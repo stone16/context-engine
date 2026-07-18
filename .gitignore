@@ -1,0 +1,31 @@
+# --- Internal working documents (kept local, not published) ---
+.grill/
+docs/design/
+docs/decisions/
+CONTEXT.md
+AGENTS.md
+CLAUDE.md
+DESIGN.md
+
+# --- Secrets & environment ---
+.env
+.env.*
+*.local
+credentials*.json
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+dist/
+build/
+*.egg-info/
+
+# --- OS / editor ---
+.DS_Store
+.idea/
+.vscode/
