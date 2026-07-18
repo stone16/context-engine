@@ -2,6 +2,7 @@
 .grill/
 docs/design/
 docs/decisions/
+docs/security/
 CONTEXT.md
 AGENTS.md
 CLAUDE.md
