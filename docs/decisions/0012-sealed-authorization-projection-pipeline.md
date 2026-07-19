@@ -1,6 +1,6 @@
 ---
 name: adr-0012-sealed-authorization-projection-pipeline
-version: "1.0.1"
+version: "1.0.2"
 description: >
   Seal Runtime ordering so content-free CandidateRef values become
   AuthorizedProjection values before content-bearing relevance, assembly, or
@@ -79,6 +79,13 @@ Source ACL evidence is a closed union:
 SourcePolicy fixes the mode at SourceVersion activation. A live or mirrored
 failure never downgrades to weak.
 
+## Rationale
+
+Security ordering is a domain invariant, not application wiring. Keeping
+policy, audit, budget, provenance, and exact projection inside one sealed
+Kernel makes bypass structurally unavailable while leaving infrastructure and
+provider variation behind narrow seams.
+
 ## Consequences
 
 The Interface has high depth: all callers get the same security order and cannot
@@ -86,3 +93,12 @@ rearrange it. Parent and neighbor expansion costs more authorization work.
 Provider contract tests must prove content-free discovery and bounded
 projection. Live outages may produce a typed partial/empty result instead of an
 availability-oriented downgrade.
+
+## Revisit trigger
+
+Reopen the kernel-versus-seam allocation only when a second production
+implementation demonstrates a variation that cannot satisfy the current deep
+Interface, or a security finding proves the sealed order insufficient. A
+replacement must preserve `CandidateRef -> AuthorizationKernel ->
+AuthorizedProjection`, mandatory policy/audit/budget/provenance behavior, and
+the absence of production disable flags or no-op dependencies.

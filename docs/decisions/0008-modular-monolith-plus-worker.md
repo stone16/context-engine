@@ -1,6 +1,6 @@
 ---
 name: adr-0008-modular-monolith-plus-worker
-version: "1.2.0"
+version: "1.2.1"
 description: >
   Record the process topology: a modular-monolith engine API plus an independent
   worker, and one justified Bot delivery application process from M2; no
@@ -25,9 +25,10 @@ closed at both the API and worker boundaries.
 ## Decision
 
 Before M2 the engine has two processes: the API service and an independent
-worker, sharing one domain package. Async work flows through a transactional outbox + job table
-(SKIP LOCKED) with a server-minted signed WorkerLease (WORKER-LEASE-007) and
-org-scoped idempotency keys. The lease binds Organization, job, operation,
+worker, sharing one domain package. Async work flows through a transactional
+outbox plus job table (`SKIP LOCKED`) with a server-minted signed WorkerLease
+(WORKER-LEASE-007) and org-scoped idempotency keys. The lease binds
+Organization, job, operation,
 source, optional resource/revision, ServiceActor/workload, policy epoch,
 optional audience, idempotency key, lease generation, issued-at, expiry, and
 nonce; redemption checks every claim against the durable job row.
@@ -40,6 +41,13 @@ service extraction occurs until a measured bottleneck or isolation requirement
 triggers a revisit; seams are re-examined when the second Adapter of a kind
 appears.
 
+## Rationale
+
+The API and worker need different scheduling and failure behavior but not
+different domain implementations. Sharing one domain package avoids premature
+distributed identity and policy propagation while the independent worker still
+contains long-running Supply work behind an exact job capability.
+
 ## Consequences
 
 Trusted context propagates through explicit request evidence or the job/lease
@@ -47,3 +55,11 @@ protocol; the worker's Organization and ServiceActor context is
 transaction-local and never ambient or borrowed from a triggering user. Engine
 and Bot applications may ship from one repository/release while remaining
 separate process and import boundaries.
+
+## Revisit trigger
+
+Reopen the process boundary only with measured isolation, scaling, deployment,
+or reliability evidence that the API-plus-worker topology cannot satisfy. A
+second real Adapter of a kind triggers seam review, not automatic service
+extraction. Any split must specify authenticated transport, Organization and
+ActorContext propagation, retries, idempotency, and credential ownership first.

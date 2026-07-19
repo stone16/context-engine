@@ -1,6 +1,6 @@
 ---
 name: adr-0006-engine-delivers-context-not-answers
-version: "1.1.0"
+version: "1.1.1"
 description: >
   Record the engine boundary: the only online deliverable is the ContextPackage;
   generation, planning, and write tools live in upper Agent Runtime applications.
@@ -31,9 +31,22 @@ upper-layer Agent Runtime applications (first instance: BotDelivery, ADR-0002).
 Refunds, order changes, message sending stay in the separate Action Plane
 (ADR-0011).
 
+## Rationale
+
+Context selection and authorization have deterministic security outcomes;
+answer generation and external effects do not. Ending at ContextPackage makes
+the engine independently testable and prevents model or action concerns from
+creating a second delivery path around Runtime policy, budget, provenance, and
+audit.
+
 ## Consequences
 
 The engine can be evaluated with deterministic retrieval metrics and security
-oracles; generation quality is the caller's concern. Revisit trigger: a caller
-demonstrates that Package-level delivery structurally cannot serve a required
-product surface.
+oracles; generation quality is the caller's concern.
+
+## Revisit trigger
+
+Reopen only when an implemented caller demonstrates, with a concrete contract
+counterexample, that Package-level delivery structurally cannot serve a
+required product surface. Any replacement decision must retain a single
+authorized online deliverable and keep write authority outside context reads.
