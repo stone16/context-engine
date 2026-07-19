@@ -44,3 +44,7 @@ bot_delivery/typescript/*.tsbuildinfo
 .DS_Store
 .idea/
 .vscode/
+.harness/*/
+!.harness/retro/
+!.harness/retro/**
+!.harness/config.json
