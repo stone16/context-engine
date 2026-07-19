@@ -55,16 +55,21 @@ measured isolation or performance evidence.
 ## Commands
 
 ```bash
-# D0: no runnable application or dependency manifest exists yet.
-# WP04 must replace this block with verified install/dev/build/test/lint commands
-# before D0 can close.
+make install   # sync the locked Python 3.13 environment
+make build     # build wheel and source distribution
+make lint      # Ruff
+make typecheck # strict mypy
+make test      # full test suite
+make smoke     # API and worker process smoke suite
+make check     # all required repository checks
 ```
 
 ## Verification Contract
 
 Before claiming an implementation done, run the verified commands recorded
-above. While D0 has no runnable implementation, report that fact and run the
-applicable document/provenance/link checks instead. Never fabricate output.
+above. Never fabricate output. A green process smoke proves only boot/readiness;
+Runtime delivery, database and worker-job capabilities remain `NOT_ACTIVE` until
+their owning issues implement and verify them.
 
 ## Safety-Rails / Do Not
 

@@ -8,8 +8,41 @@
 企业微信),下游把「经过授权、带证据、有预算」的 ContextPackage 交付给 agent
 应用与 IM bot(飞书群聊问答优先)。
 
-**当前状态**:D0 设计闭环阶段(pre-M0),尚无可运行代码。整体计划见
+**当前状态**:M0 工程骨架已启动。API 和独立 Supply worker 可运行，但
+Runtime delivery、数据库和 worker job 行为仍为 `NOT_ACTIVE`。整体计划见
 [PLAN.md](./PLAN.md)。
+
+## 开发命令
+
+要求 Python 3.13 和 [uv](https://docs.astral.sh/uv/)。依赖版本由
+`uv.lock` 固定，仓库命令统一由 `make` 暴露：
+
+```bash
+make install   # uv sync --frozen
+make build     # 构建 wheel 和 sdist
+make lint      # Ruff
+make typecheck # strict mypy
+make test      # 全部测试
+make smoke     # API / worker 进程 smoke
+make check     # build + lint + typecheck + test + smoke
+```
+
+本地启动 API：
+
+```bash
+uv run context-engine-api
+curl http://127.0.0.1:8000/health
+```
+
+确定性运行 worker 的 no-op 测试生命周期：
+
+```bash
+uv run context-engine-worker --test-mode
+```
+
+健康响应中的 `runtime_delivery: NOT_ACTIVE` 和 worker 输出中的
+`job_behavior: NOT_ACTIVE` 是能力边界，不表示数据库、授权或 ContextPackage
+交付已经实现。
 
 本次公开候选 bundle 包含实现权威、ADR、安全契约、PRD、Tech Spec
 与四个公开参考仓的证据基线；经维护者批准并提交后，它们将与实现一同
