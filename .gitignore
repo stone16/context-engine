@@ -1,12 +1,11 @@
-# --- Internal working documents (kept local, not published) ---
+# --- Private exploratory history (kept local, not published) ---
 .grill/
-docs/design/
-docs/decisions/
-docs/security/
-CONTEXT.md
-AGENTS.md
-CLAUDE.md
 DESIGN.md
+
+# The current design, ADR, security, glossary, and agent charter are intended
+# to be versioned with the open-source implementation. Historical drafts remain
+# explicitly ignored so `git add .` cannot publish them by accident.
+docs/design/2026-07-18-context-engine-design.md
 
 # --- Secrets & environment ---
 .env
