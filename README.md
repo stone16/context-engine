@@ -1,6 +1,6 @@
 # ContextEngine
 
-> A multi-tenant context delivery engine: connect your team's knowledge sources upstream, deliver **authorized, evidence-backed, budget-bounded** context packages to agents and IM bots downstream.
+> A multi-tenant context delivery engine: connect your team's knowledge sources upstream, deliver **authorized, evidence-backed, budget-bounded** ContextPackages to agents and IM bots downstream.
 
 多租户上下文交付引擎——上游连接团队知识源(飞书 / Slack / Google Docs / 企业微信),下游把「经过授权、带证据、有预算」的 ContextPackage 交付给 agent 应用与 IM bot(飞书群聊问答优先)。
 
@@ -10,6 +10,7 @@
 
 ## 文档入口
 
+- [Domain glossary](./CONTEXT.md)：身份、安全、内容与生命周期术语的仓库权威。
 - [Implementation Design v1.2](./docs/design/2026-07-18-context-engine-implementation-design.md)：集成后的实现权威与里程碑边界。
 - [四个公开参考仓证据基线](./docs/research/2026-07-19-four-public-repositories-evidence.md)：四仓优势、局限、clean-room 拆解与证据缺口。
 - [Threat Model](./docs/security/context-engine-threat-model.md)：自有资产、信任边界、威胁与 hard oracles。
