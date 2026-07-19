@@ -4,6 +4,8 @@
 >
 > *English abstract*: ContextEngine is a multi-tenant context delivery engine. Upstream connectors ingest team knowledge (Feishu/Lark, Slack, Google Docs, WeCom); downstream it delivers authorized, evidence-backed, budget-bounded ContextPackages to agent applications and IM bots. Its differentiation is not another retrieval algorithm but the combination of permission-aware retrieval, revocable governance, agent-driven curation, and first-class support for the Chinese team-tooling ecosystem.
 
+新贡献者应先阅读 [Domain glossary](CONTEXT.md)，其中规范了本文所有身份、安全、内容与生命周期术语。
+
 ---
 
 ## 1. 愿景与定位
@@ -35,7 +37,7 @@
 
 | 循环 | 职责 | 关键对象 |
 |---|---|---|
-| **Supply** | 源 → 可信候选:采集、解析、切分、索引、原子发布 | Source / Resource / Revision / Fragment |
+| **Supply** | 源 → 可信候选:采集、解析、切分、索引、原子发布 | ContextSource / ContextResource / ContextRevision / ContextFragment |
 | **Runtime** | 认证调用 → ContextPackage:候选、授权投影、相关性、装箱 | CandidateRef / AuthorizedProjection / ContextRun / ContextPackage |
 | **Learning** | authorized-only trace → 可发布的改进:评测集、切片门禁、版本化 profile | golden set / ReleaseManifest / CurationSnapshot |
 

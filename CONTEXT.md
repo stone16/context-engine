@@ -1,58 +1,434 @@
-# CONTEXT.md — ContextEngine 术语表
+# ContextEngine Domain Glossary
 
-> 本文件只是 glossary，不是 spec。实现细节以
-> `docs/design/2026-07-18-context-engine-implementation-design.md` 与 accepted ADR
-> 为准。公开参考事实须回引
-> `docs/research/2026-07-19-four-public-repositories-evidence.md` 所固定的一手来源；
-> 仓库外研究可以作为独立思考输入，但不是公开 authority 或 provenance。
+This repository-owned glossary is the canonical terminology contract for
+ContextEngine. 中文解释与英文定义具有相同语义；实现细节以
+[`Implementation Design v1.2`](docs/design/2026-07-18-context-engine-implementation-design.md)
+和 accepted ADR 为准。公开参考事实须回引
+[`four-repository evidence baseline`](docs/research/2026-07-19-four-public-repositories-evidence.md)
+所固定的一手来源；仓库外研究不是公开 authority 或 provenance。
 
-## 核心对象
+本文件只固定名称、scope、lifecycle 和 authorization role，不定义 executable
+schema、Python type、threat fixture 或新的架构决策。
 
-- **ContextPackage**:引擎唯一的 online 交付物——经过授权、带证据、有预算的上下文包(citations、purpose、TTL、asOf、decisionRef)。引擎边界止于此,不产出答案。
-- **Evidence**:窄定义——仅指某次 ContextRun 中通过 exact authorization 且被选中的 Fragment。长期存储对象只能叫 ContextFragment,不得叫 Evidence。
-- **ContextRun**:一次 resolve 的 authorized-only 可学习记录(Package digest、已授权 Evidence refs、性能/预算、feedback)。不存未授权正文或可枚举的 denied candidate。
-- **DecisionAudit**:受限安全审计记录,保存授权/拒绝的原因类别、摘要与必需身份链;不是租户可见的 Learning 语料,也不保存 denied 正文。
-- **Resource / Revision / Fragment**:Supply 三层——外部内容源对象 → 不可变内容版本(原子发布,查询永不见混血)→ 索引/交付单元。
-- **CandidateRef**:召回阶段的不透明候选引用;不是 Evidence,不携带可向 reranker/模型/调用方暴露的正文。
-- **AuthorizedProjection**:`AuthorizationKernel` 对 CandidateRef 执行 exact authorization 与字段投影后的 Runtime 内部唯一内容承载类型;水合、精排、相关性模型与 assembler 只接收此类型。
-- **AuthorizedModelInput**:BotDelivery 只能从一个当前、audience-bound ContextPackage 及其 purpose/retention policy 派生的生成输入;ModelGateway 不接收 CandidateRef、SourceProjectionBatch、源裸内容或 denied data。
-- **CurationAnnotation**:Curation Agent 产出的带证据标注(去重簇/过期标记/tag-termbase),以 proposed 状态入库,人工 audit 后编入 CurationSnapshot;只影响 ranking/assembly,不触碰授权。
-- **CurationSnapshot**:独立于内容 Revision 的不可变治理发布物,引用兼容的 content revisions。active selection 与 Revision 解耦,但只能由 ContextLearning.promote 随 ReleaseManifest 切换;curation pipeline 无直接激活权。
-- **ReleaseManifest**:将 ContentProfile / IndexProfile / RuntimeProfile / CurationProfile 等不可变版本引用组合为一次可评测发布;CurationProfile 显式携带可选 CurationSnapshotRef、兼容 Revision 集与评测摘要,因此 manifest 唯一选择某个 snapshot 或 curation-off。Learning 产出 candidate 与评测报告;经 release-operator 权限校验的 ContextLearning.promote 是唯一激活/回滚入口。
-- **CrossOrgLearningArtifact**:跨租户学习的 revisit-only 概念标签。V1 是 non-goal,不创建该对象的 schema、interface 或可执行路径;未来重访必须先有 opt-in、聚合、匿名化与 raw refs=0 的新 ADR。
+## How to read this glossary
 
-## 身份与授权
+- **Persistent**：对象具有跨请求的 durable identity 或 state。
+- **Request-scoped**：对象的语义绑定一次 authenticated invocation 或
+  `ContextRun`；保留审计 lineage 不会把它变成长期 source content。
+- **Authorization authority**：参与当前授权决策的受信输入。任何一个输入都不能
+  单独授权；必需约束取交集，缺失时 fail closed。
+- 每个 tenant-owned object 只属于一个 `Organization`。Organization reference
+  只是安全边界，不是 access grant。
 
-- **Organization**:安全根。所有租户拥有的行/块/索引/任务/trace 显式归属。
-- **ActorContext / ServicePrincipal**:事务 actor 为 UserActor 或 ServiceActor。在线请求使用认证 Principal/Membership;后台 worker 使用注册且最小权限的 ServicePrincipal,绑定 workload、Organization、job/lease、source/operation、epoch 与 expiry,不得伪装触发用户,也不替代最终用户授权。
-- **WorkerLease**:server-minted 且签名,绑定 Organization、job、operation、source、可选 resource/revision、ServiceActor/workload、policy epoch、可选 audience、idempotency、lease generation、iat/exp 与 nonce;兑换时逐项核对 durable job row,变异、过期、旧 generation 或 replay 均拒绝。
-- **EffectiveScope**:七项必需 trusted 授权约束(OrgBoundary ∩ MembershipRights ∩ PrincipalGrants ∩ AgentCeiling ∩ SourceNativeACL ∩ ResourceACL ∩ PurposePolicy),再与可选 RequestNarrowing 取交集。任一必需 trusted 项缺失 fail closed;RequestNarrowing 缺省表示「不额外收窄」,绝不扩大已建立 scope。
-- **Policy Epoch**:引擎观测到权限变化后的本地失效机制。它使新 resolve、Continue 和 OpenCitation 不再复用旧决策,但不能召回已交付给 IM/模型的字节。
-- **SourceAclEvidence**:某次 exact authorization 所使用的源权限证据。`Live`=同请求源生检查;`Mirrored`=版本化本地投影+明确 `aclAsOf`/freshness;`Weak`=源天生无细粒度 ACL 时的受限语义。Weak 永不是 Live/Mirrored 读取失败时的 fallback。
-- **TrustedDeliveryContext**:受信入口构造的 nominal 交付事实(channel、conversation、purpose、audience binding、freshness),不属于 caller 可随意提交的 RequestNarrowing。
-- **AudienceSnapshot**:签名/受信的群成员事实快照;由 identity adapter 解析,由 AuthorizationKernel 计算群交集。任一成员未绑定、无法枚举或快照过期时,公开回答 fail closed。
-- **DeliveryEvidenceRef**:远程 BotDelivery 到 Runtime ingress 的 opaque 证据引用,绑定 authenticated service、resolve request id、Organization、asker、destination、purpose、audience digest 与 expiry;通过认证 transport metadata 传递,不携带 raw audience claims,由 ingress 兑换 TrustedDeliveryContext。
-- **ContextAccessTicket / ActionTicket**:读票据 / 外部效果票据,同一 identity chain、不同 audience、不可互换。ActionTicket 与单一 effect 绑定且 one-shot;创建占位、编辑、发私聊分别使用不同票据。
-- **ContinuationToken / CitationOpenRef**:Continue 使用 principal-bound、one-shot、累计预算的 token;CitationOpenRef 是可多次使用但不授权的 opaque locator,每次 OpenCitation 都重新认证与授权。
-- **群聊交集授权**:群公开 Package 按受信 AudienceSnapshot 中全体可见人的权限交集生成;提问者私有 Package 必须另行 resolve,不得从公开或提问者全量 Package 二次分割。
+## Required-term classification
 
-## 模块与面
+| Canonical term | Persistence and lifecycle | Owner or scope | Authorization role |
+|---|---|---|---|
+| `Organization` | Persistent security root | Self; boundary for tenant-owned state | Required boundary, never a grant by itself |
+| `User` | Persistent human identity | Global; joins an Organization only through Membership | None by itself |
+| `Membership` | Persistent, versioned, revocable relationship | One Organization and one User | Current rights are one required authority input |
+| `Principal` | Request-scoped authenticated actor designation | One Organization and authenticated invocation | Current grants are one required authority input |
+| `Agent` | Persistent logical application/scenario identity | One Organization | None; owns versions that only narrow access |
+| `AgentVersion` | Immutable version used by a request | One Organization and Agent | Delegation ceiling only; never an identity or grant |
+| `ContextSource` | Persistent logical source registration | One Organization | Source policy boundary, never sufficient alone |
+| `SourceVersion` | Immutable source-configuration snapshot | One Organization and ContextSource | Active configuration constrains access, never grants it |
+| `ContextResource` | Persistent stable source-object identity | One Organization and ContextSource | Resource ACL/state constrain access, never grant it |
+| `ContextRevision` | Persistent immutable canonical snapshot | One Organization and ContextResource | None; visibility is not authorization |
+| `ContextFragment` | Persistent content derived from one ContextRevision | Same Organization/Resource/Revision lineage | None; an index hit cannot authorize it |
+| `Evidence` | Request-scoped designation in one ContextRun | One Organization, run, Principal, purpose, and decision | Authorization result, never an authority |
+| `ContextRun` | Persistent authorized-only resolution lineage | One Organization and invocation | Learning/audit lineage, not a grant |
+| `PolicySnapshot` | Request-scoped decision snapshot; lineage may persist | One Organization and ContextRun | Records decision inputs; stale snapshots cannot authorize |
+| `Policy Epoch` | Persistent monotonic revocation value | Tenant-owned; granularity remains pending WP04 and its ADR update | Current value is a freshness check, not a grant |
+| `ContextPackage` | Request-scoped, expiring online output | One Organization, ContextRun, Principal, purpose, and audience | Authorized output, not reusable authority |
+| `ContextAccessTicket` | Short-lived signed source-read capability | One Organization, identity chain, provider audience, purpose, epoch, and expiry | Authority only for its declared read audience |
+| `ActionTicket` | Short-lived signed one-effect capability | One Organization, identity chain, effect/audience/payload, epoch, and expiry | Authority only for its declared external effect |
+| `WorkerLease` | Short-lived signed one-shot work capability | One Organization, durable job, ServiceActor/workload, expiry, and nonce | Authority only for the matching job attempt |
+| `acquisition checkpoint` | Persistent monotonic acquisition progress | One Organization and ContextSource | None |
+| `publish watermark` | Persistent monotonic visibility progress | One Organization and ContextSource | None |
 
-- **ContextControl / ContextRuntime / ContextLearning**:三个 engine Module。Runtime 收口为 sealed `resolve(AuthenticatedInvocation, TrustedDeliveryContext, Acquire | Continue | OpenCitation)`,固定经过 AuthorizationKernel、PackageBudget、provenance 与 audit gates;Control 只管 source/access/policy;Learning 提供 evaluate/promote,通过唯一的 promote 入口激活或回滚 ReleaseManifest。加上外部受信 BotDelivery 与 ActionPlane,系统共有五个 deep Module。
-- **AuthorizationKernel**:不可插拔的 deep Module,固定执行 identity / Organization / policy / SourceAclEvidence / exact authorization / field projection 并记录 DecisionAudit;生产路径无 no-op 或 bypass 构造。
-- **BotDelivery**:引擎之外的受信交付编排 deep Module——向 trusted identity adapter 请求 DeliveryEvidenceRef,消费 Package,经 ModelGateway 生成,再通过 ActionPlane 交付。BotDelivery、ModelGateway、ActionPlane 与 Sender 都在 delivery TCB 内;受控明文网络端点是 ModelGateway 与 Sender。BotDelivery 不自行计算群 scope,也不是 transport。
-- **ActionPlane**:所有外部副作用的唯一所有者;prepare 返回 Prepared/GenericDenied/AudienceChanged/RetryableUnavailable closed outcome,perform 返回 Applied/AlreadyApplied/Rejected(effect=0)/ReconciliationRequired。每个 effect 独立签发并校验 org/audience/payload digest/expiry/idempotency;已成功 replay 只回存量 receipt,外部结果不确定时用同一 attempt 对账,不得换新 ticket 重放。
-- **ContextProvider**:唯一 Source seam,V1 只有四个 typed 只读操作(describeCapabilities/readChanges/discover/authorizeAndProject),统一返回 closed ProviderOutcome。discover 的 CandidatePage 与 authorizeAndProject 的 SourceProjectionBatch 共享 SourceConsistencyRef(provider/SourceVersion/ACL mode/decision-or-snapshot/asOf),Kernel 拒绝缺失、混合、变化或过期引用;只有 Kernel 能构造 AuthorizedProjection。FileProvider 使用显式、版本化且 active 的 FileSourceAccess 作为 Mirrored ACL,不声称继承宿主 OS 文件权限;grant 缺失、不完整或未知时严格 deny,不推断 owner/public。
-- **Server ingress / generated client**:HTTP 是 V1 server ingress;MCP 是只在真实 caller 出现后激活的可选 server ingress;TypeScript SDK 是 OpenAPI 生成的 HTTP client artifact,不是 transport。所有入口参数均不可直接伪造 AuthenticatedInvocation 或 TrustedDeliveryContext。
-- **Kernel vs Seam**:AuthorizationKernel 不可插拔;parser/embedding/connector/HTTP 与激活后的 MCP adapter 可插拔。V1 retrieval 固定 PostgreSQL FTS + pgvector,只有内部候选注入 test seam;第二个真实 backend 出现前不抽外部 Index portability contract。
-- **PackageBudget / PromptBudget**:ContextEngine 只强制 PackageBudget(服务端 ceiling 与 caller request 取小);system prompt、历史与答案预留属于上层 PromptBudget。
+Reviewer classification: `ContextRevision` and `ContextFragment` are persistent;
+`Evidence` is request-scoped. None of the three is an authorization authority.
 
-## 节奏与门
+## Canonical definitions
 
-- **Engineering Gate E5 / Launch Gate L1**:M5 以 Security/Reliability/Quality/Budget 四份报告 + Ops readiness 判工程完成,不依赖先有 partner。其后 L1 需明确的 design-partner agreement、legal review、命名与 commercial approval 才开放受邀使用;公开 SaaS 另行裁决。
-- **并行 C1**:M3 后启动的 CurationSnapshot 实验轨,不是 M4/M5 或 design partner 的前置条件。
-- **Connector 节奏**:M6 Slack、M7 Google Docs/Drive,每个里程碑只引入一个新权限模型;企微先 P3 feasibility,通过后再独立排期。
-- **三硬 oracle**:Unauthorized Evidence = 0、wrong-Organization effect = 0、missing-context fallback = 0。veto,不与功能分互换。
-- **Invariant catalog**:版本化预注册 applicability/applicableFrom 与 required gate;capability activation/coverage 独立报告。展示态仅 PASS/FAIL/NOT_ACTIVE/NOT_APPLICABLE;active 但未执行或未映射 = FAIL,required exit 只能由 PASS 满足。
-- **切片门禁**:golden set 按失败模式切片(指称/不对称/粒度/冗余/负例/安全),任一切片跌破阈值不放行。
-- **双水位**:acquisition cursor(变化已 durable 接收)≠ publish watermark(Revision 已 active)。
+### `Organization`
+
+The tenant and security root. 中文：Organization 是租户隔离、归属和策略计算的根边界。
+
+- **Owner/scope:** globally identified; every tenant-owned row, blob, index
+  record, job, and trace belongs to exactly one Organization.
+- **Lifecycle:** durable and distinct from Membership, ContextSource, or
+  ContextResource lifecycle changes.
+- **Invariant:** an Organization reference selects a boundary but never proves
+  that a caller may read or act within it.
+- **Do not confuse with:** workspace, source, deployment cell, or caller-supplied
+  `tenant_id`. `tenant` is explanatory prose only.
+
+### `User`
+
+A persistent human identity that may participate in multiple Organizations.
+中文：User 表示全局的人，不携带任何 Organization 内权限。
+
+- **Owner/scope:** global; Organization association exists only through a
+  Membership, as settled by issue #11.
+- **Lifecycle:** independent of Memberships; removing one Membership does not
+  redefine the User.
+- **Invariant:** User ID alone is neither an authenticated Principal nor
+  Organization authorization.
+- **Do not confuse with:** Membership, Principal, IM account, or Agent.
+
+### `Membership`
+
+The durable, revocable relationship binding one User to one Organization.
+中文：Membership 才承载 User 在某个 Organization 内的当前资格与权利。
+
+- **Owner/scope:** tenant-owned by exactly one Organization and linked to one
+  User.
+- **Lifecycle:** active, versioned, expired, or revoked; inactive or stale
+  Membership contributes no rights.
+- **Invariant:** current Membership rights are required but are intersected with
+  all other required authorization constraints.
+- **Do not confuse with:** User, Principal, group, or delivery audience.
+
+### `Principal`
+
+The request-scoped designation of the authenticated human or service actor on
+whose behalf an online invocation is evaluated. 中文：Principal 由可信认证链为本次调用
+解析，不能由 request body 自报。
+
+- **Owner/scope:** one Organization and authenticated invocation; this glossary
+  does not choose how an identity provider stores the underlying account.
+- **Lifecycle:** constructed from verified authentication context; missing,
+  revoked, or invalid bindings fail closed.
+- **Invariant:** Principal grants cannot bypass Membership, Agent ceiling,
+  source/resource ACL, purpose policy, or delivery audience constraints.
+- **Do not confuse with:** User, Membership, Agent, ServicePrincipal, or
+  AudienceSnapshot.
+
+### `Agent`
+
+The persistent logical identity of a versioned application or scenario
+configuration. 中文：Agent 是配置入口，不是代替 User/Principal 授权的身份。
+
+- **Owner/scope:** tenant-owned by one Organization.
+- **Lifecycle:** stable while configuration changes are published as immutable
+  AgentVersions.
+- **Invariant:** an Agent has no independent rights and never expands Principal
+  scope.
+- **Do not confuse with:** Principal, ServicePrincipal, worker, model, or
+  BotDelivery.
+
+### `AgentVersion`
+
+An immutable Agent configuration version containing its delegation ceiling.
+中文：AgentVersion 只给委托权限设上限，不能赋予 Principal 原本没有的权限。
+
+- **Owner/scope:** same Organization and Agent; a request binds the exact version
+  it used.
+- **Lifecycle:** immutable and superseded by a later version rather than edited
+  in place.
+- **Invariant:** **Agent/AgentVersion is a delegation ceiling, not an independent
+  authorization identity.** It only narrows effective scope.
+- **Do not confuse with:** Principal grant, Membership right, model version, or
+  WorkerLease.
+
+### `ContextSource`
+
+The persistent logical registration of an external content source.
+中文：ContextSource 是 Organization 内 File、API 或其他知识来源的稳定注册身份。
+
+- **Owner/scope:** tenant-owned by one Organization.
+- **Lifecycle:** stable while configuration/capability snapshots are represented
+  by SourceVersions; source offboarding is separate from content deletion.
+- **Invariant:** owns ContextResources and declares source policy/capabilities;
+  callers and Agents cannot choose a weaker source mode.
+- **Do not confuse with:** `ContextProvider` adapter, credential,
+  ContextResource, or SourceVersion.
+
+### `SourceVersion`
+
+An immutable snapshot of ContextSource configuration, capabilities, ACL evidence
+mode, and source policy. 中文：SourceVersion 固定某次 source 配置，active-version
+pointer 选择当前版本。
+
+- **Owner/scope:** one Organization and ContextSource.
+- **Lifecycle:** immutable and superseded rather than edited; creation,
+  activation, and disable procedures belong to the implementation design and
+  accepted ADRs.
+- **Invariant:** work and source consistency evidence bind the exact version
+  where required; inactive/stale configuration cannot silently substitute.
+- **Do not confuse with:** ContextSource, ContextRevision, connector release, or
+  source-native document version.
+
+### `ContextResource`
+
+The persistent stable identity of one source-owned object, such as one file or
+document. 中文：ContextResource 表示 source 中具有独立 lifecycle 的对象，不是内容快照。
+
+- **Owner/scope:** one Organization and ContextSource with stable source lineage.
+- **Lifecycle:** points atomically to its active ContextRevision and may be
+  tombstoned; content changes preserve Resource identity.
+- **Invariant:** the active pointer changes only through publication; visibility
+  and source/resource ACL still require exact authorization.
+- **Do not confuse with:** raw bytes, ContextRevision, ContextFragment, or search
+  result.
+
+### `ContextRevision`
+
+An immutable canonical content snapshot of one ContextResource.
+中文：ContextRevision 是不可变内容版本；发布时读者只见完整旧版或完整新版。
+
+- **Owner/scope:** persistent through exactly one Organization, ContextSource,
+  and ContextResource lineage.
+- **Lifecycle:** `prepared -> indexed -> active`; activation is an atomic
+  ContextResource pointer change, and superseded revisions may remain retained.
+- **Invariant:** content is never mutated in place; physical or active presence
+  never authorizes delivery.
+- **Do not confuse with:** SourceVersion, mutable document, ContextFragment, or
+  Evidence.
+
+### `ContextFragment`
+
+A persistent unit derived from one ContextRevision for indexing, retrieval,
+projection, ranking, and budget assembly. 中文：ContextFragment 是长期内容/检索单元，
+不表示任何请求有权看到它。
+
+- **Owner/scope:** same Organization, ContextResource, and ContextRevision
+  lineage as its parent revision.
+- **Lifecycle:** reproducibly compiled and visible only through its
+  ContextRevision publication state.
+- **Invariant:** a CandidateRef/index hit is only a candidate. Exact authorization
+  and selection are required before the Fragment becomes Evidence.
+- **Do not confuse with:** CandidateRef, AuthorizedProjection, Evidence,
+  citation, or ContextPackage block. `chunk` is not a canonical object name.
+
+### `Evidence`
+
+The request-scoped designation given only to a ContextFragment that passed exact
+authorization and was selected in one ContextRun. 中文：Evidence 不是长期存储内容，
+而是某次 run 中“已精确授权且已选中”的 Fragment 身份。
+
+- **Owner/scope:** one Organization, ContextRun, Principal, purpose, audience,
+  as-of time, PolicySnapshot, Policy Epoch, and decision reference.
+- **Lifecycle:** created after authorization and selection; expires with request
+  authority while its safe lineage may persist.
+- **Invariant:** **persistent content is ContextFragment; only an exact-authorized,
+  selected Fragment in one ContextRun is Evidence.** Evidence is the outcome of
+  authorization, not its authority.
+- **Do not confuse with:** ContextFragment, candidate, AuthorizedProjection,
+  citation, source quote, or generic supporting information.
+
+### `ContextRun`
+
+The durable, authorized-only lineage of one `ContextRuntime.resolve` execution.
+中文：ContextRun 连接一次有效调用、已授权 Evidence、Package、budget/performance 和
+允许的 feedback，是 Learning 数据。
+
+- **Owner/scope:** persistent and tenant-owned by one Organization and
+  authenticated invocation.
+- **Lifecycle:** accepted and finalized with its outcome; later feedback may
+  reference it without creating a new run.
+- **Invariant:** denied content/object details never enter tenant-visible
+  ContextRun; restricted denial lineage belongs to DecisionAudit.
+- **Do not confuse with:** HTTP request, trace, DecisionAudit, PolicySnapshot,
+  ContextPackage, or user session.
+
+### `PolicySnapshot`
+
+The request-bound snapshot of versioned policy and egress decision inputs used
+for one ContextRun. 中文：PolicySnapshot 解释一次授权依据，不冻结未来授权。
+
+- **Owner/scope:** one Organization and ContextRun; safe decision lineage may be
+  persisted while authority remains request-scoped.
+- **Lifecycle:** captured during authorization and bound to purpose, audience,
+  Policy Epoch, as-of time, and decision reference.
+- **Invariant:** a snapshot explains a past decision but stale state cannot
+  authorize later delivery or reuse.
+- **Do not confuse with:** current policy, Policy Epoch, policy version, grant,
+  or ContextPackage.
+
+### `Policy Epoch`
+
+A tenant-owned, monotonically increasing local revocation value.
+中文：Policy Epoch 在引擎 durable observation 后阻止旧授权决策被继续复用；物理
+cleanup 可异步。
+
+- **Owner/scope:** persistent tenant-owned state. Organization、source 或
+  resource 粒度尚未决定，必须由 WP04 实证与后续 ADR 更新裁决；本术语表不预设答案。
+- **Lifecycle:** only moves forward through trusted access changes and is never
+  reused.
+- **Invariant:** stale snapshots/tickets fail closed. Epoch cannot detect an
+  upstream change not yet observed and cannot recall bytes already delivered.
+- **Do not confuse with:** PolicySnapshot, configuration version, acquisition
+  checkpoint, publish watermark, or cleanup completion.
+
+### `ContextPackage`
+
+The sole online ContextEngine output: an expiring, authorized, evidence-backed,
+budget-bounded context package. 中文：ContextPackage 交付 context/security lineage，
+不生成答案，也不授权写操作。
+
+- **Owner/scope:** one Organization, ContextRun, Principal, purpose, audience,
+  as-of time, and decision; contains only authorized Evidence.
+- **Lifecycle:** self-contained and expiring; any later use is evaluated under
+  current authority rather than inheriting authority from an older package.
+- **Invariant:** required security fields and Evidence lineage cannot be
+  removed; expired/delivered bytes are not reusable authorization.
+- **Do not confuse with:** answer/model output, HTTP envelope, ContextRun,
+  EgressGrant, or ticket.
+
+### `ContextAccessTicket`
+
+A signed, short-lived capability for source-read operations against one declared
+ContextProvider audience. 中文：ContextAccessTicket 只委托受限 source read，不能执行
+外部写 effect。
+
+- **Owner/scope:** one Organization, authenticated identity chain, declared
+  source-read audience, purpose, revocation freshness, and expiry.
+- **Lifecycle:** minted after trusted authorization and validated on use;
+  issuance/redemption audit may persist while the ticket is ephemeral.
+- **Invariant:** valid only for its exact read audience/restrictions; Provider
+  projection evidence still requires Kernel validation.
+- **Do not confuse with:** credential, ActionTicket, ContinuationToken,
+  WorkerLease, or generic bearer token.
+
+### `ActionTicket`
+
+A signed, short-lived, one-shot capability for exactly one external effect.
+中文：ActionTicket 绑定一个 write effect；创建占位、编辑和私聊发送使用不同票据。
+
+- **Owner/scope:** one Organization, authenticated identity chain, and exactly
+  one declared effect, destination, audience, and payload.
+- **Lifecycle:** short-lived and consumed once; issuance, redemption, and replay
+  handling belong to the owning design and ADRs.
+- **Invariant:** ContextAccessTicket and ActionTicket have different audiences
+  and are never interchangeable; rejected use has business effect zero.
+- **Do not confuse with:** read ticket, EgressGrant, WorkerLease, credential, or
+  proof that an effect succeeded.
+
+### `WorkerLease`
+
+A server-minted, signed, short-lived, one-shot capability for one durable job
+attempt. 中文：WorkerLease 把 worker 权限限制到指定 Organization、job、operation 和
+ServiceActor/workload，并防 cross-job/cross-tenant replay。
+
+- **Owner/scope:** one Organization, one durable job attempt, its declared work,
+  and the registered service workload that may perform it.
+- **Lifecycle:** short-lived and one-shot; mismatch, expiry, staleness, or replay
+  makes it invalid. Exact claim/redemption fields belong to the owning ADR.
+- **Invariant:** no general tenant/read/action authority and no long-lived source
+  credential; rejected lease produces zero business effect.
+- **Do not confuse with:** queue message, durable job, lock,
+  ContextAccessTicket, ActionTicket, or ServicePrincipal.
+
+### `acquisition checkpoint`
+
+The durable, opaque, monotonic signal recording which source changes have been
+accepted. 中文：acquisition checkpoint 只表示变化已 durable 接收，不表示内容可见。
+
+- **Owner/scope:** one Organization and ContextSource; Provider contracts may
+  further bind SourceVersion/stream/partition.
+- **Lifecycle:** advances only after durable acceptance; replay is idempotent and
+  older input cannot move it backward.
+- **Invariant:** may advance while compilation/publication is incomplete or
+  failed; it is progress metadata, never authorization.
+- **Do not confuse with:** publish watermark, active ContextRevision, worker
+  acknowledgement, or Policy Epoch. `acquisition cursor` maps here.
+
+### `publish watermark`
+
+The durable, monotonic signal recording which accepted changes completed
+Runtime-visible ContextRevision activation or tombstone publication.
+中文：publish watermark 只在相应 visibility transaction commit 后推进。
+
+- **Owner/scope:** one Organization and ContextSource, correlated to accepted
+  change/publication lineage.
+- **Lifecycle:** may lag acquisition checkpoint during failure and catch up after
+  recovery without regression.
+- **Invariant:** **acquisition checkpoint and publish watermark are separate
+  progress signals.** Runtime never trusts either instead of current policy,
+  source consistency, and visibility checks.
+- **Do not confuse with:** acquisition checkpoint, prepared/indexed state,
+  WorkerLease completion, active pointer, Policy Epoch, or cleanup completion.
+
+## Alias policy
+
+Normative contracts, schemas, tests, and security discussion use the canonical
+English names above. These short forms are accepted only after the canonical
+term is established locally:
+
+| Short form | Canonical mapping |
+|---|---|
+| tenant / Org | `Organization`; never a separate object or caller authority |
+| Source | `ContextSource` |
+| Resource | `ContextResource` |
+| Revision | `ContextRevision` |
+| Fragment | `ContextFragment` |
+| Package | `ContextPackage` |
+| acquisition cursor | `acquisition checkpoint` |
+| read ticket | `ContextAccessTicket` (explanatory prose only) |
+| write/effect ticket | `ActionTicket` (explanatory prose only) |
+
+Forbidden conflations:
+
+- User, Membership, Principal, Agent, and ServicePrincipal are not interchangeable.
+- ContextSource, ContextProvider, credential, and SourceVersion are not interchangeable.
+- ContextResource, ContextRevision, ContextFragment, CandidateRef,
+  AuthorizedProjection, and Evidence are not interchangeable.
+- PolicySnapshot, policy version, Policy Epoch, acquisition checkpoint, and
+  publish watermark are not interchangeable.
+- ContextAccessTicket, ActionTicket, WorkerLease, ContinuationToken,
+  CitationOpenRef, EgressGrant, and credential are not interchangeable.
+
+## Related established terms
+
+The following terms are included only to preserve distinctions used above. Their
+protocols, interfaces, field sets, and release rules are owned by the
+[`Implementation Design v1.2`](docs/design/2026-07-18-context-engine-implementation-design.md)
+and accepted ADRs, not by this glossary.
+
+- **DecisionAudit:** restricted security lineage for authorization decisions;
+  it is not tenant-visible Learning content.
+- **CandidateRef:** an opaque, content-free retrieval candidate; it is neither a
+  ContextFragment nor Evidence.
+- **AuthorizedProjection:** content projected only after exact authorization for
+  use inside Runtime.
+- **AuthorizedModelInput:** generation input derived from an authorized,
+  audience-bound ContextPackage.
+- **CurationAnnotation:** a proposed governance annotation that may affect
+  ranking or assembly but never authorization.
+- **CurationSnapshot:** an immutable collection of accepted curation state,
+  distinct from ContextRevision publication.
+- **ReleaseManifest:** an immutable composition of release-version references;
+  it is not a ContextRevision or authorization grant.
+- **ActorContext:** the trusted designation of the actor responsible for a
+  transaction.
+- **ServicePrincipal:** a registered service identity; it is not a User,
+  Principal, Agent, or WorkerLease.
+- **EffectiveScope:** the intersection of all required trusted authorization
+  constraints plus any optional request narrowing; it can only stay equal or
+  become narrower.
+- **SourceAclEvidence:** the source-native access evidence considered during
+  exact authorization.
+- **TrustedDeliveryContext:** trusted delivery facts supplied by an authenticated
+  ingress, not caller-authored narrowing.
+- **AudienceSnapshot:** trusted audience-membership facts used when evaluating a
+  shared delivery audience.
+- **DeliveryEvidenceRef:** an opaque locator for trusted delivery evidence; it
+  is not an authorization grant.
+- **ContinuationToken:** an expiring capability for continuing one authorized
+  context interaction; it is not a ContextAccessTicket.
+- **CitationOpenRef:** an opaque citation locator that carries no authorization.
+- **EgressGrant:** authority for one declared egress hop; it carries no external
+  write authority.
+- **AuthorizationKernel:** the trusted authorization boundary that turns
+  candidates into AuthorizedProjection values.
+- **ContextProvider:** the adapter boundary to a ContextSource; it is distinct
+  from that source, its credentials, and its SourceVersions.
+- **BotDelivery:** the trusted delivery orchestrator outside ContextEngine; it
+  is not an Agent or Principal.
+- **ActionPlane:** the owner of authorized external effects; it is distinct from
+  ContextEngine's context-delivery boundary.
+- **PackageBudget:** the size/selection budget enforced for ContextPackage.
+- **PromptBudget:** the caller's broader prompt allocation; it is not enforced
+  by ContextEngine.
