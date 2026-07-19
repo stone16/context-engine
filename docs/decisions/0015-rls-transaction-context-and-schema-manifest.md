@@ -32,11 +32,11 @@ set, policy epoch, and expiry. Supply workers use a least-privilege ServiceActor
 bound to the durable job and WorkerLease; they never impersonate a triggering
 user, and ingestion authority never grants Runtime delivery authority.
 
-WorkerLease is server-minted and signed. It binds Organization, job, operation, source and optional
-resource/revision, ServiceActor/workload, policy epoch, optional audience,
-idempotency key, lease generation, issued-at, expiry, and nonce. Redemption
-checks every claim against the current job row; mutation, stale generation, and
-replay deny.
+WorkerLease is server-minted and signed. It binds Organization, job, operation,
+source and optional resource/revision, ServiceActor/workload, policy epoch,
+optional audience, idempotency key, lease generation, issued-at, expiry, and
+nonce. Redemption checks every claim against the current job row; mutation,
+stale generation, and replay deny.
 
 Every request and worker operation begins a transaction, sets Organization and
 ActorContext transaction-locally, validates it, and only then permits ORM

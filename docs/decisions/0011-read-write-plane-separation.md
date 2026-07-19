@@ -1,6 +1,6 @@
 ---
 name: adr-0011-read-write-plane-separation
-version: "1.2.0"
+version: "1.2.1"
 description: >
   Record the separation of context reads from action writes: ContextAccessTicket
   and ActionTicket share an identity chain but different audiences and are never
@@ -28,6 +28,13 @@ different audience claim, never interchangeable (ACTION-SEPARATION-014). Low-ris
 actions (e.g. plain-text group replies) may use a pre-approved policy tier:
 the approval flow lightens, ticket separation and audit never do.
 
+## Rationale
+
+Read authority proves only that a caller may receive declared context. It says
+nothing about whether that caller may mutate an external destination. Distinct
+ticket audiences make this boundary cryptographically checkable and prevent a
+read-capable component from becoming a confused deputy for writes.
+
 ## Consequences
 
 The engine's attack surface stays read-only; every side effect has its own
@@ -41,3 +48,11 @@ use distinct tickets and idempotency keys linked only by DeliveryAttemptRef;
 successful replay returns the stored receipt, while an ambiguous provider
 attempt is reconciled under the original id rather than retried with a new
 ticket.
+
+## Revisit trigger
+
+This separation may be refined when a real external effect requires a new
+capability class or approval tier. It must not be reopened merely to reuse a
+read ticket: any proposal still has to prove different read and effect
+audiences, one-effect payload/destination binding, and zero business effect for
+wrong-audience use.

@@ -14,10 +14,10 @@ description: >
 
 ## Context
 
-ContextEngine is a new multi-process context-delivery system. Agent-facing documentation (the files an
-AI coding agent loads before seeing a task) needs a consistent house standard from
-day one so facts land at the right altitude, guardrails are always-resident, and
-volatile values are never copied.
+ContextEngine is a new multi-process context-delivery system. Agent-facing
+documentation (the files an AI coding agent loads before seeing a task) needs a
+consistent house standard from day one so facts land at the right altitude,
+guardrails are always-resident, and volatile values are never copied.
 
 ## Decision
 
@@ -40,4 +40,5 @@ We will adopt the **doc-steward** standard:
 Docs can be audited with doc-steward's read-only EVALUATE
 (`doc_lint --target .`) and low-risk fixes applied via `/doc-steward-apply`.
 
-~~TODO_DECISION: exact frontend/backend/database stack~~ — resolved 2026-07-18 by ADR-0005 (Python 3.13 + FastAPI + SQLAlchemy + PostgreSQL 17 + pgvector).
+~~TODO_DECISION: exact frontend/backend/database stack~~ — resolved 2026-07-18
+by ADR-0005 (Python 3.13 + FastAPI + SQLAlchemy + PostgreSQL 17 + pgvector).
