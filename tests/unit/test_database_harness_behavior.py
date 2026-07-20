@@ -27,7 +27,7 @@ def _run_stubbed_harness(checkout: Path, stub_directory: Path) -> tuple[str, str
     }
 
     subprocess.run(
-        ["bash", str(scripts / "database_harness.sh"), "up"],
+        ["/bin/bash", str(scripts / "database_harness.sh"), "up"],
         check=True,
         capture_output=True,
         text=True,
@@ -90,7 +90,7 @@ def test_concurrent_first_use_converges_on_one_persisted_compose_project(
         stub_directory / "ln",
         "#!/usr/bin/env bash\n"
         "if [[ \"$2\" == */compose-project ]]; then\n"
-        "  marker=\"$HARNESS_BARRIER_DIR/$BASHPID\"\n"
+        "  marker=\"$HARNESS_BARRIER_DIR/$$\"\n"
         "  : >\"$marker\"\n"
         "  if mkdir \"$HARNESS_BARRIER_DIR/leader\" 2>/dev/null; then\n"
         "    while [[ $(find \"$HARNESS_BARRIER_DIR\" -type f | wc -l) -lt 2 ]]; do\n"
@@ -120,7 +120,7 @@ def test_concurrent_first_use_converges_on_one_persisted_compose_project(
 
     processes = [
         subprocess.Popen(
-            ["bash", str(scripts / "database_harness.sh"), "up"],
+            ["/bin/bash", str(scripts / "database_harness.sh"), "up"],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
