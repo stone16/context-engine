@@ -50,7 +50,7 @@ Verified on 2026-07-19:
 | Design authority | Implementation Design v1.2 is authoritative; earlier drafts are non-authoritative history. | `docs/design/2026-07-18-context-engine-implementation-design.md:9` |
 | Baseline | A byte-level candidate exists but is not approved and is not immutable. | `DESIGN-BASELINE.md:1` |
 | Architecture | Five deep Modules and three processes by M2 are fixed. | implementation design sections 2 and 9 |
-| Security | Security prose defines eighteen base families plus the release-owner family; their revocation IDs still need one generated canonical catalog. | `docs/security/Test-Architecture-与可验证性设计.md:123`, `docs/security/安全负向测试清单.md:28` |
+| Security | ADR-0019 fixes exactly fifteen stable release IDs in the machine catalog; overlapping labels retain their cases under canonical IDs, and the canonical fixture is `ACCEPT-001` through `ACCEPT-012` plus derived evidence. | `eval/catalogs/security-invariants.yaml`, `docs/decisions/0019-security-catalog-normalization.md` |
 | Roadmap | D0, M0-M7, parallel C1, L1, and P3 are defined. | `PLAN.md:77`, implementation design section 9 |
 | Product contract | The program PRD contains 100 user stories and implementation/testing decisions. | `docs/agents/prd-contextengine-implementation.md` |
 | Issue backlog | Before this document, no child issue draft was stored. This spec is the repository draft; no GitHub parent or child issue has been created or authorized. | this spec, `docs/agents/issue-tracker.md`, `DESIGN-BASELINE.md` |
@@ -934,13 +934,27 @@ availability.
 | CITATION-AUTH-010 | M2 | HTTP/generated SDK + BotDelivery |
 | EGRESS-011 | M2 | ModelGateway/Sender spies |
 | TRACE-REDACTION-012 | M0/M1 | persisted ContextRun/DecisionAudit + log scan |
-| CACHE-SCOPE-013 | Conditional from first authorization-sensitive cache activation | Runtime behavior with cache-key mutation suite |
 | ACTION-SEPARATION-014 | M2 | ActionPlane prepare/perform + Sender spy |
 | CROSS-ORG-LEARN-015 | M0 | architecture/schema/export gate |
-| AUDIENCE-016 | M5 | BotDelivery + Runtime + ActionPlane |
-| ACL-PROOF-017 | M1 File; M4 live source | Provider contract + Runtime |
-| DELIVERY-EVIDENCE-018 | M2 | authenticated ingress before retrieval |
 | RELEASE-OWNER-019 | M0 | ContextLearning promote + direct-write negative tests |
+
+These are exactly the fifteen canonical release IDs fixed by
+[ADR-0019](../decisions/0019-security-catalog-normalization.md). The former
+`AUDIENCE-016` cases remain required under `SCOPE-INTERSECTION-004` plus
+`EGRESS-011`; former `ACL-PROOF-017` cases under `INDEX-NOT-AUTHORITY-005` plus
+`REVOCATION-006`; and former `DELIVERY-EVIDENCE-018` cases under
+`TRANSPORT-UNTRUSTED-008`. This normalization removes duplicate release labels,
+not safeguards or tests. IDs are never renumbered or reused.
+
+The twelve canonical top-level scenarios are `ACCEPT-001` cross-Organization
+isolation (including the bidirectional A/B assertions in one parameterized
+fixture), `ACCEPT-002` same-Organization Membership isolation, `ACCEPT-003`
+Agent ceiling, `ACCEPT-004` request narrowing, `ACCEPT-005` revocation,
+`ACCEPT-006` hostile index, `ACCEPT-007` transport injection, `ACCEPT-008`
+WorkerLease replay/binding, `ACCEPT-009` source-native ACL, `ACCEPT-010`
+citation revocation, `ACCEPT-011` denied/not-found equivalence, and
+`ACCEPT-012` Context/Action separation. Historical scenarios 13–22 remain
+required derived or parameterized evidence and do not add top-level IDs.
 
 Catalog output is exactly `PASS`, `FAIL`, `NOT_ACTIVE`, or `NOT_APPLICABLE`.
 Capability coverage is reported separately. An active unexecuted or unmapped
@@ -948,10 +962,13 @@ invariant is `FAIL`; a required exit accepts only `PASS`.
 
 M1 separately requires a composition/behavior check proving that no final
 Package or `AuthorizedProjection` cache is active as an authorization shortcut.
-While that capability is inactive, `CACHE-SCOPE-013` is honestly `NOT_ACTIVE`
-and is not a required M1 exit entry. If any authorization-sensitive cache is
-later activated, the catalog's preregistered `applicableFrom` makes
-`CACHE-SCOPE-013` required and only `PASS` can release it.
+`CACHE-SCOPE-013` is a preregistered conditional extension outside the
+canonical fifteen. While that capability is inactive, the M1 composition check
+must prove the path unreachable; it is not a canonical catalog result. If an
+authorization-sensitive final Package or `AuthorizedProjection` cache is later
+activated, a prior versioned catalog/schema change must add `CACHE-SCOPE-013`,
+its `applicableFrom`, and its cache-key mutation cases. Only `PASS` can release
+that activated capability.
 
 `NON-ENUMERATION-009` has milestone-scoped proving cases. M1 must PASS
 deterministic status, body, error, shape, and count equivalence for missing,
@@ -960,29 +977,18 @@ same-Organization denied, and cross-Organization refs. Its timing case has
 uncertainty method are preregistered before execution, and the case must PASS for
 E5.
 
-The planned executable catalog is `eval/catalogs/security-invariants.yaml`; once
-implemented, it becomes the single source for reports and generated security
-documentation. It uses `REVOCATION-006` as the canonical id and includes
-`RELEASE-OWNER-019`; a generator check fails if documentation, tests, and the
-catalog disagree.
+The executable machine authority is `eval/catalogs/security-invariants.yaml`.
+Its schema is `eval/catalogs/security-catalog.schema.json`, and
+`python3 scripts/validate_security_catalog.py` checks the exact count, order,
+IDs, shape, and tracked document references. The catalog uses JSON-compatible
+YAML so the D0 validator can use the Python standard library while no dependency
+manifest exists. It uses `REVOCATION-006` and includes `RELEASE-OWNER-019`.
 
-Each catalog entry has this machine-validated minimum shape:
-
-```yaml
-- id: TENANT-OWNERSHIP-001
-  title: explicit Organization ownership
-  applicability:
-    mode: required            # required | conditional | not_applicable
-    applicableFrom: M0        # required for required/conditional
-    rationale: null           # required only for not_applicable
-  capabilityRef: tenant-isolation
-  requiredMilestones: [M0]
-  provingCases:
-    property: [case-id]
-    postgres: [case-id]
-    runtimeOrDelivery: [case-id]
-  evidenceArtifacts: [artifact-pattern]
-```
+The schema, rather than a duplicated prose example, owns the exact entry shape.
+At minimum it makes identity, purpose, threat/assets, deterministic and hard
+oracles, applicability, capability, milestone, evidence status, expected
+property/PostgreSQL/runtime-or-delivery evidence, and authority references
+machine-required.
 
 The runner joins catalog entries to capability activation and current test
 results, then emits the four-state status. Unknown ids, duplicate ids, a missing
@@ -1142,9 +1148,12 @@ their shape is known.
   Policy Epoch granularity.
 - **Acceptance:** no P0/P1 cross-document conflict; evidence reports and their
   digests are pinned; Runtime/Provider/BotDelivery/ActionPlane/Learning test seams
-  are approved; the canonical invariant catalog normalizes revocation naming and
-  includes `RELEASE-OWNER-019`; the epoch prototype, impact report, and decision
-  update is pinned; the publication destination is explicit.
+  are approved; the canonical invariant catalog contains exactly the fifteen
+  ADR-0019 IDs, uses `REVOCATION-006`, includes `RELEASE-OWNER-019`, and passes
+  `python3 scripts/validate_security_catalog.py`; `ACCEPT-001` through
+  `ACCEPT-012` (including denied/not-found equivalence) retain all derived
+  evidence; the epoch prototype, impact report,
+  and decision update is pinned; the publication destination is explicit.
 - **Rollback:** supersede with a new baseline manifest; never mutate a historical
   approved digest in place.
 
@@ -1487,8 +1496,12 @@ authorization weakening.
 | `docs/decisions/0014-curation-snapshot-and-release-ownership.md` | Curation and single release owner. |
 | `docs/decisions/0015-rls-transaction-context-and-schema-manifest.md` | PostgreSQL roles, context, WorkerLease, and schema audit. |
 | `docs/decisions/0016-implementation-authority-and-vertical-slice-roadmap.md` | Authority and milestone sequencing. |
+| `docs/decisions/0019-security-catalog-normalization.md` | Exact canonical release IDs, absorbed labels, conditional cache extension, and acceptance-scenario counting. |
 | `docs/security/Test-Architecture-与可验证性设计.md` | Required test surfaces, catalogs, and CI cadence. |
 | `docs/security/安全负向测试清单.md` | Adversarial cases and expected zero-byte/effect outcomes. |
+| `eval/catalogs/security-invariants.yaml` | Machine authority for the fifteen canonical release invariants. |
+| `eval/catalogs/security-catalog.schema.json` | Schema enforced by the D0 catalog validator. |
+| `scripts/validate_security_catalog.py` | Standard-library validator for catalog order, shape, IDs, and tracked references. |
 | `docs/agents/prd-contextengine-implementation.md` | Product intent, user stories, and program acceptance decisions. |
 | `DESIGN-BASELINE.md` | Candidate digest and D0 promotion checklist. |
 | `PLAN.md` | Public roadmap summary. |

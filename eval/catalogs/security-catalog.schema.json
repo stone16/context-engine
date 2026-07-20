@@ -1,0 +1,662 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ContextEngine security invariant and acceptance fixture catalog",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "catalogVersion",
+    "authority",
+    "hardOracles",
+    "invariants",
+    "fixtures"
+  ],
+  "properties": {
+    "catalogVersion": {
+      "type": "string",
+      "const": "1.0.0"
+    },
+    "authority": {
+      "$ref": "#/$defs/authority"
+    },
+    "hardOracles": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "prefixItems": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "requiredValue", "veto"],
+          "properties": {
+            "name": {"const": "Unauthorized Evidence"},
+            "requiredValue": {"type": "integer", "const": 0},
+            "veto": {"type": "boolean", "const": true}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "requiredValue", "veto"],
+          "properties": {
+            "name": {"const": "wrong-Organization effect"},
+            "requiredValue": {"type": "integer", "const": 0},
+            "veto": {"type": "boolean", "const": true}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "requiredValue", "veto"],
+          "properties": {
+            "name": {"const": "missing-context fallback"},
+            "requiredValue": {"type": "integer", "const": 0},
+            "veto": {"type": "boolean", "const": true}
+          }
+        }
+      ],
+      "items": false
+    },
+    "invariants": {
+      "type": "array",
+      "minItems": 15,
+      "maxItems": 15,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/invariant"
+      }
+    },
+    "fixtures": {
+      "type": "array",
+      "minItems": 12,
+      "maxItems": 12,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/fixture"
+      }
+    }
+  },
+  "$defs": {
+    "nonEmptyString": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "stringArray": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/nonEmptyString"
+      }
+    },
+    "authorityRef": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(#[0-9]+|(?!(?:[A-Za-z]:[/\\\\]|/|https?://|file://))(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9._\\-/\u4e00-\u9fff]+(?:#[A-Za-z0-9._\\-/\u4e00-\u9fff]+)?)$"
+    },
+    "documentRef": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!(?:[A-Za-z]:[/\\\\]|/|https?://|file://))(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9._\\-/\u4e00-\u9fff]+(?:#[A-Za-z0-9._\\-/]+)?$"
+    },
+    "authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["issueRefs", "documentRefs", "reconciliation"],
+      "properties": {
+        "issueRefs": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^#[0-9]+$"
+          }
+        },
+        "documentRefs": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/documentRef"
+          }
+        },
+        "reconciliation": {
+          "$ref": "#/$defs/nonEmptyString"
+        }
+      }
+    },
+    "invariantId": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)*-[0-9]{3}$",
+      "enum": [
+        "TENANT-OWNERSHIP-001",
+        "TENANT-FK-002",
+        "RLS-FAIL-CLOSED-003",
+        "SCOPE-INTERSECTION-004",
+        "INDEX-NOT-AUTHORITY-005",
+        "REVOCATION-006",
+        "WORKER-LEASE-007",
+        "TRANSPORT-UNTRUSTED-008",
+        "NON-ENUMERATION-009",
+        "CITATION-AUTH-010",
+        "EGRESS-011",
+        "TRACE-REDACTION-012",
+        "ACTION-SEPARATION-014",
+        "CROSS-ORG-LEARN-015",
+        "RELEASE-OWNER-019"
+      ]
+    },
+    "fixtureId": {
+      "type": "string",
+      "pattern": "^ACCEPT-[0-9]{3}$",
+      "enum": [
+        "ACCEPT-001",
+        "ACCEPT-002",
+        "ACCEPT-003",
+        "ACCEPT-004",
+        "ACCEPT-005",
+        "ACCEPT-006",
+        "ACCEPT-007",
+        "ACCEPT-008",
+        "ACCEPT-009",
+        "ACCEPT-010",
+        "ACCEPT-011",
+        "ACCEPT-012"
+      ]
+    },
+    "threatRef": {
+      "type": "string",
+      "pattern": "^TM-(0[1-9]|1[0-8])$"
+    },
+    "assetRef": {
+      "type": "string",
+      "pattern": "^A-0[1-8]$"
+    },
+    "hardOracleName": {
+      "type": "string",
+      "enum": [
+        "Unauthorized Evidence",
+        "wrong-Organization effect",
+        "missing-context fallback"
+      ]
+    },
+    "milestone": {
+      "type": "string",
+      "pattern": "^(D0|M[0-9]+|C[0-9]+|P[0-9]+)$"
+    },
+    "applicability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "applicableFrom", "rationale"],
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["required", "conditional", "not_applicable"]
+        },
+        "applicableFrom": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "rationale": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "pattern": "\\S"
+        }
+      },
+      "if": {
+        "properties": {
+          "mode": {"const": "not_applicable"}
+        },
+        "required": ["mode"]
+      },
+      "then": {
+        "properties": {
+          "applicableFrom": {"type": "null"},
+          "rationale": {"$ref": "#/$defs/nonEmptyString"}
+        }
+      },
+      "else": {
+        "properties": {
+          "applicableFrom": {"$ref": "#/$defs/nonEmptyString"}
+        }
+      }
+    },
+    "expectedEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["property", "postgres", "runtimeOrDelivery"],
+      "properties": {
+        "property": {"$ref": "#/$defs/stringArray"},
+        "postgres": {"$ref": "#/$defs/stringArray"},
+        "runtimeOrDelivery": {"$ref": "#/$defs/stringArray"}
+      }
+    },
+    "invariant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "title",
+        "purpose",
+        "threatRefs",
+        "protectedAssets",
+        "deterministicOracle",
+        "hardOracleRefs",
+        "applicability",
+        "capabilityRef",
+        "requiredMilestones",
+        "evidenceStatus",
+        "expectedEvidence",
+        "authorityRefs"
+      ],
+      "properties": {
+        "id": {"$ref": "#/$defs/invariantId"},
+        "title": {"$ref": "#/$defs/nonEmptyString"},
+        "purpose": {"$ref": "#/$defs/nonEmptyString"},
+        "threatRefs": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/threatRef"}
+        },
+        "protectedAssets": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/assetRef"}
+        },
+        "deterministicOracle": {"$ref": "#/$defs/nonEmptyString"},
+        "hardOracleRefs": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/hardOracleName"}
+        },
+        "applicability": {"$ref": "#/$defs/applicability"},
+        "capabilityRef": {"$ref": "#/$defs/nonEmptyString"},
+        "requiredMilestones": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/milestone"}
+        },
+        "evidenceStatus": {
+          "type": "string",
+          "enum": ["accepted", "future_case"]
+        },
+        "expectedEvidence": {"$ref": "#/$defs/expectedEvidence"},
+        "authorityRefs": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/authorityRef"}
+        }
+      }
+    },
+    "carrier": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["statusAtM0", "m0Expectation", "upgradeTrigger"],
+      "properties": {
+        "statusAtM0": {
+          "type": "string",
+          "enum": ["available", "unavailable", "future"]
+        },
+        "m0Expectation": {
+          "type": "string",
+          "enum": ["active_fail_closed", "fail_closed"]
+        },
+        "upgradeTrigger": {"$ref": "#/$defs/nonEmptyString"}
+      },
+      "if": {
+        "properties": {
+          "statusAtM0": {"const": "available"}
+        },
+        "required": ["statusAtM0"]
+      },
+      "then": {
+        "properties": {
+          "m0Expectation": {"const": "active_fail_closed"}
+        }
+      },
+      "else": {
+        "properties": {
+          "m0Expectation": {"const": "fail_closed"}
+        }
+      }
+    },
+    "trustedIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "actorKind": {"$ref": "#/$defs/nonEmptyString"},
+        "serviceActorRef": {"$ref": "#/$defs/nonEmptyString"},
+        "organizationRef": {"$ref": "#/$defs/nonEmptyString"},
+        "principalRef": {"$ref": "#/$defs/nonEmptyString"},
+        "agentRef": {"$ref": "#/$defs/nonEmptyString"},
+        "agentVersion": {"type": "integer", "minimum": 0},
+        "membershipVersion": {"type": "integer", "minimum": 0},
+        "currentPolicyEpoch": {"type": "integer", "minimum": 0},
+        "purpose": {"$ref": "#/$defs/nonEmptyString"},
+        "requiredAclMode": {"$ref": "#/$defs/nonEmptyString"},
+        "capabilityAudience": {"$ref": "#/$defs/nonEmptyString"},
+        "authenticationSource": {"$ref": "#/$defs/nonEmptyString"},
+        "durableJobRef": {"$ref": "#/$defs/nonEmptyString"},
+        "samplePlanRef": {"$ref": "#/$defs/nonEmptyString"},
+        "source": {"$ref": "#/$defs/nonEmptyString"},
+        "invocations": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/invocationIdentity"}
+        }
+      }
+    },
+    "invocationIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["organizationRef", "principalRef", "purpose"],
+      "properties": {
+        "organizationRef": {"$ref": "#/$defs/nonEmptyString"},
+        "principalRef": {"$ref": "#/$defs/nonEmptyString"},
+        "purpose": {"$ref": "#/$defs/nonEmptyString"}
+      }
+    },
+    "setup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["preconditions", "trustedIdentity"],
+      "properties": {
+        "preconditions": {"$ref": "#/$defs/stringArray"},
+        "trustedIdentity": {"$ref": "#/$defs/trustedIdentity"}
+      }
+    },
+    "adversarialMutation": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 2,
+      "required": ["kind"],
+      "properties": {
+        "kind": {"$ref": "#/$defs/nonEmptyString"},
+        "attempts": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/probeAttempt"}
+        },
+        "candidateWasDiscoveredFor": {"$ref": "#/$defs/nonEmptyString"},
+        "candidateFields": {"$ref": "#/$defs/stringArray"},
+        "currentInvocation": {"$ref": "#/$defs/nonEmptyString"},
+        "requestedAgentSources": {"$ref": "#/$defs/stringArray"},
+        "signedAgentCeiling": {"$ref": "#/$defs/stringArray"},
+        "requestNarrowing": {"$ref": "#/$defs/requestNarrowing"},
+        "promptInjectedSourceRefs": {"$ref": "#/$defs/stringArray"},
+        "tokenPolicyEpoch": {"type": "integer", "minimum": 0},
+        "cachedResourceStillPresent": {"type": "boolean"},
+        "orderedCandidateRefs": {"$ref": "#/$defs/stringArray"},
+        "candidatePayloadFields": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/nonEmptyString"}
+        },
+        "bodyFields": {"$ref": "#/$defs/injectedBodyFields"},
+        "replayCount": {"type": "integer", "minimum": 1},
+        "mutatedClaim": {"$ref": "#/$defs/mutatedClaim"},
+        "retainedNonce": {"$ref": "#/$defs/nonEmptyString"},
+        "requestedFallback": {"$ref": "#/$defs/nonEmptyString"},
+        "missingCapability": {"$ref": "#/$defs/nonEmptyString"},
+        "locator": {"$ref": "#/$defs/nonEmptyString"},
+        "originalPolicyEpoch": {"type": "integer", "minimum": 0},
+        "attemptedAlternateUse": {"$ref": "#/$defs/nonEmptyString"},
+        "probes": {"$ref": "#/$defs/stringArray"},
+        "order": {"$ref": "#/$defs/stringArray"},
+        "ticketKind": {"$ref": "#/$defs/nonEmptyString"},
+        "requestedEffect": {"$ref": "#/$defs/nonEmptyString"},
+        "destination": {"$ref": "#/$defs/nonEmptyString"},
+        "targetOrganization": {"$ref": "#/$defs/nonEmptyString"}
+      }
+    },
+    "probeAttempt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["invocation", "target"],
+      "properties": {
+        "invocation": {"$ref": "#/$defs/nonEmptyString"},
+        "target": {"$ref": "#/$defs/nonEmptyString"}
+      }
+    },
+    "requestNarrowing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sourceRefs"],
+      "properties": {
+        "sourceRefs": {"$ref": "#/$defs/stringArray"}
+      }
+    },
+    "injectedBodyFields": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["organizationRef", "principalRef", "purpose", "audience", "acl", "rawSql", "bypassAuthorization"],
+      "properties": {
+        "organizationRef": {"$ref": "#/$defs/nonEmptyString"},
+        "principalRef": {"$ref": "#/$defs/nonEmptyString"},
+        "purpose": {"$ref": "#/$defs/nonEmptyString"},
+        "audience": {"$ref": "#/$defs/stringArray"},
+        "acl": {"$ref": "#/$defs/nonEmptyString"},
+        "rawSql": {"$ref": "#/$defs/nonEmptyString"},
+        "bypassAuthorization": {"type": "boolean"}
+      }
+    },
+    "mutatedClaim": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "organizationRef": {"$ref": "#/$defs/nonEmptyString"},
+        "jobRef": {"$ref": "#/$defs/nonEmptyString"},
+        "sourceRef": {"$ref": "#/$defs/nonEmptyString"},
+        "operation": {"$ref": "#/$defs/nonEmptyString"},
+        "generation": {"type": "integer", "minimum": 0},
+        "nonce": {"$ref": "#/$defs/nonEmptyString"}
+      }
+    },
+    "operation": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 2,
+      "required": ["interface", "request"],
+      "properties": {
+        "interface": {"$ref": "#/$defs/nonEmptyString"},
+        "request": {"$ref": "#/$defs/nonEmptyString"},
+        "count": {"type": "integer", "minimum": 1},
+        "observation": {"$ref": "#/$defs/nonEmptyString"},
+        "expectedAuthorizedProjection": {"$ref": "#/$defs/stringArray"},
+        "expectedEffectiveScope": {"$ref": "#/$defs/stringArray"},
+        "comparison": {"$ref": "#/$defs/nonEmptyString"},
+        "timing": {"$ref": "#/$defs/nonEmptyString"},
+        "requiredTypeFlow": {"$ref": "#/$defs/stringArray"},
+        "phase": {"$ref": "#/$defs/nonEmptyString"},
+        "durableComparison": {"$ref": "#/$defs/nonEmptyString"},
+        "comparisonFields": {"$ref": "#/$defs/stringArray"}
+      }
+    },
+    "externalResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 2,
+      "required": ["status"],
+      "properties": {
+        "status": {"type": "integer", "minimum": 100, "maximum": 599},
+        "code": {"$ref": "#/$defs/nonEmptyString"},
+        "body": {"$ref": "#/$defs/responseBody"},
+        "sameForBothAttempts": {"type": "boolean"},
+        "authorizedPayloadUtf8": {"$ref": "#/$defs/nonEmptyString"},
+        "authorizedPayloadBytes": {"type": "integer", "minimum": 0},
+        "privateFieldPresent": {"type": "boolean"},
+        "privateResourcePresent": {"type": "boolean"},
+        "source2Present": {"type": "boolean"},
+        "orgBContentPresent": {"type": "boolean"},
+        "fieldNamesEchoed": {"type": "boolean"},
+        "missingContextFallbackCount": {"type": "integer", "minimum": 0},
+        "leaseClaimsEchoed": {"type": "boolean"},
+        "byteIdenticalAcrossProbes": {"type": "boolean"},
+        "sameTimingBucket": {"type": "boolean"}
+      }
+    },
+    "responseBody": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "kind": {"$ref": "#/$defs/nonEmptyString"},
+        "gap": {"$ref": "#/$defs/nonEmptyString"}
+      }
+    },
+    "packageOrError": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 2,
+      "required": ["kind"],
+      "properties": {
+        "kind": {"$ref": "#/$defs/nonEmptyString"},
+        "packageCount": {"type": "integer", "minimum": 0},
+        "crossOrganizationResourceDetailCount": {"type": "integer", "minimum": 0},
+        "evidenceFields": {"$ref": "#/$defs/stringArray"},
+        "deniedFieldCountExposed": {"type": "boolean"},
+        "evidenceResourceRefs": {"$ref": "#/$defs/stringArray"},
+        "gap": {"$ref": "#/$defs/nonEmptyString"},
+        "sourceRefs": {"$ref": "#/$defs/stringArray"},
+        "expandedSourceCallCount": {"type": "integer", "minimum": 0},
+        "stalePackageReturned": {"type": "boolean"},
+        "revokedResourceDetailCount": {"type": "integer", "minimum": 0},
+        "evidenceRefs": {"$ref": "#/$defs/stringArray"},
+        "deniedCandidateCountExposed": {"type": "boolean"},
+        "contextPackageCreated": {"type": "boolean"},
+        "trustedContextConstructedFromBody": {"type": "boolean"},
+        "reasonVisibleToWorker": {"$ref": "#/$defs/nonEmptyString"},
+        "newReceiptCreated": {"type": "boolean"},
+        "aclModeUsed": {"type": ["string", "null"], "minLength": 1},
+        "weakFallbackCount": {"type": "integer", "minimum": 0},
+        "capabilityReportedAsPass": {"type": "boolean"},
+        "citationFieldsReturned": {"type": "integer", "minimum": 0},
+        "capabilityStatus": {"$ref": "#/$defs/nonEmptyString"},
+        "deniedCountExposed": {"type": "boolean"},
+        "existenceDetailCount": {"type": "integer", "minimum": 0},
+        "actionTicketCreated": {"type": "boolean"},
+        "contextTicketConsumed": {"type": "boolean"}
+      }
+    },
+    "evidenceMetrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["unauthorizedEvidenceCount", "unauthorizedContentBytes", "outboundBytes"],
+      "properties": {
+        "unauthorizedEvidenceCount": {"type": "integer", "minimum": 0, "const": 0},
+        "unauthorizedContentBytes": {"type": "integer", "minimum": 0, "const": 0},
+        "outboundBytes": {"type": "integer", "minimum": 0}
+      }
+    },
+    "businessEffectMetrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["wrongOrganizationEffectCount", "mutationEffectCount", "totalEffectsAfterScenario"],
+      "properties": {
+        "wrongOrganizationEffectCount": {"type": "integer", "minimum": 0, "const": 0},
+        "mutationEffectCount": {"type": "integer", "minimum": 0},
+        "totalEffectsAfterScenario": {"type": "integer", "minimum": 0}
+      }
+    },
+    "ioMetrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["providerCalls", "indexCalls", "modelCalls", "actionCalls"],
+      "properties": {
+        "providerCalls": {"type": "integer", "minimum": 0},
+        "indexCalls": {"type": "integer", "minimum": 0},
+        "modelCalls": {"type": "integer", "minimum": 0},
+        "actionCalls": {"type": "integer", "minimum": 0}
+      }
+    },
+    "expected": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["externalResponse", "packageOrError", "evidence", "businessEffects", "io"],
+      "properties": {
+        "externalResponse": {"$ref": "#/$defs/externalResponse"},
+        "packageOrError": {"$ref": "#/$defs/packageOrError"},
+        "evidence": {"$ref": "#/$defs/evidenceMetrics"},
+        "businessEffects": {"$ref": "#/$defs/businessEffectMetrics"},
+        "io": {"$ref": "#/$defs/ioMetrics"}
+      }
+    },
+    "fixture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "title",
+        "decisionStatus",
+        "carrier",
+        "setup",
+        "adversarialMutation",
+        "operation",
+        "expected",
+        "invariantRefs",
+        "authorityRefs"
+      ],
+      "properties": {
+        "id": {"$ref": "#/$defs/fixtureId"},
+        "title": {"$ref": "#/$defs/nonEmptyString"},
+        "decisionStatus": {
+          "type": "string",
+          "enum": ["accepted", "future_case"]
+        },
+        "carrier": {"$ref": "#/$defs/carrier"},
+        "setup": {"$ref": "#/$defs/setup"},
+        "adversarialMutation": {"$ref": "#/$defs/adversarialMutation"},
+        "operation": {"$ref": "#/$defs/operation"},
+        "expected": {"$ref": "#/$defs/expected"},
+        "invariantRefs": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/invariantId"}
+        },
+        "authorityRefs": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/authorityRef"}
+        }
+      },
+      "if": {
+        "properties": {
+          "carrier": {
+            "properties": {
+              "statusAtM0": {"enum": ["unavailable", "future"]}
+            },
+            "required": ["statusAtM0"]
+          }
+        },
+        "required": ["carrier"]
+      },
+      "then": {
+        "properties": {
+          "expected": {
+            "properties": {
+              "io": {
+                "properties": {
+                  "providerCalls": {"const": 0},
+                  "indexCalls": {"const": 0},
+                  "modelCalls": {"const": 0},
+                  "actionCalls": {"const": 0}
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,1013 @@
+{
+  "catalogVersion": "1.0.0",
+  "authority": {
+    "issueRefs": [
+      "#2",
+      "#5"
+    ],
+    "documentRefs": [
+      "README.md",
+      "docs/agents/prd-contextengine-implementation.md",
+      "docs/design/2026-07-18-context-engine-implementation-design.md",
+      "docs/security/context-engine-threat-model.md",
+      "docs/security/Test-Architecture-与可验证性设计.md",
+      "docs/security/安全负向测试清单.md",
+      "docs/decisions/0019-security-catalog-normalization.md"
+    ],
+    "reconciliation": "Issue #2 fixes the product and testing decisions, issue #5 requires exactly fifteen release invariants and twelve canonical acceptance fixtures, and ADR-0019 resolves the later nineteen-label prose expansion without weakening any safeguard. The canonical set is IDs 001 through 012, 014, 015, and 019: CACHE-SCOPE-013 remains a preregistered conditional extension; AUDIENCE-016 is absorbed by SCOPE-INTERSECTION-004 and EGRESS-011; ACL-PROOF-017 is absorbed by INDEX-NOT-AUTHORITY-005 and REVOCATION-006; DELIVERY-EVIDENCE-018 is absorbed by TRANSPORT-UNTRUSTED-008. ACCEPT-001 through ACCEPT-012 follow ADR-0019's category order. Protected-asset references A-01 through A-08 refer, in order, to the eight bullets in the threat model's Protected assets section. Every expectedEvidence value below is a stable planned case identifier, not a claim that the case ran or passed; carrier status and the explicit M0 oracle preserve the distinction between an accepted decision and an activated capability."
+  },
+  "hardOracles": [
+    {
+      "name": "Unauthorized Evidence",
+      "requiredValue": 0,
+      "veto": true
+    },
+    {
+      "name": "wrong-Organization effect",
+      "requiredValue": 0,
+      "veto": true
+    },
+    {
+      "name": "missing-context fallback",
+      "requiredValue": 0,
+      "veto": true
+    }
+  ],
+  "invariants": [
+    {
+      "id": "TENANT-OWNERSHIP-001",
+      "title": "Every tenant-owned object has explicit Organization ownership",
+      "purpose": "Prevent orphaned or ambiguously owned rows, blobs, index records, jobs, traces, and Packages from entering a tenant path.",
+      "threatRefs": ["TM-02", "TM-08"],
+      "protectedAssets": ["A-01", "A-03", "A-08"],
+      "deterministicOracle": "Pass only when every classified tenant object has one Organization owner, missing-owner creation is rejected, and the orphan count is exactly 0; fail on any accepted missing owner or ambiguous ownership chain.",
+      "hardOracleRefs": ["Unauthorized Evidence", "wrong-Organization effect", "missing-context fallback"],
+      "applicability": {
+        "mode": "required",
+        "applicableFrom": "M0",
+        "rationale": null
+      },
+      "capabilityRef": "organization-owned-storage",
+      "requiredMilestones": ["M0", "M1"],
+      "evidenceStatus": "accepted",
+      "expectedEvidence": {
+        "property": ["PROP-TENANT-OWNERSHIP-001"],
+        "postgres": ["PG-TENANT-OWNERSHIP-001", "DB-008"],
+        "runtimeOrDelivery": ["RUNTIME-TENANT-OWNERSHIP-001"]
+      },
+      "authorityRefs": [
+        "docs/security/context-engine-threat-model.md#2-protected-assets",
+        "docs/security/Test-Architecture-与可验证性设计.md#4-security-invariant-catalog",
+        "docs/decisions/0019-security-catalog-normalization.md#decision"
+      ]
+    },
+    {
+      "id": "TENANT-FK-002",
+      "title": "Tenant children cannot reference another Organization's parent",
+      "purpose": "Make cross-Organization object graphs structurally unrepresentable even when application filters or identifiers are wrong.",
+      "threatRefs": ["TM-02"],
+      "protectedAssets": ["A-01", "A-03"],
+      "deterministicOracle": "Pass only when every attempted cross-Organization child-to-parent write is rejected and creates exactly 0 rows; fail if any cross-Organization reference commits.",
+      "hardOracleRefs": ["Unauthorized Evidence", "wrong-Organization effect"],
+      "applicability": {
+        "mode": "required",
+        "applicableFrom": "M0",
+        "rationale": null
+      },
+      "capabilityRef": "composite-tenant-ownership",
+      "requiredMilestones": ["M0", "M1"],
+      "evidenceStatus": "accepted",
+      "expectedEvidence": {
+        "property": ["PROP-TENANT-FK-002"],
+        "postgres": ["PG-TENANT-FK-002", "DB-003"],
+        "runtimeOrDelivery": ["RUNTIME-TENANT-FK-002"]
+      },
+      "authorityRefs": [
+        "docs/security/context-engine-threat-model.md#6-threat-register",
+        "docs/security/安全负向测试清单.md#3-databaseindexcache-与-blob",
+        "docs/decisions/0019-security-catalog-normalization.md#decision"
+      ]
+    },
+    {
+      "id": "RLS-FAIL-CLOSED-003",
+      "title": "Missing or invalid tenant transaction context fails closed",
+      "purpose": "Ensure a non-owner database session never falls back to a default tenant or inherited pool context.",
+      "threatRefs": ["TM-01", "TM-02"],
+      "protectedAssets": ["A-01", "A-02", "A-06"],
+      "deterministicOracle": "Pass only when non-owner SELECT returns 0 tenant rows or a generic error, every tenant write errors, and missing-context fallback is exactly 0; fail if any tenant datum is read or written without the complete transaction-local context.",
+      "hardOracleRefs": ["Unauthorized Evidence", "missing-context fallback"],
+      "applicability": {
+        "mode": "required",
+        "applicableFrom": "M0",
+        "rationale": null
+      },
+      "capabilityRef": "non-owner-force-rls",
+      "requiredMilestones": ["M0"],
+      "evidenceStatus": "accepted",
+      "expectedEvidence": {
+        "property": ["PROP-RLS-FAIL-CLOSED-003"],
+        "postgres": ["PG-RLS-FAIL-CLOSED-003", "DB-001", "DB-006", "DB-009"],
+        "runtimeOrDelivery": ["AUTH-003", "RUNTIME-RLS-FAIL-CLOSED-003"]
+      },
+      "authorityRefs": [
+        "docs/security/context-engine-threat-model.md#3-trust-boundaries",
+        "docs/security/Test-Architecture-与可验证性设计.md#6-postgresrls-integration-harness",
+        "docs/security/安全负向测试清单.md#3-databaseindexcache-与-blob"
+      ]
+    },
+    {
+      "id": "SCOPE-INTERSECTION-004",
+      "title": "Agent and request scope can only narrow trusted scope",
+      "purpose": "Keep EffectiveScope equal to the complete trusted authorization intersection while treating optional RequestNarrowing only as an additional restriction.",
+      "threatRefs": ["TM-01", "TM-11"],
+      "protectedAssets": ["A-01", "A-02", "A-04"],
+      "deterministicOracle": "Pass only when every generated Agent ceiling, request filter, and audience intersection produces a result set that is a subset of the trusted Principal scope; fail if adding an untrusted operand introduces any Resource or field, or if a missing required trusted operand yields a nonempty result.",
+      "hardOracleRefs": ["Unauthorized Evidence", "missing-context fallback"],
+      "applicability": {
+        "mode": "required",
+        "applicableFrom": "M0",
+        "rationale": null
+      },
+      "capabilityRef": "effective-scope-intersection",
+      "requiredMilestones": ["M0", "M1", "M5"],
+      "evidenceStatus": "accepted",
+      "expectedEvidence": {
+        "property": ["PROP-SCOPE-INTERSECTION-004"],
+        "postgres": ["PG-SCOPE-INTERSECTION-004", "DB-010"],
+        "runtimeOrDelivery": ["AUTH-006", "AUTH-007", "AUTH-010", "AUTH-011"]
+      },
+      "authorityRefs": [
+        "docs/agents/prd-contextengine-implementation.md#solution",
+        "docs/security/Test-Architecture-与可验证性设计.md#5-property-based-authorization-tests",
+        "docs/decisions/0019-security-catalog-normalization.md#decision"
+      ]
+    },
+    {
+      "id": "INDEX-NOT-AUTHORITY-005",
+      "title": "Candidate discovery is never authorization",
+      "purpose": "Keep CandidateRef content-free and require every candidate or expansion to cross the sealed AuthorizationKernel before any content-bearing consumer.",
+      "threatRefs": ["TM-03", "TM-04", "TM-09"],
+      "protectedAssets": ["A-01", "A-04", "A-07"],
+      "deterministicOracle": "Pass only when each raw candidate follows CandidateRef to AuthorizationKernel to AuthorizedProjection, denied projections and denied content bytes are exactly 0 at hydration, rerank, assembly, model, Package, and ContextRun seams; fail if index or cache output alone reaches any content-bearing consumer.",
+      "hardOracleRefs": ["Unauthorized Evidence"],
+      "applicability": {
+        "mode": "required",
+        "applicableFrom": "M0",
+        "rationale": null
+      },
+      "capabilityRef": "sealed-authorization-projection",
+      "requiredMilestones": ["M0", "M1", "M3"],
+      "evidenceStatus": "accepted",
+      "expectedEvidence": {
+        "property": ["PROP-INDEX-NOT-AUTHORITY-005"],
+        "postgres": ["PG-INDEX-NOT-AUTHORITY-005", "IDX-001", "IDX-002"],
+        "runtimeOrDelivery": ["RUN-002", "RUN-003", "RUN-013"]
+      },
+      "authorityRefs": [
+        "docs/design/2026-07-18-context-engine-implementation-design.md#3-runtime-security-pipeline",
+        "docs/security/context-engine-threat-model.md#6-threat-register",
+        "docs/security/安全负向测试清单.md#6-runtimeassemblycitation-与-egress"
+      ]
+    },
+    {
+      "id": "REVOCATION-006",
+      "title": "Observed revocation invalidates the next controlled operation",
+      "purpose": "Prevent stale cache, index, continuation, citation, ticket, or ACL snapshots from preserving future access after Policy Epoch or source evidence changes.",
+      "threatRefs": ["TM-05", "TM-06", "TM-14"],
+      "protectedAssets": ["A-01", "A-04", "A-05"],
+      "deterministicOracle": "Pass only when the first controlled operation after an observed revoke returns 0 revoked Evidence and 0 revoked content bytes without relying on asynchronous cleanup; fail if any stale decision, capability, cache, or strong-to-weak ACL fallback restores visibility.",
+      "hardOracleRefs": ["Unauthorized Evidence", "missing-context fallback"],
+      "applicability": {
+        "mode": "required",
+        "applicableFrom": "M0",
+        "rationale": null
+      },
+      "capabilityRef": "policy-epoch-revocation",
+      "requiredMilestones": ["M0", "M1", "M2"],
+      "evidenceStatus": "accepted",
+      "expectedEvidence": {
+        "property": ["PROP-REVOCATION-006"],
+        "postgres": ["PG-REVOCATION-006", "CACHE-002", "BLOB-002"],
+        "runtimeOrDelivery": ["RUN-006", "RUN-011", "CITE-002", "PROV-013", "PROV-014"]
+      },
+      "authorityRefs": [
+        "docs/design/2026-07-18-context-engine-implementation-design.md#44-revocation-linearization",
+        "docs/security/context-engine-threat-model.md#6-threat-register",
+        "docs/security/安全负向测试清单.md#5-providerfederation-与-source-native-acl"
+      ]
+    },
+    {
+      "id": "WORKER-LEASE-007",
+      "title": "Worker authority is exact-job, least-privilege, and one-shot",
+      "purpose": "Prevent worker user impersonation and authority replay across Organizations, jobs, sources, operations, revisions, workloads, or generations.",
+      "threatRefs": ["TM-07", "TM-08"],
+      "protectedAssets": ["A-05", "A-06", "A-08"],
+      "deterministicOracle": "Pass only when mutation of any registered WorkerLease binding, stale generation, expiry, replay, or UserActor impersonation causes exactly 0 new durable mutations and 0 wrong-Organization effects; fail if a mismatched lease changes durable state.",
+      "hardOracleRefs": ["wrong-Organization effect", "missing-context fallback"],
+      "applicability": {
+        "mode": "required",
+        "applicableFrom": "M0",
+        "rationale": null
+      },
+      "capabilityRef": "signed-worker-lease",
+      "requiredMilestones": ["M0", "M1"],
+      "evidenceStatus": "accepted",
+      "expectedEvidence": {
+        "property": ["PROP-WORKER-LEASE-007"],
+        "postgres": ["PG-WORKER-LEASE-007", "DB-011", "JOB-001", "JOB-005"],
+        "runtimeOrDelivery": ["WORKER-LEASE-REPLAY-007"]
+      },
+      "authorityRefs": [
+        "docs/security/context-engine-threat-model.md#3-trust-boundaries",
+        "docs/security/Test-Architecture-与可验证性设计.md#73-queueworker-contract",
+        "docs/security/安全负向测试清单.md#4-workeroutbox-与-publication"
+      ]
+    },
+    {
+      "id": "TRANSPORT-UNTRUSTED-008",
+      "title": "Untrusted transport cannot author trusted invocation facts",
+      "purpose": "Bind Organization, Principal, Membership, purpose, audience, and delivery facts only from authenticated ingress or a redeemed request-bound DeliveryEvidenceRef.",
+      "threatRefs": ["TM-01", "TM-10"],
+      "protectedAssets": ["A-02", "A-04", "A-05"],
+      "deterministicOracle": "Pass only when every caller-authored trusted field or invalid DeliveryEvidenceRef is rejected before provider, index, model, action, or Package work, with all four call counts and missing-context fallback exactly 0; fail if a body or replayed reference influences trusted context.",
+      "hardOracleRefs": ["Unauthorized Evidence", "wrong-Organization effect", "missing-context fallback"],
+      "applicability": {
+        "mode": "required",
+        "applicableFrom": "M0",
+        "rationale": null
+      },
+      "capabilityRef": "closed-trusted-ingress",
+      "requiredMilestones": ["M0", "M2"],
+      "evidenceStatus": "accepted",
+      "expectedEvidence": {
+        "property": ["PROP-TRANSPORT-UNTRUSTED-008"],
+        "postgres": ["PG-TRANSPORT-UNTRUSTED-008"],
+        "runtimeOrDelivery": ["AUTH-002", "AUTH-009", "DELIV-001", "DELIV-002", "RUN-012"]
+      },
+      "authorityRefs": [
+        "docs/design/2026-07-18-context-engine-implementation-design.md#21-contextcontrol",
+        "docs/security/context-engine-threat-model.md#3-trust-boundaries",
+        "docs/security/Test-Architecture-与可验证性设计.md#74-transport-contract"
+      ]
+    },
+    {
+      "id": "NON-ENUMERATION-009",
+      "title": "Denied and nonexistent objects are externally equivalent",
+      "purpose": "Prevent hidden Resource existence, counts, names, and denial branches from becoming a caller-visible side channel.",
+      "threatRefs": ["TM-02", "TM-18"],
+      "protectedAssets": ["A-01", "A-02", "A-07"],
+      "deterministicOracle": "Pass only when denied and missing probes have byte-identical status, body, and error code and fall in the preregistered equivalent timing bucket; fail on any existence-dependent external difference or leaked denied count.",
+      "hardOracleRefs": ["Unauthorized Evidence"],
+      "applicability": {
+        "mode": "required",
+        "applicableFrom": "M0",
+        "rationale": null
+      },
+      "capabilityRef": "non-enumerating-resolution",
+      "requiredMilestones": ["M0", "M1"],
+      "evidenceStatus": "accepted",
+      "expectedEvidence": {
+        "property": ["PROP-NON-ENUMERATION-009"],
+        "postgres": ["PG-NON-ENUMERATION-009", "BLOB-001"],
+        "runtimeOrDelivery": ["AUTH-008", "RUN-001", "ENUM-001", "ENUM-002"]
+      },
+      "authorityRefs": [
+        "docs/security/context-engine-threat-model.md#6-threat-register",
+        "docs/security/Test-Architecture-与可验证性设计.md#9-runtime-behavior-tests",
+        "docs/security/安全负向测试清单.md#7-tracedebugnon-enumeration-与-learning"
+      ]
+    },
+    {
+      "id": "CITATION-AUTH-010",
+      "title": "Citation opens reauthorize and are not bearer capabilities",
+      "purpose": "Keep CitationOpenRef separate from one-shot ContinuationToken and require current opener, audience, source, and policy authorization on every open.",
+      "threatRefs": ["TM-06", "TM-14"],
+      "protectedAssets": ["A-01", "A-04", "A-05"],
+      "deterministicOracle": "Pass only when a wrong opener, revoked grant, tampered locator, or token-kind swap yields exactly 0 fields, 0 source bytes, and a generic unavailable response; fail if the reference itself restores authority.",
+      "hardOracleRefs": ["Unauthorized Evidence", "missing-context fallback"],
+      "applicability": {
+        "mode": "required",
+        "applicableFrom": "M2",
+        "rationale": null
+      },
+      "capabilityRef": "citation-open-reauthorization",
+      "requiredMilestones": ["M2", "M3"],
+      "evidenceStatus": "accepted",
+      "expectedEvidence": {
+        "property": ["PROP-CITATION-AUTH-010"],
+        "postgres": ["PG-CITATION-AUTH-010", "BLOB-002"],
+        "runtimeOrDelivery": ["CITE-001", "CITE-002", "CITE-003", "CITE-004"]
+      },
+      "authorityRefs": [
+        "docs/design/2026-07-18-context-engine-implementation-design.md#53-tokens-and-locators",
+        "docs/security/context-engine-threat-model.md#6-threat-register",
+        "docs/security/安全负向测试清单.md#6-runtimeassemblycitation-与-egress"
+      ]
+    },
+    {
+      "id": "EGRESS-011",
+      "title": "Delivery egress is package-, audience-, and grant-bound",
+      "purpose": "Ensure model and sender payloads derive only from one current audience-bound ContextPackage and a matching EgressGrant, with send-time audience revalidation.",
+      "threatRefs": ["TM-10", "TM-11", "TM-12", "TM-13"],
+      "protectedAssets": ["A-02", "A-04", "A-05"],
+      "deterministicOracle": "Pass only when every sensitivity, purpose, provider, region, audience, digest, or snapshot mismatch produces exactly 0 model or sender payload bytes and 0 wrong-Organization effects; fail on any payload or effect without the exact current grant.",
+      "hardOracleRefs": ["Unauthorized Evidence", "wrong-Organization effect", "missing-context fallback"],
+      "applicability": {
+        "mode": "required",
+        "applicableFrom": "M2",
+        "rationale": null
+      },
+      "capabilityRef": "delivery-egress-grant",
+      "requiredMilestones": ["M2", "M5"],
+      "evidenceStatus": "accepted",
+      "expectedEvidence": {
+        "property": ["PROP-EGRESS-011"],
+        "postgres": ["PG-EGRESS-011"],
+        "runtimeOrDelivery": ["EGR-001", "EGR-003", "EGR-004", "EGR-005", "RUN-015"]
+      },
+      "authorityRefs": [
+        "docs/design/2026-07-18-context-engine-implementation-design.md#5-delivery-audience-egress-and-capability-taxonomy",
+        "docs/security/context-engine-threat-model.md#3-trust-boundaries",
+        "docs/security/Test-Architecture-与可验证性设计.md#75-egress-与-action-contract"
+      ]
+    },
+    {
+      "id": "TRACE-REDACTION-012",
+      "title": "Tenant-visible runs contain authorized lineage only",
+      "purpose": "Keep denied details and secrets out of ContextRun, logs, metrics, debug output, evaluation, and Learning while retaining only restricted redacted DecisionAudit categories and digests.",
+      "threatRefs": ["TM-15"],
+      "protectedAssets": ["A-01", "A-06", "A-07"],
+      "deterministicOracle": "Pass only when tenant-visible and Learning-safe records contain exactly 0 raw denied bodies, denied names, secret values, or denied counts, and restricted audit contains only approved opaque references, digests, and categories; fail on any forbidden match.",
+      "hardOracleRefs": ["Unauthorized Evidence"],
+      "applicability": {
+        "mode": "required",
+        "applicableFrom": "M0",
+        "rationale": null
+      },
+      "capabilityRef": "authorized-only-observability",
+      "requiredMilestones": ["M0", "M1"],
+      "evidenceStatus": "accepted",
+      "expectedEvidence": {
+        "property": ["PROP-TRACE-REDACTION-012"],
+        "postgres": ["PG-TRACE-REDACTION-012", "OBS-004", "OBS-005"],
+        "runtimeOrDelivery": ["OBS-001", "OBS-002", "OBS-003"]
+      },
+      "authorityRefs": [
+        "docs/security/context-engine-threat-model.md#6-threat-register",
+        "docs/security/Test-Architecture-与可验证性设计.md#11-contract-snapshots-与-schema-evolution",
+        "docs/security/安全负向测试清单.md#7-tracedebugnon-enumeration-与-learning"
+      ]
+    },
+    {
+      "id": "ACTION-SEPARATION-014",
+      "title": "Context authority never grants external-effect authority",
+      "purpose": "Require ActionPlane prepare then perform with a distinct Organization-, audience-, effect-, destination-, payload-, epoch-, and idempotency-bound one-shot ActionTicket for every effect.",
+      "threatRefs": ["TM-13"],
+      "protectedAssets": ["A-04", "A-05", "A-08"],
+      "deterministicOracle": "Pass only when bypassed prepare, wrong capability class, cross-effect reuse, binding mutation, and replay each add exactly 0 effects and wrong-Organization effect is exactly 0; fail if ContextAccessTicket or any mismatched ActionTicket causes a new effect.",
+      "hardOracleRefs": ["Unauthorized Evidence", "wrong-Organization effect", "missing-context fallback"],
+      "applicability": {
+        "mode": "required",
+        "applicableFrom": "M0",
+        "rationale": null
+      },
+      "capabilityRef": "action-plane-one-shot-ticket",
+      "requiredMilestones": ["M0", "M2"],
+      "evidenceStatus": "accepted",
+      "expectedEvidence": {
+        "property": ["PROP-ACTION-SEPARATION-014"],
+        "postgres": ["PG-ACTION-SEPARATION-014"],
+        "runtimeOrDelivery": ["ACTION-001", "ACTION-002", "ACTION-003", "ACTION-004", "ACTION-005", "ACTION-006"]
+      },
+      "authorityRefs": [
+        "docs/design/2026-07-18-context-engine-implementation-design.md#25-actionplane",
+        "docs/security/context-engine-threat-model.md#6-threat-register",
+        "docs/security/Test-Architecture-与可验证性设计.md#75-egress-与-action-contract"
+      ]
+    },
+    {
+      "id": "CROSS-ORG-LEARN-015",
+      "title": "V1 Learning contains no raw cross-Organization artifacts",
+      "purpose": "Prevent feedback, evaluation, exports, and global artifacts from turning authorized tenant content or denied traces into a cross-tenant channel.",
+      "threatRefs": ["TM-15", "TM-16"],
+      "protectedAssets": ["A-01", "A-03", "A-07"],
+      "deterministicOracle": "Pass only when cross-Organization feedback references are rejected, global artifacts contain exactly 0 raw tenant references, and no artifact is produced without the declared opt-in and aggregation gate; fail on any raw cross-Organization lineage.",
+      "hardOracleRefs": ["Unauthorized Evidence", "wrong-Organization effect"],
+      "applicability": {
+        "mode": "required",
+        "applicableFrom": "M0",
+        "rationale": null
+      },
+      "capabilityRef": "organization-scoped-learning",
+      "requiredMilestones": ["M0", "M3"],
+      "evidenceStatus": "accepted",
+      "expectedEvidence": {
+        "property": ["PROP-CROSS-ORG-LEARN-015"],
+        "postgres": ["PG-CROSS-ORG-LEARN-015", "LEARN-001"],
+        "runtimeOrDelivery": ["LEARN-002", "LEARN-003"]
+      },
+      "authorityRefs": [
+        "docs/agents/prd-contextengine-implementation.md#out-of-scope",
+        "docs/security/context-engine-threat-model.md#7-explicit-assumptions-and-non-goals",
+        "docs/security/安全负向测试清单.md#7-tracedebugnon-enumeration-与-learning"
+      ]
+    },
+    {
+      "id": "RELEASE-OWNER-019",
+      "title": "ContextLearning promotion is the only release activation authority",
+      "purpose": "Prevent Control, migration, bootstrap, Curation, Runtime, or evaluator paths from directly changing the active ReleaseManifest, including initial activation and rollback.",
+      "threatRefs": ["TM-16"],
+      "protectedAssets": ["A-03", "A-07", "A-08"],
+      "deterministicOracle": "Pass only when every direct active-pointer attempt outside release-operator-authorized ContextLearning.promote changes exactly 0 pointers and 0 publication state, while initial and rollback selections require the same audited promote path; fail on any second publication authority.",
+      "hardOracleRefs": ["Unauthorized Evidence", "wrong-Organization effect"],
+      "applicability": {
+        "mode": "required",
+        "applicableFrom": "M0",
+        "rationale": null
+      },
+      "capabilityRef": "governed-release-promotion",
+      "requiredMilestones": ["M0", "M3"],
+      "evidenceStatus": "accepted",
+      "expectedEvidence": {
+        "property": ["PROP-RELEASE-OWNER-019"],
+        "postgres": ["PG-RELEASE-OWNER-019", "LEARN-006", "LEARN-007"],
+        "runtimeOrDelivery": ["LEARN-004", "LEARN-008", "LEARN-009"]
+      },
+      "authorityRefs": [
+        "docs/design/2026-07-18-context-engine-implementation-design.md#63-release-ownership",
+        "docs/security/context-engine-threat-model.md#3-trust-boundaries",
+        "docs/decisions/0019-security-catalog-normalization.md#decision"
+      ]
+    }
+  ],
+  "fixtures": [
+    {
+      "id": "ACCEPT-001",
+      "title": "Bidirectional cross-Organization isolation",
+      "decisionStatus": "accepted",
+      "carrier": {
+        "statusAtM0": "available",
+        "m0Expectation": "active_fail_closed",
+        "upgradeTrigger": "Issues #8 and #13 upgrade this authority fixture with the real non-owner ownership path and sealed exact-authorization Runtime path."
+      },
+      "setup": {
+        "preconditions": [
+          "Organization org-a owns resource shared-name/a-secret and active Membership member-a.",
+          "Organization org-b owns a different resource shared-name/b-secret and active Membership member-b.",
+          "The two opaque Resource identifiers are known to the opposing caller, but neither Membership has a cross-Organization grant."
+        ],
+        "trustedIdentity": {
+          "invocations": [
+            {"organizationRef": "org-a", "principalRef": "member-a", "purpose": "context.answer"},
+            {"organizationRef": "org-b", "principalRef": "member-b", "purpose": "context.answer"}
+          ],
+          "source": "authenticated ingress; callers do not author these values"
+        }
+      },
+      "adversarialMutation": {
+        "kind": "cross_organization_resource_probe",
+        "attempts": [
+          {"invocation": "member-a", "target": "shared-name/b-secret"},
+          {"invocation": "member-b", "target": "shared-name/a-secret"}
+        ]
+      },
+      "operation": {
+        "interface": "ContextRuntime.resolve",
+        "request": "Acquire",
+        "count": 2,
+        "observation": "Compare the two complete responses without reading restricted DecisionAudit."
+      },
+      "expected": {
+        "externalResponse": {"status": 404, "code": "context_not_available", "body": {"kind": "generic_unavailable"}, "sameForBothAttempts": true},
+        "packageOrError": {"kind": "error", "packageCount": 0, "crossOrganizationResourceDetailCount": 0},
+        "evidence": {"unauthorizedEvidenceCount": 0, "unauthorizedContentBytes": 0, "outboundBytes": 0},
+        "businessEffects": {"wrongOrganizationEffectCount": 0, "mutationEffectCount": 0, "totalEffectsAfterScenario": 0},
+        "io": {"providerCalls": 0, "indexCalls": 0, "modelCalls": 0, "actionCalls": 0}
+      },
+      "invariantRefs": ["TENANT-OWNERSHIP-001", "TENANT-FK-002", "RLS-FAIL-CLOSED-003", "NON-ENUMERATION-009"],
+      "authorityRefs": [
+        "docs/agents/prd-contextengine-implementation.md#user-stories",
+        "docs/security/Test-Architecture-与可验证性设计.md#13-v1-acceptance-scenarios",
+        "docs/decisions/0019-security-catalog-normalization.md#decision"
+      ]
+    },
+    {
+      "id": "ACCEPT-002",
+      "title": "Same-Organization Membership field differences",
+      "decisionStatus": "accepted",
+      "carrier": {
+        "statusAtM0": "available",
+        "m0Expectation": "active_fail_closed",
+        "upgradeTrigger": "Issue #11 upgrades this authority fixture with current Membership validation before content I/O."
+      },
+      "setup": {
+        "preconditions": [
+          "Organization org-a has active Membership member-full with fields status and private_note.",
+          "The same Organization has active Membership member-limited with field status only.",
+          "Resource ticket-1 contains ASCII values status=open and private_note=secret."
+        ],
+        "trustedIdentity": {
+          "organizationRef": "org-a",
+          "principalRef": "member-limited",
+          "membershipVersion": 7,
+          "purpose": "context.answer"
+        }
+      },
+      "adversarialMutation": {
+        "kind": "broader_membership_candidate_reuse",
+        "candidateWasDiscoveredFor": "member-full",
+        "candidateFields": ["status", "private_note"],
+        "currentInvocation": "member-limited"
+      },
+      "operation": {
+        "interface": "ContextRuntime.resolve",
+        "request": "Acquire ticket-1",
+        "expectedAuthorizedProjection": ["status"]
+      },
+      "expected": {
+        "externalResponse": {"status": 200, "authorizedPayloadUtf8": "status=open", "authorizedPayloadBytes": 11, "privateFieldPresent": false},
+        "packageOrError": {"kind": "ContextPackage", "evidenceFields": ["status"], "deniedFieldCountExposed": false},
+        "evidence": {"unauthorizedEvidenceCount": 0, "unauthorizedContentBytes": 0, "outboundBytes": 11},
+        "businessEffects": {"wrongOrganizationEffectCount": 0, "mutationEffectCount": 0, "totalEffectsAfterScenario": 0},
+        "io": {"providerCalls": 1, "indexCalls": 1, "modelCalls": 0, "actionCalls": 0}
+      },
+      "invariantRefs": ["SCOPE-INTERSECTION-004", "INDEX-NOT-AUTHORITY-005", "TRACE-REDACTION-012"],
+      "authorityRefs": [
+        "docs/security/安全负向测试清单.md#9-minimal-release-matrix",
+        "docs/security/安全负向测试清单.md#2-identitytenant-与-delegation",
+        "docs/decisions/0019-security-catalog-normalization.md#decision"
+      ]
+    },
+    {
+      "id": "ACCEPT-003",
+      "title": "Agent delegation ceiling cannot expand Principal scope",
+      "decisionStatus": "accepted",
+      "carrier": {
+        "statusAtM0": "available",
+        "m0Expectation": "active_fail_closed",
+        "upgradeTrigger": "Issue #12 upgrades this authority fixture with the production Agent ceiling and request-narrowing implementation."
+      },
+      "setup": {
+        "preconditions": [
+          "Active member-a may read resource public-1 and private-1.",
+          "Agent agent-narrow is owned by org-a and delegates only public-1.",
+          "Both resources appear as content-free candidates for the same question."
+        ],
+        "trustedIdentity": {
+          "organizationRef": "org-a",
+          "principalRef": "member-a",
+          "agentRef": "agent-narrow",
+          "agentVersion": 3,
+          "purpose": "context.answer"
+        }
+      },
+      "adversarialMutation": {
+        "kind": "agent_scope_expansion",
+        "requestedAgentSources": ["public-1", "private-1"],
+        "signedAgentCeiling": ["public-1"]
+      },
+      "operation": {
+        "interface": "ContextRuntime.resolve",
+        "request": "Acquire both identifiers",
+        "expectedEffectiveScope": ["public-1"]
+      },
+      "expected": {
+        "externalResponse": {"status": 200, "authorizedPayloadUtf8": "public", "authorizedPayloadBytes": 6, "privateResourcePresent": false},
+        "packageOrError": {"kind": "ContextPackage", "evidenceResourceRefs": ["public-1"], "gap": "generic_scope_restricted"},
+        "evidence": {"unauthorizedEvidenceCount": 0, "unauthorizedContentBytes": 0, "outboundBytes": 6},
+        "businessEffects": {"wrongOrganizationEffectCount": 0, "mutationEffectCount": 0, "totalEffectsAfterScenario": 0},
+        "io": {"providerCalls": 1, "indexCalls": 1, "modelCalls": 0, "actionCalls": 0}
+      },
+      "invariantRefs": ["SCOPE-INTERSECTION-004", "INDEX-NOT-AUTHORITY-005"],
+      "authorityRefs": [
+        "docs/agents/prd-contextengine-implementation.md#solution",
+        "docs/security/Test-Architecture-与可验证性设计.md#5-property-based-authorization-tests",
+        "docs/decisions/0019-security-catalog-normalization.md#decision"
+      ]
+    },
+    {
+      "id": "ACCEPT-004",
+      "title": "Caller request narrowing is monotonic",
+      "decisionStatus": "accepted",
+      "carrier": {
+        "statusAtM0": "available",
+        "m0Expectation": "active_fail_closed",
+        "upgradeTrigger": "Issue #12 upgrades this authority fixture with production parsing of the closed RequestNarrowing contract."
+      },
+      "setup": {
+        "preconditions": [
+          "member-a and agent-a are authorized for source-1 and source-2.",
+          "The trusted purpose policy permits both sources.",
+          "The request explicitly narrows acquisition to source-1."
+        ],
+        "trustedIdentity": {
+          "organizationRef": "org-a",
+          "principalRef": "member-a",
+          "agentRef": "agent-a",
+          "purpose": "context.answer"
+        }
+      },
+      "adversarialMutation": {
+        "kind": "prompt_controlled_filter_expansion",
+        "requestNarrowing": {"sourceRefs": ["source-1"]},
+        "promptInjectedSourceRefs": ["source-1", "source-2"]
+      },
+      "operation": {
+        "interface": "ContextRuntime.resolve",
+        "request": "Acquire with explicit source-1 narrowing",
+        "comparison": "Result set must be a subset of the same invocation without RequestNarrowing."
+      },
+      "expected": {
+        "externalResponse": {"status": 200, "authorizedPayloadUtf8": "source-one", "authorizedPayloadBytes": 10, "source2Present": false},
+        "packageOrError": {"kind": "ContextPackage", "sourceRefs": ["source-1"], "expandedSourceCallCount": 0},
+        "evidence": {"unauthorizedEvidenceCount": 0, "unauthorizedContentBytes": 0, "outboundBytes": 10},
+        "businessEffects": {"wrongOrganizationEffectCount": 0, "mutationEffectCount": 0, "totalEffectsAfterScenario": 0},
+        "io": {"providerCalls": 1, "indexCalls": 1, "modelCalls": 0, "actionCalls": 0}
+      },
+      "invariantRefs": ["SCOPE-INTERSECTION-004", "TRANSPORT-UNTRUSTED-008"],
+      "authorityRefs": [
+        "docs/agents/prd-contextengine-implementation.md#implementation-decisions",
+        "docs/security/安全负向测试清单.md#2-identitytenant-与-delegation",
+        "docs/decisions/0019-security-catalog-normalization.md#decision"
+      ]
+    },
+    {
+      "id": "ACCEPT-005",
+      "title": "Revocation invalidates stale continuation before content I/O",
+      "decisionStatus": "accepted",
+      "carrier": {
+        "statusAtM0": "available",
+        "m0Expectation": "active_fail_closed",
+        "upgradeTrigger": "Issue #15 upgrades this authority fixture with Policy Epoch invalidation for stale authorization artifacts."
+      },
+      "setup": {
+        "preconditions": [
+          "member-a previously received a continuation bound to org-a, membership version 4, and Policy Epoch 8.",
+          "The authoritative grant is revoked and Policy Epoch is synchronously advanced to 9.",
+          "The old candidate and Package remain physically present in cache and index."
+        ],
+        "trustedIdentity": {
+          "organizationRef": "org-a",
+          "principalRef": "member-a",
+          "membershipVersion": 5,
+          "currentPolicyEpoch": 9,
+          "purpose": "context.answer"
+        }
+      },
+      "adversarialMutation": {
+        "kind": "stale_continuation_replay",
+        "tokenPolicyEpoch": 8,
+        "cachedResourceStillPresent": true
+      },
+      "operation": {
+        "interface": "ContextRuntime.resolve",
+        "request": "Continue with the epoch-8 token",
+        "timing": "first controlled operation after observed revocation"
+      },
+      "expected": {
+        "externalResponse": {"status": 404, "code": "context_not_available", "body": {"kind": "generic_unavailable"}},
+        "packageOrError": {"kind": "error", "stalePackageReturned": false, "revokedResourceDetailCount": 0},
+        "evidence": {"unauthorizedEvidenceCount": 0, "unauthorizedContentBytes": 0, "outboundBytes": 0},
+        "businessEffects": {"wrongOrganizationEffectCount": 0, "mutationEffectCount": 0, "totalEffectsAfterScenario": 0},
+        "io": {"providerCalls": 0, "indexCalls": 0, "modelCalls": 0, "actionCalls": 0}
+      },
+      "invariantRefs": ["REVOCATION-006", "CITATION-AUTH-010", "TRACE-REDACTION-012"],
+      "authorityRefs": [
+        "docs/agents/prd-contextengine-implementation.md#implementation-decisions",
+        "docs/security/Test-Architecture-与可验证性设计.md#9-runtime-behavior-tests",
+        "docs/decisions/0019-security-catalog-normalization.md#decision"
+      ]
+    },
+    {
+      "id": "ACCEPT-006",
+      "title": "Hostile index candidate cannot bypass exact authorization",
+      "decisionStatus": "accepted",
+      "carrier": {
+        "statusAtM0": "available",
+        "m0Expectation": "active_fail_closed",
+        "upgradeTrigger": "Issue #13 upgrades this authority fixture through the sealed CandidateRef to AuthorizationKernel to AuthorizedProjection Runtime path."
+      },
+      "setup": {
+        "preconditions": [
+          "member-a may read candidate-a whose authorized ASCII body is A-safe.",
+          "candidate-b belongs to org-b and has no grant for member-a.",
+          "The retrieval seam is configured to return content-free candidate-b ranked before content-free candidate-a."
+        ],
+        "trustedIdentity": {
+          "organizationRef": "org-a",
+          "principalRef": "member-a",
+          "purpose": "context.answer"
+        }
+      },
+      "adversarialMutation": {
+        "kind": "cross_organization_candidate_injection",
+        "orderedCandidateRefs": ["candidate-b", "candidate-a"],
+        "candidatePayloadFields": []
+      },
+      "operation": {
+        "interface": "ContextRuntime.resolve",
+        "request": "Acquire",
+        "requiredTypeFlow": ["CandidateRef", "AuthorizationKernel", "AuthorizedProjection"]
+      },
+      "expected": {
+        "externalResponse": {"status": 200, "authorizedPayloadUtf8": "A-safe", "authorizedPayloadBytes": 6, "orgBContentPresent": false},
+        "packageOrError": {"kind": "ContextPackage", "evidenceRefs": ["candidate-a"], "deniedCandidateCountExposed": false},
+        "evidence": {"unauthorizedEvidenceCount": 0, "unauthorizedContentBytes": 0, "outboundBytes": 6},
+        "businessEffects": {"wrongOrganizationEffectCount": 0, "mutationEffectCount": 0, "totalEffectsAfterScenario": 0},
+        "io": {"providerCalls": 1, "indexCalls": 1, "modelCalls": 0, "actionCalls": 0}
+      },
+      "invariantRefs": ["TENANT-OWNERSHIP-001", "INDEX-NOT-AUTHORITY-005", "TRACE-REDACTION-012"],
+      "authorityRefs": [
+        "docs/design/2026-07-18-context-engine-implementation-design.md#3-runtime-security-pipeline",
+        "docs/security/安全负向测试清单.md#6-runtimeassemblycitation-与-egress",
+        "docs/decisions/0019-security-catalog-normalization.md#decision"
+      ]
+    },
+    {
+      "id": "ACCEPT-007",
+      "title": "Transport injection cannot manufacture trusted context",
+      "decisionStatus": "accepted",
+      "carrier": {
+        "statusAtM0": "available",
+        "m0Expectation": "active_fail_closed",
+        "upgradeTrigger": "Issue #9 upgrades this authority fixture with production HTTP authentication binding and a closed request schema."
+      },
+      "setup": {
+        "preconditions": [
+          "The authenticated session is bound to org-a and member-a.",
+          "The HTTP Acquire schema accepts only the closed untrusted request fields.",
+          "No trusted delivery reference is present in authenticated transport metadata."
+        ],
+        "trustedIdentity": {
+          "organizationRef": "org-a",
+          "principalRef": "member-a",
+          "authenticationSource": "server session"
+        }
+      },
+      "adversarialMutation": {
+        "kind": "trusted_field_body_injection",
+        "bodyFields": {
+          "organizationRef": "org-b",
+          "principalRef": "member-b",
+          "purpose": "admin.export",
+          "audience": ["member-b"],
+          "acl": "allow-all",
+          "rawSql": "select *",
+          "bypassAuthorization": true
+        }
+      },
+      "operation": {
+        "interface": "HTTP POST /resolve",
+        "request": "Acquire with unknown trusted fields",
+        "phase": "closed-schema decoding before trusted context construction"
+      },
+      "expected": {
+        "externalResponse": {"status": 422, "code": "invalid_request", "fieldNamesEchoed": false, "missingContextFallbackCount": 0},
+        "packageOrError": {"kind": "error", "contextPackageCreated": false, "trustedContextConstructedFromBody": false},
+        "evidence": {"unauthorizedEvidenceCount": 0, "unauthorizedContentBytes": 0, "outboundBytes": 0},
+        "businessEffects": {"wrongOrganizationEffectCount": 0, "mutationEffectCount": 0, "totalEffectsAfterScenario": 0},
+        "io": {"providerCalls": 0, "indexCalls": 0, "modelCalls": 0, "actionCalls": 0}
+      },
+      "invariantRefs": ["RLS-FAIL-CLOSED-003", "TRANSPORT-UNTRUSTED-008", "EGRESS-011"],
+      "authorityRefs": [
+        "docs/agents/prd-contextengine-implementation.md#testing-decisions",
+        "docs/security/Test-Architecture-与可验证性设计.md#74-transport-contract",
+        "docs/decisions/0019-security-catalog-normalization.md#decision"
+      ]
+    },
+    {
+      "id": "ACCEPT-008",
+      "title": "WorkerLease replay and binding mutation change no durable state",
+      "decisionStatus": "accepted",
+      "carrier": {
+        "statusAtM0": "available",
+        "m0Expectation": "active_fail_closed",
+        "upgradeTrigger": "Issue #17 upgrades this authority fixture with signed WorkerLease verification against the current durable job row and one-shot ledger."
+      },
+      "setup": {
+        "preconditions": [
+          "Registered ServiceActor worker-1 completed job-a generation 2 once with nonce n-1.",
+          "The durable one-shot receipt records one legitimate mutation for org-a/source-a.",
+          "The consumed signed lease binds org-a, job-a, ingest, source-a, worker-1, epoch 4, generation 2, idempotency idem-a, expiry, and nonce n-1."
+        ],
+        "trustedIdentity": {
+          "actorKind": "ServiceActor",
+          "serviceActorRef": "worker-1",
+          "organizationRef": "org-a",
+          "durableJobRef": "job-a"
+        }
+      },
+      "adversarialMutation": {
+        "kind": "consumed_lease_replay_with_binding_change",
+        "replayCount": 1,
+        "mutatedClaim": {"organizationRef": "org-b"},
+        "retainedNonce": "n-1"
+      },
+      "operation": {
+        "interface": "Supply worker lease redemption",
+        "request": "Redeem mutated consumed lease",
+        "durableComparison": "Compare mutation ledger before and after the replay."
+      },
+      "expected": {
+        "externalResponse": {"status": 404, "code": "work_not_available", "leaseClaimsEchoed": false, "missingContextFallbackCount": 0},
+        "packageOrError": {"kind": "worker_rejection", "reasonVisibleToWorker": "generic_unavailable", "newReceiptCreated": false},
+        "evidence": {"unauthorizedEvidenceCount": 0, "unauthorizedContentBytes": 0, "outboundBytes": 0},
+        "businessEffects": {"wrongOrganizationEffectCount": 0, "mutationEffectCount": 0, "totalEffectsAfterScenario": 1},
+        "io": {"providerCalls": 0, "indexCalls": 0, "modelCalls": 0, "actionCalls": 0}
+      },
+      "invariantRefs": ["TENANT-OWNERSHIP-001", "WORKER-LEASE-007", "TRACE-REDACTION-012"],
+      "authorityRefs": [
+        "docs/agents/prd-contextengine-implementation.md#implementation-decisions",
+        "docs/security/安全负向测试清单.md#4-workeroutbox-与-publication",
+        "docs/decisions/0019-security-catalog-normalization.md#decision"
+      ]
+    },
+    {
+      "id": "ACCEPT-009",
+      "title": "Unavailable source-native ACL fails closed at M0",
+      "decisionStatus": "accepted",
+      "carrier": {
+        "statusAtM0": "future",
+        "m0Expectation": "fail_closed",
+        "upgradeTrigger": "The owning File authorized-Package issue #23 first upgrades this fixture for Mirrored FileSourceAccess; a later federated-provider issue upgrades it for real Live source-native ACL evidence."
+      },
+      "setup": {
+        "preconditions": [
+          "source-future declares Live source-native ACL as required for resource-future.",
+          "No production Provider carrier or source sandbox for that capability exists at M0.",
+          "A service credential could read the source object but is not end-user delivery authority."
+        ],
+        "trustedIdentity": {
+          "organizationRef": "org-a",
+          "principalRef": "member-a",
+          "purpose": "context.answer",
+          "requiredAclMode": "Live"
+        }
+      },
+      "adversarialMutation": {
+        "kind": "service_account_acl_substitution",
+        "requestedFallback": "Weak",
+        "missingCapability": "live-source-native-acl"
+      },
+      "operation": {
+        "interface": "ContextRuntime.resolve",
+        "request": "Acquire resource-future",
+        "phase": "capability availability check before Provider invocation"
+      },
+      "expected": {
+        "externalResponse": {"status": 503, "code": "context_unavailable", "body": {"gap": "provider_capability_unavailable"}},
+        "packageOrError": {"kind": "error", "aclModeUsed": null, "weakFallbackCount": 0, "capabilityReportedAsPass": false},
+        "evidence": {"unauthorizedEvidenceCount": 0, "unauthorizedContentBytes": 0, "outboundBytes": 0},
+        "businessEffects": {"wrongOrganizationEffectCount": 0, "mutationEffectCount": 0, "totalEffectsAfterScenario": 0},
+        "io": {"providerCalls": 0, "indexCalls": 0, "modelCalls": 0, "actionCalls": 0}
+      },
+      "invariantRefs": ["INDEX-NOT-AUTHORITY-005", "REVOCATION-006", "TRANSPORT-UNTRUSTED-008"],
+      "authorityRefs": [
+        "docs/design/2026-07-18-context-engine-implementation-design.md#33-contextprovider-and-source-projection",
+        "docs/security/安全负向测试清单.md#5-providerfederation-与-source-native-acl",
+        "docs/decisions/0019-security-catalog-normalization.md#decision"
+      ]
+    },
+    {
+      "id": "ACCEPT-010",
+      "title": "Unavailable citation carrier denies revoked citation open at M0",
+      "decisionStatus": "accepted",
+      "carrier": {
+        "statusAtM0": "future",
+        "m0Expectation": "fail_closed",
+        "upgradeTrigger": "The owning M2 OpenCitation implementation issue upgrades this fixture only after current-opener authorization and distinct token variants exist at the public HTTP seam."
+      },
+      "setup": {
+        "preconditions": [
+          "citation-ref-1 is a locator recorded in an earlier Package for member-a.",
+          "member-a's Resource grant has since been revoked.",
+          "M0 has no active OpenCitation carrier and cannot redeem citation or continuation wire variants."
+        ],
+        "trustedIdentity": {
+          "organizationRef": "org-a",
+          "principalRef": "member-a",
+          "currentPolicyEpoch": 6,
+          "purpose": "citation.open"
+        }
+      },
+      "adversarialMutation": {
+        "kind": "revoked_citation_locator_open",
+        "locator": "citation-ref-1",
+        "originalPolicyEpoch": 5,
+        "attemptedAlternateUse": "ContinuationToken"
+      },
+      "operation": {
+        "interface": "ContextRuntime.resolve",
+        "request": "OpenCitation citation-ref-1",
+        "phase": "inactive-capability gate before source or blob I/O"
+      },
+      "expected": {
+        "externalResponse": {"status": 404, "code": "context_not_available", "body": {"kind": "generic_unavailable"}},
+        "packageOrError": {"kind": "error", "citationFieldsReturned": 0, "capabilityStatus": "unavailable", "capabilityReportedAsPass": false},
+        "evidence": {"unauthorizedEvidenceCount": 0, "unauthorizedContentBytes": 0, "outboundBytes": 0},
+        "businessEffects": {"wrongOrganizationEffectCount": 0, "mutationEffectCount": 0, "totalEffectsAfterScenario": 0},
+        "io": {"providerCalls": 0, "indexCalls": 0, "modelCalls": 0, "actionCalls": 0}
+      },
+      "invariantRefs": ["REVOCATION-006", "CITATION-AUTH-010", "NON-ENUMERATION-009"],
+      "authorityRefs": [
+        "docs/design/2026-07-18-context-engine-implementation-design.md#53-tokens-and-locators",
+        "docs/security/安全负向测试清单.md#6-runtimeassemblycitation-与-egress",
+        "docs/decisions/0019-security-catalog-normalization.md#decision"
+      ]
+    },
+    {
+      "id": "ACCEPT-011",
+      "title": "Denied and not-found probes are externally indistinguishable",
+      "decisionStatus": "accepted",
+      "carrier": {
+        "statusAtM0": "available",
+        "m0Expectation": "active_fail_closed",
+        "upgradeTrigger": "Issue #14 upgrades this authority fixture with canonical denied/not-found HTTP behavior and the preregistered response comparison."
+      },
+      "setup": {
+        "preconditions": [
+          "member-a is authenticated in org-a but is denied resource-hidden.",
+          "resource-missing does not exist in org-a.",
+          "The experiment freezes one canonical status, body, error code, and coarse timing bucket before either probe."
+        ],
+        "trustedIdentity": {
+          "organizationRef": "org-a",
+          "principalRef": "member-a",
+          "purpose": "context.answer",
+          "samplePlanRef": "NONENUM-PLAN-001"
+        }
+      },
+      "adversarialMutation": {
+        "kind": "existence_oracle_pair",
+        "probes": ["resource-hidden", "resource-missing"],
+        "order": ["denied", "missing"]
+      },
+      "operation": {
+        "interface": "ContextRuntime.resolve",
+        "request": "Acquire each probe independently",
+        "comparisonFields": ["status", "body", "errorCode", "timingBucket"]
+      },
+      "expected": {
+        "externalResponse": {"status": 404, "code": "context_not_available", "body": {"kind": "generic_unavailable"}, "byteIdenticalAcrossProbes": true, "sameTimingBucket": true},
+        "packageOrError": {"kind": "error", "packageCount": 0, "deniedCountExposed": false, "existenceDetailCount": 0},
+        "evidence": {"unauthorizedEvidenceCount": 0, "unauthorizedContentBytes": 0, "outboundBytes": 0},
+        "businessEffects": {"wrongOrganizationEffectCount": 0, "mutationEffectCount": 0, "totalEffectsAfterScenario": 0},
+        "io": {"providerCalls": 0, "indexCalls": 0, "modelCalls": 0, "actionCalls": 0}
+      },
+      "invariantRefs": ["NON-ENUMERATION-009", "TRACE-REDACTION-012"],
+      "authorityRefs": [
+        "docs/security/context-engine-threat-model.md#6-threat-register",
+        "docs/security/安全负向测试清单.md#7-tracedebugnon-enumeration-与-learning",
+        "docs/decisions/0019-security-catalog-normalization.md#decision"
+      ]
+    },
+    {
+      "id": "ACCEPT-012",
+      "title": "Context and Action capabilities remain separated at M0",
+      "decisionStatus": "accepted",
+      "carrier": {
+        "statusAtM0": "unavailable",
+        "m0Expectation": "fail_closed",
+        "upgradeTrigger": "Issue #18 installs the distinct inactive ContextAccessTicket and ActionTicket audiences; the owning M2 ActionPlane issue upgrades this fixture to prepare and perform against a real Sender."
+      },
+      "setup": {
+        "preconditions": [
+          "A syntactically valid ContextAccessTicket is bound to org-a, member-a, context.read, and source-a.",
+          "No M0 ActionPlane or Sender carrier is active.",
+          "No ActionTicket has been prepared for destination conversation-b or payload digest digest-b."
+        ],
+        "trustedIdentity": {
+          "organizationRef": "org-a",
+          "principalRef": "member-a",
+          "capabilityAudience": "context.read",
+          "purpose": "context.answer"
+        }
+      },
+      "adversarialMutation": {
+        "kind": "read_ticket_used_for_write",
+        "ticketKind": "ContextAccessTicket",
+        "requestedEffect": "send_message",
+        "destination": "conversation-b",
+        "targetOrganization": "org-b"
+      },
+      "operation": {
+        "interface": "ActionPlane.perform",
+        "request": "Send without prepare using ContextAccessTicket",
+        "phase": "inactive-capability and capability-class gate before Sender I/O"
+      },
+      "expected": {
+        "externalResponse": {"status": 404, "code": "action_not_available", "body": {"kind": "generic_unavailable"}, "missingContextFallbackCount": 0},
+        "packageOrError": {"kind": "action_rejection", "actionTicketCreated": false, "contextTicketConsumed": false, "capabilityReportedAsPass": false},
+        "evidence": {"unauthorizedEvidenceCount": 0, "unauthorizedContentBytes": 0, "outboundBytes": 0},
+        "businessEffects": {"wrongOrganizationEffectCount": 0, "mutationEffectCount": 0, "totalEffectsAfterScenario": 0},
+        "io": {"providerCalls": 0, "indexCalls": 0, "modelCalls": 0, "actionCalls": 0}
+      },
+      "invariantRefs": ["TRANSPORT-UNTRUSTED-008", "EGRESS-011", "ACTION-SEPARATION-014"],
+      "authorityRefs": [
+        "docs/agents/prd-contextengine-implementation.md#implementation-decisions",
+        "docs/security/Test-Architecture-与可验证性设计.md#75-egress-与-action-contract",
+        "docs/decisions/0019-security-catalog-normalization.md#decision"
+      ]
+    }
+  ]
+}
