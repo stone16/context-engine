@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import BaseModel
 
@@ -458,7 +459,7 @@ def test_resolve_body_limit_does_not_change_health_requests() -> None:
         InvocationSpy(),
         transport_profile=HttpTransportProfile(
             max_resolve_body_bytes=1,
-            max_json_nesting_depth=1,
+            max_json_nesting_depth=16,
         ),
     )
 
@@ -466,6 +467,36 @@ def test_resolve_body_limit_does_not_change_health_requests() -> None:
 
     assert response.status_code == 200
     assert response.json()["status"] == "ready"
+
+
+def test_resolve_body_limit_applies_when_application_is_mounted() -> None:
+    authenticator = DeterministicAuthenticator()
+    spy = InvocationSpy()
+    inner = create_app(
+        authenticator=authenticator,
+        invocation_observer=spy.observe,
+        transport_profile=HttpTransportProfile(
+            max_resolve_body_bytes=1,
+            max_json_nesting_depth=16,
+        ),
+    )
+    outer = FastAPI()
+    outer.mount("/prefix", inner)
+    client = TestClient(outer)
+
+    response = client.post(
+        "/prefix/v1/context:resolve",
+        headers={
+            "Authorization": f"Bearer {VALID_TOKEN}",
+            "Content-Type": "application/json",
+        },
+        content=b'{"kind":"acquire","need":{"query":"probe"}}',
+    )
+
+    assert response.status_code == 400
+    assert response.content == b'{"code":"invalid_request"}'
+    assert authenticator.calls == []
+    assert spy.invocations == []
 
 
 @pytest.mark.parametrize(

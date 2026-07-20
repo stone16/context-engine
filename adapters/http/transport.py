@@ -108,7 +108,8 @@ class ResolveBodyLimitMiddleware:
 
     def _is_resolve_request(self, scope: Scope) -> bool:
         return (
-            scope.get("method") == "POST" and scope.get("path") == self._resolve_path
+            scope.get("method") == "POST"
+            and _route_relative_path(scope) == self._resolve_path
         )
 
     async def _reject(self, scope: Scope, receive: Receive, send: Send) -> None:
@@ -117,6 +118,21 @@ class ResolveBodyLimitMiddleware:
             receive,
             send,
         )
+
+
+def _route_relative_path(scope: Scope) -> str:
+    """Remove a valid ASGI root path using Starlette routing semantics."""
+
+    path: str = scope["path"]
+    root_path_value = scope.get("root_path")
+    root_path = root_path_value if isinstance(root_path_value, str) else ""
+    if not root_path or not path.startswith(root_path):
+        return path
+    if path == root_path:
+        return ""
+    if path[len(root_path)] == "/":
+        return path[len(root_path) :]
+    return path
 
 
 def enforce_json_nesting(document: object, *, maximum_depth: int) -> None:
