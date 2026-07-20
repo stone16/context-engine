@@ -34,10 +34,24 @@ def _run_stubbed_harness(checkout: Path, stub_directory: Path) -> tuple[str, str
         env=environment,
     )
 
-    project = (checkout / ".context-engine/compose-project").read_text(
+    environment_contents = (checkout / ".context-engine/database.env").read_text(
         encoding="utf-8"
-    ).strip()
+    )
+    project = next(
+        line.partition("=")[2]
+        for line in environment_contents.splitlines()
+        if line.startswith("CONTEXT_ENGINE_COMPOSE_PROJECT=")
+    )
     return project, command_log.read_text(encoding="utf-8")
+
+
+def _stub_harness_dependencies(stub_directory: Path) -> None:
+    _write_executable(
+        stub_directory / "docker",
+        "#!/usr/bin/env bash\n"
+        "printf '%s\\n' \"$*\" >>\"$HARNESS_COMMAND_LOG\"\n",
+    )
+    _write_executable(stub_directory / "uv", "#!/usr/bin/env bash\nexit 0\n")
 
 
 def test_two_checkouts_generate_distinct_persistent_compose_projects(
@@ -45,11 +59,7 @@ def test_two_checkouts_generate_distinct_persistent_compose_projects(
 ) -> None:
     stub_directory = tmp_path / "bin"
     stub_directory.mkdir()
-    _write_executable(
-        stub_directory / "docker",
-        "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >>\"$HARNESS_COMMAND_LOG\"\n",
-    )
-    _write_executable(stub_directory / "uv", "#!/usr/bin/env bash\nexit 0\n")
+    _stub_harness_dependencies(stub_directory)
     first_checkout = tmp_path / "first"
     second_checkout = tmp_path / "second"
 
@@ -78,18 +88,13 @@ def test_concurrent_first_use_converges_on_one_persisted_compose_project(
 ) -> None:
     stub_directory = tmp_path / "bin"
     stub_directory.mkdir()
-    _write_executable(
-        stub_directory / "docker",
-        "#!/usr/bin/env bash\n"
-        "printf '%s\\n' \"$*\" >>\"$HARNESS_COMMAND_LOG\"\n",
-    )
-    _write_executable(stub_directory / "uv", "#!/usr/bin/env bash\nexit 0\n")
+    _stub_harness_dependencies(stub_directory)
     barrier_directory = tmp_path / "barrier"
     barrier_directory.mkdir()
     _write_executable(
         stub_directory / "ln",
         "#!/usr/bin/env bash\n"
-        "if [[ \"$2\" == */compose-project ]]; then\n"
+        "if [[ \"$2\" == */database.env ]]; then\n"
         "  marker=\"$HARNESS_BARRIER_DIR/$$\"\n"
         "  : >\"$marker\"\n"
         "  if mkdir \"$HARNESS_BARRIER_DIR/leader\" 2>/dev/null; then\n"
@@ -135,8 +140,13 @@ def test_concurrent_first_use_converges_on_one_persisted_compose_project(
         r"--project-name (context-engine-[0-9a-f]{16})",
         command_log.read_text(encoding="utf-8"),
     )
-    persisted_project = (checkout / ".context-engine/compose-project").read_text(
+    environment_contents = (checkout / ".context-engine/database.env").read_text(
         encoding="utf-8"
-    ).strip()
+    )
+    persisted_project = next(
+        line.partition("=")[2]
+        for line in environment_contents.splitlines()
+        if line.startswith("CONTEXT_ENGINE_COMPOSE_PROJECT=")
+    )
     assert len(projects) == 2
     assert set(projects) == {persisted_project}

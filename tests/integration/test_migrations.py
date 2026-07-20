@@ -31,10 +31,11 @@ def test_empty_baseline_downgrade_upgrade_cycle(
 ) -> None:
     alembic_configuration = Config(ROOT / "alembic.ini")
 
-    command.downgrade(alembic_configuration, "base")
-    assert _revision_rows(migration_configuration) == []
-
-    command.upgrade(alembic_configuration, "head")
+    try:
+        command.downgrade(alembic_configuration, "base")
+        assert _revision_rows(migration_configuration) == []
+    finally:
+        command.upgrade(alembic_configuration, "head")
     assert _revision_rows(migration_configuration) == ["20260720_0001"]
 
 

@@ -35,9 +35,9 @@ make check     # 全部门禁；要求先执行 make db-up
 
 数据库底座首次启动时会在被 Git 忽略的
 `.context-engine/database.env` 生成随机凭据并将文件权限设为 `0600`；该文件是
-本地 migration、API Runtime、worker 与 security test 连接配置的唯一实时来源。
-同目录的 `compose-project` 保存该 checkout 独有且持久的随机 Compose project
-身份，避免多个 worktree 或 checkout 共享容器、网络与数据卷。
+本地 migration、API Runtime、worker、security test 连接配置和该 checkout
+独有 Compose project 身份的唯一实时来源，避免多个 worktree 或 checkout 共享
+容器、网络与数据卷。
 镜像及服务拓扑的版本真相位于 [`compose.yaml`](./compose.yaml)，PostgreSQL 只绑定
 一个动态选择的 `127.0.0.1` host port。migration、runtime 与 worker 使用不同
 角色；runtime/security test 不会回退到 migration 或 bootstrap 凭据。

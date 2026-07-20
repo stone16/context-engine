@@ -28,10 +28,8 @@ def test_compose_project_identity_is_generated_per_checkout() -> None:
 
     assert "name: context-engine-dev" not in compose
     assert 'readonly COMPOSE_PROJECT="context-engine-dev"' not in script
-    assert 'readonly PROJECT_FILE="$STATE_DIR/compose-project"' in script
+    assert "CONTEXT_ENGINE_COMPOSE_PROJECT" in script
     assert '--project-name "$COMPOSE_PROJECT"' in script
-    assert 'ln "$temporary_file" "$PROJECT_FILE"' in script
-    assert 'mv "$temporary_file" "$PROJECT_FILE"' not in script
 
 
 @pytest.mark.parametrize(
@@ -82,6 +80,16 @@ def test_runtime_role_guard_checks_every_role_escalation_attribute(
 
     assert f"role.{catalog_attribute} AS {guard_alias}" in guard
     assert f'"{guard_alias}": False' in guard
+
+
+def test_runtime_role_guard_rejects_every_set_capable_membership() -> None:
+    guard = repository_text("engine/persistence/role_guard.py")
+
+    assert "FROM pg_auth_members AS membership" in guard
+    assert "membership.member = role.oid" in guard
+    assert "membership.set_option" in guard
+    assert "AS has_no_set_capable_memberships" in guard
+    assert '"has_no_set_capable_memberships": True' in guard
 
 
 def test_ci_runs_the_same_make_database_contract_as_local() -> None:

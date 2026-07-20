@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import os
+
+import psycopg
 import pytest
 from sqlalchemy import Engine, text
 
@@ -202,3 +205,35 @@ def test_role_guard_passes_runtime_and_rejects_owner_credentials(
             assert_runtime_role(connection)
     finally:
         migration_engine.dispose()
+
+
+def test_role_guard_rejects_unrelated_set_capable_membership(
+    guarded_runtime_engine: Engine,
+) -> None:
+    with psycopg.connect(
+        host="127.0.0.1",
+        port=int(os.environ["CONTEXT_ENGINE_POSTGRES_PORT"]),
+        dbname=os.environ["POSTGRES_DB"],
+        user=os.environ["POSTGRES_USER"],
+        password=os.environ["POSTGRES_PASSWORD"],
+    ) as bootstrap_connection:
+        bootstrap_connection.execute("DROP ROLE IF EXISTS context_engine_guard_probe")
+        bootstrap_connection.execute(
+            "CREATE ROLE context_engine_guard_probe NOLOGIN NOSUPERUSER"
+        )
+        bootstrap_connection.execute(
+            f"GRANT context_engine_guard_probe TO {RUNTIME_ROLE} WITH SET TRUE"
+        )
+        bootstrap_connection.commit()
+        try:
+            with (
+                guarded_runtime_engine.connect() as connection,
+                pytest.raises(AssertionError, match="set_capable_memberships"),
+            ):
+                assert_runtime_role(connection)
+        finally:
+            bootstrap_connection.execute(
+                f"REVOKE context_engine_guard_probe FROM {RUNTIME_ROLE}"
+            )
+            bootstrap_connection.execute("DROP ROLE context_engine_guard_probe")
+            bootstrap_connection.commit()
