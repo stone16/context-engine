@@ -404,6 +404,12 @@
         "replayCount": {"type": "integer", "minimum": 1},
         "mutatedClaim": {"$ref": "#/$defs/mutatedClaim"},
         "retainedNonce": {"$ref": "#/$defs/nonEmptyString"},
+        "parameterizedCases": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/parameterizedCase"}
+        },
         "requestedFallback": {"$ref": "#/$defs/nonEmptyString"},
         "missingCapability": {"$ref": "#/$defs/nonEmptyString"},
         "locator": {"$ref": "#/$defs/nonEmptyString"},
@@ -461,6 +467,21 @@
         "nonce": {"$ref": "#/$defs/nonEmptyString"}
       }
     },
+    "parameterizedCase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "mutation", "expectedNewDurableEffects", "expectedWrongOrganizationEffects", "expectedContentWorkCalls"],
+      "properties": {
+        "id": {"$ref": "#/$defs/nonEmptyString"},
+        "claim": {"$ref": "#/$defs/nonEmptyString"},
+        "mutation": {},
+        "expectedStatus": {"type": "integer", "minimum": 100, "maximum": 599},
+        "expectedOutcome": {"$ref": "#/$defs/nonEmptyString"},
+        "expectedNewDurableEffects": {"type": "integer", "const": 0},
+        "expectedWrongOrganizationEffects": {"type": "integer", "const": 0},
+        "expectedContentWorkCalls": {"type": "integer", "const": 0}
+      }
+    },
     "operation": {
       "type": "object",
       "additionalProperties": false,
@@ -478,7 +499,8 @@
         "requiredTypeFlow": {"$ref": "#/$defs/stringArray"},
         "phase": {"$ref": "#/$defs/nonEmptyString"},
         "durableComparison": {"$ref": "#/$defs/nonEmptyString"},
-        "comparisonFields": {"$ref": "#/$defs/stringArray"}
+        "comparisonFields": {"$ref": "#/$defs/stringArray"},
+        "normalizationAllowlist": {"$ref": "#/$defs/stringArray"}
       }
     },
     "externalResponse": {
@@ -490,7 +512,7 @@
         "status": {"type": "integer", "minimum": 100, "maximum": 599},
         "code": {"$ref": "#/$defs/nonEmptyString"},
         "body": {"$ref": "#/$defs/responseBody"},
-        "sameForBothAttempts": {"type": "boolean"},
+        "sameOutcomeSemanticsForBothAttempts": {"type": "boolean"},
         "authorizedPayloadUtf8": {"$ref": "#/$defs/nonEmptyString"},
         "authorizedPayloadBytes": {"type": "integer", "minimum": 0},
         "privateFieldPresent": {"type": "boolean"},
@@ -499,7 +521,8 @@
         "orgBContentPresent": {"type": "boolean"},
         "fieldNamesEchoed": {"type": "boolean"},
         "leaseClaimsEchoed": {"type": "boolean"},
-        "byteIdenticalAcrossProbes": {"type": "boolean"},
+        "headers": {"$ref": "#/$defs/responseHeaders"},
+        "normalizedByteIdenticalAcrossProbes": {"type": "boolean"},
         "timingEqualityClaimed": {"type": "boolean"}
       }
     },
@@ -510,8 +533,62 @@
       "properties": {
         "kind": {"$ref": "#/$defs/nonEmptyString"},
         "gap": {"$ref": "#/$defs/nonEmptyString"},
-        "coverageReason": {"$ref": "#/$defs/nonEmptyString"},
-        "retryable": {"type": "boolean"}
+        "retryable": {"type": "boolean"},
+        "package": {"$ref": "#/$defs/emptyContextPackage"},
+        "egressGrant": {"$ref": "#/$defs/nonEmptyString"}
+      }
+    },
+    "emptyContextPackage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["packageId", "packageDigest", "purpose", "audienceDigest", "policyEpoch", "decisionRef", "releaseManifestRef", "retentionPolicyRef", "asOf", "expiresAt", "tokenizerRef", "blocks", "evidence", "gaps", "coverage", "budgetUsage"],
+      "properties": {
+        "packageId": {"$ref": "#/$defs/nonEmptyString"},
+        "packageDigest": {"$ref": "#/$defs/nonEmptyString"},
+        "purpose": {"$ref": "#/$defs/nonEmptyString"},
+        "audienceDigest": {"$ref": "#/$defs/nonEmptyString"},
+        "policyEpoch": {"$ref": "#/$defs/nonEmptyString"},
+        "decisionRef": {"$ref": "#/$defs/nonEmptyString"},
+        "releaseManifestRef": {"$ref": "#/$defs/nonEmptyString"},
+        "retentionPolicyRef": {"$ref": "#/$defs/nonEmptyString"},
+        "asOf": {"$ref": "#/$defs/nonEmptyString"},
+        "expiresAt": {"$ref": "#/$defs/nonEmptyString"},
+        "tokenizerRef": {"$ref": "#/$defs/nonEmptyString"},
+        "blocks": {"type": "array", "maxItems": 0},
+        "evidence": {"type": "array", "maxItems": 0},
+        "gaps": {"type": "array", "maxItems": 0},
+        "coverage": {"$ref": "#/$defs/emptyCoverage"},
+        "budgetUsage": {"$ref": "#/$defs/zeroBudgetUsage"}
+      }
+    },
+    "emptyCoverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "reason"],
+      "properties": {
+        "status": {"const": "empty"},
+        "reason": {"const": "no_authorized_evidence"}
+      }
+    },
+    "zeroBudgetUsage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tokens", "providerCalls", "costMicrounits", "elapsedMs"],
+      "properties": {
+        "tokens": {"type": "integer", "const": 0},
+        "providerCalls": {"type": "integer", "const": 0},
+        "costMicrounits": {"type": "integer", "const": 0},
+        "elapsedMs": {"type": "integer", "const": 0}
+      }
+    },
+    "responseHeaders": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["Content-Type", "Cache-Control", "X-Context-Request-Id"],
+      "properties": {
+        "Content-Type": {"const": "application/json"},
+        "Cache-Control": {"const": "no-store"},
+        "X-Context-Request-Id": {"$ref": "#/$defs/nonEmptyString"}
       }
     },
     "packageOrError": {
@@ -523,6 +600,8 @@
         "kind": {"$ref": "#/$defs/nonEmptyString"},
         "packageCount": {"type": "integer", "minimum": 0},
         "crossOrganizationResourceDetailCount": {"type": "integer", "minimum": 0},
+        "coverageStatus": {"$ref": "#/$defs/nonEmptyString"},
+        "coverageReason": {"$ref": "#/$defs/nonEmptyString"},
         "evidenceFields": {"$ref": "#/$defs/stringArray"},
         "deniedFieldCountExposed": {"type": "boolean"},
         "evidenceResourceRefs": {"$ref": "#/$defs/stringArray"},

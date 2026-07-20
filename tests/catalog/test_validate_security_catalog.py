@@ -54,6 +54,33 @@ RUNTIME_OUTCOMES = {
     "ACCEPT-011": ("resolved", "ContextPackage"),
 }
 
+TRANSPORT_CASE_IDS = [
+    "BODY-INJECTION",
+    "DELIV-001",
+    "DELIV-002",
+    "DELIV-003",
+    "DELIV-004",
+]
+WORKER_LEASE_CASE_IDS = [
+    "LEASE-ORGANIZATION",
+    "LEASE-JOB",
+    "LEASE-OPERATION",
+    "LEASE-SOURCE",
+    "LEASE-RESOURCE",
+    "LEASE-REVISION",
+    "LEASE-SERVICE-ACTOR",
+    "LEASE-WORKLOAD",
+    "LEASE-POLICY-EPOCH",
+    "LEASE-AUDIENCE",
+    "LEASE-IDEMPOTENCY",
+    "LEASE-GENERATION",
+    "LEASE-ISSUED-AT",
+    "LEASE-EXPIRY",
+    "LEASE-NONCE",
+    "LEASE-REPLAY",
+    "LEASE-USER-IMPERSONATION",
+]
+
 
 def object_at(mapping: dict[str, object], *keys: str) -> dict[str, object]:
     """Return a nested object while keeping malformed test data type-safe."""
@@ -120,19 +147,80 @@ def make_catalog() -> dict[str, object]:
             "code": "not_found",
         }
         operation: dict[str, object] = {"kind": "resolve"}
+        adversarial_mutation: dict[str, object] = {
+            "kind": "cross_organization_reference"
+        }
         if fixture_id in RUNTIME_OUTCOMES:
             body_kind, result_kind = RUNTIME_OUTCOMES[fixture_id]
             body: dict[str, object] = {"kind": body_kind}
             external_response = {"status": 200, "body": body}
             package_or_error = {"kind": result_kind, "code": "domain_outcome"}
             if fixture_id in {"ACCEPT-001", "ACCEPT-011"}:
-                body["coverageReason"] = "no_authorized_evidence"
-                package_or_error["gap"] = "no_authorized_evidence"
+                body["package"] = {
+                    "packageId": "opaque-package-ref",
+                    "packageDigest": "sha256-package-digest",
+                    "purpose": "context.answer",
+                    "audienceDigest": "audience-bound-digest",
+                    "policyEpoch": "current-policy-epoch",
+                    "decisionRef": "opaque-decision-ref",
+                    "releaseManifestRef": "active-release-manifest-ref",
+                    "retentionPolicyRef": "active-retention-policy-ref",
+                    "asOf": "current-rfc3339-time",
+                    "expiresAt": "bounded-rfc3339-expiry",
+                    "tokenizerRef": "active-tokenizer-ref",
+                    "blocks": [],
+                    "evidence": [],
+                    "gaps": [],
+                    "coverage": {
+                        "status": "empty",
+                        "reason": "no_authorized_evidence",
+                    },
+                    "budgetUsage": {
+                        "tokens": 0,
+                        "providerCalls": 0,
+                        "costMicrounits": 0,
+                        "elapsedMs": 0,
+                    },
+                }
+                body["egressGrant"] = "opaque-matching-egress-grant"
+                package_or_error["coverageStatus"] = "empty"
+                package_or_error["coverageReason"] = "no_authorized_evidence"
             if fixture_id in {"ACCEPT-005", "ACCEPT-009"}:
                 body["retryable"] = False
             if fixture_id == "ACCEPT-011":
                 external_response["timingEqualityClaimed"] = False
                 operation["comparisonFields"] = ["status", "body", "headers"]
+                operation["normalizationAllowlist"] = [
+                    "body.package.packageId",
+                    "body.package.packageDigest",
+                    "body.package.decisionRef",
+                    "body.package.asOf",
+                    "body.package.expiresAt",
+                    "body.package.budgetUsage.elapsedMs",
+                    "body.egressGrant",
+                    "headers.X-Context-Request-Id",
+                ]
+                adversarial_mutation["probes"] = [
+                    "resource-cross-org",
+                    "resource-same-org-denied",
+                    "resource-missing",
+                ]
+        if fixture_id in {"ACCEPT-007", "ACCEPT-008"}:
+            case_ids = (
+                TRANSPORT_CASE_IDS
+                if fixture_id == "ACCEPT-007"
+                else WORKER_LEASE_CASE_IDS
+            )
+            adversarial_mutation["parameterizedCases"] = [
+                {
+                    "id": case_id,
+                    "mutation": "Mutate exactly the named trust binding.",
+                    "expectedNewDurableEffects": 0,
+                    "expectedWrongOrganizationEffects": 0,
+                    "expectedContentWorkCalls": 0,
+                }
+                for case_id in case_ids
+            ]
         fixtures.append(
             {
                 "id": fixture_id,
@@ -147,7 +235,7 @@ def make_catalog() -> dict[str, object]:
                     "preconditions": ["Two isolated Organizations exist."],
                     "trustedIdentity": {"kind": "authenticated_invocation"},
                 },
-                "adversarialMutation": {"kind": "cross_organization_reference"},
+                "adversarialMutation": adversarial_mutation,
                 "operation": operation,
                 "expected": {
                     "externalResponse": external_response,
@@ -766,13 +854,30 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
         )
         for fixture_id in ("ACCEPT-001", "ACCEPT-011"):
             fixture = fixtures[fixture_id]
+            response_body = fixture["expected"]["externalResponse"]["body"]
             self.assertEqual(
-                fixture["expected"]["externalResponse"]["body"]["coverageReason"],
+                response_body["package"]["coverage"],
+                {"status": "empty", "reason": "no_authorized_evidence"},
+            )
+            self.assertEqual(response_body["package"]["blocks"], [])
+            self.assertEqual(response_body["package"]["evidence"], [])
+            self.assertEqual(response_body["package"]["gaps"], [])
+            self.assertEqual(
+                response_body["package"]["budgetUsage"],
+                {
+                    "tokens": 0,
+                    "providerCalls": 0,
+                    "costMicrounits": 0,
+                    "elapsedMs": 0,
+                },
+            )
+            self.assertTrue(response_body["egressGrant"])
+            self.assertEqual(
+                fixture["expected"]["packageOrError"]["coverageReason"],
                 "no_authorized_evidence",
             )
             self.assertEqual(
-                fixture["expected"]["packageOrError"]["gap"],
-                "no_authorized_evidence",
+                fixture["expected"]["packageOrError"]["coverageStatus"], "empty"
             )
         for fixture_id in ("ACCEPT-005", "ACCEPT-009"):
             self.assertIs(
@@ -789,6 +894,119 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
             expected = CANONICAL_REQUIRED_MILESTONES[invariant_id]
             self.assertEqual(invariant["applicability"]["applicableFrom"], expected[0])
             self.assertEqual(invariant["requiredMilestones"], expected)
+
+    def test_tracked_catalog_preserves_required_parameterized_security_cases(
+        self,
+    ) -> None:
+        catalog = load_document(DEFAULT_CATALOG_PATH)
+        fixtures = {
+            fixture["id"]: fixture
+            for fixture in catalog["fixtures"]
+            if isinstance(fixture, dict)
+        }
+        expected_case_ids = {
+            "ACCEPT-007": [
+                "BODY-INJECTION",
+                "DELIV-001",
+                "DELIV-002",
+                "DELIV-003",
+                "DELIV-004",
+            ],
+            "ACCEPT-008": [
+                "LEASE-ORGANIZATION",
+                "LEASE-JOB",
+                "LEASE-OPERATION",
+                "LEASE-SOURCE",
+                "LEASE-RESOURCE",
+                "LEASE-REVISION",
+                "LEASE-SERVICE-ACTOR",
+                "LEASE-WORKLOAD",
+                "LEASE-POLICY-EPOCH",
+                "LEASE-AUDIENCE",
+                "LEASE-IDEMPOTENCY",
+                "LEASE-GENERATION",
+                "LEASE-ISSUED-AT",
+                "LEASE-EXPIRY",
+                "LEASE-NONCE",
+                "LEASE-REPLAY",
+                "LEASE-USER-IMPERSONATION",
+            ],
+        }
+        for fixture_id, expected_ids in expected_case_ids.items():
+            cases = fixtures[fixture_id]["adversarialMutation"]["parameterizedCases"]
+            self.assertEqual([case["id"] for case in cases], expected_ids)
+            for case in cases:
+                self.assertEqual(case["expectedNewDurableEffects"], 0)
+                self.assertEqual(case["expectedWrongOrganizationEffects"], 0)
+                self.assertEqual(case["expectedContentWorkCalls"], 0)
+            self.assertEqual(
+                fixtures[fixture_id]["expected"]["io"],
+                {
+                    "providerCalls": 0,
+                    "indexCalls": 0,
+                    "modelCalls": 0,
+                    "actionCalls": 0,
+                },
+            )
+
+        accept_011 = fixtures["ACCEPT-011"]
+        self.assertEqual(
+            accept_011["adversarialMutation"]["probes"],
+            [
+                "resource-cross-org",
+                "resource-same-org-denied",
+                "resource-missing",
+            ],
+        )
+        self.assertEqual(accept_011["expected"]["packageOrError"]["packageCount"], 3)
+
+    def test_parameterized_security_case_deletions_are_rejected(self) -> None:
+        catalog = load_document(DEFAULT_CATALOG_PATH)
+        schema = load_document(DEFAULT_SCHEMA_PATH)
+        fixtures = object_list_at(catalog, "fixtures")
+        transport_cases = object_list_at(
+            fixtures[6], "adversarialMutation", "parameterizedCases"
+        )
+        worker_cases = object_list_at(
+            fixtures[7], "adversarialMutation", "parameterizedCases"
+        )
+        nonenumeration_mutation = object_at(fixtures[10], "adversarialMutation")
+        probes = nonenumeration_mutation["probes"]
+        assert isinstance(probes, list)
+        transport_cases.pop()
+        worker_cases.pop(4)
+        probes.pop(0)
+        transport_cases[0]["expectedContentWorkCalls"] = 1
+
+        with self.assertRaises(CatalogValidationError) as raised:
+            validate_catalog(catalog, schema)
+
+        self.assertIn(
+            "fixtures[6].adversarialMutation.parameterizedCases: ids must be the "
+            "canonical ordered set ['BODY-INJECTION', 'DELIV-001', 'DELIV-002', "
+            "'DELIV-003', 'DELIV-004']",
+            raised.exception.errors,
+        )
+        self.assertIn(
+            "fixtures[6].adversarialMutation.parameterizedCases[0]."
+            "expectedContentWorkCalls: must be the numeric constant 0",
+            raised.exception.errors,
+        )
+        self.assertTrue(
+            any(
+                error.startswith(
+                    "fixtures[7].adversarialMutation.parameterizedCases: ids "
+                    "must be the canonical ordered set"
+                )
+                for error in raised.exception.errors
+            )
+        )
+        self.assertIn(
+            "fixtures[10].adversarialMutation.probes: must be the canonical "
+            "ordered probe set ['resource-cross-org', "
+            "'resource-same-org-denied', 'resource-missing']",
+            raised.exception.errors,
+        )
 
     def test_runtime_outcome_and_milestone_drift_are_rejected(self) -> None:
         catalog = load_document(DEFAULT_CATALOG_PATH)
@@ -807,6 +1025,47 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
             "the canonical Runtime outcome",
             raised.exception.errors,
         )
+
+    def test_resolved_empty_outcome_shape_drift_is_rejected(self) -> None:
+        catalog = load_document(DEFAULT_CATALOG_PATH)
+        schema = load_document(DEFAULT_SCHEMA_PATH)
+        fixtures = object_list_at(catalog, "fixtures")
+        body = object_at(fixtures[0], "expected", "externalResponse", "body")
+        package = object_at(body, "package")
+        coverage = object_at(package, "coverage")
+        body.pop("egressGrant")
+        coverage["reason"] = "source_unavailable"
+        package["gaps"] = [{"category": "capability_unsupported"}]
+
+        with self.assertRaises(CatalogValidationError) as raised:
+            validate_catalog(catalog, schema)
+
+        self.assertIn(
+            "fixtures[0].expected.externalResponse.body.egressGrant: must be a "
+            "non-empty string",
+            raised.exception.errors,
+        )
+        self.assertIn(
+            "fixtures[0].expected.externalResponse.body.package.coverage.reason: "
+            "must be 'no_authorized_evidence' for a hidden or missing Acquire",
+            raised.exception.errors,
+        )
+        self.assertIn(
+            "fixtures[0].expected.externalResponse.body.package.gaps: must be empty "
+            "because no_authorized_evidence is coverage, not a Provider gap",
+            raised.exception.errors,
+        )
+
+    def test_milestone_drift_is_rejected(self) -> None:
+        catalog = load_document(DEFAULT_CATALOG_PATH)
+        schema = load_document(DEFAULT_SCHEMA_PATH)
+        invariants = object_list_at(catalog, "invariants")
+        object_at(invariants[5], "applicability")["applicableFrom"] = "M0"
+        invariants[5]["requiredMilestones"] = ["M0", "M1"]
+
+        with self.assertRaises(CatalogValidationError) as raised:
+            validate_catalog(catalog, schema)
+
         self.assertIn(
             "invariants[5].applicability.applicableFrom: must be 'M1' for "
             "REVOCATION-006",

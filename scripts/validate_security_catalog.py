@@ -140,6 +140,33 @@ RUNTIME_OUTCOME_KINDS: dict[str, tuple[str, str]] = {
 NON_RETRYABLE_RUNTIME_FIXTURES = frozenset({"ACCEPT-005", "ACCEPT-009"})
 RESOLVED_EMPTY_RUNTIME_FIXTURES = frozenset({"ACCEPT-001", "ACCEPT-011"})
 
+TRANSPORT_CASE_IDS: tuple[str, ...] = (
+    "BODY-INJECTION",
+    "DELIV-001",
+    "DELIV-002",
+    "DELIV-003",
+    "DELIV-004",
+)
+WORKER_LEASE_CASE_IDS: tuple[str, ...] = (
+    "LEASE-ORGANIZATION",
+    "LEASE-JOB",
+    "LEASE-OPERATION",
+    "LEASE-SOURCE",
+    "LEASE-RESOURCE",
+    "LEASE-REVISION",
+    "LEASE-SERVICE-ACTOR",
+    "LEASE-WORKLOAD",
+    "LEASE-POLICY-EPOCH",
+    "LEASE-AUDIENCE",
+    "LEASE-IDEMPOTENCY",
+    "LEASE-GENERATION",
+    "LEASE-ISSUED-AT",
+    "LEASE-EXPIRY",
+    "LEASE-NONCE",
+    "LEASE-REPLAY",
+    "LEASE-USER-IMPERSONATION",
+)
+
 
 @dataclass(frozen=True)
 class ValidationReport:
@@ -468,6 +495,48 @@ def _validate_metric_object(
     return result
 
 
+def _validate_parameterized_case_ids(
+    mutation: Mapping[str, Any],
+    expected_ids: tuple[str, ...],
+    path: str,
+    collector: _Collector,
+) -> None:
+    cases = mutation.get("parameterizedCases")
+    if not isinstance(cases, list) or not cases:
+        collector.add(f"{path}.parameterizedCases", "must be a non-empty array")
+        return
+    case_ids: list[str] = []
+    for index, case_value in enumerate(cases):
+        case = collector.require_mapping(
+            case_value, f"{path}.parameterizedCases[{index}]"
+        )
+        if case is None:
+            continue
+        case_id = case.get("id")
+        if collector.require_nonempty_string(
+            case_id, f"{path}.parameterizedCases[{index}].id"
+        ):
+            assert isinstance(case_id, str)
+            case_ids.append(case_id)
+        for field in (
+            "expectedNewDurableEffects",
+            "expectedWrongOrganizationEffects",
+            "expectedContentWorkCalls",
+        ):
+            if case.get(field) != 0 or isinstance(case.get(field), bool):
+                collector.add(
+                    f"{path}.parameterizedCases[{index}].{field}",
+                    "must be the numeric constant 0",
+                )
+    if len(case_ids) != len(set(case_ids)):
+        collector.add(f"{path}.parameterizedCases", "ids must be unique")
+    if tuple(case_ids) != expected_ids:
+        collector.add(
+            f"{path}.parameterizedCases",
+            f"ids must be the canonical ordered set {list(expected_ids)!r}",
+        )
+
+
 def _validate_fixture(
     fixture: Mapping[str, Any],
     path: str,
@@ -518,6 +587,23 @@ def _validate_fixture(
     collector.require_nonempty_object(
         fixture.get("adversarialMutation"), f"{path}.adversarialMutation"
     )
+    adversarial_mutation = collector.require_mapping(
+        fixture.get("adversarialMutation"), f"{path}.adversarialMutation"
+    )
+    if fixture_id == "ACCEPT-007" and adversarial_mutation is not None:
+        _validate_parameterized_case_ids(
+            adversarial_mutation,
+            TRANSPORT_CASE_IDS,
+            f"{path}.adversarialMutation",
+            collector,
+        )
+    if fixture_id == "ACCEPT-008" and adversarial_mutation is not None:
+        _validate_parameterized_case_ids(
+            adversarial_mutation,
+            WORKER_LEASE_CASE_IDS,
+            f"{path}.adversarialMutation",
+            collector,
+        )
     collector.require_nonempty_object(fixture.get("operation"), f"{path}.operation")
 
     expected = collector.require_mapping(fixture.get("expected"), f"{path}.expected")
@@ -613,20 +699,71 @@ def _validate_fixture(
                 f"must be false for {fixture_id}",
             )
         if fixture_id in RESOLVED_EMPTY_RUNTIME_FIXTURES:
+            resolved_package = (
+                collector.require_mapping(
+                    response_body.get("package"),
+                    f"{path}.expected.externalResponse.body.package",
+                )
+                if response_body is not None
+                else None
+            )
+            coverage = (
+                collector.require_mapping(
+                    resolved_package.get("coverage"),
+                    f"{path}.expected.externalResponse.body.package.coverage",
+                )
+                if resolved_package is not None
+                else None
+            )
             if (
                 response_body is not None
-                and response_body.get("coverageReason") != "no_authorized_evidence"
+                and not collector.require_nonempty_string(
+                    response_body.get("egressGrant"),
+                    f"{path}.expected.externalResponse.body.egressGrant",
+                )
+                and "egressGrant" not in response_body
             ):
                 collector.add(
-                    f"{path}.expected.externalResponse.body.coverageReason",
-                    "must be 'no_authorized_evidence' for a hidden or missing Acquire",
+                    f"{path}.expected.externalResponse.body.egressGrant",
+                    "is required for a resolved outcome",
+                )
+            if coverage is not None and coverage.get("status") != "empty":
+                collector.add(
+                    f"{path}.expected.externalResponse.body.package.coverage.status",
+                    "must be 'empty' for a hidden or missing Acquire",
                 )
             if (
-                package_or_error is not None
-                and package_or_error.get("gap") != "no_authorized_evidence"
+                coverage is not None
+                and coverage.get("reason") != "no_authorized_evidence"
             ):
                 collector.add(
-                    f"{path}.expected.packageOrError.gap",
+                    f"{path}.expected.externalResponse.body.package.coverage.reason",
+                    "must be 'no_authorized_evidence' for a hidden or missing Acquire",
+                )
+            for field in ("blocks", "evidence", "gaps"):
+                if resolved_package is not None and resolved_package.get(field) != []:
+                    message = "must be empty for a resolved empty Package"
+                    if field == "gaps":
+                        message = (
+                            "must be empty because no_authorized_evidence is coverage, "
+                            "not a Provider gap"
+                        )
+                    collector.add(
+                        f"{path}.expected.externalResponse.body.package.{field}",
+                        message,
+                    )
+            if package_or_error is not None and (
+                package_or_error.get("coverageStatus") != "empty"
+            ):
+                collector.add(
+                    f"{path}.expected.packageOrError.coverageStatus",
+                    "must be 'empty' for a hidden or missing Acquire",
+                )
+            if package_or_error is not None and (
+                package_or_error.get("coverageReason") != "no_authorized_evidence"
+            ):
+                collector.add(
+                    f"{path}.expected.packageOrError.coverageReason",
                     "must be 'no_authorized_evidence' for a hidden or missing Acquire",
                 )
         if fixture_id == "ACCEPT-011":
@@ -653,6 +790,52 @@ def _validate_fixture(
                 collector.add(
                     f"{path}.operation.comparisonFields",
                     "must not claim timing equality before the preregistered M5 gate",
+                )
+            normalization_allowlist = (
+                collector.require_string_list(
+                    operation.get("normalizationAllowlist"),
+                    f"{path}.operation.normalizationAllowlist",
+                )
+                if operation is not None
+                else None
+            )
+            canonical_allowlist = (
+                "body.package.packageId",
+                "body.package.packageDigest",
+                "body.package.decisionRef",
+                "body.package.asOf",
+                "body.package.expiresAt",
+                "body.package.budgetUsage.elapsedMs",
+                "body.egressGrant",
+                "headers.X-Context-Request-Id",
+            )
+            if (
+                normalization_allowlist is not None
+                and tuple(normalization_allowlist) != canonical_allowlist
+            ):
+                collector.add(
+                    f"{path}.operation.normalizationAllowlist",
+                    "must be the canonical ordered allowlist "
+                    f"{list(canonical_allowlist)!r}",
+                )
+            probes = (
+                collector.require_string_list(
+                    adversarial_mutation.get("probes"),
+                    f"{path}.adversarialMutation.probes",
+                )
+                if adversarial_mutation is not None
+                else None
+            )
+            canonical_probes = (
+                "resource-cross-org",
+                "resource-same-org-denied",
+                "resource-missing",
+            )
+            if probes is not None and tuple(probes) != canonical_probes:
+                collector.add(
+                    f"{path}.adversarialMutation.probes",
+                    "must be the canonical ordered probe set "
+                    f"{list(canonical_probes)!r}",
                 )
 
     invariant_refs = collector.require_string_list(
