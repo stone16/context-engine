@@ -147,6 +147,46 @@ RUNTIME_OUTCOME_KINDS: dict[str, tuple[str, str]] = {
     "ACCEPT-011": ("resolved", "ContextPackage"),
 }
 
+CANONICAL_FAIL_CLOSED_OUTCOMES: dict[str, dict[str, object]] = {
+    "ACCEPT-007": {
+        "externalResponse": {
+            "status": 422,
+            "code": "invalid_request",
+            "fieldNamesEchoed": False,
+        },
+        "packageOrError": {
+            "kind": "error",
+            "contextPackageCreated": False,
+            "trustedContextConstructedFromBody": False,
+        },
+    },
+    "ACCEPT-008": {
+        "externalResponse": {
+            "status": 404,
+            "code": "work_not_available",
+            "leaseClaimsEchoed": False,
+        },
+        "packageOrError": {
+            "kind": "worker_rejection",
+            "reasonVisibleToWorker": "generic_unavailable",
+            "newReceiptCreated": False,
+        },
+    },
+    "ACCEPT-012": {
+        "externalResponse": {
+            "status": 404,
+            "code": "action_not_available",
+            "body": {"kind": "generic_unavailable"},
+        },
+        "packageOrError": {
+            "kind": "action_rejection",
+            "actionTicketCreated": False,
+            "contextTicketConsumed": False,
+            "capabilityReportedAsPass": False,
+        },
+    },
+}
+
 NON_RETRYABLE_RUNTIME_FIXTURES = frozenset({"ACCEPT-005", "ACCEPT-009"})
 RESOLVED_EMPTY_RUNTIME_FIXTURES = frozenset({"ACCEPT-001", "ACCEPT-011"})
 
@@ -830,6 +870,16 @@ def _validate_fixture(
                 collector.add(
                     f"{path}.expected.io.{field}",
                     "must be 0 for an unavailable or future carrier",
+                )
+
+    canonical_fail_closed = CANONICAL_FAIL_CLOSED_OUTCOMES.get(fixture_id or "")
+    if canonical_fail_closed is not None and expected is not None:
+        for field, canonical_value in canonical_fail_closed.items():
+            if expected.get(field) != canonical_value:
+                collector.add(
+                    f"{path}.expected.{field}",
+                    "must preserve the canonical fail-closed outcome "
+                    f"for {fixture_id}",
                 )
 
     if fixture_id in RUNTIME_OUTCOME_KINDS and expected is not None:

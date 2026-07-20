@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import copy
 import io
 import json
 import os
@@ -13,6 +14,7 @@ from typing import Any, cast
 from scripts.validate_security_catalog import (
     ACL_PROOF_CASE_IDS,
     AUDIENCE_ACTION_CASE_IDS,
+    CANONICAL_FAIL_CLOSED_OUTCOMES,
     CANONICAL_INVARIANT_IDS,
     DEFAULT_CATALOG_PATH,
     DEFAULT_SCHEMA_PATH,
@@ -284,6 +286,16 @@ def make_catalog() -> dict[str, object]:
                 }
                 for case_id in derived_case_ids
             ]
+        if fixture_id in CANONICAL_FAIL_CLOSED_OUTCOMES:
+            canonical_outcome = copy.deepcopy(
+                CANONICAL_FAIL_CLOSED_OUTCOMES[fixture_id]
+            )
+            external_response = cast(
+                dict[str, object], canonical_outcome["externalResponse"]
+            )
+            package_or_error = cast(
+                dict[str, object], canonical_outcome["packageOrError"]
+            )
         fixtures.append(
             {
                 "id": fixture_id,
@@ -1209,6 +1221,45 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
         self.assertIn(
             "fixtures[0].expected.externalResponse.status: must be 200 for "
             "the canonical Runtime outcome",
+            raised.exception.errors,
+        )
+
+    def test_non_runtime_fail_closed_outcome_drift_is_rejected(self) -> None:
+        catalog = load_document(DEFAULT_CATALOG_PATH)
+        schema = load_document(DEFAULT_SCHEMA_PATH)
+        fixtures = {
+            fixture["id"]: fixture
+            for fixture in object_list_at(catalog, "fixtures")
+        }
+        object_at(fixtures["ACCEPT-007"], "expected")["externalResponse"] = {
+            "status": 200,
+            "code": "resolved",
+        }
+        object_at(fixtures["ACCEPT-008"], "expected")["packageOrError"] = {
+            "kind": "ContextPackage",
+            "newReceiptCreated": True,
+        }
+        object_at(fixtures["ACCEPT-012"], "expected")["externalResponse"] = {
+            "status": 200,
+            "body": {"kind": "resolved"},
+        }
+
+        with self.assertRaises(CatalogValidationError) as raised:
+            validate_catalog(catalog, schema)
+
+        self.assertIn(
+            "fixtures[6].expected.externalResponse: must preserve the canonical "
+            "fail-closed outcome for ACCEPT-007",
+            raised.exception.errors,
+        )
+        self.assertIn(
+            "fixtures[7].expected.packageOrError: must preserve the canonical "
+            "fail-closed outcome for ACCEPT-008",
+            raised.exception.errors,
+        )
+        self.assertIn(
+            "fixtures[11].expected.externalResponse: must preserve the canonical "
+            "fail-closed outcome for ACCEPT-012",
             raised.exception.errors,
         )
 
