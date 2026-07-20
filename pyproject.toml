@@ -9,7 +9,10 @@ description = "Permission-aware context delivery engine"
 readme = "README.md"
 requires-python = ">=3.13,<3.14"
 dependencies = [
+  "alembic>=1.16,<1.17",
   "fastapi>=0.116,<0.117",
+  "psycopg[binary]>=3.2,<3.3",
+  "sqlalchemy>=2.0,<2.1",
   "uvicorn>=0.35,<0.36",
 ]
 
@@ -31,10 +34,20 @@ packages = ["engine", "adapters", "applications"]
 [tool.mypy]
 python_version = "3.13"
 strict = true
-files = ["engine", "adapters", "applications", "tests"]
+files = [
+  "engine",
+  "adapters",
+  "applications",
+  "migrations",
+  "scripts/wait_for_database.py",
+  "tests",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+  "integration: requires the real PostgreSQL 17 + pgvector harness",
+]
 
 [tool.ruff]
 target-version = "py313"

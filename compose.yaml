@@ -1,0 +1,32 @@
+name: context-engine-dev
+
+services:
+  postgres:
+    image: pgvector/pgvector:0.8.5-pg17-bookworm@sha256:d2ef61f42ef767baa5a1475393303cc235bcd92febd9d7014eddb48b41f3bad0
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB is required}
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256
+      CONTEXT_ENGINE_MIGRATOR_ROLE: ${CONTEXT_ENGINE_MIGRATOR_ROLE:?CONTEXT_ENGINE_MIGRATOR_ROLE is required}
+      CONTEXT_ENGINE_MIGRATOR_PASSWORD: ${CONTEXT_ENGINE_MIGRATOR_PASSWORD:?CONTEXT_ENGINE_MIGRATOR_PASSWORD is required}
+      CONTEXT_ENGINE_RUNTIME_ROLE: ${CONTEXT_ENGINE_RUNTIME_ROLE:?CONTEXT_ENGINE_RUNTIME_ROLE is required}
+      CONTEXT_ENGINE_RUNTIME_PASSWORD: ${CONTEXT_ENGINE_RUNTIME_PASSWORD:?CONTEXT_ENGINE_RUNTIME_PASSWORD is required}
+      CONTEXT_ENGINE_WORKER_ROLE: ${CONTEXT_ENGINE_WORKER_ROLE:?CONTEXT_ENGINE_WORKER_ROLE is required}
+      CONTEXT_ENGINE_WORKER_PASSWORD: ${CONTEXT_ENGINE_WORKER_PASSWORD:?CONTEXT_ENGINE_WORKER_PASSWORD is required}
+    ports:
+      - "127.0.0.1:${CONTEXT_ENGINE_POSTGRES_PORT:?CONTEXT_ENGINE_POSTGRES_PORT is required}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./infra/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready --username "$${POSTGRES_USER}" --dbname "$${POSTGRES_DB}"
+      interval: 1s
+      timeout: 5s
+      retries: 30
+      start_period: 5s
+
+volumes:
+  postgres-data:
