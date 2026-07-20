@@ -26,26 +26,11 @@ def _revision_rows(configuration: DatabaseConfiguration) -> list[str]:
         engine.dispose()
 
 
-def test_empty_baseline_downgrade_upgrade_cycle(
-    migration_configuration: DatabaseConfiguration,
-) -> None:
-    alembic_configuration = Config(ROOT / "alembic.ini")
-
-    try:
-        command.downgrade(alembic_configuration, "base")
-        assert _revision_rows(migration_configuration) == []
-    finally:
-        command.upgrade(alembic_configuration, "head")
-    assert _revision_rows(migration_configuration) == ["20260720_0001"]
-
-
-def test_baseline_contains_no_application_or_tenant_tables(
-    migration_configuration: DatabaseConfiguration,
-) -> None:
-    engine = create_database_engine(migration_configuration)
+def _application_tables(configuration: DatabaseConfiguration) -> list[str]:
+    engine = create_database_engine(configuration)
     try:
         with engine.connect() as connection:
-            tables = list(
+            return list(
                 connection.execute(
                     text(
                         """
@@ -57,21 +42,41 @@ def test_baseline_contains_no_application_or_tenant_tables(
                     )
                 ).scalars()
             )
-            rls_tables = connection.execute(
-                text(
-                    """
-                    SELECT count(*)
-                    FROM pg_class AS relation
-                    JOIN pg_namespace AS namespace
-                      ON namespace.oid = relation.relnamespace
-                    WHERE namespace.nspname = 'public'
-                      AND relation.relkind IN ('r', 'p')
-                      AND (relation.relrowsecurity OR relation.relforcerowsecurity)
-                    """
-                )
-            ).scalar_one()
     finally:
         engine.dispose()
 
-    assert tables == ["alembic_version"]
-    assert rls_tables == 0
+
+def test_empty_baseline_remains_a_reversible_historical_revision(
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    alembic_configuration = Config(ROOT / "alembic.ini")
+
+    try:
+        command.downgrade(alembic_configuration, "base")
+        assert _revision_rows(migration_configuration) == []
+        command.upgrade(alembic_configuration, "20260720_0001")
+        assert _revision_rows(migration_configuration) == ["20260720_0001"]
+        assert _application_tables(migration_configuration) == ["alembic_version"]
+    finally:
+        command.upgrade(alembic_configuration, "head")
+    assert _revision_rows(migration_configuration) == ["20260720_0002"]
+
+
+def test_organization_isolation_revision_downgrades_and_reapplies_cleanly(
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    alembic_configuration = Config(ROOT / "alembic.ini")
+
+    try:
+        command.downgrade(alembic_configuration, "20260720_0001")
+        assert _revision_rows(migration_configuration) == ["20260720_0001"]
+        assert _application_tables(migration_configuration) == ["alembic_version"]
+    finally:
+        command.upgrade(alembic_configuration, "head")
+
+    assert _revision_rows(migration_configuration) == ["20260720_0002"]
+    assert _application_tables(migration_configuration) == [
+        "alembic_version",
+        "organization",
+        "organization_record",
+    ]

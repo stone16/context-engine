@@ -9,8 +9,9 @@
 应用与 IM bot(飞书群聊问答优先)。
 
 **当前状态**:M0 工程骨架已启动。API 和独立 Supply worker 可运行，真实
-PostgreSQL 17 + pgvector 测试底座可复现；Runtime delivery、tenant schema、
-RLS enforcement 和 worker job 行为仍为 `NOT_ACTIVE`。整体计划见
+PostgreSQL 17 + pgvector 测试底座可复现；Organization 安全根与一张代表性
+tenant-owned 表的非 owner FORCE RLS 隔离切片已验证。Runtime delivery、完整
+ActorContext / Membership 以及 worker job 行为仍为 `NOT_ACTIVE`。整体计划见
 [PLAN.md](./PLAN.md)。
 
 ## 开发命令
@@ -71,9 +72,10 @@ uv run context-engine-worker --test-mode
 ```
 
 健康响应中的 `runtime_delivery: NOT_ACTIVE` 和 worker 输出中的
-`job_behavior: NOT_ACTIVE` 是能力边界。当前数据库测试只证明 PG17/pgvector、
-角色隔离、空 Alembic baseline 和连接池清理契约；它没有 tenant table，也不声明
-RLS、授权或 ContextPackage 交付已经实现。
+`job_behavior: NOT_ACTIVE` 是能力边界。当前数据库测试证明 PG17/pgvector、
+角色隔离、迁移、连接池清理，以及 Organization + `organization_record` 的
+事务级租户上下文、复合所有权和 FORCE RLS；它不声明 Membership、完整
+ActorContext、Runtime 授权或 ContextPackage 交付已经实现。
 
 本次公开候选 bundle 包含实现权威、ADR、安全契约、PRD、Tech Spec
 与四个公开参考仓的证据基线；经维护者批准并提交后，它们将与实现一同
@@ -99,8 +101,9 @@ ContextEngine 的安全协议依据自身需求与威胁模型独立设计，零
   evidence gates。
 
 当前除固定 commit 的四仓静态证据与仓库内设计拆解外，已有真实 PostgreSQL 17 +
-pgvector 的基础 harness 证据。tenant schema / RLS isolation、filtered ANN 和飞书
-capability 的动态证据仍未完成，因此不声称这些产品能力已经验证。
+pgvector 的基础 harness，以及首个 Organization-owned 代表表的 RLS 动态证据。
+完整 domain schema、ActorContext、filtered ANN 和飞书 capability 的动态证据仍未
+完成，因此不把这个证据切片扩称为完整产品授权能力。
 
 ## 为什么做这个
 

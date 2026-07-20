@@ -1,0 +1,90 @@
+{
+  "manifestVersion": "1.0.0",
+  "tables": [
+    {
+      "name": "alembic_version",
+      "classification": "global",
+      "purpose": "Alembic migration metadata",
+      "partitions": []
+    },
+    {
+      "name": "organization",
+      "classification": "global",
+      "purpose": "Organization security root",
+      "primaryKey": {
+        "name": "pk_organization",
+        "columns": ["organization_id"]
+      },
+      "permittedOperations": {
+        "context_engine_runtime": [],
+        "context_engine_worker": []
+      },
+      "partitions": []
+    },
+    {
+      "name": "organization_record",
+      "classification": "tenant_owned",
+      "purpose": "Representative tenant-owned record for the first isolation slice",
+      "organizationColumn": "organization_id",
+      "organizationInclusiveKeys": [
+        {
+          "name": "pk_organization_record",
+          "kind": "primary_key",
+          "columns": ["organization_id", "record_id"]
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_organization_record_organization",
+          "columns": ["organization_id"],
+          "references": {
+            "table": "organization",
+            "columns": ["organization_id"]
+          }
+        },
+        {
+          "name": "fk_organization_record_parent_same_organization",
+          "columns": ["organization_id", "parent_record_id"],
+          "references": {
+            "table": "organization_record",
+            "columns": ["organization_id", "record_id"]
+          }
+        }
+      ],
+      "rowLevelSecurity": {
+        "enabled": true,
+        "forced": true,
+        "policies": [
+          {
+            "name": "organization_record_organization_isolation",
+            "command": "ALL",
+            "roles": ["context_engine_runtime"],
+            "using": "organization_id = COALESCE(NULLIF(current_setting('app.organization_id', true), ''), 'missing-organization-context')::uuid",
+            "withCheck": "organization_id = COALESCE(NULLIF(current_setting('app.organization_id', true), ''), 'missing-organization-context')::uuid"
+          }
+        ]
+      },
+      "permittedOperations": {
+        "context_engine_runtime": ["SELECT", "INSERT", "UPDATE", "DELETE"],
+        "context_engine_worker": []
+      },
+      "partitions": [],
+      "securityInvariantIds": [
+        "TENANT-OWNERSHIP-001",
+        "TENANT-FK-002",
+        "RLS-FAIL-CLOSED-003"
+      ],
+      "negativeTestIds": [
+        "DB-001",
+        "DB-002",
+        "DB-003",
+        "DB-004",
+        "DB-006",
+        "DB-007",
+        "DB-008",
+        "MIG-001",
+        "MIG-002"
+      ]
+    }
+  ]
+}

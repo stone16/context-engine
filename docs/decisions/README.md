@@ -89,3 +89,4 @@ touched:
 - [0015 — RLS transaction context and schema manifest](0015-rls-transaction-context-and-schema-manifest.md)
 - [0016 — Implementation authority and vertical-slice roadmap](0016-implementation-authority-and-vertical-slice-roadmap.md)
 - [0019 — Security catalog normalization](0019-security-catalog-normalization.md)
+- [0020 — Staged Organization RLS proof](0020-stage-organization-rls-before-actor-context.md)

@@ -64,7 +64,7 @@ def guarded_runtime_engine(
 
 @pytest.fixture(scope="session", autouse=True)
 def migrated_database(guarded_runtime_engine: Engine) -> Iterator[None]:
-    """Put the disposable database at the empty baseline revision for all tests."""
+    """Put the disposable database at the current reviewed migration head."""
 
     configuration = Config(ROOT / "alembic.ini")
     command.upgrade(configuration, "head")
