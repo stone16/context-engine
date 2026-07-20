@@ -8,12 +8,15 @@ has no dependency on an application environment or a third-party YAML parser.
 from __future__ import annotations
 
 import argparse
+import html
 import json
 import re
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
+from urllib.parse import unquote
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
@@ -1033,6 +1036,113 @@ def validate_catalog(
     )
 
 
+_MARKDOWN_HEADING = re.compile(r"^ {0,3}#{1,6}(?:[ \t]+|$)(.*)$")
+_MARKDOWN_CLOSING_HASHES = re.compile(r"[ \t]+#+[ \t]*$")
+_MARKDOWN_FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
+_MARKDOWN_LINK = re.compile(r"!?\[([^]]*)\]\([^)]*\)")
+_MARKDOWN_HTML_TAG = re.compile(r"<[^>]+>")
+
+
+def _github_heading_slug(heading: str) -> str:
+    """Return the GitHub-style base slug for a Markdown heading."""
+
+    visible_text = _MARKDOWN_LINK.sub(r"\1", heading)
+    visible_text = _MARKDOWN_HTML_TAG.sub("", visible_text)
+    visible_text = html.unescape(visible_text).lower()
+    slug_characters = (
+        character
+        for character in visible_text
+        if character.isalnum()
+        or character.isspace()
+        or character in {"-", "_"}
+    )
+    return re.sub(r"\s", "-", "".join(slug_characters))
+
+
+def _markdown_heading_anchors(document: Path) -> set[str]:
+    """Extract GitHub-style anchors, including deterministic duplicate suffixes."""
+
+    anchors: set[str] = set()
+    fence_character: str | None = None
+    fence_length = 0
+    for line in document.read_text(encoding="utf-8").splitlines():
+        fence = _MARKDOWN_FENCE.match(line)
+        if fence is not None:
+            marker = fence.group(1)
+            if fence_character is None:
+                fence_character = marker[0]
+                fence_length = len(marker)
+            elif marker[0] == fence_character and len(marker) >= fence_length:
+                fence_character = None
+                fence_length = 0
+            continue
+        if fence_character is not None:
+            continue
+
+        match = _MARKDOWN_HEADING.match(line)
+        if match is None:
+            continue
+        heading = _MARKDOWN_CLOSING_HASHES.sub("", match.group(1)).strip()
+        base_slug = _github_heading_slug(heading)
+        if not base_slug:
+            continue
+        anchor = base_slug
+        suffix = 0
+        while anchor in anchors:
+            suffix += 1
+            anchor = f"{base_slug}-{suffix}"
+        anchors.add(anchor)
+    return anchors
+
+
+def _git_tracks(repository_root: Path, ref: str) -> bool:
+    """Return whether *ref* is present in the repository's Git index."""
+
+    try:
+        result = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(repository_root),
+                "ls-files",
+                "--error-unmatch",
+                "--",
+                ref,
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        return False
+    return result.returncode == 0
+
+
+def _iter_catalog_authority_refs(
+    catalog: Mapping[str, Any],
+) -> Sequence[tuple[str, str]]:
+    refs: list[tuple[str, str]] = []
+    for collection_name in ("invariants", "fixtures"):
+        collection = catalog.get(collection_name)
+        if not isinstance(collection, list):
+            continue
+        for item_index, item in enumerate(collection):
+            if not isinstance(item, Mapping):
+                continue
+            authority_refs = item.get("authorityRefs")
+            if not isinstance(authority_refs, list):
+                continue
+            for ref_index, ref in enumerate(authority_refs):
+                if isinstance(ref, str):
+                    refs.append(
+                        (
+                            f"{collection_name}[{item_index}].authorityRefs[{ref_index}]",
+                            ref,
+                        )
+                    )
+    return refs
+
+
 def _validate_document_paths(
     catalog: Mapping[str, Any], repository_root: Path
 ) -> None:
@@ -1044,6 +1154,7 @@ def _validate_document_paths(
     if not isinstance(document_refs, list):
         return
     root = repository_root.resolve()
+    tracked_documents: dict[str, Path] = {}
     for index, ref in enumerate(document_refs):
         if not isinstance(ref, str):
             continue
@@ -1060,6 +1171,33 @@ def _validate_document_paths(
             continue
         if not resolved.is_file():
             errors.append(f"{path}: tracked document does not exist: {ref!r}")
+            continue
+        if not _git_tracks(root, ref):
+            errors.append(f"{path}: must reference a Git-tracked file: {ref!r}")
+            continue
+        tracked_documents[ref] = resolved
+
+    heading_anchors: dict[str, set[str]] = {}
+    for ref_path, ref in _iter_catalog_authority_refs(catalog):
+        document_ref, separator, fragment = ref.partition("#")
+        if not document_ref or not separator:
+            # Bare references such as issue ``#5`` are not document anchors.
+            continue
+        document = tracked_documents.get(document_ref)
+        if document is None or document.suffix.lower() not in {".md", ".markdown"}:
+            continue
+        anchors = heading_anchors.get(document_ref)
+        if anchors is None:
+            try:
+                anchors = _markdown_heading_anchors(document)
+            except (OSError, UnicodeError):
+                # Existence/tracking errors above remain the actionable boundary.
+                continue
+            heading_anchors[document_ref] = anchors
+        if unquote(fragment) not in anchors:
+            errors.append(
+                f"{ref_path}: Markdown heading anchor does not exist: {ref!r}"
+            )
     if errors:
         raise CatalogValidationError(errors)
 

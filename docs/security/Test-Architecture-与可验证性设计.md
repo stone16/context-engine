@@ -406,7 +406,7 @@ Flaky test 不能自动重跑后变绿；先记录原始失败，只有 typed ex
 | `ACCEPT-002` | same-Organization Membership isolation | 同一 Organization 的 Membership A/B 得到不同 Resource/field |
 | `ACCEPT-003` | Agent ceiling intersection | Agent ceiling 比 User 小时只返回交集 |
 | `ACCEPT-004` | request narrowing | request source/filter 只能收窄，不能扩大 trusted scope |
-| `ACCEPT-005` | revocation | revoke 后下一次 request、旧 cache、旧 continuation 均不可见 |
+| `ACCEPT-005` | revocation | M0 对不可用 continuation 做 generic refusal 且 Provider/Index/Source I/O=0；真实 carrier 激活后，revoke 后下一次 request、旧 cache、旧 continuation 均不可见 |
 | `ACCEPT-006` | hostile index candidate | index 故意返回 cross-org candidate 仍不进入 AuthorizedProjection/Evidence 或 content-bearing consumer |
 | `ACCEPT-007` | transport injection rejection | HTTP body 自报 org/ACL/raw SQL 被 schema 拒绝；MCP 激活后同一 fixture 也必须拒绝 |
 | `ACCEPT-008` | WorkerLease replay and binding | Worker 使用 ServiceActor；WorkerLease 每个 claim 与 durable job row 匹配，wrong-org/generation/workload/job/source/operation 与 replay 被拒绝 |

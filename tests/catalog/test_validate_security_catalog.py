@@ -5,6 +5,7 @@ import copy
 import io
 import json
 import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -12,7 +13,9 @@ from pathlib import Path
 from scripts.validate_security_catalog import (
     CANONICAL_INVARIANT_IDS,
     CatalogValidationError,
+    DEFAULT_CATALOG_PATH,
     main,
+    load_document,
     render_report,
     validate_catalog,
     validate_files,
@@ -52,7 +55,7 @@ def make_catalog() -> dict[str, object]:
                     "runtimeOrDelivery": [f"RUNTIME-{number:03d}"],
                 },
                 "authorityRefs": [
-                    "docs/security/context-engine-threat-model.md#hard-oracles"
+                    "docs/security/context-engine-threat-model.md#5-hard-oracles"
                 ],
             }
         )
@@ -98,7 +101,7 @@ def make_catalog() -> dict[str, object]:
                 "invariantRefs": [CANONICAL_INVARIANT_IDS[(number - 1) % 15]],
                 "authorityRefs": [
                     "#5",
-                    "docs/security/context-engine-threat-model.md#hard-oracles",
+                    "docs/security/context-engine-threat-model.md#5-hard-oracles",
                 ],
             }
         )
@@ -474,6 +477,124 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
                 escaping.exception.errors,
             )
 
+    def test_validate_files_rejects_a_nonexistent_markdown_heading_anchor(self) -> None:
+        repository_root = Path(__file__).resolve().parents[2]
+        catalog = make_catalog()
+        invariants = catalog["invariants"]
+        assert isinstance(invariants, list)
+        invariants[0]["authorityRefs"] = [
+            "docs/security/context-engine-threat-model.md#not-a-real-heading"
+        ]
+
+        with tempfile.TemporaryDirectory() as directory:
+            catalog_path = Path(directory, "security-invariants.yaml")
+            schema_path = Path(directory, "security-catalog.schema.json")
+            catalog_path.write_text(json.dumps(catalog), encoding="utf-8")
+            schema_path.write_text(json.dumps(make_schema()), encoding="utf-8")
+
+            with self.assertRaises(CatalogValidationError) as raised:
+                validate_files(
+                    catalog_path,
+                    schema_path,
+                    repository_root=repository_root,
+                )
+
+        self.assertIn(
+            (
+                "invariants[0].authorityRefs[0]: Markdown heading anchor does not exist: "
+                "'docs/security/context-engine-threat-model.md#not-a-real-heading'"
+            ),
+            raised.exception.errors,
+        )
+
+    def test_validate_files_rejects_untracked_and_ignored_authority_documents(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(
+                ["git", "-C", str(root), "init", "--quiet"],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            docs = root / "docs"
+            docs.mkdir()
+            (docs / "untracked.md").write_text("# Real heading\n", encoding="utf-8")
+            (docs / "ignored.md").write_text("# Real heading\n", encoding="utf-8")
+            (root / ".gitignore").write_text("docs/ignored.md\n", encoding="utf-8")
+
+            catalog = make_catalog()
+            catalog["authority"]["documentRefs"] = [
+                "docs/untracked.md",
+                "docs/ignored.md",
+            ]
+            for invariant in catalog["invariants"]:
+                invariant["authorityRefs"] = ["docs/untracked.md#real-heading"]
+            for fixture in catalog["fixtures"]:
+                fixture["authorityRefs"] = ["#5", "docs/ignored.md#real-heading"]
+
+            catalog_path = root / "security-invariants.yaml"
+            schema_path = root / "security-catalog.schema.json"
+            catalog_path.write_text(json.dumps(catalog), encoding="utf-8")
+            schema_path.write_text(json.dumps(make_schema()), encoding="utf-8")
+
+            with self.assertRaises(CatalogValidationError) as raised:
+                validate_files(catalog_path, schema_path, repository_root=root)
+
+        self.assertIn(
+            (
+                "authority.documentRefs[0]: must reference a Git-tracked file: "
+                "'docs/untracked.md'"
+            ),
+            raised.exception.errors,
+        )
+        self.assertIn(
+            (
+                "authority.documentRefs[1]: must reference a Git-tracked file: "
+                "'docs/ignored.md'"
+            ),
+            raised.exception.errors,
+        )
+
+    def test_validate_files_accepts_unicode_and_duplicate_heading_anchors(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(
+                ["git", "-C", str(root), "init", "--quiet"],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            docs = root / "docs"
+            docs.mkdir()
+            authority_document = docs / "authority.md"
+            authority_document.write_text(
+                "# 重复 标题\n\n# 重复 标题\n",
+                encoding="utf-8",
+            )
+            subprocess.run(
+                ["git", "-C", str(root), "add", "--", "docs/authority.md"],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+
+            catalog = make_catalog()
+            catalog["authority"]["documentRefs"] = ["docs/authority.md"]
+            for invariant in catalog["invariants"]:
+                invariant["authorityRefs"] = ["docs/authority.md#重复-标题"]
+            for fixture in catalog["fixtures"]:
+                fixture["authorityRefs"] = ["#5", "docs/authority.md#重复-标题-1"]
+
+            catalog_path = root / "security-invariants.yaml"
+            schema_path = root / "security-catalog.schema.json"
+            catalog_path.write_text(json.dumps(catalog), encoding="utf-8")
+            schema_path.write_text(json.dumps(make_schema()), encoding="utf-8")
+
+            report = validate_files(catalog_path, schema_path, repository_root=root)
+
+        self.assertEqual(report.invariant_count, 15)
+        self.assertEqual(report.fixture_count, 12)
+
     def test_cli_default_paths_are_anchored_to_repository(self) -> None:
         repository_root = Path(__file__).resolve().parents[2]
         if not (repository_root / "eval/catalogs/security-invariants.yaml").is_file():
@@ -503,6 +624,31 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
 
         self.assertEqual(report.invariant_count, 15)
         self.assertEqual(report.fixture_count, 12)
+
+    def test_tracked_catalog_freezes_later_carrier_and_source_acl_semantics(self) -> None:
+        catalog = load_document(DEFAULT_CATALOG_PATH)
+        fixtures = {
+            fixture["id"]: fixture
+            for fixture in catalog["fixtures"]
+            if isinstance(fixture, dict)
+        }
+
+        accept_005 = fixtures["ACCEPT-005"]
+        self.assertEqual(accept_005["carrier"]["statusAtM0"], "future")
+        self.assertEqual(accept_005["carrier"]["m0Expectation"], "fail_closed")
+        self.assertEqual(
+            accept_005["expected"]["io"],
+            {
+                "providerCalls": 0,
+                "indexCalls": 0,
+                "modelCalls": 0,
+                "actionCalls": 0,
+            },
+        )
+        self.assertEqual(
+            fixtures["ACCEPT-009"]["invariantRefs"],
+            ["INDEX-NOT-AUTHORITY-005", "REVOCATION-006"],
+        )
 
     def test_cli_reads_json_compatible_yaml_and_prints_report(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

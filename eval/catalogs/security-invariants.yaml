@@ -633,18 +633,18 @@
     },
     {
       "id": "ACCEPT-005",
-      "title": "Revocation invalidates stale continuation before content I/O",
+      "title": "Unavailable stale continuation fails closed before content I/O at M0",
       "decisionStatus": "accepted",
       "carrier": {
-        "statusAtM0": "available",
-        "m0Expectation": "active_fail_closed",
-        "upgradeTrigger": "Issue #15 upgrades this authority fixture with Policy Epoch invalidation for stale authorization artifacts."
+        "statusAtM0": "future",
+        "m0Expectation": "fail_closed",
+        "upgradeTrigger": "Issue #16 activates the M0 unavailable-capability refusal without redeeming a continuation; issue #15 separately proves next-request Acquire revocation, and the future real-continuation owner upgrades this fixture only when continuation issuance and redemption exist."
       },
       "setup": {
         "preconditions": [
-          "member-a previously received a continuation bound to org-a, membership version 4, and Policy Epoch 8.",
+          "An opaque caller value claims to be a continuation bound to org-a, membership version 4, and Policy Epoch 8.",
           "The authoritative grant is revoked and Policy Epoch is synchronously advanced to 9.",
-          "The old candidate and Package remain physically present in cache and index."
+          "M0 does not issue or redeem real continuations; stale candidate and Package-shaped test data remain physically present behind instrumented twins."
         ],
         "trustedIdentity": {
           "organizationRef": "org-a",
@@ -861,7 +861,7 @@
         "businessEffects": {"wrongOrganizationEffectCount": 0, "mutationEffectCount": 0, "totalEffectsAfterScenario": 0},
         "io": {"providerCalls": 0, "indexCalls": 0, "modelCalls": 0, "actionCalls": 0}
       },
-      "invariantRefs": ["INDEX-NOT-AUTHORITY-005", "REVOCATION-006", "TRANSPORT-UNTRUSTED-008"],
+      "invariantRefs": ["INDEX-NOT-AUTHORITY-005", "REVOCATION-006"],
       "authorityRefs": [
         "docs/design/2026-07-18-context-engine-implementation-design.md#33-contextprovider-and-source-projection",
         "docs/security/安全负向测试清单.md#5-providerfederation-与-source-native-acl",
