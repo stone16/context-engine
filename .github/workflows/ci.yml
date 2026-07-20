@@ -8,6 +8,7 @@ on:
 jobs:
   checks:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
@@ -16,4 +17,7 @@ jobs:
           enable-cache: true
       - run: uv python install 3.13
       - run: make install
+      - run: make db-up
       - run: make check
+      - if: always()
+        run: make db-down

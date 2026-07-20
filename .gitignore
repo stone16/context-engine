@@ -12,6 +12,7 @@ docs/design/2026-07-18-context-engine-design.md
 .env.*
 *.local
 credentials*.json
+.context-engine/
 
 # --- Python ---
 __pycache__/

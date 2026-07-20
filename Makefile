@@ -1,4 +1,4 @@
-.PHONY: install build lint typecheck test catalog smoke check
+.PHONY: install build lint typecheck test catalog smoke db-up db-down db-reset integration check
 
 install:
 	uv sync --frozen
@@ -22,4 +22,16 @@ catalog:
 smoke:
 	uv run pytest -q tests/process
 
-check: build lint typecheck test catalog smoke
+db-up:
+	./scripts/database_harness.sh up
+
+db-down:
+	./scripts/database_harness.sh down
+
+db-reset:
+	./scripts/database_harness.sh reset
+
+integration:
+	./scripts/database_harness.sh integration
+
+check: build lint typecheck test catalog smoke integration

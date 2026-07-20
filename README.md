@@ -8,8 +8,9 @@
 企业微信),下游把「经过授权、带证据、有预算」的 ContextPackage 交付给 agent
 应用与 IM bot(飞书群聊问答优先)。
 
-**当前状态**:M0 工程骨架已启动。API 和独立 Supply worker 可运行，但
-Runtime delivery、数据库和 worker job 行为仍为 `NOT_ACTIVE`。整体计划见
+**当前状态**:M0 工程骨架已启动。API 和独立 Supply worker 可运行，真实
+PostgreSQL 17 + pgvector 测试底座可复现；Runtime delivery、tenant schema、
+RLS enforcement 和 worker job 行为仍为 `NOT_ACTIVE`。整体计划见
 [PLAN.md](./PLAN.md)。
 
 ## 开发命令
@@ -25,8 +26,34 @@ make typecheck # strict mypy
 make test      # 单元测试
 make catalog   # 安全目录静态测试与校验
 make smoke     # API / worker 进程 smoke
-make check     # build + lint + typecheck + test + catalog + smoke
+make db-up     # 启动真实 PostgreSQL 17 + pgvector 测试底座
+make db-down   # 停止测试底座并保留 disposable data volume
+make db-reset  # 删除并重建该测试底座的 disposable data volume
+make integration # 真实 PostgreSQL integration/security harness
+make check     # 全部门禁；要求先执行 make db-up
 ```
+
+数据库底座首次启动时会在被 Git 忽略的
+`.context-engine/database.env` 生成随机凭据并将文件权限设为 `0600`；该文件是
+本地 migration、API Runtime、worker、security test 连接配置和该 checkout
+独有 Compose project 身份的唯一实时来源，避免多个 worktree 或 checkout 共享
+容器、网络与数据卷。
+镜像及服务拓扑的版本真相位于 [`compose.yaml`](./compose.yaml)，PostgreSQL 只绑定
+一个动态选择的 `127.0.0.1` host port。migration、runtime 与 worker 使用不同
+角色；runtime/security test 不会回退到 migration 或 bootstrap 凭据。
+
+从 clean checkout 运行与 CI 相同的数据库门禁：
+
+```bash
+make install
+make db-up
+make check
+make db-down
+```
+
+`make db-reset` 只删除当前 checkout 的 generated Compose project 所属的
+disposable PostgreSQL volume，然后从初始化脚本重建。它不会删除仓库内容，但会
+清除该本地测试数据库中的全部数据。
 
 本地启动 API：
 
@@ -44,8 +71,9 @@ uv run context-engine-worker --test-mode
 ```
 
 健康响应中的 `runtime_delivery: NOT_ACTIVE` 和 worker 输出中的
-`job_behavior: NOT_ACTIVE` 是能力边界，不表示数据库、授权或 ContextPackage
-交付已经实现。
+`job_behavior: NOT_ACTIVE` 是能力边界。当前数据库测试只证明 PG17/pgvector、
+角色隔离、空 Alembic baseline 和连接池清理契约；它没有 tenant table，也不声明
+RLS、授权或 ContextPackage 交付已经实现。
 
 本次公开候选 bundle 包含实现权威、ADR、安全契约、PRD、Tech Spec
 与四个公开参考仓的证据基线；经维护者批准并提交后，它们将与实现一同
@@ -70,9 +98,9 @@ ContextEngine 的安全协议依据自身需求与威胁模型独立设计，零
 - [D0 Baseline Candidate](./DESIGN-BASELINE.md)：当前候选状态与尚未关闭的
   evidence gates。
 
-当前只有固定 commit 的四仓静态证据与仓库内设计拆解；PostgreSQL RLS、
-filtered ANN 和飞书 capability 的 disposable evidence spikes 尚未完成，
-因此不声称已有动态可行性或产品能力验证。
+当前除固定 commit 的四仓静态证据与仓库内设计拆解外，已有真实 PostgreSQL 17 +
+pgvector 的基础 harness 证据。tenant schema / RLS isolation、filtered ANN 和飞书
+capability 的动态证据仍未完成，因此不声称这些产品能力已经验证。
 
 ## 为什么做这个
 
