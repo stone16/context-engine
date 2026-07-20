@@ -372,7 +372,7 @@ def test_missing_tenant_context_is_fail_closed_for_every_operation(
     guarded_runtime_engine: Engine,
     organizations: OrganizationPair,
 ) -> None:
-    """DB-001: every missing-context operation errors with zero fallback."""
+    """DB-001: missing reads are empty and every write errors before effects."""
 
     record_a = uuid4()
     record_b = uuid4()
@@ -390,15 +390,13 @@ def test_missing_tenant_context_is_fail_closed_for_every_operation(
     )
 
     missing_context_fallback_count = 0
-    with (
-        pytest.raises(DBAPIError) as select_error,
-        guarded_runtime_engine.connect() as connection,
-    ):
+    with guarded_runtime_engine.connect() as connection:
         assert connection.execute(
             text("SELECT current_setting('app.organization_id', true)")
         ).scalar_one_or_none() in {None, ""}
-        visible_records(connection)
-    assert_sqlstate(select_error.value, "22P02")
+        rows = visible_records(connection)
+        missing_context_fallback_count += len(rows)
+        assert rows == []
 
     with (
         pytest.raises(DBAPIError) as insert_error,
@@ -422,7 +420,7 @@ def test_missing_tenant_context_is_fail_closed_for_every_operation(
                 "payload": "missing-context-insert",
             },
         )
-    assert_sqlstate(insert_error.value, "22P02")
+    assert_sqlstate(insert_error.value, "42501")
 
     with (
         pytest.raises(DBAPIError) as update_error,
@@ -442,7 +440,7 @@ def test_missing_tenant_context_is_fail_closed_for_every_operation(
                 "record_id": record_a,
             },
         )
-    assert_sqlstate(update_error.value, "22P02")
+    assert_sqlstate(update_error.value, "42501")
 
     with (
         pytest.raises(DBAPIError) as delete_error,
@@ -461,7 +459,7 @@ def test_missing_tenant_context_is_fail_closed_for_every_operation(
                 "record_id": record_b,
             },
         )
-    assert_sqlstate(delete_error.value, "22P02")
+    assert_sqlstate(delete_error.value, "42501")
 
     assert missing_context_fallback_count == 0
     for organization_id, record_id, payload in (
@@ -509,9 +507,20 @@ def test_single_connection_pool_reuse_never_leaks_organization_context(
                     (organization_id, record_id, None, payload)
                 ]
 
+            with engine.connect() as connection:
+                backend_pids.add(
+                    connection.execute(text("SELECT pg_backend_pid()")).scalar_one()
+                )
+                assert connection.execute(
+                    text("SELECT current_setting('app.organization_id', true)")
+                ).scalar_one_or_none() in {None, ""}
+                rows = visible_records(connection)
+                missing_context_fallback_count += len(rows)
+                assert rows == []
+
             with (
-                pytest.raises(DBAPIError) as missing_context_error,
-                engine.connect() as connection,
+                pytest.raises(DBAPIError) as write_error,
+                engine.begin() as connection,
             ):
                 backend_pids.add(
                     connection.execute(text("SELECT pg_backend_pid()")).scalar_one()
@@ -519,8 +528,16 @@ def test_single_connection_pool_reuse_never_leaks_organization_context(
                 assert connection.execute(
                     text("SELECT current_setting('app.organization_id', true)")
                 ).scalar_one_or_none() in {None, ""}
-                visible_records(connection)
-            assert_sqlstate(missing_context_error.value, "22P02")
+                connection.execute(
+                    text(
+                        """
+                        UPDATE organization_record
+                        SET payload = 'unreachable-after-pool-reuse'
+                        WHERE false
+                        """
+                    )
+                )
+            assert_sqlstate(write_error.value, "42501")
 
         assert backend_pids and len(backend_pids) == 1
         assert missing_context_fallback_count == 0
@@ -571,10 +588,7 @@ def test_failed_organization_transaction_rolls_back_row_and_local_context(
             )
             raise LookupError("cancel operation")
 
-        with (
-            pytest.raises(DBAPIError) as missing_context_error,
-            engine.connect() as connection,
-        ):
+        with engine.connect() as connection:
             assert (
                 connection.execute(text("SELECT pg_backend_pid()")).scalar_one()
                 == backend_pid
@@ -582,22 +596,24 @@ def test_failed_organization_transaction_rolls_back_row_and_local_context(
             assert connection.execute(
                 text("SELECT current_setting('app.organization_id', true)")
             ).scalar_one_or_none() in {None, ""}
-            visible_records(connection)
-        assert_sqlstate(missing_context_error.value, "22P02")
+            assert visible_records(connection) == []
 
         with organization_transaction(
             engine, organizations.organization_a
         ) as connection:
-            assert connection.execute(
-                text(
-                    """
+            assert (
+                connection.execute(
+                    text(
+                        """
                     SELECT count(*)
                     FROM organization_record
                     WHERE record_id = :record_id
                     """
-                ),
-                {"record_id": rolled_back_record},
-            ).scalar_one() == 0
+                    ),
+                    {"record_id": rolled_back_record},
+                ).scalar_one()
+                == 0
+            )
     finally:
         engine.dispose()
 
@@ -619,12 +635,17 @@ def test_force_rls_subjects_the_table_owner_without_tenant_context(
 
     migration_engine = create_database_engine(migration_configuration)
     try:
-        with migration_engine.begin() as connection:
+        with migration_engine.connect() as connection:
             assert connection.execute(
                 text("SELECT current_setting('app.organization_id', true)")
             ).scalar_one_or_none() in {None, ""}
             assert visible_records(connection) == []
-            update_result = connection.execute(
+
+        with (
+            pytest.raises(DBAPIError) as update_error,
+            migration_engine.begin() as connection,
+        ):
+            connection.execute(
                 text(
                     """
                     UPDATE organization_record
@@ -638,8 +659,13 @@ def test_force_rls_subjects_the_table_owner_without_tenant_context(
                     "record_id": record_id,
                 },
             )
-            assert update_result.rowcount == 0
-            delete_result = connection.execute(
+        assert_sqlstate(update_error.value, "42501")
+
+        with (
+            pytest.raises(DBAPIError) as delete_error,
+            migration_engine.begin() as connection,
+        ):
+            connection.execute(
                 text(
                     """
                     DELETE FROM organization_record
@@ -652,7 +678,7 @@ def test_force_rls_subjects_the_table_owner_without_tenant_context(
                     "record_id": record_id,
                 },
             )
-            assert delete_result.rowcount == 0
+        assert_sqlstate(delete_error.value, "42501")
 
         with (
             pytest.raises(DBAPIError) as insert_error,
@@ -676,7 +702,7 @@ def test_force_rls_subjects_the_table_owner_without_tenant_context(
                     "payload": "owner-bypass-insert",
                 },
             )
-        assert "row-level security" in str(insert_error.value)
+        assert_sqlstate(insert_error.value, "42501")
     finally:
         migration_engine.dispose()
 
@@ -691,6 +717,50 @@ def test_force_rls_subjects_the_table_owner_without_tenant_context(
                 "force-owner-oracle",
             )
         ]
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        """
+        INSERT INTO organization_record (
+            organization_id,
+            record_id,
+            parent_record_id,
+            payload
+        )
+        SELECT :organization_id, :record_id, NULL, 'unreachable'
+        WHERE false
+        """,
+        """
+        UPDATE organization_record
+        SET payload = 'unreachable'
+        WHERE false
+        """,
+        """
+        DELETE FROM organization_record
+        WHERE false
+        """,
+    ],
+)
+def test_missing_context_write_guard_runs_when_no_row_reaches_rls(
+    guarded_runtime_engine: Engine,
+    statement: str,
+) -> None:
+    """DB-001: a statement-level guard rejects even zero-candidate writes."""
+
+    with (
+        pytest.raises(DBAPIError) as error,
+        guarded_runtime_engine.begin() as connection,
+    ):
+        connection.execute(
+            text(statement),
+            {
+                "organization_id": uuid4(),
+                "record_id": uuid4(),
+            },
+        )
+    assert_sqlstate(error.value, "42501")
 
 
 def test_catalog_proves_force_rls_policy_ownership_constraints_and_grants(
@@ -802,6 +872,52 @@ def test_catalog_proves_force_rls_policy_ownership_constraints_and_grants(
                     )
                 ).one()
             )
+            write_guard = tuple(
+                connection.execute(
+                    text(
+                        """
+                        SELECT
+                            trigger_record.tgname,
+                            trigger_record.tgenabled,
+                            trigger_record.tgisinternal,
+                            pg_get_triggerdef(trigger_record.oid, true),
+                            function_record.proname,
+                            pg_get_userbyid(function_record.proowner),
+                            function_record.prosecdef,
+                            language_record.lanname,
+                            function_record.proconfig,
+                            function_record.prosrc
+                        FROM pg_trigger AS trigger_record
+                        JOIN pg_class AS relation
+                          ON relation.oid = trigger_record.tgrelid
+                        JOIN pg_namespace AS namespace
+                          ON namespace.oid = relation.relnamespace
+                        JOIN pg_proc AS function_record
+                          ON function_record.oid = trigger_record.tgfoid
+                        JOIN pg_language AS language_record
+                          ON language_record.oid = function_record.prolang
+                        WHERE namespace.nspname = 'public'
+                          AND relation.relname = 'organization_record'
+                          AND trigger_record.tgname =
+                              'organization_record_write_context_guard'
+                        """
+                    )
+                ).one()
+            )
+            write_guard_grants = {
+                (row.grantee, row.privilege_type)
+                for row in connection.execute(
+                    text(
+                        """
+                        SELECT grantee, privilege_type
+                        FROM information_schema.routine_privileges
+                        WHERE routine_schema = 'public'
+                          AND routine_name =
+                              'organization_record_require_write_context'
+                        """
+                    )
+                )
+            }
             runtime_grants = {
                 (row.table_name, row.privilege_type)
                 for row in connection.execute(
@@ -884,9 +1000,7 @@ def test_catalog_proves_force_rls_policy_ownership_constraints_and_grants(
         migration_engine.dispose()
 
     manifest_document = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
-    manifest_tables = {
-        table["name"] for table in manifest_document["tables"]
-    }
+    manifest_tables = {table["name"] for table in manifest_document["tables"]}
     assert manifest_tables == catalog_tables
     assert relation_owners == {
         "organization": MIGRATOR_ROLE,
@@ -906,6 +1020,31 @@ def test_catalog_proves_force_rls_policy_ownership_constraints_and_grants(
     assert "current_setting" in normalized_policy
     assert "app.organization_id" in normalized_policy
     assert "nullif" in normalized_policy
+
+    assert write_guard[:3] == (
+        "organization_record_write_context_guard",
+        "O",
+        False,
+    )
+    normalized_trigger = str(write_guard[3]).lower()
+    assert "before insert or delete or update" in normalized_trigger
+    assert "for each statement" in normalized_trigger
+    assert "organization_record_require_write_context()" in normalized_trigger
+    assert write_guard[4:9] == (
+        "organization_record_require_write_context",
+        MIGRATOR_ROLE,
+        False,
+        "plpgsql",
+        ["search_path=pg_catalog"],
+    )
+    normalized_guard_body = str(write_guard[9]).lower()
+    assert "current_setting('app.organization_id', true)" in normalized_guard_body
+    assert "nullif" in normalized_guard_body
+    assert "errcode = '42501'" in normalized_guard_body
+    assert write_guard_grants == {
+        (MIGRATOR_ROLE, "EXECUTE"),
+        (RUNTIME_ROLE, "EXECUTE"),
+    }
 
     assert runtime_grants == {
         ("organization_record", "SELECT"),
@@ -930,12 +1069,18 @@ def test_catalog_proves_force_rls_policy_ownership_constraints_and_grants(
     assert constraints["pk_organization_record"].lower() == (
         "primary key (organization_id, record_id)"
     )
-    assert constraints["fk_organization_record_organization"].lower().startswith(
-        "foreign key (organization_id) references organization(organization_id)"
+    assert (
+        constraints["fk_organization_record_organization"]
+        .lower()
+        .startswith(
+            "foreign key (organization_id) references organization(organization_id)"
+        )
     )
-    assert constraints[
-        "fk_organization_record_parent_same_organization"
-    ].lower().startswith(
-        "foreign key (organization_id, parent_record_id) references "
-        "organization_record(organization_id, record_id)"
+    assert (
+        constraints["fk_organization_record_parent_same_organization"]
+        .lower()
+        .startswith(
+            "foreign key (organization_id, parent_record_id) references "
+            "organization_record(organization_id, record_id)"
+        )
     )

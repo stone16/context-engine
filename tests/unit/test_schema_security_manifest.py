@@ -19,8 +19,7 @@ def table_entries(document: dict[str, Any]) -> dict[str, dict[str, Any]]:
     assert isinstance(raw_tables, list)
     assert all(isinstance(table, dict) for table in raw_tables)
     return {
-        cast(str, table["name"]): cast(dict[str, Any], table)
-        for table in raw_tables
+        cast(str, table["name"]): cast(dict[str, Any], table) for table in raw_tables
     }
 
 
@@ -53,15 +52,12 @@ def test_tenant_owned_manifest_entry_preserves_every_security_property() -> None
     assert all(key["columns"][0] == organization_column for key in keys)
 
     foreign_keys = {
-        foreign_key["name"]: foreign_key
-        for foreign_key in entry["foreignKeys"]
+        foreign_key["name"]: foreign_key for foreign_key in entry["foreignKeys"]
     }
     assert foreign_keys["fk_organization_record_organization"]["columns"] == [
         organization_column
     ]
-    same_org_fk = foreign_keys[
-        "fk_organization_record_parent_same_organization"
-    ]
+    same_org_fk = foreign_keys["fk_organization_record_parent_same_organization"]
     assert same_org_fk["columns"][0] == organization_column
     assert same_org_fk["references"]["columns"][0] == organization_column
 
@@ -73,7 +69,16 @@ def test_tenant_owned_manifest_entry_preserves_every_security_property() -> None
     assert policy["roles"] == ["context_engine_runtime"]
     assert policy["using"] == policy["withCheck"]
     assert "app.organization_id" in policy["using"]
-    assert "missing-organization-context" in policy["using"]
+    assert "NULLIF" in policy["using"]
+
+    assert rls["writeContextGuard"] == {
+        "trigger": "organization_record_write_context_guard",
+        "function": "organization_record_require_write_context",
+        "timing": "BEFORE",
+        "orientation": "STATEMENT",
+        "events": ["INSERT", "UPDATE", "DELETE"],
+        "missingContextSqlstate": "42501",
+    }
 
     assert entry["permittedOperations"] == {
         "context_engine_runtime": ["SELECT", "INSERT", "UPDATE", "DELETE"],

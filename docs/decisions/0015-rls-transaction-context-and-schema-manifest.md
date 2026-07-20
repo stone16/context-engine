@@ -51,6 +51,11 @@ global or tenant-owned. Tenant-owned entries require Organization ownership,
 composite foreign keys, USING and WITH CHECK policies, FORCE RLS, and policy
 tests. Coverage is computed over the manifest.
 
+The manifest is JSON-compatible YAML by contract and is parsed with Python's
+standard-library JSON decoder. YAML-only syntax is invalid. This keeps the
+bootstrap and migration security gate deterministic and dependency-free, in
+the same form as the canonical security catalog fixed by ADR-0019.
+
 ## Consequences
 
 Real PostgreSQL 17 with the runtime role is a per-commit security gate.

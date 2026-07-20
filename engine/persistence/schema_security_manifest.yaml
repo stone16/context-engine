@@ -59,10 +59,18 @@
             "name": "organization_record_organization_isolation",
             "command": "ALL",
             "roles": ["context_engine_runtime"],
-            "using": "organization_id = COALESCE(NULLIF(current_setting('app.organization_id', true), ''), 'missing-organization-context')::uuid",
-            "withCheck": "organization_id = COALESCE(NULLIF(current_setting('app.organization_id', true), ''), 'missing-organization-context')::uuid"
+            "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid",
+            "withCheck": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"
           }
-        ]
+        ],
+        "writeContextGuard": {
+          "trigger": "organization_record_write_context_guard",
+          "function": "organization_record_require_write_context",
+          "timing": "BEFORE",
+          "orientation": "STATEMENT",
+          "events": ["INSERT", "UPDATE", "DELETE"],
+          "missingContextSqlstate": "42501"
+        }
       },
       "permittedOperations": {
         "context_engine_runtime": ["SELECT", "INSERT", "UPDATE", "DELETE"],

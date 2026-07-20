@@ -62,11 +62,15 @@ or worker path, remains `NOT_ACTIVE` for this evidence-only boundary. The schema
 manifest must not list that case as covered until the complete ActorContext
 protocol exists and its owning negative test runs.
 
-For the non-owner runtime role, a missing or reset Organization GUC produces the
-same deterministic PostgreSQL invalid-text-representation error for reads and
-writes. This prevents a missing-context write from being mistaken for an
-authorized no-op. A present but different Organization remains an ordinary RLS
-miss with zero visible rows and zero effects.
+For the non-owner runtime role, a missing or reset Organization GUC makes the
+RLS predicate unknown and therefore exposes zero tenant rows. The representative
+table also has a bounded `BEFORE ... FOR EACH STATEMENT` write-context trigger;
+it rejects INSERT, UPDATE, and DELETE with SQLSTATE `42501` before row filtering,
+including statements for which no candidate row exists. The trigger is an
+invoker-security function with a fixed `pg_catalog` search path and no PUBLIC or
+worker execute grant. This prevents a missing-context write from being mistaken
+for an authorized no-op. A present but different Organization remains an
+ordinary RLS miss with zero visible rows and zero effects.
 
 The representative record is an evidence carrier, not permission to generalize
 an RLS framework before a second real tenant-owned domain table exists.

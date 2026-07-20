@@ -23,12 +23,10 @@ depends_on: str | Sequence[str] | None = None
 _RUNTIME_ROLE = "context_engine_runtime"
 _WORKER_ROLE = "context_engine_worker"
 _TENANT_EXPRESSION = (
-    "organization_id = "
-    "COALESCE("
-    "NULLIF(current_setting('app.organization_id', true), ''), "
-    "'missing-organization-context'"
-    ")::uuid"
+    "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"
 )
+_WRITE_CONTEXT_GUARD_FUNCTION = "public.organization_record_require_write_context"
+_WRITE_CONTEXT_GUARD_TRIGGER = "organization_record_write_context_guard"
 
 
 def upgrade() -> None:
@@ -103,6 +101,39 @@ def upgrade() -> None:
         f"WITH CHECK ({_TENANT_EXPRESSION})"
     )
     op.execute(
+        f"""
+        CREATE FUNCTION {_WRITE_CONTEXT_GUARD_FUNCTION}()
+        RETURNS trigger
+        LANGUAGE plpgsql
+        SECURITY INVOKER
+        SET search_path = pg_catalog
+        AS $function$
+        BEGIN
+            IF NULLIF(
+                current_setting('app.organization_id', true),
+                ''
+            ) IS NULL THEN
+                RAISE EXCEPTION USING
+                    ERRCODE = '42501',
+                    MESSAGE = 'organization context is required for tenant writes';
+            END IF;
+            RETURN NULL;
+        END;
+        $function$
+        """
+    )
+    op.execute(f"REVOKE ALL ON FUNCTION {_WRITE_CONTEXT_GUARD_FUNCTION}() FROM PUBLIC")
+    op.execute(
+        "GRANT EXECUTE ON FUNCTION "
+        f"{_WRITE_CONTEXT_GUARD_FUNCTION}() TO {_RUNTIME_ROLE}"
+    )
+    op.execute(
+        f"CREATE TRIGGER {_WRITE_CONTEXT_GUARD_TRIGGER} "
+        "BEFORE INSERT OR UPDATE OR DELETE ON public.organization_record "
+        "FOR EACH STATEMENT "
+        f"EXECUTE FUNCTION {_WRITE_CONTEXT_GUARD_FUNCTION}()"
+    )
+    op.execute(
         "GRANT SELECT, INSERT, UPDATE, DELETE "
         f"ON TABLE organization_record TO {_RUNTIME_ROLE}"
     )
@@ -116,4 +147,5 @@ def downgrade() -> None:
         f"ON TABLE organization_record FROM {_RUNTIME_ROLE}"
     )
     op.drop_table("organization_record")
+    op.execute(f"DROP FUNCTION {_WRITE_CONTEXT_GUARD_FUNCTION}()")
     op.drop_table("organization")
