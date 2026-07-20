@@ -75,9 +75,10 @@ Before claiming an implementation done, run the verified commands recorded
 above. Never fabricate output. `.context-engine/database.env` is the generated,
 ignored, mode-0600 source for local database connection contracts; `compose.yaml`
 owns the pinned test service topology. A green process smoke proves only
-boot/readiness. The database harness proves PG17/pgvector, role, migration, and
-pool-reset infrastructure only; tenant schema, RLS enforcement, Runtime delivery,
-and worker-job behavior remain `NOT_ACTIVE` until their owning issues verify them.
+boot/readiness. The database harness additionally proves the bounded Organization
+plus representative-record FORCE-RLS slice; Membership, the complete ActorContext
+protocol, Runtime delivery, and worker-job behavior remain `NOT_ACTIVE` until their
+owning issues verify them.
 
 ## Safety-Rails / Do Not
 
