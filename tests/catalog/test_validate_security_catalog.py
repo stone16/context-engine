@@ -11,9 +11,12 @@ from pathlib import Path
 from typing import cast
 
 from scripts.validate_security_catalog import (
+    ACL_PROOF_CASE_IDS,
+    AUDIENCE_ACTION_CASE_IDS,
     CANONICAL_INVARIANT_IDS,
     DEFAULT_CATALOG_PATH,
     DEFAULT_SCHEMA_PATH,
+    REQUIRED_RUNTIME_EVIDENCE,
     CatalogValidationError,
     load_document,
     main,
@@ -127,7 +130,10 @@ def make_catalog() -> dict[str, object]:
                 "expectedEvidence": {
                     "property": [f"PROP-{number:03d}"],
                     "postgres": [f"PG-{number:03d}"],
-                    "runtimeOrDelivery": [f"RUNTIME-{number:03d}"],
+                    "runtimeOrDelivery": [
+                        f"RUNTIME-{number:03d}",
+                        *REQUIRED_RUNTIME_EVIDENCE.get(invariant_id, ()),
+                    ],
                 },
                 "authorityRefs": [
                     "docs/security/context-engine-threat-model.md#5-hard-oracles"
@@ -215,11 +221,54 @@ def make_catalog() -> dict[str, object]:
                 {
                     "id": case_id,
                     "mutation": "Mutate exactly the named trust binding.",
+                    "expectedStatus": (
+                        422
+                        if case_id == "BODY-INJECTION"
+                        else 200
+                        if fixture_id == "ACCEPT-007"
+                        else 404
+                    ),
+                    "expectedOutcome": (
+                        "invalid_request"
+                        if case_id == "BODY-INJECTION"
+                        else "request_not_available"
+                        if fixture_id == "ACCEPT-007"
+                        else "work_not_available"
+                    ),
                     "expectedNewDurableEffects": 0,
                     "expectedWrongOrganizationEffects": 0,
                     "expectedContentWorkCalls": 0,
                 }
                 for case_id in case_ids
+            ]
+        if fixture_id in {"ACCEPT-009", "ACCEPT-012"}:
+            derived_case_ids = (
+                ACL_PROOF_CASE_IDS
+                if fixture_id == "ACCEPT-009"
+                else AUDIENCE_ACTION_CASE_IDS
+            )
+            adversarial_mutation["caseRef"] = (
+                "PROV-010" if fixture_id == "ACCEPT-009" else "ACTION-001"
+            )
+            adversarial_mutation["parameterizedCases"] = [
+                {
+                    "id": case_id,
+                    "mutation": "Exercise the named derived security obligation.",
+                    "expectedStatus": 200 if fixture_id == "ACCEPT-009" else 404,
+                    "expectedOutcome": (
+                        "request_not_available"
+                        if fixture_id == "ACCEPT-009"
+                        else "action_not_available"
+                    ),
+                    "expectedNewDurableEffects": 0,
+                    "expectedWrongOrganizationEffects": 0,
+                    "expectedContentWorkCalls": 0,
+                    "activatedOracle": (
+                        "The activated carrier preserves the named "
+                        "fail-closed contract."
+                    ),
+                }
+                for case_id in derived_case_ids
             ]
         fixtures.append(
             {
@@ -931,14 +980,30 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
                 "LEASE-REPLAY",
                 "LEASE-USER-IMPERSONATION",
             ],
+            "ACCEPT-009": list(ACL_PROOF_CASE_IDS),
+            "ACCEPT-012": list(AUDIENCE_ACTION_CASE_IDS),
         }
         for fixture_id, expected_ids in expected_case_ids.items():
             cases = fixtures[fixture_id]["adversarialMutation"]["parameterizedCases"]
             self.assertEqual([case["id"] for case in cases], expected_ids)
             for case in cases:
+                if fixture_id == "ACCEPT-007" and case["id"] == "BODY-INJECTION":
+                    expected_status, expected_outcome = 422, "invalid_request"
+                elif fixture_id == "ACCEPT-007":
+                    expected_status, expected_outcome = 200, "request_not_available"
+                elif fixture_id == "ACCEPT-008":
+                    expected_status, expected_outcome = 404, "work_not_available"
+                elif fixture_id == "ACCEPT-009":
+                    expected_status, expected_outcome = 200, "request_not_available"
+                else:
+                    expected_status, expected_outcome = 404, "action_not_available"
+                self.assertEqual(case["expectedStatus"], expected_status)
+                self.assertEqual(case["expectedOutcome"], expected_outcome)
                 self.assertEqual(case["expectedNewDurableEffects"], 0)
                 self.assertEqual(case["expectedWrongOrganizationEffects"], 0)
                 self.assertEqual(case["expectedContentWorkCalls"], 0)
+                if fixture_id in {"ACCEPT-009", "ACCEPT-012"}:
+                    self.assertTrue(case["activatedOracle"])
             self.assertEqual(
                 fixtures[fixture_id]["expected"]["io"],
                 {
@@ -970,6 +1035,12 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
         worker_cases = object_list_at(
             fixtures[7], "adversarialMutation", "parameterizedCases"
         )
+        acl_cases = object_list_at(
+            fixtures[8], "adversarialMutation", "parameterizedCases"
+        )
+        audience_action_cases = object_list_at(
+            fixtures[11], "adversarialMutation", "parameterizedCases"
+        )
         nonenumeration_mutation = object_at(fixtures[10], "adversarialMutation")
         probes = nonenumeration_mutation["probes"]
         assert isinstance(probes, list)
@@ -977,6 +1048,10 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
         worker_cases.pop(4)
         probes.pop(0)
         transport_cases[0]["expectedContentWorkCalls"] = 1
+        transport_cases[1]["expectedStatus"] = 503
+        worker_cases[0]["expectedOutcome"] = "organization_mismatch"
+        acl_cases.pop(1)
+        audience_action_cases[-1]["activatedOracle"] = ""
 
         with self.assertRaises(CatalogValidationError) as raised:
             validate_catalog(catalog, schema)
@@ -985,6 +1060,16 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
             "fixtures[6].adversarialMutation.parameterizedCases: ids must be the "
             "canonical ordered set ['BODY-INJECTION', 'DELIV-001', 'DELIV-002', "
             "'DELIV-003', 'DELIV-004']",
+            raised.exception.errors,
+        )
+        self.assertIn(
+            "fixtures[6].adversarialMutation.parameterizedCases[1].expectedStatus: "
+            "must be 200 for DELIV-001",
+            raised.exception.errors,
+        )
+        self.assertIn(
+            "fixtures[7].adversarialMutation.parameterizedCases[0].expectedOutcome: "
+            "must be 'work_not_available' for LEASE-ORGANIZATION",
             raised.exception.errors,
         )
         self.assertIn(
@@ -1001,11 +1086,64 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
                 for error in raised.exception.errors
             )
         )
+        self.assertTrue(
+            any(
+                error.startswith(
+                    "fixtures[8].adversarialMutation.parameterizedCases: ids "
+                    "must be the canonical ordered set"
+                )
+                for error in raised.exception.errors
+            )
+        )
+        self.assertIn(
+            "fixtures[11].adversarialMutation.parameterizedCases[13]."
+            "activatedOracle: must be a non-empty string",
+            raised.exception.errors,
+        )
         self.assertIn(
             "fixtures[10].adversarialMutation.probes: must be the canonical "
             "ordered probe set ['resource-cross-org', "
             "'resource-same-org-denied', 'resource-missing']",
             raised.exception.errors,
+        )
+
+    def test_absorbed_evidence_and_case_outcomes_cannot_be_removed(self) -> None:
+        catalog = load_document(DEFAULT_CATALOG_PATH)
+        schema = load_document(DEFAULT_SCHEMA_PATH)
+        invariants = {
+            invariant["id"]: invariant
+            for invariant in catalog["invariants"]
+            if isinstance(invariant, dict)
+        }
+        fixtures = object_list_at(catalog, "fixtures")
+        revocation_evidence = invariants["REVOCATION-006"]["expectedEvidence"][
+            "runtimeOrDelivery"
+        ]
+        assert isinstance(revocation_evidence, list)
+        revocation_evidence.remove("PROV-019")
+        acl_cases = object_list_at(
+            fixtures[8], "adversarialMutation", "parameterizedCases"
+        )
+        del acl_cases[0]["expectedStatus"]
+
+        with self.assertRaises(CatalogValidationError) as raised:
+            validate_catalog(catalog, schema)
+
+        self.assertIn(
+            "invariants[5].expectedEvidence.runtimeOrDelivery: must preserve "
+            "absorbed derived case 'PROV-019' for REVOCATION-006",
+            raised.exception.errors,
+        )
+        self.assertIn(
+            "fixtures[8].adversarialMutation.parameterizedCases[0]."
+            "expectedStatus: must be 200 for PROV-013",
+            raised.exception.errors,
+        )
+        self.assertTrue(
+            any(
+                error.endswith(".expectedStatus: is required by the schema")
+                for error in raised.exception.errors
+            )
         )
 
     def test_runtime_outcome_and_milestone_drift_are_rejected(self) -> None:

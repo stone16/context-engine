@@ -134,7 +134,7 @@
       "expectedEvidence": {
         "property": ["PROP-SCOPE-INTERSECTION-004"],
         "postgres": ["PG-SCOPE-INTERSECTION-004", "DB-010"],
-        "runtimeOrDelivery": ["AUTH-006", "AUTH-007", "AUTH-010", "AUTH-011"]
+        "runtimeOrDelivery": ["AUTH-006", "AUTH-007", "AUTH-010", "AUTH-011", "RUN-014"]
       },
       "authorityRefs": [
         "docs/agents/prd-contextengine-implementation.md#solution",
@@ -161,7 +161,7 @@
       "expectedEvidence": {
         "property": ["PROP-INDEX-NOT-AUTHORITY-005"],
         "postgres": ["PG-INDEX-NOT-AUTHORITY-005", "IDX-001", "IDX-002"],
-        "runtimeOrDelivery": ["RUN-002", "RUN-003", "RUN-013"]
+        "runtimeOrDelivery": ["RUN-002", "RUN-003", "RUN-013", "PROV-010", "PROV-013", "PROV-014", "PROV-015", "PROV-018", "PROV-019", "PROV-020"]
       },
       "authorityRefs": [
         "docs/design/2026-07-18-context-engine-implementation-design.md#3-runtime-security-pipeline",
@@ -188,7 +188,7 @@
       "expectedEvidence": {
         "property": ["PROP-REVOCATION-006"],
         "postgres": ["PG-REVOCATION-006", "CACHE-002", "BLOB-002"],
-        "runtimeOrDelivery": ["RUN-006", "RUN-011", "CITE-002", "PROV-013", "PROV-014"]
+        "runtimeOrDelivery": ["RUN-006", "RUN-011", "CITE-002", "PROV-013", "PROV-014", "PROV-015", "PROV-018", "PROV-019", "PROV-020"]
       },
       "authorityRefs": [
         "docs/design/2026-07-18-context-engine-implementation-design.md#44-revocation-linearization",
@@ -323,7 +323,7 @@
       "expectedEvidence": {
         "property": ["PROP-EGRESS-011"],
         "postgres": ["PG-EGRESS-011"],
-        "runtimeOrDelivery": ["EGR-001", "EGR-003", "EGR-004", "EGR-005", "RUN-015"]
+        "runtimeOrDelivery": ["EGR-001", "EGR-003", "EGR-004", "EGR-005", "EGR-006", "RUN-014", "RUN-015"]
       },
       "authorityRefs": [
         "docs/design/2026-07-18-context-engine-implementation-design.md#5-delivery-audience-egress-and-capability-taxonomy",
@@ -377,7 +377,7 @@
       "expectedEvidence": {
         "property": ["PROP-ACTION-SEPARATION-014"],
         "postgres": ["PG-ACTION-SEPARATION-014"],
-        "runtimeOrDelivery": ["ACTION-001", "ACTION-002", "ACTION-003", "ACTION-004", "ACTION-005", "ACTION-006"]
+        "runtimeOrDelivery": ["ACTION-001", "ACTION-002", "ACTION-003", "ACTION-004", "ACTION-005", "ACTION-006", "ACTION-007", "ACTION-008", "ACTION-009"]
       },
       "authorityRefs": [
         "docs/design/2026-07-18-context-engine-implementation-design.md#25-actionplane",
@@ -835,23 +835,23 @@
         "mutatedClaim": {"organizationRef": "org-b"},
         "retainedNonce": "n-1",
         "parameterizedCases": [
-          {"id": "LEASE-ORGANIZATION", "claim": "organizationRef", "mutation": "org-b", "expectedNewDurableEffects": 0, "expectedWrongOrganizationEffects": 0, "expectedContentWorkCalls": 0},
-          {"id": "LEASE-JOB", "claim": "jobRef", "mutation": "job-b", "expectedNewDurableEffects": 0, "expectedWrongOrganizationEffects": 0, "expectedContentWorkCalls": 0},
-          {"id": "LEASE-OPERATION", "claim": "operation", "mutation": "publish", "expectedNewDurableEffects": 0, "expectedWrongOrganizationEffects": 0, "expectedContentWorkCalls": 0},
-          {"id": "LEASE-SOURCE", "claim": "sourceRef", "mutation": "source-b", "expectedNewDurableEffects": 0, "expectedWrongOrganizationEffects": 0, "expectedContentWorkCalls": 0},
-          {"id": "LEASE-RESOURCE", "claim": "resourceRef", "mutation": "resource-b", "expectedNewDurableEffects": 0, "expectedWrongOrganizationEffects": 0, "expectedContentWorkCalls": 0},
-          {"id": "LEASE-REVISION", "claim": "revisionRef", "mutation": "revision-b", "expectedNewDurableEffects": 0, "expectedWrongOrganizationEffects": 0, "expectedContentWorkCalls": 0},
-          {"id": "LEASE-SERVICE-ACTOR", "claim": "serviceActorRef", "mutation": "worker-b", "expectedNewDurableEffects": 0, "expectedWrongOrganizationEffects": 0, "expectedContentWorkCalls": 0},
-          {"id": "LEASE-WORKLOAD", "claim": "workload", "mutation": "workload-b", "expectedNewDurableEffects": 0, "expectedWrongOrganizationEffects": 0, "expectedContentWorkCalls": 0},
-          {"id": "LEASE-POLICY-EPOCH", "claim": "policyEpoch", "mutation": 3, "expectedNewDurableEffects": 0, "expectedWrongOrganizationEffects": 0, "expectedContentWorkCalls": 0},
-          {"id": "LEASE-AUDIENCE", "claim": "audienceDigest", "mutation": "audience-b", "expectedNewDurableEffects": 0, "expectedWrongOrganizationEffects": 0, "expectedContentWorkCalls": 0},
-          {"id": "LEASE-IDEMPOTENCY", "claim": "idempotencyKey", "mutation": "idem-b", "expectedNewDurableEffects": 0, "expectedWrongOrganizationEffects": 0, "expectedContentWorkCalls": 0},
-          {"id": "LEASE-GENERATION", "claim": "generation", "mutation": 1, "expectedNewDurableEffects": 0, "expectedWrongOrganizationEffects": 0, "expectedContentWorkCalls": 0},
-          {"id": "LEASE-ISSUED-AT", "claim": "issuedAt", "mutation": "outside-bound-window", "expectedNewDurableEffects": 0, "expectedWrongOrganizationEffects": 0, "expectedContentWorkCalls": 0},
-          {"id": "LEASE-EXPIRY", "claim": "expiresAt", "mutation": "expired", "expectedNewDurableEffects": 0, "expectedWrongOrganizationEffects": 0, "expectedContentWorkCalls": 0},
-          {"id": "LEASE-NONCE", "claim": "nonce", "mutation": "n-2", "expectedNewDurableEffects": 0, "expectedWrongOrganizationEffects": 0, "expectedContentWorkCalls": 0},
-          {"id": "LEASE-REPLAY", "claim": "redemption", "mutation": "reuse-consumed-lease", "expectedNewDurableEffects": 0, "expectedWrongOrganizationEffects": 0, "expectedContentWorkCalls": 0},
-          {"id": "LEASE-USER-IMPERSONATION", "claim": "actorKind", "mutation": "UserActor", "expectedNewDurableEffects": 0, "expectedWrongOrganizationEffects": 0, "expectedContentWorkCalls": 0}
+          {"id": "LEASE-ORGANIZATION", "claim": "organizationRef", "mutation": "org-b", "expectedStatus": 404, "expectedOutcome": "work_not_available", "expectedNewDurableEffects": 0, "expectedWrongOrganizationEffects": 0, "expectedContentWorkCalls": 0},
+          {"id": "LEASE-JOB", "claim": "jobRef", "mutation": "job-b", "expectedStatus": 404, "expectedOutcome": "work_not_available", "expectedNewDurableEffects": 0, "expectedWrongOrganizationEffects": 0, "expectedContentWorkCalls": 0},
+          {"id": "LEASE-OPERATION", "claim": "operation", "mutation": "publish", "expectedStatus": 404, "expectedOutcome": "work_not_available", "expectedNewDurableEffects": 0, "expectedWrongOrganizationEffects": 0, "expectedContentWorkCalls": 0},
+          {"id": "LEASE-SOURCE", "claim": "sourceRef", "mutation": "source-b", "expectedStatus": 404, "expectedOutcome": "work_not_available", "expectedNewDurableEffects": 0, "expectedWrongOrganizationEffects": 0, "expectedContentWorkCalls": 0},
+          {"id": "LEASE-RESOURCE", "claim": "resourceRef", "mutation": "resource-b", "expectedStatus": 404, "expectedOutcome": "work_not_available", "expectedNewDurableEffects": 0, "expectedWrongOrganizationEffects": 0, "expectedContentWorkCalls": 0},
+          {"id": "LEASE-REVISION", "claim": "revisionRef", "mutation": "revision-b", "expectedStatus": 404, "expectedOutcome": "work_not_available", "expectedNewDurableEffects": 0, "expectedWrongOrganizationEffects": 0, "expectedContentWorkCalls": 0},
+          {"id": "LEASE-SERVICE-ACTOR", "claim": "serviceActorRef", "mutation": "worker-b", "expectedStatus": 404, "expectedOutcome": "work_not_available", "expectedNewDurableEffects": 0, "expectedWrongOrganizationEffects": 0, "expectedContentWorkCalls": 0},
+          {"id": "LEASE-WORKLOAD", "claim": "workload", "mutation": "workload-b", "expectedStatus": 404, "expectedOutcome": "work_not_available", "expectedNewDurableEffects": 0, "expectedWrongOrganizationEffects": 0, "expectedContentWorkCalls": 0},
+          {"id": "LEASE-POLICY-EPOCH", "claim": "policyEpoch", "mutation": 3, "expectedStatus": 404, "expectedOutcome": "work_not_available", "expectedNewDurableEffects": 0, "expectedWrongOrganizationEffects": 0, "expectedContentWorkCalls": 0},
+          {"id": "LEASE-AUDIENCE", "claim": "audienceDigest", "mutation": "audience-b", "expectedStatus": 404, "expectedOutcome": "work_not_available", "expectedNewDurableEffects": 0, "expectedWrongOrganizationEffects": 0, "expectedContentWorkCalls": 0},
+          {"id": "LEASE-IDEMPOTENCY", "claim": "idempotencyKey", "mutation": "idem-b", "expectedStatus": 404, "expectedOutcome": "work_not_available", "expectedNewDurableEffects": 0, "expectedWrongOrganizationEffects": 0, "expectedContentWorkCalls": 0},
+          {"id": "LEASE-GENERATION", "claim": "generation", "mutation": 1, "expectedStatus": 404, "expectedOutcome": "work_not_available", "expectedNewDurableEffects": 0, "expectedWrongOrganizationEffects": 0, "expectedContentWorkCalls": 0},
+          {"id": "LEASE-ISSUED-AT", "claim": "issuedAt", "mutation": "outside-bound-window", "expectedStatus": 404, "expectedOutcome": "work_not_available", "expectedNewDurableEffects": 0, "expectedWrongOrganizationEffects": 0, "expectedContentWorkCalls": 0},
+          {"id": "LEASE-EXPIRY", "claim": "expiresAt", "mutation": "expired", "expectedStatus": 404, "expectedOutcome": "work_not_available", "expectedNewDurableEffects": 0, "expectedWrongOrganizationEffects": 0, "expectedContentWorkCalls": 0},
+          {"id": "LEASE-NONCE", "claim": "nonce", "mutation": "n-2", "expectedStatus": 404, "expectedOutcome": "work_not_available", "expectedNewDurableEffects": 0, "expectedWrongOrganizationEffects": 0, "expectedContentWorkCalls": 0},
+          {"id": "LEASE-REPLAY", "claim": "redemption", "mutation": "reuse-consumed-lease", "expectedStatus": 404, "expectedOutcome": "work_not_available", "expectedNewDurableEffects": 0, "expectedWrongOrganizationEffects": 0, "expectedContentWorkCalls": 0},
+          {"id": "LEASE-USER-IMPERSONATION", "claim": "actorKind", "mutation": "UserActor", "expectedStatus": 404, "expectedOutcome": "work_not_available", "expectedNewDurableEffects": 0, "expectedWrongOrganizationEffects": 0, "expectedContentWorkCalls": 0}
         ]
       },
       "operation": {
@@ -885,6 +885,8 @@
       "setup": {
         "preconditions": [
           "source-future declares Live source-native ACL as required for resource-future.",
+          "source-coarse genuinely lacks finer ACL semantics, but no complete active Weak SourcePolicy or sensitivity decision exists at M0.",
+          "file-source-a has no complete active versioned PostgreSQL FileSourceAccess grant; host ownership and mode are never engine authority.",
           "No production Provider carrier or source sandbox for that capability exists at M0.",
           "A service credential could read the source object but is not end-user delivery authority."
         ],
@@ -897,13 +899,21 @@
       },
       "adversarialMutation": {
         "kind": "service_account_acl_substitution",
+        "caseRef": "PROV-010",
         "requestedFallback": "Weak",
-        "missingCapability": "live-source-native-acl"
+        "missingCapability": "live-source-native-acl",
+        "parameterizedCases": [
+          {"id": "PROV-013", "mutation": "A declared Live or strong ACL check times out, returns 429, or fails with 5xx.", "expectedStatus": 200, "expectedOutcome": "request_not_available", "expectedNewDurableEffects": 0, "expectedWrongOrganizationEffects": 0, "expectedContentWorkCalls": 0, "activatedOracle": "Fail closed or return a typed unavailable gap with zero Evidence; never substitute Weak proof."},
+          {"id": "PROV-014", "mutation": "Mirrored ACL exceeds its freshness SLA or omits aclAsOf or sourceVersion.", "expectedStatus": 200, "expectedOutcome": "request_not_available", "expectedNewDurableEffects": 0, "expectedWrongOrganizationEffects": 0, "expectedContentWorkCalls": 0, "activatedOracle": "Reject, resynchronize, or use an equally strong supported Live check; every allowed Mirrored Evidence exposes proofKind Mirrored, aclAsOf, sourceVersion, and its declared freshness bound."},
+          {"id": "PROV-015", "mutation": "A coarse-membership source requests Weak proof without a complete active Weak SourcePolicy and sensitivity decision.", "expectedStatus": 200, "expectedOutcome": "request_not_available", "expectedNewDurableEffects": 0, "expectedWrongOrganizationEffects": 0, "expectedContentWorkCalls": 0, "activatedOracle": "Weak is allowed only when the source genuinely lacks finer ACL semantics and explicitly declares it; incomplete, stale, unknown-sensitivity, or sensitive cases deny, while an allowed Package exposes proofKind Weak and declared as-of/freshness."},
+          {"id": "PROV-018", "mutation": "FileSourceAccess is missing, incomplete, unknown, cross-Organization, cross-Resource, or not the active manifest version.", "expectedStatus": 200, "expectedOutcome": "request_not_available", "expectedNewDurableEffects": 0, "expectedWrongOrganizationEffects": 0, "expectedContentWorkCalls": 0, "activatedOracle": "Deny generically with zero Evidence and no implicit owner/public fallback; an allowed File result uses the active versioned PostgreSQL grant and exposes complete Mirrored proof and freshness fields."},
+          {"id": "PROV-019", "mutation": "Host operating-system owner, mode, or ACL is permissive while FileSourceAccess is absent or denied.", "expectedStatus": 200, "expectedOutcome": "request_not_available", "expectedNewDurableEffects": 0, "expectedWrongOrganizationEffects": 0, "expectedContentWorkCalls": 0, "activatedOracle": "Host metadata never changes engine authorization; only active versioned PostgreSQL FileSourceAccess may yield an allowed Mirrored proof."}
+        ]
       },
       "operation": {
         "interface": "ContextRuntime.resolve",
-        "request": "Acquire resource-future",
-        "phase": "capability availability check before Provider invocation"
+        "request": "Execute PROV-010 and each named ACL-proof or FileSourceAccess mutation independently; at M0 attempt Acquire only through the unavailable capability gate",
+        "phase": "M0 capability availability check before Provider invocation; owning carrier later upgrades each activatedOracle at its highest public seam"
       },
       "expected": {
         "externalResponse": {"status": 200, "body": {"kind": "request_not_available", "retryable": false}},
@@ -915,6 +925,7 @@
       "invariantRefs": ["INDEX-NOT-AUTHORITY-005", "REVOCATION-006"],
       "authorityRefs": [
         "docs/design/2026-07-18-context-engine-implementation-design.md#33-contextprovider-and-source-projection",
+        "docs/security/Test-Architecture-与可验证性设计.md#13-v1-acceptance-scenarios",
         "docs/security/安全负向测试清单.md#5-providerfederation-与-source-native-acl",
         "docs/decisions/0019-security-catalog-normalization.md#decision"
       ]
@@ -1051,6 +1062,9 @@
       "setup": {
         "preconditions": [
           "A syntactically valid ContextAccessTicket is bound to org-a, member-a, context.read, and source-a.",
+          "conversation-b contains member-a and member-b; both may read public evidence, only member-a may read private-field-a, and the platform can expose history to future members.",
+          "The trusted group AudienceSnapshot is complete for member-a and member-b at resolve time; membership drift, lookup failure, and future-history exposure are independently mutated below.",
+          "Public and asker-private delivery require independent audience-bound resolves; create-placeholder and finalize-reply require distinct prepare/perform tickets and idempotency keys.",
           "No M0 ActionPlane or Sender carrier is active.",
           "No ActionTicket has been prepared for destination conversation-b or payload digest digest-b."
         ],
@@ -1062,16 +1076,33 @@
         }
       },
       "adversarialMutation": {
-        "kind": "read_ticket_used_for_write",
+        "kind": "parameterized_audience_and_action_separation",
+        "caseRef": "ACTION-001",
         "ticketKind": "ContextAccessTicket",
         "requestedEffect": "send_message",
         "destination": "conversation-b",
-        "targetOrganization": "org-b"
+        "targetOrganization": "org-b",
+        "parameterizedCases": [
+          {"id": "AUTH-010", "mutation": "A trusted group AudienceSnapshot contains an unknown, unbound, external, or lookup-failed member.", "expectedStatus": 404, "expectedOutcome": "action_not_available", "expectedNewDurableEffects": 0, "expectedWrongOrganizationEffects": 0, "expectedContentWorkCalls": 0, "activatedOracle": "The public Package, group-send bytes, and group effects are zero; only a separately resolved explicit private flow may proceed."},
+          {"id": "RUN-014", "mutation": "One question needs a group-public result and an asker-private supplement.", "expectedStatus": 404, "expectedOutcome": "action_not_available", "expectedNewDurableEffects": 0, "expectedWrongOrganizationEffects": 0, "expectedContentWorkCalls": 0, "activatedOracle": "Resolve two independent audience-bound Packages and EgressGrants; never derive or split the public Package from the asker-private Package, and cross-audience private bytes remain zero."},
+          {"id": "EGR-003", "mutation": "BotDelivery bypasses the Kernel, expands AudienceSnapshot, or slices asker-private content for public delivery.", "expectedStatus": 404, "expectedOutcome": "action_not_available", "expectedNewDurableEffects": 0, "expectedWrongOrganizationEffects": 0, "expectedContentWorkCalls": 0, "activatedOracle": "Reject at the trusted boundary with zero public, model, or sender bytes and zero public effects; restricted audit records only the violation category."},
+          {"id": "EGR-005", "mutation": "A member joins or leaves after resolve, or send-time audience lookup is stale, unknown, or unavailable.", "expectedStatus": 404, "expectedOutcome": "action_not_available", "expectedNewDurableEffects": 0, "expectedWrongOrganizationEffects": 0, "expectedContentWorkCalls": 0, "activatedOracle": "ActionPlane.prepare returns AudienceChanged for stale or unknown audience; no ActionTicket, group bytes, or effect is produced, and delivery must re-resolve or use a separate private flow."},
+          {"id": "EGR-006", "mutation": "Future members can read group history while the old-snapshot Package contains content not authorized for every future reader.", "expectedStatus": 404, "expectedOutcome": "action_not_available", "expectedNewDurableEffects": 0, "expectedWrongOrganizationEffects": 0, "expectedContentWorkCalls": 0, "activatedOracle": "Protected public and future-member bytes and public effects remain zero unless verifiable delete/redaction compensation proves safety; otherwise use a generic notice, per-opener citation, or separate private delivery."},
+          {"id": "ACTION-001", "mutation": "Use a ContextAccessTicket for refund, update, edit, or send.", "expectedStatus": 404, "expectedOutcome": "action_not_available", "expectedNewDurableEffects": 0, "expectedWrongOrganizationEffects": 0, "expectedContentWorkCalls": 0, "activatedOracle": "ActionPlane rejects the wrong capability or audience with effect zero; read authority never creates a write effect."},
+          {"id": "ACTION-002", "mutation": "Use an ActionTicket for ContextRuntime resolve or Provider read.", "expectedStatus": 404, "expectedOutcome": "action_not_available", "expectedNewDurableEffects": 0, "expectedWrongOrganizationEffects": 0, "expectedContentWorkCalls": 0, "activatedOracle": "The read boundary rejects the wrong capability with zero Evidence and content work, and does not consume the ActionTicket."},
+          {"id": "ACTION-003", "mutation": "Use a CreatePlaceholder ticket for FinalizeReply or another effect, or reverse the ticket/payload pairing.", "expectedStatus": 404, "expectedOutcome": "action_not_available", "expectedNewDurableEffects": 0, "expectedWrongOrganizationEffects": 0, "expectedContentWorkCalls": 0, "activatedOracle": "ActionPlane.perform returns Rejected with effect zero for every operation, destination, audience, or payload-class mismatch."},
+          {"id": "ACTION-004", "mutation": "Replay separately prepared create and finalize tickets sequentially and concurrently.", "expectedStatus": 404, "expectedOutcome": "action_not_available", "expectedNewDurableEffects": 0, "expectedWrongOrganizationEffects": 0, "expectedContentWorkCalls": 0, "activatedOracle": "Each distinct ticket produces at most one corresponding Applied effect; every successful replay returns AlreadyApplied with the same stored receipt and adds zero effects."},
+          {"id": "ACTION-005", "mutation": "Bypass prepare or present a caller-signed ActionTicket directly to perform.", "expectedStatus": 404, "expectedOutcome": "action_not_available", "expectedNewDurableEffects": 0, "expectedWrongOrganizationEffects": 0, "expectedContentWorkCalls": 0, "activatedOracle": "ActionPlane.perform returns Rejected with effect zero, creates no ticket, and makes no Sender call."},
+          {"id": "ACTION-006", "mutation": "Mutate Organization, operation, destination, audience, payload digest, epoch, expiry, approval tier, idempotency key, or nonce after prepare.", "expectedStatus": 404, "expectedOutcome": "action_not_available", "expectedNewDurableEffects": 0, "expectedWrongOrganizationEffects": 0, "expectedContentWorkCalls": 0, "activatedOracle": "Exact binding validation returns Rejected with zero new, wrong-Organization, or wrong-audience effects."},
+          {"id": "ACTION-007", "mutation": "After a timeout-after-send or ambiguous provider result, retry with a new ticket, key, or attempt id.", "expectedStatus": 404, "expectedOutcome": "action_not_available", "expectedNewDurableEffects": 0, "expectedWrongOrganizationEffects": 0, "expectedContentWorkCalls": 0, "activatedOracle": "Return ReconciliationRequired with the original providerAttemptRef; create no replacement ticket or additional effect and reconcile only under the original id."},
+          {"id": "ACTION-008", "mutation": "Prepare encounters policy denial, audience drift, or temporary unavailability.", "expectedStatus": 404, "expectedOutcome": "action_not_available", "expectedNewDurableEffects": 0, "expectedWrongOrganizationEffects": 0, "expectedContentWorkCalls": 0, "activatedOracle": "Return exactly GenericDenied, AudienceChanged, or RetryableUnavailable for the matching condition, with no ActionTicket, Sender call, or effect."},
+          {"id": "ACTION-009", "mutation": "Perform receives a wrong ticket or payload, or an external attempt remains ambiguous.", "expectedStatus": 404, "expectedOutcome": "action_not_available", "expectedNewDurableEffects": 0, "expectedWrongOrganizationEffects": 0, "expectedContentWorkCalls": 0, "activatedOracle": "Return Rejected(effect zero) for deterministic mismatch or ReconciliationRequired with the original providerAttemptRef for ambiguity; never mint retry authority or an extra effect."}
+        ]
       },
       "operation": {
-        "interface": "ActionPlane.perform",
-        "request": "Send without prepare using ContextAccessTicket",
-        "phase": "inactive-capability and capability-class gate before Sender I/O"
+        "interface": "ContextRuntime, BotDelivery, ActionPlane, and Sender conformance seams",
+        "request": "Execute each named audience or Action mutation independently; at M0 every case first crosses the unavailable Action capability gate",
+        "phase": "M0 inactive-capability gate before content or Sender I/O; owning M2 carriers later upgrade each activatedOracle at its highest public seam"
       },
       "expected": {
         "externalResponse": {"status": 404, "code": "action_not_available", "body": {"kind": "generic_unavailable"}},
@@ -1080,10 +1111,12 @@
         "businessEffects": {"wrongOrganizationEffectCount": 0, "mutationEffectCount": 0, "totalEffectsAfterScenario": 0},
         "io": {"providerCalls": 0, "indexCalls": 0, "modelCalls": 0, "actionCalls": 0}
       },
-      "invariantRefs": ["TRANSPORT-UNTRUSTED-008", "EGRESS-011", "ACTION-SEPARATION-014"],
+      "invariantRefs": ["SCOPE-INTERSECTION-004", "TRANSPORT-UNTRUSTED-008", "EGRESS-011", "ACTION-SEPARATION-014"],
       "authorityRefs": [
         "docs/agents/prd-contextengine-implementation.md#implementation-decisions",
         "docs/security/Test-Architecture-与可验证性设计.md#75-egress-与-action-contract",
+        "docs/security/Test-Architecture-与可验证性设计.md#13-v1-acceptance-scenarios",
+        "docs/security/安全负向测试清单.md#6-runtimeassemblycitation-与-egress",
         "docs/decisions/0019-security-catalog-normalization.md#decision"
       ]
     }

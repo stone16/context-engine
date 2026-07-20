@@ -166,6 +166,63 @@ WORKER_LEASE_CASE_IDS: tuple[str, ...] = (
     "LEASE-REPLAY",
     "LEASE-USER-IMPERSONATION",
 )
+ACL_PROOF_CASE_IDS: tuple[str, ...] = (
+    "PROV-013",
+    "PROV-014",
+    "PROV-015",
+    "PROV-018",
+    "PROV-019",
+)
+AUDIENCE_ACTION_CASE_IDS: tuple[str, ...] = (
+    "AUTH-010",
+    "RUN-014",
+    "EGR-003",
+    "EGR-005",
+    "EGR-006",
+    "ACTION-001",
+    "ACTION-002",
+    "ACTION-003",
+    "ACTION-004",
+    "ACTION-005",
+    "ACTION-006",
+    "ACTION-007",
+    "ACTION-008",
+    "ACTION-009",
+)
+
+TRANSPORT_CASE_OUTCOMES: dict[str, tuple[int, str]] = {
+    "BODY-INJECTION": (422, "invalid_request"),
+    "DELIV-001": (200, "request_not_available"),
+    "DELIV-002": (200, "request_not_available"),
+    "DELIV-003": (200, "request_not_available"),
+    "DELIV-004": (200, "request_not_available"),
+}
+WORKER_LEASE_CASE_OUTCOME = (404, "work_not_available")
+ACL_PROOF_CASE_OUTCOME = (200, "request_not_available")
+AUDIENCE_ACTION_CASE_OUTCOME = (404, "action_not_available")
+
+REQUIRED_RUNTIME_EVIDENCE: dict[str, tuple[str, ...]] = {
+    "SCOPE-INTERSECTION-004": ("AUTH-010", "RUN-014"),
+    "INDEX-NOT-AUTHORITY-005": (
+        "PROV-010",
+        "PROV-013",
+        "PROV-014",
+        "PROV-015",
+        "PROV-018",
+        "PROV-019",
+        "PROV-020",
+    ),
+    "REVOCATION-006": (
+        "PROV-013",
+        "PROV-014",
+        "PROV-015",
+        "PROV-018",
+        "PROV-019",
+        "PROV-020",
+    ),
+    "EGRESS-011": ("EGR-003", "EGR-005", "EGR-006", "RUN-014"),
+    "ACTION-SEPARATION-014": tuple(f"ACTION-{number:03d}" for number in range(1, 10)),
+}
 
 
 @dataclass(frozen=True)
@@ -459,6 +516,21 @@ def _validate_invariants(
                 collector.require_string_list(
                     expected_evidence.get(field), f"{path}.expectedEvidence.{field}"
                 )
+            runtime_evidence = collector.require_string_list(
+                expected_evidence.get("runtimeOrDelivery"),
+                f"{path}.expectedEvidence.runtimeOrDelivery",
+            )
+            if (
+                runtime_evidence is not None
+                and invariant_id in REQUIRED_RUNTIME_EVIDENCE
+            ):
+                for case_id in REQUIRED_RUNTIME_EVIDENCE[invariant_id]:
+                    if case_id not in runtime_evidence:
+                        collector.add(
+                            f"{path}.expectedEvidence.runtimeOrDelivery",
+                            "must preserve absorbed derived case "
+                            f"{case_id!r} for {invariant_id}",
+                        )
         _validate_authority_refs(
             invariant.get("authorityRefs"),
             f"{path}.authorityRefs",
@@ -500,6 +572,9 @@ def _validate_parameterized_case_ids(
     expected_ids: tuple[str, ...],
     path: str,
     collector: _Collector,
+    expected_outcomes: Mapping[str, tuple[int, str]] | None = None,
+    *,
+    require_activated_oracle: bool = False,
 ) -> None:
     cases = mutation.get("parameterizedCases")
     if not isinstance(cases, list) or not cases:
@@ -518,6 +593,23 @@ def _validate_parameterized_case_ids(
         ):
             assert isinstance(case_id, str)
             case_ids.append(case_id)
+            if expected_outcomes is not None and case_id in expected_outcomes:
+                expected_status, expected_outcome = expected_outcomes[case_id]
+                if case.get("expectedStatus") != expected_status:
+                    collector.add(
+                        f"{path}.parameterizedCases[{index}].expectedStatus",
+                        f"must be {expected_status} for {case_id}",
+                    )
+                if case.get("expectedOutcome") != expected_outcome:
+                    collector.add(
+                        f"{path}.parameterizedCases[{index}].expectedOutcome",
+                        f"must be {expected_outcome!r} for {case_id}",
+                    )
+        if require_activated_oracle:
+            collector.require_nonempty_string(
+                case.get("activatedOracle"),
+                f"{path}.parameterizedCases[{index}].activatedOracle",
+            )
         for field in (
             "expectedNewDurableEffects",
             "expectedWrongOrganizationEffects",
@@ -596,6 +688,7 @@ def _validate_fixture(
             TRANSPORT_CASE_IDS,
             f"{path}.adversarialMutation",
             collector,
+            TRANSPORT_CASE_OUTCOMES,
         )
     if fixture_id == "ACCEPT-008" and adversarial_mutation is not None:
         _validate_parameterized_case_ids(
@@ -603,6 +696,33 @@ def _validate_fixture(
             WORKER_LEASE_CASE_IDS,
             f"{path}.adversarialMutation",
             collector,
+            {case_id: WORKER_LEASE_CASE_OUTCOME for case_id in WORKER_LEASE_CASE_IDS},
+        )
+    if fixture_id == "ACCEPT-009" and adversarial_mutation is not None:
+        if adversarial_mutation.get("caseRef") != "PROV-010":
+            collector.add(
+                f"{path}.adversarialMutation.caseRef",
+                "must be 'PROV-010' for the top-level service-account substitution",
+            )
+        _validate_parameterized_case_ids(
+            adversarial_mutation,
+            ACL_PROOF_CASE_IDS,
+            f"{path}.adversarialMutation",
+            collector,
+            {case_id: ACL_PROOF_CASE_OUTCOME for case_id in ACL_PROOF_CASE_IDS},
+            require_activated_oracle=True,
+        )
+    if fixture_id == "ACCEPT-012" and adversarial_mutation is not None:
+        _validate_parameterized_case_ids(
+            adversarial_mutation,
+            AUDIENCE_ACTION_CASE_IDS,
+            f"{path}.adversarialMutation",
+            collector,
+            {
+                case_id: AUDIENCE_ACTION_CASE_OUTCOME
+                for case_id in AUDIENCE_ACTION_CASE_IDS
+            },
+            require_activated_oracle=True,
         )
     collector.require_nonempty_object(fixture.get("operation"), f"{path}.operation")
 
