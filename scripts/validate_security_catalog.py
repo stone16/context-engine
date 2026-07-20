@@ -13,11 +13,11 @@ import json
 import re
 import subprocess
 import sys
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 from urllib.parse import unquote
-
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CATALOG_PATH = REPOSITORY_ROOT / "eval/catalogs/security-invariants.yaml"
@@ -206,7 +206,9 @@ def load_document(path: str | Path) -> dict[str, Any]:
             [f"{document_path}: cannot load JSON-compatible YAML/JSON: {error}"]
         ) from error
     if not isinstance(value, dict):
-        raise CatalogValidationError([f"{document_path}: document root must be an object"])
+        raise CatalogValidationError(
+            [f"{document_path}: document root must be an object"]
+        )
     return value
 
 
@@ -217,11 +219,15 @@ def _validate_authority(catalog: Mapping[str, Any], collector: _Collector) -> se
     collector.require_exact_fields(
         authority, ("issueRefs", "documentRefs", "reconciliation"), "authority"
     )
-    issue_refs = collector.require_string_list(authority.get("issueRefs"), "authority.issueRefs")
+    issue_refs = collector.require_string_list(
+        authority.get("issueRefs"), "authority.issueRefs"
+    )
     document_refs = collector.require_string_list(
         authority.get("documentRefs"), "authority.documentRefs"
     )
-    collector.require_nonempty_string(authority.get("reconciliation"), "authority.reconciliation")
+    collector.require_nonempty_string(
+        authority.get("reconciliation"), "authority.reconciliation"
+    )
     return set(issue_refs or ()) | set(document_refs or ())
 
 
@@ -263,9 +269,7 @@ def _validate_hard_oracles(catalog: Mapping[str, Any], collector: _Collector) ->
         )
 
 
-def _validate_identifier(
-    value: object, path: str, collector: _Collector
-) -> str | None:
+def _validate_identifier(value: object, path: str, collector: _Collector) -> str | None:
     if not collector.require_nonempty_string(value, path):
         return None
     assert isinstance(value, str)
@@ -291,21 +295,31 @@ def _validate_applicability(value: object, path: str, collector: _Collector) -> 
     applicability = collector.require_mapping(value, path)
     if applicability is None:
         return
-    collector.require_exact_fields(applicability, ("mode", "applicableFrom", "rationale"), path)
+    collector.require_exact_fields(
+        applicability, ("mode", "applicableFrom", "rationale"), path
+    )
     mode = applicability.get("mode")
     if mode not in {"required", "conditional", "not_applicable"}:
-        collector.add(f"{path}.mode", "must be required, conditional, or not_applicable")
+        collector.add(
+            f"{path}.mode", "must be required, conditional, or not_applicable"
+        )
         return
     if mode in {"required", "conditional"}:
         collector.require_nonempty_string(
             applicability.get("applicableFrom"), f"{path}.applicableFrom"
         )
         if applicability.get("rationale") is not None:
-            collector.require_nonempty_string(applicability.get("rationale"), f"{path}.rationale")
+            collector.require_nonempty_string(
+                applicability.get("rationale"), f"{path}.rationale"
+            )
     else:
         if applicability.get("applicableFrom") is not None:
-            collector.add(f"{path}.applicableFrom", "must be null when mode is not_applicable")
-        collector.require_nonempty_string(applicability.get("rationale"), f"{path}.rationale")
+            collector.add(
+                f"{path}.applicableFrom", "must be null when mode is not_applicable"
+            )
+        collector.require_nonempty_string(
+            applicability.get("rationale"), f"{path}.rationale"
+        )
 
 
 def _validate_invariants(
@@ -325,7 +339,9 @@ def _validate_invariants(
         if invariant is None:
             continue
         collector.require_exact_fields(invariant, INVARIANT_FIELDS, path)
-        invariant_id = _validate_identifier(invariant.get("id"), f"{path}.id", collector)
+        invariant_id = _validate_identifier(
+            invariant.get("id"), f"{path}.id", collector
+        )
         if invariant_id is not None:
             invariant_ids.append(invariant_id)
         for field in ("title", "purpose", "deterministicOracle", "capabilityRef"):
@@ -343,7 +359,9 @@ def _validate_invariants(
                         f"{path}.hardOracleRefs[{ref_index}]",
                         f"unknown hard oracle {ref!r}",
                     )
-        _validate_applicability(invariant.get("applicability"), f"{path}.applicability", collector)
+        _validate_applicability(
+            invariant.get("applicability"), f"{path}.applicability", collector
+        )
         if invariant.get("evidenceStatus") != "accepted":
             collector.add(f"{path}.evidenceStatus", "must be accepted")
 
@@ -351,7 +369,9 @@ def _validate_invariants(
             invariant.get("expectedEvidence"), f"{path}.expectedEvidence"
         )
         if expected_evidence is not None:
-            collector.require_exact_fields(expected_evidence, EXPECTED_EVIDENCE_FIELDS, f"{path}.expectedEvidence")
+            collector.require_exact_fields(
+                expected_evidence, EXPECTED_EVIDENCE_FIELDS, f"{path}.expectedEvidence"
+            )
             for field in EXPECTED_EVIDENCE_FIELDS:
                 collector.require_string_list(
                     expected_evidence.get(field), f"{path}.expectedEvidence.{field}"
@@ -371,7 +391,8 @@ def _validate_invariants(
     if tuple(invariant_ids) != CANONICAL_INVARIANT_IDS:
         collector.add(
             "invariants",
-            "ids must be the canonical ordered set: " + ", ".join(CANONICAL_INVARIANT_IDS),
+            "ids must be the canonical ordered set: "
+            + ", ".join(CANONICAL_INVARIANT_IDS),
         )
     return seen
 
@@ -417,7 +438,9 @@ def _validate_fixture(
                 f"{path}.carrier.statusAtM0",
                 "must be available, unavailable, or future",
             )
-        expected_m0 = "active_fail_closed" if carrier_status == "available" else "fail_closed"
+        expected_m0 = (
+            "active_fail_closed" if carrier_status == "available" else "fail_closed"
+        )
         if carrier.get("m0Expectation") != expected_m0:
             collector.add(
                 f"{path}.carrier.m0Expectation",
@@ -430,7 +453,9 @@ def _validate_fixture(
     setup = collector.require_mapping(fixture.get("setup"), f"{path}.setup")
     if setup is not None:
         collector.require_exact_fields(setup, SETUP_FIELDS, f"{path}.setup")
-        collector.require_string_list(setup.get("preconditions"), f"{path}.setup.preconditions")
+        collector.require_string_list(
+            setup.get("preconditions"), f"{path}.setup.preconditions"
+        )
         collector.require_nonempty_object(
             setup.get("trustedIdentity"), f"{path}.setup.trustedIdentity"
         )
@@ -450,7 +475,10 @@ def _validate_fixture(
             expected.get("packageOrError"), f"{path}.expected.packageOrError"
         )
         evidence_counts = _validate_metric_object(
-            expected.get("evidence"), EVIDENCE_FIELDS, f"{path}.expected.evidence", collector
+            expected.get("evidence"),
+            EVIDENCE_FIELDS,
+            f"{path}.expected.evidence",
+            collector,
         )
         business_effect_counts = _validate_metric_object(
             expected.get("businessEffects"),
@@ -487,7 +515,9 @@ def _validate_fixture(
     if invariant_refs is not None:
         for index, ref in enumerate(invariant_refs):
             if ref not in known_invariant_ids:
-                collector.add(f"{path}.invariantRefs[{index}]", f"unknown invariant {ref!r}")
+                collector.add(
+                    f"{path}.invariantRefs[{index}]", f"unknown invariant {ref!r}"
+                )
     _validate_authority_refs(
         fixture.get("authorityRefs"),
         f"{path}.authorityRefs",
@@ -532,7 +562,8 @@ def _validate_fixtures(
     if tuple(fixture_ids) != CANONICAL_FIXTURE_IDS:
         collector.add(
             "fixtures",
-            "ids must be the canonical ordered set: " + ", ".join(CANONICAL_FIXTURE_IDS),
+            "ids must be the canonical ordered set: "
+            + ", ".join(CANONICAL_FIXTURE_IDS),
         )
     return tuple(sorted(mappings))
 
@@ -556,7 +587,10 @@ def _resolve_schema_node(
             collector.add(path, f"unresolvable schema reference {reference!r}")
             return None
         current = current[part]
-    resolved = collector.require_mapping(current, reference,)
+    resolved = collector.require_mapping(
+        current,
+        reference,
+    )
     return resolved
 
 
@@ -565,7 +599,7 @@ def _json_values_equal(left: object, right: object) -> bool:
 
     if isinstance(left, bool) or isinstance(right, bool):
         return type(left) is type(right) and left == right
-    if isinstance(left, (int, float)) and isinstance(right, (int, float)):
+    if isinstance(left, int | float) and isinstance(right, int | float):
         return left == right
     return type(left) is type(right) and left == right
 
@@ -581,7 +615,7 @@ def _matches_json_type(value: object, expected_type: str) -> bool:
         case "integer":
             return isinstance(value, int) and not isinstance(value, bool)
         case "number":
-            return isinstance(value, (int, float)) and not isinstance(value, bool)
+            return isinstance(value, int | float) and not isinstance(value, bool)
         case "boolean":
             return isinstance(value, bool)
         case "null":
@@ -610,7 +644,9 @@ def _validate_schema_instance(
 
     reference = schema_node.get("$ref")
     if reference is not None:
-        resolved = _resolve_schema_node(root_schema, schema_node, f"schema for {path}", collector)
+        resolved = _resolve_schema_node(
+            root_schema, schema_node, f"schema for {path}", collector
+        )
         if resolved is None:
             return
         _validate_schema_instance(value, resolved, root_schema, path, collector)
@@ -629,7 +665,8 @@ def _validate_schema_instance(
     else:
         expected_type_names = ()
     if expected_type_names and not any(
-        _matches_json_type(value, expected_type) for expected_type in expected_type_names
+        _matches_json_type(value, expected_type)
+        for expected_type in expected_type_names
     ):
         rendered = " or ".join(repr(name) for name in expected_type_names)
         collector.add(path, f"must have type {rendered}")
@@ -638,7 +675,9 @@ def _validate_schema_instance(
     if "const" in schema_node and not _json_values_equal(value, schema_node["const"]):
         collector.add(path, f"must equal {schema_node['const']!r}")
     enum = schema_node.get("enum")
-    if isinstance(enum, list) and not any(_json_values_equal(value, item) for item in enum):
+    if isinstance(enum, list) and not any(
+        _json_values_equal(value, item) for item in enum
+    ):
         collector.add(path, "must be one of the schema's enumerated values")
 
     if isinstance(value, str):
@@ -649,12 +688,12 @@ def _validate_schema_instance(
         if isinstance(pattern, str) and re.search(pattern, value) is None:
             collector.add(path, f"must match schema pattern {pattern!r}")
 
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
+    if isinstance(value, int | float) and not isinstance(value, bool):
         minimum = schema_node.get("minimum")
         maximum = schema_node.get("maximum")
-        if isinstance(minimum, (int, float)) and value < minimum:
+        if isinstance(minimum, int | float) and value < minimum:
             collector.add(path, f"must be greater than or equal to {minimum}")
-        if isinstance(maximum, (int, float)) and value > maximum:
+        if isinstance(maximum, int | float) and value > maximum:
             collector.add(path, f"must be less than or equal to {maximum}")
 
     if isinstance(value, list):
@@ -666,7 +705,9 @@ def _validate_schema_instance(
             collector.add(path, f"must contain no more than {maximum_items} items")
         if schema_node.get("uniqueItems") is True:
             encoded = [
-                json.dumps(item, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+                json.dumps(
+                    item, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+                )
                 for item in value
             ]
             if len(encoded) != len(set(encoded)):
@@ -677,19 +718,29 @@ def _validate_schema_instance(
             prefix_count = min(len(value), len(prefix_items))
             for index in range(prefix_count):
                 _validate_schema_instance(
-                    value[index], prefix_items[index], root_schema, f"{path}[{index}]", collector
+                    value[index],
+                    prefix_items[index],
+                    root_schema,
+                    f"{path}[{index}]",
+                    collector,
                 )
         item_schema = schema_node.get("items")
         if item_schema is not None:
             for index in range(prefix_count, len(value)):
                 _validate_schema_instance(
-                    value[index], item_schema, root_schema, f"{path}[{index}]", collector
+                    value[index],
+                    item_schema,
+                    root_schema,
+                    f"{path}[{index}]",
+                    collector,
                 )
 
     if isinstance(value, dict):
         minimum_properties = schema_node.get("minProperties")
         if isinstance(minimum_properties, int) and len(value) < minimum_properties:
-            collector.add(path, f"must contain at least {minimum_properties} properties")
+            collector.add(
+                path, f"must contain at least {minimum_properties} properties"
+            )
         required = schema_node.get("required")
         if isinstance(required, list):
             for field in required:
@@ -700,7 +751,11 @@ def _validate_schema_instance(
             for field, child_schema in properties.items():
                 if field in value:
                     _validate_schema_instance(
-                        value[field], child_schema, root_schema, f"{path}.{field}", collector
+                        value[field],
+                        child_schema,
+                        root_schema,
+                        f"{path}.{field}",
+                        collector,
                     )
             if schema_node.get("additionalProperties") is False:
                 for field in value:
@@ -711,7 +766,9 @@ def _validate_schema_instance(
     if condition is not None:
         probe = _Collector()
         _validate_schema_instance(value, condition, root_schema, path, probe)
-        branch = schema_node.get("then") if not probe.errors else schema_node.get("else")
+        branch = (
+            schema_node.get("then") if not probe.errors else schema_node.get("else")
+        )
         if branch is not None:
             _validate_schema_instance(value, branch, root_schema, path, collector)
 
@@ -811,7 +868,9 @@ def _validate_schema(
                     collector,
                 )
                 properties = _schema_properties(
-                    item, f"schema.properties.hardOracles.prefixItems[{index}]", collector
+                    item,
+                    f"schema.properties.hardOracles.prefixItems[{index}]",
+                    collector,
                 )
                 if properties is None:
                     continue
@@ -851,7 +910,10 @@ def _validate_schema(
         if array_schema.get("uniqueItems") is not True:
             collector.add(f"schema.properties.{name}.uniqueItems", "must be true")
         item = _resolve_schema_node(
-            root, array_schema.get("items"), f"schema.properties.{name}.items", collector
+            root,
+            array_schema.get("items"),
+            f"schema.properties.{name}.items",
+            collector,
         )
         if item is not None:
             _require_closed_object_schema(
@@ -864,9 +926,10 @@ def _validate_schema(
         invariant_id_schema = _schema_child(
             root, invariant_item, "id", "schema.invariants.items", collector
         )
-        if invariant_id_schema is not None and tuple(
-            invariant_id_schema.get("enum", ())
-        ) != CANONICAL_INVARIANT_IDS:
+        if (
+            invariant_id_schema is not None
+            and tuple(invariant_id_schema.get("enum", ())) != CANONICAL_INVARIANT_IDS
+        ):
             collector.add(
                 "schema.invariants.items.properties.id.enum",
                 "must freeze the canonical ordered IDs",
@@ -880,7 +943,10 @@ def _validate_schema(
             )
             if child_schema is not None:
                 _require_closed_object_schema(
-                    child_schema, fields, f"schema.invariants.items.properties.{child}", collector
+                    child_schema,
+                    fields,
+                    f"schema.invariants.items.properties.{child}",
+                    collector,
                 )
 
     fixture_item = item_nodes.get("fixtures")
@@ -888,25 +954,34 @@ def _validate_schema(
         fixture_id_schema = _schema_child(
             root, fixture_item, "id", "schema.fixtures.items", collector
         )
-        if fixture_id_schema is not None and tuple(
-            fixture_id_schema.get("enum", ())
-        ) != CANONICAL_FIXTURE_IDS:
+        if (
+            fixture_id_schema is not None
+            and tuple(fixture_id_schema.get("enum", ())) != CANONICAL_FIXTURE_IDS
+        ):
             collector.add(
                 "schema.fixtures.items.properties.id.enum",
                 "must freeze the canonical ordered IDs",
             )
         for child, fields in (("carrier", CARRIER_FIELDS), ("setup", SETUP_FIELDS)):
-            child_schema = _schema_child(root, fixture_item, child, "schema.fixtures.items", collector)
+            child_schema = _schema_child(
+                root, fixture_item, child, "schema.fixtures.items", collector
+            )
             if child_schema is not None:
                 _require_closed_object_schema(
-                    child_schema, fields, f"schema.fixtures.items.properties.{child}", collector
+                    child_schema,
+                    fields,
+                    f"schema.fixtures.items.properties.{child}",
+                    collector,
                 )
         expected_schema = _schema_child(
             root, fixture_item, "expected", "schema.fixtures.items", collector
         )
         if expected_schema is not None:
             _require_closed_object_schema(
-                expected_schema, EXPECTED_FIELDS, "schema.fixtures.items.properties.expected", collector
+                expected_schema,
+                EXPECTED_FIELDS,
+                "schema.fixtures.items.properties.expected",
+                collector,
             )
             for child, fields in (
                 ("evidence", EVIDENCE_FIELDS),
@@ -974,7 +1049,9 @@ def _validate_schema(
             if definition_mapping.get("type") != "object":
                 collector.add(f"{definition_path}.type", "must be 'object'")
             if definition_mapping.get("additionalProperties") is not False:
-                collector.add(f"{definition_path}.additionalProperties", "must be false")
+                collector.add(
+                    f"{definition_path}.additionalProperties", "must be false"
+                )
             if required_fields:
                 _require_schema_fields(
                     definition_mapping, required_fields, definition_path, collector
@@ -986,7 +1063,10 @@ def _validate_schema(
             if invariant_id_value is not None
             else None
         )
-        if invariant_id is not None and tuple(invariant_id.get("enum", ())) != CANONICAL_INVARIANT_IDS:
+        if (
+            invariant_id is not None
+            and tuple(invariant_id.get("enum", ())) != CANONICAL_INVARIANT_IDS
+        ):
             collector.add(
                 "schema.$defs.invariantId.enum",
                 "must freeze the canonical ordered IDs",
@@ -997,7 +1077,10 @@ def _validate_schema(
             if fixture_id_value is not None
             else None
         )
-        if fixture_id is not None and tuple(fixture_id.get("enum", ())) != CANONICAL_FIXTURE_IDS:
+        if (
+            fixture_id is not None
+            and tuple(fixture_id.get("enum", ())) != CANONICAL_FIXTURE_IDS
+        ):
             collector.add(
                 "schema.$defs.fixtureId.enum",
                 "must freeze the canonical ordered IDs",
@@ -1052,9 +1135,7 @@ def _github_heading_slug(heading: str) -> str:
     slug_characters = (
         character
         for character in visible_text
-        if character.isalnum()
-        or character.isspace()
-        or character in {"-", "_"}
+        if character.isalnum() or character.isspace() or character in {"-", "_"}
     )
     return re.sub(r"\s", "-", "".join(slug_characters))
 
@@ -1143,9 +1224,7 @@ def _iter_catalog_authority_refs(
     return refs
 
 
-def _validate_document_paths(
-    catalog: Mapping[str, Any], repository_root: Path
-) -> None:
+def _validate_document_paths(catalog: Mapping[str, Any], repository_root: Path) -> None:
     errors: list[str] = []
     authority = catalog.get("authority")
     if not isinstance(authority, Mapping):
@@ -1238,13 +1317,19 @@ def build_parser() -> argparse.ArgumentParser:
         nargs="?",
         type=Path,
         default=DEFAULT_CATALOG_PATH,
-        help="catalog path (default: repository eval/catalogs/security-invariants.yaml)",
+        help=(
+            "catalog path (default: repository "
+            "eval/catalogs/security-invariants.yaml)"
+        ),
     )
     parser.add_argument(
         "--schema",
         type=Path,
         default=DEFAULT_SCHEMA_PATH,
-        help="schema path (default: repository eval/catalogs/security-catalog.schema.json)",
+        help=(
+            "schema path (default: repository "
+            "eval/catalogs/security-catalog.schema.json)"
+        ),
     )
     return parser
 

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import contextlib
-import copy
 import io
 import json
 import os
@@ -9,24 +8,47 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from typing import cast
 
 from scripts.validate_security_catalog import (
     CANONICAL_INVARIANT_IDS,
-    CatalogValidationError,
     DEFAULT_CATALOG_PATH,
-    main,
+    CatalogValidationError,
     load_document,
+    main,
     render_report,
     validate_catalog,
     validate_files,
 )
-
 
 HARD_ORACLE_NAMES = (
     "Unauthorized Evidence",
     "wrong-Organization effect",
     "missing-context fallback",
 )
+
+
+def object_at(mapping: dict[str, object], *keys: str) -> dict[str, object]:
+    """Return a nested object while keeping malformed test data type-safe."""
+    current: object = mapping
+    for key in keys:
+        assert isinstance(current, dict)
+        current = current[key]
+    assert isinstance(current, dict)
+    return cast(dict[str, object], current)
+
+
+def object_list_at(
+    mapping: dict[str, object], *keys: str
+) -> list[dict[str, object]]:
+    """Return a nested list of objects with runtime shape assertions."""
+    current: object = mapping
+    for key in keys:
+        assert isinstance(current, dict)
+        current = current[key]
+    assert isinstance(current, list)
+    assert all(isinstance(item, dict) for item in current)
+    return cast(list[dict[str, object]], current)
 
 
 def make_catalog() -> dict[str, object]:
@@ -350,7 +372,7 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
         catalog = make_catalog()
         schema = make_schema()
         catalog["catalogVersion"] = "999.0.0"
-        schema["properties"]["catalogVersion"]["const"] = "999.0.0"
+        object_at(schema, "properties", "catalogVersion")["const"] = "999.0.0"
 
         self.assert_catalog_error(
             catalog,
@@ -360,24 +382,22 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
 
     def test_hard_oracle_order_is_frozen(self) -> None:
         catalog = make_catalog()
-        hard_oracles = catalog["hardOracles"]
-        assert isinstance(hard_oracles, list)
+        hard_oracles = object_list_at(catalog, "hardOracles")
         hard_oracles[0], hard_oracles[1] = hard_oracles[1], hard_oracles[0]
 
         self.assert_catalog_error(
             catalog,
-            "hardOracles: must use the canonical order: " + ", ".join(HARD_ORACLE_NAMES),
+            "hardOracles: must use the canonical order: "
+            + ", ".join(HARD_ORACLE_NAMES),
         )
 
     def test_unknown_catalog_fields_are_rejected_at_every_boundary(self) -> None:
         catalog = make_catalog()
         catalog["unexpected"] = True
-        invariants = catalog["invariants"]
-        fixtures = catalog["fixtures"]
-        assert isinstance(invariants, list)
-        assert isinstance(fixtures, list)
-        invariants[0]["applicability"]["unexpected"] = True
-        fixtures[0]["expected"]["io"]["unexpected"] = 0
+        invariants = object_list_at(catalog, "invariants")
+        fixtures = object_list_at(catalog, "fixtures")
+        object_at(invariants[0], "applicability")["unexpected"] = True
+        object_at(fixtures[0], "expected", "io")["unexpected"] = 0
 
         error = self.assert_catalog_error(
             catalog,
@@ -394,9 +414,11 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
 
     def test_schema_must_freeze_nested_shapes_and_canonical_ids(self) -> None:
         schema = make_schema()
-        schema["$defs"]["invariant"]["additionalProperties"] = True
-        schema["properties"]["invariants"]["type"] = "object"
-        schema["$defs"]["invariant"]["properties"]["id"] = {"type": "string"}
+        object_at(schema, "$defs", "invariant")["additionalProperties"] = True
+        object_at(schema, "properties", "invariants")["type"] = "object"
+        object_at(schema, "$defs", "invariant", "properties")["id"] = {
+            "type": "string"
+        }
 
         error = self.assert_catalog_error(
             make_catalog(),
@@ -408,15 +430,16 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
             error.errors,
         )
         self.assertIn(
-            "schema.invariants.items.properties.id.enum: must freeze the canonical ordered IDs",
+            "schema.invariants.items.properties.id.enum: must freeze the "
+            "canonical ordered IDs",
             error.errors,
         )
 
     def test_schema_hard_oracle_tuple_is_closed(self) -> None:
         schema = make_schema()
-        hard_oracle_schema = schema["properties"]["hardOracles"]
+        hard_oracle_schema = object_at(schema, "properties", "hardOracles")
         hard_oracle_schema.pop("items", None)
-        hard_oracle_schema["prefixItems"][0].pop("required", None)
+        object_list_at(hard_oracle_schema, "prefixItems")[0].pop("required", None)
 
         error = self.assert_catalog_error(
             make_catalog(),
@@ -431,7 +454,7 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
     def test_catalog_is_validated_against_schema_constraints(self) -> None:
         catalog = make_catalog()
         schema = make_schema()
-        schema["properties"]["catalogVersion"]["pattern"] = "^never$"
+        object_at(schema, "properties", "catalogVersion")["pattern"] = "^never$"
 
         self.assert_catalog_error(
             catalog,
@@ -439,14 +462,18 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
             schema,
         )
 
-    def test_validate_files_rejects_missing_and_escaping_authority_documents(self) -> None:
+    def test_validate_files_rejects_missing_and_escaping_authority_documents(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             catalog = make_catalog()
-            catalog["authority"]["documentRefs"] = ["docs/security/missing.md"]
-            for invariant in catalog["invariants"]:
+            object_at(catalog, "authority")["documentRefs"] = [
+                "docs/security/missing.md"
+            ]
+            for invariant in object_list_at(catalog, "invariants"):
                 invariant["authorityRefs"] = ["docs/security/missing.md#oracle"]
-            for fixture in catalog["fixtures"]:
+            for fixture in object_list_at(catalog, "fixtures"):
                 fixture["authorityRefs"] = ["#5", "docs/security/missing.md#oracle"]
             catalog_path = root / "eval/catalogs/security-invariants.yaml"
             schema_path = root / "eval/catalogs/security-catalog.schema.json"
@@ -458,14 +485,15 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
                 validate_files(catalog_path, schema_path, repository_root=root)
 
             self.assertIn(
-                "authority.documentRefs[0]: tracked document does not exist: 'docs/security/missing.md'",
+                "authority.documentRefs[0]: tracked document does not exist: "
+                "'docs/security/missing.md'",
                 raised.exception.errors,
             )
 
-            catalog["authority"]["documentRefs"] = ["../outside.md"]
-            for invariant in catalog["invariants"]:
+            object_at(catalog, "authority")["documentRefs"] = ["../outside.md"]
+            for invariant in object_list_at(catalog, "invariants"):
                 invariant["authorityRefs"] = ["../outside.md#oracle"]
-            for fixture in catalog["fixtures"]:
+            for fixture in object_list_at(catalog, "fixtures"):
                 fixture["authorityRefs"] = ["#5", "../outside.md#oracle"]
             catalog_path.write_text(json.dumps(catalog), encoding="utf-8")
 
@@ -473,7 +501,8 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
                 validate_files(catalog_path, schema_path, repository_root=root)
 
             self.assertIn(
-                "authority.documentRefs[0]: must be a repository-relative path without '..'",
+                "authority.documentRefs[0]: must be a repository-relative path "
+                "without '..'",
                 escaping.exception.errors,
             )
 
@@ -501,13 +530,16 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
 
         self.assertIn(
             (
-                "invariants[0].authorityRefs[0]: Markdown heading anchor does not exist: "
+                "invariants[0].authorityRefs[0]: Markdown heading anchor does "
+                "not exist: "
                 "'docs/security/context-engine-threat-model.md#not-a-real-heading'"
             ),
             raised.exception.errors,
         )
 
-    def test_validate_files_rejects_untracked_and_ignored_authority_documents(self) -> None:
+    def test_validate_files_rejects_untracked_and_ignored_authority_documents(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             subprocess.run(
@@ -523,13 +555,13 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
             (root / ".gitignore").write_text("docs/ignored.md\n", encoding="utf-8")
 
             catalog = make_catalog()
-            catalog["authority"]["documentRefs"] = [
+            object_at(catalog, "authority")["documentRefs"] = [
                 "docs/untracked.md",
                 "docs/ignored.md",
             ]
-            for invariant in catalog["invariants"]:
+            for invariant in object_list_at(catalog, "invariants"):
                 invariant["authorityRefs"] = ["docs/untracked.md#real-heading"]
-            for fixture in catalog["fixtures"]:
+            for fixture in object_list_at(catalog, "fixtures"):
                 fixture["authorityRefs"] = ["#5", "docs/ignored.md#real-heading"]
 
             catalog_path = root / "security-invariants.yaml"
@@ -579,10 +611,12 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
             )
 
             catalog = make_catalog()
-            catalog["authority"]["documentRefs"] = ["docs/authority.md"]
-            for invariant in catalog["invariants"]:
+            object_at(catalog, "authority")["documentRefs"] = [
+                "docs/authority.md"
+            ]
+            for invariant in object_list_at(catalog, "invariants"):
                 invariant["authorityRefs"] = ["docs/authority.md#重复-标题"]
-            for fixture in catalog["fixtures"]:
+            for fixture in object_list_at(catalog, "fixtures"):
                 fixture["authorityRefs"] = ["#5", "docs/authority.md#重复-标题-1"]
 
             catalog_path = root / "security-invariants.yaml"
@@ -611,7 +645,9 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
             os.chdir(previous_cwd)
 
         self.assertEqual(exit_code, 0, stderr.getvalue())
-        self.assertIn("security catalog valid: 15 invariants, 12 fixtures", stdout.getvalue())
+        self.assertIn(
+            "security catalog valid: 15 invariants, 12 fixtures", stdout.getvalue()
+        )
 
     def test_tracked_catalog_and_schema_validate_together(self) -> None:
         repository_root = Path(__file__).resolve().parents[2]
@@ -620,12 +656,16 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
         if not schema_path.is_file():
             self.skipTest("tracked schema is landing in the parallel TDD task")
 
-        report = validate_files(catalog_path, schema_path, repository_root=repository_root)
+        report = validate_files(
+            catalog_path, schema_path, repository_root=repository_root
+        )
 
         self.assertEqual(report.invariant_count, 15)
         self.assertEqual(report.fixture_count, 12)
 
-    def test_tracked_catalog_freezes_later_carrier_and_source_acl_semantics(self) -> None:
+    def test_tracked_catalog_freezes_later_carrier_and_source_acl_semantics(
+        self,
+    ) -> None:
         catalog = load_document(DEFAULT_CATALOG_PATH)
         fixtures = {
             fixture["id"]: fixture
@@ -664,7 +704,9 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(stderr.getvalue(), "")
-        self.assertIn("security catalog valid: 15 invariants, 12 fixtures\n", stdout.getvalue())
+        self.assertIn(
+            "security catalog valid: 15 invariants, 12 fixtures\n", stdout.getvalue()
+        )
         self.assertIn("  ACCEPT-012: TRACE-REDACTION-012\n", stdout.getvalue())
 
     def test_duplicate_invariant_id_is_rejected(self) -> None:
@@ -752,7 +794,8 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
             ),
         )
         self.assertIn(
-            "fixtures[0].expected.io.modelCalls: must be 0 for an unavailable or future carrier",
+            "fixtures[0].expected.io.modelCalls: must be 0 for an unavailable "
+            "or future carrier",
             error.errors,
         )
 
@@ -810,7 +853,7 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
 
     def test_schema_count_drift_is_rejected(self) -> None:
         schema = make_schema()
-        schema["properties"]["invariants"]["maxItems"] = 16
+        object_at(schema, "properties", "invariants")["maxItems"] = 16
 
         self.assert_catalog_error(
             make_catalog(),
@@ -820,7 +863,7 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
 
     def test_cli_reports_validation_errors_to_stderr(self) -> None:
         catalog = make_catalog()
-        catalog["hardOracles"][0]["veto"] = False
+        object_list_at(catalog, "hardOracles")[0]["veto"] = False
         with tempfile.TemporaryDirectory() as directory:
             catalog_path = Path(directory, "security-invariants.yaml")
             schema_path = Path(directory, "security-catalog.schema.json")
