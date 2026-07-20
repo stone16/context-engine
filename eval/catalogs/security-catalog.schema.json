@@ -498,10 +498,9 @@
         "source2Present": {"type": "boolean"},
         "orgBContentPresent": {"type": "boolean"},
         "fieldNamesEchoed": {"type": "boolean"},
-        "missingContextFallbackCount": {"type": "integer", "minimum": 0},
         "leaseClaimsEchoed": {"type": "boolean"},
         "byteIdenticalAcrossProbes": {"type": "boolean"},
-        "sameTimingBucket": {"type": "boolean"}
+        "timingEqualityClaimed": {"type": "boolean"}
       }
     },
     "responseBody": {
@@ -510,7 +509,9 @@
       "minProperties": 1,
       "properties": {
         "kind": {"$ref": "#/$defs/nonEmptyString"},
-        "gap": {"$ref": "#/$defs/nonEmptyString"}
+        "gap": {"$ref": "#/$defs/nonEmptyString"},
+        "coverageReason": {"$ref": "#/$defs/nonEmptyString"},
+        "retryable": {"type": "boolean"}
       }
     },
     "packageOrError": {
@@ -550,10 +551,11 @@
     "evidenceMetrics": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["unauthorizedEvidenceCount", "unauthorizedContentBytes", "outboundBytes"],
+      "required": ["unauthorizedEvidenceCount", "unauthorizedContentBytes", "missingContextFallbackCount", "outboundBytes"],
       "properties": {
         "unauthorizedEvidenceCount": {"type": "integer", "minimum": 0, "const": 0},
         "unauthorizedContentBytes": {"type": "integer", "minimum": 0, "const": 0},
+        "missingContextFallbackCount": {"type": "integer", "minimum": 0, "const": 0},
         "outboundBytes": {"type": "integer", "minimum": 0}
       }
     },

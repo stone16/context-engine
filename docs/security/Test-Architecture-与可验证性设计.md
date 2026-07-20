@@ -124,7 +124,7 @@ interface ActionPlane {
 
 ### 4. Security invariant catalog
 
-发布目录的唯一机器权威是 [`eval/catalogs/security-invariants.yaml`](../../eval/catalogs/security-invariants.yaml)，其 schema 是 [`eval/catalogs/security-catalog.schema.json`](../../eval/catalogs/security-catalog.schema.json)，验证命令是 `python3 scripts/validate_security_catalog.py`。它使用 JSON-compatible YAML，使 D0 在尚无依赖清单时可由 Python 标准库完成确定性验证。[ADR-0019](../decisions/0019-security-catalog-normalization.md) 固定恰好 15 个 canonical release ID。每条 invariant 同时拥有适用的 domain property、Postgres integration 与 runtime/delivery negative evidence；任何 required seam 失败都阻止发布。
+发布目录的唯一机器权威是 [`eval/catalogs/security-invariants.yaml`](../../eval/catalogs/security-invariants.yaml)，其 schema 是 [`eval/catalogs/security-catalog.schema.json`](../../eval/catalogs/security-catalog.schema.json)，验证命令是 `python3 scripts/validate_security_catalog.py`。它使用 JSON-compatible YAML，使校验器在 bootstrap 与 CI 中始终只依赖 Python 标准库并保持确定性，与应用依赖解耦。[ADR-0019](../decisions/0019-security-catalog-normalization.md) 固定恰好 15 个 canonical release ID。每条 invariant 同时拥有适用的 domain property、Postgres integration 与 runtime/delivery negative evidence；任何 required seam 失败都阻止发布。
 
 | ID | Invariant | 最小测试 |
 |---|---|---|
@@ -136,7 +136,7 @@ interface ActionPlane {
 | `REVOCATION-006` | engine观察到access change后先bump Policy Epoch，下一请求失效 | cache/index未清理仍不可见；已发送bytes由独立egress历史策略处理 |
 | `WORKER-LEASE-007` | ServiceActor/WorkerLease精确绑定org、job、operation、source、可选resource/revision、workload、epoch、可选audience、idempotency、generation、iat/exp、nonce | 逐claim变异、durable job row不匹配、过期、旧generation、replay或伪装UserActor均拒绝 |
 | `TRANSPORT-UNTRUSTED-008` | HTTP/MCP body不能自报org/user/audience/ACL/raw SQL/bypass；SDK只是HTTP client artifact | schema拒绝trusted字段，ingress仅从认证会话或已兑换DeliveryEvidenceRef构造context |
-| `NON-ENUMERATION-009` | missing 与 unauthorized 对 caller 等价 | status/body/latency bucket 无资源存在性差异 |
+| `NON-ENUMERATION-009` | missing 与 unauthorized 对 caller 等价 | M1 固定 status/body/domain outcome/shape/count，不声明 timing 等价；M5/E5 再运行预注册、有统计功效的 timing gate |
 | `CITATION-AUTH-010` | CitationOpenRef不授予权限且每次open授权；ContinuationToken独立、scope-bound且one-shot | 两类token不可互换；wrong opener/revoke后返回0 bytes |
 | `EGRESS-011` | sensitivity/purpose/provider/region/audience做交集，TCB逐跳验证egress grant | disallowed ModelGateway/Sender receives zero payload/effect |
 | `TRACE-REDACTION-012` | ContextRun只含authorized refs；restricted DecisionAudit不含raw denied content | tenant-visible run/debug无raw denied；security audit只有opaque digest/category |
@@ -412,7 +412,7 @@ Flaky test 不能自动重跑后变绿；先记录原始失败，只有 typed ex
 | `ACCEPT-008` | WorkerLease replay and binding | Worker 使用 ServiceActor；WorkerLease 每个 claim 与 durable job row 匹配，wrong-org/generation/workload/job/source/operation 与 replay 被拒绝 |
 | `ACCEPT-009` | source-native ACL | federated Provider 对 source-native ACL 做最后授权，proof 不可静默降级 |
 | `ACCEPT-010` | citation revocation | citation/open-original 在 revoke 后失败且不暴露存在性 |
-| `ACCEPT-011` | denied/not-found equivalence | cross-org、same-org denied 与 missing reference 的 status/body/error/shape/count 等价；milestone-scoped timing case按预注册门槛执行 |
+| `ACCEPT-011` | denied/not-found equivalence | M1 冻结 cross-org、same-org denied 与 missing reference 的 status/body/domain outcome/shape/count 等价，不声明 timing 等价；M5/E5 再按预注册、有统计功效的 timing 门槛执行 |
 | `ACCEPT-012` | Context/Action separation | Context 与 Action 使用不同 audience/capability，read authority 不产生 write effect |
 
 早期编号 13–22 不是额外顶层 acceptance ID，而是下面这些仍然必跑的参数化/派生案例或 invariant evidence：

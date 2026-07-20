@@ -101,6 +101,7 @@ EXPECTED_FIELDS = (
 EVIDENCE_FIELDS = (
     "unauthorizedEvidenceCount",
     "unauthorizedContentBytes",
+    "missingContextFallbackCount",
     "outboundBytes",
 )
 BUSINESS_EFFECT_FIELDS = (
@@ -109,6 +110,35 @@ BUSINESS_EFFECT_FIELDS = (
     "totalEffectsAfterScenario",
 )
 IO_FIELDS = ("providerCalls", "indexCalls", "modelCalls", "actionCalls")
+
+CANONICAL_REQUIRED_MILESTONES: dict[str, tuple[str, ...]] = {
+    "TENANT-OWNERSHIP-001": ("M0", "M1"),
+    "TENANT-FK-002": ("M0", "M1"),
+    "RLS-FAIL-CLOSED-003": ("M0",),
+    "SCOPE-INTERSECTION-004": ("M0", "M1", "M5"),
+    "INDEX-NOT-AUTHORITY-005": ("M0", "M1", "M3"),
+    "REVOCATION-006": ("M1", "M2"),
+    "WORKER-LEASE-007": ("M1", "M3"),
+    "TRANSPORT-UNTRUSTED-008": ("M1", "M2"),
+    "NON-ENUMERATION-009": ("M1", "M5"),
+    "CITATION-AUTH-010": ("M2", "M3"),
+    "EGRESS-011": ("M2", "M5"),
+    "TRACE-REDACTION-012": ("M0", "M1"),
+    "ACTION-SEPARATION-014": ("M2",),
+    "CROSS-ORG-LEARN-015": ("M0", "M3"),
+    "RELEASE-OWNER-019": ("M0", "M3"),
+}
+
+RUNTIME_OUTCOME_KINDS: dict[str, tuple[str, str]] = {
+    "ACCEPT-001": ("resolved", "ContextPackage"),
+    "ACCEPT-005": ("request_not_available", "request_not_available"),
+    "ACCEPT-009": ("request_not_available", "request_not_available"),
+    "ACCEPT-010": ("citation_not_available", "citation_not_available"),
+    "ACCEPT-011": ("resolved", "ContextPackage"),
+}
+
+NON_RETRYABLE_RUNTIME_FIXTURES = frozenset({"ACCEPT-005", "ACCEPT-009"})
+RESOLVED_EMPTY_RUNTIME_FIXTURES = frozenset({"ACCEPT-001", "ACCEPT-011"})
 
 
 @dataclass(frozen=True)
@@ -346,7 +376,7 @@ def _validate_invariants(
             invariant_ids.append(invariant_id)
         for field in ("title", "purpose", "deterministicOracle", "capabilityRef"):
             collector.require_nonempty_string(invariant.get(field), f"{path}.{field}")
-        for field in ("threatRefs", "protectedAssets", "requiredMilestones"):
+        for field in ("threatRefs", "protectedAssets"):
             collector.require_string_list(invariant.get(field), f"{path}.{field}")
 
         hard_oracle_refs = collector.require_string_list(
@@ -359,9 +389,35 @@ def _validate_invariants(
                         f"{path}.hardOracleRefs[{ref_index}]",
                         f"unknown hard oracle {ref!r}",
                     )
+        applicability = collector.require_mapping(
+            invariant.get("applicability"), f"{path}.applicability"
+        )
         _validate_applicability(
             invariant.get("applicability"), f"{path}.applicability", collector
         )
+        required_milestones = collector.require_string_list(
+            invariant.get("requiredMilestones"), f"{path}.requiredMilestones"
+        )
+        if invariant_id in CANONICAL_REQUIRED_MILESTONES:
+            canonical_milestones = CANONICAL_REQUIRED_MILESTONES[invariant_id]
+            first_required = canonical_milestones[0]
+            if (
+                applicability is not None
+                and applicability.get("applicableFrom") != first_required
+            ):
+                collector.add(
+                    f"{path}.applicability.applicableFrom",
+                    f"must be {first_required!r} for {invariant_id}",
+                )
+            if (
+                required_milestones is not None
+                and tuple(required_milestones) != canonical_milestones
+            ):
+                collector.add(
+                    f"{path}.requiredMilestones",
+                    "must be the canonical sequence "
+                    f"{list(canonical_milestones)!r} for {invariant_id}",
+                )
         if invariant.get("evidenceStatus") != "accepted":
             collector.add(f"{path}.evidenceStatus", "must be accepted")
 
@@ -486,7 +542,11 @@ def _validate_fixture(
             f"{path}.expected.businessEffects",
             collector,
         )
-        for field in ("unauthorizedEvidenceCount", "unauthorizedContentBytes"):
+        for field in (
+            "unauthorizedEvidenceCount",
+            "unauthorizedContentBytes",
+            "missingContextFallbackCount",
+        ):
             if evidence_counts.get(field) != 0:
                 collector.add(
                     f"{path}.expected.evidence.{field}",
@@ -506,6 +566,93 @@ def _validate_fixture(
                 collector.add(
                     f"{path}.expected.io.{field}",
                     "must be 0 for an unavailable or future carrier",
+                )
+
+    if fixture_id in RUNTIME_OUTCOME_KINDS and expected is not None:
+        external_response = collector.require_mapping(
+            expected.get("externalResponse"), f"{path}.expected.externalResponse"
+        )
+        package_or_error = collector.require_mapping(
+            expected.get("packageOrError"), f"{path}.expected.packageOrError"
+        )
+        response_body = (
+            collector.require_mapping(
+                external_response.get("body"),
+                f"{path}.expected.externalResponse.body",
+            )
+            if external_response is not None
+            else None
+        )
+        expected_body_kind, expected_result_kind = RUNTIME_OUTCOME_KINDS[fixture_id]
+        if external_response is not None and external_response.get("status") != 200:
+            collector.add(
+                f"{path}.expected.externalResponse.status",
+                "must be 200 for the canonical Runtime outcome",
+            )
+        if (
+            response_body is not None
+            and response_body.get("kind") != expected_body_kind
+        ):
+            collector.add(
+                f"{path}.expected.externalResponse.body.kind",
+                f"must be {expected_body_kind!r} for {fixture_id}",
+            )
+        if (
+            package_or_error is not None
+            and package_or_error.get("kind") != expected_result_kind
+        ):
+            collector.add(
+                f"{path}.expected.packageOrError.kind",
+                f"must be {expected_result_kind!r} for {fixture_id}",
+            )
+        if fixture_id in NON_RETRYABLE_RUNTIME_FIXTURES and (
+            response_body is not None and response_body.get("retryable") is not False
+        ):
+            collector.add(
+                f"{path}.expected.externalResponse.body.retryable",
+                f"must be false for {fixture_id}",
+            )
+        if fixture_id in RESOLVED_EMPTY_RUNTIME_FIXTURES:
+            if (
+                response_body is not None
+                and response_body.get("coverageReason") != "no_authorized_evidence"
+            ):
+                collector.add(
+                    f"{path}.expected.externalResponse.body.coverageReason",
+                    "must be 'no_authorized_evidence' for a hidden or missing Acquire",
+                )
+            if (
+                package_or_error is not None
+                and package_or_error.get("gap") != "no_authorized_evidence"
+            ):
+                collector.add(
+                    f"{path}.expected.packageOrError.gap",
+                    "must be 'no_authorized_evidence' for a hidden or missing Acquire",
+                )
+        if fixture_id == "ACCEPT-011":
+            if (
+                external_response is not None
+                and external_response.get("timingEqualityClaimed") is not False
+            ):
+                collector.add(
+                    f"{path}.expected.externalResponse.timingEqualityClaimed",
+                    "must be false before the preregistered M5 timing gate",
+                )
+            operation = collector.require_mapping(
+                fixture.get("operation"), f"{path}.operation"
+            )
+            comparison_fields = (
+                collector.require_string_list(
+                    operation.get("comparisonFields"),
+                    f"{path}.operation.comparisonFields",
+                )
+                if operation is not None
+                else None
+            )
+            if comparison_fields is not None and "timingBucket" in comparison_fields:
+                collector.add(
+                    f"{path}.operation.comparisonFields",
+                    "must not claim timing equality before the preregistered M5 gate",
                 )
 
     invariant_refs = collector.require_string_list(
@@ -1318,8 +1465,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=DEFAULT_CATALOG_PATH,
         help=(
-            "catalog path (default: repository "
-            "eval/catalogs/security-invariants.yaml)"
+            "catalog path (default: repository eval/catalogs/security-invariants.yaml)"
         ),
     )
     parser.add_argument(

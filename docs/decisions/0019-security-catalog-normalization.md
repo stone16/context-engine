@@ -57,8 +57,8 @@ this order:
 set. `eval/catalogs/security-catalog.schema.json` validates its shape, and
 `python3 scripts/validate_security_catalog.py` validates the catalog and its
 tracked document references. The catalog uses JSON-compatible YAML so the D0
-validator can use the Python standard library while no dependency manifest
-exists.
+validator remains standard-library-only and deterministic in bootstrap and CI,
+independent of application dependencies.
 
 The following labels retain all of their tests and safeguards but are not
 additional canonical release IDs:

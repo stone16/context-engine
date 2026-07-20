@@ -179,11 +179,11 @@
       "hardOracleRefs": ["Unauthorized Evidence", "missing-context fallback"],
       "applicability": {
         "mode": "required",
-        "applicableFrom": "M0",
+        "applicableFrom": "M1",
         "rationale": null
       },
       "capabilityRef": "policy-epoch-revocation",
-      "requiredMilestones": ["M0", "M1", "M2"],
+      "requiredMilestones": ["M1", "M2"],
       "evidenceStatus": "accepted",
       "expectedEvidence": {
         "property": ["PROP-REVOCATION-006"],
@@ -206,11 +206,11 @@
       "hardOracleRefs": ["wrong-Organization effect", "missing-context fallback"],
       "applicability": {
         "mode": "required",
-        "applicableFrom": "M0",
+        "applicableFrom": "M1",
         "rationale": null
       },
       "capabilityRef": "signed-worker-lease",
-      "requiredMilestones": ["M0", "M1"],
+      "requiredMilestones": ["M1", "M3"],
       "evidenceStatus": "accepted",
       "expectedEvidence": {
         "property": ["PROP-WORKER-LEASE-007"],
@@ -233,11 +233,11 @@
       "hardOracleRefs": ["Unauthorized Evidence", "wrong-Organization effect", "missing-context fallback"],
       "applicability": {
         "mode": "required",
-        "applicableFrom": "M0",
+        "applicableFrom": "M1",
         "rationale": null
       },
       "capabilityRef": "closed-trusted-ingress",
-      "requiredMilestones": ["M0", "M2"],
+      "requiredMilestones": ["M1", "M2"],
       "evidenceStatus": "accepted",
       "expectedEvidence": {
         "property": ["PROP-TRANSPORT-UNTRUSTED-008"],
@@ -256,15 +256,15 @@
       "purpose": "Prevent hidden Resource existence, counts, names, and denial branches from becoming a caller-visible side channel.",
       "threatRefs": ["TM-02", "TM-18"],
       "protectedAssets": ["A-01", "A-02", "A-07"],
-      "deterministicOracle": "Pass only when denied and missing probes have byte-identical status, body, and error code and fall in the preregistered equivalent timing bucket; fail on any existence-dependent external difference or leaked denied count.",
+      "deterministicOracle": "Pass only when denied and missing probes have byte-identical status, body, headers, and domain outcome after documented per-run fields are normalized; fail on any existence-dependent external difference or leaked denied count. Statistical timing equality is not claimed before its separately preregistered M5 gate.",
       "hardOracleRefs": ["Unauthorized Evidence"],
       "applicability": {
         "mode": "required",
-        "applicableFrom": "M0",
+        "applicableFrom": "M1",
         "rationale": null
       },
       "capabilityRef": "non-enumerating-resolution",
-      "requiredMilestones": ["M0", "M1"],
+      "requiredMilestones": ["M1", "M5"],
       "evidenceStatus": "accepted",
       "expectedEvidence": {
         "property": ["PROP-NON-ENUMERATION-009"],
@@ -368,11 +368,11 @@
       "hardOracleRefs": ["Unauthorized Evidence", "wrong-Organization effect", "missing-context fallback"],
       "applicability": {
         "mode": "required",
-        "applicableFrom": "M0",
+        "applicableFrom": "M2",
         "rationale": null
       },
       "capabilityRef": "action-plane-one-shot-ticket",
-      "requiredMilestones": ["M0", "M2"],
+      "requiredMilestones": ["M2"],
       "evidenceStatus": "accepted",
       "expectedEvidence": {
         "property": ["PROP-ACTION-SEPARATION-014"],
@@ -478,9 +478,9 @@
         "observation": "Compare the two complete responses without reading restricted DecisionAudit."
       },
       "expected": {
-        "externalResponse": {"status": 404, "code": "context_not_available", "body": {"kind": "generic_unavailable"}, "sameForBothAttempts": true},
-        "packageOrError": {"kind": "error", "packageCount": 0, "crossOrganizationResourceDetailCount": 0},
-        "evidence": {"unauthorizedEvidenceCount": 0, "unauthorizedContentBytes": 0, "outboundBytes": 0},
+        "externalResponse": {"status": 200, "body": {"kind": "resolved", "coverageReason": "no_authorized_evidence"}, "sameForBothAttempts": true},
+        "packageOrError": {"kind": "ContextPackage", "packageCount": 2, "gap": "no_authorized_evidence", "crossOrganizationResourceDetailCount": 0},
+        "evidence": {"unauthorizedEvidenceCount": 0, "unauthorizedContentBytes": 0, "missingContextFallbackCount": 0, "outboundBytes": 0},
         "businessEffects": {"wrongOrganizationEffectCount": 0, "mutationEffectCount": 0, "totalEffectsAfterScenario": 0},
         "io": {"providerCalls": 0, "indexCalls": 0, "modelCalls": 0, "actionCalls": 0}
       },
@@ -527,7 +527,7 @@
       "expected": {
         "externalResponse": {"status": 200, "authorizedPayloadUtf8": "status=open", "authorizedPayloadBytes": 11, "privateFieldPresent": false},
         "packageOrError": {"kind": "ContextPackage", "evidenceFields": ["status"], "deniedFieldCountExposed": false},
-        "evidence": {"unauthorizedEvidenceCount": 0, "unauthorizedContentBytes": 0, "outboundBytes": 11},
+        "evidence": {"unauthorizedEvidenceCount": 0, "unauthorizedContentBytes": 0, "missingContextFallbackCount": 0, "outboundBytes": 11},
         "businessEffects": {"wrongOrganizationEffectCount": 0, "mutationEffectCount": 0, "totalEffectsAfterScenario": 0},
         "io": {"providerCalls": 1, "indexCalls": 1, "modelCalls": 0, "actionCalls": 0}
       },
@@ -574,7 +574,7 @@
       "expected": {
         "externalResponse": {"status": 200, "authorizedPayloadUtf8": "public", "authorizedPayloadBytes": 6, "privateResourcePresent": false},
         "packageOrError": {"kind": "ContextPackage", "evidenceResourceRefs": ["public-1"], "gap": "generic_scope_restricted"},
-        "evidence": {"unauthorizedEvidenceCount": 0, "unauthorizedContentBytes": 0, "outboundBytes": 6},
+        "evidence": {"unauthorizedEvidenceCount": 0, "unauthorizedContentBytes": 0, "missingContextFallbackCount": 0, "outboundBytes": 6},
         "businessEffects": {"wrongOrganizationEffectCount": 0, "mutationEffectCount": 0, "totalEffectsAfterScenario": 0},
         "io": {"providerCalls": 1, "indexCalls": 1, "modelCalls": 0, "actionCalls": 0}
       },
@@ -620,7 +620,7 @@
       "expected": {
         "externalResponse": {"status": 200, "authorizedPayloadUtf8": "source-one", "authorizedPayloadBytes": 10, "source2Present": false},
         "packageOrError": {"kind": "ContextPackage", "sourceRefs": ["source-1"], "expandedSourceCallCount": 0},
-        "evidence": {"unauthorizedEvidenceCount": 0, "unauthorizedContentBytes": 0, "outboundBytes": 10},
+        "evidence": {"unauthorizedEvidenceCount": 0, "unauthorizedContentBytes": 0, "missingContextFallbackCount": 0, "outboundBytes": 10},
         "businessEffects": {"wrongOrganizationEffectCount": 0, "mutationEffectCount": 0, "totalEffectsAfterScenario": 0},
         "io": {"providerCalls": 1, "indexCalls": 1, "modelCalls": 0, "actionCalls": 0}
       },
@@ -665,9 +665,9 @@
         "timing": "first controlled operation after observed revocation"
       },
       "expected": {
-        "externalResponse": {"status": 404, "code": "context_not_available", "body": {"kind": "generic_unavailable"}},
-        "packageOrError": {"kind": "error", "stalePackageReturned": false, "revokedResourceDetailCount": 0},
-        "evidence": {"unauthorizedEvidenceCount": 0, "unauthorizedContentBytes": 0, "outboundBytes": 0},
+        "externalResponse": {"status": 200, "body": {"kind": "request_not_available", "retryable": false}},
+        "packageOrError": {"kind": "request_not_available", "stalePackageReturned": false, "revokedResourceDetailCount": 0},
+        "evidence": {"unauthorizedEvidenceCount": 0, "unauthorizedContentBytes": 0, "missingContextFallbackCount": 0, "outboundBytes": 0},
         "businessEffects": {"wrongOrganizationEffectCount": 0, "mutationEffectCount": 0, "totalEffectsAfterScenario": 0},
         "io": {"providerCalls": 0, "indexCalls": 0, "modelCalls": 0, "actionCalls": 0}
       },
@@ -712,7 +712,7 @@
       "expected": {
         "externalResponse": {"status": 200, "authorizedPayloadUtf8": "A-safe", "authorizedPayloadBytes": 6, "orgBContentPresent": false},
         "packageOrError": {"kind": "ContextPackage", "evidenceRefs": ["candidate-a"], "deniedCandidateCountExposed": false},
-        "evidence": {"unauthorizedEvidenceCount": 0, "unauthorizedContentBytes": 0, "outboundBytes": 6},
+        "evidence": {"unauthorizedEvidenceCount": 0, "unauthorizedContentBytes": 0, "missingContextFallbackCount": 0, "outboundBytes": 6},
         "businessEffects": {"wrongOrganizationEffectCount": 0, "mutationEffectCount": 0, "totalEffectsAfterScenario": 0},
         "io": {"providerCalls": 1, "indexCalls": 1, "modelCalls": 0, "actionCalls": 0}
       },
@@ -762,9 +762,9 @@
         "phase": "closed-schema decoding before trusted context construction"
       },
       "expected": {
-        "externalResponse": {"status": 422, "code": "invalid_request", "fieldNamesEchoed": false, "missingContextFallbackCount": 0},
+        "externalResponse": {"status": 422, "code": "invalid_request", "fieldNamesEchoed": false},
         "packageOrError": {"kind": "error", "contextPackageCreated": false, "trustedContextConstructedFromBody": false},
-        "evidence": {"unauthorizedEvidenceCount": 0, "unauthorizedContentBytes": 0, "outboundBytes": 0},
+        "evidence": {"unauthorizedEvidenceCount": 0, "unauthorizedContentBytes": 0, "missingContextFallbackCount": 0, "outboundBytes": 0},
         "businessEffects": {"wrongOrganizationEffectCount": 0, "mutationEffectCount": 0, "totalEffectsAfterScenario": 0},
         "io": {"providerCalls": 0, "indexCalls": 0, "modelCalls": 0, "actionCalls": 0}
       },
@@ -809,9 +809,9 @@
         "durableComparison": "Compare mutation ledger before and after the replay."
       },
       "expected": {
-        "externalResponse": {"status": 404, "code": "work_not_available", "leaseClaimsEchoed": false, "missingContextFallbackCount": 0},
+        "externalResponse": {"status": 404, "code": "work_not_available", "leaseClaimsEchoed": false},
         "packageOrError": {"kind": "worker_rejection", "reasonVisibleToWorker": "generic_unavailable", "newReceiptCreated": false},
-        "evidence": {"unauthorizedEvidenceCount": 0, "unauthorizedContentBytes": 0, "outboundBytes": 0},
+        "evidence": {"unauthorizedEvidenceCount": 0, "unauthorizedContentBytes": 0, "missingContextFallbackCount": 0, "outboundBytes": 0},
         "businessEffects": {"wrongOrganizationEffectCount": 0, "mutationEffectCount": 0, "totalEffectsAfterScenario": 1},
         "io": {"providerCalls": 0, "indexCalls": 0, "modelCalls": 0, "actionCalls": 0}
       },
@@ -855,9 +855,9 @@
         "phase": "capability availability check before Provider invocation"
       },
       "expected": {
-        "externalResponse": {"status": 503, "code": "context_unavailable", "body": {"gap": "provider_capability_unavailable"}},
-        "packageOrError": {"kind": "error", "aclModeUsed": null, "weakFallbackCount": 0, "capabilityReportedAsPass": false},
-        "evidence": {"unauthorizedEvidenceCount": 0, "unauthorizedContentBytes": 0, "outboundBytes": 0},
+        "externalResponse": {"status": 200, "body": {"kind": "request_not_available", "retryable": false}},
+        "packageOrError": {"kind": "request_not_available", "aclModeUsed": null, "weakFallbackCount": 0, "capabilityReportedAsPass": false},
+        "evidence": {"unauthorizedEvidenceCount": 0, "unauthorizedContentBytes": 0, "missingContextFallbackCount": 0, "outboundBytes": 0},
         "businessEffects": {"wrongOrganizationEffectCount": 0, "mutationEffectCount": 0, "totalEffectsAfterScenario": 0},
         "io": {"providerCalls": 0, "indexCalls": 0, "modelCalls": 0, "actionCalls": 0}
       },
@@ -902,9 +902,9 @@
         "phase": "inactive-capability gate before source or blob I/O"
       },
       "expected": {
-        "externalResponse": {"status": 404, "code": "context_not_available", "body": {"kind": "generic_unavailable"}},
-        "packageOrError": {"kind": "error", "citationFieldsReturned": 0, "capabilityStatus": "unavailable", "capabilityReportedAsPass": false},
-        "evidence": {"unauthorizedEvidenceCount": 0, "unauthorizedContentBytes": 0, "outboundBytes": 0},
+        "externalResponse": {"status": 200, "body": {"kind": "citation_not_available"}},
+        "packageOrError": {"kind": "citation_not_available", "citationFieldsReturned": 0, "capabilityStatus": "unavailable", "capabilityReportedAsPass": false},
+        "evidence": {"unauthorizedEvidenceCount": 0, "unauthorizedContentBytes": 0, "missingContextFallbackCount": 0, "outboundBytes": 0},
         "businessEffects": {"wrongOrganizationEffectCount": 0, "mutationEffectCount": 0, "totalEffectsAfterScenario": 0},
         "io": {"providerCalls": 0, "indexCalls": 0, "modelCalls": 0, "actionCalls": 0}
       },
@@ -928,7 +928,7 @@
         "preconditions": [
           "member-a is authenticated in org-a but is denied resource-hidden.",
           "resource-missing does not exist in org-a.",
-          "The experiment freezes one canonical status, body, error code, and coarse timing bucket before either probe."
+          "The experiment freezes canonical status, body, relevant headers, domain outcome, and the documented per-run normalization allowlist before either probe; timing equality is deferred to the preregistered M5 gate."
         ],
         "trustedIdentity": {
           "organizationRef": "org-a",
@@ -945,12 +945,12 @@
       "operation": {
         "interface": "ContextRuntime.resolve",
         "request": "Acquire each probe independently",
-        "comparisonFields": ["status", "body", "errorCode", "timingBucket"]
+        "comparisonFields": ["status", "body", "headers", "domainOutcome"]
       },
       "expected": {
-        "externalResponse": {"status": 404, "code": "context_not_available", "body": {"kind": "generic_unavailable"}, "byteIdenticalAcrossProbes": true, "sameTimingBucket": true},
-        "packageOrError": {"kind": "error", "packageCount": 0, "deniedCountExposed": false, "existenceDetailCount": 0},
-        "evidence": {"unauthorizedEvidenceCount": 0, "unauthorizedContentBytes": 0, "outboundBytes": 0},
+        "externalResponse": {"status": 200, "body": {"kind": "resolved", "coverageReason": "no_authorized_evidence"}, "byteIdenticalAcrossProbes": true, "timingEqualityClaimed": false},
+        "packageOrError": {"kind": "ContextPackage", "packageCount": 2, "gap": "no_authorized_evidence", "deniedCountExposed": false, "existenceDetailCount": 0},
+        "evidence": {"unauthorizedEvidenceCount": 0, "unauthorizedContentBytes": 0, "missingContextFallbackCount": 0, "outboundBytes": 0},
         "businessEffects": {"wrongOrganizationEffectCount": 0, "mutationEffectCount": 0, "totalEffectsAfterScenario": 0},
         "io": {"providerCalls": 0, "indexCalls": 0, "modelCalls": 0, "actionCalls": 0}
       },
@@ -996,9 +996,9 @@
         "phase": "inactive-capability and capability-class gate before Sender I/O"
       },
       "expected": {
-        "externalResponse": {"status": 404, "code": "action_not_available", "body": {"kind": "generic_unavailable"}, "missingContextFallbackCount": 0},
+        "externalResponse": {"status": 404, "code": "action_not_available", "body": {"kind": "generic_unavailable"}},
         "packageOrError": {"kind": "action_rejection", "actionTicketCreated": false, "contextTicketConsumed": false, "capabilityReportedAsPass": false},
-        "evidence": {"unauthorizedEvidenceCount": 0, "unauthorizedContentBytes": 0, "outboundBytes": 0},
+        "evidence": {"unauthorizedEvidenceCount": 0, "unauthorizedContentBytes": 0, "missingContextFallbackCount": 0, "outboundBytes": 0},
         "businessEffects": {"wrongOrganizationEffectCount": 0, "mutationEffectCount": 0, "totalEffectsAfterScenario": 0},
         "io": {"providerCalls": 0, "indexCalls": 0, "modelCalls": 0, "actionCalls": 0}
       },

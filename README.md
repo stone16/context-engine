@@ -23,8 +23,9 @@ make build     # 构建 wheel 和 sdist
 make lint      # Ruff
 make typecheck # strict mypy
 make test      # 单元测试
+make catalog   # 安全目录静态测试与校验
 make smoke     # API / worker 进程 smoke
-make check     # build + lint + typecheck + test + smoke
+make check     # build + lint + typecheck + test + catalog + smoke
 ```
 
 本地启动 API：

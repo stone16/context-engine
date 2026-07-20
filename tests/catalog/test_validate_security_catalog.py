@@ -13,6 +13,7 @@ from typing import cast
 from scripts.validate_security_catalog import (
     CANONICAL_INVARIANT_IDS,
     DEFAULT_CATALOG_PATH,
+    DEFAULT_SCHEMA_PATH,
     CatalogValidationError,
     load_document,
     main,
@@ -27,6 +28,32 @@ HARD_ORACLE_NAMES = (
     "missing-context fallback",
 )
 
+CANONICAL_REQUIRED_MILESTONES = {
+    "TENANT-OWNERSHIP-001": ["M0", "M1"],
+    "TENANT-FK-002": ["M0", "M1"],
+    "RLS-FAIL-CLOSED-003": ["M0"],
+    "SCOPE-INTERSECTION-004": ["M0", "M1", "M5"],
+    "INDEX-NOT-AUTHORITY-005": ["M0", "M1", "M3"],
+    "REVOCATION-006": ["M1", "M2"],
+    "WORKER-LEASE-007": ["M1", "M3"],
+    "TRANSPORT-UNTRUSTED-008": ["M1", "M2"],
+    "NON-ENUMERATION-009": ["M1", "M5"],
+    "CITATION-AUTH-010": ["M2", "M3"],
+    "EGRESS-011": ["M2", "M5"],
+    "TRACE-REDACTION-012": ["M0", "M1"],
+    "ACTION-SEPARATION-014": ["M2"],
+    "CROSS-ORG-LEARN-015": ["M0", "M3"],
+    "RELEASE-OWNER-019": ["M0", "M3"],
+}
+
+RUNTIME_OUTCOMES = {
+    "ACCEPT-001": ("resolved", "ContextPackage"),
+    "ACCEPT-005": ("request_not_available", "request_not_available"),
+    "ACCEPT-009": ("request_not_available", "request_not_available"),
+    "ACCEPT-010": ("citation_not_available", "citation_not_available"),
+    "ACCEPT-011": ("resolved", "ContextPackage"),
+}
+
 
 def object_at(mapping: dict[str, object], *keys: str) -> dict[str, object]:
     """Return a nested object while keeping malformed test data type-safe."""
@@ -38,9 +65,7 @@ def object_at(mapping: dict[str, object], *keys: str) -> dict[str, object]:
     return cast(dict[str, object], current)
 
 
-def object_list_at(
-    mapping: dict[str, object], *keys: str
-) -> list[dict[str, object]]:
+def object_list_at(mapping: dict[str, object], *keys: str) -> list[dict[str, object]]:
     """Return a nested list of objects with runtime shape assertions."""
     current: object = mapping
     for key in keys:
@@ -54,6 +79,7 @@ def object_list_at(
 def make_catalog() -> dict[str, object]:
     invariants = []
     for number, invariant_id in enumerate(CANONICAL_INVARIANT_IDS, start=1):
+        required_milestones = CANONICAL_REQUIRED_MILESTONES[invariant_id]
         invariants.append(
             {
                 "id": invariant_id,
@@ -65,11 +91,11 @@ def make_catalog() -> dict[str, object]:
                 "hardOracleRefs": [HARD_ORACLE_NAMES[(number - 1) % 3]],
                 "applicability": {
                     "mode": "required",
-                    "applicableFrom": "M0",
+                    "applicableFrom": required_milestones[0],
                     "rationale": None,
                 },
                 "capabilityRef": "tenant-isolation",
-                "requiredMilestones": ["M0"],
+                "requiredMilestones": required_milestones,
                 "evidenceStatus": "accepted",
                 "expectedEvidence": {
                     "property": [f"PROP-{number:03d}"],
@@ -84,9 +110,32 @@ def make_catalog() -> dict[str, object]:
 
     fixtures = []
     for number in range(1, 13):
+        fixture_id = f"ACCEPT-{number:03d}"
+        external_response: dict[str, object] = {
+            "status": 404,
+            "body": "generic",
+        }
+        package_or_error: dict[str, object] = {
+            "kind": "error",
+            "code": "not_found",
+        }
+        operation: dict[str, object] = {"kind": "resolve"}
+        if fixture_id in RUNTIME_OUTCOMES:
+            body_kind, result_kind = RUNTIME_OUTCOMES[fixture_id]
+            body: dict[str, object] = {"kind": body_kind}
+            external_response = {"status": 200, "body": body}
+            package_or_error = {"kind": result_kind, "code": "domain_outcome"}
+            if fixture_id in {"ACCEPT-001", "ACCEPT-011"}:
+                body["coverageReason"] = "no_authorized_evidence"
+                package_or_error["gap"] = "no_authorized_evidence"
+            if fixture_id in {"ACCEPT-005", "ACCEPT-009"}:
+                body["retryable"] = False
+            if fixture_id == "ACCEPT-011":
+                external_response["timingEqualityClaimed"] = False
+                operation["comparisonFields"] = ["status", "body", "headers"]
         fixtures.append(
             {
-                "id": f"ACCEPT-{number:03d}",
+                "id": fixture_id,
                 "title": f"Acceptance fixture {number}",
                 "decisionStatus": "accepted",
                 "carrier": {
@@ -99,13 +148,14 @@ def make_catalog() -> dict[str, object]:
                     "trustedIdentity": {"kind": "authenticated_invocation"},
                 },
                 "adversarialMutation": {"kind": "cross_organization_reference"},
-                "operation": {"kind": "resolve"},
+                "operation": operation,
                 "expected": {
-                    "externalResponse": {"status": 404, "body": "generic"},
-                    "packageOrError": {"kind": "error", "code": "not_found"},
+                    "externalResponse": external_response,
+                    "packageOrError": package_or_error,
                     "evidence": {
                         "unauthorizedEvidenceCount": 0,
                         "unauthorizedContentBytes": 0,
+                        "missingContextFallbackCount": 0,
                         "outboundBytes": 0,
                     },
                     "businessEffects": {
@@ -295,11 +345,13 @@ def make_schema() -> dict[str, object]:
                                 "required": [
                                     "unauthorizedEvidenceCount",
                                     "unauthorizedContentBytes",
+                                    "missingContextFallbackCount",
                                     "outboundBytes",
                                 ],
                                 "properties": {
                                     "unauthorizedEvidenceCount": {},
                                     "unauthorizedContentBytes": {},
+                                    "missingContextFallbackCount": {},
                                     "outboundBytes": {},
                                 },
                             },
@@ -416,9 +468,7 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
         schema = make_schema()
         object_at(schema, "$defs", "invariant")["additionalProperties"] = True
         object_at(schema, "properties", "invariants")["type"] = "object"
-        object_at(schema, "$defs", "invariant", "properties")["id"] = {
-            "type": "string"
-        }
+        object_at(schema, "$defs", "invariant", "properties")["id"] = {"type": "string"}
 
         error = self.assert_catalog_error(
             make_catalog(),
@@ -611,9 +661,7 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
             )
 
             catalog = make_catalog()
-            object_at(catalog, "authority")["documentRefs"] = [
-                "docs/authority.md"
-            ]
+            object_at(catalog, "authority")["documentRefs"] = ["docs/authority.md"]
             for invariant in object_list_at(catalog, "invariants"):
                 invariant["authorityRefs"] = ["docs/authority.md#重复-标题"]
             for fixture in object_list_at(catalog, "fixtures"):
@@ -688,6 +736,86 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
         self.assertEqual(
             fixtures["ACCEPT-009"]["invariantRefs"],
             ["INDEX-NOT-AUTHORITY-005", "REVOCATION-006"],
+        )
+
+    def test_tracked_catalog_matches_runtime_outcome_and_timing_authority(
+        self,
+    ) -> None:
+        catalog = load_document(DEFAULT_CATALOG_PATH)
+        fixtures = {
+            fixture["id"]: fixture
+            for fixture in catalog["fixtures"]
+            if isinstance(fixture, dict)
+        }
+
+        for fixture_id, (body_kind, result_kind) in RUNTIME_OUTCOMES.items():
+            fixture = fixtures[fixture_id]
+            self.assertEqual(fixture["expected"]["externalResponse"]["status"], 200)
+            self.assertEqual(
+                fixture["expected"]["externalResponse"]["body"]["kind"],
+                body_kind,
+            )
+            self.assertEqual(fixture["expected"]["packageOrError"]["kind"], result_kind)
+
+        accept_011 = fixtures["ACCEPT-011"]
+        self.assertNotIn("sameTimingBucket", accept_011["expected"]["externalResponse"])
+        self.assertNotIn("timingBucket", accept_011["operation"]["comparisonFields"])
+        self.assertIs(
+            accept_011["expected"]["externalResponse"]["timingEqualityClaimed"],
+            False,
+        )
+        for fixture_id in ("ACCEPT-001", "ACCEPT-011"):
+            fixture = fixtures[fixture_id]
+            self.assertEqual(
+                fixture["expected"]["externalResponse"]["body"]["coverageReason"],
+                "no_authorized_evidence",
+            )
+            self.assertEqual(
+                fixture["expected"]["packageOrError"]["gap"],
+                "no_authorized_evidence",
+            )
+        for fixture_id in ("ACCEPT-005", "ACCEPT-009"):
+            self.assertIs(
+                fixtures[fixture_id]["expected"]["externalResponse"]["body"][
+                    "retryable"
+                ],
+                False,
+            )
+
+    def test_tracked_catalog_matches_required_milestone_authority(self) -> None:
+        catalog = load_document(DEFAULT_CATALOG_PATH)
+        for invariant in catalog["invariants"]:
+            invariant_id = invariant["id"]
+            expected = CANONICAL_REQUIRED_MILESTONES[invariant_id]
+            self.assertEqual(invariant["applicability"]["applicableFrom"], expected[0])
+            self.assertEqual(invariant["requiredMilestones"], expected)
+
+    def test_runtime_outcome_and_milestone_drift_are_rejected(self) -> None:
+        catalog = load_document(DEFAULT_CATALOG_PATH)
+        schema = load_document(DEFAULT_SCHEMA_PATH)
+        fixtures = object_list_at(catalog, "fixtures")
+        invariants = object_list_at(catalog, "invariants")
+        object_at(fixtures[0], "expected", "externalResponse")["status"] = 404
+        object_at(invariants[5], "applicability")["applicableFrom"] = "M0"
+        invariants[5]["requiredMilestones"] = ["M0", "M1"]
+
+        with self.assertRaises(CatalogValidationError) as raised:
+            validate_catalog(catalog, schema)
+
+        self.assertIn(
+            "fixtures[0].expected.externalResponse.status: must be 200 for "
+            "the canonical Runtime outcome",
+            raised.exception.errors,
+        )
+        self.assertIn(
+            "invariants[5].applicability.applicableFrom: must be 'M1' for "
+            "REVOCATION-006",
+            raised.exception.errors,
+        )
+        self.assertIn(
+            "invariants[5].requiredMilestones: must be the canonical sequence "
+            "['M1', 'M2'] for REVOCATION-006",
+            raised.exception.errors,
         )
 
     def test_cli_reads_json_compatible_yaml_and_prints_report(self) -> None:
@@ -834,6 +962,7 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
         fixtures = catalog["fixtures"]
         assert isinstance(fixtures, list)
         fixtures[0]["expected"]["evidence"]["unauthorizedEvidenceCount"] = 1
+        fixtures[0]["expected"]["evidence"]["missingContextFallbackCount"] = 1
         fixtures[0]["expected"]["businessEffects"]["wrongOrganizationEffectCount"] = 1
 
         error = self.assert_catalog_error(
@@ -842,6 +971,13 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
                 "fixtures[0].expected.evidence.unauthorizedEvidenceCount: "
                 "must be 0 for every acceptance fixture"
             ),
+        )
+        self.assertIn(
+            (
+                "fixtures[0].expected.evidence.missingContextFallbackCount: "
+                "must be 0 for every acceptance fixture"
+            ),
+            error.errors,
         )
         self.assertIn(
             (

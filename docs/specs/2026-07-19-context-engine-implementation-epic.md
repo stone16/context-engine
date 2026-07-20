@@ -54,10 +54,11 @@ Verified on 2026-07-19:
 | Roadmap | D0, M0-M7, parallel C1, L1, and P3 are defined. | `PLAN.md:77`, implementation design section 9 |
 | Product contract | The program PRD contains 100 user stories and implementation/testing decisions. | `docs/agents/prd-contextengine-implementation.md` |
 | Issue backlog | Before this document, no child issue draft was stored. This spec is the repository draft; no GitHub parent or child issue has been created or authorized. | this spec, `docs/agents/issue-tracker.md`, `DESIGN-BASELINE.md` |
-| Commands | Verified install, dev, build, test, lint, and report commands are not selected because no runnable implementation or dependency manifest exists. | `AGENTS.md` Commands section |
+| Commands | Verified install, build, lint, strict typecheck, unit-test, static security-catalog, process-smoke, and aggregate-check commands are exposed by the Makefile. | `Makefile`, `AGENTS.md` Commands section |
 
-The last two rows are deliberate D0 blockers. This spec makes the child backlog
-explicit, but it does not claim those blockers are closed.
+The issue-backlog row records the repository state when this spec was written.
+The command baseline is now active; this spec does not by itself claim that the
+remaining D0 evidence gates are closed.
 
 ### 1.3 Desired state
 
@@ -971,18 +972,19 @@ its `applicableFrom`, and its cache-key mutation cases. Only `PASS` can release
 that activated capability.
 
 `NON-ENUMERATION-009` has milestone-scoped proving cases. M1 must PASS
-deterministic status, body, error, shape, and count equivalence for missing,
-same-Organization denied, and cross-Organization refs. Its timing case has
-`applicableFrom: M5`; sample size, effect-size threshold, noise controls, and
-uncertainty method are preregistered before execution, and the case must PASS for
-E5.
+deterministic status, body, relevant headers, domain outcome, shape, and count
+equivalence for missing, same-Organization denied, and cross-Organization refs;
+M1 makes no timing-equivalence claim. Its timing case has `applicableFrom: M5`;
+sample size, effect-size threshold, noise controls, and uncertainty method are
+preregistered before execution, and the case must PASS for E5.
 
 The executable machine authority is `eval/catalogs/security-invariants.yaml`.
 Its schema is `eval/catalogs/security-catalog.schema.json`, and
 `python3 scripts/validate_security_catalog.py` checks the exact count, order,
 IDs, shape, and tracked document references. The catalog uses JSON-compatible
-YAML so the D0 validator can use the Python standard library while no dependency
-manifest exists. It uses `REVOCATION-006` and includes `RELEASE-OWNER-019`.
+YAML so the validator remains standard-library-only and deterministic in
+bootstrap and CI, independent of application dependencies. It uses
+`REVOCATION-006` and includes `RELEASE-OWNER-019`.
 
 The schema, rather than a duplicated prose example, owns the exact entry shape.
 At minimum it makes identity, purpose, threat/assets, deterministic and hard
@@ -1505,7 +1507,7 @@ authorization weakening.
 | `docs/agents/prd-contextengine-implementation.md` | Product intent, user stories, and program acceptance decisions. |
 | `DESIGN-BASELINE.md` | Candidate digest and D0 promotion checklist. |
 | `PLAN.md` | Public roadmap summary. |
-| `AGENTS.md` | Repository safety rails and future commands. |
+| `AGENTS.md` | Repository safety rails and verified commands. |
 
 Planned implementation directories are created only when their first owning work
 package begins: `engine/`, `adapters/`, `bot_delivery/`, `action_plane/`,
