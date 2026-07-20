@@ -13,7 +13,7 @@ typecheck:
 	uv run mypy
 
 test:
-	uv run pytest -q
+	uv run pytest -q tests/unit
 
 smoke:
 	uv run pytest -q tests/process

@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import threading
 from collections.abc import Sequence
 
 from engine import BUILD_IDENTIFIER
@@ -21,8 +22,11 @@ def run(*, test_mode: bool) -> int:
                 "job_behavior": "NOT_ACTIVE",
             },
             sort_keys=True,
-        )
+        ),
+        flush=True,
     )
+    if not test_mode:
+        threading.Event().wait()
     return 0
 
 

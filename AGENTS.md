@@ -59,7 +59,7 @@ make install   # sync the locked Python 3.13 environment
 make build     # build wheel and source distribution
 make lint      # Ruff
 make typecheck # strict mypy
-make test      # full test suite
+make test      # unit test suite
 make smoke     # API and worker process smoke suite
 make check     # all required repository checks
 ```

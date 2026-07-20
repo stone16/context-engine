@@ -30,26 +30,25 @@ class KernelDependencies:
     budget: KernelDependency
     provenance: KernelDependency
 
-    def validate(self) -> None:
-        expected = {
-            "policy": KernelDependency.POLICY,
-            "audit": KernelDependency.AUDIT,
-            "budget": KernelDependency.BUDGET,
-            "provenance": KernelDependency.PROVENANCE,
-        }
-        for field_name, expected_dependency in expected.items():
-            actual = getattr(self, field_name, None)
-            if actual is not expected_dependency:
-                raise RuntimeConfigurationError(
-                    f"mandatory kernel dependency is missing or invalid: {field_name}"
-                )
-
-
 class Runtime:
     """Construction seam for a sealed Runtime whose delivery API is not active."""
 
     def __init__(self, dependencies: KernelDependencies) -> None:
-        dependencies.validate()
+        if type(dependencies) is not KernelDependencies:
+            raise RuntimeConfigurationError(
+                "runtime dependencies must be KernelDependencies"
+            )
+        expected = (
+            ("policy", KernelDependency.POLICY),
+            ("audit", KernelDependency.AUDIT),
+            ("budget", KernelDependency.BUDGET),
+            ("provenance", KernelDependency.PROVENANCE),
+        )
+        for field_name, expected_dependency in expected:
+            if getattr(dependencies, field_name) is not expected_dependency:
+                raise RuntimeConfigurationError(
+                    f"mandatory kernel dependency is missing or invalid: {field_name}"
+                )
         self._dependencies = dependencies
 
 

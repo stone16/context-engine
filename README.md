@@ -22,7 +22,7 @@ make install   # uv sync --frozen
 make build     # 构建 wheel 和 sdist
 make lint      # Ruff
 make typecheck # strict mypy
-make test      # 全部测试
+make test      # 单元测试
 make smoke     # API / worker 进程 smoke
 make check     # build + lint + typecheck + test + smoke
 ```
@@ -31,8 +31,10 @@ make check     # build + lint + typecheck + test + smoke
 
 ```bash
 uv run context-engine-api
-curl http://127.0.0.1:8000/health
 ```
+
+监听地址和端口可通过 `context-engine-api --help` 中记录的参数覆盖；进程启动后
+在所配置地址请求 `/health`。
 
 确定性运行 worker 的 no-op 测试生命周期：
 

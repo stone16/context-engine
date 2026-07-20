@@ -33,3 +33,28 @@ def test_runtime_rejects_a_dependency_in_the_wrong_slot() -> None:
 
     with pytest.raises(RuntimeConfigurationError, match="invalid: policy"):
         Runtime(invalid_dependencies)
+
+
+def test_runtime_rejects_a_subclass_that_overrides_validation() -> None:
+    class BypassDependencies(KernelDependencies):
+        def validate(self) -> None:
+            pass
+
+    dependencies = BypassDependencies(
+        policy=None,  # type: ignore[arg-type]
+        audit=None,  # type: ignore[arg-type]
+        budget=None,  # type: ignore[arg-type]
+        provenance=None,  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(RuntimeConfigurationError, match="must be KernelDependencies"):
+        Runtime(dependencies)
+
+
+def test_runtime_rejects_a_duck_typed_validation_bypass() -> None:
+    class BypassDependencies:
+        def validate(self) -> None:
+            pass
+
+    with pytest.raises(RuntimeConfigurationError, match="must be KernelDependencies"):
+        Runtime(BypassDependencies())  # type: ignore[arg-type]

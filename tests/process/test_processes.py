@@ -1,7 +1,6 @@
 import json
 import socket
 import subprocess
-import sys
 import time
 from contextlib import closing
 from pathlib import Path
@@ -22,10 +21,7 @@ def test_api_boots_and_reports_readiness() -> None:
     port = _unused_port()
     process = subprocess.Popen(
         [
-            sys.executable,
-            "-m",
-            "uvicorn",
-            "adapters.http.app:app",
+            "context-engine-api",
             "--host",
             "127.0.0.1",
             "--port",
@@ -47,7 +43,8 @@ def test_api_boots_and_reports_readiness() -> None:
                 break
             except OSError:
                 if process.poll() is not None or time.monotonic() >= deadline:
-                    output = process.stdout.read() if process.stdout else ""
+                    process.terminate()
+                    output, _ = process.communicate(timeout=5)
                     raise AssertionError(
                         f"API failed to become ready:\n{output}"
                     ) from None
@@ -66,7 +63,7 @@ def test_api_boots_and_reports_readiness() -> None:
 
 def test_worker_completes_test_lifecycle() -> None:
     completed = subprocess.run(
-        [sys.executable, "-m", "engine.supply_worker_main", "--test-mode"],
+        ["context-engine-worker", "--test-mode"],
         cwd=ROOT,
         check=True,
         capture_output=True,
@@ -75,6 +72,29 @@ def test_worker_completes_test_lifecycle() -> None:
 
     assert json.loads(completed.stdout) == {
         "status": "test-complete",
+        "service": "context-engine-worker",
+        "version": BUILD_IDENTIFIER,
+        "job_behavior": "NOT_ACTIVE",
+    }
+
+
+def test_worker_stays_alive_until_terminated_in_normal_mode() -> None:
+    process = subprocess.Popen(
+        ["context-engine-worker"],
+        cwd=ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    try:
+        time.sleep(0.2)
+        assert process.poll() is None
+    finally:
+        process.terminate()
+        output, _ = process.communicate(timeout=5)
+
+    assert json.loads(output) == {
+        "status": "ready",
         "service": "context-engine-worker",
         "version": BUILD_IDENTIFIER,
         "job_behavior": "NOT_ACTIVE",
