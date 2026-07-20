@@ -6,10 +6,16 @@ from engine.runtime.construction import (
     Runtime,
     RuntimeConfigurationError,
 )
+from engine.runtime.invocation import (
+    AuthenticatedInvocation,
+    InvocationConstructionProvenance,
+)
 
 __all__ = [
     "KernelDependencies",
     "KernelDependency",
+    "AuthenticatedInvocation",
+    "InvocationConstructionProvenance",
     "Runtime",
     "RuntimeConfigurationError",
 ]
