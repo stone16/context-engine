@@ -4,7 +4,10 @@ import subprocess
 import time
 from contextlib import closing
 from pathlib import Path
-from urllib.request import urlopen
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
+
+import pytest
 
 from engine import BUILD_IDENTIFIER
 
@@ -55,6 +58,22 @@ def test_api_boots_and_reports_readiness() -> None:
             "service": "context-engine-api",
             "version": BUILD_IDENTIFIER,
             "runtime_delivery": "NOT_ACTIVE",
+        }
+
+        request = Request(
+            f"http://127.0.0.1:{port}/v1/context:resolve",
+            data=b'{"kind":"acquire","need":{"query":"probe"}}',
+            headers={
+                "Authorization": "Bearer unconfigured-production-credential",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        with pytest.raises(HTTPError) as authentication_error:
+            urlopen(request, timeout=1)
+        assert authentication_error.value.code == 401
+        assert json.load(authentication_error.value) == {
+            "code": "authentication_failed"
         }
     finally:
         process.terminate()

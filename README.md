@@ -11,8 +11,10 @@
 **当前状态**:M0 工程骨架已启动。API 和独立 Supply worker 可运行，
 [`compose.yaml`](./compose.yaml) 固定的真实 PostgreSQL + pgvector 测试底座可复现；
 Organization 安全根与一张代表性 tenant-owned 表的非 owner FORCE RLS 隔离切片
-已验证。Runtime delivery、完整 ActorContext / Membership 以及 worker job 行为仍为
-`NOT_ACTIVE`。整体计划见 [PLAN.md](./PLAN.md)。
+已验证；HTTP 已能用确定性测试认证构造 nominal `AuthenticatedInvocation`，并用
+closed body 与通用错误证明 caller 不能注入 trusted identity。默认应用仍拒绝全部
+credential；生产认证、Runtime delivery、完整 ActorContext / Membership 以及
+worker job 行为仍为 `NOT_ACTIVE`。整体计划见 [PLAN.md](./PLAN.md)。
 
 ## 开发命令
 
@@ -77,6 +79,22 @@ PostgreSQL/pgvector、
 角色隔离、迁移、连接池清理，以及 Organization + `organization_record` 的
 事务级租户上下文、复合所有权和 FORCE RLS；它不声明 Membership、完整
 ActorContext、Runtime 授权或 ContextPackage 交付已经实现。
+
+### 当前 HTTP trust-boundary seam
+
+`POST /v1/context:resolve` 当前只用于验证 authenticated HTTP ingress：测试可注入
+一个把 opaque credential 映射为 verified transport facts 的 authenticator，并在
+`AuthenticatedInvocation` 构造后用 observer 检查 nominal trusted value。有效测试
+请求在该 seam 停止且不返回 ContextPackage；模块级默认应用使用 reject-all
+authenticator，因此尚不接受任何 credential。
+
+请求体仅允许 `kind: "acquire"` 和 `need.query`，每层 unknown field、重复 JSON key
+以及重复 singleton security/transport header 都 fail closed；pre-auth body bytes 和
+JSON nesting 由 `adapters/http/transport.py` 的 versioned profile 限制。非法
+JSON/media type、
+认证失败和 closed-schema 失败分别使用 OpenAPI 记录的通用 400、401 和 422 响应，
+不会回显 tenant、Principal、Membership 或注入字段。生产 OAuth/JWT、Membership
+查询、授权、Provider/index 工作与 Package delivery 不属于这个已激活 seam。
 
 本次公开候选 bundle 包含实现权威、ADR、安全契约、PRD、Tech Spec
 与四个公开参考仓的证据基线；经维护者批准并提交后，它们将与实现一同
