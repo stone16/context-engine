@@ -207,8 +207,18 @@ def test_role_guard_passes_runtime_and_rejects_owner_credentials(
         migration_engine.dispose()
 
 
-def test_role_guard_rejects_unrelated_set_capable_membership(
+@pytest.mark.parametrize(
+    ("membership_options", "inherits_probe_privilege"),
+    [
+        ("WITH SET TRUE, INHERIT FALSE, ADMIN FALSE", False),
+        ("WITH SET FALSE, INHERIT TRUE, ADMIN FALSE", True),
+        ("WITH SET FALSE, INHERIT FALSE, ADMIN TRUE", False),
+    ],
+)
+def test_role_guard_rejects_every_unrelated_role_membership(
     guarded_runtime_engine: Engine,
+    membership_options: str,
+    inherits_probe_privilege: bool,
 ) -> None:
     with psycopg.connect(
         host="127.0.0.1",
@@ -222,18 +232,33 @@ def test_role_guard_rejects_unrelated_set_capable_membership(
             "CREATE ROLE context_engine_guard_probe NOLOGIN NOSUPERUSER"
         )
         bootstrap_connection.execute(
-            f"GRANT context_engine_guard_probe TO {RUNTIME_ROLE} WITH SET TRUE"
+            "GRANT SELECT ON public.alembic_version TO context_engine_guard_probe"
+        )
+        bootstrap_connection.execute(
+            f"GRANT context_engine_guard_probe TO {RUNTIME_ROLE} "
+            f"{membership_options}"
         )
         bootstrap_connection.commit()
         try:
+            with guarded_runtime_engine.connect() as connection:
+                assert connection.execute(
+                    text(
+                        "SELECT has_table_privilege("
+                        "current_user, 'public.alembic_version', 'SELECT')"
+                    )
+                ).scalar_one() is inherits_probe_privilege
             with (
                 guarded_runtime_engine.connect() as connection,
-                pytest.raises(AssertionError, match="set_capable_memberships"),
+                pytest.raises(AssertionError, match="role_memberships"),
             ):
                 assert_runtime_role(connection)
         finally:
             bootstrap_connection.execute(
                 f"REVOKE context_engine_guard_probe FROM {RUNTIME_ROLE}"
+            )
+            bootstrap_connection.execute(
+                "REVOKE SELECT ON public.alembic_version "
+                "FROM context_engine_guard_probe"
             )
             bootstrap_connection.execute("DROP ROLE context_engine_guard_probe")
             bootstrap_connection.commit()

@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 readonly ROOT_DIR
 readonly STATE_DIR="$ROOT_DIR/.context-engine"
 readonly ENV_FILE="$STATE_DIR/database.env"
+readonly LEGACY_PROJECT_FILE="$STATE_DIR/compose-project"
 readonly COMPOSE_FILE="$ROOT_DIR/compose.yaml"
 COMPOSE_PROJECT=''
 
@@ -94,6 +95,55 @@ generate_environment() {
     exit 1
   fi
   chmod 600 "$ENV_FILE"
+  migrate_legacy_project_identity
+}
+
+read_embedded_project_identity() {
+  local variable_name
+  local variable_value
+  while IFS='=' read -r variable_name variable_value; do
+    if [[ "$variable_name" == 'CONTEXT_ENGINE_COMPOSE_PROJECT' ]]; then
+      printf '%s\n' "$variable_value"
+      return 0
+    fi
+  done <"$ENV_FILE"
+  return 1
+}
+
+migrate_legacy_project_identity() {
+  if read_embedded_project_identity >/dev/null; then
+    return
+  fi
+  if [[ ! -e "$LEGACY_PROJECT_FILE" && ! -L "$LEGACY_PROJECT_FILE" ]]; then
+    return
+  fi
+  if [[ -L "$LEGACY_PROJECT_FILE" || ! -f "$LEGACY_PROJECT_FILE" || \
+        ! -O "$LEGACY_PROJECT_FILE" ]]; then
+    printf 'legacy Compose project identity must be a current-user-owned regular file: %s\n' \
+      "$LEGACY_PROJECT_FILE" >&2
+    exit 1
+  fi
+
+  local legacy_project
+  legacy_project="$(<"$LEGACY_PROJECT_FILE")"
+  if [[ ! "$legacy_project" =~ ^context-engine-[0-9a-f]{16}$ ]]; then
+    printf 'legacy Compose project identity failed its generated-value contract\n' >&2
+    exit 1
+  fi
+
+  local migration_file
+  migration_file="$(mktemp "$STATE_DIR/database.env.migrate.XXXXXX")"
+  trap 'rm -f "$migration_file"' EXIT
+  (
+    umask 077
+    while IFS= read -r environment_line || [[ -n "$environment_line" ]]; do
+      printf '%s\n' "$environment_line"
+    done <"$ENV_FILE"
+    printf 'CONTEXT_ENGINE_COMPOSE_PROJECT=%s\n' "$legacy_project"
+  ) >"$migration_file"
+  chmod 600 "$migration_file"
+  mv "$migration_file" "$ENV_FILE"
+  trap - EXIT
 }
 
 load_environment() {

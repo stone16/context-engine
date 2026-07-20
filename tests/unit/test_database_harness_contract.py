@@ -82,14 +82,13 @@ def test_runtime_role_guard_checks_every_role_escalation_attribute(
     assert f'"{guard_alias}": False' in guard
 
 
-def test_runtime_role_guard_rejects_every_set_capable_membership() -> None:
+def test_runtime_role_guard_rejects_every_membership() -> None:
     guard = repository_text("engine/persistence/role_guard.py")
 
     assert "FROM pg_auth_members AS membership" in guard
     assert "membership.member = role.oid" in guard
-    assert "membership.set_option" in guard
-    assert "AS has_no_set_capable_memberships" in guard
-    assert '"has_no_set_capable_memberships": True' in guard
+    assert "AS has_no_role_memberships" in guard
+    assert '"has_no_role_memberships": True' in guard
 
 
 def test_ci_runs_the_same_make_database_contract_as_local() -> None:

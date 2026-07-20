@@ -150,3 +150,30 @@ def test_concurrent_first_use_converges_on_one_persisted_compose_project(
     )
     assert len(projects) == 2
     assert set(projects) == {persisted_project}
+
+
+def test_legacy_two_file_state_migrates_without_changing_project_identity(
+    tmp_path: Path,
+) -> None:
+    stub_directory = tmp_path / "bin"
+    stub_directory.mkdir()
+    _stub_harness_dependencies(stub_directory)
+    checkout = tmp_path / "checkout"
+    project, _ = _run_stubbed_harness(checkout, stub_directory)
+    environment_path = checkout / ".context-engine/database.env"
+    legacy_environment = "\n".join(
+        line
+        for line in environment_path.read_text(encoding="utf-8").splitlines()
+        if not line.startswith("CONTEXT_ENGINE_COMPOSE_PROJECT=")
+    )
+    environment_path.write_text(f"{legacy_environment}\n", encoding="utf-8")
+    environment_path.chmod(0o600)
+    project_path = checkout / ".context-engine/compose-project"
+    project_path.write_text(f"{project}\n", encoding="utf-8")
+    project_path.chmod(0o600)
+
+    migrated_project, command = _run_stubbed_harness(checkout, stub_directory)
+
+    assert migrated_project == project
+    assert f"--project-name {project}" in command
+    assert project_path.read_text(encoding="utf-8").strip() == project
