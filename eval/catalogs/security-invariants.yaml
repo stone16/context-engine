@@ -242,7 +242,7 @@
       "expectedEvidence": {
         "property": ["PROP-TRANSPORT-UNTRUSTED-008"],
         "postgres": ["PG-TRANSPORT-UNTRUSTED-008"],
-        "runtimeOrDelivery": ["AUTH-002", "AUTH-009", "DELIV-001", "DELIV-002", "RUN-012"]
+        "runtimeOrDelivery": ["AUTH-002", "AUTH-009", "DELIV-001", "DELIV-002", "DELIV-003", "DELIV-004", "RUN-012"]
       },
       "authorityRefs": [
         "docs/design/2026-07-18-context-engine-implementation-design.md#21-contextcontrol",

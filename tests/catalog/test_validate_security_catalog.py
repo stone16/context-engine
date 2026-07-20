@@ -8,7 +8,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 from scripts.validate_security_catalog import (
     ACL_PROOF_CASE_IDS,
@@ -242,6 +242,23 @@ def make_catalog() -> dict[str, object]:
                 for case_id in case_ids
             ]
         if fixture_id in {"ACCEPT-009", "ACCEPT-012"}:
+            tracked_catalog = load_document(DEFAULT_CATALOG_PATH)
+            tracked_oracles: dict[str, str] = {}
+            for tracked_fixture in cast(
+                list[dict[str, Any]], tracked_catalog["fixtures"]
+            ):
+                if tracked_fixture["id"] not in {"ACCEPT-009", "ACCEPT-012"}:
+                    continue
+                tracked_cases = cast(
+                    list[dict[str, Any]],
+                    tracked_fixture["adversarialMutation"]["parameterizedCases"],
+                )
+                tracked_oracles.update(
+                    {
+                        cast(str, case["id"]): cast(str, case["activatedOracle"])
+                        for case in tracked_cases
+                    }
+                )
             derived_case_ids = (
                 ACL_PROOF_CASE_IDS
                 if fixture_id == "ACCEPT-009"
@@ -263,10 +280,7 @@ def make_catalog() -> dict[str, object]:
                     "expectedNewDurableEffects": 0,
                     "expectedWrongOrganizationEffects": 0,
                     "expectedContentWorkCalls": 0,
-                    "activatedOracle": (
-                        "The activated carrier preserves the named "
-                        "fail-closed contract."
-                    ),
+                    "activatedOracle": tracked_oracles[case_id],
                 }
                 for case_id in derived_case_ids
             ]
@@ -602,18 +616,28 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
         )
 
     def test_schema_must_freeze_nested_shapes_and_canonical_ids(self) -> None:
-        schema = make_schema()
+        schema = load_document(DEFAULT_SCHEMA_PATH)
         object_at(schema, "$defs", "invariant")["additionalProperties"] = True
         object_at(schema, "properties", "invariants")["type"] = "object"
         object_at(schema, "$defs", "invariant", "properties")["id"] = {"type": "string"}
+        object_at(schema, "$defs", "parameterizedCase")["additionalProperties"] = True
+        object_at(schema, "$defs", "parameterizedCase")["required"] = ["id"]
 
         error = self.assert_catalog_error(
-            make_catalog(),
+            load_document(DEFAULT_CATALOG_PATH),
             "schema.properties.invariants.type: must be 'array'",
             schema,
         )
         self.assertIn(
             "schema.invariants.items.additionalProperties: must be false",
+            error.errors,
+        )
+        self.assertIn(
+            "schema.$defs.parameterizedCase.additionalProperties: must be false",
+            error.errors,
+        )
+        self.assertIn(
+            "schema.$defs.parameterizedCase.required: must declare 'mutation'",
             error.errors,
         )
         self.assertIn(
@@ -1121,10 +1145,18 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
         ]
         assert isinstance(revocation_evidence, list)
         revocation_evidence.remove("PROV-019")
+        transport_evidence = invariants["TRANSPORT-UNTRUSTED-008"]["expectedEvidence"][
+            "runtimeOrDelivery"
+        ]
+        assert isinstance(transport_evidence, list)
+        self.assertIn("DELIV-004", transport_evidence)
+        transport_evidence.remove("DELIV-004")
         acl_cases = object_list_at(
             fixtures[8], "adversarialMutation", "parameterizedCases"
         )
         del acl_cases[0]["expectedStatus"]
+        acl_cases[1]["mutation"] = None
+        acl_cases[2]["activatedOracle"] = "pass"
 
         with self.assertRaises(CatalogValidationError) as raised:
             validate_catalog(catalog, schema)
@@ -1132,6 +1164,11 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
         self.assertIn(
             "invariants[5].expectedEvidence.runtimeOrDelivery: must preserve "
             "absorbed derived case 'PROV-019' for REVOCATION-006",
+            raised.exception.errors,
+        )
+        self.assertIn(
+            "invariants[7].expectedEvidence.runtimeOrDelivery: must preserve "
+            "absorbed derived case 'DELIV-004' for TRANSPORT-UNTRUSTED-008",
             raised.exception.errors,
         )
         self.assertIn(
@@ -1144,6 +1181,17 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
                 error.endswith(".expectedStatus: is required by the schema")
                 for error in raised.exception.errors
             )
+        )
+        self.assertIn(
+            "fixtures[8].adversarialMutation.parameterizedCases[1].mutation: "
+            "must be a non-empty string or a non-negative integer",
+            raised.exception.errors,
+        )
+        self.assertIn(
+            "fixtures[8].adversarialMutation.parameterizedCases[2]."
+            "activatedOracle: must preserve the canonical activated oracle "
+            "for PROV-015",
+            raised.exception.errors,
         )
 
     def test_runtime_outcome_and_milestone_drift_are_rejected(self) -> None:

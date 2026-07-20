@@ -8,6 +8,7 @@ has no dependency on an application environment or a third-party YAML parser.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import html
 import json
 import re
@@ -110,6 +111,15 @@ BUSINESS_EFFECT_FIELDS = (
     "totalEffectsAfterScenario",
 )
 IO_FIELDS = ("providerCalls", "indexCalls", "modelCalls", "actionCalls")
+PARAMETERIZED_CASE_FIELDS = (
+    "id",
+    "mutation",
+    "expectedStatus",
+    "expectedOutcome",
+    "expectedNewDurableEffects",
+    "expectedWrongOrganizationEffects",
+    "expectedContentWorkCalls",
+)
 
 CANONICAL_REQUIRED_MILESTONES: dict[str, tuple[str, ...]] = {
     "TENANT-OWNERSHIP-001": ("M0", "M1"),
@@ -201,6 +211,28 @@ WORKER_LEASE_CASE_OUTCOME = (404, "work_not_available")
 ACL_PROOF_CASE_OUTCOME = (200, "request_not_available")
 AUDIENCE_ACTION_CASE_OUTCOME = (404, "action_not_available")
 
+CANONICAL_ACTIVATED_ORACLE_DIGESTS: dict[str, str] = {
+    "PROV-013": "597d1b8511d430398f0de6982df350a6158ef57135b33eb1636b19d57222e7f6",
+    "PROV-014": "105e5e581bd363375e86c098f3bcded295024d91f380e7d3221545c5b5877bdd",
+    "PROV-015": "b34bfee66ab61a1a187182d8137412151c0f52b1c60ba030febecf0af9b2aa24",
+    "PROV-018": "f39c044b3475f536c990eae3c78c422b08080c134ec03c9eeffbd1aa31de01f4",
+    "PROV-019": "933086bc50969a6c04dfed9b46d3509e25e815bf58d5c025dfde298578d05698",
+    "AUTH-010": "ee7342e4fa1b5a5f43337b43e3dfd0a0b1a6065cdefcaf610eabc48397767dfb",
+    "RUN-014": "5edc224d7cf4d7b44773f8c0b5a8d6065a83113fb0361dd799239128c22e4393",
+    "EGR-003": "a7e1b84b711534fe9a8bf2f399d117f508f357aea498f07e562e6bdd027e4822",
+    "EGR-005": "dfce84151968132f0df53f9261981c8e1bb9d3bbffe9920d95cc106649ceda25",
+    "EGR-006": "50196c9621df31c1c7e4b86613da509d64d5a81c3aae55d3bd51e88582d187f6",
+    "ACTION-001": "bfc12ae00de249b37531f6521a49979e2d43dab1e3e229426e1f3a5e7cfb3ee9",
+    "ACTION-002": "68d07a06d265d0f3e833db78521eac5b1e2e0f90229f800e6291e2210710338e",
+    "ACTION-003": "9f18bb396da1b6ff513366704c8b0d4ed913430cb54a153e9d6a56a92bf3061e",
+    "ACTION-004": "f9140ac2129845d1bb582f9fa84eed77ace2ce1d840ae0abddfa209d4d4a7fae",
+    "ACTION-005": "a285bc30ba4b55755c17e565d6a40d0fdb900f952b5b91fe9efbdad36ffbfb09",
+    "ACTION-006": "f1701a889c9b0613e75eda58cf4fb129ab5135d39cc352b079c6932f943df4d9",
+    "ACTION-007": "3e1acc8a53d43f00f5214ab5c339b685dc039cb5a2a4d38f128c9ff94888cc57",
+    "ACTION-008": "a62b4872153da75ad63b2f9678efa4c38250e2464c82f3ee15d55f33545f007a",
+    "ACTION-009": "9ea27dea249b98198811ff1bfffa1e5307d59f84bea8e31050c5e2ea0b3528ce",
+}
+
 REQUIRED_RUNTIME_EVIDENCE: dict[str, tuple[str, ...]] = {
     "SCOPE-INTERSECTION-004": ("AUTH-010", "RUN-014"),
     "INDEX-NOT-AUTHORITY-005": (
@@ -219,6 +251,12 @@ REQUIRED_RUNTIME_EVIDENCE: dict[str, tuple[str, ...]] = {
         "PROV-018",
         "PROV-019",
         "PROV-020",
+    ),
+    "TRANSPORT-UNTRUSTED-008": (
+        "DELIV-001",
+        "DELIV-002",
+        "DELIV-003",
+        "DELIV-004",
     ),
     "EGRESS-011": ("EGR-003", "EGR-005", "EGR-006", "RUN-014"),
     "ACTION-SEPARATION-014": tuple(f"ACTION-{number:03d}" for number in range(1, 10)),
@@ -605,11 +643,31 @@ def _validate_parameterized_case_ids(
                         f"{path}.parameterizedCases[{index}].expectedOutcome",
                         f"must be {expected_outcome!r} for {case_id}",
                     )
-        if require_activated_oracle:
-            collector.require_nonempty_string(
-                case.get("activatedOracle"),
-                f"{path}.parameterizedCases[{index}].activatedOracle",
+        mutation_value = case.get("mutation")
+        mutation_path = f"{path}.parameterizedCases[{index}].mutation"
+        if isinstance(mutation_value, str):
+            collector.require_nonempty_string(mutation_value, mutation_path)
+        elif (
+            isinstance(mutation_value, bool)
+            or not isinstance(mutation_value, int)
+            or mutation_value < 0
+        ):
+            collector.add(
+                mutation_path,
+                "must be a non-empty string or a non-negative integer",
             )
+        if require_activated_oracle:
+            oracle_path = f"{path}.parameterizedCases[{index}].activatedOracle"
+            oracle = case.get("activatedOracle")
+            if collector.require_nonempty_string(oracle, oracle_path):
+                assert isinstance(oracle, str)
+                canonical_digest = CANONICAL_ACTIVATED_ORACLE_DIGESTS.get(case_id)
+                oracle_digest = hashlib.sha256(oracle.encode("utf-8")).hexdigest()
+                if canonical_digest is not None and oracle_digest != canonical_digest:
+                    collector.add(
+                        oracle_path,
+                        f"must preserve the canonical activated oracle for {case_id}",
+                    )
         for field in (
             "expectedNewDurableEffects",
             "expectedWrongOrganizationEffects",
@@ -1477,6 +1535,7 @@ def _validate_schema(
                 "bypassAuthorization",
             ),
             "mutatedClaim": (),
+            "parameterizedCase": PARAMETERIZED_CASE_FIELDS,
             "operation": ("interface", "request"),
             "externalResponse": ("status",),
             "responseBody": (),

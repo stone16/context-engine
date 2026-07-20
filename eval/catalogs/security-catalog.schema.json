@@ -475,7 +475,12 @@
       "properties": {
         "id": {"$ref": "#/$defs/nonEmptyString"},
         "claim": {"$ref": "#/$defs/nonEmptyString"},
-        "mutation": {},
+        "mutation": {
+          "type": ["string", "integer"],
+          "minLength": 1,
+          "pattern": "\\S",
+          "minimum": 0
+        },
         "expectedStatus": {"type": "integer", "minimum": 100, "maximum": 599},
         "expectedOutcome": {"$ref": "#/$defs/nonEmptyString"},
         "expectedNewDurableEffects": {"type": "integer", "const": 0},
