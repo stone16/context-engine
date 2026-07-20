@@ -31,12 +31,17 @@ class VerifiedAuthenticationContext:
             self.authenticated_application_ref,
             self.authentication_binding_ref,
         )
-        if any(not value or value.isspace() for value in required_refs):
+        if any(
+            type(value) is not str or not value or value.isspace()
+            for value in required_refs
+        ):
             raise InvalidAuthenticationContext(
                 "verified authentication refs must be non-empty"
             )
         if self.membership_ref is not None and (
-            not self.membership_ref or self.membership_ref.isspace()
+            type(self.membership_ref) is not str
+            or not self.membership_ref
+            or self.membership_ref.isspace()
         ):
             raise InvalidAuthenticationContext(
                 "verified membership ref must be non-empty"

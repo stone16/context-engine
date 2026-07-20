@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import FrozenInstanceError
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from fastapi import FastAPI
@@ -62,6 +62,20 @@ class InvalidClaimsAuthenticator:
         return VerifiedAuthenticationContext(
             organization_ref="organization-secret-malformed",
             principal_ref=" ",
+            membership_ref="membership-from-auth",
+            agent_version_ref="agent-version-from-auth",
+            authenticated_application_ref="application-from-auth",
+            authentication_binding_ref="binding-from-auth",
+        )
+
+
+class InvalidClaimTypeAuthenticator:
+    """Test double for an untyped claim that cannot be a trusted ref."""
+
+    def authenticate(self, opaque_credential: str) -> VerifiedAuthenticationContext:
+        return VerifiedAuthenticationContext(
+            organization_ref=cast(Any, 42),
+            principal_ref="principal-from-auth",
             membership_ref="membership-from-auth",
             agent_version_ref="agent-version-from-auth",
             authenticated_application_ref="application-from-auth",
@@ -166,7 +180,11 @@ def test_authentication_failures_are_generic_and_call_no_domain_seam(
 
 @pytest.mark.parametrize(
     "authenticator",
-    [InvalidResultAuthenticator(), InvalidClaimsAuthenticator()],
+    [
+        InvalidResultAuthenticator(),
+        InvalidClaimsAuthenticator(),
+        InvalidClaimTypeAuthenticator(),
+    ],
 )
 def test_invalid_authenticator_output_is_a_generic_authentication_failure(
     authenticator: Any,
@@ -189,6 +207,35 @@ def test_invalid_authenticator_output_is_a_generic_authentication_failure(
     assert response.content == b'{"code":"authentication_failed"}'
     assert "organization-secret-malformed" not in response.text
     assert spy.invocations == []
+
+
+@pytest.mark.parametrize(
+    ("field_name", "field_value"),
+    [
+        ("organization_ref", 42),
+        ("principal_ref", True),
+        ("membership_ref", []),
+        ("agent_version_ref", {}),
+        ("authenticated_application_ref", object()),
+        ("authentication_binding_ref", 3.14),
+    ],
+)
+def test_verified_authentication_context_rejects_non_string_refs(
+    field_name: str,
+    field_value: object,
+) -> None:
+    claims: dict[str, Any] = {
+        "organization_ref": "organization-from-auth",
+        "principal_ref": "principal-from-auth",
+        "membership_ref": "membership-from-auth",
+        "agent_version_ref": "agent-version-from-auth",
+        "authenticated_application_ref": "application-from-auth",
+        "authentication_binding_ref": "binding-from-auth",
+    }
+    claims[field_name] = field_value
+
+    with pytest.raises(ValueError, match="verified"):
+        VerifiedAuthenticationContext(**claims)
 
 
 @pytest.mark.parametrize(
