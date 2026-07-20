@@ -13,6 +13,7 @@ from adapters.http.authentication import (
     AuthenticationRejected,
     VerifiedAuthenticationContext,
 )
+from adapters.http.transport import HttpTransportProfile
 from engine.runtime import (
     AuthenticatedInvocation,
     InvocationConstructionProvenance,
@@ -372,6 +373,228 @@ def test_invalid_utf8_json_uses_the_documented_generic_transport_error() -> None
     assert spy.invocations == []
 
 
+def test_resolve_body_limit_is_enforced_before_authentication() -> None:
+    raw_body = b'{"kind":"acquire","need":{"query":"probe"}}'
+    exact_authenticator = DeterministicAuthenticator()
+    exact_spy = InvocationSpy()
+    exact_client = trust_boundary_client(
+        exact_authenticator,
+        exact_spy,
+        transport_profile=HttpTransportProfile(
+            max_resolve_body_bytes=len(raw_body),
+            max_json_nesting_depth=2,
+        ),
+    )
+    rejected_authenticator = DeterministicAuthenticator()
+    rejected_spy = InvocationSpy()
+    rejected_client = trust_boundary_client(
+        rejected_authenticator,
+        rejected_spy,
+        transport_profile=HttpTransportProfile(
+            max_resolve_body_bytes=len(raw_body) - 1,
+            max_json_nesting_depth=2,
+        ),
+    )
+    headers = {
+        "Authorization": f"Bearer {VALID_TOKEN}",
+        "Content-Type": "application/json",
+    }
+
+    exact = exact_client.post(
+        "/v1/context:resolve",
+        headers=headers,
+        content=raw_body,
+    )
+    rejected = rejected_client.post(
+        "/v1/context:resolve",
+        headers=headers,
+        content=raw_body,
+    )
+
+    assert exact.status_code == 204
+    assert len(exact_spy.invocations) == 1
+    assert rejected.status_code == 400
+    assert rejected.content == b'{"code":"invalid_request"}'
+    assert rejected_authenticator.calls == []
+    assert rejected_spy.invocations == []
+
+
+def test_chunked_body_cannot_bypass_the_receive_limit() -> None:
+    authenticator = DeterministicAuthenticator()
+    spy = InvocationSpy()
+    client = trust_boundary_client(
+        authenticator,
+        spy,
+        transport_profile=HttpTransportProfile(
+            max_resolve_body_bytes=24,
+            max_json_nesting_depth=2,
+        ),
+    )
+
+    response = client.post(
+        "/v1/context:resolve",
+        headers={
+            "Authorization": f"Bearer {VALID_TOKEN}",
+            "Content-Type": "application/json",
+        },
+        content=iter(
+            [
+                b'{"kind":"acquire",',
+                b'"need":{"query":"probe"}}',
+            ]
+        ),
+    )
+
+    assert response.request.headers["transfer-encoding"] == "chunked"
+    assert response.status_code == 400
+    assert response.content == b'{"code":"invalid_request"}'
+    assert authenticator.calls == []
+    assert spy.invocations == []
+
+
+def test_resolve_body_limit_does_not_change_health_requests() -> None:
+    client = trust_boundary_client(
+        DeterministicAuthenticator(),
+        InvocationSpy(),
+        transport_profile=HttpTransportProfile(
+            max_resolve_body_bytes=1,
+            max_json_nesting_depth=1,
+        ),
+    )
+
+    response = client.get("/health")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "ready"
+
+
+@pytest.mark.parametrize(
+    "declared_length",
+    [b"not-a-number", b"-1"],
+)
+def test_invalid_declared_body_length_fails_before_authentication(
+    declared_length: bytes,
+) -> None:
+    authenticator = DeterministicAuthenticator()
+    spy = InvocationSpy()
+    client = trust_boundary_client(authenticator, spy)
+
+    response = client.post(
+        "/v1/context:resolve",
+        headers=[
+            (b"Authorization", f"Bearer {VALID_TOKEN}".encode()),
+            (b"Content-Type", b"application/json"),
+            (b"Content-Length", declared_length),
+        ],
+        content=b'{"kind":"acquire","need":{"query":"probe"}}',
+    )
+
+    assert response.status_code == 400
+    assert response.content == b'{"code":"invalid_request"}'
+    assert authenticator.calls == []
+    assert spy.invocations == []
+
+
+def test_duplicate_declared_body_length_fails_before_authentication() -> None:
+    authenticator = DeterministicAuthenticator()
+    spy = InvocationSpy()
+    client = trust_boundary_client(authenticator, spy)
+
+    response = client.post(
+        "/v1/context:resolve",
+        headers=[
+            (b"Authorization", f"Bearer {VALID_TOKEN}".encode()),
+            (b"Content-Type", b"application/json"),
+            (b"Content-Length", b"50"),
+            (b"Content-Length", b"50"),
+        ],
+        content=b'{"kind":"acquire","need":{"query":"probe"}}',
+    )
+
+    assert response.status_code == 400
+    assert response.content == b'{"code":"invalid_request"}'
+    assert authenticator.calls == []
+    assert spy.invocations == []
+
+
+def test_json_nesting_limit_is_enforced_before_authentication() -> None:
+    authenticator = DeterministicAuthenticator()
+    spy = InvocationSpy()
+    client = trust_boundary_client(
+        authenticator,
+        spy,
+        transport_profile=HttpTransportProfile(
+            max_resolve_body_bytes=1024,
+            max_json_nesting_depth=2,
+        ),
+    )
+
+    response = client.post(
+        "/v1/context:resolve",
+        headers={
+            "Authorization": f"Bearer {VALID_TOKEN}",
+            "Content-Type": "application/json",
+        },
+        content=(
+            b'{"kind":"acquire","need":{"query":"probe"},'
+            b'"unknown":[[]]}'
+        ),
+    )
+
+    assert response.status_code == 400
+    assert response.content == b'{"code":"invalid_request"}'
+    assert authenticator.calls == []
+    assert spy.invocations == []
+
+
+def test_parser_recursion_limit_is_still_a_generic_transport_rejection() -> None:
+    authenticator = DeterministicAuthenticator()
+    spy = InvocationSpy()
+    client = trust_boundary_client(authenticator, spy)
+    nested_value = b"[" * 2000 + b"0" + b"]" * 2000
+
+    response = client.post(
+        "/v1/context:resolve",
+        headers={
+            "Authorization": f"Bearer {VALID_TOKEN}",
+            "Content-Type": "application/json",
+        },
+        content=(
+            b'{"kind":"acquire","need":{"query":"probe"},"unknown":'
+            + nested_value
+            + b"}"
+        ),
+    )
+
+    assert response.status_code == 400
+    assert response.content == b'{"code":"invalid_request"}'
+    assert authenticator.calls == []
+    assert spy.invocations == []
+
+
+@pytest.mark.parametrize(
+    ("max_resolve_body_bytes", "max_json_nesting_depth"),
+    [(0, 2), (1024, 0)],
+)
+def test_transport_profile_rejects_non_positive_limits(
+    max_resolve_body_bytes: int,
+    max_json_nesting_depth: int,
+) -> None:
+    with pytest.raises(ValueError, match="positive"):
+        HttpTransportProfile(
+            max_resolve_body_bytes=max_resolve_body_bytes,
+            max_json_nesting_depth=max_json_nesting_depth,
+        )
+
+
+def test_transport_profile_rejects_boolean_limits() -> None:
+    with pytest.raises(ValueError, match="positive"):
+        HttpTransportProfile(
+            max_resolve_body_bytes=True,
+            max_json_nesting_depth=2,
+        )
+
+
 @pytest.mark.parametrize(
     ("duplicate_name", "duplicate_values", "expected_status", "expected_body"),
     [
@@ -581,13 +804,25 @@ def test_authenticated_invocation_is_not_a_body_model_or_public_constructor() ->
 def trust_boundary_client(
     authenticator: DeterministicAuthenticator,
     spy: InvocationSpy,
+    *,
+    transport_profile: HttpTransportProfile | None = None,
 ) -> TestClient:
+    if transport_profile is None:
+        return TestClient(
+            create_app(
+                authenticator=authenticator,
+                invocation_observer=spy.observe,
+                clock=lambda: RECEIVED_AT,
+                request_id_factory=lambda: "server-generated-request",
+            )
+        )
     return TestClient(
         create_app(
             authenticator=authenticator,
             invocation_observer=spy.observe,
             clock=lambda: RECEIVED_AT,
             request_id_factory=lambda: "server-generated-request",
+            transport_profile=transport_profile,
         )
     )
 

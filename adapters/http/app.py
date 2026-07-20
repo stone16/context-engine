@@ -25,6 +25,12 @@ from adapters.http.contracts import (
     AuthenticationFailureWire,
     InvalidRequestWire,
 )
+from adapters.http.transport import (
+    HTTP_TRANSPORT_PROFILE_V1,
+    HttpTransportProfile,
+    ResolveBodyLimitMiddleware,
+    enforce_json_nesting,
+)
 from engine import BUILD_IDENTIFIER
 from engine.runtime import AuthenticatedInvocation, Runtime
 from engine.runtime.construction import required_kernel_dependencies
@@ -38,6 +44,7 @@ HEALTH_RESPONSE: Final = {
 }
 AUTHENTICATION_FAILED_RESPONSE: Final = {"code": "authentication_failed"}
 INVALID_REQUEST_RESPONSE: Final = {"code": "invalid_request"}
+RESOLVE_PATH: Final = "/v1/context:resolve"
 
 
 class TransportAuthenticationFailed(Exception):
@@ -91,6 +98,7 @@ def create_app(
     invocation_observer: Callable[[AuthenticatedInvocation], None] | None = None,
     clock: Callable[[], datetime] = _utc_now,
     request_id_factory: Callable[[], str] = _new_request_id,
+    transport_profile: HttpTransportProfile = HTTP_TRANSPORT_PROFILE_V1,
 ) -> FastAPI:
     """Construct API; Runtime delivery and production authentication stay inactive."""
 
@@ -105,6 +113,12 @@ def create_app(
         auto_error=False,
     )
     app = FastAPI(title="ContextEngine", version=BUILD_IDENTIFIER)
+    app.add_middleware(
+        ResolveBodyLimitMiddleware,
+        profile=transport_profile,
+        resolve_path=RESOLVE_PATH,
+        invalid_response=INVALID_REQUEST_RESPONSE,
+    )
 
     @app.exception_handler(TransportAuthenticationFailed)
     async def authentication_failed(
@@ -155,12 +169,16 @@ def create_app(
         if media_type != "application/json":
             raise InvalidRequestMediaType
         try:
-            loads(
+            document = loads(
                 await request.body(),
                 object_pairs_hook=_reject_duplicate_json_object_keys,
                 parse_constant=_reject_non_finite_json_number,
             )
-        except (ValueError, UnicodeDecodeError):
+            enforce_json_nesting(
+                document,
+                maximum_depth=transport_profile.max_json_nesting_depth,
+            )
+        except (ValueError, UnicodeDecodeError, RecursionError):
             raise InvalidJsonTransport from None
 
     def verified_authentication(
@@ -189,14 +207,17 @@ def create_app(
         return HEALTH_RESPONSE.copy()
 
     @app.post(
-        "/v1/context:resolve",
+        RESOLVE_PATH,
         status_code=204,
         response_class=Response,
         dependencies=[Depends(require_closed_json_transport)],
         responses={
             400: {
                 "model": InvalidRequestWire,
-                "description": "The JSON transport syntax or media type is invalid.",
+                "description": (
+                    "The request transport syntax, media type, or active "
+                    "resource profile is invalid."
+                ),
             },
             401: {
                 "model": AuthenticationFailureWire,

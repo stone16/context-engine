@@ -9,7 +9,7 @@ description: >
 # 0021. Stage HTTP authentication before identity-provider selection
 
 - Status: accepted
-- Date: 2026-07-21
+- Date: 2026-07-20
 - Refines: ADR-0017
 
 ## Context
@@ -38,7 +38,10 @@ later issue selects and verifies an owning identity provider.
 The request body is a recursively closed acquire shape containing only
 `kind = acquire` and `need.query`. Unknown fields and duplicate JSON object keys
 fail before the invocation observer. Duplicate singleton authentication,
-content-type, or correlation headers also fail closed. Transport syntax errors
+content-type, or correlation headers also fail closed. A versioned HTTP
+transport profile bounds body bytes at the ASGI receive boundary and JSON
+nesting before authentication; its source of truth is the HTTP transport
+adapter, not this decision text. Transport syntax errors
 use a generic `400 invalid_request`; authentication failures use a generic
 `401 authentication_failed`; closed-schema failures use a generic
 `422 invalid_request`. These bodies and statuses are part of OpenAPI.
@@ -60,7 +63,7 @@ equivalence and zero downstream work.
 
 Tests can prove exactly one trusted invocation for valid authentication and zero
 domain calls for rejected requests, including conflicting identity injection
-and unknown-field smuggling. The default application remains fail closed even
+and unknown-field smuggling. The default application remains fail-closed even
 if it receives a syntactically valid opaque credential.
 
 The observer success response is evidence for this implementation slice, not a

@@ -89,7 +89,9 @@ ActorContext、Runtime 授权或 ContextPackage 交付已经实现。
 authenticator，因此尚不接受任何 credential。
 
 请求体仅允许 `kind: "acquire"` 和 `need.query`，每层 unknown field、重复 JSON key
-以及重复 singleton security/transport header 都 fail closed。非法 JSON/media type、
+以及重复 singleton security/transport header 都 fail closed；pre-auth body bytes 和
+JSON nesting 由 `adapters/http/transport.py` 的 versioned profile 限制。非法
+JSON/media type、
 认证失败和 closed-schema 失败分别使用 OpenAPI 记录的通用 400、401 和 422 响应，
 不会回显 tenant、Principal、Membership 或注入字段。生产 OAuth/JWT、Membership
 查询、授权、Provider/index 工作与 Package delivery 不属于这个已激活 seam。
