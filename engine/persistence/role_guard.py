@@ -19,6 +19,9 @@ def assert_runtime_role(connection: Connection) -> None:
                 role.rolsuper AS is_superuser,
                 role.rolbypassrls AS bypasses_rls,
                 role.rolinherit AS inherits_roles,
+                role.rolcreaterole AS can_create_roles,
+                role.rolcreatedb AS can_create_databases,
+                role.rolreplication AS can_replicate,
                 pg_has_role(current_user, :migrator_role, 'MEMBER')
                     AS is_migrator_member,
                 pg_has_role(current_user, :migrator_role, 'USAGE')
@@ -59,6 +62,9 @@ def assert_runtime_role(connection: Connection) -> None:
         "is_superuser": False,
         "bypasses_rls": False,
         "inherits_roles": False,
+        "can_create_roles": False,
+        "can_create_databases": False,
+        "can_replicate": False,
         "is_migrator_member": False,
         "can_use_migrator": False,
         "owns_database": False,
@@ -71,7 +77,7 @@ def assert_runtime_role(connection: Connection) -> None:
     if dict(row) != expected:
         raise AssertionError(
             "PostgreSQL security integration tests require the exact non-owner "
-            "runtime role with NOSUPERUSER, NOBYPASSRLS, NOINHERIT, no migrator "
-            "membership or object ownership, and no database CREATE/TEMPORARY "
-            "or schema CREATE privilege"
+            "runtime role with NOSUPERUSER, NOBYPASSRLS, NOINHERIT, NOCREATEROLE, "
+            "NOCREATEDB, NOREPLICATION, no migrator membership or object ownership, "
+            "and no database CREATE/TEMPORARY or schema CREATE privilege"
         )

@@ -141,6 +141,16 @@ def test_database_url_must_be_explicit_postgresql_psycopg_credentials(
         load_database_configuration(DatabasePurpose.API_RUNTIME, environment)
 
 
+def test_database_url_rejects_query_parameters_that_override_login_identity() -> None:
+    environment = database_environment()
+    environment["CONTEXT_ENGINE_RUNTIME_DATABASE_URL"] += (
+        "?user=context_engine_migrator&password=migration-secret"
+    )
+
+    with pytest.raises(DatabaseConfigurationError, match="query parameters"):
+        load_database_configuration(DatabasePurpose.API_RUNTIME, environment)
+
+
 def test_harness_contract_keeps_roles_distinct_and_test_uses_runtime() -> None:
     configurations = load_harness_database_configurations(database_environment())
 
@@ -195,6 +205,22 @@ def test_configuration_cannot_be_forged_with_a_non_postgresql_url() -> None:
         type(runtime_configuration)(
             purpose=DatabasePurpose.API_RUNTIME,
             url=make_url("sqlite+pysqlite:///:memory:"),
+            expected_role=RUNTIME_ROLE,
+        )
+
+
+def test_configuration_cannot_be_forged_with_query_parameter_overrides() -> None:
+    runtime_configuration = load_database_configuration(
+        DatabasePurpose.API_RUNTIME, database_environment()
+    )
+
+    with pytest.raises(DatabaseConfigurationError, match="query parameters"):
+        type(runtime_configuration)(
+            purpose=DatabasePurpose.API_RUNTIME,
+            url=make_url(
+                "postgresql+psycopg://context_engine_runtime:runtime-secret@"
+                "127.0.0.1:5432/context_engine?host=privileged.example"
+            ),
             expected_role=RUNTIME_ROLE,
         )
 

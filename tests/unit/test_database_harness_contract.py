@@ -22,6 +22,18 @@ def test_compose_pins_postgresql_17_pgvector_0_8_5_by_digest() -> None:
     assert "./infra/postgres/init:/docker-entrypoint-initdb.d:ro" in compose
 
 
+def test_compose_project_identity_is_generated_per_checkout() -> None:
+    compose = repository_text("compose.yaml")
+    script = repository_text("scripts/database_harness.sh")
+
+    assert "name: context-engine-dev" not in compose
+    assert 'readonly COMPOSE_PROJECT="context-engine-dev"' not in script
+    assert 'readonly PROJECT_FILE="$STATE_DIR/compose-project"' in script
+    assert '--project-name "$COMPOSE_PROJECT"' in script
+    assert 'ln "$temporary_file" "$PROJECT_FILE"' in script
+    assert 'mv "$temporary_file" "$PROJECT_FILE"' not in script
+
+
 @pytest.mark.parametrize(
     "sql_variable",
     [
@@ -49,8 +61,27 @@ def test_database_harness_generates_secret_state_and_never_sources_it() -> None:
     assert "umask 077" in script
     assert 'chmod 600 "$temporary_file"' in script
     assert 'source "$ENV_FILE"' not in script
+    assert 'ln "$temporary_file" "$ENV_FILE"' in script
+    assert 'mv "$temporary_file" "$ENV_FILE"' not in script
     assert "unexpected variable" in script
     assert "role-isolated URL contract" in script
+
+
+@pytest.mark.parametrize(
+    ("catalog_attribute", "guard_alias"),
+    [
+        ("rolcreaterole", "can_create_roles"),
+        ("rolcreatedb", "can_create_databases"),
+        ("rolreplication", "can_replicate"),
+    ],
+)
+def test_runtime_role_guard_checks_every_role_escalation_attribute(
+    catalog_attribute: str, guard_alias: str
+) -> None:
+    guard = repository_text("engine/persistence/role_guard.py")
+
+    assert f"role.{catalog_attribute} AS {guard_alias}" in guard
+    assert f'"{guard_alias}": False' in guard
 
 
 def test_ci_runs_the_same_make_database_contract_as_local() -> None:

@@ -61,6 +61,10 @@ class DatabaseConfiguration:
             raise DatabaseConfigurationError(
                 "database configuration must use the postgresql+psycopg driver"
             )
+        if self.url.query:
+            raise DatabaseConfigurationError(
+                "database configuration URL must not contain query parameters"
+            )
         if self.url.username != self.expected_role:
             raise DatabaseConfigurationError(
                 "database configuration URL username must match its expected role"
@@ -108,6 +112,10 @@ def _require_url(variable: str, environment: Mapping[str, str]) -> URL:
     if url.drivername != "postgresql+psycopg":
         raise DatabaseConfigurationError(
             f"{variable} must use the postgresql+psycopg driver"
+        )
+    if url.query:
+        raise DatabaseConfigurationError(
+            f"{variable} must not contain query parameters"
         )
     if not url.username or url.password is None or not str(url.password):
         raise DatabaseConfigurationError(
