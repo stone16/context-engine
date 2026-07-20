@@ -21,6 +21,7 @@ kernel, capability separation, and publication visibility model.
 | Trusted access boundary | [0017 — Trusted invocation and closed Runtime access](0017-trusted-invocation-and-closed-runtime-access.md) | HTTP, generated SDK, and activated MCP map to one Runtime contract; trusted inputs are ingress-built | Caller-supplied identity/ACL/audience, transport-local policy, or IM as a fourth transport |
 | Read versus effect | [0011 — Read/write plane separation](0011-read-write-plane-separation.md) | `ContextAccessTicket` and `ActionTicket` use different audiences and are non-interchangeable | Using content/read authority to execute an external effect |
 | Publication visibility | [0018 — Immutable ContextRevision publication](0018-immutable-revision-publication.md) | `ContextResource` content is immutable `ContextRevision`/`ContextFragment` lineage; one transaction changes the active pointer | In-place content mutation, mixed old/new reads, or cleanup-defined visibility |
+| Release security catalog | [0019 — Security catalog normalization](0019-security-catalog-normalization.md) | One machine catalog contains exactly fifteen stable release IDs; overlapping labels and derived scenarios keep their safeguards without inflating the count | Parallel prose catalogs, renumbering, or treating inactive cache behavior as a canonical release family |
 
 Each baseline ADR is `accepted` and contains Context, Decision, Rationale,
 Consequences, and Revisit trigger sections. A revisit trigger permits review; it
@@ -87,3 +88,4 @@ touched:
 - [0014 — Curation snapshot and release ownership](0014-curation-snapshot-and-release-ownership.md)
 - [0015 — RLS transaction context and schema manifest](0015-rls-transaction-context-and-schema-manifest.md)
 - [0016 — Implementation authority and vertical-slice roadmap](0016-implementation-authority-and-vertical-slice-roadmap.md)
+- [0019 — Security catalog normalization](0019-security-catalog-normalization.md)

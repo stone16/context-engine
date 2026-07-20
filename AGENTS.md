@@ -60,6 +60,7 @@ make build     # build wheel and source distribution
 make lint      # Ruff
 make typecheck # strict mypy
 make test      # unit test suite
+make catalog   # static security catalog tests and validation
 make smoke     # API and worker process smoke suite
 make check     # all required repository checks
 ```
