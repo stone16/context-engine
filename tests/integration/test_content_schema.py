@@ -15,6 +15,11 @@ from engine.persistence.configuration import MIGRATOR_ROLE, RUNTIME_ROLE, WORKER
 
 pytestmark = pytest.mark.integration
 CHECKED_AT = datetime(2026, 7, 21, 9, 0, tzinfo=UTC)
+PYTHON_ISSPACE_CHARACTERS = (
+    "\u0009\u000a\u000b\u000c\u000d\u001c\u001d\u001e\u001f\u0020"
+    "\u0085\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006"
+    "\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -445,6 +450,60 @@ def test_revision_and_fragment_parents_cannot_cross_organization(
         engine.dispose()
 
 
+@pytest.mark.parametrize(
+    "content",
+    [
+        pytest.param("", id="empty"),
+        pytest.param("   ", id="spaces"),
+        pytest.param("\t\n\r", id="control-whitespace"),
+        pytest.param("\x1c\x1d\x1e\x1f", id="python-control-whitespace"),
+        pytest.param("\u0085", id="next-line"),
+        pytest.param("\u00a0", id="no-break-space"),
+        pytest.param("\u1680", id="ogham-space-mark"),
+        pytest.param(
+            "\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a",
+            id="unicode-quad-and-width-spaces",
+        ),
+        pytest.param("\u2028\u2029", id="unicode-line-separators"),
+        pytest.param("\u202f\u205f\u3000", id="remaining-unicode-spaces"),
+    ],
+)
+def test_context_fragment_rejects_blank_content(
+    migration_configuration: DatabaseConfiguration,
+    content_fixture: ContentFixture,
+    content: str,
+) -> None:
+    engine = create_database_engine(migration_configuration)
+    try:
+        with pytest.raises(IntegrityError) as error, engine.begin() as connection:
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO context_fragment (
+                        organization_id, resource_ref, revision_id,
+                        fragment_ref, ordinal, content
+                    ) VALUES (
+                        :organization_id, :resource_ref, :revision_id,
+                        :fragment_ref, 9999, :content
+                    )
+                    """
+                ),
+                {
+                    "organization_id": content_fixture.organization_a,
+                    "resource_ref": content_fixture.active_resource_ref,
+                    "revision_id": content_fixture.active_revision_id,
+                    "fragment_ref": f"fragment:{uuid4()}",
+                    "content": content,
+                },
+            )
+        assert (
+            getattr(getattr(error.value.orig, "diag", None), "constraint_name", None)
+            == "ck_context_fragment_content_nonblank"
+        )
+    finally:
+        engine.dispose()
+
+
 def test_content_tables_have_force_rls_and_least_privilege_grants(
     migration_configuration: DatabaseConfiguration,
 ) -> None:
@@ -668,7 +727,15 @@ def test_content_tables_have_force_rls_and_least_privilege_grants(
             "fk_context_fragment_organization",
             "fk_context_fragment_revision_same_organization",
             "ck_context_fragment_ordinal_nonnegative",
+            "ck_context_fragment_content_nonblank",
         } <= constraints.keys()
+        content_constraint = constraints[
+            "ck_context_fragment_content_nonblank"
+        ]
+        assert content_constraint == (
+            "CHECK (translate(content, "
+            f"'{PYTHON_ISSPACE_CHARACTERS}'::text, ''::text) <> ''::text)"
+        )
         assert (
             "deferrable initially deferred"
             in constraints[

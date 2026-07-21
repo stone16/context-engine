@@ -430,7 +430,11 @@ class AuthorizationKernel:
         try:
             projections = []
             consumed_tokens = 0
-            for candidate in sorted(candidates, key=_candidate_sort_key):
+            ordered_candidates = sorted(
+                set(candidates),
+                key=_candidate_sort_key,
+            )
+            for candidate in ordered_candidates:
                 locator = _locate_materialized_fragment(
                     projection_session,
                     candidate,

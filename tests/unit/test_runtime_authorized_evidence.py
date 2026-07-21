@@ -470,6 +470,29 @@ def test_budget_selection_is_independent_of_hostile_candidate_rank() -> None:
     assert forward == reversed_rank == ("A-safe",)
 
 
+def test_hostile_index_duplicate_candidates_are_deduplicated_before_projection(
+) -> None:
+    index = HostileCandidateIndex((AUTHORIZED, AUTHORIZED, AUTHORIZED))
+    port = RecordingMaterializedPort()
+    runtime = Runtime(
+        required_kernel_dependencies(),
+        candidate_index=cast(CandidateIndex, index),
+        clock=lambda: AS_OF,
+    )
+
+    with trusted_operands(port) as (invocation, delivery):
+        outcome = runtime.resolve(
+            invocation,
+            delivery,
+            Acquire(need=ContextNeed(query="duplicate hostile candidates")),
+        )
+
+    assert port.locator_calls == [AUTHORIZED]
+    assert port.body_calls == [locator(AUTHORIZED)]
+    assert tuple(block.body for block in outcome.package.blocks) == ("A-safe",)
+    assert len(outcome.package.evidence) == 1
+
+
 def test_agent_ceiling_denial_keeps_candidate_content_out_of_package() -> None:
     index = HostileCandidateIndex((AUTHORIZED,))
     port = RecordingMaterializedPort()
