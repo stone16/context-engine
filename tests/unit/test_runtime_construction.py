@@ -25,7 +25,7 @@ def test_runtime_rejects_each_missing_kernel_dependency(missing: str) -> None:
 def test_runtime_rejects_a_dependency_in_the_wrong_slot() -> None:
     dependencies = required_kernel_dependencies()
     invalid_dependencies = KernelDependencies(
-        policy=dependencies.audit,
+        policy=dependencies.audit,  # type: ignore[arg-type]
         audit=dependencies.audit,
         budget=dependencies.budget,
         provenance=dependencies.provenance,

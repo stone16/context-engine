@@ -3,7 +3,7 @@
 from collections.abc import Callable
 from datetime import UTC, datetime
 from json import loads
-from typing import Annotated, Final
+from typing import Annotated, Final, Literal, cast
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, Header, Request, Response, Security
@@ -23,7 +23,16 @@ from adapters.http.authentication import (
 from adapters.http.contracts import (
     AcquireWire,
     AuthenticationFailureWire,
+    BudgetUsageWire,
+    ContextPackageWire,
+    CoverageWire,
     InvalidRequestWire,
+    ResolvedWire,
+)
+from adapters.http.organization_authority import (
+    OrganizationAuthority,
+    OrganizationVerificationRejected,
+    RejectingOrganizationAuthority,
 )
 from adapters.http.transport import (
     HTTP_TRANSPORT_PROFILE_V1,
@@ -33,7 +42,10 @@ from adapters.http.transport import (
 )
 from engine import BUILD_IDENTIFIER
 from engine.runtime import AuthenticatedInvocation, Runtime
+from engine.runtime.budget import PackageBudgetRequest
 from engine.runtime.construction import required_kernel_dependencies
+from engine.runtime.contracts import Acquire, ContextNeed, RequestNarrowing, Resolved
+from engine.runtime.delivery import _construct_direct_delivery_context
 from engine.runtime.invocation import _construct_authenticated_http_invocation
 
 HEALTH_RESPONSE: Final = {
@@ -71,10 +83,7 @@ def _new_request_id() -> str:
     return str(uuid4())
 
 
-def _unreachable_invocation_observer(
-    invocation: AuthenticatedInvocation,
-) -> None:
-    raise RuntimeError("authenticated invocation observer is not configured")
+DIRECT_ACQUIRE_PURPOSE: Final = "context.answer"
 
 
 def _reject_duplicate_json_object_keys(
@@ -95,18 +104,26 @@ def _reject_non_finite_json_number(value: str) -> object:
 def create_app(
     *,
     authenticator: Authenticator | None = None,
+    organization_authority: OrganizationAuthority | None = None,
+    runtime: Runtime | None = None,
     invocation_observer: Callable[[AuthenticatedInvocation], None] | None = None,
+    resolution_observer: Callable[[Resolved], None] | None = None,
     clock: Callable[[], datetime] = _utc_now,
     request_id_factory: Callable[[], str] = _new_request_id,
     transport_profile: HttpTransportProfile = HTTP_TRANSPORT_PROFILE_V1,
 ) -> FastAPI:
-    """Construct API; Runtime delivery and production authentication stay inactive."""
+    """Construct API; the module-level composition remains reject-all."""
 
-    Runtime(required_kernel_dependencies())
-    if authenticator is not None and invocation_observer is None:
-        raise ValueError("an injected authenticator requires an invocation observer")
+    selected_runtime = runtime or Runtime(
+        required_kernel_dependencies(),
+        clock=clock,
+    )
+    if type(selected_runtime) is not Runtime:
+        raise TypeError("runtime must be the sealed Runtime composition")
     selected_authenticator = authenticator or RejectingAuthenticator()
-    selected_observer = invocation_observer or _unreachable_invocation_observer
+    selected_organization_authority = (
+        organization_authority or RejectingOrganizationAuthority()
+    )
     bearer = HTTPBearer(
         scheme_name="ContextEngineBearer",
         bearerFormat="opaque",
@@ -208,8 +225,9 @@ def create_app(
 
     @app.post(
         RESOLVE_PATH,
-        status_code=204,
-        response_class=Response,
+        status_code=200,
+        response_model=ResolvedWire,
+        response_model_by_alias=True,
         dependencies=[Depends(require_closed_json_transport)],
         responses={
             400: {
@@ -235,7 +253,7 @@ def create_app(
             },
         },
     )
-    def inspect_authenticated_invocation(
+    def resolve_context(
         body: AcquireWire,
         authentication: Annotated[
             VerifiedAuthenticationContext,
@@ -246,29 +264,122 @@ def create_app(
             Header(
                 alias="X-Context-Request-Id",
                 min_length=1,
+                max_length=transport_profile.max_correlation_id_characters,
                 pattern=r".*\S.*",
             ),
         ] = None,
-    ) -> Response:
-        """Expose only a test observer before Runtime delivery is activated."""
+    ) -> JSONResponse:
+        """Map one authenticated Acquire to the single sealed Runtime entry."""
 
         request_id = context_request_id or request_id_factory()
-        invocation = _construct_authenticated_http_invocation(
-            request_id=request_id,
-            organization_ref=authentication.organization_ref,
-            principal_ref=authentication.principal_ref,
-            membership_ref=authentication.membership_ref,
-            agent_version_ref=authentication.agent_version_ref,
+        received_at = clock()
+        try:
+            organization_verification = (
+                selected_organization_authority.verify_existing(
+                    authentication,
+                    request_id=request_id,
+                    verified_at=received_at,
+                )
+            )
+            invocation = _construct_authenticated_http_invocation(
+                request_id=request_id,
+                authenticated_organization_ref=authentication.organization_ref,
+                organization_verification=organization_verification,
+                principal_ref=authentication.principal_ref,
+                membership_ref=authentication.membership_ref,
+                agent_version_ref=authentication.agent_version_ref,
+                authenticated_application_ref=(
+                    authentication.authenticated_application_ref
+                ),
+                authentication_binding_ref=(
+                    authentication.authentication_binding_ref
+                ),
+                received_at=received_at,
+            )
+        except (OrganizationVerificationRejected, TypeError, ValueError):
+            raise TransportAuthenticationFailed from None
+        if invocation_observer is not None:
+            invocation_observer(invocation)
+        delivery_context = _construct_direct_delivery_context(
+            purpose=DIRECT_ACQUIRE_PURPOSE,
             authenticated_application_ref=(
                 authentication.authenticated_application_ref
             ),
-            authentication_binding_ref=authentication.authentication_binding_ref,
-            received_at=clock(),
+            delivery_binding_ref=authentication.authentication_binding_ref,
+            established_at=invocation.received_at,
         )
-        selected_observer(invocation)
-        return Response(status_code=204)
+        request = _acquire_from_wire(body)
+        outcome = selected_runtime.resolve(invocation, delivery_context, request)
+        response = _resolved_to_wire(outcome)
+        if resolution_observer is not None:
+            resolution_observer(outcome)
+        return JSONResponse(
+            response.model_dump(mode="json", by_alias=True),
+            status_code=200,
+            headers={
+                "Cache-Control": "no-store",
+                "X-Context-Request-Id": invocation.request_id,
+            },
+        )
 
     return app
+
+
+def _acquire_from_wire(body: AcquireWire) -> Acquire:
+    package_budget = None
+    if body.packageBudget is not None:
+        package_budget = PackageBudgetRequest(
+            max_tokens=body.packageBudget.maxTokens,
+            max_provider_calls=body.packageBudget.maxProviderCalls,
+            max_cost_microunits=body.packageBudget.maxCostMicrounits,
+            max_elapsed_ms=body.packageBudget.maxElapsedMs,
+        )
+    narrowing = None
+    if body.requestNarrowing is not None:
+        narrowing = RequestNarrowing(
+            source_refs=body.requestNarrowing.sourceRefs,
+            resource_refs=body.requestNarrowing.resourceRefs,
+        )
+    return Acquire(
+        need=ContextNeed(query=body.need.query),
+        package_budget=package_budget,
+        narrowing=narrowing,
+    )
+
+
+def _resolved_to_wire(outcome: Resolved) -> ResolvedWire:
+    package = outcome.package
+    return ResolvedWire(
+        kind=outcome.kind,
+        package=ContextPackageWire(
+            organizationRef=package.organization_ref,
+            purpose=package.purpose,
+            ttlSeconds=package.ttl_seconds,
+            asOf=package.as_of,
+            expiresAt=package.expires_at,
+            decisionRef=package.decision_ref,
+            blocks=package.blocks,
+            evidence=package.evidence,
+            gaps=package.gaps,
+            budgetUsage=BudgetUsageWire(
+                tokens=cast(Literal[0], package.budget_usage.tokens),
+                providerCalls=cast(
+                    Literal[0], package.budget_usage.provider_calls
+                ),
+                costMicrounits=cast(
+                    Literal[0], package.budget_usage.cost_microunits
+                ),
+                elapsedMs=cast(Literal[0], package.budget_usage.elapsed_ms),
+            ),
+            coverage=CoverageWire(
+                status=cast(Literal["empty"], package.coverage.status),
+                reason=cast(
+                    Literal["no_authorized_evidence"],
+                    package.coverage.reason,
+                ),
+            ),
+        ),
+    )
 
 
 app = create_app()

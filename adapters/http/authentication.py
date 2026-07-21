@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from typing import Protocol
+from uuid import UUID
 
 
 class AuthenticationRejected(Exception):
@@ -38,6 +39,13 @@ class VerifiedAuthenticationContext:
             raise InvalidAuthenticationContext(
                 "verified authentication refs must be non-empty"
             )
+        try:
+            organization_id = UUID(self.organization_ref)
+        except ValueError:
+            raise InvalidAuthenticationContext(
+                "verified Organization ref must be an internal UUID"
+            ) from None
+        object.__setattr__(self, "organization_ref", str(organization_id))
         if self.membership_ref is not None and (
             type(self.membership_ref) is not str
             or not self.membership_ref

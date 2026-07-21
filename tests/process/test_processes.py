@@ -1,6 +1,7 @@
 import json
 import socket
 import subprocess
+import sys
 import time
 from contextlib import closing
 from pathlib import Path
@@ -10,8 +11,28 @@ from urllib.request import Request, urlopen
 import pytest
 
 from engine import BUILD_IDENTIFIER
+from tests.process.conformance_app import (
+    PROCESS_ORGANIZATION_REF,
+    PROCESS_VALID_TOKEN,
+)
 
 ROOT = Path(__file__).parents[2]
+
+
+def _wait_until_ready(process: subprocess.Popen[str], port: int) -> None:
+    deadline = time.monotonic() + 10
+    while True:
+        try:
+            with urlopen(f"http://127.0.0.1:{port}/health", timeout=1):
+                return
+        except OSError:
+            if process.poll() is not None or time.monotonic() >= deadline:
+                process.terminate()
+                output, _ = process.communicate(timeout=5)
+                raise AssertionError(
+                    f"API failed to become ready:\n{output}"
+                ) from None
+            time.sleep(0.05)
 
 
 def _unused_port() -> int:
@@ -74,6 +95,58 @@ def test_api_boots_and_reports_readiness() -> None:
         assert authentication_error.value.code == 401
         assert json.load(authentication_error.value) == {
             "code": "authentication_failed"
+        }
+    finally:
+        process.terminate()
+        process.wait(timeout=5)
+
+
+def test_http_acquire_smoke_returns_the_empty_package_contract() -> None:
+    port = _unused_port()
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "uvicorn",
+            "tests.process.conformance_app:app",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(port),
+            "--log-level",
+            "warning",
+        ],
+        cwd=ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    try:
+        _wait_until_ready(process, port)
+        request = Request(
+            f"http://127.0.0.1:{port}/v1/context:resolve",
+            data=b'{"kind":"acquire","need":{"query":"process smoke"}}',
+            headers={
+                "Authorization": f"Bearer {PROCESS_VALID_TOKEN}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        with urlopen(request, timeout=1) as response:
+            payload = json.load(response)
+            assert response.status == 200
+            assert response.headers["Cache-Control"] == "no-store"
+
+        assert payload["kind"] == "resolved"
+        package = payload["package"]
+        assert package["organizationRef"] != PROCESS_ORGANIZATION_REF
+        assert package["purpose"] == "context.answer"
+        assert package["blocks"] == []
+        assert package["evidence"] == []
+        assert package["gaps"] == []
+        assert package["coverage"] == {
+            "status": "empty",
+            "reason": "no_authorized_evidence",
         }
     finally:
         process.terminate()
