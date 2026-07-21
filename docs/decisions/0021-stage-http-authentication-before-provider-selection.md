@@ -78,3 +78,12 @@ Revisit when an owning production authentication mechanism is selected or when
 the first Runtime delivery issue replaces the observer. Preserve the closed
 body, generic failure, duplicate-input, OpenAPI, and zero-downstream-call
 oracles when either boundary advances.
+
+## Historical refinement
+
+ADR-0022 replaces the successful observer-only `204` response with the first
+sealed Runtime Acquire and tenant-safe empty ContextPackage. The rejecting
+production authenticator and every transport/authentication failure invariant
+in this decision remain active. Accordingly, the observer-only success behavior
+and the `NOT_ACTIVE` statements above describe ADR-0021's historical stage, not
+the current conformance composition.

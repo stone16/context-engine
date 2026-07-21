@@ -12,8 +12,9 @@
 [`compose.yaml`](./compose.yaml) 固定的真实 PostgreSQL + pgvector 测试底座可复现；
 Organization 安全根与一张代表性 tenant-owned 表的非 owner FORCE RLS 隔离切片
 已验证；HTTP 已能用确定性测试认证构造 nominal `AuthenticatedInvocation`，并用
-closed body 与通用错误证明 caller 不能注入 trusted identity。默认应用仍拒绝全部
-credential；生产认证、Runtime delivery、完整 ActorContext / Membership 以及
+closed body 与通用错误证明 caller 不能注入 trusted identity；该测试组合已通过唯一
+`ContextRuntime.resolve` 返回 tenant-safe、evidence-free ContextPackage。默认应用仍拒绝全部
+credential；生产认证、带内容 Runtime delivery、完整 ActorContext / Membership 以及
 worker job 行为仍为 `NOT_ACTIVE`。整体计划见 [PLAN.md](./PLAN.md)。
 
 ## 开发命令
@@ -73,28 +74,36 @@ uv run context-engine-api
 uv run context-engine-worker --test-mode
 ```
 
-健康响应中的 `runtime_delivery: NOT_ACTIVE` 和 worker 输出中的
+健康响应中的 `runtime_delivery: NOT_ACTIVE` 表示默认进程没有生产认证入口，worker 输出中的
 `job_behavior: NOT_ACTIVE` 是能力边界。当前数据库测试证明 `compose.yaml` 固定的
 PostgreSQL/pgvector、
 角色隔离、迁移、连接池清理，以及 Organization + `organization_record` 的
 事务级租户上下文、复合所有权和 FORCE RLS；它不声明 Membership、完整
-ActorContext、Runtime 授权或 ContextPackage 交付已经实现。
+ActorContext、内容授权或生产 ContextPackage 交付已经实现；注入的 conformance 组合只证明
+Issue #10 的安全空包路径。
 
-### 当前 HTTP trust-boundary seam
+### 当前 HTTP empty-Package tracer
 
-`POST /v1/context:resolve` 当前只用于验证 authenticated HTTP ingress：测试可注入
-一个把 opaque credential 映射为 verified transport facts 的 authenticator，并在
-`AuthenticatedInvocation` 构造后用 observer 检查 nominal trusted value。有效测试
-请求在该 seam 停止且不返回 ContextPackage；模块级默认应用使用 reject-all
-authenticator，因此尚不接受任何 credential。
+`POST /v1/context:resolve` 的 conformance 组合可注入一个把 opaque credential
+映射为 verified transport facts 的 authenticator，以及一个为已登记 Organization
+签发 request-bound nominal proof 的 trusted authority；ingress 构造 nominal
+`AuthenticatedInvocation` 与 server-owned direct `TrustedDeliveryContext` 后，恰好
+调用一次 sealed Runtime。有效 Acquire 返回 `200 resolved` 与 evidence-free
+ContextPackage；模块级默认应用的两条 authority 均 reject-all，因此不会接受任何
+生产 credential。
 
-请求体仅允许 `kind: "acquire"` 和 `need.query`，每层 unknown field、重复 JSON key
+请求体仅允许 `kind: "acquire"`、`need.query`、可选的有限 `packageBudget` 和可选的
+`requestNarrowing`（ref 长度与集合数量均受 active profile 限制），每层 unknown field、重复 JSON key
 以及重复 singleton security/transport header 都 fail closed；pre-auth body bytes 和
 JSON nesting 由 `adapters/http/transport.py` 的 versioned profile 限制。非法
 JSON/media type、
 认证失败和 closed-schema 失败分别使用 OpenAPI 记录的通用 400、401 和 422 响应，
-不会回显 tenant、Principal、Membership 或注入字段。生产 OAuth/JWT、Membership
-查询、授权、Provider/index 工作与 Package delivery 不属于这个已激活 seam。
+不会回显 tenant、Principal、Membership 或注入字段。purpose 只来自服务端 route
+policy；返回的 `organizationRef` 是新生成的 package-scoped opaque reference，不能作为
+后续请求的 trusted tenant input。空包的 blocks/evidence/gaps 均为空，coverage 为
+`no_authorized_evidence`，Provider/index/source-content 调用均为零。确定性与
+real-PostgreSQL seeded Organization authority 只属于测试组合。生产 OAuth/JWT、
+Membership 查询、ActorContext、Evidence 与 continuation 不属于这个已激活 tracer。
 
 本次公开候选 bundle 包含实现权威、ADR、安全契约、PRD、Tech Spec
 与四个公开参考仓的证据基线；经维护者批准并提交后，它们将与实现一同

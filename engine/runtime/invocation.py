@@ -4,6 +4,11 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 
+from engine.runtime.organization import (
+    ExistingOrganizationVerification,
+    OrganizationVerificationProvenance,
+)
+
 
 class InvocationConstructionProvenance(StrEnum):
     """Closed provenance for trusted invocation construction."""
@@ -23,6 +28,7 @@ class AuthenticatedInvocation:
     authenticated_application_ref: str
     authentication_binding_ref: str
     received_at: datetime
+    organization_verification: ExistingOrganizationVerification
     construction_provenance: InvocationConstructionProvenance
 
     def __init__(self, *args: object, **kwargs: object) -> None:
@@ -34,7 +40,8 @@ class AuthenticatedInvocation:
 def _construct_authenticated_http_invocation(
     *,
     request_id: str,
-    organization_ref: str,
+    authenticated_organization_ref: str,
+    organization_verification: ExistingOrganizationVerification,
     principal_ref: str,
     membership_ref: str | None,
     agent_version_ref: str,
@@ -46,7 +53,7 @@ def _construct_authenticated_http_invocation(
 
     required_refs = {
         "request_id": request_id,
-        "organization_ref": organization_ref,
+        "authenticated_organization_ref": authenticated_organization_ref,
         "principal_ref": principal_ref,
         "agent_version_ref": agent_version_ref,
         "authenticated_application_ref": authenticated_application_ref,
@@ -59,10 +66,31 @@ def _construct_authenticated_http_invocation(
         raise ValueError("trusted invocation membership_ref must be non-empty")
     if received_at.tzinfo is None or received_at.utcoffset() is None:
         raise ValueError("trusted invocation received_at must be timezone-aware")
+    if type(organization_verification) is not ExistingOrganizationVerification:
+        raise TypeError(
+            "trusted invocation requires ExistingOrganizationVerification"
+        )
+    if (
+        organization_verification.construction_provenance
+        is not OrganizationVerificationProvenance.AUTHENTICATED_HTTP_AUTHORITY
+        or str(organization_verification.organization_id)
+        != authenticated_organization_ref
+        or organization_verification.request_id != request_id
+        or organization_verification.authentication_binding_ref
+        != authentication_binding_ref
+        or organization_verification.verified_at != received_at
+    ):
+        raise ValueError(
+            "trusted invocation Organization verification must match authentication"
+        )
 
     invocation = object.__new__(AuthenticatedInvocation)
     object.__setattr__(invocation, "request_id", request_id)
-    object.__setattr__(invocation, "organization_ref", organization_ref)
+    object.__setattr__(
+        invocation,
+        "organization_ref",
+        authenticated_organization_ref,
+    )
     object.__setattr__(invocation, "principal_ref", principal_ref)
     object.__setattr__(invocation, "membership_ref", membership_ref)
     object.__setattr__(invocation, "agent_version_ref", agent_version_ref)
@@ -77,6 +105,11 @@ def _construct_authenticated_http_invocation(
         authentication_binding_ref,
     )
     object.__setattr__(invocation, "received_at", received_at)
+    object.__setattr__(
+        invocation,
+        "organization_verification",
+        organization_verification,
+    )
     object.__setattr__(
         invocation,
         "construction_provenance",

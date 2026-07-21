@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import FrozenInstanceError
 from datetime import UTC, datetime
 from typing import Any, cast
+from uuid import UUID
 
 import pytest
 from fastapi import FastAPI
@@ -14,10 +15,19 @@ from adapters.http.authentication import (
     AuthenticationRejected,
     VerifiedAuthenticationContext,
 )
+from adapters.http.organization_authority import (
+    OrganizationVerificationRejected,
+)
 from adapters.http.transport import HttpTransportProfile
 from engine.runtime import (
     AuthenticatedInvocation,
     InvocationConstructionProvenance,
+    Resolved,
+)
+from engine.runtime.organization import (
+    ExistingOrganizationVerification,
+    OrganizationVerificationProvenance,
+    _construct_existing_http_organization_verification,
 )
 
 VALID_BODY = {
@@ -26,6 +36,7 @@ VALID_BODY = {
 }
 VALID_TOKEN = "opaque-test-credential"
 RECEIVED_AT = datetime(2026, 7, 21, 5, 0, tzinfo=UTC)
+INTERNAL_ORGANIZATION_REF = "81e18bca-86a1-478a-937d-7675c6fe69b0"
 
 
 class DeterministicAuthenticator:
@@ -39,13 +50,119 @@ class DeterministicAuthenticator:
         if opaque_credential != VALID_TOKEN:
             raise AuthenticationRejected
         return VerifiedAuthenticationContext(
-            organization_ref="organization-from-auth",
+            organization_ref=INTERNAL_ORGANIZATION_REF,
             principal_ref="principal-from-auth",
-            membership_ref="membership-from-auth",
+            membership_ref=None,
             agent_version_ref="agent-version-from-auth",
             authenticated_application_ref="application-from-auth",
             authentication_binding_ref="binding-from-auth",
         )
+
+
+class DeterministicOrganizationAuthority:
+    """Test twin that recognizes the one registered conformance Organization."""
+
+    def verify_existing(
+        self,
+        authentication: VerifiedAuthenticationContext,
+        *,
+        request_id: str,
+        verified_at: datetime,
+    ) -> ExistingOrganizationVerification:
+        if authentication.organization_ref != INTERNAL_ORGANIZATION_REF:
+            raise OrganizationVerificationRejected
+        return _construct_existing_http_organization_verification(
+            organization_id=UUID(authentication.organization_ref),
+            request_id=request_id,
+            authentication_binding_ref=authentication.authentication_binding_ref,
+            verified_at=verified_at,
+        )
+
+
+class RejectingTestOrganizationAuthority:
+    def verify_existing(
+        self,
+        authentication: VerifiedAuthenticationContext,
+        *,
+        request_id: str,
+        verified_at: datetime,
+    ) -> ExistingOrganizationVerification:
+        raise OrganizationVerificationRejected
+
+
+class SwitchedOrganizationAuthority:
+    def verify_existing(
+        self,
+        authentication: VerifiedAuthenticationContext,
+        *,
+        request_id: str,
+        verified_at: datetime,
+    ) -> ExistingOrganizationVerification:
+        return _construct_existing_http_organization_verification(
+            organization_id=UUID(int=9),
+            request_id=request_id,
+            authentication_binding_ref=authentication.authentication_binding_ref,
+            verified_at=verified_at,
+        )
+
+
+class WrongTypeOrganizationAuthority:
+    def verify_existing(
+        self,
+        authentication: VerifiedAuthenticationContext,
+        *,
+        request_id: str,
+        verified_at: datetime,
+    ) -> Any:
+        return {"organization_id": authentication.organization_ref}
+
+
+class MismatchedOrganizationEvidenceAuthority:
+    def __init__(self, field: str) -> None:
+        self._field = field
+
+    def verify_existing(
+        self,
+        authentication: VerifiedAuthenticationContext,
+        *,
+        request_id: str,
+        verified_at: datetime,
+    ) -> ExistingOrganizationVerification:
+        return _construct_existing_http_organization_verification(
+            organization_id=UUID(authentication.organization_ref),
+            request_id=("other-request" if self._field == "request" else request_id),
+            authentication_binding_ref=(
+                "other-binding"
+                if self._field == "binding"
+                else authentication.authentication_binding_ref
+            ),
+            verified_at=(
+                datetime(2026, 7, 21, 5, 1, tzinfo=UTC)
+                if self._field == "time"
+                else verified_at
+            ),
+        )
+
+
+class InvalidProvenanceOrganizationAuthority(DeterministicOrganizationAuthority):
+    def verify_existing(
+        self,
+        authentication: VerifiedAuthenticationContext,
+        *,
+        request_id: str,
+        verified_at: datetime,
+    ) -> ExistingOrganizationVerification:
+        evidence = super().verify_existing(
+            authentication,
+            request_id=request_id,
+            verified_at=verified_at,
+        )
+        object.__setattr__(
+            evidence,
+            "construction_provenance",
+            cast(OrganizationVerificationProvenance, "untrusted"),
+        )
+        return evidence
 
 
 class InvalidResultAuthenticator:
@@ -83,12 +200,49 @@ class InvalidClaimTypeAuthenticator:
         )
 
 
+class InvalidOrganizationRefAuthenticator:
+    """Test double whose trusted Organization locator is not internal."""
+
+    def authenticate(self, opaque_credential: str) -> VerifiedAuthenticationContext:
+        return VerifiedAuthenticationContext(
+            organization_ref="orgpkg_caller-replayed-output-reference",
+            principal_ref="principal-from-auth",
+            membership_ref="membership-from-auth",
+            agent_version_ref="agent-version-from-auth",
+            authenticated_application_ref="application-from-auth",
+            authentication_binding_ref="binding-from-auth",
+        )
+
+
+class AlternateUuidSpellingAuthenticator(DeterministicAuthenticator):
+    """Return the same trusted UUID using a valid non-canonical spelling."""
+
+    def authenticate(self, opaque_credential: str) -> VerifiedAuthenticationContext:
+        context = super().authenticate(opaque_credential)
+        return VerifiedAuthenticationContext(
+            organization_ref=context.organization_ref.replace("-", "").upper(),
+            principal_ref=context.principal_ref,
+            membership_ref=context.membership_ref,
+            agent_version_ref=context.agent_version_ref,
+            authenticated_application_ref=context.authenticated_application_ref,
+            authentication_binding_ref=context.authentication_binding_ref,
+        )
+
+
 class InvocationSpy:
     def __init__(self) -> None:
         self.invocations: list[AuthenticatedInvocation] = []
 
     def observe(self, invocation: AuthenticatedInvocation) -> None:
         self.invocations.append(invocation)
+
+
+class ResolutionSpy:
+    def __init__(self) -> None:
+        self.outcomes: list[Resolved] = []
+
+    def observe(self, outcome: Resolved) -> None:
+        self.outcomes.append(outcome)
 
 
 def test_valid_auth_constructs_exact_trusted_invocation_once() -> None:
@@ -106,15 +260,17 @@ def test_valid_auth_constructs_exact_trusted_invocation_once() -> None:
         json=VALID_BODY,
     )
 
-    assert response.status_code == 204
-    assert response.content == b""
+    assert response.status_code == 200
+    assert response.json()["kind"] == "resolved"
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["x-context-request-id"] == "request-from-header"
     assert authenticator.calls == [VALID_TOKEN]
     assert len(spy.invocations) == 1
     invocation = spy.invocations[0]
     assert invocation.request_id == "request-from-header"
-    assert invocation.organization_ref == "organization-from-auth"
+    assert invocation.organization_ref == INTERNAL_ORGANIZATION_REF
     assert invocation.principal_ref == "principal-from-auth"
-    assert invocation.membership_ref == "membership-from-auth"
+    assert invocation.membership_ref is None
     assert invocation.agent_version_ref == "agent-version-from-auth"
     assert invocation.authenticated_application_ref == "application-from-auth"
     assert invocation.authentication_binding_ref == "binding-from-auth"
@@ -124,6 +280,171 @@ def test_valid_auth_constructs_exact_trusted_invocation_once() -> None:
         is InvocationConstructionProvenance.AUTHENTICATED_HTTP_INGRESS
     )
     assert VALID_TOKEN not in repr(invocation)
+
+
+def test_valid_acquire_returns_canonical_tenant_safe_empty_package() -> None:
+    client = trust_boundary_client(DeterministicAuthenticator(), InvocationSpy())
+
+    response = client.post(
+        "/v1/context:resolve",
+        headers={"Authorization": f"Bearer {VALID_TOKEN}"},
+        json={
+            **VALID_BODY,
+            "packageBudget": {"maxTokens": 100, "maxElapsedMs": 1_000},
+            "requestNarrowing": {
+                "sourceRefs": ["source_opaque"],
+                "resourceRefs": ["resource_opaque"],
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/json"
+    assert response.headers["cache-control"] == "no-store"
+    assert response.json() == {
+        "kind": "resolved",
+        "package": {
+            "organizationRef": response.json()["package"]["organizationRef"],
+            "purpose": "context.answer",
+            "ttlSeconds": 300,
+            "asOf": "2026-07-21T05:00:00Z",
+            "expiresAt": "2026-07-21T05:05:00Z",
+            "decisionRef": response.json()["package"]["decisionRef"],
+            "blocks": [],
+            "evidence": [],
+            "gaps": [],
+            "budgetUsage": {
+                "tokens": 0,
+                "providerCalls": 0,
+                "costMicrounits": 0,
+                "elapsedMs": 0,
+            },
+            "coverage": {
+                "status": "empty",
+                "reason": "no_authorized_evidence",
+            },
+        },
+    }
+    assert response.json()["package"]["organizationRef"] != (
+        INTERNAL_ORGANIZATION_REF
+    )
+
+
+def test_valid_http_acquire_reaches_the_single_runtime_entry_exactly_once() -> None:
+    resolution_spy = ResolutionSpy()
+    client = TestClient(
+        create_app(
+            authenticator=DeterministicAuthenticator(),
+            organization_authority=DeterministicOrganizationAuthority(),
+            clock=lambda: RECEIVED_AT,
+            resolution_observer=resolution_spy.observe,
+        )
+    )
+
+    response = client.post(
+        "/v1/context:resolve",
+        headers={"Authorization": f"Bearer {VALID_TOKEN}"},
+        json=VALID_BODY,
+    )
+
+    assert response.status_code == 200
+    assert len(resolution_spy.outcomes) == 1
+    assert resolution_spy.outcomes[0].package.evidence == ()
+
+
+def test_valid_organization_uuid_is_canonicalized_once_at_auth_boundary() -> None:
+    spy = InvocationSpy()
+    client = trust_boundary_client(AlternateUuidSpellingAuthenticator(), spy)
+
+    response = client.post(
+        "/v1/context:resolve",
+        headers={"Authorization": f"Bearer {VALID_TOKEN}"},
+        json=VALID_BODY,
+    )
+
+    assert response.status_code == 200
+    assert spy.invocations[0].organization_ref == INTERNAL_ORGANIZATION_REF
+
+
+@pytest.mark.parametrize(
+    "organization_authority",
+    [
+        RejectingTestOrganizationAuthority(),
+        SwitchedOrganizationAuthority(),
+        WrongTypeOrganizationAuthority(),
+        MismatchedOrganizationEvidenceAuthority("request"),
+        MismatchedOrganizationEvidenceAuthority("binding"),
+        MismatchedOrganizationEvidenceAuthority("time"),
+        InvalidProvenanceOrganizationAuthority(),
+    ],
+)
+def test_unverified_or_switched_organization_fails_before_runtime(
+    organization_authority: object,
+) -> None:
+    resolution_spy = ResolutionSpy()
+    client = TestClient(
+        create_app(
+            authenticator=DeterministicAuthenticator(),
+            organization_authority=cast(Any, organization_authority),
+            resolution_observer=resolution_spy.observe,
+            clock=lambda: RECEIVED_AT,
+        )
+    )
+
+    response = client.post(
+        "/v1/context:resolve",
+        headers={"Authorization": f"Bearer {VALID_TOKEN}"},
+        json=VALID_BODY,
+    )
+
+    assert response.status_code == 401
+    assert response.content == b'{"code":"authentication_failed"}'
+    assert resolution_spy.outcomes == []
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {**VALID_BODY, "packageBudget": {}},
+        {**VALID_BODY, "packageBudget": {"maxTokens": 0}},
+        {**VALID_BODY, "packageBudget": {"maxTokens": True}},
+        {**VALID_BODY, "packageBudget": {"maxTokens": 1.5}},
+        {**VALID_BODY, "packageBudget": {"maxTokens": "1"}},
+        {**VALID_BODY, "packageBudget": {"unknown": 1}},
+        {**VALID_BODY, "requestNarrowing": {}},
+        {**VALID_BODY, "requestNarrowing": {"sourceRefs": []}},
+        {
+            **VALID_BODY,
+            "requestNarrowing": {"sourceRefs": ["same", "same"]},
+        },
+        {**VALID_BODY, "requestNarrowing": {"resourceRefs": [" "]}},
+        {
+            **VALID_BODY,
+            "requestNarrowing": {
+                "sourceRefs": [f"source_{index}" for index in range(65)]
+            },
+        },
+        {
+            **VALID_BODY,
+            "requestNarrowing": {"resourceRefs": ["r" * 257]},
+        },
+    ],
+)
+def test_budget_and_narrowing_wire_variants_are_strictly_closed(
+    body: dict[str, object],
+) -> None:
+    spy = InvocationSpy()
+    client = trust_boundary_client(DeterministicAuthenticator(), spy)
+
+    response = client.post(
+        "/v1/context:resolve",
+        headers={"Authorization": f"Bearer {VALID_TOKEN}"},
+        json=body,
+    )
+
+    assert response.status_code == 422
+    assert response.content == b'{"code":"invalid_request"}'
+    assert spy.invocations == []
 
 
 def test_missing_correlation_header_uses_server_generated_request_id() -> None:
@@ -136,7 +457,8 @@ def test_missing_correlation_header_uses_server_generated_request_id() -> None:
         json=VALID_BODY,
     )
 
-    assert response.status_code == 204
+    assert response.status_code == 200
+    assert response.headers["x-context-request-id"] == "server-generated-request"
     assert [invocation.request_id for invocation in spy.invocations] == [
         "server-generated-request"
     ]
@@ -184,6 +506,7 @@ def test_authentication_failures_are_generic_and_call_no_domain_seam(
         InvalidResultAuthenticator(),
         InvalidClaimsAuthenticator(),
         InvalidClaimTypeAuthenticator(),
+        InvalidOrganizationRefAuthenticator(),
     ],
 )
 def test_invalid_authenticator_output_is_a_generic_authentication_failure(
@@ -459,7 +782,7 @@ def test_resolve_body_limit_is_enforced_before_authentication() -> None:
         content=raw_body,
     )
 
-    assert exact.status_code == 204
+    assert exact.status_code == 200
     assert len(exact_spy.invocations) == 1
     assert rejected.status_code == 400
     assert rejected.content == b'{"code":"invalid_request"}'
@@ -521,6 +844,7 @@ def test_resolve_body_limit_applies_when_application_is_mounted() -> None:
     spy = InvocationSpy()
     inner = create_app(
         authenticator=authenticator,
+        organization_authority=DeterministicOrganizationAuthority(),
         invocation_observer=spy.observe,
         transport_profile=HttpTransportProfile(
             max_resolve_body_bytes=1,
@@ -651,17 +975,23 @@ def test_parser_recursion_limit_is_still_a_generic_transport_rejection() -> None
 
 
 @pytest.mark.parametrize(
-    ("max_resolve_body_bytes", "max_json_nesting_depth"),
-    [(0, 2), (1024, 0)],
+    (
+        "max_resolve_body_bytes",
+        "max_json_nesting_depth",
+        "max_correlation_id_characters",
+    ),
+    [(0, 2, 256), (1024, 0, 256), (1024, 2, 0)],
 )
 def test_transport_profile_rejects_non_positive_limits(
     max_resolve_body_bytes: int,
     max_json_nesting_depth: int,
+    max_correlation_id_characters: int,
 ) -> None:
     with pytest.raises(ValueError, match="positive"):
         HttpTransportProfile(
             max_resolve_body_bytes=max_resolve_body_bytes,
             max_json_nesting_depth=max_json_nesting_depth,
+            max_correlation_id_characters=max_correlation_id_characters,
         )
 
 
@@ -670,6 +1000,12 @@ def test_transport_profile_rejects_boolean_limits() -> None:
         HttpTransportProfile(
             max_resolve_body_bytes=True,
             max_json_nesting_depth=2,
+        )
+    with pytest.raises(ValueError, match="positive"):
+        HttpTransportProfile(
+            max_resolve_body_bytes=1024,
+            max_json_nesting_depth=2,
+            max_correlation_id_characters=True,
         )
 
 
@@ -767,9 +1103,23 @@ def test_default_application_rejects_all_credentials() -> None:
     assert response.content == b'{"code":"authentication_failed"}'
 
 
-def test_injected_authenticator_requires_the_bounded_observer_seam() -> None:
-    with pytest.raises(ValueError, match="invocation observer"):
-        create_app(authenticator=DeterministicAuthenticator())
+def test_injected_authenticator_runs_only_the_real_sealed_runtime() -> None:
+    client = TestClient(
+        create_app(
+            authenticator=DeterministicAuthenticator(),
+            organization_authority=DeterministicOrganizationAuthority(),
+            clock=lambda: RECEIVED_AT,
+        )
+    )
+
+    response = client.post(
+        "/v1/context:resolve",
+        headers={"Authorization": f"Bearer {VALID_TOKEN}"},
+        json=VALID_BODY,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["kind"] == "resolved"
 
 
 def test_openapi_body_is_closed_and_contains_no_trusted_fields() -> None:
@@ -783,12 +1133,44 @@ def test_openapi_body_is_closed_and_contains_no_trusted_fields() -> None:
         "scheme": "bearer",
         "bearerFormat": "opaque",
     }
+    correlation_parameter = next(
+        parameter
+        for parameter in operation["parameters"]
+        if parameter["name"] == "X-Context-Request-Id"
+    )
+    correlation_schema = correlation_parameter["schema"]["anyOf"][0]
+    assert correlation_schema["maxLength"] == 256
 
     request_schema = operation["requestBody"]["content"]["application/json"]["schema"]
     reachable = reachable_schemas(request_schema, schema["components"]["schemas"])
-    assert set(reachable) == {"AcquireWire", "ContextNeedWire"}
-    assert reachable["AcquireWire"]["properties"].keys() == {"kind", "need"}
+    assert set(reachable) == {
+        "AcquireWire",
+        "ContextNeedWire",
+        "PackageBudgetWire",
+        "RequestNarrowingWire",
+    }
+    assert reachable["AcquireWire"]["properties"].keys() == {
+        "kind",
+        "need",
+        "packageBudget",
+        "requestNarrowing",
+    }
     assert reachable["ContextNeedWire"]["properties"].keys() == {"query"}
+    assert reachable["PackageBudgetWire"]["properties"].keys() == {
+        "maxTokens",
+        "maxProviderCalls",
+        "maxCostMicrounits",
+        "maxElapsedMs",
+    }
+    assert reachable["RequestNarrowingWire"]["properties"].keys() == {
+        "sourceRefs",
+        "resourceRefs",
+    }
+    narrowing_properties = reachable["RequestNarrowingWire"]["properties"]
+    for field_name in ("sourceRefs", "resourceRefs"):
+        narrowing_schema = narrowing_properties[field_name]["anyOf"][0]
+        assert narrowing_schema["maxItems"] == 64
+        assert narrowing_schema["items"]["maxLength"] == 256
     assert all(
         document["additionalProperties"] is False for document in reachable.values()
     )
@@ -812,11 +1194,52 @@ def test_openapi_body_is_closed_and_contains_no_trusted_fields() -> None:
     ):
         assert forbidden not in serialized_request_graph
 
-    assert set(operation["responses"]) == {"204", "400", "401", "422"}
+    assert set(operation["responses"]) == {"200", "400", "401", "422"}
     assert response_schema_name(operation, 400) == "InvalidRequestWire"
     assert response_schema_name(operation, 401) == "AuthenticationFailureWire"
     assert response_schema_name(operation, 422) == "InvalidRequestWire"
-    assert "content" not in operation["responses"]["204"]
+    assert response_schema_name(operation, 200) == "ResolvedWire"
+    response_schema = operation["responses"]["200"]["content"][
+        "application/json"
+    ]["schema"]
+    response_models = reachable_schemas(
+        response_schema,
+        schema["components"]["schemas"],
+    )
+    assert set(response_models) == {
+        "ResolvedWire",
+        "ContextPackageWire",
+        "BudgetUsageWire",
+        "CoverageWire",
+    }
+    package_schema = response_models["ContextPackageWire"]
+    assert package_schema["additionalProperties"] is False
+    assert package_schema["required"] == [
+        "organizationRef",
+        "purpose",
+        "ttlSeconds",
+        "asOf",
+        "expiresAt",
+        "decisionRef",
+        "blocks",
+        "evidence",
+        "gaps",
+        "budgetUsage",
+        "coverage",
+    ]
+    assert package_schema["properties"]["blocks"]["maxItems"] == 0
+    assert package_schema["properties"]["evidence"]["maxItems"] == 0
+    assert package_schema["properties"]["gaps"]["maxItems"] == 0
+    assert package_schema["properties"]["organizationRef"]["pattern"] == (
+        "^orgpkg_[0-9a-f]{32}$"
+    )
+    assert package_schema["properties"]["decisionRef"]["pattern"] == (
+        "^dec_[0-9a-f]{32}$"
+    )
+    assert all(
+        response_model["additionalProperties"] is False
+        for response_model in response_models.values()
+    )
     assert "HTTPValidationError" not in schema["components"]["schemas"]
 
     for name, code in (
@@ -848,6 +1271,34 @@ def test_correlation_header_must_be_non_empty_if_present(header_value: str) -> N
     assert spy.invocations == []
 
 
+def test_correlation_header_is_bounded_by_the_active_transport_profile() -> None:
+    spy = InvocationSpy()
+    client = trust_boundary_client(DeterministicAuthenticator(), spy)
+
+    exact = client.post(
+        "/v1/context:resolve",
+        headers={
+            "Authorization": f"Bearer {VALID_TOKEN}",
+            "X-Context-Request-Id": "r" * 256,
+        },
+        json=VALID_BODY,
+    )
+    rejected = client.post(
+        "/v1/context:resolve",
+        headers={
+            "Authorization": f"Bearer {VALID_TOKEN}",
+            "X-Context-Request-Id": "r" * 257,
+        },
+        json=VALID_BODY,
+    )
+
+    assert exact.status_code == 200
+    assert exact.headers["x-context-request-id"] == "r" * 256
+    assert rejected.status_code == 422
+    assert rejected.content == b'{"code":"invalid_request"}'
+    assert [invocation.request_id for invocation in spy.invocations] == ["r" * 256]
+
+
 def test_authenticated_invocation_is_not_a_body_model_or_public_constructor() -> None:
     assert not issubclass(AuthenticatedInvocation, BaseModel)
     assert not hasattr(AuthenticatedInvocation, "model_validate")
@@ -874,7 +1325,7 @@ def test_authenticated_invocation_is_not_a_body_model_or_public_constructor() ->
         headers={"Authorization": f"Bearer {VALID_TOKEN}"},
         json=VALID_BODY,
     )
-    assert response.status_code == 204
+    assert response.status_code == 200
     with pytest.raises(FrozenInstanceError):
         spy.invocations[0].organization_ref = "mutation"  # type: ignore[misc]
 
@@ -889,6 +1340,7 @@ def trust_boundary_client(
         return TestClient(
             create_app(
                 authenticator=authenticator,
+                organization_authority=DeterministicOrganizationAuthority(),
                 invocation_observer=spy.observe,
                 clock=lambda: RECEIVED_AT,
                 request_id_factory=lambda: "server-generated-request",
@@ -897,6 +1349,7 @@ def trust_boundary_client(
     return TestClient(
         create_app(
             authenticator=authenticator,
+            organization_authority=DeterministicOrganizationAuthority(),
             invocation_observer=spy.observe,
             clock=lambda: RECEIVED_AT,
             request_id_factory=lambda: "server-generated-request",
