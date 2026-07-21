@@ -7,7 +7,7 @@ from json import loads
 from typing import Annotated, Final, Literal, cast
 from uuid import UUID, uuid4
 
-from fastapi import Depends, FastAPI, Header, Request, Response, Security
+from fastapi import Body, Depends, FastAPI, Header, Request, Response, Security
 from fastapi.exception_handlers import http_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -26,11 +26,17 @@ from adapters.http.contracts import (
     AuthenticationFailureWire,
     BlockWire,
     BudgetUsageWire,
+    CitationNotAvailableWire,
     ContextPackageWire,
+    ContinueWire,
     CoverageWire,
     EvidenceWire,
     InvalidRequestWire,
+    OpenCitationWire,
+    RequestNotAvailableWire,
+    ResolutionOutcomeWire,
     ResolvedWire,
+    ResolveWire,
     ServiceUnavailableWire,
 )
 from adapters.http.membership_authority import (
@@ -60,7 +66,18 @@ from engine.persistence.membership_context import (
     MembershipIdentity,
     MembershipNotCurrent,
 )
-from engine.runtime import AuthenticatedInvocation, Runtime
+from engine.runtime import (
+    AuthenticatedInvocation,
+    CitationNotAvailable,
+    CitationOpenRef,
+    ContinuationToken,
+    Continue,
+    OpenCitation,
+    RequestNotAvailable,
+    ResolutionOutcome,
+    Runtime,
+    RuntimeRequest,
+)
 from engine.runtime.actor import MembershipRejectionAuditReceipt
 from engine.runtime.budget import PackageBudgetRequest
 from engine.runtime.construction import required_kernel_dependencies
@@ -100,6 +117,10 @@ class InvalidJsonTransport(Exception):
     """Resolve received malformed JSON or a duplicate object key."""
 
 
+class InvalidClosedRequest(Exception):
+    """Resolve received input outside its closed request surface."""
+
+
 class DuplicateJsonObjectKey(ValueError):
     """Strict JSON decoding found an ambiguous object member."""
 
@@ -113,6 +134,7 @@ def _new_request_id() -> str:
 
 
 DIRECT_ACQUIRE_PURPOSE: Final = "context.answer"
+DIRECT_CITATION_PURPOSE: Final = "citation.open"
 
 
 def _reject_duplicate_json_object_keys(
@@ -203,15 +225,18 @@ def create_app(
         return JSONResponse(INVALID_REQUEST_RESPONSE, status_code=400)
 
     @app.exception_handler(RequestValidationError)
+    @app.exception_handler(InvalidClosedRequest)
     async def invalid_request(
         request: Request,
-        error: RequestValidationError,
+        error: RequestValidationError | InvalidClosedRequest,
     ) -> JSONResponse:
         status_code = (
             400
-            if any(detail.get("type") == "json_invalid" for detail in error.errors())
+            if isinstance(error, RequestValidationError)
+            and any(detail.get("type") == "json_invalid" for detail in error.errors())
             else 422
         )
+        del request, error
         return JSONResponse(INVALID_REQUEST_RESPONSE, status_code=status_code)
 
     @app.exception_handler(StarletteHTTPException)
@@ -228,6 +253,8 @@ def create_app(
         request_id_values = request.headers.getlist("x-context-request-id")
         if len(content_type_values) != 1 or len(request_id_values) > 1:
             raise InvalidRequestMediaType
+        if request.scope.get("query_string", b""):
+            raise InvalidClosedRequest
         media_type = content_type_values[0].partition(";")[0].strip().casefold()
         if media_type != "application/json":
             raise InvalidRequestMediaType
@@ -272,7 +299,7 @@ def create_app(
     @app.post(
         RESOLVE_PATH,
         status_code=200,
-        response_model=ResolvedWire,
+        response_model=ResolutionOutcomeWire,
         response_model_by_alias=True,
         dependencies=[Depends(require_closed_json_transport)],
         responses={
@@ -304,7 +331,7 @@ def create_app(
         },
     )
     def resolve_context(
-        body: AcquireWire,
+        body: Annotated[ResolveWire, Body()],
         authentication: Annotated[
             VerifiedAuthenticationContext,
             Depends(verified_authentication),
@@ -319,8 +346,9 @@ def create_app(
             ),
         ] = None,
     ) -> JSONResponse:
-        """Map one authenticated Acquire to the single sealed Runtime entry."""
+        """Map one authenticated closed request to the sealed Runtime entry."""
 
+        runtime_request = _runtime_request_from_wire(body)
         request_id = context_request_id or request_id_factory()
         received_at = clock()
         try:
@@ -364,7 +392,7 @@ def create_app(
                         policy_epoch=current_membership_verification.policy_epoch,
                         principal_ref=current_membership_verification.principal_ref,
                         agent_version_ref=authentication.agent_version_ref,
-                        purpose=DIRECT_ACQUIRE_PURPOSE,
+                        purpose=_purpose_for_wire(body),
                         request_id=current_membership_verification.request_id,
                         authentication_binding_ref=(
                             current_membership_verification.authentication_binding_ref
@@ -375,8 +403,15 @@ def create_app(
                     raise TransportAuthenticationFailed from None
                 with ExitStack() as scope_stack:
                     try:
+                        scope_authority = (
+                            selected_scope_authority
+                            if selected_runtime._requires_active_scope_authority(
+                                runtime_request
+                            )
+                            else MissingTrustedScopeAuthority()
+                        )
                         scope_snapshot = scope_stack.enter_context(
-                            selected_scope_authority.current_scope(scope_identity)
+                            scope_authority.current_scope(scope_identity)
                         )
                     except (TypeError, ValueError):
                         raise TrustedAuthorityUnavailable from None
@@ -401,7 +436,7 @@ def create_app(
                             authentication_binding_ref=(
                                 authentication.authentication_binding_ref
                             ),
-                            trusted_purpose=DIRECT_ACQUIRE_PURPOSE,
+                            trusted_purpose=_purpose_for_wire(body),
                             received_at=received_at,
                             trusted_scope_snapshot=scope_snapshot,
                         )
@@ -412,7 +447,7 @@ def create_app(
                     if invocation_observer is not None:
                         invocation_observer(invocation)
                     delivery_context = _construct_direct_delivery_context(
-                        purpose=DIRECT_ACQUIRE_PURPOSE,
+                        purpose=_purpose_for_wire(body),
                         authenticated_application_ref=(
                             authentication.authenticated_application_ref
                         ),
@@ -421,14 +456,13 @@ def create_app(
                         ),
                         established_at=invocation.received_at,
                     )
-                    request = _acquire_from_wire(body)
                     outcome = selected_runtime.resolve(
                         invocation,
                         delivery_context,
-                        request,
+                        runtime_request,
                     )
-                    response = _resolved_to_wire(outcome)
-                    if resolution_observer is not None:
+                    response = _resolution_outcome_to_wire(outcome)
+                    if type(outcome) is Resolved and resolution_observer is not None:
                         resolution_observer(outcome)
                     return JSONResponse(
                         response.model_dump(
@@ -460,7 +494,9 @@ def create_app(
     return app
 
 
-def _acquire_from_wire(body: AcquireWire) -> Acquire:
+def _package_budget_from_wire(
+    body: AcquireWire | ContinueWire,
+) -> PackageBudgetRequest | None:
     package_budget = None
     if body.packageBudget is not None:
         package_budget = PackageBudgetRequest(
@@ -469,6 +505,10 @@ def _acquire_from_wire(body: AcquireWire) -> Acquire:
             max_cost_microunits=body.packageBudget.maxCostMicrounits,
             max_elapsed_ms=body.packageBudget.maxElapsedMs,
         )
+    return package_budget
+
+
+def _acquire_from_wire(body: AcquireWire) -> Acquire:
     narrowing = None
     if body.requestNarrowing is not None:
         narrowing = RequestNarrowing(
@@ -477,9 +517,45 @@ def _acquire_from_wire(body: AcquireWire) -> Acquire:
         )
     return Acquire(
         need=ContextNeed(query=body.need.query),
-        package_budget=package_budget,
+        package_budget=_package_budget_from_wire(body),
         narrowing=narrowing,
     )
+
+
+def _purpose_for_wire(body: ResolveWire) -> str:
+    return (
+        DIRECT_CITATION_PURPOSE
+        if type(body) is OpenCitationWire
+        else DIRECT_ACQUIRE_PURPOSE
+    )
+
+
+def _runtime_request_from_wire(body: ResolveWire) -> RuntimeRequest:
+    if type(body) is AcquireWire:
+        return _acquire_from_wire(body)
+    if type(body) is ContinueWire:
+        return Continue(
+            continuation_token=ContinuationToken(body.continuationToken),
+            package_budget=_package_budget_from_wire(body),
+        )
+    if type(body) is OpenCitationWire:
+        return OpenCitation(citation_open_ref=CitationOpenRef(body.citationOpenRef))
+    raise TypeError("wire body must be one closed resolve variant")
+
+
+def _resolution_outcome_to_wire(
+    outcome: ResolutionOutcome,
+) -> ResolvedWire | RequestNotAvailableWire | CitationNotAvailableWire:
+    if type(outcome) is Resolved:
+        return _resolved_to_wire(outcome)
+    if type(outcome) is RequestNotAvailable:
+        return RequestNotAvailableWire(
+            kind=outcome.kind,
+            retryable=outcome.retryable,
+        )
+    if type(outcome) is CitationNotAvailable:
+        return CitationNotAvailableWire(kind=outcome.kind)
+    raise TypeError("Runtime returned an unknown resolution outcome")
 
 
 def _resolved_to_wire(outcome: Resolved) -> ResolvedWire:

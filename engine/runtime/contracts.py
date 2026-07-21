@@ -16,14 +16,22 @@ from engine.runtime.evidence import Evidence, PackageBlock, validate_package_con
 __all__ = [
     "Acquire",
     "BudgetUsage",
+    "CitationNotAvailable",
+    "CitationOpenRef",
     "ContextNeed",
     "ContextPackage",
+    "Continue",
+    "ContinuationToken",
     "Coverage",
     "CoverageReason",
     "CoverageStatus",
     "DirectDeliveryConstructionProvenance",
+    "OpenCitation",
     "RequestNarrowing",
+    "RequestNotAvailable",
+    "ResolutionOutcome",
     "Resolved",
+    "RuntimeRequest",
     "ScopeDecisionReceipt",
     "TrustedDeliveryContext",
     "_construct_direct_delivery_context",
@@ -31,6 +39,7 @@ __all__ = [
 
 MAX_NARROWING_REFS = 64
 MAX_NARROWING_REF_LENGTH = 256
+MAX_OPAQUE_CAPABILITY_LENGTH = 4096
 ORGANIZATION_PACKAGE_REF_PREFIX = "orgpkg"
 DECISION_REF_PREFIX = "dec"
 ORGANIZATION_PACKAGE_REF_PATTERN = r"^orgpkg_[0-9a-f]{32}$"
@@ -125,6 +134,64 @@ class Acquire:
             raise TypeError("package_budget must be PackageBudgetRequest or None")
         if self.narrowing is not None and type(self.narrowing) is not RequestNarrowing:
             raise TypeError("narrowing must be RequestNarrowing or None")
+
+
+def _require_opaque_capability_value(field_name: str, value: object) -> None:
+    if (
+        type(value) is not str
+        or not value
+        or len(value) > MAX_OPAQUE_CAPABILITY_LENGTH
+        or any(character.isspace() for character in value)
+    ):
+        raise ValueError(f"{field_name} must be a bounded nonblank opaque string")
+
+
+@dataclass(frozen=True, slots=True)
+class ContinuationToken:
+    """Opaque caller value for the distinct continuation capability class."""
+
+    value: str = field(repr=False)
+
+    def __post_init__(self) -> None:
+        _require_opaque_capability_value("ContinuationToken opaque value", self.value)
+
+
+@dataclass(frozen=True, slots=True)
+class CitationOpenRef:
+    """Opaque non-authorizing locator for the citation-open capability class."""
+
+    value: str = field(repr=False)
+
+    def __post_init__(self) -> None:
+        _require_opaque_capability_value("CitationOpenRef opaque value", self.value)
+
+
+@dataclass(frozen=True, slots=True)
+class Continue:
+    """Closed continuation request whose production carrier is unavailable at M0."""
+
+    continuation_token: ContinuationToken = field(repr=False)
+    package_budget: PackageBudgetRequest | None = None
+
+    def __post_init__(self) -> None:
+        if type(self.continuation_token) is not ContinuationToken:
+            raise TypeError("continuation_token must be ContinuationToken")
+        if (
+            self.package_budget is not None
+            and type(self.package_budget) is not PackageBudgetRequest
+        ):
+            raise TypeError("package_budget must be PackageBudgetRequest or None")
+
+
+@dataclass(frozen=True, slots=True)
+class OpenCitation:
+    """Closed citation-open request whose locator grants no authority."""
+
+    citation_open_ref: CitationOpenRef = field(repr=False)
+
+    def __post_init__(self) -> None:
+        if type(self.citation_open_ref) is not CitationOpenRef:
+            raise TypeError("citation_open_ref must be CitationOpenRef")
 
 
 @dataclass(frozen=True, slots=True)
@@ -318,3 +385,30 @@ class Resolved:
             raise TypeError("resolved scope_decision must be ScopeDecisionReceipt")
         if self.kind != "resolved":
             raise ValueError("resolved outcome kind must be resolved")
+
+
+@dataclass(frozen=True, slots=True)
+class RequestNotAvailable:
+    """Generic caller-safe outcome for a known unavailable Runtime request."""
+
+    kind: Literal["request_not_available"] = "request_not_available"
+    retryable: Literal[False] = False
+
+    def __post_init__(self) -> None:
+        if self.kind != "request_not_available" or self.retryable is not False:
+            raise ValueError("request-not-available public shape must remain closed")
+
+
+@dataclass(frozen=True, slots=True)
+class CitationNotAvailable:
+    """Generic caller-safe outcome for a known unavailable citation open."""
+
+    kind: Literal["citation_not_available"] = "citation_not_available"
+
+    def __post_init__(self) -> None:
+        if self.kind != "citation_not_available":
+            raise ValueError("citation-not-available public shape must remain closed")
+
+
+type RuntimeRequest = Acquire | Continue | OpenCitation
+type ResolutionOutcome = Resolved | RequestNotAvailable | CitationNotAvailable

@@ -93,6 +93,13 @@ paired Runtime/HTTP gate 进一步证明 cross-Organization、same-Organization 
 non-owner Control 事务原子撤销 seeded access 并推进 epoch，sealed Acquire 在交付前复核当前
 epoch，因此相同 query、CandidateRef 与持久 Fragment 在第一次 post-revoke 请求中返回
 零 Evidence，且 Org B 不受影响。该测试能力不等于生产 grant/admin workflow。
+Issue #16 已把公开 Runtime wire 固定为 closed `Acquire | Continue | OpenCitation`
+union，并在 server-owned `RuntimeCapabilityGate` 激活 M0 拒绝路径：已知但尚无真实
+carrier 的 Continue、OpenCitation、federated discovery 与 source-native authorization
+在任何 Provider/index/source-content I/O 前分别返回通用 domain-level
+`request_not_available` 或 `citation_not_available`；unknown variant 或 caller 自报
+capability 仍为通用 422。该激活只证明 deterministic refusal，不表示 continuation、
+citation、federated/source-native Provider 或 File publication 已实现。
 
 ### 当前 HTTP exact-authorized Evidence tracer
 
@@ -110,8 +117,10 @@ projection 与 sealed AuthorizationKernel，返回唯一 exact-authorized Eviden
 默认显式返回七个 missing trusted operands，因此不会接受任何生产 credential，也不会
 产生可交付 scope。
 
-请求体仅允许 `kind: "acquire"`、`need.query`、可选的有限 `packageBudget` 和可选的
-`requestNarrowing`（ref 长度与集合数量均受 active profile 限制），每层 unknown field、重复 JSON key
+请求体是 closed `kind` union：Acquire 允许 `need.query`、可选的有限
+`packageBudget` 和可选 `requestNarrowing`；Continue 允许 opaque
+`continuationToken` 与可选更小的 `packageBudget`；OpenCitation 只允许 opaque
+`citationOpenRef`。所有 ref/token 长度与集合数量均受 active profile 限制；每层 unknown field、重复 JSON key
 以及重复 singleton security/transport header 都 fail closed；pre-auth body bytes 和
 JSON nesting 由 `adapters/http/transport.py` 的 versioned profile 限制。非法
 JSON/media type、
@@ -130,7 +139,10 @@ refs/timestamps 后完全相同；响应不含 Resource 标识、名称、Candid
 确定性 authorities 与 real-PostgreSQL seeded composition 只属于测试组合。生产 OAuth/JWT、durable
 Principal/Agent grant authority、真实 Source/Resource ACL、通用检索与 continuation
 不属于这个已激活 tracer。Policy Epoch V0 也不激活 UI/外部 admin、DecisionAudit、
-outbox、cleanup、Continue、OpenCitation、WorkerLease 或 ticket revocation carrier。
+outbox、cleanup、真实 Continue/OpenCitation、WorkerLease 或 ticket revocation carrier。
+其中 Continue/OpenCitation 的 M0 通用拒绝已经激活，但真实 issuance/redemption carrier
+仍保持 future；restricted in-process audit 只保留 `UNSUPPORTED_CAPABILITY` 类别，
+durable DecisionAudit 仍为 `NOT_ACTIVE`。
 
 本次公开候选 bundle 包含实现权威、ADR、安全契约、PRD、Tech Spec
 与四个公开参考仓的证据基线；经维护者批准并提交后，它们将与实现一同

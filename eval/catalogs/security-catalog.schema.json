@@ -59,12 +59,47 @@
     },
     "activations": {
       "type": "array",
-      "minItems": 1,
-      "maxItems": 1,
+      "minItems": 2,
+      "maxItems": 2,
       "uniqueItems": true,
-      "items": {
-        "$ref": "#/$defs/activation"
-      }
+      "prefixItems": [
+        {
+          "const": {
+            "issueRef": "#15",
+            "invariantRef": "REVOCATION-006",
+            "carrier": "ContextRuntime.resolve(Acquire)",
+            "status": "active_fail_closed",
+            "policyEpochScope": "organization-v0",
+            "controlBoundary": "PostgreSQLAccessPolicyControl.change_access(ResourceAccessRevocation)",
+            "testEvidence": [
+              {"id": "PG-REVOCATION-006", "surface": "tests/integration/test_access_policy_revocation.py", "oracle": "The internal non-owner Control transaction atomically revokes exact same-Organization access and advances one monotonic Organization epoch; rollback and overflow expose neither half, concurrent successful changes lose no bump, and Org B remains unchanged."},
+              {"id": "RUN-006", "surface": "tests/integration/test_runtime_policy_epoch_integration.py", "oracle": "The same authenticated HTTP Acquire with the same query and unchanged CandidateIndex/Fragment returns authorized Evidence before revoke and zero Evidence on the first request after commit; Org B remains authorized and the persistent Fragment remains present."},
+              {"id": "CACHE-002", "surface": "tests/unit/test_runtime_authorized_evidence.py", "oracle": "An injected pre-revocation authorization decision or a mid-resolve epoch change fails the final current-epoch gate and delivers zero stale Evidence without relying on candidate or content removal."}
+            ],
+            "deferredEvidence": ["BLOB-002"],
+            "futureCarriers": ["Continue", "OpenCitation", "WorkerLease", "ContextAccessTicket", "ActionTicket"],
+            "notActive": ["DecisionAudit", "outbox", "cleanup", "Source/Resource Policy Epochs", "UI/external admin"]
+          }
+        },
+        {
+          "const": {
+            "issueRef": "#16",
+            "invariantRef": "INDEX-NOT-AUTHORITY-005",
+            "carrier": "ContextRuntime.resolve(Continue | OpenCitation | server-owned unavailable Acquire plan)",
+            "status": "active_fail_closed",
+            "policyEpochScope": "organization-v0",
+            "controlBoundary": "RuntimeCapabilityGate.require_available(RuntimeCapability)",
+            "testEvidence": [
+              {"id": "RUN-UNAVAILABLE-016", "surface": "tests/unit/test_runtime_unavailable_capabilities.py", "oracle": "Table-driven Runtime cases prove unavailable Continue, OpenCitation, and server-owned Acquire plans traverse the content-free sealed Kernel preflight and stop before Provider, index, or source I/O; the restricted mandatory audit retains only UNSUPPORTED_CAPABILITY."},
+              {"id": "HTTP-UNAVAILABLE-016", "surface": "tests/unit/test_http_unavailable_capabilities.py", "oracle": "The closed HTTP and OpenAPI request union admits its declared variants, maps known unavailable capabilities to generic 200 domain outcomes before configured scope-authority or content I/O, rejects unknown fields and every query string with 422, and serializes no internal cause or protected detail."}
+            ],
+            "deferredEvidence": ["real-continuation-redemption", "real-citation-redemption", "real-federated-source-native-authorization"],
+            "futureCarriers": ["Continue", "OpenCitation", "federated/source-native ContextProvider"],
+            "notActive": ["continuation issuance/redemption", "citation locator redemption", "federated Provider/source-native ACL I/O", "File publication"]
+          }
+        }
+      ],
+      "items": false
     },
     "invariants": {
       "type": "array",
@@ -256,7 +291,7 @@
       "additionalProperties": false,
       "required": ["id", "surface", "oracle"],
       "properties": {
-        "id": {"enum": ["PG-REVOCATION-006", "RUN-006", "CACHE-002"]},
+        "id": {"enum": ["PG-REVOCATION-006", "RUN-006", "CACHE-002", "RUN-UNAVAILABLE-016", "HTTP-UNAVAILABLE-016"]},
         "surface": {"$ref": "#/$defs/documentRef"},
         "oracle": {"$ref": "#/$defs/nonEmptyString"}
       }
@@ -266,15 +301,15 @@
       "additionalProperties": false,
       "required": ["issueRef", "invariantRef", "carrier", "status", "policyEpochScope", "controlBoundary", "testEvidence", "deferredEvidence", "futureCarriers", "notActive"],
       "properties": {
-        "issueRef": {"const": "#15"},
-        "invariantRef": {"const": "REVOCATION-006"},
-        "carrier": {"const": "ContextRuntime.resolve(Acquire)"},
+        "issueRef": {"enum": ["#15", "#16"]},
+        "invariantRef": {"enum": ["REVOCATION-006", "INDEX-NOT-AUTHORITY-005"]},
+        "carrier": {"enum": ["ContextRuntime.resolve(Acquire)", "ContextRuntime.resolve(Continue | OpenCitation | server-owned unavailable Acquire plan)"]},
         "status": {"const": "active_fail_closed"},
         "policyEpochScope": {"const": "organization-v0"},
-        "controlBoundary": {"const": "PostgreSQLAccessPolicyControl.change_access(ResourceAccessRevocation)"},
+        "controlBoundary": {"enum": ["PostgreSQLAccessPolicyControl.change_access(ResourceAccessRevocation)", "RuntimeCapabilityGate.require_available(RuntimeCapability)"]},
         "testEvidence": {
           "type": "array",
-          "minItems": 3,
+          "minItems": 2,
           "maxItems": 3,
           "uniqueItems": true,
           "items": {"$ref": "#/$defs/activationTestEvidence"}
@@ -282,35 +317,20 @@
         "deferredEvidence": {
           "type": "array",
           "minItems": 1,
-          "maxItems": 1,
-          "prefixItems": [{"const": "BLOB-002"}],
-          "items": false
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/nonEmptyString"}
         },
         "futureCarriers": {
           "type": "array",
-          "minItems": 5,
-          "maxItems": 5,
-          "prefixItems": [
-            {"const": "Continue"},
-            {"const": "OpenCitation"},
-            {"const": "WorkerLease"},
-            {"const": "ContextAccessTicket"},
-            {"const": "ActionTicket"}
-          ],
-          "items": false
+          "minItems": 3,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/nonEmptyString"}
         },
         "notActive": {
           "type": "array",
-          "minItems": 5,
-          "maxItems": 5,
-          "prefixItems": [
-            {"const": "DecisionAudit"},
-            {"const": "outbox"},
-            {"const": "cleanup"},
-            {"const": "Source/Resource Policy Epochs"},
-            {"const": "UI/external admin"}
-          ],
-          "items": false
+          "minItems": 4,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/nonEmptyString"}
         }
       }
     },

@@ -1507,7 +1507,10 @@ def test_openapi_body_is_closed_and_contains_no_trusted_fields() -> None:
     request_schema = operation["requestBody"]["content"]["application/json"]["schema"]
     reachable = reachable_schemas(request_schema, schema["components"]["schemas"])
     assert set(reachable) == {
+        "ResolveWire",
         "AcquireWire",
+        "ContinueWire",
+        "OpenCitationWire",
         "ContextNeedWire",
         "PackageBudgetWire",
         "RequestNarrowingWire",
@@ -1517,6 +1520,15 @@ def test_openapi_body_is_closed_and_contains_no_trusted_fields() -> None:
         "need",
         "packageBudget",
         "requestNarrowing",
+    }
+    assert reachable["ContinueWire"]["properties"].keys() == {
+        "kind",
+        "continuationToken",
+        "packageBudget",
+    }
+    assert reachable["OpenCitationWire"]["properties"].keys() == {
+        "kind",
+        "citationOpenRef",
     }
     assert reachable["ContextNeedWire"]["properties"].keys() == {"query"}
     assert reachable["PackageBudgetWire"]["properties"].keys() == {
@@ -1535,7 +1547,9 @@ def test_openapi_body_is_closed_and_contains_no_trusted_fields() -> None:
         assert narrowing_schema["maxItems"] == 64
         assert narrowing_schema["items"]["maxLength"] == 256
     assert all(
-        document["additionalProperties"] is False for document in reachable.values()
+        document["additionalProperties"] is False
+        for name, document in reachable.items()
+        if name != "ResolveWire"
     )
 
     serialized_request_graph = repr(reachable).casefold()
@@ -1570,7 +1584,7 @@ def test_openapi_body_is_closed_and_contains_no_trusted_fields() -> None:
     assert response_schema_name(operation, 401) == "AuthenticationFailureWire"
     assert response_schema_name(operation, 422) == "InvalidRequestWire"
     assert response_schema_name(operation, 503) == "ServiceUnavailableWire"
-    assert response_schema_name(operation, 200) == "ResolvedWire"
+    assert response_schema_name(operation, 200) == "ResolutionOutcomeWire"
     response_schema = operation["responses"]["200"]["content"][
         "application/json"
     ]["schema"]
@@ -1579,7 +1593,10 @@ def test_openapi_body_is_closed_and_contains_no_trusted_fields() -> None:
         schema["components"]["schemas"],
     )
     assert set(response_models) == {
+        "ResolutionOutcomeWire",
         "ResolvedWire",
+        "RequestNotAvailableWire",
+        "CitationNotAvailableWire",
         "ContextPackageWire",
         "BlockWire",
         "EvidenceWire",
@@ -1635,7 +1652,8 @@ def test_openapi_body_is_closed_and_contains_no_trusted_fields() -> None:
     }
     assert all(
         response_model["additionalProperties"] is False
-        for response_model in response_models.values()
+        for name, response_model in response_models.items()
+        if name != "ResolutionOutcomeWire"
     )
     serialized_response_graph = repr(response_models).casefold()
     for forbidden in (

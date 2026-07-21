@@ -9,11 +9,19 @@ from hashlib import sha256
 from hmac import new as new_hmac
 from secrets import token_bytes
 from threading import Lock
-from typing import Literal
+from typing import Literal, overload
 from uuid import UUID
 
 from engine.runtime.actor import _require_active_user_actor
 from engine.runtime.budget import PackageBudget, effective_package_budget
+from engine.runtime.capabilities import (
+    RuntimeCapability,
+    RuntimeCapabilityGate,
+    RuntimeRefusalCategory,
+    UnsupportedCapability,
+    UnsupportedCapabilityAuditReceipt,
+    _required_capability_for_request,
+)
 from engine.runtime.content_io import (
     CandidateIndex,
     RuntimeContentIo,
@@ -24,11 +32,17 @@ from engine.runtime.contracts import (
     ORGANIZATION_PACKAGE_REF_PREFIX,
     Acquire,
     BudgetUsage,
+    CitationNotAvailable,
     ContextPackage,
+    Continue,
     Coverage,
     CoverageReason,
     CoverageStatus,
+    OpenCitation,
+    RequestNotAvailable,
+    ResolutionOutcome,
     Resolved,
+    RuntimeRequest,
     ScopeDecisionReceipt,
     _require_closed_opaque_ref,
 )
@@ -145,10 +159,9 @@ class AuthorizationDecision:
     content: PackageContent
 
 
-def _validate_trusted_operands(
+def _validate_trusted_invocation_and_delivery(
     invocation: AuthenticatedInvocation,
     delivery_context: TrustedDeliveryContext,
-    request: Acquire,
 ) -> None:
     if (
         type(invocation) is not AuthenticatedInvocation
@@ -196,8 +209,6 @@ def _validate_trusted_operands(
         or delivery_context.established_at != invocation.received_at
     ):
         raise ValueError("Runtime requires a matching trusted delivery context")
-    if type(request) is not Acquire:
-        raise TypeError("Runtime request must be Acquire")
     scope_snapshot = invocation.trusted_scope_snapshot
     _require_active_trusted_scope_snapshot(scope_snapshot)
     if (
@@ -226,7 +237,9 @@ class PolicyGate:
         delivery_context: TrustedDeliveryContext,
         request: Acquire,
     ) -> PolicyReceipt:
-        _validate_trusted_operands(invocation, delivery_context, request)
+        if type(request) is not Acquire:
+            raise TypeError("Runtime request must be Acquire")
+        _validate_trusted_invocation_and_delivery(invocation, delivery_context)
         effective_scope = (
             compute_effective_scope(
                 _trusted_operands_from_snapshot(invocation.trusted_scope_snapshot),
@@ -243,6 +256,24 @@ class PolicyGate:
             purpose=delivery_context.purpose,
             policy_epoch=invocation.policy_epoch,
             effective_scope=effective_scope,
+        )
+
+    def validate_unavailable(
+        self,
+        invocation: AuthenticatedInvocation,
+        delivery_context: TrustedDeliveryContext,
+        request: RuntimeRequest,
+    ) -> PolicyReceipt:
+        """Validate trusted operands without authorizing any content scope."""
+
+        if type(request) not in {Acquire, Continue, OpenCitation}:
+            raise TypeError("request must be one closed Runtime request variant")
+        _validate_trusted_invocation_and_delivery(invocation, delivery_context)
+        return PolicyReceipt(
+            request_id=invocation.request_id,
+            purpose=delivery_context.purpose,
+            policy_epoch=invocation.policy_epoch,
+            effective_scope=EffectiveScope(frozenset()),
         )
 
 
@@ -269,9 +300,20 @@ class PackageBudgetGate:
     def intersect(
         self,
         server_budget: PackageBudget,
-        request: Acquire,
+        request: Acquire | Continue,
     ) -> PackageBudget:
         return effective_package_budget(server_budget, request.package_budget)
+
+    def preflight(
+        self,
+        server_budget: PackageBudget,
+        request: RuntimeRequest,
+    ) -> PackageBudget:
+        if type(request) is Acquire or type(request) is Continue:
+            return effective_package_budget(server_budget, request.package_budget)
+        if type(request) is OpenCitation:
+            return effective_package_budget(server_budget, None)
+        raise TypeError("budget preflight requires one closed Runtime request")
 
 
 @dataclass(frozen=True, slots=True)
@@ -334,9 +376,16 @@ class ProvenanceGate:
         )
 
 
-@dataclass(frozen=True, slots=True)
 class DecisionAuditGate:
     """Concrete safe in-memory audit gate; persistence belongs to Issue #19."""
+
+    __slots__ = ("_lock", "_unsupported_category_counts")
+
+    def __init__(self) -> None:
+        self._lock = Lock()
+        self._unsupported_category_counts: dict[RuntimeRefusalCategory, int] = {
+            RuntimeRefusalCategory.UNSUPPORTED_CAPABILITY: 0
+        }
 
     def record(
         self,
@@ -355,6 +404,35 @@ class DecisionAuditGate:
             ),
             authorized_evidence_count=authorized_evidence_count,
         )
+
+    def record_unsupported(
+        self,
+        provenance_receipt: DecisionProvenanceReceipt,
+    ) -> None:
+        """Record only the closed category, never carrier or resource detail."""
+
+        if type(provenance_receipt) is not DecisionProvenanceReceipt:
+            raise TypeError(
+                "unsupported capability audit requires decision provenance"
+            )
+        _require_closed_opaque_ref(
+            "decision reference",
+            provenance_receipt.decision_ref,
+            prefix=DECISION_REF_PREFIX,
+        )
+        receipt = UnsupportedCapabilityAuditReceipt()
+        with self._lock:
+            self._unsupported_category_counts[receipt.category] += 1
+
+    def _unsupported_capability_snapshot(
+        self,
+    ) -> tuple[RuntimeRefusalCategory, int, Literal[0]]:
+        """Return only the restricted category, occurrence count, and zero detail."""
+
+        category = RuntimeRefusalCategory.UNSUPPORTED_CAPABILITY
+        with self._lock:
+            count = self._unsupported_category_counts[category]
+        return category, count, 0
 
 
 type KernelDependency = (
@@ -471,6 +549,43 @@ class AuthorizationKernel:
             provenance_receipt=provenance_receipt,
             content=content,
         )
+
+    def preflight_unavailable_request(
+        self,
+        invocation: AuthenticatedInvocation,
+        delivery_context: TrustedDeliveryContext,
+        request: RuntimeRequest,
+        *,
+        server_budget: PackageBudget,
+        as_of: datetime,
+        reference_issuer: _OpaqueReferenceIssuer,
+    ) -> None:
+        """Run the mandatory content-free gates before a capability veto."""
+
+        policy_receipt = self._policy.validate_unavailable(
+            invocation,
+            delivery_context,
+            request,
+        )
+        self._budget.preflight(server_budget, request)
+
+        scope_snapshot = invocation.trusted_scope_snapshot
+        provenance_receipt = self._provenance.issue(
+            invocation,
+            policy_receipt,
+            as_of=as_of,
+            reference_issuer=reference_issuer,
+        )
+        if (
+            scope_snapshot.policy_epoch != invocation.policy_epoch
+            or not self._policy_epoch.is_current(
+                invocation.user_actor.policy_epoch_verification
+            )
+        ):
+            raise PolicyEpochAuthorityUnavailable(
+                "unavailable capability preflight requires a current Policy Epoch"
+            )
+        self._audit.record_unsupported(provenance_receipt)
 
     def finalize_for_delivery(
         self,
@@ -700,7 +815,7 @@ class _OpaqueReferenceIssuer:
 
 
 class Runtime:
-    """Single sealed Runtime entry point for the Acquire tracer."""
+    """Single sealed Runtime entry point for the closed request union."""
 
     def __init__(
         self,
@@ -710,6 +825,9 @@ class Runtime:
         server_budget: PackageBudget = DEFAULT_SERVER_PACKAGE_BUDGET,
         content_io: RuntimeContentIo | None = None,
         candidate_index: CandidateIndex | None = None,
+        acquire_capability: RuntimeCapability = (
+            RuntimeCapability.MATERIALIZED_ACQUIRE
+        ),
         clock: Callable[[], datetime] = _utc_now,
     ) -> None:
         validated = _validate_kernel_dependencies(dependencies)
@@ -724,32 +842,136 @@ class Runtime:
             getattr(candidate_index, "discover", None)
         ):
             raise RuntimeConfigurationError("candidate_index is incomplete")
+        if (
+            content_io is not None
+            and candidate_index is not None
+            and content_io.index is not candidate_index
+        ):
+            raise RuntimeConfigurationError(
+                "candidate_index must be the composed content_io index"
+            )
+        if content_io is None and candidate_index is not None:
+            selected_content_io = RuntimeContentIo(
+                index=candidate_index,
+                provider=selected_content_io.provider,
+                source_content=selected_content_io.source_content,
+            )
+        if (
+            type(acquire_capability) is not RuntimeCapability
+            or acquire_capability
+            not in {
+                RuntimeCapability.MATERIALIZED_ACQUIRE,
+                RuntimeCapability.FEDERATED_DISCOVERY,
+                RuntimeCapability.SOURCE_NATIVE_AUTHORIZATION,
+            }
+        ):
+            raise RuntimeConfigurationError(
+                "acquire capability must be a server-owned Acquire capability"
+            )
         self._dependencies = validated
         self._kernel = AuthorizationKernel(validated)
         self._package_ttl_seconds = package_ttl_seconds
         self._server_budget = server_budget
         self._content_io = selected_content_io
-        self._candidate_index = candidate_index
+        self._candidate_discovery_enabled = candidate_index is not None
+        self._acquire_capability = acquire_capability
+        self._capability_gate = RuntimeCapabilityGate()
         self._clock = clock
         self._reference_issuer = _OpaqueReferenceIssuer()
 
+    @overload
     def resolve(
         self,
         invocation: AuthenticatedInvocation,
         delivery_context: TrustedDeliveryContext,
         request: Acquire,
-    ) -> Resolved:
-        """Resolve one Acquire through the sole sealed Kernel path."""
+    ) -> Resolved | RequestNotAvailable: ...
+
+    @overload
+    def resolve(
+        self,
+        invocation: AuthenticatedInvocation,
+        delivery_context: TrustedDeliveryContext,
+        request: Continue,
+    ) -> RequestNotAvailable: ...
+
+    @overload
+    def resolve(
+        self,
+        invocation: AuthenticatedInvocation,
+        delivery_context: TrustedDeliveryContext,
+        request: OpenCitation,
+    ) -> CitationNotAvailable: ...
+
+    @overload
+    def resolve(
+        self,
+        invocation: AuthenticatedInvocation,
+        delivery_context: TrustedDeliveryContext,
+        request: RuntimeRequest,
+    ) -> ResolutionOutcome: ...
+
+    def resolve(
+        self,
+        invocation: AuthenticatedInvocation,
+        delivery_context: TrustedDeliveryContext,
+        request: RuntimeRequest,
+    ) -> ResolutionOutcome:
+        """Resolve one closed request after a pre-content capability check."""
+
+        request_type = type(request)
+        capability = _required_capability_for_request(
+            request,
+            acquire_capability=self._acquire_capability,
+        )
+
+        if type(self._capability_gate) is not RuntimeCapabilityGate:
+            raise RuntimeConfigurationError(
+                "mandatory Runtime capability gate is missing or invalid"
+            )
+        if type(self._kernel) is not AuthorizationKernel:
+            raise RuntimeConfigurationError(
+                "mandatory AuthorizationKernel is missing or invalid"
+            )
+        try:
+            self._capability_gate.require_available(capability)
+        except UnsupportedCapability:
+            self._kernel.preflight_unavailable_request(
+                invocation,
+                delivery_context,
+                request,
+                server_budget=self._server_budget,
+                as_of=_require_utc("Runtime clock", self._clock()),
+                reference_issuer=self._reference_issuer,
+            )
+            if request_type is OpenCitation:
+                return CitationNotAvailable()
+            return RequestNotAvailable()
+
+        if capability is not RuntimeCapability.MATERIALIZED_ACQUIRE:
+            raise RuntimeConfigurationError(
+                "available Acquire capability has no sealed implementation"
+            )
+        if request_type is not Acquire:
+            raise RuntimeConfigurationError(
+                "available future Runtime carrier has no sealed implementation"
+            )
+        assert isinstance(request, Acquire)
+        acquire = request
 
         as_of = _require_utc("Runtime clock", self._clock())
         decision = self._kernel.authorize_acquire(
             invocation,
             delivery_context,
-            request,
+            acquire,
             server_budget=self._server_budget,
             as_of=as_of,
             reference_issuer=self._reference_issuer,
-            candidate_index=self._candidate_index,
+            candidate_index=(
+                self._content_io.index
+                if self._candidate_discovery_enabled
+                else None
+            ),
             projection_session=(
                 invocation.user_actor.materialized_projection_session
             ),
@@ -797,6 +1019,32 @@ class Runtime:
                 is_empty=not policy_receipt.effective_scope.targets,
             ),
         )
+
+    def _required_capability(self, request: RuntimeRequest) -> RuntimeCapability:
+        """Expose the sealed server-owned plan to trusted ingress composition."""
+
+        return _required_capability_for_request(
+            request,
+            acquire_capability=self._acquire_capability,
+        )
+
+    def _requires_active_scope_authority(self, request: RuntimeRequest) -> bool:
+        """Tell trusted ingress whether this server plan can perform content work."""
+
+        capability = self._required_capability(request)
+        gate = RuntimeCapabilityGate()
+        try:
+            gate.require_available(capability)
+        except UnsupportedCapability:
+            return False
+        return True
+
+    def _unsupported_capability_audit_snapshot(
+        self,
+    ) -> tuple[RuntimeRefusalCategory, int, Literal[0]]:
+        """Expose restricted audit evidence only to trusted in-process checks."""
+
+        return self._dependencies.audit._unsupported_capability_snapshot()
 
 
 def required_kernel_dependencies() -> KernelDependencies:

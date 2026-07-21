@@ -9,6 +9,7 @@ from engine.runtime.contracts import (
     DECISION_REF_PATTERN,
     MAX_NARROWING_REF_LENGTH,
     MAX_NARROWING_REFS,
+    MAX_OPAQUE_CAPABILITY_LENGTH,
     ORGANIZATION_PACKAGE_REF_PATTERN,
 )
 
@@ -115,12 +116,45 @@ class RequestNarrowingWire(ClosedWireModel):
 
 
 class AcquireWire(ClosedWireModel):
-    """Only the closed untrusted Acquire variant currently activated."""
+    """Closed untrusted Acquire variant."""
 
     kind: Literal["acquire"]
     need: ContextNeedWire
     packageBudget: PackageBudgetWire | None = None
     requestNarrowing: RequestNarrowingWire | None = None
+
+
+OpaqueCapabilityInput = Annotated[
+    str,
+    Field(
+        strict=True,
+        min_length=1,
+        max_length=MAX_OPAQUE_CAPABILITY_LENGTH,
+        pattern=r"^\S+$",
+        repr=False,
+    ),
+]
+
+
+class ContinueWire(ClosedWireModel):
+    """Closed known continuation variant; its carrier is unavailable at M0."""
+
+    kind: Literal["continue"]
+    continuationToken: OpaqueCapabilityInput
+    packageBudget: PackageBudgetWire | None = None
+
+
+class OpenCitationWire(ClosedWireModel):
+    """Closed known citation variant; its locator carries no authority."""
+
+    kind: Literal["open_citation"]
+    citationOpenRef: OpaqueCapabilityInput
+
+
+type ResolveWire = Annotated[
+    AcquireWire | ContinueWire | OpenCitationWire,
+    Field(discriminator="kind"),
+]
 
 
 class BudgetUsageWire(ClosedWireModel):
@@ -238,6 +272,25 @@ class ResolvedWire(ClosedWireModel):
 
     kind: Literal["resolved"]
     package: ContextPackageWire
+
+
+class RequestNotAvailableWire(ClosedWireModel):
+    """Caller-safe outcome for an unavailable known request."""
+
+    kind: Literal["request_not_available"]
+    retryable: Literal[False]
+
+
+class CitationNotAvailableWire(ClosedWireModel):
+    """Caller-safe outcome for an unavailable citation open."""
+
+    kind: Literal["citation_not_available"]
+
+
+type ResolutionOutcomeWire = Annotated[
+    ResolvedWire | RequestNotAvailableWire | CitationNotAvailableWire,
+    Field(discriminator="kind"),
+]
 
 
 class AuthenticationFailureWire(ClosedWireModel):

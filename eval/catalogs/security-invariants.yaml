@@ -4,7 +4,8 @@
     "issueRefs": [
       "#2",
       "#5",
-      "#15"
+      "#15",
+      "#16"
     ],
     "documentRefs": [
       "README.md",
@@ -14,9 +15,10 @@
       "docs/security/Test-Architecture-与可验证性设计.md",
       "docs/security/安全负向测试清单.md",
       "docs/decisions/0019-security-catalog-normalization.md",
-      "docs/decisions/0027-organization-policy-epoch.md"
+      "docs/decisions/0027-organization-policy-epoch.md",
+      "docs/decisions/0028-fail-closed-unavailable-runtime-capabilities.md"
     ],
-    "reconciliation": "Issue #2 fixes the product and testing decisions, issue #5 requires exactly fifteen release invariants and twelve canonical acceptance fixtures, and ADR-0019 resolves the later nineteen-label prose expansion without weakening any safeguard. Issue #15 activates only Organization-level next-request resolve(Acquire) revocation evidence under REVOCATION-006: PG-REVOCATION-006, RUN-006, and CACHE-002 are active while BLOB-002 and Continue, citation, lease, ticket, audit, outbox, cleanup, finer-epoch, UI, and external-admin carriers remain future or NOT_ACTIVE. The canonical set is IDs 001 through 012, 014, 015, and 019: CACHE-SCOPE-013 remains a preregistered conditional extension; AUDIENCE-016 is absorbed by SCOPE-INTERSECTION-004 and EGRESS-011; ACL-PROOF-017 is absorbed by INDEX-NOT-AUTHORITY-005 and REVOCATION-006; DELIVERY-EVIDENCE-018 is absorbed by TRANSPORT-UNTRUSTED-008. ACCEPT-001 through ACCEPT-012 follow ADR-0019's category order. Protected-asset references A-01 through A-08 refer, in order, to the eight bullets in the threat model's Protected assets section. Every expectedEvidence value below is a stable planned case identifier, not a claim that the case ran or passed; only an exact activation record upgrades named evidence, while fixture carrier status and the explicit M0 oracle preserve every other accepted-versus-active distinction."
+    "reconciliation": "Issue #2 fixes the product and testing decisions, issue #5 requires exactly fifteen release invariants and twelve canonical acceptance fixtures, and ADR-0019 resolves the later nineteen-label prose expansion without weakening any safeguard. Issue #15 activates only Organization-level next-request resolve(Acquire) revocation evidence under REVOCATION-006: PG-REVOCATION-006, RUN-006, and CACHE-002 are active while BLOB-002 and Continue, citation, lease, ticket, audit, outbox, cleanup, finer-epoch, UI, and external-admin carriers remain future or NOT_ACTIVE. Issue #16 activates only the M0 refusal gate for unavailable Continue, OpenCitation, and server-owned unavailable Acquire plans: its real continuation, citation, federated/source-native, and File carriers remain future, while its Runtime and HTTP refusal surfaces prove generic outcomes before content I/O. The canonical set is IDs 001 through 012, 014, 015, and 019: CACHE-SCOPE-013 remains a preregistered conditional extension; AUDIENCE-016 is absorbed by SCOPE-INTERSECTION-004 and EGRESS-011; ACL-PROOF-017 is absorbed by INDEX-NOT-AUTHORITY-005 and REVOCATION-006; DELIVERY-EVIDENCE-018 is absorbed by TRANSPORT-UNTRUSTED-008. ACCEPT-001 through ACCEPT-012 follow ADR-0019's category order. Protected-asset references A-01 through A-08 refer, in order, to the eight bullets in the threat model's Protected assets section. Every expectedEvidence value below is a stable planned case identifier, not a claim that the case ran or passed; only an exact activation record upgrades named evidence, while fixture carrier status and the explicit M0 oracle preserve every other accepted-versus-active distinction."
   },
   "hardOracles": [
     {
@@ -63,6 +65,29 @@
       "deferredEvidence": ["BLOB-002"],
       "futureCarriers": ["Continue", "OpenCitation", "WorkerLease", "ContextAccessTicket", "ActionTicket"],
       "notActive": ["DecisionAudit", "outbox", "cleanup", "Source/Resource Policy Epochs", "UI/external admin"]
+    },
+    {
+      "issueRef": "#16",
+      "invariantRef": "INDEX-NOT-AUTHORITY-005",
+      "carrier": "ContextRuntime.resolve(Continue | OpenCitation | server-owned unavailable Acquire plan)",
+      "status": "active_fail_closed",
+      "policyEpochScope": "organization-v0",
+      "controlBoundary": "RuntimeCapabilityGate.require_available(RuntimeCapability)",
+      "testEvidence": [
+        {
+          "id": "RUN-UNAVAILABLE-016",
+          "surface": "tests/unit/test_runtime_unavailable_capabilities.py",
+          "oracle": "Table-driven Runtime cases prove unavailable Continue, OpenCitation, and server-owned Acquire plans traverse the content-free sealed Kernel preflight and stop before Provider, index, or source I/O; the restricted mandatory audit retains only UNSUPPORTED_CAPABILITY."
+        },
+        {
+          "id": "HTTP-UNAVAILABLE-016",
+          "surface": "tests/unit/test_http_unavailable_capabilities.py",
+          "oracle": "The closed HTTP and OpenAPI request union admits its declared variants, maps known unavailable capabilities to generic 200 domain outcomes before configured scope-authority or content I/O, rejects unknown fields and every query string with 422, and serializes no internal cause or protected detail."
+        }
+      ],
+      "deferredEvidence": ["real-continuation-redemption", "real-citation-redemption", "real-federated-source-native-authorization"],
+      "futureCarriers": ["Continue", "OpenCitation", "federated/source-native ContextProvider"],
+      "notActive": ["continuation issuance/redemption", "citation locator redemption", "federated Provider/source-native ACL I/O", "File publication"]
     }
   ],
   "invariants": [
@@ -727,7 +752,8 @@
       "authorityRefs": [
         "docs/agents/prd-contextengine-implementation.md#implementation-decisions",
         "docs/security/Test-Architecture-与可验证性设计.md#9-runtime-behavior-tests",
-        "docs/decisions/0019-security-catalog-normalization.md#decision"
+        "docs/decisions/0019-security-catalog-normalization.md#decision",
+        "docs/decisions/0028-fail-closed-unavailable-runtime-capabilities.md#decision"
       ]
     },
     {
@@ -955,7 +981,8 @@
         "docs/design/2026-07-18-context-engine-implementation-design.md#33-contextprovider-and-source-projection",
         "docs/security/Test-Architecture-与可验证性设计.md#13-v1-acceptance-scenarios",
         "docs/security/安全负向测试清单.md#5-providerfederation-与-source-native-acl",
-        "docs/decisions/0019-security-catalog-normalization.md#decision"
+        "docs/decisions/0019-security-catalog-normalization.md#decision",
+        "docs/decisions/0028-fail-closed-unavailable-runtime-capabilities.md#decision"
       ]
     },
     {
@@ -1002,7 +1029,8 @@
       "authorityRefs": [
         "docs/design/2026-07-18-context-engine-implementation-design.md#53-tokens-and-locators",
         "docs/security/安全负向测试清单.md#6-runtimeassemblycitation-与-egress",
-        "docs/decisions/0019-security-catalog-normalization.md#decision"
+        "docs/decisions/0019-security-catalog-normalization.md#decision",
+        "docs/decisions/0028-fail-closed-unavailable-runtime-capabilities.md#decision"
       ]
     },
     {

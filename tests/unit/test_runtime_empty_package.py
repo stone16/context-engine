@@ -26,6 +26,7 @@ from engine.runtime.content_io import RuntimeContentIo
 from engine.runtime.contracts import (
     Acquire,
     ContextNeed,
+    Resolved,
 )
 from engine.runtime.delivery import (
     TrustedDeliveryContext,
@@ -253,6 +254,8 @@ def test_resolve_records_the_finite_effective_budget_without_exposing_usage() ->
             ),
         )
 
+    assert type(inherited) is Resolved
+    assert type(narrowed) is Resolved
     assert inherited.effective_budget == SERVER_BUDGET
     assert narrowed.effective_budget == PackageBudget(
         max_tokens=100,
@@ -376,8 +379,13 @@ def test_runtime_issues_closed_fresh_server_refs_without_factory_injection() -> 
         candidate = runtime()
         request = Acquire(need=ContextNeed(query="fresh refs"))
 
-        first = candidate.resolve(invocation, delivery, request).package
-        second = candidate.resolve(invocation, delivery, request).package
+        first_outcome = candidate.resolve(invocation, delivery, request)
+        second_outcome = candidate.resolve(invocation, delivery, request)
+
+        assert type(first_outcome) is Resolved
+        assert type(second_outcome) is Resolved
+        first = first_outcome.package
+        second = second_outcome.package
 
     assert first.organization_ref != second.organization_ref
     assert first.decision_ref != second.decision_ref
