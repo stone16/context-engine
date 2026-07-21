@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from copy import deepcopy
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from json import dumps, loads
@@ -50,6 +49,8 @@ NORMALIZATION_ALLOWLIST = (
     "body.package.expiresAt",
     "headers.X-Context-Request-Id",
 )
+BODY_PACKAGE_PATH_PREFIX = "body.package."
+REQUEST_ID_HEADER_PATH = "headers.X-Context-Request-Id"
 RELEVANT_HEADERS = (
     "Content-Type",
     "Cache-Control",
@@ -163,30 +164,18 @@ def _catalog_accept_011() -> dict[str, object]:
     return next(fixture for fixture in fixtures if fixture["id"] == "ACCEPT-011")
 
 
-def _replace_body_path(
-    body: dict[str, object],
-    allowlisted_path: str,
-) -> None:
-    segments = allowlisted_path.split(".")
-    assert segments[0] == "body"
-    current = body
-    for segment in segments[1:-1]:
-        child = current[segment]
-        assert isinstance(child, dict)
-        current = cast(dict[str, object], child)
-    current[segments[-1]] = "<normalized-per-run-value>"
-
-
 def _normalize_captured_body(response: Response) -> bytes:
     captured = response.content
     document = cast(dict[str, object], response.json())
     package = cast(dict[str, object], document["package"])
-    for field_name in (
-        "organizationRef",
-        "decisionRef",
-        "asOf",
-        "expiresAt",
-    ):
+    body_paths = (
+        path
+        for path in NORMALIZATION_ALLOWLIST
+        if path.startswith(BODY_PACKAGE_PATH_PREFIX)
+    )
+    for body_path in body_paths:
+        field_name = body_path.removeprefix(BODY_PACKAGE_PATH_PREFIX)
+        assert field_name and "." not in field_name
         encoded_value = dumps(
             package[field_name],
             ensure_ascii=False,
@@ -203,17 +192,12 @@ def _normalize_captured_body(response: Response) -> bytes:
 
 def _normalize_external_response(response: Response) -> NormalizedExternalResponse:
     external = _external_response_document(response)
-    body = deepcopy(cast(dict[str, object], external["body"]))
-    headers = deepcopy(cast(dict[str, str], external["headers"]))
-    used_paths: list[str] = []
+    headers = cast(dict[str, str], external["headers"]).copy()
     for allowlisted_path in NORMALIZATION_ALLOWLIST:
-        if allowlisted_path.startswith("body."):
-            _replace_body_path(body, allowlisted_path)
-        else:
-            assert allowlisted_path == "headers.X-Context-Request-Id"
-            headers["X-Context-Request-Id"] = "<normalized-per-run-value>"
-        used_paths.append(allowlisted_path)
-    assert tuple(used_paths) == NORMALIZATION_ALLOWLIST
+        if allowlisted_path.startswith(BODY_PACKAGE_PATH_PREFIX):
+            continue
+        assert allowlisted_path == REQUEST_ID_HEADER_PATH
+        headers["X-Context-Request-Id"] = "<normalized-per-run-value>"
     return NormalizedExternalResponse(
         status=response.status_code,
         body=_normalize_captured_body(response),
