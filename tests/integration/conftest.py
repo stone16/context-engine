@@ -34,6 +34,13 @@ def runtime_configuration(
 
 
 @pytest.fixture(scope="session")
+def control_configuration(
+    database_configurations: HarnessDatabaseConfigurations,
+) -> DatabaseConfiguration:
+    return database_configurations.control
+
+
+@pytest.fixture(scope="session")
 def migration_configuration(
     database_configurations: HarnessDatabaseConfigurations,
 ) -> DatabaseConfiguration:

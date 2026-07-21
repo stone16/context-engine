@@ -42,6 +42,7 @@ files = [
   "adapters",
   "applications",
   "migrations",
+  "scripts/provision_database_roles.py",
   "scripts/wait_for_database.py",
   "tests",
 ]

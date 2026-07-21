@@ -23,13 +23,13 @@ def table_entries(document: dict[str, Any]) -> dict[str, dict[str, Any]]:
     }
 
 
-def test_manifest_classifies_the_exact_issue_13_content_schema() -> None:
+def test_manifest_classifies_the_exact_issue_15_policy_epoch_schema() -> None:
     """PROP-TENANT-OWNERSHIP-001: no current table is left unclassified."""
 
     document = manifest()
     tables = table_entries(document)
 
-    assert document["manifestVersion"] == "3.0.0"
+    assert document["manifestVersion"] == "4.0.0"
     assert set(tables) == {
         "alembic_version",
         "context_fragment",
@@ -37,7 +37,9 @@ def test_manifest_classifies_the_exact_issue_13_content_schema() -> None:
         "context_revision",
         "membership",
         "organization",
+        "organization_policy_epoch",
         "organization_record",
+        "resource_access_policy",
         "user_account",
     }
     assert tables["alembic_version"]["classification"] == "global"
@@ -45,6 +47,11 @@ def test_manifest_classifies_the_exact_issue_13_content_schema() -> None:
     assert tables["user_account"]["classification"] == "global"
     assert tables["membership"]["classification"] == "tenant_owned"
     assert tables["organization_record"]["classification"] == "tenant_owned"
+    assert (
+        tables["organization_policy_epoch"]["classification"]
+        == "tenant_owned"
+    )
+    assert tables["resource_access_policy"]["classification"] == "tenant_owned"
     assert tables["context_resource"]["classification"] == "tenant_owned"
     assert tables["context_revision"]["classification"] == "tenant_owned"
     assert tables["context_fragment"]["classification"] == "tenant_owned"
@@ -324,3 +331,124 @@ def test_content_manifest_preserves_lineage_visibility_and_immutability() -> Non
             "events": ["UPDATE", "DELETE"],
             "sqlstate": "55000",
         }
+
+
+def test_policy_epoch_manifest_seals_runtime_reads_and_control_mutation() -> None:
+    """PG-REVOCATION-006: one DB operation owns mutation plus epoch advance."""
+
+    document = manifest()
+    entries = table_entries(document)
+    epoch = entries["organization_policy_epoch"]
+    access = entries["resource_access_policy"]
+
+    assert epoch["organizationInclusiveKeys"] == [
+        {
+            "name": "pk_organization_policy_epoch",
+            "kind": "primary_key",
+            "columns": ["organization_id"],
+        }
+    ]
+    assert epoch["checkConstraints"] == [
+        {
+            "name": "ck_organization_policy_epoch_positive_signed_bigint",
+            "expression": "policy_epoch BETWEEN 1 AND 9223372036854775807",
+        }
+    ]
+    assert access["organizationInclusiveKeys"] == [
+        {
+            "name": "pk_resource_access_policy",
+            "kind": "primary_key",
+            "columns": ["organization_id", "resource_ref", "principal_ref"],
+        }
+    ]
+    access_foreign_keys = {
+        foreign_key["name"]: foreign_key for foreign_key in access["foreignKeys"]
+    }
+    assert access_foreign_keys[
+        "fk_resource_access_policy_resource_same_organization"
+    ] == {
+        "name": "fk_resource_access_policy_resource_same_organization",
+        "columns": ["organization_id", "resource_ref"],
+        "references": {
+            "table": "context_resource",
+            "columns": ["organization_id", "resource_ref"],
+        },
+        "onDelete": "CASCADE",
+    }
+    assert access_foreign_keys["fk_resource_access_policy_organization"] == {
+        "name": "fk_resource_access_policy_organization",
+        "columns": ["organization_id"],
+        "references": {
+            "table": "organization",
+            "columns": ["organization_id"],
+        },
+        "onDelete": "CASCADE",
+    }
+    assert {constraint["name"] for constraint in access["checkConstraints"]} == {
+        "ck_resource_access_policy_version_positive_signed_bigint",
+        "ck_resource_access_policy_resource_ref_nonblank",
+        "ck_resource_access_policy_principal_ref_nonblank",
+        "ck_resource_access_policy_state",
+        "ck_resource_access_policy_state_timestamp",
+    }
+
+    for entry in (epoch, access):
+        assert entry["organizationColumn"] == "organization_id"
+        assert entry["permittedOperations"] == {
+            "context_engine_access_policy_definer": ["SELECT", "UPDATE"],
+            "context_engine_control": ["EXECUTE change_resource_access"],
+            "context_engine_runtime": ["SELECT"],
+            "context_engine_worker": [],
+        }
+        rls = entry["rowLevelSecurity"]
+        assert rls["enabled"] is True
+        assert rls["forced"] is True
+        runtime_policy = next(
+            policy
+            for policy in rls["policies"]
+            if policy["roles"] == ["context_engine_runtime"]
+        )
+        assert runtime_policy["command"] == "SELECT"
+        assert "app.organization_id" in runtime_policy["using"]
+        assert "app.membership_id" in runtime_policy["using"]
+        assert "app.principal_ref" in runtime_policy["using"]
+        assert all(
+            policy["roles"] != ["context_engine_control"]
+            for policy in rls["policies"]
+        )
+        definer_policies = [
+            policy
+            for policy in rls["policies"]
+            if policy["roles"]
+            == ["context_engine_access_policy_definer"]
+        ]
+        assert {policy["command"] for policy in definer_policies} == {
+            "SELECT",
+            "UPDATE",
+        }
+        select_policy = next(
+            policy for policy in definer_policies if policy["command"] == "SELECT"
+        )
+        update_policy = next(
+            policy for policy in definer_policies if policy["command"] == "UPDATE"
+        )
+        assert "withCheck" not in select_policy
+        assert update_policy["using"] == update_policy["withCheck"]
+        assert all(
+            "app.organization_id" in policy["using"]
+            for policy in definer_policies
+        )
+
+    assert document["controlOperations"] == [
+        {
+            "name": "change_resource_access",
+            "databaseFunction": "context_control_revoke_resource_access",
+            "role": "context_engine_control",
+            "definerRole": "context_engine_access_policy_definer",
+            "directTableMutationAllowed": False,
+            "atomicWrites": [
+                "resource_access_policy",
+                "organization_policy_epoch",
+            ],
+        }
+    ]

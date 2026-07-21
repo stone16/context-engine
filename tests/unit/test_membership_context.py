@@ -35,6 +35,9 @@ class _ScalarResult:
     def scalar_one(self) -> object:
         return self._value
 
+    def scalar_one_or_none(self) -> object | None:
+        return self._value
+
     def one_or_none(self) -> _MembershipRow | None:
         return cast(_MembershipRow | None, self._value)
 
@@ -52,11 +55,41 @@ class _FakeConnection:
         row: _MembershipRow | None,
         *,
         fail_on_query: bool = False,
+        fail_on_begin: bool = False,
+        fail_on_commit: bool = False,
+        policy_epoch: object = 7,
+        transaction_isolation: object = "READ COMMITTED",
     ) -> None:
         self._events = events
         self._settings = settings
         self._row = row
         self._fail_on_query = fail_on_query
+        self._fail_on_begin = fail_on_begin
+        self._fail_on_commit = fail_on_commit
+        self._policy_epoch = policy_epoch
+        self._transaction_isolation = transaction_isolation
+
+    def execution_options(self, **kwargs: object) -> _FakeConnection:
+        assert kwargs == {"isolation_level": "READ COMMITTED"}
+        self._events.append("isolation:READ COMMITTED")
+        return self
+
+    def get_isolation_level(self) -> object:
+        self._events.append("verify-isolation")
+        return self._transaction_isolation
+
+    def begin(self) -> AbstractContextManager[Connection]:
+        if self._fail_on_begin:
+            raise OperationalError(
+                "begin",
+                {},
+                RuntimeError("database unavailable during begin"),
+            )
+        return _BeginContext(
+            self,
+            self._events,
+            fail_on_commit=self._fail_on_commit,
+        )
 
     def execute(
         self,
@@ -96,6 +129,8 @@ class _FakeConnection:
         if "current_setting" in sql:
             assert parameters is not None
             return _ScalarResult(self._settings[cast(str, parameters["setting_name"])])
+        if "FROM organization_policy_epoch" in sql:
+            return _ScalarResult(self._policy_epoch)
         if self._fail_on_query:
             raise OperationalError("query", {}, RuntimeError("database unavailable"))
         return _ScalarResult(self._row)
@@ -142,6 +177,22 @@ class _BeginContext(AbstractContextManager[Connection]):
         return None
 
 
+class _ConnectContext(AbstractContextManager[Connection]):
+    def __init__(self, connection: _FakeConnection) -> None:
+        self._connection = connection
+
+    def __enter__(self) -> Connection:
+        return cast(Connection, self._connection)
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        del exc_type, exc_value, traceback
+
+
 class _FakeEngine:
     def __init__(
         self,
@@ -150,6 +201,8 @@ class _FakeEngine:
         fail_on_query: bool = False,
         fail_on_begin: bool = False,
         fail_on_commit: bool = False,
+        policy_epoch: object = 7,
+        transaction_isolation: object = "READ COMMITTED",
     ) -> None:
         self.events: list[str] = []
         self.settings: dict[str, str] = {}
@@ -158,23 +211,15 @@ class _FakeEngine:
             self.settings,
             row,
             fail_on_query=fail_on_query,
+            fail_on_begin=fail_on_begin,
+            fail_on_commit=fail_on_commit,
+            policy_epoch=policy_epoch,
+            transaction_isolation=transaction_isolation,
         )
-        self._fail_on_begin = fail_on_begin
-        self._fail_on_commit = fail_on_commit
 
-    def begin(self, **kwargs: Any) -> AbstractContextManager[Connection]:
+    def connect(self, **kwargs: Any) -> AbstractContextManager[Connection]:
         assert kwargs == {}
-        if self._fail_on_begin:
-            raise OperationalError(
-                "begin",
-                {},
-                RuntimeError("database unavailable during begin"),
-            )
-        return _BeginContext(
-            self.connection,
-            self.events,
-            fail_on_commit=self._fail_on_commit,
-        )
+        return _ConnectContext(self.connection)
 
 
 def identity() -> MembershipIdentity:
@@ -210,7 +255,11 @@ def test_current_membership_transaction_binds_every_actor_fact_before_lookup() -
             verification.materialized_projection_session
         )
 
-    assert fake_engine.events[0] == "begin"
+    assert fake_engine.events[0:3] == [
+        "isolation:READ COMMITTED",
+        "verify-isolation",
+        "begin",
+    ]
     lookup_position = next(
         index
         for index, event in enumerate(fake_engine.events)
@@ -270,6 +319,46 @@ def test_database_fault_is_not_reclassified_as_membership_denial() -> None:
     assert fake_engine.events[-1] == "rollback"
 
 
+def test_unverified_read_committed_transaction_fails_closed() -> None:
+    expected = identity()
+    fake_engine = _FakeEngine(
+        _MembershipRow(expected.user_id),
+        transaction_isolation="REPEATABLE READ",
+    )
+    authority = PostgreSQLMembershipAuthority(cast(Engine, fake_engine))
+
+    with (
+        pytest.raises(MembershipAuthorityUnavailable, match="READ COMMITTED"),
+        authority.current_user_actor(expected),
+    ):
+        pytest.fail("a stale-snapshot transaction must not reach Runtime")
+
+    assert fake_engine.events == [
+        "isolation:READ COMMITTED",
+        "verify-isolation",
+    ]
+
+
+@pytest.mark.parametrize("policy_epoch", (None, True, 0, 1 << 63, "7"))
+def test_missing_or_malformed_epoch_fails_closed_as_authority_unavailable(
+    policy_epoch: object,
+) -> None:
+    expected = identity()
+    fake_engine = _FakeEngine(
+        _MembershipRow(expected.user_id),
+        policy_epoch=policy_epoch,
+    )
+    authority = PostgreSQLMembershipAuthority(cast(Engine, fake_engine))
+
+    with (
+        pytest.raises(MembershipAuthorityUnavailable),
+        authority.current_user_actor(expected),
+    ):
+        pytest.fail("malformed Policy Epoch must not reach Runtime")
+
+    assert fake_engine.events[-1] == "rollback"
+
+
 def test_non_runtime_database_role_never_opens_membership_authority_scope(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -293,7 +382,12 @@ def test_non_runtime_database_role_never_opens_membership_authority_scope(
     ):
         pytest.fail("a privileged database role must not reach Runtime")
 
-    assert fake_engine.events == ["begin", "rollback"]
+    assert fake_engine.events == [
+        "isolation:READ COMMITTED",
+        "verify-isolation",
+        "begin",
+        "rollback",
+    ]
 
 
 @pytest.mark.parametrize("failure_point", ["begin", "commit"])

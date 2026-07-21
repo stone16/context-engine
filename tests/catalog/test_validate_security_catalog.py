@@ -12,10 +12,12 @@ from pathlib import Path
 from typing import Any, cast
 
 from scripts.validate_security_catalog import (
+    ACCEPT_005_FUTURE_CARRIER,
     ACL_PROOF_CASE_IDS,
     AUDIENCE_ACTION_CASE_IDS,
     CANONICAL_FAIL_CLOSED_OUTCOMES,
     CANONICAL_INVARIANT_IDS,
+    CANONICAL_REVOCATION_ACTIVATION,
     DEFAULT_CATALOG_PATH,
     DEFAULT_SCHEMA_PATH,
     REQUIRED_RUNTIME_EVIDENCE,
@@ -145,6 +147,16 @@ def make_catalog() -> dict[str, object]:
                 ],
             }
         )
+
+    revocation_evidence = cast(
+        dict[str, object], invariants[CANONICAL_INVARIANT_IDS.index("REVOCATION-006")]
+    )["expectedEvidence"]
+    assert isinstance(revocation_evidence, dict)
+    revocation_evidence["postgres"] = [
+        "PG-REVOCATION-006",
+        "CACHE-002",
+        "BLOB-002",
+    ]
 
     fixtures = []
     for number in range(1, 13):
@@ -396,16 +408,19 @@ def make_catalog() -> dict[str, object]:
             package_or_error = cast(
                 dict[str, object], canonical_outcome["packageOrError"]
             )
+        carrier = {
+            "statusAtM0": "available",
+            "m0Expectation": "active_fail_closed",
+            "upgradeTrigger": "Upgrade when the complete carrier is activated.",
+        }
+        if fixture_id == "ACCEPT-005":
+            carrier = copy.deepcopy(ACCEPT_005_FUTURE_CARRIER)
         fixtures.append(
             {
                 "id": fixture_id,
                 "title": f"Acceptance fixture {number}",
                 "decisionStatus": "accepted",
-                "carrier": {
-                    "statusAtM0": "available",
-                    "m0Expectation": "active_fail_closed",
-                    "upgradeTrigger": "Upgrade when the complete carrier is activated.",
-                },
+                "carrier": carrier,
                 "setup": {
                     "preconditions": ["Two isolated Organizations exist."],
                     "trustedIdentity": {"kind": "authenticated_invocation"},
@@ -452,6 +467,7 @@ def make_catalog() -> dict[str, object]:
             {"name": name, "requiredValue": 0, "veto": True}
             for name in HARD_ORACLE_NAMES
         ],
+        "activations": [copy.deepcopy(CANONICAL_REVOCATION_ACTIVATION)],
         "invariants": invariants,
         "fixtures": fixtures,
     }
@@ -493,6 +509,7 @@ def make_schema() -> dict[str, object]:
             "catalogVersion",
             "authority",
             "hardOracles",
+            "activations",
             "invariants",
             "fixtures",
         ],
@@ -518,6 +535,13 @@ def make_schema() -> dict[str, object]:
                 ],
                 "items": False,
             },
+            "activations": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 1,
+                "uniqueItems": True,
+                "items": {"$ref": "#/$defs/activation"},
+            },
             "invariants": {
                 "type": "array",
                 "minItems": 15,
@@ -534,6 +558,47 @@ def make_schema() -> dict[str, object]:
             },
         },
         "$defs": {
+            "activationTestEvidence": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["id", "surface", "oracle"],
+                "properties": {
+                    "id": {},
+                    "surface": {},
+                    "oracle": {},
+                },
+            },
+            "activation": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": [
+                    "issueRef",
+                    "invariantRef",
+                    "carrier",
+                    "status",
+                    "policyEpochScope",
+                    "controlBoundary",
+                    "testEvidence",
+                    "deferredEvidence",
+                    "futureCarriers",
+                    "notActive",
+                ],
+                "properties": {
+                    "issueRef": {},
+                    "invariantRef": {},
+                    "carrier": {},
+                    "status": {},
+                    "policyEpochScope": {},
+                    "controlBoundary": {},
+                    "testEvidence": {
+                        "type": "array",
+                        "items": {"$ref": "#/$defs/activationTestEvidence"},
+                    },
+                    "deferredEvidence": {},
+                    "futureCarriers": {},
+                    "notActive": {},
+                },
+            },
             "invariant": {
                 "type": "object",
                 "additionalProperties": False,
@@ -704,6 +769,79 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
             catalog,
             "hardOracles: must use the canonical order: "
             + ", ".join(HARD_ORACLE_NAMES),
+        )
+
+    def test_issue_15_revocation_activation_is_frozen(self) -> None:
+        catalog = make_catalog()
+        activation = object_list_at(catalog, "activations")[0]
+        self.assertEqual(activation, CANONICAL_REVOCATION_ACTIVATION)
+
+        test_evidence = object_list_at(activation, "testEvidence")
+        test_evidence[0]["surface"] = "tests/unit/false_green.py"
+        test_evidence[1]["id"] = "RUN-011"
+        activation["policyEpochScope"] = "resource"
+        activation["deferredEvidence"] = []
+        activation["futureCarriers"] = ["Continue"]
+        activation["notActive"] = []
+
+        error = self.assert_catalog_error(
+            catalog,
+            "activations: must exactly preserve the canonical Issue #15 Acquire "
+            "revocation activation and its future/NOT_ACTIVE boundaries",
+        )
+        self.assertTrue(
+            any(message.startswith("catalog.activations") for message in error.errors)
+            or any(message.startswith("activations") for message in error.errors)
+        )
+
+    def test_issue_15_evidence_and_future_continue_cannot_false_green(self) -> None:
+        catalog = make_catalog()
+        invariants = {
+            invariant["id"]: invariant
+            for invariant in object_list_at(catalog, "invariants")
+        }
+        revocation = invariants["REVOCATION-006"]
+        postgres = object_at(revocation, "expectedEvidence")["postgres"]
+        runtime = object_at(revocation, "expectedEvidence")["runtimeOrDelivery"]
+        assert isinstance(postgres, list)
+        assert isinstance(runtime, list)
+        postgres.remove("PG-REVOCATION-006")
+        postgres.remove("CACHE-002")
+        runtime.remove("RUN-006")
+
+        fixtures = {
+            fixture["id"]: fixture
+            for fixture in object_list_at(catalog, "fixtures")
+        }
+        accept_005 = fixtures["ACCEPT-005"]
+        accept_005["carrier"] = {
+            "statusAtM0": "available",
+            "m0Expectation": "active_fail_closed",
+            "upgradeTrigger": "Issue #15 activates Continue.",
+        }
+
+        with self.assertRaises(CatalogValidationError) as raised:
+            validate_catalog(catalog, make_schema())
+
+        self.assertIn(
+            "invariants[5].expectedEvidence.postgres: must preserve canonical "
+            "revocation evidence 'PG-REVOCATION-006' for REVOCATION-006",
+            raised.exception.errors,
+        )
+        self.assertIn(
+            "invariants[5].expectedEvidence.postgres: must preserve canonical "
+            "revocation evidence 'CACHE-002' for REVOCATION-006",
+            raised.exception.errors,
+        )
+        self.assertIn(
+            "invariants[5].expectedEvidence.runtimeOrDelivery: must preserve "
+            "absorbed derived case 'RUN-006' for REVOCATION-006",
+            raised.exception.errors,
+        )
+        self.assertIn(
+            "fixtures[4].carrier: must preserve ACCEPT-005 as the future Continue "
+            "carrier; Issue #15 activates Acquire only",
+            raised.exception.errors,
         )
 
     def test_unknown_catalog_fields_are_rejected_at_every_boundary(self) -> None:

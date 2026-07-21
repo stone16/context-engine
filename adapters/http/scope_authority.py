@@ -10,6 +10,7 @@ from typing import NoReturn, Protocol
 from uuid import UUID
 
 from engine.runtime.actor import MAX_MEMBERSHIP_VERSION
+from engine.runtime.policy_epoch import MAX_POLICY_EPOCH
 from engine.runtime.scope import MISSING_TRUSTED_SCOPE
 from engine.runtime.scope_authority import (
     TrustedScopeSnapshot,
@@ -31,6 +32,7 @@ class ScopeAuthorityIdentity:
     user_id: UUID = field(repr=False)
     membership_id: UUID = field(repr=False)
     membership_version: int = field(repr=False)
+    policy_epoch: int = field(repr=False)
     principal_ref: str = field(repr=False)
     agent_version_ref: str = field(repr=False)
     purpose: str = field(repr=False)
@@ -49,6 +51,14 @@ class ScopeAuthorityIdentity:
             raise ValueError(
                 "Scope authority Membership version must fit a positive "
                 "signed 64-bit integer"
+            )
+        if (
+            type(self.policy_epoch) is not int
+            or not 1 <= self.policy_epoch <= MAX_POLICY_EPOCH
+        ):
+            raise ValueError(
+                "Scope authority Policy Epoch must fit a positive signed "
+                "64-bit integer"
             )
         for field_name in (
             "principal_ref",
@@ -94,6 +104,7 @@ def _missing_trusted_scope(
             user_id=identity.user_id,
             membership_id=identity.membership_id,
             membership_version=identity.membership_version,
+            policy_epoch=identity.policy_epoch,
             principal_ref=identity.principal_ref,
             agent_version_ref=identity.agent_version_ref,
             purpose=identity.purpose,

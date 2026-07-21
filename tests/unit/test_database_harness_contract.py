@@ -36,6 +36,7 @@ def test_compose_project_identity_is_generated_per_checkout() -> None:
     "sql_variable",
     [
         "migrator_role",
+        "control_role",
         "runtime_role",
         "worker_role",
     ],
@@ -63,6 +64,33 @@ def test_database_harness_generates_secret_state_and_never_sources_it() -> None:
     assert 'mv "$temporary_file" "$ENV_FILE"' not in script
     assert "unexpected variable" in script
     assert "role-isolated URL contract" in script
+    assert "CONTEXT_ENGINE_CONTROL_ROLE=context_engine_control" in script
+    assert "CONTEXT_ENGINE_CONTROL_DATABASE_URL" in script
+
+
+def test_compose_passes_the_dedicated_control_credential_to_bootstrap() -> None:
+    compose = repository_text("compose.yaml")
+
+    assert "CONTEXT_ENGINE_CONTROL_ROLE" in compose
+    assert "CONTEXT_ENGINE_CONTROL_PASSWORD" in compose
+
+
+def test_readiness_probe_includes_the_dedicated_control_configuration() -> None:
+    wait_script = repository_text("scripts/wait_for_database.py")
+
+    assert "configurations.control" in wait_script
+    assert "migration, control, runtime, worker" in wait_script
+
+
+def test_harness_provisions_post_init_roles_before_readiness() -> None:
+    harness = repository_text("scripts/database_harness.sh")
+    provisioner = repository_text("scripts/provision_database_roles.py")
+
+    assert harness.count("  provision_database_roles\n  wait_for_database") == 2
+    assert "ACCESS_POLICY_DEFINER_ROLE" in provisioner
+    assert "NOLOGIN NOSUPERUSER" in provisioner
+    assert "WITH ADMIN FALSE, INHERIT FALSE, SET TRUE" in provisioner
+    assert "database security-role provisioning failed" in provisioner
 
 
 @pytest.mark.parametrize(

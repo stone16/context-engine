@@ -31,6 +31,7 @@ def test_trusted_scope_snapshot_is_nominal_frozen_and_scope_lived() -> None:
         user_id=USER_ID,
         membership_id=MEMBERSHIP_ID,
         membership_version=3,
+        policy_epoch=7,
         principal_ref="principal-1",
         agent_version_ref="agent-version-1",
         purpose="context.answer",
@@ -83,6 +84,7 @@ def test_trusted_scope_snapshot_rejects_cross_organization_targets() -> None:
             user_id=USER_ID,
             membership_id=MEMBERSHIP_ID,
             membership_version=3,
+            policy_epoch=7,
             principal_ref="principal-1",
             agent_version_ref="agent-version-1",
             purpose="context.answer",
@@ -110,6 +112,7 @@ def test_trusted_scope_snapshot_revalidates_mutated_operands_on_consumption(
         user_id=USER_ID,
         membership_id=MEMBERSHIP_ID,
         membership_version=3,
+        policy_epoch=7,
         principal_ref="principal-1",
         agent_version_ref="agent-version-1",
         purpose="context.answer",
@@ -131,6 +134,38 @@ def test_trusted_scope_snapshot_revalidates_mutated_operands_on_consumption(
 
     with pytest.raises(ValueError, match="stay in Organization"):
         _trusted_operands_from_snapshot(snapshot)
+
+    _close_scope_authority_scope(authority_scope)
+
+
+def test_trusted_scope_snapshot_rejects_a_mutated_policy_epoch_on_consumption(
+) -> None:
+    authority_scope = _open_scope_authority_scope()
+    snapshot = _construct_trusted_scope_snapshot(
+        authority_scope=authority_scope,
+        organization_id=ORGANIZATION_ID,
+        user_id=USER_ID,
+        membership_id=MEMBERSHIP_ID,
+        membership_version=3,
+        policy_epoch=7,
+        principal_ref="principal-1",
+        agent_version_ref="agent-version-1",
+        purpose="context.answer",
+        request_id="request-1",
+        authentication_binding_ref="binding-1",
+        checked_at=CHECKED_AT,
+        organization_boundary=ScopeSet(frozenset()),
+        membership_rights=ScopeSet(frozenset()),
+        principal_grants=ScopeSet(frozenset()),
+        agent_ceiling=ScopeSet(frozenset()),
+        source_native_acl=ScopeSet(frozenset()),
+        resource_acl=ScopeSet(frozenset()),
+        purpose_policy=ScopeSet(frozenset()),
+    )
+    object.__setattr__(snapshot, "policy_epoch", 0)
+
+    with pytest.raises(ValueError, match="Policy Epoch"):
+        _require_active_trusted_scope_snapshot(snapshot)
 
     _close_scope_authority_scope(authority_scope)
 
@@ -162,6 +197,7 @@ def test_trusted_scope_snapshot_rejects_malformed_binding_facts(
         "user_id": USER_ID,
         "membership_id": MEMBERSHIP_ID,
         "membership_version": 3,
+        "policy_epoch": 7,
         "principal_ref": "principal-1",
         "agent_version_ref": "agent-version-1",
         "purpose": "context.answer",

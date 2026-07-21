@@ -148,6 +148,7 @@ class ExactScopeAuthority:
                 user_id=identity.user_id,
                 membership_id=identity.membership_id,
                 membership_version=identity.membership_version,
+                policy_epoch=identity.policy_epoch,
                 principal_ref=identity.principal_ref,
                 agent_version_ref=identity.agent_version_ref,
                 purpose=identity.purpose,
@@ -382,6 +383,37 @@ def _seed_fixture(
             ),
             candidates,
         )
+        connection.execute(
+            text(
+                """
+                INSERT INTO resource_access_policy (
+                    organization_id,
+                    resource_ref,
+                    principal_ref,
+                    access_version,
+                    access_state,
+                    revoked_at
+                ) VALUES (
+                    :organization_id,
+                    :resource_ref,
+                    :principal_ref,
+                    1,
+                    'allowed',
+                    NULL
+                )
+                """
+            ),
+            [
+                {
+                    "organization_id": organization.organization_id,
+                    "resource_ref": organization.authorized.resource_ref,
+                    "principal_ref": (
+                        f"principal:authorized-evidence:{organization.label}"
+                    ),
+                }
+                for organization in organizations
+            ],
+        )
 
 
 def _persistent_content_snapshot(
@@ -446,6 +478,18 @@ def _cleanup_fixture(engine: Engine, fixture: RuntimeEvidenceFixture) -> None:
         )
     try:
         with engine.begin() as connection:
+            connection.execute(
+                text(
+                    """
+                    DELETE FROM resource_access_policy
+                    WHERE organization_id IN (
+                        :org_a_id,
+                        :org_b_id
+                    )
+                    """
+                ),
+                organizations,
+            )
             connection.execute(
                 text(
                     """

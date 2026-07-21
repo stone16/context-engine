@@ -81,6 +81,7 @@ class DeterministicScopeAuthority:
                 user_id=identity.user_id,
                 membership_id=identity.membership_id,
                 membership_version=identity.membership_version,
+                policy_epoch=identity.policy_epoch,
                 principal_ref=identity.principal_ref,
                 agent_version_ref=identity.agent_version_ref,
                 purpose=identity.purpose,

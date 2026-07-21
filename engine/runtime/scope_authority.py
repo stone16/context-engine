@@ -7,6 +7,7 @@ from typing import NoReturn
 from uuid import UUID
 
 from engine.runtime.actor import MAX_MEMBERSHIP_VERSION
+from engine.runtime.policy_epoch import MAX_POLICY_EPOCH
 from engine.runtime.scope import (
     MISSING_TRUSTED_SCOPE,
     MissingTrustedScope,
@@ -66,6 +67,7 @@ class TrustedScopeSnapshot:
     user_id: UUID = field(repr=False)
     membership_id: UUID = field(repr=False)
     membership_version: int = field(repr=False)
+    policy_epoch: int = field(repr=False)
     principal_ref: str = field(repr=False)
     agent_version_ref: str = field(repr=False)
     purpose: str = field(repr=False)
@@ -99,6 +101,7 @@ def _construct_trusted_scope_snapshot(
     user_id: UUID,
     membership_id: UUID,
     membership_version: int,
+    policy_epoch: int,
     principal_ref: str,
     agent_version_ref: str,
     purpose: str,
@@ -136,6 +139,10 @@ def _construct_trusted_scope_snapshot(
         raise ValueError(
             "trusted scope Membership version must fit a positive signed 64-bit "
             "integer"
+        )
+    if type(policy_epoch) is not int or not 1 <= policy_epoch <= MAX_POLICY_EPOCH:
+        raise ValueError(
+            "trusted scope Policy Epoch must fit a positive signed 64-bit integer"
         )
     reference_facts: tuple[tuple[str, object], ...] = (
         ("principal_ref", principal_ref),
@@ -180,6 +187,7 @@ def _construct_trusted_scope_snapshot(
         "user_id": user_id,
         "membership_id": membership_id,
         "membership_version": membership_version,
+        "policy_epoch": policy_epoch,
         "principal_ref": principal_ref,
         "agent_version_ref": agent_version_ref,
         "purpose": purpose,
@@ -216,6 +224,13 @@ def _require_active_trusted_scope_snapshot(snapshot: TrustedScopeSnapshot) -> No
     ):
         raise InvalidTrustedScopeSnapshot(
             "trusted scope snapshot requires active trusted scope authority"
+        )
+    if (
+        type(snapshot.policy_epoch) is not int
+        or not 1 <= snapshot.policy_epoch <= MAX_POLICY_EPOCH
+    ):
+        raise InvalidTrustedScopeSnapshot(
+            "trusted scope snapshot requires a valid Policy Epoch"
         )
 
 

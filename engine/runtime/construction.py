@@ -10,6 +10,7 @@ from hmac import new as new_hmac
 from secrets import token_bytes
 from threading import Lock
 from typing import Literal
+from uuid import UUID
 
 from engine.runtime.actor import _require_active_user_actor
 from engine.runtime.budget import PackageBudget, effective_package_budget
@@ -59,6 +60,12 @@ from engine.runtime.organization import (
     ExistingOrganizationVerification,
     OrganizationVerificationProvenance,
 )
+from engine.runtime.policy_epoch import (
+    PolicyEpochAuthorityUnavailable,
+    PolicyEpochVerification,
+    _policy_epoch_is_current,
+    _require_active_policy_epoch_verification,
+)
 from engine.runtime.scope import (
     OMITTED_REQUEST_NARROWING,
     EffectiveScope,
@@ -81,6 +88,7 @@ class PolicyReceipt:
 
     request_id: str
     purpose: str
+    policy_epoch: int
     effective_scope: EffectiveScope = field(repr=False)
 
 
@@ -90,6 +98,15 @@ class DecisionProvenanceReceipt:
 
     decision_ref: str
     package_organization_ref: str
+    organization_id: UUID = field(repr=False)
+    user_id: UUID = field(repr=False)
+    membership_id: UUID = field(repr=False)
+    membership_version: int = field(repr=False)
+    principal_ref: str = field(repr=False)
+    agent_version_ref: str = field(repr=False)
+    authenticated_application_ref: str = field(repr=False)
+    authentication_binding_ref: str = field(repr=False)
+    effective_scope_digest: str = field(repr=False)
     request_id: str
     purpose: str
     as_of: datetime
@@ -120,12 +137,11 @@ class DecisionAuditReceipt:
 
 @dataclass(frozen=True, slots=True)
 class AuthorizationDecision:
-    """Result proving each mandatory Kernel behavior completed."""
+    """Pre-delivery result awaiting the final Policy Epoch and audit gates."""
 
     effective_budget: PackageBudget
     policy_receipt: PolicyReceipt
     provenance_receipt: DecisionProvenanceReceipt
-    audit_receipt: DecisionAuditReceipt
     content: PackageContent
 
 
@@ -166,6 +182,7 @@ def _validate_trusted_operands(
         or actor.authentication_binding_ref
         != invocation.authentication_binding_ref
         or actor.checked_at != invocation.received_at
+        or actor.policy_epoch != invocation.policy_epoch
     ):
         raise ValueError("Runtime requires a matching current UserActor")
     if (
@@ -210,17 +227,39 @@ class PolicyGate:
         request: Acquire,
     ) -> PolicyReceipt:
         _validate_trusted_operands(invocation, delivery_context, request)
-        effective_scope = compute_effective_scope(
-            _trusted_operands_from_snapshot(invocation.trusted_scope_snapshot),
-            request.narrowing
-            if request.narrowing is not None
-            else OMITTED_REQUEST_NARROWING,
+        effective_scope = (
+            compute_effective_scope(
+                _trusted_operands_from_snapshot(invocation.trusted_scope_snapshot),
+                request.narrowing
+                if request.narrowing is not None
+                else OMITTED_REQUEST_NARROWING,
+            )
+            if invocation.trusted_scope_snapshot.policy_epoch
+            == invocation.policy_epoch
+            else EffectiveScope(frozenset())
         )
         return PolicyReceipt(
             request_id=invocation.request_id,
             purpose=delivery_context.purpose,
+            policy_epoch=invocation.policy_epoch,
             effective_scope=effective_scope,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class PolicyEpochGate:
+    """Concrete final durable-epoch validation gate; never replaceable."""
+
+    def is_current(self, verification: PolicyEpochVerification) -> bool:
+        try:
+            _require_active_policy_epoch_verification(verification)
+            return _policy_epoch_is_current(verification)
+        except PolicyEpochAuthorityUnavailable:
+            raise
+        except (TypeError, ValueError) as error:
+            raise PolicyEpochAuthorityUnavailable(
+                "Policy Epoch validation authority is unavailable"
+            ) from error
 
 
 @dataclass(frozen=True, slots=True)
@@ -272,12 +311,25 @@ class ProvenanceGate:
         return DecisionProvenanceReceipt(
             decision_ref=decision_ref,
             package_organization_ref=organization_ref,
+            organization_id=(
+                invocation.organization_verification.organization_id
+            ),
+            user_id=invocation.user_actor.user_id,
+            membership_id=invocation.user_actor.membership_id,
+            membership_version=invocation.user_actor.membership_version,
+            principal_ref=invocation.principal_ref,
+            agent_version_ref=invocation.agent_version_ref,
+            authenticated_application_ref=(
+                invocation.authenticated_application_ref
+            ),
+            authentication_binding_ref=invocation.authentication_binding_ref,
+            effective_scope_digest=policy_receipt.effective_scope.digest,
             request_id=policy_receipt.request_id,
             purpose=policy_receipt.purpose,
             as_of=as_of,
             run_ref=references.run_ref,
             policy_snapshot_ref=references.policy_snapshot_ref,
-            policy_epoch=references.policy_epoch,
+            policy_epoch=policy_receipt.policy_epoch,
             source_acl_decision_ref=references.source_acl_decision_ref,
         )
 
@@ -306,7 +358,11 @@ class DecisionAuditGate:
 
 
 type KernelDependency = (
-    PolicyGate | DecisionAuditGate | PackageBudgetGate | ProvenanceGate
+    PolicyGate
+    | PolicyEpochGate
+    | DecisionAuditGate
+    | PackageBudgetGate
+    | ProvenanceGate
 )
 
 
@@ -315,6 +371,7 @@ class KernelDependencies:
     """Exact mandatory concrete gates; callers cannot replace their behavior."""
 
     policy: PolicyGate
+    policy_epoch: PolicyEpochGate
     audit: DecisionAuditGate
     budget: PackageBudgetGate
     provenance: ProvenanceGate
@@ -327,6 +384,7 @@ def _validate_kernel_dependencies(dependencies: object) -> KernelDependencies:
         )
     for field_name, expected_type in (
         ("policy", PolicyGate),
+        ("policy_epoch", PolicyEpochGate),
         ("audit", DecisionAuditGate),
         ("budget", PackageBudgetGate),
         ("provenance", ProvenanceGate),
@@ -344,6 +402,7 @@ class AuthorizationKernel:
     def __init__(self, dependencies: KernelDependencies) -> None:
         validated = _validate_kernel_dependencies(dependencies)
         self._policy = validated.policy
+        self._policy_epoch = validated.policy_epoch
         self._audit = validated.audit
         self._budget = validated.budget
         self._provenance = validated.provenance
@@ -360,13 +419,23 @@ class AuthorizationKernel:
         candidate_index: CandidateIndex | None,
         projection_session: MaterializedProjectionSession | None,
     ) -> AuthorizationDecision:
-        """Run policy, budget, provenance, exact projection, assembly, and audit."""
+        """Run policy, budget, provenance, exact projection, and assembly."""
 
         policy_receipt = self._policy.validate_acquire(
             invocation,
             delivery_context,
             request,
         )
+        epoch_verification = (
+            invocation.user_actor.policy_epoch_verification
+        )
+        if not self._policy_epoch.is_current(epoch_verification):
+            policy_receipt = PolicyReceipt(
+                request_id=policy_receipt.request_id,
+                purpose=policy_receipt.purpose,
+                policy_epoch=policy_receipt.policy_epoch,
+                effective_scope=EffectiveScope(frozenset()),
+            )
         effective_budget = self._budget.intersect(server_budget, request)
         provenance_receipt = self._provenance.issue(
             invocation,
@@ -396,19 +465,81 @@ class AuthorizationKernel:
             candidates,
             projection_session,
         )
-        audit_receipt = self._audit.record(
-            provenance_receipt,
-            authorized_evidence_count=len(content.evidence),
-        )
-        if audit_receipt.decision_ref != provenance_receipt.decision_ref:
-            raise RuntimeConfigurationError("audit and provenance decision mismatch")
         return AuthorizationDecision(
             effective_budget=effective_budget,
             policy_receipt=policy_receipt,
             provenance_receipt=provenance_receipt,
-            audit_receipt=audit_receipt,
             content=content,
         )
+
+    def finalize_for_delivery(
+        self,
+        invocation: AuthenticatedInvocation,
+        decision: AuthorizationDecision,
+    ) -> tuple[PolicyReceipt, PackageContent, DecisionAuditReceipt]:
+        """Revalidate immediately before audit and Package construction."""
+
+        if type(decision) is not AuthorizationDecision:
+            raise TypeError("final Policy Epoch gate requires AuthorizationDecision")
+        _require_active_user_actor(invocation.user_actor)
+        policy_receipt = decision.policy_receipt
+        content = decision.content
+        provenance = decision.provenance_receipt
+        content_binding_matches_decision = all(
+            evidence.lineage.run_ref == provenance.run_ref
+            and evidence.lineage.decision_ref == provenance.decision_ref
+            and evidence.lineage.principal_ref == provenance.principal_ref
+            and evidence.lineage.purpose == provenance.purpose
+            and evidence.lineage.as_of == provenance.as_of
+            and evidence.lineage.policy_snapshot_ref
+            == provenance.policy_snapshot_ref
+            and evidence.lineage.policy_epoch == provenance.policy_epoch
+            and evidence.lineage.source_acl_decision_ref
+            == provenance.source_acl_decision_ref
+            for evidence in content.evidence
+        )
+        decision_binding_matches_invocation = (
+            provenance.organization_id == invocation.user_actor.organization_id
+            and provenance.user_id == invocation.user_actor.user_id
+            and provenance.membership_id == invocation.user_actor.membership_id
+            and provenance.membership_version
+            == invocation.user_actor.membership_version
+            and provenance.principal_ref == invocation.principal_ref
+            and provenance.agent_version_ref == invocation.agent_version_ref
+            and provenance.authenticated_application_ref
+            == invocation.authenticated_application_ref
+            and provenance.authentication_binding_ref
+            == invocation.authentication_binding_ref
+            and policy_receipt.policy_epoch == provenance.policy_epoch
+            == invocation.policy_epoch
+            == invocation.user_actor.policy_epoch
+            and policy_receipt.request_id == provenance.request_id
+            == invocation.request_id
+            and policy_receipt.purpose == provenance.purpose
+            and provenance.effective_scope_digest
+            == policy_receipt.effective_scope.digest
+        )
+        if (
+            not content_binding_matches_decision
+            or not decision_binding_matches_invocation
+            or not self._policy_epoch.is_current(
+                invocation.user_actor.policy_epoch_verification
+            )
+        ):
+            policy_receipt = PolicyReceipt(
+                request_id=policy_receipt.request_id,
+                purpose=policy_receipt.purpose,
+                policy_epoch=policy_receipt.policy_epoch,
+                effective_scope=EffectiveScope(frozenset()),
+            )
+            content = construct_package_content(())
+        audit_receipt = self._audit.record(
+            decision.provenance_receipt,
+            authorized_evidence_count=len(content.evidence),
+        )
+        if audit_receipt.decision_ref != decision.provenance_receipt.decision_ref:
+            raise RuntimeConfigurationError("audit and provenance decision mismatch")
+        return policy_receipt, content, audit_receipt
 
     def _authorize_and_assemble(
         self,
@@ -528,7 +659,6 @@ class _IssuedReferences:
     decision_ref: str
     run_ref: str
     policy_snapshot_ref: str
-    policy_epoch: int
     source_acl_decision_ref: str
 
 
@@ -565,7 +695,6 @@ class _OpaqueReferenceIssuer:
             decision_ref=f"{DECISION_REF_PREFIX}_{entropies['decision']}",
             run_ref=f"run_{entropies['run']}",
             policy_snapshot_ref=f"policy_{entropies['policy']}",
-            policy_epoch=1,
             source_acl_decision_ref=f"sourceacl_{entropies['source-acl']}",
         )
 
@@ -625,23 +754,26 @@ class Runtime:
                 invocation.user_actor.materialized_projection_session
             ),
         )
+        policy_receipt, content, audit_receipt = (
+            self._kernel.finalize_for_delivery(invocation, decision)
+        )
         provenance = decision.provenance_receipt
 
         package = ContextPackage(
             organization_ref=provenance.package_organization_ref,
-            purpose=decision.policy_receipt.purpose,
+            purpose=policy_receipt.purpose,
             ttl_seconds=self._package_ttl_seconds,
             as_of=provenance.as_of,
             expires_at=provenance.as_of
             + timedelta(seconds=self._package_ttl_seconds),
             decision_ref=provenance.decision_ref,
-            blocks=decision.content.blocks,
-            evidence=decision.content.evidence,
+            blocks=content.blocks,
+            evidence=content.evidence,
             gaps=(),
             budget_usage=BudgetUsage(
                 tokens=sum(
                     len(block.body.encode("utf-8"))
-                    for block in decision.content.blocks
+                    for block in content.blocks
                 ),
                 provider_calls=0,
                 cost_microunits=0,
@@ -650,19 +782,19 @@ class Runtime:
             coverage=Coverage(
                 status=(
                     CoverageStatus.SUFFICIENT
-                    if decision.content.evidence
+                    if content.evidence
                     else CoverageStatus.EMPTY
                 ),
-                reason=decision.audit_receipt.reason,
+                reason=audit_receipt.reason,
             ),
         )
         return Resolved(
             package=package,
             effective_budget=decision.effective_budget,
             scope_decision=ScopeDecisionReceipt(
-                digest=decision.policy_receipt.effective_scope.digest,
-                target_count=len(decision.policy_receipt.effective_scope.targets),
-                is_empty=not decision.policy_receipt.effective_scope.targets,
+                digest=policy_receipt.effective_scope.digest,
+                target_count=len(policy_receipt.effective_scope.targets),
+                is_empty=not policy_receipt.effective_scope.targets,
             ),
         )
 
@@ -672,6 +804,7 @@ def required_kernel_dependencies() -> KernelDependencies:
 
     return KernelDependencies(
         policy=PolicyGate(),
+        policy_epoch=PolicyEpochGate(),
         audit=DecisionAuditGate(),
         budget=PackageBudgetGate(),
         provenance=ProvenanceGate(),

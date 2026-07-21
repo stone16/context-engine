@@ -7,6 +7,7 @@
     "catalogVersion",
     "authority",
     "hardOracles",
+    "activations",
     "invariants",
     "fixtures"
   ],
@@ -55,6 +56,15 @@
         }
       ],
       "items": false
+    },
+    "activations": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/activation"
+      }
     },
     "invariants": {
       "type": "array",
@@ -239,6 +249,69 @@
         "property": {"$ref": "#/$defs/stringArray"},
         "postgres": {"$ref": "#/$defs/stringArray"},
         "runtimeOrDelivery": {"$ref": "#/$defs/stringArray"}
+      }
+    },
+    "activationTestEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "surface", "oracle"],
+      "properties": {
+        "id": {"enum": ["PG-REVOCATION-006", "RUN-006", "CACHE-002"]},
+        "surface": {"$ref": "#/$defs/documentRef"},
+        "oracle": {"$ref": "#/$defs/nonEmptyString"}
+      }
+    },
+    "activation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["issueRef", "invariantRef", "carrier", "status", "policyEpochScope", "controlBoundary", "testEvidence", "deferredEvidence", "futureCarriers", "notActive"],
+      "properties": {
+        "issueRef": {"const": "#15"},
+        "invariantRef": {"const": "REVOCATION-006"},
+        "carrier": {"const": "ContextRuntime.resolve(Acquire)"},
+        "status": {"const": "active_fail_closed"},
+        "policyEpochScope": {"const": "organization-v0"},
+        "controlBoundary": {"const": "PostgreSQLAccessPolicyControl.change_access(ResourceAccessRevocation)"},
+        "testEvidence": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/activationTestEvidence"}
+        },
+        "deferredEvidence": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "prefixItems": [{"const": "BLOB-002"}],
+          "items": false
+        },
+        "futureCarriers": {
+          "type": "array",
+          "minItems": 5,
+          "maxItems": 5,
+          "prefixItems": [
+            {"const": "Continue"},
+            {"const": "OpenCitation"},
+            {"const": "WorkerLease"},
+            {"const": "ContextAccessTicket"},
+            {"const": "ActionTicket"}
+          ],
+          "items": false
+        },
+        "notActive": {
+          "type": "array",
+          "minItems": 5,
+          "maxItems": 5,
+          "prefixItems": [
+            {"const": "DecisionAudit"},
+            {"const": "outbox"},
+            {"const": "cleanup"},
+            {"const": "Source/Resource Policy Epochs"},
+            {"const": "UI/external admin"}
+          ],
+          "items": false
+        }
       }
     },
     "invariant": {

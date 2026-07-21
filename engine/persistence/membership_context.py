@@ -28,6 +28,13 @@ from engine.runtime.materialized import (
     _construct_materialized_projection_session,
     _open_materialized_projection_scope,
 )
+from engine.runtime.policy_epoch import (
+    PolicyEpochAuthorityUnavailable,
+    _close_policy_epoch_authority_scope,
+    _construct_policy_epoch_session,
+    _observe_current_policy_epoch,
+    _open_policy_epoch_authority_scope,
+)
 
 
 class MembershipNotCurrent(Exception):
@@ -144,6 +151,13 @@ class _PostgreSQLMaterializedProjectionPort:
                   ON fragment.organization_id = revision.organization_id
                  AND fragment.resource_ref = revision.resource_ref
                  AND fragment.revision_id = revision.revision_id
+                JOIN resource_access_policy AS access_policy
+                  ON access_policy.organization_id = resource.organization_id
+                 AND access_policy.resource_ref = resource.resource_ref
+                 AND access_policy.principal_ref = current_setting(
+                     'app.principal_ref'
+                 )
+                 AND access_policy.access_state = 'allowed'
                 WHERE resource.organization_id = :organization_id
                   AND resource.source_ref = :source_ref
                   AND resource.resource_ref = :resource_ref
@@ -190,6 +204,13 @@ class _PostgreSQLMaterializedProjectionPort:
                   ON fragment.organization_id = revision.organization_id
                  AND fragment.resource_ref = revision.resource_ref
                  AND fragment.revision_id = revision.revision_id
+                JOIN resource_access_policy AS access_policy
+                  ON access_policy.organization_id = resource.organization_id
+                 AND access_policy.resource_ref = resource.resource_ref
+                 AND access_policy.principal_ref = current_setting(
+                     'app.principal_ref'
+                 )
+                 AND access_policy.access_state = 'allowed'
                 WHERE resource.organization_id = :organization_id
                   AND resource.source_ref = :source_ref
                   AND resource.resource_ref = :resource_ref
@@ -205,6 +226,25 @@ class _PostgreSQLMaterializedProjectionPort:
                 "revision_id": revision_id,
                 "fragment_ref": locator.fragment_ref,
             },
+        ).scalar_one_or_none()
+
+
+class _PostgreSQLPolicyEpochPort:
+    """Current Organization epoch reads on the retained Membership transaction."""
+
+    def __init__(self, connection: Connection) -> None:
+        self._connection = connection
+
+    def read_current_epoch(self, organization_id: UUID) -> object:
+        return self._connection.execute(
+            text(
+                """
+                SELECT policy_epoch
+                FROM organization_policy_epoch
+                WHERE organization_id = :organization_id
+                """
+            ),
+            {"organization_id": organization_id},
         ).scalar_one_or_none()
 
 
@@ -224,91 +264,126 @@ class PostgreSQLMembershipAuthority:
         if type(identity) is not MembershipIdentity:
             raise TypeError("Membership identity must be MembershipIdentity")
         try:
-            with self._engine.begin() as connection:
-                try:
-                    assert_runtime_role(connection)
-                except AssertionError as error:
+            with self._engine.connect() as raw_connection:
+                connection = raw_connection.execution_options(
+                    isolation_level="READ COMMITTED"
+                )
+                observed_isolation = connection.get_isolation_level()
+                if observed_isolation != "READ COMMITTED":
                     raise MembershipAuthorityUnavailable(
-                        "current Membership authority is not the Runtime role"
-                    ) from error
-                for setting_name, value_factory in _ACTOR_SETTINGS.items():
-                    expected = value_factory(identity)
-                    connection.execute(
-                        text(
-                            "SELECT set_config("
-                            ":setting_name, :setting_value, true"
-                            ")"
-                        ),
-                        {
-                            "setting_name": setting_name,
-                            "setting_value": expected,
-                        },
+                        "current Membership authority requires READ COMMITTED"
                     )
-                    observed = connection.execute(
-                        text("SELECT current_setting(:setting_name, true)"),
-                        {"setting_name": setting_name},
-                    ).scalar_one()
-                    if observed != expected:
-                        raise MembershipAuthorityUnavailable(
-                            "UserActor context binding failed"
-                        )
-
-                row = connection.execute(
-                    text(
-                        """
-                        SELECT user_id
-                        FROM membership
-                        WHERE organization_id = :organization_id
-                          AND membership_id = :membership_id
-                          AND user_id = :user_id
-                          AND membership_version = :membership_version
-                          AND status = 'active'
-                          AND valid_from <= :checked_at
-                          AND (
-                              valid_until IS NULL
-                              OR :checked_at < valid_until
-                          )
-                        """
-                    ),
-                    {
-                        "organization_id": identity.organization_id,
-                        "membership_id": identity.membership_id,
-                        "user_id": identity.user_id,
-                        "membership_version": identity.membership_version,
-                        "checked_at": identity.checked_at,
-                    },
-                ).one_or_none()
-                if row is None or row.user_id != identity.user_id:
-                    raise MembershipNotCurrent
-
-                scope = _open_membership_authority_scope()
-                projection_scope = _open_materialized_projection_scope()
-                try:
-                    projection_session = _construct_materialized_projection_session(
-                        authority_scope=projection_scope,
-                        port=_PostgreSQLMaterializedProjectionPort(connection),
+                with connection.begin():
+                    yield from self._current_user_actor_transaction(
+                        connection,
+                        identity,
                     )
-                    verification = _construct_current_membership_verification(
-                        organization_id=identity.organization_id,
-                        user_id=identity.user_id,
-                        membership_id=identity.membership_id,
-                        membership_version=identity.membership_version,
-                        principal_ref=identity.principal_ref,
-                        request_id=identity.request_id,
-                        authentication_binding_ref=(
-                            identity.authentication_binding_ref
-                        ),
-                        checked_at=identity.checked_at,
-                        authority_scope=scope,
-                        materialized_projection_session=projection_session,
-                    )
-                    yield verification
-                finally:
-                    _close_materialized_projection_scope(projection_scope)
-                    _close_membership_authority_scope(scope)
         except (MembershipNotCurrent, MembershipAuthorityUnavailable):
             raise
+        except PolicyEpochAuthorityUnavailable as error:
+            raise MembershipAuthorityUnavailable(
+                "current Membership Policy Epoch unavailable"
+            ) from error
         except SQLAlchemyError as error:
             raise MembershipAuthorityUnavailable(
                 "current Membership authority unavailable"
             ) from error
+
+    def _current_user_actor_transaction(
+        self,
+        connection: Connection,
+        identity: MembershipIdentity,
+    ) -> Iterator[CurrentMembershipVerification]:
+        """Verify one UserActor inside an already-pinned current-read transaction."""
+
+        try:
+            assert_runtime_role(connection)
+        except AssertionError as error:
+            raise MembershipAuthorityUnavailable(
+                "current Membership authority is not the Runtime role"
+            ) from error
+        for setting_name, value_factory in _ACTOR_SETTINGS.items():
+            expected = value_factory(identity)
+            connection.execute(
+                text(
+                    "SELECT set_config("
+                    ":setting_name, :setting_value, true"
+                    ")"
+                ),
+                {
+                    "setting_name": setting_name,
+                    "setting_value": expected,
+                },
+            )
+            observed = connection.execute(
+                text("SELECT current_setting(:setting_name, true)"),
+                {"setting_name": setting_name},
+            ).scalar_one()
+            if observed != expected:
+                raise MembershipAuthorityUnavailable(
+                    "UserActor context binding failed"
+                )
+
+        row = connection.execute(
+            text(
+                """
+                SELECT user_id
+                FROM membership
+                WHERE organization_id = :organization_id
+                  AND membership_id = :membership_id
+                  AND user_id = :user_id
+                  AND membership_version = :membership_version
+                  AND status = 'active'
+                  AND valid_from <= :checked_at
+                  AND (
+                      valid_until IS NULL
+                      OR :checked_at < valid_until
+                  )
+                """
+            ),
+            {
+                "organization_id": identity.organization_id,
+                "membership_id": identity.membership_id,
+                "user_id": identity.user_id,
+                "membership_version": identity.membership_version,
+                "checked_at": identity.checked_at,
+            },
+        ).one_or_none()
+        if row is None or row.user_id != identity.user_id:
+            raise MembershipNotCurrent
+
+        scope = _open_membership_authority_scope()
+        projection_scope = _open_materialized_projection_scope()
+        policy_epoch_scope = _open_policy_epoch_authority_scope()
+        try:
+            projection_session = _construct_materialized_projection_session(
+                authority_scope=projection_scope,
+                port=_PostgreSQLMaterializedProjectionPort(connection),
+            )
+            policy_epoch_session = _construct_policy_epoch_session(
+                authority_scope=policy_epoch_scope,
+                organization_id=identity.organization_id,
+                port=_PostgreSQLPolicyEpochPort(connection),
+            )
+            policy_epoch_verification = _observe_current_policy_epoch(
+                policy_epoch_session
+            )
+            yield _construct_current_membership_verification(
+                organization_id=identity.organization_id,
+                user_id=identity.user_id,
+                membership_id=identity.membership_id,
+                membership_version=identity.membership_version,
+                principal_ref=identity.principal_ref,
+                request_id=identity.request_id,
+                authentication_binding_ref=(
+                    identity.authentication_binding_ref
+                ),
+                checked_at=identity.checked_at,
+                policy_epoch_verification=policy_epoch_verification,
+                authority_scope=scope,
+                materialized_projection_session=projection_session,
+            )
+        finally:
+            _close_policy_epoch_authority_scope(policy_epoch_scope)
+            _close_materialized_projection_scope(projection_scope)
+            _close_membership_authority_scope(scope)

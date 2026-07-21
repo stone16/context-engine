@@ -10,7 +10,9 @@ from engine.runtime import (
 from engine.runtime.construction import required_kernel_dependencies
 
 
-@pytest.mark.parametrize("missing", ["policy", "audit", "budget", "provenance"])
+@pytest.mark.parametrize(
+    "missing", ["policy", "policy_epoch", "audit", "budget", "provenance"]
+)
 def test_runtime_rejects_each_missing_kernel_dependency(missing: str) -> None:
     dependencies = required_kernel_dependencies()
     invalid_dependencies = replace(dependencies, **{missing: None})  # type: ignore[arg-type]
@@ -26,6 +28,7 @@ def test_runtime_rejects_a_dependency_in_the_wrong_slot() -> None:
     dependencies = required_kernel_dependencies()
     invalid_dependencies = KernelDependencies(
         policy=dependencies.audit,  # type: ignore[arg-type]
+        policy_epoch=dependencies.policy_epoch,
         audit=dependencies.audit,
         budget=dependencies.budget,
         provenance=dependencies.provenance,
@@ -42,6 +45,7 @@ def test_runtime_rejects_a_subclass_that_overrides_validation() -> None:
 
     dependencies = BypassDependencies(
         policy=None,  # type: ignore[arg-type]
+        policy_epoch=None,  # type: ignore[arg-type]
         audit=None,  # type: ignore[arg-type]
         budget=None,  # type: ignore[arg-type]
         provenance=None,  # type: ignore[arg-type]
