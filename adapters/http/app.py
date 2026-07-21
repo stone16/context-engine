@@ -39,6 +39,12 @@ from adapters.http.organization_authority import (
     OrganizationVerificationRejected,
     RejectingOrganizationAuthority,
 )
+from adapters.http.scope_authority import (
+    MissingTrustedScopeAuthority,
+    ScopeAuthority,
+    ScopeAuthorityIdentity,
+    ScopeAuthorityUnavailable,
+)
 from adapters.http.transport import (
     HTTP_TRANSPORT_PROFILE_V1,
     HttpTransportProfile,
@@ -57,7 +63,10 @@ from engine.runtime.budget import PackageBudgetRequest
 from engine.runtime.construction import required_kernel_dependencies
 from engine.runtime.contracts import Acquire, ContextNeed, RequestNarrowing, Resolved
 from engine.runtime.delivery import _construct_direct_delivery_context
-from engine.runtime.invocation import _construct_authenticated_http_invocation
+from engine.runtime.invocation import (
+    _construct_authenticated_http_invocation,
+)
+from engine.runtime.scope_authority import InvalidTrustedScopeSnapshot
 
 HEALTH_RESPONSE: Final = {
     "status": "ready",
@@ -122,6 +131,7 @@ def create_app(
     authenticator: Authenticator | None = None,
     organization_authority: OrganizationAuthority | None = None,
     membership_authority: MembershipAuthority | None = None,
+    scope_authority: ScopeAuthority | None = None,
     runtime: Runtime | None = None,
     invocation_observer: Callable[[AuthenticatedInvocation], None] | None = None,
     resolution_observer: Callable[[Resolved], None] | None = None,
@@ -147,6 +157,7 @@ def create_app(
     selected_membership_authority = (
         membership_authority or RejectingMembershipAuthority()
     )
+    selected_scope_authority = scope_authority or MissingTrustedScopeAuthority()
     bearer = HTTPBearer(
         scheme_name="ContextEngineBearer",
         bearerFormat="opaque",
@@ -335,59 +346,89 @@ def create_app(
                 membership_identity
             ) as current_membership_verification:
                 try:
-                    invocation = _construct_authenticated_http_invocation(
-                        request_id=request_id,
-                        authenticated_organization_ref=(
-                            authentication.organization_ref
+                    scope_identity = ScopeAuthorityIdentity(
+                        organization_id=(
+                            current_membership_verification.organization_id
                         ),
-                        organization_verification=organization_verification,
-                        user_ref=authentication.user_ref,
-                        principal_ref=authentication.principal_ref,
-                        membership_ref=authentication.membership_ref,
-                        membership_version=authentication.membership_version,
-                        current_membership_verification=(
-                            current_membership_verification
+                        user_id=current_membership_verification.user_id,
+                        membership_id=(
+                            current_membership_verification.membership_id
                         ),
+                        membership_version=(
+                            current_membership_verification.membership_version
+                        ),
+                        principal_ref=current_membership_verification.principal_ref,
                         agent_version_ref=authentication.agent_version_ref,
-                        authenticated_application_ref=(
-                            authentication.authenticated_application_ref
-                        ),
+                        purpose=DIRECT_ACQUIRE_PURPOSE,
+                        request_id=current_membership_verification.request_id,
                         authentication_binding_ref=(
-                            authentication.authentication_binding_ref
+                            current_membership_verification.authentication_binding_ref
                         ),
-                        received_at=received_at,
+                        checked_at=current_membership_verification.checked_at,
                     )
                 except (TypeError, ValueError):
                     raise TransportAuthenticationFailed from None
-                if invocation_observer is not None:
-                    invocation_observer(invocation)
-                delivery_context = _construct_direct_delivery_context(
-                    purpose=DIRECT_ACQUIRE_PURPOSE,
-                    authenticated_application_ref=(
-                        authentication.authenticated_application_ref
-                    ),
-                    delivery_binding_ref=(
-                        authentication.authentication_binding_ref
-                    ),
-                    established_at=invocation.received_at,
-                )
-                request = _acquire_from_wire(body)
-                outcome = selected_runtime.resolve(
-                    invocation,
-                    delivery_context,
-                    request,
-                )
-                response = _resolved_to_wire(outcome)
-                if resolution_observer is not None:
-                    resolution_observer(outcome)
-                return JSONResponse(
-                    response.model_dump(mode="json", by_alias=True),
-                    status_code=200,
-                    headers={
-                        "Cache-Control": "no-store",
-                        "X-Context-Request-Id": invocation.request_id,
-                    },
-                )
+                with selected_scope_authority.current_scope(
+                    scope_identity
+                ) as scope_snapshot:
+                    try:
+                        invocation = _construct_authenticated_http_invocation(
+                            request_id=request_id,
+                            authenticated_organization_ref=(
+                                authentication.organization_ref
+                            ),
+                            organization_verification=organization_verification,
+                            user_ref=authentication.user_ref,
+                            principal_ref=authentication.principal_ref,
+                            membership_ref=authentication.membership_ref,
+                            membership_version=authentication.membership_version,
+                            current_membership_verification=(
+                                current_membership_verification
+                            ),
+                            agent_version_ref=authentication.agent_version_ref,
+                            authenticated_application_ref=(
+                                authentication.authenticated_application_ref
+                            ),
+                            authentication_binding_ref=(
+                                authentication.authentication_binding_ref
+                            ),
+                            trusted_purpose=DIRECT_ACQUIRE_PURPOSE,
+                            received_at=received_at,
+                            trusted_scope_snapshot=scope_snapshot,
+                        )
+                    except InvalidTrustedScopeSnapshot:
+                        raise TrustedAuthorityUnavailable from None
+                    except (TypeError, ValueError):
+                        raise TransportAuthenticationFailed from None
+                    if invocation_observer is not None:
+                        invocation_observer(invocation)
+                    delivery_context = _construct_direct_delivery_context(
+                        purpose=DIRECT_ACQUIRE_PURPOSE,
+                        authenticated_application_ref=(
+                            authentication.authenticated_application_ref
+                        ),
+                        delivery_binding_ref=(
+                            authentication.authentication_binding_ref
+                        ),
+                        established_at=invocation.received_at,
+                    )
+                    request = _acquire_from_wire(body)
+                    outcome = selected_runtime.resolve(
+                        invocation,
+                        delivery_context,
+                        request,
+                    )
+                    response = _resolved_to_wire(outcome)
+                    if resolution_observer is not None:
+                        resolution_observer(outcome)
+                    return JSONResponse(
+                        response.model_dump(mode="json", by_alias=True),
+                        status_code=200,
+                        headers={
+                            "Cache-Control": "no-store",
+                            "X-Context-Request-Id": invocation.request_id,
+                        },
+                    )
         except MembershipNotCurrent as error:
             if type(error) is not MembershipNotCurrent:
                 raise TrustedAuthorityUnavailable from None
@@ -395,6 +436,10 @@ def create_app(
                 membership_rejection_observer(error.audit_receipt)
             raise TransportAuthenticationFailed from None
         except MembershipAuthorityUnavailable:
+            raise TrustedAuthorityUnavailable from None
+        except ScopeAuthorityUnavailable:
+            raise TrustedAuthorityUnavailable from None
+        except InvalidTrustedScopeSnapshot:
             raise TrustedAuthorityUnavailable from None
 
     return app

@@ -15,6 +15,7 @@ from engine.runtime.contracts import (
     CoverageStatus,
     RequestNarrowing,
     Resolved,
+    ScopeDecisionReceipt,
 )
 from engine.runtime.delivery import (
     DirectDeliveryConstructionProvenance,
@@ -39,6 +40,11 @@ EFFECTIVE_BUDGET = PackageBudget(
     max_provider_calls=8,
     max_cost_microunits=25_000,
     max_elapsed_ms=2_500,
+)
+SCOPE_DECISION = ScopeDecisionReceipt(
+    digest="0" * 64,
+    target_count=0,
+    is_empty=True,
 )
 
 
@@ -320,7 +326,11 @@ def test_empty_package_rejects_invalid_or_detail_bearing_state(
 
 def test_resolved_is_a_closed_immutable_outcome() -> None:
     package = make_package()
-    outcome = Resolved(package=package, effective_budget=EFFECTIVE_BUDGET)
+    outcome = Resolved(
+        package=package,
+        effective_budget=EFFECTIVE_BUDGET,
+        scope_decision=SCOPE_DECISION,
+    )
 
     assert outcome.kind == "resolved"
     assert outcome.package is package
@@ -331,12 +341,63 @@ def test_resolved_is_a_closed_immutable_outcome() -> None:
         Resolved(
             package=package,
             effective_budget=EFFECTIVE_BUDGET,
+            scope_decision=SCOPE_DECISION,
             kind=cast(Any, "other"),
         )
     with pytest.raises(TypeError, match="ContextPackage"):
         Resolved(
             package=cast(Any, object()),
             effective_budget=EFFECTIVE_BUDGET,
+            scope_decision=SCOPE_DECISION,
         )
     with pytest.raises(TypeError, match="PackageBudget"):
-        Resolved(package=package, effective_budget=cast(Any, object()))
+        Resolved(
+            package=package,
+            effective_budget=cast(Any, object()),
+            scope_decision=SCOPE_DECISION,
+        )
+    with pytest.raises(TypeError, match="ScopeDecisionReceipt"):
+        Resolved(
+            package=package,
+            effective_budget=EFFECTIVE_BUDGET,
+            scope_decision=cast(Any, object()),
+        )
+
+
+@pytest.mark.parametrize(
+    "changes",
+    (
+        {"digest": ""},
+        {"digest": "0" * 63},
+        {"digest": "G" * 64},
+        {"target_count": -1},
+        {"target_count": True},
+        {"is_empty": 0},
+        {"target_count": 1, "is_empty": True},
+        {"target_count": 0, "is_empty": False},
+    ),
+)
+def test_scope_decision_receipt_is_closed_and_consistent(
+    changes: dict[str, object],
+) -> None:
+    values: dict[str, object] = {
+        "digest": "0" * 64,
+        "target_count": 0,
+        "is_empty": True,
+    }
+    values.update(changes)
+
+    with pytest.raises((TypeError, ValueError), match="scope decision"):
+        ScopeDecisionReceipt(**cast(Any, values))
+
+
+def test_scope_decision_receipt_hides_digest_from_repr() -> None:
+    receipt = ScopeDecisionReceipt(
+        digest="a" * 64,
+        target_count=1,
+        is_empty=False,
+    )
+
+    assert "a" * 64 not in repr(receipt)
+    with pytest.raises(FrozenInstanceError):
+        receipt.target_count = 2  # type: ignore[misc]

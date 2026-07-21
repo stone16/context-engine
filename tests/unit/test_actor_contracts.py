@@ -9,6 +9,10 @@ from adapters.http.authentication import (
     InvalidAuthenticationContext,
     VerifiedAuthenticationContext,
 )
+from adapters.http.scope_authority import (
+    MissingTrustedScopeAuthority,
+    ScopeAuthorityIdentity,
+)
 from engine.runtime.actor import (
     CurrentMembershipVerification,
     MembershipVerificationProvenance,
@@ -73,6 +77,21 @@ def current_membership_proof(
         request_id=request_id,
         authentication_binding_ref=authentication_binding_ref,
         checked_at=checked_at,
+    )
+
+
+def scope_authority_identity() -> ScopeAuthorityIdentity:
+    return ScopeAuthorityIdentity(
+        organization_id=ORGANIZATION_ID,
+        user_id=USER_ID,
+        membership_id=MEMBERSHIP_ID,
+        membership_version=7,
+        principal_ref="principal-not-the-user-id",
+        agent_version_ref="agent-version-1",
+        purpose="context.answer",
+        request_id="request-1",
+        authentication_binding_ref="binding-1",
+        checked_at=CHECKED_AT,
     )
 
 
@@ -247,20 +266,25 @@ def test_authenticated_invocation_binds_one_current_user_actor() -> None:
         verified_at=CHECKED_AT,
     )
 
-    invocation = _construct_authenticated_http_invocation(
-        request_id="request-1",
-        authenticated_organization_ref=str(ORGANIZATION_ID),
-        organization_verification=organization_proof,
-        user_ref=str(USER_ID),
-        principal_ref="principal-not-the-user-id",
-        membership_ref=str(MEMBERSHIP_ID),
-        membership_version=7,
-        current_membership_verification=proof,
-        agent_version_ref="agent-version-1",
-        authenticated_application_ref="application-1",
-        authentication_binding_ref="binding-1",
-        received_at=CHECKED_AT,
-    )
+    with MissingTrustedScopeAuthority().current_scope(
+        scope_authority_identity()
+    ) as scope_snapshot:
+        invocation = _construct_authenticated_http_invocation(
+            request_id="request-1",
+            authenticated_organization_ref=str(ORGANIZATION_ID),
+            organization_verification=organization_proof,
+            user_ref=str(USER_ID),
+            principal_ref="principal-not-the-user-id",
+            membership_ref=str(MEMBERSHIP_ID),
+            membership_version=7,
+            current_membership_verification=proof,
+            agent_version_ref="agent-version-1",
+            authenticated_application_ref="application-1",
+            authentication_binding_ref="binding-1",
+            trusted_purpose="context.answer",
+            received_at=CHECKED_AT,
+            trusted_scope_snapshot=scope_snapshot,
+        )
 
     assert invocation.user_ref == str(USER_ID)
     assert invocation.membership_ref == str(MEMBERSHIP_ID)
@@ -313,12 +337,17 @@ def test_authenticated_invocation_rejects_mismatched_current_membership(
         "agent_version_ref": "agent-version-1",
         "authenticated_application_ref": "application-1",
         "authentication_binding_ref": "binding-1",
+        "trusted_purpose": "context.answer",
         "received_at": CHECKED_AT,
     }
     values.update(invocation_override)
 
-    with pytest.raises(ValueError, match="current Membership"):
-        _construct_authenticated_http_invocation(**values)  # type: ignore[arg-type]
+    with MissingTrustedScopeAuthority().current_scope(
+        scope_authority_identity()
+    ) as scope_snapshot:
+        values["trusted_scope_snapshot"] = scope_snapshot
+        with pytest.raises(ValueError, match="current Membership"):
+            cast(Any, _construct_authenticated_http_invocation)(**values)
 
     _close_membership_authority_scope(scope)
 
@@ -334,7 +363,12 @@ def test_authenticated_invocation_rejects_closed_membership_authority_scope() ->
         verified_at=CHECKED_AT,
     )
 
-    with pytest.raises(ValueError, match="active Membership authority scope"):
+    with (
+        MissingTrustedScopeAuthority().current_scope(
+            scope_authority_identity()
+        ) as scope_snapshot,
+        pytest.raises(ValueError, match="active Membership authority scope"),
+    ):
         _construct_authenticated_http_invocation(
             request_id="request-1",
             authenticated_organization_ref=str(ORGANIZATION_ID),
@@ -347,7 +381,9 @@ def test_authenticated_invocation_rejects_closed_membership_authority_scope() ->
             agent_version_ref="agent-version-1",
             authenticated_application_ref="application-1",
             authentication_binding_ref="binding-1",
+            trusted_purpose="context.answer",
             received_at=CHECKED_AT,
+            trusted_scope_snapshot=scope_snapshot,
         )
 
 

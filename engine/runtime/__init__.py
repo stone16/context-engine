@@ -29,6 +29,7 @@ from engine.runtime.contracts import (
     CoverageStatus,
     RequestNarrowing,
     Resolved,
+    ScopeDecisionReceipt,
     TrustedDeliveryContext,
 )
 from engine.runtime.invocation import (
@@ -56,6 +57,7 @@ __all__ = [
     "PackageBudgetRequest",
     "RequestNarrowing",
     "Resolved",
+    "ScopeDecisionReceipt",
     "Runtime",
     "RuntimeConfigurationError",
     "TrustedDeliveryContext",

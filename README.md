@@ -15,8 +15,10 @@ tenant-owned 表的非 owner FORCE RLS 隔离已验证；HTTP 已能把确定性
 当前 Membership-backed `UserActor`，构造 nominal `AuthenticatedInvocation`，并用
 closed body 与通用错误证明 caller 不能注入 trusted identity；该测试组合已通过唯一
 `ContextRuntime.resolve` 返回 tenant-safe、evidence-free ContextPackage。默认应用仍拒绝全部
-credential；生产认证、带内容 Runtime delivery、Principal/Agent scope 交集以及 worker job
-行为仍为 `NOT_ACTIVE`。整体计划见 [PLAN.md](./PLAN.md)。
+credential；sealed Runtime 已执行七个 trusted operands 与可选 RequestNarrowing 的
+synthetic finite EffectiveScope 交集，并保持空包和零内容 I/O。生产认证、durable
+Principal/Agent grants、真实 ACL、带内容 Runtime delivery 以及 worker job 行为仍为
+`NOT_ACTIVE`。整体计划见 [PLAN.md](./PLAN.md)。
 
 ## 开发命令
 
@@ -80,8 +82,9 @@ uv run context-engine-worker --test-mode
 PostgreSQL/pgvector、
 角色隔离、迁移、连接池清理，以及 Organization + current Membership-backed
 `UserActor` + `organization_record` 的事务级租户上下文、复合所有权和 FORCE RLS。
-它不声明 Principal/Agent scope、内容授权或生产 ContextPackage 交付已经实现；注入的
-conformance 组合证明 Issue #11 在安全空包路径上增加的当前 Membership 门禁。
+它不声明 durable Principal/Agent grants、真实 ACL、内容授权或生产 ContextPackage
+交付已经实现；注入的 conformance 组合证明当前 Membership 门禁，以及 Issue #12
+synthetic EffectiveScope 的 fail-closed、单调不扩张空包路径。
 
 ### 当前 HTTP empty-Package tracer
 
@@ -92,7 +95,9 @@ conformance 组合证明 Issue #11 在安全空包路径上增加的当前 Membe
 该事务保持到 sealed Runtime 与 ContextPackage 构造完成。有效 Acquire 返回
 `200 resolved` 与 evidence-free ContextPackage；无效 Membership 统一返回通用 401，
 数据库 authority 不可用统一返回通用 503，且两者都不会调用内容系统。模块级默认应用的
-三条 authority 均 reject-all，因此不会接受任何生产 credential。
+认证、Organization 与 Membership 三条生产 authority 均 reject-all；scope authority
+默认显式返回七个 missing trusted operands，因此不会接受任何生产 credential，也不会
+产生可交付 scope。
 
 请求体仅允许 `kind: "acquire"`、`need.query`、可选的有限 `packageBudget` 和可选的
 `requestNarrowing`（ref 长度与集合数量均受 active profile 限制），每层 unknown field、重复 JSON key
@@ -104,8 +109,9 @@ JSON/media type、
 policy；返回的 `organizationRef` 是新生成的 package-scoped opaque reference，不能作为
 后续请求的 trusted tenant input。空包的 blocks/evidence/gaps 均为空，coverage 为
 `no_authorized_evidence`，Provider/index/source-content 调用均为零。确定性 authorities
-与 real-PostgreSQL seeded composition 只属于测试组合。生产 OAuth/JWT、Principal/
-Agent scope、Evidence 与 continuation 不属于这个已激活 tracer。
+与 real-PostgreSQL seeded composition 只属于测试组合。生产 OAuth/JWT、durable
+Principal/Agent grant authority、真实 Source/Resource ACL、Evidence 与
+continuation 不属于这个已激活 tracer。
 
 本次公开候选 bundle 包含实现权威、ADR、安全契约、PRD、Tech Spec
 与四个公开参考仓的证据基线；经维护者批准并提交后，它们将与实现一同

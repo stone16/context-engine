@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from hmac import new as new_hmac
@@ -24,6 +24,7 @@ from engine.runtime.contracts import (
     CoverageReason,
     CoverageStatus,
     Resolved,
+    ScopeDecisionReceipt,
     _require_closed_opaque_ref,
 )
 from engine.runtime.delivery import (
@@ -38,6 +39,15 @@ from engine.runtime.organization import (
     ExistingOrganizationVerification,
     OrganizationVerificationProvenance,
 )
+from engine.runtime.scope import (
+    OMITTED_REQUEST_NARROWING,
+    EffectiveScope,
+    compute_effective_scope,
+)
+from engine.runtime.scope_authority import (
+    _require_active_trusted_scope_snapshot,
+    _trusted_operands_from_snapshot,
+)
 
 
 class RuntimeConfigurationError(RuntimeError):
@@ -50,6 +60,7 @@ class EmptyPolicyReceipt:
 
     request_id: str
     purpose: str
+    effective_scope: EffectiveScope = field(repr=False)
     candidate_count: Literal[0] = 0
     authorized_projection_count: Literal[0] = 0
 
@@ -138,6 +149,22 @@ def _validate_trusted_operands(
         raise ValueError("Runtime requires a matching trusted delivery context")
     if type(request) is not Acquire:
         raise TypeError("Runtime request must be Acquire")
+    scope_snapshot = invocation.trusted_scope_snapshot
+    _require_active_trusted_scope_snapshot(scope_snapshot)
+    if (
+        scope_snapshot.organization_id != actor.organization_id
+        or scope_snapshot.user_id != actor.user_id
+        or scope_snapshot.membership_id != actor.membership_id
+        or scope_snapshot.membership_version != actor.membership_version
+        or scope_snapshot.principal_ref != invocation.principal_ref
+        or scope_snapshot.agent_version_ref != invocation.agent_version_ref
+        or scope_snapshot.purpose != delivery_context.purpose
+        or scope_snapshot.request_id != invocation.request_id
+        or scope_snapshot.authentication_binding_ref
+        != invocation.authentication_binding_ref
+        or scope_snapshot.checked_at != invocation.received_at
+    ):
+        raise ValueError("Runtime requires a matching trusted scope snapshot")
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,9 +178,16 @@ class PolicyGate:
         request: Acquire,
     ) -> EmptyPolicyReceipt:
         _validate_trusted_operands(invocation, delivery_context, request)
+        effective_scope = compute_effective_scope(
+            _trusted_operands_from_snapshot(invocation.trusted_scope_snapshot),
+            request.narrowing
+            if request.narrowing is not None
+            else OMITTED_REQUEST_NARROWING,
+        )
         return EmptyPolicyReceipt(
             request_id=invocation.request_id,
             purpose=delivery_context.purpose,
+            effective_scope=effective_scope,
         )
 
 
@@ -425,6 +459,11 @@ class Runtime:
         return Resolved(
             package=package,
             effective_budget=decision.effective_budget,
+            scope_decision=ScopeDecisionReceipt(
+                digest=decision.policy_receipt.effective_scope.digest,
+                target_count=len(decision.policy_receipt.effective_scope.targets),
+                is_empty=not decision.policy_receipt.effective_scope.targets,
+            ),
         )
 
 
