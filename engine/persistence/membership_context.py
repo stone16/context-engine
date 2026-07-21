@@ -30,6 +30,7 @@ from engine.runtime.materialized import (
 )
 from engine.runtime.policy_epoch import (
     PolicyEpochAuthorityUnavailable,
+    PolicyEpochPortFailure,
     _close_policy_epoch_authority_scope,
     _construct_policy_epoch_session,
     _observe_current_policy_epoch,
@@ -236,16 +237,21 @@ class _PostgreSQLPolicyEpochPort:
         self._connection = connection
 
     def read_current_epoch(self, organization_id: UUID) -> object:
-        return self._connection.execute(
-            text(
-                """
-                SELECT policy_epoch
-                FROM organization_policy_epoch
-                WHERE organization_id = :organization_id
-                """
-            ),
-            {"organization_id": organization_id},
-        ).scalar_one_or_none()
+        try:
+            return self._connection.execute(
+                text(
+                    """
+                    SELECT policy_epoch
+                    FROM organization_policy_epoch
+                    WHERE organization_id = :organization_id
+                    """
+                ),
+                {"organization_id": organization_id},
+            ).scalar_one_or_none()
+        except SQLAlchemyError:
+            raise PolicyEpochPortFailure(
+                "Policy Epoch backend is unavailable"
+            ) from None
 
 
 class PostgreSQLMembershipAuthority:

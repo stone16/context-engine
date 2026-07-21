@@ -293,6 +293,10 @@ ContextProvider audience. 中文：ContextAccessTicket 只委托受限 source re
   issuance/redemption audit may persist while the ticket is ephemeral.
 - **Invariant:** valid only for its exact read audience/restrictions; Provider
   projection evidence still requires Kernel validation.
+- **Activation note:** Issue #18 proves only one Organization/Provider-bound
+  signed synthetic-read carrier, including cross-plane rejection and final V0
+  Policy Epoch validation. Production ContextProvider discovery/projection,
+  source credentials, and source ACL evidence remain `NOT_ACTIVE`.
 - **Do not confuse with:** credential, ActionTicket, ContinuationToken,
   WorkerLease, or generic bearer token.
 
@@ -307,6 +311,11 @@ A signed, short-lived, one-shot capability for exactly one external effect.
   handling belong to the owning design and ADRs.
 - **Invariant:** ContextAccessTicket and ActionTicket have different audiences
   and are never interchangeable; rejected use has business effect zero.
+- **Activation note:** Issue #18 proves only a distinct signed
+  Organization/channel-bound synthetic no-op and zero-effect rejection. It does
+  not activate the canonical durable one-shot lifecycle, ActionPlane
+  prepare/perform, Sender/IM delivery, payload/destination/approval/idempotency,
+  DeliveryAttempt, replay, stored receipt, or reconciliation semantics.
 - **Do not confuse with:** read ticket, EgressGrant, WorkerLease, credential, or
   proof that an effect succeeded.
 

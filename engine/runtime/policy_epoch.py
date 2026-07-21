@@ -19,9 +19,13 @@ class PolicyEpochVerificationProvenance(StrEnum):
 
 
 class PolicyEpochPort(Protocol):
-    """Narrow current-epoch read owned by one retained trusted transaction."""
+    """Narrow epoch read; expected backend faults use PolicyEpochPortFailure."""
 
     def read_current_epoch(self, organization_id: UUID) -> object: ...
+
+
+class PolicyEpochPortFailure(RuntimeError):
+    """Expected backend failure reported by a Policy Epoch authority port."""
 
 
 class _PolicyEpochAuthorityScope:
@@ -141,9 +145,13 @@ def _observe_current_policy_epoch(
     session: PolicyEpochSession,
 ) -> PolicyEpochVerification:
     _require_active_policy_epoch_session(session)
-    epoch = _require_policy_epoch(
-        session._port.read_current_epoch(session.organization_id)
-    )
+    try:
+        observed_value = session._port.read_current_epoch(session.organization_id)
+    except (PolicyEpochAuthorityUnavailable, PolicyEpochPortFailure):
+        raise PolicyEpochAuthorityUnavailable(
+            "current Organization Policy Epoch is unavailable"
+        ) from None
+    epoch = _require_policy_epoch(observed_value)
     verification = object.__new__(PolicyEpochVerification)
     object.__setattr__(verification, "organization_id", session.organization_id)
     object.__setattr__(verification, "policy_epoch", epoch)
@@ -179,9 +187,13 @@ def _policy_epoch_is_current(verification: PolicyEpochVerification) -> bool:
     """Re-read durable epoch; structural failures are authority unavailability."""
 
     _require_active_policy_epoch_verification(verification)
-    observed = _require_policy_epoch(
-        verification.validation_session._port.read_current_epoch(
+    try:
+        observed_value = verification.validation_session._port.read_current_epoch(
             verification.organization_id
         )
-    )
+    except (PolicyEpochAuthorityUnavailable, PolicyEpochPortFailure):
+        raise PolicyEpochAuthorityUnavailable(
+            "current Organization Policy Epoch is unavailable"
+        ) from None
+    observed = _require_policy_epoch(observed_value)
     return observed == verification.policy_epoch

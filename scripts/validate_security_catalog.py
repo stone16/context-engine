@@ -23,7 +23,7 @@ from urllib.parse import unquote
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CATALOG_PATH = REPOSITORY_ROOT / "eval/catalogs/security-invariants.yaml"
 DEFAULT_SCHEMA_PATH = REPOSITORY_ROOT / "eval/catalogs/security-catalog.schema.json"
-SUPPORTED_CATALOG_VERSION = "1.0.0"
+SUPPORTED_CATALOG_VERSION = "1.1.0"
 EXPECTED_INVARIANT_COUNT = 15
 EXPECTED_FIXTURE_COUNT = 12
 ID_PATTERN = re.compile(r"^[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)*-[0-9]{3}$")
@@ -398,11 +398,24 @@ ACCEPT_008_FUTURE_CARRIER: dict[str, str] = {
     ),
 }
 
-CANONICAL_FUTURE_FIXTURE_CARRIERS: dict[str, dict[str, str]] = {
+ACCEPT_012_UNAVAILABLE_CARRIER: dict[str, str] = {
+    "statusAtM0": "unavailable",
+    "m0Expectation": "fail_closed",
+    "upgradeTrigger": (
+        "Issue #18 independently activates only distinct signed synthetic "
+        "ContextAccessTicket Provider-read and ActionTicket no-op channel-action "
+        "carriers. The full ACCEPT-012 fixture upgrades only when the owning M2 "
+        "ActionPlane issue proves prepare and perform against a real Sender with "
+        "all durable effect bindings and reconciliation."
+    ),
+}
+
+CANONICAL_DEFERRED_FIXTURE_CARRIERS: dict[str, dict[str, str]] = {
     "ACCEPT-005": ACCEPT_005_FUTURE_CARRIER,
     "ACCEPT-008": ACCEPT_008_FUTURE_CARRIER,
     "ACCEPT-009": ACCEPT_009_FUTURE_CARRIER,
     "ACCEPT-010": ACCEPT_010_FUTURE_CARRIER,
+    "ACCEPT-012": ACCEPT_012_UNAVAILABLE_CARRIER,
 }
 
 CANONICAL_REVOCATION_ACTIVATION: dict[str, object] = {
@@ -455,8 +468,8 @@ CANONICAL_REVOCATION_ACTIVATION: dict[str, object] = {
         "Continue",
         "OpenCitation",
         "Policy-Epoch-bound WorkerLease",
-        "ContextAccessTicket",
-        "ActionTicket",
+        "production ContextAccessTicket",
+        "production ActionTicket",
     ],
     "notActive": [
         "DecisionAudit",
@@ -599,10 +612,78 @@ CANONICAL_WORKER_LEASE_ACTIVATION: dict[str, object] = {
     ],
 }
 
+CANONICAL_TICKET_AUDIENCE_ACTIVATION: dict[str, object] = {
+    "issueRef": "#18",
+    "invariantRef": "ACTION-SEPARATION-014",
+    "carrier": (
+        "signed synthetic ContextAccessTicket Provider read | signed synthetic "
+        "ActionTicket no-op channel action"
+    ),
+    "status": "active_fail_closed",
+    "policyEpochScope": "organization-v0",
+    "controlBoundary": (
+        "ContextAccessTicketReadHandler.read | ActionTicketNoopHandler.perform"
+    ),
+    "testEvidence": [
+        {
+            "id": "TICKET-AUDIENCE-018",
+            "surface": "tests/unit/test_ticket_audience_separation.py",
+            "oracle": (
+                "Distinct nominal signed ContextAccessTicket and ActionTicket "
+                "types use one explicit versioned keyring while separate signing "
+                "domains and token types prevent cross-plane authority. They bind "
+                "a validated AuthenticatedInvocation/TrustedDeliveryContext "
+                "identity and purpose, trusted Organization, current Organization "
+                "Policy Epoch, bounded expiry, operation, and "
+                "provider-specific context-read or channel-specific im-send "
+                "audiences. Their type-aware deserializers and structurally "
+                "separate synthetic Provider-read "
+                "and no-op channel handlers accept only the exact matching ticket; "
+                "cross-plane, target, audience, identity, freshness, tamper, and "
+                "malformed-token probes return one generic non-enumerating "
+                "rejection with zero rejected synthetic calls. This is not "
+                "production ContextProvider, Sender, or ActionPlane evidence."
+            ),
+        },
+        {
+            "id": "PG-TICKET-EPOCH-018",
+            "surface": "tests/integration/test_ticket_policy_epoch.py",
+            "oracle": (
+                "The real PostgreSQL non-owner UserActor transaction exercises "
+                "both ticket types before a trusted Control transaction commits an "
+                "Organization epoch bump, then rejects both previously valid "
+                "tickets before their separate synthetic read and action effect "
+                "counters increment. This proves current Organization-v0 epoch "
+                "binding, not durable ticket consumption or a real external effect."
+            ),
+        },
+    ],
+    "deferredEvidence": [
+        "PROP-ACTION-SEPARATION-014",
+        "PG-ACTION-SEPARATION-014",
+        "ACTION-001 through ACTION-009",
+        "full ACCEPT-012 matrix",
+    ],
+    "futureCarriers": [
+        "production ContextProvider read/projection",
+        "ContextRuntime ticket integration",
+        "BotDelivery",
+        "M2 ActionPlane and real Sender",
+    ],
+    "notActive": [
+        "full M2 ActionPlane.prepare/perform",
+        "real Sender/external effect",
+        "payload/destination/approval/idempotency",
+        "durable one-shot/replay/reconciliation",
+        "full ACCEPT-012 PASS",
+    ],
+}
+
 CANONICAL_ACTIVATIONS: list[dict[str, object]] = [
     CANONICAL_REVOCATION_ACTIVATION,
     CANONICAL_UNAVAILABLE_CAPABILITY_ACTIVATION,
     CANONICAL_WORKER_LEASE_ACTIVATION,
+    CANONICAL_TICKET_AUDIENCE_ACTIVATION,
 ]
 
 
@@ -774,7 +855,7 @@ def _validate_activations(catalog: Mapping[str, Any], collector: _Collector) -> 
         collector.add(
             "activations",
             "must contain exactly the canonical ordered Issue #15, Issue #16, "
-            "and Issue #17 "
+            "Issue #17, and Issue #18 "
             "activation records",
         )
 
@@ -809,7 +890,7 @@ def _validate_activations(catalog: Mapping[str, Any], collector: _Collector) -> 
         collector.add(
             "activations",
             "must exactly preserve the canonical ordered Issue #15, Issue #16, "
-            "and Issue #17 "
+            "Issue #17, and Issue #18 "
             "activation records and their future/NOT_ACTIVE boundaries",
         )
 
@@ -1133,10 +1214,13 @@ def _validate_fixture(
         collector.require_nonempty_string(
             carrier.get("upgradeTrigger"), f"{path}.carrier.upgradeTrigger"
         )
-        canonical_future_carrier = CANONICAL_FUTURE_FIXTURE_CARRIERS.get(
+        canonical_deferred_carrier = CANONICAL_DEFERRED_FIXTURE_CARRIERS.get(
             fixture_id or ""
         )
-        if canonical_future_carrier is not None and carrier != canonical_future_carrier:
+        if (
+            canonical_deferred_carrier is not None
+            and carrier != canonical_deferred_carrier
+        ):
             if fixture_id == "ACCEPT-005":
                 message = (
                     "must preserve ACCEPT-005 as the future Continue carrier; "
@@ -1147,6 +1231,12 @@ def _validate_fixture(
                     "must preserve the full ACCEPT-008 fixture as "
                     "future/fail_closed; Issue #17 activates only its "
                     "independent persistent no-op carrier"
+                )
+            elif fixture_id == "ACCEPT-012":
+                message = (
+                    "must preserve the full ACCEPT-012 fixture as "
+                    "unavailable/fail_closed; Issue #18 activates only its "
+                    "independent synthetic ticket-audience carrier"
                 )
             else:
                 message = (
@@ -2199,7 +2289,8 @@ def _validate_schema(
                         collector.add(
                             "schema.properties.activations.prefixItems"
                             f"[{index}].const",
-                            f"must freeze the canonical Issue #{15 + index} "
+                            "must freeze the canonical "
+                            f"Issue {expected_activation['issueRef']} "
                             "activation record",
                         )
             if array_schema.get("items") is not False:
@@ -2350,40 +2441,53 @@ def _validate_schema(
                     )
 
         all_of = fixture_item.get("allOf")
-        accept_008_frozen = False
-        if isinstance(all_of, list):
-            for rule in all_of:
-                if not isinstance(rule, Mapping):
-                    continue
-                condition = rule.get("if")
-                consequence = rule.get("then")
-                if not isinstance(condition, Mapping) or not isinstance(
-                    consequence, Mapping
-                ):
-                    continue
-                condition_properties = condition.get("properties")
-                consequence_properties = consequence.get("properties")
-                if not isinstance(condition_properties, Mapping) or not isinstance(
-                    consequence_properties, Mapping
-                ):
-                    continue
-                fixture_id_condition = condition_properties.get("id")
-                carrier_consequence = consequence_properties.get("carrier")
-                if (
-                    isinstance(fixture_id_condition, Mapping)
-                    and fixture_id_condition.get("const") == "ACCEPT-008"
-                    and isinstance(carrier_consequence, Mapping)
-                    and carrier_consequence.get("const")
-                    == ACCEPT_008_FUTURE_CARRIER
-                ):
-                    accept_008_frozen = True
-                    break
-        if not accept_008_frozen:
-            collector.add(
-                "schema.fixtures.items.allOf",
-                "must independently freeze ACCEPT-008 as the canonical "
-                "future/fail_closed fixture carrier",
-            )
+        frozen_fixture_carriers = {
+            "ACCEPT-008": (
+                ACCEPT_008_FUTURE_CARRIER,
+                "future/fail_closed",
+            ),
+            "ACCEPT-012": (
+                ACCEPT_012_UNAVAILABLE_CARRIER,
+                "unavailable/fail_closed",
+            ),
+        }
+        for frozen_fixture_id, (
+            expected_carrier,
+            expected_state,
+        ) in frozen_fixture_carriers.items():
+            fixture_frozen = False
+            if isinstance(all_of, list):
+                for rule in all_of:
+                    if not isinstance(rule, Mapping):
+                        continue
+                    condition = rule.get("if")
+                    consequence = rule.get("then")
+                    if not isinstance(condition, Mapping) or not isinstance(
+                        consequence, Mapping
+                    ):
+                        continue
+                    condition_properties = condition.get("properties")
+                    consequence_properties = consequence.get("properties")
+                    if not isinstance(
+                        condition_properties, Mapping
+                    ) or not isinstance(consequence_properties, Mapping):
+                        continue
+                    fixture_id_condition = condition_properties.get("id")
+                    carrier_consequence = consequence_properties.get("carrier")
+                    if (
+                        isinstance(fixture_id_condition, Mapping)
+                        and fixture_id_condition.get("const") == frozen_fixture_id
+                        and isinstance(carrier_consequence, Mapping)
+                        and carrier_consequence.get("const") == expected_carrier
+                    ):
+                        fixture_frozen = True
+                        break
+            if not fixture_frozen:
+                collector.add(
+                    "schema.fixtures.items.allOf",
+                    f"must independently freeze {frozen_fixture_id} as the "
+                    f"canonical {expected_state} fixture carrier",
+                )
 
     definitions = root.get("$defs")
     definitions = collector.require_mapping(definitions, "schema.$defs")

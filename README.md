@@ -23,7 +23,16 @@ Principal/Agent grants、真实 Source ACL 与通用内容检索仍为 `NOT_ACTI
 Organization、job、registered ServicePrincipal binding、固定 workload/worker audience、
 过期时间与 nonce，并在 non-owner FORCE RLS 下只允许一次原子完成；该 bounded binding
 不是完整 canonical `ServiceActor`，真实 ingestion、outbox 与 publication job 仍为
-`NOT_ACTIVE`。整体计划见 [PLAN.md](./PLAN.md)。
+`NOT_ACTIVE`。[Issue #18 的 ADR-0030](./docs/decisions/0030-bound-ticket-audiences.md)
+也只激活 bounded signed-ticket separation proof：一个 synthetic
+Provider read 与一个 synthetic channel no-op 共享 current `UserActor` identity chain 和
+key configuration，但使用不同 nominal types、signed domains、fixed operations 和
+provider/channel audiences。Agent/purpose 只从 matching
+`AuthenticatedInvocation`/`TrustedDeliveryContext` 派生；各自的 type-aware deserializer
+在创建 nominal ticket 前验证 signed namespace。两者均绑定 trusted
+Organization/target、bounded expiry 与 V0 Policy Epoch；所有 mismatch 使用 generic
+rejection 且 effect 为零。Production Provider、
+Sender/IM 与完整 M2 ActionPlane 仍为 `NOT_ACTIVE`。整体计划见 [PLAN.md](./PLAN.md)。
 
 ## 开发命令
 
@@ -122,6 +131,27 @@ Policy Epoch、end-user delivery audience、idempotency/generation、outbox、Fi
 worker loop，也不发布或声称完整 canonical `ServiceActor`（其 source/allowed-set/Policy
 Epoch 尚不存在），并将完整 `ACCEPT-008` fixture 保持 `future/fail_closed`。
 
+Issue #18 加入 canonical HMAC-SHA256 `ContextAccessTicket` 与 `ActionTicket`
+protocols；两者使用同一 validated `AuthenticatedInvocation` /
+`TrustedDeliveryContext` identity chain 和 explicit versioned key configuration。
+Read protocol 固定
+`context-engine.context-access-ticket` / `CE-ContextAccessTicket` /
+`synthetic.provider.read` 并派生 `context-read:<provider>`；action protocol 固定
+`context-engine.action-ticket` / `CE-ActionTicket` /
+`synthetic.channel.noop` 并派生 `im-send:<channel>`。Issuer 与 handler 由 trusted
+configuration 绑定一个 Organization/target；Agent/purpose 不接受裸字符串，token 也不
+提供公开 value constructor。两个独立 deserializer 在构造 nominal type 前验证签名、
+domain/type、fixed operation 与 schema；handler 再校验完整 identity、purpose、bounded
+expiry、nonce 和 key version，并在两个独立 synthetic effect 前最后复核 Organization
+V0 Policy Epoch。使用同一 key 的 cross-plane deserialize/pass、wrong
+target/Organization、identity/audience mismatch、tamper、overlong/expired lifetime、
+authority failure 和 committed epoch bump 均返回一个 non-enumerating unavailable 结果，
+rejected effect 为零。该 bounded proof 不激活 production Provider
+discovery/projection、source credential、Sender/IM、`ActionPlane.prepare`/`perform`、
+payload/destination/approval/idempotency、DeliveryAttempt、durable one-shot/replay/
+concurrency、stored receipt 或 reconciliation；完整 `ACCEPT-012` carrier 保持
+`NOT_ACTIVE`。
+
 ### 当前 HTTP exact-authorized Evidence tracer
 
 `POST /v1/context:resolve` 的 conformance 组合可注入一个把 opaque credential
@@ -159,8 +189,9 @@ refs/timestamps 后完全相同；响应不含 Resource 标识、名称、Candid
 
 确定性 authorities 与 real-PostgreSQL seeded composition 只属于测试组合。生产 OAuth/JWT、durable
 Principal/Agent grant authority、真实 Source/Resource ACL、通用检索与 continuation
-不属于这个已激活 tracer。Policy Epoch V0 也不激活 UI/外部 admin、DecisionAudit、
-outbox、cleanup、真实 Continue/OpenCitation、WorkerLease 或 ticket revocation carrier。
+不属于这个已激活 tracer。Policy Epoch V0 本身也不激活 UI/外部 admin、DecisionAudit、
+outbox、cleanup、真实 Continue/OpenCitation 或完整 production WorkerLease/ticket carrier；
+#17 与 #18 仅通过各自 ADR 单独激活前述 bounded proof。
 其中 Continue/OpenCitation 的 M0 通用拒绝已经激活，但真实 issuance/redemption carrier
 仍保持 future；restricted in-process audit 只保留 `UNSUPPORTED_CAPABILITY` 类别，
 durable DecisionAudit 仍为 `NOT_ACTIVE`。

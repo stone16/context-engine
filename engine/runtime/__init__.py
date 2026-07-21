@@ -1,5 +1,15 @@
 """Sealed Runtime boundary and exact-authorized delivery contracts."""
 
+from engine.runtime._ticket_signing import TicketSigningKeyring
+from engine.runtime.action_ticket import (
+    ACTION_AUDIENCE_PREFIX,
+    ACTION_TICKET_OPERATION,
+    ActionTicket,
+    ActionTicketIssuer,
+    ActionTicketNoopHandler,
+    SyntheticActionReceipt,
+    SyntheticNoopChannel,
+)
 from engine.runtime.actor import (
     CurrentMembershipVerification,
     MembershipRejectionAuditReceipt,
@@ -18,6 +28,15 @@ from engine.runtime.construction import (
     KernelDependency,
     Runtime,
     RuntimeConfigurationError,
+)
+from engine.runtime.context_access_ticket import (
+    CONTEXT_ACCESS_OPERATION,
+    CONTEXT_READ_AUDIENCE_PREFIX,
+    ContextAccessTicket,
+    ContextAccessTicketIssuer,
+    ContextAccessTicketReadHandler,
+    SyntheticReadProvider,
+    SyntheticReadReceipt,
 )
 from engine.runtime.contracts import (
     Acquire,
@@ -54,8 +73,19 @@ from engine.runtime.invocation import (
     AuthenticatedInvocation,
     InvocationConstructionProvenance,
 )
+from engine.runtime.ticket_identity import TicketExecutionIdentity
+from engine.runtime.ticket_rejection import (
+    TicketNotAvailable,
+    TicketRejectionAuditReceipt,
+    TicketRejectionCategory,
+)
 
 __all__ = [
+    "ACTION_AUDIENCE_PREFIX",
+    "ACTION_TICKET_OPERATION",
+    "ActionTicket",
+    "ActionTicketIssuer",
+    "ActionTicketNoopHandler",
     "KernelDependencies",
     "KernelDependency",
     "AuthenticatedInvocation",
@@ -66,6 +96,11 @@ __all__ = [
     "CitationOpenRef",
     "CandidateRef",
     "ContextNeed",
+    "CONTEXT_ACCESS_OPERATION",
+    "CONTEXT_READ_AUDIENCE_PREFIX",
+    "ContextAccessTicket",
+    "ContextAccessTicketIssuer",
+    "ContextAccessTicketReadHandler",
     "ContextPackage",
     "Continue",
     "ContinuationToken",
@@ -89,6 +124,15 @@ __all__ = [
     "ResolutionOutcome",
     "Resolved",
     "ScopeDecisionReceipt",
+    "SyntheticActionReceipt",
+    "SyntheticNoopChannel",
+    "SyntheticReadProvider",
+    "SyntheticReadReceipt",
+    "TicketExecutionIdentity",
+    "TicketNotAvailable",
+    "TicketRejectionAuditReceipt",
+    "TicketRejectionCategory",
+    "TicketSigningKeyring",
     "Runtime",
     "RuntimeConfigurationError",
     "RuntimeRequest",

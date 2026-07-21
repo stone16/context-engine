@@ -1,6 +1,6 @@
 ---
 name: adr-0027-organization-policy-epoch
-version: "1.0.0"
+version: "1.1.0"
 description: >
   Select an Organization-level Policy Epoch for the first Acquire revocation
   slice and freeze its atomic mutation and final-delivery validation boundary.
@@ -73,6 +73,14 @@ Durable DecisionAudit and outbox publication remain `NOT_ACTIVE`; their owning
 issues must add them to the same authoritative transaction before claiming the
 full design-level linearization contract.
 
+[ADR-0030](0030-bound-ticket-audiences.md) independently reuses this
+Organization V0 epoch for the bounded Issue #18 `ContextAccessTicket` synthetic
+Provider read and `ActionTicket` synthetic channel no-op. Each separate handler
+performs the retained current-epoch check immediately before its configured
+synthetic effect. That refinement does not add a second epoch, extend the
+Control transaction, or activate a production Provider, Sender, IM delivery,
+or ActionPlane carrier.
+
 ## Rationale
 
 Organization granularity gives the first implementation one unambiguous tenant-
@@ -94,12 +102,15 @@ authorization product before its identity and approval workflows are designed.
   authorize delivery.
 - `ACCEPT-005` remains a future Continue fixture. OpenCitation, WorkerLease,
   ContextAccessTicket, ActionTicket, and historical Package-byte handling are
-  not activated by this decision.
+  not activated by this decision. ADR-0029 and ADR-0030 separately reuse the
+  Organization boundary only for their explicitly bounded carriers; they do
+  not promote the complete production lease or ticket contracts.
 
 ## Revisit trigger
 
 Revisit when measured Organization-level contention or invalidation cost
 justifies a finer epoch, or when DecisionAudit, outbox, Continue, OpenCitation,
-WorkerLease, ContextAccessTicket, ActionTicket, or cleanup carriers activate.
-Any refinement must preserve monotonic tenant isolation, atomic access-change
-linearization, and final current-epoch validation before newly delivered bytes.
+cleanup, or any production WorkerLease, ContextAccessTicket, or ActionTicket
+carrier activates beyond the bounded ADR-0029/ADR-0030 proofs. Any refinement
+must preserve monotonic tenant isolation, atomic access-change linearization,
+and final current-epoch validation before newly delivered bytes or effects.
