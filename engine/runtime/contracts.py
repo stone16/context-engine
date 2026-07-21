@@ -1,6 +1,6 @@
 """Closed request and evidence-free delivery contracts for ContextRuntime."""
 
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, field, fields
 from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import Literal
@@ -23,6 +23,7 @@ __all__ = [
     "DirectDeliveryConstructionProvenance",
     "RequestNarrowing",
     "Resolved",
+    "ScopeDecisionReceipt",
     "TrustedDeliveryContext",
     "_construct_direct_delivery_context",
 ]
@@ -135,11 +136,11 @@ class BudgetUsage:
     elapsed_ms: int
 
     def __post_init__(self) -> None:
-        for field in fields(self):
-            value = getattr(self, field.name)
+        for usage_field in fields(self):
+            value = getattr(self, usage_field.name)
             if type(value) is not int or value < 0:
                 raise ValueError(
-                    f"{field.name} must be a non-negative exact integer"
+                    f"{usage_field.name} must be a non-negative exact integer"
                 )
 
 
@@ -241,11 +242,35 @@ class ContextPackage:
 
 
 @dataclass(frozen=True, slots=True)
+class ScopeDecisionReceipt:
+    """Restricted EffectiveScope observation without concrete target identifiers."""
+
+    digest: str = field(repr=False)
+    target_count: int
+    is_empty: bool
+
+    def __post_init__(self) -> None:
+        if (
+            type(self.digest) is not str
+            or len(self.digest) != 64
+            or any(character not in "0123456789abcdef" for character in self.digest)
+        ):
+            raise ValueError("scope decision digest must be lowercase SHA-256")
+        if type(self.target_count) is not int or self.target_count < 0:
+            raise ValueError("scope decision target_count must be non-negative")
+        if type(self.is_empty) is not bool:
+            raise TypeError("scope decision is_empty must be bool")
+        if self.is_empty != (self.target_count == 0):
+            raise ValueError("scope decision empty state must match target_count")
+
+
+@dataclass(frozen=True, slots=True)
 class Resolved:
     """Successful closed resolution outcome."""
 
     package: ContextPackage
     effective_budget: PackageBudget
+    scope_decision: ScopeDecisionReceipt = field(repr=False)
     kind: Literal["resolved"] = "resolved"
 
     def __post_init__(self) -> None:
@@ -253,5 +278,7 @@ class Resolved:
             raise TypeError("resolved package must be ContextPackage")
         if type(self.effective_budget) is not PackageBudget:
             raise TypeError("resolved effective_budget must be PackageBudget")
+        if type(self.scope_decision) is not ScopeDecisionReceipt:
+            raise TypeError("resolved scope_decision must be ScopeDecisionReceipt")
         if self.kind != "resolved":
             raise ValueError("resolved outcome kind must be resolved")

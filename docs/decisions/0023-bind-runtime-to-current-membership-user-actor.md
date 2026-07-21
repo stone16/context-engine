@@ -132,6 +132,11 @@ this decision does not activate:
   authority, Policy Epoch, audience authorization, durable audit/package
   records, release selection, or egress grants.
 
+Historical refinement: ADR-0024 now activates the Issue #12 synthetic finite
+EffectiveScope intersection. Durable Principal/Agent grant authorities, real
+ACL evidence, exact Candidate authorization, and content delivery remain
+excluded from ADR-0023 and from that synthetic slice.
+
 ## Rationale
 
 One transaction and one lifetime-bound nominal proof make the durable

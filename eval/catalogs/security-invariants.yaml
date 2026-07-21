@@ -570,7 +570,7 @@
       "carrier": {
         "statusAtM0": "available",
         "m0Expectation": "active_fail_closed",
-        "upgradeTrigger": "Issue #12 upgrades this authority fixture with the production Agent ceiling and request-narrowing implementation."
+        "upgradeTrigger": "Issue #13 and later upgrade this synthetic intersection fixture when real CandidateRef, exact authorization, ACL evidence, and content delivery activate."
       },
       "setup": {
         "preconditions": [
@@ -617,7 +617,7 @@
       "carrier": {
         "statusAtM0": "available",
         "m0Expectation": "active_fail_closed",
-        "upgradeTrigger": "Issue #12 upgrades this authority fixture with production parsing of the closed RequestNarrowing contract."
+        "upgradeTrigger": "Issue #13 and later upgrade this closed narrowing fixture when real CandidateRef, exact authorization, and content delivery activate."
       },
       "setup": {
         "preconditions": [

@@ -911,6 +911,23 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
             ["INDEX-NOT-AUTHORITY-005", "REVOCATION-006"],
         )
 
+    def test_tracked_catalog_freezes_issue_12_synthetic_scope_carriers(
+        self,
+    ) -> None:
+        catalog = load_document(DEFAULT_CATALOG_PATH)
+        fixtures = {
+            fixture["id"]: fixture
+            for fixture in catalog["fixtures"]
+            if isinstance(fixture, dict)
+        }
+
+        for fixture_id in ("ACCEPT-003", "ACCEPT-004"):
+            carrier = fixtures[fixture_id]["carrier"]
+            self.assertEqual(carrier["statusAtM0"], "available")
+            self.assertEqual(carrier["m0Expectation"], "active_fail_closed")
+            self.assertNotIn("Issue #12", carrier["upgradeTrigger"])
+            self.assertIn("Issue #13", carrier["upgradeTrigger"])
+
     def test_tracked_catalog_matches_runtime_outcome_and_timing_authority(
         self,
     ) -> None:

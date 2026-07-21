@@ -49,9 +49,11 @@ are excluded from public authority and provenance.
 - The manifest must be generated only after maintainer approval and a commit
   make the candidate immutable; this edit intentionally does not invent hashes
   for uncommitted content.
-- The RLS transaction-context, filtered-ANN, and Feishu capability evidence
-  spikes remain pending. Install, test, lint, build, and report commands also
-  remain pending because the repository has no implementation yet.
+- Historical note: this candidate predates implementation. The repository now
+  has verified install, build, lint, typecheck, unit/catalog/process, and real
+  PostgreSQL integration commands recorded in `AGENTS.md` and `README.md`, plus
+  RLS transaction-context evidence. Filtered-ANN and Feishu capability evidence
+  remain pending; this candidate still does not close D0.
 
 ## Pending SHA-256 manifest scope
 
@@ -79,6 +81,6 @@ independent verification result.
 - [ ] Child issue granularity and dependencies are approved before publication.
 - [ ] Feishu, RLS transaction-context, and filtered-ANN evidence spikes pass and
       their reproducible reports are pinned.
-- [ ] Real install/test/lint/build/report commands are selected and verified.
+- [x] Real install/test/lint/build/report commands are selected and verified.
 - [ ] This candidate is committed as an immutable, publication-ready authority
       baseline.

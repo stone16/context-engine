@@ -1532,6 +1532,14 @@ def test_openapi_body_is_closed_and_contains_no_trusted_fields() -> None:
         "bypass",
         "authenticatedinvocation",
         "trusteddeliverycontext",
+        "principalgrants",
+        "agentceiling",
+        "membershiprights",
+        "sourcenativeacl",
+        "resourceacl",
+        "purposepolicy",
+        "precomputedscope",
+        "effectivescope",
     ):
         assert forbidden not in serialized_request_graph
 
@@ -1582,6 +1590,23 @@ def test_openapi_body_is_closed_and_contains_no_trusted_fields() -> None:
         response_model["additionalProperties"] is False
         for response_model in response_models.values()
     )
+    serialized_response_graph = repr(response_models).casefold()
+    for forbidden in (
+        "effectivescope",
+        "scopedecision",
+        "scopetarget",
+        "targetcount",
+        "digest",
+        "sourceref",
+        "resourceref",
+        "principalgrants",
+        "agentceiling",
+        "membershiprights",
+        "sourcenativeacl",
+        "resourceacl",
+        "purposepolicy",
+    ):
+        assert forbidden not in serialized_response_graph
     assert "HTTPValidationError" not in schema["components"]["schemas"]
 
     for name, code in (
@@ -1593,6 +1618,9 @@ def test_openapi_body_is_closed_and_contains_no_trusted_fields() -> None:
         assert error_schema["additionalProperties"] is False
         assert error_schema["required"] == ["code"]
         assert error_schema["properties"]["code"]["const"] == code
+        serialized_error_schema = repr(error_schema).casefold()
+        assert "scope" not in serialized_error_schema
+        assert "digest" not in serialized_error_schema
 
 
 @pytest.mark.parametrize("header_value", ["", "   "])

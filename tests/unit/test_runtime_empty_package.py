@@ -7,6 +7,10 @@ from uuid import UUID
 
 import pytest
 
+from adapters.http.scope_authority import (
+    MissingTrustedScopeAuthority,
+    ScopeAuthorityIdentity,
+)
 from engine.runtime.actor import (
     _close_membership_authority_scope,
     _construct_current_membership_verification,
@@ -92,28 +96,45 @@ def trusted_operands() -> Iterator[
         authentication_binding_ref="binding-internal",
         checked_at=AS_OF,
     )
-    invocation = _construct_authenticated_http_invocation(
-        request_id="request-1",
-        authenticated_organization_ref=INTERNAL_ORGANIZATION_REF,
-        organization_verification=verification,
-        user_ref=INTERNAL_USER_REF,
-        principal_ref="principal-internal",
-        membership_ref=INTERNAL_MEMBERSHIP_REF,
-        membership_version=1,
-        current_membership_verification=membership_verification,
-        agent_version_ref="agent-version-internal",
-        authenticated_application_ref="application-internal",
-        authentication_binding_ref="binding-internal",
-        received_at=AS_OF,
-    )
-    delivery = _construct_direct_delivery_context(
-        purpose="context.answer",
-        authenticated_application_ref="application-internal",
-        delivery_binding_ref="binding-internal",
-        established_at=AS_OF,
-    )
     try:
-        yield invocation, delivery
+        scope_identity = ScopeAuthorityIdentity(
+            organization_id=UUID(INTERNAL_ORGANIZATION_REF),
+            user_id=UUID(INTERNAL_USER_REF),
+            membership_id=UUID(INTERNAL_MEMBERSHIP_REF),
+            membership_version=1,
+            principal_ref="principal-internal",
+            agent_version_ref="agent-version-internal",
+            purpose="context.answer",
+            request_id="request-1",
+            authentication_binding_ref="binding-internal",
+            checked_at=AS_OF,
+        )
+        with MissingTrustedScopeAuthority().current_scope(
+            scope_identity
+        ) as scope_snapshot:
+            invocation = _construct_authenticated_http_invocation(
+                request_id="request-1",
+                authenticated_organization_ref=INTERNAL_ORGANIZATION_REF,
+                organization_verification=verification,
+                user_ref=INTERNAL_USER_REF,
+                principal_ref="principal-internal",
+                membership_ref=INTERNAL_MEMBERSHIP_REF,
+                membership_version=1,
+                current_membership_verification=membership_verification,
+                agent_version_ref="agent-version-internal",
+                authenticated_application_ref="application-internal",
+                authentication_binding_ref="binding-internal",
+                trusted_purpose="context.answer",
+                received_at=AS_OF,
+                trusted_scope_snapshot=scope_snapshot,
+            )
+            delivery = _construct_direct_delivery_context(
+                purpose="context.answer",
+                authenticated_application_ref="application-internal",
+                delivery_binding_ref="binding-internal",
+                established_at=AS_OF,
+            )
+            yield invocation, delivery
     finally:
         _close_membership_authority_scope(authority_scope)
 

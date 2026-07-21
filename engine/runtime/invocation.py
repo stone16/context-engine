@@ -15,6 +15,11 @@ from engine.runtime.organization import (
     ExistingOrganizationVerification,
     OrganizationVerificationProvenance,
 )
+from engine.runtime.scope_authority import (
+    InvalidTrustedScopeSnapshot,
+    TrustedScopeSnapshot,
+    _require_active_trusted_scope_snapshot,
+)
 
 
 class InvocationConstructionProvenance(StrEnum):
@@ -39,6 +44,7 @@ class AuthenticatedInvocation:
     received_at: datetime
     organization_verification: ExistingOrganizationVerification
     user_actor: UserActor = field(repr=False)
+    trusted_scope_snapshot: TrustedScopeSnapshot = field(repr=False)
     construction_provenance: InvocationConstructionProvenance
 
     def __init__(self, *args: object, **kwargs: object) -> None:
@@ -60,7 +66,9 @@ def _construct_authenticated_http_invocation(
     agent_version_ref: str,
     authenticated_application_ref: str,
     authentication_binding_ref: str,
+    trusted_purpose: str,
     received_at: datetime,
+    trusted_scope_snapshot: TrustedScopeSnapshot,
 ) -> AuthenticatedInvocation:
     """Build the nominal value at the authenticated HTTP adapter boundary."""
 
@@ -73,6 +81,7 @@ def _construct_authenticated_http_invocation(
         "agent_version_ref": agent_version_ref,
         "authenticated_application_ref": authenticated_application_ref,
         "authentication_binding_ref": authentication_binding_ref,
+        "trusted_purpose": trusted_purpose,
     }
     for field_name, value in required_refs.items():
         if type(value) is not str or not value or value.isspace():
@@ -135,6 +144,29 @@ def _construct_authenticated_http_invocation(
         raise ValueError(
             "trusted invocation current Membership must match authentication"
         )
+    try:
+        _require_active_trusted_scope_snapshot(trusted_scope_snapshot)
+    except (TypeError, ValueError):
+        raise InvalidTrustedScopeSnapshot(
+            "trusted invocation requires an active nominal scope snapshot"
+        ) from None
+    if (
+        trusted_scope_snapshot.organization_id
+        != organization_verification.organization_id
+        or trusted_scope_snapshot.user_id != user_actor.user_id
+        or trusted_scope_snapshot.membership_id != user_actor.membership_id
+        or trusted_scope_snapshot.membership_version != membership_version
+        or trusted_scope_snapshot.principal_ref != principal_ref
+        or trusted_scope_snapshot.agent_version_ref != agent_version_ref
+        or trusted_scope_snapshot.purpose != trusted_purpose
+        or trusted_scope_snapshot.request_id != request_id
+        or trusted_scope_snapshot.authentication_binding_ref
+        != authentication_binding_ref
+        or trusted_scope_snapshot.checked_at != received_at
+    ):
+        raise InvalidTrustedScopeSnapshot(
+            "trusted invocation scope snapshot must match authentication"
+        )
 
     invocation = object.__new__(AuthenticatedInvocation)
     object.__setattr__(invocation, "request_id", request_id)
@@ -165,6 +197,11 @@ def _construct_authenticated_http_invocation(
         organization_verification,
     )
     object.__setattr__(invocation, "user_actor", user_actor)
+    object.__setattr__(
+        invocation,
+        "trusted_scope_snapshot",
+        trusted_scope_snapshot,
+    )
     object.__setattr__(
         invocation,
         "construction_provenance",
