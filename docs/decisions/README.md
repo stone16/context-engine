@@ -29,6 +29,7 @@ kernel, capability separation, and publication visibility model.
 | Unavailable Runtime capabilities | [0028 — Fail-closed unavailable Runtime capabilities](0028-fail-closed-unavailable-runtime-capabilities.md) | Closed Acquire/Continue/OpenCitation wire; server-owned capability gate returns generic M0 domain refusals before content I/O | Caller-authored capability plans, fake empty success, existence detail, or claiming a real future carrier |
 | First worker lease | [0029 — Persistent no-op WorkerLease](0029-bound-first-worker-lease-to-persistent-no-op-jobs.md) | Versioned HMAC-SHA256 exact-job lease permits one atomic persistent no-op completion; the full Supply carrier remains deferred | Ambient worker identity, signature-only authority, in-memory replay defense, or claiming full `ACCEPT-008` PASS |
 | Read versus effect | [0011 — Read/write plane separation](0011-read-write-plane-separation.md) | `ContextAccessTicket` and `ActionTicket` use different audiences and are non-interchangeable | Using content/read authority to execute an external effect |
+| First ticket audience split | [0030 — Bound ticket audiences](0030-bound-ticket-audiences.md) | Same identity/key configuration, but distinct signed read/action domains, nominal types, fixed synthetic operations, and target audiences; current epoch is checked before effect | Cross-plane reuse, caller-authored claims/targets, or claiming the synthetic no-op as production Provider or ActionPlane |
 | Publication visibility | [0018 — Immutable ContextRevision publication](0018-immutable-revision-publication.md) | `ContextResource` content is immutable `ContextRevision`/`ContextFragment` lineage; one transaction changes the active pointer | In-place content mutation, mixed old/new reads, or cleanup-defined visibility |
 | Release security catalog | [0019 — Security catalog normalization](0019-security-catalog-normalization.md) | One machine catalog contains exactly fifteen stable release IDs; overlapping labels and derived scenarios keep their safeguards without inflating the count | Parallel prose catalogs, renumbering, or treating inactive cache behavior as a canonical release family |
 
@@ -107,3 +108,4 @@ touched:
 - [0027 — Organization Policy Epoch](0027-organization-policy-epoch.md)
 - [0028 — Fail-closed unavailable Runtime capabilities](0028-fail-closed-unavailable-runtime-capabilities.md)
 - [0029 — Persistent no-op WorkerLease](0029-bound-first-worker-lease-to-persistent-no-op-jobs.md)
+- [0030 — Bound ticket audiences](0030-bound-ticket-audiences.md)

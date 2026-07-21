@@ -16,11 +16,14 @@ from scripts.validate_security_catalog import (
     ACCEPT_008_FUTURE_CARRIER,
     ACCEPT_009_FUTURE_CARRIER,
     ACCEPT_010_FUTURE_CARRIER,
+    ACCEPT_012_UNAVAILABLE_CARRIER,
     ACL_PROOF_CASE_IDS,
     AUDIENCE_ACTION_CASE_IDS,
+    CANONICAL_ACTIVATION_ISSUE_LIST,
     CANONICAL_FAIL_CLOSED_OUTCOMES,
     CANONICAL_INVARIANT_IDS,
     CANONICAL_REVOCATION_ACTIVATION,
+    CANONICAL_TICKET_AUDIENCE_ACTIVATION,
     CANONICAL_UNAVAILABLE_CAPABILITY_ACTIVATION,
     CANONICAL_WORKER_LEASE_ACTIVATION,
     DEFAULT_CATALOG_PATH,
@@ -426,6 +429,8 @@ def make_catalog() -> dict[str, object]:
             carrier = copy.deepcopy(ACCEPT_009_FUTURE_CARRIER)
         elif fixture_id == "ACCEPT-010":
             carrier = copy.deepcopy(ACCEPT_010_FUTURE_CARRIER)
+        elif fixture_id == "ACCEPT-012":
+            carrier = copy.deepcopy(ACCEPT_012_UNAVAILABLE_CARRIER)
         fixtures.append(
             {
                 "id": fixture_id,
@@ -468,7 +473,7 @@ def make_catalog() -> dict[str, object]:
         )
 
     return {
-        "catalogVersion": "1.0.0",
+        "catalogVersion": "1.1.0",
         "authority": {
             "issueRefs": ["#5"],
             "documentRefs": ["docs/security/context-engine-threat-model.md"],
@@ -482,6 +487,7 @@ def make_catalog() -> dict[str, object]:
             copy.deepcopy(CANONICAL_REVOCATION_ACTIVATION),
             copy.deepcopy(CANONICAL_UNAVAILABLE_CAPABILITY_ACTIVATION),
             copy.deepcopy(CANONICAL_WORKER_LEASE_ACTIVATION),
+            copy.deepcopy(CANONICAL_TICKET_AUDIENCE_ACTIVATION),
         ],
         "invariants": invariants,
         "fixtures": fixtures,
@@ -529,7 +535,7 @@ def make_schema() -> dict[str, object]:
             "fixtures",
         ],
         "properties": {
-            "catalogVersion": {"const": "1.0.0"},
+            "catalogVersion": {"const": "1.1.0"},
             "authority": {"type": "object"},
             "hardOracles": {
                 "type": "array",
@@ -552,8 +558,8 @@ def make_schema() -> dict[str, object]:
             },
             "activations": {
                 "type": "array",
-                "minItems": 3,
-                "maxItems": 3,
+                "minItems": 4,
+                "maxItems": 4,
                 "uniqueItems": True,
                 "prefixItems": [
                     {"const": copy.deepcopy(CANONICAL_REVOCATION_ACTIVATION)},
@@ -563,6 +569,7 @@ def make_schema() -> dict[str, object]:
                         )
                     },
                     {"const": copy.deepcopy(CANONICAL_WORKER_LEASE_ACTIVATION)},
+                    {"const": copy.deepcopy(CANONICAL_TICKET_AUDIENCE_ACTIVATION)},
                 ],
                 "items": False,
             },
@@ -755,7 +762,22 @@ def make_schema() -> dict[str, object]:
                                 }
                             }
                         },
-                    }
+                    },
+                    {
+                        "if": {
+                            "properties": {"id": {"const": "ACCEPT-012"}},
+                            "required": ["id"],
+                        },
+                        "then": {
+                            "properties": {
+                                "carrier": {
+                                    "const": copy.deepcopy(
+                                        ACCEPT_012_UNAVAILABLE_CARRIER
+                                    )
+                                }
+                            }
+                        },
+                    },
                 ],
             },
         },
@@ -797,7 +819,7 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
 
         self.assert_catalog_error(
             catalog,
-            "catalogVersion: must be the supported version '1.0.0'",
+            "catalogVersion: must be the supported version '1.1.0'",
             schema,
         )
 
@@ -816,6 +838,12 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
         catalog = make_catalog()
         activation = object_list_at(catalog, "activations")[0]
         self.assertEqual(activation, CANONICAL_REVOCATION_ACTIVATION)
+        future_carriers = activation["futureCarriers"]
+        assert isinstance(future_carriers, list)
+        self.assertEqual(
+            future_carriers[-2:],
+            ["production ContextAccessTicket", "production ActionTicket"],
+        )
 
         test_evidence = object_list_at(activation, "testEvidence")
         test_evidence[0]["surface"] = "tests/unit/false_green.py"
@@ -827,8 +855,8 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
 
         error = self.assert_catalog_error(
             catalog,
-            "activations: must exactly preserve the canonical ordered Issue #15, "
-            "Issue #16, and Issue #17 activation records and their "
+            "activations: must exactly preserve the canonical ordered "
+            f"{CANONICAL_ACTIVATION_ISSUE_LIST} activation records and their "
             "future/NOT_ACTIVE boundaries",
         )
         self.assertTrue(
@@ -848,8 +876,8 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
 
         self.assert_catalog_error(
             catalog,
-            "activations: must exactly preserve the canonical ordered Issue #15, "
-            "Issue #16, and Issue #17 activation records and their "
+            "activations: must exactly preserve the canonical ordered "
+            f"{CANONICAL_ACTIVATION_ISSUE_LIST} activation records and their "
             "future/NOT_ACTIVE boundaries",
         )
 
@@ -867,9 +895,82 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
 
         self.assert_catalog_error(
             catalog,
-            "activations: must exactly preserve the canonical ordered Issue #15, "
-            "Issue #16, and Issue #17 activation records and their "
+            "activations: must exactly preserve the canonical ordered "
+            f"{CANONICAL_ACTIVATION_ISSUE_LIST} activation records and their "
             "future/NOT_ACTIVE boundaries",
+        )
+
+    def test_issue_18_ticket_audience_activation_is_bounded_and_frozen(self) -> None:
+        catalog = make_catalog()
+        activation = object_list_at(catalog, "activations")[3]
+        self.assertEqual(activation, CANONICAL_TICKET_AUDIENCE_ACTIVATION)
+        self.assertEqual(activation["invariantRef"], "ACTION-SEPARATION-014")
+        self.assertEqual(activation["policyEpochScope"], "organization-v0")
+        self.assertEqual(
+            [
+                (evidence["id"], evidence["surface"])
+                for evidence in object_list_at(activation, "testEvidence")
+            ],
+            [
+                (
+                    "TICKET-AUDIENCE-018",
+                    "tests/unit/test_ticket_audience_separation.py",
+                ),
+                (
+                    "PG-TICKET-EPOCH-018",
+                    "tests/integration/test_ticket_policy_epoch.py",
+                ),
+            ],
+        )
+        self.assertEqual(
+            activation["notActive"],
+            [
+                "full M2 ActionPlane.prepare/perform",
+                "real Sender/external effect",
+                "payload/destination/approval/idempotency",
+                "durable one-shot/replay/reconciliation",
+                "full ACCEPT-012 PASS",
+            ],
+        )
+
+        test_evidence = object_list_at(activation, "testEvidence")
+        test_evidence[0]["surface"] = "tests/unit/false_green.py"
+        activation["carrier"] = "production ActionPlane"
+        activation["notActive"] = []
+
+        self.assert_catalog_error(
+            catalog,
+            "activations: must exactly preserve the canonical ordered "
+            f"{CANONICAL_ACTIVATION_ISSUE_LIST} activation records and their "
+            "future/NOT_ACTIVE boundaries",
+        )
+
+    def test_issue_18_synthetic_tickets_do_not_false_green_full_accept_012(
+        self,
+    ) -> None:
+        catalog = make_catalog()
+        fixture = object_list_at(catalog, "fixtures")[11]
+        carrier = object_at(fixture, "carrier")
+        self.assertEqual(
+            object_list_at(catalog, "activations")[3]["status"],
+            "active_fail_closed",
+        )
+        self.assertEqual(carrier, ACCEPT_012_UNAVAILABLE_CARRIER)
+        self.assertEqual(carrier["statusAtM0"], "unavailable")
+        self.assertEqual(carrier["m0Expectation"], "fail_closed")
+
+        carrier.update(
+            {
+                "statusAtM0": "available",
+                "m0Expectation": "active_fail_closed",
+                "upgradeTrigger": "Issue #18 proves the full fixture.",
+            }
+        )
+        self.assert_catalog_error(
+            catalog,
+            "fixtures[11].carrier: must preserve the full ACCEPT-012 fixture as "
+            "unavailable/fail_closed; Issue #18 activates only its independent "
+            "synthetic ticket-audience carrier",
         )
 
     def test_issue_17_noop_does_not_false_green_full_accept_008(self) -> None:
@@ -986,6 +1087,36 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
             catalog,
             "schema.fixtures.items.allOf: must independently freeze ACCEPT-008 "
             "as the canonical future/fail_closed fixture carrier",
+            schema,
+        )
+
+    def test_schema_independently_freezes_full_accept_012_as_unavailable(
+        self,
+    ) -> None:
+        catalog = make_catalog()
+        schema = load_document(DEFAULT_SCHEMA_PATH)
+        fixture_schema = object_at(schema, "$defs", "fixture")
+        all_of = fixture_schema["allOf"]
+        assert isinstance(all_of, list)
+        accept_012_rule = next(
+            rule
+            for rule in all_of
+            if isinstance(rule, dict)
+            and isinstance(rule.get("if"), dict)
+            and isinstance(rule["if"].get("properties"), dict)
+            and isinstance(rule["if"]["properties"].get("id"), dict)
+            and rule["if"]["properties"]["id"].get("const") == "ACCEPT-012"
+        )
+        object_at(accept_012_rule, "then", "properties", "carrier")["const"] = {
+            "statusAtM0": "available",
+            "m0Expectation": "active_fail_closed",
+            "upgradeTrigger": "Issue #18 proves the full fixture.",
+        }
+
+        self.assert_catalog_error(
+            catalog,
+            "schema.fixtures.items.allOf: must independently freeze ACCEPT-012 "
+            "as the canonical unavailable/fail_closed fixture carrier",
             schema,
         )
 
@@ -1329,6 +1460,55 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
 
         self.assertEqual(report.invariant_count, 15)
         self.assertEqual(report.fixture_count, 12)
+
+    def test_tracked_catalog_freezes_issue_18_authority_and_bounded_scope(
+        self,
+    ) -> None:
+        catalog = load_document(DEFAULT_CATALOG_PATH)
+        authority = object_at(catalog, "authority")
+        issue_refs = authority["issueRefs"]
+        document_refs = authority["documentRefs"]
+        reconciliation = authority["reconciliation"]
+        assert isinstance(issue_refs, list)
+        assert isinstance(document_refs, list)
+        assert isinstance(reconciliation, str)
+
+        self.assertEqual(catalog["catalogVersion"], "1.1.0")
+        self.assertEqual(issue_refs[-4:], ["#15", "#16", "#17", "#18"])
+        self.assertIn(
+            "docs/decisions/0030-bound-ticket-audiences.md",
+            document_refs,
+        )
+        for boundary in (
+            "production ContextAccessTicket/ActionTicket",
+            "TICKET-AUDIENCE-018 and PG-TICKET-EPOCH-018",
+            "distinct signed synthetic ContextAccessTicket Provider-read",
+            "full M2 ActionPlane.prepare/perform",
+            "payload/destination/approval/idempotency binding",
+            "durable one-shot/replay/reconciliation",
+            "full ACCEPT-012 PASS",
+        ):
+            self.assertIn(boundary, reconciliation)
+
+        invariants = {
+            invariant["id"]: invariant
+            for invariant in object_list_at(catalog, "invariants")
+        }
+        fixtures = {
+            fixture["id"]: fixture
+            for fixture in object_list_at(catalog, "fixtures")
+        }
+        for authority_owner in (
+            invariants["ACTION-SEPARATION-014"],
+            fixtures["ACCEPT-012"],
+        ):
+            refs = authority_owner["authorityRefs"]
+            assert isinstance(refs, list)
+            self.assertIn("#18", refs)
+            self.assertIn(
+                "docs/decisions/0030-bound-ticket-audiences.md#decision",
+                refs,
+            )
 
     def test_tracked_catalog_freezes_later_carrier_and_source_acl_semantics(
         self,

@@ -21,9 +21,11 @@ from engine.runtime.actor import (
     MembershipRejectionAuditReceipt,
     MembershipRejectionCategory,
 )
+from engine.runtime.construction import PolicyEpochGate
 from engine.runtime.materialized import (
     _require_active_materialized_projection_session,
 )
+from engine.runtime.policy_epoch import PolicyEpochAuthorityUnavailable
 
 CHECKED_AT = datetime(2026, 7, 21, 8, 0, tzinfo=UTC)
 
@@ -66,8 +68,12 @@ class _FakeConnection:
         self._fail_on_query = fail_on_query
         self._fail_on_begin = fail_on_begin
         self._fail_on_commit = fail_on_commit
+        self._fail_on_policy_epoch = False
         self._policy_epoch = policy_epoch
         self._transaction_isolation = transaction_isolation
+
+    def fail_policy_epoch_reads(self) -> None:
+        self._fail_on_policy_epoch = True
 
     def execution_options(self, **kwargs: object) -> _FakeConnection:
         assert kwargs == {"isolation_level": "READ COMMITTED"}
@@ -130,6 +136,12 @@ class _FakeConnection:
             assert parameters is not None
             return _ScalarResult(self._settings[cast(str, parameters["setting_name"])])
         if "FROM organization_policy_epoch" in sql:
+            if self._fail_on_policy_epoch:
+                raise OperationalError(
+                    "policy epoch query",
+                    {},
+                    RuntimeError("secret backend epoch diagnostic"),
+                )
             return _ScalarResult(self._policy_epoch)
         if self._fail_on_query:
             raise OperationalError("query", {}, RuntimeError("database unavailable"))
@@ -356,6 +368,47 @@ def test_missing_or_malformed_epoch_fails_closed_as_authority_unavailable(
     ):
         pytest.fail("malformed Policy Epoch must not reach Runtime")
 
+    assert fake_engine.events[-1] == "rollback"
+
+
+def test_policy_epoch_database_fault_is_normalized_at_the_final_gate() -> None:
+    expected = identity()
+    fake_engine = _FakeEngine(_MembershipRow(expected.user_id))
+    authority = PostgreSQLMembershipAuthority(cast(Engine, fake_engine))
+
+    with authority.current_user_actor(expected) as verification:
+        fake_engine.connection.fail_policy_epoch_reads()
+        with pytest.raises(PolicyEpochAuthorityUnavailable) as rejection:
+            PolicyEpochGate().is_current(
+                verification.policy_epoch_verification
+            )
+
+    rendered = (str(rejection.value), repr(rejection.value))
+    assert rendered == (
+        "current Organization Policy Epoch is unavailable",
+        "PolicyEpochAuthorityUnavailable("
+        "'current Organization Policy Epoch is unavailable')",
+    )
+    assert all("secret backend epoch diagnostic" not in item for item in rendered)
+    assert rejection.value.__cause__ is None
+    assert rejection.value.__suppress_context__ is True
+
+
+def test_initial_policy_epoch_database_fault_remains_membership_unavailable(
+) -> None:
+    expected = identity()
+    fake_engine = _FakeEngine(_MembershipRow(expected.user_id))
+    fake_engine.connection.fail_policy_epoch_reads()
+    authority = PostgreSQLMembershipAuthority(cast(Engine, fake_engine))
+
+    with (
+        pytest.raises(MembershipAuthorityUnavailable) as rejection,
+        authority.current_user_actor(expected),
+    ):
+        pytest.fail("an unavailable Policy Epoch must not reach Runtime")
+
+    assert str(rejection.value) == "current Membership Policy Epoch unavailable"
+    assert "secret backend epoch diagnostic" not in repr(rejection.value)
     assert fake_engine.events[-1] == "rollback"
 
 

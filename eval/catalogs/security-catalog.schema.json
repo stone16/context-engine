@@ -14,7 +14,7 @@
   "properties": {
     "catalogVersion": {
       "type": "string",
-      "const": "1.0.0"
+      "const": "1.1.0"
     },
     "authority": {
       "$ref": "#/$defs/authority"
@@ -59,8 +59,8 @@
     },
     "activations": {
       "type": "array",
-      "minItems": 3,
-      "maxItems": 3,
+      "minItems": 4,
+      "maxItems": 4,
       "uniqueItems": true,
       "prefixItems": [
         {
@@ -77,7 +77,7 @@
               {"id": "CACHE-002", "surface": "tests/unit/test_runtime_authorized_evidence.py", "oracle": "An injected pre-revocation authorization decision or a mid-resolve epoch change fails the final current-epoch gate and delivers zero stale Evidence without relying on candidate or content removal."}
             ],
             "deferredEvidence": ["BLOB-002"],
-            "futureCarriers": ["Continue", "OpenCitation", "Policy-Epoch-bound WorkerLease", "ContextAccessTicket", "ActionTicket"],
+            "futureCarriers": ["Continue", "OpenCitation", "Policy-Epoch-bound WorkerLease", "production ContextAccessTicket", "production ActionTicket"],
             "notActive": ["DecisionAudit", "outbox", "cleanup", "Source/Resource Policy Epochs", "UI/external admin"]
           }
         },
@@ -114,6 +114,23 @@
             "deferredEvidence": ["PROP-WORKER-LEASE-007", "PG-WORKER-LEASE-007", "DB-011", "JOB-001", "JOB-005", "full ACCEPT-008 per-binding matrix"],
             "futureCarriers": ["Source-bound acquisition", "Resource/Revision mutation", "Policy-Epoch/end-user-delivery-audience-bound WorkerLease", "idempotency/generation-bound business mutation", "outbox dispatch", "File publication"],
             "notActive": ["Source", "Resource", "Revision", "Policy Epoch", "end-user delivery audience", "idempotency", "generation", "content-bearing mutation", "outbox", "File publication", "full ACCEPT-008 PASS"]
+          }
+        },
+        {
+          "const": {
+            "issueRef": "#18",
+            "invariantRef": "ACTION-SEPARATION-014",
+            "carrier": "signed synthetic ContextAccessTicket Provider read | signed synthetic ActionTicket no-op channel action",
+            "status": "active_fail_closed",
+            "policyEpochScope": "organization-v0",
+            "controlBoundary": "ContextAccessTicketReadHandler.read | ActionTicketNoopHandler.perform",
+            "testEvidence": [
+              {"id": "TICKET-AUDIENCE-018", "surface": "tests/unit/test_ticket_audience_separation.py", "oracle": "Distinct nominal signed ContextAccessTicket and ActionTicket types use one explicit versioned keyring while separate signing domains and token types prevent cross-plane authority. They bind a validated AuthenticatedInvocation/TrustedDeliveryContext identity and purpose, trusted Organization, current Organization Policy Epoch, bounded expiry, operation, and provider-specific context-read or channel-specific im-send audiences. Their type-aware deserializers and structurally separate synthetic Provider-read and no-op channel handlers accept only the exact matching ticket; cross-plane, target, audience, identity, freshness, tamper, and malformed-token probes return one generic non-enumerating rejection with zero rejected synthetic calls. This is not production ContextProvider, Sender, or ActionPlane evidence."},
+              {"id": "PG-TICKET-EPOCH-018", "surface": "tests/integration/test_ticket_policy_epoch.py", "oracle": "The real PostgreSQL non-owner UserActor transaction exercises both ticket types before a trusted Control transaction commits an Organization epoch bump, then rejects both previously valid tickets before their separate synthetic read and action effect counters increment. This proves current Organization-v0 epoch binding, not durable ticket consumption or a real external effect."}
+            ],
+            "deferredEvidence": ["PROP-ACTION-SEPARATION-014", "PG-ACTION-SEPARATION-014", "ACTION-001 through ACTION-009", "full ACCEPT-012 matrix"],
+            "futureCarriers": ["production ContextProvider read/projection", "ContextRuntime ticket integration", "BotDelivery", "M2 ActionPlane and real Sender"],
+            "notActive": ["full M2 ActionPlane.prepare/perform", "real Sender/external effect", "payload/destination/approval/idempotency", "durable one-shot/replay/reconciliation", "full ACCEPT-012 PASS"]
           }
         }
       ],
@@ -309,7 +326,7 @@
       "additionalProperties": false,
       "required": ["id", "surface", "oracle"],
       "properties": {
-        "id": {"enum": ["PG-REVOCATION-006", "RUN-006", "CACHE-002", "RUN-UNAVAILABLE-016", "HTTP-UNAVAILABLE-016", "LEASE-SIGNING-017", "PG-WORKER-LEASE-NOOP-017", "WORKER-LEASE-REPLAY-007"]},
+        "id": {"enum": ["PG-REVOCATION-006", "RUN-006", "CACHE-002", "RUN-UNAVAILABLE-016", "HTTP-UNAVAILABLE-016", "LEASE-SIGNING-017", "PG-WORKER-LEASE-NOOP-017", "WORKER-LEASE-REPLAY-007", "TICKET-AUDIENCE-018", "PG-TICKET-EPOCH-018"]},
         "surface": {"$ref": "#/$defs/documentRef"},
         "oracle": {"$ref": "#/$defs/nonEmptyString"}
       }
@@ -319,12 +336,12 @@
       "additionalProperties": false,
       "required": ["issueRef", "invariantRef", "carrier", "status", "policyEpochScope", "controlBoundary", "testEvidence", "deferredEvidence", "futureCarriers", "notActive"],
       "properties": {
-        "issueRef": {"enum": ["#15", "#16", "#17"]},
-        "invariantRef": {"enum": ["REVOCATION-006", "INDEX-NOT-AUTHORITY-005", "WORKER-LEASE-007"]},
-        "carrier": {"enum": ["ContextRuntime.resolve(Acquire)", "ContextRuntime.resolve(Continue | OpenCitation | server-owned unavailable Acquire plan)", "signed one-shot persistent no-op durable-job WorkerLease"]},
+        "issueRef": {"enum": ["#15", "#16", "#17", "#18"]},
+        "invariantRef": {"enum": ["REVOCATION-006", "INDEX-NOT-AUTHORITY-005", "WORKER-LEASE-007", "ACTION-SEPARATION-014"]},
+        "carrier": {"enum": ["ContextRuntime.resolve(Acquire)", "ContextRuntime.resolve(Continue | OpenCitation | server-owned unavailable Acquire plan)", "signed one-shot persistent no-op durable-job WorkerLease", "signed synthetic ContextAccessTicket Provider read | signed synthetic ActionTicket no-op channel action"]},
         "status": {"const": "active_fail_closed"},
         "policyEpochScope": {"enum": ["organization-v0", "not-bound-issue-17"]},
-        "controlBoundary": {"enum": ["PostgreSQLAccessPolicyControl.change_access(ResourceAccessRevocation)", "RuntimeCapabilityGate.require_available(RuntimeCapability)", "complete_persistent_noop_job(PostgreSQLWorkerLeaseAuthority, WorkerLeaseRedemption)"]},
+        "controlBoundary": {"enum": ["PostgreSQLAccessPolicyControl.change_access(ResourceAccessRevocation)", "RuntimeCapabilityGate.require_available(RuntimeCapability)", "complete_persistent_noop_job(PostgreSQLWorkerLeaseAuthority, WorkerLeaseRedemption)", "ContextAccessTicketReadHandler.read | ActionTicketNoopHandler.perform"]},
         "testEvidence": {
           "type": "array",
           "minItems": 2,
@@ -967,6 +984,25 @@
                   "statusAtM0": "future",
                   "m0Expectation": "fail_closed",
                   "upgradeTrigger": "Issue #17 independently activates only the signed one-shot persistent no-op durable-job carrier. The full ACCEPT-008 fixture upgrades only after Source, Resource, Revision, Policy Epoch, end-user delivery audience, idempotency, generation, business mutation, outbox, and File carriers run their full per-binding matrix."
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "id": {"const": "ACCEPT-012"}
+            },
+            "required": ["id"]
+          },
+          "then": {
+            "properties": {
+              "carrier": {
+                "const": {
+                  "statusAtM0": "unavailable",
+                  "m0Expectation": "fail_closed",
+                  "upgradeTrigger": "Issue #18 independently activates only distinct signed synthetic ContextAccessTicket Provider-read and ActionTicket no-op channel-action carriers. The full ACCEPT-012 fixture upgrades only when the owning M2 ActionPlane issue proves prepare and perform against a real Sender with all durable effect bindings and reconciliation."
                 }
               }
             }
