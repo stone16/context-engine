@@ -979,13 +979,13 @@
       "carrier": {
         "statusAtM0": "available",
         "m0Expectation": "active_fail_closed",
-        "upgradeTrigger": "Issue #14 upgrades this authority fixture with canonical denied/not-found HTTP behavior and the preregistered response comparison."
+        "upgradeTrigger": "Activated by paired Runtime and HTTP denied/not-found equivalence tests; extend only at the separately preregistered M5 timing gate or when another public read carrier activates."
       },
       "setup": {
         "preconditions": [
           "member-a is authenticated in org-a; resource-cross-org belongs to org-b and resource-same-org-denied belongs to org-a without a grant for member-a.",
           "resource-missing does not exist in org-a.",
-          "The experiment freezes canonical status, body, relevant headers, domain outcome, and the in-fixture per-run normalization allowlist before all three probes; timing equality is deferred to the preregistered M5 gate."
+          "The experiment freezes canonical status, body, relevant headers, domain outcome, and the in-fixture per-run normalization allowlist before all three probes; same-Organization denial is exercised both as the only Candidate and ranked first before a missing Candidate; timing equality is deferred to the preregistered M5 gate."
         ],
         "trustedIdentity": {
           "organizationRef": "org-a",
@@ -1000,9 +1000,9 @@
       },
       "operation": {
         "interface": "ContextRuntime.resolve",
-        "request": "Acquire each of the three probes independently",
+        "request": "Acquire each probe independently; one additional same-Organization denied-first rank variant repeats the same deterministic oracle",
         "comparisonFields": ["status", "body", "headers", "domainOutcome"],
-        "normalizationAllowlist": ["body.package.organizationRef", "body.package.decisionRef", "body.package.asOf", "body.package.expiresAt", "body.package.budgetUsage.elapsedMs", "headers.X-Context-Request-Id"]
+        "normalizationAllowlist": ["body.package.organizationRef", "body.package.decisionRef", "body.package.asOf", "body.package.expiresAt", "headers.X-Context-Request-Id"]
       },
       "expected": {
         "externalResponse": {
@@ -1027,10 +1027,10 @@
           "normalizedByteIdenticalAcrossProbes": true,
           "timingEqualityClaimed": false
         },
-        "packageOrError": {"kind": "ContextPackage", "packageCount": 3, "coverageStatus": "empty", "coverageReason": "no_authorized_evidence", "deniedCountExposed": false, "existenceDetailCount": 0},
+        "packageOrError": {"kind": "ContextPackage", "packageCount": 4, "coverageStatus": "empty", "coverageReason": "no_authorized_evidence", "deniedCountExposed": false, "existenceDetailCount": 0},
         "evidence": {"unauthorizedEvidenceCount": 0, "unauthorizedContentBytes": 0, "missingContextFallbackCount": 0, "outboundBytes": 0},
         "businessEffects": {"wrongOrganizationEffectCount": 0, "mutationEffectCount": 0, "totalEffectsAfterScenario": 0},
-        "io": {"providerCalls": 0, "indexCalls": 0, "modelCalls": 0, "actionCalls": 0}
+        "io": {"providerCalls": 0, "indexCalls": 1, "modelCalls": 0, "actionCalls": 0}
       },
       "invariantRefs": ["NON-ENUMERATION-009", "TRACE-REDACTION-012"],
       "authorityRefs": [

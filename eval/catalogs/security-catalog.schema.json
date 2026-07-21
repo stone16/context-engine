@@ -543,8 +543,8 @@
         "fieldNamesEchoed": {"type": "boolean"},
         "leaseClaimsEchoed": {"type": "boolean"},
         "headers": {"$ref": "#/$defs/responseHeaders"},
-        "normalizedByteIdenticalAcrossProbes": {"type": "boolean"},
-        "timingEqualityClaimed": {"type": "boolean"}
+        "normalizedByteIdenticalAcrossProbes": {"type": "boolean", "const": true},
+        "timingEqualityClaimed": {"type": "boolean", "const": false}
       }
     },
     "responseBody": {
@@ -722,8 +722,8 @@
         "capabilityReportedAsPass": {"type": "boolean"},
         "citationFieldsReturned": {"type": "integer", "minimum": 0},
         "capabilityStatus": {"$ref": "#/$defs/nonEmptyString"},
-        "deniedCountExposed": {"type": "boolean"},
-        "existenceDetailCount": {"type": "integer", "minimum": 0},
+        "deniedCountExposed": {"type": "boolean", "const": false},
+        "existenceDetailCount": {"type": "integer", "const": 0},
         "actionTicketCreated": {"type": "boolean"},
         "contextTicketConsumed": {"type": "boolean"}
       }

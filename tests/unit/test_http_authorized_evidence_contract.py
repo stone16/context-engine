@@ -10,7 +10,14 @@ from pydantic import ValidationError
 from adapters.http.app import _resolved_to_wire
 from adapters.http.contracts import ContextPackageWire, EvidenceWire
 from engine.runtime.budget import PackageBudget
-from engine.runtime.contracts import Resolved
+from engine.runtime.contracts import (
+    BudgetUsage,
+    ContextPackage,
+    Coverage,
+    CoverageReason,
+    CoverageStatus,
+    Resolved,
+)
 from engine.runtime.evidence import Evidence, EvidenceLineage, PackageBlock
 
 AS_OF = datetime(2026, 7, 21, 5, 0, tzinfo=UTC)
@@ -18,6 +25,34 @@ EVIDENCE_ENTROPY = "a" * 64
 EVIDENCE_REF = f"ev_{EVIDENCE_ENTROPY}"
 BLOCK_ID = f"block_{EVIDENCE_ENTROPY}"
 DECISION_REF = "dec_" + "b" * 32
+
+
+def empty_outcome() -> Resolved:
+    package = ContextPackage(
+        organization_ref="orgpkg_" + "c" * 32,
+        purpose="context.answer",
+        ttl_seconds=300,
+        as_of=AS_OF,
+        expires_at=datetime(2026, 7, 21, 5, 5, tzinfo=UTC),
+        decision_ref=DECISION_REF,
+        blocks=(),
+        evidence=(),
+        gaps=(),
+        budget_usage=BudgetUsage(
+            tokens=0,
+            provider_calls=0,
+            cost_microunits=0,
+            elapsed_ms=0,
+        ),
+        coverage=Coverage(
+            status=CoverageStatus.EMPTY,
+            reason=CoverageReason.NO_AUTHORIZED_EVIDENCE,
+        ),
+    )
+    return cast(
+        Resolved,
+        SimpleNamespace(kind="resolved", package=package),
+    )
 
 
 def authorized_outcome() -> Resolved:
@@ -141,6 +176,32 @@ def test_context_package_wire_requires_exact_block_evidence_closure() -> None:
     document["blocks"][0]["blockId"] = "block_" + "d" * 64
 
     with pytest.raises(ValidationError, match="block/Evidence closure"):
+        ContextPackageWire.model_validate(document)
+
+
+@pytest.mark.parametrize(
+    ("field_name", "value"),
+    (
+        ("resourceRef", "resource:denied-secret"),
+        ("resourceName", "Denied quarterly plan"),
+        ("deniedCount", 1),
+        ("candidateCount", 1),
+        ("denialReason", "outside_effective_scope"),
+        ("existenceDetail", "resource_exists"),
+    ),
+)
+def test_empty_package_wire_rejects_existence_and_denial_metadata(
+    field_name: str,
+    value: object,
+) -> None:
+    document = _resolved_to_wire(empty_outcome()).package.model_dump(
+        mode="json",
+        by_alias=True,
+        exclude_none=True,
+    )
+    document[field_name] = value
+
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
         ContextPackageWire.model_validate(document)
 
 

@@ -86,7 +86,10 @@ PostgreSQL/pgvector、
 它不声明 durable Principal/Agent grants、真实 ACL、生产级内容授权或生产
 ContextPackage 交付已经实现；注入的 conformance 组合证明当前 Membership 门禁、
 Issue #12 synthetic EffectiveScope 的 fail-closed 单调不扩张路径，以及 Issue #13
-hostile CandidateIndex 的 synthetic exact-authorized Evidence 路径。
+hostile CandidateIndex 的 synthetic exact-authorized Evidence 路径；Issue #14 的
+paired Runtime/HTTP gate 进一步证明 cross-Organization、same-Organization denied
+与 nonexistent Candidate 收敛为同一个 tenant-safe empty Package（不声明 timing
+等价）。
 
 ### 当前 HTTP exact-authorized Evidence tracer
 
@@ -113,10 +116,15 @@ JSON/media type、
 不会回显 tenant、Principal、Membership 或注入字段。purpose 只来自服务端 route
 policy；返回的 `organizationRef` 是新生成的 package-scoped opaque reference，不能作为
 后续请求的 trusted tenant input。空包的 blocks/evidence/gaps 均为空，coverage 为
-`no_authorized_evidence`，Provider/index/source-content 调用均为零。内容 tracer 对 denied
+`no_authorized_evidence`；默认无候选路径的 Provider/index/source-content 调用均为零。内容 tracer 对 denied
 same-Organization 与 cross-Organization 候选保持零 body bytes、零 Evidence refs 和零外部
 effect，并为 authorized block 保持一对一 Evidence 引用闭包与完整 lineage。确定性
-authorities 与 real-PostgreSQL seeded composition 只属于测试组合。生产 OAuth/JWT、durable
+denied、cross-Organization 与 nonexistent probes 的 HTTP status、closed product
+headers、Package body 与 Runtime domain outcome 在仅归一化 server-authored per-resolve
+refs/timestamps 后完全相同；响应不含 Resource 标识、名称、Candidate/denied 数量或拒绝
+原因。此门禁不测量或声明 timing equality。
+
+确定性 authorities 与 real-PostgreSQL seeded composition 只属于测试组合。生产 OAuth/JWT、durable
 Principal/Agent grant authority、真实 Source/Resource ACL、通用检索与 continuation
 不属于这个已激活 tracer。
 

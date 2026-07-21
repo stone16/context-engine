@@ -238,14 +238,24 @@ def make_catalog() -> dict[str, object]:
             if fixture_id in {"ACCEPT-005", "ACCEPT-009"}:
                 body["retryable"] = False
             if fixture_id == "ACCEPT-011":
+                external_response["headers"] = {
+                    "Content-Type": "application/json",
+                    "Cache-Control": "no-store",
+                    "X-Context-Request-Id": "normalized-request-id",
+                }
+                external_response["normalizedByteIdenticalAcrossProbes"] = True
                 external_response["timingEqualityClaimed"] = False
-                operation["comparisonFields"] = ["status", "body", "headers"]
+                operation["comparisonFields"] = [
+                    "status",
+                    "body",
+                    "headers",
+                    "domainOutcome",
+                ]
                 operation["normalizationAllowlist"] = [
                     "body.package.organizationRef",
                     "body.package.decisionRef",
                     "body.package.asOf",
                     "body.package.expiresAt",
-                    "body.package.budgetUsage.elapsedMs",
                     "headers.X-Context-Request-Id",
                 ]
                 adversarial_mutation["probes"] = [
@@ -253,6 +263,19 @@ def make_catalog() -> dict[str, object]:
                     "resource-same-org-denied",
                     "resource-missing",
                 ]
+                adversarial_mutation["order"] = [
+                    "cross_organization_denied",
+                    "same_organization_denied",
+                    "missing",
+                ]
+                package_or_error.pop("code")
+                package_or_error.update(
+                    {
+                        "packageCount": 4,
+                        "deniedCountExposed": False,
+                        "existenceDetailCount": 0,
+                    }
+                )
         if fixture_id in {"ACCEPT-007", "ACCEPT-008"}:
             case_ids = (
                 TRANSPORT_CASE_IDS
@@ -405,7 +428,7 @@ def make_catalog() -> dict[str, object]:
                     },
                     "io": {
                         "providerCalls": 0,
-                        "indexCalls": 0,
+                        "indexCalls": 1 if fixture_id == "ACCEPT-011" else 0,
                         "modelCalls": 0,
                         "actionCalls": 0,
                     },
@@ -1277,6 +1300,55 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
         self.assertEqual(
             accept_011["expected"]["packageOrError"]["coverageStatus"], "empty"
         )
+        self.assertNotIn("Issue #14", accept_011["carrier"]["upgradeTrigger"])
+        self.assertEqual(
+            accept_011["operation"]["comparisonFields"],
+            ["status", "body", "headers", "domainOutcome"],
+        )
+        self.assertEqual(
+            accept_011["operation"]["normalizationAllowlist"],
+            [
+                "body.package.organizationRef",
+                "body.package.decisionRef",
+                "body.package.asOf",
+                "body.package.expiresAt",
+                "headers.X-Context-Request-Id",
+            ],
+        )
+        self.assertIs(
+            accept_011["expected"]["externalResponse"][
+                "normalizedByteIdenticalAcrossProbes"
+            ],
+            True,
+        )
+        self.assertEqual(
+            accept_011["expected"]["externalResponse"]["headers"],
+            {
+                "Content-Type": "application/json",
+                "Cache-Control": "no-store",
+                "X-Context-Request-Id": "normalized-request-id",
+            },
+        )
+        self.assertEqual(
+            accept_011["expected"]["packageOrError"],
+            {
+                "kind": "ContextPackage",
+                "packageCount": 4,
+                "coverageStatus": "empty",
+                "coverageReason": "no_authorized_evidence",
+                "deniedCountExposed": False,
+                "existenceDetailCount": 0,
+            },
+        )
+        self.assertEqual(
+            accept_011["expected"]["io"],
+            {
+                "providerCalls": 0,
+                "indexCalls": 1,
+                "modelCalls": 0,
+                "actionCalls": 0,
+            },
+        )
         for fixture_id in ("ACCEPT-005", "ACCEPT-009"):
             self.assertIs(
                 fixtures[fixture_id]["expected"]["externalResponse"]["body"][
@@ -1372,7 +1444,7 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
                 "resource-missing",
             ],
         )
-        self.assertEqual(accept_011["expected"]["packageOrError"]["packageCount"], 3)
+        self.assertEqual(accept_011["expected"]["packageOrError"]["packageCount"], 4)
 
     def test_parameterized_security_case_deletions_are_rejected(self) -> None:
         catalog = load_document(DEFAULT_CATALOG_PATH)
@@ -1599,6 +1671,72 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
             "because no_authorized_evidence is coverage, not a Provider gap",
             raised.exception.errors,
         )
+
+    def test_non_enumeration_comparison_contract_drift_is_rejected(self) -> None:
+        catalog = load_document(DEFAULT_CATALOG_PATH)
+        schema = load_document(DEFAULT_SCHEMA_PATH)
+        fixture = object_list_at(catalog, "fixtures")[10]
+        operation = object_at(fixture, "operation")
+        mutation = object_at(fixture, "adversarialMutation")
+        expected = object_at(fixture, "expected")
+        external_response = object_at(expected, "externalResponse")
+        package_summary = object_at(expected, "packageOrError")
+        io = object_at(expected, "io")
+        evidence = object_at(expected, "evidence")
+        effects = object_at(expected, "businessEffects")
+        body = object_at(external_response, "body")
+        package = object_at(body, "package")
+
+        operation["comparisonFields"] = ["status", "body"]
+        operation["normalizationAllowlist"] = [
+            "body.package.organizationRef",
+            "body.package.resourceRef",
+        ]
+        mutation["order"] = ["missing", "same_organization_denied"]
+        external_response["normalizedByteIdenticalAcrossProbes"] = False
+        external_response["headers"] = {
+            "Content-Type": "application/json",
+            "Cache-Control": "private",
+            "X-Context-Request-Id": "normalized-request-id",
+        }
+        package_summary["deniedCountExposed"] = True
+        package_summary["existenceDetailCount"] = 1
+        io["indexCalls"] = 0
+        evidence["outboundBytes"] = 1
+        effects["mutationEffectCount"] = 1
+        object_at(package, "budgetUsage")["elapsedMs"] = 1
+
+        with self.assertRaises(CatalogValidationError) as raised:
+            validate_catalog(catalog, schema)
+
+        errors = raised.exception.errors
+        self.assertTrue(
+            any(
+                "comparisonFields" in error and "canonical ordered" in error
+                for error in errors
+            )
+        )
+        self.assertTrue(
+            any(
+                "normalizationAllowlist" in error
+                and "canonical ordered" in error
+                for error in errors
+            )
+        )
+        self.assertTrue(any("adversarialMutation.order" in error for error in errors))
+        self.assertTrue(
+            any("normalizedByteIdenticalAcrossProbes" in error for error in errors)
+        )
+        self.assertTrue(
+            any("externalResponse.headers" in error for error in errors)
+        )
+        self.assertTrue(any("packageOrError" in error for error in errors))
+        self.assertTrue(any("expected.io" in error for error in errors))
+        self.assertTrue(
+            any("externalResponse.body.package" in error for error in errors)
+        )
+        self.assertTrue(any("expected.evidence" in error for error in errors))
+        self.assertTrue(any("expected.businessEffects" in error for error in errors))
 
     def test_milestone_drift_is_rejected(self) -> None:
         catalog = load_document(DEFAULT_CATALOG_PATH)
