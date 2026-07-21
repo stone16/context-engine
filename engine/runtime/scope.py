@@ -10,8 +10,8 @@ from engine.runtime.contracts import RequestNarrowing
 __all__ = [
     "EffectiveScope",
     "MISSING_TRUSTED_SCOPE",
-    "OMITTED_REQUEST_NARROWING",
     "MissingTrustedScope",
+    "OMITTED_REQUEST_NARROWING",
     "OmittedRequestNarrowing",
     "ScopeSet",
     "ScopeTarget",

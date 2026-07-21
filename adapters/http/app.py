@@ -1,6 +1,7 @@
 """FastAPI composition root and bounded authenticated-invocation seam."""
 
 from collections.abc import Callable
+from contextlib import ExitStack
 from datetime import UTC, datetime
 from json import loads
 from typing import Annotated, Final, Literal, cast
@@ -368,9 +369,13 @@ def create_app(
                     )
                 except (TypeError, ValueError):
                     raise TransportAuthenticationFailed from None
-                with selected_scope_authority.current_scope(
-                    scope_identity
-                ) as scope_snapshot:
+                with ExitStack() as scope_stack:
+                    try:
+                        scope_snapshot = scope_stack.enter_context(
+                            selected_scope_authority.current_scope(scope_identity)
+                        )
+                    except (TypeError, ValueError):
+                        raise TrustedAuthorityUnavailable from None
                     try:
                         invocation = _construct_authenticated_http_invocation(
                             request_id=request_id,

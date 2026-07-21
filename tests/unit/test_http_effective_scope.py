@@ -110,6 +110,20 @@ class UnavailableScopeAuthority:
         yield cast(Any, None)
 
 
+class InvalidEntryScopeAuthority:
+    def __init__(self, error_type: type[TypeError] | type[ValueError]) -> None:
+        self._error_type = error_type
+
+    @contextmanager
+    def current_scope(
+        self,
+        identity: ScopeAuthorityIdentity,
+    ) -> Iterator[TrustedScopeSnapshot]:
+        del identity
+        raise self._error_type("sensitive authority establishment detail")
+        yield cast(Any, None)
+
+
 class MutatedScopeAuthority(DeterministicScopeAuthority):
     def __init__(
         self,
@@ -229,7 +243,6 @@ def test_http_request_narrowing_is_exact_and_overbroad_refs_do_not_widen() -> No
             ],
         },
     }
-
     omitted_response, omitted, omitted_io, _ = request(trusted)
     exact_response, exact, exact_io, _ = request(trusted, body=exact_body)
     overbroad_response, overbroad, overbroad_io, _ = request(
@@ -345,6 +358,47 @@ def test_scope_authority_unavailability_is_generic_503_and_zero_io() -> None:
     )
 
 
+@pytest.mark.parametrize("error_type", (TypeError, ValueError))
+def test_scope_authority_entry_validation_failure_is_generic_503_and_zero_io(
+    error_type: type[TypeError] | type[ValueError],
+) -> None:
+    content_io = DownstreamContentIoSpy()
+    outcomes: list[Resolved] = []
+    runtime = Runtime(
+        required_kernel_dependencies(),
+        content_io=RuntimeContentIo(
+            index=content_io,
+            provider=content_io,
+            source_content=content_io,
+        ),
+        clock=lambda: RECEIVED_AT,
+    )
+    client = TestClient(
+        create_app(
+            authenticator=DeterministicAuthenticator(),
+            organization_authority=DeterministicOrganizationAuthority(),
+            membership_authority=DeterministicMembershipAuthority(),
+            scope_authority=InvalidEntryScopeAuthority(error_type),
+            runtime=runtime,
+            resolution_observer=outcomes.append,
+            clock=lambda: RECEIVED_AT,
+        ),
+        raise_server_exceptions=False,
+    )
+
+    response = client.post(
+        "/v1/context:resolve",
+        headers={"Authorization": f"Bearer {VALID_TOKEN}"},
+        json=VALID_BODY,
+    )
+
+    assert response.status_code == 503
+    assert response.content == b'{"code":"service_unavailable"}'
+    assert outcomes == []
+    assert content_io.total_calls == 0
+    assert "sensitive authority establishment detail" not in response.text
+
+
 @pytest.mark.parametrize(
     ("field_name", "field_value"),
     (
@@ -399,13 +453,14 @@ def test_mutated_scope_snapshot_is_generic_503_and_never_reaches_runtime(
 @pytest.mark.parametrize(
     "attempted_operator",
     (
+        {"sourceRefs": []},
         {"union": True},
         {"sourceWildcard": "*"},
         {"bypassAuthorization": True},
         {"agentCeiling": ["source:http:a"]},
     ),
 )
-def test_http_rejects_request_narrowing_widening_operators_before_runtime(
+def test_http_rejects_malformed_or_widening_request_narrowing_before_runtime(
     attempted_operator: dict[str, object],
 ) -> None:
     content_io = DownstreamContentIoSpy()
