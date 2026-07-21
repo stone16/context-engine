@@ -1,4 +1,4 @@
-"""Closed request and evidence-free delivery contracts for ContextRuntime."""
+"""Closed request and exact-authorized delivery contracts for ContextRuntime."""
 
 from dataclasses import dataclass, field, fields
 from datetime import datetime, timedelta
@@ -11,6 +11,7 @@ from engine.runtime.delivery import (
     TrustedDeliveryContext,
     _construct_direct_delivery_context,
 )
+from engine.runtime.evidence import Evidence, PackageBlock, validate_package_content
 
 __all__ = [
     "Acquire",
@@ -145,9 +146,10 @@ class BudgetUsage:
 
 
 class CoverageStatus(StrEnum):
-    """Closed coverage states active in the empty-package tracer."""
+    """Closed coverage states active in the Runtime tracer."""
 
     EMPTY = "empty"
+    SUFFICIENT = "sufficient"
 
 
 class CoverageReason(StrEnum):
@@ -161,19 +163,21 @@ class Coverage:
     """Typed package coverage that cannot enumerate denied resources."""
 
     status: CoverageStatus
-    reason: CoverageReason
+    reason: CoverageReason | None = None
 
     def __post_init__(self) -> None:
         if type(self.status) is not CoverageStatus:
             raise TypeError("status must be CoverageStatus")
-        if type(self.reason) is not CoverageReason:
-            raise TypeError("reason must be CoverageReason")
-        if self.status is not CoverageStatus.EMPTY:
-            raise ValueError("empty package coverage status must be empty")
-        if self.reason is not CoverageReason.NO_AUTHORIZED_EVIDENCE:
+        if self.reason is not None and type(self.reason) is not CoverageReason:
+            raise TypeError("reason must be CoverageReason or None")
+        if self.status is CoverageStatus.EMPTY and (
+            self.reason is not CoverageReason.NO_AUTHORIZED_EVIDENCE
+        ):
             raise ValueError(
                 "empty package coverage reason must be no_authorized_evidence"
             )
+        if self.status is CoverageStatus.SUFFICIENT and self.reason is not None:
+            raise ValueError("sufficient package coverage must not contain a reason")
 
 
 def _require_utc(field_name: str, value: object) -> None:
@@ -187,7 +191,7 @@ def _require_utc(field_name: str, value: object) -> None:
 
 @dataclass(frozen=True, slots=True)
 class ContextPackage:
-    """Tenant-safe evidence-free Runtime deliverable for the first tracer."""
+    """Tenant-safe Runtime deliverable with exact authorized Evidence closure."""
 
     organization_ref: str
     purpose: str
@@ -195,8 +199,8 @@ class ContextPackage:
     as_of: datetime
     expires_at: datetime
     decision_ref: str
-    blocks: tuple[()]
-    evidence: tuple[()]
+    blocks: tuple[PackageBlock, ...]
+    evidence: tuple[Evidence, ...]
     gaps: tuple[()]
     budget_usage: BudgetUsage
     coverage: Coverage
@@ -226,19 +230,51 @@ class ContextPackage:
         ):
             raise ValueError("package TTL must exactly match its expiry interval")
 
-        for field_name in ("blocks", "evidence", "gaps"):
-            value = getattr(self, field_name)
-            if type(value) is not tuple or value:
-                raise ValueError(f"empty package {field_name} must be an empty tuple")
-        if type(self.budget_usage) is not BudgetUsage:
-            raise TypeError("empty package usage must be BudgetUsage")
-        if any(
-            getattr(self.budget_usage, field.name) != 0
-            for field in fields(BudgetUsage)
+        if type(self.blocks) is not tuple or any(
+            type(block) is not PackageBlock for block in self.blocks
         ):
-            raise ValueError("empty package usage must be zero")
+            raise TypeError("package blocks must be a tuple of PackageBlock")
+        if type(self.evidence) is not tuple or any(
+            type(item) is not Evidence for item in self.evidence
+        ):
+            raise TypeError("package evidence must be a tuple of Evidence")
+        if type(self.gaps) is not tuple or self.gaps:
+            raise ValueError("package gaps must be an empty tuple in this tracer")
+        validate_package_content(self.blocks, self.evidence)
+        if type(self.budget_usage) is not BudgetUsage:
+            raise TypeError("package usage must be BudgetUsage")
         if type(self.coverage) is not Coverage:
-            raise TypeError("empty package coverage must be Coverage")
+            raise TypeError("package coverage must be Coverage")
+        has_content = bool(self.blocks or self.evidence)
+        if has_content:
+            if not self.blocks or not self.evidence:
+                raise ValueError("content package requires blocks and Evidence")
+            if self.coverage.status is not CoverageStatus.SUFFICIENT:
+                raise ValueError("content package coverage must be sufficient")
+            expected_tokens = sum(
+                len(block.body.encode("utf-8")) for block in self.blocks
+            )
+            if self.budget_usage.tokens != expected_tokens:
+                raise ValueError("content package token usage must equal UTF-8 bytes")
+            if any(
+                value != 0
+                for value in (
+                    self.budget_usage.provider_calls,
+                    self.budget_usage.cost_microunits,
+                    self.budget_usage.elapsed_ms,
+                )
+            ):
+                raise ValueError(
+                    "internal content package non-token usage must be zero"
+                )
+        else:
+            if self.coverage.status is not CoverageStatus.EMPTY:
+                raise ValueError("evidence-free package coverage must be empty")
+            if any(
+                getattr(self.budget_usage, usage_field.name) != 0
+                for usage_field in fields(BudgetUsage)
+            ):
+                raise ValueError("empty package usage must be zero")
 
 
 @dataclass(frozen=True, slots=True)

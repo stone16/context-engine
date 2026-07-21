@@ -1,5 +1,5 @@
 {
-  "manifestVersion": "2.0.0",
+  "manifestVersion": "3.0.0",
   "tables": [
     {
       "name": "alembic_version",
@@ -203,6 +203,218 @@
         "MIG-001",
         "MIG-002"
       ]
+    },
+    {
+      "name": "context_resource",
+      "classification": "tenant_owned",
+      "purpose": "Stable Organization-owned source object and active immutable Revision pointer",
+      "organizationColumn": "organization_id",
+      "organizationInclusiveKeys": [
+        {
+          "name": "pk_context_resource",
+          "kind": "primary_key",
+          "columns": ["organization_id", "resource_ref"]
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_context_resource_organization",
+          "columns": ["organization_id"],
+          "references": {
+            "table": "organization",
+            "columns": ["organization_id"]
+          }
+        },
+        {
+          "name": "fk_context_resource_active_revision_same_organization",
+          "columns": ["organization_id", "resource_ref", "active_revision_id"],
+          "references": {
+            "table": "context_revision",
+            "columns": ["organization_id", "resource_ref", "revision_id"]
+          },
+          "deferrable": true,
+          "initially": "DEFERRED"
+        }
+      ],
+      "rowLevelSecurity": {
+        "enabled": true,
+        "forced": true,
+        "policies": [
+          {
+            "name": "context_resource_current_user_actor",
+            "command": "SELECT",
+            "roles": ["context_engine_runtime"],
+            "using": "context_resource.organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid AND EXISTS (SELECT 1 FROM public.membership AS actor_membership WHERE actor_membership.organization_id = context_resource.organization_id AND actor_membership.organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid AND current_setting('app.actor_kind', true) = 'user' AND actor_membership.user_id = NULLIF(current_setting('app.user_id', true), '')::uuid AND NULLIF(current_setting('app.principal_ref', true), '') IS NOT NULL AND actor_membership.membership_id = NULLIF(current_setting('app.membership_id', true), '')::uuid AND actor_membership.membership_version = NULLIF(current_setting('app.membership_version', true), '')::bigint AND NULLIF(current_setting('app.request_id', true), '') IS NOT NULL AND NULLIF(current_setting('app.authentication_binding_ref', true), '') IS NOT NULL AND NULLIF(current_setting('app.checked_at', true), '') IS NOT NULL AND actor_membership.status = 'active' AND actor_membership.valid_from <= NULLIF(current_setting('app.checked_at', true), '')::timestamptz AND (actor_membership.valid_until IS NULL OR actor_membership.valid_until > NULLIF(current_setting('app.checked_at', true), '')::timestamptz)) AND context_resource.tombstoned IS FALSE"
+          },
+          {
+            "name": "context_resource_migrator_administration",
+            "command": "ALL",
+            "roles": ["context_engine_migrator"],
+            "using": "true",
+            "withCheck": "true"
+          }
+        ]
+      },
+      "permittedOperations": {
+        "context_engine_runtime": ["SELECT"],
+        "context_engine_worker": []
+      },
+      "partitions": [],
+      "securityInvariantIds": [
+        "TENANT-OWNERSHIP-001",
+        "TENANT-FK-002",
+        "RLS-FAIL-CLOSED-003"
+      ],
+      "negativeTestIds": ["DB-001", "DB-002", "DB-004", "DB-009", "DB-010"]
+    },
+    {
+      "name": "context_revision",
+      "classification": "tenant_owned",
+      "purpose": "Immutable canonical Revision lineage selected only by its Resource active pointer",
+      "organizationColumn": "organization_id",
+      "organizationInclusiveKeys": [
+        {
+          "name": "pk_context_revision",
+          "kind": "primary_key",
+          "columns": ["organization_id", "resource_ref", "revision_id"]
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_context_revision_organization",
+          "columns": ["organization_id"],
+          "references": {
+            "table": "organization",
+            "columns": ["organization_id"]
+          }
+        },
+        {
+          "name": "fk_context_revision_resource_same_organization",
+          "columns": ["organization_id", "resource_ref"],
+          "references": {
+            "table": "context_resource",
+            "columns": ["organization_id", "resource_ref"]
+          }
+        }
+      ],
+      "rowLevelSecurity": {
+        "enabled": true,
+        "forced": true,
+        "policies": [
+          {
+            "name": "context_revision_current_user_actor",
+            "command": "SELECT",
+            "roles": ["context_engine_runtime"],
+            "using": "context_revision.organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid AND EXISTS (SELECT 1 FROM public.membership AS actor_membership WHERE actor_membership.organization_id = context_revision.organization_id AND actor_membership.organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid AND current_setting('app.actor_kind', true) = 'user' AND actor_membership.user_id = NULLIF(current_setting('app.user_id', true), '')::uuid AND NULLIF(current_setting('app.principal_ref', true), '') IS NOT NULL AND actor_membership.membership_id = NULLIF(current_setting('app.membership_id', true), '')::uuid AND actor_membership.membership_version = NULLIF(current_setting('app.membership_version', true), '')::bigint AND NULLIF(current_setting('app.request_id', true), '') IS NOT NULL AND NULLIF(current_setting('app.authentication_binding_ref', true), '') IS NOT NULL AND NULLIF(current_setting('app.checked_at', true), '') IS NOT NULL AND actor_membership.status = 'active' AND actor_membership.valid_from <= NULLIF(current_setting('app.checked_at', true), '')::timestamptz AND (actor_membership.valid_until IS NULL OR actor_membership.valid_until > NULLIF(current_setting('app.checked_at', true), '')::timestamptz)) AND EXISTS (SELECT 1 FROM public.context_resource AS active_resource WHERE active_resource.organization_id = context_revision.organization_id AND active_resource.resource_ref = context_revision.resource_ref AND active_resource.active_revision_id = context_revision.revision_id AND active_resource.tombstoned IS FALSE)"
+          },
+          {
+            "name": "context_revision_migrator_administration",
+            "command": "ALL",
+            "roles": ["context_engine_migrator"],
+            "using": "true",
+            "withCheck": "true"
+          }
+        ]
+      },
+      "immutableRows": {
+        "trigger": "context_revision_reject_mutation",
+        "function": "context_content_reject_mutation",
+        "events": ["UPDATE", "DELETE"],
+        "sqlstate": "55000"
+      },
+      "permittedOperations": {
+        "context_engine_runtime": ["SELECT"],
+        "context_engine_worker": []
+      },
+      "partitions": [],
+      "securityInvariantIds": [
+        "TENANT-OWNERSHIP-001",
+        "TENANT-FK-002",
+        "RLS-FAIL-CLOSED-003"
+      ],
+      "negativeTestIds": ["DB-001", "DB-002", "DB-004", "DB-009", "DB-010"]
+    },
+    {
+      "name": "context_fragment",
+      "classification": "tenant_owned",
+      "purpose": "Immutable active-Revision Fragment content; persistent rows are never Evidence",
+      "organizationColumn": "organization_id",
+      "organizationInclusiveKeys": [
+        {
+          "name": "pk_context_fragment",
+          "kind": "primary_key",
+          "columns": ["organization_id", "resource_ref", "revision_id", "fragment_ref"]
+        },
+        {
+          "name": "uq_context_fragment_revision_ordinal",
+          "kind": "unique",
+          "columns": ["organization_id", "resource_ref", "revision_id", "ordinal"]
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_context_fragment_organization",
+          "columns": ["organization_id"],
+          "references": {
+            "table": "organization",
+            "columns": ["organization_id"]
+          }
+        },
+        {
+          "name": "fk_context_fragment_revision_same_organization",
+          "columns": ["organization_id", "resource_ref", "revision_id"],
+          "references": {
+            "table": "context_revision",
+            "columns": ["organization_id", "resource_ref", "revision_id"]
+          }
+        }
+      ],
+      "checkConstraints": [
+        {
+          "name": "ck_context_fragment_ordinal_nonnegative",
+          "expression": "ordinal >= 0"
+        },
+        {
+          "name": "ck_context_fragment_content_nonblank",
+          "expression": "translate(content, U&'\\0009\\000A\\000B\\000C\\000D\\001C\\001D\\001E\\001F\\0020\\0085\\00A0\\1680\\2000\\2001\\2002\\2003\\2004\\2005\\2006\\2007\\2008\\2009\\200A\\2028\\2029\\202F\\205F\\3000', '') <> ''"
+        }
+      ],
+      "rowLevelSecurity": {
+        "enabled": true,
+        "forced": true,
+        "policies": [
+          {
+            "name": "context_fragment_current_user_actor",
+            "command": "SELECT",
+            "roles": ["context_engine_runtime"],
+            "using": "context_fragment.organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid AND EXISTS (SELECT 1 FROM public.membership AS actor_membership WHERE actor_membership.organization_id = context_fragment.organization_id AND actor_membership.organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid AND current_setting('app.actor_kind', true) = 'user' AND actor_membership.user_id = NULLIF(current_setting('app.user_id', true), '')::uuid AND NULLIF(current_setting('app.principal_ref', true), '') IS NOT NULL AND actor_membership.membership_id = NULLIF(current_setting('app.membership_id', true), '')::uuid AND actor_membership.membership_version = NULLIF(current_setting('app.membership_version', true), '')::bigint AND NULLIF(current_setting('app.request_id', true), '') IS NOT NULL AND NULLIF(current_setting('app.authentication_binding_ref', true), '') IS NOT NULL AND NULLIF(current_setting('app.checked_at', true), '') IS NOT NULL AND actor_membership.status = 'active' AND actor_membership.valid_from <= NULLIF(current_setting('app.checked_at', true), '')::timestamptz AND (actor_membership.valid_until IS NULL OR actor_membership.valid_until > NULLIF(current_setting('app.checked_at', true), '')::timestamptz)) AND EXISTS (SELECT 1 FROM public.context_resource AS active_resource WHERE active_resource.organization_id = context_fragment.organization_id AND active_resource.resource_ref = context_fragment.resource_ref AND active_resource.active_revision_id = context_fragment.revision_id AND active_resource.tombstoned IS FALSE)"
+          },
+          {
+            "name": "context_fragment_migrator_administration",
+            "command": "ALL",
+            "roles": ["context_engine_migrator"],
+            "using": "true",
+            "withCheck": "true"
+          }
+        ]
+      },
+      "immutableRows": {
+        "trigger": "context_fragment_reject_mutation",
+        "function": "context_content_reject_mutation",
+        "events": ["UPDATE", "DELETE"],
+        "sqlstate": "55000"
+      },
+      "permittedOperations": {
+        "context_engine_runtime": ["SELECT"],
+        "context_engine_worker": []
+      },
+      "partitions": [],
+      "securityInvariantIds": [
+        "TENANT-OWNERSHIP-001",
+        "TENANT-FK-002",
+        "RLS-FAIL-CLOSED-003"
+      ],
+      "negativeTestIds": ["DB-001", "DB-002", "DB-004", "DB-009", "DB-010"]
     }
   ]
 }

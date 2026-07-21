@@ -21,6 +21,9 @@ from engine.runtime.actor import (
     MembershipRejectionAuditReceipt,
     MembershipRejectionCategory,
 )
+from engine.runtime.materialized import (
+    _require_active_materialized_projection_session,
+)
 
 CHECKED_AT = datetime(2026, 7, 21, 8, 0, tzinfo=UTC)
 
@@ -196,6 +199,16 @@ def test_current_membership_transaction_binds_every_actor_fact_before_lookup() -
         fake_engine.events.append("runtime-resolve")
         assert verification.user_id == expected.user_id
         assert verification.membership_id == expected.membership_id
+        assert verification.materialized_projection_session is not None
+        _require_active_materialized_projection_session(
+            verification.materialized_projection_session
+        )
+
+    assert verification.materialized_projection_session is not None
+    with pytest.raises(ValueError, match="active materialized projection scope"):
+        _require_active_materialized_projection_session(
+            verification.materialized_projection_session
+        )
 
     assert fake_engine.events[0] == "begin"
     lookup_position = next(

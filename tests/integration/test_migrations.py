@@ -59,7 +59,7 @@ def test_empty_baseline_remains_a_reversible_historical_revision(
         assert _application_tables(migration_configuration) == ["alembic_version"]
     finally:
         command.upgrade(alembic_configuration, "head")
-    assert _revision_rows(migration_configuration) == ["20260721_0003"]
+    assert _revision_rows(migration_configuration) == ["20260721_0004"]
 
 
 def test_organization_isolation_revision_downgrades_and_reapplies_cleanly(
@@ -74,9 +74,12 @@ def test_organization_isolation_revision_downgrades_and_reapplies_cleanly(
     finally:
         command.upgrade(alembic_configuration, "head")
 
-    assert _revision_rows(migration_configuration) == ["20260721_0003"]
+    assert _revision_rows(migration_configuration) == ["20260721_0004"]
     assert _application_tables(migration_configuration) == [
         "alembic_version",
+        "context_fragment",
+        "context_resource",
+        "context_revision",
         "membership",
         "organization",
         "organization_record",
@@ -100,4 +103,35 @@ def test_membership_revision_downgrades_to_issue_8_and_reapplies_cleanly(
     finally:
         command.upgrade(alembic_configuration, "head")
 
-    assert _revision_rows(migration_configuration) == ["20260721_0003"]
+    assert _revision_rows(migration_configuration) == ["20260721_0004"]
+
+
+def test_content_schema_revision_downgrades_to_membership_and_reapplies_cleanly(
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    alembic_configuration = Config(ROOT / "alembic.ini")
+
+    try:
+        command.downgrade(alembic_configuration, "20260721_0003")
+        assert _revision_rows(migration_configuration) == ["20260721_0003"]
+        assert _application_tables(migration_configuration) == [
+            "alembic_version",
+            "membership",
+            "organization",
+            "organization_record",
+            "user_account",
+        ]
+    finally:
+        command.upgrade(alembic_configuration, "head")
+
+    assert _revision_rows(migration_configuration) == ["20260721_0004"]
+    assert _application_tables(migration_configuration) == [
+        "alembic_version",
+        "context_fragment",
+        "context_resource",
+        "context_revision",
+        "membership",
+        "organization",
+        "organization_record",
+        "user_account",
+    ]

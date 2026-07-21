@@ -1,15 +1,16 @@
-"""Replaceable content seams that remain untouched by the empty Runtime path."""
+"""Content-free discovery plus prohibited legacy content seams."""
 
 from dataclasses import dataclass
 from typing import Protocol
 
 from engine.runtime.contracts import Acquire
+from engine.runtime.evidence import CandidateRef
 
 
 class CandidateIndex(Protocol):
-    """Future content-free candidate discovery seam."""
+    """Content-free candidate discovery seam; never an authorization source."""
 
-    def discover(self, request: Acquire) -> tuple[()]: ...
+    def discover(self, request: Acquire) -> tuple[CandidateRef, ...]: ...
 
 
 class ContextProvider(Protocol):
@@ -49,7 +50,7 @@ class _ProhibitedSourceContentReader:
 
 
 def prohibited_empty_path_content_io() -> RuntimeContentIo:
-    """Build fail-fast production seams; none may be called in Issue #10."""
+    """Build fail-fast legacy seams; authorized content uses the sealed Kernel."""
 
     return RuntimeContentIo(
         index=_ProhibitedCandidateIndex(),

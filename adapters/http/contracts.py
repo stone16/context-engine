@@ -1,4 +1,4 @@
-"""Closed HTTP wire models for the evidence-free Acquire tracer."""
+"""Closed HTTP wire models for Acquire and exact-authorized Evidence."""
 
 from datetime import datetime
 from typing import Annotated, Literal, Self
@@ -13,6 +13,11 @@ from engine.runtime.contracts import (
 )
 
 PositiveExactInteger = Annotated[int, Field(strict=True, gt=0)]
+NonnegativeExactInteger = Annotated[int, Field(strict=True, ge=0)]
+PositivePolicyEpoch = Annotated[
+    int,
+    Field(strict=True, ge=1, le=(1 << 63) - 1),
+]
 BoundedNarrowingRef = Annotated[
     str,
     Field(
@@ -33,6 +38,22 @@ OrganizationPackageOutputRef = Annotated[
 DecisionOutputRef = Annotated[
     str,
     Field(strict=True, pattern=DECISION_REF_PATTERN),
+]
+OpaqueOutputRef = Annotated[
+    str,
+    Field(strict=True, min_length=1, max_length=256, pattern=r"^\S+$"),
+]
+EvidenceOutputRef = Annotated[
+    str,
+    Field(strict=True, pattern=r"^ev_[0-9a-f]{64}$"),
+]
+BlockOutputRef = Annotated[
+    str,
+    Field(strict=True, pattern=r"^block_[0-9a-f]{64}$"),
+]
+NonblankBlockText = Annotated[
+    str,
+    Field(strict=True, min_length=1, pattern=r".*\S.*"),
 ]
 
 
@@ -105,21 +126,65 @@ class AcquireWire(ClosedWireModel):
 class BudgetUsageWire(ClosedWireModel):
     """Actual resources consumed by this Package."""
 
-    tokens: Literal[0]
+    tokens: NonnegativeExactInteger
     providerCalls: Literal[0]
     costMicrounits: Literal[0]
     elapsedMs: Literal[0]
 
 
-class CoverageWire(ClosedWireModel):
-    """Typed tenant-safe empty coverage without existence detail."""
+class BlockWire(ClosedWireModel):
+    """One authorized text block bound to exactly one public Evidence ref."""
 
-    status: Literal["empty"]
-    reason: Literal["no_authorized_evidence"]
+    blockId: BlockOutputRef
+    text: NonblankBlockText
+    evidenceRefs: Annotated[
+        tuple[EvidenceOutputRef, ...],
+        Field(min_length=1, max_length=1),
+    ]
+
+    @model_validator(mode="after")
+    def bind_id_to_its_evidence(self) -> Self:
+        evidence_ref = self.evidenceRefs[0]
+        expected_block_id = f"block_{evidence_ref.removeprefix('ev_')}"
+        if self.blockId != expected_block_id:
+            raise ValueError("blockId must be derived from its exact Evidence ref")
+        return self
+
+
+class EvidenceWire(ClosedWireModel):
+    """Public request-scoped Evidence and its authorization lineage."""
+
+    evidenceRef: EvidenceOutputRef
+    sourceRef: OpaqueOutputRef
+    resourceRef: OpaqueOutputRef
+    revisionRef: OpaqueOutputRef
+    fragmentRef: OpaqueOutputRef
+    runRef: OpaqueOutputRef
+    purpose: NonblankPurpose
+    authorizationAsOf: datetime
+    decisionRef: DecisionOutputRef
+    policySnapshotRef: OpaqueOutputRef
+    policyEpoch: PositivePolicyEpoch
+    sourceDecisionRef: OpaqueOutputRef
+
+
+class CoverageWire(ClosedWireModel):
+    """Typed tenant-safe coverage for the selected package content."""
+
+    status: Literal["empty", "sufficient"]
+    reason: Literal["no_authorized_evidence"] | None = None
+
+    @model_validator(mode="after")
+    def require_status_specific_reason(self) -> Self:
+        if self.status == "empty" and self.reason != "no_authorized_evidence":
+            raise ValueError("empty coverage requires its tenant-safe reason")
+        if self.status == "sufficient" and self.reason is not None:
+            raise ValueError("sufficient coverage cannot carry an empty reason")
+        return self
 
 
 class ContextPackageWire(ClosedWireModel):
-    """Staged public evidence-free ContextPackage."""
+    """Public package with an exact block/Evidence closure."""
 
     organizationRef: OrganizationPackageOutputRef
     purpose: NonblankPurpose
@@ -127,11 +192,45 @@ class ContextPackageWire(ClosedWireModel):
     asOf: datetime
     expiresAt: datetime
     decisionRef: DecisionOutputRef
-    blocks: tuple[()]
-    evidence: tuple[()]
+    blocks: tuple[BlockWire, ...]
+    evidence: tuple[EvidenceWire, ...]
     gaps: tuple[()]
     budgetUsage: BudgetUsageWire
     coverage: CoverageWire
+
+    @model_validator(mode="after")
+    def require_exact_authorized_content_closure(self) -> Self:
+        block_refs = tuple(block.evidenceRefs[0] for block in self.blocks)
+        evidence_refs = tuple(item.evidenceRef for item in self.evidence)
+        if (
+            len(block_refs) != len(set(block_refs))
+            or len(evidence_refs) != len(set(evidence_refs))
+            or set(block_refs) != set(evidence_refs)
+        ):
+            raise ValueError("package must have an exact block/Evidence closure")
+
+        has_content = bool(self.blocks or self.evidence)
+        if has_content != (self.coverage.status == "sufficient"):
+            raise ValueError("package content must match its coverage status")
+        if not has_content and self.budgetUsage.tokens != 0:
+            raise ValueError("empty package token usage must be zero")
+        if has_content and self.budgetUsage.tokens != sum(
+            len(block.text.encode("utf-8")) for block in self.blocks
+        ):
+            raise ValueError(
+                "content package token usage must equal authorized UTF-8 bytes"
+            )
+
+        for item in self.evidence:
+            if (
+                item.purpose != self.purpose
+                or item.authorizationAsOf != self.asOf
+                or item.decisionRef != self.decisionRef
+            ):
+                raise ValueError(
+                    "Evidence lineage must match its enclosing package decision"
+                )
+        return self
 
 
 class ResolvedWire(ClosedWireModel):

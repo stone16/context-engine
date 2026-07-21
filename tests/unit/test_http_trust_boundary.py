@@ -1559,6 +1559,8 @@ def test_openapi_body_is_closed_and_contains_no_trusted_fields() -> None:
     assert set(response_models) == {
         "ResolvedWire",
         "ContextPackageWire",
+        "BlockWire",
+        "EvidenceWire",
         "BudgetUsageWire",
         "CoverageWire",
     }
@@ -1577,8 +1579,12 @@ def test_openapi_body_is_closed_and_contains_no_trusted_fields() -> None:
         "budgetUsage",
         "coverage",
     ]
-    assert package_schema["properties"]["blocks"]["maxItems"] == 0
-    assert package_schema["properties"]["evidence"]["maxItems"] == 0
+    assert package_schema["properties"]["blocks"]["items"] == {
+        "$ref": "#/components/schemas/BlockWire"
+    }
+    assert package_schema["properties"]["evidence"]["items"] == {
+        "$ref": "#/components/schemas/EvidenceWire"
+    }
     assert package_schema["properties"]["gaps"]["maxItems"] == 0
     assert package_schema["properties"]["organizationRef"]["pattern"] == (
         "^orgpkg_[0-9a-f]{32}$"
@@ -1586,6 +1592,25 @@ def test_openapi_body_is_closed_and_contains_no_trusted_fields() -> None:
     assert package_schema["properties"]["decisionRef"]["pattern"] == (
         "^dec_[0-9a-f]{32}$"
     )
+    block_schema = response_models["BlockWire"]
+    assert block_schema["required"] == ["blockId", "text", "evidenceRefs"]
+    assert block_schema["properties"]["evidenceRefs"]["minItems"] == 1
+    assert block_schema["properties"]["evidenceRefs"]["maxItems"] == 1
+    evidence_schema = response_models["EvidenceWire"]
+    assert set(evidence_schema["properties"]) == {
+        "evidenceRef",
+        "sourceRef",
+        "resourceRef",
+        "revisionRef",
+        "fragmentRef",
+        "runRef",
+        "purpose",
+        "authorizationAsOf",
+        "decisionRef",
+        "policySnapshotRef",
+        "policyEpoch",
+        "sourceDecisionRef",
+    }
     assert all(
         response_model["additionalProperties"] is False
         for response_model in response_models.values()
@@ -1597,8 +1622,10 @@ def test_openapi_body_is_closed_and_contains_no_trusted_fields() -> None:
         "scopetarget",
         "targetcount",
         "digest",
-        "sourceref",
-        "resourceref",
+        "principalref",
+        "candidate",
+        "organizationid",
+        "denied",
         "principalgrants",
         "agentceiling",
         "membershiprights",
