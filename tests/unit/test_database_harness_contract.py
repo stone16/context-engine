@@ -22,6 +22,16 @@ def test_compose_pins_postgresql_17_pgvector_0_8_5_by_digest() -> None:
     assert "./infra/postgres/init:/docker-entrypoint-initdb.d:ro" in compose
 
 
+def test_bootstrap_owns_the_exact_extensions_required_by_migrations() -> None:
+    bootstrap = repository_text("infra/postgres/init/10-security-roles.sh")
+    provisioner = repository_text("scripts/provision_database_roles.py")
+
+    assert "CREATE EXTENSION vector WITH SCHEMA public" in bootstrap
+    assert "CREATE EXTENSION pgcrypto WITH SCHEMA public" in bootstrap
+    assert "CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA public" in provisioner
+    assert 'extension != ("public", contract.bootstrap_role)' in provisioner
+
+
 def test_compose_project_identity_is_generated_per_checkout() -> None:
     compose = repository_text("compose.yaml")
     script = repository_text("scripts/database_harness.sh")
@@ -88,6 +98,7 @@ def test_harness_provisions_post_init_roles_before_readiness() -> None:
 
     assert harness.count("  provision_database_roles\n  wait_for_database") == 2
     assert "ACCESS_POLICY_DEFINER_ROLE" in provisioner
+    assert "WORKER_LEASE_DEFINER_ROLE" in provisioner
     assert "NOLOGIN NOSUPERUSER" in provisioner
     assert "WITH ADMIN FALSE, INHERIT FALSE, SET TRUE" in provisioner
     assert "database security-role provisioning failed" in provisioner

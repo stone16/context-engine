@@ -386,6 +386,19 @@ ACCEPT_010_FUTURE_CARRIER: dict[str, str] = {
     ),
 }
 
+ACCEPT_008_BOUNDED_CARRIER: dict[str, str] = {
+    "statusAtM0": "available",
+    "m0Expectation": "active_fail_closed",
+    "upgradeTrigger": (
+        "Issue #17 activates only the signed one-shot persistent no-op "
+        "durable-job subcarrier. The complete fixture upgrades only after "
+        "Source, Resource, Revision, Policy Epoch, end-user delivery audience, "
+        "idempotency, generation, business mutation, outbox, and File carriers "
+        "run their "
+        "full per-binding matrix."
+    ),
+}
+
 CANONICAL_FUTURE_RUNTIME_CARRIERS: dict[str, dict[str, str]] = {
     "ACCEPT-005": ACCEPT_005_FUTURE_CARRIER,
     "ACCEPT-009": ACCEPT_009_FUTURE_CARRIER,
@@ -441,7 +454,7 @@ CANONICAL_REVOCATION_ACTIVATION: dict[str, object] = {
     "futureCarriers": [
         "Continue",
         "OpenCitation",
-        "WorkerLease",
+        "Policy-Epoch-bound WorkerLease",
         "ContextAccessTicket",
         "ActionTicket",
     ],
@@ -508,9 +521,86 @@ CANONICAL_UNAVAILABLE_CAPABILITY_ACTIVATION: dict[str, object] = {
     ],
 }
 
+CANONICAL_WORKER_LEASE_ACTIVATION: dict[str, object] = {
+    "issueRef": "#17",
+    "invariantRef": "WORKER-LEASE-007",
+    "carrier": "signed one-shot persistent no-op durable-job WorkerLease",
+    "status": "active_fail_closed",
+    "policyEpochScope": "not-bound-issue-17",
+    "controlBoundary": (
+        "complete_persistent_noop_job(PostgreSQLWorkerLeaseAuthority, "
+        "WorkerLeaseRedemption)"
+    ),
+    "testEvidence": [
+        {
+            "id": "LEASE-SIGNING-017",
+            "surface": "tests/unit/test_worker_lease.py",
+            "oracle": (
+                "Versioned domain-separated canonical HMAC-SHA256 signing "
+                "with an explicit injected keyring accepts one exact no-op "
+                "lease and generically rejects unknown versions, malformed "
+                "tokens, tampering, expiry, claim mutation, and UserActor "
+                "substitution without exposing claims or key material."
+            ),
+        },
+        {
+            "id": "PG-WORKER-LEASE-NOOP-017",
+            "surface": "tests/integration/test_worker_lease.py",
+            "oracle": (
+                "The registered least-privilege ServicePrincipal and "
+                "ServiceActor redeem one exact same-Organization persistent "
+                "no-op job through an atomic current-row compare-and-set; "
+                "rollback, replay, mismatch, expiry, and concurrent losers "
+                "create zero additional durable transitions and zero "
+                "wrong-Organization effects."
+            ),
+        },
+        {
+            "id": "WORKER-LEASE-REPLAY-007",
+            "surface": "tests/integration/test_worker_lease.py",
+            "oracle": (
+                "The real worker application seam completes exactly one "
+                "persistent no-op job with its server-minted lease; replay "
+                "returns only generic work-not-available and leaves the "
+                "completed durable state unchanged."
+            ),
+        },
+    ],
+    "deferredEvidence": [
+        "PROP-WORKER-LEASE-007",
+        "PG-WORKER-LEASE-007",
+        "DB-011",
+        "JOB-001",
+        "JOB-005",
+        "full ACCEPT-008 per-binding matrix",
+    ],
+    "futureCarriers": [
+        "Source-bound acquisition",
+        "Resource/Revision mutation",
+        "Policy-Epoch/end-user-delivery-audience-bound WorkerLease",
+        "idempotency/generation-bound business mutation",
+        "outbox dispatch",
+        "File publication",
+    ],
+    "notActive": [
+        "Source",
+        "Resource",
+        "Revision",
+        "Policy Epoch",
+        "end-user delivery audience",
+        "idempotency",
+        "generation",
+        "content-bearing mutation",
+        "outbox",
+        "File publication",
+        "full ACCEPT-008 PASS",
+    ],
+}
+
 CANONICAL_ACTIVATIONS: list[dict[str, object]] = [
     CANONICAL_REVOCATION_ACTIVATION,
     CANONICAL_UNAVAILABLE_CAPABILITY_ACTIVATION,
+    CANONICAL_WORKER_LEASE_ACTIVATION,
 ]
 
 
@@ -651,6 +741,7 @@ def _validate_hard_oracles(catalog: Mapping[str, Any], collector: _Collector) ->
         collector.require_exact_fields(oracle, ("name", "requiredValue", "veto"), path)
         name = oracle.get("name")
         if collector.require_nonempty_string(name, f"{path}.name"):
+            assert isinstance(name, str)
             found_names.append(name)
         required_value = oracle.get("requiredValue")
         if isinstance(required_value, bool) or required_value != 0:
@@ -680,7 +771,8 @@ def _validate_activations(catalog: Mapping[str, Any], collector: _Collector) -> 
     if len(activations) != len(CANONICAL_ACTIVATIONS):
         collector.add(
             "activations",
-            "must contain exactly the canonical ordered Issue #15 and Issue #16 "
+            "must contain exactly the canonical ordered Issue #15, Issue #16, "
+            "and Issue #17 "
             "activation records",
         )
 
@@ -714,7 +806,8 @@ def _validate_activations(catalog: Mapping[str, Any], collector: _Collector) -> 
     if activations != CANONICAL_ACTIVATIONS:
         collector.add(
             "activations",
-            "must exactly preserve the canonical ordered Issue #15 and Issue #16 "
+            "must exactly preserve the canonical ordered Issue #15, Issue #16, "
+            "and Issue #17 "
             "activation records and their future/NOT_ACTIVE boundaries",
         )
 
@@ -974,6 +1067,7 @@ def _validate_parameterized_case_ids(
             oracle = case.get("activatedOracle")
             if collector.require_nonempty_string(oracle, oracle_path):
                 assert isinstance(oracle, str)
+                assert isinstance(case_id, str)
                 canonical_digest = CANONICAL_ACTIVATED_ORACLE_DIGESTS.get(case_id)
                 oracle_digest = hashlib.sha256(oracle.encode("utf-8")).hexdigest()
                 if canonical_digest is not None and oracle_digest != canonical_digest:
@@ -1051,6 +1145,12 @@ def _validate_fixture(
             collector.add(
                 f"{path}.carrier",
                 message,
+            )
+        if fixture_id == "ACCEPT-008" and carrier != ACCEPT_008_BOUNDED_CARRIER:
+            collector.add(
+                f"{path}.carrier",
+                "must preserve the bounded Issue #17 persistent no-op carrier; "
+                "the full ACCEPT-008 carrier remains deferred",
             )
 
     setup = collector.require_mapping(fixture.get("setup"), f"{path}.setup")
@@ -1385,6 +1485,7 @@ def _validate_fixture(
                         ("authorizationAsOf", "asOf"),
                         ("decisionRef", "decisionRef"),
                     ):
+                        assert resolved_package is not None
                         if item.get(evidence_field) != resolved_package.get(
                             package_field
                         ):
@@ -1542,12 +1643,12 @@ def _validate_fixture(
                     "must be the canonical ordered probe set "
                     f"{list(canonical_probes)!r}",
                 )
-            canonical_order = (
+            canonical_order: tuple[str, ...] = (
                 "cross_organization_denied",
                 "same_organization_denied",
                 "missing",
             )
-            order = (
+            canonical_outcome_order = (
                 collector.require_string_list(
                     adversarial_mutation.get("order"),
                     f"{path}.adversarialMutation.order",
@@ -1555,7 +1656,10 @@ def _validate_fixture(
                 if adversarial_mutation is not None
                 else None
             )
-            if order is not None and tuple(order) != canonical_order:
+            if (
+                canonical_outcome_order is not None
+                and tuple(canonical_outcome_order) != canonical_order
+            ):
                 collector.add(
                     f"{path}.adversarialMutation.order",
                     "must be the canonical ordered outcome set "
@@ -1815,6 +1919,7 @@ def _validate_schema_instance(
             _validate_schema_instance(value, remaining, root_schema, path, collector)
         return
 
+    expected_type_names: tuple[str, ...]
     expected_types = schema_node.get("type")
     if isinstance(expected_types, str):
         expected_type_names = (expected_types,)
@@ -2191,15 +2296,23 @@ def _validate_schema(
                 "schema.fixtures.items.properties.id.enum",
                 "must freeze the canonical ordered IDs",
             )
-        for child, fields in (("carrier", CARRIER_FIELDS), ("setup", SETUP_FIELDS)):
+        fixture_children: tuple[tuple[str, tuple[str, ...]], ...] = (
+            ("carrier", CARRIER_FIELDS),
+            ("setup", SETUP_FIELDS),
+        )
+        for fixture_child, fixture_fields in fixture_children:
             child_schema = _schema_child(
-                root, fixture_item, child, "schema.fixtures.items", collector
+                root,
+                fixture_item,
+                fixture_child,
+                "schema.fixtures.items",
+                collector,
             )
             if child_schema is not None:
                 _require_closed_object_schema(
                     child_schema,
-                    fields,
-                    f"schema.fixtures.items.properties.{child}",
+                    fixture_fields,
+                    f"schema.fixtures.items.properties.{fixture_child}",
                     collector,
                 )
         expected_schema = _schema_child(
@@ -2212,30 +2325,32 @@ def _validate_schema(
                 "schema.fixtures.items.properties.expected",
                 collector,
             )
-            for child, fields in (
+            expected_children: tuple[tuple[str, tuple[str, ...]], ...] = (
                 ("evidence", EVIDENCE_FIELDS),
                 ("businessEffects", BUSINESS_EFFECT_FIELDS),
                 ("io", IO_FIELDS),
-            ):
+            )
+            for expected_child, expected_fields in expected_children:
                 child_schema = _schema_child(
                     root,
                     expected_schema,
-                    child,
+                    expected_child,
                     "schema.fixtures.items.properties.expected",
                     collector,
                 )
                 if child_schema is not None:
                     _require_closed_object_schema(
                         child_schema,
-                        fields,
-                        f"schema.fixtures.items.properties.expected.properties.{child}",
+                        expected_fields,
+                        "schema.fixtures.items.properties.expected.properties."
+                        f"{expected_child}",
                         collector,
                     )
 
     definitions = root.get("$defs")
     definitions = collector.require_mapping(definitions, "schema.$defs")
     if definitions is not None:
-        closed_object_definitions = {
+        closed_object_definitions: dict[str, tuple[str, ...]] = {
             "authority": ("issueRefs", "documentRefs", "reconciliation"),
             "activation": ACTIVATION_FIELDS,
             "activationTestEvidence": ACTIVATION_TEST_EVIDENCE_FIELDS,
@@ -2270,7 +2385,7 @@ def _validate_schema(
             "invariant": INVARIANT_FIELDS,
             "fixture": FIXTURE_FIELDS,
         }
-        for definition_name, required_fields in closed_object_definitions.items():
+        for definition_name, definition_fields in closed_object_definitions.items():
             definition = definitions.get(definition_name)
             definition_path = f"schema.$defs.{definition_name}"
             if definition is None:
@@ -2284,9 +2399,9 @@ def _validate_schema(
                 collector.add(
                     f"{definition_path}.additionalProperties", "must be false"
                 )
-            if required_fields:
+            if definition_fields:
                 _require_schema_fields(
-                    definition_mapping, required_fields, definition_path, collector
+                    definition_mapping, definition_fields, definition_path, collector
                 )
 
         invariant_id_value = definitions.get("invariantId")
@@ -2490,7 +2605,7 @@ def _validate_document_paths(catalog: Mapping[str, Any], repository_root: Path) 
         tracked_documents[ref] = resolved
 
     heading_anchors: dict[str, set[str]] = {}
-    for ref_path, ref in _iter_catalog_authority_refs(catalog):
+    for reference_path, ref in _iter_catalog_authority_refs(catalog):
         document_ref, separator, fragment = ref.partition("#")
         if not document_ref or not separator:
             # Bare references such as issue ``#5`` are not document anchors.
@@ -2508,7 +2623,7 @@ def _validate_document_paths(catalog: Mapping[str, Any], repository_root: Path) 
             heading_anchors[document_ref] = anchors
         if unquote(fragment) not in anchors:
             errors.append(
-                f"{ref_path}: Markdown heading anchor does not exist: {ref!r}"
+                f"{reference_path}: Markdown heading anchor does not exist: {ref!r}"
             )
     if errors:
         raise CatalogValidationError(errors)

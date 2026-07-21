@@ -1,10 +1,13 @@
 import json
+import os
+import selectors
 import socket
 import subprocess
 import sys
 import time
 from contextlib import closing
 from pathlib import Path
+from typing import cast
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
@@ -39,6 +42,55 @@ def _unused_port() -> int:
     with closing(socket.socket()) as sock:
         sock.bind(("127.0.0.1", 0))
         return int(sock.getsockname()[1])
+
+
+def _wait_for_worker_readiness(
+    process: subprocess.Popen[str],
+    *,
+    timeout_seconds: float = 10,
+) -> dict[str, object]:
+    assert process.stdout is not None
+    deadline = time.monotonic() + timeout_seconds
+    output = bytearray()
+
+    with selectors.DefaultSelector() as selector:
+        selector.register(process.stdout, selectors.EVENT_READ)
+        while time.monotonic() < deadline:
+            remaining = deadline - time.monotonic()
+            if not selector.select(timeout=max(remaining, 0)):
+                continue
+
+            chunk = os.read(process.stdout.fileno(), 4096)
+            if not chunk:
+                break
+            output.extend(chunk)
+            if b"\n" not in output:
+                continue
+
+            readiness_line, _, _ = output.partition(b"\n")
+            try:
+                payload: object = json.loads(readiness_line.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as error:
+                raise AssertionError(
+                    f"Worker emitted invalid readiness JSON: {readiness_line!r}"
+                ) from error
+            if not isinstance(payload, dict) or not all(
+                isinstance(key, str) for key in payload
+            ):
+                raise AssertionError(
+                    f"Worker emitted a non-object readiness payload: {payload!r}"
+                )
+            return cast(dict[str, object], payload)
+
+    captured = output.decode("utf-8", errors="replace")
+    if process.poll() is None:
+        raise AssertionError(
+            "Worker did not emit readiness JSON within "
+            f"{timeout_seconds}s: {captured!r}"
+        )
+    raise AssertionError(
+        f"Worker exited with code {process.returncode} before readiness: {captured!r}"
+    )
 
 
 def test_api_boots_and_reports_readiness() -> None:
@@ -179,13 +231,13 @@ def test_worker_stays_alive_until_terminated_in_normal_mode() -> None:
         text=True,
     )
     try:
-        time.sleep(0.2)
+        payload = _wait_for_worker_readiness(process)
         assert process.poll() is None
     finally:
         process.terminate()
-        output, _ = process.communicate(timeout=5)
+        process.communicate(timeout=5)
 
-    assert json.loads(output) == {
+    assert payload == {
         "status": "ready",
         "service": "context-engine-worker",
         "version": BUILD_IDENTIFIER,

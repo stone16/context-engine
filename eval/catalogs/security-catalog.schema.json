@@ -59,8 +59,8 @@
     },
     "activations": {
       "type": "array",
-      "minItems": 2,
-      "maxItems": 2,
+      "minItems": 3,
+      "maxItems": 3,
       "uniqueItems": true,
       "prefixItems": [
         {
@@ -77,7 +77,7 @@
               {"id": "CACHE-002", "surface": "tests/unit/test_runtime_authorized_evidence.py", "oracle": "An injected pre-revocation authorization decision or a mid-resolve epoch change fails the final current-epoch gate and delivers zero stale Evidence without relying on candidate or content removal."}
             ],
             "deferredEvidence": ["BLOB-002"],
-            "futureCarriers": ["Continue", "OpenCitation", "WorkerLease", "ContextAccessTicket", "ActionTicket"],
+            "futureCarriers": ["Continue", "OpenCitation", "Policy-Epoch-bound WorkerLease", "ContextAccessTicket", "ActionTicket"],
             "notActive": ["DecisionAudit", "outbox", "cleanup", "Source/Resource Policy Epochs", "UI/external admin"]
           }
         },
@@ -96,6 +96,24 @@
             "deferredEvidence": ["real-continuation-redemption", "real-citation-redemption", "real-federated-source-native-authorization"],
             "futureCarriers": ["Continue", "OpenCitation", "federated/source-native ContextProvider"],
             "notActive": ["continuation issuance/redemption", "citation locator redemption", "federated Provider/source-native ACL I/O", "File publication"]
+          }
+        },
+        {
+          "const": {
+            "issueRef": "#17",
+            "invariantRef": "WORKER-LEASE-007",
+            "carrier": "signed one-shot persistent no-op durable-job WorkerLease",
+            "status": "active_fail_closed",
+            "policyEpochScope": "not-bound-issue-17",
+            "controlBoundary": "complete_persistent_noop_job(PostgreSQLWorkerLeaseAuthority, WorkerLeaseRedemption)",
+            "testEvidence": [
+              {"id": "LEASE-SIGNING-017", "surface": "tests/unit/test_worker_lease.py", "oracle": "Versioned domain-separated canonical HMAC-SHA256 signing with an explicit injected keyring accepts one exact no-op lease and generically rejects unknown versions, malformed tokens, tampering, expiry, claim mutation, and UserActor substitution without exposing claims or key material."},
+              {"id": "PG-WORKER-LEASE-NOOP-017", "surface": "tests/integration/test_worker_lease.py", "oracle": "The registered least-privilege ServicePrincipal and ServiceActor redeem one exact same-Organization persistent no-op job through an atomic current-row compare-and-set; rollback, replay, mismatch, expiry, and concurrent losers create zero additional durable transitions and zero wrong-Organization effects."},
+              {"id": "WORKER-LEASE-REPLAY-007", "surface": "tests/integration/test_worker_lease.py", "oracle": "The real worker application seam completes exactly one persistent no-op job with its server-minted lease; replay returns only generic work-not-available and leaves the completed durable state unchanged."}
+            ],
+            "deferredEvidence": ["PROP-WORKER-LEASE-007", "PG-WORKER-LEASE-007", "DB-011", "JOB-001", "JOB-005", "full ACCEPT-008 per-binding matrix"],
+            "futureCarriers": ["Source-bound acquisition", "Resource/Revision mutation", "Policy-Epoch/end-user-delivery-audience-bound WorkerLease", "idempotency/generation-bound business mutation", "outbox dispatch", "File publication"],
+            "notActive": ["Source", "Resource", "Revision", "Policy Epoch", "end-user delivery audience", "idempotency", "generation", "content-bearing mutation", "outbox", "File publication", "full ACCEPT-008 PASS"]
           }
         }
       ],
@@ -291,7 +309,7 @@
       "additionalProperties": false,
       "required": ["id", "surface", "oracle"],
       "properties": {
-        "id": {"enum": ["PG-REVOCATION-006", "RUN-006", "CACHE-002", "RUN-UNAVAILABLE-016", "HTTP-UNAVAILABLE-016"]},
+        "id": {"enum": ["PG-REVOCATION-006", "RUN-006", "CACHE-002", "RUN-UNAVAILABLE-016", "HTTP-UNAVAILABLE-016", "LEASE-SIGNING-017", "PG-WORKER-LEASE-NOOP-017", "WORKER-LEASE-REPLAY-007"]},
         "surface": {"$ref": "#/$defs/documentRef"},
         "oracle": {"$ref": "#/$defs/nonEmptyString"}
       }
@@ -301,12 +319,12 @@
       "additionalProperties": false,
       "required": ["issueRef", "invariantRef", "carrier", "status", "policyEpochScope", "controlBoundary", "testEvidence", "deferredEvidence", "futureCarriers", "notActive"],
       "properties": {
-        "issueRef": {"enum": ["#15", "#16"]},
-        "invariantRef": {"enum": ["REVOCATION-006", "INDEX-NOT-AUTHORITY-005"]},
-        "carrier": {"enum": ["ContextRuntime.resolve(Acquire)", "ContextRuntime.resolve(Continue | OpenCitation | server-owned unavailable Acquire plan)"]},
+        "issueRef": {"enum": ["#15", "#16", "#17"]},
+        "invariantRef": {"enum": ["REVOCATION-006", "INDEX-NOT-AUTHORITY-005", "WORKER-LEASE-007"]},
+        "carrier": {"enum": ["ContextRuntime.resolve(Acquire)", "ContextRuntime.resolve(Continue | OpenCitation | server-owned unavailable Acquire plan)", "signed one-shot persistent no-op durable-job WorkerLease"]},
         "status": {"const": "active_fail_closed"},
-        "policyEpochScope": {"const": "organization-v0"},
-        "controlBoundary": {"enum": ["PostgreSQLAccessPolicyControl.change_access(ResourceAccessRevocation)", "RuntimeCapabilityGate.require_available(RuntimeCapability)"]},
+        "policyEpochScope": {"enum": ["organization-v0", "not-bound-issue-17"]},
+        "controlBoundary": {"enum": ["PostgreSQLAccessPolicyControl.change_access(ResourceAccessRevocation)", "RuntimeCapabilityGate.require_available(RuntimeCapability)", "complete_persistent_noop_job(PostgreSQLWorkerLeaseAuthority, WorkerLeaseRedemption)"]},
         "testEvidence": {
           "type": "array",
           "minItems": 2,

@@ -1,5 +1,5 @@
 {
-  "manifestVersion": "4.0.0",
+  "manifestVersion": "5.1.0",
   "controlOperations": [
     {
       "name": "change_resource_access",
@@ -11,6 +11,26 @@
         "resource_access_policy",
         "organization_policy_epoch"
       ]
+    },
+    {
+      "name": "issue_noop_worker_lease",
+      "databaseFunction": "context_worker_issue_noop_lease",
+      "role": "context_engine_control",
+      "definerRole": "context_engine_worker_lease_definer",
+      "directTableMutationAllowed": false,
+      "databaseOwnedTime": true,
+      "maxTtlSeconds": 3600,
+      "atomicWrites": ["worker_noop_job"]
+    },
+    {
+      "name": "complete_noop_worker_job",
+      "databaseFunction": "context_worker_complete_noop_job",
+      "role": "context_engine_worker",
+      "definerRole": "context_engine_worker_lease_definer",
+      "directTableMutationAllowed": false,
+      "databaseOwnedTime": true,
+      "rawNonceComparedAsSha256": true,
+      "atomicWrites": ["worker_noop_job"]
     }
   ],
   "tables": [
@@ -535,6 +555,220 @@
         "DB-009",
         "DB-010",
         "PG-REVOCATION-006"
+      ]
+    },
+    {
+      "name": "service_principal",
+      "classification": "tenant_owned",
+      "purpose": "Registered least-privilege ServiceActor binding for persistent no-op work",
+      "organizationColumn": "organization_id",
+      "organizationInclusiveKeys": [
+        {
+          "name": "pk_service_principal",
+          "kind": "primary_key",
+          "columns": ["organization_id", "service_principal_id"]
+        },
+        {
+          "name": "uq_service_principal_worker_binding",
+          "kind": "unique",
+          "columns": ["organization_id", "service_principal_id", "workload", "worker_audience", "operation"]
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_service_principal_organization",
+          "columns": ["organization_id"],
+          "references": {
+            "table": "organization",
+            "columns": ["organization_id"]
+          },
+          "onDelete": "CASCADE"
+        }
+      ],
+      "checkConstraints": [
+        {
+          "name": "ck_service_principal_workload_bounds",
+          "expression": "translate(workload, U&'\\0009\\000A\\000B\\000C\\000D\\001C\\001D\\001E\\001F\\0020\\0085\\00A0\\1680\\2000\\2001\\2002\\2003\\2004\\2005\\2006\\2007\\2008\\2009\\200A\\2028\\2029\\202F\\205F\\3000', '') <> '' AND char_length(workload) <= 128 AND octet_length(workload) <= 512"
+        },
+        {
+          "name": "ck_service_principal_worker_audience_bounds",
+          "expression": "translate(worker_audience, U&'\\0009\\000A\\000B\\000C\\000D\\001C\\001D\\001E\\001F\\0020\\0085\\00A0\\1680\\2000\\2001\\2002\\2003\\2004\\2005\\2006\\2007\\2008\\2009\\200A\\2028\\2029\\202F\\205F\\3000', '') <> '' AND char_length(worker_audience) <= 255 AND octet_length(worker_audience) <= 1020"
+        },
+        {
+          "name": "ck_service_principal_operation_noop_complete",
+          "expression": "operation = 'noop.complete'"
+        }
+      ],
+      "rowLevelSecurity": {
+        "enabled": true,
+        "forced": true,
+        "policies": [
+          {
+            "name": "service_principal_current_service_actor",
+            "command": "SELECT",
+            "roles": ["context_engine_worker"],
+            "using": "service_principal.organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid AND current_setting('app.actor_kind', true) = 'service' AND service_principal.service_principal_id = NULLIF(current_setting('app.service_principal_id', true), '')::uuid AND service_principal.workload = current_setting('app.workload', true) AND service_principal.worker_audience = current_setting('app.worker_audience', true) AND service_principal.operation = current_setting('app.operation', true) AND service_principal.operation = 'noop.complete' AND service_principal.enabled IS TRUE"
+          },
+          {
+            "name": "service_principal_worker_lease_definer_select",
+            "command": "SELECT",
+            "roles": ["context_engine_worker_lease_definer"],
+            "using": "service_principal.organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid AND current_setting('app.actor_kind', true) = 'service' AND service_principal.service_principal_id = NULLIF(current_setting('app.service_principal_id', true), '')::uuid AND service_principal.workload = current_setting('app.workload', true) AND service_principal.worker_audience = current_setting('app.worker_audience', true) AND service_principal.operation = current_setting('app.operation', true) AND service_principal.operation = 'noop.complete' AND service_principal.enabled IS TRUE"
+          },
+          {
+            "name": "service_principal_migrator_administration",
+            "command": "ALL",
+            "roles": ["context_engine_migrator"],
+            "using": "true",
+            "withCheck": "true"
+          }
+        ]
+      },
+      "permittedOperations": {
+        "context_engine_runtime": [],
+        "context_engine_worker": ["SELECT"],
+        "context_engine_worker_lease_definer": ["SELECT"]
+      },
+      "partitions": [],
+      "securityInvariantIds": [
+        "TENANT-OWNERSHIP-001",
+        "TENANT-FK-002",
+        "RLS-FAIL-CLOSED-003",
+        "WORKER-LEASE-007"
+      ],
+      "negativeTestIds": [
+        "DB-001",
+        "DB-004",
+        "DB-006",
+        "DB-008",
+        "DB-009",
+        "DB-011",
+        "JOB-001",
+        "JOB-005",
+        "WORKER-LEASE-007"
+      ]
+    },
+    {
+      "name": "worker_noop_job",
+      "classification": "tenant_owned",
+      "purpose": "Exact-job durable state and one-shot receipt for the bounded no-op WorkerLease",
+      "organizationColumn": "organization_id",
+      "organizationInclusiveKeys": [
+        {
+          "name": "pk_worker_noop_job",
+          "kind": "primary_key",
+          "columns": ["organization_id", "job_id"]
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_worker_noop_job_organization",
+          "columns": ["organization_id"],
+          "references": {
+            "table": "organization",
+            "columns": ["organization_id"]
+          },
+          "onDelete": "CASCADE"
+        },
+        {
+          "name": "fk_worker_noop_job_service_principal_binding",
+          "columns": ["organization_id", "service_principal_id", "workload", "worker_audience", "operation"],
+          "references": {
+            "table": "service_principal",
+            "columns": ["organization_id", "service_principal_id", "workload", "worker_audience", "operation"]
+          }
+        }
+      ],
+      "checkConstraints": [
+        {
+          "name": "ck_worker_noop_job_workload_bounds",
+          "expression": "translate(workload, U&'\\0009\\000A\\000B\\000C\\000D\\001C\\001D\\001E\\001F\\0020\\0085\\00A0\\1680\\2000\\2001\\2002\\2003\\2004\\2005\\2006\\2007\\2008\\2009\\200A\\2028\\2029\\202F\\205F\\3000', '') <> '' AND char_length(workload) <= 128 AND octet_length(workload) <= 512"
+        },
+        {
+          "name": "ck_worker_noop_job_worker_audience_bounds",
+          "expression": "translate(worker_audience, U&'\\0009\\000A\\000B\\000C\\000D\\001C\\001D\\001E\\001F\\0020\\0085\\00A0\\1680\\2000\\2001\\2002\\2003\\2004\\2005\\2006\\2007\\2008\\2009\\200A\\2028\\2029\\202F\\205F\\3000', '') <> '' AND char_length(worker_audience) <= 255 AND octet_length(worker_audience) <= 1020"
+        },
+        {
+          "name": "ck_worker_noop_job_actor_kind_service",
+          "expression": "actor_kind = 'service'"
+        },
+        {
+          "name": "ck_worker_noop_job_operation_noop_complete",
+          "expression": "operation = 'noop.complete'"
+        },
+        {
+          "name": "ck_worker_noop_job_state",
+          "expression": "state IN ('available', 'leased', 'completed')"
+        },
+        {
+          "name": "ck_worker_noop_job_signing_key_version_positive",
+          "expression": "signing_key_version IS NULL OR signing_key_version > 0"
+        },
+        {
+          "name": "ck_worker_noop_job_nonce_sha256_length",
+          "expression": "lease_nonce_digest IS NULL OR octet_length(lease_nonce_digest) = 32"
+        },
+        {
+          "name": "ck_worker_noop_job_state_consistency",
+          "expression": "(state = 'available' AND signing_key_version IS NULL AND lease_nonce_digest IS NULL AND lease_issued_at IS NULL AND lease_expires_at IS NULL AND lease_redeemed_at IS NULL AND completed_at IS NULL AND effect_count = 0) OR (state = 'leased' AND signing_key_version IS NOT NULL AND lease_nonce_digest IS NOT NULL AND lease_issued_at IS NOT NULL AND lease_expires_at > lease_issued_at AND lease_redeemed_at IS NULL AND completed_at IS NULL AND effect_count = 0) OR (state = 'completed' AND signing_key_version IS NOT NULL AND lease_nonce_digest IS NOT NULL AND lease_issued_at IS NOT NULL AND lease_expires_at > lease_issued_at AND lease_redeemed_at IS NOT NULL AND completed_at IS NOT NULL AND lease_redeemed_at >= lease_issued_at AND completed_at >= lease_redeemed_at AND effect_count = 1)"
+        }
+      ],
+      "rowLevelSecurity": {
+        "enabled": true,
+        "forced": true,
+        "policies": [
+          {
+            "name": "worker_noop_job_current_service_actor_select",
+            "command": "SELECT",
+            "roles": ["context_engine_worker"],
+            "using": "worker_noop_job.organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid AND current_setting('app.actor_kind', true) = 'service' AND worker_noop_job.service_principal_id = NULLIF(current_setting('app.service_principal_id', true), '')::uuid AND worker_noop_job.workload = current_setting('app.workload', true) AND worker_noop_job.worker_audience = current_setting('app.worker_audience', true) AND worker_noop_job.operation = current_setting('app.operation', true) AND worker_noop_job.operation = 'noop.complete' AND worker_noop_job.job_id = NULLIF(current_setting('app.worker_job_id', true), '')::uuid AND EXISTS (SELECT 1 FROM public.service_principal AS active_service_principal WHERE active_service_principal.organization_id = worker_noop_job.organization_id AND active_service_principal.service_principal_id = worker_noop_job.service_principal_id AND active_service_principal.workload = worker_noop_job.workload AND active_service_principal.worker_audience = worker_noop_job.worker_audience AND active_service_principal.operation = worker_noop_job.operation AND active_service_principal.enabled IS TRUE)"
+          },
+          {
+            "name": "worker_noop_job_worker_lease_definer_select",
+            "command": "SELECT",
+            "roles": ["context_engine_worker_lease_definer"],
+            "using": "worker_noop_job.organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid AND current_setting('app.actor_kind', true) = 'service' AND worker_noop_job.service_principal_id = NULLIF(current_setting('app.service_principal_id', true), '')::uuid AND worker_noop_job.workload = current_setting('app.workload', true) AND worker_noop_job.worker_audience = current_setting('app.worker_audience', true) AND worker_noop_job.operation = current_setting('app.operation', true) AND worker_noop_job.operation = 'noop.complete' AND worker_noop_job.job_id = NULLIF(current_setting('app.worker_job_id', true), '')::uuid AND EXISTS (SELECT 1 FROM public.service_principal AS active_service_principal WHERE active_service_principal.organization_id = worker_noop_job.organization_id AND active_service_principal.service_principal_id = worker_noop_job.service_principal_id AND active_service_principal.workload = worker_noop_job.workload AND active_service_principal.worker_audience = worker_noop_job.worker_audience AND active_service_principal.operation = worker_noop_job.operation AND active_service_principal.enabled IS TRUE)"
+          },
+          {
+            "name": "worker_noop_job_worker_lease_definer_update",
+            "command": "UPDATE",
+            "roles": ["context_engine_worker_lease_definer"],
+            "using": "worker_noop_job.organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid AND current_setting('app.actor_kind', true) = 'service' AND worker_noop_job.service_principal_id = NULLIF(current_setting('app.service_principal_id', true), '')::uuid AND worker_noop_job.workload = current_setting('app.workload', true) AND worker_noop_job.worker_audience = current_setting('app.worker_audience', true) AND worker_noop_job.operation = current_setting('app.operation', true) AND worker_noop_job.operation = 'noop.complete' AND worker_noop_job.job_id = NULLIF(current_setting('app.worker_job_id', true), '')::uuid AND EXISTS (SELECT 1 FROM public.service_principal AS active_service_principal WHERE active_service_principal.organization_id = worker_noop_job.organization_id AND active_service_principal.service_principal_id = worker_noop_job.service_principal_id AND active_service_principal.workload = worker_noop_job.workload AND active_service_principal.worker_audience = worker_noop_job.worker_audience AND active_service_principal.operation = worker_noop_job.operation AND active_service_principal.enabled IS TRUE)",
+            "withCheck": "worker_noop_job.organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid AND current_setting('app.actor_kind', true) = 'service' AND worker_noop_job.service_principal_id = NULLIF(current_setting('app.service_principal_id', true), '')::uuid AND worker_noop_job.workload = current_setting('app.workload', true) AND worker_noop_job.worker_audience = current_setting('app.worker_audience', true) AND worker_noop_job.operation = current_setting('app.operation', true) AND worker_noop_job.operation = 'noop.complete' AND worker_noop_job.job_id = NULLIF(current_setting('app.worker_job_id', true), '')::uuid AND EXISTS (SELECT 1 FROM public.service_principal AS active_service_principal WHERE active_service_principal.organization_id = worker_noop_job.organization_id AND active_service_principal.service_principal_id = worker_noop_job.service_principal_id AND active_service_principal.workload = worker_noop_job.workload AND active_service_principal.worker_audience = worker_noop_job.worker_audience AND active_service_principal.operation = worker_noop_job.operation AND active_service_principal.enabled IS TRUE)"
+          },
+          {
+            "name": "worker_noop_job_migrator_administration",
+            "command": "ALL",
+            "roles": ["context_engine_migrator"],
+            "using": "true",
+            "withCheck": "true"
+          }
+        ]
+      },
+      "permittedOperations": {
+        "context_engine_control": ["EXECUTE issue_noop_worker_lease"],
+        "context_engine_runtime": [],
+        "context_engine_worker": ["SELECT", "EXECUTE complete_noop_worker_job"],
+        "context_engine_worker_lease_definer": ["SELECT", "UPDATE"]
+      },
+      "partitions": [],
+      "securityInvariantIds": [
+        "TENANT-OWNERSHIP-001",
+        "TENANT-FK-002",
+        "RLS-FAIL-CLOSED-003",
+        "WORKER-LEASE-007"
+      ],
+      "negativeTestIds": [
+        "DB-001",
+        "DB-003",
+        "DB-004",
+        "DB-006",
+        "DB-008",
+        "DB-009",
+        "DB-011",
+        "JOB-001",
+        "JOB-005",
+        "WORKER-LEASE-007"
       ]
     },
     {

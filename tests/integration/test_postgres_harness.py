@@ -8,6 +8,7 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import Engine, text
+from sqlalchemy.exc import ProgrammingError
 
 from engine.persistence import (
     DatabaseConfiguration,
@@ -19,6 +20,7 @@ from engine.persistence.configuration import (
     CONTROL_ROLE,
     MIGRATOR_ROLE,
     RUNTIME_ROLE,
+    WORKER_LEASE_DEFINER_ROLE,
     WORKER_ROLE,
 )
 from scripts.provision_database_roles import (
@@ -53,19 +55,28 @@ def role_attributes(engine: Engine) -> tuple[object, ...]:
         )
 
 
-def test_server_is_postgresql_17_with_pgvector_0_8_5(
+def test_server_has_pinned_postgresql_pgvector_and_bootstrap_pgcrypto(
     guarded_runtime_engine: Engine,
 ) -> None:
     with guarded_runtime_engine.connect() as connection:
         version_number = connection.execute(
             text("SELECT current_setting('server_version_num')::integer")
         ).scalar_one()
-        extension_version = connection.execute(
-            text("SELECT extversion FROM pg_extension WHERE extname = 'vector'")
-        ).scalar_one()
+        extensions = {
+            str(row.extname): str(row.extversion)
+            for row in connection.execute(
+                text(
+                    """
+                    SELECT extension.extname, extension.extversion
+                    FROM pg_extension AS extension
+                    WHERE extension.extname IN ('vector', 'pgcrypto')
+                    """
+                )
+            )
+        }
 
     assert version_number // 10_000 == 17
-    assert extension_version == "0.8.5"
+    assert extensions == {"pgcrypto": "1.3", "vector": "0.8.5"}
 
 
 def test_migration_control_runtime_and_worker_roles_have_reviewed_capabilities(
@@ -119,6 +130,7 @@ def test_post_init_role_provisioning_repairs_a_legacy_volume_idempotently(
         control_role=CONTROL_ROLE,
         control_password=os.environ["CONTEXT_ENGINE_CONTROL_PASSWORD"],
         definer_role=ACCESS_POLICY_DEFINER_ROLE,
+        worker_lease_definer_role=WORKER_LEASE_DEFINER_ROLE,
     )
     alembic_configuration = Config(ROOT / "alembic.ini")
     try:
@@ -133,7 +145,11 @@ def test_post_init_role_provisioning_repairs_a_legacy_volume_idempotently(
             bootstrap_connection.execute(
                 f"REVOKE {ACCESS_POLICY_DEFINER_ROLE} FROM {MIGRATOR_ROLE}"
             )
-            for role_name in (ACCESS_POLICY_DEFINER_ROLE, CONTROL_ROLE):
+            for role_name in (
+                ACCESS_POLICY_DEFINER_ROLE,
+                WORKER_LEASE_DEFINER_ROLE,
+                CONTROL_ROLE,
+            ):
                 bootstrap_connection.execute(f"DROP OWNED BY {role_name}")
                 bootstrap_connection.execute(f"DROP ROLE {role_name}")
             bootstrap_connection.commit()
@@ -141,9 +157,13 @@ def test_post_init_role_provisioning_repairs_a_legacy_volume_idempotently(
                 """
                 SELECT count(*)
                 FROM pg_roles
-                WHERE rolname IN (%s, %s)
+                WHERE rolname IN (%s, %s, %s)
                 """,
-                (CONTROL_ROLE, ACCESS_POLICY_DEFINER_ROLE),
+                (
+                    CONTROL_ROLE,
+                    ACCESS_POLICY_DEFINER_ROLE,
+                    WORKER_LEASE_DEFINER_ROLE,
+                ),
             ).fetchone()
             assert missing_roles == (0,)
 
@@ -160,25 +180,47 @@ def test_post_init_role_provisioning_repairs_a_legacy_volume_idempotently(
                     definer.rolcanlogin,
                     definer.rolsuper,
                     definer.rolinherit,
-                    membership.admin_option,
-                    membership.inherit_option,
-                    membership.set_option
+                    access_membership.admin_option,
+                    access_membership.inherit_option,
+                    access_membership.set_option,
+                    worker_definer.rolcanlogin,
+                    worker_definer.rolsuper,
+                    worker_definer.rolinherit,
+                    worker_membership.admin_option,
+                    worker_membership.inherit_option,
+                    worker_membership.set_option
                 FROM pg_roles AS control
                 CROSS JOIN pg_roles AS definer
-                JOIN pg_auth_members AS membership
-                  ON membership.roleid = definer.oid
+                CROSS JOIN pg_roles AS worker_definer
+                JOIN pg_auth_members AS access_membership
+                  ON access_membership.roleid = definer.oid
                 JOIN pg_roles AS migrator
-                  ON migrator.oid = membership.member
+                  ON migrator.oid = access_membership.member
+                JOIN pg_auth_members AS worker_membership
+                  ON worker_membership.roleid = worker_definer.oid
+                 AND worker_membership.member = migrator.oid
                 WHERE control.rolname = %s
                   AND definer.rolname = %s
+                  AND worker_definer.rolname = %s
                   AND migrator.rolname = %s
                 """,
-                (CONTROL_ROLE, ACCESS_POLICY_DEFINER_ROLE, MIGRATOR_ROLE),
+                (
+                    CONTROL_ROLE,
+                    ACCESS_POLICY_DEFINER_ROLE,
+                    WORKER_LEASE_DEFINER_ROLE,
+                    MIGRATOR_ROLE,
+                ),
             ).fetchone()
             assert facts == (
                 True,
                 False,
                 False,
+                False,
+                False,
+                False,
+                False,
+                False,
+                True,
                 False,
                 False,
                 False,
@@ -203,6 +245,191 @@ def test_post_init_role_provisioning_repairs_a_legacy_volume_idempotently(
         ) as bootstrap_connection:
             provision_security_roles(bootstrap_connection, contract)
         command.upgrade(alembic_configuration, "head")
+
+
+def test_worker_lease_definer_and_functions_are_narrow_and_non_public(
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    engine = create_database_engine(migration_configuration)
+    try:
+        with engine.connect() as connection:
+            role_facts = tuple(
+                connection.execute(
+                    text(
+                        """
+                        SELECT
+                            role.rolcanlogin,
+                            role.rolsuper,
+                            role.rolcreaterole,
+                            role.rolcreatedb,
+                            role.rolinherit,
+                            role.rolreplication,
+                            role.rolbypassrls
+                        FROM pg_roles AS role
+                        WHERE role.rolname = :definer
+                        """
+                    ),
+                    {"definer": WORKER_LEASE_DEFINER_ROLE},
+                ).one()
+            )
+            function_facts = connection.execute(
+                text(
+                    """
+                    SELECT
+                        procedure.proname,
+                        procedure.prosecdef,
+                        owner.rolname,
+                        procedure.proconfig,
+                        NOT EXISTS (
+                            SELECT 1
+                            FROM aclexplode(procedure.proacl) AS privilege
+                            WHERE privilege.grantee = 0
+                              AND privilege.privilege_type = 'EXECUTE'
+                        ) AS no_public_execute
+                    FROM pg_proc AS procedure
+                    JOIN pg_namespace AS namespace
+                      ON namespace.oid = procedure.pronamespace
+                    JOIN pg_roles AS owner
+                      ON owner.oid = procedure.proowner
+                    WHERE namespace.nspname = 'public'
+                      AND procedure.proname IN (
+                          'context_worker_issue_noop_lease',
+                          'context_worker_complete_noop_job'
+                      )
+                    ORDER BY procedure.proname
+                    """
+                )
+            ).all()
+            privileges = tuple(
+                connection.execute(
+                    text(
+                        """
+                        SELECT
+                            has_table_privilege(
+                                :worker, 'public.worker_noop_job', 'UPDATE'
+                            ),
+                            has_table_privilege(
+                                :worker, 'public.worker_noop_job', 'SELECT'
+                            ),
+                            has_table_privilege(
+                                :control, 'public.worker_noop_job', 'SELECT'
+                            ),
+                            has_table_privilege(
+                                :control, 'public.worker_noop_job', 'UPDATE'
+                            ),
+                            has_table_privilege(
+                                :definer, 'public.worker_noop_job', 'SELECT'
+                            ),
+                            has_any_column_privilege(
+                                :definer, 'public.worker_noop_job', 'UPDATE'
+                            ),
+                            has_function_privilege(
+                                :control,
+                                'public.context_worker_issue_noop_lease('
+                                'uuid,uuid,uuid,text,text,bigint,bytea,integer)',
+                                'EXECUTE'
+                            ),
+                            has_function_privilege(
+                                :worker,
+                                'public.context_worker_issue_noop_lease('
+                                'uuid,uuid,uuid,text,text,bigint,bytea,integer)',
+                                'EXECUTE'
+                            ),
+                            has_function_privilege(
+                                :worker,
+                                'public.context_worker_complete_noop_job('
+                                'uuid,uuid,uuid,text,text,text,bigint,bytea,'
+                                'timestamptz,timestamptz)',
+                                'EXECUTE'
+                            ),
+                            has_function_privilege(
+                                :control,
+                                'public.context_worker_complete_noop_job('
+                                'uuid,uuid,uuid,text,text,text,bigint,bytea,'
+                                'timestamptz,timestamptz)',
+                                'EXECUTE'
+                            )
+                        """
+                    ),
+                    {
+                        "control": CONTROL_ROLE,
+                        "definer": WORKER_LEASE_DEFINER_ROLE,
+                        "worker": WORKER_ROLE,
+                    },
+                ).one()
+            )
+    finally:
+        engine.dispose()
+
+    assert role_facts == (False, False, False, False, False, False, False)
+    assert len(function_facts) == 2
+    for _name, security_definer, owner, configuration, no_public in function_facts:
+        assert security_definer is True
+        assert owner == WORKER_LEASE_DEFINER_ROLE
+        assert set(configuration) == {
+            "row_security=on",
+            "search_path=pg_catalog, pg_temp",
+        }
+        assert no_public is True
+    assert privileges == (
+        False,
+        True,
+        False,
+        False,
+        True,
+        True,
+        True,
+        False,
+        True,
+        False,
+    )
+
+
+def test_worker_and_control_cannot_cross_worker_lease_function_authority(
+    control_configuration: DatabaseConfiguration,
+    worker_configuration: DatabaseConfiguration,
+) -> None:
+    control_engine = create_database_engine(control_configuration)
+    worker_engine = create_database_engine(worker_configuration)
+    issue_sql = text(
+        """
+        SELECT * FROM public.context_worker_issue_noop_lease(
+            gen_random_uuid(), gen_random_uuid(), gen_random_uuid(),
+            'supply.noop', 'context-engine-worker', 1, gen_random_bytes(32), 60
+        )
+        """
+    )
+    complete_sql = text(
+        """
+        SELECT * FROM public.context_worker_complete_noop_job(
+            gen_random_uuid(), gen_random_uuid(), gen_random_uuid(),
+            'supply.noop', 'context-engine-worker', 'noop.complete', 1,
+            gen_random_bytes(32), transaction_timestamp(),
+            transaction_timestamp() + interval '60 seconds'
+        )
+        """
+    )
+    try:
+        with (
+            worker_engine.connect() as connection,
+            pytest.raises(ProgrammingError, match="permission denied for function"),
+        ):
+            connection.execute(issue_sql).all()
+        with (
+            control_engine.connect() as connection,
+            pytest.raises(ProgrammingError, match="permission denied for function"),
+        ):
+            connection.execute(complete_sql).all()
+        with (
+            worker_engine.connect() as connection,
+            pytest.raises(ProgrammingError, match="permission denied for table"),
+        ):
+            connection.execute(
+                text("UPDATE public.worker_noop_job SET state = state")
+            )
+    finally:
+        control_engine.dispose()
+        worker_engine.dispose()
 
 
 def test_control_runtime_and_worker_are_not_owners_or_migrator_members(
