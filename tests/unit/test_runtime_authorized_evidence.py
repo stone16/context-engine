@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import fields
 from datetime import UTC, datetime
 from itertools import permutations
 from typing import cast
@@ -15,9 +16,19 @@ from engine.runtime.actor import (
     _open_membership_authority_scope,
 )
 from engine.runtime.budget import PackageBudgetRequest
-from engine.runtime.construction import Runtime, required_kernel_dependencies
+from engine.runtime.construction import (
+    DecisionAuditGate,
+    DecisionProvenanceReceipt,
+    Runtime,
+    required_kernel_dependencies,
+)
 from engine.runtime.content_io import CandidateIndex
-from engine.runtime.contracts import Acquire, ContextNeed, RequestNarrowing
+from engine.runtime.contracts import (
+    Acquire,
+    ContextNeed,
+    ContextPackage,
+    RequestNarrowing,
+)
 from engine.runtime.delivery import (
     TrustedDeliveryContext,
     _construct_direct_delivery_context,
@@ -78,6 +89,13 @@ CROSS_ORGANIZATION = CandidateRef(
     revision_ref="33333333-3333-4333-8333-333333333333",
     fragment_ref="fragment:cross-organization",
 )
+MISSING = CandidateRef(
+    organization_id=ORGANIZATION_ID,
+    source_ref="source:synthetic",
+    resource_ref="resource:missing",
+    revision_ref="55555555-5555-4555-8555-555555555555",
+    fragment_ref="fragment:missing",
+)
 
 
 def locator(candidate: CandidateRef) -> MaterializedFragmentLocator:
@@ -117,6 +135,8 @@ class RecordingMaterializedPort:
         candidate_ref: CandidateRef,
     ) -> MaterializedFragmentLocator | None:
         self.locator_calls.append(candidate_ref)
+        if candidate_ref == MISSING:
+            return None
         return locator(candidate_ref)
 
     def project_body(
@@ -137,6 +157,24 @@ class MismatchedLocatorPort(RecordingMaterializedPort):
     ) -> MaterializedFragmentLocator | None:
         self.locator_calls.append(candidate_ref)
         return locator(AUTHORIZED)
+
+
+class MissingLocatorPort(RecordingMaterializedPort):
+    def locate(
+        self,
+        candidate_ref: CandidateRef,
+    ) -> None:
+        self.locator_calls.append(candidate_ref)
+        return None
+
+
+class MissingBodyPort(RecordingMaterializedPort):
+    def project_body(
+        self,
+        selected_locator: MaterializedFragmentLocator,
+    ) -> None:
+        self.body_calls.append(selected_locator)
+        return None
 
 
 def exact_operands() -> TrustedScopeOperands:
@@ -353,6 +391,174 @@ def test_runtime_rejects_authority_locator_that_does_not_match_candidate_exactly
     assert outcome.package.blocks == ()
     assert outcome.package.coverage.status == "empty"
     assert port.body_calls == []
+
+
+def test_missing_materialized_body_uses_the_same_tenant_safe_empty_outcome() -> None:
+    index = HostileCandidateIndex((AUTHORIZED,))
+    port = MissingBodyPort()
+    runtime = Runtime(
+        required_kernel_dependencies(),
+        candidate_index=cast(CandidateIndex, index),
+        clock=lambda: AS_OF,
+    )
+
+    with trusted_operands(port) as (invocation, delivery):
+        outcome = runtime.resolve(
+            invocation,
+            delivery,
+            Acquire(need=ContextNeed(query="missing projected body")),
+        )
+
+    assert port.locator_calls == [AUTHORIZED]
+    assert port.body_calls == [locator(AUTHORIZED)]
+    assert outcome.package.blocks == ()
+    assert outcome.package.evidence == ()
+    assert outcome.package.gaps == ()
+    assert outcome.package.coverage.status == "empty"
+    assert outcome.package.coverage.reason == "no_authorized_evidence"
+
+
+def _canonical_empty_package(package: ContextPackage) -> tuple[object, ...]:
+    return (
+        package.purpose,
+        package.ttl_seconds,
+        package.as_of,
+        package.expires_at,
+        package.blocks,
+        package.evidence,
+        package.gaps,
+        package.budget_usage,
+        package.coverage,
+    )
+
+
+def test_runtime_canonical_empty_package_is_equal_for_every_internal_branch() -> None:
+    scenarios: tuple[
+        tuple[tuple[CandidateRef, ...], RecordingMaterializedPort], ...
+    ] = (
+        ((DENIED,), RecordingMaterializedPort()),
+        ((DENIED, MISSING), RecordingMaterializedPort()),
+        ((AUTHORIZED,), MissingLocatorPort()),
+        ((CROSS_ORGANIZATION,), RecordingMaterializedPort()),
+        ((AUTHORIZED,), MissingBodyPort()),
+    )
+    packages = []
+    for ranked, port in scenarios:
+        runtime = Runtime(
+            required_kernel_dependencies(),
+            candidate_index=cast(CandidateIndex, HostileCandidateIndex(ranked)),
+            clock=lambda: AS_OF,
+        )
+        with trusted_operands(port) as (invocation, delivery):
+            outcome = runtime.resolve(
+                invocation,
+                delivery,
+                Acquire(need=ContextNeed(query="canonical empty outcome")),
+            )
+        packages.append(_canonical_empty_package(outcome.package))
+
+    assert packages == [packages[0]] * len(packages)
+
+
+@pytest.mark.parametrize(
+    "ranked",
+    (
+        (DENIED,),
+        (DENIED, MISSING),
+        (MISSING,),
+        (CROSS_ORGANIZATION,),
+    ),
+)
+def test_denied_cross_organization_and_missing_candidates_share_one_runtime_outcome(
+    ranked: tuple[CandidateRef, ...],
+) -> None:
+    index = HostileCandidateIndex(ranked)
+    port = RecordingMaterializedPort()
+    runtime = Runtime(
+        required_kernel_dependencies(),
+        candidate_index=cast(CandidateIndex, index),
+        clock=lambda: AS_OF,
+    )
+
+    with trusted_operands(port) as (invocation, delivery):
+        outcome = runtime.resolve(
+            invocation,
+            delivery,
+            Acquire(need=ContextNeed(query="non-enumerating probe")),
+        )
+
+    package = outcome.package
+    assert index.calls == 1
+    assert port.locator_calls == sorted(set(ranked), key=lambda candidate: (
+        str(candidate.organization_id),
+        candidate.source_ref,
+        candidate.resource_ref,
+        candidate.revision_ref,
+        candidate.fragment_ref,
+    ))
+    assert port.body_calls == []
+    assert package.blocks == ()
+    assert package.evidence == ()
+    assert package.gaps == ()
+    assert package.coverage.status == "empty"
+    assert package.coverage.reason == "no_authorized_evidence"
+    assert package.budget_usage.tokens == 0
+    assert package.budget_usage.provider_calls == 0
+    assert package.budget_usage.cost_microunits == 0
+    assert package.budget_usage.elapsed_ms == 0
+
+    rendered = repr(outcome)
+    for candidate in ranked:
+        for forbidden in (
+            candidate.source_ref,
+            candidate.resource_ref,
+            candidate.revision_ref,
+            candidate.fragment_ref,
+        ):
+            assert forbidden not in rendered
+    for forbidden_field in (
+        "denied_count",
+        "candidate_count",
+        "denial_reason",
+        "existence_detail",
+    ):
+        assert forbidden_field not in rendered.casefold()
+
+
+def test_empty_decision_audit_is_generic_and_retains_no_denied_detail() -> None:
+    receipt = DecisionAuditGate().record(
+        DecisionProvenanceReceipt(
+            decision_ref="dec_" + "a" * 32,
+            package_organization_ref="orgpkg_" + "b" * 32,
+            request_id="request-non-enumeration-audit",
+            purpose="context.answer",
+            as_of=AS_OF,
+            run_ref="run-non-enumeration-audit",
+            policy_snapshot_ref="policy-non-enumeration-audit",
+            policy_epoch=1,
+            source_acl_decision_ref="sourceacl-non-enumeration-audit",
+        ),
+        authorized_evidence_count=0,
+    )
+
+    assert receipt.reason == "no_authorized_evidence"
+    assert receipt.authorized_evidence_count == 0
+    assert receipt.denied_detail_count == 0
+    assert tuple(field.name for field in fields(receipt)) == (
+        "decision_ref",
+        "reason",
+        "authorized_evidence_count",
+        "denied_detail_count",
+    )
+    rendered = repr(receipt).casefold()
+    for forbidden in (
+        "resource_ref",
+        "fragment_ref",
+        "candidate_ref",
+        "denial_reason",
+        "denied_count",
+    ):
+        assert forbidden not in rendered
 
 
 def test_empty_effective_scope_performs_zero_candidate_or_body_io() -> None:

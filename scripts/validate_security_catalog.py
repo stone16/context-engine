@@ -1230,10 +1230,20 @@ def _validate_fixture(
                 if operation is not None
                 else None
             )
-            if comparison_fields is not None and "timingBucket" in comparison_fields:
+            canonical_comparison_fields = (
+                "status",
+                "body",
+                "headers",
+                "domainOutcome",
+            )
+            if (
+                comparison_fields is not None
+                and tuple(comparison_fields) != canonical_comparison_fields
+            ):
                 collector.add(
                     f"{path}.operation.comparisonFields",
-                    "must not claim timing equality before the preregistered M5 gate",
+                    "must be the canonical ordered comparison set "
+                    f"{list(canonical_comparison_fields)!r}",
                 )
             normalization_allowlist = (
                 collector.require_string_list(
@@ -1248,7 +1258,6 @@ def _validate_fixture(
                 "body.package.decisionRef",
                 "body.package.asOf",
                 "body.package.expiresAt",
-                "body.package.budgetUsage.elapsedMs",
                 "headers.X-Context-Request-Id",
             )
             if (
@@ -1279,6 +1288,131 @@ def _validate_fixture(
                     "must be the canonical ordered probe set "
                     f"{list(canonical_probes)!r}",
                 )
+            canonical_order = (
+                "cross_organization_denied",
+                "same_organization_denied",
+                "missing",
+            )
+            order = (
+                collector.require_string_list(
+                    adversarial_mutation.get("order"),
+                    f"{path}.adversarialMutation.order",
+                )
+                if adversarial_mutation is not None
+                else None
+            )
+            if order is not None and tuple(order) != canonical_order:
+                collector.add(
+                    f"{path}.adversarialMutation.order",
+                    "must be the canonical ordered outcome set "
+                    f"{list(canonical_order)!r}",
+                )
+            if (
+                external_response is not None
+                and external_response.get("normalizedByteIdenticalAcrossProbes")
+                is not True
+            ):
+                collector.add(
+                    f"{path}.expected.externalResponse."
+                    "normalizedByteIdenticalAcrossProbes",
+                    "must be true for the deterministic non-enumeration gate",
+                )
+            canonical_headers = {
+                "Content-Type": "application/json",
+                "Cache-Control": "no-store",
+                "X-Context-Request-Id": "normalized-request-id",
+            }
+            if (
+                external_response is not None
+                and external_response.get("headers") != canonical_headers
+            ):
+                collector.add(
+                    f"{path}.expected.externalResponse.headers",
+                    "must preserve the canonical non-enumerating response headers",
+                )
+            canonical_empty_package = {
+                "organizationRef": (
+                    "orgpkg_0000000000000000000000000000000a"
+                ),
+                "purpose": "context.answer",
+                "ttlSeconds": 30,
+                "asOf": "2026-07-21T09:30:00Z",
+                "expiresAt": "2026-07-21T09:30:30Z",
+                "decisionRef": "dec_0000000000000000000000000000000a",
+                "blocks": [],
+                "evidence": [],
+                "gaps": [],
+                "budgetUsage": {
+                    "tokens": 0,
+                    "providerCalls": 0,
+                    "costMicrounits": 0,
+                    "elapsedMs": 0,
+                },
+                "coverage": {
+                    "status": "empty",
+                    "reason": "no_authorized_evidence",
+                },
+            }
+            observed_package = (
+                response_body.get("package")
+                if response_body is not None
+                else None
+            )
+            if observed_package != canonical_empty_package:
+                collector.add(
+                    f"{path}.expected.externalResponse.body.package",
+                    "must preserve the canonical non-enumerating empty Package",
+                )
+            canonical_package_summary = {
+                "kind": "ContextPackage",
+                "packageCount": 4,
+                "coverageStatus": "empty",
+                "coverageReason": "no_authorized_evidence",
+                "deniedCountExposed": False,
+                "existenceDetailCount": 0,
+            }
+            if (
+                package_or_error is not None
+                and package_or_error != canonical_package_summary
+            ):
+                collector.add(
+                    f"{path}.expected.packageOrError",
+                    "must preserve the canonical non-enumerating Package summary",
+                )
+            canonical_io = {
+                "providerCalls": 0,
+                "indexCalls": 1,
+                "modelCalls": 0,
+                "actionCalls": 0,
+            }
+            if io_counts != canonical_io:
+                collector.add(
+                    f"{path}.expected.io",
+                    "must preserve one CandidateIndex call per probe and zero "
+                    "provider, model, or action calls",
+                )
+            if expected is not None:
+                canonical_evidence_metrics = {
+                    "unauthorizedEvidenceCount": 0,
+                    "unauthorizedContentBytes": 0,
+                    "missingContextFallbackCount": 0,
+                    "outboundBytes": 0,
+                }
+                if expected.get("evidence") != canonical_evidence_metrics:
+                    collector.add(
+                        f"{path}.expected.evidence",
+                        "must preserve all zero non-enumeration Evidence metrics",
+                    )
+                canonical_effects = {
+                    "wrongOrganizationEffectCount": 0,
+                    "mutationEffectCount": 0,
+                    "totalEffectsAfterScenario": 0,
+                }
+                if expected.get("businessEffects") != canonical_effects:
+                    collector.add(
+                        f"{path}.expected.businessEffects",
+                        "must preserve all zero non-enumeration effects",
+                    )
 
     invariant_refs = collector.require_string_list(
         fixture.get("invariantRefs"), f"{path}.invariantRefs"
