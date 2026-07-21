@@ -338,14 +338,14 @@ def test_worker_lease_definer_and_functions_are_narrow_and_non_public(
                             has_function_privilege(
                                 :worker,
                                 'public.context_worker_complete_noop_job('
-                                'uuid,uuid,uuid,text,text,text,bigint,bytea,'
+                                'uuid,uuid,bigint,bytea,'
                                 'timestamptz,timestamptz)',
                                 'EXECUTE'
                             ),
                             has_function_privilege(
                                 :control,
                                 'public.context_worker_complete_noop_job('
-                                'uuid,uuid,uuid,text,text,text,bigint,bytea,'
+                                'uuid,uuid,bigint,bytea,'
                                 'timestamptz,timestamptz)',
                                 'EXECUTE'
                             )
@@ -373,7 +373,7 @@ def test_worker_lease_definer_and_functions_are_narrow_and_non_public(
         assert no_public is True
     assert privileges == (
         False,
-        True,
+        False,
         False,
         False,
         True,
@@ -402,8 +402,7 @@ def test_worker_and_control_cannot_cross_worker_lease_function_authority(
     complete_sql = text(
         """
         SELECT * FROM public.context_worker_complete_noop_job(
-            gen_random_uuid(), gen_random_uuid(), gen_random_uuid(),
-            'supply.noop', 'context-engine-worker', 'noop.complete', 1,
+            gen_random_uuid(), gen_random_uuid(), 1,
             gen_random_bytes(32), transaction_timestamp(),
             transaction_timestamp() + interval '60 seconds'
         )

@@ -9,9 +9,9 @@ from uuid import UUID
 
 import pytest
 
+import engine.supply as supply
 from engine.supply import (
     WORKER_LEASE_OPERATION,
-    ServiceActor,
     WorkerLeaseClaims,
     WorkerLeaseCodec,
     WorkerLeaseKeyring,
@@ -21,12 +21,6 @@ from engine.supply import (
     generate_worker_lease_nonce,
     worker_lease_digest,
     worker_lease_nonce_digest,
-)
-from engine.supply.jobs import (
-    _close_service_actor_authority_scope,
-    _construct_service_actor,
-    _open_service_actor_authority_scope,
-    _require_active_service_actor,
 )
 
 ORGANIZATION_ID = UUID("0198ce9a-6cd1-7dc2-bff8-5aec4a3c48b1")
@@ -325,6 +319,24 @@ def test_header_and_payload_signing_key_versions_must_match() -> None:
         _codec().verify(signed, **_verification_arguments())  # type: ignore[arg-type]
 
 
+@pytest.mark.parametrize(
+    ("document_kind", "field_name"),
+    [("header", "v"), ("header", "kid"), ("payload", "signing_key_version")],
+)
+def test_json_boolean_is_never_accepted_as_an_integer_version(
+    document_kind: str,
+    field_name: str,
+) -> None:
+    token = _codec().mint(_claims())
+    header, payload = _decoded_token(token)
+    document = header if document_kind == "header" else payload
+    document[field_name] = True
+    signed = _signed_token(_canonical(header), _canonical(payload))
+
+    with pytest.raises(WorkNotAvailable, match="^work not available$"):
+        _codec().verify(signed, **_verification_arguments())  # type: ignore[arg-type]
+
+
 def test_extra_or_missing_header_and_claim_fields_are_rejected() -> None:
     token = _codec().mint(_claims())
     header, payload = _decoded_token(token)
@@ -455,49 +467,6 @@ def test_nonce_generation_and_digests_are_fixed_and_nonrevealing() -> None:
     assert first.hex() not in worker_lease_nonce_digest(first)
 
 
-def test_service_actor_is_nominal_immutable_and_bound_to_active_lease_scope() -> None:
-    claims = WorkerLeaseClaims(
-        signing_key_version=KEY_VERSION,
-        organization_id=ORGANIZATION_ID,
-        job_id=JOB_ID,
-        service_principal_id=SERVICE_PRINCIPAL_ID,
-        workload="supply.noop",
-        worker_audience="context-engine:supply-worker",
-        issued_at=NOW,
-        expires_at=NOW + timedelta(minutes=5),
-        nonce=bytes(range(32, 64)),
-    )
-    authority_scope = _open_service_actor_authority_scope()
-
-    actor = _construct_service_actor(
-        authority_scope=authority_scope,
-        claims=claims,
-        now=NOW,
-    )
-
-    assert actor.organization_id == ORGANIZATION_ID
-    assert actor.service_principal_id == SERVICE_PRINCIPAL_ID
-    assert actor.workload == "supply.noop"
-    assert actor.worker_audience == "context-engine:supply-worker"
-    assert actor.operation == "noop.complete"
-    assert "user" not in {item.name for item in fields(actor)}
-    assert str(ORGANIZATION_ID) not in repr(actor)
-    assert str(SERVICE_PRINCIPAL_ID) not in repr(actor)
-    with pytest.raises(FrozenInstanceError):
-        actor.workload = "other"  # type: ignore[misc]
-    with pytest.raises(TypeError):
-        ServiceActor(
-            organization_id=ORGANIZATION_ID,
-            service_principal_id=SERVICE_PRINCIPAL_ID,
-            workload="supply.noop",
-            worker_audience="context-engine:supply-worker",
-            operation="noop.complete",
-            expires_at=NOW + timedelta(minutes=5),
-        )
-    with pytest.raises(TypeError):
-        pickle.dumps(actor)
-
-    _require_active_service_actor(actor, now=NOW)
-    _close_service_actor_authority_scope(authority_scope)
-    with pytest.raises(ValueError):
-        _require_active_service_actor(actor, now=NOW)
+def test_bounded_noop_carrier_does_not_publish_an_incomplete_service_actor() -> None:
+    assert "ServiceActor" not in supply.__all__
+    assert not hasattr(supply, "ServiceActor")

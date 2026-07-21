@@ -106,7 +106,7 @@
         {
           "id": "PG-WORKER-LEASE-NOOP-017",
           "surface": "tests/integration/test_worker_lease.py",
-          "oracle": "The registered least-privilege ServicePrincipal and ServiceActor redeem one exact same-Organization persistent no-op job through an atomic current-row compare-and-set; rollback, replay, mismatch, expiry, and concurrent losers create zero additional durable transitions and zero wrong-Organization effects."
+          "oracle": "The bounded registered ServicePrincipal receiver binding redeems one exact same-Organization persistent no-op job only through the database function's atomic current-row compare-and-set; the worker role has no table SELECT, and rollback, replay, mismatch, expiry, and concurrent losers create zero additional durable transitions and zero wrong-Organization effects. This does not claim the full canonical ServiceActor."
         },
         {
           "id": "WORKER-LEASE-REPLAY-007",
@@ -896,9 +896,9 @@
       "title": "WorkerLease replay and binding mutation change no durable state",
       "decisionStatus": "accepted",
       "carrier": {
-        "statusAtM0": "available",
-        "m0Expectation": "active_fail_closed",
-        "upgradeTrigger": "Issue #17 activates only the signed one-shot persistent no-op durable-job subcarrier. The complete fixture upgrades only after Source, Resource, Revision, Policy Epoch, end-user delivery audience, idempotency, generation, business mutation, outbox, and File carriers run their full per-binding matrix."
+        "statusAtM0": "future",
+        "m0Expectation": "fail_closed",
+        "upgradeTrigger": "Issue #17 independently activates only the signed one-shot persistent no-op durable-job carrier. The full ACCEPT-008 fixture upgrades only after Source, Resource, Revision, Policy Epoch, end-user delivery audience, idempotency, generation, business mutation, outbox, and File carriers run their full per-binding matrix."
       },
       "setup": {
         "preconditions": [

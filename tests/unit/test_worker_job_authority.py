@@ -7,6 +7,7 @@ from uuid import uuid4
 
 import pytest
 from sqlalchemy import Engine
+from sqlalchemy.exc import SQLAlchemyError
 
 from engine.persistence import (
     MAX_WORKER_LEASE_TTL_SECONDS,
@@ -36,6 +37,31 @@ class ForbiddenDatabaseEngine:
     def begin(self) -> None:
         self.connection_attempts += 1
         raise AssertionError("untrusted lease reached the database")
+
+
+class FailingDatabaseEngine:
+    def __init__(self, marker: bytes = b"n" * 32) -> None:
+        self._marker = marker
+
+    def begin(self) -> None:
+        raise SQLAlchemyError("nonce=" + self._marker.hex())
+
+
+def exception_tree(error: BaseException) -> tuple[str, ...]:
+    rendered: list[str] = []
+    pending: list[BaseException] = [error]
+    seen: set[int] = set()
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        rendered.extend((str(current), repr(current)))
+        if current.__cause__ is not None:
+            pending.append(current.__cause__)
+        if current.__context__ is not None and not current.__suppress_context__:
+            pending.append(current.__context__)
+    return tuple(rendered)
 
 
 def signed_attempt() -> tuple[
@@ -140,6 +166,51 @@ def test_redemption_message_cannot_supply_receiver_identity_time_or_operation() 
         "operation",
     ]
     assert identity.operation == WORKER_LEASE_OPERATION
+
+
+def test_redemption_database_failure_tree_never_retains_token_or_nonce() -> None:
+    codec, token, attempt, identity = signed_attempt()
+    authority = PostgreSQLWorkerLeaseAuthority(
+        cast(Engine, FailingDatabaseEngine()),
+        codec,
+        identity,
+        clock=lambda: NOW,
+    )
+
+    with pytest.raises(RuntimeError) as failed:
+        authority.complete_noop(attempt)
+
+    forbidden = (token.serialize(), (b"n" * 32).hex())
+    rendered = exception_tree(failed.value)
+    assert all(marker not in value for marker in forbidden for value in rendered)
+
+
+def test_issuance_database_failure_tree_never_retains_generated_nonce(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    codec, _token, attempt, identity = signed_attempt()
+    generated_nonce = b"i" * 32
+    monkeypatch.setattr(
+        "engine.persistence.worker_jobs.generate_worker_lease_nonce",
+        lambda: generated_nonce,
+    )
+    issuer = PostgreSQLWorkerLeaseIssuer(
+        cast(Engine, FailingDatabaseEngine(generated_nonce)),
+        codec,
+    )
+    request = WorkerLeaseIssueRequest(
+        organization_id=attempt.expected_organization_id,
+        job_id=attempt.expected_job_id,
+        service_principal_id=identity.service_principal_id,
+        workload=identity.workload,
+        worker_audience=identity.worker_audience,
+    )
+
+    with pytest.raises(RuntimeError) as failed:
+        issuer.issue_noop_lease(request)
+
+    rendered = exception_tree(failed.value)
+    assert all(generated_nonce.hex() not in value for value in rendered)
 
 
 def test_lease_issue_request_cannot_supply_lease_times() -> None:

@@ -13,7 +13,7 @@ from typing import Any, cast
 
 from scripts.validate_security_catalog import (
     ACCEPT_005_FUTURE_CARRIER,
-    ACCEPT_008_BOUNDED_CARRIER,
+    ACCEPT_008_FUTURE_CARRIER,
     ACCEPT_009_FUTURE_CARRIER,
     ACCEPT_010_FUTURE_CARRIER,
     ACL_PROOF_CASE_IDS,
@@ -421,7 +421,7 @@ def make_catalog() -> dict[str, object]:
         if fixture_id == "ACCEPT-005":
             carrier = copy.deepcopy(ACCEPT_005_FUTURE_CARRIER)
         elif fixture_id == "ACCEPT-008":
-            carrier = copy.deepcopy(ACCEPT_008_BOUNDED_CARRIER)
+            carrier = copy.deepcopy(ACCEPT_008_FUTURE_CARRIER)
         elif fixture_id == "ACCEPT-009":
             carrier = copy.deepcopy(ACCEPT_009_FUTURE_CARRIER)
         elif fixture_id == "ACCEPT-010":
@@ -740,6 +740,23 @@ def make_schema() -> dict[str, object]:
                         },
                     },
                 },
+                "allOf": [
+                    {
+                        "if": {
+                            "properties": {"id": {"const": "ACCEPT-008"}},
+                            "required": ["id"],
+                        },
+                        "then": {
+                            "properties": {
+                                "carrier": {
+                                    "const": copy.deepcopy(
+                                        ACCEPT_008_FUTURE_CARRIER
+                                    )
+                                }
+                            }
+                        },
+                    }
+                ],
             },
         },
     }
@@ -859,13 +876,26 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
         catalog = make_catalog()
         fixture = object_list_at(catalog, "fixtures")[7]
         carrier = object_at(fixture, "carrier")
-        self.assertEqual(carrier, ACCEPT_008_BOUNDED_CARRIER)
+        self.assertEqual(
+            object_list_at(catalog, "activations")[2]["status"],
+            "active_fail_closed",
+        )
+        self.assertEqual(carrier, ACCEPT_008_FUTURE_CARRIER)
+        self.assertEqual(carrier["statusAtM0"], "future")
+        self.assertEqual(carrier["m0Expectation"], "fail_closed")
 
-        carrier["upgradeTrigger"] = "Issue #17 proves the full fixture."
+        carrier.update(
+            {
+                "statusAtM0": "available",
+                "m0Expectation": "active_fail_closed",
+                "upgradeTrigger": "Issue #17 proves the full fixture.",
+            }
+        )
         error = self.assert_catalog_error(
             catalog,
-            "fixtures[7].carrier: must preserve the bounded Issue #17 persistent "
-            "no-op carrier; the full ACCEPT-008 carrier remains deferred",
+            "fixtures[7].carrier: must preserve the full ACCEPT-008 fixture as "
+            "future/fail_closed; Issue #17 activates only its independent "
+            "persistent no-op carrier",
         )
         self.assertNotIn("full ACCEPT-008 PASS", str(error))
 
@@ -929,6 +959,34 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
                 error.startswith("catalog.activations[0]: must equal")
                 for error in raised.exception.errors
             )
+        )
+
+    def test_schema_independently_freezes_full_accept_008_as_future(self) -> None:
+        catalog = make_catalog()
+        schema = load_document(DEFAULT_SCHEMA_PATH)
+        fixture_schema = object_at(schema, "$defs", "fixture")
+        all_of = fixture_schema["allOf"]
+        assert isinstance(all_of, list)
+        accept_008_rule = next(
+            rule
+            for rule in all_of
+            if isinstance(rule, dict)
+            and isinstance(rule.get("if"), dict)
+            and isinstance(rule["if"].get("properties"), dict)
+            and isinstance(rule["if"]["properties"].get("id"), dict)
+            and rule["if"]["properties"]["id"].get("const") == "ACCEPT-008"
+        )
+        object_at(accept_008_rule, "then", "properties", "carrier")["const"] = {
+            "statusAtM0": "available",
+            "m0Expectation": "active_fail_closed",
+            "upgradeTrigger": "Issue #17 proves the full fixture.",
+        }
+
+        self.assert_catalog_error(
+            catalog,
+            "schema.fixtures.items.allOf: must independently freeze ACCEPT-008 "
+            "as the canonical future/fail_closed fixture carrier",
+            schema,
         )
 
     def test_future_carrier_drift_reports_the_whole_carrier_not_a_false_status(

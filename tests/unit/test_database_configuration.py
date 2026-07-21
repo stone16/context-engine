@@ -246,6 +246,7 @@ def test_database_engine_installs_non_optional_reset_and_checkout_hooks(
 
     def fake_create_engine(url: object, **options: object) -> object:
         assert options == {
+            "hide_parameters": True,
             "pool_pre_ping": True,
             "pool_reset_on_return": None,
             "pool_size": 5,

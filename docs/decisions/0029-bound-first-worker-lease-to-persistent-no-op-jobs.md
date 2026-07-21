@@ -42,29 +42,40 @@ and the issuer applies a bounded server-owned lifetime; neither timestamp is
 accepted from an issuance request.
 
 The token binds the Issue #17 fields that exist: Organization, durable job,
-registered `ServicePrincipal`/`ServiceActor`, workload, worker audience, the
-exact persistent no-op operation, issued-at, expiry, and nonce. The current
-durable job row is
-the authority for those same values. A valid signature alone never authorizes
-work.
+registered `ServicePrincipal` binding, workload, worker audience, the exact
+persistent no-op operation, issued-at, expiry, and nonce. The current durable
+job row is the authority for those same values. A valid signature alone never
+authorizes work. This is a bounded `ServicePrincipal` receiver binding, not the
+full canonical `ServiceActor`: Issue #17 has no source/allowed-operation set or
+Policy Epoch, so it neither publishes nor claims that broader ActorContext arm.
 
 The untrusted redemption carrier contains only the opaque token plus independent
-Organization/job routing references. The receiver's registered
-ServicePrincipal, workload, audience, operation, and current time come from the
-worker authority's trusted composition, not from that carrier. A local clock can
-reject early, while PostgreSQL transaction time remains the final expiry
-authority.
+Organization/job routing references. Its registered ServicePrincipal identity
+and local time come from the worker authority's trusted composition, not from
+that carrier. The durable receiver dimensions are fixed to workload
+`supply.noop`, worker audience `context-engine-worker`, and operation
+`noop.complete`; the database completion function accepts none of them from the
+worker call. A local clock can reject early, while PostgreSQL transaction time
+remains the final expiry authority.
 
 Issuance and completion use separate, narrowly granted `SECURITY DEFINER`
 functions owned by a dedicated non-login, non-owner role with fixed
 `search_path`, forced RLS, and exact `session_user` checks. Control can execute
-only issuance; the worker can execute only completion and has no direct job
-`UPDATE`. The completion function atomically compares the current no-op job row,
-including the server-stored SHA-256 nonce digest, and performs the only state
-change. Only the expected leased state and unconsumed nonce may transition once;
-replay, expiry, tampering, wrong Organization/job/actor/workload/operation,
+only issuance; the worker can execute only completion and has no direct table
+`SELECT` or job `UPDATE`. The database function is the sole durable read/write
+boundary for the worker. The completion function atomically compares the
+current no-op job row, including the server-stored SHA-256 nonce digest, and
+performs the only state change. Only the expected leased state and unconsumed
+nonce may transition once; replay, expiry, tampering, wrong Organization/job,
 stale state, and concurrent losers make no new durable change. The worker never
 impersonates the triggering user.
+
+Issuance may replace a still-unconsumed lease only after its database-owned
+expiry. The takeover uses a fresh database timestamp and nonce in one conditional
+update, so a crash after the previous transaction commits but before the opaque
+token reaches the caller cannot strand the job forever. The superseded token
+then fails the current-row comparison and has effect zero; an unexpired lease
+cannot be replaced.
 
 Rejections expose one generic unavailable result. Restricted audit records only
 a safe reason category plus digests; it does not record the token, signature,
@@ -94,9 +105,9 @@ an alternate completion path.
 - Unit evidence can prove canonical signing, versioned-key selection, tamper
   rejection, expiry, and generic rejection without claiming database authority.
 - Real PostgreSQL evidence is required for registered service identity,
-  database-owned lease time, function ownership/grants, denial of direct table
-  mutation, exact-row comparison, atomic one-shot completion, rollback, and
-  concurrency.
+  database-owned lease time, expired-lease takeover, function ownership/grants,
+  denial of direct table reads and mutation, exact-row comparison, atomic
+  one-shot completion, rollback, and concurrency.
 - The real worker application seam plus PostgreSQL proves one persistent no-op
   completion and replay rejection; default CLI smoke still proves only process
   boot/readiness because no production key source or job loop exists yet.

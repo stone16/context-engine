@@ -1,5 +1,5 @@
 {
-  "manifestVersion": "5.1.0",
+  "manifestVersion": "5.2.0",
   "controlOperations": [
     {
       "name": "change_resource_access",
@@ -20,6 +20,7 @@
       "directTableMutationAllowed": false,
       "databaseOwnedTime": true,
       "maxTtlSeconds": 3600,
+      "expiredLeaseReissuance": true,
       "atomicWrites": ["worker_noop_job"]
     },
     {
@@ -30,6 +31,13 @@
       "directTableMutationAllowed": false,
       "databaseOwnedTime": true,
       "rawNonceComparedAsSha256": true,
+      "fixedReceiver": {
+        "databaseRole": "context_engine_worker",
+        "workload": "supply.noop",
+        "workerAudience": "context-engine-worker",
+        "operation": "noop.complete"
+      },
+      "callerSuppliedReceiverDimensions": [],
       "atomicWrites": ["worker_noop_job"]
     }
   ],
@@ -560,7 +568,7 @@
     {
       "name": "service_principal",
       "classification": "tenant_owned",
-      "purpose": "Registered least-privilege ServiceActor binding for persistent no-op work",
+      "purpose": "Bounded registered receiver principal for the Issue #17 no-op carrier; not the full canonical ServiceActor",
       "organizationColumn": "organization_id",
       "organizationInclusiveKeys": [
         {
@@ -591,8 +599,16 @@
           "expression": "translate(workload, U&'\\0009\\000A\\000B\\000C\\000D\\001C\\001D\\001E\\001F\\0020\\0085\\00A0\\1680\\2000\\2001\\2002\\2003\\2004\\2005\\2006\\2007\\2008\\2009\\200A\\2028\\2029\\202F\\205F\\3000', '') <> '' AND char_length(workload) <= 128 AND octet_length(workload) <= 512"
         },
         {
+          "name": "ck_service_principal_workload_issue17",
+          "expression": "workload = 'supply.noop'"
+        },
+        {
           "name": "ck_service_principal_worker_audience_bounds",
           "expression": "translate(worker_audience, U&'\\0009\\000A\\000B\\000C\\000D\\001C\\001D\\001E\\001F\\0020\\0085\\00A0\\1680\\2000\\2001\\2002\\2003\\2004\\2005\\2006\\2007\\2008\\2009\\200A\\2028\\2029\\202F\\205F\\3000', '') <> '' AND char_length(worker_audience) <= 255 AND octet_length(worker_audience) <= 1020"
+        },
+        {
+          "name": "ck_service_principal_worker_audience_issue17",
+          "expression": "worker_audience = 'context-engine-worker'"
         },
         {
           "name": "ck_service_principal_operation_noop_complete",
@@ -604,16 +620,10 @@
         "forced": true,
         "policies": [
           {
-            "name": "service_principal_current_service_actor",
-            "command": "SELECT",
-            "roles": ["context_engine_worker"],
-            "using": "service_principal.organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid AND current_setting('app.actor_kind', true) = 'service' AND service_principal.service_principal_id = NULLIF(current_setting('app.service_principal_id', true), '')::uuid AND service_principal.workload = current_setting('app.workload', true) AND service_principal.worker_audience = current_setting('app.worker_audience', true) AND service_principal.operation = current_setting('app.operation', true) AND service_principal.operation = 'noop.complete' AND service_principal.enabled IS TRUE"
-          },
-          {
             "name": "service_principal_worker_lease_definer_select",
             "command": "SELECT",
             "roles": ["context_engine_worker_lease_definer"],
-            "using": "service_principal.organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid AND current_setting('app.actor_kind', true) = 'service' AND service_principal.service_principal_id = NULLIF(current_setting('app.service_principal_id', true), '')::uuid AND service_principal.workload = current_setting('app.workload', true) AND service_principal.worker_audience = current_setting('app.worker_audience', true) AND service_principal.operation = current_setting('app.operation', true) AND service_principal.operation = 'noop.complete' AND service_principal.enabled IS TRUE"
+            "using": "service_principal.organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid AND current_setting('app.actor_kind', true) = 'service' AND current_setting('app.workload', true) = 'supply.noop' AND current_setting('app.worker_audience', true) = 'context-engine-worker' AND current_setting('app.operation', true) = 'noop.complete' AND service_principal.workload = 'supply.noop' AND service_principal.worker_audience = 'context-engine-worker' AND service_principal.operation = 'noop.complete' AND service_principal.enabled IS TRUE"
           },
           {
             "name": "service_principal_migrator_administration",
@@ -626,7 +636,7 @@
       },
       "permittedOperations": {
         "context_engine_runtime": [],
-        "context_engine_worker": ["SELECT"],
+        "context_engine_worker": [],
         "context_engine_worker_lease_definer": ["SELECT"]
       },
       "partitions": [],
@@ -685,8 +695,16 @@
           "expression": "translate(workload, U&'\\0009\\000A\\000B\\000C\\000D\\001C\\001D\\001E\\001F\\0020\\0085\\00A0\\1680\\2000\\2001\\2002\\2003\\2004\\2005\\2006\\2007\\2008\\2009\\200A\\2028\\2029\\202F\\205F\\3000', '') <> '' AND char_length(workload) <= 128 AND octet_length(workload) <= 512"
         },
         {
+          "name": "ck_worker_noop_job_workload_issue17",
+          "expression": "workload = 'supply.noop'"
+        },
+        {
           "name": "ck_worker_noop_job_worker_audience_bounds",
           "expression": "translate(worker_audience, U&'\\0009\\000A\\000B\\000C\\000D\\001C\\001D\\001E\\001F\\0020\\0085\\00A0\\1680\\2000\\2001\\2002\\2003\\2004\\2005\\2006\\2007\\2008\\2009\\200A\\2028\\2029\\202F\\205F\\3000', '') <> '' AND char_length(worker_audience) <= 255 AND octet_length(worker_audience) <= 1020"
+        },
+        {
+          "name": "ck_worker_noop_job_worker_audience_issue17",
+          "expression": "worker_audience = 'context-engine-worker'"
         },
         {
           "name": "ck_worker_noop_job_actor_kind_service",
@@ -718,23 +736,17 @@
         "forced": true,
         "policies": [
           {
-            "name": "worker_noop_job_current_service_actor_select",
-            "command": "SELECT",
-            "roles": ["context_engine_worker"],
-            "using": "worker_noop_job.organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid AND current_setting('app.actor_kind', true) = 'service' AND worker_noop_job.service_principal_id = NULLIF(current_setting('app.service_principal_id', true), '')::uuid AND worker_noop_job.workload = current_setting('app.workload', true) AND worker_noop_job.worker_audience = current_setting('app.worker_audience', true) AND worker_noop_job.operation = current_setting('app.operation', true) AND worker_noop_job.operation = 'noop.complete' AND worker_noop_job.job_id = NULLIF(current_setting('app.worker_job_id', true), '')::uuid AND EXISTS (SELECT 1 FROM public.service_principal AS active_service_principal WHERE active_service_principal.organization_id = worker_noop_job.organization_id AND active_service_principal.service_principal_id = worker_noop_job.service_principal_id AND active_service_principal.workload = worker_noop_job.workload AND active_service_principal.worker_audience = worker_noop_job.worker_audience AND active_service_principal.operation = worker_noop_job.operation AND active_service_principal.enabled IS TRUE)"
-          },
-          {
             "name": "worker_noop_job_worker_lease_definer_select",
             "command": "SELECT",
             "roles": ["context_engine_worker_lease_definer"],
-            "using": "worker_noop_job.organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid AND current_setting('app.actor_kind', true) = 'service' AND worker_noop_job.service_principal_id = NULLIF(current_setting('app.service_principal_id', true), '')::uuid AND worker_noop_job.workload = current_setting('app.workload', true) AND worker_noop_job.worker_audience = current_setting('app.worker_audience', true) AND worker_noop_job.operation = current_setting('app.operation', true) AND worker_noop_job.operation = 'noop.complete' AND worker_noop_job.job_id = NULLIF(current_setting('app.worker_job_id', true), '')::uuid AND EXISTS (SELECT 1 FROM public.service_principal AS active_service_principal WHERE active_service_principal.organization_id = worker_noop_job.organization_id AND active_service_principal.service_principal_id = worker_noop_job.service_principal_id AND active_service_principal.workload = worker_noop_job.workload AND active_service_principal.worker_audience = worker_noop_job.worker_audience AND active_service_principal.operation = worker_noop_job.operation AND active_service_principal.enabled IS TRUE)"
+            "using": "worker_noop_job.organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid AND current_setting('app.actor_kind', true) = 'service' AND current_setting('app.workload', true) = 'supply.noop' AND current_setting('app.worker_audience', true) = 'context-engine-worker' AND current_setting('app.operation', true) = 'noop.complete' AND worker_noop_job.workload = 'supply.noop' AND worker_noop_job.worker_audience = 'context-engine-worker' AND worker_noop_job.operation = 'noop.complete' AND worker_noop_job.job_id = NULLIF(current_setting('app.worker_job_id', true), '')::uuid AND EXISTS (SELECT 1 FROM public.service_principal AS active_service_principal WHERE active_service_principal.organization_id = worker_noop_job.organization_id AND active_service_principal.service_principal_id = worker_noop_job.service_principal_id AND active_service_principal.workload = worker_noop_job.workload AND active_service_principal.worker_audience = worker_noop_job.worker_audience AND active_service_principal.operation = worker_noop_job.operation AND active_service_principal.enabled IS TRUE)"
           },
           {
             "name": "worker_noop_job_worker_lease_definer_update",
             "command": "UPDATE",
             "roles": ["context_engine_worker_lease_definer"],
-            "using": "worker_noop_job.organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid AND current_setting('app.actor_kind', true) = 'service' AND worker_noop_job.service_principal_id = NULLIF(current_setting('app.service_principal_id', true), '')::uuid AND worker_noop_job.workload = current_setting('app.workload', true) AND worker_noop_job.worker_audience = current_setting('app.worker_audience', true) AND worker_noop_job.operation = current_setting('app.operation', true) AND worker_noop_job.operation = 'noop.complete' AND worker_noop_job.job_id = NULLIF(current_setting('app.worker_job_id', true), '')::uuid AND EXISTS (SELECT 1 FROM public.service_principal AS active_service_principal WHERE active_service_principal.organization_id = worker_noop_job.organization_id AND active_service_principal.service_principal_id = worker_noop_job.service_principal_id AND active_service_principal.workload = worker_noop_job.workload AND active_service_principal.worker_audience = worker_noop_job.worker_audience AND active_service_principal.operation = worker_noop_job.operation AND active_service_principal.enabled IS TRUE)",
-            "withCheck": "worker_noop_job.organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid AND current_setting('app.actor_kind', true) = 'service' AND worker_noop_job.service_principal_id = NULLIF(current_setting('app.service_principal_id', true), '')::uuid AND worker_noop_job.workload = current_setting('app.workload', true) AND worker_noop_job.worker_audience = current_setting('app.worker_audience', true) AND worker_noop_job.operation = current_setting('app.operation', true) AND worker_noop_job.operation = 'noop.complete' AND worker_noop_job.job_id = NULLIF(current_setting('app.worker_job_id', true), '')::uuid AND EXISTS (SELECT 1 FROM public.service_principal AS active_service_principal WHERE active_service_principal.organization_id = worker_noop_job.organization_id AND active_service_principal.service_principal_id = worker_noop_job.service_principal_id AND active_service_principal.workload = worker_noop_job.workload AND active_service_principal.worker_audience = worker_noop_job.worker_audience AND active_service_principal.operation = worker_noop_job.operation AND active_service_principal.enabled IS TRUE)"
+            "using": "worker_noop_job.organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid AND current_setting('app.actor_kind', true) = 'service' AND current_setting('app.workload', true) = 'supply.noop' AND current_setting('app.worker_audience', true) = 'context-engine-worker' AND current_setting('app.operation', true) = 'noop.complete' AND worker_noop_job.workload = 'supply.noop' AND worker_noop_job.worker_audience = 'context-engine-worker' AND worker_noop_job.operation = 'noop.complete' AND worker_noop_job.job_id = NULLIF(current_setting('app.worker_job_id', true), '')::uuid AND EXISTS (SELECT 1 FROM public.service_principal AS active_service_principal WHERE active_service_principal.organization_id = worker_noop_job.organization_id AND active_service_principal.service_principal_id = worker_noop_job.service_principal_id AND active_service_principal.workload = worker_noop_job.workload AND active_service_principal.worker_audience = worker_noop_job.worker_audience AND active_service_principal.operation = worker_noop_job.operation AND active_service_principal.enabled IS TRUE)",
+            "withCheck": "worker_noop_job.organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid AND current_setting('app.actor_kind', true) = 'service' AND current_setting('app.workload', true) = 'supply.noop' AND current_setting('app.worker_audience', true) = 'context-engine-worker' AND current_setting('app.operation', true) = 'noop.complete' AND worker_noop_job.workload = 'supply.noop' AND worker_noop_job.worker_audience = 'context-engine-worker' AND worker_noop_job.operation = 'noop.complete' AND worker_noop_job.job_id = NULLIF(current_setting('app.worker_job_id', true), '')::uuid AND EXISTS (SELECT 1 FROM public.service_principal AS active_service_principal WHERE active_service_principal.organization_id = worker_noop_job.organization_id AND active_service_principal.service_principal_id = worker_noop_job.service_principal_id AND active_service_principal.workload = worker_noop_job.workload AND active_service_principal.worker_audience = worker_noop_job.worker_audience AND active_service_principal.operation = worker_noop_job.operation AND active_service_principal.enabled IS TRUE)"
           },
           {
             "name": "worker_noop_job_migrator_administration",
@@ -748,7 +760,7 @@
       "permittedOperations": {
         "context_engine_control": ["EXECUTE issue_noop_worker_lease"],
         "context_engine_runtime": [],
-        "context_engine_worker": ["SELECT", "EXECUTE complete_noop_worker_job"],
+        "context_engine_worker": ["EXECUTE complete_noop_worker_job"],
         "context_engine_worker_lease_definer": ["SELECT", "UPDATE"]
       },
       "partitions": [],

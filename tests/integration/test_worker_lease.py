@@ -14,7 +14,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import Connection, Engine, event, text
-from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.exc import IntegrityError, ProgrammingError
 
 from applications.worker import complete_persistent_noop_job
 from engine.persistence import (
@@ -49,6 +49,8 @@ pytestmark = pytest.mark.integration
 
 SIGNING_KEY_VERSION = 7
 SIGNING_KEY = b"issue-17-test-key-material-32bytes-minimum"
+ROTATED_SIGNING_KEY_VERSION = 8
+ROTATED_SIGNING_KEY = b"issue-17-rotated-key-material-32bytes-minimum"
 WORKLOAD = "supply.noop"
 WORKER_AUDIENCE = "context-engine-worker"
 DEFAULT_TEST_TTL_SECONDS = 300
@@ -59,10 +61,6 @@ _COMPLETE_NOOP_SQL = text(
     FROM public.context_worker_complete_noop_job(
         :organization_id,
         :job_id,
-        :service_principal_id,
-        :workload,
-        :worker_audience,
-        :operation,
         :signing_key_version,
         :nonce,
         :issued_at,
@@ -185,11 +183,13 @@ class WorkerJobFixture:
         self,
         request: WorkerLeaseIssueRequest,
         *,
+        codec: WorkerLeaseCodec | None = None,
         service_principal_id: UUID | None = None,
         workload: str | None = None,
         worker_audience: str | None = None,
         clock: Callable[[], datetime] | None = None,
     ) -> PostgreSQLWorkerLeaseAuthority:
+        lease_codec = self.codec if codec is None else codec
         identity = WorkerExecutionIdentity(
             service_principal_id=(
                 service_principal_id or request.service_principal_id
@@ -200,12 +200,12 @@ class WorkerJobFixture:
         if clock is None:
             return PostgreSQLWorkerLeaseAuthority(
                 self.worker_engine,
-                self.codec,
+                lease_codec,
                 identity,
             )
         return PostgreSQLWorkerLeaseAuthority(
             self.worker_engine,
-            self.codec,
+            lease_codec,
             identity,
             clock=clock,
         )
@@ -241,10 +241,13 @@ class WorkerJobFixture:
         self,
         token: WorkerLeaseToken,
         request: WorkerLeaseIssueRequest,
+        *,
+        codec: WorkerLeaseCodec | None = None,
     ) -> WorkerLeaseClaims:
         issued_at = self.job_state(request)["lease_issued_at"]
         assert isinstance(issued_at, datetime)
-        return self.codec.verify(
+        lease_codec = self.codec if codec is None else codec
+        return lease_codec.verify(
             token,
             expected_organization_id=request.organization_id,
             expected_job_id=request.job_id,
@@ -363,10 +366,6 @@ def _raw_completion_parameters(
     return {
         "organization_id": claims.organization_id,
         "job_id": claims.job_id,
-        "service_principal_id": claims.service_principal_id,
-        "workload": claims.workload,
-        "worker_audience": claims.worker_audience,
-        "operation": claims.operation,
         "signing_key_version": claims.signing_key_version,
         "nonce": nonce or claims.nonce,
         "issued_at": claims.issued_at,
@@ -640,7 +639,7 @@ def test_signed_nonce_must_match_the_persisted_digest(
     assert worker_jobs.job_state(request)["effect_count"] == 0
 
 
-def test_disabled_registered_service_actor_cannot_redeem_a_valid_lease(
+def test_disabled_registered_service_principal_cannot_redeem_a_valid_lease(
     worker_jobs: WorkerJobFixture,
 ) -> None:
     request = worker_jobs.seed_job()
@@ -693,7 +692,7 @@ def bound_worker_transaction(
         yield connection
 
 
-def test_worker_rls_is_forced_and_exact_tenant_job_context_is_required(
+def test_worker_guc_poisoning_cannot_read_either_tenant_table(
     worker_jobs: WorkerJobFixture,
 ) -> None:
     shared_job_id = uuid4()
@@ -709,25 +708,15 @@ def test_worker_rls_is_forced_and_exact_tenant_job_context_is_required(
         service_principal_id=shared_service_principal_id,
     )
 
-    with worker_jobs.worker_engine.connect() as connection:
-        assert connection.execute(
-            text("SELECT count(*) FROM worker_noop_job")
-        ).scalar_one() == 0
-
-    with bound_worker_transaction(worker_jobs.worker_engine, request_a) as connection:
-        rows = connection.execute(
-            text(
-                """
-                SELECT organization_id, job_id
-                FROM worker_noop_job
-                WHERE job_id = :job_id
-                """
-            ),
-            {"job_id": shared_job_id},
-        ).all()
-    assert [tuple(row) for row in rows] == [
-        (worker_jobs.organization_a, shared_job_id)
-    ]
+    for table_name in ("service_principal", "worker_noop_job"):
+        with (
+            pytest.raises(ProgrammingError, match="permission denied for table"),
+            bound_worker_transaction(
+                worker_jobs.worker_engine,
+                request_a,
+            ) as connection,
+        ):
+            connection.execute(text(f"SELECT * FROM {table_name}")).all()
 
     with worker_jobs.migration_engine.connect() as connection:
         relations = connection.execute(
@@ -774,11 +763,7 @@ def test_worker_tables_have_minimum_grants_and_direct_update_is_denied(
             for privilege in ("SELECT", "INSERT", "UPDATE", "DELETE")
         }
 
-    expected_true = {
-        (WORKER_ROLE, "service_principal", "SELECT"),
-        (WORKER_ROLE, "worker_noop_job", "SELECT"),
-    }
-    assert {key for key, granted in privileges.items() if granted} == expected_true
+    assert {key for key, granted in privileges.items() if granted} == set()
 
     with (
         pytest.raises(ProgrammingError, match="permission denied for table"),
@@ -834,6 +819,203 @@ def test_raw_completion_is_role_narrow_and_forged_nonce_has_zero_effect(
     assert rows == []
     assert worker_jobs.job_state(request)["state"] == "leased"
     assert worker_jobs.job_state(request)["effect_count"] == 0
+
+
+def test_raw_completion_has_no_caller_supplied_receiver_dimensions(
+    worker_jobs: WorkerJobFixture,
+) -> None:
+    request = worker_jobs.seed_job()
+    token = worker_jobs.issue(request)
+    claims = worker_jobs.claims(token, request)
+    parameters = _raw_completion_parameters(claims)
+    old_receiver_parameter_sql = text(
+        """
+        SELECT * FROM public.context_worker_complete_noop_job(
+            :organization_id,
+            :job_id,
+            :forged_service_principal_id,
+            :forged_workload,
+            :forged_worker_audience,
+            :forged_operation,
+            :signing_key_version,
+            :nonce,
+            :issued_at,
+            :expires_at
+        )
+        """
+    )
+
+    with (
+        worker_jobs.worker_engine.connect() as connection,
+        pytest.raises(ProgrammingError, match="does not exist"),
+    ):
+        connection.execute(
+            old_receiver_parameter_sql,
+            {
+                **parameters,
+                "forged_service_principal_id": uuid4(),
+                "forged_workload": "forged.workload",
+                "forged_worker_audience": "forged-audience",
+                "forged_operation": "noop.complete",
+            },
+        ).all()
+
+    assert worker_jobs.job_state(request)["state"] == "leased"
+    assert worker_jobs.job_state(request)["effect_count"] == 0
+
+
+def test_issue17_tables_reject_noncanonical_receiver_rows(
+    worker_jobs: WorkerJobFixture,
+) -> None:
+    for changed_column, changed_value, constraint_name in (
+        (
+            "workload",
+            "forged.workload",
+            "ck_service_principal_workload_issue17",
+        ),
+        (
+            "worker_audience",
+            "forged-audience",
+            "ck_service_principal_worker_audience_issue17",
+        ),
+    ):
+        with (
+            worker_jobs.migration_engine.begin() as connection,
+            pytest.raises(IntegrityError, match=constraint_name),
+        ):
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO service_principal (
+                        organization_id,
+                        service_principal_id,
+                        workload,
+                        worker_audience,
+                        operation,
+                        enabled
+                    ) VALUES (
+                        :organization_id,
+                        :service_principal_id,
+                        :workload,
+                        :worker_audience,
+                        'noop.complete',
+                        TRUE
+                    )
+                    """
+                ),
+                {
+                    "organization_id": worker_jobs.organization_a,
+                    "service_principal_id": uuid4(),
+                    "workload": (
+                        changed_value if changed_column == "workload" else WORKLOAD
+                    ),
+                    "worker_audience": (
+                        changed_value
+                        if changed_column == "worker_audience"
+                        else WORKER_AUDIENCE
+                    ),
+                },
+            )
+
+
+def test_current_lease_cannot_be_reissued(
+    worker_jobs: WorkerJobFixture,
+) -> None:
+    request = worker_jobs.seed_job()
+    token = worker_jobs.issue(request)
+    before = worker_jobs.job_state(request)
+
+    with pytest.raises(WorkerLeaseIssueNotAvailable, match="^work not available$"):
+        worker_jobs.issue(request)
+
+    after = worker_jobs.job_state(request)
+    assert after == before
+    completion = complete_persistent_noop_job(
+        worker_jobs.authority(request),
+        redemption(token, request),
+    )
+    assert completion.effect_count == 1
+
+
+def test_two_concurrent_expired_lease_reissues_produce_one_current_token(
+    worker_jobs: WorkerJobFixture,
+) -> None:
+    request = worker_jobs.seed_job()
+    worker_jobs.issue(request, lease_ttl_seconds=1)
+    with worker_jobs.migration_engine.connect() as connection:
+        connection.execute(text("SELECT pg_sleep(1.1)"))
+    barrier = Barrier(2)
+
+    def reissue_once() -> WorkerLeaseToken | None:
+        barrier.wait(timeout=5)
+        try:
+            return worker_jobs.issue(request)
+        except WorkerLeaseIssueNotAvailable:
+            return None
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        tokens = list(executor.map(lambda _index: reissue_once(), range(2)))
+
+    winners = [token for token in tokens if token is not None]
+    assert len(winners) == 1
+    completion = complete_persistent_noop_job(
+        worker_jobs.authority(request),
+        redemption(winners[0], request),
+    )
+    assert completion.effect_count == 1
+    assert worker_jobs.job_state(request)["effect_count"] == 1
+
+
+def test_expired_lease_is_atomically_reissued_and_only_new_token_completes(
+    worker_jobs: WorkerJobFixture,
+) -> None:
+    request = worker_jobs.seed_job()
+    old_token = worker_jobs.issue(request, lease_ttl_seconds=1)
+    old_claims = worker_jobs.claims(old_token, request)
+    with worker_jobs.migration_engine.connect() as connection:
+        connection.execute(text("SELECT pg_sleep(1.1)"))
+
+    rotated_codec = WorkerLeaseCodec(
+        WorkerLeaseKeyring(
+            active_version=ROTATED_SIGNING_KEY_VERSION,
+            keys={
+                SIGNING_KEY_VERSION: SIGNING_KEY,
+                ROTATED_SIGNING_KEY_VERSION: ROTATED_SIGNING_KEY,
+            },
+        )
+    )
+    new_token = PostgreSQLWorkerLeaseIssuer(
+        worker_jobs.control_engine,
+        rotated_codec,
+    ).issue_noop_lease(request)
+    new_claims = worker_jobs.claims(new_token, request, codec=rotated_codec)
+    state = worker_jobs.job_state(request)
+    assert new_token.serialize() != old_token.serialize()
+    assert old_claims.signing_key_version == SIGNING_KEY_VERSION
+    assert new_claims.signing_key_version == ROTATED_SIGNING_KEY_VERSION
+    assert new_claims.nonce != old_claims.nonce
+    assert new_claims.issued_at >= old_claims.expires_at
+    assert state["lease_nonce_digest"] == hashlib.sha256(new_claims.nonce).digest()
+    assert state["lease_issued_at"] == new_claims.issued_at
+    assert state["lease_expires_at"] == new_claims.expires_at
+
+    with pytest.raises(WorkNotAvailable, match="^work not available$"):
+        complete_persistent_noop_job(
+            worker_jobs.authority(
+                request,
+                codec=rotated_codec,
+                clock=lambda: old_claims.issued_at,
+            ),
+            redemption(old_token, request),
+        )
+    assert worker_jobs.job_state(request)["effect_count"] == 0
+
+    completion = complete_persistent_noop_job(
+        worker_jobs.authority(request, codec=rotated_codec),
+        redemption(new_token, request),
+    )
+    assert completion.effect_count == 1
+    assert worker_jobs.job_state(request)["effect_count"] == 1
 
 
 class _ForcedPostCASRollback(RuntimeError):

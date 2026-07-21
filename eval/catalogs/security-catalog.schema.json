@@ -108,7 +108,7 @@
             "controlBoundary": "complete_persistent_noop_job(PostgreSQLWorkerLeaseAuthority, WorkerLeaseRedemption)",
             "testEvidence": [
               {"id": "LEASE-SIGNING-017", "surface": "tests/unit/test_worker_lease.py", "oracle": "Versioned domain-separated canonical HMAC-SHA256 signing with an explicit injected keyring accepts one exact no-op lease and generically rejects unknown versions, malformed tokens, tampering, expiry, claim mutation, and UserActor substitution without exposing claims or key material."},
-              {"id": "PG-WORKER-LEASE-NOOP-017", "surface": "tests/integration/test_worker_lease.py", "oracle": "The registered least-privilege ServicePrincipal and ServiceActor redeem one exact same-Organization persistent no-op job through an atomic current-row compare-and-set; rollback, replay, mismatch, expiry, and concurrent losers create zero additional durable transitions and zero wrong-Organization effects."},
+              {"id": "PG-WORKER-LEASE-NOOP-017", "surface": "tests/integration/test_worker_lease.py", "oracle": "The bounded registered ServicePrincipal receiver binding redeems one exact same-Organization persistent no-op job only through the database function's atomic current-row compare-and-set; the worker role has no table SELECT, and rollback, replay, mismatch, expiry, and concurrent losers create zero additional durable transitions and zero wrong-Organization effects. This does not claim the full canonical ServiceActor."},
               {"id": "WORKER-LEASE-REPLAY-007", "surface": "tests/integration/test_worker_lease.py", "oracle": "The real worker application seam completes exactly one persistent no-op job with its server-minted lease; replay returns only generic work-not-available and leaves the completed durable state unchanged."}
             ],
             "deferredEvidence": ["PROP-WORKER-LEASE-007", "PG-WORKER-LEASE-007", "DB-011", "JOB-001", "JOB-005", "full ACCEPT-008 per-binding matrix"],
@@ -923,33 +923,56 @@
           "items": {"$ref": "#/$defs/authorityRef"}
         }
       },
-      "if": {
-        "properties": {
-          "carrier": {
+      "allOf": [
+        {
+          "if": {
             "properties": {
-              "statusAtM0": {"enum": ["unavailable", "future"]}
+              "carrier": {
+                "properties": {
+                  "statusAtM0": {"enum": ["unavailable", "future"]}
+                },
+                "required": ["statusAtM0"]
+              }
             },
-            "required": ["statusAtM0"]
+            "required": ["carrier"]
+          },
+          "then": {
+            "properties": {
+              "expected": {
+                "properties": {
+                  "io": {
+                    "properties": {
+                      "providerCalls": {"const": 0},
+                      "indexCalls": {"const": 0},
+                      "modelCalls": {"const": 0},
+                      "actionCalls": {"const": 0}
+                    }
+                  }
+                }
+              }
+            }
           }
         },
-        "required": ["carrier"]
-      },
-      "then": {
-        "properties": {
-          "expected": {
+        {
+          "if": {
             "properties": {
-              "io": {
-                "properties": {
-                  "providerCalls": {"const": 0},
-                  "indexCalls": {"const": 0},
-                  "modelCalls": {"const": 0},
-                  "actionCalls": {"const": 0}
+              "id": {"const": "ACCEPT-008"}
+            },
+            "required": ["id"]
+          },
+          "then": {
+            "properties": {
+              "carrier": {
+                "const": {
+                  "statusAtM0": "future",
+                  "m0Expectation": "fail_closed",
+                  "upgradeTrigger": "Issue #17 independently activates only the signed one-shot persistent no-op durable-job carrier. The full ACCEPT-008 fixture upgrades only after Source, Resource, Revision, Policy Epoch, end-user delivery audience, idempotency, generation, business mutation, outbox, and File carriers run their full per-binding matrix."
                 }
               }
             }
           }
         }
-      }
+      ]
     }
   }
 }

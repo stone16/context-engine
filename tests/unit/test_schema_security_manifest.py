@@ -29,7 +29,7 @@ def test_manifest_classifies_the_exact_issue_17_worker_lease_schema() -> None:
     document = manifest()
     tables = table_entries(document)
 
-    assert document["manifestVersion"] == "5.1.0"
+    assert document["manifestVersion"] == "5.2.0"
     assert set(tables) == {
         "alembic_version",
         "context_fragment",
@@ -61,7 +61,7 @@ def test_manifest_classifies_the_exact_issue_17_worker_lease_schema() -> None:
     assert tables["worker_noop_job"]["classification"] == "tenant_owned"
 
 
-def test_worker_lease_manifest_requires_exact_service_actor_and_job() -> None:
+def test_worker_lease_manifest_requires_exact_receiver_and_job() -> None:
     """DB-011/JOB-001/JOB-005: worker authority is exact and fail closed."""
 
     entries = table_entries(manifest())
@@ -121,12 +121,16 @@ def test_worker_lease_manifest_requires_exact_service_actor_and_job() -> None:
 
     assert {constraint["name"] for constraint in principal["checkConstraints"]} == {
         "ck_service_principal_workload_bounds",
+        "ck_service_principal_workload_issue17",
         "ck_service_principal_worker_audience_bounds",
+        "ck_service_principal_worker_audience_issue17",
         "ck_service_principal_operation_noop_complete",
     }
     assert {constraint["name"] for constraint in job["checkConstraints"]} == {
         "ck_worker_noop_job_workload_bounds",
+        "ck_worker_noop_job_workload_issue17",
         "ck_worker_noop_job_worker_audience_bounds",
+        "ck_worker_noop_job_worker_audience_issue17",
         "ck_worker_noop_job_actor_kind_service",
         "ck_worker_noop_job_operation_noop_complete",
         "ck_worker_noop_job_state",
@@ -154,16 +158,13 @@ def test_worker_lease_manifest_requires_exact_service_actor_and_job() -> None:
 
     assert principal["permittedOperations"] == {
         "context_engine_runtime": [],
-        "context_engine_worker": ["SELECT"],
+        "context_engine_worker": [],
         "context_engine_worker_lease_definer": ["SELECT"],
     }
     assert job["permittedOperations"] == {
         "context_engine_control": ["EXECUTE issue_noop_worker_lease"],
         "context_engine_runtime": [],
-        "context_engine_worker": [
-            "SELECT",
-            "EXECUTE complete_noop_worker_job",
-        ],
+        "context_engine_worker": ["EXECUTE complete_noop_worker_job"],
         "context_engine_worker_lease_definer": ["SELECT", "UPDATE"],
     }
 
@@ -183,46 +184,25 @@ def test_worker_lease_manifest_requires_exact_service_actor_and_job() -> None:
             "using": "true",
             "withCheck": "true",
         }
-        worker_policies = [
+        assert not [
             policy
             for policy in rls["policies"]
             if policy["roles"] == ["context_engine_worker"]
         ]
-        assert worker_policies
-        for policy in worker_policies:
-            expression = policy["using"]
-            for setting_name in (
-                "app.organization_id",
-                "app.actor_kind",
-                "app.service_principal_id",
-                "app.workload",
-                "app.worker_audience",
-                "app.operation",
-            ):
-                assert setting_name in expression
-            assert "noop.complete" in expression
         assert {"DB-011", "JOB-001", "JOB-005", "WORKER-LEASE-007"} <= set(
             entry["negativeTestIds"]
         )
         assert "WORKER-LEASE-007" in entry["securityInvariantIds"]
 
-    principal_worker_policy = next(
+    principal_definer_policy = next(
         policy
         for policy in principal["rowLevelSecurity"]["policies"]
-        if policy["roles"] == ["context_engine_worker"]
+        if policy["roles"] == ["context_engine_worker_lease_definer"]
     )
-    assert principal_worker_policy["command"] == "SELECT"
-    assert "enabled IS TRUE" in principal_worker_policy["using"]
-
-    job_worker_policies = [
-        policy
-        for policy in job["rowLevelSecurity"]["policies"]
-        if policy["roles"] == ["context_engine_worker"]
-    ]
-    assert {policy["command"] for policy in job_worker_policies} == {"SELECT"}
-    for policy in job_worker_policies:
-        assert "app.worker_job_id" in policy["using"]
-        assert "active_service_principal.enabled IS TRUE" in policy["using"]
+    assert principal_definer_policy["command"] == "SELECT"
+    assert "enabled IS TRUE" in principal_definer_policy["using"]
+    for receiver_value in ("supply.noop", "context-engine-worker", "noop.complete"):
+        assert receiver_value in principal_definer_policy["using"]
     definer_policies = [
         policy
         for policy in job["rowLevelSecurity"]["policies"]
@@ -236,6 +216,10 @@ def test_worker_lease_manifest_requires_exact_service_actor_and_job() -> None:
         policy for policy in definer_policies if policy["command"] == "UPDATE"
     )
     assert update_policy["using"] == update_policy["withCheck"]
+    assert "app.worker_job_id" in update_policy["using"]
+    assert "active_service_principal.enabled IS TRUE" in update_policy["using"]
+    for receiver_value in ("supply.noop", "context-engine-worker", "noop.complete"):
+        assert receiver_value in update_policy["using"]
 
     operations = manifest()["controlOperations"]
     assert operations[1:] == [
@@ -247,6 +231,7 @@ def test_worker_lease_manifest_requires_exact_service_actor_and_job() -> None:
             "directTableMutationAllowed": False,
             "databaseOwnedTime": True,
             "maxTtlSeconds": 3600,
+            "expiredLeaseReissuance": True,
             "atomicWrites": ["worker_noop_job"],
         },
         {
@@ -257,6 +242,13 @@ def test_worker_lease_manifest_requires_exact_service_actor_and_job() -> None:
             "directTableMutationAllowed": False,
             "databaseOwnedTime": True,
             "rawNonceComparedAsSha256": True,
+            "fixedReceiver": {
+                "databaseRole": "context_engine_worker",
+                "workload": "supply.noop",
+                "workerAudience": "context-engine-worker",
+                "operation": "noop.complete",
+            },
+            "callerSuppliedReceiverDimensions": [],
             "atomicWrites": ["worker_noop_job"],
         },
     ]

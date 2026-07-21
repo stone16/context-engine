@@ -3,7 +3,6 @@
 from engine.supply.jobs import (
     WORKER_LEASE_ACTOR_KIND,
     WORKER_LEASE_OPERATION,
-    ServiceActor,
     WorkerLeaseClaims,
     WorkerLeaseCodec,
     WorkerLeaseKeyring,
@@ -19,7 +18,6 @@ from engine.supply.jobs import (
 __all__ = [
     "WORKER_LEASE_ACTOR_KIND",
     "WORKER_LEASE_OPERATION",
-    "ServiceActor",
     "WorkNotAvailable",
     "WorkerLeaseClaims",
     "WorkerLeaseCodec",

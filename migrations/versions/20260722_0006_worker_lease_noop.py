@@ -1,12 +1,13 @@
-"""Add registered ServiceActors and the persistent no-op WorkerLease job.
+"""Add registered ServicePrincipals and the bounded no-op WorkerLease receiver.
 
 Revision ID: 20260722_0006
 Revises: 20260721_0005
 Create Date: 2026-07-22
 
-This bounded carrier proves only the Issue #17 no-op lease lifecycle.  It does
-not persist credentials, source payloads, or any of the deferred full Supply
-job authority dimensions.
+This bounded carrier proves only the Issue #17 no-op lease lifecycle. It binds
+one database-authenticated worker receiver and can replace only an expired,
+unconsumed lease so a post-commit delivery loss cannot strand the job. It does
+not persist credentials, source payloads, or any deferred full Supply authority.
 """
 
 from collections.abc import Sequence
@@ -31,36 +32,36 @@ _ISSUE_LEASE_FUNCTION = "public.context_worker_issue_noop_lease"
 _COMPLETE_JOB_FUNCTION = "public.context_worker_complete_noop_job"
 _ISSUE_LEASE_SIGNATURE = "(uuid, uuid, uuid, text, text, bigint, bytea, integer)"
 _COMPLETE_JOB_SIGNATURE = (
-    "(uuid, uuid, uuid, text, text, text, bigint, bytea, "
-    "timestamp with time zone, timestamp with time zone)"
+    "(uuid, uuid, bigint, bytea, timestamp with time zone, "
+    "timestamp with time zone)"
 )
 _MAX_SIGNED_BIGINT = 2**63 - 1
 _MAX_LEASE_TTL_SECONDS = 3600
+_BOUND_WORKLOAD = "supply.noop"
+_BOUND_WORKER_AUDIENCE = "context-engine-worker"
+_BOUND_OPERATION = "noop.complete"
 _PYTHON_ISSPACE_CODE_POINTS = (
     "U&'\\0009\\000A\\000B\\000C\\000D\\001C\\001D\\001E\\001F\\0020"
     "\\0085\\00A0\\1680\\2000\\2001\\2002\\2003\\2004\\2005\\2006"
     "\\2007\\2008\\2009\\200A\\2028\\2029\\202F\\205F\\3000'"
 )
 
-_SERVICE_ACTOR_BINDING = """
-{table_name}.organization_id = NULLIF(
+_BOUND_RECEIVER_BINDING = f"""
+{{table_name}}.organization_id = NULLIF(
     current_setting('app.organization_id', true), ''
 )::uuid
 AND current_setting('app.actor_kind', true) = 'service'
-AND {table_name}.service_principal_id = NULLIF(
-    current_setting('app.service_principal_id', true), ''
-)::uuid
-AND {table_name}.workload = current_setting('app.workload', true)
-AND {table_name}.worker_audience = current_setting(
-    'app.worker_audience', true
-)
-AND {table_name}.operation = current_setting('app.operation', true)
-AND {table_name}.operation = 'noop.complete'
+AND current_setting('app.workload', true) = '{_BOUND_WORKLOAD}'
+AND current_setting('app.worker_audience', true) = '{_BOUND_WORKER_AUDIENCE}'
+AND current_setting('app.operation', true) = '{_BOUND_OPERATION}'
+AND {{table_name}}.workload = '{_BOUND_WORKLOAD}'
+AND {{table_name}}.worker_audience = '{_BOUND_WORKER_AUDIENCE}'
+AND {{table_name}}.operation = '{_BOUND_OPERATION}'
 """.strip()
 
 
-def _worker_expression(table_name: str) -> str:
-    expression = _SERVICE_ACTOR_BINDING.format(table_name=table_name)
+def _definer_receiver_expression(table_name: str) -> str:
+    expression = _BOUND_RECEIVER_BINDING.format(table_name=table_name)
     if table_name == _SERVICE_PRINCIPAL_TABLE:
         return f"{expression}\nAND {table_name}.enabled IS TRUE"
     return (
@@ -130,10 +131,18 @@ def upgrade() -> None:
             name="ck_service_principal_workload_bounds",
         ),
         sa.CheckConstraint(
+            f"workload = '{_BOUND_WORKLOAD}'",
+            name="ck_service_principal_workload_issue17",
+        ),
+        sa.CheckConstraint(
             f"translate(worker_audience, {_PYTHON_ISSPACE_CODE_POINTS}, '') <> '' "
             "AND char_length(worker_audience) <= 255 "
             "AND octet_length(worker_audience) <= 1020",
             name="ck_service_principal_worker_audience_bounds",
+        ),
+        sa.CheckConstraint(
+            f"worker_audience = '{_BOUND_WORKER_AUDIENCE}'",
+            name="ck_service_principal_worker_audience_issue17",
         ),
         sa.CheckConstraint(
             "operation = 'noop.complete'",
@@ -202,10 +211,18 @@ def upgrade() -> None:
             name="ck_worker_noop_job_workload_bounds",
         ),
         sa.CheckConstraint(
+            f"workload = '{_BOUND_WORKLOAD}'",
+            name="ck_worker_noop_job_workload_issue17",
+        ),
+        sa.CheckConstraint(
             f"translate(worker_audience, {_PYTHON_ISSPACE_CODE_POINTS}, '') <> '' "
             "AND char_length(worker_audience) <= 255 "
             "AND octet_length(worker_audience) <= 1020",
             name="ck_worker_noop_job_worker_audience_bounds",
+        ),
+        sa.CheckConstraint(
+            f"worker_audience = '{_BOUND_WORKER_AUDIENCE}'",
+            name="ck_worker_noop_job_worker_audience_issue17",
         ),
         sa.CheckConstraint(
             "actor_kind = 'service'",
@@ -271,11 +288,8 @@ def upgrade() -> None:
             "USING (true) WITH CHECK (true)"
         )
 
-    service_principal_expression = _worker_expression(_SERVICE_PRINCIPAL_TABLE)
-    op.execute(
-        "CREATE POLICY service_principal_current_service_actor "
-        "ON service_principal AS PERMISSIVE FOR SELECT "
-        f"TO {_WORKER_ROLE} USING ({service_principal_expression})"
+    service_principal_expression = _definer_receiver_expression(
+        _SERVICE_PRINCIPAL_TABLE
     )
     op.execute(
         "CREATE POLICY service_principal_worker_lease_definer_select "
@@ -284,12 +298,7 @@ def upgrade() -> None:
         f"USING ({service_principal_expression})"
     )
 
-    job_expression = _worker_expression(_JOB_TABLE)
-    op.execute(
-        "CREATE POLICY worker_noop_job_current_service_actor_select "
-        "ON worker_noop_job AS PERMISSIVE FOR SELECT "
-        f"TO {_WORKER_ROLE} USING ({job_expression})"
-    )
+    job_expression = _definer_receiver_expression(_JOB_TABLE)
     op.execute(
         "CREATE POLICY worker_noop_job_worker_lease_definer_select "
         "ON worker_noop_job AS PERMISSIVE FOR SELECT "
@@ -302,12 +311,6 @@ def upgrade() -> None:
         f"WITH CHECK ({job_expression})"
     )
 
-    op.execute(
-        f"GRANT SELECT ON TABLE {_SERVICE_PRINCIPAL_TABLE} TO {_WORKER_ROLE}"
-    )
-    op.execute(
-        f"GRANT SELECT ON TABLE {_JOB_TABLE} TO {_WORKER_ROLE}"
-    )
     op.execute(
         f"GRANT SELECT ON TABLE {_SERVICE_PRINCIPAL_TABLE}, {_JOB_TABLE} "
         f"TO {_WORKER_LEASE_DEFINER_ROLE}"
@@ -348,8 +351,8 @@ def upgrade() -> None:
             IF requested_organization_id IS NULL
                OR requested_job_id IS NULL
                OR requested_service_principal_id IS NULL
-               OR requested_workload IS NULL
-               OR requested_worker_audience IS NULL
+               OR requested_workload IS DISTINCT FROM '{_BOUND_WORKLOAD}'
+               OR requested_worker_audience IS DISTINCT FROM '{_BOUND_WORKER_AUDIENCE}'
                OR requested_signing_key_version IS NULL
                OR requested_signing_key_version NOT BETWEEN 1 AND {_MAX_SIGNED_BIGINT}
                OR requested_nonce IS NULL
@@ -370,13 +373,13 @@ def upgrade() -> None:
                 true
             );
             PERFORM pg_catalog.set_config(
-                'app.workload', requested_workload, true
+                'app.workload', '{_BOUND_WORKLOAD}', true
             );
             PERFORM pg_catalog.set_config(
-                'app.worker_audience', requested_worker_audience, true
+                'app.worker_audience', '{_BOUND_WORKER_AUDIENCE}', true
             );
             PERFORM pg_catalog.set_config(
-                'app.operation', 'noop.complete', true
+                'app.operation', '{_BOUND_OPERATION}', true
             );
             PERFORM pg_catalog.set_config(
                 'app.worker_job_id', requested_job_id::text, true
@@ -398,11 +401,17 @@ def upgrade() -> None:
             WHERE job.organization_id = requested_organization_id
               AND job.job_id = requested_job_id
               AND job.service_principal_id = requested_service_principal_id
-              AND job.workload = requested_workload
-              AND job.worker_audience = requested_worker_audience
+              AND job.workload = '{_BOUND_WORKLOAD}'
+              AND job.worker_audience = '{_BOUND_WORKER_AUDIENCE}'
               AND job.actor_kind = 'service'
-              AND job.operation = 'noop.complete'
-              AND job.state = 'available'
+              AND job.operation = '{_BOUND_OPERATION}'
+              AND (
+                  job.state = 'available'
+                  OR (
+                      job.state = 'leased'
+                      AND job.lease_expires_at <= database_issued_at
+                  )
+              )
               AND job.effect_count = 0
               AND EXISTS (
                   SELECT 1
@@ -431,10 +440,6 @@ def upgrade() -> None:
         CREATE FUNCTION {_COMPLETE_JOB_FUNCTION}(
             requested_organization_id uuid,
             requested_job_id uuid,
-            requested_service_principal_id uuid,
-            requested_workload text,
-            requested_worker_audience text,
-            requested_operation text,
             requested_signing_key_version bigint,
             requested_nonce bytea,
             requested_issued_at timestamptz,
@@ -455,10 +460,6 @@ def upgrade() -> None:
             END IF;
             IF requested_organization_id IS NULL
                OR requested_job_id IS NULL
-               OR requested_service_principal_id IS NULL
-               OR requested_workload IS NULL
-               OR requested_worker_audience IS NULL
-               OR requested_operation IS DISTINCT FROM 'noop.complete'
                OR requested_signing_key_version IS NULL
                OR requested_signing_key_version NOT BETWEEN 1 AND {_MAX_SIGNED_BIGINT}
                OR requested_nonce IS NULL
@@ -474,18 +475,16 @@ def upgrade() -> None:
             );
             PERFORM pg_catalog.set_config('app.actor_kind', 'service', true);
             PERFORM pg_catalog.set_config(
-                'app.service_principal_id',
-                requested_service_principal_id::text,
-                true
+                'app.service_principal_id', '', true
             );
             PERFORM pg_catalog.set_config(
-                'app.workload', requested_workload, true
+                'app.workload', '{_BOUND_WORKLOAD}', true
             );
             PERFORM pg_catalog.set_config(
-                'app.worker_audience', requested_worker_audience, true
+                'app.worker_audience', '{_BOUND_WORKER_AUDIENCE}', true
             );
             PERFORM pg_catalog.set_config(
-                'app.operation', requested_operation, true
+                'app.operation', '{_BOUND_OPERATION}', true
             );
             PERFORM pg_catalog.set_config(
                 'app.worker_job_id', requested_job_id::text, true
@@ -500,11 +499,10 @@ def upgrade() -> None:
                 effect_count = 1
             WHERE job.organization_id = requested_organization_id
               AND job.job_id = requested_job_id
-              AND job.service_principal_id = requested_service_principal_id
-              AND job.workload = requested_workload
-              AND job.worker_audience = requested_worker_audience
+              AND job.workload = '{_BOUND_WORKLOAD}'
+              AND job.worker_audience = '{_BOUND_WORKER_AUDIENCE}'
               AND job.actor_kind = 'service'
-              AND job.operation = requested_operation
+              AND job.operation = '{_BOUND_OPERATION}'
               AND job.state = 'leased'
               AND job.effect_count = 0
               AND job.signing_key_version = requested_signing_key_version

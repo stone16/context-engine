@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Final, Literal
 from uuid import UUID
@@ -21,58 +21,15 @@ from engine.supply.jobs import (
     WorkerLeaseRejectionAuditReceipt,
     WorkerLeaseToken,
     WorkNotAvailable,
-    _close_service_actor_authority_scope,
-    _construct_service_actor,
-    _open_service_actor_authority_scope,
-    _require_active_service_actor,
+    _require_identifier,
+    _require_utc,
+    _require_uuid,
     generate_worker_lease_nonce,
     worker_lease_digest,
 )
 
 DEFAULT_WORKER_LEASE_TTL_SECONDS: Final = 300
 MAX_WORKER_LEASE_TTL_SECONDS: Final = 3600
-_WORKER_CONTEXT_SETTINGS: Final = (
-    "app.organization_id",
-    "app.actor_kind",
-    "app.service_principal_id",
-    "app.workload",
-    "app.worker_audience",
-    "app.operation",
-    "app.worker_job_id",
-)
-
-
-def _require_uuid(field_name: str, value: object) -> UUID:
-    if type(value) is not UUID:
-        raise TypeError(f"{field_name} must be UUID")
-    return value
-
-
-def _require_identifier(
-    field_name: str, value: object, *, maximum_length: int
-) -> str:
-    if (
-        type(value) is not str
-        or not value
-        or value.isspace()
-        or len(value) > maximum_length
-        or any(character.isspace() for character in value)
-    ):
-        raise ValueError(f"{field_name} must be a bounded nonblank identifier")
-    return value
-
-
-def _require_utc(field_name: str, value: object) -> datetime:
-    if (
-        type(value) is not datetime
-        or value.tzinfo is None
-        or value.utcoffset() != timedelta(0)
-        or value.microsecond != 0
-    ):
-        raise ValueError(f"{field_name} must be whole-second UTC")
-    return value
-
-
 def _utc_now() -> datetime:
     return datetime.now(UTC).replace(microsecond=0)
 
@@ -193,20 +150,6 @@ def _rejection(token: WorkerLeaseToken) -> WorkNotAvailable:
     )
 
 
-def _worker_settings(
-    claims: WorkerLeaseClaims,
-) -> dict[str, str]:
-    return {
-        "app.organization_id": str(claims.organization_id),
-        "app.actor_kind": claims.actor_kind,
-        "app.service_principal_id": str(claims.service_principal_id),
-        "app.workload": claims.workload,
-        "app.worker_audience": claims.worker_audience,
-        "app.operation": claims.operation,
-        "app.worker_job_id": str(claims.job_id),
-    }
-
-
 class PostgreSQLWorkerLeaseIssuer:
     """Mint one DB-timed lease through the dedicated Control function."""
 
@@ -287,10 +230,10 @@ class PostgreSQLWorkerLeaseIssuer:
             return token
         except (WorkerLeaseIssueNotAvailable, WorkerLeaseAuthorityUnavailable):
             raise
-        except SQLAlchemyError as error:
+        except SQLAlchemyError:
             raise WorkerLeaseAuthorityUnavailable(
                 "worker lease issuance database work failed"
-            ) from error
+            ) from None
 
     @staticmethod
     def _require_control_role(connection: Connection) -> None:
@@ -345,50 +288,30 @@ class PostgreSQLWorkerLeaseAuthority:
         )
         try:
             with self._worker_engine.begin() as connection:
-                self._bind_worker_context(connection, _worker_settings(claims))
-                if not self._registered_service_actor_is_current(connection, claims):
-                    raise _rejection(redemption.token)
-                scope = _open_service_actor_authority_scope()
-                try:
-                    actor = _construct_service_actor(
-                        authority_scope=scope,
-                        claims=claims,
-                        now=checked_at,
-                    )
-                    _require_active_service_actor(actor, now=checked_at)
-                    row = connection.execute(
-                        text(
-                            """
-                            SELECT effect_count
-                            FROM public.context_worker_complete_noop_job(
-                                :organization_id,
-                                :job_id,
-                                :service_principal_id,
-                                :workload,
-                                :worker_audience,
-                                :operation,
-                                :signing_key_version,
-                                :nonce,
-                                :issued_at,
-                                :expires_at
-                            )
-                            """
-                        ),
-                        {
-                            "organization_id": claims.organization_id,
-                            "job_id": claims.job_id,
-                            "service_principal_id": claims.service_principal_id,
-                            "workload": claims.workload,
-                            "worker_audience": claims.worker_audience,
-                            "operation": claims.operation,
-                            "signing_key_version": claims.signing_key_version,
-                            "nonce": claims.nonce,
-                            "issued_at": claims.issued_at,
-                            "expires_at": claims.expires_at,
-                        },
-                    ).one_or_none()
-                finally:
-                    _close_service_actor_authority_scope(scope)
+                self._require_worker_role(connection)
+                row = connection.execute(
+                    text(
+                        """
+                        SELECT effect_count
+                        FROM public.context_worker_complete_noop_job(
+                            :organization_id,
+                            :job_id,
+                            :signing_key_version,
+                            :nonce,
+                            :issued_at,
+                            :expires_at
+                        )
+                        """
+                    ),
+                    {
+                        "organization_id": claims.organization_id,
+                        "job_id": claims.job_id,
+                        "signing_key_version": claims.signing_key_version,
+                        "nonce": claims.nonce,
+                        "issued_at": claims.issued_at,
+                        "expires_at": claims.expires_at,
+                    },
+                ).one_or_none()
                 if row is None or row.effect_count != 1:
                     raise _rejection(redemption.token)
             return WorkerNoOpCompletion(
@@ -398,68 +321,16 @@ class PostgreSQLWorkerLeaseAuthority:
             )
         except (WorkNotAvailable, WorkerLeaseAuthorityUnavailable):
             raise
-        except SQLAlchemyError as error:
+        except SQLAlchemyError:
             raise WorkerLeaseAuthorityUnavailable(
                 "worker lease redemption database work failed"
-            ) from error
+            ) from None
 
     @staticmethod
-    def _registered_service_actor_is_current(
-        connection: Connection, claims: WorkerLeaseClaims
-    ) -> bool:
-        row = connection.execute(
-            text(
-                """
-                SELECT service_principal_id
-                FROM service_principal
-                WHERE organization_id = :organization_id
-                  AND service_principal_id = :service_principal_id
-                  AND workload = :workload
-                  AND worker_audience = :worker_audience
-                  AND operation = :operation
-                  AND enabled IS TRUE
-                """
-            ),
-            {
-                "organization_id": claims.organization_id,
-                "service_principal_id": claims.service_principal_id,
-                "workload": claims.workload,
-                "worker_audience": claims.worker_audience,
-                "operation": claims.operation,
-            },
-        ).one_or_none()
-        return (
-            row is not None
-            and row.service_principal_id == claims.service_principal_id
-        )
-
-    @staticmethod
-    def _bind_worker_context(
-        connection: Connection, settings: dict[str, str]
-    ) -> None:
+    def _require_worker_role(connection: Connection) -> None:
         try:
             assert_worker_role(connection)
         except AssertionError as error:
             raise WorkerLeaseAuthorityUnavailable(
                 "worker lease authority is not the dedicated worker role"
             ) from error
-        if tuple(settings) != _WORKER_CONTEXT_SETTINGS:
-            raise WorkerLeaseAuthorityUnavailable(
-                "worker lease context settings are incomplete"
-            )
-        for setting_name, expected_value in settings.items():
-            connection.execute(
-                text("SELECT set_config(:setting_name, :setting_value, true)"),
-                {
-                    "setting_name": setting_name,
-                    "setting_value": expected_value,
-                },
-            )
-            observed_value = connection.execute(
-                text("SELECT current_setting(:setting_name, true)"),
-                {"setting_name": setting_name},
-            ).scalar_one()
-            if observed_value != expected_value:
-                raise WorkerLeaseAuthorityUnavailable(
-                    "worker ServiceActor context binding failed"
-                )

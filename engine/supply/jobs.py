@@ -365,6 +365,8 @@ class WorkerLeaseCodec:
     def _verify_signed(self, token: WorkerLeaseToken) -> WorkerLeaseClaims:
         encoded_header, encoded_claims, encoded_signature = token._value.split(".")
         header = _decode_document(encoded_header, _HEADER_FIELDS)
+        if type(header["v"]) is not int:
+            raise ValueError
         if header != {
             "alg": _ALGORITHM,
             "dom": _DOMAIN,
@@ -385,7 +387,10 @@ class WorkerLeaseCodec:
         if not hmac.compare_digest(supplied_signature, expected_signature):
             raise ValueError
         document = _decode_document(encoded_claims, _CLAIM_FIELDS)
-        if document["signing_key_version"] != key_version:
+        if (
+            type(document["signing_key_version"]) is not int
+            or document["signing_key_version"] != key_version
+        ):
             raise ValueError
         if document["actor_kind"] != WORKER_LEASE_ACTOR_KIND:
             raise ValueError
@@ -402,106 +407,6 @@ class WorkerLeaseCodec:
             expires_at=_parse_timestamp(document["expires_at"]),
             nonce=_base64url_decode(cast(str, document["nonce"])),
         )
-
-
-class _ServiceActorAuthorityScope:
-    """Private lifetime token for one durable lease/job authority operation."""
-
-    __slots__ = ("_active", "_seal")
-    _active: bool
-    _seal: object
-
-    def __init__(self) -> None:
-        raise TypeError("ServiceActor authority scopes are not publicly constructible")
-
-    def __reduce__(self) -> NoReturn:
-        raise TypeError("ServiceActor authority scopes are not serializable")
-
-
-_SERVICE_ACTOR_AUTHORITY_SCOPE_SEAL = object()
-
-
-def _open_service_actor_authority_scope() -> _ServiceActorAuthorityScope:
-    scope = object.__new__(_ServiceActorAuthorityScope)
-    scope._active = True
-    scope._seal = _SERVICE_ACTOR_AUTHORITY_SCOPE_SEAL
-    return scope
-
-
-def _close_service_actor_authority_scope(
-    scope: _ServiceActorAuthorityScope,
-) -> None:
-    if (
-        type(scope) is not _ServiceActorAuthorityScope
-        or getattr(scope, "_seal", None) is not _SERVICE_ACTOR_AUTHORITY_SCOPE_SEAL
-    ):
-        raise TypeError("ServiceActor authority scope has the wrong nominal type")
-    scope._active = False
-
-
-@dataclass(frozen=True, slots=True, init=False)
-class ServiceActor:
-    """Least-privilege worker actor from registered service and exact lease facts."""
-
-    organization_id: UUID = field(repr=False)
-    service_principal_id: UUID = field(repr=False)
-    workload: str = field(repr=False)
-    worker_audience: str = field(repr=False)
-    operation: Literal["noop.complete"] = field(repr=False)
-    expires_at: datetime = field(repr=False)
-    _authority_scope: _ServiceActorAuthorityScope = field(repr=False)
-
-    def __init__(self, *args: object, **kwargs: object) -> None:
-        raise TypeError(
-            "ServiceActor can only be constructed by trusted durable-job authority"
-        )
-
-    def __reduce__(self) -> NoReturn:
-        raise TypeError("ServiceActor is not serializable")
-
-
-def _construct_service_actor(
-    *,
-    authority_scope: _ServiceActorAuthorityScope,
-    claims: WorkerLeaseClaims,
-    now: datetime,
-) -> ServiceActor:
-    if (
-        type(authority_scope) is not _ServiceActorAuthorityScope
-        or getattr(authority_scope, "_seal", None)
-        is not _SERVICE_ACTOR_AUTHORITY_SCOPE_SEAL
-        or not getattr(authority_scope, "_active", False)
-    ):
-        raise ValueError("ServiceActor requires an active trusted authority scope")
-    if type(claims) is not WorkerLeaseClaims:
-        raise TypeError("claims must be WorkerLeaseClaims")
-    checked_at = _require_utc("now", now)
-    if checked_at < claims.issued_at or checked_at >= claims.expires_at:
-        raise ValueError("ServiceActor requires a current WorkerLease")
-    actor = object.__new__(ServiceActor)
-    object.__setattr__(actor, "organization_id", claims.organization_id)
-    object.__setattr__(actor, "service_principal_id", claims.service_principal_id)
-    object.__setattr__(actor, "workload", claims.workload)
-    object.__setattr__(actor, "worker_audience", claims.worker_audience)
-    object.__setattr__(actor, "operation", claims.operation)
-    object.__setattr__(actor, "expires_at", claims.expires_at)
-    object.__setattr__(actor, "_authority_scope", authority_scope)
-    return actor
-
-
-def _require_active_service_actor(actor: ServiceActor, *, now: datetime) -> None:
-    if type(actor) is not ServiceActor:
-        raise TypeError("ServiceActor has the wrong nominal type")
-    checked_at = _require_utc("now", now)
-    if (
-        type(actor._authority_scope) is not _ServiceActorAuthorityScope
-        or getattr(actor._authority_scope, "_seal", None)
-        is not _SERVICE_ACTOR_AUTHORITY_SCOPE_SEAL
-        or not getattr(actor._authority_scope, "_active", False)
-        or actor.operation != WORKER_LEASE_OPERATION
-        or checked_at >= actor.expires_at
-    ):
-        raise ValueError("ServiceActor requires active exact-job authority")
 
 
 def _base64url_decode(value: str) -> bytes:

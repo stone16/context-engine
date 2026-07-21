@@ -64,6 +64,7 @@ def create_database_engine(
     """Build a PostgreSQL engine whose pool reset point clears every session GUC."""
 
     options: dict[str, object] = {
+        "hide_parameters": True,
         "pool_pre_ping": True,
         "pool_reset_on_return": None,
         "pool_size": pool_size,

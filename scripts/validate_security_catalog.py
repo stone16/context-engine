@@ -386,21 +386,21 @@ ACCEPT_010_FUTURE_CARRIER: dict[str, str] = {
     ),
 }
 
-ACCEPT_008_BOUNDED_CARRIER: dict[str, str] = {
-    "statusAtM0": "available",
-    "m0Expectation": "active_fail_closed",
+ACCEPT_008_FUTURE_CARRIER: dict[str, str] = {
+    "statusAtM0": "future",
+    "m0Expectation": "fail_closed",
     "upgradeTrigger": (
-        "Issue #17 activates only the signed one-shot persistent no-op "
-        "durable-job subcarrier. The complete fixture upgrades only after "
-        "Source, Resource, Revision, Policy Epoch, end-user delivery audience, "
-        "idempotency, generation, business mutation, outbox, and File carriers "
-        "run their "
-        "full per-binding matrix."
+        "Issue #17 independently activates only the signed one-shot persistent "
+        "no-op durable-job carrier. The full ACCEPT-008 fixture upgrades only "
+        "after Source, Resource, Revision, Policy Epoch, end-user delivery "
+        "audience, idempotency, generation, business mutation, outbox, and File "
+        "carriers run their full per-binding matrix."
     ),
 }
 
-CANONICAL_FUTURE_RUNTIME_CARRIERS: dict[str, dict[str, str]] = {
+CANONICAL_FUTURE_FIXTURE_CARRIERS: dict[str, dict[str, str]] = {
     "ACCEPT-005": ACCEPT_005_FUTURE_CARRIER,
+    "ACCEPT-008": ACCEPT_008_FUTURE_CARRIER,
     "ACCEPT-009": ACCEPT_009_FUTURE_CARRIER,
     "ACCEPT-010": ACCEPT_010_FUTURE_CARRIER,
 }
@@ -547,12 +547,14 @@ CANONICAL_WORKER_LEASE_ACTIVATION: dict[str, object] = {
             "id": "PG-WORKER-LEASE-NOOP-017",
             "surface": "tests/integration/test_worker_lease.py",
             "oracle": (
-                "The registered least-privilege ServicePrincipal and "
-                "ServiceActor redeem one exact same-Organization persistent "
-                "no-op job through an atomic current-row compare-and-set; "
+                "The bounded registered ServicePrincipal receiver binding "
+                "redeems one exact same-Organization persistent no-op job only "
+                "through the database function's atomic current-row "
+                "compare-and-set; the worker role has no table SELECT, and "
                 "rollback, replay, mismatch, expiry, and concurrent losers "
                 "create zero additional durable transitions and zero "
-                "wrong-Organization effects."
+                "wrong-Organization effects. This does not claim the full "
+                "canonical ServiceActor."
             ),
         },
         {
@@ -1131,27 +1133,27 @@ def _validate_fixture(
         collector.require_nonempty_string(
             carrier.get("upgradeTrigger"), f"{path}.carrier.upgradeTrigger"
         )
-        canonical_future_carrier = CANONICAL_FUTURE_RUNTIME_CARRIERS.get(
+        canonical_future_carrier = CANONICAL_FUTURE_FIXTURE_CARRIERS.get(
             fixture_id or ""
         )
         if canonical_future_carrier is not None and carrier != canonical_future_carrier:
-            message = (
-                "must preserve ACCEPT-005 as the future Continue carrier; "
-                "Issue #16 activates only its M0 refusal"
-                if fixture_id == "ACCEPT-005"
-                else "must exactly preserve the canonical future carrier; "
-                "Issue #16 activates only its M0 refusal"
-            )
-            collector.add(
-                f"{path}.carrier",
-                message,
-            )
-        if fixture_id == "ACCEPT-008" and carrier != ACCEPT_008_BOUNDED_CARRIER:
-            collector.add(
-                f"{path}.carrier",
-                "must preserve the bounded Issue #17 persistent no-op carrier; "
-                "the full ACCEPT-008 carrier remains deferred",
-            )
+            if fixture_id == "ACCEPT-005":
+                message = (
+                    "must preserve ACCEPT-005 as the future Continue carrier; "
+                    "Issue #16 activates only its M0 refusal"
+                )
+            elif fixture_id == "ACCEPT-008":
+                message = (
+                    "must preserve the full ACCEPT-008 fixture as "
+                    "future/fail_closed; Issue #17 activates only its "
+                    "independent persistent no-op carrier"
+                )
+            else:
+                message = (
+                    "must exactly preserve the canonical future carrier; "
+                    "Issue #16 activates only its M0 refusal"
+                )
+            collector.add(f"{path}.carrier", message)
 
     setup = collector.require_mapping(fixture.get("setup"), f"{path}.setup")
     if setup is not None:
@@ -2346,6 +2348,42 @@ def _validate_schema(
                         f"{expected_child}",
                         collector,
                     )
+
+        all_of = fixture_item.get("allOf")
+        accept_008_frozen = False
+        if isinstance(all_of, list):
+            for rule in all_of:
+                if not isinstance(rule, Mapping):
+                    continue
+                condition = rule.get("if")
+                consequence = rule.get("then")
+                if not isinstance(condition, Mapping) or not isinstance(
+                    consequence, Mapping
+                ):
+                    continue
+                condition_properties = condition.get("properties")
+                consequence_properties = consequence.get("properties")
+                if not isinstance(condition_properties, Mapping) or not isinstance(
+                    consequence_properties, Mapping
+                ):
+                    continue
+                fixture_id_condition = condition_properties.get("id")
+                carrier_consequence = consequence_properties.get("carrier")
+                if (
+                    isinstance(fixture_id_condition, Mapping)
+                    and fixture_id_condition.get("const") == "ACCEPT-008"
+                    and isinstance(carrier_consequence, Mapping)
+                    and carrier_consequence.get("const")
+                    == ACCEPT_008_FUTURE_CARRIER
+                ):
+                    accept_008_frozen = True
+                    break
+        if not accept_008_frozen:
+            collector.add(
+                "schema.fixtures.items.allOf",
+                "must independently freeze ACCEPT-008 as the canonical "
+                "future/fail_closed fixture carrier",
+            )
 
     definitions = root.get("$defs")
     definitions = collector.require_mapping(definitions, "schema.$defs")
