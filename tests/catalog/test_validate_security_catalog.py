@@ -19,6 +19,7 @@ from scripts.validate_security_catalog import (
     ACCEPT_012_UNAVAILABLE_CARRIER,
     ACL_PROOF_CASE_IDS,
     AUDIENCE_ACTION_CASE_IDS,
+    CANONICAL_ACTIVATION_ISSUE_LIST,
     CANONICAL_FAIL_CLOSED_OUTCOMES,
     CANONICAL_INVARIANT_IDS,
     CANONICAL_REVOCATION_ACTIVATION,
@@ -854,8 +855,8 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
 
         error = self.assert_catalog_error(
             catalog,
-            "activations: must exactly preserve the canonical ordered Issue #15, "
-            "Issue #16, Issue #17, and Issue #18 activation records and their "
+            "activations: must exactly preserve the canonical ordered "
+            f"{CANONICAL_ACTIVATION_ISSUE_LIST} activation records and their "
             "future/NOT_ACTIVE boundaries",
         )
         self.assertTrue(
@@ -875,8 +876,8 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
 
         self.assert_catalog_error(
             catalog,
-            "activations: must exactly preserve the canonical ordered Issue #15, "
-            "Issue #16, Issue #17, and Issue #18 activation records and their "
+            "activations: must exactly preserve the canonical ordered "
+            f"{CANONICAL_ACTIVATION_ISSUE_LIST} activation records and their "
             "future/NOT_ACTIVE boundaries",
         )
 
@@ -894,8 +895,8 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
 
         self.assert_catalog_error(
             catalog,
-            "activations: must exactly preserve the canonical ordered Issue #15, "
-            "Issue #16, Issue #17, and Issue #18 activation records and their "
+            "activations: must exactly preserve the canonical ordered "
+            f"{CANONICAL_ACTIVATION_ISSUE_LIST} activation records and their "
             "future/NOT_ACTIVE boundaries",
         )
 
@@ -939,8 +940,8 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
 
         self.assert_catalog_error(
             catalog,
-            "activations: must exactly preserve the canonical ordered Issue #15, "
-            "Issue #16, Issue #17, and Issue #18 activation records and their "
+            "activations: must exactly preserve the canonical ordered "
+            f"{CANONICAL_ACTIVATION_ISSUE_LIST} activation records and their "
             "future/NOT_ACTIVE boundaries",
         )
 

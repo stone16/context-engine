@@ -191,7 +191,7 @@ refs/timestamps 后完全相同；响应不含 Resource 标识、名称、Candid
 Principal/Agent grant authority、真实 Source/Resource ACL、通用检索与 continuation
 不属于这个已激活 tracer。Policy Epoch V0 本身也不激活 UI/外部 admin、DecisionAudit、
 outbox、cleanup、真实 Continue/OpenCitation 或完整 production WorkerLease/ticket carrier；
-#17 与 #18 仅通过各自 ADR 单独激活前述 bounded proof。
+Issue #17 与 Issue #18 仅通过各自 ADR 单独激活前述 bounded proof。
 其中 Continue/OpenCitation 的 M0 通用拒绝已经激活，但真实 issuance/redemption carrier
 仍保持 future；restricted in-process audit 只保留 `UNSUPPORTED_CAPABILITY` 类别，
 durable DecisionAudit 仍为 `NOT_ACTIVE`。

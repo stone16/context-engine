@@ -685,6 +685,9 @@ CANONICAL_ACTIVATIONS: list[dict[str, object]] = [
     CANONICAL_WORKER_LEASE_ACTIVATION,
     CANONICAL_TICKET_AUDIENCE_ACTIVATION,
 ]
+CANONICAL_ACTIVATION_ISSUE_LIST = ", ".join(
+    f"Issue {activation['issueRef']}" for activation in CANONICAL_ACTIVATIONS
+)
 
 
 @dataclass(frozen=True)
@@ -854,8 +857,8 @@ def _validate_activations(catalog: Mapping[str, Any], collector: _Collector) -> 
     if len(activations) != len(CANONICAL_ACTIVATIONS):
         collector.add(
             "activations",
-            "must contain exactly the canonical ordered Issue #15, Issue #16, "
-            "Issue #17, and Issue #18 "
+            f"must contain exactly the canonical ordered "
+            f"{CANONICAL_ACTIVATION_ISSUE_LIST} "
             "activation records",
         )
 
@@ -889,8 +892,8 @@ def _validate_activations(catalog: Mapping[str, Any], collector: _Collector) -> 
     if activations != CANONICAL_ACTIVATIONS:
         collector.add(
             "activations",
-            "must exactly preserve the canonical ordered Issue #15, Issue #16, "
-            "Issue #17, and Issue #18 "
+            f"must exactly preserve the canonical ordered "
+            f"{CANONICAL_ACTIVATION_ISSUE_LIST} "
             "activation records and their future/NOT_ACTIVE boundaries",
         )
 
