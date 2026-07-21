@@ -120,7 +120,7 @@ def test_request_narrowing_enforces_active_profile_bounds(
 def test_request_narrowing_rejects_empty_mutable_duplicate_or_invalid_sets(
     narrowing: dict[str, object],
 ) -> None:
-    with pytest.raises(ValueError, match="narrowing|refs"):
+    with pytest.raises(ValueError, match=r"narrowing|refs"):
         RequestNarrowing(**cast(Any, narrowing))
 
 
@@ -311,7 +311,10 @@ def test_context_package_is_the_tenant_safe_evidence_free_deliverable() -> None:
 def test_empty_package_rejects_invalid_or_detail_bearing_state(
     changes: dict[str, object],
 ) -> None:
-    with pytest.raises((TypeError, ValueError), match="package|empty|UTC|TTL|usage"):
+    with pytest.raises(
+        (TypeError, ValueError),
+        match=r"package|empty|UTC|TTL|usage",
+    ):
         make_package(**changes)
 
 
@@ -324,7 +327,7 @@ def test_resolved_is_a_closed_immutable_outcome() -> None:
     assert outcome.effective_budget is EFFECTIVE_BUDGET
     with pytest.raises(FrozenInstanceError):
         outcome.kind = "different"  # type: ignore[misc,assignment]
-    with pytest.raises((TypeError, ValueError), match="resolved|ContextPackage"):
+    with pytest.raises((TypeError, ValueError), match=r"resolved|ContextPackage"):
         Resolved(
             package=package,
             effective_budget=EFFECTIVE_BUDGET,

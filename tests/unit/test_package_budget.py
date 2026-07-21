@@ -24,7 +24,7 @@ def test_omitted_request_inherits_the_finite_server_ceiling() -> None:
 def test_explicit_empty_request_is_rejected() -> None:
     with pytest.raises(
         ValueError,
-        match="^at least one budget dimension must be provided$",
+        match=r"^at least one budget dimension must be provided$",
     ):
         PackageBudgetRequest()
 
