@@ -366,6 +366,32 @@ ACCEPT_005_FUTURE_CARRIER: dict[str, str] = {
     ),
 }
 
+ACCEPT_009_FUTURE_CARRIER: dict[str, str] = {
+    "statusAtM0": "future",
+    "m0Expectation": "fail_closed",
+    "upgradeTrigger": (
+        "The owning File authorized-Package issue #23 first upgrades this "
+        "fixture for Mirrored FileSourceAccess; a later federated-provider "
+        "issue upgrades it for real Live source-native ACL evidence."
+    ),
+}
+
+ACCEPT_010_FUTURE_CARRIER: dict[str, str] = {
+    "statusAtM0": "future",
+    "m0Expectation": "fail_closed",
+    "upgradeTrigger": (
+        "The owning M2 OpenCitation implementation issue upgrades this "
+        "fixture only after current-opener authorization and distinct token "
+        "variants exist at the public HTTP seam."
+    ),
+}
+
+CANONICAL_FUTURE_RUNTIME_CARRIERS: dict[str, dict[str, str]] = {
+    "ACCEPT-005": ACCEPT_005_FUTURE_CARRIER,
+    "ACCEPT-009": ACCEPT_009_FUTURE_CARRIER,
+    "ACCEPT-010": ACCEPT_010_FUTURE_CARRIER,
+}
+
 CANONICAL_REVOCATION_ACTIVATION: dict[str, object] = {
     "issueRef": "#15",
     "invariantRef": "REVOCATION-006",
@@ -427,6 +453,65 @@ CANONICAL_REVOCATION_ACTIVATION: dict[str, object] = {
         "UI/external admin",
     ],
 }
+
+CANONICAL_UNAVAILABLE_CAPABILITY_ACTIVATION: dict[str, object] = {
+    "issueRef": "#16",
+    "invariantRef": "INDEX-NOT-AUTHORITY-005",
+    "carrier": (
+        "ContextRuntime.resolve(Continue | OpenCitation | server-owned "
+        "unavailable Acquire plan)"
+    ),
+    "status": "active_fail_closed",
+    "policyEpochScope": "organization-v0",
+    "controlBoundary": (
+        "RuntimeCapabilityGate.require_available(RuntimeCapability)"
+    ),
+    "testEvidence": [
+        {
+            "id": "RUN-UNAVAILABLE-016",
+            "surface": "tests/unit/test_runtime_unavailable_capabilities.py",
+            "oracle": (
+                "Table-driven Runtime cases prove unavailable Continue, "
+                "OpenCitation, and server-owned Acquire plans traverse the "
+                "content-free sealed Kernel preflight and stop before Provider, "
+                "index, or source I/O; the restricted mandatory audit retains "
+                "only UNSUPPORTED_CAPABILITY."
+            ),
+        },
+        {
+            "id": "HTTP-UNAVAILABLE-016",
+            "surface": "tests/unit/test_http_unavailable_capabilities.py",
+            "oracle": (
+                "The closed HTTP and OpenAPI request union admits its declared "
+                "variants, maps known unavailable capabilities to generic 200 "
+                "domain outcomes before configured scope-authority or content I/O, "
+                "rejects unknown fields and every query string with 422, and "
+                "serializes no internal cause or protected detail."
+            ),
+        },
+    ],
+    "deferredEvidence": [
+        "real-continuation-redemption",
+        "real-citation-redemption",
+        "real-federated-source-native-authorization",
+    ],
+    "futureCarriers": [
+        "Continue",
+        "OpenCitation",
+        "federated/source-native ContextProvider",
+    ],
+    "notActive": [
+        "continuation issuance/redemption",
+        "citation locator redemption",
+        "federated Provider/source-native ACL I/O",
+        "File publication",
+    ],
+}
+
+CANONICAL_ACTIVATIONS: list[dict[str, object]] = [
+    CANONICAL_REVOCATION_ACTIVATION,
+    CANONICAL_UNAVAILABLE_CAPABILITY_ACTIVATION,
+]
 
 
 @dataclass(frozen=True)
@@ -592,10 +677,11 @@ def _validate_activations(catalog: Mapping[str, Any], collector: _Collector) -> 
     if not isinstance(activations, list):
         collector.add("activations", "must be an array")
         return
-    if len(activations) != 1:
+    if len(activations) != len(CANONICAL_ACTIVATIONS):
         collector.add(
             "activations",
-            "must contain exactly the canonical Issue #15 activation record",
+            "must contain exactly the canonical ordered Issue #15 and Issue #16 "
+            "activation records",
         )
 
     for index, value in enumerate(activations):
@@ -625,11 +711,11 @@ def _validate_activations(catalog: Mapping[str, Any], collector: _Collector) -> 
         for field in ("deferredEvidence", "futureCarriers", "notActive"):
             collector.require_string_list(activation.get(field), f"{path}.{field}")
 
-    if activations != [CANONICAL_REVOCATION_ACTIVATION]:
+    if activations != CANONICAL_ACTIVATIONS:
         collector.add(
             "activations",
-            "must exactly preserve the canonical Issue #15 Acquire revocation "
-            "activation and its future/NOT_ACTIVE boundaries",
+            "must exactly preserve the canonical ordered Issue #15 and Issue #16 "
+            "activation records and their future/NOT_ACTIVE boundaries",
         )
 
 
@@ -951,11 +1037,20 @@ def _validate_fixture(
         collector.require_nonempty_string(
             carrier.get("upgradeTrigger"), f"{path}.carrier.upgradeTrigger"
         )
-        if fixture_id == "ACCEPT-005" and carrier != ACCEPT_005_FUTURE_CARRIER:
+        canonical_future_carrier = CANONICAL_FUTURE_RUNTIME_CARRIERS.get(
+            fixture_id or ""
+        )
+        if canonical_future_carrier is not None and carrier != canonical_future_carrier:
+            message = (
+                "must preserve ACCEPT-005 as the future Continue carrier; "
+                "Issue #16 activates only its M0 refusal"
+                if fixture_id == "ACCEPT-005"
+                else "must exactly preserve the canonical future carrier; "
+                "Issue #16 activates only its M0 refusal"
+            )
             collector.add(
                 f"{path}.carrier",
-                "must preserve ACCEPT-005 as the future Continue carrier; "
-                "Issue #15 activates Acquire only",
+                message,
             )
 
     setup = collector.require_mapping(fixture.get("setup"), f"{path}.setup")
@@ -1959,7 +2054,7 @@ def _validate_schema(
             collector.add("schema.properties.hardOracles.items", "must be false")
 
     array_specs = (
-        ("activations", 1, ACTIVATION_FIELDS),
+        ("activations", len(CANONICAL_ACTIVATIONS), ACTIVATION_FIELDS),
         ("invariants", EXPECTED_INVARIANT_COUNT, INVARIANT_FIELDS),
         ("fixtures", EXPECTED_FIXTURE_COUNT, FIXTURE_FIELDS),
     )
@@ -1975,9 +2070,48 @@ def _validate_schema(
                 collector.add(f"schema.properties.{name}.{keyword}", f"must be {count}")
         if array_schema.get("uniqueItems") is not True:
             collector.add(f"schema.properties.{name}.uniqueItems", "must be true")
+        if name == "activations":
+            prefix_items = array_schema.get("prefixItems")
+            expected_activation_constants = tuple(CANONICAL_ACTIVATIONS)
+            if not isinstance(prefix_items, list) or len(prefix_items) != len(
+                expected_activation_constants
+            ):
+                collector.add(
+                    "schema.properties.activations.prefixItems",
+                    "must freeze exactly the canonical ordered activation records",
+                )
+            else:
+                for index, expected_activation in enumerate(
+                    expected_activation_constants
+                ):
+                    prefix_item = prefix_items[index]
+                    if (
+                        not isinstance(prefix_item, Mapping)
+                        or prefix_item.get("const") != expected_activation
+                    ):
+                        collector.add(
+                            "schema.properties.activations.prefixItems"
+                            f"[{index}].const",
+                            f"must freeze the canonical Issue #{15 + index} "
+                            "activation record",
+                        )
+            if array_schema.get("items") is not False:
+                collector.add(
+                    "schema.properties.activations.items", "must be false"
+                )
+        item_node = array_schema.get("items")
+        if name == "activations" and item_node is False:
+            prefix_items = array_schema.get("prefixItems")
+            item_node = (
+                prefix_items[0]
+                if isinstance(prefix_items, list) and prefix_items
+                else None
+            )
+            if isinstance(item_node, Mapping) and "const" in item_node:
+                item_node = {"$ref": "#/$defs/activation"}
         item = _resolve_schema_node(
             root,
-            array_schema.get("items"),
+            item_node,
             f"schema.properties.{name}.items",
             collector,
         )

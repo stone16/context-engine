@@ -32,6 +32,7 @@ from engine.runtime.contracts import (
     ContextNeed,
     ContextPackage,
     RequestNarrowing,
+    Resolved,
 )
 from engine.runtime.delivery import (
     TrustedDeliveryContext,
@@ -346,6 +347,7 @@ def test_hostile_candidate_order_delivers_only_exact_authorized_evidence(
             Acquire(need=ContextNeed(query="hostile index")),
         )
 
+    assert type(outcome) is Resolved
     package = outcome.package
     assert index.calls == 1
     assert port.body_calls == [locator(AUTHORIZED)]
@@ -396,9 +398,11 @@ def test_stale_scope_epoch_stops_before_candidate_or_body_io() -> None:
             Acquire(need=ContextNeed(query="stale cached scope")),
         )
 
+    assert type(outcome) is Resolved
     assert outcome.scope_decision.is_empty is True
     assert outcome.scope_decision.target_count == 0
     assert outcome.package.blocks == ()
+    assert type(outcome) is Resolved
     assert outcome.package.evidence == ()
     assert index.calls == 0
     assert port.locator_calls == []
@@ -423,11 +427,13 @@ def test_mid_resolve_epoch_change_discards_assembled_content_before_audit_and_de
             Acquire(need=ContextNeed(query="mid-resolve revocation")),
         )
 
+    assert type(outcome) is Resolved
     # This is the mutation witness: without the final validation, A-safe leaks.
     assert epoch.reads == 3
     assert index.calls == 1
     assert port.body_calls == [locator(AUTHORIZED)]
     assert outcome.package.blocks == ()
+    assert type(outcome) is Resolved
     assert outcome.package.evidence == ()
     assert outcome.package.coverage.status == "empty"
     assert outcome.package.coverage.reason == "no_authorized_evidence"
@@ -595,6 +601,7 @@ def test_runtime_rejects_authority_locator_that_does_not_match_candidate_exactly
             Acquire(need=ContextNeed(query="mismatched authoritative locator")),
         )
 
+    assert type(outcome) is Resolved
     assert outcome.package.evidence == ()
     assert outcome.package.blocks == ()
     assert outcome.package.coverage.status == "empty"
@@ -617,6 +624,7 @@ def test_missing_materialized_body_uses_the_same_tenant_safe_empty_outcome() -> 
             Acquire(need=ContextNeed(query="missing projected body")),
         )
 
+    assert type(outcome) is Resolved
     assert port.locator_calls == [AUTHORIZED]
     assert port.body_calls == [locator(AUTHORIZED)]
     assert outcome.package.blocks == ()
@@ -663,6 +671,7 @@ def test_runtime_canonical_empty_package_is_equal_for_every_internal_branch() ->
                 delivery,
                 Acquire(need=ContextNeed(query="canonical empty outcome")),
             )
+        assert type(outcome) is Resolved
         packages.append(_canonical_empty_package(outcome.package))
 
     assert packages == [packages[0]] * len(packages)
@@ -695,6 +704,7 @@ def test_denied_cross_organization_and_missing_candidates_share_one_runtime_outc
             Acquire(need=ContextNeed(query="non-enumerating probe")),
         )
 
+    assert type(outcome) is Resolved
     package = outcome.package
     assert index.calls == 1
     assert port.locator_calls == sorted(set(ranked), key=lambda candidate: (
@@ -808,6 +818,7 @@ def test_empty_effective_scope_performs_zero_candidate_or_body_io() -> None:
             Acquire(need=ContextNeed(query="empty effective scope")),
         )
 
+    assert type(outcome) is Resolved
     assert outcome.scope_decision.is_empty is True
     assert outcome.package.evidence == ()
     assert index.calls == 0
@@ -834,6 +845,7 @@ def test_authorized_body_over_budget_is_not_delivered() -> None:
             ),
         )
 
+    assert type(outcome) is Resolved
     assert port.body_calls == [locator(AUTHORIZED)]
     assert outcome.package.blocks == ()
     assert outcome.package.evidence == ()
@@ -885,6 +897,7 @@ def test_budget_selection_is_independent_of_hostile_candidate_rank() -> None:
                 ),
             )
 
+        assert type(outcome) is Resolved
         return tuple(block.body for block in outcome.package.blocks)
 
     forward = resolve((AUTHORIZED, AUTHORIZED_SECOND))
@@ -910,6 +923,7 @@ def test_hostile_index_duplicate_candidates_are_deduplicated_before_projection(
             Acquire(need=ContextNeed(query="duplicate hostile candidates")),
         )
 
+    assert type(outcome) is Resolved
     assert port.locator_calls == [AUTHORIZED]
     assert port.body_calls == [locator(AUTHORIZED)]
     assert tuple(block.body for block in outcome.package.blocks) == ("A-safe",)
@@ -937,6 +951,7 @@ def test_agent_ceiling_denial_keeps_candidate_content_out_of_package() -> None:
             Acquire(need=ContextNeed(query="agent ceiling")),
         )
 
+    assert type(outcome) is Resolved
     assert outcome.package.evidence == ()
     assert index.calls == 0
     assert port.body_calls == []
@@ -961,6 +976,7 @@ def test_request_narrowing_filters_candidate_before_body_projection() -> None:
             ),
         )
 
+    assert type(outcome) is Resolved
     assert outcome.package.evidence == ()
     assert index.calls == 0
     assert port.body_calls == []

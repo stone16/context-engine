@@ -195,7 +195,7 @@ def resolve(
 ) -> Resolved:
     selected_spy = spy or ContentIoSpy()
     with bound_runtime_inputs(operands) as (invocation, delivery):
-        return make_runtime(selected_spy).resolve(
+        outcome = make_runtime(selected_spy).resolve(
             invocation,
             delivery,
             Acquire(
@@ -203,6 +203,8 @@ def resolve(
                 narrowing=narrowing,
             ),
         )
+    assert type(outcome) is Resolved
+    return outcome
 
 
 def test_runtime_observes_only_the_effective_scope_receipt_and_returns_empty_package(

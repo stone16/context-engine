@@ -393,6 +393,13 @@ and accepted ADRs, not by this glossary.
 
 - **DecisionAudit:** restricted security lineage for authorization decisions;
   it is not tenant-visible Learning content.
+- **RuntimeCapability:** a server-owned closed designation of one Runtime
+  operation or required adapter behavior. It is never caller-authored authority,
+  and availability is checked before Provider, index, or source-content I/O.
+- **UNSUPPORTED_CAPABILITY:** the restricted internal refusal category emitted
+  when a declared RuntimeCapability has no active carrier. It is not a public
+  response code and carries no token, locator, Provider, Source, or Resource
+  detail.
 - **CandidateRef:** an opaque, content-free retrieval candidate; it is neither a
   ContextFragment nor Evidence.
 - **AuthorizedProjection:** content projected only after exact authorization for
