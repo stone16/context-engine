@@ -5,7 +5,8 @@
       "#2",
       "#5",
       "#15",
-      "#16"
+      "#16",
+      "#17"
     ],
     "documentRefs": [
       "README.md",
@@ -18,7 +19,7 @@
       "docs/decisions/0027-organization-policy-epoch.md",
       "docs/decisions/0028-fail-closed-unavailable-runtime-capabilities.md"
     ],
-    "reconciliation": "Issue #2 fixes the product and testing decisions, issue #5 requires exactly fifteen release invariants and twelve canonical acceptance fixtures, and ADR-0019 resolves the later nineteen-label prose expansion without weakening any safeguard. Issue #15 activates only Organization-level next-request resolve(Acquire) revocation evidence under REVOCATION-006: PG-REVOCATION-006, RUN-006, and CACHE-002 are active while BLOB-002 and Continue, citation, lease, ticket, audit, outbox, cleanup, finer-epoch, UI, and external-admin carriers remain future or NOT_ACTIVE. Issue #16 activates only the M0 refusal gate for unavailable Continue, OpenCitation, and server-owned unavailable Acquire plans: its real continuation, citation, federated/source-native, and File carriers remain future, while its Runtime and HTTP refusal surfaces prove generic outcomes before content I/O. The canonical set is IDs 001 through 012, 014, 015, and 019: CACHE-SCOPE-013 remains a preregistered conditional extension; AUDIENCE-016 is absorbed by SCOPE-INTERSECTION-004 and EGRESS-011; ACL-PROOF-017 is absorbed by INDEX-NOT-AUTHORITY-005 and REVOCATION-006; DELIVERY-EVIDENCE-018 is absorbed by TRANSPORT-UNTRUSTED-008. ACCEPT-001 through ACCEPT-012 follow ADR-0019's category order. Protected-asset references A-01 through A-08 refer, in order, to the eight bullets in the threat model's Protected assets section. Every expectedEvidence value below is a stable planned case identifier, not a claim that the case ran or passed; only an exact activation record upgrades named evidence, while fixture carrier status and the explicit M0 oracle preserve every other accepted-versus-active distinction."
+    "reconciliation": "Issue #2 fixes the product and testing decisions, issue #5 requires exactly fifteen release invariants and twelve canonical acceptance fixtures, and ADR-0019 resolves the later nineteen-label prose expansion without weakening any safeguard. Issue #15 activates only Organization-level next-request resolve(Acquire) revocation evidence under REVOCATION-006: PG-REVOCATION-006, RUN-006, and CACHE-002 are active while BLOB-002 and Continue, citation, Policy-Epoch-bound WorkerLease, ticket, audit, outbox, cleanup, finer-epoch, UI, and external-admin carriers remain future or NOT_ACTIVE. Issue #16 activates only the M0 refusal gate for unavailable Continue, OpenCitation, and server-owned unavailable Acquire plans: its real continuation, citation, federated/source-native, and File carriers remain future, while its Runtime and HTTP refusal surfaces prove generic outcomes before content I/O. Issue #17 activates only the signed one-shot persistent no-op durable-job WorkerLease subcarrier under WORKER-LEASE-007. It binds one exact worker audience but no end-user delivery audience or Policy Epoch, and proves only LEASE-SIGNING-017, PG-WORKER-LEASE-NOOP-017, and WORKER-LEASE-REPLAY-007; Source, Resource, Revision, Policy Epoch, end-user delivery audience, idempotency, generation, business mutation, outbox, File publication, and the full ACCEPT-008 matrix remain deferred or NOT_ACTIVE. The canonical set is IDs 001 through 012, 014, 015, and 019: CACHE-SCOPE-013 remains a preregistered conditional extension; AUDIENCE-016 is absorbed by SCOPE-INTERSECTION-004 and EGRESS-011; ACL-PROOF-017 is absorbed by INDEX-NOT-AUTHORITY-005 and REVOCATION-006; DELIVERY-EVIDENCE-018 is absorbed by TRANSPORT-UNTRUSTED-008. ACCEPT-001 through ACCEPT-012 follow ADR-0019's category order. Protected-asset references A-01 through A-08 refer, in order, to the eight bullets in the threat model's Protected assets section. Every expectedEvidence value below is a stable planned case identifier, not a claim that the case ran or passed; only an exact activation record upgrades named evidence, while fixture carrier status and the explicit M0 oracle preserve every other accepted-versus-active distinction."
   },
   "hardOracles": [
     {
@@ -63,7 +64,7 @@
         }
       ],
       "deferredEvidence": ["BLOB-002"],
-      "futureCarriers": ["Continue", "OpenCitation", "WorkerLease", "ContextAccessTicket", "ActionTicket"],
+      "futureCarriers": ["Continue", "OpenCitation", "Policy-Epoch-bound WorkerLease", "ContextAccessTicket", "ActionTicket"],
       "notActive": ["DecisionAudit", "outbox", "cleanup", "Source/Resource Policy Epochs", "UI/external admin"]
     },
     {
@@ -88,6 +89,34 @@
       "deferredEvidence": ["real-continuation-redemption", "real-citation-redemption", "real-federated-source-native-authorization"],
       "futureCarriers": ["Continue", "OpenCitation", "federated/source-native ContextProvider"],
       "notActive": ["continuation issuance/redemption", "citation locator redemption", "federated Provider/source-native ACL I/O", "File publication"]
+    },
+    {
+      "issueRef": "#17",
+      "invariantRef": "WORKER-LEASE-007",
+      "carrier": "signed one-shot persistent no-op durable-job WorkerLease",
+      "status": "active_fail_closed",
+      "policyEpochScope": "not-bound-issue-17",
+      "controlBoundary": "complete_persistent_noop_job(PostgreSQLWorkerLeaseAuthority, WorkerLeaseRedemption)",
+      "testEvidence": [
+        {
+          "id": "LEASE-SIGNING-017",
+          "surface": "tests/unit/test_worker_lease.py",
+          "oracle": "Versioned domain-separated canonical HMAC-SHA256 signing with an explicit injected keyring accepts one exact no-op lease and generically rejects unknown versions, malformed tokens, tampering, expiry, claim mutation, and UserActor substitution without exposing claims or key material."
+        },
+        {
+          "id": "PG-WORKER-LEASE-NOOP-017",
+          "surface": "tests/integration/test_worker_lease.py",
+          "oracle": "The bounded registered ServicePrincipal receiver binding redeems one exact same-Organization persistent no-op job only through the database function's atomic current-row compare-and-set; the worker role has no table SELECT, and rollback, replay, mismatch, expiry, and concurrent losers create zero additional durable transitions and zero wrong-Organization effects. This does not claim the full canonical ServiceActor."
+        },
+        {
+          "id": "WORKER-LEASE-REPLAY-007",
+          "surface": "tests/integration/test_worker_lease.py",
+          "oracle": "The real worker application seam completes exactly one persistent no-op job with its server-minted lease; replay returns only generic work-not-available and leaves the completed durable state unchanged."
+        }
+      ],
+      "deferredEvidence": ["PROP-WORKER-LEASE-007", "PG-WORKER-LEASE-007", "DB-011", "JOB-001", "JOB-005", "full ACCEPT-008 per-binding matrix"],
+      "futureCarriers": ["Source-bound acquisition", "Resource/Revision mutation", "Policy-Epoch/end-user-delivery-audience-bound WorkerLease", "idempotency/generation-bound business mutation", "outbox dispatch", "File publication"],
+      "notActive": ["Source", "Resource", "Revision", "Policy Epoch", "end-user delivery audience", "idempotency", "generation", "content-bearing mutation", "outbox", "File publication", "full ACCEPT-008 PASS"]
     }
   ],
   "invariants": [
@@ -278,7 +307,8 @@
       "authorityRefs": [
         "docs/security/context-engine-threat-model.md#3-trust-boundaries",
         "docs/security/Test-Architecture-与可验证性设计.md#73-queueworker-contract",
-        "docs/security/安全负向测试清单.md#4-workeroutbox-与-publication"
+        "docs/security/安全负向测试清单.md#4-workeroutbox-与-publication",
+        "#17"
       ]
     },
     {
@@ -866,9 +896,9 @@
       "title": "WorkerLease replay and binding mutation change no durable state",
       "decisionStatus": "accepted",
       "carrier": {
-        "statusAtM0": "available",
-        "m0Expectation": "active_fail_closed",
-        "upgradeTrigger": "Issue #17 upgrades this authority fixture with signed WorkerLease verification against the current durable job row and one-shot ledger."
+        "statusAtM0": "future",
+        "m0Expectation": "fail_closed",
+        "upgradeTrigger": "Issue #17 independently activates only the signed one-shot persistent no-op durable-job carrier. The full ACCEPT-008 fixture upgrades only after Source, Resource, Revision, Policy Epoch, end-user delivery audience, idempotency, generation, business mutation, outbox, and File carriers run their full per-binding matrix."
       },
       "setup": {
         "preconditions": [
@@ -924,7 +954,8 @@
       "authorityRefs": [
         "docs/agents/prd-contextengine-implementation.md#implementation-decisions",
         "docs/security/安全负向测试清单.md#4-workeroutbox-与-publication",
-        "docs/decisions/0019-security-catalog-normalization.md#decision"
+        "docs/decisions/0019-security-catalog-normalization.md#decision",
+        "#17"
       ]
     },
     {

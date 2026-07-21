@@ -42,7 +42,7 @@ schema、Python type、threat fixture 或新的架构决策。
 | `ContextPackage` | Request-scoped, expiring online output | One Organization, ContextRun, Principal, purpose, and audience | Authorized output, not reusable authority |
 | `ContextAccessTicket` | Short-lived signed source-read capability | One Organization, identity chain, provider audience, purpose, epoch, and expiry | Authority only for its declared read audience |
 | `ActionTicket` | Short-lived signed one-effect capability | One Organization, identity chain, effect/audience/payload, epoch, and expiry | Authority only for its declared external effect |
-| `WorkerLease` | Short-lived signed one-shot work capability | One Organization, durable job, ServiceActor/workload, expiry, and nonce | Authority only for the matching job attempt |
+| `WorkerLease` | Short-lived signed one-shot work capability | One Organization, durable job, registered service workload, expiry, and nonce | Authority only for the matching job attempt |
 | `acquisition checkpoint` | Persistent monotonic acquisition progress | One Organization and ContextSource | None |
 | `publish watermark` | Persistent monotonic visibility progress | One Organization and ContextSource | None |
 
@@ -314,7 +314,7 @@ A signed, short-lived, one-shot capability for exactly one external effect.
 
 A server-minted, signed, short-lived, one-shot capability for one durable job
 attempt. 中文：WorkerLease 把 worker 权限限制到指定 Organization、job、operation 和
-ServiceActor/workload，并防 cross-job/cross-tenant replay。
+registered service workload，并防 cross-job/cross-tenant replay。
 
 - **Owner/scope:** one Organization, one durable job attempt, its declared work,
   and the registered service workload that may perform it.
@@ -322,6 +322,10 @@ ServiceActor/workload，并防 cross-job/cross-tenant replay。
   makes it invalid. Exact claim/redemption fields belong to the owning ADR.
 - **Invariant:** no general tenant/read/action authority and no long-lived source
   credential; rejected lease produces zero business effect.
+- **Activation note:** Issue #17 binds a registered ServicePrincipal to
+  `supply.noop` + `context-engine-worker` + `noop.complete`; this bounded carrier
+  is not the canonical ServiceActor until source/allowed-operation set, Policy
+  Epoch, and the remaining ActorContext fields exist.
 - **Do not confuse with:** queue message, durable job, lock,
   ContextAccessTicket, ActionTicket, or ServicePrincipal.
 

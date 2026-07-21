@@ -89,4 +89,7 @@ GRANT USAGE ON SCHEMA public
 -- pgvector is an untrusted extension, so only the disposable bootstrap
 -- superuser creates it. Application schema objects remain migrator-owned.
 CREATE EXTENSION vector WITH SCHEMA public;
+-- WorkerLease nonce redemption uses only pgcrypto's SHA-256 digest primitive.
+-- The bootstrap superuser, never an application role, owns the extension.
+CREATE EXTENSION pgcrypto WITH SCHEMA public;
 SQL

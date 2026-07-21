@@ -4,11 +4,16 @@ from __future__ import annotations
 
 from sqlalchemy import Connection, text
 
-from engine.persistence.configuration import CONTROL_ROLE, MIGRATOR_ROLE, RUNTIME_ROLE
+from engine.persistence.configuration import (
+    CONTROL_ROLE,
+    MIGRATOR_ROLE,
+    RUNTIME_ROLE,
+    WORKER_ROLE,
+)
 
 
 def _assert_non_owner_role(connection: Connection, expected_role: str) -> None:
-    """Reject any control/runtime session with authority outside its exact login."""
+    """Reject any application session with authority outside its exact login."""
 
     row = connection.execute(
         text(
@@ -86,7 +91,7 @@ def _assert_non_owner_role(connection: Connection, expected_role: str) -> None:
 
 
 def assert_control_role(connection: Connection) -> None:
-    """Require the dedicated least-privilege access-policy mutation login."""
+    """Require the dedicated least-privilege internal Control login."""
 
     _assert_non_owner_role(connection, CONTROL_ROLE)
 
@@ -95,3 +100,9 @@ def assert_runtime_role(connection: Connection) -> None:
     """Reject owner, superuser, BYPASSRLS, inheriting, or CREATE-capable sessions."""
 
     _assert_non_owner_role(connection, RUNTIME_ROLE)
+
+
+def assert_worker_role(connection: Connection) -> None:
+    """Require the dedicated least-privilege Supply worker login."""
+
+    _assert_non_owner_role(connection, WORKER_ROLE)

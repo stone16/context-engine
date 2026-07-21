@@ -59,7 +59,7 @@ def test_empty_baseline_remains_a_reversible_historical_revision(
         assert _application_tables(migration_configuration) == ["alembic_version"]
     finally:
         command.upgrade(alembic_configuration, "head")
-    assert _revision_rows(migration_configuration) == ["20260721_0005"]
+    assert _revision_rows(migration_configuration) == ["20260722_0006"]
 
 
 def test_organization_isolation_revision_downgrades_and_reapplies_cleanly(
@@ -74,7 +74,7 @@ def test_organization_isolation_revision_downgrades_and_reapplies_cleanly(
     finally:
         command.upgrade(alembic_configuration, "head")
 
-    assert _revision_rows(migration_configuration) == ["20260721_0005"]
+    assert _revision_rows(migration_configuration) == ["20260722_0006"]
     assert _application_tables(migration_configuration) == [
         "alembic_version",
         "context_fragment",
@@ -85,7 +85,9 @@ def test_organization_isolation_revision_downgrades_and_reapplies_cleanly(
         "organization_policy_epoch",
         "organization_record",
         "resource_access_policy",
+        "service_principal",
         "user_account",
+        "worker_noop_job",
     ]
 
 
@@ -105,7 +107,7 @@ def test_membership_revision_downgrades_to_issue_8_and_reapplies_cleanly(
     finally:
         command.upgrade(alembic_configuration, "head")
 
-    assert _revision_rows(migration_configuration) == ["20260721_0005"]
+    assert _revision_rows(migration_configuration) == ["20260722_0006"]
 
 
 def test_content_schema_revision_downgrades_to_membership_and_reapplies_cleanly(
@@ -126,7 +128,7 @@ def test_content_schema_revision_downgrades_to_membership_and_reapplies_cleanly(
     finally:
         command.upgrade(alembic_configuration, "head")
 
-    assert _revision_rows(migration_configuration) == ["20260721_0005"]
+    assert _revision_rows(migration_configuration) == ["20260722_0006"]
     assert _application_tables(migration_configuration) == [
         "alembic_version",
         "context_fragment",
@@ -137,7 +139,9 @@ def test_content_schema_revision_downgrades_to_membership_and_reapplies_cleanly(
         "organization_policy_epoch",
         "organization_record",
         "resource_access_policy",
+        "service_principal",
         "user_account",
+        "worker_noop_job",
     ]
 
 
@@ -164,7 +168,7 @@ def test_policy_epoch_revision_downgrades_to_content_and_reapplies_cleanly(
     finally:
         command.upgrade(alembic_configuration, "head")
 
-    assert _revision_rows(migration_configuration) == ["20260721_0005"]
+    assert _revision_rows(migration_configuration) == ["20260722_0006"]
     assert _application_tables(migration_configuration) == [
         "alembic_version",
         "context_fragment",
@@ -175,5 +179,49 @@ def test_policy_epoch_revision_downgrades_to_content_and_reapplies_cleanly(
         "organization_policy_epoch",
         "organization_record",
         "resource_access_policy",
+        "service_principal",
         "user_account",
+        "worker_noop_job",
+    ]
+
+
+def test_worker_lease_revision_downgrades_to_policy_epoch_and_reapplies_cleanly(
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    """Issue #17 worker authority is one reversible schema revision."""
+
+    alembic_configuration = Config(ROOT / "alembic.ini")
+
+    try:
+        command.downgrade(alembic_configuration, "20260721_0005")
+        assert _revision_rows(migration_configuration) == ["20260721_0005"]
+        assert _application_tables(migration_configuration) == [
+            "alembic_version",
+            "context_fragment",
+            "context_resource",
+            "context_revision",
+            "membership",
+            "organization",
+            "organization_policy_epoch",
+            "organization_record",
+            "resource_access_policy",
+            "user_account",
+        ]
+    finally:
+        command.upgrade(alembic_configuration, "head")
+
+    assert _revision_rows(migration_configuration) == ["20260722_0006"]
+    assert _application_tables(migration_configuration) == [
+        "alembic_version",
+        "context_fragment",
+        "context_resource",
+        "context_revision",
+        "membership",
+        "organization",
+        "organization_policy_epoch",
+        "organization_record",
+        "resource_access_policy",
+        "service_principal",
+        "user_account",
+        "worker_noop_job",
     ]

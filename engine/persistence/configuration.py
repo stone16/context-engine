@@ -13,6 +13,7 @@ from sqlalchemy.exc import ArgumentError
 MIGRATOR_ROLE = "context_engine_migrator"
 CONTROL_ROLE = "context_engine_control"
 ACCESS_POLICY_DEFINER_ROLE = "context_engine_access_policy_definer"
+WORKER_LEASE_DEFINER_ROLE = "context_engine_worker_lease_definer"
 RUNTIME_ROLE = "context_engine_runtime"
 WORKER_ROLE = "context_engine_worker"
 

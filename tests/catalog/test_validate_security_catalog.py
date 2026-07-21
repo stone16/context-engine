@@ -13,6 +13,7 @@ from typing import Any, cast
 
 from scripts.validate_security_catalog import (
     ACCEPT_005_FUTURE_CARRIER,
+    ACCEPT_008_FUTURE_CARRIER,
     ACCEPT_009_FUTURE_CARRIER,
     ACCEPT_010_FUTURE_CARRIER,
     ACL_PROOF_CASE_IDS,
@@ -21,6 +22,7 @@ from scripts.validate_security_catalog import (
     CANONICAL_INVARIANT_IDS,
     CANONICAL_REVOCATION_ACTIVATION,
     CANONICAL_UNAVAILABLE_CAPABILITY_ACTIVATION,
+    CANONICAL_WORKER_LEASE_ACTIVATION,
     DEFAULT_CATALOG_PATH,
     DEFAULT_SCHEMA_PATH,
     REQUIRED_RUNTIME_EVIDENCE,
@@ -418,6 +420,8 @@ def make_catalog() -> dict[str, object]:
         }
         if fixture_id == "ACCEPT-005":
             carrier = copy.deepcopy(ACCEPT_005_FUTURE_CARRIER)
+        elif fixture_id == "ACCEPT-008":
+            carrier = copy.deepcopy(ACCEPT_008_FUTURE_CARRIER)
         elif fixture_id == "ACCEPT-009":
             carrier = copy.deepcopy(ACCEPT_009_FUTURE_CARRIER)
         elif fixture_id == "ACCEPT-010":
@@ -477,6 +481,7 @@ def make_catalog() -> dict[str, object]:
         "activations": [
             copy.deepcopy(CANONICAL_REVOCATION_ACTIVATION),
             copy.deepcopy(CANONICAL_UNAVAILABLE_CAPABILITY_ACTIVATION),
+            copy.deepcopy(CANONICAL_WORKER_LEASE_ACTIVATION),
         ],
         "invariants": invariants,
         "fixtures": fixtures,
@@ -547,8 +552,8 @@ def make_schema() -> dict[str, object]:
             },
             "activations": {
                 "type": "array",
-                "minItems": 2,
-                "maxItems": 2,
+                "minItems": 3,
+                "maxItems": 3,
                 "uniqueItems": True,
                 "prefixItems": [
                     {"const": copy.deepcopy(CANONICAL_REVOCATION_ACTIVATION)},
@@ -557,6 +562,7 @@ def make_schema() -> dict[str, object]:
                             CANONICAL_UNAVAILABLE_CAPABILITY_ACTIVATION
                         )
                     },
+                    {"const": copy.deepcopy(CANONICAL_WORKER_LEASE_ACTIVATION)},
                 ],
                 "items": False,
             },
@@ -734,6 +740,23 @@ def make_schema() -> dict[str, object]:
                         },
                     },
                 },
+                "allOf": [
+                    {
+                        "if": {
+                            "properties": {"id": {"const": "ACCEPT-008"}},
+                            "required": ["id"],
+                        },
+                        "then": {
+                            "properties": {
+                                "carrier": {
+                                    "const": copy.deepcopy(
+                                        ACCEPT_008_FUTURE_CARRIER
+                                    )
+                                }
+                            }
+                        },
+                    }
+                ],
             },
         },
     }
@@ -804,8 +827,9 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
 
         error = self.assert_catalog_error(
             catalog,
-            "activations: must exactly preserve the canonical ordered Issue #15 "
-            "and Issue #16 activation records and their future/NOT_ACTIVE boundaries",
+            "activations: must exactly preserve the canonical ordered Issue #15, "
+            "Issue #16, and Issue #17 activation records and their "
+            "future/NOT_ACTIVE boundaries",
         )
         self.assertTrue(
             any(message.startswith("catalog.activations") for message in error.errors)
@@ -824,9 +848,56 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
 
         self.assert_catalog_error(
             catalog,
-            "activations: must exactly preserve the canonical ordered Issue #15 "
-            "and Issue #16 activation records and their future/NOT_ACTIVE boundaries",
+            "activations: must exactly preserve the canonical ordered Issue #15, "
+            "Issue #16, and Issue #17 activation records and their "
+            "future/NOT_ACTIVE boundaries",
         )
+
+    def test_issue_17_worker_lease_activation_is_bounded_and_frozen(self) -> None:
+        catalog = make_catalog()
+        activation = object_list_at(catalog, "activations")[2]
+        self.assertEqual(activation, CANONICAL_WORKER_LEASE_ACTIVATION)
+        self.assertEqual(activation["policyEpochScope"], "not-bound-issue-17")
+
+        test_evidence = object_list_at(activation, "testEvidence")
+        test_evidence[0]["surface"] = "tests/unit/false_green.py"
+        activation["policyEpochScope"] = "organization-v0"
+        activation["futureCarriers"] = []
+        activation["notActive"] = ["none"]
+
+        self.assert_catalog_error(
+            catalog,
+            "activations: must exactly preserve the canonical ordered Issue #15, "
+            "Issue #16, and Issue #17 activation records and their "
+            "future/NOT_ACTIVE boundaries",
+        )
+
+    def test_issue_17_noop_does_not_false_green_full_accept_008(self) -> None:
+        catalog = make_catalog()
+        fixture = object_list_at(catalog, "fixtures")[7]
+        carrier = object_at(fixture, "carrier")
+        self.assertEqual(
+            object_list_at(catalog, "activations")[2]["status"],
+            "active_fail_closed",
+        )
+        self.assertEqual(carrier, ACCEPT_008_FUTURE_CARRIER)
+        self.assertEqual(carrier["statusAtM0"], "future")
+        self.assertEqual(carrier["m0Expectation"], "fail_closed")
+
+        carrier.update(
+            {
+                "statusAtM0": "available",
+                "m0Expectation": "active_fail_closed",
+                "upgradeTrigger": "Issue #17 proves the full fixture.",
+            }
+        )
+        error = self.assert_catalog_error(
+            catalog,
+            "fixtures[7].carrier: must preserve the full ACCEPT-008 fixture as "
+            "future/fail_closed; Issue #17 activates only its independent "
+            "persistent no-op carrier",
+        )
+        self.assertNotIn("full ACCEPT-008 PASS", str(error))
 
     def test_issue_16_refusal_does_not_false_green_future_carriers(self) -> None:
         catalog = make_catalog()
@@ -888,6 +959,34 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
                 error.startswith("catalog.activations[0]: must equal")
                 for error in raised.exception.errors
             )
+        )
+
+    def test_schema_independently_freezes_full_accept_008_as_future(self) -> None:
+        catalog = make_catalog()
+        schema = load_document(DEFAULT_SCHEMA_PATH)
+        fixture_schema = object_at(schema, "$defs", "fixture")
+        all_of = fixture_schema["allOf"]
+        assert isinstance(all_of, list)
+        accept_008_rule = next(
+            rule
+            for rule in all_of
+            if isinstance(rule, dict)
+            and isinstance(rule.get("if"), dict)
+            and isinstance(rule["if"].get("properties"), dict)
+            and isinstance(rule["if"]["properties"].get("id"), dict)
+            and rule["if"]["properties"]["id"].get("const") == "ACCEPT-008"
+        )
+        object_at(accept_008_rule, "then", "properties", "carrier")["const"] = {
+            "statusAtM0": "available",
+            "m0Expectation": "active_fail_closed",
+            "upgradeTrigger": "Issue #17 proves the full fixture.",
+        }
+
+        self.assert_catalog_error(
+            catalog,
+            "schema.fixtures.items.allOf: must independently freeze ACCEPT-008 "
+            "as the canonical future/fail_closed fixture carrier",
+            schema,
         )
 
     def test_future_carrier_drift_reports_the_whole_carrier_not_a_false_status(

@@ -17,6 +17,7 @@ from engine.persistence.configuration import (
     ACCESS_POLICY_DEFINER_ROLE,
     CONTROL_ROLE,
     MIGRATOR_ROLE,
+    WORKER_LEASE_DEFINER_ROLE,
 )
 
 _HEX_SECRET = re.compile(r"[0-9a-f]{64}")
@@ -34,6 +35,7 @@ class RoleProvisioningContract:
     control_role: str
     control_password: str
     definer_role: str
+    worker_lease_definer_role: str
 
     def __post_init__(self) -> None:
         for field_name in (
@@ -42,11 +44,18 @@ class RoleProvisioningContract:
             "migrator_role",
             "control_role",
             "definer_role",
+            "worker_lease_definer_role",
         ):
             value = getattr(self, field_name)
             if type(value) is not str or not value or value.isspace():
                 raise ValueError(f"{field_name} must be non-empty")
-        if len({self.migrator_role, self.control_role, self.definer_role}) != 3:
+        security_roles = {
+            self.migrator_role,
+            self.control_role,
+            self.definer_role,
+            self.worker_lease_definer_role,
+        }
+        if len(security_roles) != 4:
             raise ValueError("provisioned database roles must be distinct")
         if type(self.postgres_port) is not int or not 1 <= self.postgres_port <= 65535:
             raise ValueError("postgres_port must be a valid TCP port")
@@ -95,6 +104,7 @@ def _contract_from_environment(
         control_role=environment["CONTEXT_ENGINE_CONTROL_ROLE"],
         control_password=environment["CONTEXT_ENGINE_CONTROL_PASSWORD"],
         definer_role=ACCESS_POLICY_DEFINER_ROLE,
+        worker_lease_definer_role=WORKER_LEASE_DEFINER_ROLE,
     )
 
 
@@ -195,13 +205,29 @@ def provision_security_roles(
     connection: psycopg.Connection[Any],
     contract: RoleProvisioningContract,
 ) -> None:
-    """Create or reconcile the two post-init roles without schema migration."""
+    """Create or reconcile post-init roles and bootstrap-owned extensions."""
 
     if type(contract) is not RoleProvisioningContract:
         raise TypeError("role provisioning contract has the wrong nominal type")
     _require_bootstrap_authority(connection, contract)
     _create_role_if_missing(connection, contract.control_role)
     _create_role_if_missing(connection, contract.definer_role)
+    _create_role_if_missing(connection, contract.worker_lease_definer_role)
+
+    connection.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA public")
+    extension = connection.execute(
+        """
+        SELECT namespace.nspname, owner.rolname
+        FROM pg_extension AS extension
+        JOIN pg_namespace AS namespace
+          ON namespace.oid = extension.extnamespace
+        JOIN pg_roles AS owner
+          ON owner.oid = extension.extowner
+        WHERE extension.extname = 'pgcrypto'
+        """
+    ).fetchone()
+    if extension != ("public", contract.bootstrap_role):
+        raise RuntimeError("pgcrypto must be bootstrap-owned in public")
 
     connection.execute(
         sql.SQL(
@@ -218,11 +244,19 @@ def provision_security_roles(
             "NOINHERIT NOREPLICATION NOBYPASSRLS"
         ).format(sql.Identifier(contract.definer_role))
     )
+    connection.execute(
+        sql.SQL(
+            "ALTER ROLE {} WITH NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE "
+            "NOINHERIT NOREPLICATION NOBYPASSRLS"
+        ).format(sql.Identifier(contract.worker_lease_definer_role))
+    )
 
     _revoke_roles_granted_to(connection, contract.control_role)
     _revoke_roles_granted_to(connection, contract.definer_role)
+    _revoke_roles_granted_to(connection, contract.worker_lease_definer_role)
     _revoke_members_of(connection, contract.control_role)
     _revoke_members_of(connection, contract.definer_role)
+    _revoke_members_of(connection, contract.worker_lease_definer_role)
     connection.execute(
         sql.SQL(
             "GRANT {} TO {} WITH ADMIN FALSE, INHERIT FALSE, SET TRUE"
@@ -231,8 +265,20 @@ def provision_security_roles(
             sql.Identifier(contract.migrator_role),
         )
     )
+    connection.execute(
+        sql.SQL(
+            "GRANT {} TO {} WITH ADMIN FALSE, INHERIT FALSE, SET TRUE"
+        ).format(
+            sql.Identifier(contract.worker_lease_definer_role),
+            sql.Identifier(contract.migrator_role),
+        )
+    )
 
-    for role_name in (contract.control_role, contract.definer_role):
+    for role_name in (
+        contract.control_role,
+        contract.definer_role,
+        contract.worker_lease_definer_role,
+    ):
         connection.execute(
             sql.SQL("REVOKE ALL PRIVILEGES ON DATABASE {} FROM {}").format(
                 sql.Identifier(contract.database_name),

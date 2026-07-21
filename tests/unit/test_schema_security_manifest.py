@@ -23,13 +23,13 @@ def table_entries(document: dict[str, Any]) -> dict[str, dict[str, Any]]:
     }
 
 
-def test_manifest_classifies_the_exact_issue_15_policy_epoch_schema() -> None:
+def test_manifest_classifies_the_exact_issue_17_worker_lease_schema() -> None:
     """PROP-TENANT-OWNERSHIP-001: no current table is left unclassified."""
 
     document = manifest()
     tables = table_entries(document)
 
-    assert document["manifestVersion"] == "4.0.0"
+    assert document["manifestVersion"] == "5.2.0"
     assert set(tables) == {
         "alembic_version",
         "context_fragment",
@@ -40,7 +40,9 @@ def test_manifest_classifies_the_exact_issue_15_policy_epoch_schema() -> None:
         "organization_policy_epoch",
         "organization_record",
         "resource_access_policy",
+        "service_principal",
         "user_account",
+        "worker_noop_job",
     }
     assert tables["alembic_version"]["classification"] == "global"
     assert tables["organization"]["classification"] == "global"
@@ -55,6 +57,201 @@ def test_manifest_classifies_the_exact_issue_15_policy_epoch_schema() -> None:
     assert tables["context_resource"]["classification"] == "tenant_owned"
     assert tables["context_revision"]["classification"] == "tenant_owned"
     assert tables["context_fragment"]["classification"] == "tenant_owned"
+    assert tables["service_principal"]["classification"] == "tenant_owned"
+    assert tables["worker_noop_job"]["classification"] == "tenant_owned"
+
+
+def test_worker_lease_manifest_requires_exact_receiver_and_job() -> None:
+    """DB-011/JOB-001/JOB-005: worker authority is exact and fail closed."""
+
+    entries = table_entries(manifest())
+    principal = entries["service_principal"]
+    job = entries["worker_noop_job"]
+
+    assert principal["organizationInclusiveKeys"] == [
+        {
+            "name": "pk_service_principal",
+            "kind": "primary_key",
+            "columns": ["organization_id", "service_principal_id"],
+        },
+        {
+            "name": "uq_service_principal_worker_binding",
+            "kind": "unique",
+            "columns": [
+                "organization_id",
+                "service_principal_id",
+                "workload",
+                "worker_audience",
+                "operation",
+            ],
+        },
+    ]
+    assert job["organizationInclusiveKeys"] == [
+        {
+            "name": "pk_worker_noop_job",
+            "kind": "primary_key",
+            "columns": ["organization_id", "job_id"],
+        }
+    ]
+    job_foreign_keys = {
+        foreign_key["name"]: foreign_key for foreign_key in job["foreignKeys"]
+    }
+    assert job_foreign_keys[
+        "fk_worker_noop_job_service_principal_binding"
+    ] == {
+        "name": "fk_worker_noop_job_service_principal_binding",
+        "columns": [
+            "organization_id",
+            "service_principal_id",
+            "workload",
+            "worker_audience",
+            "operation",
+        ],
+        "references": {
+            "table": "service_principal",
+            "columns": [
+                "organization_id",
+                "service_principal_id",
+                "workload",
+                "worker_audience",
+                "operation",
+            ],
+        },
+    }
+
+    assert {constraint["name"] for constraint in principal["checkConstraints"]} == {
+        "ck_service_principal_workload_bounds",
+        "ck_service_principal_workload_issue17",
+        "ck_service_principal_worker_audience_bounds",
+        "ck_service_principal_worker_audience_issue17",
+        "ck_service_principal_operation_noop_complete",
+    }
+    assert {constraint["name"] for constraint in job["checkConstraints"]} == {
+        "ck_worker_noop_job_workload_bounds",
+        "ck_worker_noop_job_workload_issue17",
+        "ck_worker_noop_job_worker_audience_bounds",
+        "ck_worker_noop_job_worker_audience_issue17",
+        "ck_worker_noop_job_actor_kind_service",
+        "ck_worker_noop_job_operation_noop_complete",
+        "ck_worker_noop_job_state",
+        "ck_worker_noop_job_signing_key_version_positive",
+        "ck_worker_noop_job_nonce_sha256_length",
+        "ck_worker_noop_job_state_consistency",
+    }
+    state_constraint = next(
+        constraint["expression"]
+        for constraint in job["checkConstraints"]
+        if constraint["name"] == "ck_worker_noop_job_state_consistency"
+    )
+    for state in ("available", "leased", "completed"):
+        assert f"state = '{state}'" in state_constraint
+    for field in (
+        "signing_key_version",
+        "lease_nonce_digest",
+        "lease_issued_at",
+        "lease_expires_at",
+        "lease_redeemed_at",
+        "completed_at",
+        "effect_count",
+    ):
+        assert field in state_constraint
+
+    assert principal["permittedOperations"] == {
+        "context_engine_runtime": [],
+        "context_engine_worker": [],
+        "context_engine_worker_lease_definer": ["SELECT"],
+    }
+    assert job["permittedOperations"] == {
+        "context_engine_control": ["EXECUTE issue_noop_worker_lease"],
+        "context_engine_runtime": [],
+        "context_engine_worker": ["EXECUTE complete_noop_worker_job"],
+        "context_engine_worker_lease_definer": ["SELECT", "UPDATE"],
+    }
+
+    for entry in (principal, job):
+        rls = entry["rowLevelSecurity"]
+        assert rls["enabled"] is True
+        assert rls["forced"] is True
+        migrator_policy = next(
+            policy
+            for policy in rls["policies"]
+            if policy["roles"] == ["context_engine_migrator"]
+        )
+        assert migrator_policy == {
+            "name": f"{entry['name']}_migrator_administration",
+            "command": "ALL",
+            "roles": ["context_engine_migrator"],
+            "using": "true",
+            "withCheck": "true",
+        }
+        assert not [
+            policy
+            for policy in rls["policies"]
+            if policy["roles"] == ["context_engine_worker"]
+        ]
+        assert {"DB-011", "JOB-001", "JOB-005", "WORKER-LEASE-007"} <= set(
+            entry["negativeTestIds"]
+        )
+        assert "WORKER-LEASE-007" in entry["securityInvariantIds"]
+
+    principal_definer_policy = next(
+        policy
+        for policy in principal["rowLevelSecurity"]["policies"]
+        if policy["roles"] == ["context_engine_worker_lease_definer"]
+    )
+    assert principal_definer_policy["command"] == "SELECT"
+    assert "enabled IS TRUE" in principal_definer_policy["using"]
+    for receiver_value in ("supply.noop", "context-engine-worker", "noop.complete"):
+        assert receiver_value in principal_definer_policy["using"]
+    definer_policies = [
+        policy
+        for policy in job["rowLevelSecurity"]["policies"]
+        if policy["roles"] == ["context_engine_worker_lease_definer"]
+    ]
+    assert {policy["command"] for policy in definer_policies} == {
+        "SELECT",
+        "UPDATE",
+    }
+    update_policy = next(
+        policy for policy in definer_policies if policy["command"] == "UPDATE"
+    )
+    assert update_policy["using"] == update_policy["withCheck"]
+    assert "app.worker_job_id" in update_policy["using"]
+    assert "active_service_principal.enabled IS TRUE" in update_policy["using"]
+    for receiver_value in ("supply.noop", "context-engine-worker", "noop.complete"):
+        assert receiver_value in update_policy["using"]
+
+    operations = manifest()["controlOperations"]
+    assert operations[1:] == [
+        {
+            "name": "issue_noop_worker_lease",
+            "databaseFunction": "context_worker_issue_noop_lease",
+            "role": "context_engine_control",
+            "definerRole": "context_engine_worker_lease_definer",
+            "directTableMutationAllowed": False,
+            "databaseOwnedTime": True,
+            "maxTtlSeconds": 3600,
+            "expiredLeaseReissuance": True,
+            "atomicWrites": ["worker_noop_job"],
+        },
+        {
+            "name": "complete_noop_worker_job",
+            "databaseFunction": "context_worker_complete_noop_job",
+            "role": "context_engine_worker",
+            "definerRole": "context_engine_worker_lease_definer",
+            "directTableMutationAllowed": False,
+            "databaseOwnedTime": True,
+            "rawNonceComparedAsSha256": True,
+            "fixedReceiver": {
+                "databaseRole": "context_engine_worker",
+                "workload": "supply.noop",
+                "workerAudience": "context-engine-worker",
+                "operation": "noop.complete",
+            },
+            "callerSuppliedReceiverDimensions": [],
+            "atomicWrites": ["worker_noop_job"],
+        },
+    ]
 
 
 def test_membership_manifest_requires_exact_user_actor_and_read_only_runtime() -> None:
@@ -439,16 +636,14 @@ def test_policy_epoch_manifest_seals_runtime_reads_and_control_mutation() -> Non
             for policy in definer_policies
         )
 
-    assert document["controlOperations"] == [
-        {
-            "name": "change_resource_access",
-            "databaseFunction": "context_control_revoke_resource_access",
-            "role": "context_engine_control",
-            "definerRole": "context_engine_access_policy_definer",
-            "directTableMutationAllowed": False,
-            "atomicWrites": [
-                "resource_access_policy",
-                "organization_policy_epoch",
-            ],
-        }
-    ]
+    assert document["controlOperations"][0] == {
+        "name": "change_resource_access",
+        "databaseFunction": "context_control_revoke_resource_access",
+        "role": "context_engine_control",
+        "definerRole": "context_engine_access_policy_definer",
+        "directTableMutationAllowed": False,
+        "atomicWrites": [
+            "resource_access_policy",
+            "organization_policy_epoch",
+        ],
+    }

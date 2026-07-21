@@ -12,6 +12,7 @@ from engine.persistence import (
     DatabaseConfiguration,
     HarnessDatabaseConfigurations,
     assert_runtime_role,
+    assert_worker_role,
     create_database_engine,
     load_harness_database_configurations,
 )
@@ -64,6 +65,21 @@ def guarded_runtime_engine(
     try:
         with engine.connect() as connection:
             assert_runtime_role(connection)
+        yield engine
+    finally:
+        engine.dispose()
+
+
+@pytest.fixture(scope="session")
+def guarded_worker_engine(
+    worker_configuration: DatabaseConfiguration,
+) -> Iterator[Engine]:
+    """Expose only a verified non-owner worker engine to lease tests."""
+
+    engine = create_database_engine(worker_configuration)
+    try:
+        with engine.connect() as connection:
+            assert_worker_role(connection)
         yield engine
     finally:
         engine.dispose()
