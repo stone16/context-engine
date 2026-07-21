@@ -22,6 +22,12 @@ from engine.runtime.organization import (
     ExistingOrganizationVerification,
     _construct_existing_http_organization_verification,
 )
+from engine.runtime.policy_epoch import (
+    _close_policy_epoch_authority_scope,
+    _construct_policy_epoch_session,
+    _observe_current_policy_epoch,
+    _open_policy_epoch_authority_scope,
+)
 
 PROCESS_VALID_TOKEN = "process-test-credential"
 PROCESS_ORGANIZATION_REF = "81e18bca-86a1-478a-937d-7675c6fe69b0"
@@ -63,7 +69,21 @@ class ProcessTestMembershipAuthority:
         ):
             raise MembershipNotCurrent
         scope = _open_membership_authority_scope()
+        policy_epoch_scope = _open_policy_epoch_authority_scope()
+
+        class CurrentEpochPort:
+            def read_current_epoch(self, organization_id: UUID) -> object:
+                assert organization_id == identity.organization_id
+                return 1
+
         try:
+            verification = _observe_current_policy_epoch(
+                _construct_policy_epoch_session(
+                    authority_scope=policy_epoch_scope,
+                    organization_id=identity.organization_id,
+                    port=CurrentEpochPort(),
+                )
+            )
             yield _construct_current_membership_verification(
                 authority_scope=scope,
                 organization_id=identity.organization_id,
@@ -74,8 +94,10 @@ class ProcessTestMembershipAuthority:
                 request_id=identity.request_id,
                 authentication_binding_ref=identity.authentication_binding_ref,
                 checked_at=identity.checked_at,
+                policy_epoch_verification=verification,
             )
         finally:
+            _close_policy_epoch_authority_scope(policy_epoch_scope)
             _close_membership_authority_scope(scope)
 
 

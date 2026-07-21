@@ -38,7 +38,7 @@ schema、Python type、threat fixture 或新的架构决策。
 | `Evidence` | Request-scoped designation in one ContextRun | One Organization, run, Principal, purpose, and decision | Authorization result, never an authority |
 | `ContextRun` | Persistent authorized-only resolution lineage | One Organization and invocation | Learning/audit lineage, not a grant |
 | `PolicySnapshot` | Request-scoped decision snapshot; lineage may persist | One Organization and ContextRun | Records decision inputs; stale snapshots cannot authorize |
-| `Policy Epoch` | Persistent monotonic revocation value | Tenant-owned; granularity remains pending WP04 and its ADR update | Current value is a freshness check, not a grant |
+| `Policy Epoch` | Persistent monotonic revocation value | One Organization in V0; finer granularity is not active | Current value is a freshness check, not a grant |
 | `ContextPackage` | Request-scoped, expiring online output | One Organization, ContextRun, Principal, purpose, and audience | Authorized output, not reusable authority |
 | `ContextAccessTicket` | Short-lived signed source-read capability | One Organization, identity chain, provider audience, purpose, epoch, and expiry | Authority only for its declared read audience |
 | `ActionTicket` | Short-lived signed one-effect capability | One Organization, identity chain, effect/audience/payload, epoch, and expiry | Authority only for its declared external effect |
@@ -253,12 +253,16 @@ A tenant-owned, monotonically increasing local revocation value.
 中文：Policy Epoch 在引擎 durable observation 后阻止旧授权决策被继续复用；物理
 cleanup 可异步。
 
-- **Owner/scope:** persistent tenant-owned state. Organization、source 或
-  resource 粒度尚未决定，必须由 WP04 实证与后续 ADR 更新裁决；本术语表不预设答案。
-- **Lifecycle:** only moves forward through trusted access changes and is never
-  reused.
-- **Invariant:** stale snapshots/tickets fail closed. Epoch cannot detect an
-  upstream change not yet observed and cannot recall bytes already delivered.
+- **Owner/scope:** persistent tenant-owned state. V0 stores exactly one value
+  per Organization; Source/Resource refinement remains a measured future
+  decision rather than an active second authority.
+- **Lifecycle:** only moves forward through a trusted access change. The active
+  V0 Control transaction commits the access mutation and epoch advancement
+  together; failure commits neither and a value is never reused.
+- **Invariant:** an Acquire decision must bind the observed Organization epoch
+  and pass a current-value check immediately before delivery. Stale decisions
+  fail closed. Epoch cannot detect an upstream change not yet observed, grant
+  access by itself, or recall bytes already delivered.
 - **Do not confuse with:** PolicySnapshot, configuration version, acquisition
   checkpoint, publish watermark, or cleanup completion.
 

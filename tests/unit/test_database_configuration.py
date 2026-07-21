@@ -8,6 +8,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.pool import QueuePool
 
 from engine.persistence.configuration import (
+    CONTROL_ROLE,
     MIGRATOR_ROLE,
     RUNTIME_ROLE,
     WORKER_ROLE,
@@ -29,6 +30,10 @@ def database_environment() -> dict[str, str]:
             "postgresql+psycopg://context_engine_runtime:runtime-secret@"
             "127.0.0.1:5432/context_engine"
         ),
+        "CONTEXT_ENGINE_CONTROL_DATABASE_URL": (
+            "postgresql+psycopg://context_engine_control:control-secret@"
+            "127.0.0.1:5432/context_engine"
+        ),
         "CONTEXT_ENGINE_WORKER_DATABASE_URL": (
             "postgresql+psycopg://context_engine_worker:worker-secret@"
             "127.0.0.1:5432/context_engine"
@@ -39,6 +44,7 @@ def database_environment() -> dict[str, str]:
         ),
         "CONTEXT_ENGINE_MIGRATOR_ROLE": MIGRATOR_ROLE,
         "CONTEXT_ENGINE_RUNTIME_ROLE": RUNTIME_ROLE,
+        "CONTEXT_ENGINE_CONTROL_ROLE": CONTROL_ROLE,
         "CONTEXT_ENGINE_WORKER_ROLE": WORKER_ROLE,
     }
 
@@ -47,6 +53,7 @@ def database_environment() -> dict[str, str]:
     ("purpose", "missing_name"),
     [
         (DatabasePurpose.MIGRATION, "CONTEXT_ENGINE_MIGRATION_DATABASE_URL"),
+        (DatabasePurpose.CONTROL_PLANE, "CONTEXT_ENGINE_CONTROL_DATABASE_URL"),
         (DatabasePurpose.API_RUNTIME, "CONTEXT_ENGINE_RUNTIME_DATABASE_URL"),
         (DatabasePurpose.SUPPLY_WORKER, "CONTEXT_ENGINE_WORKER_DATABASE_URL"),
         (DatabasePurpose.SECURITY_TEST, "CONTEXT_ENGINE_TEST_DATABASE_URL"),
@@ -76,6 +83,11 @@ def test_runtime_never_falls_back_to_migration_credentials() -> None:
 @pytest.mark.parametrize(
     ("purpose", "url_name", "unsafe_role"),
     [
+        (
+            DatabasePurpose.CONTROL_PLANE,
+            "CONTEXT_ENGINE_CONTROL_DATABASE_URL",
+            MIGRATOR_ROLE,
+        ),
         (
             DatabasePurpose.API_RUNTIME,
             "CONTEXT_ENGINE_RUNTIME_DATABASE_URL",
@@ -155,6 +167,7 @@ def test_harness_contract_keeps_roles_distinct_and_test_uses_runtime() -> None:
     configurations = load_harness_database_configurations(database_environment())
 
     assert configurations.migration.expected_role == MIGRATOR_ROLE
+    assert configurations.control.expected_role == CONTROL_ROLE
     assert configurations.runtime.expected_role == RUNTIME_ROLE
     assert configurations.worker.expected_role == WORKER_ROLE
     assert configurations.security_test.expected_role == RUNTIME_ROLE

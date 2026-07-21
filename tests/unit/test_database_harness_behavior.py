@@ -177,3 +177,37 @@ def test_legacy_two_file_state_migrates_without_changing_project_identity(
     assert migrated_project == project
     assert f"--project-name {project}" in command
     assert project_path.read_text(encoding="utf-8").strip() == project
+
+
+def test_legacy_environment_gains_one_generated_control_credential(
+    tmp_path: Path,
+) -> None:
+    stub_directory = tmp_path / "bin"
+    stub_directory.mkdir()
+    _stub_harness_dependencies(stub_directory)
+    checkout = tmp_path / "checkout"
+    project, _ = _run_stubbed_harness(checkout, stub_directory)
+    environment_path = checkout / ".context-engine/database.env"
+    legacy_environment = "\n".join(
+        line
+        for line in environment_path.read_text(encoding="utf-8").splitlines()
+        if not line.startswith("CONTEXT_ENGINE_CONTROL_")
+    )
+    environment_path.write_text(f"{legacy_environment}\n", encoding="utf-8")
+    environment_path.chmod(0o600)
+
+    migrated_project, command = _run_stubbed_harness(checkout, stub_directory)
+
+    migrated_lines = environment_path.read_text(encoding="utf-8").splitlines()
+    migrated = dict(line.split("=", maxsplit=1) for line in migrated_lines)
+    assert migrated_project == project
+    assert f"--project-name {project}" in command
+    assert migrated["CONTEXT_ENGINE_CONTROL_ROLE"] == "context_engine_control"
+    control_password = migrated["CONTEXT_ENGINE_CONTROL_PASSWORD"]
+    assert re.fullmatch(r"[0-9a-f]{64}", control_password)
+    assert migrated["CONTEXT_ENGINE_CONTROL_DATABASE_URL"] == (
+        "postgresql+psycopg://context_engine_control:"
+        f"{control_password}@127.0.0.1:"
+        f"{migrated['CONTEXT_ENGINE_POSTGRES_PORT']}/context_engine"
+    )
+    assert environment_path.stat().st_mode & 0o777 == 0o600

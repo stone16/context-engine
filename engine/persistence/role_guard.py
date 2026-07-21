@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from sqlalchemy import Connection, text
 
-from engine.persistence.configuration import MIGRATOR_ROLE, RUNTIME_ROLE
+from engine.persistence.configuration import CONTROL_ROLE, MIGRATOR_ROLE, RUNTIME_ROLE
 
 
-def assert_runtime_role(connection: Connection) -> None:
-    """Reject owner, superuser, BYPASSRLS, inheriting, or CREATE-capable sessions."""
+def _assert_non_owner_role(connection: Connection, expected_role: str) -> None:
+    """Reject any control/runtime session with authority outside its exact login."""
 
     row = connection.execute(
         text(
@@ -23,16 +23,14 @@ def assert_runtime_role(connection: Connection) -> None:
                 role.rolcreatedb AS can_create_databases,
                 role.rolreplication AS can_replicate,
                 NOT EXISTS (
-                    SELECT 1
-                    FROM pg_auth_members AS membership
+                    SELECT 1 FROM pg_auth_members AS membership
                     WHERE membership.member = role.oid
                 ) AS has_no_role_memberships,
                 pg_has_role(current_user, :migrator_role, 'MEMBER')
                     AS is_migrator_member,
                 pg_has_role(current_user, :migrator_role, 'USAGE')
                     AS can_use_migrator,
-                pg_get_userbyid(database.datdba) = current_user
-                    AS owns_database,
+                pg_get_userbyid(database.datdba) = current_user AS owns_database,
                 pg_get_userbyid(namespace.nspowner) = current_user
                     AS owns_public_schema,
                 NOT EXISTS (
@@ -46,24 +44,21 @@ def assert_runtime_role(connection: Connection) -> None:
                 ) AS owns_no_public_relations,
                 has_database_privilege(current_user, current_database(), 'CREATE')
                     AS can_create_in_database,
-                has_database_privilege(
-                    current_user, current_database(), 'TEMPORARY'
-                ) AS can_create_temporary_tables,
+                has_database_privilege(current_user, current_database(), 'TEMPORARY')
+                    AS can_create_temporary_tables,
                 has_schema_privilege(current_user, 'public', 'CREATE')
                     AS can_create_in_public_schema
             FROM pg_roles AS role
-            JOIN pg_database AS database
-              ON database.datname = current_database()
-            JOIN pg_namespace AS namespace
-              ON namespace.nspname = 'public'
+            JOIN pg_database AS database ON database.datname = current_database()
+            JOIN pg_namespace AS namespace ON namespace.nspname = 'public'
             WHERE role.rolname = current_user
             """
         ),
         {"migrator_role": MIGRATOR_ROLE},
     ).mappings().one()
     expected = {
-        "current_role": RUNTIME_ROLE,
-        "session_role": RUNTIME_ROLE,
+        "current_role": expected_role,
+        "session_role": expected_role,
         "is_superuser": False,
         "bypasses_rls": False,
         "inherits_roles": False,
@@ -83,9 +78,20 @@ def assert_runtime_role(connection: Connection) -> None:
     observed = dict(row)
     if observed != expected:
         raise AssertionError(
-            "PostgreSQL security integration tests require the exact non-owner "
-            "runtime role with NOSUPERUSER, NOBYPASSRLS, NOINHERIT, NOCREATEROLE, "
-            "NOCREATEDB, NOREPLICATION, no role memberships, no object ownership, "
-            "and no database CREATE/TEMPORARY or schema CREATE privilege "
+            "PostgreSQL authority requires the exact non-owner login with "
+            "NOSUPERUSER, NOBYPASSRLS, NOINHERIT, no role memberships, no "
+            "object ownership, and no database or schema creation privilege "
             f"(observed={observed!r}, expected={expected!r})"
         )
+
+
+def assert_control_role(connection: Connection) -> None:
+    """Require the dedicated least-privilege access-policy mutation login."""
+
+    _assert_non_owner_role(connection, CONTROL_ROLE)
+
+
+def assert_runtime_role(connection: Connection) -> None:
+    """Reject owner, superuser, BYPASSRLS, inheriting, or CREATE-capable sessions."""
+
+    _assert_non_owner_role(connection, RUNTIME_ROLE)

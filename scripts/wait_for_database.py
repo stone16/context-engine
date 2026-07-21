@@ -17,7 +17,7 @@ from engine.persistence import (
 
 
 def wait_for_database(timeout_seconds: float) -> None:
-    """Probe migration, runtime, worker, and security-test URLs without fallback."""
+    """Probe every role-isolated harness URL without credential fallback."""
 
     configurations = load_harness_database_configurations()
     deadline = time.monotonic() + timeout_seconds
@@ -27,6 +27,7 @@ def wait_for_database(timeout_seconds: float) -> None:
         try:
             for configuration in (
                 configurations.migration,
+                configurations.control,
                 configurations.runtime,
                 configurations.worker,
                 configurations.security_test,
@@ -58,7 +59,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--timeout", type=float, default=30.0)
     arguments = parser.parse_args(argv)
     wait_for_database(arguments.timeout)
-    print("PostgreSQL harness ready: migration, runtime, worker, security-test")
+    print(
+        "PostgreSQL harness ready: migration, control, runtime, worker, "
+        "security-test"
+    )
     return 0
 
 

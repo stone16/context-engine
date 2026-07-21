@@ -69,6 +69,7 @@ from engine.runtime.delivery import _construct_direct_delivery_context
 from engine.runtime.invocation import (
     _construct_authenticated_http_invocation,
 )
+from engine.runtime.policy_epoch import PolicyEpochAuthorityUnavailable
 from engine.runtime.scope_authority import InvalidTrustedScopeSnapshot
 
 HEALTH_RESPONSE: Final = {
@@ -360,6 +361,7 @@ def create_app(
                         membership_version=(
                             current_membership_verification.membership_version
                         ),
+                        policy_epoch=current_membership_verification.policy_epoch,
                         principal_ref=current_membership_verification.principal_ref,
                         agent_version_ref=authentication.agent_version_ref,
                         purpose=DIRECT_ACQUIRE_PURPOSE,
@@ -447,6 +449,8 @@ def create_app(
                 membership_rejection_observer(error.audit_receipt)
             raise TransportAuthenticationFailed from None
         except MembershipAuthorityUnavailable:
+            raise TrustedAuthorityUnavailable from None
+        except PolicyEpochAuthorityUnavailable:
             raise TrustedAuthorityUnavailable from None
         except ScopeAuthorityUnavailable:
             raise TrustedAuthorityUnavailable from None

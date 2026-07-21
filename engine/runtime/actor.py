@@ -10,6 +10,10 @@ from engine.runtime.materialized import (
     MaterializedProjectionSession,
     _require_active_materialized_projection_session,
 )
+from engine.runtime.policy_epoch import (
+    PolicyEpochVerification,
+    _require_active_policy_epoch_verification,
+)
 
 MAX_MEMBERSHIP_VERSION: Final = (1 << 63) - 1
 
@@ -85,6 +89,8 @@ class CurrentMembershipVerification:
     request_id: str
     authentication_binding_ref: str
     checked_at: datetime
+    policy_epoch: int
+    policy_epoch_verification: PolicyEpochVerification = field(repr=False)
     materialized_projection_session: MaterializedProjectionSession | None = field(
         repr=False
     )
@@ -112,6 +118,7 @@ def _construct_current_membership_verification(
     request_id: str,
     authentication_binding_ref: str,
     checked_at: datetime,
+    policy_epoch_verification: PolicyEpochVerification,
     materialized_projection_session: MaterializedProjectionSession | None = None,
 ) -> CurrentMembershipVerification:
     """Construct proof after the trusted authority verifies the durable row."""
@@ -157,6 +164,11 @@ def _construct_current_membership_verification(
         _require_active_materialized_projection_session(
             materialized_projection_session
         )
+    _require_active_policy_epoch_verification(policy_epoch_verification)
+    if policy_epoch_verification.organization_id != organization_id:
+        raise ValueError(
+            "current Membership Policy Epoch must stay in Organization"
+        )
 
     verification = object.__new__(CurrentMembershipVerification)
     object.__setattr__(verification, "organization_id", organization_id)
@@ -171,6 +183,16 @@ def _construct_current_membership_verification(
         authentication_binding_ref,
     )
     object.__setattr__(verification, "checked_at", checked_at)
+    object.__setattr__(
+        verification,
+        "policy_epoch",
+        policy_epoch_verification.policy_epoch,
+    )
+    object.__setattr__(
+        verification,
+        "policy_epoch_verification",
+        policy_epoch_verification,
+    )
     object.__setattr__(
         verification,
         "materialized_projection_session",
@@ -207,6 +229,18 @@ def _require_active_current_membership_verification(
         _require_active_materialized_projection_session(
             verification.materialized_projection_session
         )
+    _require_active_policy_epoch_verification(
+        verification.policy_epoch_verification
+    )
+    if (
+        verification.policy_epoch
+        != verification.policy_epoch_verification.policy_epoch
+        or verification.organization_id
+        != verification.policy_epoch_verification.organization_id
+    ):
+        raise ValueError(
+            "current Membership does not match its Policy Epoch verification"
+        )
 
 
 @dataclass(frozen=True, slots=True, init=False)
@@ -221,6 +255,8 @@ class UserActor:
     request_id: str
     authentication_binding_ref: str
     checked_at: datetime
+    policy_epoch: int
+    policy_epoch_verification: PolicyEpochVerification = field(repr=False)
     materialized_projection_session: MaterializedProjectionSession | None = field(
         repr=False
     )
@@ -255,6 +291,11 @@ def _construct_user_actor(
             verification.authentication_binding_ref,
         ),
         ("checked_at", verification.checked_at),
+        ("policy_epoch", verification.policy_epoch),
+        (
+            "policy_epoch_verification",
+            verification.policy_epoch_verification,
+        ),
         (
             "materialized_projection_session",
             verification.materialized_projection_session,
@@ -291,6 +332,9 @@ def _require_active_user_actor(actor: UserActor) -> None:
         or actor.authentication_binding_ref
         != verification.authentication_binding_ref
         or actor.checked_at != verification.checked_at
+        or actor.policy_epoch != verification.policy_epoch
+        or actor.policy_epoch_verification
+        is not verification.policy_epoch_verification
         or actor.materialized_projection_session
         is not verification.materialized_projection_session
     ):

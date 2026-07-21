@@ -11,6 +11,8 @@ from sqlalchemy.engine import URL, make_url
 from sqlalchemy.exc import ArgumentError
 
 MIGRATOR_ROLE = "context_engine_migrator"
+CONTROL_ROLE = "context_engine_control"
+ACCESS_POLICY_DEFINER_ROLE = "context_engine_access_policy_definer"
 RUNTIME_ROLE = "context_engine_runtime"
 WORKER_ROLE = "context_engine_worker"
 
@@ -19,6 +21,7 @@ class DatabasePurpose(Enum):
     """A database credential boundary that may never fall back to another role."""
 
     MIGRATION = ("CONTEXT_ENGINE_MIGRATION_DATABASE_URL", MIGRATOR_ROLE)
+    CONTROL_PLANE = ("CONTEXT_ENGINE_CONTROL_DATABASE_URL", CONTROL_ROLE)
     API_RUNTIME = ("CONTEXT_ENGINE_RUNTIME_DATABASE_URL", RUNTIME_ROLE)
     SUPPLY_WORKER = ("CONTEXT_ENGINE_WORKER_DATABASE_URL", WORKER_ROLE)
     SECURITY_TEST = ("CONTEXT_ENGINE_TEST_DATABASE_URL", RUNTIME_ROLE)
@@ -34,6 +37,7 @@ class DatabasePurpose(Enum):
 
 ROLE_ENVIRONMENT_VARIABLES: dict[DatabasePurpose, str] = {
     DatabasePurpose.MIGRATION: "CONTEXT_ENGINE_MIGRATOR_ROLE",
+    DatabasePurpose.CONTROL_PLANE: "CONTEXT_ENGINE_CONTROL_ROLE",
     DatabasePurpose.API_RUNTIME: "CONTEXT_ENGINE_RUNTIME_ROLE",
     DatabasePurpose.SUPPLY_WORKER: "CONTEXT_ENGINE_WORKER_ROLE",
     DatabasePurpose.SECURITY_TEST: "CONTEXT_ENGINE_RUNTIME_ROLE",
@@ -92,6 +96,7 @@ class HarnessDatabaseConfigurations:
     """All role-isolated URLs required by the authoritative database harness."""
 
     migration: DatabaseConfiguration
+    control: DatabaseConfiguration
     runtime: DatabaseConfiguration
     worker: DatabaseConfiguration
     security_test: DatabaseConfiguration
@@ -157,11 +162,12 @@ def load_database_configuration(
 def load_harness_database_configurations(
     environment: Mapping[str, str] | None = None,
 ) -> HarnessDatabaseConfigurations:
-    """Load and cross-check the four explicit harness credential contracts."""
+    """Load and cross-check the five explicit harness credential contracts."""
 
     source = os.environ if environment is None else environment
     configurations = HarnessDatabaseConfigurations(
         migration=load_database_configuration(DatabasePurpose.MIGRATION, source),
+        control=load_database_configuration(DatabasePurpose.CONTROL_PLANE, source),
         runtime=load_database_configuration(DatabasePurpose.API_RUNTIME, source),
         worker=load_database_configuration(DatabasePurpose.SUPPLY_WORKER, source),
         security_test=load_database_configuration(
@@ -170,12 +176,13 @@ def load_harness_database_configurations(
     )
     distinct_roles = {
         configurations.migration.expected_role,
+        configurations.control.expected_role,
         configurations.runtime.expected_role,
         configurations.worker.expected_role,
     }
-    if len(distinct_roles) != 3:
+    if len(distinct_roles) != 4:
         raise DatabaseConfigurationError(
-            "migration, runtime, and worker database roles must be distinct"
+            "migration, control, runtime, and worker database roles must be distinct"
         )
     if configurations.security_test.url != configurations.runtime.url:
         raise DatabaseConfigurationError(

@@ -47,6 +47,12 @@ from engine.runtime.organization import (
     OrganizationVerificationProvenance,
     _construct_existing_http_organization_verification,
 )
+from engine.runtime.policy_epoch import (
+    _close_policy_epoch_authority_scope,
+    _construct_policy_epoch_session,
+    _observe_current_policy_epoch,
+    _open_policy_epoch_authority_scope,
+)
 
 VALID_BODY = {
     "kind": "acquire",
@@ -103,7 +109,21 @@ class DeterministicMembershipAuthority:
             raise MembershipNotCurrent
         self.events.append("authority-open")
         scope = _open_membership_authority_scope()
+        policy_epoch_scope = _open_policy_epoch_authority_scope()
+
+        class CurrentEpochPort:
+            def read_current_epoch(self, organization_id: UUID) -> object:
+                assert organization_id == identity.organization_id
+                return 7
+
         try:
+            policy_epoch_verification = _observe_current_policy_epoch(
+                _construct_policy_epoch_session(
+                    authority_scope=policy_epoch_scope,
+                    organization_id=identity.organization_id,
+                    port=CurrentEpochPort(),
+                )
+            )
             yield _construct_current_membership_verification(
                 authority_scope=scope,
                 organization_id=identity.organization_id,
@@ -114,8 +134,10 @@ class DeterministicMembershipAuthority:
                 request_id=identity.request_id,
                 authentication_binding_ref=identity.authentication_binding_ref,
                 checked_at=identity.checked_at,
+                policy_epoch_verification=policy_epoch_verification,
             )
         finally:
+            _close_policy_epoch_authority_scope(policy_epoch_scope)
             _close_membership_authority_scope(scope)
             self.events.append("authority-close")
 

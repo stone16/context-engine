@@ -27,6 +27,12 @@ from engine.runtime.invocation import (
 from engine.runtime.organization import (
     _construct_existing_http_organization_verification,
 )
+from engine.runtime.policy_epoch import (
+    _close_policy_epoch_authority_scope,
+    _construct_policy_epoch_session,
+    _observe_current_policy_epoch,
+    _open_policy_epoch_authority_scope,
+)
 from engine.runtime.scope import (
     MISSING_TRUSTED_SCOPE,
     MissingTrustedScope,
@@ -96,8 +102,21 @@ def bound_runtime_inputs(
     operands: TrustedScopeOperands,
 ) -> Iterator[tuple[AuthenticatedInvocation, TrustedDeliveryContext]]:
     membership_scope = _open_membership_authority_scope()
+    policy_epoch_scope = _open_policy_epoch_authority_scope()
     scope_authority_scope = _open_scope_authority_scope()
     try:
+        class CurrentEpochPort:
+            def read_current_epoch(self, organization_id: UUID) -> object:
+                assert organization_id == ORGANIZATION_ID
+                return 3
+
+        policy_epoch_verification = _observe_current_policy_epoch(
+            _construct_policy_epoch_session(
+                authority_scope=policy_epoch_scope,
+                organization_id=ORGANIZATION_ID,
+                port=CurrentEpochPort(),
+            )
+        )
         organization_verification = (
             _construct_existing_http_organization_verification(
                 organization_id=ORGANIZATION_ID,
@@ -116,6 +135,7 @@ def bound_runtime_inputs(
             request_id="request-1",
             authentication_binding_ref="binding-1",
             checked_at=AS_OF,
+            policy_epoch_verification=policy_epoch_verification,
         )
         scope_snapshot = _construct_trusted_scope_snapshot(
             authority_scope=scope_authority_scope,
@@ -123,6 +143,7 @@ def bound_runtime_inputs(
             user_id=USER_ID,
             membership_id=MEMBERSHIP_ID,
             membership_version=3,
+            policy_epoch=3,
             principal_ref="principal-1",
             agent_version_ref="agent-version-1",
             purpose="context.answer",
@@ -161,6 +182,7 @@ def bound_runtime_inputs(
         )
         yield invocation, delivery
     finally:
+        _close_policy_epoch_authority_scope(policy_epoch_scope)
         _close_scope_authority_scope(scope_authority_scope)
         _close_membership_authority_scope(membership_scope)
 

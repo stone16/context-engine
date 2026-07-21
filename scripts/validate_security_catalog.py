@@ -60,9 +60,23 @@ TOP_LEVEL_FIELDS = (
     "catalogVersion",
     "authority",
     "hardOracles",
+    "activations",
     "invariants",
     "fixtures",
 )
+ACTIVATION_FIELDS = (
+    "issueRef",
+    "invariantRef",
+    "carrier",
+    "status",
+    "policyEpochScope",
+    "controlBoundary",
+    "testEvidence",
+    "deferredEvidence",
+    "futureCarriers",
+    "notActive",
+)
+ACTIVATION_TEST_EVIDENCE_FIELDS = ("id", "surface", "oracle")
 INVARIANT_FIELDS = (
     "id",
     "title",
@@ -319,6 +333,7 @@ REQUIRED_RUNTIME_EVIDENCE: dict[str, tuple[str, ...]] = {
         "PROV-020",
     ),
     "REVOCATION-006": (
+        "RUN-006",
         "PROV-013",
         "PROV-014",
         "PROV-015",
@@ -334,6 +349,83 @@ REQUIRED_RUNTIME_EVIDENCE: dict[str, tuple[str, ...]] = {
     ),
     "EGRESS-011": ("EGR-003", "EGR-005", "EGR-006", "RUN-014"),
     "ACTION-SEPARATION-014": tuple(f"ACTION-{number:03d}" for number in range(1, 10)),
+}
+
+REQUIRED_POSTGRES_EVIDENCE: dict[str, tuple[str, ...]] = {
+    "REVOCATION-006": ("PG-REVOCATION-006", "CACHE-002", "BLOB-002"),
+}
+
+ACCEPT_005_FUTURE_CARRIER: dict[str, str] = {
+    "statusAtM0": "future",
+    "m0Expectation": "fail_closed",
+    "upgradeTrigger": (
+        "Issue #16 activates the M0 unavailable-capability refusal without "
+        "redeeming a continuation; issue #15 separately proves next-request "
+        "Acquire revocation, and the future real-continuation owner upgrades "
+        "this fixture only when continuation issuance and redemption exist."
+    ),
+}
+
+CANONICAL_REVOCATION_ACTIVATION: dict[str, object] = {
+    "issueRef": "#15",
+    "invariantRef": "REVOCATION-006",
+    "carrier": "ContextRuntime.resolve(Acquire)",
+    "status": "active_fail_closed",
+    "policyEpochScope": "organization-v0",
+    "controlBoundary": (
+        "PostgreSQLAccessPolicyControl.change_access(ResourceAccessRevocation)"
+    ),
+    "testEvidence": [
+        {
+            "id": "PG-REVOCATION-006",
+            "surface": "tests/integration/test_access_policy_revocation.py",
+            "oracle": (
+                "The internal non-owner Control transaction atomically revokes "
+                "exact same-Organization access and advances one monotonic "
+                "Organization epoch; rollback and overflow expose neither half, "
+                "concurrent successful changes lose no bump, and Org B remains "
+                "unchanged."
+            ),
+        },
+        {
+            "id": "RUN-006",
+            "surface": (
+                "tests/integration/test_runtime_policy_epoch_integration.py"
+            ),
+            "oracle": (
+                "The same authenticated HTTP Acquire with the same query and "
+                "unchanged CandidateIndex/Fragment returns authorized Evidence "
+                "before revoke and zero Evidence on the first request after "
+                "commit; Org B remains authorized and the persistent Fragment "
+                "remains present."
+            ),
+        },
+        {
+            "id": "CACHE-002",
+            "surface": "tests/unit/test_runtime_authorized_evidence.py",
+            "oracle": (
+                "An injected pre-revocation authorization decision or a "
+                "mid-resolve epoch change fails the final current-epoch gate and "
+                "delivers zero stale Evidence without relying on candidate or "
+                "content removal."
+            ),
+        },
+    ],
+    "deferredEvidence": ["BLOB-002"],
+    "futureCarriers": [
+        "Continue",
+        "OpenCitation",
+        "WorkerLease",
+        "ContextAccessTicket",
+        "ActionTicket",
+    ],
+    "notActive": [
+        "DecisionAudit",
+        "outbox",
+        "cleanup",
+        "Source/Resource Policy Epochs",
+        "UI/external admin",
+    ],
 }
 
 
@@ -495,6 +587,52 @@ def _validate_hard_oracles(catalog: Mapping[str, Any], collector: _Collector) ->
         )
 
 
+def _validate_activations(catalog: Mapping[str, Any], collector: _Collector) -> None:
+    activations = catalog.get("activations")
+    if not isinstance(activations, list):
+        collector.add("activations", "must be an array")
+        return
+    if len(activations) != 1:
+        collector.add(
+            "activations",
+            "must contain exactly the canonical Issue #15 activation record",
+        )
+
+    for index, value in enumerate(activations):
+        path = f"activations[{index}]"
+        activation = collector.require_mapping(value, path)
+        if activation is None:
+            continue
+        collector.require_exact_fields(activation, ACTIVATION_FIELDS, path)
+        test_evidence = activation.get("testEvidence")
+        if not isinstance(test_evidence, list):
+            collector.add(f"{path}.testEvidence", "must be an array")
+        else:
+            for evidence_index, evidence_value in enumerate(test_evidence):
+                evidence_path = f"{path}.testEvidence[{evidence_index}]"
+                evidence = collector.require_mapping(evidence_value, evidence_path)
+                if evidence is None:
+                    continue
+                collector.require_exact_fields(
+                    evidence,
+                    ACTIVATION_TEST_EVIDENCE_FIELDS,
+                    evidence_path,
+                )
+                for field in ACTIVATION_TEST_EVIDENCE_FIELDS:
+                    collector.require_nonempty_string(
+                        evidence.get(field), f"{evidence_path}.{field}"
+                    )
+        for field in ("deferredEvidence", "futureCarriers", "notActive"):
+            collector.require_string_list(activation.get(field), f"{path}.{field}")
+
+    if activations != [CANONICAL_REVOCATION_ACTIVATION]:
+        collector.add(
+            "activations",
+            "must exactly preserve the canonical Issue #15 Acquire revocation "
+            "activation and its future/NOT_ACTIVE boundaries",
+        )
+
+
 def _validate_identifier(value: object, path: str, collector: _Collector) -> str | None:
     if not collector.require_nonempty_string(value, path):
         return None
@@ -641,6 +779,21 @@ def _validate_invariants(
                         collector.add(
                             f"{path}.expectedEvidence.runtimeOrDelivery",
                             "must preserve absorbed derived case "
+                            f"{case_id!r} for {invariant_id}",
+                        )
+            postgres_evidence = collector.require_string_list(
+                expected_evidence.get("postgres"),
+                f"{path}.expectedEvidence.postgres",
+            )
+            if (
+                postgres_evidence is not None
+                and invariant_id in REQUIRED_POSTGRES_EVIDENCE
+            ):
+                for case_id in REQUIRED_POSTGRES_EVIDENCE[invariant_id]:
+                    if case_id not in postgres_evidence:
+                        collector.add(
+                            f"{path}.expectedEvidence.postgres",
+                            "must preserve canonical revocation evidence "
                             f"{case_id!r} for {invariant_id}",
                         )
         _validate_authority_refs(
@@ -798,6 +951,12 @@ def _validate_fixture(
         collector.require_nonempty_string(
             carrier.get("upgradeTrigger"), f"{path}.carrier.upgradeTrigger"
         )
+        if fixture_id == "ACCEPT-005" and carrier != ACCEPT_005_FUTURE_CARRIER:
+            collector.add(
+                f"{path}.carrier",
+                "must preserve ACCEPT-005 as the future Continue carrier; "
+                "Issue #15 activates Acquire only",
+            )
 
     setup = collector.require_mapping(fixture.get("setup"), f"{path}.setup")
     if setup is not None:
@@ -1800,6 +1959,7 @@ def _validate_schema(
             collector.add("schema.properties.hardOracles.items", "must be false")
 
     array_specs = (
+        ("activations", 1, ACTIVATION_FIELDS),
         ("invariants", EXPECTED_INVARIANT_COUNT, INVARIANT_FIELDS),
         ("fixtures", EXPECTED_FIXTURE_COUNT, FIXTURE_FIELDS),
     )
@@ -1826,6 +1986,35 @@ def _validate_schema(
                 item, required_fields, f"schema.{name}.items", collector
             )
             item_nodes[name] = item
+
+    activation_item = item_nodes.get("activations")
+    if activation_item is not None:
+        test_evidence_schema = _schema_child(
+            root,
+            activation_item,
+            "testEvidence",
+            "schema.activations.items",
+            collector,
+        )
+        if test_evidence_schema is not None:
+            if test_evidence_schema.get("type") != "array":
+                collector.add(
+                    "schema.activations.items.properties.testEvidence.type",
+                    "must be 'array'",
+                )
+            evidence_item = _resolve_schema_node(
+                root,
+                test_evidence_schema.get("items"),
+                "schema.activations.items.properties.testEvidence.items",
+                collector,
+            )
+            if evidence_item is not None:
+                _require_closed_object_schema(
+                    evidence_item,
+                    ACTIVATION_TEST_EVIDENCE_FIELDS,
+                    "schema.activations.items.properties.testEvidence.items",
+                    collector,
+                )
 
     invariant_item = item_nodes.get("invariants")
     if invariant_item is not None:
@@ -1914,6 +2103,8 @@ def _validate_schema(
     if definitions is not None:
         closed_object_definitions = {
             "authority": ("issueRefs", "documentRefs", "reconciliation"),
+            "activation": ACTIVATION_FIELDS,
+            "activationTestEvidence": ACTIVATION_TEST_EVIDENCE_FIELDS,
             "applicability": ("mode", "applicableFrom", "rationale"),
             "expectedEvidence": EXPECTED_EVIDENCE_FIELDS,
             "carrier": CARRIER_FIELDS,
@@ -2009,6 +2200,7 @@ def validate_catalog(
         )
     known_authority_refs = _validate_authority(catalog, collector)
     _validate_hard_oracles(catalog, collector)
+    _validate_activations(catalog, collector)
     invariant_ids = _validate_invariants(catalog, known_authority_refs, collector)
     mappings = _validate_fixtures(
         catalog, invariant_ids, known_authority_refs, collector

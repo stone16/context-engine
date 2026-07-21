@@ -39,12 +39,14 @@ generate_environment() {
   if [[ ! -f "$ENV_FILE" ]]; then
     local bootstrap_password
     local migrator_password
+    local control_password
     local runtime_password
     local worker_password
     local postgres_port
     local compose_project
     bootstrap_password="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
     migrator_password="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+    control_password="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
     runtime_password="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
     worker_password="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
     postgres_port="$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')"
@@ -64,12 +66,16 @@ generate_environment() {
         printf 'CONTEXT_ENGINE_COMPOSE_PROJECT=%s\n' "$compose_project"
         printf 'CONTEXT_ENGINE_MIGRATOR_ROLE=context_engine_migrator\n'
         printf 'CONTEXT_ENGINE_MIGRATOR_PASSWORD=%s\n' "$migrator_password"
+        printf 'CONTEXT_ENGINE_CONTROL_ROLE=context_engine_control\n'
+        printf 'CONTEXT_ENGINE_CONTROL_PASSWORD=%s\n' "$control_password"
         printf 'CONTEXT_ENGINE_RUNTIME_ROLE=context_engine_runtime\n'
         printf 'CONTEXT_ENGINE_RUNTIME_PASSWORD=%s\n' "$runtime_password"
         printf 'CONTEXT_ENGINE_WORKER_ROLE=context_engine_worker\n'
         printf 'CONTEXT_ENGINE_WORKER_PASSWORD=%s\n' "$worker_password"
         printf 'CONTEXT_ENGINE_MIGRATION_DATABASE_URL=postgresql+psycopg://context_engine_migrator:%s@127.0.0.1:%s/context_engine\n' \
           "$migrator_password" "$postgres_port"
+        printf 'CONTEXT_ENGINE_CONTROL_DATABASE_URL=postgresql+psycopg://context_engine_control:%s@127.0.0.1:%s/context_engine\n' \
+          "$control_password" "$postgres_port"
         printf 'CONTEXT_ENGINE_RUNTIME_DATABASE_URL=postgresql+psycopg://context_engine_runtime:%s@127.0.0.1:%s/context_engine\n' \
           "$runtime_password" "$postgres_port"
         printf 'CONTEXT_ENGINE_WORKER_DATABASE_URL=postgresql+psycopg://context_engine_worker:%s@127.0.0.1:%s/context_engine\n' \
@@ -96,6 +102,7 @@ generate_environment() {
   fi
   chmod 600 "$ENV_FILE"
   migrate_legacy_project_identity
+  migrate_legacy_control_identity
 }
 
 read_embedded_project_identity() {
@@ -146,13 +153,45 @@ migrate_legacy_project_identity() {
   trap - EXIT
 }
 
+migrate_legacy_control_identity() {
+  if grep -q '^CONTEXT_ENGINE_CONTROL_ROLE=' "$ENV_FILE"; then
+    return
+  fi
+
+  local postgres_port
+  postgres_port="$(sed -n 's/^CONTEXT_ENGINE_POSTGRES_PORT=//p' "$ENV_FILE")"
+  if [[ ! "$postgres_port" =~ ^[0-9]+$ ]]; then
+    printf 'legacy database environment has no valid PostgreSQL port\n' >&2
+    exit 1
+  fi
+
+  local control_password
+  control_password="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+  local migration_file
+  migration_file="$(mktemp "$STATE_DIR/database.env.control.XXXXXX")"
+  trap 'rm -f "$migration_file"' EXIT
+  (
+    umask 077
+    while IFS= read -r environment_line || [[ -n "$environment_line" ]]; do
+      printf '%s\n' "$environment_line"
+    done <"$ENV_FILE"
+    printf 'CONTEXT_ENGINE_CONTROL_ROLE=context_engine_control\n'
+    printf 'CONTEXT_ENGINE_CONTROL_PASSWORD=%s\n' "$control_password"
+    printf 'CONTEXT_ENGINE_CONTROL_DATABASE_URL=postgresql+psycopg://context_engine_control:%s@127.0.0.1:%s/context_engine\n' \
+      "$control_password" "$postgres_port"
+  ) >"$migration_file"
+  chmod 600 "$migration_file"
+  mv "$migration_file" "$ENV_FILE"
+  trap - EXIT
+}
+
 load_environment() {
   generate_environment
 
   local variable_name
   local variable_value
   local loaded_variable_names=' '
-  local allowed_variables=' POSTGRES_DB POSTGRES_USER POSTGRES_PASSWORD CONTEXT_ENGINE_POSTGRES_PORT CONTEXT_ENGINE_COMPOSE_PROJECT CONTEXT_ENGINE_MIGRATOR_ROLE CONTEXT_ENGINE_MIGRATOR_PASSWORD CONTEXT_ENGINE_RUNTIME_ROLE CONTEXT_ENGINE_RUNTIME_PASSWORD CONTEXT_ENGINE_WORKER_ROLE CONTEXT_ENGINE_WORKER_PASSWORD CONTEXT_ENGINE_MIGRATION_DATABASE_URL CONTEXT_ENGINE_RUNTIME_DATABASE_URL CONTEXT_ENGINE_WORKER_DATABASE_URL CONTEXT_ENGINE_TEST_DATABASE_URL '
+  local allowed_variables=' POSTGRES_DB POSTGRES_USER POSTGRES_PASSWORD CONTEXT_ENGINE_POSTGRES_PORT CONTEXT_ENGINE_COMPOSE_PROJECT CONTEXT_ENGINE_MIGRATOR_ROLE CONTEXT_ENGINE_MIGRATOR_PASSWORD CONTEXT_ENGINE_CONTROL_ROLE CONTEXT_ENGINE_CONTROL_PASSWORD CONTEXT_ENGINE_RUNTIME_ROLE CONTEXT_ENGINE_RUNTIME_PASSWORD CONTEXT_ENGINE_WORKER_ROLE CONTEXT_ENGINE_WORKER_PASSWORD CONTEXT_ENGINE_MIGRATION_DATABASE_URL CONTEXT_ENGINE_CONTROL_DATABASE_URL CONTEXT_ENGINE_RUNTIME_DATABASE_URL CONTEXT_ENGINE_WORKER_DATABASE_URL CONTEXT_ENGINE_TEST_DATABASE_URL '
 
   while IFS='=' read -r variable_name variable_value; do
     if [[ -z "$variable_name" || "$allowed_variables" != *" $variable_name "* ]]; then
@@ -181,12 +220,14 @@ load_environment() {
   if [[ "$POSTGRES_DB" != 'context_engine' || \
         "$POSTGRES_USER" != 'context_engine_bootstrap' || \
         "$CONTEXT_ENGINE_MIGRATOR_ROLE" != 'context_engine_migrator' || \
+        "$CONTEXT_ENGINE_CONTROL_ROLE" != 'context_engine_control' || \
         "$CONTEXT_ENGINE_RUNTIME_ROLE" != 'context_engine_runtime' || \
         "$CONTEXT_ENGINE_WORKER_ROLE" != 'context_engine_worker' || \
         ! "$CONTEXT_ENGINE_POSTGRES_PORT" =~ ^[0-9]+$ || \
         ! "$CONTEXT_ENGINE_COMPOSE_PROJECT" =~ ^context-engine-[0-9a-f]{16}$ || \
         ! "$POSTGRES_PASSWORD" =~ ^[0-9a-f]{64}$ || \
         ! "$CONTEXT_ENGINE_MIGRATOR_PASSWORD" =~ ^[0-9a-f]{64}$ || \
+        ! "$CONTEXT_ENGINE_CONTROL_PASSWORD" =~ ^[0-9a-f]{64}$ || \
         ! "$CONTEXT_ENGINE_RUNTIME_PASSWORD" =~ ^[0-9a-f]{64}$ || \
         ! "$CONTEXT_ENGINE_WORKER_PASSWORD" =~ ^[0-9a-f]{64}$ ]]; then
     printf 'database environment failed its generated-value contract\n' >&2
@@ -197,6 +238,8 @@ load_environment() {
   local database_endpoint="127.0.0.1:$CONTEXT_ENGINE_POSTGRES_PORT/context_engine"
   if [[ "$CONTEXT_ENGINE_MIGRATION_DATABASE_URL" != \
           "postgresql+psycopg://context_engine_migrator:$CONTEXT_ENGINE_MIGRATOR_PASSWORD@$database_endpoint" || \
+        "$CONTEXT_ENGINE_CONTROL_DATABASE_URL" != \
+          "postgresql+psycopg://context_engine_control:$CONTEXT_ENGINE_CONTROL_PASSWORD@$database_endpoint" || \
         "$CONTEXT_ENGINE_RUNTIME_DATABASE_URL" != \
           "postgresql+psycopg://context_engine_runtime:$CONTEXT_ENGINE_RUNTIME_PASSWORD@$database_endpoint" || \
         "$CONTEXT_ENGINE_WORKER_DATABASE_URL" != \
@@ -220,11 +263,16 @@ wait_for_database() {
   uv run python "$ROOT_DIR/scripts/wait_for_database.py"
 }
 
+provision_database_roles() {
+  uv run python "$ROOT_DIR/scripts/provision_database_roles.py"
+}
+
 database_up() {
   require_command docker
   require_command uv
   load_environment
   compose up --detach --wait
+  provision_database_roles
   wait_for_database
   printf 'PostgreSQL harness is ready; connection contract: %s\n' "$ENV_FILE"
 }
@@ -245,6 +293,7 @@ database_reset() {
   load_environment
   compose down --volumes --remove-orphans
   compose up --detach --wait
+  provision_database_roles
   wait_for_database
   printf 'PostgreSQL harness was rebuilt from an empty data volume.\n'
 }

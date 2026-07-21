@@ -38,6 +38,7 @@ class AuthenticatedInvocation:
     principal_ref: str
     membership_ref: str
     membership_version: int
+    policy_epoch: int
     agent_version_ref: str
     authenticated_application_ref: str
     authentication_binding_ref: str
@@ -136,6 +137,8 @@ def _construct_authenticated_http_invocation(
         or str(user_actor.user_id) != user_ref
         or str(user_actor.membership_id) != membership_ref
         or user_actor.membership_version != membership_version
+        or user_actor.policy_epoch
+        != current_membership_verification.policy_epoch
         or user_actor.principal_ref != principal_ref
         or user_actor.request_id != request_id
         or user_actor.authentication_binding_ref != authentication_binding_ref
@@ -179,6 +182,7 @@ def _construct_authenticated_http_invocation(
     object.__setattr__(invocation, "principal_ref", principal_ref)
     object.__setattr__(invocation, "membership_ref", membership_ref)
     object.__setattr__(invocation, "membership_version", membership_version)
+    object.__setattr__(invocation, "policy_epoch", user_actor.policy_epoch)
     object.__setattr__(invocation, "agent_version_ref", agent_version_ref)
     object.__setattr__(
         invocation,

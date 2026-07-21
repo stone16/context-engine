@@ -30,11 +30,38 @@ from engine.runtime.invocation import _construct_authenticated_http_invocation
 from engine.runtime.organization import (
     _construct_existing_http_organization_verification,
 )
+from engine.runtime.policy_epoch import (
+    PolicyEpochVerification,
+    _construct_policy_epoch_session,
+    _observe_current_policy_epoch,
+    _open_policy_epoch_authority_scope,
+)
 
 CHECKED_AT = datetime(2026, 7, 21, 6, 0, tzinfo=UTC)
 ORGANIZATION_ID = UUID("81e18bca-86a1-478a-937d-7675c6fe69b0")
 USER_ID = UUID("d3d9893f-82d2-4890-8cb2-4c7e57a56f16")
 MEMBERSHIP_ID = UUID("9c9e9f4c-a5ec-4417-9408-0346e1c6c998")
+
+
+class _CurrentEpochPort:
+    def read_current_epoch(self, organization_id: UUID) -> object:
+        del organization_id
+        return 7
+
+
+_POLICY_EPOCH_SCOPE = _open_policy_epoch_authority_scope()
+
+
+def policy_epoch_verification(
+    organization_id: UUID = ORGANIZATION_ID,
+) -> PolicyEpochVerification:
+    return _observe_current_policy_epoch(
+        _construct_policy_epoch_session(
+            authority_scope=_POLICY_EPOCH_SCOPE,
+            organization_id=organization_id,
+            port=_CurrentEpochPort(),
+        )
+    )
 
 
 def verified_authentication_context(
@@ -66,6 +93,7 @@ def current_membership_proof(
     request_id: str = "request-1",
     authentication_binding_ref: str = "binding-1",
     checked_at: datetime = CHECKED_AT,
+    epoch_verification: PolicyEpochVerification | None = None,
 ) -> CurrentMembershipVerification:
     return _construct_current_membership_verification(
         authority_scope=scope,  # type: ignore[arg-type]
@@ -77,6 +105,9 @@ def current_membership_proof(
         request_id=request_id,
         authentication_binding_ref=authentication_binding_ref,
         checked_at=checked_at,
+        policy_epoch_verification=(
+            epoch_verification or policy_epoch_verification(organization_id)
+        ),
     )
 
 
@@ -86,6 +117,7 @@ def scope_authority_identity() -> ScopeAuthorityIdentity:
         user_id=USER_ID,
         membership_id=MEMBERSHIP_ID,
         membership_version=7,
+        policy_epoch=7,
         principal_ref="principal-not-the-user-id",
         agent_version_ref="agent-version-1",
         purpose="context.answer",
@@ -110,6 +142,7 @@ def test_current_membership_proof_is_nominal_frozen_and_scope_lived() -> None:
         request_id="request-1",
         authentication_binding_ref="binding-1",
         checked_at=CHECKED_AT,
+        policy_epoch_verification=policy_epoch_verification(),
     )
 
     _require_active_current_membership_verification(proof)
@@ -204,6 +237,7 @@ def test_user_actor_is_nominal_exact_and_keeps_principal_distinct_from_user() ->
         request_id="request-1",
         authentication_binding_ref="binding-1",
         checked_at=CHECKED_AT,
+        policy_epoch_verification=policy_epoch_verification(),
     )
     actor = _construct_user_actor(proof)
 

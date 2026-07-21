@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import fields
+from dataclasses import fields, replace
 from datetime import UTC, datetime
 from itertools import permutations
 from typing import cast
@@ -17,9 +17,13 @@ from engine.runtime.actor import (
 )
 from engine.runtime.budget import PackageBudgetRequest
 from engine.runtime.construction import (
+    DEFAULT_SERVER_PACKAGE_BUDGET,
+    AuthorizationDecision,
+    AuthorizationKernel,
     DecisionAuditGate,
     DecisionProvenanceReceipt,
     Runtime,
+    _OpaqueReferenceIssuer,
     required_kernel_dependencies,
 )
 from engine.runtime.content_io import CandidateIndex
@@ -47,6 +51,12 @@ from engine.runtime.materialized import (
 )
 from engine.runtime.organization import (
     _construct_existing_http_organization_verification,
+)
+from engine.runtime.policy_epoch import (
+    _close_policy_epoch_authority_scope,
+    _construct_policy_epoch_session,
+    _observe_current_policy_epoch,
+    _open_policy_epoch_authority_scope,
 )
 from engine.runtime.scope import ScopeSet, ScopeTarget, TrustedScopeOperands
 from engine.runtime.scope_authority import (
@@ -150,6 +160,19 @@ class RecordingMaterializedPort:
         return None
 
 
+class SequencedPolicyEpochPort:
+    def __init__(self, *epochs: int) -> None:
+        self._epochs = list(epochs)
+        self.reads = 0
+
+    def read_current_epoch(self, organization_id: UUID) -> object:
+        assert organization_id == ORGANIZATION_ID
+        self.reads += 1
+        if len(self._epochs) > 1:
+            return self._epochs.pop(0)
+        return self._epochs[0]
+
+
 class MismatchedLocatorPort(RecordingMaterializedPort):
     def locate(
         self,
@@ -203,11 +226,23 @@ def exact_operands() -> TrustedScopeOperands:
 @contextmanager
 def trusted_operands(
     port: RecordingMaterializedPort,
+    *,
+    policy_epoch_port: SequencedPolicyEpochPort | None = None,
+    scope_policy_epoch: int | None = None,
 ) -> Iterator[tuple[AuthenticatedInvocation, TrustedDeliveryContext]]:
     membership_scope = _open_membership_authority_scope()
     materialized_scope = _open_materialized_projection_scope()
     scope_authority_scope = _open_scope_authority_scope()
+    policy_epoch_scope = _open_policy_epoch_authority_scope()
     try:
+        selected_epoch_port = policy_epoch_port or SequencedPolicyEpochPort(7)
+        policy_epoch_verification = _observe_current_policy_epoch(
+            _construct_policy_epoch_session(
+                authority_scope=policy_epoch_scope,
+                organization_id=ORGANIZATION_ID,
+                port=selected_epoch_port,
+            )
+        )
         projection_session = _construct_materialized_projection_session(
             authority_scope=materialized_scope,
             port=cast(MaterializedProjectionPort, port),
@@ -230,6 +265,7 @@ def trusted_operands(
             request_id="request-authorized-evidence",
             authentication_binding_ref="binding-authorized-evidence",
             checked_at=AS_OF,
+            policy_epoch_verification=policy_epoch_verification,
             materialized_projection_session=projection_session,
         )
         operands = exact_operands()
@@ -239,6 +275,11 @@ def trusted_operands(
             user_id=USER_ID,
             membership_id=MEMBERSHIP_ID,
             membership_version=7,
+            policy_epoch=(
+                policy_epoch_verification.policy_epoch
+                if scope_policy_epoch is None
+                else scope_policy_epoch
+            ),
             principal_ref="principal-authorized-evidence",
             agent_version_ref="agent-version-authorized-evidence",
             purpose="context.answer",
@@ -277,6 +318,7 @@ def trusted_operands(
         )
         yield invocation, delivery
     finally:
+        _close_policy_epoch_authority_scope(policy_epoch_scope)
         _close_scope_authority_scope(scope_authority_scope)
         _close_materialized_projection_scope(materialized_scope)
         _close_membership_authority_scope(membership_scope)
@@ -316,7 +358,7 @@ def test_hostile_candidate_order_delivers_only_exact_authorized_evidence(
     assert package.evidence[0].lineage.as_of == AS_OF
     assert package.evidence[0].lineage.decision_ref == package.decision_ref
     assert package.evidence[0].lineage.policy_snapshot_ref
-    assert package.evidence[0].lineage.policy_epoch > 0
+    assert package.evidence[0].lineage.policy_epoch == 7
     assert package.evidence[0].lineage.source_acl_decision_ref
     assert package.coverage.status == "sufficient"
     assert package.coverage.reason is None
@@ -336,6 +378,172 @@ def test_hostile_candidate_order_delivers_only_exact_authorized_evidence(
         str(OTHER_ORGANIZATION_ID),
     ):
         assert forbidden not in rendered
+
+
+def test_stale_scope_epoch_stops_before_candidate_or_body_io() -> None:
+    index = HostileCandidateIndex((AUTHORIZED,))
+    port = RecordingMaterializedPort()
+    runtime = Runtime(
+        required_kernel_dependencies(),
+        candidate_index=cast(CandidateIndex, index),
+        clock=lambda: AS_OF,
+    )
+
+    with trusted_operands(port, scope_policy_epoch=6) as (invocation, delivery):
+        outcome = runtime.resolve(
+            invocation,
+            delivery,
+            Acquire(need=ContextNeed(query="stale cached scope")),
+        )
+
+    assert outcome.scope_decision.is_empty is True
+    assert outcome.scope_decision.target_count == 0
+    assert outcome.package.blocks == ()
+    assert outcome.package.evidence == ()
+    assert index.calls == 0
+    assert port.locator_calls == []
+    assert port.body_calls == []
+
+
+def test_mid_resolve_epoch_change_discards_assembled_content_before_audit_and_delivery(
+) -> None:
+    index = HostileCandidateIndex((AUTHORIZED,))
+    port = RecordingMaterializedPort()
+    epoch = SequencedPolicyEpochPort(7, 7, 8)
+    runtime = Runtime(
+        required_kernel_dependencies(),
+        candidate_index=cast(CandidateIndex, index),
+        clock=lambda: AS_OF,
+    )
+
+    with trusted_operands(port, policy_epoch_port=epoch) as (invocation, delivery):
+        outcome = runtime.resolve(
+            invocation,
+            delivery,
+            Acquire(need=ContextNeed(query="mid-resolve revocation")),
+        )
+
+    # This is the mutation witness: without the final validation, A-safe leaks.
+    assert epoch.reads == 3
+    assert index.calls == 1
+    assert port.body_calls == [locator(AUTHORIZED)]
+    assert outcome.package.blocks == ()
+    assert outcome.package.evidence == ()
+    assert outcome.package.coverage.status == "empty"
+    assert outcome.package.coverage.reason == "no_authorized_evidence"
+    assert outcome.package.budget_usage.tokens == 0
+    assert "A-safe" not in repr(outcome)
+
+
+def test_pre_revocation_decision_cannot_be_laundered_by_fresh_invocation(
+) -> None:
+    """CACHE-002: a current invocation cannot make stale decision content current."""
+
+    index = HostileCandidateIndex((AUTHORIZED,))
+    port = RecordingMaterializedPort()
+    kernel = AuthorizationKernel(required_kernel_dependencies())
+    issuer = _OpaqueReferenceIssuer()
+
+    with trusted_operands(
+        port,
+        policy_epoch_port=SequencedPolicyEpochPort(7),
+    ) as (pre_revocation_invocation, delivery):
+        stale_decision = kernel.authorize_acquire(
+            pre_revocation_invocation,
+            delivery,
+            Acquire(need=ContextNeed(query="cached pre-revocation decision")),
+            server_budget=DEFAULT_SERVER_PACKAGE_BUDGET,
+            as_of=AS_OF,
+            reference_issuer=issuer,
+            candidate_index=cast(CandidateIndex, index),
+            projection_session=(
+                pre_revocation_invocation.user_actor.materialized_projection_session
+            ),
+        )
+
+    assert stale_decision.policy_receipt.policy_epoch == 7
+    assert stale_decision.content.blocks[0].body == "A-safe"
+
+    with trusted_operands(
+        RecordingMaterializedPort(),
+        policy_epoch_port=SequencedPolicyEpochPort(8),
+    ) as (post_revocation_invocation, _delivery):
+        policy_receipt, content, audit_receipt = kernel.finalize_for_delivery(
+            post_revocation_invocation,
+            stale_decision,
+        )
+
+    # Mutation witness: checking only the fresh invocation's current epoch leaks
+    # the stale decision's already assembled A-safe content here.
+    assert policy_receipt.effective_scope.targets == frozenset()
+    assert content.blocks == ()
+    assert content.evidence == ()
+    assert audit_receipt.authorized_evidence_count == 0
+    assert "A-safe" not in repr(content)
+
+
+def test_stale_content_cannot_be_spliced_into_a_current_decision() -> None:
+    """Decision receipts cannot relabel old Evidence lineage as current."""
+
+    kernel = AuthorizationKernel(required_kernel_dependencies())
+    issuer = _OpaqueReferenceIssuer()
+    request = Acquire(need=ContextNeed(query="spliced cached decision"))
+
+    with trusted_operands(
+        RecordingMaterializedPort(),
+        policy_epoch_port=SequencedPolicyEpochPort(7),
+    ) as (pre_revocation_invocation, delivery):
+        stale_decision = kernel.authorize_acquire(
+            pre_revocation_invocation,
+            delivery,
+            request,
+            server_budget=DEFAULT_SERVER_PACKAGE_BUDGET,
+            as_of=AS_OF,
+            reference_issuer=issuer,
+            candidate_index=cast(
+                CandidateIndex,
+                HostileCandidateIndex((AUTHORIZED,)),
+            ),
+            projection_session=(
+                pre_revocation_invocation.user_actor.materialized_projection_session
+            ),
+        )
+
+    with trusted_operands(
+        RecordingMaterializedPort(),
+        policy_epoch_port=SequencedPolicyEpochPort(8),
+    ) as (post_revocation_invocation, delivery):
+        current_decision = kernel.authorize_acquire(
+            post_revocation_invocation,
+            delivery,
+            request,
+            server_budget=DEFAULT_SERVER_PACKAGE_BUDGET,
+            as_of=AS_OF,
+            reference_issuer=issuer,
+            candidate_index=cast(
+                CandidateIndex,
+                HostileCandidateIndex((AUTHORIZED,)),
+            ),
+            projection_session=(
+                post_revocation_invocation.user_actor.materialized_projection_session
+            ),
+        )
+        spliced_decision: AuthorizationDecision = replace(
+            current_decision,
+            content=stale_decision.content,
+        )
+        policy_receipt, content, audit_receipt = kernel.finalize_for_delivery(
+            post_revocation_invocation,
+            spliced_decision,
+        )
+
+    # Mutation witness: receipt/invocation epoch checks alone accept the epoch-8
+    # wrapper and leak the epoch-7 A-safe content.
+    assert policy_receipt.effective_scope.targets == frozenset()
+    assert content.blocks == ()
+    assert content.evidence == ()
+    assert audit_receipt.authorized_evidence_count == 0
+    assert "A-safe" not in repr(content)
 
 
 def test_explicit_candidate_index_requires_same_transaction_projection_session(
@@ -530,6 +738,15 @@ def test_empty_decision_audit_is_generic_and_retains_no_denied_detail() -> None:
         DecisionProvenanceReceipt(
             decision_ref="dec_" + "a" * 32,
             package_organization_ref="orgpkg_" + "b" * 32,
+            organization_id=ORGANIZATION_ID,
+            user_id=USER_ID,
+            membership_id=MEMBERSHIP_ID,
+            membership_version=7,
+            principal_ref="principal-non-enumeration-audit",
+            agent_version_ref="agent-version-non-enumeration-audit",
+            authenticated_application_ref="application-non-enumeration-audit",
+            authentication_binding_ref="binding-non-enumeration-audit",
+            effective_scope_digest="0" * 64,
             request_id="request-non-enumeration-audit",
             purpose="context.answer",
             as_of=AS_OF,

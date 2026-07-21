@@ -38,6 +38,12 @@ from engine.runtime.invocation import (
 from engine.runtime.organization import (
     _construct_existing_http_organization_verification,
 )
+from engine.runtime.policy_epoch import (
+    _close_policy_epoch_authority_scope,
+    _construct_policy_epoch_session,
+    _observe_current_policy_epoch,
+    _open_policy_epoch_authority_scope,
+)
 
 AS_OF = datetime(2026, 7, 21, 5, 0, tzinfo=UTC)
 INTERNAL_ORGANIZATION_REF = "81e18bca-86a1-478a-937d-7675c6fe69b0"
@@ -79,6 +85,20 @@ def trusted_operands() -> Iterator[
     tuple[AuthenticatedInvocation, TrustedDeliveryContext]
 ]:
     authority_scope = _open_membership_authority_scope()
+    policy_epoch_scope = _open_policy_epoch_authority_scope()
+
+    class CurrentEpochPort:
+        def read_current_epoch(self, organization_id: UUID) -> object:
+            assert organization_id == UUID(INTERNAL_ORGANIZATION_REF)
+            return 1
+
+    policy_epoch_verification = _observe_current_policy_epoch(
+        _construct_policy_epoch_session(
+            authority_scope=policy_epoch_scope,
+            organization_id=UUID(INTERNAL_ORGANIZATION_REF),
+            port=CurrentEpochPort(),
+        )
+    )
     verification = _construct_existing_http_organization_verification(
         organization_id=UUID(INTERNAL_ORGANIZATION_REF),
         request_id="request-1",
@@ -95,6 +115,7 @@ def trusted_operands() -> Iterator[
         request_id="request-1",
         authentication_binding_ref="binding-internal",
         checked_at=AS_OF,
+        policy_epoch_verification=policy_epoch_verification,
     )
     try:
         scope_identity = ScopeAuthorityIdentity(
@@ -102,6 +123,7 @@ def trusted_operands() -> Iterator[
             user_id=UUID(INTERNAL_USER_REF),
             membership_id=UUID(INTERNAL_MEMBERSHIP_REF),
             membership_version=1,
+            policy_epoch=1,
             principal_ref="principal-internal",
             agent_version_ref="agent-version-internal",
             purpose="context.answer",
@@ -136,6 +158,7 @@ def trusted_operands() -> Iterator[
             )
             yield invocation, delivery
     finally:
+        _close_policy_epoch_authority_scope(policy_epoch_scope)
         _close_membership_authority_scope(authority_scope)
 
 
