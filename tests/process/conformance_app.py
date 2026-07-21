@@ -1,5 +1,7 @@
-"""Test-only listening API composition for the Issue #10 process smoke."""
+"""Test-only listening API composition for the current process smoke."""
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime
 from uuid import UUID
 
@@ -9,6 +11,13 @@ from adapters.http.authentication import (
     VerifiedAuthenticationContext,
 )
 from adapters.http.organization_authority import OrganizationVerificationRejected
+from engine.persistence import MembershipIdentity, MembershipNotCurrent
+from engine.runtime.actor import (
+    CurrentMembershipVerification,
+    _close_membership_authority_scope,
+    _construct_current_membership_verification,
+    _open_membership_authority_scope,
+)
 from engine.runtime.organization import (
     ExistingOrganizationVerification,
     _construct_existing_http_organization_verification,
@@ -16,6 +25,8 @@ from engine.runtime.organization import (
 
 PROCESS_VALID_TOKEN = "process-test-credential"
 PROCESS_ORGANIZATION_REF = "81e18bca-86a1-478a-937d-7675c6fe69b0"
+PROCESS_USER_REF = "d3d9893f-82d2-4890-8cb2-4c7e57a56f16"
+PROCESS_MEMBERSHIP_REF = "9c9e9f4c-a5ec-4417-9408-0346e1c6c998"
 
 
 class ProcessTestAuthenticator:
@@ -26,12 +37,46 @@ class ProcessTestAuthenticator:
             raise AuthenticationRejected
         return VerifiedAuthenticationContext(
             organization_ref=PROCESS_ORGANIZATION_REF,
+            user_ref=PROCESS_USER_REF,
             principal_ref="process-principal",
-            membership_ref=None,
+            membership_ref=PROCESS_MEMBERSHIP_REF,
+            membership_version=1,
             agent_version_ref="process-agent-version",
             authenticated_application_ref="process-application",
             authentication_binding_ref="process-binding",
         )
+
+
+class ProcessTestMembershipAuthority:
+    """One active conformance Membership with a request-lived proof."""
+
+    @contextmanager
+    def current_user_actor(
+        self,
+        identity: MembershipIdentity,
+    ) -> Iterator[CurrentMembershipVerification]:
+        if (
+            identity.organization_id != UUID(PROCESS_ORGANIZATION_REF)
+            or identity.user_id != UUID(PROCESS_USER_REF)
+            or identity.membership_id != UUID(PROCESS_MEMBERSHIP_REF)
+            or identity.membership_version != 1
+        ):
+            raise MembershipNotCurrent
+        scope = _open_membership_authority_scope()
+        try:
+            yield _construct_current_membership_verification(
+                authority_scope=scope,
+                organization_id=identity.organization_id,
+                user_id=identity.user_id,
+                membership_id=identity.membership_id,
+                membership_version=identity.membership_version,
+                principal_ref=identity.principal_ref,
+                request_id=identity.request_id,
+                authentication_binding_ref=identity.authentication_binding_ref,
+                checked_at=identity.checked_at,
+            )
+        finally:
+            _close_membership_authority_scope(scope)
 
 
 class ProcessTestOrganizationAuthority:
@@ -57,4 +102,5 @@ class ProcessTestOrganizationAuthority:
 app = create_app(
     authenticator=ProcessTestAuthenticator(),
     organization_authority=ProcessTestOrganizationAuthority(),
+    membership_authority=ProcessTestMembershipAuthority(),
 )

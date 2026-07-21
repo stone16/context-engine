@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import cast
 from uuid import UUID, uuid4
 
@@ -14,7 +14,12 @@ from adapters.http.authentication import (
     VerifiedAuthenticationContext,
 )
 from adapters.http.organization_authority import OrganizationVerificationRejected
-from engine.persistence import DatabaseConfiguration, create_database_engine
+from engine.persistence import (
+    DatabaseConfiguration,
+    PostgreSQLMembershipAuthority,
+    create_database_engine,
+)
+from engine.runtime.actor import MembershipRejectionAuditReceipt
 from engine.runtime.construction import Runtime, required_kernel_dependencies
 from engine.runtime.content_io import RuntimeContentIo
 from engine.runtime.contracts import Acquire
@@ -29,16 +34,27 @@ RECEIVED_AT = datetime(2026, 7, 21, 5, 0, tzinfo=UTC)
 
 
 class SeededAuthenticator:
-    def __init__(self, organization_id: UUID) -> None:
+    def __init__(
+        self,
+        organization_id: UUID,
+        user_id: UUID,
+        membership_id: UUID,
+        membership_version: int = 1,
+    ) -> None:
         self._organization_id = organization_id
+        self._user_id = user_id
+        self._membership_id = membership_id
+        self._membership_version = membership_version
 
     def authenticate(self, opaque_credential: str) -> VerifiedAuthenticationContext:
         if opaque_credential != TOKEN:
             raise AuthenticationRejected
         return VerifiedAuthenticationContext(
             organization_ref=str(self._organization_id),
+            user_ref=str(self._user_id),
             principal_ref="seeded-principal",
-            membership_ref=None,
+            membership_ref=str(self._membership_id),
+            membership_version=self._membership_version,
             agent_version_ref="seeded-agent",
             authenticated_application_ref="seeded-application",
             authentication_binding_ref="seeded-binding",
@@ -89,9 +105,11 @@ def test_seeded_existing_organization_reaches_http_empty_package(
     migration_configuration: DatabaseConfiguration,
     guarded_runtime_engine: Engine,
 ) -> None:
-    """Issue #10: real root existence plus HTTP/Runtime zero-content path."""
+    """Issue #11: a real active Membership reaches the empty Package path."""
 
     organization_id = uuid4()
+    user_id = uuid4()
+    membership_id = uuid4()
     migration_engine = create_database_engine(migration_configuration)
     try:
         with migration_engine.begin() as connection:
@@ -105,6 +123,39 @@ def test_seeded_existing_organization_reaches_http_empty_package(
                 ),
                 {"organization_id": organization_id},
             ).scalar_one()
+            connection.execute(
+                text("INSERT INTO user_account (user_id) VALUES (:user_id)"),
+                {"user_id": user_id},
+            )
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO membership (
+                        organization_id,
+                        membership_id,
+                        user_id,
+                        status,
+                        membership_version,
+                        valid_from,
+                        valid_until
+                    ) VALUES (
+                        :organization_id,
+                        :membership_id,
+                        :user_id,
+                        'active',
+                        1,
+                        :valid_from,
+                        NULL
+                    )
+                    """
+                ),
+                {
+                    "organization_id": organization_id,
+                    "membership_id": membership_id,
+                    "user_id": user_id,
+                    "valid_from": RECEIVED_AT,
+                },
+            )
         assert cast(UUID, inserted) == organization_id
 
         spy = ContentIoSpy()
@@ -119,8 +170,15 @@ def test_seeded_existing_organization_reaches_http_empty_package(
         )
         client = TestClient(
             create_app(
-                authenticator=SeededAuthenticator(organization_id),
+                authenticator=SeededAuthenticator(
+                    organization_id,
+                    user_id,
+                    membership_id,
+                ),
                 organization_authority=SeededOrganizationAuthority(organization_id),
+                membership_authority=PostgreSQLMembershipAuthority(
+                    guarded_runtime_engine
+                ),
                 runtime=runtime,
                 clock=lambda: RECEIVED_AT,
             )
@@ -143,15 +201,244 @@ def test_seeded_existing_organization_reaches_http_empty_package(
         assert spy.calls == 0
 
         with guarded_runtime_engine.connect() as connection:
-            assert connection.execute(
-                text("SELECT current_setting('app.organization_id', true)")
-            ).scalar_one_or_none() in {None, ""}
+            for setting_name in (
+                "app.organization_id",
+                "app.actor_kind",
+                "app.user_id",
+                "app.membership_id",
+                "app.membership_version",
+                "app.principal_ref",
+                "app.request_id",
+                "app.authentication_binding_ref",
+                "app.checked_at",
+            ):
+                assert connection.execute(
+                    text("SELECT current_setting(:setting_name, true)"),
+                    {"setting_name": setting_name},
+                ).scalar_one_or_none() in {None, ""}
     finally:
         with migration_engine.begin() as connection:
+            connection.execute(
+                text(
+                    """
+                    DELETE FROM membership
+                    WHERE organization_id = :organization_id
+                      AND membership_id = :membership_id
+                    """
+                ),
+                {
+                    "organization_id": organization_id,
+                    "membership_id": membership_id,
+                },
+            )
+            connection.execute(
+                text("DELETE FROM user_account WHERE user_id = :user_id"),
+                {"user_id": user_id},
+            )
             connection.execute(
                 text(
                     "DELETE FROM organization WHERE organization_id = :organization_id"
                 ),
                 {"organization_id": organization_id},
+            )
+        migration_engine.dispose()
+
+
+def test_real_postgres_http_membership_matrix_is_generic_and_zero_io(
+    migration_configuration: DatabaseConfiguration,
+    guarded_runtime_engine: Engine,
+) -> None:
+    """Issue #11 DoD: the full invalid matrix crosses HTTP and real RLS."""
+
+    organization_a = uuid4()
+    organization_b = uuid4()
+    users = {
+        category: uuid4()
+        for category in (
+            "active",
+            "missing",
+            "inactive",
+            "expired",
+            "revoked",
+            "cross-organization",
+            "stale-version",
+            "not-yet-valid",
+            "wrong-user",
+        )
+    }
+    memberships = {category: uuid4() for category in users}
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.begin() as connection:
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO organization (organization_id)
+                    VALUES (:organization_a), (:organization_b)
+                    """
+                ),
+                {
+                    "organization_a": organization_a,
+                    "organization_b": organization_b,
+                },
+            )
+            connection.execute(
+                text("INSERT INTO user_account (user_id) VALUES (:user_id)"),
+                [{"user_id": user_id} for user_id in users.values()],
+            )
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO membership (
+                        organization_id,
+                        membership_id,
+                        user_id,
+                        status,
+                        membership_version,
+                        valid_from,
+                        valid_until
+                    ) VALUES (
+                        :organization_id,
+                        :membership_id,
+                        :user_id,
+                        :status,
+                        1,
+                        :valid_from,
+                        :valid_until
+                    )
+                    """
+                ),
+                [
+                    {
+                        "organization_id": (
+                            organization_b
+                            if category == "cross-organization"
+                            else organization_a
+                        ),
+                        "membership_id": memberships[category],
+                        "user_id": users[category],
+                        "status": (
+                            category
+                            if category in {"inactive", "revoked"}
+                            else "active"
+                        ),
+                        "valid_from": (
+                            RECEIVED_AT + timedelta(seconds=1)
+                            if category == "not-yet-valid"
+                            else RECEIVED_AT - timedelta(days=2)
+                        ),
+                        "valid_until": (
+                            RECEIVED_AT - timedelta(seconds=1)
+                            if category == "expired"
+                            else None
+                        ),
+                    }
+                    for category in (
+                        "active",
+                        "inactive",
+                        "expired",
+                        "revoked",
+                        "cross-organization",
+                        "stale-version",
+                        "not-yet-valid",
+                        "wrong-user",
+                    )
+                ],
+            )
+
+        spy = ContentIoSpy()
+        runtime = Runtime(
+            required_kernel_dependencies(),
+            content_io=RuntimeContentIo(
+                index=spy,
+                provider=spy,
+                source_content=spy,
+            ),
+            clock=lambda: RECEIVED_AT,
+        )
+        authority = PostgreSQLMembershipAuthority(guarded_runtime_engine)
+        audit_receipts: list[MembershipRejectionAuditReceipt] = []
+        responses: dict[str, tuple[int, bytes]] = {}
+        for category in users:
+            client = TestClient(
+                create_app(
+                    authenticator=SeededAuthenticator(
+                        organization_a,
+                        (
+                            users["active"]
+                            if category == "wrong-user"
+                            else users[category]
+                        ),
+                        memberships[category],
+                        2 if category == "stale-version" else 1,
+                    ),
+                    organization_authority=SeededOrganizationAuthority(
+                        organization_a
+                    ),
+                    membership_authority=authority,
+                    membership_rejection_observer=audit_receipts.append,
+                    runtime=runtime,
+                    clock=lambda: RECEIVED_AT,
+                )
+            )
+            response = client.post(
+                "/v1/context:resolve",
+                headers={"Authorization": f"Bearer {TOKEN}"},
+                json={"kind": "acquire", "need": {"query": category}},
+            )
+            responses[category] = (response.status_code, response.content)
+
+        assert responses.pop("active")[0] == 200
+        assert set(responses.values()) == {
+            (401, b'{"code":"authentication_failed"}')
+        }
+        assert audit_receipts == [MembershipRejectionAuditReceipt()] * 8
+        assert spy.calls == 0
+
+        with guarded_runtime_engine.connect() as connection:
+            for setting_name in (
+                "app.organization_id",
+                "app.actor_kind",
+                "app.user_id",
+                "app.membership_id",
+                "app.membership_version",
+                "app.principal_ref",
+                "app.request_id",
+                "app.authentication_binding_ref",
+                "app.checked_at",
+            ):
+                assert connection.execute(
+                    text("SELECT current_setting(:setting_name, true)"),
+                    {"setting_name": setting_name},
+                ).scalar_one_or_none() in {None, ""}
+    finally:
+        with migration_engine.begin() as connection:
+            connection.execute(
+                text(
+                    """
+                    DELETE FROM membership
+                    WHERE organization_id IN (:organization_a, :organization_b)
+                    """
+                ),
+                {
+                    "organization_a": organization_a,
+                    "organization_b": organization_b,
+                },
+            )
+            connection.execute(
+                text("DELETE FROM user_account WHERE user_id = :user_id"),
+                [{"user_id": user_id} for user_id in users.values()],
+            )
+            connection.execute(
+                text(
+                    """
+                    DELETE FROM organization
+                    WHERE organization_id IN (:organization_a, :organization_b)
+                    """
+                ),
+                {
+                    "organization_a": organization_a,
+                    "organization_b": organization_b,
+                },
             )
         migration_engine.dispose()

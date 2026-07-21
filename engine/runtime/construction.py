@@ -11,6 +11,7 @@ from secrets import token_bytes
 from threading import Lock
 from typing import Literal
 
+from engine.runtime.actor import _require_active_user_actor
 from engine.runtime.budget import PackageBudget, effective_package_budget
 from engine.runtime.content_io import RuntimeContentIo, prohibited_empty_path_content_io
 from engine.runtime.contracts import (
@@ -110,6 +111,20 @@ def _validate_trusted_operands(
         raise ValueError(
             "Runtime requires a matching existing-Organization verification"
         )
+    actor = invocation.user_actor
+    _require_active_user_actor(actor)
+    if (
+        str(actor.organization_id) != invocation.organization_ref
+        or str(actor.user_id) != invocation.user_ref
+        or str(actor.membership_id) != invocation.membership_ref
+        or actor.membership_version != invocation.membership_version
+        or actor.principal_ref != invocation.principal_ref
+        or actor.request_id != invocation.request_id
+        or actor.authentication_binding_ref
+        != invocation.authentication_binding_ref
+        or actor.checked_at != invocation.received_at
+    ):
+        raise ValueError("Runtime requires a matching current UserActor")
     if (
         type(delivery_context) is not TrustedDeliveryContext
         or delivery_context.construction_provenance

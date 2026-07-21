@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from typing import Protocol
 from uuid import UUID
 
+from engine.runtime.actor import MAX_MEMBERSHIP_VERSION
+
 
 class AuthenticationRejected(Exception):
     """Opaque credential did not establish verified authentication context."""
@@ -18,8 +20,10 @@ class VerifiedAuthenticationContext:
     """Identity facts emitted by a verified transport/session authenticator."""
 
     organization_ref: str
+    user_ref: str
     principal_ref: str
-    membership_ref: str | None
+    membership_ref: str
+    membership_version: int
     agent_version_ref: str
     authenticated_application_ref: str
     authentication_binding_ref: str
@@ -27,7 +31,9 @@ class VerifiedAuthenticationContext:
     def __post_init__(self) -> None:
         required_refs = (
             self.organization_ref,
+            self.user_ref,
             self.principal_ref,
+            self.membership_ref,
             self.agent_version_ref,
             self.authenticated_application_ref,
             self.authentication_binding_ref,
@@ -39,20 +45,23 @@ class VerifiedAuthenticationContext:
             raise InvalidAuthenticationContext(
                 "verified authentication refs must be non-empty"
             )
-        try:
-            organization_id = UUID(self.organization_ref)
-        except ValueError:
-            raise InvalidAuthenticationContext(
-                "verified Organization ref must be an internal UUID"
-            ) from None
-        object.__setattr__(self, "organization_ref", str(organization_id))
-        if self.membership_ref is not None and (
-            type(self.membership_ref) is not str
-            or not self.membership_ref
-            or self.membership_ref.isspace()
+        for field_name in ("organization_ref", "user_ref", "membership_ref"):
+            value = getattr(self, field_name)
+            try:
+                internal_id = UUID(value)
+            except ValueError:
+                label = field_name.removesuffix("_ref").replace("_", " ")
+                raise InvalidAuthenticationContext(
+                    f"verified {label} ref must be an internal UUID"
+                ) from None
+            object.__setattr__(self, field_name, str(internal_id))
+        if (
+            type(self.membership_version) is not int
+            or not 1 <= self.membership_version <= MAX_MEMBERSHIP_VERSION
         ):
             raise InvalidAuthenticationContext(
-                "verified membership ref must be non-empty"
+                "verified Membership version must fit a positive signed 64-bit "
+                "integer"
             )
 
 

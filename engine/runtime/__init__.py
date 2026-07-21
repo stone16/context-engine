@@ -1,5 +1,13 @@
 """Sealed Runtime boundary and first evidence-free delivery contracts."""
 
+from engine.runtime.actor import (
+    CurrentMembershipVerification,
+    MembershipRejectionAuditReceipt,
+    MembershipRejectionCategory,
+    MembershipVerificationProvenance,
+    UserActor,
+    UserActorConstructionProvenance,
+)
 from engine.runtime.budget import (
     PackageBudget,
     PackageBudgetRequest,
@@ -39,7 +47,11 @@ __all__ = [
     "Coverage",
     "CoverageReason",
     "CoverageStatus",
+    "CurrentMembershipVerification",
     "InvocationConstructionProvenance",
+    "MembershipVerificationProvenance",
+    "MembershipRejectionAuditReceipt",
+    "MembershipRejectionCategory",
     "PackageBudget",
     "PackageBudgetRequest",
     "RequestNarrowing",
@@ -47,5 +59,7 @@ __all__ = [
     "Runtime",
     "RuntimeConfigurationError",
     "TrustedDeliveryContext",
+    "UserActor",
+    "UserActorConstructionProvenance",
     "effective_package_budget",
 ]

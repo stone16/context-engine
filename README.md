@@ -10,12 +10,13 @@
 
 **当前状态**:M0 工程骨架已启动。API 和独立 Supply worker 可运行，
 [`compose.yaml`](./compose.yaml) 固定的真实 PostgreSQL + pgvector 测试底座可复现；
-Organization 安全根与一张代表性 tenant-owned 表的非 owner FORCE RLS 隔离切片
-已验证；HTTP 已能用确定性测试认证构造 nominal `AuthenticatedInvocation`，并用
+Organization 安全根、全局 User、Organization-scoped Membership 与一张代表性
+tenant-owned 表的非 owner FORCE RLS 隔离已验证；HTTP 已能把确定性测试认证解析成
+当前 Membership-backed `UserActor`，构造 nominal `AuthenticatedInvocation`，并用
 closed body 与通用错误证明 caller 不能注入 trusted identity；该测试组合已通过唯一
 `ContextRuntime.resolve` 返回 tenant-safe、evidence-free ContextPackage。默认应用仍拒绝全部
-credential；生产认证、带内容 Runtime delivery、完整 ActorContext / Membership 以及
-worker job 行为仍为 `NOT_ACTIVE`。整体计划见 [PLAN.md](./PLAN.md)。
+credential；生产认证、带内容 Runtime delivery、Principal/Agent scope 交集以及 worker job
+行为仍为 `NOT_ACTIVE`。整体计划见 [PLAN.md](./PLAN.md)。
 
 ## 开发命令
 
@@ -77,20 +78,21 @@ uv run context-engine-worker --test-mode
 健康响应中的 `runtime_delivery: NOT_ACTIVE` 表示默认进程没有生产认证入口，worker 输出中的
 `job_behavior: NOT_ACTIVE` 是能力边界。当前数据库测试证明 `compose.yaml` 固定的
 PostgreSQL/pgvector、
-角色隔离、迁移、连接池清理，以及 Organization + `organization_record` 的
-事务级租户上下文、复合所有权和 FORCE RLS；它不声明 Membership、完整
-ActorContext、内容授权或生产 ContextPackage 交付已经实现；注入的 conformance 组合只证明
-Issue #10 的安全空包路径。
+角色隔离、迁移、连接池清理，以及 Organization + current Membership-backed
+`UserActor` + `organization_record` 的事务级租户上下文、复合所有权和 FORCE RLS。
+它不声明 Principal/Agent scope、内容授权或生产 ContextPackage 交付已经实现；注入的
+conformance 组合证明 Issue #11 在安全空包路径上增加的当前 Membership 门禁。
 
 ### 当前 HTTP empty-Package tracer
 
 `POST /v1/context:resolve` 的 conformance 组合可注入一个把 opaque credential
-映射为 verified transport facts 的 authenticator，以及一个为已登记 Organization
-签发 request-bound nominal proof 的 trusted authority；ingress 构造 nominal
-`AuthenticatedInvocation` 与 server-owned direct `TrustedDeliveryContext` 后，恰好
-调用一次 sealed Runtime。有效 Acquire 返回 `200 resolved` 与 evidence-free
-ContextPackage；模块级默认应用的两条 authority 均 reject-all，因此不会接受任何
-生产 credential。
+映射为 verified transport facts 的 authenticator、一个为已登记 Organization
+签发 request-bound nominal proof 的 trusted authority，以及一个在单次 PostgreSQL
+事务内校验 current Membership 并签发 lifetime-bound `UserActor` proof 的 authority；
+该事务保持到 sealed Runtime 与 ContextPackage 构造完成。有效 Acquire 返回
+`200 resolved` 与 evidence-free ContextPackage；无效 Membership 统一返回通用 401，
+数据库 authority 不可用统一返回通用 503，且两者都不会调用内容系统。模块级默认应用的
+三条 authority 均 reject-all，因此不会接受任何生产 credential。
 
 请求体仅允许 `kind: "acquire"`、`need.query`、可选的有限 `packageBudget` 和可选的
 `requestNarrowing`（ref 长度与集合数量均受 active profile 限制），每层 unknown field、重复 JSON key
@@ -101,9 +103,9 @@ JSON/media type、
 不会回显 tenant、Principal、Membership 或注入字段。purpose 只来自服务端 route
 policy；返回的 `organizationRef` 是新生成的 package-scoped opaque reference，不能作为
 后续请求的 trusted tenant input。空包的 blocks/evidence/gaps 均为空，coverage 为
-`no_authorized_evidence`，Provider/index/source-content 调用均为零。确定性与
-real-PostgreSQL seeded Organization authority 只属于测试组合。生产 OAuth/JWT、
-Membership 查询、ActorContext、Evidence 与 continuation 不属于这个已激活 tracer。
+`no_authorized_evidence`，Provider/index/source-content 调用均为零。确定性 authorities
+与 real-PostgreSQL seeded composition 只属于测试组合。生产 OAuth/JWT、Principal/
+Agent scope、Evidence 与 continuation 不属于这个已激活 tracer。
 
 本次公开候选 bundle 包含实现权威、ADR、安全契约、PRD、Tech Spec
 与四个公开参考仓的证据基线；经维护者批准并提交后，它们将与实现一同

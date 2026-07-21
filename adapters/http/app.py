@@ -4,7 +4,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from json import loads
 from typing import Annotated, Final, Literal, cast
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from fastapi import Depends, FastAPI, Header, Request, Response, Security
 from fastapi.exception_handlers import http_exception_handler
@@ -28,6 +28,11 @@ from adapters.http.contracts import (
     CoverageWire,
     InvalidRequestWire,
     ResolvedWire,
+    ServiceUnavailableWire,
+)
+from adapters.http.membership_authority import (
+    MembershipAuthority,
+    RejectingMembershipAuthority,
 )
 from adapters.http.organization_authority import (
     OrganizationAuthority,
@@ -41,7 +46,13 @@ from adapters.http.transport import (
     enforce_json_nesting,
 )
 from engine import BUILD_IDENTIFIER
+from engine.persistence.membership_context import (
+    MembershipAuthorityUnavailable,
+    MembershipIdentity,
+    MembershipNotCurrent,
+)
 from engine.runtime import AuthenticatedInvocation, Runtime
+from engine.runtime.actor import MembershipRejectionAuditReceipt
 from engine.runtime.budget import PackageBudgetRequest
 from engine.runtime.construction import required_kernel_dependencies
 from engine.runtime.contracts import Acquire, ContextNeed, RequestNarrowing, Resolved
@@ -56,11 +67,16 @@ HEALTH_RESPONSE: Final = {
 }
 AUTHENTICATION_FAILED_RESPONSE: Final = {"code": "authentication_failed"}
 INVALID_REQUEST_RESPONSE: Final = {"code": "invalid_request"}
+SERVICE_UNAVAILABLE_RESPONSE: Final = {"code": "service_unavailable"}
 RESOLVE_PATH: Final = "/v1/context:resolve"
 
 
 class TransportAuthenticationFailed(Exception):
     """Authentication failed without exposing credential or identity detail."""
+
+
+class TrustedAuthorityUnavailable(Exception):
+    """A required trusted authority failed without exposing identity detail."""
 
 
 class InvalidRequestMediaType(Exception):
@@ -105,9 +121,13 @@ def create_app(
     *,
     authenticator: Authenticator | None = None,
     organization_authority: OrganizationAuthority | None = None,
+    membership_authority: MembershipAuthority | None = None,
     runtime: Runtime | None = None,
     invocation_observer: Callable[[AuthenticatedInvocation], None] | None = None,
     resolution_observer: Callable[[Resolved], None] | None = None,
+    membership_rejection_observer: (
+        Callable[[MembershipRejectionAuditReceipt], None] | None
+    ) = None,
     clock: Callable[[], datetime] = _utc_now,
     request_id_factory: Callable[[], str] = _new_request_id,
     transport_profile: HttpTransportProfile = HTTP_TRANSPORT_PROFILE_V1,
@@ -123,6 +143,9 @@ def create_app(
     selected_authenticator = authenticator or RejectingAuthenticator()
     selected_organization_authority = (
         organization_authority or RejectingOrganizationAuthority()
+    )
+    selected_membership_authority = (
+        membership_authority or RejectingMembershipAuthority()
     )
     bearer = HTTPBearer(
         scheme_name="ContextEngineBearer",
@@ -147,6 +170,14 @@ def create_app(
             status_code=401,
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+    @app.exception_handler(TrustedAuthorityUnavailable)
+    async def trusted_authority_unavailable(
+        request: Request,
+        error: TrustedAuthorityUnavailable,
+    ) -> JSONResponse:
+        del request, error
+        return JSONResponse(SERVICE_UNAVAILABLE_RESPONSE, status_code=503)
 
     @app.exception_handler(InvalidRequestMediaType)
     @app.exception_handler(InvalidJsonTransport)
@@ -251,6 +282,10 @@ def create_app(
                 "model": InvalidRequestWire,
                 "description": "The closed request schema rejected the body.",
             },
+            503: {
+                "model": ServiceUnavailableWire,
+                "description": "A required trusted authority is unavailable.",
+            },
         },
     )
     def resolve_context(
@@ -281,46 +316,86 @@ def create_app(
                     verified_at=received_at,
                 )
             )
-            invocation = _construct_authenticated_http_invocation(
-                request_id=request_id,
-                authenticated_organization_ref=authentication.organization_ref,
-                organization_verification=organization_verification,
+            membership_identity = MembershipIdentity(
+                organization_id=UUID(authentication.organization_ref),
+                user_id=UUID(authentication.user_ref),
+                membership_id=UUID(authentication.membership_ref),
+                membership_version=authentication.membership_version,
                 principal_ref=authentication.principal_ref,
-                membership_ref=authentication.membership_ref,
-                agent_version_ref=authentication.agent_version_ref,
-                authenticated_application_ref=(
-                    authentication.authenticated_application_ref
-                ),
+                request_id=request_id,
                 authentication_binding_ref=(
                     authentication.authentication_binding_ref
                 ),
-                received_at=received_at,
+                checked_at=received_at,
             )
         except (OrganizationVerificationRejected, TypeError, ValueError):
             raise TransportAuthenticationFailed from None
-        if invocation_observer is not None:
-            invocation_observer(invocation)
-        delivery_context = _construct_direct_delivery_context(
-            purpose=DIRECT_ACQUIRE_PURPOSE,
-            authenticated_application_ref=(
-                authentication.authenticated_application_ref
-            ),
-            delivery_binding_ref=authentication.authentication_binding_ref,
-            established_at=invocation.received_at,
-        )
-        request = _acquire_from_wire(body)
-        outcome = selected_runtime.resolve(invocation, delivery_context, request)
-        response = _resolved_to_wire(outcome)
-        if resolution_observer is not None:
-            resolution_observer(outcome)
-        return JSONResponse(
-            response.model_dump(mode="json", by_alias=True),
-            status_code=200,
-            headers={
-                "Cache-Control": "no-store",
-                "X-Context-Request-Id": invocation.request_id,
-            },
-        )
+        try:
+            with selected_membership_authority.current_user_actor(
+                membership_identity
+            ) as current_membership_verification:
+                try:
+                    invocation = _construct_authenticated_http_invocation(
+                        request_id=request_id,
+                        authenticated_organization_ref=(
+                            authentication.organization_ref
+                        ),
+                        organization_verification=organization_verification,
+                        user_ref=authentication.user_ref,
+                        principal_ref=authentication.principal_ref,
+                        membership_ref=authentication.membership_ref,
+                        membership_version=authentication.membership_version,
+                        current_membership_verification=(
+                            current_membership_verification
+                        ),
+                        agent_version_ref=authentication.agent_version_ref,
+                        authenticated_application_ref=(
+                            authentication.authenticated_application_ref
+                        ),
+                        authentication_binding_ref=(
+                            authentication.authentication_binding_ref
+                        ),
+                        received_at=received_at,
+                    )
+                except (TypeError, ValueError):
+                    raise TransportAuthenticationFailed from None
+                if invocation_observer is not None:
+                    invocation_observer(invocation)
+                delivery_context = _construct_direct_delivery_context(
+                    purpose=DIRECT_ACQUIRE_PURPOSE,
+                    authenticated_application_ref=(
+                        authentication.authenticated_application_ref
+                    ),
+                    delivery_binding_ref=(
+                        authentication.authentication_binding_ref
+                    ),
+                    established_at=invocation.received_at,
+                )
+                request = _acquire_from_wire(body)
+                outcome = selected_runtime.resolve(
+                    invocation,
+                    delivery_context,
+                    request,
+                )
+                response = _resolved_to_wire(outcome)
+                if resolution_observer is not None:
+                    resolution_observer(outcome)
+                return JSONResponse(
+                    response.model_dump(mode="json", by_alias=True),
+                    status_code=200,
+                    headers={
+                        "Cache-Control": "no-store",
+                        "X-Context-Request-Id": invocation.request_id,
+                    },
+                )
+        except MembershipNotCurrent as error:
+            if type(error) is not MembershipNotCurrent:
+                raise TrustedAuthorityUnavailable from None
+            if membership_rejection_observer is not None:
+                membership_rejection_observer(error.audit_receipt)
+            raise TransportAuthenticationFailed from None
+        except MembershipAuthorityUnavailable:
+            raise TrustedAuthorityUnavailable from None
 
     return app
 
