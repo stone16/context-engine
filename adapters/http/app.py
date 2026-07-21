@@ -24,9 +24,11 @@ from adapters.http.authentication import (
 from adapters.http.contracts import (
     AcquireWire,
     AuthenticationFailureWire,
+    BlockWire,
     BudgetUsageWire,
     ContextPackageWire,
     CoverageWire,
+    EvidenceWire,
     InvalidRequestWire,
     ResolvedWire,
     ServiceUnavailableWire,
@@ -427,7 +429,11 @@ def create_app(
                     if resolution_observer is not None:
                         resolution_observer(outcome)
                     return JSONResponse(
-                        response.model_dump(mode="json", by_alias=True),
+                        response.model_dump(
+                            mode="json",
+                            by_alias=True,
+                            exclude_none=True,
+                        ),
                         status_code=200,
                         headers={
                             "Cache-Control": "no-store",
@@ -474,6 +480,33 @@ def _acquire_from_wire(body: AcquireWire) -> Acquire:
 
 def _resolved_to_wire(outcome: Resolved) -> ResolvedWire:
     package = outcome.package
+    blocks = tuple(
+        BlockWire(
+            blockId=(
+                f"block_{block.evidence_ref.removeprefix('ev_')}"
+            ),
+            text=block.body,
+            evidenceRefs=(block.evidence_ref,),
+        )
+        for block in package.blocks
+    )
+    evidence = tuple(
+        EvidenceWire(
+            evidenceRef=item.evidence_ref,
+            sourceRef=item.source_ref,
+            resourceRef=item.resource_ref,
+            revisionRef=item.revision_ref,
+            fragmentRef=item.fragment_ref,
+            runRef=item.lineage.run_ref,
+            purpose=item.lineage.purpose,
+            authorizationAsOf=item.lineage.as_of,
+            decisionRef=item.lineage.decision_ref,
+            policySnapshotRef=item.lineage.policy_snapshot_ref,
+            policyEpoch=item.lineage.policy_epoch,
+            sourceDecisionRef=item.lineage.source_acl_decision_ref,
+        )
+        for item in package.evidence
+    )
     return ResolvedWire(
         kind=outcome.kind,
         package=ContextPackageWire(
@@ -483,11 +516,11 @@ def _resolved_to_wire(outcome: Resolved) -> ResolvedWire:
             asOf=package.as_of,
             expiresAt=package.expires_at,
             decisionRef=package.decision_ref,
-            blocks=package.blocks,
-            evidence=package.evidence,
+            blocks=blocks,
+            evidence=evidence,
             gaps=package.gaps,
             budgetUsage=BudgetUsageWire(
-                tokens=cast(Literal[0], package.budget_usage.tokens),
+                tokens=package.budget_usage.tokens,
                 providerCalls=cast(
                     Literal[0], package.budget_usage.provider_calls
                 ),
@@ -497,9 +530,12 @@ def _resolved_to_wire(outcome: Resolved) -> ResolvedWire:
                 elapsedMs=cast(Literal[0], package.budget_usage.elapsed_ms),
             ),
             coverage=CoverageWire(
-                status=cast(Literal["empty"], package.coverage.status),
+                status=cast(
+                    Literal["empty", "sufficient"],
+                    package.coverage.status,
+                ),
                 reason=cast(
-                    Literal["no_authorized_evidence"],
+                    Literal["no_authorized_evidence"] | None,
                     package.coverage.reason,
                 ),
             ),

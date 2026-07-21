@@ -6,6 +6,11 @@ from enum import StrEnum
 from typing import Final, Literal, NoReturn
 from uuid import UUID
 
+from engine.runtime.materialized import (
+    MaterializedProjectionSession,
+    _require_active_materialized_projection_session,
+)
+
 MAX_MEMBERSHIP_VERSION: Final = (1 << 63) - 1
 
 
@@ -80,6 +85,9 @@ class CurrentMembershipVerification:
     request_id: str
     authentication_binding_ref: str
     checked_at: datetime
+    materialized_projection_session: MaterializedProjectionSession | None = field(
+        repr=False
+    )
     construction_provenance: MembershipVerificationProvenance
     _authority_scope: _MembershipAuthorityScope = field(repr=False)
 
@@ -104,6 +112,7 @@ def _construct_current_membership_verification(
     request_id: str,
     authentication_binding_ref: str,
     checked_at: datetime,
+    materialized_projection_session: MaterializedProjectionSession | None = None,
 ) -> CurrentMembershipVerification:
     """Construct proof after the trusted authority verifies the durable row."""
 
@@ -144,6 +153,10 @@ def _construct_current_membership_verification(
         or checked_at.utcoffset() != timedelta(0)
     ):
         raise ValueError("current Membership checked_at must be timezone-aware UTC")
+    if materialized_projection_session is not None:
+        _require_active_materialized_projection_session(
+            materialized_projection_session
+        )
 
     verification = object.__new__(CurrentMembershipVerification)
     object.__setattr__(verification, "organization_id", organization_id)
@@ -158,6 +171,11 @@ def _construct_current_membership_verification(
         authentication_binding_ref,
     )
     object.__setattr__(verification, "checked_at", checked_at)
+    object.__setattr__(
+        verification,
+        "materialized_projection_session",
+        materialized_projection_session,
+    )
     object.__setattr__(
         verification,
         "construction_provenance",
@@ -185,6 +203,10 @@ def _require_active_current_membership_verification(
         raise ValueError(
             "current Membership proof requires active Membership authority scope"
         )
+    if verification.materialized_projection_session is not None:
+        _require_active_materialized_projection_session(
+            verification.materialized_projection_session
+        )
 
 
 @dataclass(frozen=True, slots=True, init=False)
@@ -199,6 +221,9 @@ class UserActor:
     request_id: str
     authentication_binding_ref: str
     checked_at: datetime
+    materialized_projection_session: MaterializedProjectionSession | None = field(
+        repr=False
+    )
     current_membership_verification: CurrentMembershipVerification = field(repr=False)
     construction_provenance: UserActorConstructionProvenance
 
@@ -230,6 +255,10 @@ def _construct_user_actor(
             verification.authentication_binding_ref,
         ),
         ("checked_at", verification.checked_at),
+        (
+            "materialized_projection_session",
+            verification.materialized_projection_session,
+        ),
         ("current_membership_verification", verification),
         (
             "construction_provenance",
@@ -262,5 +291,7 @@ def _require_active_user_actor(actor: UserActor) -> None:
         or actor.authentication_binding_ref
         != verification.authentication_binding_ref
         or actor.checked_at != verification.checked_at
+        or actor.materialized_projection_session
+        is not verification.materialized_projection_session
     ):
         raise ValueError("UserActor does not match its current Membership proof")

@@ -22,6 +22,7 @@ from engine.runtime.delivery import (
     TrustedDeliveryContext,
     _construct_direct_delivery_context,
 )
+from engine.runtime.evidence import Evidence, EvidenceLineage, PackageBlock
 
 AS_OF = datetime(2026, 7, 21, 5, 0, tzinfo=UTC)
 EXPIRES_AT = AS_OF + timedelta(seconds=300)
@@ -45,6 +46,29 @@ SCOPE_DECISION = ScopeDecisionReceipt(
     digest="0" * 64,
     target_count=0,
     is_empty=True,
+)
+EVIDENCE_REF = "ev_" + "a" * 64
+AUTHORIZED_LINEAGE = EvidenceLineage(
+    run_ref="run-authorized",
+    principal_ref="principal-hidden",
+    purpose="direct_agent_context",
+    as_of=AS_OF,
+    decision_ref="dec_00000000000000000000000000000001",
+    policy_snapshot_ref="policy-current",
+    policy_epoch=1,
+    source_acl_decision_ref="source-decision-current",
+)
+AUTHORIZED_EVIDENCE = Evidence(
+    evidence_ref=EVIDENCE_REF,
+    source_ref="source-authorized",
+    resource_ref="resource-authorized",
+    revision_ref="revision-authorized",
+    fragment_ref="fragment-authorized",
+    lineage=AUTHORIZED_LINEAGE,
+)
+AUTHORIZED_BLOCK = PackageBlock(
+    evidence_ref=EVIDENCE_REF,
+    body="A-safe",
 )
 
 
@@ -250,6 +274,17 @@ def test_empty_coverage_is_typed_closed_and_immutable() -> None:
         EMPTY_COVERAGE.reason = CoverageReason.NO_AUTHORIZED_EVIDENCE  # type: ignore[misc]
 
 
+def test_sufficient_coverage_has_no_empty_reason() -> None:
+    sufficient = Coverage(status=CoverageStatus.SUFFICIENT)
+
+    assert sufficient.reason is None
+    with pytest.raises(ValueError, match="must not contain a reason"):
+        Coverage(
+            status=CoverageStatus.SUFFICIENT,
+            reason=CoverageReason.NO_AUTHORIZED_EVIDENCE,
+        )
+
+
 def test_context_package_is_the_tenant_safe_evidence_free_deliverable() -> None:
     package = make_package()
 
@@ -278,6 +313,70 @@ def test_context_package_is_the_tenant_safe_evidence_free_deliverable() -> None:
 
     with pytest.raises(FrozenInstanceError):
         package.organization_ref = "other"  # type: ignore[misc]
+
+
+def test_context_package_accepts_only_closed_exact_authorized_content() -> None:
+    package = make_package(
+        blocks=(AUTHORIZED_BLOCK,),
+        evidence=(AUTHORIZED_EVIDENCE,),
+        budget_usage=BudgetUsage(
+            tokens=len(b"A-safe"),
+            provider_calls=0,
+            cost_microunits=0,
+            elapsed_ms=0,
+        ),
+        coverage=Coverage(status=CoverageStatus.SUFFICIENT),
+    )
+
+    assert package.blocks == (AUTHORIZED_BLOCK,)
+    assert package.evidence == (AUTHORIZED_EVIDENCE,)
+
+
+@pytest.mark.parametrize(
+    "changes",
+    (
+        {"blocks": (AUTHORIZED_BLOCK,)},
+        {"evidence": (AUTHORIZED_EVIDENCE,)},
+        {
+            "blocks": (AUTHORIZED_BLOCK,),
+            "evidence": (AUTHORIZED_EVIDENCE,),
+            "budget_usage": BudgetUsage(
+                tokens=5,
+                provider_calls=0,
+                cost_microunits=0,
+                elapsed_ms=0,
+            ),
+            "coverage": Coverage(status=CoverageStatus.SUFFICIENT),
+        },
+        {
+            "blocks": (AUTHORIZED_BLOCK,),
+            "evidence": (AUTHORIZED_EVIDENCE,),
+            "budget_usage": BudgetUsage(
+                tokens=6,
+                provider_calls=1,
+                cost_microunits=0,
+                elapsed_ms=0,
+            ),
+            "coverage": Coverage(status=CoverageStatus.SUFFICIENT),
+        },
+        {
+            "blocks": (AUTHORIZED_BLOCK,),
+            "evidence": (AUTHORIZED_EVIDENCE,),
+            "budget_usage": BudgetUsage(
+                tokens=6,
+                provider_calls=0,
+                cost_microunits=0,
+                elapsed_ms=0,
+            ),
+            "coverage": EMPTY_COVERAGE,
+        },
+    ),
+)
+def test_context_package_rejects_incomplete_or_misaccounted_content(
+    changes: dict[str, object],
+) -> None:
+    with pytest.raises((TypeError, ValueError), match="package|content|usage"):
+        make_package(**changes)
 
 
 @pytest.mark.parametrize(

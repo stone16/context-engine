@@ -27,6 +27,7 @@ SUPPORTED_CATALOG_VERSION = "1.0.0"
 EXPECTED_INVARIANT_COUNT = 15
 EXPECTED_FIXTURE_COUNT = 12
 ID_PATTERN = re.compile(r"^[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)*-[0-9]{3}$")
+EVIDENCE_REF_PATTERN = re.compile(r"^ev_[0-9a-f]{64}$")
 
 CANONICAL_INVARIANT_IDS: tuple[str, ...] = (
     "TENANT-OWNERSHIP-001",
@@ -141,7 +142,10 @@ CANONICAL_REQUIRED_MILESTONES: dict[str, tuple[str, ...]] = {
 
 RUNTIME_OUTCOME_KINDS: dict[str, tuple[str, str]] = {
     "ACCEPT-001": ("resolved", "ContextPackage"),
+    "ACCEPT-003": ("resolved", "ContextPackage"),
+    "ACCEPT-004": ("resolved", "ContextPackage"),
     "ACCEPT-005": ("request_not_available", "request_not_available"),
+    "ACCEPT-006": ("resolved", "ContextPackage"),
     "ACCEPT-009": ("request_not_available", "request_not_available"),
     "ACCEPT-010": ("citation_not_available", "citation_not_available"),
     "ACCEPT-011": ("resolved", "ContextPackage"),
@@ -188,7 +192,37 @@ CANONICAL_FAIL_CLOSED_OUTCOMES: dict[str, dict[str, object]] = {
 }
 
 NON_RETRYABLE_RUNTIME_FIXTURES = frozenset({"ACCEPT-005", "ACCEPT-009"})
-RESOLVED_EMPTY_RUNTIME_FIXTURES = frozenset({"ACCEPT-001", "ACCEPT-011"})
+RESOLVED_EMPTY_RUNTIME_FIXTURES = frozenset({"ACCEPT-011"})
+RESOLVED_CONTENT_RUNTIME_FIXTURES = frozenset(
+    {"ACCEPT-001", "ACCEPT-003", "ACCEPT-004", "ACCEPT-006"}
+)
+CANDIDATE_RANK_MEMBERS: tuple[str, ...] = (
+    "candidate-authorized-a",
+    "candidate-denied-a",
+    "candidate-hostile-b",
+)
+CANDIDATE_RANK_ORDERS: tuple[tuple[str, ...], ...] = (
+    ("candidate-authorized-a", "candidate-denied-a", "candidate-hostile-b"),
+    ("candidate-authorized-a", "candidate-hostile-b", "candidate-denied-a"),
+    ("candidate-denied-a", "candidate-authorized-a", "candidate-hostile-b"),
+    ("candidate-denied-a", "candidate-hostile-b", "candidate-authorized-a"),
+    ("candidate-hostile-b", "candidate-authorized-a", "candidate-denied-a"),
+    ("candidate-hostile-b", "candidate-denied-a", "candidate-authorized-a"),
+)
+PUBLIC_EVIDENCE_FIELDS: tuple[str, ...] = (
+    "evidenceRef",
+    "sourceRef",
+    "resourceRef",
+    "revisionRef",
+    "fragmentRef",
+    "runRef",
+    "purpose",
+    "authorizationAsOf",
+    "decisionRef",
+    "policySnapshotRef",
+    "policyEpoch",
+    "sourceDecisionRef",
+)
 
 TRANSPORT_CASE_IDS: tuple[str, ...] = (
     "BODY-INJECTION",
@@ -822,6 +856,34 @@ def _validate_fixture(
             },
             require_activated_oracle=True,
         )
+    if fixture_id == "ACCEPT-006" and adversarial_mutation is not None:
+        rank_orders = adversarial_mutation.get("candidateRankOrders")
+        rendered_orders = (
+            tuple(tuple(order) for order in rank_orders)
+            if isinstance(rank_orders, list)
+            and all(isinstance(order, list) for order in rank_orders)
+            else ()
+        )
+        if rendered_orders != CANDIDATE_RANK_ORDERS:
+            collector.add(
+                f"{path}.adversarialMutation.candidateRankOrders",
+                "must contain all six canonical authorized, denied, and "
+                "cross-Organization CandidateRef rank orders",
+            )
+        for order_index, order in enumerate(rendered_orders):
+            if len(order) != len(CANDIDATE_RANK_MEMBERS) or set(order) != set(
+                CANDIDATE_RANK_MEMBERS
+            ):
+                collector.add(
+                    f"{path}.adversarialMutation.candidateRankOrders[{order_index}]",
+                    "must contain each canonical content-free CandidateRef "
+                    "exactly once",
+                )
+        if adversarial_mutation.get("candidatePayloadFields") != []:
+            collector.add(
+                f"{path}.adversarialMutation.candidatePayloadFields",
+                "must be empty because CandidateRef is content-free",
+            )
     collector.require_nonempty_object(fixture.get("operation"), f"{path}.operation")
 
     expected = collector.require_mapping(fixture.get("expected"), f"{path}.expected")
@@ -943,18 +1005,6 @@ def _validate_fixture(
                 if resolved_package is not None
                 else None
             )
-            if (
-                response_body is not None
-                and not collector.require_nonempty_string(
-                    response_body.get("egressGrant"),
-                    f"{path}.expected.externalResponse.body.egressGrant",
-                )
-                and "egressGrant" not in response_body
-            ):
-                collector.add(
-                    f"{path}.expected.externalResponse.body.egressGrant",
-                    "is required for a resolved outcome",
-                )
             if coverage is not None and coverage.get("status") != "empty":
                 collector.add(
                     f"{path}.expected.externalResponse.body.package.coverage.status",
@@ -994,6 +1044,172 @@ def _validate_fixture(
                     f"{path}.expected.packageOrError.coverageReason",
                     "must be 'no_authorized_evidence' for a hidden or missing Acquire",
                 )
+        if fixture_id in RESOLVED_CONTENT_RUNTIME_FIXTURES:
+            resolved_package = (
+                collector.require_mapping(
+                    response_body.get("package"),
+                    f"{path}.expected.externalResponse.body.package",
+                )
+                if response_body is not None
+                else None
+            )
+            blocks = resolved_package.get("blocks") if resolved_package else None
+            evidence = resolved_package.get("evidence") if resolved_package else None
+            coverage = (
+                collector.require_mapping(
+                    resolved_package.get("coverage"),
+                    f"{path}.expected.externalResponse.body.package.coverage",
+                )
+                if resolved_package is not None
+                else None
+            )
+            if coverage is not None and coverage != {"status": "sufficient"}:
+                collector.add(
+                    f"{path}.expected.externalResponse.body.package.coverage",
+                    "must be exactly {'status': 'sufficient'} for authorized content",
+                )
+            if not isinstance(blocks, list) or len(blocks) != 1:
+                collector.add(
+                    f"{path}.expected.externalResponse.body.package.blocks",
+                    "must contain exactly one authorized block",
+                )
+            if not isinstance(evidence, list) or len(evidence) != 1:
+                collector.add(
+                    f"{path}.expected.externalResponse.body.package.evidence",
+                    "must contain exactly one authorized Evidence",
+                )
+            if isinstance(blocks, list) and len(blocks) == 1 and isinstance(
+                evidence, list
+            ) and len(evidence) == 1:
+                block = collector.require_mapping(
+                    blocks[0],
+                    f"{path}.expected.externalResponse.body.package.blocks[0]",
+                )
+                item = collector.require_mapping(
+                    evidence[0],
+                    f"{path}.expected.externalResponse.body.package.evidence[0]",
+                )
+                if block is not None and item is not None:
+                    evidence_ref = item.get("evidenceRef")
+                    block_id = block.get("blockId")
+                    block_text = block.get("text")
+                    if (
+                        not isinstance(evidence_ref, str)
+                        or EVIDENCE_REF_PATTERN.fullmatch(evidence_ref) is None
+                    ):
+                        collector.add(
+                            f"{path}.expected.externalResponse.body.package.evidence[0].evidenceRef",
+                            "must use the closed ev_<64 lowercase hex> format",
+                        )
+                    if block.get("evidenceRefs") != [evidence_ref]:
+                        collector.add(
+                            f"{path}.expected.externalResponse.body.package.blocks[0].evidenceRefs",
+                            "must resolve to exactly the one Evidence in this Package",
+                        )
+                    expected_block_id = (
+                        f"block_{evidence_ref.removeprefix('ev_')}"
+                        if isinstance(evidence_ref, str)
+                        and EVIDENCE_REF_PATTERN.fullmatch(evidence_ref)
+                        else None
+                    )
+                    if block_id != expected_block_id:
+                        collector.add(
+                            f"{path}.expected.externalResponse.body.package.blocks[0].blockId",
+                            "must be derived from its exact EvidenceRef",
+                        )
+                    if (
+                        not isinstance(block_text, str)
+                        or not block_text
+                        or block_text.isspace()
+                    ):
+                        collector.add(
+                            f"{path}.expected.externalResponse.body.package.blocks[0].text",
+                            "must be nonblank authorized text",
+                        )
+                    for evidence_field, package_field in (
+                        ("purpose", "purpose"),
+                        ("authorizationAsOf", "asOf"),
+                        ("decisionRef", "decisionRef"),
+                    ):
+                        if item.get(evidence_field) != resolved_package.get(
+                            package_field
+                        ):
+                            collector.add(
+                                f"{path}.expected.externalResponse.body.package.evidence[0].{evidence_field}",
+                                f"must equal enclosing Package {package_field}",
+                            )
+                    if tuple(item) != PUBLIC_EVIDENCE_FIELDS:
+                        collector.add(
+                            f"{path}.expected.externalResponse.body.package.evidence[0]",
+                            "must carry the closed complete public authorization "
+                            "lineage",
+                        )
+                    if evidence_ref in CANDIDATE_RANK_MEMBERS:
+                        collector.add(
+                            f"{path}.expected.externalResponse.body.package.evidence[0].evidenceRef",
+                            "must be a request-scoped EvidenceRef distinct from "
+                            "CandidateRef",
+                        )
+                    for forbidden in (
+                        "principalRef",
+                        "candidateRef",
+                        "candidateOrganizationRef",
+                        "deniedCount",
+                        "deniedFields",
+                    ):
+                        if forbidden in item:
+                            collector.add(
+                                f"{path}.expected.externalResponse.body.package.evidence[0].{forbidden}",
+                                "must not be public Package Evidence",
+                            )
+            budget_usage = (
+                collector.require_mapping(
+                    resolved_package.get("budgetUsage"),
+                    f"{path}.expected.externalResponse.body.package.budgetUsage",
+                )
+                if resolved_package is not None
+                else None
+            )
+            if budget_usage is not None and budget_usage.get("providerCalls") != 0:
+                collector.add(
+                    f"{path}.expected.externalResponse.body.package.budgetUsage.providerCalls",
+                    "must be 0 for internal materialized PostgreSQL projection",
+                )
+            if isinstance(blocks, list) and budget_usage is not None:
+                block_texts = [
+                    block.get("text")
+                    for block in blocks
+                    if isinstance(block, Mapping)
+                ]
+                if all(isinstance(text, str) for text in block_texts):
+                    authorized_bytes = sum(
+                        len(text.encode("utf-8"))
+                        for text in block_texts
+                        if isinstance(text, str)
+                    )
+                    if budget_usage.get("tokens") != authorized_bytes:
+                        collector.add(
+                            f"{path}.expected.externalResponse.body.package.budgetUsage.tokens",
+                            "must equal the authorized block UTF-8 byte count",
+                        )
+            if io_counts.get("providerCalls") != 0:
+                collector.add(
+                    f"{path}.expected.io.providerCalls",
+                    "must be 0 for internal materialized PostgreSQL projection",
+                )
+            package_or_error = collector.require_mapping(
+                expected.get("packageOrError"), f"{path}.expected.packageOrError"
+            )
+            if package_or_error is not None:
+                for field in (
+                    "unauthorizedFieldCount",
+                    "unauthorizedEvidenceRefCount",
+                ):
+                    if package_or_error.get(field) != 0:
+                        collector.add(
+                            f"{path}.expected.packageOrError.{field}",
+                            "must be the numeric constant 0 for authorized content",
+                        )
         if fixture_id == "ACCEPT-011":
             if (
                 external_response is not None
@@ -1028,13 +1244,11 @@ def _validate_fixture(
                 else None
             )
             canonical_allowlist = (
-                "body.package.packageId",
-                "body.package.packageDigest",
+                "body.package.organizationRef",
                 "body.package.decisionRef",
                 "body.package.asOf",
                 "body.package.expiresAt",
                 "body.package.budgetUsage.elapsedMs",
-                "body.egressGrant",
                 "headers.X-Context-Request-Id",
             )
             if (

@@ -1,4 +1,4 @@
-"""Sealed Runtime boundary and first evidence-free delivery contracts."""
+"""Sealed Runtime boundary and exact-authorized delivery contracts."""
 
 from engine.runtime.actor import (
     CurrentMembershipVerification,
@@ -32,6 +32,16 @@ from engine.runtime.contracts import (
     ScopeDecisionReceipt,
     TrustedDeliveryContext,
 )
+from engine.runtime.evidence import (
+    AuthorizedProjection,
+    CandidateRef,
+    Evidence,
+    EvidenceLineage,
+    PackageBlock,
+    PackageContent,
+    construct_package_content,
+    validate_package_content,
+)
 from engine.runtime.invocation import (
     AuthenticatedInvocation,
     InvocationConstructionProvenance,
@@ -42,7 +52,9 @@ __all__ = [
     "KernelDependency",
     "AuthenticatedInvocation",
     "Acquire",
+    "AuthorizedProjection",
     "BudgetUsage",
+    "CandidateRef",
     "ContextNeed",
     "ContextPackage",
     "Coverage",
@@ -53,8 +65,12 @@ __all__ = [
     "MembershipVerificationProvenance",
     "MembershipRejectionAuditReceipt",
     "MembershipRejectionCategory",
+    "Evidence",
+    "EvidenceLineage",
     "PackageBudget",
     "PackageBudgetRequest",
+    "PackageBlock",
+    "PackageContent",
     "RequestNarrowing",
     "Resolved",
     "ScopeDecisionReceipt",
@@ -63,5 +79,7 @@ __all__ = [
     "TrustedDeliveryContext",
     "UserActor",
     "UserActorConstructionProvenance",
+    "construct_package_content",
     "effective_package_budget",
+    "validate_package_content",
 ]

@@ -81,6 +81,14 @@
       "minLength": 1,
       "pattern": "\\S"
     },
+    "evidenceRef": {
+      "type": "string",
+      "pattern": "^ev_[0-9a-f]{64}$"
+    },
+    "blockRef": {
+      "type": "string",
+      "pattern": "^block_[0-9a-f]{64}$"
+    },
     "stringArray": {
       "type": "array",
       "minItems": 1,
@@ -396,6 +404,12 @@
         "tokenPolicyEpoch": {"type": "integer", "minimum": 0},
         "cachedResourceStillPresent": {"type": "boolean"},
         "orderedCandidateRefs": {"$ref": "#/$defs/stringArray"},
+        "candidateRankOrders": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/stringArray"}
+        },
         "candidatePayloadFields": {
           "type": "array",
           "uniqueItems": true,
@@ -541,40 +555,116 @@
         "kind": {"$ref": "#/$defs/nonEmptyString"},
         "gap": {"$ref": "#/$defs/nonEmptyString"},
         "retryable": {"type": "boolean"},
-        "package": {"$ref": "#/$defs/emptyContextPackage"},
-        "egressGrant": {"$ref": "#/$defs/nonEmptyString"}
+        "package": {"$ref": "#/$defs/contextPackage"}
       }
     },
-    "emptyContextPackage": {
+    "contextPackage": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["packageId", "packageDigest", "purpose", "audienceDigest", "policyEpoch", "decisionRef", "releaseManifestRef", "retentionPolicyRef", "asOf", "expiresAt", "tokenizerRef", "blocks", "evidence", "gaps", "coverage", "budgetUsage"],
+      "required": ["organizationRef", "purpose", "ttlSeconds", "asOf", "expiresAt", "decisionRef", "blocks", "evidence", "gaps", "budgetUsage", "coverage"],
       "properties": {
-        "packageId": {"$ref": "#/$defs/nonEmptyString"},
-        "packageDigest": {"$ref": "#/$defs/nonEmptyString"},
+        "organizationRef": {"$ref": "#/$defs/nonEmptyString"},
         "purpose": {"$ref": "#/$defs/nonEmptyString"},
-        "audienceDigest": {"$ref": "#/$defs/nonEmptyString"},
-        "policyEpoch": {"$ref": "#/$defs/nonEmptyString"},
-        "decisionRef": {"$ref": "#/$defs/nonEmptyString"},
-        "releaseManifestRef": {"$ref": "#/$defs/nonEmptyString"},
-        "retentionPolicyRef": {"$ref": "#/$defs/nonEmptyString"},
+        "ttlSeconds": {"type": "integer", "minimum": 1},
         "asOf": {"$ref": "#/$defs/nonEmptyString"},
         "expiresAt": {"$ref": "#/$defs/nonEmptyString"},
-        "tokenizerRef": {"$ref": "#/$defs/nonEmptyString"},
-        "blocks": {"type": "array", "maxItems": 0},
-        "evidence": {"type": "array", "maxItems": 0},
+        "decisionRef": {"$ref": "#/$defs/nonEmptyString"},
+        "blocks": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/packageBlock"}
+        },
+        "evidence": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/packageEvidence"}
+        },
         "gaps": {"type": "array", "maxItems": 0},
-        "coverage": {"$ref": "#/$defs/emptyCoverage"},
-        "budgetUsage": {"$ref": "#/$defs/zeroBudgetUsage"}
+        "budgetUsage": {"$ref": "#/$defs/budgetUsage"},
+        "coverage": {"$ref": "#/$defs/coverage"}
+      },
+      "if": {
+        "properties": {
+          "coverage": {
+            "properties": {"status": {"const": "empty"}},
+            "required": ["status"]
+          }
+        },
+        "required": ["coverage"]
+      },
+      "then": {
+        "properties": {
+          "blocks": {"maxItems": 0},
+          "evidence": {"maxItems": 0},
+          "budgetUsage": {"$ref": "#/$defs/zeroBudgetUsage"}
+        }
+      },
+      "else": {
+        "properties": {
+          "blocks": {"minItems": 1},
+          "evidence": {"minItems": 1}
+        }
       }
     },
-    "emptyCoverage": {
+    "packageBlock": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["status", "reason"],
+      "required": ["blockId", "text", "evidenceRefs"],
       "properties": {
-        "status": {"const": "empty"},
+        "blockId": {"$ref": "#/$defs/blockRef"},
+        "text": {"$ref": "#/$defs/nonEmptyString"},
+        "evidenceRefs": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/evidenceRef"}
+        }
+      }
+    },
+    "packageEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["evidenceRef", "sourceRef", "resourceRef", "revisionRef", "fragmentRef", "runRef", "purpose", "authorizationAsOf", "decisionRef", "policySnapshotRef", "policyEpoch", "sourceDecisionRef"],
+      "properties": {
+        "evidenceRef": {"$ref": "#/$defs/evidenceRef"},
+        "sourceRef": {"$ref": "#/$defs/nonEmptyString"},
+        "resourceRef": {"$ref": "#/$defs/nonEmptyString"},
+        "revisionRef": {"$ref": "#/$defs/nonEmptyString"},
+        "fragmentRef": {"$ref": "#/$defs/nonEmptyString"},
+        "runRef": {"$ref": "#/$defs/nonEmptyString"},
+        "purpose": {"$ref": "#/$defs/nonEmptyString"},
+        "authorizationAsOf": {"$ref": "#/$defs/nonEmptyString"},
+        "decisionRef": {"$ref": "#/$defs/nonEmptyString"},
+        "policySnapshotRef": {"$ref": "#/$defs/nonEmptyString"},
+        "policyEpoch": {"type": "integer", "minimum": 1},
+        "sourceDecisionRef": {"$ref": "#/$defs/nonEmptyString"}
+      }
+    },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status"],
+      "properties": {
+        "status": {"enum": ["empty", "sufficient"]},
         "reason": {"const": "no_authorized_evidence"}
+      },
+      "if": {
+        "properties": {"status": {"const": "empty"}},
+        "required": ["status"]
+      },
+      "then": {"required": ["reason"]},
+      "else": {"properties": {"reason": false}}
+    },
+    "budgetUsage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tokens", "providerCalls", "costMicrounits", "elapsedMs"],
+      "properties": {
+        "tokens": {"type": "integer", "minimum": 0},
+        "providerCalls": {"type": "integer", "minimum": 0},
+        "costMicrounits": {"type": "integer", "minimum": 0},
+        "elapsedMs": {"type": "integer", "minimum": 0}
       }
     },
     "zeroBudgetUsage": {
@@ -619,6 +709,10 @@
         "revokedResourceDetailCount": {"type": "integer", "minimum": 0},
         "evidenceRefs": {"$ref": "#/$defs/stringArray"},
         "deniedCandidateCountExposed": {"type": "boolean"},
+        "blocksPerPackage": {"type": "integer", "minimum": 0},
+        "evidencePerPackage": {"type": "integer", "minimum": 0},
+        "unauthorizedFieldCount": {"type": "integer", "const": 0},
+        "unauthorizedEvidenceRefCount": {"type": "integer", "const": 0},
         "contextPackageCreated": {"type": "boolean"},
         "trustedContextConstructedFromBody": {"type": "boolean"},
         "reasonVisibleToWorker": {"$ref": "#/$defs/nonEmptyString"},

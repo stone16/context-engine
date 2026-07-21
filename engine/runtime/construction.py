@@ -1,4 +1,4 @@
-"""Fail-closed construction and first sealed empty-Package Runtime path."""
+"""Fail-closed sealed Runtime authorization and Package construction path."""
 
 from __future__ import annotations
 
@@ -13,7 +13,11 @@ from typing import Literal
 
 from engine.runtime.actor import _require_active_user_actor
 from engine.runtime.budget import PackageBudget, effective_package_budget
-from engine.runtime.content_io import RuntimeContentIo, prohibited_empty_path_content_io
+from engine.runtime.content_io import (
+    CandidateIndex,
+    RuntimeContentIo,
+    prohibited_empty_path_content_io,
+)
 from engine.runtime.contracts import (
     DECISION_REF_PREFIX,
     ORGANIZATION_PACKAGE_REF_PREFIX,
@@ -31,9 +35,25 @@ from engine.runtime.delivery import (
     DirectDeliveryConstructionProvenance,
     TrustedDeliveryContext,
 )
+from engine.runtime.evidence import (
+    CandidateRef,
+    EvidenceLineage,
+    PackageContent,
+    _candidate_sort_key,
+    _close_authorization_kernel_scope,
+    _construct_authorized_projection,
+    _open_authorization_kernel_scope,
+    construct_package_content,
+)
 from engine.runtime.invocation import (
     AuthenticatedInvocation,
     InvocationConstructionProvenance,
+)
+from engine.runtime.materialized import (
+    MaterializedFragmentLocator,
+    MaterializedProjectionSession,
+    _locate_materialized_fragment,
+    _project_materialized_fragment_body,
 )
 from engine.runtime.organization import (
     ExistingOrganizationVerification,
@@ -42,6 +62,7 @@ from engine.runtime.organization import (
 from engine.runtime.scope import (
     OMITTED_REQUEST_NARROWING,
     EffectiveScope,
+    ScopeTarget,
     compute_effective_scope,
 )
 from engine.runtime.scope_authority import (
@@ -55,26 +76,27 @@ class RuntimeConfigurationError(RuntimeError):
 
 
 @dataclass(frozen=True, slots=True)
-class EmptyPolicyReceipt:
-    """Trusted-input policy result for a request with zero candidates."""
+class PolicyReceipt:
+    """Trusted-input policy result before candidate discovery."""
 
     request_id: str
     purpose: str
     effective_scope: EffectiveScope = field(repr=False)
-    candidate_count: Literal[0] = 0
-    authorized_projection_count: Literal[0] = 0
 
 
 @dataclass(frozen=True, slots=True)
 class DecisionProvenanceReceipt:
-    """In-memory provenance binding for the staged empty decision."""
+    """Server-owned request and policy lineage for one decision."""
 
     decision_ref: str
     package_organization_ref: str
     request_id: str
     purpose: str
     as_of: datetime
-    authorized_projection_count: Literal[0] = 0
+    run_ref: str
+    policy_snapshot_ref: str
+    policy_epoch: int
+    source_acl_decision_ref: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,19 +104,29 @@ class DecisionAuditReceipt:
     """Restricted safe audit result with no denied identifiers or counts."""
 
     decision_ref: str
-    reason: CoverageReason
-    authorized_evidence_count: Literal[0] = 0
+    reason: CoverageReason | None
+    authorized_evidence_count: int = 0
     denied_detail_count: Literal[0] = 0
+
+    def __post_init__(self) -> None:
+        if (
+            type(self.authorized_evidence_count) is not int
+            or self.authorized_evidence_count < 0
+        ):
+            raise ValueError("authorized Evidence count must be non-negative")
+        if self.denied_detail_count != 0:
+            raise ValueError("denied decision detail count must remain zero")
 
 
 @dataclass(frozen=True, slots=True)
-class EmptyAuthorizationDecision:
+class AuthorizationDecision:
     """Result proving each mandatory Kernel behavior completed."""
 
     effective_budget: PackageBudget
-    policy_receipt: EmptyPolicyReceipt
+    policy_receipt: PolicyReceipt
     provenance_receipt: DecisionProvenanceReceipt
     audit_receipt: DecisionAuditReceipt
+    content: PackageContent
 
 
 def _validate_trusted_operands(
@@ -171,12 +203,12 @@ def _validate_trusted_operands(
 class PolicyGate:
     """Concrete, non-substitutable trusted-input policy gate."""
 
-    def validate_empty_acquire(
+    def validate_acquire(
         self,
         invocation: AuthenticatedInvocation,
         delivery_context: TrustedDeliveryContext,
         request: Acquire,
-    ) -> EmptyPolicyReceipt:
+    ) -> PolicyReceipt:
         _validate_trusted_operands(invocation, delivery_context, request)
         effective_scope = compute_effective_scope(
             _trusted_operands_from_snapshot(invocation.trusted_scope_snapshot),
@@ -184,7 +216,7 @@ class PolicyGate:
             if request.narrowing is not None
             else OMITTED_REQUEST_NARROWING,
         )
-        return EmptyPolicyReceipt(
+        return PolicyReceipt(
             request_id=invocation.request_id,
             purpose=delivery_context.purpose,
             effective_scope=effective_scope,
@@ -210,13 +242,15 @@ class ProvenanceGate:
     def issue(
         self,
         invocation: AuthenticatedInvocation,
-        policy_receipt: EmptyPolicyReceipt,
+        policy_receipt: PolicyReceipt,
         *,
         as_of: datetime,
         reference_issuer: _OpaqueReferenceIssuer,
     ) -> DecisionProvenanceReceipt:
         _require_utc("Runtime clock", as_of)
-        organization_ref, decision_ref = reference_issuer.issue_pair()
+        references = reference_issuer.issue()
+        organization_ref = references.package_organization_ref
+        decision_ref = references.decision_ref
         organization_ref = _require_closed_opaque_ref(
             "organization reference",
             organization_ref,
@@ -241,6 +275,10 @@ class ProvenanceGate:
             request_id=policy_receipt.request_id,
             purpose=policy_receipt.purpose,
             as_of=as_of,
+            run_ref=references.run_ref,
+            policy_snapshot_ref=references.policy_snapshot_ref,
+            policy_epoch=references.policy_epoch,
+            source_acl_decision_ref=references.source_acl_decision_ref,
         )
 
 
@@ -248,13 +286,22 @@ class ProvenanceGate:
 class DecisionAuditGate:
     """Concrete safe in-memory audit gate; persistence belongs to Issue #19."""
 
-    def record_empty(
+    def record(
         self,
         provenance_receipt: DecisionProvenanceReceipt,
+        *,
+        authorized_evidence_count: int,
     ) -> DecisionAuditReceipt:
+        if type(authorized_evidence_count) is not int or authorized_evidence_count < 0:
+            raise ValueError("authorized Evidence count must be non-negative")
         return DecisionAuditReceipt(
             decision_ref=provenance_receipt.decision_ref,
-            reason=CoverageReason.NO_AUTHORIZED_EVIDENCE,
+            reason=(
+                CoverageReason.NO_AUTHORIZED_EVIDENCE
+                if authorized_evidence_count == 0
+                else None
+            ),
+            authorized_evidence_count=authorized_evidence_count,
         )
 
 
@@ -292,7 +339,7 @@ def _validate_kernel_dependencies(dependencies: object) -> KernelDependencies:
 
 
 class AuthorizationKernel:
-    """Non-pluggable kernel gate for the first zero-candidate Runtime slice."""
+    """Non-pluggable exact authorization and projection boundary."""
 
     def __init__(self, dependencies: KernelDependencies) -> None:
         validated = _validate_kernel_dependencies(dependencies)
@@ -301,7 +348,7 @@ class AuthorizationKernel:
         self._budget = validated.budget
         self._provenance = validated.provenance
 
-    def authorize_empty_acquire(
+    def authorize_acquire(
         self,
         invocation: AuthenticatedInvocation,
         delivery_context: TrustedDeliveryContext,
@@ -310,10 +357,12 @@ class AuthorizationKernel:
         server_budget: PackageBudget,
         as_of: datetime,
         reference_issuer: _OpaqueReferenceIssuer,
-    ) -> EmptyAuthorizationDecision:
-        """Run policy, budget, provenance, and audit in their fixed order."""
+        candidate_index: CandidateIndex | None,
+        projection_session: MaterializedProjectionSession | None,
+    ) -> AuthorizationDecision:
+        """Run policy, budget, provenance, exact projection, assembly, and audit."""
 
-        policy_receipt = self._policy.validate_empty_acquire(
+        policy_receipt = self._policy.validate_acquire(
             invocation,
             delivery_context,
             request,
@@ -325,15 +374,125 @@ class AuthorizationKernel:
             as_of=as_of,
             reference_issuer=reference_issuer,
         )
-        audit_receipt = self._audit.record_empty(provenance_receipt)
+        candidates: tuple[CandidateRef, ...] = ()
+        if policy_receipt.effective_scope.targets and candidate_index is not None:
+            if projection_session is None:
+                raise RuntimeConfigurationError(
+                    "candidate discovery requires same-transaction projection session"
+                )
+            discovered = candidate_index.discover(request)
+            if type(discovered) is not tuple or any(
+                type(candidate) is not CandidateRef for candidate in discovered
+            ):
+                raise TypeError(
+                    "CandidateIndex must return a tuple of exact CandidateRef values"
+                )
+            candidates = discovered
+        content = self._authorize_and_assemble(
+            invocation,
+            policy_receipt,
+            provenance_receipt,
+            effective_budget,
+            candidates,
+            projection_session,
+        )
+        audit_receipt = self._audit.record(
+            provenance_receipt,
+            authorized_evidence_count=len(content.evidence),
+        )
         if audit_receipt.decision_ref != provenance_receipt.decision_ref:
             raise RuntimeConfigurationError("audit and provenance decision mismatch")
-        return EmptyAuthorizationDecision(
+        return AuthorizationDecision(
             effective_budget=effective_budget,
             policy_receipt=policy_receipt,
             provenance_receipt=provenance_receipt,
             audit_receipt=audit_receipt,
+            content=content,
         )
+
+    def _authorize_and_assemble(
+        self,
+        invocation: AuthenticatedInvocation,
+        policy_receipt: PolicyReceipt,
+        provenance_receipt: DecisionProvenanceReceipt,
+        effective_budget: PackageBudget,
+        candidates: tuple[CandidateRef, ...],
+        projection_session: MaterializedProjectionSession | None,
+    ) -> PackageContent:
+        if not candidates:
+            return construct_package_content(())
+        if projection_session is None:
+            raise RuntimeConfigurationError(
+                "candidate discovery requires same-transaction projection session"
+            )
+
+        kernel_scope = _open_authorization_kernel_scope()
+        try:
+            projections = []
+            consumed_tokens = 0
+            for candidate in sorted(candidates, key=_candidate_sort_key):
+                locator = _locate_materialized_fragment(
+                    projection_session,
+                    candidate,
+                )
+                if locator is None or not _locator_matches_candidate(
+                    locator,
+                    candidate,
+                ):
+                    continue
+                exact_target = ScopeTarget(
+                    locator.organization_id,
+                    locator.source_ref,
+                    locator.resource_ref,
+                )
+                if exact_target not in policy_receipt.effective_scope.targets:
+                    continue
+                body = _project_materialized_fragment_body(
+                    projection_session,
+                    locator,
+                )
+                if body is None:
+                    continue
+                projection = _construct_authorized_projection(
+                    kernel_scope=kernel_scope,
+                    candidate_ref=candidate,
+                    body=body,
+                    lineage=EvidenceLineage(
+                        run_ref=provenance_receipt.run_ref,
+                        principal_ref=invocation.principal_ref,
+                        purpose=provenance_receipt.purpose,
+                        as_of=provenance_receipt.as_of,
+                        decision_ref=provenance_receipt.decision_ref,
+                        policy_snapshot_ref=(
+                            provenance_receipt.policy_snapshot_ref
+                        ),
+                        policy_epoch=provenance_receipt.policy_epoch,
+                        source_acl_decision_ref=(
+                            provenance_receipt.source_acl_decision_ref
+                        ),
+                    ),
+                )
+                body_tokens = len(projection.projected_body.encode("utf-8"))
+                if consumed_tokens + body_tokens > effective_budget.max_tokens:
+                    continue
+                projections.append(projection)
+                consumed_tokens += body_tokens
+            return construct_package_content(tuple(projections))
+        finally:
+            _close_authorization_kernel_scope(kernel_scope)
+
+
+def _locator_matches_candidate(
+    locator: MaterializedFragmentLocator,
+    candidate: CandidateRef,
+) -> bool:
+    return type(candidate) is CandidateRef and (
+        locator.organization_id == candidate.organization_id
+        and locator.source_ref == candidate.source_ref
+        and locator.resource_ref == candidate.resource_ref
+        and locator.revision_ref == candidate.revision_ref
+        and locator.fragment_ref == candidate.fragment_ref
+    )
 
 
 DEFAULT_PACKAGE_TTL_SECONDS = 300
@@ -359,6 +518,16 @@ def _require_utc(field_name: str, value: object) -> datetime:
     return value
 
 
+@dataclass(frozen=True, slots=True)
+class _IssuedReferences:
+    package_organization_ref: str
+    decision_ref: str
+    run_ref: str
+    policy_snapshot_ref: str
+    policy_epoch: int
+    source_acl_decision_ref: str
+
+
 class _OpaqueReferenceIssuer:
     """Runtime-owned, lock-serialized issuer with no caller-controlled factory."""
 
@@ -367,28 +536,38 @@ class _OpaqueReferenceIssuer:
         self._sequence = 0
         self._lock = Lock()
 
-    def issue_pair(self) -> tuple[str, str]:
+    def issue(self) -> _IssuedReferences:
         with self._lock:
             self._sequence += 1
             material = self._sequence.to_bytes(16, byteorder="big")
-            organization_entropy = new_hmac(
-                self._secret,
-                b"organization:" + material,
-                sha256,
-            ).hexdigest()[:32]
-            decision_entropy = new_hmac(
-                self._secret,
-                b"decision:" + material,
-                sha256,
-            ).hexdigest()[:32]
-        return (
-            f"{ORGANIZATION_PACKAGE_REF_PREFIX}_{organization_entropy}",
-            f"{DECISION_REF_PREFIX}_{decision_entropy}",
+            entropies = {
+                label: new_hmac(
+                    self._secret,
+                    label.encode("ascii") + b":" + material,
+                    sha256,
+                ).hexdigest()[:32]
+                for label in (
+                    "organization",
+                    "decision",
+                    "run",
+                    "policy",
+                    "source-acl",
+                )
+            }
+        return _IssuedReferences(
+            package_organization_ref=(
+                f"{ORGANIZATION_PACKAGE_REF_PREFIX}_{entropies['organization']}"
+            ),
+            decision_ref=f"{DECISION_REF_PREFIX}_{entropies['decision']}",
+            run_ref=f"run_{entropies['run']}",
+            policy_snapshot_ref=f"policy_{entropies['policy']}",
+            policy_epoch=1,
+            source_acl_decision_ref=f"sourceacl_{entropies['source-acl']}",
         )
 
 
 class Runtime:
-    """Single sealed Runtime entry point for the evidence-free Acquire tracer."""
+    """Single sealed Runtime entry point for the Acquire tracer."""
 
     def __init__(
         self,
@@ -397,6 +576,7 @@ class Runtime:
         package_ttl_seconds: int = DEFAULT_PACKAGE_TTL_SECONDS,
         server_budget: PackageBudget = DEFAULT_SERVER_PACKAGE_BUDGET,
         content_io: RuntimeContentIo | None = None,
+        candidate_index: CandidateIndex | None = None,
         clock: Callable[[], datetime] = _utc_now,
     ) -> None:
         validated = _validate_kernel_dependencies(dependencies)
@@ -407,11 +587,16 @@ class Runtime:
         selected_content_io = content_io or prohibited_empty_path_content_io()
         if type(selected_content_io) is not RuntimeContentIo:
             raise RuntimeConfigurationError("content_io must be RuntimeContentIo")
+        if candidate_index is not None and not callable(
+            getattr(candidate_index, "discover", None)
+        ):
+            raise RuntimeConfigurationError("candidate_index is incomplete")
         self._dependencies = validated
         self._kernel = AuthorizationKernel(validated)
         self._package_ttl_seconds = package_ttl_seconds
         self._server_budget = server_budget
         self._content_io = selected_content_io
+        self._candidate_index = candidate_index
         self._clock = clock
         self._reference_issuer = _OpaqueReferenceIssuer()
 
@@ -421,16 +606,20 @@ class Runtime:
         delivery_context: TrustedDeliveryContext,
         request: Acquire,
     ) -> Resolved:
-        """Resolve one Acquire through the sole sealed empty-Package path."""
+        """Resolve one Acquire through the sole sealed Kernel path."""
 
         as_of = _require_utc("Runtime clock", self._clock())
-        decision = self._kernel.authorize_empty_acquire(
+        decision = self._kernel.authorize_acquire(
             invocation,
             delivery_context,
             request,
             server_budget=self._server_budget,
             as_of=as_of,
             reference_issuer=self._reference_issuer,
+            candidate_index=self._candidate_index,
+            projection_session=(
+                invocation.user_actor.materialized_projection_session
+            ),
         )
         provenance = decision.provenance_receipt
 
@@ -442,17 +631,24 @@ class Runtime:
             expires_at=provenance.as_of
             + timedelta(seconds=self._package_ttl_seconds),
             decision_ref=provenance.decision_ref,
-            blocks=(),
-            evidence=(),
+            blocks=decision.content.blocks,
+            evidence=decision.content.evidence,
             gaps=(),
             budget_usage=BudgetUsage(
-                tokens=0,
+                tokens=sum(
+                    len(block.body.encode("utf-8"))
+                    for block in decision.content.blocks
+                ),
                 provider_calls=0,
                 cost_microunits=0,
                 elapsed_ms=0,
             ),
             coverage=Coverage(
-                status=CoverageStatus.EMPTY,
+                status=(
+                    CoverageStatus.SUFFICIENT
+                    if decision.content.evidence
+                    else CoverageStatus.EMPTY
+                ),
                 reason=decision.audit_receipt.reason,
             ),
         )

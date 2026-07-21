@@ -448,7 +448,7 @@
       "carrier": {
         "statusAtM0": "available",
         "m0Expectation": "active_fail_closed",
-        "upgradeTrigger": "Issues #8 and #13 upgrade this authority fixture with the real non-owner ownership path and sealed exact-authorization Runtime path."
+        "upgradeTrigger": "Activated by the real non-owner ownership path and sealed exact-authorization Runtime path; extend only when later audience or provider semantics activate."
       },
       "setup": {
         "preconditions": [
@@ -483,33 +483,27 @@
           "body": {
             "kind": "resolved",
             "package": {
-              "packageId": "opaque-package-ref",
-              "packageDigest": "sha256-package-digest",
+              "organizationRef": "orgpkg_0000000000000000000000000000000a",
               "purpose": "context.answer",
-              "audienceDigest": "audience-bound-digest",
-              "policyEpoch": "current-policy-epoch",
-              "decisionRef": "opaque-decision-ref",
-              "releaseManifestRef": "active-release-manifest-ref",
-              "retentionPolicyRef": "active-retention-policy-ref",
-              "asOf": "current-rfc3339-time",
-              "expiresAt": "bounded-rfc3339-expiry",
-              "tokenizerRef": "active-tokenizer-ref",
-              "blocks": [],
-              "evidence": [],
+              "ttlSeconds": 30,
+              "asOf": "2026-07-21T09:30:00Z",
+              "expiresAt": "2026-07-21T09:30:30Z",
+              "decisionRef": "dec_0000000000000000000000000000000a",
+              "blocks": [{"blockId": "block_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "text": "A-safe", "evidenceRefs": ["ev_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]}],
+              "evidence": [{"evidenceRef": "ev_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "sourceRef": "source-synthetic-a", "resourceRef": "resource-authorized-a", "revisionRef": "revision-authorized-a", "fragmentRef": "fragment-authorized-a", "runRef": "run-authorized-a", "purpose": "context.answer", "authorizationAsOf": "2026-07-21T09:30:00Z", "decisionRef": "dec_0000000000000000000000000000000a", "policySnapshotRef": "policy-snapshot-a", "policyEpoch": 1, "sourceDecisionRef": "source-decision-a"}],
               "gaps": [],
-              "coverage": {"status": "empty", "reason": "no_authorized_evidence"},
-              "budgetUsage": {"tokens": 0, "providerCalls": 0, "costMicrounits": 0, "elapsedMs": 0}
-            },
-            "egressGrant": "opaque-matching-egress-grant"
+              "budgetUsage": {"tokens": 6, "providerCalls": 0, "costMicrounits": 0, "elapsedMs": 0},
+              "coverage": {"status": "sufficient"}
+            }
           },
           "sameOutcomeSemanticsForBothAttempts": true
         },
-        "packageOrError": {"kind": "ContextPackage", "packageCount": 2, "coverageStatus": "empty", "coverageReason": "no_authorized_evidence", "crossOrganizationResourceDetailCount": 0},
-        "evidence": {"unauthorizedEvidenceCount": 0, "unauthorizedContentBytes": 0, "missingContextFallbackCount": 0, "outboundBytes": 0},
+        "packageOrError": {"kind": "ContextPackage", "packageCount": 2, "coverageStatus": "sufficient", "blocksPerPackage": 1, "evidencePerPackage": 1, "unauthorizedFieldCount": 0, "unauthorizedEvidenceRefCount": 0, "crossOrganizationResourceDetailCount": 0},
+        "evidence": {"unauthorizedEvidenceCount": 0, "unauthorizedContentBytes": 0, "missingContextFallbackCount": 0, "outboundBytes": 6},
         "businessEffects": {"wrongOrganizationEffectCount": 0, "mutationEffectCount": 0, "totalEffectsAfterScenario": 0},
         "io": {"providerCalls": 0, "indexCalls": 0, "modelCalls": 0, "actionCalls": 0}
       },
-      "invariantRefs": ["TENANT-OWNERSHIP-001", "TENANT-FK-002", "RLS-FAIL-CLOSED-003", "NON-ENUMERATION-009"],
+      "invariantRefs": ["TENANT-OWNERSHIP-001", "TENANT-FK-002", "RLS-FAIL-CLOSED-003", "SCOPE-INTERSECTION-004", "INDEX-NOT-AUTHORITY-005", "NON-ENUMERATION-009"],
       "authorityRefs": [
         "docs/agents/prd-contextengine-implementation.md#user-stories",
         "docs/security/Test-Architecture-与可验证性设计.md#13-v1-acceptance-scenarios",
@@ -570,7 +564,7 @@
       "carrier": {
         "statusAtM0": "available",
         "m0Expectation": "active_fail_closed",
-        "upgradeTrigger": "Issue #13 and later upgrade this synthetic intersection fixture when real CandidateRef, exact authorization, ACL evidence, and content delivery activate."
+        "upgradeTrigger": "Activated through the synthetic exact-authorization content path; extend only when later source-native ACL semantics activate."
       },
       "setup": {
         "preconditions": [
@@ -597,11 +591,11 @@
         "expectedEffectiveScope": ["public-1"]
       },
       "expected": {
-        "externalResponse": {"status": 200, "authorizedPayloadUtf8": "public", "authorizedPayloadBytes": 6, "privateResourcePresent": false},
-        "packageOrError": {"kind": "ContextPackage", "evidenceResourceRefs": ["public-1"], "gap": "generic_scope_restricted"},
+        "externalResponse": {"status": 200, "body": {"kind": "resolved", "package": {"organizationRef": "orgpkg_0000000000000000000000000000000a", "purpose": "context.answer", "ttlSeconds": 30, "asOf": "2026-07-21T09:30:00Z", "expiresAt": "2026-07-21T09:30:30Z", "decisionRef": "dec_0000000000000000000000000000000a", "blocks": [{"blockId": "block_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "text": "A-safe", "evidenceRefs": ["ev_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]}], "evidence": [{"evidenceRef": "ev_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "sourceRef": "source-synthetic-a", "resourceRef": "resource-authorized-a", "revisionRef": "revision-authorized-a", "fragmentRef": "fragment-authorized-a", "runRef": "run-authorized-a", "purpose": "context.answer", "authorizationAsOf": "2026-07-21T09:30:00Z", "decisionRef": "dec_0000000000000000000000000000000a", "policySnapshotRef": "policy-snapshot-a", "policyEpoch": 1, "sourceDecisionRef": "source-decision-a"}], "gaps": [], "budgetUsage": {"tokens": 6, "providerCalls": 0, "costMicrounits": 0, "elapsedMs": 0}, "coverage": {"status": "sufficient"}}}, "authorizedPayloadUtf8": "A-safe", "authorizedPayloadBytes": 6, "privateResourcePresent": false},
+        "packageOrError": {"kind": "ContextPackage", "evidenceResourceRefs": ["resource-authorized-a"], "blocksPerPackage": 1, "evidencePerPackage": 1, "unauthorizedFieldCount": 0, "unauthorizedEvidenceRefCount": 0},
         "evidence": {"unauthorizedEvidenceCount": 0, "unauthorizedContentBytes": 0, "missingContextFallbackCount": 0, "outboundBytes": 6},
         "businessEffects": {"wrongOrganizationEffectCount": 0, "mutationEffectCount": 0, "totalEffectsAfterScenario": 0},
-        "io": {"providerCalls": 1, "indexCalls": 1, "modelCalls": 0, "actionCalls": 0}
+        "io": {"providerCalls": 0, "indexCalls": 1, "modelCalls": 0, "actionCalls": 0}
       },
       "invariantRefs": ["SCOPE-INTERSECTION-004", "INDEX-NOT-AUTHORITY-005"],
       "authorityRefs": [
@@ -617,7 +611,7 @@
       "carrier": {
         "statusAtM0": "available",
         "m0Expectation": "active_fail_closed",
-        "upgradeTrigger": "Issue #13 and later upgrade this closed narrowing fixture when real CandidateRef, exact authorization, and content delivery activate."
+        "upgradeTrigger": "Activated through the synthetic exact-authorization content path; extend only when later retrieval and provider semantics activate."
       },
       "setup": {
         "preconditions": [
@@ -643,13 +637,13 @@
         "comparison": "Result set must be a subset of the same invocation without RequestNarrowing."
       },
       "expected": {
-        "externalResponse": {"status": 200, "authorizedPayloadUtf8": "source-one", "authorizedPayloadBytes": 10, "source2Present": false},
-        "packageOrError": {"kind": "ContextPackage", "sourceRefs": ["source-1"], "expandedSourceCallCount": 0},
-        "evidence": {"unauthorizedEvidenceCount": 0, "unauthorizedContentBytes": 0, "missingContextFallbackCount": 0, "outboundBytes": 10},
+        "externalResponse": {"status": 200, "body": {"kind": "resolved", "package": {"organizationRef": "orgpkg_0000000000000000000000000000000a", "purpose": "context.answer", "ttlSeconds": 30, "asOf": "2026-07-21T09:30:00Z", "expiresAt": "2026-07-21T09:30:30Z", "decisionRef": "dec_0000000000000000000000000000000a", "blocks": [{"blockId": "block_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "text": "A-safe", "evidenceRefs": ["ev_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]}], "evidence": [{"evidenceRef": "ev_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "sourceRef": "source-synthetic-a", "resourceRef": "resource-authorized-a", "revisionRef": "revision-authorized-a", "fragmentRef": "fragment-authorized-a", "runRef": "run-authorized-a", "purpose": "context.answer", "authorizationAsOf": "2026-07-21T09:30:00Z", "decisionRef": "dec_0000000000000000000000000000000a", "policySnapshotRef": "policy-snapshot-a", "policyEpoch": 1, "sourceDecisionRef": "source-decision-a"}], "gaps": [], "budgetUsage": {"tokens": 6, "providerCalls": 0, "costMicrounits": 0, "elapsedMs": 0}, "coverage": {"status": "sufficient"}}}, "authorizedPayloadUtf8": "A-safe", "authorizedPayloadBytes": 6, "source2Present": false},
+        "packageOrError": {"kind": "ContextPackage", "sourceRefs": ["source-synthetic-a"], "expandedSourceCallCount": 0, "blocksPerPackage": 1, "evidencePerPackage": 1, "unauthorizedFieldCount": 0, "unauthorizedEvidenceRefCount": 0},
+        "evidence": {"unauthorizedEvidenceCount": 0, "unauthorizedContentBytes": 0, "missingContextFallbackCount": 0, "outboundBytes": 6},
         "businessEffects": {"wrongOrganizationEffectCount": 0, "mutationEffectCount": 0, "totalEffectsAfterScenario": 0},
-        "io": {"providerCalls": 1, "indexCalls": 1, "modelCalls": 0, "actionCalls": 0}
+        "io": {"providerCalls": 0, "indexCalls": 1, "modelCalls": 0, "actionCalls": 0}
       },
-      "invariantRefs": ["SCOPE-INTERSECTION-004", "TRANSPORT-UNTRUSTED-008"],
+      "invariantRefs": ["SCOPE-INTERSECTION-004", "INDEX-NOT-AUTHORITY-005", "TRANSPORT-UNTRUSTED-008"],
       "authorityRefs": [
         "docs/agents/prd-contextengine-implementation.md#implementation-decisions",
         "docs/security/安全负向测试清单.md#2-identitytenant-与-delegation",
@@ -710,13 +704,13 @@
       "carrier": {
         "statusAtM0": "available",
         "m0Expectation": "active_fail_closed",
-        "upgradeTrigger": "Issue #13 upgrades this authority fixture through the sealed CandidateRef to AuthorizationKernel to AuthorizedProjection Runtime path."
+        "upgradeTrigger": "Activated through the sealed CandidateRef to AuthorizationKernel to AuthorizedProjection Runtime path; extend only when later retrieval semantics activate."
       },
       "setup": {
         "preconditions": [
-          "member-a may read candidate-a whose authorized ASCII body is A-safe.",
-          "candidate-b belongs to org-b and has no grant for member-a.",
-          "The retrieval seam is configured to return content-free candidate-b ranked before content-free candidate-a."
+          "member-a may read candidate-authorized-a whose authorized ASCII body is A-safe.",
+          "candidate-denied-a belongs to org-a without a grant and candidate-hostile-b belongs to org-b.",
+          "All three content-free CandidateRefs are returned in every rank permutation."
         ],
         "trustedIdentity": {
           "organizationRef": "org-a",
@@ -726,7 +720,8 @@
       },
       "adversarialMutation": {
         "kind": "cross_organization_candidate_injection",
-        "orderedCandidateRefs": ["candidate-b", "candidate-a"],
+        "orderedCandidateRefs": ["candidate-hostile-b", "candidate-denied-a", "candidate-authorized-a"],
+        "candidateRankOrders": [["candidate-authorized-a", "candidate-denied-a", "candidate-hostile-b"], ["candidate-authorized-a", "candidate-hostile-b", "candidate-denied-a"], ["candidate-denied-a", "candidate-authorized-a", "candidate-hostile-b"], ["candidate-denied-a", "candidate-hostile-b", "candidate-authorized-a"], ["candidate-hostile-b", "candidate-authorized-a", "candidate-denied-a"], ["candidate-hostile-b", "candidate-denied-a", "candidate-authorized-a"]],
         "candidatePayloadFields": []
       },
       "operation": {
@@ -735,13 +730,13 @@
         "requiredTypeFlow": ["CandidateRef", "AuthorizationKernel", "AuthorizedProjection"]
       },
       "expected": {
-        "externalResponse": {"status": 200, "authorizedPayloadUtf8": "A-safe", "authorizedPayloadBytes": 6, "orgBContentPresent": false},
-        "packageOrError": {"kind": "ContextPackage", "evidenceRefs": ["candidate-a"], "deniedCandidateCountExposed": false},
+        "externalResponse": {"status": 200, "body": {"kind": "resolved", "package": {"organizationRef": "orgpkg_0000000000000000000000000000000a", "purpose": "context.answer", "ttlSeconds": 30, "asOf": "2026-07-21T09:30:00Z", "expiresAt": "2026-07-21T09:30:30Z", "decisionRef": "dec_0000000000000000000000000000000a", "blocks": [{"blockId": "block_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "text": "A-safe", "evidenceRefs": ["ev_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]}], "evidence": [{"evidenceRef": "ev_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "sourceRef": "source-synthetic-a", "resourceRef": "resource-authorized-a", "revisionRef": "revision-authorized-a", "fragmentRef": "fragment-authorized-a", "runRef": "run-authorized-a", "purpose": "context.answer", "authorizationAsOf": "2026-07-21T09:30:00Z", "decisionRef": "dec_0000000000000000000000000000000a", "policySnapshotRef": "policy-snapshot-a", "policyEpoch": 1, "sourceDecisionRef": "source-decision-a"}], "gaps": [], "budgetUsage": {"tokens": 6, "providerCalls": 0, "costMicrounits": 0, "elapsedMs": 0}, "coverage": {"status": "sufficient"}}}, "authorizedPayloadUtf8": "A-safe", "authorizedPayloadBytes": 6, "orgBContentPresent": false},
+        "packageOrError": {"kind": "ContextPackage", "evidenceRefs": ["ev_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "blocksPerPackage": 1, "evidencePerPackage": 1, "unauthorizedFieldCount": 0, "unauthorizedEvidenceRefCount": 0, "deniedCandidateCountExposed": false},
         "evidence": {"unauthorizedEvidenceCount": 0, "unauthorizedContentBytes": 0, "missingContextFallbackCount": 0, "outboundBytes": 6},
         "businessEffects": {"wrongOrganizationEffectCount": 0, "mutationEffectCount": 0, "totalEffectsAfterScenario": 0},
-        "io": {"providerCalls": 1, "indexCalls": 1, "modelCalls": 0, "actionCalls": 0}
+        "io": {"providerCalls": 0, "indexCalls": 1, "modelCalls": 0, "actionCalls": 0}
       },
-      "invariantRefs": ["TENANT-OWNERSHIP-001", "INDEX-NOT-AUTHORITY-005", "TRACE-REDACTION-012"],
+      "invariantRefs": ["TENANT-OWNERSHIP-001", "TENANT-FK-002", "RLS-FAIL-CLOSED-003", "SCOPE-INTERSECTION-004", "INDEX-NOT-AUTHORITY-005", "TRACE-REDACTION-012"],
       "authorityRefs": [
         "docs/design/2026-07-18-context-engine-implementation-design.md#3-runtime-security-pipeline",
         "docs/security/安全负向测试清单.md#6-runtimeassemblycitation-与-egress",
@@ -1007,7 +1002,7 @@
         "interface": "ContextRuntime.resolve",
         "request": "Acquire each of the three probes independently",
         "comparisonFields": ["status", "body", "headers", "domainOutcome"],
-        "normalizationAllowlist": ["body.package.packageId", "body.package.packageDigest", "body.package.decisionRef", "body.package.asOf", "body.package.expiresAt", "body.package.budgetUsage.elapsedMs", "body.egressGrant", "headers.X-Context-Request-Id"]
+        "normalizationAllowlist": ["body.package.organizationRef", "body.package.decisionRef", "body.package.asOf", "body.package.expiresAt", "body.package.budgetUsage.elapsedMs", "headers.X-Context-Request-Id"]
       },
       "expected": {
         "externalResponse": {
@@ -1015,24 +1010,18 @@
           "body": {
             "kind": "resolved",
             "package": {
-              "packageId": "normalized-package-ref",
-              "packageDigest": "normalized-package-digest",
+              "organizationRef": "orgpkg_0000000000000000000000000000000a",
               "purpose": "context.answer",
-              "audienceDigest": "audience-a",
-              "policyEpoch": "current-policy-epoch",
-              "decisionRef": "normalized-decision-ref",
-              "releaseManifestRef": "active-release-manifest-ref",
-              "retentionPolicyRef": "active-retention-policy-ref",
-              "asOf": "normalized-as-of",
-              "expiresAt": "normalized-expiry",
-              "tokenizerRef": "active-tokenizer-ref",
+              "ttlSeconds": 30,
+              "asOf": "2026-07-21T09:30:00Z",
+              "expiresAt": "2026-07-21T09:30:30Z",
+              "decisionRef": "dec_0000000000000000000000000000000a",
               "blocks": [],
               "evidence": [],
               "gaps": [],
-              "coverage": {"status": "empty", "reason": "no_authorized_evidence"},
-              "budgetUsage": {"tokens": 0, "providerCalls": 0, "costMicrounits": 0, "elapsedMs": 0}
-            },
-            "egressGrant": "normalized-egress-grant"
+              "budgetUsage": {"tokens": 0, "providerCalls": 0, "costMicrounits": 0, "elapsedMs": 0},
+              "coverage": {"status": "empty", "reason": "no_authorized_evidence"}
+            }
           },
           "headers": {"Content-Type": "application/json", "Cache-Control": "no-store", "X-Context-Request-Id": "normalized-request-id"},
           "normalizedByteIdenticalAcrossProbes": true,

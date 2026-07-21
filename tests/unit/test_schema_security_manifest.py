@@ -23,15 +23,18 @@ def table_entries(document: dict[str, Any]) -> dict[str, dict[str, Any]]:
     }
 
 
-def test_manifest_classifies_the_exact_issue_11_identity_schema() -> None:
+def test_manifest_classifies_the_exact_issue_13_content_schema() -> None:
     """PROP-TENANT-OWNERSHIP-001: no current table is left unclassified."""
 
     document = manifest()
     tables = table_entries(document)
 
-    assert document["manifestVersion"] == "2.0.0"
+    assert document["manifestVersion"] == "3.0.0"
     assert set(tables) == {
         "alembic_version",
+        "context_fragment",
+        "context_resource",
+        "context_revision",
         "membership",
         "organization",
         "organization_record",
@@ -42,6 +45,9 @@ def test_manifest_classifies_the_exact_issue_11_identity_schema() -> None:
     assert tables["user_account"]["classification"] == "global"
     assert tables["membership"]["classification"] == "tenant_owned"
     assert tables["organization_record"]["classification"] == "tenant_owned"
+    assert tables["context_resource"]["classification"] == "tenant_owned"
+    assert tables["context_revision"]["classification"] == "tenant_owned"
+    assert tables["context_fragment"]["classification"] == "tenant_owned"
 
 
 def test_membership_manifest_requires_exact_user_actor_and_read_only_runtime() -> None:
@@ -169,3 +175,136 @@ def test_tenant_owned_manifest_entry_preserves_every_security_property() -> None
         "MIG-001",
         "MIG-002",
     }
+
+
+def test_content_manifest_preserves_lineage_visibility_and_immutability() -> None:
+    entries = table_entries(manifest())
+    resource = entries["context_resource"]
+    revision = entries["context_revision"]
+    fragment = entries["context_fragment"]
+
+    assert resource["organizationInclusiveKeys"] == [
+        {
+            "name": "pk_context_resource",
+            "kind": "primary_key",
+            "columns": ["organization_id", "resource_ref"],
+        }
+    ]
+    assert revision["organizationInclusiveKeys"] == [
+        {
+            "name": "pk_context_revision",
+            "kind": "primary_key",
+            "columns": ["organization_id", "resource_ref", "revision_id"],
+        }
+    ]
+    assert fragment["organizationInclusiveKeys"] == [
+        {
+            "name": "pk_context_fragment",
+            "kind": "primary_key",
+            "columns": [
+                "organization_id",
+                "resource_ref",
+                "revision_id",
+                "fragment_ref",
+            ],
+        },
+        {
+            "name": "uq_context_fragment_revision_ordinal",
+            "kind": "unique",
+            "columns": [
+                "organization_id",
+                "resource_ref",
+                "revision_id",
+                "ordinal",
+            ],
+        },
+    ]
+
+    resource_foreign_keys = {
+        foreign_key["name"]: foreign_key for foreign_key in resource["foreignKeys"]
+    }
+    active_pointer = resource_foreign_keys[
+        "fk_context_resource_active_revision_same_organization"
+    ]
+    assert active_pointer["columns"] == [
+        "organization_id",
+        "resource_ref",
+        "active_revision_id",
+    ]
+    assert active_pointer["references"] == {
+        "table": "context_revision",
+        "columns": ["organization_id", "resource_ref", "revision_id"],
+    }
+    assert active_pointer["deferrable"] is True
+    assert active_pointer["initially"] == "DEFERRED"
+
+    revision_parent = next(
+        foreign_key
+        for foreign_key in revision["foreignKeys"]
+        if foreign_key["name"] == "fk_context_revision_resource_same_organization"
+    )
+    assert revision_parent["columns"] == ["organization_id", "resource_ref"]
+    assert revision_parent["references"] == {
+        "table": "context_resource",
+        "columns": ["organization_id", "resource_ref"],
+    }
+    fragment_parent = next(
+        foreign_key
+        for foreign_key in fragment["foreignKeys"]
+        if foreign_key["name"] == "fk_context_fragment_revision_same_organization"
+    )
+    assert fragment_parent["columns"] == [
+        "organization_id",
+        "resource_ref",
+        "revision_id",
+    ]
+    assert fragment_parent["references"] == {
+        "table": "context_revision",
+        "columns": ["organization_id", "resource_ref", "revision_id"],
+    }
+
+    for entry in (resource, revision, fragment):
+        assert entry["organizationColumn"] == "organization_id"
+        assert entry["permittedOperations"] == {
+            "context_engine_runtime": ["SELECT"],
+            "context_engine_worker": [],
+        }
+        rls = entry["rowLevelSecurity"]
+        assert rls["enabled"] is True
+        assert rls["forced"] is True
+        runtime_policy = next(
+            policy
+            for policy in rls["policies"]
+            if policy["roles"] == ["context_engine_runtime"]
+        )
+        assert runtime_policy["command"] == "SELECT"
+        assert "app.organization_id" in runtime_policy["using"]
+        assert "app.membership_id" in runtime_policy["using"]
+        assert "tombstoned" in runtime_policy["using"]
+        migrator_policy = next(
+            policy
+            for policy in rls["policies"]
+            if policy["roles"] == ["context_engine_migrator"]
+        )
+        assert migrator_policy == {
+            "name": f"{entry['name']}_migrator_administration",
+            "command": "ALL",
+            "roles": ["context_engine_migrator"],
+            "using": "true",
+            "withCheck": "true",
+        }
+
+    for entry in (revision, fragment):
+        expression = next(
+            policy["using"]
+            for policy in entry["rowLevelSecurity"]["policies"]
+            if policy["roles"] == ["context_engine_runtime"]
+        )
+        assert "active_revision_id" in expression
+        assert "tombstoned" in expression
+        assert entry["immutableRows"] == {
+            "trigger": f"{entry['name']}_reject_mutation",
+            "function": "context_content_reject_mutation",
+            "events": ["UPDATE", "DELETE"],
+            "sqlstate": "55000",
+        }

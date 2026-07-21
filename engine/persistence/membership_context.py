@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from typing import Protocol
 from uuid import UUID
 
-from sqlalchemy import Engine, text
+from sqlalchemy import Connection, Engine, text
 from sqlalchemy.exc import SQLAlchemyError
 
 from engine.persistence.role_guard import assert_runtime_role
@@ -20,6 +20,13 @@ from engine.runtime.actor import (
     _close_membership_authority_scope,
     _construct_current_membership_verification,
     _open_membership_authority_scope,
+)
+from engine.runtime.evidence import CandidateRef
+from engine.runtime.materialized import (
+    MaterializedFragmentLocator,
+    _close_materialized_projection_scope,
+    _construct_materialized_projection_session,
+    _open_materialized_projection_scope,
 )
 
 
@@ -96,6 +103,111 @@ _ACTOR_SETTINGS: dict[str, _MembershipIdentityValue] = {
 }
 
 
+def _canonical_candidate_revision(value: str) -> UUID | None:
+    try:
+        parsed = UUID(value)
+    except ValueError:
+        return None
+    if str(parsed) != value:
+        return None
+    return parsed
+
+
+class _PostgreSQLMaterializedProjectionPort:
+    """Two-stage Fragment reads on the owning current-UserActor transaction."""
+
+    def __init__(self, connection: Connection) -> None:
+        self._connection = connection
+
+    def locate(
+        self,
+        candidate_ref: CandidateRef,
+    ) -> MaterializedFragmentLocator | None:
+        revision_id = _canonical_candidate_revision(candidate_ref.revision_ref)
+        if revision_id is None:
+            return None
+        row = self._connection.execute(
+            text(
+                """
+                SELECT
+                    resource.organization_id,
+                    resource.source_ref,
+                    resource.resource_ref,
+                    revision.revision_id,
+                    fragment.fragment_ref
+                FROM context_resource AS resource
+                JOIN context_revision AS revision
+                  ON revision.organization_id = resource.organization_id
+                 AND revision.resource_ref = resource.resource_ref
+                 AND revision.revision_id = resource.active_revision_id
+                JOIN context_fragment AS fragment
+                  ON fragment.organization_id = revision.organization_id
+                 AND fragment.resource_ref = revision.resource_ref
+                 AND fragment.revision_id = revision.revision_id
+                WHERE resource.organization_id = :organization_id
+                  AND resource.source_ref = :source_ref
+                  AND resource.resource_ref = :resource_ref
+                  AND resource.active_revision_id = :revision_id
+                  AND resource.tombstoned IS FALSE
+                  AND fragment.fragment_ref = :fragment_ref
+                """
+            ),
+            {
+                "organization_id": candidate_ref.organization_id,
+                "source_ref": candidate_ref.source_ref,
+                "resource_ref": candidate_ref.resource_ref,
+                "revision_id": revision_id,
+                "fragment_ref": candidate_ref.fragment_ref,
+            },
+        ).one_or_none()
+        if row is None:
+            return None
+        return MaterializedFragmentLocator(
+            organization_id=row.organization_id,
+            source_ref=row.source_ref,
+            resource_ref=row.resource_ref,
+            revision_ref=str(row.revision_id),
+            fragment_ref=row.fragment_ref,
+        )
+
+    def project_body(
+        self,
+        locator: MaterializedFragmentLocator,
+    ) -> str | None:
+        revision_id = _canonical_candidate_revision(locator.revision_ref)
+        if revision_id is None:
+            return None
+        return self._connection.execute(
+            text(
+                """
+                SELECT fragment.content
+                FROM context_resource AS resource
+                JOIN context_revision AS revision
+                  ON revision.organization_id = resource.organization_id
+                 AND revision.resource_ref = resource.resource_ref
+                 AND revision.revision_id = resource.active_revision_id
+                JOIN context_fragment AS fragment
+                  ON fragment.organization_id = revision.organization_id
+                 AND fragment.resource_ref = revision.resource_ref
+                 AND fragment.revision_id = revision.revision_id
+                WHERE resource.organization_id = :organization_id
+                  AND resource.source_ref = :source_ref
+                  AND resource.resource_ref = :resource_ref
+                  AND resource.active_revision_id = :revision_id
+                  AND resource.tombstoned IS FALSE
+                  AND fragment.fragment_ref = :fragment_ref
+                """
+            ),
+            {
+                "organization_id": locator.organization_id,
+                "source_ref": locator.source_ref,
+                "resource_ref": locator.resource_ref,
+                "revision_id": revision_id,
+                "fragment_ref": locator.fragment_ref,
+            },
+        ).scalar_one_or_none()
+
+
 class PostgreSQLMembershipAuthority:
     """Open and retain the exact UserActor transaction through Runtime work."""
 
@@ -170,7 +282,12 @@ class PostgreSQLMembershipAuthority:
                     raise MembershipNotCurrent
 
                 scope = _open_membership_authority_scope()
+                projection_scope = _open_materialized_projection_scope()
                 try:
+                    projection_session = _construct_materialized_projection_session(
+                        authority_scope=projection_scope,
+                        port=_PostgreSQLMaterializedProjectionPort(connection),
+                    )
                     verification = _construct_current_membership_verification(
                         organization_id=identity.organization_id,
                         user_id=identity.user_id,
@@ -183,9 +300,11 @@ class PostgreSQLMembershipAuthority:
                         ),
                         checked_at=identity.checked_at,
                         authority_scope=scope,
+                        materialized_projection_session=projection_session,
                     )
                     yield verification
                 finally:
+                    _close_materialized_projection_scope(projection_scope)
                     _close_membership_authority_scope(scope)
         except (MembershipNotCurrent, MembershipAuthorityUnavailable):
             raise
