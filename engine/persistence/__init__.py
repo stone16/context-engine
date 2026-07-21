@@ -9,6 +9,12 @@ from engine.persistence.configuration import (
     load_harness_database_configurations,
 )
 from engine.persistence.database import create_database_engine
+from engine.persistence.membership_context import (
+    MembershipAuthorityUnavailable,
+    MembershipIdentity,
+    MembershipNotCurrent,
+    PostgreSQLMembershipAuthority,
+)
 from engine.persistence.role_guard import assert_runtime_role
 from engine.persistence.tenant_context import (
     OrganizationContextBindingError,
@@ -20,7 +26,11 @@ __all__ = [
     "DatabaseConfigurationError",
     "DatabasePurpose",
     "HarnessDatabaseConfigurations",
+    "MembershipAuthorityUnavailable",
+    "MembershipIdentity",
+    "MembershipNotCurrent",
     "OrganizationContextBindingError",
+    "PostgreSQLMembershipAuthority",
     "assert_runtime_role",
     "create_database_engine",
     "load_database_configuration",

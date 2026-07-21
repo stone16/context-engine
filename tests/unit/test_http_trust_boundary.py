@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import FrozenInstanceError
 from datetime import UTC, datetime
 from typing import Any, cast
@@ -19,11 +21,27 @@ from adapters.http.organization_authority import (
     OrganizationVerificationRejected,
 )
 from adapters.http.transport import HttpTransportProfile
+from engine.persistence.membership_context import (
+    MembershipAuthorityUnavailable,
+    MembershipIdentity,
+    MembershipNotCurrent,
+)
 from engine.runtime import (
     AuthenticatedInvocation,
     InvocationConstructionProvenance,
     Resolved,
+    Runtime,
 )
+from engine.runtime.actor import (
+    CurrentMembershipVerification,
+    MembershipRejectionAuditReceipt,
+    _close_membership_authority_scope,
+    _construct_current_membership_verification,
+    _open_membership_authority_scope,
+)
+from engine.runtime.construction import required_kernel_dependencies
+from engine.runtime.content_io import RuntimeContentIo
+from engine.runtime.contracts import Acquire
 from engine.runtime.organization import (
     ExistingOrganizationVerification,
     OrganizationVerificationProvenance,
@@ -37,6 +55,8 @@ VALID_BODY = {
 VALID_TOKEN = "opaque-test-credential"
 RECEIVED_AT = datetime(2026, 7, 21, 5, 0, tzinfo=UTC)
 INTERNAL_ORGANIZATION_REF = "81e18bca-86a1-478a-937d-7675c6fe69b0"
+INTERNAL_USER_REF = "d3d9893f-82d2-4890-8cb2-4c7e57a56f16"
+INTERNAL_MEMBERSHIP_REF = "9c9e9f4c-a5ec-4417-9408-0346e1c6c998"
 
 
 class DeterministicAuthenticator:
@@ -51,12 +71,141 @@ class DeterministicAuthenticator:
             raise AuthenticationRejected
         return VerifiedAuthenticationContext(
             organization_ref=INTERNAL_ORGANIZATION_REF,
+            user_ref=INTERNAL_USER_REF,
             principal_ref="principal-from-auth",
-            membership_ref=None,
+            membership_ref=INTERNAL_MEMBERSHIP_REF,
+            membership_version=7,
             agent_version_ref="agent-version-from-auth",
             authenticated_application_ref="application-from-auth",
             authentication_binding_ref="binding-from-auth",
         )
+
+
+class DeterministicMembershipAuthority:
+    """Test twin retaining one nominal proof for the whole Runtime call."""
+
+    def __init__(self) -> None:
+        self.identities: list[MembershipIdentity] = []
+        self.events: list[str] = []
+
+    @contextmanager
+    def current_user_actor(
+        self,
+        identity: MembershipIdentity,
+    ) -> Iterator[CurrentMembershipVerification]:
+        self.identities.append(identity)
+        if (
+            identity.organization_id != UUID(INTERNAL_ORGANIZATION_REF)
+            or identity.user_id != UUID(INTERNAL_USER_REF)
+            or identity.membership_id != UUID(INTERNAL_MEMBERSHIP_REF)
+            or identity.membership_version != 7
+        ):
+            raise MembershipNotCurrent
+        self.events.append("authority-open")
+        scope = _open_membership_authority_scope()
+        try:
+            yield _construct_current_membership_verification(
+                authority_scope=scope,
+                organization_id=identity.organization_id,
+                user_id=identity.user_id,
+                membership_id=identity.membership_id,
+                membership_version=identity.membership_version,
+                principal_ref=identity.principal_ref,
+                request_id=identity.request_id,
+                authentication_binding_ref=identity.authentication_binding_ref,
+                checked_at=identity.checked_at,
+            )
+        finally:
+            _close_membership_authority_scope(scope)
+            self.events.append("authority-close")
+
+
+class RejectingTestMembershipAuthority:
+    def current_user_actor(
+        self,
+        identity: MembershipIdentity,
+    ) -> AbstractContextManager[CurrentMembershipVerification]:
+        del identity
+        return _RaisingMembershipContext(MembershipNotCurrent())
+
+
+class UnavailableTestMembershipAuthority:
+    def current_user_actor(
+        self,
+        identity: MembershipIdentity,
+    ) -> AbstractContextManager[CurrentMembershipVerification]:
+        del identity
+        return _RaisingMembershipContext(MembershipAuthorityUnavailable())
+
+
+class _RaisingMembershipContext(
+    AbstractContextManager[CurrentMembershipVerification]
+):
+    def __init__(self, error: Exception) -> None:
+        self._error = error
+
+    def __enter__(self) -> CurrentMembershipVerification:
+        raise self._error
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: object,
+    ) -> bool | None:
+        del exc_type, exc_value, traceback
+        return None
+
+
+class ExitUnavailableMembershipAuthority(DeterministicMembershipAuthority):
+    @contextmanager
+    def current_user_actor(
+        self,
+        identity: MembershipIdentity,
+    ) -> Iterator[CurrentMembershipVerification]:
+        with super().current_user_actor(identity) as verification:
+            yield verification
+        raise MembershipAuthorityUnavailable
+
+
+class CategorizedRejectingMembershipAuthority:
+    """Represent any durable invalid category without changing its boundary result."""
+
+    def __init__(self, category: str) -> None:
+        self.category = category
+        self.calls = 0
+
+    def current_user_actor(
+        self,
+        identity: MembershipIdentity,
+    ) -> AbstractContextManager[CurrentMembershipVerification]:
+        del identity
+        self.calls += 1
+        return _RaisingMembershipContext(MembershipNotCurrent())
+
+
+class DownstreamContentIoSpy:
+    def __init__(self) -> None:
+        self.index_calls = 0
+        self.provider_calls = 0
+        self.source_content_calls = 0
+
+    def discover(self, request: Acquire) -> tuple[()]:
+        del request
+        self.index_calls += 1
+        return ()
+
+    def authorize_and_project(self) -> tuple[()]:
+        self.provider_calls += 1
+        return ()
+
+    def read_content(self) -> tuple[()]:
+        self.source_content_calls += 1
+        return ()
+
+    @property
+    def total_calls(self) -> int:
+        return self.index_calls + self.provider_calls + self.source_content_calls
 
 
 class DeterministicOrganizationAuthority:
@@ -178,8 +327,10 @@ class InvalidClaimsAuthenticator:
     def authenticate(self, opaque_credential: str) -> VerifiedAuthenticationContext:
         return VerifiedAuthenticationContext(
             organization_ref="organization-secret-malformed",
+            user_ref=INTERNAL_USER_REF,
             principal_ref=" ",
-            membership_ref="membership-from-auth",
+            membership_ref=INTERNAL_MEMBERSHIP_REF,
+            membership_version=7,
             agent_version_ref="agent-version-from-auth",
             authenticated_application_ref="application-from-auth",
             authentication_binding_ref="binding-from-auth",
@@ -192,8 +343,10 @@ class InvalidClaimTypeAuthenticator:
     def authenticate(self, opaque_credential: str) -> VerifiedAuthenticationContext:
         return VerifiedAuthenticationContext(
             organization_ref=cast(Any, 42),
+            user_ref=INTERNAL_USER_REF,
             principal_ref="principal-from-auth",
-            membership_ref="membership-from-auth",
+            membership_ref=INTERNAL_MEMBERSHIP_REF,
+            membership_version=7,
             agent_version_ref="agent-version-from-auth",
             authenticated_application_ref="application-from-auth",
             authentication_binding_ref="binding-from-auth",
@@ -206,8 +359,27 @@ class InvalidOrganizationRefAuthenticator:
     def authenticate(self, opaque_credential: str) -> VerifiedAuthenticationContext:
         return VerifiedAuthenticationContext(
             organization_ref="orgpkg_caller-replayed-output-reference",
+            user_ref=INTERNAL_USER_REF,
             principal_ref="principal-from-auth",
-            membership_ref="membership-from-auth",
+            membership_ref=INTERNAL_MEMBERSHIP_REF,
+            membership_version=7,
+            agent_version_ref="agent-version-from-auth",
+            authenticated_application_ref="application-from-auth",
+            authentication_binding_ref="binding-from-auth",
+        )
+
+
+class OversizedMembershipVersionAuthenticator:
+    """Test double whose Membership version cannot fit durable BIGINT."""
+
+    def authenticate(self, opaque_credential: str) -> VerifiedAuthenticationContext:
+        del opaque_credential
+        return VerifiedAuthenticationContext(
+            organization_ref=INTERNAL_ORGANIZATION_REF,
+            user_ref=INTERNAL_USER_REF,
+            principal_ref="principal-from-auth",
+            membership_ref=INTERNAL_MEMBERSHIP_REF,
+            membership_version=1 << 63,
             agent_version_ref="agent-version-from-auth",
             authenticated_application_ref="application-from-auth",
             authentication_binding_ref="binding-from-auth",
@@ -221,8 +393,10 @@ class AlternateUuidSpellingAuthenticator(DeterministicAuthenticator):
         context = super().authenticate(opaque_credential)
         return VerifiedAuthenticationContext(
             organization_ref=context.organization_ref.replace("-", "").upper(),
+            user_ref=context.user_ref,
             principal_ref=context.principal_ref,
             membership_ref=context.membership_ref,
+            membership_version=context.membership_version,
             agent_version_ref=context.agent_version_ref,
             authenticated_application_ref=context.authenticated_application_ref,
             authentication_binding_ref=context.authentication_binding_ref,
@@ -269,8 +443,10 @@ def test_valid_auth_constructs_exact_trusted_invocation_once() -> None:
     invocation = spy.invocations[0]
     assert invocation.request_id == "request-from-header"
     assert invocation.organization_ref == INTERNAL_ORGANIZATION_REF
+    assert invocation.user_ref == INTERNAL_USER_REF
     assert invocation.principal_ref == "principal-from-auth"
-    assert invocation.membership_ref is None
+    assert invocation.membership_ref == INTERNAL_MEMBERSHIP_REF
+    assert invocation.membership_version == 7
     assert invocation.agent_version_ref == "agent-version-from-auth"
     assert invocation.authenticated_application_ref == "application-from-auth"
     assert invocation.authentication_binding_ref == "binding-from-auth"
@@ -336,6 +512,7 @@ def test_valid_http_acquire_reaches_the_single_runtime_entry_exactly_once() -> N
         create_app(
             authenticator=DeterministicAuthenticator(),
             organization_authority=DeterministicOrganizationAuthority(),
+            membership_authority=DeterministicMembershipAuthority(),
             clock=lambda: RECEIVED_AT,
             resolution_observer=resolution_spy.observe,
         )
@@ -400,6 +577,166 @@ def test_unverified_or_switched_organization_fails_before_runtime(
     assert response.status_code == 401
     assert response.content == b'{"code":"authentication_failed"}'
     assert resolution_spy.outcomes == []
+
+
+@pytest.mark.parametrize(
+    "category",
+    ("missing", "inactive", "expired", "revoked", "cross-organization"),
+)
+def test_invalid_membership_matrix_is_externally_equivalent_and_zero_io(
+    category: str,
+) -> None:
+    authority = CategorizedRejectingMembershipAuthority(category)
+    audit_receipts: list[MembershipRejectionAuditReceipt] = []
+    content_io = DownstreamContentIoSpy()
+    runtime = Runtime(
+        required_kernel_dependencies(),
+        content_io=RuntimeContentIo(
+            index=content_io,
+            provider=content_io,
+            source_content=content_io,
+        ),
+        clock=lambda: RECEIVED_AT,
+    )
+    resolution_spy = ResolutionSpy()
+    client = TestClient(
+        create_app(
+            authenticator=DeterministicAuthenticator(),
+            organization_authority=DeterministicOrganizationAuthority(),
+            membership_authority=authority,
+            membership_rejection_observer=audit_receipts.append,
+            runtime=runtime,
+            resolution_observer=resolution_spy.observe,
+            clock=lambda: RECEIVED_AT,
+        )
+    )
+
+    response = client.post(
+        "/v1/context:resolve",
+        headers={"Authorization": f"Bearer {VALID_TOKEN}"},
+        json=VALID_BODY,
+    )
+
+    assert response.status_code == 401
+    assert response.content == b'{"code":"authentication_failed"}'
+    assert response.headers["www-authenticate"] == "Bearer"
+    assert authority.calls == 1
+    assert resolution_spy.outcomes == []
+    assert content_io.total_calls == 0
+    assert audit_receipts == [MembershipRejectionAuditReceipt()]
+    assert all(
+        protected not in response.text
+        for protected in (
+            category,
+            INTERNAL_ORGANIZATION_REF,
+            INTERNAL_USER_REF,
+            INTERNAL_MEMBERSHIP_REF,
+        )
+    )
+
+
+def test_membership_authority_unavailability_is_generic_503_and_zero_io() -> None:
+    content_io = DownstreamContentIoSpy()
+    runtime = Runtime(
+        required_kernel_dependencies(),
+        content_io=RuntimeContentIo(
+            index=content_io,
+            provider=content_io,
+            source_content=content_io,
+        ),
+        clock=lambda: RECEIVED_AT,
+    )
+    client = TestClient(
+        create_app(
+            authenticator=DeterministicAuthenticator(),
+            organization_authority=DeterministicOrganizationAuthority(),
+            membership_authority=UnavailableTestMembershipAuthority(),
+            runtime=runtime,
+            clock=lambda: RECEIVED_AT,
+        )
+    )
+
+    response = client.post(
+        "/v1/context:resolve",
+        headers={"Authorization": f"Bearer {VALID_TOKEN}"},
+        json=VALID_BODY,
+    )
+
+    assert response.status_code == 503
+    assert response.content == b'{"code":"service_unavailable"}'
+    assert content_io.total_calls == 0
+    assert all(
+        protected not in response.text
+        for protected in (
+            INTERNAL_ORGANIZATION_REF,
+            INTERNAL_USER_REF,
+            INTERNAL_MEMBERSHIP_REF,
+        )
+    )
+
+
+def test_membership_transaction_exit_failure_suppresses_prepared_200_as_503() -> None:
+    resolution_spy = ResolutionSpy()
+    client = TestClient(
+        create_app(
+            authenticator=DeterministicAuthenticator(),
+            organization_authority=DeterministicOrganizationAuthority(),
+            membership_authority=ExitUnavailableMembershipAuthority(),
+            resolution_observer=resolution_spy.observe,
+            clock=lambda: RECEIVED_AT,
+        )
+    )
+
+    response = client.post(
+        "/v1/context:resolve",
+        headers={"Authorization": f"Bearer {VALID_TOKEN}"},
+        json=VALID_BODY,
+    )
+
+    assert response.status_code == 503
+    assert response.content == b'{"code":"service_unavailable"}'
+    assert len(resolution_spy.outcomes) == 1
+    assert "resolved" not in response.text
+
+
+def test_membership_authority_scope_encloses_invocation_runtime_and_response() -> None:
+    authority = DeterministicMembershipAuthority()
+    invocation_spy = InvocationSpy()
+    resolution_spy = ResolutionSpy()
+
+    def observe_invocation(invocation: AuthenticatedInvocation) -> None:
+        authority.events.append("invocation")
+        invocation_spy.observe(invocation)
+
+    def observe_resolution(outcome: Resolved) -> None:
+        authority.events.append("resolved")
+        resolution_spy.observe(outcome)
+
+    client = TestClient(
+        create_app(
+            authenticator=DeterministicAuthenticator(),
+            organization_authority=DeterministicOrganizationAuthority(),
+            membership_authority=authority,
+            invocation_observer=observe_invocation,
+            resolution_observer=observe_resolution,
+            clock=lambda: RECEIVED_AT,
+        )
+    )
+
+    response = client.post(
+        "/v1/context:resolve",
+        headers={"Authorization": f"Bearer {VALID_TOKEN}"},
+        json=VALID_BODY,
+    )
+
+    assert response.status_code == 200
+    assert authority.events == [
+        "authority-open",
+        "invocation",
+        "resolved",
+        "authority-close",
+    ]
+    assert len(invocation_spy.invocations) == len(resolution_spy.outcomes) == 1
 
 
 @pytest.mark.parametrize(
@@ -507,6 +844,7 @@ def test_authentication_failures_are_generic_and_call_no_domain_seam(
         InvalidClaimsAuthenticator(),
         InvalidClaimTypeAuthenticator(),
         InvalidOrganizationRefAuthenticator(),
+        OversizedMembershipVersionAuthenticator(),
     ],
 )
 def test_invalid_authenticator_output_is_a_generic_authentication_failure(
@@ -548,9 +886,11 @@ def test_verified_authentication_context_rejects_non_string_refs(
     field_value: object,
 ) -> None:
     claims: dict[str, Any] = {
-        "organization_ref": "organization-from-auth",
+        "organization_ref": INTERNAL_ORGANIZATION_REF,
+        "user_ref": INTERNAL_USER_REF,
         "principal_ref": "principal-from-auth",
-        "membership_ref": "membership-from-auth",
+        "membership_ref": INTERNAL_MEMBERSHIP_REF,
+        "membership_version": 7,
         "agent_version_ref": "agent-version-from-auth",
         "authenticated_application_ref": "application-from-auth",
         "authentication_binding_ref": "binding-from-auth",
@@ -1108,6 +1448,7 @@ def test_injected_authenticator_runs_only_the_real_sealed_runtime() -> None:
         create_app(
             authenticator=DeterministicAuthenticator(),
             organization_authority=DeterministicOrganizationAuthority(),
+            membership_authority=DeterministicMembershipAuthority(),
             clock=lambda: RECEIVED_AT,
         )
     )
@@ -1194,10 +1535,11 @@ def test_openapi_body_is_closed_and_contains_no_trusted_fields() -> None:
     ):
         assert forbidden not in serialized_request_graph
 
-    assert set(operation["responses"]) == {"200", "400", "401", "422"}
+    assert set(operation["responses"]) == {"200", "400", "401", "422", "503"}
     assert response_schema_name(operation, 400) == "InvalidRequestWire"
     assert response_schema_name(operation, 401) == "AuthenticationFailureWire"
     assert response_schema_name(operation, 422) == "InvalidRequestWire"
+    assert response_schema_name(operation, 503) == "ServiceUnavailableWire"
     assert response_schema_name(operation, 200) == "ResolvedWire"
     response_schema = operation["responses"]["200"]["content"][
         "application/json"
@@ -1245,6 +1587,7 @@ def test_openapi_body_is_closed_and_contains_no_trusted_fields() -> None:
     for name, code in (
         ("InvalidRequestWire", "invalid_request"),
         ("AuthenticationFailureWire", "authentication_failed"),
+        ("ServiceUnavailableWire", "service_unavailable"),
     ):
         error_schema = schema["components"]["schemas"][name]
         assert error_schema["additionalProperties"] is False
@@ -1341,6 +1684,7 @@ def trust_boundary_client(
             create_app(
                 authenticator=authenticator,
                 organization_authority=DeterministicOrganizationAuthority(),
+                membership_authority=DeterministicMembershipAuthority(),
                 invocation_observer=spy.observe,
                 clock=lambda: RECEIVED_AT,
                 request_id_factory=lambda: "server-generated-request",
@@ -1350,6 +1694,7 @@ def trust_boundary_client(
         create_app(
             authenticator=authenticator,
             organization_authority=DeterministicOrganizationAuthority(),
+            membership_authority=DeterministicMembershipAuthority(),
             invocation_observer=spy.observe,
             clock=lambda: RECEIVED_AT,
             request_id_factory=lambda: "server-generated-request",

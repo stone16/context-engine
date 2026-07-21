@@ -151,3 +151,9 @@ class InvalidRequestWire(ClosedWireModel):
     """Closed public response for request syntax or schema rejection."""
 
     code: Literal["invalid_request"]
+
+
+class ServiceUnavailableWire(ClosedWireModel):
+    """Closed response when a required trusted authority is unavailable."""
+
+    code: Literal["service_unavailable"]

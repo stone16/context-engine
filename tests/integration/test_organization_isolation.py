@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Protocol, cast
 from uuid import UUID, uuid4
@@ -14,13 +16,13 @@ from sqlalchemy.exc import DBAPIError, IntegrityError
 from engine.persistence import (
     DatabaseConfiguration,
     create_database_engine,
-    organization_transaction,
 )
 from engine.persistence.configuration import MIGRATOR_ROLE, RUNTIME_ROLE, WORKER_ROLE
 
 pytestmark = pytest.mark.integration
 ROOT = Path(__file__).parents[2]
 MANIFEST_PATH = ROOT / "engine/persistence/schema_security_manifest.yaml"
+ACTOR_CHECKED_AT = datetime(2026, 7, 21, 8, 0, tzinfo=UTC)
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,6 +37,33 @@ class PostgreSQLError(Protocol):
 
 def assert_sqlstate(error: DBAPIError, expected: str) -> None:
     assert cast(PostgreSQLError, error.orig).sqlstate == expected
+
+
+@contextmanager
+def current_user_transaction(
+    engine: Engine,
+    organization_id: UUID,
+) -> Iterator[Connection]:
+    """Bind the complete test UserActor; IDs deliberately share one UUID."""
+
+    settings = {
+        "app.organization_id": str(organization_id),
+        "app.actor_kind": "user",
+        "app.user_id": str(organization_id),
+        "app.membership_id": str(organization_id),
+        "app.membership_version": "1",
+        "app.principal_ref": f"principal:{organization_id}",
+        "app.request_id": f"request:{uuid4()}",
+        "app.authentication_binding_ref": f"binding:{uuid4()}",
+        "app.checked_at": ACTOR_CHECKED_AT.isoformat().replace("+00:00", "Z"),
+    }
+    with engine.begin() as connection:
+        for setting_name, setting_value in settings.items():
+            connection.execute(
+                text("SELECT set_config(:name, :value, true)"),
+                {"name": setting_name, "value": setting_value},
+            )
+        yield connection
 
 
 @pytest.fixture
@@ -60,26 +89,102 @@ def organizations(
                     "organization_b": pair.organization_b,
                 },
             )
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO user_account (user_id)
+                    VALUES (:organization_a), (:organization_b)
+                    """
+                ),
+                {
+                    "organization_a": pair.organization_a,
+                    "organization_b": pair.organization_b,
+                },
+            )
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO membership (
+                        organization_id,
+                        membership_id,
+                        user_id,
+                        status,
+                        membership_version,
+                        valid_from,
+                        valid_until
+                    ) VALUES
+                    (
+                        :organization_a,
+                        :organization_a,
+                        :organization_a,
+                        'active',
+                        1,
+                        :valid_from,
+                        NULL
+                    ),
+                    (
+                        :organization_b,
+                        :organization_b,
+                        :organization_b,
+                        'active',
+                        1,
+                        :valid_from,
+                        NULL
+                    )
+                    """
+                ),
+                {
+                    "organization_a": pair.organization_a,
+                    "organization_b": pair.organization_b,
+                    "valid_from": ACTOR_CHECKED_AT - timedelta(days=1),
+                },
+            )
 
         yield pair
     finally:
-        for organization_id in (
-            pair.organization_a,
-            pair.organization_b,
-        ):
-            with organization_transaction(
-                guarded_runtime_engine, organization_id
-            ) as connection:
-                connection.execute(
-                    text(
-                        """
-                        DELETE FROM organization_record
-                        WHERE organization_id = :organization_id
-                        """
-                    ),
-                    {"organization_id": organization_id},
-                )
         with migration_engine.begin() as connection:
+            connection.execute(
+                text(
+                    """
+                    DELETE FROM organization_record
+                    WHERE organization_id IN (
+                        :organization_a,
+                        :organization_b
+                    )
+                    """
+                ),
+                {
+                    "organization_a": pair.organization_a,
+                    "organization_b": pair.organization_b,
+                },
+            )
+            connection.execute(
+                text(
+                    """
+                    DELETE FROM membership
+                    WHERE organization_id IN (
+                        :organization_a,
+                        :organization_b
+                    )
+                    """
+                ),
+                {
+                    "organization_a": pair.organization_a,
+                    "organization_b": pair.organization_b,
+                },
+            )
+            connection.execute(
+                text(
+                    """
+                    DELETE FROM user_account
+                    WHERE user_id IN (:organization_a, :organization_b)
+                    """
+                ),
+                {
+                    "organization_a": pair.organization_a,
+                    "organization_b": pair.organization_b,
+                },
+            )
             connection.execute(
                 text(
                     """
@@ -106,7 +211,7 @@ def insert_record(
     *,
     parent_record_id: UUID | None = None,
 ) -> None:
-    with organization_transaction(engine, organization_id) as connection:
+    with current_user_transaction(engine, organization_id) as connection:
         connection.execute(
             text(
                 """
@@ -184,7 +289,7 @@ def test_bidirectional_rls_hides_and_blocks_wrong_organization_effects(
         (organizations.organization_b, organizations.organization_a),
     )
     for current_organization, other_organization in directions:
-        with organization_transaction(
+        with current_user_transaction(
             guarded_runtime_engine, current_organization
         ) as connection:
             assert visible_records(connection) == [
@@ -198,7 +303,7 @@ def test_bidirectional_rls_hides_and_blocks_wrong_organization_effects(
 
         with (
             pytest.raises(DBAPIError, match="row-level security"),
-            organization_transaction(
+            current_user_transaction(
                 guarded_runtime_engine, current_organization
             ) as connection,
         ):
@@ -223,7 +328,7 @@ def test_bidirectional_rls_hides_and_blocks_wrong_organization_effects(
 
         with (
             pytest.raises(DBAPIError, match="row-level security"),
-            organization_transaction(
+            current_user_transaction(
                 guarded_runtime_engine, current_organization
             ) as connection,
         ):
@@ -245,7 +350,7 @@ def test_bidirectional_rls_hides_and_blocks_wrong_organization_effects(
                 },
             )
 
-        with organization_transaction(
+        with current_user_transaction(
             guarded_runtime_engine, current_organization
         ) as connection:
             update_result = connection.execute(
@@ -265,7 +370,7 @@ def test_bidirectional_rls_hides_and_blocks_wrong_organization_effects(
             wrong_organization_effect_count += update_result.rowcount
             assert update_result.rowcount == 0
 
-        with organization_transaction(
+        with current_user_transaction(
             guarded_runtime_engine, current_organization
         ) as connection:
             delete_result = connection.execute(
@@ -286,7 +391,7 @@ def test_bidirectional_rls_hides_and_blocks_wrong_organization_effects(
 
     assert wrong_organization_effect_count == 0
     for organization_id, payload in records.items():
-        with organization_transaction(
+        with current_user_transaction(
             guarded_runtime_engine, organization_id
         ) as connection:
             assert visible_records(connection) == [
@@ -336,7 +441,7 @@ def test_composite_ownership_accepts_same_org_and_rejects_cross_org_parent(
             parent_record_id=parent_b,
         )
 
-    with organization_transaction(
+    with current_user_transaction(
         guarded_runtime_engine, organizations.organization_a
     ) as connection:
         assert set(visible_records(connection)) == {
@@ -351,21 +456,35 @@ def test_composite_ownership_accepts_same_org_and_rejects_cross_org_parent(
 
 
 def test_organization_foreign_key_rejects_orphan_record(
-    guarded_runtime_engine: Engine,
+    migration_configuration: DatabaseConfiguration,
 ) -> None:
     """TENANT-OWNERSHIP-001: no representative row can lack a real owner."""
 
     nonexistent_organization = uuid4()
-    with pytest.raises(
-        IntegrityError,
-        match="fk_organization_record_organization",
-    ):
-        insert_record(
-            guarded_runtime_engine,
-            nonexistent_organization,
-            uuid4(),
-            "orphan",
-        )
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with (
+            pytest.raises(
+                IntegrityError,
+                match="fk_organization_record_organization",
+            ),
+            migration_engine.begin() as connection,
+        ):
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO organization_record (
+                        organization_id, record_id, parent_record_id, payload
+                    ) VALUES (:organization_id, :record_id, NULL, 'orphan')
+                    """
+                ),
+                {
+                    "organization_id": nonexistent_organization,
+                    "record_id": uuid4(),
+                },
+            )
+    finally:
+        migration_engine.dispose()
 
 
 def test_missing_tenant_context_is_fail_closed_for_every_operation(
@@ -466,7 +585,7 @@ def test_missing_tenant_context_is_fail_closed_for_every_operation(
         (organizations.organization_a, record_a, "organization-a"),
         (organizations.organization_b, record_b, "organization-b"),
     ):
-        with organization_transaction(
+        with current_user_transaction(
             guarded_runtime_engine, organization_id
         ) as connection:
             assert visible_records(connection) == [
@@ -499,7 +618,7 @@ def test_single_connection_pool_reuse_never_leaks_organization_context(
         for iteration in range(12):
             organization_id = ordered_organizations[iteration % 2]
             record_id, payload = records[organization_id]
-            with organization_transaction(engine, organization_id) as connection:
+            with current_user_transaction(engine, organization_id) as connection:
                 backend_pids.add(
                     connection.execute(text("SELECT pg_backend_pid()")).scalar_one()
                 )
@@ -511,9 +630,21 @@ def test_single_connection_pool_reuse_never_leaks_organization_context(
                 backend_pids.add(
                     connection.execute(text("SELECT pg_backend_pid()")).scalar_one()
                 )
-                assert connection.execute(
-                    text("SELECT current_setting('app.organization_id', true)")
-                ).scalar_one_or_none() in {None, ""}
+                for setting_name in (
+                    "app.organization_id",
+                    "app.actor_kind",
+                    "app.user_id",
+                    "app.membership_id",
+                    "app.membership_version",
+                    "app.principal_ref",
+                    "app.request_id",
+                    "app.authentication_binding_ref",
+                    "app.checked_at",
+                ):
+                    assert connection.execute(
+                        text("SELECT current_setting(:name, true)"),
+                        {"name": setting_name},
+                    ).scalar_one_or_none() in {None, ""}
                 rows = visible_records(connection)
                 missing_context_fallback_count += len(rows)
                 assert rows == []
@@ -561,7 +692,7 @@ def test_failed_organization_transaction_rolls_back_row_and_local_context(
     try:
         with (
             pytest.raises(LookupError, match="cancel operation"),
-            organization_transaction(
+            current_user_transaction(
                 engine, organizations.organization_a
             ) as connection,
         ):
@@ -598,7 +729,7 @@ def test_failed_organization_transaction_rolls_back_row_and_local_context(
             ).scalar_one_or_none() in {None, ""}
             assert visible_records(connection) == []
 
-        with organization_transaction(
+        with current_user_transaction(
             engine, organizations.organization_a
         ) as connection:
             assert (
@@ -618,12 +749,12 @@ def test_failed_organization_transaction_rolls_back_row_and_local_context(
         engine.dispose()
 
 
-def test_force_rls_subjects_the_table_owner_without_tenant_context(
+def test_explicit_migrator_policy_is_the_only_force_rls_administration_path(
     guarded_runtime_engine: Engine,
     migration_configuration: DatabaseConfiguration,
     organizations: OrganizationPair,
 ) -> None:
-    """DB-004: FORCE is behavioral—the owning migrator cannot bypass RLS."""
+    """DB-004: FORCE remains on while the named migration policy administers."""
 
     record_id = uuid4()
     insert_record(
@@ -639,74 +770,18 @@ def test_force_rls_subjects_the_table_owner_without_tenant_context(
             assert connection.execute(
                 text("SELECT current_setting('app.organization_id', true)")
             ).scalar_one_or_none() in {None, ""}
-            assert visible_records(connection) == []
-
-        with (
-            pytest.raises(DBAPIError) as update_error,
-            migration_engine.begin() as connection,
-        ):
-            connection.execute(
-                text(
-                    """
-                    UPDATE organization_record
-                    SET payload = 'owner-bypass-update'
-                    WHERE organization_id = :organization_id
-                      AND record_id = :record_id
-                    """
-                ),
-                {
-                    "organization_id": organizations.organization_a,
-                    "record_id": record_id,
-                },
-            )
-        assert_sqlstate(update_error.value, "42501")
-
-        with (
-            pytest.raises(DBAPIError) as delete_error,
-            migration_engine.begin() as connection,
-        ):
-            connection.execute(
-                text(
-                    """
-                    DELETE FROM organization_record
-                    WHERE organization_id = :organization_id
-                      AND record_id = :record_id
-                    """
-                ),
-                {
-                    "organization_id": organizations.organization_a,
-                    "record_id": record_id,
-                },
-            )
-        assert_sqlstate(delete_error.value, "42501")
-
-        with (
-            pytest.raises(DBAPIError) as insert_error,
-            migration_engine.begin() as connection,
-        ):
-            connection.execute(
-                text(
-                    """
-                    INSERT INTO organization_record (
-                        organization_id,
-                        record_id,
-                        parent_record_id,
-                        payload
-                    )
-                    VALUES (:organization_id, :record_id, NULL, :payload)
-                    """
-                ),
-                {
-                    "organization_id": organizations.organization_a,
-                    "record_id": uuid4(),
-                    "payload": "owner-bypass-insert",
-                },
-            )
-        assert_sqlstate(insert_error.value, "42501")
+            assert visible_records(connection) == [
+                (
+                    organizations.organization_a,
+                    record_id,
+                    None,
+                    "force-owner-oracle",
+                )
+            ]
     finally:
         migration_engine.dispose()
 
-    with organization_transaction(
+    with current_user_transaction(
         guarded_runtime_engine, organizations.organization_a
     ) as connection:
         assert visible_records(connection) == [
@@ -868,6 +943,8 @@ def test_catalog_proves_force_rls_policy_ownership_constraints_and_grants(
                         FROM pg_policies
                         WHERE schemaname = 'public'
                           AND tablename = 'organization_record'
+                          AND policyname =
+                              'organization_record_organization_isolation'
                         """
                     )
                 ).one()
@@ -1019,6 +1096,10 @@ def test_catalog_proves_force_rls_policy_ownership_constraints_and_grants(
     assert "organization_id" in normalized_policy
     assert "current_setting" in normalized_policy
     assert "app.organization_id" in normalized_policy
+    assert "app.membership_id" in normalized_policy
+    assert "app.membership_version" in normalized_policy
+    assert "app.checked_at" in normalized_policy
+    assert "actor_membership" in normalized_policy
     assert "nullif" in normalized_policy
 
     assert write_guard[:3] == (
@@ -1039,6 +1120,10 @@ def test_catalog_proves_force_rls_policy_ownership_constraints_and_grants(
     )
     normalized_guard_body = str(write_guard[9]).lower()
     assert "current_setting('app.organization_id', true)" in normalized_guard_body
+    assert "current_setting('app.membership_id', true)" in normalized_guard_body
+    assert "current_setting('app.membership_version', true)" in normalized_guard_body
+    assert "current_setting('app.checked_at', true)" in normalized_guard_body
+    assert "from public.membership" in normalized_guard_body
     assert "nullif" in normalized_guard_body
     assert "errcode = '42501'" in normalized_guard_body
     assert write_guard_grants == {

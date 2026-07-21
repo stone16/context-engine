@@ -1,5 +1,5 @@
 {
-  "manifestVersion": "1.0.0",
+  "manifestVersion": "2.0.0",
   "tables": [
     {
       "name": "alembic_version",
@@ -22,9 +22,108 @@
       "partitions": []
     },
     {
+      "name": "user_account",
+      "classification": "global",
+      "purpose": "Global user identity root without tenant rights",
+      "primaryKey": {
+        "name": "pk_user_account",
+        "columns": ["user_id"]
+      },
+      "permittedOperations": {
+        "context_engine_runtime": [],
+        "context_engine_worker": []
+      },
+      "partitions": []
+    },
+    {
+      "name": "membership",
+      "classification": "tenant_owned",
+      "purpose": "Organization-scoped current UserActor membership authority",
+      "organizationColumn": "organization_id",
+      "organizationInclusiveKeys": [
+        {
+          "name": "pk_membership",
+          "kind": "primary_key",
+          "columns": ["organization_id", "membership_id"]
+        },
+        {
+          "name": "uq_membership_organization_user",
+          "kind": "unique",
+          "columns": ["organization_id", "user_id"]
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_membership_organization",
+          "columns": ["organization_id"],
+          "references": {
+            "table": "organization",
+            "columns": ["organization_id"]
+          }
+        },
+        {
+          "name": "fk_membership_user_account",
+          "columns": ["user_id"],
+          "references": {
+            "table": "user_account",
+            "columns": ["user_id"]
+          }
+        }
+      ],
+      "checkConstraints": [
+        {
+          "name": "ck_membership_status",
+          "expression": "status IN ('active', 'inactive', 'revoked')"
+        },
+        {
+          "name": "ck_membership_version_positive",
+          "expression": "membership_version > 0"
+        },
+        {
+          "name": "ck_membership_valid_interval",
+          "expression": "valid_until IS NULL OR valid_until > valid_from"
+        }
+      ],
+      "rowLevelSecurity": {
+        "enabled": true,
+        "forced": true,
+        "policies": [
+          {
+            "name": "membership_current_user_actor",
+            "command": "SELECT",
+            "roles": ["context_engine_runtime"],
+            "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid AND current_setting('app.actor_kind', true) = 'user' AND user_id = NULLIF(current_setting('app.user_id', true), '')::uuid AND NULLIF(current_setting('app.principal_ref', true), '') IS NOT NULL AND membership_id = NULLIF(current_setting('app.membership_id', true), '')::uuid AND membership_version = NULLIF(current_setting('app.membership_version', true), '')::bigint AND NULLIF(current_setting('app.request_id', true), '') IS NOT NULL AND NULLIF(current_setting('app.authentication_binding_ref', true), '') IS NOT NULL AND NULLIF(current_setting('app.checked_at', true), '') IS NOT NULL AND status = 'active' AND valid_from <= NULLIF(current_setting('app.checked_at', true), '')::timestamptz AND (valid_until IS NULL OR valid_until > NULLIF(current_setting('app.checked_at', true), '')::timestamptz)"
+          },
+          {
+            "name": "membership_migrator_administration",
+            "command": "ALL",
+            "roles": ["context_engine_migrator"],
+            "using": "true",
+            "withCheck": "true"
+          }
+        ]
+      },
+      "permittedOperations": {
+        "context_engine_runtime": ["SELECT"],
+        "context_engine_worker": []
+      },
+      "partitions": [],
+      "securityInvariantIds": [
+        "TENANT-OWNERSHIP-001",
+        "RLS-FAIL-CLOSED-003"
+      ],
+      "negativeTestIds": [
+        "DB-001",
+        "DB-002",
+        "DB-004",
+        "DB-009",
+        "DB-010"
+      ]
+    },
+    {
       "name": "organization_record",
       "classification": "tenant_owned",
-      "purpose": "Representative tenant-owned record for the first isolation slice",
+      "purpose": "Representative tenant-owned record protected by current UserActor Membership",
       "organizationColumn": "organization_id",
       "organizationInclusiveKeys": [
         {
@@ -59,8 +158,15 @@
             "name": "organization_record_organization_isolation",
             "command": "ALL",
             "roles": ["context_engine_runtime"],
-            "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid",
-            "withCheck": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"
+            "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid AND EXISTS (SELECT 1 FROM public.membership AS actor_membership WHERE actor_membership.organization_id = organization_record.organization_id AND actor_membership.organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid AND current_setting('app.actor_kind', true) = 'user' AND actor_membership.user_id = NULLIF(current_setting('app.user_id', true), '')::uuid AND NULLIF(current_setting('app.principal_ref', true), '') IS NOT NULL AND actor_membership.membership_id = NULLIF(current_setting('app.membership_id', true), '')::uuid AND actor_membership.membership_version = NULLIF(current_setting('app.membership_version', true), '')::bigint AND NULLIF(current_setting('app.request_id', true), '') IS NOT NULL AND NULLIF(current_setting('app.authentication_binding_ref', true), '') IS NOT NULL AND NULLIF(current_setting('app.checked_at', true), '') IS NOT NULL AND actor_membership.status = 'active' AND actor_membership.valid_from <= NULLIF(current_setting('app.checked_at', true), '')::timestamptz AND (actor_membership.valid_until IS NULL OR actor_membership.valid_until > NULLIF(current_setting('app.checked_at', true), '')::timestamptz))",
+            "withCheck": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid AND EXISTS (SELECT 1 FROM public.membership AS actor_membership WHERE actor_membership.organization_id = organization_record.organization_id AND actor_membership.organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid AND current_setting('app.actor_kind', true) = 'user' AND actor_membership.user_id = NULLIF(current_setting('app.user_id', true), '')::uuid AND NULLIF(current_setting('app.principal_ref', true), '') IS NOT NULL AND actor_membership.membership_id = NULLIF(current_setting('app.membership_id', true), '')::uuid AND actor_membership.membership_version = NULLIF(current_setting('app.membership_version', true), '')::bigint AND NULLIF(current_setting('app.request_id', true), '') IS NOT NULL AND NULLIF(current_setting('app.authentication_binding_ref', true), '') IS NOT NULL AND NULLIF(current_setting('app.checked_at', true), '') IS NOT NULL AND actor_membership.status = 'active' AND actor_membership.valid_from <= NULLIF(current_setting('app.checked_at', true), '')::timestamptz AND (actor_membership.valid_until IS NULL OR actor_membership.valid_until > NULLIF(current_setting('app.checked_at', true), '')::timestamptz))"
+          },
+          {
+            "name": "organization_record_migrator_administration",
+            "command": "ALL",
+            "roles": ["context_engine_migrator"],
+            "using": "true",
+            "withCheck": "true"
           }
         ],
         "writeContextGuard": {
@@ -69,7 +175,9 @@
           "timing": "BEFORE",
           "orientation": "STATEMENT",
           "events": ["INSERT", "UPDATE", "DELETE"],
-          "missingContextSqlstate": "42501"
+          "missingContextSqlstate": "42501",
+          "requiredActorKind": "user",
+          "requiresCurrentMembership": true
         }
       },
       "permittedOperations": {
@@ -90,6 +198,8 @@
         "DB-006",
         "DB-007",
         "DB-008",
+        "DB-009",
+        "DB-010",
         "MIG-001",
         "MIG-002"
       ]

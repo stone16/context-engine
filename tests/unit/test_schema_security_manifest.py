@@ -23,21 +23,78 @@ def table_entries(document: dict[str, Any]) -> dict[str, dict[str, Any]]:
     }
 
 
-def test_manifest_classifies_the_exact_bounded_issue_8_schema() -> None:
+def test_manifest_classifies_the_exact_issue_11_identity_schema() -> None:
     """PROP-TENANT-OWNERSHIP-001: no current table is left unclassified."""
 
     document = manifest()
     tables = table_entries(document)
 
-    assert document["manifestVersion"] == "1.0.0"
+    assert document["manifestVersion"] == "2.0.0"
     assert set(tables) == {
         "alembic_version",
+        "membership",
         "organization",
         "organization_record",
+        "user_account",
     }
     assert tables["alembic_version"]["classification"] == "global"
     assert tables["organization"]["classification"] == "global"
+    assert tables["user_account"]["classification"] == "global"
+    assert tables["membership"]["classification"] == "tenant_owned"
     assert tables["organization_record"]["classification"] == "tenant_owned"
+
+
+def test_membership_manifest_requires_exact_user_actor_and_read_only_runtime() -> None:
+    """DB-009/DB-010: the identity row is not an Organization-only grant."""
+
+    entry = table_entries(manifest())["membership"]
+    assert entry["organizationColumn"] == "organization_id"
+    assert entry["organizationInclusiveKeys"] == [
+        {
+            "name": "pk_membership",
+            "kind": "primary_key",
+            "columns": ["organization_id", "membership_id"],
+        },
+        {
+            "name": "uq_membership_organization_user",
+            "kind": "unique",
+            "columns": ["organization_id", "user_id"],
+        },
+    ]
+    assert entry["permittedOperations"] == {
+        "context_engine_runtime": ["SELECT"],
+        "context_engine_worker": [],
+    }
+
+    rls = entry["rowLevelSecurity"]
+    assert rls["enabled"] is True
+    assert rls["forced"] is True
+    runtime_policy = next(
+        policy
+        for policy in rls["policies"]
+        if policy["roles"] == ["context_engine_runtime"]
+    )
+    assert runtime_policy["command"] == "SELECT"
+    expression = runtime_policy["using"]
+    for setting_name in (
+        "app.organization_id",
+        "app.actor_kind",
+        "app.user_id",
+        "app.membership_id",
+        "app.membership_version",
+        "app.principal_ref",
+        "app.request_id",
+        "app.authentication_binding_ref",
+        "app.checked_at",
+    ):
+        assert setting_name in expression
+    for membership_property in (
+        "status",
+        "membership_version",
+        "valid_from",
+        "valid_until",
+    ):
+        assert membership_property in expression
 
 
 def test_tenant_owned_manifest_entry_preserves_every_security_property() -> None:
@@ -64,11 +121,19 @@ def test_tenant_owned_manifest_entry_preserves_every_security_property() -> None
     rls = entry["rowLevelSecurity"]
     assert rls["enabled"] is True
     assert rls["forced"] is True
-    assert len(rls["policies"]) == 1
-    policy = rls["policies"][0]
+    assert len(rls["policies"]) == 2
+    policy = next(
+        candidate
+        for candidate in rls["policies"]
+        if candidate["roles"] == ["context_engine_runtime"]
+    )
     assert policy["roles"] == ["context_engine_runtime"]
     assert policy["using"] == policy["withCheck"]
     assert "app.organization_id" in policy["using"]
+    assert "app.membership_id" in policy["using"]
+    assert "app.membership_version" in policy["using"]
+    assert "app.checked_at" in policy["using"]
+    assert "EXISTS" in policy["using"]
     assert "NULLIF" in policy["using"]
 
     assert rls["writeContextGuard"] == {
@@ -78,6 +143,8 @@ def test_tenant_owned_manifest_entry_preserves_every_security_property() -> None
         "orientation": "STATEMENT",
         "events": ["INSERT", "UPDATE", "DELETE"],
         "missingContextSqlstate": "42501",
+        "requiredActorKind": "user",
+        "requiresCurrentMembership": True,
     }
 
     assert entry["permittedOperations"] == {
@@ -97,6 +164,8 @@ def test_tenant_owned_manifest_entry_preserves_every_security_property() -> None
         "DB-006",
         "DB-007",
         "DB-008",
+        "DB-009",
+        "DB-010",
         "MIG-001",
         "MIG-002",
     }
