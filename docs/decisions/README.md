@@ -37,6 +37,7 @@ kernel, capability separation, and publication visibility model.
 | Release security catalog | [0019 — Security catalog normalization](0019-security-catalog-normalization.md) | One machine catalog contains exactly fifteen stable release IDs; overlapping labels and derived scenarios keep their safeguards without inflating the count | Parallel prose catalogs, renumbering, or treating inactive cache behavior as a canonical release family |
 | Executable M0 security veto | [0034 — Registered executable security evidence](0034-execute-the-m0-security-veto-from-registered-evidence.md) | Exact current tests, explicit hard-oracle observations, and live all-table RLS facts produce provenance-bearing independent gate artifacts | Planned IDs presented as executed proof, skip/retry-to-green, manifest-only RLS claims, or aggregate scoring |
 | First File source registration | [0035 — Trusted File source registration](0035-register-file-sources-through-context-control.md) | One operation-bound trusted Control call atomically creates an Organization-owned source plus immutable active first version; all acquisition carriers remain unavailable | Caller-authored Organization/mode, host paths, registration-time File I/O, future capability claims, or cross-tenant idempotency |
+| First Markdown compiler | [0036 — Deterministic narrow Markdown compilation](0036-compile-narrow-markdown-deterministically.md) | Exact bytes compile purely into one canonical heading-plus-paragraph ParsedDocument with normalized coordinates and versioned content/compilation identities | Path-coupled parsing, silent unsupported syntax, partial documents, unversioned derived identities, or parser-side I/O |
 
 Each baseline ADR is `accepted` and contains Context, Decision, Rationale,
 Consequences, and Revisit trigger sections. A revisit trigger permits review; it
@@ -119,3 +120,4 @@ touched:
 - [0033 — Organization release promotion owner](0033-promote-organization-releases-through-one-learning-owner.md)
 - [0034 — Registered executable security evidence](0034-execute-the-m0-security-veto-from-registered-evidence.md)
 - [0035 — Trusted File source registration](0035-register-file-sources-through-context-control.md)
+- [0036 — Deterministic narrow Markdown compilation](0036-compile-narrow-markdown-deterministically.md)
