@@ -32,7 +32,9 @@ HEAD_TABLES = [
     "decision_audit",
     "exact_phrase_candidate",
     "file_acquisition",
+    "file_acquisition_result",
     "file_import_job",
+    "file_resource_ingestion_guard",
     "file_revision_snapshot",
     "membership",
     "membership_resource_field_right",
@@ -99,7 +101,7 @@ def test_empty_baseline_remains_a_reversible_historical_revision(
         assert _application_tables(migration_configuration) == ["alembic_version"]
     finally:
         command.upgrade(alembic_configuration, "head")
-    assert _revision_rows(migration_configuration) == ["20260723_0012"]
+    assert _revision_rows(migration_configuration) == ["20260724_0013"]
 
 
 def test_organization_isolation_revision_downgrades_and_reapplies_cleanly(
@@ -114,7 +116,7 @@ def test_organization_isolation_revision_downgrades_and_reapplies_cleanly(
     finally:
         command.upgrade(alembic_configuration, "head")
 
-    assert _revision_rows(migration_configuration) == ["20260723_0012"]
+    assert _revision_rows(migration_configuration) == ["20260724_0013"]
     assert _application_tables(migration_configuration) == HEAD_TABLES
 
 
@@ -134,7 +136,7 @@ def test_membership_revision_downgrades_to_issue_8_and_reapplies_cleanly(
     finally:
         command.upgrade(alembic_configuration, "head")
 
-    assert _revision_rows(migration_configuration) == ["20260723_0012"]
+    assert _revision_rows(migration_configuration) == ["20260724_0013"]
 
 
 def test_content_schema_revision_downgrades_to_membership_and_reapplies_cleanly(
@@ -155,7 +157,7 @@ def test_content_schema_revision_downgrades_to_membership_and_reapplies_cleanly(
     finally:
         command.upgrade(alembic_configuration, "head")
 
-    assert _revision_rows(migration_configuration) == ["20260723_0012"]
+    assert _revision_rows(migration_configuration) == ["20260724_0013"]
     assert _application_tables(migration_configuration) == HEAD_TABLES
 
 
@@ -182,7 +184,7 @@ def test_policy_epoch_revision_downgrades_to_content_and_reapplies_cleanly(
     finally:
         command.upgrade(alembic_configuration, "head")
 
-    assert _revision_rows(migration_configuration) == ["20260723_0012"]
+    assert _revision_rows(migration_configuration) == ["20260724_0013"]
     assert _application_tables(migration_configuration) == HEAD_TABLES
 
 
@@ -211,7 +213,7 @@ def test_worker_lease_revision_downgrades_to_policy_epoch_and_reapplies_cleanly(
     finally:
         command.upgrade(alembic_configuration, "head")
 
-    assert _revision_rows(migration_configuration) == ["20260723_0012"]
+    assert _revision_rows(migration_configuration) == ["20260724_0013"]
     assert _application_tables(migration_configuration) == HEAD_TABLES
 
 
@@ -233,7 +235,7 @@ def test_decision_lineage_revision_downgrades_to_worker_lease_and_reapplies_clea
     finally:
         command.upgrade(alembic_configuration, "head")
 
-    assert _revision_rows(migration_configuration) == ["20260723_0012"]
+    assert _revision_rows(migration_configuration) == ["20260724_0013"]
     assert _application_tables(migration_configuration) == HEAD_TABLES
 
 
@@ -271,7 +273,7 @@ def test_field_projection_revision_downgrades_to_decision_lineage_and_reapplies_
     finally:
         command.upgrade(alembic_configuration, "head")
 
-    assert _revision_rows(migration_configuration) == ["20260723_0012"]
+    assert _revision_rows(migration_configuration) == ["20260724_0013"]
     assert "context_fragment_field" in _application_tables(migration_configuration)
     assert "membership_resource_field_right" in _application_tables(
         migration_configuration
@@ -294,7 +296,7 @@ def test_file_source_revision_downgrades_to_learning_release_and_reapplies_clean
     finally:
         command.upgrade(alembic_configuration, "head")
 
-    assert _revision_rows(migration_configuration) == ["20260723_0012"]
+    assert _revision_rows(migration_configuration) == ["20260724_0013"]
     tables = _application_tables(migration_configuration)
     assert "context_source" in tables
     assert "source_version" in tables
@@ -311,20 +313,24 @@ def test_structural_markdown_revision_downgrades_and_reapplies_cleanly(
         command.downgrade(alembic_configuration, "20260722_0011")
         assert _revision_rows(migration_configuration) == ["20260722_0011"]
         with engine.connect() as connection:
-            assert connection.execute(
-                text(
-                    """
+            assert (
+                connection.execute(
+                    text(
+                        """
                     SELECT count(*)
                     FROM information_schema.columns
                     WHERE table_schema = 'public'
                       AND table_name = 'file_revision_snapshot'
                       AND column_name = 'compilation_document'
                     """
-                )
-            ).scalar_one() == 0
-            assert connection.execute(
-                text(
-                    """
+                    )
+                ).scalar_one()
+                == 0
+            )
+            assert (
+                connection.execute(
+                    text(
+                        """
                     SELECT count(*)
                     FROM pg_proc AS procedure
                     JOIN pg_namespace AS namespace
@@ -333,30 +339,36 @@ def test_structural_markdown_revision_downgrades_and_reapplies_cleanly(
                       AND procedure.proname =
                           'context_worker_publish_structural_file_import'
                     """
-                )
-            ).scalar_one() == 0
+                    )
+                ).scalar_one()
+                == 0
+            )
     finally:
         command.upgrade(alembic_configuration, "head")
         engine.dispose()
 
-    assert _revision_rows(migration_configuration) == ["20260723_0012"]
+    assert _revision_rows(migration_configuration) == ["20260724_0013"]
     engine = create_database_engine(migration_configuration)
     try:
         with engine.connect() as connection:
-            assert connection.execute(
-                text(
-                    """
+            assert (
+                connection.execute(
+                    text(
+                        """
                     SELECT count(*)
                     FROM information_schema.columns
                     WHERE table_schema = 'public'
                       AND table_name = 'file_revision_snapshot'
                       AND column_name = 'compilation_document'
                     """
-                )
-            ).scalar_one() == 1
-            assert connection.execute(
-                text(
-                    """
+                    )
+                ).scalar_one()
+                == 1
+            )
+            assert (
+                connection.execute(
+                    text(
+                        """
                     SELECT count(*)
                     FROM pg_proc AS procedure
                     JOIN pg_namespace AS namespace
@@ -365,10 +377,33 @@ def test_structural_markdown_revision_downgrades_and_reapplies_cleanly(
                       AND procedure.proname =
                           'context_worker_publish_structural_file_import'
                     """
-                )
-            ).scalar_one() == 1
+                    )
+                ).scalar_one()
+                == 1
+            )
     finally:
         engine.dispose()
+
+
+def test_file_noop_revision_downgrades_and_reapplies_cleanly(
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    """Issue #25 owns one reversible acquisition-outcome schema boundary."""
+
+    alembic_configuration = Config(ROOT / "alembic.ini")
+    try:
+        command.downgrade(alembic_configuration, "20260723_0012")
+        assert _revision_rows(migration_configuration) == ["20260723_0012"]
+        tables = _application_tables(migration_configuration)
+        assert "file_acquisition_result" not in tables
+        assert "file_resource_ingestion_guard" not in tables
+    finally:
+        command.upgrade(alembic_configuration, "head")
+
+    assert _revision_rows(migration_configuration) == ["20260724_0013"]
+    tables = _application_tables(migration_configuration)
+    assert "file_acquisition_result" in tables
+    assert "file_resource_ingestion_guard" in tables
 
 
 def test_structural_snapshot_constraint_rejects_missing_json_bindings(
@@ -483,20 +518,23 @@ def test_empty_content_downgrade_preserves_v2_context_run_history(
         command.downgrade(alembic_configuration, "20260722_0007")
         assert _revision_rows(migration_configuration) == ["20260722_0007"]
         with engine.connect() as connection:
-            assert connection.execute(
-                text(
-                    """
+            assert (
+                connection.execute(
+                    text(
+                        """
                     SELECT package_digest_profile
                     FROM context_run
                     WHERE organization_id = :organization_id
                       AND run_ref = :run_ref
                     """
-                ),
-                {
-                    "organization_id": identity.organization_id,
-                    "run_ref": identity.run_ref,
-                },
-            ).scalar_one() == "context-package-canonical-json-v2"
+                    ),
+                    {
+                        "organization_id": identity.organization_id,
+                        "run_ref": identity.run_ref,
+                    },
+                ).scalar_one()
+                == "context-package-canonical-json-v2"
+            )
             profile_constraint = connection.execute(
                 text(
                     """
@@ -514,16 +552,12 @@ def test_empty_content_downgrade_preserves_v2_context_run_history(
         with engine.begin() as connection:
             connection.execute(
                 text(
-                    "DELETE FROM context_run "
-                    "WHERE organization_id = :organization_id"
+                    "DELETE FROM context_run WHERE organization_id = :organization_id"
                 ),
                 {"organization_id": identity.organization_id},
             )
             connection.execute(
-                text(
-                    "DELETE FROM membership "
-                    "WHERE organization_id = :organization_id"
-                ),
+                text("DELETE FROM membership WHERE organization_id = :organization_id"),
                 {"organization_id": identity.organization_id},
             )
             connection.execute(
@@ -532,8 +566,7 @@ def test_empty_content_downgrade_preserves_v2_context_run_history(
             )
             connection.execute(
                 text(
-                    "DELETE FROM organization "
-                    "WHERE organization_id = :organization_id"
+                    "DELETE FROM organization WHERE organization_id = :organization_id"
                 ),
                 {"organization_id": identity.organization_id},
             )
@@ -650,22 +683,28 @@ def test_field_projection_downgrade_refuses_populated_content_atomically(
         ):
             command.downgrade(alembic_configuration, "20260722_0007")
 
-        assert _revision_rows(migration_configuration) == ["20260723_0012"]
+        assert _revision_rows(migration_configuration) == ["20260724_0013"]
         with engine.connect() as connection:
-            assert connection.execute(
-                text(
-                    "SELECT content FROM context_fragment "
-                    "WHERE organization_id = :organization_id"
-                ),
-                parameters,
-            ).scalar_one() == "private-body"
-            assert connection.execute(
-                text(
-                    "SELECT field_ref FROM membership_resource_field_right "
-                    "WHERE organization_id = :organization_id"
-                ),
-                parameters,
-            ).scalar_one() == "body"
+            assert (
+                connection.execute(
+                    text(
+                        "SELECT content FROM context_fragment "
+                        "WHERE organization_id = :organization_id"
+                    ),
+                    parameters,
+                ).scalar_one()
+                == "private-body"
+            )
+            assert (
+                connection.execute(
+                    text(
+                        "SELECT field_ref FROM membership_resource_field_right "
+                        "WHERE organization_id = :organization_id"
+                    ),
+                    parameters,
+                ).scalar_one()
+                == "body"
+            )
             policy = connection.execute(
                 text(
                     """
@@ -704,15 +743,13 @@ def test_field_projection_downgrade_refuses_populated_content_atomically(
                     "WHERE organization_id = :organization_id",
                     "DELETE FROM context_resource "
                     "WHERE organization_id = :organization_id",
-                    "DELETE FROM membership "
-                    "WHERE organization_id = :organization_id",
+                    "DELETE FROM membership WHERE organization_id = :organization_id",
                     "DELETE FROM user_account WHERE user_id = :user_id",
-                    "DELETE FROM organization "
-                    "WHERE organization_id = :organization_id",
+                    "DELETE FROM organization WHERE organization_id = :organization_id",
                 ):
                     connection.execute(text(statement), parameters)
         except SQLAlchemyError:
-            if _revision_rows(migration_configuration) != ["20260723_0012"]:
+            if _revision_rows(migration_configuration) != ["20260724_0013"]:
                 command.upgrade(alembic_configuration, "head")
             raise
         finally:
@@ -855,15 +892,18 @@ def test_field_projection_downgrade_serializes_with_concurrent_fragment_insert(
 
         assert _revision_rows(migration_configuration) == ["20260722_0008"]
         with engine.connect() as connection:
-            assert connection.execute(
-                text(
-                    "SELECT content FROM context_fragment "
-                    "WHERE organization_id = :organization_id"
-                ),
-                parameters,
-            ).scalar_one() == "concurrent-private-body"
+            assert (
+                connection.execute(
+                    text(
+                        "SELECT content FROM context_fragment "
+                        "WHERE organization_id = :organization_id"
+                    ),
+                    parameters,
+                ).scalar_one()
+                == "concurrent-private-body"
+            )
     finally:
-        if _revision_rows(migration_configuration) != ["20260723_0012"]:
+        if _revision_rows(migration_configuration) != ["20260724_0013"]:
             command.upgrade(alembic_configuration, "head")
         with engine.begin() as connection:
             connection.execute(
@@ -887,8 +927,7 @@ def test_field_projection_downgrade_serializes_with_concurrent_fragment_insert(
                     "WHERE organization_id = :organization_id",
                     "DELETE FROM context_resource "
                     "WHERE organization_id = :organization_id",
-                    "DELETE FROM organization "
-                    "WHERE organization_id = :organization_id",
+                    "DELETE FROM organization WHERE organization_id = :organization_id",
                 ):
                     connection.execute(text(statement), parameters)
         finally:

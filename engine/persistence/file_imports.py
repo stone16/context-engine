@@ -62,24 +62,26 @@ class FileImportLeaseRedemption:
 
 @dataclass(frozen=True, slots=True)
 class PublishedFileImport:
-    """Complete immutable lineage for the one committed publication effect."""
+    """Complete active lineage for one published or unchanged acquisition."""
 
     candidate_refs: tuple[CandidateRef, ...]
     acquisition_id: UUID = field(repr=False)
+    content_identity_digest: str = field(repr=False)
+    outcome: Literal["published", "unchanged"] = "published"
+    reason_digest: str | None = field(default=None, repr=False)
     publication_states: tuple[str, str, str] = (
         "prepared",
         "indexed",
         "active",
     )
-    effect_count: Literal[1] = 1
+    effect_count: Literal[0, 1] = 1
 
     def __post_init__(self) -> None:
         if (
             type(self.candidate_refs) is not tuple
             or not self.candidate_refs
             or any(
-                type(candidate) is not CandidateRef
-                for candidate in self.candidate_refs
+                type(candidate) is not CandidateRef for candidate in self.candidate_refs
             )
         ):
             raise TypeError("published File import requires CandidateRef values")
@@ -98,10 +100,33 @@ class PublishedFileImport:
             )
         if type(self.acquisition_id) is not UUID:
             raise TypeError("published File import acquisition must be UUID")
+        if (
+            type(self.content_identity_digest) is not str
+            or len(self.content_identity_digest) != 64
+            or any(
+                character not in "0123456789abcdef"
+                for character in self.content_identity_digest
+            )
+        ):
+            raise ValueError("File import content identity must be SHA-256")
         if self.publication_states != ("prepared", "indexed", "active"):
             raise ValueError("File publication state sequence must remain closed")
-        if self.effect_count != 1:
-            raise ValueError("published File import has exactly one effect")
+        if self.outcome == "published":
+            if self.effect_count != 1 or self.reason_digest is not None:
+                raise ValueError("published File import has exactly one effect")
+        elif self.outcome == "unchanged":
+            if (
+                self.effect_count != 0
+                or type(self.reason_digest) is not str
+                or len(self.reason_digest) != 64
+                or any(
+                    character not in "0123456789abcdef"
+                    for character in self.reason_digest
+                )
+            ):
+                raise ValueError("unchanged File import requires a reason digest")
+        else:
+            raise ValueError("File import outcome must be closed")
 
     @property
     def candidate_ref(self) -> CandidateRef:
@@ -279,8 +304,8 @@ class PostgreSQLFileImportWorker:
                 canonicalize_parsed_document(document).decode("utf-8")
             )
             statement = """
-                SELECT effect_count
-                FROM public.context_worker_publish_structural_file_import(
+                SELECT *
+                FROM public.context_worker_publish_structural_file_import_v2(
                     :organization_id, :job_id, :service_principal_id,
                     :source_ref, :resource_ref,
                     :revision_id, :canonical_text,
@@ -300,8 +325,8 @@ class PostgreSQLFileImportWorker:
         else:
             fragment = document.fragments[0]
             statement = """
-                SELECT effect_count
-                FROM public.context_worker_publish_file_import(
+                SELECT *
+                FROM public.context_worker_publish_file_import_v2(
                     :organization_id, :job_id, :service_principal_id,
                     :source_ref, :resource_ref,
                     :revision_id, :fragment_ref, :canonical_text,
@@ -339,7 +364,13 @@ class PostgreSQLFileImportWorker:
                         **payload,
                     },
                 ).one_or_none()
-                if row is None or row.effect_count != 1:
+                if (
+                    row is None
+                    or row.effect_count not in {0, 1}
+                    or row.outcome not in {"published", "unchanged"}
+                    or row.active_revision_id is None
+                    or not row.fragment_refs
+                ):
                     raise _rejection(token)
         except WorkNotAvailable:
             raise
@@ -351,12 +382,16 @@ class PostgreSQLFileImportWorker:
                     organization_id=claims.organization_id,
                     source_ref=str(redeemed.source_ref.value),
                     resource_ref=resource_ref,
-                    revision_ref=str(revision_id),
-                    fragment_ref=fragment.fragment_ref,
+                    revision_ref=str(row.active_revision_id),
+                    fragment_ref=fragment_ref,
                 )
-                for fragment in document.fragments
+                for fragment_ref in row.fragment_refs
             ),
             acquisition_id=redeemed.acquisition_id,
+            content_identity_digest=row.content_identity_digest,
+            outcome=row.outcome,
+            reason_digest=row.reason_digest,
+            effect_count=row.effect_count,
         )
 
     def _fail(

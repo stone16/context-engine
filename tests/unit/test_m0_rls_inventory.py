@@ -25,7 +25,9 @@ TENANT_TABLES = {
     "decision_audit",
     "exact_phrase_candidate",
     "file_acquisition",
+    "file_acquisition_result",
     "file_import_job",
+    "file_resource_ingestion_guard",
     "file_revision_snapshot",
     "membership",
     "membership_resource_field_right",
@@ -50,8 +52,7 @@ def _manifest_tables() -> dict[str, dict[str, Any]]:
     raw_tables = document["tables"]
     assert isinstance(raw_tables, list)
     return {
-        cast(str, table["name"]): cast(dict[str, Any], table)
-        for table in raw_tables
+        cast(str, table["name"]): cast(dict[str, Any], table) for table in raw_tables
     }
 
 
@@ -125,7 +126,7 @@ def test_manifest_declares_exact_live_table_denominator_and_rls_evidence() -> No
 
     assert global_tables == GLOBAL_TABLES
     assert tenant_tables == TENANT_TABLES
-    assert len(tables) == 30
+    assert len(tables) == 32
 
     for name in sorted(GLOBAL_TABLES):
         rationale = tables[name]["classificationRationale"]
@@ -148,8 +149,8 @@ def test_rls_auditor_requires_every_live_control_and_non_owner_evidence() -> Non
 
     assert report["passed"] is True
     assert report["coverage"] == {
-        "numerator": 27,
-        "denominator": 27,
+        "numerator": 29,
+        "denominator": 29,
         "percent": 100.0,
     }
     inventory = cast(dict[str, object], report["inventory"])
@@ -174,14 +175,12 @@ def test_rls_auditor_does_not_count_force_rls_or_evidence_gaps() -> None:
     assert report["passed"] is False
     assert report["coverage"] == {
         "numerator": 0,
-        "denominator": 27,
+        "denominator": 29,
         "percent": 0.0,
     }
     tenant_reports = cast(list[dict[str, Any]], report["tenantTables"])
     organization_record = next(
-        table
-        for table in tenant_reports
-        if table["table"] == "organization_record"
+        table for table in tenant_reports if table["table"] == "organization_record"
     )
     assert organization_record["rlsForced"] is False
     assert organization_record["nonOwnerIsolation"]["passed"] is False
@@ -244,9 +243,10 @@ def test_rls_auditor_pins_global_allowlist_independently_of_manifest() -> None:
     )
 
     assert report["passed"] is False
-    assert "organization_record" in cast(
-        dict[str, list[str]], report["globalAllowlistInventory"]
-    )["unexpected"]
+    assert (
+        "organization_record"
+        in cast(dict[str, list[str]], report["globalAllowlistInventory"])["unexpected"]
+    )
     assert any(
         "global table allowlist differs from the pinned M0 allowlist" in failure
         for failure in cast(list[str], report["failures"])
@@ -311,9 +311,7 @@ def test_rls_auditor_requires_exact_policy_inventory_and_semantics() -> None:
 def test_rls_auditor_accepts_postgresql_expression_rendering_only() -> None:
     snapshot = _matching_catalog_snapshot()
     live_tables = cast(dict[str, dict[str, Any]], snapshot["tables"])
-    policies = cast(
-        list[dict[str, Any]], live_tables["context_run"]["policies"]
-    )
+    policies = cast(list[dict[str, Any]], live_tables["context_run"]["policies"])
     reader_policy = next(
         policy
         for policy in policies

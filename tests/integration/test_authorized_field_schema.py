@@ -1263,6 +1263,11 @@ def test_field_authority_tables_have_force_rls_and_least_privilege_grants(
             "membership_resource_field_right",
             "INSERT",
         ),
+        (
+            "context_engine_worker_lease_definer",
+            "membership_resource_field_right",
+            "SELECT",
+        ),
     }
     assert {
         "pk_context_fragment_field",
