@@ -7,16 +7,19 @@ from uuid import UUID
 
 import pytest
 
-from engine.runtime.evidence import CandidateRef
+from engine.runtime.evidence import MAX_PROJECTED_FIELD_REFS, CandidateRef
 from engine.runtime.materialized import (
+    MaterializedFieldValue,
     MaterializedFragmentLocator,
+    MaterializedFragmentProjection,
+    MaterializedProjectionKind,
     MaterializedProjectionPort,
     MaterializedProjectionSession,
     _close_materialized_projection_scope,
     _construct_materialized_projection_session,
     _locate_materialized_fragment,
     _open_materialized_projection_scope,
-    _project_materialized_fragment_body,
+    _project_materialized_fragment,
 )
 
 ORGANIZATION_ID = UUID("81e18bca-86a1-478a-937d-7675c6fe69b0")
@@ -45,7 +48,7 @@ def locator() -> MaterializedFragmentLocator:
 class RecordingProjectionPort:
     def __init__(self) -> None:
         self.locator_calls: list[CandidateRef] = []
-        self.body_calls: list[MaterializedFragmentLocator] = []
+        self.projection_calls: list[MaterializedFragmentLocator] = []
 
     def locate(
         self,
@@ -54,12 +57,22 @@ class RecordingProjectionPort:
         self.locator_calls.append(selected_candidate)
         return locator()
 
-    def project_body(
+    def project(
         self,
         selected_locator: MaterializedFragmentLocator,
-    ) -> str | None:
-        self.body_calls.append(selected_locator)
-        return "authorized synthetic body"
+    ) -> MaterializedFragmentProjection | None:
+        self.projection_calls.append(selected_locator)
+        return MaterializedFragmentProjection(
+            kind=MaterializedProjectionKind.LEGACY_BODY,
+            fields=(
+                MaterializedFieldValue(
+                    field_ref="body",
+                    field_value="authorized synthetic body",
+                    ordinal=0,
+                ),
+            ),
+            projection_ceiling=frozenset({"body"}),
+        )
 
 
 def test_projection_session_is_nominal_lifetime_bound_and_nonserializable() -> None:
@@ -107,14 +120,40 @@ def test_locator_is_content_free_and_body_projection_is_a_separate_operation(
         forbidden not in MaterializedFragmentLocator.__dataclass_fields__
         for forbidden in ("body", "content", "text", "snippet", "title", "path")
     )
-    assert port.body_calls == []
+    assert port.projection_calls == []
 
-    body = _project_materialized_fragment_body(session, selected_locator)
+    projection = _project_materialized_fragment(session, selected_locator)
 
-    assert body == "authorized synthetic body"
+    assert projection is not None
+    assert projection.rendered_body == "authorized synthetic body"
+    assert projection.projected_field_refs == ("body",)
     assert port.locator_calls == [candidate()]
-    assert port.body_calls == [locator()]
+    assert port.projection_calls == [locator()]
     _close_materialized_projection_scope(scope)
+
+
+def test_materialized_projection_rejects_more_than_the_public_field_bound() -> None:
+    fields = tuple(
+        MaterializedFieldValue(
+            field_ref=f"field_{index}",
+            field_value=f"value {index}",
+            ordinal=index,
+        )
+        for index in range(MAX_PROJECTED_FIELD_REFS + 1)
+    )
+    maximum = MaterializedFragmentProjection(
+        kind=MaterializedProjectionKind.STRUCTURED_FIELDS,
+        fields=fields[:MAX_PROJECTED_FIELD_REFS],
+        projection_ceiling=frozenset(field.field_ref for field in fields),
+    )
+
+    assert len(maximum.projected_field_refs) == MAX_PROJECTED_FIELD_REFS
+    with pytest.raises(ValueError, match="at most 64"):
+        MaterializedFragmentProjection(
+            kind=MaterializedProjectionKind.STRUCTURED_FIELDS,
+            fields=fields,
+            projection_ceiling=frozenset(field.field_ref for field in fields),
+        )
 
 
 @pytest.mark.parametrize(
@@ -135,7 +174,7 @@ def test_projection_operations_require_exact_nominal_inputs(invalid: object) -> 
     with pytest.raises(TypeError):
         _locate_materialized_fragment(session, cast(CandidateRef, invalid))
     with pytest.raises(TypeError):
-        _project_materialized_fragment_body(
+        _project_materialized_fragment(
             session,
             cast(MaterializedFragmentLocator, invalid),
         )

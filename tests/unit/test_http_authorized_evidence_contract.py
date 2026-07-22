@@ -18,7 +18,12 @@ from engine.runtime.contracts import (
     CoverageStatus,
     Resolved,
 )
-from engine.runtime.evidence import Evidence, EvidenceLineage, PackageBlock
+from engine.runtime.evidence import (
+    MAX_PROJECTED_FIELD_REFS,
+    Evidence,
+    EvidenceLineage,
+    PackageBlock,
+)
 from engine.runtime.package_digest import verify_context_package_digest
 
 AS_OF = datetime(2026, 7, 21, 5, 0, tzinfo=UTC)
@@ -73,6 +78,7 @@ def authorized_outcome() -> Resolved:
         resource_ref="resource:authorized",
         revision_ref="revision:authorized",
         fragment_ref="fragment:authorized",
+        projected_field_refs=("body",),
         lineage=lineage,
     )
     package = ContextPackage(
@@ -123,7 +129,7 @@ def test_authorized_package_maps_to_the_exact_closed_public_shape() -> None:
             "expiresAt": "2026-07-21T05:05:00Z",
             "decisionRef": DECISION_REF,
             "packageDigest": (
-                "1e94624bcee1de8c0212efdfcb0f9b85e209d651d65bef821c57fd8bbd7e31c9"
+                "4905f3fb20b9d4cc1b78d75dbd1a92bf4fc59a8475a1cf27e9298e2bafc71750"
             ),
             "blocks": [
                 {
@@ -139,6 +145,7 @@ def test_authorized_package_maps_to_the_exact_closed_public_shape() -> None:
                     "resourceRef": "resource:authorized",
                     "revisionRef": "revision:authorized",
                     "fragmentRef": "fragment:authorized",
+                    "projectedFields": ["body"],
                     "runRef": "run-authorized-request",
                     "purpose": "context.answer",
                     "authorizationAsOf": "2026-07-21T05:00:00Z",
@@ -223,6 +230,32 @@ def test_evidence_wire_rejects_internal_authority_fields(forbidden: str) -> None
 
     with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
         EvidenceWire.model_validate(evidence_document)
+
+
+def test_evidence_wire_rejects_duplicate_projected_fields() -> None:
+    evidence_document = (
+        _resolved_to_wire(authorized_outcome())
+        .package.evidence[0]
+        .model_dump(mode="json", by_alias=True)
+    )
+    evidence_document["projectedFields"] = ["body", "body"]
+
+    with pytest.raises(ValidationError, match="projectedFields must be unique"):
+        EvidenceWire.model_validate(evidence_document)
+
+
+def test_evidence_wire_accepts_the_shared_maximum_projected_fields() -> None:
+    evidence_document = (
+        _resolved_to_wire(authorized_outcome())
+        .package.evidence[0]
+        .model_dump(mode="json", by_alias=True)
+    )
+    maximum_refs = [f"field_{index}" for index in range(MAX_PROJECTED_FIELD_REFS)]
+    evidence_document["projectedFields"] = maximum_refs
+
+    observed = EvidenceWire.model_validate(evidence_document)
+
+    assert observed.projectedFields == tuple(maximum_refs)
 
 
 def test_authorized_budget_usage_allows_tokens_but_no_external_consumption() -> None:

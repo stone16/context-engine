@@ -13,7 +13,7 @@ from uuid import UUID
 
 import rfc8785
 
-PACKAGE_DIGEST_PROFILE: Final = "context-package-canonical-json-v1"
+PACKAGE_DIGEST_PROFILE: Final = "context-package-canonical-json-v2"
 QUERY_DIGEST_PROFILE: Final = "context-query-json-hmac-sha256-v1"
 _QUERY_DIGEST_DOMAIN: Final = b"context-engine.query-digest.v1\x00"
 _MINIMUM_QUERY_KEY_BYTES: Final = 32

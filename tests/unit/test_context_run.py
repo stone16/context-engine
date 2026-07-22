@@ -245,6 +245,7 @@ def _authorized_package() -> ContextPackage:
         resource_ref="resource-authorized",
         revision_ref="revision-authorized",
         fragment_ref="fragment-authorized",
+        projected_field_refs=("body",),
         lineage=lineage,
     )
     body = "safe authorized text"

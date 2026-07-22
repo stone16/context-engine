@@ -1,5 +1,5 @@
 {
-  "manifestVersion": "7.0.0",
+  "manifestVersion": "8.0.0",
   "controlOperations": [
     {
       "name": "change_resource_access",
@@ -91,6 +91,11 @@
           "name": "uq_membership_organization_user",
           "kind": "unique",
           "columns": ["organization_id", "user_id"]
+        },
+        {
+          "name": "uq_membership_organization_id_version",
+          "kind": "unique",
+          "columns": ["organization_id", "membership_id", "membership_version"]
         }
       ],
       "foreignKeys": [
@@ -640,7 +645,7 @@
         },
         {
           "name": "ck_context_run_package_digest_profile",
-          "expression": "package_digest_profile = 'context-package-canonical-json-v1'"
+          "expression": "package_digest_profile IN ('context-package-canonical-json-v1', 'context-package-canonical-json-v2')"
         },
         {
           "name": "ck_context_run_package_digest_sha256",
@@ -1207,10 +1212,24 @@
           "expression": "ordinal >= 0"
         },
         {
-          "name": "ck_context_fragment_content_nonblank",
-          "expression": "translate(content, U&'\\0009\\000A\\000B\\000C\\000D\\001C\\001D\\001E\\001F\\0020\\0085\\00A0\\1680\\2000\\2001\\2002\\2003\\2004\\2005\\2006\\2007\\2008\\2009\\200A\\2028\\2029\\202F\\205F\\3000', '') <> ''"
+          "name": "ck_context_fragment_projection_kind",
+          "expression": "projection_kind IN ('body', 'fields')"
+        },
+        {
+          "name": "ck_context_fragment_projection_payload",
+          "expression": "(projection_kind = 'body' AND content IS NOT NULL AND translate(content, U&'\\0009\\000A\\000B\\000C\\000D\\001C\\001D\\001E\\001F\\0020\\0085\\00A0\\1680\\2000\\2001\\2002\\2003\\2004\\2005\\2006\\2007\\2008\\2009\\200A\\2028\\2029\\202F\\205F\\3000', '') <> '') OR (projection_kind = 'fields' AND content IS NULL)"
         }
       ],
+      "projectionModes": {
+        "body": {
+          "content": "required_nonblank",
+          "runtimeRightFieldRef": "body"
+        },
+        "fields": {
+          "content": "must_be_null",
+          "valuesTable": "context_fragment_field"
+        }
+      },
       "rowLevelSecurity": {
         "enabled": true,
         "forced": true,
@@ -1219,7 +1238,7 @@
             "name": "context_fragment_current_user_actor",
             "command": "SELECT",
             "roles": ["context_engine_runtime"],
-            "using": "context_fragment.organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid AND EXISTS (SELECT 1 FROM public.membership AS actor_membership WHERE actor_membership.organization_id = context_fragment.organization_id AND actor_membership.organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid AND current_setting('app.actor_kind', true) = 'user' AND actor_membership.user_id = NULLIF(current_setting('app.user_id', true), '')::uuid AND NULLIF(current_setting('app.principal_ref', true), '') IS NOT NULL AND actor_membership.membership_id = NULLIF(current_setting('app.membership_id', true), '')::uuid AND actor_membership.membership_version = NULLIF(current_setting('app.membership_version', true), '')::bigint AND NULLIF(current_setting('app.request_id', true), '') IS NOT NULL AND NULLIF(current_setting('app.authentication_binding_ref', true), '') IS NOT NULL AND NULLIF(current_setting('app.checked_at', true), '') IS NOT NULL AND actor_membership.status = 'active' AND actor_membership.valid_from <= NULLIF(current_setting('app.checked_at', true), '')::timestamptz AND (actor_membership.valid_until IS NULL OR actor_membership.valid_until > NULLIF(current_setting('app.checked_at', true), '')::timestamptz)) AND EXISTS (SELECT 1 FROM public.context_resource AS active_resource WHERE active_resource.organization_id = context_fragment.organization_id AND active_resource.resource_ref = context_fragment.resource_ref AND active_resource.active_revision_id = context_fragment.revision_id AND active_resource.tombstoned IS FALSE)"
+            "using": "context_fragment.organization_id = NULLIF( current_setting('app.organization_id', true), '' )::uuid AND current_setting('app.actor_kind', true) = 'user' AND NULLIF(current_setting('app.principal_ref', true), '') IS NOT NULL AND NULLIF(current_setting('app.request_id', true), '') IS NOT NULL AND NULLIF( current_setting('app.authentication_binding_ref', true), '' ) IS NOT NULL AND NULLIF(current_setting('app.checked_at', true), '') IS NOT NULL AND EXISTS ( SELECT 1 FROM public.membership AS actor_membership WHERE actor_membership.organization_id = context_fragment.organization_id AND actor_membership.organization_id = NULLIF( current_setting('app.organization_id', true), '' )::uuid AND actor_membership.user_id = NULLIF( current_setting('app.user_id', true), '' )::uuid AND actor_membership.membership_id = NULLIF( current_setting('app.membership_id', true), '' )::uuid AND actor_membership.membership_version = NULLIF( current_setting('app.membership_version', true), '' )::bigint AND actor_membership.status = 'active' AND actor_membership.valid_from <= NULLIF( current_setting('app.checked_at', true), '' )::timestamptz AND ( actor_membership.valid_until IS NULL OR actor_membership.valid_until > NULLIF( current_setting('app.checked_at', true), '' )::timestamptz ) ) AND EXISTS ( SELECT 1 FROM public.context_resource AS active_resource WHERE active_resource.organization_id = context_fragment.organization_id AND active_resource.resource_ref = context_fragment.resource_ref AND active_resource.active_revision_id = context_fragment.revision_id AND active_resource.tombstoned IS FALSE ) AND EXISTS ( SELECT 1 FROM public.resource_access_policy AS current_access WHERE current_access.organization_id = context_fragment.organization_id AND current_access.resource_ref = context_fragment.resource_ref AND current_access.principal_ref = current_setting( 'app.principal_ref', true ) AND current_access.access_state = 'allowed' ) AND ( context_fragment.projection_kind = 'fields' OR ( context_fragment.projection_kind = 'body' AND EXISTS ( SELECT 1 FROM public.membership_resource_field_right AS field_right WHERE field_right.organization_id = context_fragment.organization_id AND field_right.membership_id = NULLIF( current_setting('app.membership_id', true), '' )::uuid AND field_right.membership_version = NULLIF( current_setting('app.membership_version', true), '' )::bigint AND field_right.resource_ref = context_fragment.resource_ref AND field_right.field_ref = 'body' ) ) )"
           },
           {
             "name": "context_fragment_migrator_administration",
@@ -1247,6 +1266,160 @@
         "RLS-FAIL-CLOSED-003"
       ],
       "negativeTestIds": ["DB-001", "DB-002", "DB-004", "DB-009", "DB-010"]
+    },
+    {
+      "name": "context_fragment_field",
+      "classification": "tenant_owned",
+      "purpose": "Immutable structured Fragment fields filtered by exact current Membership Resource rights before Runtime can read values",
+      "organizationColumn": "organization_id",
+      "organizationInclusiveKeys": [
+        {
+          "name": "pk_context_fragment_field",
+          "kind": "primary_key",
+          "columns": ["organization_id", "resource_ref", "revision_id", "fragment_ref", "field_ref"]
+        },
+        {
+          "name": "uq_context_fragment_field_parent_ordinal",
+          "kind": "unique",
+          "columns": ["organization_id", "resource_ref", "revision_id", "fragment_ref", "ordinal"]
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_context_fragment_field_parent_same_organization",
+          "columns": ["organization_id", "resource_ref", "revision_id", "fragment_ref"],
+          "references": {
+            "table": "context_fragment",
+            "columns": ["organization_id", "resource_ref", "revision_id", "fragment_ref"]
+          }
+        }
+      ],
+      "checkConstraints": [
+        {
+          "name": "ck_context_fragment_field_ordinal_bounded",
+          "expression": "ordinal BETWEEN 0 AND 63"
+        },
+        {
+          "name": "ck_context_fragment_field_ref",
+          "expression": "field_ref ~ '^[a-z][a-z0-9_]{0,63}$' AND field_ref <> 'body'"
+        },
+        {
+          "name": "ck_context_fragment_field_value_nonblank",
+          "expression": "translate(field_value, U&'\\0009\\000A\\000B\\000C\\000D\\001C\\001D\\001E\\001F\\0020\\0085\\00A0\\1680\\2000\\2001\\2002\\2003\\2004\\2005\\2006\\2007\\2008\\2009\\200A\\2028\\2029\\202F\\205F\\3000', '') <> ''"
+        }
+      ],
+      "parentProjectionGuard": {
+        "trigger": "context_fragment_field_fields_parent_guard",
+        "function": "context_fragment_field_require_fields_parent",
+        "requiredProjectionKind": "fields",
+        "sqlstate": "23514"
+      },
+      "rowLevelSecurity": {
+        "enabled": true,
+        "forced": true,
+        "policies": [
+          {
+            "name": "context_fragment_field_current_user_actor",
+            "command": "SELECT",
+            "roles": ["context_engine_runtime"],
+            "using": "context_fragment_field.organization_id = NULLIF( current_setting('app.organization_id', true), '' )::uuid AND current_setting('app.actor_kind', true) = 'user' AND NULLIF(current_setting('app.principal_ref', true), '') IS NOT NULL AND NULLIF(current_setting('app.request_id', true), '') IS NOT NULL AND NULLIF( current_setting('app.authentication_binding_ref', true), '' ) IS NOT NULL AND NULLIF(current_setting('app.checked_at', true), '') IS NOT NULL AND EXISTS ( SELECT 1 FROM public.membership AS actor_membership WHERE actor_membership.organization_id = context_fragment_field.organization_id AND actor_membership.organization_id = NULLIF( current_setting('app.organization_id', true), '' )::uuid AND actor_membership.user_id = NULLIF( current_setting('app.user_id', true), '' )::uuid AND actor_membership.membership_id = NULLIF( current_setting('app.membership_id', true), '' )::uuid AND actor_membership.membership_version = NULLIF( current_setting('app.membership_version', true), '' )::bigint AND actor_membership.status = 'active' AND actor_membership.valid_from <= NULLIF( current_setting('app.checked_at', true), '' )::timestamptz AND ( actor_membership.valid_until IS NULL OR actor_membership.valid_until > NULLIF( current_setting('app.checked_at', true), '' )::timestamptz ) ) AND EXISTS ( SELECT 1 FROM public.context_resource AS active_resource WHERE active_resource.organization_id = context_fragment_field.organization_id AND active_resource.resource_ref = context_fragment_field.resource_ref AND active_resource.active_revision_id = context_fragment_field.revision_id AND active_resource.tombstoned IS FALSE ) AND EXISTS ( SELECT 1 FROM public.membership_resource_field_right AS field_right WHERE field_right.organization_id = context_fragment_field.organization_id AND field_right.membership_id = NULLIF( current_setting('app.membership_id', true), '' )::uuid AND field_right.membership_version = NULLIF( current_setting('app.membership_version', true), '' )::bigint AND field_right.resource_ref = context_fragment_field.resource_ref AND field_right.field_ref = context_fragment_field.field_ref ) AND EXISTS ( SELECT 1 FROM public.resource_access_policy AS current_access WHERE current_access.organization_id = context_fragment_field.organization_id AND current_access.resource_ref = context_fragment_field.resource_ref AND current_access.principal_ref = current_setting( 'app.principal_ref', true ) AND current_access.access_state = 'allowed' )"
+          },
+          {
+            "name": "context_fragment_field_migrator_administration",
+            "command": "ALL",
+            "roles": ["context_engine_migrator"],
+            "using": "true",
+            "withCheck": "true"
+          }
+        ]
+      },
+      "immutableRows": {
+        "trigger": "context_fragment_field_reject_mutation",
+        "function": "context_content_reject_mutation",
+        "events": ["UPDATE", "DELETE"],
+        "sqlstate": "55000"
+      },
+      "permittedOperations": {
+        "context_engine_runtime": ["SELECT"],
+        "context_engine_worker": []
+      },
+      "partitions": [],
+      "securityInvariantIds": ["TENANT-OWNERSHIP-001", "TENANT-FK-002", "RLS-FAIL-CLOSED-003", "SCOPE-INTERSECTION-004", "INDEX-NOT-AUTHORITY-005"],
+      "negativeTestIds": ["DB-001", "DB-002", "DB-004", "DB-009", "DB-010", "PG-SCOPE-INTERSECTION-004", "PG-INDEX-NOT-AUTHORITY-005"]
+    },
+    {
+      "name": "membership_resource_field_right",
+      "classification": "tenant_owned",
+      "purpose": "Closed allowlist binding one exact Membership version to readable fields of one same-Organization Resource; absence denies",
+      "organizationColumn": "organization_id",
+      "organizationInclusiveKeys": [
+        {
+          "name": "pk_membership_resource_field_right",
+          "kind": "primary_key",
+          "columns": ["organization_id", "membership_id", "membership_version", "resource_ref", "field_ref"]
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_membership_field_right_membership_version",
+          "columns": ["organization_id", "membership_id", "membership_version"],
+          "references": {
+            "table": "membership",
+            "columns": ["organization_id", "membership_id", "membership_version"]
+          }
+        },
+        {
+          "name": "fk_membership_field_right_resource_same_organization",
+          "columns": ["organization_id", "resource_ref"],
+          "references": {
+            "table": "context_resource",
+            "columns": ["organization_id", "resource_ref"]
+          }
+        }
+      ],
+      "checkConstraints": [
+        {
+          "name": "ck_membership_resource_field_right_version_positive",
+          "expression": "membership_version > 0"
+        },
+        {
+          "name": "ck_membership_resource_field_right_field_ref",
+          "expression": "field_ref ~ '^[a-z][a-z0-9_]{0,63}$'"
+        }
+      ],
+      "mutationLinearization": {
+        "trigger": "membership_resource_field_right_mutation_lock",
+        "function": "membership_resource_field_right_lock_mutation",
+        "scope": "organization_transaction_advisory_lock",
+        "runtimeLockMode": "shared",
+        "mutationLockMode": "exclusive"
+      },
+      "rowLevelSecurity": {
+        "enabled": true,
+        "forced": true,
+        "policies": [
+          {
+            "name": "membership_resource_field_right_current_user_actor",
+            "command": "SELECT",
+            "roles": ["context_engine_runtime"],
+            "using": "membership_resource_field_right.organization_id = NULLIF( current_setting('app.organization_id', true), '' )::uuid AND current_setting('app.actor_kind', true) = 'user' AND NULLIF(current_setting('app.principal_ref', true), '') IS NOT NULL AND NULLIF(current_setting('app.request_id', true), '') IS NOT NULL AND NULLIF( current_setting('app.authentication_binding_ref', true), '' ) IS NOT NULL AND NULLIF(current_setting('app.checked_at', true), '') IS NOT NULL AND EXISTS ( SELECT 1 FROM public.membership AS actor_membership WHERE actor_membership.organization_id = membership_resource_field_right.organization_id AND actor_membership.organization_id = NULLIF( current_setting('app.organization_id', true), '' )::uuid AND actor_membership.user_id = NULLIF( current_setting('app.user_id', true), '' )::uuid AND actor_membership.membership_id = NULLIF( current_setting('app.membership_id', true), '' )::uuid AND actor_membership.membership_version = NULLIF( current_setting('app.membership_version', true), '' )::bigint AND actor_membership.status = 'active' AND actor_membership.valid_from <= NULLIF( current_setting('app.checked_at', true), '' )::timestamptz AND ( actor_membership.valid_until IS NULL OR actor_membership.valid_until > NULLIF( current_setting('app.checked_at', true), '' )::timestamptz ) ) AND membership_resource_field_right.membership_id = NULLIF( current_setting('app.membership_id', true), '' )::uuid AND membership_resource_field_right.membership_version = NULLIF( current_setting('app.membership_version', true), '' )::bigint AND EXISTS ( SELECT 1 FROM public.context_resource AS live_resource WHERE live_resource.organization_id = membership_resource_field_right.organization_id AND live_resource.resource_ref = membership_resource_field_right.resource_ref AND live_resource.tombstoned IS FALSE ) AND EXISTS ( SELECT 1 FROM public.resource_access_policy AS current_access WHERE current_access.organization_id = membership_resource_field_right.organization_id AND current_access.resource_ref = membership_resource_field_right.resource_ref AND current_access.principal_ref = current_setting( 'app.principal_ref', true ) AND current_access.access_state = 'allowed' )"
+          },
+          {
+            "name": "membership_resource_field_right_migrator_administration",
+            "command": "ALL",
+            "roles": ["context_engine_migrator"],
+            "using": "true",
+            "withCheck": "true"
+          }
+        ]
+      },
+      "permittedOperations": {
+        "context_engine_runtime": ["SELECT"],
+        "context_engine_worker": []
+      },
+      "partitions": [],
+      "securityInvariantIds": ["TENANT-OWNERSHIP-001", "TENANT-FK-002", "RLS-FAIL-CLOSED-003", "SCOPE-INTERSECTION-004", "INDEX-NOT-AUTHORITY-005"],
+      "negativeTestIds": ["DB-001", "DB-002", "DB-004", "DB-009", "DB-010", "PG-SCOPE-INTERSECTION-004", "PG-INDEX-NOT-AUTHORITY-005"]
     }
   ]
 }

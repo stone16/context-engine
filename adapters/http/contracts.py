@@ -12,6 +12,10 @@ from engine.runtime.contracts import (
     MAX_OPAQUE_CAPABILITY_LENGTH,
     ORGANIZATION_PACKAGE_REF_PATTERN,
 )
+from engine.runtime.evidence import (
+    MAX_PROJECTED_FIELD_REFS,
+    validate_projected_field_refs,
+)
 from engine.runtime.package_digest import verify_context_package_digest
 
 PositiveExactInteger = Annotated[int, Field(strict=True, gt=0)]
@@ -44,6 +48,10 @@ DecisionOutputRef = Annotated[
 OpaqueOutputRef = Annotated[
     str,
     Field(strict=True, min_length=1, max_length=256, pattern=r"^\S+$"),
+]
+ProjectedFieldOutputRef = Annotated[
+    str,
+    Field(strict=True, pattern=r"^[a-z][a-z0-9_]{0,63}$"),
 ]
 EvidenceOutputRef = Annotated[
     str,
@@ -198,6 +206,10 @@ class EvidenceWire(ClosedWireModel):
     resourceRef: OpaqueOutputRef
     revisionRef: OpaqueOutputRef
     fragmentRef: OpaqueOutputRef
+    projectedFields: Annotated[
+        tuple[ProjectedFieldOutputRef, ...],
+        Field(min_length=1, max_length=MAX_PROJECTED_FIELD_REFS),
+    ]
     runRef: OpaqueOutputRef
     purpose: NonblankPurpose
     authorizationAsOf: datetime
@@ -205,6 +217,17 @@ class EvidenceWire(ClosedWireModel):
     policySnapshotRef: OpaqueOutputRef
     policyEpoch: PositivePolicyEpoch
     sourceDecisionRef: OpaqueOutputRef
+
+    @model_validator(mode="after")
+    def require_unique_projected_fields(self) -> Self:
+        try:
+            validate_projected_field_refs(self.projectedFields)
+        except ValueError as error:
+            raise ValueError(
+                "projectedFields must be unique, valid, and contain at most "
+                f"{MAX_PROJECTED_FIELD_REFS} items"
+            ) from error
+        return self
 
 
 class CoverageWire(ClosedWireModel):

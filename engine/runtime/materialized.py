@@ -1,22 +1,137 @@
 """Lifetime-bound same-transaction materialized Fragment projection seam."""
 
 from dataclasses import dataclass, field
-from typing import NoReturn, Protocol
+from enum import StrEnum
+from typing import Final, NoReturn, Protocol
 from uuid import UUID
 
-from engine.runtime.evidence import CandidateRef
+from engine.runtime.evidence import (
+    MAX_PROJECTED_FIELD_REFS,
+    CandidateRef,
+    validate_projected_field_refs,
+)
 
 __all__ = [
+    "MaterializedFieldValue",
     "MaterializedFragmentLocator",
+    "MaterializedFragmentProjection",
+    "MaterializedProjectionKind",
     "MaterializedProjectionPort",
     "MaterializedProjectionSession",
 ]
+
+MAX_FIELD_REF_LENGTH: Final = 64
 
 
 def _require_nonblank_ref(field_name: str, value: object) -> str:
     if type(value) is not str or not value or value.isspace():
         raise ValueError(f"{field_name} must be a nonblank exact string")
     return value
+
+
+def _require_field_ref(value: object) -> str:
+    if (
+        type(value) is not str
+        or not value
+        or len(value) > MAX_FIELD_REF_LENGTH
+        or value[0] not in "abcdefghijklmnopqrstuvwxyz"
+        or any(
+            character not in "abcdefghijklmnopqrstuvwxyz0123456789_"
+            for character in value
+        )
+    ):
+        raise ValueError(
+            "materialized field_ref must be a bounded lowercase identifier"
+        )
+    return value
+
+
+class MaterializedProjectionKind(StrEnum):
+    """Closed persisted Fragment representations understood by Runtime."""
+
+    LEGACY_BODY = "body"
+    STRUCTURED_FIELDS = "fields"
+
+
+@dataclass(frozen=True, slots=True)
+class MaterializedFieldValue:
+    """One already-authorized field returned by the retained transaction."""
+
+    field_ref: str = field(repr=False)
+    field_value: str = field(repr=False)
+    ordinal: int
+
+    def __post_init__(self) -> None:
+        _require_field_ref(self.field_ref)
+        if (
+            type(self.field_value) is not str
+            or not self.field_value
+            or self.field_value.isspace()
+        ):
+            raise ValueError("materialized field_value must be a nonblank string")
+        if type(self.ordinal) is not int or self.ordinal < 0:
+            raise ValueError("materialized field ordinal must be nonnegative")
+
+
+@dataclass(frozen=True, slots=True)
+class MaterializedFragmentProjection:
+    """Fields already reduced by one trusted Membership projection ceiling."""
+
+    kind: MaterializedProjectionKind
+    fields: tuple[MaterializedFieldValue, ...] = field(repr=False)
+    projection_ceiling: frozenset[str] = field(repr=False)
+
+    def __post_init__(self) -> None:
+        if type(self.kind) is not MaterializedProjectionKind:
+            raise TypeError("materialized projection kind must be closed")
+        if type(self.fields) is not tuple or not self.fields or any(
+            type(value) is not MaterializedFieldValue for value in self.fields
+        ):
+            raise ValueError("materialized projection requires authorized fields")
+        if (
+            type(self.projection_ceiling) is not frozenset
+            or not self.projection_ceiling
+        ):
+            raise ValueError("materialized projection ceiling must be nonempty")
+        for field_ref in self.projection_ceiling:
+            _require_field_ref(field_ref)
+        field_refs = tuple(value.field_ref for value in self.fields)
+        try:
+            validate_projected_field_refs(field_refs)
+        except ValueError as error:
+            raise ValueError(
+                "materialized projected field refs must be unique, valid, and "
+                f"contain at most {MAX_PROJECTED_FIELD_REFS} items"
+            ) from error
+        if tuple(value.ordinal for value in self.fields) != tuple(
+            range(len(self.fields))
+        ):
+            raise ValueError("materialized fields require canonical ordinal order")
+        if not set(field_refs).issubset(self.projection_ceiling):
+            raise ValueError(
+                "materialized projection returned a field outside its trusted ceiling"
+            )
+        if self.kind is MaterializedProjectionKind.LEGACY_BODY and field_refs != (
+            "body",
+        ):
+            raise ValueError("legacy body projection requires only the body field")
+        if (
+            self.kind is MaterializedProjectionKind.STRUCTURED_FIELDS
+            and "body" in field_refs
+        ):
+            raise ValueError("structured projection cannot contain the legacy body")
+
+    @property
+    def projected_field_refs(self) -> tuple[str, ...]:
+        return tuple(value.field_ref for value in self.fields)
+
+    @property
+    def rendered_body(self) -> str:
+        if self.kind is MaterializedProjectionKind.LEGACY_BODY:
+            return self.fields[0].field_value
+        return "\n".join(
+            f"{value.field_ref}={value.field_value}" for value in self.fields
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,10 +167,10 @@ class MaterializedProjectionPort(Protocol):
         candidate_ref: CandidateRef,
     ) -> MaterializedFragmentLocator | None: ...
 
-    def project_body(
+    def project(
         self,
         locator: MaterializedFragmentLocator,
-    ) -> str | None: ...
+    ) -> MaterializedFragmentProjection | None: ...
 
 
 class _MaterializedProjectionScope:
@@ -143,7 +258,7 @@ def _construct_materialized_projection_session(
             "scope"
         )
     if not callable(getattr(port, "locate", None)) or not callable(
-        getattr(port, "project_body", None)
+        getattr(port, "project", None)
     ):
         raise TypeError("materialized projection port is incomplete")
     session = object.__new__(MaterializedProjectionSession)
@@ -165,16 +280,17 @@ def _locate_materialized_fragment(
     return locator
 
 
-def _project_materialized_fragment_body(
+def _project_materialized_fragment(
     session: MaterializedProjectionSession,
     locator: MaterializedFragmentLocator,
-) -> str | None:
+) -> MaterializedFragmentProjection | None:
     _require_active_materialized_projection_session(session)
     if type(locator) is not MaterializedFragmentLocator:
-        raise TypeError("materialized body projection requires exact locator")
-    body = session._port.project_body(locator)
-    if body is None:
+        raise TypeError("materialized field projection requires exact locator")
+    projection = session._port.project(locator)
+    if projection is None:
         return None
-    if type(body) is not str or not body or body.isspace():
-        raise ValueError("materialized body projection must be a nonblank string")
-    return body
+    if type(projection) is not MaterializedFragmentProjection:
+        raise TypeError("materialized projection port returned the wrong nominal type")
+    projection.__post_init__()
+    return projection

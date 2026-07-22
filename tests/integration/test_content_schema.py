@@ -15,11 +15,6 @@ from engine.persistence.configuration import MIGRATOR_ROLE, RUNTIME_ROLE, WORKER
 
 pytestmark = pytest.mark.integration
 CHECKED_AT = datetime(2026, 7, 21, 9, 0, tzinfo=UTC)
-PYTHON_ISSPACE_CHARACTERS = (
-    "\u0009\u000a\u000b\u000c\u000d\u001c\u001d\u001e\u001f\u0020"
-    "\u0085\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006"
-    "\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000"
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -207,6 +202,51 @@ def content_fixture(
                 ),
                 asdict(fixture),
             )
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO resource_access_policy (
+                        organization_id, resource_ref, principal_ref,
+                        access_version, access_state, revoked_at
+                    ) VALUES
+                    (
+                        :organization_a, :active_resource_ref,
+                        'principal:' || CAST(:user_a AS text),
+                        1, 'allowed', NULL
+                    ),
+                    (
+                        :organization_a, :tombstoned_resource_ref,
+                        'principal:' || CAST(:user_a AS text),
+                        1, 'allowed', NULL
+                    ),
+                    (
+                        :organization_b, :hostile_resource_ref,
+                        'principal:' || CAST(:user_a AS text),
+                        1, 'allowed', NULL
+                    )
+                    """
+                ),
+                asdict(fixture),
+            )
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO membership_resource_field_right (
+                        organization_id, membership_id, membership_version,
+                        resource_ref, field_ref
+                    ) VALUES
+                    (
+                        :organization_a, :membership_a, 1,
+                        :active_resource_ref, 'body'
+                    ),
+                    (
+                        :organization_a, :membership_a, 1,
+                        :tombstoned_resource_ref, 'body'
+                    )
+                    """
+                ),
+                asdict(fixture),
+            )
         yield fixture
     finally:
         with engine.begin() as connection:
@@ -224,6 +264,22 @@ def content_fixture(
             )
         try:
             with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "DELETE FROM membership_resource_field_right "
+                        "WHERE organization_id IN "
+                        "(:organization_a, :organization_b)"
+                    ),
+                    asdict(fixture),
+                )
+                connection.execute(
+                    text(
+                        "DELETE FROM resource_access_policy "
+                        "WHERE organization_id IN "
+                        "(:organization_a, :organization_b)"
+                    ),
+                    asdict(fixture),
+                )
                 connection.execute(
                     text(
                         "DELETE FROM context_fragment "
@@ -498,7 +554,7 @@ def test_context_fragment_rejects_blank_content(
             )
         assert (
             getattr(getattr(error.value.orig, "diag", None), "constraint_name", None)
-            == "ck_context_fragment_content_nonblank"
+            == "ck_context_fragment_projection_payload"
         )
     finally:
         engine.dispose()
@@ -712,6 +768,7 @@ def test_content_tables_have_force_rls_and_least_privilege_grants(
                 "revision_id",
                 "fragment_ref",
                 "ordinal",
+                "projection_kind",
                 "content",
             },
         }
@@ -727,15 +784,13 @@ def test_content_tables_have_force_rls_and_least_privilege_grants(
             "fk_context_fragment_organization",
             "fk_context_fragment_revision_same_organization",
             "ck_context_fragment_ordinal_nonnegative",
-            "ck_context_fragment_content_nonblank",
+            "ck_context_fragment_projection_kind",
+            "ck_context_fragment_projection_payload",
         } <= constraints.keys()
-        content_constraint = constraints[
-            "ck_context_fragment_content_nonblank"
-        ]
-        assert content_constraint == (
-            "CHECK (translate(content, "
-            f"'{PYTHON_ISSPACE_CHARACTERS}'::text, ''::text) <> ''::text)"
-        )
+        content_constraint = constraints["ck_context_fragment_projection_payload"]
+        assert "projection_kind = 'body'::text" in content_constraint
+        assert "projection_kind = 'fields'::text" in content_constraint
+        assert "content IS NULL" in content_constraint
         assert (
             "deferrable initially deferred"
             in constraints[
@@ -799,6 +854,11 @@ def test_content_tables_have_force_rls_and_least_privilege_grants(
             assert "tombstoned" in normalized_policy
             if table_name != "context_resource":
                 assert "active_revision_id" in normalized_policy
+            if table_name == "context_fragment":
+                assert "membership_resource_field_right" in normalized_policy
+                assert "field_right.field_ref = 'body'" in normalized_policy
+                assert "resource_access_policy" in normalized_policy
+                assert "current_access.access_state = 'allowed'" in normalized_policy
             migrator_policy = policies[
                 (table_name, f"{table_name}_migrator_administration")
             ]

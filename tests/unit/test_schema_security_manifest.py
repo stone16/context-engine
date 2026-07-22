@@ -23,22 +23,24 @@ def table_entries(document: dict[str, Any]) -> dict[str, dict[str, Any]]:
     }
 
 
-def test_manifest_classifies_the_exact_issue_19_decision_lineage_schema() -> None:
+def test_manifest_classifies_the_exact_issue_48_field_projection_schema() -> None:
     """PROP-TENANT-OWNERSHIP-001: no current table is left unclassified."""
 
     document = manifest()
     tables = table_entries(document)
 
-    assert document["manifestVersion"] == "7.0.0"
+    assert document["manifestVersion"] == "8.0.0"
     assert set(tables) == {
         "alembic_version",
         "context_fragment",
+        "context_fragment_field",
         "context_resource",
         "context_revision",
         "context_run",
         "context_run_operator_read_ticket",
         "decision_audit",
         "membership",
+        "membership_resource_field_right",
         "organization",
         "organization_policy_epoch",
         "organization_record",
@@ -57,6 +59,10 @@ def test_manifest_classifies_the_exact_issue_19_decision_lineage_schema() -> Non
     assert tables["context_resource"]["classification"] == "tenant_owned"
     assert tables["context_revision"]["classification"] == "tenant_owned"
     assert tables["context_fragment"]["classification"] == "tenant_owned"
+    assert tables["context_fragment_field"]["classification"] == "tenant_owned"
+    assert tables["membership_resource_field_right"]["classification"] == (
+        "tenant_owned"
+    )
     assert tables["context_run"]["classification"] == "tenant_owned"
     assert tables["context_run_operator_read_ticket"]["classification"] == (
         "tenant_owned"
@@ -139,6 +145,7 @@ def test_issue_19_lineage_manifest_is_closed_and_role_separated() -> None:
     for literal in (
         "context-query-json-hmac-sha256-v1",
         "context-package-canonical-json-v1",
+        "context-package-canonical-json-v2",
         "digest_only",
         "delivered_authorized",
         "delivered_empty",
@@ -540,6 +547,15 @@ def test_membership_manifest_requires_exact_user_actor_and_read_only_runtime() -
             "kind": "unique",
             "columns": ["organization_id", "user_id"],
         },
+        {
+            "name": "uq_membership_organization_id_version",
+            "kind": "unique",
+            "columns": [
+                "organization_id",
+                "membership_id",
+                "membership_version",
+            ],
+        },
     ]
     assert entry["permittedOperations"] == {
         "context_engine_runtime": ["SELECT"],
@@ -656,6 +672,8 @@ def test_content_manifest_preserves_lineage_visibility_and_immutability() -> Non
     resource = entries["context_resource"]
     revision = entries["context_revision"]
     fragment = entries["context_fragment"]
+    field = entries["context_fragment_field"]
+    right = entries["membership_resource_field_right"]
 
     assert resource["organizationInclusiveKeys"] == [
         {
@@ -742,16 +760,31 @@ def test_content_manifest_preserves_lineage_visibility_and_immutability() -> Non
             "expression": "ordinal >= 0",
         },
         {
-            "name": "ck_context_fragment_content_nonblank",
+            "name": "ck_context_fragment_projection_kind",
+            "expression": "projection_kind IN ('body', 'fields')",
+        },
+        {
+            "name": "ck_context_fragment_projection_payload",
             "expression": (
-                "translate(content, "
-                "U&'\\0009\\000A\\000B\\000C\\000D\\001C\\001D\\001E\\001F"
-                "\\0020\\0085\\00A0\\1680\\2000\\2001\\2002\\2003\\2004"
-                "\\2005\\2006\\2007\\2008\\2009\\200A\\2028\\2029\\202F"
-                "\\205F\\3000', '') <> ''"
+                "(projection_kind = 'body' AND content IS NOT NULL AND "
+                "translate(content, U&'\\0009\\000A\\000B\\000C\\000D\\001C"
+                "\\001D\\001E\\001F\\0020\\0085\\00A0\\1680\\2000\\2001"
+                "\\2002\\2003\\2004\\2005\\2006\\2007\\2008\\2009\\200A"
+                "\\2028\\2029\\202F\\205F\\3000', '') <> '') OR "
+                "(projection_kind = 'fields' AND content IS NULL)"
             ),
         },
     ]
+    assert fragment["projectionModes"] == {
+        "body": {
+            "content": "required_nonblank",
+            "runtimeRightFieldRef": "body",
+        },
+        "fields": {
+            "content": "must_be_null",
+            "valuesTable": "context_fragment_field",
+        },
+    }
 
     for entry in (resource, revision, fragment):
         assert entry["organizationColumn"] == "organization_id"
@@ -798,6 +831,186 @@ def test_content_manifest_preserves_lineage_visibility_and_immutability() -> Non
             "events": ["UPDATE", "DELETE"],
             "sqlstate": "55000",
         }
+
+    fragment_policy = next(
+        policy["using"]
+        for policy in fragment["rowLevelSecurity"]["policies"]
+        if policy["roles"] == ["context_engine_runtime"]
+    )
+    assert "projection_kind = 'fields'" in fragment_policy
+    assert "membership_resource_field_right" in fragment_policy
+    assert "field_right.field_ref = 'body'" in fragment_policy
+    assert "resource_access_policy" in fragment_policy
+    assert "current_access.access_state = 'allowed'" in fragment_policy
+
+    assert field["organizationInclusiveKeys"] == [
+        {
+            "name": "pk_context_fragment_field",
+            "kind": "primary_key",
+            "columns": [
+                "organization_id",
+                "resource_ref",
+                "revision_id",
+                "fragment_ref",
+                "field_ref",
+            ],
+        },
+        {
+            "name": "uq_context_fragment_field_parent_ordinal",
+            "kind": "unique",
+            "columns": [
+                "organization_id",
+                "resource_ref",
+                "revision_id",
+                "fragment_ref",
+                "ordinal",
+            ],
+        },
+    ]
+    assert field["foreignKeys"] == [
+        {
+            "name": "fk_context_fragment_field_parent_same_organization",
+            "columns": [
+                "organization_id",
+                "resource_ref",
+                "revision_id",
+                "fragment_ref",
+            ],
+            "references": {
+                "table": "context_fragment",
+                "columns": [
+                    "organization_id",
+                    "resource_ref",
+                    "revision_id",
+                    "fragment_ref",
+                ],
+            },
+        }
+    ]
+    assert field["checkConstraints"] == [
+        {
+            "name": "ck_context_fragment_field_ordinal_bounded",
+            "expression": "ordinal BETWEEN 0 AND 63",
+        },
+        {
+            "name": "ck_context_fragment_field_ref",
+            "expression": (
+                "field_ref ~ '^[a-z][a-z0-9_]{0,63}$' "
+                "AND field_ref <> 'body'"
+            ),
+        },
+        {
+            "name": "ck_context_fragment_field_value_nonblank",
+            "expression": (
+                "translate(field_value, "
+                "U&'\\0009\\000A\\000B\\000C\\000D\\001C\\001D\\001E\\001F"
+                "\\0020\\0085\\00A0\\1680\\2000\\2001\\2002\\2003\\2004"
+                "\\2005\\2006\\2007\\2008\\2009\\200A\\2028\\2029\\202F"
+                "\\205F\\3000', '') <> ''"
+            ),
+        },
+    ]
+    assert field["parentProjectionGuard"] == {
+        "trigger": "context_fragment_field_fields_parent_guard",
+        "function": "context_fragment_field_require_fields_parent",
+        "requiredProjectionKind": "fields",
+        "sqlstate": "23514",
+    }
+    assert field["immutableRows"] == {
+        "trigger": "context_fragment_field_reject_mutation",
+        "function": "context_content_reject_mutation",
+        "events": ["UPDATE", "DELETE"],
+        "sqlstate": "55000",
+    }
+
+    assert right["organizationInclusiveKeys"] == [
+        {
+            "name": "pk_membership_resource_field_right",
+            "kind": "primary_key",
+            "columns": [
+                "organization_id",
+                "membership_id",
+                "membership_version",
+                "resource_ref",
+                "field_ref",
+            ],
+        }
+    ]
+    right_foreign_keys = {
+        foreign_key["name"]: foreign_key for foreign_key in right["foreignKeys"]
+    }
+    assert right_foreign_keys["fk_membership_field_right_membership_version"][
+        "columns"
+    ] == [
+        "organization_id",
+        "membership_id",
+        "membership_version",
+    ]
+    assert right_foreign_keys["fk_membership_field_right_resource_same_organization"][
+        "columns"
+    ] == ["organization_id", "resource_ref"]
+    assert right["mutationLinearization"] == {
+        "trigger": "membership_resource_field_right_mutation_lock",
+        "function": "membership_resource_field_right_lock_mutation",
+        "scope": "organization_transaction_advisory_lock",
+        "runtimeLockMode": "shared",
+        "mutationLockMode": "exclusive",
+    }
+
+    for entry in (field, right):
+        assert entry["organizationColumn"] == "organization_id"
+        assert entry["permittedOperations"] == {
+            "context_engine_runtime": ["SELECT"],
+            "context_engine_worker": [],
+        }
+        rls = entry["rowLevelSecurity"]
+        assert rls["enabled"] is True
+        assert rls["forced"] is True
+        runtime_policy = next(
+            policy
+            for policy in rls["policies"]
+            if policy["roles"] == ["context_engine_runtime"]
+        )
+        for required_setting in (
+            "app.organization_id",
+            "app.user_id",
+            "app.membership_id",
+            "app.membership_version",
+            "app.checked_at",
+        ):
+            assert required_setting in runtime_policy["using"]
+        migrator_policy = next(
+            policy
+            for policy in rls["policies"]
+            if policy["roles"] == ["context_engine_migrator"]
+        )
+        assert migrator_policy == {
+            "name": f"{entry['name']}_migrator_administration",
+            "command": "ALL",
+            "roles": ["context_engine_migrator"],
+            "using": "true",
+            "withCheck": "true",
+        }
+
+    field_policy = next(
+        policy["using"]
+        for policy in field["rowLevelSecurity"]["policies"]
+        if policy["roles"] == ["context_engine_runtime"]
+    )
+    assert "membership_resource_field_right" in field_policy
+    assert "field_right.field_ref = context_fragment_field.field_ref" in field_policy
+    assert "resource_access_policy" in field_policy
+    assert "current_access.principal_ref = current_setting" in field_policy
+    assert "current_access.access_state = 'allowed'" in field_policy
+    right_policy = next(
+        policy["using"]
+        for policy in right["rowLevelSecurity"]["policies"]
+        if policy["roles"] == ["context_engine_runtime"]
+    )
+    assert "context_resource" in right_policy
+    assert "tombstoned IS FALSE" in right_policy
+    assert "resource_access_policy" in right_policy
+    assert "current_access.access_state = 'allowed'" in right_policy
 
 
 def test_policy_epoch_manifest_seals_runtime_reads_and_control_mutation() -> None:
