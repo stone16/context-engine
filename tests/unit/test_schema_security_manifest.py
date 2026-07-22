@@ -26,13 +26,13 @@ def table_entries(document: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 
 @pytest.mark.security_evidence(id="PROP-TENANT-OWNERSHIP-001", layer="property")
-def test_manifest_classifies_the_exact_issue_49_release_schema() -> None:
+def test_manifest_classifies_the_exact_current_release_schema() -> None:
     """PROP-TENANT-OWNERSHIP-001: no current table is left unclassified."""
 
     document = manifest()
     tables = table_entries(document)
 
-    assert document["manifestVersion"] == "9.0.0"
+    assert document["manifestVersion"] == "10.0.0"
     assert set(tables) == {
         "active_release_manifest",
         "alembic_version",
@@ -42,6 +42,7 @@ def test_manifest_classifies_the_exact_issue_49_release_schema() -> None:
         "context_revision",
         "context_run",
         "context_run_operator_read_ticket",
+        "context_source",
         "decision_audit",
         "membership",
         "membership_resource_field_right",
@@ -55,6 +56,7 @@ def test_manifest_classifies_the_exact_issue_49_release_schema() -> None:
         "release_promotion_audit",
         "resource_access_policy",
         "service_principal",
+        "source_version",
         "user_account",
         "worker_noop_job",
     }
@@ -79,6 +81,8 @@ def test_manifest_classifies_the_exact_issue_49_release_schema() -> None:
     assert tables["decision_audit"]["classification"] == "tenant_owned"
     assert tables["service_principal"]["classification"] == "tenant_owned"
     assert tables["worker_noop_job"]["classification"] == "tenant_owned"
+    assert tables["context_source"]["classification"] == "tenant_owned"
+    assert tables["source_version"]["classification"] == "tenant_owned"
     for release_table in (
         "active_release_manifest",
         "release_candidate",
@@ -88,6 +92,107 @@ def test_manifest_classifies_the_exact_issue_49_release_schema() -> None:
         "release_promotion_audit",
     ):
         assert tables[release_table]["classification"] == "tenant_owned"
+
+
+def test_issue_21_file_source_manifest_is_closed_and_role_separated() -> None:
+    entries = table_entries(manifest())
+    source = entries["context_source"]
+    version = entries["source_version"]
+
+    assert source["organizationInclusiveKeys"] == [
+        {
+            "name": "pk_context_source",
+            "kind": "primary_key",
+            "columns": ["organization_id", "source_id"],
+        },
+        {
+            "name": "uq_context_source_registration_idempotency",
+            "kind": "unique",
+            "columns": [
+                "organization_id",
+                "registration_operation",
+                "idempotency_key",
+            ],
+        },
+    ]
+    source_foreign_keys = {
+        foreign_key["name"]: foreign_key for foreign_key in source["foreignKeys"]
+    }
+    assert source_foreign_keys[
+        "fk_context_source_active_version_same_organization"
+    ]["columns"] == ["organization_id", "source_id", "active_version_id"]
+    assert version["organizationInclusiveKeys"] == [
+        {
+            "name": "pk_source_version",
+            "kind": "primary_key",
+            "columns": ["organization_id", "source_id", "version_id"],
+        }
+    ]
+    version_foreign_key = version["foreignKeys"][0]
+    assert version_foreign_key["name"] == (
+        "fk_source_version_source_same_organization"
+    )
+    assert "onDelete" not in version_foreign_key
+    assert version["immutableRows"] == {
+        "trigger": "source_version_immutable",
+        "function": "source_version_reject_mutation",
+        "events": ["UPDATE", "DELETE"],
+        "sqlstate": "55000",
+    }
+    capability_constraint = next(
+        constraint
+        for constraint in version["checkConstraints"]
+        if constraint["name"] == "ck_source_version_issue_21_capabilities"
+    )
+    assert "materialized" in capability_constraint["expression"]
+    assert "markdown" in capability_constraint["expression"]
+    assert "mirrored" in capability_constraint["expression"]
+    assert '"resourceKinds": ["markdown_document"]' in (
+        capability_constraint["expression"]
+    )
+    assert '"projectionFields": []' in capability_constraint["expression"]
+    for dimension in (
+        "batchLimits",
+        "checkpointSemantics",
+        "consistencyGuarantees",
+        "cursorSemantics",
+        "freshness",
+    ):
+        assert f'"{dimension}": "unavailable"' in (
+            capability_constraint["expression"]
+        )
+    assert "\"describeCapabilities\": \"unavailable\"" in (
+        capability_constraint["expression"]
+    )
+    assert capability_constraint["expression"].count("unavailable") == 13
+
+    for entry in (source, version):
+        assert entry["permittedOperations"] == {
+            "context_engine_control": ["SELECT", "INSERT"],
+            "context_engine_learning": [],
+            "context_engine_runtime": [],
+            "context_engine_security_operator": [],
+            "context_engine_worker": [],
+        }
+        assert entry["rowLevelSecurity"]["enabled"] is True
+        assert entry["rowLevelSecurity"]["forced"] is True
+
+    operation = next(
+        operation
+        for operation in manifest()["controlOperations"]
+        if operation["name"] == "register_file_source"
+    )
+    assert operation == {
+        "name": "register_file_source",
+        "role": "context_engine_control",
+        "directTableMutationAllowed": True,
+        "trustedOrganizationSource": "TrustedControlCall",
+        "transactionLocalOrganizationSetting": "app.organization_id",
+        "organizationScopedIdempotency": True,
+        "filesystemAccessAllowed": False,
+        "durableJobCreationAllowed": False,
+        "atomicWrites": ["context_source", "source_version"],
+    }
 
 
 def test_issue_19_lineage_manifest_is_closed_and_role_separated() -> None:
@@ -517,7 +622,13 @@ def test_worker_lease_manifest_requires_exact_receiver_and_job() -> None:
         assert receiver_value in update_policy["using"]
 
     operations = manifest()["controlOperations"]
-    assert operations[1:3] == [
+    worker_operations = [
+        operation
+        for operation in operations
+        if operation["name"]
+        in {"issue_noop_worker_lease", "complete_noop_worker_job"}
+    ]
+    assert worker_operations == [
         {
             "name": "issue_noop_worker_lease",
             "databaseFunction": "context_worker_issue_noop_lease",
@@ -1135,7 +1246,12 @@ def test_policy_epoch_manifest_seals_runtime_reads_and_control_mutation() -> Non
             "app.organization_id" in policy["using"] for policy in definer_policies
         )
 
-    assert document["controlOperations"][0] == {
+    change_access = next(
+        operation
+        for operation in document["controlOperations"]
+        if operation["name"] == "change_resource_access"
+    )
+    assert change_access == {
         "name": "change_resource_access",
         "databaseFunction": "context_control_revoke_resource_access",
         "role": "context_engine_control",
