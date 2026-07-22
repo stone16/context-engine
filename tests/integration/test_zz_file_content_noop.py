@@ -108,7 +108,7 @@ def _resolve_lineage(
     )
 
 
-def test_repeated_identical_file_import_is_an_auditable_publication_noop(
+def test_repeated_canonically_identical_file_import_is_an_auditable_noop(
     tmp_path: Path,
     migration_configuration: DatabaseConfiguration,
     guarded_control_engine: Engine,
@@ -137,6 +137,13 @@ def test_repeated_identical_file_import_is_an_auditable_publication_noop(
         resource_ref=first.candidate_ref.resource_ref,
         request_id="file-noop-before",
     )
+    canonical_equivalent_bytes = (
+        b"\xef\xbb\xbf# Handbook\r\n\r\nContextEngine delivers context.\r\n"
+    )
+    assert canonical_equivalent_bytes != (
+        b"# Handbook\n\nContextEngine delivers context.\n"
+    )
+    (scenario.root / "handbook.md").write_bytes(canonical_equivalent_bytes)
     repeat_prepared, repeat_token = _prepare_repeat_file_import(
         scenario,
         guarded_control_engine,
