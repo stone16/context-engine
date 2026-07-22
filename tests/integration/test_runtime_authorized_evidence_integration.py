@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -44,6 +44,7 @@ from engine.runtime.scope_authority import (
     _open_scope_authority_scope,
 )
 from tests.support.context_run_operator import exact_test_context_run_operator_read
+from tests.support.security_gate import record_security_oracles
 
 pytestmark = pytest.mark.integration
 
@@ -666,7 +667,7 @@ def _assert_exact_authorized_http_resolve(
     guarded_control_engine: Engine,
     guarded_operator_engine: Engine,
     query_digest_keyring: QueryDigestKeyring,
-) -> None:
+) -> tuple[int, int, int]:
     token = f"{TOKEN_PREFIX}:{active.label}"
     request_id = f"{REQUEST_ID_PREFIX}:{active.label}"
     index = HostileCandidateIndex(
@@ -819,15 +820,37 @@ def _assert_exact_authorized_http_resolve(
         str(active.organization_id),
         str(other.organization_id),
     )
-    assert all(value not in response_text for value in forbidden_values)
+    unauthorized_evidence_count = sum(
+        value in response_text for value in forbidden_values
+    )
+    wrong_organization_effect_count = int("effects" in response_document)
+    missing_context_fallback_count = int(
+        package["coverage"] != {"status": "sufficient"}
+        or package["blocks"] == []
+        or package["evidence"] == []
+    )
+    assert unauthorized_evidence_count == 0
+    assert wrong_organization_effect_count == 0
+    assert missing_context_fallback_count == 0
+    return (
+        unauthorized_evidence_count,
+        wrong_organization_effect_count,
+        missing_context_fallback_count,
+    )
 
 
+@pytest.mark.security_evidence(
+    id="RUNTIME-TENANT-OWNERSHIP-001", layer="runtime"
+)
+@pytest.mark.security_evidence(id="RUNTIME-TENANT-FK-002", layer="runtime")
+@pytest.mark.security_evidence(id="FIXTURE-ACCEPT-001", layer="runtime")
 def test_real_postgres_http_delivers_only_exact_authorized_evidence_bidirectionally(
     migration_configuration: DatabaseConfiguration,
     guarded_runtime_engine: Engine,
     guarded_control_engine: Engine,
     guarded_operator_engine: Engine,
     query_digest_keyring: QueryDigestKeyring,
+    record_property: Callable[[str, object], None],
 ) -> None:
     """Issue #13: both Organizations seal CandidateRef -> Kernel -> projection."""
 
@@ -838,25 +861,34 @@ def test_real_postgres_http_delivers_only_exact_authorized_evidence_bidirectiona
         before = _persistent_content_snapshot(migration_engine, fixture)
         assert len(before) == 4
 
-        _assert_exact_authorized_http_resolve(
-            active=fixture.org_a,
-            other=fixture.org_b,
-            guarded_runtime_engine=guarded_runtime_engine,
-            guarded_control_engine=guarded_control_engine,
-            guarded_operator_engine=guarded_operator_engine,
-            query_digest_keyring=query_digest_keyring,
-        )
-        _assert_exact_authorized_http_resolve(
-            active=fixture.org_b,
-            other=fixture.org_a,
-            guarded_runtime_engine=guarded_runtime_engine,
-            guarded_control_engine=guarded_control_engine,
-            guarded_operator_engine=guarded_operator_engine,
-            query_digest_keyring=query_digest_keyring,
+        observations = (
+            _assert_exact_authorized_http_resolve(
+                active=fixture.org_a,
+                other=fixture.org_b,
+                guarded_runtime_engine=guarded_runtime_engine,
+                guarded_control_engine=guarded_control_engine,
+                guarded_operator_engine=guarded_operator_engine,
+                query_digest_keyring=query_digest_keyring,
+            ),
+            _assert_exact_authorized_http_resolve(
+                active=fixture.org_b,
+                other=fixture.org_a,
+                guarded_runtime_engine=guarded_runtime_engine,
+                guarded_control_engine=guarded_control_engine,
+                guarded_operator_engine=guarded_operator_engine,
+                query_digest_keyring=query_digest_keyring,
+            ),
         )
 
         after = _persistent_content_snapshot(migration_engine, fixture)
         assert after == before
+        record_security_oracles(
+            record_property,
+            fixture_ref="ACCEPT-001",
+            unauthorized_evidence_count=sum(item[0] for item in observations),
+            wrong_organization_effect_count=sum(item[1] for item in observations),
+            missing_context_fallback_count=sum(item[2] for item in observations),
+        )
     finally:
         try:
             _cleanup_fixture(migration_engine, fixture)

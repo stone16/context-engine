@@ -339,6 +339,7 @@ def test_valid_tickets_invoke_only_their_bound_synthetic_effects() -> None:
     assert channel.effects == 1
 
 
+@pytest.mark.security_evidence(id="PROP-ACTION-SEPARATION-014", layer="property")
 def test_public_ticket_types_and_server_side_issuers_are_structurally_distinct() -> (
     None
 ):
@@ -540,7 +541,9 @@ def test_forged_exact_identity_is_normalized_before_any_effect() -> None:
     assert provider.effects == 0
 
 
-def test_each_ticket_is_rejected_by_the_other_plane_and_deserializer() -> None:
+@pytest.mark.security_evidence(id="RUNTIME-ACTION-SEPARATION-014", layer="runtime")
+def test_each_ticket_is_rejected_by_the_other_plane_and_deserializer(
+) -> None:
     provider = _Provider()
     channel = _Channel()
 
@@ -588,15 +591,17 @@ def test_each_ticket_is_rejected_by_the_other_plane_and_deserializer() -> None:
                 read_ticket.serialize(), keyring=KEYRING
             ),
         )
+        rejections: list[TicketNotAvailable] = []
         for rejected_use in rejected_uses:
             with pytest.raises(
                 TicketNotAvailable,
                 match="^capability not available$",
-            ):
+            ) as error:
                 rejected_use()
+            rejections.append(error.value)
 
-    assert provider.effects == 0
-    assert channel.effects == 0
+    assert len(rejections) == len(rejected_uses)
+    assert provider.effects == channel.effects == 0
 
 
 @pytest.mark.parametrize("segment_index", [0, 1, 2])

@@ -439,6 +439,7 @@ def test_seeded_existing_organization_reaches_http_empty_package(
         migration_engine.dispose()
 
 
+@pytest.mark.security_evidence(id="RUNTIME-RLS-FAIL-CLOSED-003", layer="runtime")
 def test_real_postgres_http_membership_matrix_is_generic_and_zero_io(
     migration_configuration: DatabaseConfiguration,
     guarded_runtime_engine: Engine,

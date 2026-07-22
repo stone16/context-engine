@@ -340,6 +340,7 @@ def _request(
     )
 
 
+@pytest.mark.security_evidence(id="PROP-RELEASE-OWNER-019", layer="property")
 @pytest.mark.parametrize("rejection_kind", REJECTION_KINDS)
 @seed(49)
 @settings(max_examples=3, deadline=None)

@@ -567,6 +567,7 @@ def test_projection_rejects_package_altered_after_digest_creation() -> None:
         )
 
 
+@pytest.mark.security_evidence(id="PROP-TRACE-REDACTION-012", layer="property")
 def test_records_retain_digests_not_raw_query_package_or_denial_details() -> None:
     run = _run()
     audit = _audit()

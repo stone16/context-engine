@@ -344,6 +344,7 @@ def test_authenticated_invocation_binds_one_current_user_actor() -> None:
         ({}, {"membership_version": 9}),
     ),
 )
+@pytest.mark.security_evidence(id="PROP-TRANSPORT-UNTRUSTED-008", layer="property")
 def test_authenticated_invocation_rejects_mismatched_current_membership(
     proof_override: dict[str, object],
     invocation_override: dict[str, object],

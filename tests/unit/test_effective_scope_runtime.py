@@ -213,6 +213,7 @@ def resolve(
     return outcome
 
 
+@pytest.mark.security_evidence(id="RUNTIME-SCOPE-INTERSECTION-004", layer="runtime")
 def test_runtime_observes_only_effective_scope_and_returns_empty_package() -> None:
     spy = ContentIoSpy()
 
@@ -232,23 +233,30 @@ def test_runtime_observes_only_effective_scope_and_returns_empty_package() -> No
     assert outcome.scope_decision.digest not in serialized_package
 
 
-def test_agent_ceiling_can_only_reduce_other_trusted_grants() -> None:
+def test_agent_ceiling_can_only_reduce_other_trusted_grants(
+) -> None:
+    broad_spy = ContentIoSpy()
     broad_agent = resolve(
         make_operands(
             principal_grants=ScopeSet(frozenset({TARGET_A})),
             agent_ceiling=ALL_TARGETS,
-        )
+        ),
+        spy=broad_spy,
     )
+    narrow_spy = ContentIoSpy()
     narrow_agent = resolve(
         make_operands(
             principal_grants=ALL_TARGETS,
             agent_ceiling=ScopeSet(frozenset({TARGET_A})),
-        )
+        ),
+        spy=narrow_spy,
     )
 
     assert broad_agent.scope_decision.target_count == 1
     assert narrow_agent.scope_decision.target_count == 1
     assert broad_agent.scope_decision.digest == narrow_agent.scope_decision.digest
+    assert broad_spy.calls == narrow_spy.calls == 0
+    assert broad_agent.package.evidence == narrow_agent.package.evidence == ()
 
 
 def test_overbroad_request_refs_do_not_expand_the_trusted_intersection() -> None:

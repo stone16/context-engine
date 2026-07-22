@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from typing import Any, cast
 
@@ -20,6 +20,7 @@ from engine.runtime.capabilities import (
 from engine.runtime.construction import Runtime, required_kernel_dependencies
 from engine.runtime.content_io import RuntimeContentIo
 from tests.support.context_run import TEST_QUERY_DIGEST_KEYRING
+from tests.support.security_gate import record_security_oracles
 from tests.unit.test_http_effective_scope import (
     DeterministicScopeAuthority,
     operands,
@@ -153,11 +154,15 @@ def test_active_acquire_still_requires_the_configured_scope_authority() -> None:
     assert_unsupported_audit(runtime, 0)
 
 
+@pytest.mark.security_evidence(id="FIXTURE-ACCEPT-005", layer="runtime")
 @pytest.mark.parametrize(
     "token",
     ("opaque-epoch-8-token", "opaque-revoked-token", "opaque-missing-token"),
 )
-def test_accept_005_continue_is_generic_non_retryable_and_zero_io(token: str) -> None:
+def test_accept_005_continue_is_generic_non_retryable_and_zero_io(
+    token: str,
+    record_property: Callable[[str, object], None],
+) -> None:
     client, content_io, runtime, invocations = client_for()
 
     response = client.post(
@@ -180,13 +185,35 @@ def test_accept_005_continue_is_generic_non_retryable_and_zero_io(token: str) ->
     assert content_io.total_calls == 0
     assert len(invocations.invocations) == 1
     assert_unsupported_audit(runtime, 1)
+    response_document = response.json()
+    unauthorized_evidence_count = int("evidence" in response_document)
+    wrong_organization_effect_count = content_io.total_calls
+    missing_context_fallback_count = int(
+        response_document
+        != {"kind": "request_not_available", "retryable": False}
+    )
+    assert unauthorized_evidence_count == 0
+    assert wrong_organization_effect_count == 0
+    assert missing_context_fallback_count == 0
+    record_security_oracles(
+        record_property,
+        fixture_ref="ACCEPT-005",
+        unauthorized_evidence_count=unauthorized_evidence_count,
+        wrong_organization_effect_count=wrong_organization_effect_count,
+        missing_context_fallback_count=missing_context_fallback_count,
+    )
 
 
+@pytest.mark.security_evidence(id="RUNTIME-CITATION-AUTH-010", layer="runtime")
+@pytest.mark.security_evidence(id="FIXTURE-ACCEPT-010", layer="runtime")
 @pytest.mark.parametrize(
     "locator",
     ("citation-revoked", "citation-missing", "continuation-shaped-value"),
 )
-def test_accept_010_open_citation_is_generic_and_zero_io(locator: str) -> None:
+def test_accept_010_open_citation_is_generic_and_zero_io(
+    locator: str,
+    record_property: Callable[[str, object], None],
+) -> None:
     client, content_io, runtime, invocations = client_for()
 
     response = client.post(
@@ -201,8 +228,25 @@ def test_accept_010_open_citation_is_generic_and_zero_io(locator: str) -> None:
     assert content_io.total_calls == 0
     assert len(invocations.invocations) == 1
     assert_unsupported_audit(runtime, 1)
+    response_document = response.json()
+    unauthorized_evidence_count = int("evidence" in response_document)
+    wrong_organization_effect_count = content_io.total_calls
+    missing_context_fallback_count = int(
+        response_document != {"kind": "citation_not_available"}
+    )
+    assert unauthorized_evidence_count == 0
+    assert wrong_organization_effect_count == 0
+    assert missing_context_fallback_count == 0
+    record_security_oracles(
+        record_property,
+        fixture_ref="ACCEPT-010",
+        unauthorized_evidence_count=unauthorized_evidence_count,
+        wrong_organization_effect_count=wrong_organization_effect_count,
+        missing_context_fallback_count=missing_context_fallback_count,
+    )
 
 
+@pytest.mark.security_evidence(id="FIXTURE-ACCEPT-009", layer="runtime")
 @pytest.mark.parametrize(
     ("case_id", "acquire_capability"),
     [
@@ -218,6 +262,7 @@ def test_accept_010_open_citation_is_generic_and_zero_io(locator: str) -> None:
 def test_accept_009_server_owned_unavailable_source_paths_are_generic_and_zero_io(
     case_id: str,
     acquire_capability: RuntimeCapability,
+    record_property: Callable[[str, object], None],
 ) -> None:
     client, content_io, runtime, invocations = client_for(
         acquire_capability=acquire_capability,
@@ -240,6 +285,25 @@ def test_accept_009_server_owned_unavailable_source_paths_are_generic_and_zero_i
     assert content_io.source_content_calls == 0
     assert len(invocations.invocations) == 1
     assert_unsupported_audit(runtime, 1)
+    response_document = response.json()
+    unauthorized_evidence_count = int("evidence" in response_document)
+    wrong_organization_effect_count = (
+        content_io.provider_calls + content_io.source_content_calls
+    )
+    missing_context_fallback_count = int(
+        response_document
+        != {"kind": "request_not_available", "retryable": False}
+    )
+    assert unauthorized_evidence_count == 0
+    assert wrong_organization_effect_count == 0
+    assert missing_context_fallback_count == 0
+    record_security_oracles(
+        record_property,
+        fixture_ref="ACCEPT-009",
+        unauthorized_evidence_count=unauthorized_evidence_count,
+        wrong_organization_effect_count=wrong_organization_effect_count,
+        missing_context_fallback_count=missing_context_fallback_count,
+    )
 
 
 @pytest.mark.parametrize(

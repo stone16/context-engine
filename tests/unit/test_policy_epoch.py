@@ -74,6 +74,7 @@ def test_missing_or_malformed_policy_epoch_is_authority_unavailable(
     _close_policy_epoch_authority_scope(authority_scope)
 
 
+@pytest.mark.security_evidence(id="PROP-REVOCATION-006", layer="property")
 def test_current_validation_re_reads_durable_epoch_and_fails_closed_on_change(
 ) -> None:
     authority_scope = _open_policy_epoch_authority_scope()

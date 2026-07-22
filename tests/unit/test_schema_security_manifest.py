@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from typing import Any, cast
 
+import pytest
+
 ROOT = Path(__file__).parents[2]
 MANIFEST_PATH = ROOT / "engine/persistence/schema_security_manifest.yaml"
 
@@ -23,6 +25,7 @@ def table_entries(document: dict[str, Any]) -> dict[str, dict[str, Any]]:
     }
 
 
+@pytest.mark.security_evidence(id="PROP-TENANT-OWNERSHIP-001", layer="property")
 def test_manifest_classifies_the_exact_issue_49_release_schema() -> None:
     """PROP-TENANT-OWNERSHIP-001: no current table is left unclassified."""
 
@@ -608,6 +611,7 @@ def test_membership_manifest_requires_exact_user_actor_and_read_only_runtime() -
         assert membership_property in expression
 
 
+@pytest.mark.security_evidence(id="PROP-RLS-FAIL-CLOSED-003", layer="property")
 def test_tenant_owned_manifest_entry_preserves_every_security_property() -> None:
     """PROP-TENANT-FK-002/PROP-RLS-FAIL-CLOSED-003 structural properties."""
 
@@ -682,6 +686,7 @@ def test_tenant_owned_manifest_entry_preserves_every_security_property() -> None
     }
 
 
+@pytest.mark.security_evidence(id="PROP-TENANT-FK-002", layer="property")
 def test_content_manifest_preserves_lineage_visibility_and_immutability() -> None:
     entries = table_entries(manifest())
     resource = entries["context_resource"]

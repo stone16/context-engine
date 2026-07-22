@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -54,6 +54,7 @@ from engine.runtime.scope_authority import (
     _open_scope_authority_scope,
 )
 from tests.support.context_run_operator import exact_test_context_run_operator_read
+from tests.support.security_gate import record_security_oracles
 
 pytestmark = pytest.mark.integration
 
@@ -536,12 +537,14 @@ def _persisted_decision_documents(
     return run_document, audit_document
 
 
+@pytest.mark.security_evidence(id="FIXTURE-ACCEPT-002", layer="runtime")
 def test_accept_002_same_organization_memberships_receive_only_authorized_fields(
     migration_configuration: DatabaseConfiguration,
     guarded_runtime_engine: Engine,
     guarded_control_engine: Engine,
     guarded_operator_engine: Engine,
     query_digest_keyring: QueryDigestKeyring,
+    record_property: Callable[[str, object], None],
 ) -> None:
     """ACCEPT-002: Membership field ceilings precede Kernel content projection."""
 
@@ -720,6 +723,35 @@ def test_accept_002_same_organization_memberships_receive_only_authorized_fields
         ):
             assert forbidden not in missing_persisted
         assert len(index.calls) == 3
+        response_documents = (
+            full_response.json(),
+            limited_response.json(),
+            missing_document,
+        )
+        unauthorized_evidence_count = sum(
+            forbidden in response.text
+            for response in (limited_response, missing_right_response)
+            for forbidden in ("secret",)
+        )
+        wrong_organization_effect_count = sum(
+            "effects" in document for document in response_documents
+        )
+        missing_context_fallback_count = int(
+            missing_document["package"]["coverage"]
+            != {"status": "empty", "reason": "no_authorized_evidence"}
+            or missing_document["package"]["blocks"] != []
+            or missing_document["package"]["evidence"] != []
+        )
+        assert unauthorized_evidence_count == 0
+        assert wrong_organization_effect_count == 0
+        assert missing_context_fallback_count == 0
+        record_security_oracles(
+            record_property,
+            fixture_ref="ACCEPT-002",
+            unauthorized_evidence_count=unauthorized_evidence_count,
+            wrong_organization_effect_count=wrong_organization_effect_count,
+            missing_context_fallback_count=missing_context_fallback_count,
+        )
     finally:
         try:
             _cleanup_fixture(migration_engine, fixture)

@@ -461,6 +461,7 @@ def test_replacing_the_mandatory_capability_gate_is_rejected_before_io() -> None
     assert twin.calls == (0, 0, 0)
 
 
+@pytest.mark.security_evidence(id="PROP-CITATION-AUTH-010", layer="property")
 def test_capability_declarations_are_closed_and_m0_does_not_false_green_carriers(
 ) -> None:
     assert capability_module.__all__ == ["RuntimeCapability"]

@@ -61,6 +61,7 @@ make lint      # Ruff
 make typecheck # strict mypy
 make test      # unit test suite
 make catalog   # static security catalog tests and validation
+make security-gate # executable M0 security veto; requires make db-up first
 make smoke     # API and worker process smoke suite
 make db-up     # start the real PostgreSQL 17 + pgvector harness
 make db-down   # stop the harness while preserving its disposable data volume
@@ -77,7 +78,11 @@ ignored, mode-0600 source for local database connection contracts; `compose.yaml
 owns the pinned test service topology. A green process smoke proves only
 boot/readiness. The database harness additionally proves Organization, current
 Membership, the online UserActor transaction, and representative-record FORCE-RLS
-isolation. Content-bearing Runtime delivery and worker-job behavior remain
+isolation. `make security-gate` executes the registered M0 evidence and writes
+raw evidence plus its independent release-gate report beneath the ignored
+`.context-engine/security-gate/` directory. Content-bearing Runtime delivery
+and worker-job behavior are active only for the exact carriers recorded by
+their accepted catalog activations; deferred carrier semantics remain
 `NOT_ACTIVE` until their owning issues verify them.
 
 ## Safety-Rails / Do Not

@@ -50,6 +50,7 @@ make lint      # Ruff
 make typecheck # strict mypy
 make test      # 单元测试
 make catalog   # 安全目录静态测试与校验
+make security-gate # 可执行 M0 安全否决门；要求先执行 make db-up
 make smoke     # API / worker 进程 smoke
 make db-up     # 启动 compose.yaml 固定的 PostgreSQL + pgvector 测试底座
 make db-down   # 停止测试底座并保留 disposable data volume
@@ -57,6 +58,12 @@ make db-reset  # 删除并重建该测试底座的 disposable data volume
 make integration # 真实 PostgreSQL integration/security harness
 make check     # 全部门禁；要求先执行 make db-up
 ```
+
+`make security-gate` 会发现并只执行注册的 M0 安全证据，核对真实 PostgreSQL
+RLS inventory，并将机器可读的原始证据与四门 release report 写入被 Git 忽略的
+`.context-engine/security-gate/`。Security 是独立否决门；尚未进入 M0 评估范围的
+Reliability、Quality 与 Budget 明确记录为 `not-evaluated`，所以这份报告只会给出
+`m0SecurityDecision`，不会把安全门通过误写成可发布或可 promotion 的总体 PASS。
 
 数据库底座首次启动时会在被 Git 忽略的
 `.context-engine/database.env` 生成随机凭据并将文件权限设为 `0600`；该文件是

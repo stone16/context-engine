@@ -35,6 +35,7 @@ kernel, capability separation, and publication visibility model.
 | Release promotion owner | [0033 — Organization release promotion owner](0033-promote-organization-releases-through-one-learning-owner.md) | Organization-owned immutable release lineage advances only through one generation-bound, release-operator-authorized `ContextLearning.promote` transaction | Pointer seeds, direct application DML, manifest-only CAS, evaluator/Control/Curation publication, or rollback mutation |
 | Publication visibility | [0018 — Immutable ContextRevision publication](0018-immutable-revision-publication.md) | `ContextResource` content is immutable `ContextRevision`/`ContextFragment` lineage; one transaction changes the active pointer | In-place content mutation, mixed old/new reads, or cleanup-defined visibility |
 | Release security catalog | [0019 — Security catalog normalization](0019-security-catalog-normalization.md) | One machine catalog contains exactly fifteen stable release IDs; overlapping labels and derived scenarios keep their safeguards without inflating the count | Parallel prose catalogs, renumbering, or treating inactive cache behavior as a canonical release family |
+| Executable M0 security veto | [0034 — Registered executable security evidence](0034-execute-the-m0-security-veto-from-registered-evidence.md) | Exact current tests, explicit hard-oracle observations, and live all-table RLS facts produce provenance-bearing independent gate artifacts | Planned IDs presented as executed proof, skip/retry-to-green, manifest-only RLS claims, or aggregate scoring |
 
 Each baseline ADR is `accepted` and contains Context, Decision, Rationale,
 Consequences, and Revisit trigger sections. A revisit trigger permits review; it
@@ -115,3 +116,4 @@ touched:
 - [0031 — Authorized-only ContextRun lineage](0031-persist-authorized-context-run-lineage.md)
 - [0032 — Membership-bound materialized fields](0032-bind-materialized-fields-to-membership-projection-rights.md)
 - [0033 — Organization release promotion owner](0033-promote-organization-releases-through-one-learning-owner.md)
+- [0034 — Registered executable security evidence](0034-execute-the-m0-security-veto-from-registered-evidence.md)

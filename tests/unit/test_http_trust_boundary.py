@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import FrozenInstanceError
 from datetime import UTC, datetime
@@ -57,6 +57,7 @@ from tests.support.context_run import (
     TEST_QUERY_DIGEST_KEYRING,
     recording_context_run_session,
 )
+from tests.support.security_gate import record_security_oracles
 
 VALID_BODY = {
     "kind": "acquire",
@@ -953,10 +954,13 @@ def test_verified_authentication_context_rejects_non_string_refs(
         ("need", "bypass", True),
     ],
 )
+@pytest.mark.security_evidence(id="RUNTIME-TRANSPORT-UNTRUSTED-008", layer="runtime")
+@pytest.mark.security_evidence(id="FIXTURE-ACCEPT-007", layer="runtime")
 def test_trusted_field_injection_is_closed_before_domain_execution(
     placement: str,
     field_name: str,
     field_value: object,
+    record_property: Callable[[str, object], None],
 ) -> None:
     authenticator = DeterministicAuthenticator()
     spy = InvocationSpy()
@@ -980,6 +984,24 @@ def test_trusted_field_injection_is_closed_before_domain_execution(
     assert field_name not in response.text
     assert str(field_value) not in response.text
     assert spy.invocations == []
+    response_document = response.json()
+    unauthorized_evidence_count = int(
+        field_name in response.text or str(field_value) in response.text
+    )
+    wrong_organization_effect_count = len(spy.invocations)
+    missing_context_fallback_count = int(
+        response_document != {"code": "invalid_request"}
+    )
+    assert unauthorized_evidence_count == 0
+    assert wrong_organization_effect_count == 0
+    assert missing_context_fallback_count == 0
+    record_security_oracles(
+        record_property,
+        fixture_ref="ACCEPT-007",
+        unauthorized_evidence_count=unauthorized_evidence_count,
+        wrong_organization_effect_count=wrong_organization_effect_count,
+        missing_context_fallback_count=missing_context_fallback_count,
+    )
 
 
 @pytest.mark.parametrize(

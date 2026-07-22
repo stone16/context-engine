@@ -335,6 +335,7 @@ def content_fixture(
         engine.dispose()
 
 
+@pytest.mark.security_evidence(id="PG-INDEX-NOT-AUTHORITY-005", layer="postgres")
 def test_runtime_rls_exposes_only_active_non_tombstoned_same_organization_rows(
     guarded_runtime_engine: Engine,
     content_fixture: ContentFixture,

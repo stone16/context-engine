@@ -522,6 +522,7 @@ def test_generated_missing_and_empty_operands_are_absorbing(
     assert effective.targets == frozenset()
 
 
+@pytest.mark.security_evidence(id="PROP-SCOPE-INTERSECTION-004", layer="property")
 @seed(20_260_724)
 @PROPERTY_SETTINGS
 @given(

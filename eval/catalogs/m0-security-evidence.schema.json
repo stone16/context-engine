@@ -1,0 +1,290 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contextengine.local/schemas/m0-security-evidence.schema.json",
+  "title": "ContextEngine M0 executable security evidence registry",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "registryVersion",
+    "catalog",
+    "execution",
+    "hardOracleAdapters",
+    "evidence",
+    "invariantMappings",
+    "fixtureMappings"
+  ],
+  "properties": {
+    "registryVersion": {
+      "const": "1.0.0"
+    },
+    "catalog": {
+      "const": {
+        "path": "eval/catalogs/security-invariants.yaml",
+        "schemaPath": "eval/catalogs/security-catalog.schema.json",
+        "catalogVersion": "1.1.0"
+      }
+    },
+    "execution": {
+      "const": {
+        "framework": "pytest",
+        "forbidOutcomes": [
+          "failed",
+          "error",
+          "skipped",
+          "xfailed",
+          "xpassed",
+          "incomplete"
+        ],
+        "evidenceLayers": [
+          "property",
+          "postgres",
+          "runtime"
+        ],
+        "observationProperty": "context_engine.security_gate.observation.v1"
+      }
+    },
+    "hardOracleAdapters": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "uniqueItems": true,
+      "prefixItems": [
+        {
+          "const": {
+            "oracleRef": "Unauthorized Evidence",
+            "resultKey": "unauthorizedEvidenceCount",
+            "assertion": "equals",
+            "requiredValue": 0,
+            "observation": {
+              "source": "pytest-user-property",
+              "reducer": "sum"
+            }
+          }
+        },
+        {
+          "const": {
+            "oracleRef": "wrong-Organization effect",
+            "resultKey": "wrongOrganizationEffectCount",
+            "assertion": "equals",
+            "requiredValue": 0,
+            "observation": {
+              "source": "pytest-user-property",
+              "reducer": "sum"
+            }
+          }
+        },
+        {
+          "const": {
+            "oracleRef": "missing-context fallback",
+            "resultKey": "missingContextFallbackCount",
+            "assertion": "equals",
+            "requiredValue": 0,
+            "observation": {
+              "source": "pytest-user-property",
+              "reducer": "sum"
+            }
+          }
+        }
+      ],
+      "items": false
+    },
+    "evidence": {
+      "type": "array",
+      "minItems": 27,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/evidence"
+      }
+    },
+    "invariantMappings": {
+      "type": "array",
+      "minItems": 15,
+      "maxItems": 15,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/invariantMapping"
+      }
+    },
+    "fixtureMappings": {
+      "type": "array",
+      "minItems": 12,
+      "maxItems": 12,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/fixtureMapping"
+      }
+    }
+  },
+  "$defs": {
+    "invariantId": {
+      "type": "string",
+      "enum": [
+        "TENANT-OWNERSHIP-001",
+        "TENANT-FK-002",
+        "RLS-FAIL-CLOSED-003",
+        "SCOPE-INTERSECTION-004",
+        "INDEX-NOT-AUTHORITY-005",
+        "REVOCATION-006",
+        "WORKER-LEASE-007",
+        "TRANSPORT-UNTRUSTED-008",
+        "NON-ENUMERATION-009",
+        "CITATION-AUTH-010",
+        "EGRESS-011",
+        "TRACE-REDACTION-012",
+        "ACTION-SEPARATION-014",
+        "CROSS-ORG-LEARN-015",
+        "RELEASE-OWNER-019"
+      ]
+    },
+    "fixtureId": {
+      "type": "string",
+      "enum": [
+        "ACCEPT-001",
+        "ACCEPT-002",
+        "ACCEPT-003",
+        "ACCEPT-004",
+        "ACCEPT-005",
+        "ACCEPT-006",
+        "ACCEPT-007",
+        "ACCEPT-008",
+        "ACCEPT-009",
+        "ACCEPT-010",
+        "ACCEPT-011",
+        "ACCEPT-012"
+      ]
+    },
+    "evidenceRef": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[A-Z][A-Z0-9-]+$"
+    },
+    "evidenceRefList": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/evidenceRef"
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "layer",
+        "selector"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/evidenceRef"
+        },
+        "layer": {
+          "type": "string",
+          "enum": [
+            "property",
+            "postgres",
+            "runtime"
+          ]
+        },
+        "selector": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^tests/(?:unit|integration)/test_[A-Za-z0-9_]+\\.py::test_[A-Za-z0-9_]+$"
+        }
+      }
+    },
+    "layerEvidenceRefs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "property",
+        "postgres",
+        "runtime"
+      ],
+      "properties": {
+        "property": {
+          "$ref": "#/$defs/evidenceRefList"
+        },
+        "postgres": {
+          "$ref": "#/$defs/evidenceRefList"
+        },
+        "runtime": {
+          "$ref": "#/$defs/evidenceRefList"
+        }
+      }
+    },
+    "invariantMapping": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "invariantRef",
+        "evidenceRefs"
+      ],
+      "properties": {
+        "invariantRef": {
+          "$ref": "#/$defs/invariantId"
+        },
+        "evidenceRefs": {
+          "$ref": "#/$defs/layerEvidenceRefs"
+        }
+      }
+    },
+    "hardOracleEvidenceRefs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "unauthorizedEvidenceCount",
+        "wrongOrganizationEffectCount",
+        "missingContextFallbackCount"
+      ],
+      "properties": {
+        "unauthorizedEvidenceCount": {
+          "$ref": "#/$defs/evidenceRefList"
+        },
+        "wrongOrganizationEffectCount": {
+          "$ref": "#/$defs/evidenceRefList"
+        },
+        "missingContextFallbackCount": {
+          "$ref": "#/$defs/evidenceRefList"
+        }
+      }
+    },
+    "fixtureMapping": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "fixtureRef",
+        "carrierStatusAtM0",
+        "m0Expectation",
+        "evidenceRefs",
+        "hardOracleEvidenceRefs"
+      ],
+      "properties": {
+        "fixtureRef": {
+          "$ref": "#/$defs/fixtureId"
+        },
+        "carrierStatusAtM0": {
+          "type": "string",
+          "enum": [
+            "available",
+            "future",
+            "unavailable"
+          ]
+        },
+        "m0Expectation": {
+          "type": "string",
+          "enum": [
+            "active_fail_closed",
+            "fail_closed"
+          ]
+        },
+        "evidenceRefs": {
+          "$ref": "#/$defs/evidenceRefList"
+        },
+        "hardOracleEvidenceRefs": {
+          "$ref": "#/$defs/hardOracleEvidenceRefs"
+        }
+      }
+    }
+  }
+}

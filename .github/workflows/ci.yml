@@ -18,6 +18,19 @@ jobs:
       - run: uv python install 3.13
       - run: make install
       - run: make db-up
-      - run: make check
+      - name: Run complete checks including the M0 security gate
+        id: complete-checks
+        run: make check
+      - name: Retain M0 security gate evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: m0-security-gate-${{ github.sha }}
+          path: |
+            .context-engine/security-gate/raw-evidence.json
+            .context-engine/security-gate/release-gate-report.json
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 30
       - if: always()
         run: make db-down

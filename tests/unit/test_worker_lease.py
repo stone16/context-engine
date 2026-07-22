@@ -137,6 +137,7 @@ def test_valid_lease_verifies_for_its_exact_job_and_worker_audience() -> None:
     assert claims.expires_at == NOW + timedelta(minutes=5)
 
 
+@pytest.mark.security_evidence(id="PROP-WORKER-LEASE-007", layer="property")
 @pytest.mark.parametrize(
     "override",
     [
