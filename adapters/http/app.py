@@ -4,7 +4,7 @@ from collections.abc import Callable
 from contextlib import ExitStack
 from datetime import UTC, datetime
 from json import loads
-from typing import Annotated, Final, Literal, cast
+from typing import Annotated, Final
 from uuid import UUID, uuid4
 
 from fastapi import Body, Depends, FastAPI, Header, Request, Response, Security
@@ -24,13 +24,9 @@ from adapters.http.authentication import (
 from adapters.http.contracts import (
     AcquireWire,
     AuthenticationFailureWire,
-    BlockWire,
-    BudgetUsageWire,
     CitationNotAvailableWire,
     ContextPackageWire,
     ContinueWire,
-    CoverageWire,
-    EvidenceWire,
     InvalidRequestWire,
     OpenCitationWire,
     RequestNotAvailableWire,
@@ -81,11 +77,19 @@ from engine.runtime import (
 from engine.runtime.actor import MembershipRejectionAuditReceipt
 from engine.runtime.budget import PackageBudgetRequest
 from engine.runtime.construction import required_kernel_dependencies
-from engine.runtime.contracts import Acquire, ContextNeed, RequestNarrowing, Resolved
+from engine.runtime.context_run import ContextRunPersistenceUnavailable
+from engine.runtime.contracts import (
+    Acquire,
+    ContextNeed,
+    RequestNarrowing,
+    Resolved,
+    context_package_public_document,
+)
 from engine.runtime.delivery import _construct_direct_delivery_context
 from engine.runtime.invocation import (
     _construct_authenticated_http_invocation,
 )
+from engine.runtime.package_digest import QueryDigestKeyring
 from engine.runtime.policy_epoch import PolicyEpochAuthorityUnavailable
 from engine.runtime.scope_authority import InvalidTrustedScopeSnapshot
 
@@ -159,6 +163,7 @@ def create_app(
     membership_authority: MembershipAuthority | None = None,
     scope_authority: ScopeAuthority | None = None,
     runtime: Runtime | None = None,
+    query_digest_keyring: QueryDigestKeyring | None = None,
     invocation_observer: Callable[[AuthenticatedInvocation], None] | None = None,
     resolution_observer: Callable[[Resolved], None] | None = None,
     membership_rejection_observer: (
@@ -173,7 +178,12 @@ def create_app(
     selected_runtime = runtime or Runtime(
         required_kernel_dependencies(),
         clock=clock,
+        query_digest_keyring=query_digest_keyring,
     )
+    if runtime is not None and query_digest_keyring is not None:
+        raise TypeError(
+            "query_digest_keyring belongs to the default Runtime composition"
+        )
     if type(selected_runtime) is not Runtime:
         raise TypeError("runtime must be the sealed Runtime composition")
     selected_authenticator = authenticator or RejectingAuthenticator()
@@ -352,12 +362,10 @@ def create_app(
         request_id = context_request_id or request_id_factory()
         received_at = clock()
         try:
-            organization_verification = (
-                selected_organization_authority.verify_existing(
-                    authentication,
-                    request_id=request_id,
-                    verified_at=received_at,
-                )
+            organization_verification = selected_organization_authority.verify_existing(
+                authentication,
+                request_id=request_id,
+                verified_at=received_at,
             )
             membership_identity = MembershipIdentity(
                 organization_id=UUID(authentication.organization_ref),
@@ -366,9 +374,7 @@ def create_app(
                 membership_version=authentication.membership_version,
                 principal_ref=authentication.principal_ref,
                 request_id=request_id,
-                authentication_binding_ref=(
-                    authentication.authentication_binding_ref
-                ),
+                authentication_binding_ref=(authentication.authentication_binding_ref),
                 checked_at=received_at,
             )
         except (OrganizationVerificationRejected, TypeError, ValueError):
@@ -383,9 +389,7 @@ def create_app(
                             current_membership_verification.organization_id
                         ),
                         user_id=current_membership_verification.user_id,
-                        membership_id=(
-                            current_membership_verification.membership_id
-                        ),
+                        membership_id=(current_membership_verification.membership_id),
                         membership_version=(
                             current_membership_verification.membership_version
                         ),
@@ -486,6 +490,8 @@ def create_app(
             raise TrustedAuthorityUnavailable from None
         except PolicyEpochAuthorityUnavailable:
             raise TrustedAuthorityUnavailable from None
+        except ContextRunPersistenceUnavailable:
+            raise TrustedAuthorityUnavailable from None
         except ScopeAuthorityUnavailable:
             raise TrustedAuthorityUnavailable from None
         except InvalidTrustedScopeSnapshot:
@@ -559,66 +565,10 @@ def _resolution_outcome_to_wire(
 
 
 def _resolved_to_wire(outcome: Resolved) -> ResolvedWire:
-    package = outcome.package
-    blocks = tuple(
-        BlockWire(
-            blockId=(
-                f"block_{block.evidence_ref.removeprefix('ev_')}"
-            ),
-            text=block.body,
-            evidenceRefs=(block.evidence_ref,),
-        )
-        for block in package.blocks
-    )
-    evidence = tuple(
-        EvidenceWire(
-            evidenceRef=item.evidence_ref,
-            sourceRef=item.source_ref,
-            resourceRef=item.resource_ref,
-            revisionRef=item.revision_ref,
-            fragmentRef=item.fragment_ref,
-            runRef=item.lineage.run_ref,
-            purpose=item.lineage.purpose,
-            authorizationAsOf=item.lineage.as_of,
-            decisionRef=item.lineage.decision_ref,
-            policySnapshotRef=item.lineage.policy_snapshot_ref,
-            policyEpoch=item.lineage.policy_epoch,
-            sourceDecisionRef=item.lineage.source_acl_decision_ref,
-        )
-        for item in package.evidence
-    )
     return ResolvedWire(
         kind=outcome.kind,
-        package=ContextPackageWire(
-            organizationRef=package.organization_ref,
-            purpose=package.purpose,
-            ttlSeconds=package.ttl_seconds,
-            asOf=package.as_of,
-            expiresAt=package.expires_at,
-            decisionRef=package.decision_ref,
-            blocks=blocks,
-            evidence=evidence,
-            gaps=package.gaps,
-            budgetUsage=BudgetUsageWire(
-                tokens=package.budget_usage.tokens,
-                providerCalls=cast(
-                    Literal[0], package.budget_usage.provider_calls
-                ),
-                costMicrounits=cast(
-                    Literal[0], package.budget_usage.cost_microunits
-                ),
-                elapsedMs=cast(Literal[0], package.budget_usage.elapsed_ms),
-            ),
-            coverage=CoverageWire(
-                status=cast(
-                    Literal["empty", "sufficient"],
-                    package.coverage.status,
-                ),
-                reason=cast(
-                    Literal["no_authorized_evidence"] | None,
-                    package.coverage.reason,
-                ),
-            ),
+        package=ContextPackageWire.model_validate(
+            context_package_public_document(outcome.package)
         ),
     )
 

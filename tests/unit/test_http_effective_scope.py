@@ -29,6 +29,7 @@ from engine.runtime.scope_authority import (
     _construct_trusted_scope_snapshot,
     _open_scope_authority_scope,
 )
+from tests.support.context_run import TEST_QUERY_DIGEST_KEYRING
 from tests.unit.test_http_trust_boundary import (
     INTERNAL_ORGANIZATION_REF,
     RECEIVED_AT,
@@ -163,6 +164,7 @@ def request(
             source_content=content_io,
         ),
         clock=lambda: RECEIVED_AT,
+        query_digest_keyring=TEST_QUERY_DIGEST_KEYRING,
     )
     client = TestClient(
         create_app(

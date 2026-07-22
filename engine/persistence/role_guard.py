@@ -7,6 +7,7 @@ from sqlalchemy import Connection, text
 from engine.persistence.configuration import (
     CONTROL_ROLE,
     MIGRATOR_ROLE,
+    OPERATOR_ROLE,
     RUNTIME_ROLE,
     WORKER_ROLE,
 )
@@ -15,9 +16,10 @@ from engine.persistence.configuration import (
 def _assert_non_owner_role(connection: Connection, expected_role: str) -> None:
     """Reject any application session with authority outside its exact login."""
 
-    row = connection.execute(
-        text(
-            """
+    row = (
+        connection.execute(
+            text(
+                """
             SELECT
                 current_user AS current_role,
                 session_user AS session_role,
@@ -58,9 +60,12 @@ def _assert_non_owner_role(connection: Connection, expected_role: str) -> None:
             JOIN pg_namespace AS namespace ON namespace.nspname = 'public'
             WHERE role.rolname = current_user
             """
-        ),
-        {"migrator_role": MIGRATOR_ROLE},
-    ).mappings().one()
+            ),
+            {"migrator_role": MIGRATOR_ROLE},
+        )
+        .mappings()
+        .one()
+    )
     expected = {
         "current_role": expected_role,
         "session_role": expected_role,
@@ -106,3 +111,37 @@ def assert_worker_role(connection: Connection) -> None:
     """Require the dedicated least-privilege Supply worker login."""
 
     _assert_non_owner_role(connection, WORKER_ROLE)
+
+
+def assert_security_operator_role(connection: Connection) -> None:
+    """Require the dedicated restricted security-audit login."""
+
+    _assert_non_owner_role(connection, OPERATOR_ROLE)
+    operator_facts = connection.execute(
+        text(
+            """
+            SELECT
+                NOT EXISTS (
+                    SELECT 1
+                    FROM pg_shdepend AS dependency
+                    JOIN pg_roles AS owner_role
+                      ON owner_role.oid = dependency.refobjid
+                    WHERE dependency.refclassid = 'pg_authid'::regclass
+                      AND dependency.deptype = 'o'
+                      AND owner_role.rolname = current_user
+                ) AS owns_no_database_objects,
+                NOT EXISTS (
+                    SELECT 1
+                    FROM pg_auth_members AS membership
+                    JOIN pg_roles AS granted_role
+                      ON granted_role.oid = membership.roleid
+                    WHERE granted_role.rolname = current_user
+                ) AS has_no_role_members
+            """
+        )
+    ).one()
+    if tuple(operator_facts) != (True, True):
+        raise AssertionError(
+            "PostgreSQL security-operator authority must own no database objects "
+            "and have no role memberships in either direction"
+        )

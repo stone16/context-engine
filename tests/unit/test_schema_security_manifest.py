@@ -23,18 +23,21 @@ def table_entries(document: dict[str, Any]) -> dict[str, dict[str, Any]]:
     }
 
 
-def test_manifest_classifies_the_exact_issue_17_worker_lease_schema() -> None:
+def test_manifest_classifies_the_exact_issue_19_decision_lineage_schema() -> None:
     """PROP-TENANT-OWNERSHIP-001: no current table is left unclassified."""
 
     document = manifest()
     tables = table_entries(document)
 
-    assert document["manifestVersion"] == "5.2.0"
+    assert document["manifestVersion"] == "7.0.0"
     assert set(tables) == {
         "alembic_version",
         "context_fragment",
         "context_resource",
         "context_revision",
+        "context_run",
+        "context_run_operator_read_ticket",
+        "decision_audit",
         "membership",
         "organization",
         "organization_policy_epoch",
@@ -49,16 +52,285 @@ def test_manifest_classifies_the_exact_issue_17_worker_lease_schema() -> None:
     assert tables["user_account"]["classification"] == "global"
     assert tables["membership"]["classification"] == "tenant_owned"
     assert tables["organization_record"]["classification"] == "tenant_owned"
-    assert (
-        tables["organization_policy_epoch"]["classification"]
-        == "tenant_owned"
-    )
+    assert tables["organization_policy_epoch"]["classification"] == "tenant_owned"
     assert tables["resource_access_policy"]["classification"] == "tenant_owned"
     assert tables["context_resource"]["classification"] == "tenant_owned"
     assert tables["context_revision"]["classification"] == "tenant_owned"
     assert tables["context_fragment"]["classification"] == "tenant_owned"
+    assert tables["context_run"]["classification"] == "tenant_owned"
+    assert tables["context_run_operator_read_ticket"]["classification"] == (
+        "tenant_owned"
+    )
+    assert tables["decision_audit"]["classification"] == "tenant_owned"
     assert tables["service_principal"]["classification"] == "tenant_owned"
     assert tables["worker_noop_job"]["classification"] == "tenant_owned"
+
+
+def test_issue_19_lineage_manifest_is_closed_and_role_separated() -> None:
+    """TRACE-REDACTION-012: durable lineage exposes no denial detail."""
+
+    entries = table_entries(manifest())
+    run = entries["context_run"]
+    audit = entries["decision_audit"]
+    ticket = entries["context_run_operator_read_ticket"]
+
+    assert run["organizationInclusiveKeys"] == [
+        {
+            "name": "pk_context_run",
+            "kind": "primary_key",
+            "columns": ["organization_id", "run_ref"],
+        },
+        {
+            "name": "uq_context_run_decision_ref",
+            "kind": "unique",
+            "columns": ["organization_id", "decision_ref"],
+        },
+        {
+            "name": "uq_context_run_lineage",
+            "kind": "unique",
+            "columns": ["organization_id", "run_ref", "decision_ref"],
+        },
+    ]
+    run_foreign_keys = {
+        foreign_key["name"]: foreign_key for foreign_key in run["foreignKeys"]
+    }
+    assert run_foreign_keys["fk_context_run_organization"] == {
+        "name": "fk_context_run_organization",
+        "columns": ["organization_id"],
+        "references": {
+            "table": "organization",
+            "columns": ["organization_id"],
+        },
+    }
+    assert run_foreign_keys["fk_context_run_membership_same_organization"] == {
+        "name": "fk_context_run_membership_same_organization",
+        "columns": ["organization_id", "membership_id"],
+        "references": {
+            "table": "membership",
+            "columns": ["organization_id", "membership_id"],
+        },
+    }
+
+    run_constraint_names = {
+        constraint["name"] for constraint in run["checkConstraints"]
+    }
+    assert run_constraint_names == {
+        "ck_context_run_reference_fields_nonblank",
+        "ck_context_run_membership_version_positive",
+        "ck_context_run_policy_epoch_positive",
+        "ck_context_run_effective_scope_digest_sha256",
+        "ck_context_run_query_digest_profile",
+        "ck_context_run_query_digest_key_version_positive",
+        "ck_context_run_query_digest_sha256",
+        "ck_context_run_outcome",
+        "ck_context_run_package_digest_profile",
+        "ck_context_run_package_digest_sha256",
+        "ck_context_run_package_retention_digest_only",
+        "ck_context_run_authorized_evidence_refs_array",
+        "ck_context_run_budget_ceilings_positive",
+        "ck_context_run_budget_usage_nonnegative",
+        "ck_context_run_budget_usage_within_ceiling",
+        "ck_context_run_outcome_evidence_consistency",
+        "ck_context_run_timestamp_order",
+    }
+    expressions = " ".join(
+        constraint["expression"] for constraint in run["checkConstraints"]
+    )
+    for literal in (
+        "context-query-json-hmac-sha256-v1",
+        "context-package-canonical-json-v1",
+        "digest_only",
+        "delivered_authorized",
+        "delivered_empty",
+        "jsonb_typeof(authorized_evidence_refs) = 'array'",
+    ):
+        assert literal in expressions
+    assert "query_text" not in expressions
+    assert "package_payload" not in expressions
+
+    assert audit["organizationInclusiveKeys"] == [
+        {
+            "name": "pk_decision_audit",
+            "kind": "primary_key",
+            "columns": ["organization_id", "decision_ref"],
+        }
+    ]
+    assert audit["foreignKeys"] == [
+        {
+            "name": "fk_decision_audit_context_run_same_organization",
+            "columns": ["organization_id", "run_ref", "decision_ref"],
+            "references": {
+                "table": "context_run",
+                "columns": ["organization_id", "run_ref", "decision_ref"],
+            },
+        }
+    ]
+    assert {constraint["name"] for constraint in audit["checkConstraints"]} == {
+        "ck_decision_audit_policy_snapshot_ref_nonblank",
+        "ck_decision_audit_policy_epoch_positive",
+        "ck_decision_audit_category_no_authorized_evidence",
+    }
+    audit_document = json.dumps(audit, sort_keys=True)
+    for prohibited in (
+        "query_digest",
+        "query_text",
+        "content",
+        "payload",
+        "candidate",
+        "resource_ref",
+        "fragment_ref",
+        "denied_count",
+    ):
+        assert prohibited not in audit_document
+
+    assert run["permittedOperations"] == {
+        "context_engine_runtime": ["INSERT"],
+        "context_engine_security_operator": [
+            "EXECUTE read_context_run_by_operator_ticket"
+        ],
+        "context_engine_context_run_reader_definer": ["SELECT"],
+        "context_engine_worker": [],
+        "context_engine_control": [
+            "EXECUTE issue_context_run_operator_read_ticket",
+            "EXECUTE revoke_context_run_operator_read_ticket",
+        ],
+    }
+    assert audit["permittedOperations"] == run["permittedOperations"]
+    for entry in (run, audit):
+        rls = entry["rowLevelSecurity"]
+        assert rls["enabled"] is True
+        assert rls["forced"] is True
+        policies = rls["policies"]
+        runtime_policy = next(
+            policy
+            for policy in policies
+            if policy["roles"] == ["context_engine_runtime"]
+        )
+        assert runtime_policy["command"] == "INSERT"
+        assert "using" not in runtime_policy
+        assert "app.organization_id" in runtime_policy["withCheck"]
+        for setting_name in (
+            "app.actor_kind",
+            "app.user_id",
+            "app.membership_id",
+            "app.membership_version",
+            "app.principal_ref",
+            "app.request_id",
+            "app.authentication_binding_ref",
+            "app.checked_at",
+        ):
+            assert setting_name in runtime_policy["withCheck"]
+        definer_policy = next(
+            policy
+            for policy in policies
+            if policy["roles"] == ["context_engine_context_run_reader_definer"]
+        )
+        allowed_modes = (
+            "= 'read'" if entry["name"] == "decision_audit" else "IN ('issue', 'read')"
+        )
+        assert definer_policy == {
+            "name": f"{entry['name']}_context_run_reader_definer_read",
+            "command": "SELECT",
+            "roles": ["context_engine_context_run_reader_definer"],
+            "using": (
+                f"{entry['name']}.organization_id = NULLIF("
+                "current_setting("
+                "'app.context_run_operator_ticket_organization_id', true), "
+                f"'')::uuid AND {entry['name']}.decision_ref = "
+                "current_setting("
+                "'app.context_run_operator_ticket_decision_ref', true) AND "
+                "current_setting('app.context_run_operator_ticket_mode', "
+                f"true) {allowed_modes}"
+            ),
+        }
+        migrator_policy = next(
+            policy
+            for policy in policies
+            if policy["roles"] == ["context_engine_migrator"]
+        )
+        assert migrator_policy == {
+            "name": f"{entry['name']}_migrator_administration",
+            "command": "ALL",
+            "roles": ["context_engine_migrator"],
+            "using": "true",
+            "withCheck": "true",
+        }
+        assert not [
+            policy
+            for policy in policies
+            if policy["roles"]
+            in (["context_engine_worker"], ["context_engine_control"])
+        ]
+        assert "TRACE-REDACTION-012" in entry["securityInvariantIds"]
+        assert {"DB-001", "DB-002", "DB-004", "OBS-004", "OBS-005"} <= set(
+            entry["negativeTestIds"]
+        )
+
+    assert ticket["organizationInclusiveKeys"] == [
+        {
+            "name": "pk_context_run_operator_read_ticket",
+            "kind": "primary_key",
+            "columns": ["organization_id", "ticket_digest"],
+        }
+    ]
+    assert ticket["capabilityUniqueKeys"] == [
+        {
+            "name": "uq_context_run_operator_read_ticket_digest",
+            "kind": "unique",
+            "columns": ["ticket_digest"],
+            "rationale": (
+                "A raw ticket can identify at most one Organization-bound "
+                "capability; replay cannot revoke or consume a second tenant's row"
+            ),
+        }
+    ]
+    assert ticket["foreignKeys"] == [
+        {
+            "name": "fk_context_run_operator_ticket_exact_decision",
+            "columns": ["organization_id", "decision_ref"],
+            "references": {
+                "table": "context_run",
+                "columns": ["organization_id", "decision_ref"],
+            },
+            "onDelete": "CASCADE",
+        }
+    ]
+    assert {item["name"] for item in ticket["checkConstraints"]} == {
+        "ck_context_run_operator_ticket_digest_sha256",
+        "ck_context_run_operator_ticket_bindings_nonblank",
+        "ck_context_run_operator_ticket_exact_ttl",
+    }
+    assert ticket["operatorReadBoundary"] == {
+        "ticketFormat": "64 lowercase hexadecimal characters",
+        "storedAs": "sha256_digest_only",
+        "databaseOwnedTtlSeconds": 60,
+        "issueFunction": "issue_context_run_operator_read_ticket",
+        "revokeFunction": "revoke_context_run_operator_read_ticket",
+        "readFunction": "read_context_run_by_operator_ticket",
+        "functionOwner": "context_engine_context_run_reader_definer",
+        "securityDefiner": True,
+        "searchPath": ["pg_catalog", "pg_temp"],
+        "rowSecurity": True,
+        "issueSessionUser": "context_engine_control",
+        "readSessionUser": "context_engine_security_operator",
+        "consumeMode": "atomic_delete_before_exact_projection",
+    }
+    assert ticket["permittedOperations"] == {
+        "context_engine_runtime": [],
+        "context_engine_security_operator": [
+            "EXECUTE read_context_run_by_operator_ticket"
+        ],
+        "context_engine_context_run_reader_definer": [
+            "SELECT",
+            "INSERT",
+            "DELETE",
+        ],
+        "context_engine_worker": [],
+        "context_engine_control": [
+            "EXECUTE issue_context_run_operator_read_ticket",
+            "EXECUTE revoke_context_run_operator_read_ticket",
+        ],
+    }
 
 
 def test_worker_lease_manifest_requires_exact_receiver_and_job() -> None:
@@ -96,9 +368,7 @@ def test_worker_lease_manifest_requires_exact_receiver_and_job() -> None:
     job_foreign_keys = {
         foreign_key["name"]: foreign_key for foreign_key in job["foreignKeys"]
     }
-    assert job_foreign_keys[
-        "fk_worker_noop_job_service_principal_binding"
-    ] == {
+    assert job_foreign_keys["fk_worker_noop_job_service_principal_binding"] == {
         "name": "fk_worker_noop_job_service_principal_binding",
         "columns": [
             "organization_id",
@@ -610,14 +880,12 @@ def test_policy_epoch_manifest_seals_runtime_reads_and_control_mutation() -> Non
         assert "app.membership_id" in runtime_policy["using"]
         assert "app.principal_ref" in runtime_policy["using"]
         assert all(
-            policy["roles"] != ["context_engine_control"]
-            for policy in rls["policies"]
+            policy["roles"] != ["context_engine_control"] for policy in rls["policies"]
         )
         definer_policies = [
             policy
             for policy in rls["policies"]
-            if policy["roles"]
-            == ["context_engine_access_policy_definer"]
+            if policy["roles"] == ["context_engine_access_policy_definer"]
         ]
         assert {policy["command"] for policy in definer_policies} == {
             "SELECT",
@@ -632,8 +900,7 @@ def test_policy_epoch_manifest_seals_runtime_reads_and_control_mutation() -> Non
         assert "withCheck" not in select_policy
         assert update_policy["using"] == update_policy["withCheck"]
         assert all(
-            "app.organization_id" in policy["using"]
-            for policy in definer_policies
+            "app.organization_id" in policy["using"] for policy in definer_policies
         )
 
     assert document["controlOperations"][0] == {

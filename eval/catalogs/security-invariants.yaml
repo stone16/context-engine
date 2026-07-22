@@ -7,7 +7,8 @@
       "#15",
       "#16",
       "#17",
-      "#18"
+      "#18",
+      "#19"
     ],
     "documentRefs": [
       "README.md",
@@ -19,9 +20,10 @@
       "docs/decisions/0019-security-catalog-normalization.md",
       "docs/decisions/0027-organization-policy-epoch.md",
       "docs/decisions/0028-fail-closed-unavailable-runtime-capabilities.md",
-      "docs/decisions/0030-bound-ticket-audiences.md"
+      "docs/decisions/0030-bound-ticket-audiences.md",
+      "docs/decisions/0031-persist-authorized-context-run-lineage.md"
     ],
-    "reconciliation": "Issue #2 fixes the product and testing decisions, issue #5 requires exactly fifteen release invariants and twelve canonical acceptance fixtures, and ADR-0019 resolves the later nineteen-label prose expansion without weakening any safeguard. Issue #15 activates only Organization-level next-request resolve(Acquire) revocation evidence under REVOCATION-006: PG-REVOCATION-006, RUN-006, and CACHE-002 are active while BLOB-002 and Continue, citation, Policy-Epoch-bound WorkerLease, production ContextAccessTicket/ActionTicket, audit, outbox, cleanup, finer-epoch, UI, and external-admin carriers remain future or NOT_ACTIVE. Issue #16 activates only the M0 refusal gate for unavailable Continue, OpenCitation, and server-owned unavailable Acquire plans: its real continuation, citation, federated/source-native, and File carriers remain future, while its Runtime and HTTP refusal surfaces prove generic outcomes before content I/O. Issue #17 activates only the signed one-shot persistent no-op durable-job WorkerLease subcarrier under WORKER-LEASE-007. It binds one exact worker audience but no end-user delivery audience or Policy Epoch, and proves only LEASE-SIGNING-017, PG-WORKER-LEASE-NOOP-017, and WORKER-LEASE-REPLAY-007; Source, Resource, Revision, Policy Epoch, end-user delivery audience, idempotency, generation, business mutation, outbox, File publication, and the full ACCEPT-008 matrix remain deferred or NOT_ACTIVE. Issue #18 activates only distinct signed synthetic ContextAccessTicket Provider-read and ActionTicket no-op channel-action subcarriers under ACTION-SEPARATION-014, with current Organization-v0 Policy Epoch validation. TICKET-AUDIENCE-018 and PG-TICKET-EPOCH-018 do not activate production ContextProvider integration, ContextRuntime ticket integration, BotDelivery, full M2 ActionPlane.prepare/perform, a real Sender or external effect, payload/destination/approval/idempotency binding, durable one-shot/replay/reconciliation, or full ACCEPT-012 PASS; those remain future or NOT_ACTIVE. The canonical set is IDs 001 through 012, 014, 015, and 019: CACHE-SCOPE-013 remains a preregistered conditional extension; AUDIENCE-016 is absorbed by SCOPE-INTERSECTION-004 and EGRESS-011; ACL-PROOF-017 is absorbed by INDEX-NOT-AUTHORITY-005 and REVOCATION-006; DELIVERY-EVIDENCE-018 is absorbed by TRANSPORT-UNTRUSTED-008. ACCEPT-001 through ACCEPT-012 follow ADR-0019's category order. Protected-asset references A-01 through A-08 refer, in order, to the eight bullets in the threat model's Protected assets section. Every expectedEvidence value below is a stable planned case identifier, not a claim that the case ran or passed; only an exact activation record upgrades named evidence, while fixture carrier status and the explicit M0 oracle preserve every other accepted-versus-active distinction."
+    "reconciliation": "Issue #2 fixes the product and testing decisions, issue #5 requires exactly fifteen release invariants and twelve canonical acceptance fixtures, and ADR-0019 resolves the later nineteen-label prose expansion without weakening any safeguard. Issue #15 activates only Organization-level next-request resolve(Acquire) revocation evidence under REVOCATION-006: PG-REVOCATION-006, RUN-006, and CACHE-002 are active while BLOB-002 and Continue, citation, Policy-Epoch-bound WorkerLease, production ContextAccessTicket/ActionTicket, audit, outbox, cleanup, finer-epoch, UI, and external-admin carriers remain future or NOT_ACTIVE. Issue #16 activates only the M0 refusal gate for unavailable Continue, OpenCitation, and server-owned unavailable Acquire plans: its real continuation, citation, federated/source-native, and File carriers remain future, while its Runtime and HTTP refusal surfaces prove generic outcomes before content I/O. Issue #17 activates only the signed one-shot persistent no-op durable-job WorkerLease subcarrier under WORKER-LEASE-007. It binds one exact worker audience but no end-user delivery audience or Policy Epoch, and proves only LEASE-SIGNING-017, PG-WORKER-LEASE-NOOP-017, and WORKER-LEASE-REPLAY-007; Source, Resource, Revision, Policy Epoch, end-user delivery audience, idempotency, generation, business mutation, outbox, File publication, and the full ACCEPT-008 matrix remain deferred or NOT_ACTIVE. Issue #18 activates only distinct signed synthetic ContextAccessTicket Provider-read and ActionTicket no-op channel-action subcarriers under ACTION-SEPARATION-014, with current Organization-v0 Policy Epoch validation. TICKET-AUDIENCE-018 and PG-TICKET-EPOCH-018 do not activate production ContextProvider integration, ContextRuntime ticket integration, BotDelivery, full M2 ActionPlane.prepare/perform, a real Sender or external effect, payload/destination/approval/idempotency binding, durable one-shot/replay/reconciliation, or full ACCEPT-012 PASS; those remain future or NOT_ACTIVE. Issue #19 activates only the current Acquire authorized-only ContextRun and restricted delivered-empty DecisionAudit subcarrier under TRACE-REDACTION-012. DIGEST-019, RUN-LINEAGE-019, AUTHORIZED-RUN-019, and PG-TRACE-REDACTION-012 prove deterministic Package and Organization-bound query digests, retained-UserActor-transaction persistence, decisionRef resolution, redaction, and short-lived exact-Organization operator ticket reads with no application-role table access; the supported reader commits deletion before returning, while a direct caller rollback is not claimed as durable exactly-once redemption. Raw query retention, full ContextPackage body retention, unauthenticated transport failures as ContextRuns, cross-Organization analytics, and general observability redaction remain NOT_ACTIVE. The canonical set is IDs 001 through 012, 014, 015, and 019: CACHE-SCOPE-013 remains a preregistered conditional extension; AUDIENCE-016 is absorbed by SCOPE-INTERSECTION-004 and EGRESS-011; ACL-PROOF-017 is absorbed by INDEX-NOT-AUTHORITY-005 and REVOCATION-006; DELIVERY-EVIDENCE-018 is absorbed by TRANSPORT-UNTRUSTED-008. ACCEPT-001 through ACCEPT-012 follow ADR-0019's category order. Protected-asset references A-01 through A-08 refer, in order, to the eight bullets in the threat model's Protected assets section. Every expectedEvidence value below is a stable planned case identifier, not a claim that the case ran or passed; only an exact activation record upgrades named evidence, while fixture carrier status and the explicit M0 oracle preserve every other accepted-versus-active distinction."
   },
   "hardOracles": [
     {
@@ -142,6 +144,39 @@
       "deferredEvidence": ["PROP-ACTION-SEPARATION-014", "PG-ACTION-SEPARATION-014", "ACTION-001 through ACTION-009", "full ACCEPT-012 matrix"],
       "futureCarriers": ["production ContextProvider read/projection", "ContextRuntime ticket integration", "BotDelivery", "M2 ActionPlane and real Sender"],
       "notActive": ["full M2 ActionPlane.prepare/perform", "real Sender/external effect", "payload/destination/approval/idempotency", "durable one-shot/replay/reconciliation", "full ACCEPT-012 PASS"]
+    },
+    {
+      "issueRef": "#19",
+      "invariantRef": "TRACE-REDACTION-012",
+      "carrier": "ContextRuntime.resolve(Acquire) authorized-only ContextRun | restricted delivered-empty DecisionAudit",
+      "status": "active_fail_closed",
+      "policyEpochScope": "organization-v0",
+      "controlBoundary": "persist_context_run(ContextRunPersistenceSession, ContextRunRecord, DecisionAuditRecord | None) | PostgreSQLContextRunReader.find_by_decision_ref",
+      "testEvidence": [
+        {
+          "id": "DIGEST-019",
+          "surface": "tests/unit/test_package_digest.py",
+          "oracle": "The versioned Package profile hashes the exact active public JSON document without packageDigest using RFC 8785 JSON Canonicalization Scheme (JCS), including recursive UTF-16 code-unit property ordering and ECMAScript number serialization; it rejects non-finite numbers and ambiguous values and detects alteration. The separately domain-separated versioned HMAC binds the exact query to one Organization and retains no raw query or serializable key material."
+        },
+        {
+          "id": "RUN-LINEAGE-019",
+          "surface": "tests/integration/test_runtime_empty_package_integration.py",
+          "oracle": "A successful authenticated empty HTTP Acquire returns only after the retained current-UserActor transaction persists a same-Organization digest-only ContextRun and the restricted generic no_authorized_evidence DecisionAudit; raw query, Candidate, Resource, denial identifier, and count fields are absent."
+        },
+        {
+          "id": "AUTHORIZED-RUN-019",
+          "surface": "tests/integration/test_runtime_authorized_evidence_integration.py",
+          "oracle": "The public HTTP authorized Package decisionRef resolves through the explicit same-Organization operator seam to exactly one delivered_authorized ContextRun containing only authorized Evidence refs and its matching Package digest, with no denial audit row."
+        },
+        {
+          "id": "PG-TRACE-REDACTION-012",
+          "surface": "tests/integration/test_context_run_schema.py",
+          "oracle": "Real PostgreSQL FORCE RLS permits Runtime INSERT only for the exact current UserActor, gives security-operator and Control no direct table reads, and permits one exact safe ContextRun projection when Control issues a digest-only 60-second Organization-and-decision-bound ticket that security-operator deletes before projection; a committed read, arbitrary GUCs, wrong bindings, expiry, and revocation disclose no additional row, while direct-caller rollback is not claimed as durable exactly-once redemption and DecisionAudit remains seven redacted lineage/category columns."
+        }
+      ],
+      "deferredEvidence": ["PROP-TRACE-REDACTION-012 across every future observability carrier", "OBS-002 secret scanning beyond the activated query/key contracts", "OBS-003 production debug-endpoint authorization"],
+      "futureCarriers": ["Continue and OpenCitation ContextRun lineage", "full retrieval candidate/ranking traces", "authorized feedback and golden-set extraction", "explicitly approved full-Package retention"],
+      "notActive": ["raw query retention", "full ContextPackage body retention", "unauthenticated transport failures as ContextRuns", "cross-Organization analytics", "general logs/metrics/debug/evaluation/Learning redaction coverage"]
     }
   ],
   "invariants": [
@@ -468,7 +503,9 @@
       "authorityRefs": [
         "docs/security/context-engine-threat-model.md#6-threat-register",
         "docs/security/Test-Architecture-与可验证性设计.md#11-contract-snapshots-与-schema-evolution",
-        "docs/security/安全负向测试清单.md#7-tracedebugnon-enumeration-与-learning"
+        "docs/security/安全负向测试清单.md#7-tracedebugnon-enumeration-与-learning",
+        "#19",
+        "docs/decisions/0031-persist-authorized-context-run-lineage.md#decision"
       ]
     },
     {
@@ -604,6 +641,7 @@
               "asOf": "2026-07-21T09:30:00Z",
               "expiresAt": "2026-07-21T09:30:30Z",
               "decisionRef": "dec_0000000000000000000000000000000a",
+              "packageDigest": "8e593896cded830ecb39162d17b43a84148355f0b9470926d05b9e5ce957ace9",
               "blocks": [{"blockId": "block_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "text": "A-safe", "evidenceRefs": ["ev_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]}],
               "evidence": [{"evidenceRef": "ev_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "sourceRef": "source-synthetic-a", "resourceRef": "resource-authorized-a", "revisionRef": "revision-authorized-a", "fragmentRef": "fragment-authorized-a", "runRef": "run-authorized-a", "purpose": "context.answer", "authorizationAsOf": "2026-07-21T09:30:00Z", "decisionRef": "dec_0000000000000000000000000000000a", "policySnapshotRef": "policy-snapshot-a", "policyEpoch": 1, "sourceDecisionRef": "source-decision-a"}],
               "gaps": [],
@@ -706,7 +744,7 @@
         "expectedEffectiveScope": ["public-1"]
       },
       "expected": {
-        "externalResponse": {"status": 200, "body": {"kind": "resolved", "package": {"organizationRef": "orgpkg_0000000000000000000000000000000a", "purpose": "context.answer", "ttlSeconds": 30, "asOf": "2026-07-21T09:30:00Z", "expiresAt": "2026-07-21T09:30:30Z", "decisionRef": "dec_0000000000000000000000000000000a", "blocks": [{"blockId": "block_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "text": "A-safe", "evidenceRefs": ["ev_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]}], "evidence": [{"evidenceRef": "ev_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "sourceRef": "source-synthetic-a", "resourceRef": "resource-authorized-a", "revisionRef": "revision-authorized-a", "fragmentRef": "fragment-authorized-a", "runRef": "run-authorized-a", "purpose": "context.answer", "authorizationAsOf": "2026-07-21T09:30:00Z", "decisionRef": "dec_0000000000000000000000000000000a", "policySnapshotRef": "policy-snapshot-a", "policyEpoch": 1, "sourceDecisionRef": "source-decision-a"}], "gaps": [], "budgetUsage": {"tokens": 6, "providerCalls": 0, "costMicrounits": 0, "elapsedMs": 0}, "coverage": {"status": "sufficient"}}}, "authorizedPayloadUtf8": "A-safe", "authorizedPayloadBytes": 6, "privateResourcePresent": false},
+        "externalResponse": {"status": 200, "body": {"kind": "resolved", "package": {"organizationRef": "orgpkg_0000000000000000000000000000000a", "purpose": "context.answer", "ttlSeconds": 30, "asOf": "2026-07-21T09:30:00Z", "expiresAt": "2026-07-21T09:30:30Z", "decisionRef": "dec_0000000000000000000000000000000a", "packageDigest": "8e593896cded830ecb39162d17b43a84148355f0b9470926d05b9e5ce957ace9", "blocks": [{"blockId": "block_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "text": "A-safe", "evidenceRefs": ["ev_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]}], "evidence": [{"evidenceRef": "ev_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "sourceRef": "source-synthetic-a", "resourceRef": "resource-authorized-a", "revisionRef": "revision-authorized-a", "fragmentRef": "fragment-authorized-a", "runRef": "run-authorized-a", "purpose": "context.answer", "authorizationAsOf": "2026-07-21T09:30:00Z", "decisionRef": "dec_0000000000000000000000000000000a", "policySnapshotRef": "policy-snapshot-a", "policyEpoch": 1, "sourceDecisionRef": "source-decision-a"}], "gaps": [], "budgetUsage": {"tokens": 6, "providerCalls": 0, "costMicrounits": 0, "elapsedMs": 0}, "coverage": {"status": "sufficient"}}}, "authorizedPayloadUtf8": "A-safe", "authorizedPayloadBytes": 6, "privateResourcePresent": false},
         "packageOrError": {"kind": "ContextPackage", "evidenceResourceRefs": ["resource-authorized-a"], "blocksPerPackage": 1, "evidencePerPackage": 1, "unauthorizedFieldCount": 0, "unauthorizedEvidenceRefCount": 0},
         "evidence": {"unauthorizedEvidenceCount": 0, "unauthorizedContentBytes": 0, "missingContextFallbackCount": 0, "outboundBytes": 6},
         "businessEffects": {"wrongOrganizationEffectCount": 0, "mutationEffectCount": 0, "totalEffectsAfterScenario": 0},
@@ -752,7 +790,7 @@
         "comparison": "Result set must be a subset of the same invocation without RequestNarrowing."
       },
       "expected": {
-        "externalResponse": {"status": 200, "body": {"kind": "resolved", "package": {"organizationRef": "orgpkg_0000000000000000000000000000000a", "purpose": "context.answer", "ttlSeconds": 30, "asOf": "2026-07-21T09:30:00Z", "expiresAt": "2026-07-21T09:30:30Z", "decisionRef": "dec_0000000000000000000000000000000a", "blocks": [{"blockId": "block_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "text": "A-safe", "evidenceRefs": ["ev_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]}], "evidence": [{"evidenceRef": "ev_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "sourceRef": "source-synthetic-a", "resourceRef": "resource-authorized-a", "revisionRef": "revision-authorized-a", "fragmentRef": "fragment-authorized-a", "runRef": "run-authorized-a", "purpose": "context.answer", "authorizationAsOf": "2026-07-21T09:30:00Z", "decisionRef": "dec_0000000000000000000000000000000a", "policySnapshotRef": "policy-snapshot-a", "policyEpoch": 1, "sourceDecisionRef": "source-decision-a"}], "gaps": [], "budgetUsage": {"tokens": 6, "providerCalls": 0, "costMicrounits": 0, "elapsedMs": 0}, "coverage": {"status": "sufficient"}}}, "authorizedPayloadUtf8": "A-safe", "authorizedPayloadBytes": 6, "source2Present": false},
+        "externalResponse": {"status": 200, "body": {"kind": "resolved", "package": {"organizationRef": "orgpkg_0000000000000000000000000000000a", "purpose": "context.answer", "ttlSeconds": 30, "asOf": "2026-07-21T09:30:00Z", "expiresAt": "2026-07-21T09:30:30Z", "decisionRef": "dec_0000000000000000000000000000000a", "packageDigest": "8e593896cded830ecb39162d17b43a84148355f0b9470926d05b9e5ce957ace9", "blocks": [{"blockId": "block_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "text": "A-safe", "evidenceRefs": ["ev_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]}], "evidence": [{"evidenceRef": "ev_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "sourceRef": "source-synthetic-a", "resourceRef": "resource-authorized-a", "revisionRef": "revision-authorized-a", "fragmentRef": "fragment-authorized-a", "runRef": "run-authorized-a", "purpose": "context.answer", "authorizationAsOf": "2026-07-21T09:30:00Z", "decisionRef": "dec_0000000000000000000000000000000a", "policySnapshotRef": "policy-snapshot-a", "policyEpoch": 1, "sourceDecisionRef": "source-decision-a"}], "gaps": [], "budgetUsage": {"tokens": 6, "providerCalls": 0, "costMicrounits": 0, "elapsedMs": 0}, "coverage": {"status": "sufficient"}}}, "authorizedPayloadUtf8": "A-safe", "authorizedPayloadBytes": 6, "source2Present": false},
         "packageOrError": {"kind": "ContextPackage", "sourceRefs": ["source-synthetic-a"], "expandedSourceCallCount": 0, "blocksPerPackage": 1, "evidencePerPackage": 1, "unauthorizedFieldCount": 0, "unauthorizedEvidenceRefCount": 0},
         "evidence": {"unauthorizedEvidenceCount": 0, "unauthorizedContentBytes": 0, "missingContextFallbackCount": 0, "outboundBytes": 6},
         "businessEffects": {"wrongOrganizationEffectCount": 0, "mutationEffectCount": 0, "totalEffectsAfterScenario": 0},
@@ -846,7 +884,7 @@
         "requiredTypeFlow": ["CandidateRef", "AuthorizationKernel", "AuthorizedProjection"]
       },
       "expected": {
-        "externalResponse": {"status": 200, "body": {"kind": "resolved", "package": {"organizationRef": "orgpkg_0000000000000000000000000000000a", "purpose": "context.answer", "ttlSeconds": 30, "asOf": "2026-07-21T09:30:00Z", "expiresAt": "2026-07-21T09:30:30Z", "decisionRef": "dec_0000000000000000000000000000000a", "blocks": [{"blockId": "block_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "text": "A-safe", "evidenceRefs": ["ev_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]}], "evidence": [{"evidenceRef": "ev_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "sourceRef": "source-synthetic-a", "resourceRef": "resource-authorized-a", "revisionRef": "revision-authorized-a", "fragmentRef": "fragment-authorized-a", "runRef": "run-authorized-a", "purpose": "context.answer", "authorizationAsOf": "2026-07-21T09:30:00Z", "decisionRef": "dec_0000000000000000000000000000000a", "policySnapshotRef": "policy-snapshot-a", "policyEpoch": 1, "sourceDecisionRef": "source-decision-a"}], "gaps": [], "budgetUsage": {"tokens": 6, "providerCalls": 0, "costMicrounits": 0, "elapsedMs": 0}, "coverage": {"status": "sufficient"}}}, "authorizedPayloadUtf8": "A-safe", "authorizedPayloadBytes": 6, "orgBContentPresent": false},
+        "externalResponse": {"status": 200, "body": {"kind": "resolved", "package": {"organizationRef": "orgpkg_0000000000000000000000000000000a", "purpose": "context.answer", "ttlSeconds": 30, "asOf": "2026-07-21T09:30:00Z", "expiresAt": "2026-07-21T09:30:30Z", "decisionRef": "dec_0000000000000000000000000000000a", "packageDigest": "8e593896cded830ecb39162d17b43a84148355f0b9470926d05b9e5ce957ace9", "blocks": [{"blockId": "block_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "text": "A-safe", "evidenceRefs": ["ev_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]}], "evidence": [{"evidenceRef": "ev_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "sourceRef": "source-synthetic-a", "resourceRef": "resource-authorized-a", "revisionRef": "revision-authorized-a", "fragmentRef": "fragment-authorized-a", "runRef": "run-authorized-a", "purpose": "context.answer", "authorizationAsOf": "2026-07-21T09:30:00Z", "decisionRef": "dec_0000000000000000000000000000000a", "policySnapshotRef": "policy-snapshot-a", "policyEpoch": 1, "sourceDecisionRef": "source-decision-a"}], "gaps": [], "budgetUsage": {"tokens": 6, "providerCalls": 0, "costMicrounits": 0, "elapsedMs": 0}, "coverage": {"status": "sufficient"}}}, "authorizedPayloadUtf8": "A-safe", "authorizedPayloadBytes": 6, "orgBContentPresent": false},
         "packageOrError": {"kind": "ContextPackage", "evidenceRefs": ["ev_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "blocksPerPackage": 1, "evidencePerPackage": 1, "unauthorizedFieldCount": 0, "unauthorizedEvidenceRefCount": 0, "deniedCandidateCountExposed": false},
         "evidence": {"unauthorizedEvidenceCount": 0, "unauthorizedContentBytes": 0, "missingContextFallbackCount": 0, "outboundBytes": 6},
         "businessEffects": {"wrongOrganizationEffectCount": 0, "mutationEffectCount": 0, "totalEffectsAfterScenario": 0},
@@ -1121,7 +1159,7 @@
         "interface": "ContextRuntime.resolve",
         "request": "Acquire each probe independently; one additional same-Organization denied-first rank variant repeats the same deterministic oracle",
         "comparisonFields": ["status", "body", "headers", "domainOutcome"],
-        "normalizationAllowlist": ["body.package.organizationRef", "body.package.decisionRef", "body.package.asOf", "body.package.expiresAt", "headers.X-Context-Request-Id"]
+        "normalizationAllowlist": ["body.package.organizationRef", "body.package.decisionRef", "body.package.asOf", "body.package.expiresAt", "body.package.packageDigest", "headers.X-Context-Request-Id"]
       },
       "expected": {
         "externalResponse": {
@@ -1135,6 +1173,7 @@
               "asOf": "2026-07-21T09:30:00Z",
               "expiresAt": "2026-07-21T09:30:30Z",
               "decisionRef": "dec_0000000000000000000000000000000a",
+              "packageDigest": "27f6a284027ab9446aa577125727b33263f24c8f252b8cd4616bd17b8545185e",
               "blocks": [],
               "evidence": [],
               "gaps": [],
@@ -1155,7 +1194,9 @@
       "authorityRefs": [
         "docs/security/context-engine-threat-model.md#6-threat-register",
         "docs/security/安全负向测试清单.md#7-tracedebugnon-enumeration-与-learning",
-        "docs/decisions/0019-security-catalog-normalization.md#decision"
+        "docs/decisions/0019-security-catalog-normalization.md#decision",
+        "#19",
+        "docs/decisions/0031-persist-authorized-context-run-lineage.md#decision"
       ]
     },
     {

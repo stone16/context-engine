@@ -59,11 +59,21 @@ from engine.runtime.policy_epoch import (
     _observe_current_policy_epoch,
     _open_policy_epoch_authority_scope,
 )
-from engine.runtime.scope import ScopeSet, ScopeTarget, TrustedScopeOperands
+from engine.runtime.scope import (
+    EffectiveScope,
+    ScopeSet,
+    ScopeTarget,
+    TrustedScopeOperands,
+)
 from engine.runtime.scope_authority import (
     _close_scope_authority_scope,
     _construct_trusted_scope_snapshot,
     _open_scope_authority_scope,
+)
+from tests.support.context_run import (
+    TEST_QUERY_DIGEST_KEYRING,
+    RecordingContextRunPort,
+    recording_context_run_session,
 )
 
 AS_OF = datetime(2026, 7, 21, 10, 0, tzinfo=UTC)
@@ -230,6 +240,7 @@ def trusted_operands(
     *,
     policy_epoch_port: SequencedPolicyEpochPort | None = None,
     scope_policy_epoch: int | None = None,
+    context_run_port: RecordingContextRunPort | None = None,
 ) -> Iterator[tuple[AuthenticatedInvocation, TrustedDeliveryContext]]:
     membership_scope = _open_membership_authority_scope()
     materialized_scope = _open_materialized_projection_scope()
@@ -248,76 +259,79 @@ def trusted_operands(
             authority_scope=materialized_scope,
             port=cast(MaterializedProjectionPort, port),
         )
-        organization_verification = (
-            _construct_existing_http_organization_verification(
-                organization_id=ORGANIZATION_ID,
-                request_id="request-authorized-evidence",
-                authentication_binding_ref="binding-authorized-evidence",
-                verified_at=AS_OF,
-            )
-        )
-        membership_verification = _construct_current_membership_verification(
-            authority_scope=membership_scope,
+        organization_verification = _construct_existing_http_organization_verification(
             organization_id=ORGANIZATION_ID,
-            user_id=USER_ID,
-            membership_id=MEMBERSHIP_ID,
-            membership_version=7,
-            principal_ref="principal-authorized-evidence",
             request_id="request-authorized-evidence",
             authentication_binding_ref="binding-authorized-evidence",
-            checked_at=AS_OF,
-            policy_epoch_verification=policy_epoch_verification,
-            materialized_projection_session=projection_session,
+            verified_at=AS_OF,
         )
         operands = exact_operands()
-        scope_snapshot = _construct_trusted_scope_snapshot(
-            authority_scope=scope_authority_scope,
-            organization_id=ORGANIZATION_ID,
-            user_id=USER_ID,
-            membership_id=MEMBERSHIP_ID,
-            membership_version=7,
-            policy_epoch=(
-                policy_epoch_verification.policy_epoch
-                if scope_policy_epoch is None
-                else scope_policy_epoch
-            ),
-            principal_ref="principal-authorized-evidence",
-            agent_version_ref="agent-version-authorized-evidence",
-            purpose="context.answer",
-            request_id="request-authorized-evidence",
-            authentication_binding_ref="binding-authorized-evidence",
-            checked_at=AS_OF,
-            organization_boundary=operands.organization_boundary,
-            membership_rights=operands.membership_rights,
-            principal_grants=operands.principal_grants,
-            agent_ceiling=operands.agent_ceiling,
-            source_native_acl=operands.source_native_acl,
-            resource_acl=operands.resource_acl,
-            purpose_policy=operands.purpose_policy,
-        )
-        invocation = _construct_authenticated_http_invocation(
-            request_id="request-authorized-evidence",
-            authenticated_organization_ref=str(ORGANIZATION_ID),
-            organization_verification=organization_verification,
-            user_ref=str(USER_ID),
-            principal_ref="principal-authorized-evidence",
-            membership_ref=str(MEMBERSHIP_ID),
-            membership_version=7,
-            current_membership_verification=membership_verification,
-            agent_version_ref="agent-version-authorized-evidence",
-            authenticated_application_ref="application-authorized-evidence",
-            authentication_binding_ref="binding-authorized-evidence",
-            trusted_purpose="context.answer",
-            received_at=AS_OF,
-            trusted_scope_snapshot=scope_snapshot,
-        )
-        delivery = _construct_direct_delivery_context(
-            purpose="context.answer",
-            authenticated_application_ref="application-authorized-evidence",
-            delivery_binding_ref="binding-authorized-evidence",
-            established_at=AS_OF,
-        )
-        yield invocation, delivery
+        with recording_context_run_session(port=context_run_port) as (
+            persistence_session,
+            _,
+        ):
+            membership_verification = _construct_current_membership_verification(
+                authority_scope=membership_scope,
+                organization_id=ORGANIZATION_ID,
+                user_id=USER_ID,
+                membership_id=MEMBERSHIP_ID,
+                membership_version=7,
+                principal_ref="principal-authorized-evidence",
+                request_id="request-authorized-evidence",
+                authentication_binding_ref="binding-authorized-evidence",
+                checked_at=AS_OF,
+                policy_epoch_verification=policy_epoch_verification,
+                materialized_projection_session=projection_session,
+                context_run_persistence_session=persistence_session,
+            )
+            scope_snapshot = _construct_trusted_scope_snapshot(
+                authority_scope=scope_authority_scope,
+                organization_id=ORGANIZATION_ID,
+                user_id=USER_ID,
+                membership_id=MEMBERSHIP_ID,
+                membership_version=7,
+                policy_epoch=(
+                    policy_epoch_verification.policy_epoch
+                    if scope_policy_epoch is None
+                    else scope_policy_epoch
+                ),
+                principal_ref="principal-authorized-evidence",
+                agent_version_ref="agent-version-authorized-evidence",
+                purpose="context.answer",
+                request_id="request-authorized-evidence",
+                authentication_binding_ref="binding-authorized-evidence",
+                checked_at=AS_OF,
+                organization_boundary=operands.organization_boundary,
+                membership_rights=operands.membership_rights,
+                principal_grants=operands.principal_grants,
+                agent_ceiling=operands.agent_ceiling,
+                source_native_acl=operands.source_native_acl,
+                resource_acl=operands.resource_acl,
+                purpose_policy=operands.purpose_policy,
+            )
+            invocation = _construct_authenticated_http_invocation(
+                request_id="request-authorized-evidence",
+                authenticated_organization_ref=str(ORGANIZATION_ID),
+                organization_verification=organization_verification,
+                user_ref=str(USER_ID),
+                principal_ref="principal-authorized-evidence",
+                membership_ref=str(MEMBERSHIP_ID),
+                membership_version=7,
+                current_membership_verification=membership_verification,
+                agent_version_ref="agent-version-authorized-evidence",
+                authenticated_application_ref="application-authorized-evidence",
+                authentication_binding_ref="binding-authorized-evidence",
+                trusted_purpose="context.answer",
+                received_at=AS_OF,
+                trusted_scope_snapshot=scope_snapshot,
+            )
+            delivery = _construct_direct_delivery_context(
+                purpose="context.answer",
+                authenticated_application_ref="application-authorized-evidence",
+                delivery_binding_ref="binding-authorized-evidence",
+                established_at=AS_OF,
+            )
+            yield invocation, delivery
     finally:
         _close_policy_epoch_authority_scope(policy_epoch_scope)
         _close_scope_authority_scope(scope_authority_scope)
@@ -338,6 +352,7 @@ def test_hostile_candidate_order_delivers_only_exact_authorized_evidence(
         required_kernel_dependencies(),
         candidate_index=cast(CandidateIndex, index),
         clock=lambda: AS_OF,
+        query_digest_keyring=TEST_QUERY_DIGEST_KEYRING,
     )
 
     with trusted_operands(port) as (invocation, delivery):
@@ -389,6 +404,7 @@ def test_stale_scope_epoch_stops_before_candidate_or_body_io() -> None:
         required_kernel_dependencies(),
         candidate_index=cast(CandidateIndex, index),
         clock=lambda: AS_OF,
+        query_digest_keyring=TEST_QUERY_DIGEST_KEYRING,
     )
 
     with trusted_operands(port, scope_policy_epoch=6) as (invocation, delivery):
@@ -409,18 +425,23 @@ def test_stale_scope_epoch_stops_before_candidate_or_body_io() -> None:
     assert port.body_calls == []
 
 
-def test_mid_resolve_epoch_change_discards_assembled_content_before_audit_and_delivery(
-) -> None:
+def test_mid_resolve_epoch_change_discards_content_before_delivery() -> None:
     index = HostileCandidateIndex((AUTHORIZED,))
     port = RecordingMaterializedPort()
+    context_run_port = RecordingContextRunPort()
     epoch = SequencedPolicyEpochPort(7, 7, 8)
     runtime = Runtime(
         required_kernel_dependencies(),
         candidate_index=cast(CandidateIndex, index),
         clock=lambda: AS_OF,
+        query_digest_keyring=TEST_QUERY_DIGEST_KEYRING,
     )
 
-    with trusted_operands(port, policy_epoch_port=epoch) as (invocation, delivery):
+    with trusted_operands(
+        port,
+        policy_epoch_port=epoch,
+        context_run_port=context_run_port,
+    ) as (invocation, delivery):
         outcome = runtime.resolve(
             invocation,
             delivery,
@@ -439,10 +460,58 @@ def test_mid_resolve_epoch_change_discards_assembled_content_before_audit_and_de
     assert outcome.package.coverage.reason == "no_authorized_evidence"
     assert outcome.package.budget_usage.tokens == 0
     assert "A-safe" not in repr(outcome)
+    assert len(context_run_port.calls) == 1
+    persisted_run, persisted_audit = context_run_port.calls[0]
+    assert persisted_run.effective_scope_digest == outcome.scope_decision.digest
+    assert (
+        persisted_run.effective_scope_digest
+        != EffectiveScope(
+            frozenset(
+                {
+                    ScopeTarget(
+                        ORGANIZATION_ID,
+                        AUTHORIZED.source_ref,
+                        AUTHORIZED.resource_ref,
+                    )
+                }
+            )
+        ).digest
+    )
+    assert persisted_audit is not None
 
 
-def test_pre_revocation_decision_cannot_be_laundered_by_fresh_invocation(
-) -> None:
+def test_final_epoch_veto_changes_only_the_decision_scope_digest() -> None:
+    index = HostileCandidateIndex((AUTHORIZED,))
+    port = RecordingMaterializedPort()
+    kernel = AuthorizationKernel(required_kernel_dependencies())
+    issuer = _OpaqueReferenceIssuer()
+
+    with trusted_operands(
+        port,
+        policy_epoch_port=SequencedPolicyEpochPort(7, 7, 8),
+    ) as (invocation, delivery):
+        decision = kernel.authorize_acquire(
+            invocation,
+            delivery,
+            Acquire(need=ContextNeed(query="finalized provenance")),
+            server_budget=DEFAULT_SERVER_PACKAGE_BUDGET,
+            as_of=AS_OF,
+            reference_issuer=issuer,
+            candidate_index=cast(CandidateIndex, index),
+            projection_session=invocation.user_actor.materialized_projection_session,
+        )
+        finalized = kernel.finalize_for_delivery(invocation, decision)
+
+    assert finalized.policy_receipt.effective_scope == EffectiveScope(frozenset())
+    assert finalized.provenance_receipt == replace(
+        decision.provenance_receipt,
+        effective_scope_digest=finalized.policy_receipt.effective_scope.digest,
+    )
+    assert finalized.content.evidence == ()
+    assert finalized.audit_receipt.authorized_evidence_count == 0
+
+
+def test_pre_revocation_decision_cannot_be_laundered_by_fresh_invocation() -> None:
     """CACHE-002: a current invocation cannot make stale decision content current."""
 
     index = HostileCandidateIndex((AUTHORIZED,))
@@ -474,13 +543,16 @@ def test_pre_revocation_decision_cannot_be_laundered_by_fresh_invocation(
         RecordingMaterializedPort(),
         policy_epoch_port=SequencedPolicyEpochPort(8),
     ) as (post_revocation_invocation, _delivery):
-        policy_receipt, content, audit_receipt = kernel.finalize_for_delivery(
+        finalized = kernel.finalize_for_delivery(
             post_revocation_invocation,
             stale_decision,
         )
 
     # Mutation witness: checking only the fresh invocation's current epoch leaks
     # the stale decision's already assembled A-safe content here.
+    policy_receipt = finalized.policy_receipt
+    content = finalized.content
+    audit_receipt = finalized.audit_receipt
     assert policy_receipt.effective_scope.targets == frozenset()
     assert content.blocks == ()
     assert content.evidence == ()
@@ -538,13 +610,16 @@ def test_stale_content_cannot_be_spliced_into_a_current_decision() -> None:
             current_decision,
             content=stale_decision.content,
         )
-        policy_receipt, content, audit_receipt = kernel.finalize_for_delivery(
+        finalized = kernel.finalize_for_delivery(
             post_revocation_invocation,
             spliced_decision,
         )
 
     # Mutation witness: receipt/invocation epoch checks alone accept the epoch-8
     # wrapper and leak the epoch-7 A-safe content.
+    policy_receipt = finalized.policy_receipt
+    content = finalized.content
+    audit_receipt = finalized.audit_receipt
     assert policy_receipt.effective_scope.targets == frozenset()
     assert content.blocks == ()
     assert content.evidence == ()
@@ -552,14 +627,16 @@ def test_stale_content_cannot_be_spliced_into_a_current_decision() -> None:
     assert "A-safe" not in repr(content)
 
 
-def test_explicit_candidate_index_requires_same_transaction_projection_session(
-) -> None:
+def test_explicit_candidate_index_requires_same_transaction_projection_session() -> (
+    None
+):
     index = HostileCandidateIndex((AUTHORIZED,))
     port = RecordingMaterializedPort()
     runtime = Runtime(
         required_kernel_dependencies(),
         candidate_index=cast(CandidateIndex, index),
         clock=lambda: AS_OF,
+        query_digest_keyring=TEST_QUERY_DIGEST_KEYRING,
     )
 
     with trusted_operands(port) as (invocation, delivery):
@@ -584,14 +661,16 @@ def test_explicit_candidate_index_requires_same_transaction_projection_session(
     assert port.body_calls == []
 
 
-def test_runtime_rejects_authority_locator_that_does_not_match_candidate_exactly(
-) -> None:
+def test_runtime_rejects_authority_locator_that_does_not_match_candidate_exactly() -> (
+    None
+):
     index = HostileCandidateIndex((DENIED,))
     port = MismatchedLocatorPort()
     runtime = Runtime(
         required_kernel_dependencies(),
         candidate_index=cast(CandidateIndex, index),
         clock=lambda: AS_OF,
+        query_digest_keyring=TEST_QUERY_DIGEST_KEYRING,
     )
 
     with trusted_operands(port) as (invocation, delivery):
@@ -615,6 +694,7 @@ def test_missing_materialized_body_uses_the_same_tenant_safe_empty_outcome() -> 
         required_kernel_dependencies(),
         candidate_index=cast(CandidateIndex, index),
         clock=lambda: AS_OF,
+        query_digest_keyring=TEST_QUERY_DIGEST_KEYRING,
     )
 
     with trusted_operands(port) as (invocation, delivery):
@@ -664,6 +744,7 @@ def test_runtime_canonical_empty_package_is_equal_for_every_internal_branch() ->
             required_kernel_dependencies(),
             candidate_index=cast(CandidateIndex, HostileCandidateIndex(ranked)),
             clock=lambda: AS_OF,
+            query_digest_keyring=TEST_QUERY_DIGEST_KEYRING,
         )
         with trusted_operands(port) as (invocation, delivery):
             outcome = runtime.resolve(
@@ -695,6 +776,7 @@ def test_denied_cross_organization_and_missing_candidates_share_one_runtime_outc
         required_kernel_dependencies(),
         candidate_index=cast(CandidateIndex, index),
         clock=lambda: AS_OF,
+        query_digest_keyring=TEST_QUERY_DIGEST_KEYRING,
     )
 
     with trusted_operands(port) as (invocation, delivery):
@@ -707,13 +789,16 @@ def test_denied_cross_organization_and_missing_candidates_share_one_runtime_outc
     assert type(outcome) is Resolved
     package = outcome.package
     assert index.calls == 1
-    assert port.locator_calls == sorted(set(ranked), key=lambda candidate: (
-        str(candidate.organization_id),
-        candidate.source_ref,
-        candidate.resource_ref,
-        candidate.revision_ref,
-        candidate.fragment_ref,
-    ))
+    assert port.locator_calls == sorted(
+        set(ranked),
+        key=lambda candidate: (
+            str(candidate.organization_id),
+            candidate.source_ref,
+            candidate.resource_ref,
+            candidate.revision_ref,
+            candidate.fragment_ref,
+        ),
+    )
     assert port.body_calls == []
     assert package.blocks == ()
     assert package.evidence == ()
@@ -795,6 +880,7 @@ def test_empty_effective_scope_performs_zero_candidate_or_body_io() -> None:
         required_kernel_dependencies(),
         candidate_index=cast(CandidateIndex, index),
         clock=lambda: AS_OF,
+        query_digest_keyring=TEST_QUERY_DIGEST_KEYRING,
     )
 
     with trusted_operands(port) as (invocation, delivery):
@@ -833,6 +919,7 @@ def test_authorized_body_over_budget_is_not_delivered() -> None:
         required_kernel_dependencies(),
         candidate_index=cast(CandidateIndex, index),
         clock=lambda: AS_OF,
+        query_digest_keyring=TEST_QUERY_DIGEST_KEYRING,
     )
 
     with trusted_operands(port) as (invocation, delivery):
@@ -861,6 +948,7 @@ def test_budget_selection_is_independent_of_hostile_candidate_rank() -> None:
             required_kernel_dependencies(),
             candidate_index=cast(CandidateIndex, index),
             clock=lambda: AS_OF,
+            query_digest_keyring=TEST_QUERY_DIGEST_KEYRING,
         )
 
         with trusted_operands(port) as (invocation, delivery):
@@ -906,14 +994,16 @@ def test_budget_selection_is_independent_of_hostile_candidate_rank() -> None:
     assert forward == reversed_rank == ("A-safe",)
 
 
-def test_hostile_index_duplicate_candidates_are_deduplicated_before_projection(
-) -> None:
+def test_hostile_index_duplicate_candidates_are_deduplicated_before_projection() -> (
+    None
+):
     index = HostileCandidateIndex((AUTHORIZED, AUTHORIZED, AUTHORIZED))
     port = RecordingMaterializedPort()
     runtime = Runtime(
         required_kernel_dependencies(),
         candidate_index=cast(CandidateIndex, index),
         clock=lambda: AS_OF,
+        query_digest_keyring=TEST_QUERY_DIGEST_KEYRING,
     )
 
     with trusted_operands(port) as (invocation, delivery):
@@ -937,6 +1027,7 @@ def test_agent_ceiling_denial_keeps_candidate_content_out_of_package() -> None:
         required_kernel_dependencies(),
         candidate_index=cast(CandidateIndex, index),
         clock=lambda: AS_OF,
+        query_digest_keyring=TEST_QUERY_DIGEST_KEYRING,
     )
 
     with trusted_operands(port) as (invocation, delivery):
@@ -964,6 +1055,7 @@ def test_request_narrowing_filters_candidate_before_body_projection() -> None:
         required_kernel_dependencies(),
         candidate_index=cast(CandidateIndex, index),
         clock=lambda: AS_OF,
+        query_digest_keyring=TEST_QUERY_DIGEST_KEYRING,
     )
 
     with trusted_operands(port) as (invocation, delivery):

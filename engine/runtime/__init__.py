@@ -38,6 +38,12 @@ from engine.runtime.context_access_ticket import (
     SyntheticReadProvider,
     SyntheticReadReceipt,
 )
+from engine.runtime.context_run import (
+    PACKAGE_RETENTION_MODE,
+    ContextRunOutcome,
+    ContextRunPersistenceUnavailable,
+    DecisionAuditCategory,
+)
 from engine.runtime.contracts import (
     Acquire,
     BudgetUsage,
@@ -73,6 +79,13 @@ from engine.runtime.invocation import (
     AuthenticatedInvocation,
     InvocationConstructionProvenance,
 )
+from engine.runtime.package_digest import (
+    PACKAGE_DIGEST_PROFILE,
+    QUERY_DIGEST_PROFILE,
+    QueryDigestKeyring,
+    context_package_digest,
+    verify_context_package_digest,
+)
 from engine.runtime.ticket_identity import TicketExecutionIdentity
 from engine.runtime.ticket_rejection import (
     TicketNotAvailable,
@@ -102,12 +115,15 @@ __all__ = [
     "ContextAccessTicketIssuer",
     "ContextAccessTicketReadHandler",
     "ContextPackage",
+    "ContextRunOutcome",
+    "ContextRunPersistenceUnavailable",
     "Continue",
     "ContinuationToken",
     "Coverage",
     "CoverageReason",
     "CoverageStatus",
     "CurrentMembershipVerification",
+    "DecisionAuditCategory",
     "InvocationConstructionProvenance",
     "MembershipVerificationProvenance",
     "MembershipRejectionAuditReceipt",
@@ -118,9 +134,13 @@ __all__ = [
     "PackageBudgetRequest",
     "PackageBlock",
     "PackageContent",
+    "PACKAGE_DIGEST_PROFILE",
+    "PACKAGE_RETENTION_MODE",
     "OpenCitation",
     "RequestNarrowing",
     "RequestNotAvailable",
+    "QUERY_DIGEST_PROFILE",
+    "QueryDigestKeyring",
     "ResolutionOutcome",
     "Resolved",
     "ScopeDecisionReceipt",
@@ -140,6 +160,8 @@ __all__ = [
     "UserActor",
     "UserActorConstructionProvenance",
     "construct_package_content",
+    "context_package_digest",
     "effective_package_budget",
     "validate_package_content",
+    "verify_context_package_digest",
 ]

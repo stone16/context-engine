@@ -53,6 +53,10 @@ from engine.runtime.policy_epoch import (
     _observe_current_policy_epoch,
     _open_policy_epoch_authority_scope,
 )
+from tests.support.context_run import (
+    TEST_QUERY_DIGEST_KEYRING,
+    recording_context_run_session,
+)
 
 VALID_BODY = {
     "kind": "acquire",
@@ -124,18 +128,20 @@ class DeterministicMembershipAuthority:
                     port=CurrentEpochPort(),
                 )
             )
-            yield _construct_current_membership_verification(
-                authority_scope=scope,
-                organization_id=identity.organization_id,
-                user_id=identity.user_id,
-                membership_id=identity.membership_id,
-                membership_version=identity.membership_version,
-                principal_ref=identity.principal_ref,
-                request_id=identity.request_id,
-                authentication_binding_ref=identity.authentication_binding_ref,
-                checked_at=identity.checked_at,
-                policy_epoch_verification=policy_epoch_verification,
-            )
+            with recording_context_run_session() as (persistence_session, _):
+                yield _construct_current_membership_verification(
+                    authority_scope=scope,
+                    organization_id=identity.organization_id,
+                    user_id=identity.user_id,
+                    membership_id=identity.membership_id,
+                    membership_version=identity.membership_version,
+                    principal_ref=identity.principal_ref,
+                    request_id=identity.request_id,
+                    authentication_binding_ref=identity.authentication_binding_ref,
+                    checked_at=identity.checked_at,
+                    policy_epoch_verification=policy_epoch_verification,
+                    context_run_persistence_session=persistence_session,
+                )
         finally:
             _close_policy_epoch_authority_scope(policy_epoch_scope)
             _close_membership_authority_scope(scope)
@@ -160,9 +166,7 @@ class UnavailableTestMembershipAuthority:
         return _RaisingMembershipContext(MembershipAuthorityUnavailable())
 
 
-class _RaisingMembershipContext(
-    AbstractContextManager[CurrentMembershipVerification]
-):
+class _RaisingMembershipContext(AbstractContextManager[CurrentMembershipVerification]):
     def __init__(self, error: Exception) -> None:
         self._error = error
 
@@ -508,6 +512,7 @@ def test_valid_acquire_returns_canonical_tenant_safe_empty_package() -> None:
             "asOf": "2026-07-21T05:00:00Z",
             "expiresAt": "2026-07-21T05:05:00Z",
             "decisionRef": response.json()["package"]["decisionRef"],
+            "packageDigest": response.json()["package"]["packageDigest"],
             "blocks": [],
             "evidence": [],
             "gaps": [],
@@ -523,9 +528,7 @@ def test_valid_acquire_returns_canonical_tenant_safe_empty_package() -> None:
             },
         },
     }
-    assert response.json()["package"]["organizationRef"] != (
-        INTERNAL_ORGANIZATION_REF
-    )
+    assert response.json()["package"]["organizationRef"] != (INTERNAL_ORGANIZATION_REF)
 
 
 def test_valid_http_acquire_reaches_the_single_runtime_entry_exactly_once() -> None:
@@ -536,6 +539,7 @@ def test_valid_http_acquire_reaches_the_single_runtime_entry_exactly_once() -> N
             organization_authority=DeterministicOrganizationAuthority(),
             membership_authority=DeterministicMembershipAuthority(),
             clock=lambda: RECEIVED_AT,
+            query_digest_keyring=TEST_QUERY_DIGEST_KEYRING,
             resolution_observer=resolution_spy.observe,
         )
     )
@@ -704,6 +708,7 @@ def test_membership_transaction_exit_failure_suppresses_prepared_200_as_503() ->
             authenticator=DeterministicAuthenticator(),
             organization_authority=DeterministicOrganizationAuthority(),
             membership_authority=ExitUnavailableMembershipAuthority(),
+            query_digest_keyring=TEST_QUERY_DIGEST_KEYRING,
             resolution_observer=resolution_spy.observe,
             clock=lambda: RECEIVED_AT,
         )
@@ -739,6 +744,7 @@ def test_membership_authority_scope_encloses_invocation_runtime_and_response() -
             authenticator=DeterministicAuthenticator(),
             organization_authority=DeterministicOrganizationAuthority(),
             membership_authority=authority,
+            query_digest_keyring=TEST_QUERY_DIGEST_KEYRING,
             invocation_observer=observe_invocation,
             resolution_observer=observe_resolution,
             clock=lambda: RECEIVED_AT,
@@ -1045,9 +1051,7 @@ def test_non_standard_json_numbers_fail_at_the_transport_boundary(
     spy = InvocationSpy()
     client = trust_boundary_client(authenticator, spy)
     raw_body = (
-        b'{"kind":"acquire","need":{"query":"probe"},"unknown":'
-        + non_finite
-        + b"}"
+        b'{"kind":"acquire","need":{"query":"probe"},"unknown":' + non_finite + b"}"
     )
 
     response = client.post(
@@ -1299,10 +1303,7 @@ def test_json_nesting_limit_is_enforced_before_authentication() -> None:
             "Authorization": f"Bearer {VALID_TOKEN}",
             "Content-Type": "application/json",
         },
-        content=(
-            b'{"kind":"acquire","need":{"query":"probe"},'
-            b'"unknown":[[]]}'
-        ),
+        content=(b'{"kind":"acquire","need":{"query":"probe"},"unknown":[[]]}'),
     )
 
     assert response.status_code == 400
@@ -1471,6 +1472,7 @@ def test_injected_authenticator_runs_only_the_real_sealed_runtime() -> None:
             authenticator=DeterministicAuthenticator(),
             organization_authority=DeterministicOrganizationAuthority(),
             membership_authority=DeterministicMembershipAuthority(),
+            query_digest_keyring=TEST_QUERY_DIGEST_KEYRING,
             clock=lambda: RECEIVED_AT,
         )
     )
@@ -1585,9 +1587,9 @@ def test_openapi_body_is_closed_and_contains_no_trusted_fields() -> None:
     assert response_schema_name(operation, 422) == "InvalidRequestWire"
     assert response_schema_name(operation, 503) == "ServiceUnavailableWire"
     assert response_schema_name(operation, 200) == "ResolutionOutcomeWire"
-    response_schema = operation["responses"]["200"]["content"][
-        "application/json"
-    ]["schema"]
+    response_schema = operation["responses"]["200"]["content"]["application/json"][
+        "schema"
+    ]
     response_models = reachable_schemas(
         response_schema,
         schema["components"]["schemas"],
@@ -1612,6 +1614,7 @@ def test_openapi_body_is_closed_and_contains_no_trusted_fields() -> None:
         "asOf",
         "expiresAt",
         "decisionRef",
+        "packageDigest",
         "blocks",
         "evidence",
         "gaps",
@@ -1630,6 +1633,9 @@ def test_openapi_body_is_closed_and_contains_no_trusted_fields() -> None:
     )
     assert package_schema["properties"]["decisionRef"]["pattern"] == (
         "^dec_[0-9a-f]{32}$"
+    )
+    assert package_schema["properties"]["packageDigest"]["pattern"] == (
+        "^[0-9a-f]{64}$"
     )
     block_schema = response_models["BlockWire"]
     assert block_schema["required"] == ["blockId", "text", "evidenceRefs"]
@@ -1661,7 +1667,6 @@ def test_openapi_body_is_closed_and_contains_no_trusted_fields() -> None:
         "scopedecision",
         "scopetarget",
         "targetcount",
-        "digest",
         "principalref",
         "candidate",
         "organizationid",
@@ -1780,6 +1785,7 @@ def trust_boundary_client(
                 authenticator=authenticator,
                 organization_authority=DeterministicOrganizationAuthority(),
                 membership_authority=DeterministicMembershipAuthority(),
+                query_digest_keyring=TEST_QUERY_DIGEST_KEYRING,
                 invocation_observer=spy.observe,
                 clock=lambda: RECEIVED_AT,
                 request_id_factory=lambda: "server-generated-request",
@@ -1790,6 +1796,7 @@ def trust_boundary_client(
             authenticator=authenticator,
             organization_authority=DeterministicOrganizationAuthority(),
             membership_authority=DeterministicMembershipAuthority(),
+            query_digest_keyring=TEST_QUERY_DIGEST_KEYRING,
             invocation_observer=spy.observe,
             clock=lambda: RECEIVED_AT,
             request_id_factory=lambda: "server-generated-request",

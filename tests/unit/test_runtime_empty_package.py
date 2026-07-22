@@ -45,6 +45,10 @@ from engine.runtime.policy_epoch import (
     _observe_current_policy_epoch,
     _open_policy_epoch_authority_scope,
 )
+from tests.support.context_run import (
+    TEST_QUERY_DIGEST_KEYRING,
+    recording_context_run_session,
+)
 
 AS_OF = datetime(2026, 7, 21, 5, 0, tzinfo=UTC)
 INTERNAL_ORGANIZATION_REF = "81e18bca-86a1-478a-937d-7675c6fe69b0"
@@ -106,58 +110,60 @@ def trusted_operands() -> Iterator[
         authentication_binding_ref="binding-internal",
         verified_at=AS_OF,
     )
-    membership_verification = _construct_current_membership_verification(
-        authority_scope=authority_scope,
-        organization_id=UUID(INTERNAL_ORGANIZATION_REF),
-        user_id=UUID(INTERNAL_USER_REF),
-        membership_id=UUID(INTERNAL_MEMBERSHIP_REF),
-        membership_version=1,
-        principal_ref="principal-internal",
-        request_id="request-1",
-        authentication_binding_ref="binding-internal",
-        checked_at=AS_OF,
-        policy_epoch_verification=policy_epoch_verification,
-    )
     try:
-        scope_identity = ScopeAuthorityIdentity(
-            organization_id=UUID(INTERNAL_ORGANIZATION_REF),
-            user_id=UUID(INTERNAL_USER_REF),
-            membership_id=UUID(INTERNAL_MEMBERSHIP_REF),
-            membership_version=1,
-            policy_epoch=1,
-            principal_ref="principal-internal",
-            agent_version_ref="agent-version-internal",
-            purpose="context.answer",
-            request_id="request-1",
-            authentication_binding_ref="binding-internal",
-            checked_at=AS_OF,
-        )
-        with MissingTrustedScopeAuthority().current_scope(
-            scope_identity
-        ) as scope_snapshot:
-            invocation = _construct_authenticated_http_invocation(
-                request_id="request-1",
-                authenticated_organization_ref=INTERNAL_ORGANIZATION_REF,
-                organization_verification=verification,
-                user_ref=INTERNAL_USER_REF,
-                principal_ref="principal-internal",
-                membership_ref=INTERNAL_MEMBERSHIP_REF,
+        with recording_context_run_session() as (persistence_session, _):
+            membership_verification = _construct_current_membership_verification(
+                authority_scope=authority_scope,
+                organization_id=UUID(INTERNAL_ORGANIZATION_REF),
+                user_id=UUID(INTERNAL_USER_REF),
+                membership_id=UUID(INTERNAL_MEMBERSHIP_REF),
                 membership_version=1,
-                current_membership_verification=membership_verification,
-                agent_version_ref="agent-version-internal",
-                authenticated_application_ref="application-internal",
+                principal_ref="principal-internal",
+                request_id="request-1",
                 authentication_binding_ref="binding-internal",
-                trusted_purpose="context.answer",
-                received_at=AS_OF,
-                trusted_scope_snapshot=scope_snapshot,
+                checked_at=AS_OF,
+                policy_epoch_verification=policy_epoch_verification,
+                context_run_persistence_session=persistence_session,
             )
-            delivery = _construct_direct_delivery_context(
+            scope_identity = ScopeAuthorityIdentity(
+                organization_id=UUID(INTERNAL_ORGANIZATION_REF),
+                user_id=UUID(INTERNAL_USER_REF),
+                membership_id=UUID(INTERNAL_MEMBERSHIP_REF),
+                membership_version=1,
+                policy_epoch=1,
+                principal_ref="principal-internal",
+                agent_version_ref="agent-version-internal",
                 purpose="context.answer",
-                authenticated_application_ref="application-internal",
-                delivery_binding_ref="binding-internal",
-                established_at=AS_OF,
+                request_id="request-1",
+                authentication_binding_ref="binding-internal",
+                checked_at=AS_OF,
             )
-            yield invocation, delivery
+            with MissingTrustedScopeAuthority().current_scope(
+                scope_identity
+            ) as scope_snapshot:
+                invocation = _construct_authenticated_http_invocation(
+                    request_id="request-1",
+                    authenticated_organization_ref=INTERNAL_ORGANIZATION_REF,
+                    organization_verification=verification,
+                    user_ref=INTERNAL_USER_REF,
+                    principal_ref="principal-internal",
+                    membership_ref=INTERNAL_MEMBERSHIP_REF,
+                    membership_version=1,
+                    current_membership_verification=membership_verification,
+                    agent_version_ref="agent-version-internal",
+                    authenticated_application_ref="application-internal",
+                    authentication_binding_ref="binding-internal",
+                    trusted_purpose="context.answer",
+                    received_at=AS_OF,
+                    trusted_scope_snapshot=scope_snapshot,
+                )
+                delivery = _construct_direct_delivery_context(
+                    purpose="context.answer",
+                    authenticated_application_ref="application-internal",
+                    delivery_binding_ref="binding-internal",
+                    established_at=AS_OF,
+                )
+                yield invocation, delivery
     finally:
         _close_policy_epoch_authority_scope(policy_epoch_scope)
         _close_membership_authority_scope(authority_scope)
@@ -177,6 +183,7 @@ def runtime(content_io_spy: ContentIoSpy | None = None) -> Runtime:
         server_budget=SERVER_BUDGET,
         content_io=content_io,
         clock=lambda: AS_OF,
+        query_digest_keyring=TEST_QUERY_DIGEST_KEYRING,
     )
 
 
@@ -400,7 +407,10 @@ def test_authorization_kernel_is_sealed_inside_runtime_composition() -> None:
 
     assert type(candidate._kernel) is AuthorizationKernel
     assert "kernel" not in Runtime.__init__.__annotations__
-    assert "kernel" not in Runtime.__init__.__code__.co_varnames[
-        : Runtime.__init__.__code__.co_argcount
-        + Runtime.__init__.__code__.co_kwonlyargcount
-    ]
+    assert (
+        "kernel"
+        not in Runtime.__init__.__code__.co_varnames[
+            : Runtime.__init__.__code__.co_argcount
+            + Runtime.__init__.__code__.co_kwonlyargcount
+        ]
+    )

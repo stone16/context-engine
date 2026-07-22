@@ -11,6 +11,8 @@ from sqlalchemy import Engine, text
 from sqlalchemy.exc import SQLAlchemyError
 
 from engine.persistence import (
+    DatabasePurpose,
+    assert_security_operator_role,
     create_database_engine,
     load_harness_database_configurations,
 )
@@ -30,6 +32,7 @@ def wait_for_database(timeout_seconds: float) -> None:
                 configurations.control,
                 configurations.runtime,
                 configurations.worker,
+                configurations.operator,
                 configurations.security_test,
             ):
                 engine = create_database_engine(configuration)
@@ -38,10 +41,12 @@ def wait_for_database(timeout_seconds: float) -> None:
                     current_role = connection.execute(
                         text("SELECT current_user")
                     ).scalar_one()
-                if current_role != configuration.expected_role:
-                    raise RuntimeError(
-                        "database connection reported an unexpected role"
-                    )
+                    if current_role != configuration.expected_role:
+                        raise RuntimeError(
+                            "database connection reported an unexpected role"
+                        )
+                    if configuration.purpose is DatabasePurpose.SECURITY_OPERATOR:
+                        assert_security_operator_role(connection)
             return
         except SQLAlchemyError as error:
             last_error = error
@@ -59,10 +64,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--timeout", type=float, default=30.0)
     arguments = parser.parse_args(argv)
     wait_for_database(arguments.timeout)
-    print(
-        "PostgreSQL harness ready: migration, control, runtime, worker, "
-        "security-test"
+    purpose_names = (
+        "migration, control, runtime, worker, security-operator, security-test"
     )
+    print("PostgreSQL harness ready: " + purpose_names)
     return 0
 
 

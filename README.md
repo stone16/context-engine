@@ -32,7 +32,11 @@ provider/channel audiences。Agent/purpose 只从 matching
 在创建 nominal ticket 前验证 signed namespace。两者均绑定 trusted
 Organization/target、bounded expiry 与 V0 Policy Epoch；所有 mismatch 使用 generic
 rejection 且 effect 为零。Production Provider、
-Sender/IM 与完整 M2 ActionPlane 仍为 `NOT_ACTIVE`。整体计划见 [PLAN.md](./PLAN.md)。
+Sender/IM 与完整 M2 ActionPlane 仍为 `NOT_ACTIVE`。[Issue #19 的
+ADR-0031](./docs/decisions/0031-persist-authorized-context-run-lineage.md) 进一步激活
+当前 Acquire 的 digest-only authorized ContextRun 与 restricted delivered-empty
+DecisionAudit；默认 production authentication、完整 Package/query retention 与通用
+observability redaction 仍未激活。整体计划见 [PLAN.md](./PLAN.md)。
 
 ## 开发命令
 
@@ -152,6 +156,20 @@ payload/destination/approval/idempotency、DeliveryAttempt、durable one-shot/re
 concurrency、stored receipt 或 reconciliation；完整 `ACCEPT-012` carrier 保持
 `NOT_ACTIVE`。
 
+Issue #19 为当前 authenticated Acquire 激活最小 durable lineage：每个成功空包或
+exact-authorized Package 都在返回前，于保留的 current-`UserActor` 事务内提交一条
+same-Organization、final、authorized-only `ContextRun`，公开 `decisionRef` 可经专用
+non-owner security-operator + exact Organization + 显式 trusted authorization seam
+解析。空包另写仅含 Organization/run/decision、PolicySnapshot/epoch、
+`no_authorized_evidence` 类别与时间的 restricted `DecisionAudit`；不保存 raw query、
+denied Candidate/Fragment/Resource body、ID、名称、原因或数量。Query 只保留
+Organization-bound、versioned HMAC-SHA256 digest；Package 公开并持久化可验证的
+versioned canonical SHA-256 digest，retention mode 固定为 `digest_only`，不长期保存
+完整 Package。Unauthenticated/注入失败不是 ContextRun。该 bounded
+`TRACE-REDACTION-012` 激活不扩称 logs/metrics/debug/evaluation/Learning、Continue/
+OpenCitation、feedback、完整 retrieval trace 或 production operator identity 已完成；
+默认应用的 production authentication 仍为 reject-all。
+
 ### 当前 HTTP exact-authorized Evidence tracer
 
 `POST /v1/context:resolve` 的 conformance 组合可注入一个把 opaque credential
@@ -184,17 +202,20 @@ same-Organization 与 cross-Organization 候选保持零 body bytes、零 Eviden
 effect，并为 authorized block 保持一对一 Evidence 引用闭包与完整 lineage。确定性
 denied、cross-Organization 与 nonexistent probes 的 HTTP status、closed product
 headers、Package body 与 Runtime domain outcome 在仅归一化 server-authored per-resolve
-refs/timestamps 后完全相同；响应不含 Resource 标识、名称、Candidate/denied 数量或拒绝
+refs/timestamps 以及由它们必然派生的 `packageDigest` 后完全相同；每个未归一化 Package
+仍先验证自己的 digest。响应不含 Resource 标识、名称、Candidate/denied 数量或拒绝
 原因。此门禁不测量或声明 timing equality。
 
 确定性 authorities 与 real-PostgreSQL seeded composition 只属于测试组合。生产 OAuth/JWT、durable
 Principal/Agent grant authority、真实 Source/Resource ACL、通用检索与 continuation
-不属于这个已激活 tracer。Policy Epoch V0 本身也不激活 UI/外部 admin、DecisionAudit、
-outbox、cleanup、真实 Continue/OpenCitation 或完整 production WorkerLease/ticket carrier；
+不属于这个已激活 tracer。Policy Epoch V0 本身也不激活 UI/外部 admin、
+access-mutation DecisionAudit、outbox、cleanup、真实 Continue/OpenCitation 或完整
+production WorkerLease/ticket carrier；
 Issue #17 与 Issue #18 仅通过各自 ADR 单独激活前述 bounded proof。
 其中 Continue/OpenCitation 的 M0 通用拒绝已经激活，但真实 issuance/redemption carrier
 仍保持 future；restricted in-process audit 只保留 `UNSUPPORTED_CAPABILITY` 类别，
-durable DecisionAudit 仍为 `NOT_ACTIVE`。
+Issue #19 的 durable DecisionAudit 仅覆盖 successful delivered-empty Acquire，不能被
+解释为 unavailable capability 或 Control access-mutation audit 已激活。
 
 本次公开候选 bundle 包含实现权威、ADR、安全契约、PRD、Tech Spec
 与四个公开参考仓的证据基线；经维护者批准并提交后，它们将与实现一同

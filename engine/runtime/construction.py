@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from hmac import new as new_hmac
@@ -26,6 +26,11 @@ from engine.runtime.content_io import (
     CandidateIndex,
     RuntimeContentIo,
     prohibited_empty_path_content_io,
+)
+from engine.runtime.context_run import (
+    ContextRunPersistenceUnavailable,
+    build_context_run_records,
+    persist_context_run,
 )
 from engine.runtime.contracts import (
     DECISION_REF_PREFIX,
@@ -64,6 +69,7 @@ from engine.runtime.materialized import (
     _locate_materialized_fragment,
     _project_materialized_fragment_body,
 )
+from engine.runtime.package_digest import QueryDigestKeyring
 from engine.runtime.policy_epoch import (
     PolicyEpochAuthorityUnavailable,
     PolicyEpochVerification,
@@ -150,6 +156,16 @@ class AuthorizationDecision:
 
 
 @dataclass(frozen=True, slots=True)
+class FinalizedAuthorizationResult:
+    """Final policy, provenance, content, and audit after the delivery veto."""
+
+    policy_receipt: PolicyReceipt
+    provenance_receipt: DecisionProvenanceReceipt
+    content: PackageContent
+    audit_receipt: DecisionAuditReceipt
+
+
+@dataclass(frozen=True, slots=True)
 class PolicyGate:
     """Concrete, non-substitutable trusted-input policy gate."""
 
@@ -169,8 +185,7 @@ class PolicyGate:
                 if request.narrowing is not None
                 else OMITTED_REQUEST_NARROWING,
             )
-            if invocation.trusted_scope_snapshot.policy_epoch
-            == invocation.policy_epoch
+            if invocation.trusted_scope_snapshot.policy_epoch == invocation.policy_epoch
             else EffectiveScope(frozenset())
         )
         return PolicyReceipt(
@@ -275,17 +290,13 @@ class ProvenanceGate:
         return DecisionProvenanceReceipt(
             decision_ref=decision_ref,
             package_organization_ref=organization_ref,
-            organization_id=(
-                invocation.organization_verification.organization_id
-            ),
+            organization_id=(invocation.organization_verification.organization_id),
             user_id=invocation.user_actor.user_id,
             membership_id=invocation.user_actor.membership_id,
             membership_version=invocation.user_actor.membership_version,
             principal_ref=invocation.principal_ref,
             agent_version_ref=invocation.agent_version_ref,
-            authenticated_application_ref=(
-                invocation.authenticated_application_ref
-            ),
+            authenticated_application_ref=(invocation.authenticated_application_ref),
             authentication_binding_ref=invocation.authentication_binding_ref,
             effective_scope_digest=policy_receipt.effective_scope.digest,
             request_id=policy_receipt.request_id,
@@ -334,9 +345,7 @@ class DecisionAuditGate:
         """Record only the closed category, never carrier or resource detail."""
 
         if type(provenance_receipt) is not DecisionProvenanceReceipt:
-            raise TypeError(
-                "unsupported capability audit requires decision provenance"
-            )
+            raise TypeError("unsupported capability audit requires decision provenance")
         _require_closed_opaque_ref(
             "decision reference",
             provenance_receipt.decision_ref,
@@ -426,9 +435,7 @@ class AuthorizationKernel:
             delivery_context,
             request,
         )
-        epoch_verification = (
-            invocation.user_actor.policy_epoch_verification
-        )
+        epoch_verification = invocation.user_actor.policy_epoch_verification
         if not self._policy_epoch.is_current(epoch_verification):
             policy_receipt = PolicyReceipt(
                 request_id=policy_receipt.request_id,
@@ -513,7 +520,7 @@ class AuthorizationKernel:
         self,
         invocation: AuthenticatedInvocation,
         decision: AuthorizationDecision,
-    ) -> tuple[PolicyReceipt, PackageContent, DecisionAuditReceipt]:
+    ) -> FinalizedAuthorizationResult:
         """Revalidate immediately before audit and Package construction."""
 
         if type(decision) is not AuthorizationDecision:
@@ -528,8 +535,7 @@ class AuthorizationKernel:
             and evidence.lineage.principal_ref == provenance.principal_ref
             and evidence.lineage.purpose == provenance.purpose
             and evidence.lineage.as_of == provenance.as_of
-            and evidence.lineage.policy_snapshot_ref
-            == provenance.policy_snapshot_ref
+            and evidence.lineage.policy_snapshot_ref == provenance.policy_snapshot_ref
             and evidence.lineage.policy_epoch == provenance.policy_epoch
             and evidence.lineage.source_acl_decision_ref
             == provenance.source_acl_decision_ref
@@ -547,21 +553,26 @@ class AuthorizationKernel:
             == invocation.authenticated_application_ref
             and provenance.authentication_binding_ref
             == invocation.authentication_binding_ref
-            and policy_receipt.policy_epoch == provenance.policy_epoch
+            and policy_receipt.policy_epoch
+            == provenance.policy_epoch
             == invocation.policy_epoch
             == invocation.user_actor.policy_epoch
-            and policy_receipt.request_id == provenance.request_id
+            and policy_receipt.request_id
+            == provenance.request_id
             == invocation.request_id
             and policy_receipt.purpose == provenance.purpose
             and provenance.effective_scope_digest
             == policy_receipt.effective_scope.digest
         )
-        if (
-            not content_binding_matches_decision
-            or not decision_binding_matches_invocation
-            or not self._policy_epoch.is_current(
+        final_epoch_is_current = False
+        if content_binding_matches_decision and decision_binding_matches_invocation:
+            final_epoch_is_current = self._policy_epoch.is_current(
                 invocation.user_actor.policy_epoch_verification
             )
+        if not (
+            content_binding_matches_decision
+            and decision_binding_matches_invocation
+            and final_epoch_is_current
         ):
             policy_receipt = PolicyReceipt(
                 request_id=policy_receipt.request_id,
@@ -570,13 +581,27 @@ class AuthorizationKernel:
                 effective_scope=EffectiveScope(frozenset()),
             )
             content = construct_package_content(())
+            if (
+                content_binding_matches_decision
+                and decision_binding_matches_invocation
+                and not final_epoch_is_current
+            ):
+                provenance = replace(
+                    provenance,
+                    effective_scope_digest=policy_receipt.effective_scope.digest,
+                )
         audit_receipt = self._audit.record(
-            decision.provenance_receipt,
+            provenance,
             authorized_evidence_count=len(content.evidence),
         )
-        if audit_receipt.decision_ref != decision.provenance_receipt.decision_ref:
+        if audit_receipt.decision_ref != provenance.decision_ref:
             raise RuntimeConfigurationError("audit and provenance decision mismatch")
-        return policy_receipt, content, audit_receipt
+        return FinalizedAuthorizationResult(
+            policy_receipt=policy_receipt,
+            provenance_receipt=provenance,
+            content=content,
+            audit_receipt=audit_receipt,
+        )
 
     def _authorize_and_assemble(
         self,
@@ -635,9 +660,7 @@ class AuthorizationKernel:
                         purpose=provenance_receipt.purpose,
                         as_of=provenance_receipt.as_of,
                         decision_ref=provenance_receipt.decision_ref,
-                        policy_snapshot_ref=(
-                            provenance_receipt.policy_snapshot_ref
-                        ),
+                        policy_snapshot_ref=(provenance_receipt.policy_snapshot_ref),
                         policy_epoch=provenance_receipt.policy_epoch,
                         source_acl_decision_ref=(
                             provenance_receipt.source_acl_decision_ref
@@ -751,6 +774,7 @@ class Runtime:
             RuntimeCapability.MATERIALIZED_ACQUIRE
         ),
         clock: Callable[[], datetime] = _utc_now,
+        query_digest_keyring: QueryDigestKeyring | None = None,
     ) -> None:
         validated = _validate_kernel_dependencies(dependencies)
         if type(package_ttl_seconds) is not int or package_ttl_seconds <= 0:
@@ -778,15 +802,13 @@ class Runtime:
                 provider=selected_content_io.provider,
                 source_content=selected_content_io.source_content,
             )
-        if (
-            type(acquire_capability) is not RuntimeCapability
-            or acquire_capability
-            not in {
-                RuntimeCapability.MATERIALIZED_ACQUIRE,
-                RuntimeCapability.FEDERATED_DISCOVERY,
-                RuntimeCapability.SOURCE_NATIVE_AUTHORIZATION,
-            }
-        ):
+        if type(
+            acquire_capability
+        ) is not RuntimeCapability or acquire_capability not in {
+            RuntimeCapability.MATERIALIZED_ACQUIRE,
+            RuntimeCapability.FEDERATED_DISCOVERY,
+            RuntimeCapability.SOURCE_NATIVE_AUTHORIZATION,
+        }:
             raise RuntimeConfigurationError(
                 "acquire capability must be a server-owned Acquire capability"
             )
@@ -799,6 +821,12 @@ class Runtime:
         self._acquire_capability = acquire_capability
         self._capability_gate = RuntimeCapabilityGate()
         self._clock = clock
+        if (
+            query_digest_keyring is not None
+            and type(query_digest_keyring) is not QueryDigestKeyring
+        ):
+            raise TypeError("query_digest_keyring must be QueryDigestKeyring")
+        self._query_digest_keyring = query_digest_keyring
         self._reference_issuer = _OpaqueReferenceIssuer()
 
     @overload
@@ -890,35 +918,28 @@ class Runtime:
             as_of=as_of,
             reference_issuer=self._reference_issuer,
             candidate_index=(
-                self._content_io.index
-                if self._candidate_discovery_enabled
-                else None
+                self._content_io.index if self._candidate_discovery_enabled else None
             ),
-            projection_session=(
-                invocation.user_actor.materialized_projection_session
-            ),
+            projection_session=(invocation.user_actor.materialized_projection_session),
         )
-        policy_receipt, content, audit_receipt = (
-            self._kernel.finalize_for_delivery(invocation, decision)
-        )
-        provenance = decision.provenance_receipt
+        finalized = self._kernel.finalize_for_delivery(invocation, decision)
+        policy_receipt = finalized.policy_receipt
+        content = finalized.content
+        audit_receipt = finalized.audit_receipt
+        provenance = finalized.provenance_receipt
 
         package = ContextPackage(
             organization_ref=provenance.package_organization_ref,
             purpose=policy_receipt.purpose,
             ttl_seconds=self._package_ttl_seconds,
             as_of=provenance.as_of,
-            expires_at=provenance.as_of
-            + timedelta(seconds=self._package_ttl_seconds),
+            expires_at=provenance.as_of + timedelta(seconds=self._package_ttl_seconds),
             decision_ref=provenance.decision_ref,
             blocks=content.blocks,
             evidence=content.evidence,
             gaps=(),
             budget_usage=BudgetUsage(
-                tokens=sum(
-                    len(block.body.encode("utf-8"))
-                    for block in content.blocks
-                ),
+                tokens=sum(len(block.body.encode("utf-8")) for block in content.blocks),
                 provider_calls=0,
                 cost_microunits=0,
                 elapsed_ms=0,
@@ -931,6 +952,29 @@ class Runtime:
                 ),
                 reason=audit_receipt.reason,
             ),
+        )
+        persistence_session = invocation.user_actor.context_run_persistence_session
+        if persistence_session is None:
+            raise ContextRunPersistenceUnavailable(
+                "Acquire requires durable ContextRun persistence"
+            )
+        if self._query_digest_keyring is None:
+            raise ContextRunPersistenceUnavailable(
+                "ContextRun persistence requires an explicit query digest keyring"
+            )
+        run_record, decision_audit = build_context_run_records(
+            invocation=invocation,
+            request=acquire,
+            provenance=provenance,
+            package=package,
+            final_effective_scope=policy_receipt.effective_scope,
+            effective_budget=decision.effective_budget,
+            keyring=self._query_digest_keyring,
+        )
+        persist_context_run(
+            persistence_session,
+            run_record,
+            decision_audit,
         )
         return Resolved(
             package=package,

@@ -25,11 +25,16 @@ from engine.persistence import (
 )
 from engine.runtime.construction import Runtime, required_kernel_dependencies
 from engine.runtime.content_io import CandidateIndex
+from engine.runtime.context_run import ContextRunOutcome
 from engine.runtime.contracts import Acquire
 from engine.runtime.evidence import CandidateRef
 from engine.runtime.organization import (
     ExistingOrganizationVerification,
     _construct_existing_http_organization_verification,
+)
+from engine.runtime.package_digest import (
+    QueryDigestKeyring,
+    verify_context_package_digest,
 )
 from engine.runtime.scope import ScopeSet, ScopeTarget
 from engine.runtime.scope_authority import (
@@ -38,6 +43,7 @@ from engine.runtime.scope_authority import (
     _construct_trusted_scope_snapshot,
     _open_scope_authority_scope,
 )
+from tests.support.context_run_operator import exact_test_context_run_operator_read
 
 pytestmark = pytest.mark.integration
 
@@ -280,8 +286,7 @@ def _seed_fixture(
     with engine.begin() as connection:
         connection.execute(
             text(
-                "INSERT INTO organization (organization_id) "
-                "VALUES (:organization_id)"
+                "INSERT INTO organization (organization_id) VALUES (:organization_id)"
             ),
             [
                 {"organization_id": organization.organization_id}
@@ -481,6 +486,24 @@ def _cleanup_fixture(engine: Engine, fixture: RuntimeEvidenceFixture) -> None:
             connection.execute(
                 text(
                     """
+                    DELETE FROM decision_audit
+                    WHERE organization_id IN (:org_a_id, :org_b_id)
+                    """
+                ),
+                organizations,
+            )
+            connection.execute(
+                text(
+                    """
+                    DELETE FROM context_run
+                    WHERE organization_id IN (:org_a_id, :org_b_id)
+                    """
+                ),
+                organizations,
+            )
+            connection.execute(
+                text(
+                    """
                     DELETE FROM resource_access_policy
                     WHERE organization_id IN (
                         :org_a_id,
@@ -601,6 +624,9 @@ def _assert_exact_authorized_http_resolve(
     active: OrganizationEvidenceFixture,
     other: OrganizationEvidenceFixture,
     guarded_runtime_engine: Engine,
+    guarded_control_engine: Engine,
+    guarded_operator_engine: Engine,
+    query_digest_keyring: QueryDigestKeyring,
 ) -> None:
     token = f"{TOKEN_PREFIX}:{active.label}"
     request_id = f"{REQUEST_ID_PREFIX}:{active.label}"
@@ -613,16 +639,13 @@ def _assert_exact_authorized_http_resolve(
         required_kernel_dependencies(),
         candidate_index=cast(CandidateIndex, index),
         clock=lambda: RECEIVED_AT,
+        query_digest_keyring=query_digest_keyring,
     )
     client = TestClient(
         create_app(
             authenticator=SeededAuthenticator(active, token=token),
-            organization_authority=SeededOrganizationAuthority(
-                active.organization_id
-            ),
-            membership_authority=PostgreSQLMembershipAuthority(
-                guarded_runtime_engine
-            ),
+            organization_authority=SeededOrganizationAuthority(active.organization_id),
+            membership_authority=PostgreSQLMembershipAuthority(guarded_runtime_engine),
             scope_authority=scope_authority,
             runtime=runtime,
             clock=lambda: RECEIVED_AT,
@@ -648,8 +671,48 @@ def _assert_exact_authorized_http_resolve(
     assert identity.membership_version == 1
 
     response_document = response.json()
+    decision_ref = response_document["package"]["decisionRef"]
+    with exact_test_context_run_operator_read(
+        control_engine=guarded_control_engine,
+        operator_engine=guarded_operator_engine,
+        organization_id=active.organization_id,
+        decision_ref=decision_ref,
+        request_id=f"test:issue-19:{active.label}",
+        opaque_credential=f"test:issue-19:{active.label}:credential",
+        authorized_at=RECEIVED_AT,
+    ) as (reader, authorization):
+        run = reader.find_by_decision_ref(
+            authorization,
+            decision_ref,
+        )
+    assert run is not None
+    assert run.outcome is ContextRunOutcome.DELIVERED_AUTHORIZED
+    assert run.package_digest == response_document["package"]["packageDigest"]
+    assert run.decision_audit_category is None
+    assert run.authorized_evidence_refs == (
+        response_document["package"]["evidence"][0]["evidenceRef"],
+    )
+    with exact_test_context_run_operator_read(
+        control_engine=guarded_control_engine,
+        operator_engine=guarded_operator_engine,
+        organization_id=other.organization_id,
+        decision_ref=decision_ref,
+        request_id=f"test:issue-19:wrong-org:{other.label}",
+        opaque_credential=f"test:issue-19:wrong-org:{other.label}:credential",
+        authorized_at=RECEIVED_AT,
+    ) as (other_reader, wrong_organization_authorization):
+        assert (
+            other_reader.find_by_decision_ref(
+                wrong_organization_authorization,
+                decision_ref,
+            )
+            is None
+        )
     assert "effects" not in response_document
     package = response_document["package"]
+    package_document = dict(package)
+    package_digest = package_document.pop("packageDigest")
+    assert verify_context_package_digest(package_document, package_digest)
     assert "effects" not in package
     assert package["organizationRef"] not in {
         str(active.organization_id),
@@ -671,17 +734,21 @@ def _assert_exact_authorized_http_resolve(
     evidence = package["evidence"][0]
     assert block["text"] == active.authorized_body
     assert block["evidenceRefs"] == [evidence["evidenceRef"]]
-    assert block["blockId"] == (
-        f"block_{evidence['evidenceRef'].removeprefix('ev_')}"
+    assert block["blockId"] == (f"block_{evidence['evidenceRef'].removeprefix('ev_')}")
+    assert (
+        sum(
+            item["evidenceRefs"].count(evidence["evidenceRef"])
+            for item in package["blocks"]
+        )
+        == 1
     )
-    assert sum(
-        item["evidenceRefs"].count(evidence["evidenceRef"])
-        for item in package["blocks"]
-    ) == 1
-    assert sum(
-        item["evidenceRef"] == evidence["evidenceRef"]
-        for item in package["evidence"]
-    ) == 1
+    assert (
+        sum(
+            item["evidenceRef"] == evidence["evidenceRef"]
+            for item in package["evidence"]
+        )
+        == 1
+    )
     assert evidence == {
         "evidenceRef": evidence["evidenceRef"],
         "sourceRef": active.authorized.source_ref,
@@ -718,6 +785,9 @@ def _assert_exact_authorized_http_resolve(
 def test_real_postgres_http_delivers_only_exact_authorized_evidence_bidirectionally(
     migration_configuration: DatabaseConfiguration,
     guarded_runtime_engine: Engine,
+    guarded_control_engine: Engine,
+    guarded_operator_engine: Engine,
+    query_digest_keyring: QueryDigestKeyring,
 ) -> None:
     """Issue #13: both Organizations seal CandidateRef -> Kernel -> projection."""
 
@@ -732,11 +802,17 @@ def test_real_postgres_http_delivers_only_exact_authorized_evidence_bidirectiona
             active=fixture.org_a,
             other=fixture.org_b,
             guarded_runtime_engine=guarded_runtime_engine,
+            guarded_control_engine=guarded_control_engine,
+            guarded_operator_engine=guarded_operator_engine,
+            query_digest_keyring=query_digest_keyring,
         )
         _assert_exact_authorized_http_resolve(
             active=fixture.org_b,
             other=fixture.org_a,
             guarded_runtime_engine=guarded_runtime_engine,
+            guarded_control_engine=guarded_control_engine,
+            guarded_operator_engine=guarded_operator_engine,
+            query_digest_keyring=query_digest_keyring,
         )
 
         after = _persistent_content_snapshot(migration_engine, fixture)

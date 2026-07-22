@@ -8,12 +8,26 @@ from engine.persistence.access_policy import (
     ResourceAccessRevocation,
 )
 from engine.persistence.configuration import (
+    OPERATOR_ROLE,
     DatabaseConfiguration,
     DatabaseConfigurationError,
     DatabasePurpose,
     HarnessDatabaseConfigurations,
     load_database_configuration,
     load_harness_database_configurations,
+)
+from engine.persistence.context_runs import (
+    ContextRunOperatorAccessRequest,
+    ContextRunOperatorAuthenticationRejected,
+    ContextRunOperatorAuthenticator,
+    ContextRunOperatorAuthority,
+    ContextRunOperatorAuthorityUnavailable,
+    ContextRunOperatorAuthorization,
+    ContextRunReaderUnavailable,
+    ContextRunView,
+    OperatorAuthorizationProvenance,
+    PostgreSQLContextRunReader,
+    VerifiedContextRunOperatorIdentity,
 )
 from engine.persistence.database import create_database_engine
 from engine.persistence.membership_context import (
@@ -25,6 +39,7 @@ from engine.persistence.membership_context import (
 from engine.persistence.role_guard import (
     assert_control_role,
     assert_runtime_role,
+    assert_security_operator_role,
     assert_worker_role,
 )
 from engine.persistence.tenant_context import (
@@ -53,11 +68,23 @@ __all__ = [
     "DatabaseConfigurationError",
     "DatabasePurpose",
     "HarnessDatabaseConfigurations",
+    "OPERATOR_ROLE",
     "MembershipAuthorityUnavailable",
     "MembershipIdentity",
     "MembershipNotCurrent",
     "PolicyEpoch",
     "PostgreSQLAccessPolicyControl",
+    "ContextRunOperatorAccessRequest",
+    "ContextRunOperatorAuthenticationRejected",
+    "ContextRunOperatorAuthenticator",
+    "ContextRunOperatorAuthority",
+    "ContextRunOperatorAuthorityUnavailable",
+    "ContextRunOperatorAuthorization",
+    "ContextRunReaderUnavailable",
+    "ContextRunView",
+    "OperatorAuthorizationProvenance",
+    "PostgreSQLContextRunReader",
+    "VerifiedContextRunOperatorIdentity",
     "ResourceAccessRevocation",
     "OrganizationContextBindingError",
     "PostgreSQLMembershipAuthority",
@@ -74,6 +101,7 @@ __all__ = [
     "DEFAULT_WORKER_LEASE_TTL_SECONDS",
     "MAX_WORKER_LEASE_TTL_SECONDS",
     "assert_runtime_role",
+    "assert_security_operator_role",
     "assert_control_role",
     "assert_worker_role",
     "create_database_engine",

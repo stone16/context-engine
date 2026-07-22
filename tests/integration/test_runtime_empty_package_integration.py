@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from typing import cast
 from uuid import UUID, uuid4
@@ -19,14 +21,31 @@ from engine.persistence import (
     PostgreSQLMembershipAuthority,
     create_database_engine,
 )
-from engine.runtime.actor import MembershipRejectionAuditReceipt
+from engine.persistence.membership_context import (
+    MembershipAuthorityUnavailable,
+    MembershipIdentity,
+)
+from engine.runtime.actor import (
+    CurrentMembershipVerification,
+    MembershipRejectionAuditReceipt,
+)
 from engine.runtime.construction import Runtime, required_kernel_dependencies
 from engine.runtime.content_io import RuntimeContentIo
+from engine.runtime.context_run import (
+    ContextRunOutcome,
+    DecisionAuditCategory,
+)
 from engine.runtime.contracts import Acquire
 from engine.runtime.organization import (
     ExistingOrganizationVerification,
     _construct_existing_http_organization_verification,
 )
+from engine.runtime.package_digest import (
+    QueryDigestKeyring,
+    query_digest,
+    verify_context_package_digest,
+)
+from tests.support.context_run_operator import exact_test_context_run_operator_read
 
 pytestmark = pytest.mark.integration
 TOKEN = "seeded-existing-organization"
@@ -101,9 +120,30 @@ class ContentIoSpy:
         return ()
 
 
+class RollbackAfterResolveMembershipAuthority:
+    """Inject a late transaction failure after Runtime persisted its run."""
+
+    def __init__(self, delegate: PostgreSQLMembershipAuthority) -> None:
+        self._delegate = delegate
+
+    @contextmanager
+    def current_user_actor(
+        self,
+        identity: MembershipIdentity,
+    ) -> Iterator[CurrentMembershipVerification]:
+        with self._delegate.current_user_actor(identity) as verification:
+            yield verification
+            raise MembershipAuthorityUnavailable(
+                "injected failure before transaction commit"
+            )
+
+
 def test_seeded_existing_organization_reaches_http_empty_package(
     migration_configuration: DatabaseConfiguration,
     guarded_runtime_engine: Engine,
+    guarded_control_engine: Engine,
+    guarded_operator_engine: Engine,
+    query_digest_keyring: QueryDigestKeyring,
 ) -> None:
     """Issue #11: a real active Membership reaches the empty Package path."""
 
@@ -167,6 +207,7 @@ def test_seeded_existing_organization_reaches_http_empty_package(
                 source_content=spy,
             ),
             clock=lambda: RECEIVED_AT,
+            query_digest_keyring=query_digest_keyring,
         )
         client = TestClient(
             create_app(
@@ -198,7 +239,148 @@ def test_seeded_existing_organization_reaches_http_empty_package(
             "status": "empty",
             "reason": "no_authorized_evidence",
         }
+        package_document = dict(package)
+        package_digest = package_document.pop("packageDigest")
+        assert verify_context_package_digest(package_document, package_digest)
+
+        rejected_authentication = client.post(
+            "/v1/context:resolve",
+            headers={"Authorization": "Bearer rejected-credential"},
+            json={"kind": "acquire", "need": {"query": "not accepted"}},
+        )
+        rejected_injection = client.post(
+            "/v1/context:resolve",
+            headers={"Authorization": f"Bearer {TOKEN}"},
+            json={
+                "kind": "acquire",
+                "need": {"query": "not accepted"},
+                "organizationRef": str(organization_id),
+            },
+        )
+        assert rejected_authentication.status_code == 401
+        assert rejected_injection.status_code == 422
+
+        with migration_engine.connect() as connection:
+            assert (
+                connection.execute(
+                    text(
+                        "SELECT count(*) FROM context_run "
+                        "WHERE organization_id = :organization_id"
+                    ),
+                    {"organization_id": organization_id},
+                ).scalar_one()
+                == 1
+            )
+            assert (
+                connection.execute(
+                    text(
+                        "SELECT count(*) FROM decision_audit "
+                        "WHERE organization_id = :organization_id"
+                    ),
+                    {"organization_id": organization_id},
+                ).scalar_one()
+                == 1
+            )
+        with exact_test_context_run_operator_read(
+            control_engine=guarded_control_engine,
+            operator_engine=guarded_operator_engine,
+            organization_id=organization_id,
+            decision_ref=package["decisionRef"],
+            request_id="test:issue-19:empty-operator-read",
+            opaque_credential="test:issue-19:operator",
+            authorized_at=RECEIVED_AT,
+        ) as (reader, authorization):
+            run = reader.find_by_decision_ref(
+                authorization,
+                package["decisionRef"],
+            )
+        assert run is not None
+        assert run.organization_id == organization_id
+        assert run.decision_ref == package["decisionRef"]
+        assert run.package_digest == package["packageDigest"]
+        assert run.outcome is ContextRunOutcome.DELIVERED_EMPTY
+        assert run.decision_audit_category is (
+            DecisionAuditCategory.NO_AUTHORIZED_EVIDENCE
+        )
+        assert run.authorized_evidence_refs == ()
+        assert run.package_retention_mode == "digest_only"
+        assert run.user_id == user_id
+        assert run.membership_id == membership_id
+        assert run.membership_version == 1
+        assert run.principal_ref == "seeded-principal"
+        assert run.agent_version_ref == "seeded-agent"
+        assert run.authenticated_application_ref == "seeded-application"
+        assert run.authentication_binding_ref == "seeded-binding"
+        assert run.purpose == "context.answer"
+        assert run.policy_epoch == 1
+        assert run.policy_snapshot_ref
+        assert run.effective_scope_digest
+        assert (
+            run.query_digest
+            == query_digest(
+                query_digest_keyring,
+                organization_id,
+                "real PG root",
+            ).value
+        )
+        assert run.usage_tokens == run.usage_provider_calls == 0
+        assert run.usage_cost_microunits == run.usage_elapsed_ms == 0
+        assert run.accepted_at == run.finalized_at == run.package_as_of == RECEIVED_AT
+        assert run.package_expires_at > run.package_as_of
+        serialized_run = repr(run).casefold()
+        for forbidden in (
+            "real pg root",
+            "query_text",
+            "candidate",
+            "denied_count",
+            "resource_ref",
+        ):
+            assert forbidden not in serialized_run
         assert spy.calls == 0
+
+        rollback_client = TestClient(
+            create_app(
+                authenticator=SeededAuthenticator(
+                    organization_id,
+                    user_id,
+                    membership_id,
+                ),
+                organization_authority=SeededOrganizationAuthority(organization_id),
+                membership_authority=RollbackAfterResolveMembershipAuthority(
+                    PostgreSQLMembershipAuthority(guarded_runtime_engine)
+                ),
+                runtime=runtime,
+                clock=lambda: RECEIVED_AT,
+            )
+        )
+        rejected_late_failure = rollback_client.post(
+            "/v1/context:resolve",
+            headers={"Authorization": f"Bearer {TOKEN}"},
+            json={"kind": "acquire", "need": {"query": "must roll back"}},
+        )
+        assert rejected_late_failure.status_code == 503
+        assert rejected_late_failure.content == b'{"code":"service_unavailable"}'
+        with migration_engine.connect() as connection:
+            assert (
+                connection.execute(
+                    text(
+                        "SELECT count(*) FROM context_run "
+                        "WHERE organization_id = :organization_id"
+                    ),
+                    {"organization_id": organization_id},
+                ).scalar_one()
+                == 1
+            )
+            assert (
+                connection.execute(
+                    text(
+                        "SELECT count(*) FROM decision_audit "
+                        "WHERE organization_id = :organization_id"
+                    ),
+                    {"organization_id": organization_id},
+                ).scalar_one()
+                == 1
+            )
 
         with guarded_runtime_engine.connect() as connection:
             for setting_name in (
@@ -218,6 +400,19 @@ def test_seeded_existing_organization_reaches_http_empty_package(
                 ).scalar_one_or_none() in {None, ""}
     finally:
         with migration_engine.begin() as connection:
+            connection.execute(
+                text(
+                    "DELETE FROM decision_audit "
+                    "WHERE organization_id = :organization_id"
+                ),
+                {"organization_id": organization_id},
+            )
+            connection.execute(
+                text(
+                    "DELETE FROM context_run WHERE organization_id = :organization_id"
+                ),
+                {"organization_id": organization_id},
+            )
             connection.execute(
                 text(
                     """
@@ -247,6 +442,7 @@ def test_seeded_existing_organization_reaches_http_empty_package(
 def test_real_postgres_http_membership_matrix_is_generic_and_zero_io(
     migration_configuration: DatabaseConfiguration,
     guarded_runtime_engine: Engine,
+    query_digest_keyring: QueryDigestKeyring,
 ) -> None:
     """Issue #11 DoD: the full invalid matrix crosses HTTP and real RLS."""
 
@@ -355,6 +551,7 @@ def test_real_postgres_http_membership_matrix_is_generic_and_zero_io(
                 source_content=spy,
             ),
             clock=lambda: RECEIVED_AT,
+            query_digest_keyring=query_digest_keyring,
         )
         authority = PostgreSQLMembershipAuthority(guarded_runtime_engine)
         audit_receipts: list[MembershipRejectionAuditReceipt] = []
@@ -372,9 +569,7 @@ def test_real_postgres_http_membership_matrix_is_generic_and_zero_io(
                         memberships[category],
                         2 if category == "stale-version" else 1,
                     ),
-                    organization_authority=SeededOrganizationAuthority(
-                        organization_a
-                    ),
+                    organization_authority=SeededOrganizationAuthority(organization_a),
                     membership_authority=authority,
                     membership_rejection_observer=audit_receipts.append,
                     runtime=runtime,
@@ -389,9 +584,7 @@ def test_real_postgres_http_membership_matrix_is_generic_and_zero_io(
             responses[category] = (response.status_code, response.content)
 
         assert responses.pop("active")[0] == 200
-        assert set(responses.values()) == {
-            (401, b'{"code":"authentication_failed"}')
-        }
+        assert set(responses.values()) == {(401, b'{"code":"authentication_failed"}')}
         assert audit_receipts == [MembershipRejectionAuditReceipt()] * 8
         assert spy.calls == 0
 
@@ -413,6 +606,30 @@ def test_real_postgres_http_membership_matrix_is_generic_and_zero_io(
                 ).scalar_one_or_none() in {None, ""}
     finally:
         with migration_engine.begin() as connection:
+            connection.execute(
+                text(
+                    """
+                    DELETE FROM decision_audit
+                    WHERE organization_id IN (:organization_a, :organization_b)
+                    """
+                ),
+                {
+                    "organization_a": organization_a,
+                    "organization_b": organization_b,
+                },
+            )
+            connection.execute(
+                text(
+                    """
+                    DELETE FROM context_run
+                    WHERE organization_id IN (:organization_a, :organization_b)
+                    """
+                ),
+                {
+                    "organization_a": organization_a,
+                    "organization_b": organization_b,
+                },
+            )
             connection.execute(
                 text(
                     """

@@ -20,6 +20,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote
 
+from engine.runtime.package_digest import canonicalize_context_package
+
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CATALOG_PATH = REPOSITORY_ROOT / "eval/catalogs/security-invariants.yaml"
 DEFAULT_SCHEMA_PATH = REPOSITORY_ROOT / "eval/catalogs/security-catalog.schema.json"
@@ -28,6 +30,7 @@ EXPECTED_INVARIANT_COUNT = 15
 EXPECTED_FIXTURE_COUNT = 12
 ID_PATTERN = re.compile(r"^[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)*-[0-9]{3}$")
 EVIDENCE_REF_PATTERN = re.compile(r"^ev_[0-9a-f]{64}$")
+PACKAGE_DIGEST_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 
 CANONICAL_INVARIANT_IDS: tuple[str, ...] = (
     "TENANT-OWNERSHIP-001",
@@ -441,9 +444,7 @@ CANONICAL_REVOCATION_ACTIVATION: dict[str, object] = {
         },
         {
             "id": "RUN-006",
-            "surface": (
-                "tests/integration/test_runtime_policy_epoch_integration.py"
-            ),
+            "surface": ("tests/integration/test_runtime_policy_epoch_integration.py"),
             "oracle": (
                 "The same authenticated HTTP Acquire with the same query and "
                 "unchanged CandidateIndex/Fragment returns authorized Evidence "
@@ -489,9 +490,7 @@ CANONICAL_UNAVAILABLE_CAPABILITY_ACTIVATION: dict[str, object] = {
     ),
     "status": "active_fail_closed",
     "policyEpochScope": "organization-v0",
-    "controlBoundary": (
-        "RuntimeCapabilityGate.require_available(RuntimeCapability)"
-    ),
+    "controlBoundary": ("RuntimeCapabilityGate.require_available(RuntimeCapability)"),
     "testEvidence": [
         {
             "id": "RUN-UNAVAILABLE-016",
@@ -679,11 +678,102 @@ CANONICAL_TICKET_AUDIENCE_ACTIVATION: dict[str, object] = {
     ],
 }
 
+CANONICAL_CONTEXT_RUN_ACTIVATION: dict[str, object] = {
+    "issueRef": "#19",
+    "invariantRef": "TRACE-REDACTION-012",
+    "carrier": (
+        "ContextRuntime.resolve(Acquire) authorized-only ContextRun | "
+        "restricted delivered-empty DecisionAudit"
+    ),
+    "status": "active_fail_closed",
+    "policyEpochScope": "organization-v0",
+    "controlBoundary": (
+        "persist_context_run(ContextRunPersistenceSession, ContextRunRecord, "
+        "DecisionAuditRecord | None) | "
+        "PostgreSQLContextRunReader.find_by_decision_ref"
+    ),
+    "testEvidence": [
+        {
+            "id": "DIGEST-019",
+            "surface": "tests/unit/test_package_digest.py",
+            "oracle": (
+                "The versioned Package profile hashes the exact active public "
+                "JSON document without packageDigest using RFC 8785 JSON "
+                "Canonicalization Scheme (JCS), including recursive UTF-16 "
+                "code-unit property ordering and ECMAScript number serialization; "
+                "it rejects non-finite numbers and ambiguous values and detects "
+                "alteration. The separately domain-separated versioned HMAC binds "
+                "the exact query to one Organization and retains no raw query or "
+                "serializable key material."
+            ),
+        },
+        {
+            "id": "RUN-LINEAGE-019",
+            "surface": "tests/integration/test_runtime_empty_package_integration.py",
+            "oracle": (
+                "A successful authenticated empty HTTP Acquire returns only after "
+                "the retained current-UserActor transaction persists a same-"
+                "Organization digest-only ContextRun and the restricted generic "
+                "no_authorized_evidence DecisionAudit; raw query, Candidate, "
+                "Resource, denial identifier, and count fields are absent."
+            ),
+        },
+        {
+            "id": "AUTHORIZED-RUN-019",
+            "surface": (
+                "tests/integration/test_runtime_authorized_evidence_integration.py"
+            ),
+            "oracle": (
+                "The public HTTP authorized Package decisionRef resolves through "
+                "the explicit same-Organization operator seam to exactly one "
+                "delivered_authorized ContextRun containing only authorized "
+                "Evidence refs and its matching Package digest, with no denial "
+                "audit row."
+            ),
+        },
+        {
+            "id": "PG-TRACE-REDACTION-012",
+            "surface": "tests/integration/test_context_run_schema.py",
+            "oracle": (
+                "Real PostgreSQL FORCE RLS permits Runtime INSERT only for the "
+                "exact current UserActor, gives security-operator and Control no "
+                "direct table reads, and permits one exact safe ContextRun "
+                "projection when Control issues a digest-only 60-second "
+                "Organization-and-decision-bound ticket that security-operator "
+                "deletes before projection; a committed read, arbitrary GUCs, "
+                "wrong bindings, expiry, and revocation disclose no additional "
+                "row, while direct-caller rollback is not claimed as durable "
+                "exactly-once redemption and DecisionAudit remains seven "
+                "redacted lineage/category columns."
+            ),
+        },
+    ],
+    "deferredEvidence": [
+        "PROP-TRACE-REDACTION-012 across every future observability carrier",
+        "OBS-002 secret scanning beyond the activated query/key contracts",
+        "OBS-003 production debug-endpoint authorization",
+    ],
+    "futureCarriers": [
+        "Continue and OpenCitation ContextRun lineage",
+        "full retrieval candidate/ranking traces",
+        "authorized feedback and golden-set extraction",
+        "explicitly approved full-Package retention",
+    ],
+    "notActive": [
+        "raw query retention",
+        "full ContextPackage body retention",
+        "unauthenticated transport failures as ContextRuns",
+        "cross-Organization analytics",
+        "general logs/metrics/debug/evaluation/Learning redaction coverage",
+    ],
+}
+
 CANONICAL_ACTIVATIONS: list[dict[str, object]] = [
     CANONICAL_REVOCATION_ACTIVATION,
     CANONICAL_UNAVAILABLE_CAPABILITY_ACTIVATION,
     CANONICAL_WORKER_LEASE_ACTIVATION,
     CANONICAL_TICKET_AUDIENCE_ACTIVATION,
+    CANONICAL_CONTEXT_RUN_ACTIVATION,
 ]
 CANONICAL_ACTIVATION_ISSUE_LIST = ", ".join(
     f"Issue {activation['issueRef']}" for activation in CANONICAL_ACTIVATIONS
@@ -1389,8 +1479,7 @@ def _validate_fixture(
             if expected.get(field) != canonical_value:
                 collector.add(
                     f"{path}.expected.{field}",
-                    "must preserve the canonical fail-closed outcome "
-                    f"for {fixture_id}",
+                    f"must preserve the canonical fail-closed outcome for {fixture_id}",
                 )
 
     if fixture_id in RUNTIME_OUTCOME_KINDS and expected is not None:
@@ -1430,6 +1519,30 @@ def _validate_fixture(
                 f"{path}.expected.packageOrError.kind",
                 f"must be {expected_result_kind!r} for {fixture_id}",
             )
+        public_package = (
+            response_body.get("package")
+            if response_body is not None
+            and isinstance(response_body.get("package"), Mapping)
+            else None
+        )
+        if public_package is not None:
+            package_document = dict(public_package)
+            observed_digest = package_document.pop("packageDigest", None)
+            try:
+                canonical_bytes = canonicalize_context_package(package_document)
+            except (TypeError, ValueError, UnicodeError):
+                canonical_bytes = None
+            calculated_digest = (
+                hashlib.sha256(canonical_bytes).hexdigest()
+                if canonical_bytes is not None
+                else None
+            )
+            if observed_digest != calculated_digest:
+                collector.add(
+                    f"{path}.expected.externalResponse.body.package.packageDigest",
+                    "must equal SHA-256 over the RFC 8785-canonicalized UTF-8 "
+                    "public Package document with packageDigest omitted",
+                )
         if fixture_id in NON_RETRYABLE_RUNTIME_FIXTURES and (
             response_body is not None and response_body.get("retryable") is not False
         ):
@@ -1466,6 +1579,20 @@ def _validate_fixture(
                 collector.add(
                     f"{path}.expected.externalResponse.body.package.coverage.reason",
                     "must be 'no_authorized_evidence' for a hidden or missing Acquire",
+                )
+            package_digest = (
+                resolved_package.get("packageDigest")
+                if resolved_package is not None
+                else None
+            )
+            if (
+                not isinstance(package_digest, str)
+                or PACKAGE_DIGEST_PATTERN.fullmatch(package_digest) is None
+            ):
+                collector.add(
+                    f"{path}.expected.externalResponse.body.package.packageDigest",
+                    "must be a lowercase SHA-256 over the active public Package "
+                    "document with packageDigest omitted",
                 )
             for field in ("blocks", "evidence", "gaps"):
                 if resolved_package is not None and resolved_package.get(field) != []:
@@ -1527,9 +1654,12 @@ def _validate_fixture(
                     f"{path}.expected.externalResponse.body.package.evidence",
                     "must contain exactly one authorized Evidence",
                 )
-            if isinstance(blocks, list) and len(blocks) == 1 and isinstance(
-                evidence, list
-            ) and len(evidence) == 1:
+            if (
+                isinstance(blocks, list)
+                and len(blocks) == 1
+                and isinstance(evidence, list)
+                and len(evidence) == 1
+            ):
                 block = collector.require_mapping(
                     blocks[0],
                     f"{path}.expected.externalResponse.body.package.blocks[0]",
@@ -1627,9 +1757,7 @@ def _validate_fixture(
                 )
             if isinstance(blocks, list) and budget_usage is not None:
                 block_texts = [
-                    block.get("text")
-                    for block in blocks
-                    if isinstance(block, Mapping)
+                    block.get("text") for block in blocks if isinstance(block, Mapping)
                 ]
                 if all(isinstance(text, str) for text in block_texts):
                     authorized_bytes = sum(
@@ -1708,6 +1836,7 @@ def _validate_fixture(
                 "body.package.decisionRef",
                 "body.package.asOf",
                 "body.package.expiresAt",
+                "body.package.packageDigest",
                 "headers.X-Context-Request-Id",
             )
             if (
@@ -1784,14 +1913,15 @@ def _validate_fixture(
                     "must preserve the canonical non-enumerating response headers",
                 )
             canonical_empty_package = {
-                "organizationRef": (
-                    "orgpkg_0000000000000000000000000000000a"
-                ),
+                "organizationRef": ("orgpkg_0000000000000000000000000000000a"),
                 "purpose": "context.answer",
                 "ttlSeconds": 30,
                 "asOf": "2026-07-21T09:30:00Z",
                 "expiresAt": "2026-07-21T09:30:30Z",
                 "decisionRef": "dec_0000000000000000000000000000000a",
+                "packageDigest": (
+                    "27f6a284027ab9446aa577125727b33263f24c8f252b8cd4616bd17b8545185e"
+                ),
                 "blocks": [],
                 "evidence": [],
                 "gaps": [],
@@ -1807,9 +1937,7 @@ def _validate_fixture(
                 },
             }
             observed_package = (
-                response_body.get("package")
-                if response_body is not None
-                else None
+                response_body.get("package") if response_body is not None else None
             )
             if observed_package != canonical_empty_package:
                 collector.add(
@@ -2290,16 +2418,13 @@ def _validate_schema(
                         or prefix_item.get("const") != expected_activation
                     ):
                         collector.add(
-                            "schema.properties.activations.prefixItems"
-                            f"[{index}].const",
+                            f"schema.properties.activations.prefixItems[{index}].const",
                             "must freeze the canonical "
                             f"Issue {expected_activation['issueRef']} "
                             "activation record",
                         )
             if array_schema.get("items") is not False:
-                collector.add(
-                    "schema.properties.activations.items", "must be false"
-                )
+                collector.add("schema.properties.activations.items", "must be false")
         item_node = array_schema.get("items")
         if name == "activations" and item_node is False:
             prefix_items = array_schema.get("prefixItems")
@@ -2471,9 +2596,9 @@ def _validate_schema(
                         continue
                     condition_properties = condition.get("properties")
                     consequence_properties = consequence.get("properties")
-                    if not isinstance(
-                        condition_properties, Mapping
-                    ) or not isinstance(consequence_properties, Mapping):
+                    if not isinstance(condition_properties, Mapping) or not isinstance(
+                        consequence_properties, Mapping
+                    ):
                         continue
                     fixture_id_condition = condition_properties.get("id")
                     carrier_consequence = consequence_properties.get("carrier")

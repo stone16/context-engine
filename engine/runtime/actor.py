@@ -6,6 +6,10 @@ from enum import StrEnum
 from typing import Final, Literal, NoReturn
 from uuid import UUID
 
+from engine.runtime.context_run import (
+    ContextRunPersistenceSession,
+    _require_active_context_run_persistence_session,
+)
 from engine.runtime.materialized import (
     MaterializedProjectionSession,
     _require_active_materialized_projection_session,
@@ -94,6 +98,9 @@ class CurrentMembershipVerification:
     materialized_projection_session: MaterializedProjectionSession | None = field(
         repr=False
     )
+    context_run_persistence_session: ContextRunPersistenceSession | None = field(
+        repr=False
+    )
     construction_provenance: MembershipVerificationProvenance
     _authority_scope: _MembershipAuthorityScope = field(repr=False)
 
@@ -120,6 +127,7 @@ def _construct_current_membership_verification(
     checked_at: datetime,
     policy_epoch_verification: PolicyEpochVerification,
     materialized_projection_session: MaterializedProjectionSession | None = None,
+    context_run_persistence_session: ContextRunPersistenceSession | None = None,
 ) -> CurrentMembershipVerification:
     """Construct proof after the trusted authority verifies the durable row."""
 
@@ -161,14 +169,12 @@ def _construct_current_membership_verification(
     ):
         raise ValueError("current Membership checked_at must be timezone-aware UTC")
     if materialized_projection_session is not None:
-        _require_active_materialized_projection_session(
-            materialized_projection_session
-        )
+        _require_active_materialized_projection_session(materialized_projection_session)
+    if context_run_persistence_session is not None:
+        _require_active_context_run_persistence_session(context_run_persistence_session)
     _require_active_policy_epoch_verification(policy_epoch_verification)
     if policy_epoch_verification.organization_id != organization_id:
-        raise ValueError(
-            "current Membership Policy Epoch must stay in Organization"
-        )
+        raise ValueError("current Membership Policy Epoch must stay in Organization")
 
     verification = object.__new__(CurrentMembershipVerification)
     object.__setattr__(verification, "organization_id", organization_id)
@@ -197,6 +203,11 @@ def _construct_current_membership_verification(
         verification,
         "materialized_projection_session",
         materialized_projection_session,
+    )
+    object.__setattr__(
+        verification,
+        "context_run_persistence_session",
+        context_run_persistence_session,
     )
     object.__setattr__(
         verification,
@@ -229,12 +240,13 @@ def _require_active_current_membership_verification(
         _require_active_materialized_projection_session(
             verification.materialized_projection_session
         )
-    _require_active_policy_epoch_verification(
-        verification.policy_epoch_verification
-    )
+    if verification.context_run_persistence_session is not None:
+        _require_active_context_run_persistence_session(
+            verification.context_run_persistence_session
+        )
+    _require_active_policy_epoch_verification(verification.policy_epoch_verification)
     if (
-        verification.policy_epoch
-        != verification.policy_epoch_verification.policy_epoch
+        verification.policy_epoch != verification.policy_epoch_verification.policy_epoch
         or verification.organization_id
         != verification.policy_epoch_verification.organization_id
     ):
@@ -258,6 +270,9 @@ class UserActor:
     policy_epoch: int
     policy_epoch_verification: PolicyEpochVerification = field(repr=False)
     materialized_projection_session: MaterializedProjectionSession | None = field(
+        repr=False
+    )
+    context_run_persistence_session: ContextRunPersistenceSession | None = field(
         repr=False
     )
     current_membership_verification: CurrentMembershipVerification = field(repr=False)
@@ -300,6 +315,10 @@ def _construct_user_actor(
             "materialized_projection_session",
             verification.materialized_projection_session,
         ),
+        (
+            "context_run_persistence_session",
+            verification.context_run_persistence_session,
+        ),
         ("current_membership_verification", verification),
         (
             "construction_provenance",
@@ -329,13 +348,13 @@ def _require_active_user_actor(actor: UserActor) -> None:
         or actor.membership_version != verification.membership_version
         or actor.principal_ref != verification.principal_ref
         or actor.request_id != verification.request_id
-        or actor.authentication_binding_ref
-        != verification.authentication_binding_ref
+        or actor.authentication_binding_ref != verification.authentication_binding_ref
         or actor.checked_at != verification.checked_at
         or actor.policy_epoch != verification.policy_epoch
-        or actor.policy_epoch_verification
-        is not verification.policy_epoch_verification
+        or actor.policy_epoch_verification is not verification.policy_epoch_verification
         or actor.materialized_projection_session
         is not verification.materialized_projection_session
+        or actor.context_run_persistence_session
+        is not verification.context_run_persistence_session
     ):
         raise ValueError("UserActor does not match its current Membership proof")

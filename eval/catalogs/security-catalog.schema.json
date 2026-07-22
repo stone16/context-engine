@@ -59,8 +59,8 @@
     },
     "activations": {
       "type": "array",
-      "minItems": 4,
-      "maxItems": 4,
+      "minItems": 5,
+      "maxItems": 5,
       "uniqueItems": true,
       "prefixItems": [
         {
@@ -131,6 +131,25 @@
             "deferredEvidence": ["PROP-ACTION-SEPARATION-014", "PG-ACTION-SEPARATION-014", "ACTION-001 through ACTION-009", "full ACCEPT-012 matrix"],
             "futureCarriers": ["production ContextProvider read/projection", "ContextRuntime ticket integration", "BotDelivery", "M2 ActionPlane and real Sender"],
             "notActive": ["full M2 ActionPlane.prepare/perform", "real Sender/external effect", "payload/destination/approval/idempotency", "durable one-shot/replay/reconciliation", "full ACCEPT-012 PASS"]
+          }
+        },
+        {
+          "const": {
+            "issueRef": "#19",
+            "invariantRef": "TRACE-REDACTION-012",
+            "carrier": "ContextRuntime.resolve(Acquire) authorized-only ContextRun | restricted delivered-empty DecisionAudit",
+            "status": "active_fail_closed",
+            "policyEpochScope": "organization-v0",
+            "controlBoundary": "persist_context_run(ContextRunPersistenceSession, ContextRunRecord, DecisionAuditRecord | None) | PostgreSQLContextRunReader.find_by_decision_ref",
+            "testEvidence": [
+              {"id": "DIGEST-019", "surface": "tests/unit/test_package_digest.py", "oracle": "The versioned Package profile hashes the exact active public JSON document without packageDigest using RFC 8785 JSON Canonicalization Scheme (JCS), including recursive UTF-16 code-unit property ordering and ECMAScript number serialization; it rejects non-finite numbers and ambiguous values and detects alteration. The separately domain-separated versioned HMAC binds the exact query to one Organization and retains no raw query or serializable key material."},
+              {"id": "RUN-LINEAGE-019", "surface": "tests/integration/test_runtime_empty_package_integration.py", "oracle": "A successful authenticated empty HTTP Acquire returns only after the retained current-UserActor transaction persists a same-Organization digest-only ContextRun and the restricted generic no_authorized_evidence DecisionAudit; raw query, Candidate, Resource, denial identifier, and count fields are absent."},
+              {"id": "AUTHORIZED-RUN-019", "surface": "tests/integration/test_runtime_authorized_evidence_integration.py", "oracle": "The public HTTP authorized Package decisionRef resolves through the explicit same-Organization operator seam to exactly one delivered_authorized ContextRun containing only authorized Evidence refs and its matching Package digest, with no denial audit row."},
+              {"id": "PG-TRACE-REDACTION-012", "surface": "tests/integration/test_context_run_schema.py", "oracle": "Real PostgreSQL FORCE RLS permits Runtime INSERT only for the exact current UserActor, gives security-operator and Control no direct table reads, and permits one exact safe ContextRun projection when Control issues a digest-only 60-second Organization-and-decision-bound ticket that security-operator deletes before projection; a committed read, arbitrary GUCs, wrong bindings, expiry, and revocation disclose no additional row, while direct-caller rollback is not claimed as durable exactly-once redemption and DecisionAudit remains seven redacted lineage/category columns."}
+            ],
+            "deferredEvidence": ["PROP-TRACE-REDACTION-012 across every future observability carrier", "OBS-002 secret scanning beyond the activated query/key contracts", "OBS-003 production debug-endpoint authorization"],
+            "futureCarriers": ["Continue and OpenCitation ContextRun lineage", "full retrieval candidate/ranking traces", "authorized feedback and golden-set extraction", "explicitly approved full-Package retention"],
+            "notActive": ["raw query retention", "full ContextPackage body retention", "unauthenticated transport failures as ContextRuns", "cross-Organization analytics", "general logs/metrics/debug/evaluation/Learning redaction coverage"]
           }
         }
       ],
@@ -326,7 +345,7 @@
       "additionalProperties": false,
       "required": ["id", "surface", "oracle"],
       "properties": {
-        "id": {"enum": ["PG-REVOCATION-006", "RUN-006", "CACHE-002", "RUN-UNAVAILABLE-016", "HTTP-UNAVAILABLE-016", "LEASE-SIGNING-017", "PG-WORKER-LEASE-NOOP-017", "WORKER-LEASE-REPLAY-007", "TICKET-AUDIENCE-018", "PG-TICKET-EPOCH-018"]},
+        "id": {"enum": ["PG-REVOCATION-006", "RUN-006", "CACHE-002", "RUN-UNAVAILABLE-016", "HTTP-UNAVAILABLE-016", "LEASE-SIGNING-017", "PG-WORKER-LEASE-NOOP-017", "WORKER-LEASE-REPLAY-007", "TICKET-AUDIENCE-018", "PG-TICKET-EPOCH-018", "DIGEST-019", "RUN-LINEAGE-019", "AUTHORIZED-RUN-019", "PG-TRACE-REDACTION-012"]},
         "surface": {"$ref": "#/$defs/documentRef"},
         "oracle": {"$ref": "#/$defs/nonEmptyString"}
       }
@@ -336,16 +355,16 @@
       "additionalProperties": false,
       "required": ["issueRef", "invariantRef", "carrier", "status", "policyEpochScope", "controlBoundary", "testEvidence", "deferredEvidence", "futureCarriers", "notActive"],
       "properties": {
-        "issueRef": {"enum": ["#15", "#16", "#17", "#18"]},
-        "invariantRef": {"enum": ["REVOCATION-006", "INDEX-NOT-AUTHORITY-005", "WORKER-LEASE-007", "ACTION-SEPARATION-014"]},
-        "carrier": {"enum": ["ContextRuntime.resolve(Acquire)", "ContextRuntime.resolve(Continue | OpenCitation | server-owned unavailable Acquire plan)", "signed one-shot persistent no-op durable-job WorkerLease", "signed synthetic ContextAccessTicket Provider read | signed synthetic ActionTicket no-op channel action"]},
+        "issueRef": {"enum": ["#15", "#16", "#17", "#18", "#19"]},
+        "invariantRef": {"enum": ["REVOCATION-006", "INDEX-NOT-AUTHORITY-005", "WORKER-LEASE-007", "ACTION-SEPARATION-014", "TRACE-REDACTION-012"]},
+        "carrier": {"enum": ["ContextRuntime.resolve(Acquire)", "ContextRuntime.resolve(Continue | OpenCitation | server-owned unavailable Acquire plan)", "signed one-shot persistent no-op durable-job WorkerLease", "signed synthetic ContextAccessTicket Provider read | signed synthetic ActionTicket no-op channel action", "ContextRuntime.resolve(Acquire) authorized-only ContextRun | restricted delivered-empty DecisionAudit"]},
         "status": {"const": "active_fail_closed"},
         "policyEpochScope": {"enum": ["organization-v0", "not-bound-issue-17"]},
-        "controlBoundary": {"enum": ["PostgreSQLAccessPolicyControl.change_access(ResourceAccessRevocation)", "RuntimeCapabilityGate.require_available(RuntimeCapability)", "complete_persistent_noop_job(PostgreSQLWorkerLeaseAuthority, WorkerLeaseRedemption)", "ContextAccessTicketReadHandler.read | ActionTicketNoopHandler.perform"]},
+        "controlBoundary": {"enum": ["PostgreSQLAccessPolicyControl.change_access(ResourceAccessRevocation)", "RuntimeCapabilityGate.require_available(RuntimeCapability)", "complete_persistent_noop_job(PostgreSQLWorkerLeaseAuthority, WorkerLeaseRedemption)", "ContextAccessTicketReadHandler.read | ActionTicketNoopHandler.perform", "persist_context_run(ContextRunPersistenceSession, ContextRunRecord, DecisionAuditRecord | None) | PostgreSQLContextRunReader.find_by_decision_ref"]},
         "testEvidence": {
           "type": "array",
           "minItems": 2,
-          "maxItems": 3,
+          "maxItems": 4,
           "uniqueItems": true,
           "items": {"$ref": "#/$defs/activationTestEvidence"}
         },
@@ -689,7 +708,7 @@
     "contextPackage": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["organizationRef", "purpose", "ttlSeconds", "asOf", "expiresAt", "decisionRef", "blocks", "evidence", "gaps", "budgetUsage", "coverage"],
+      "required": ["organizationRef", "purpose", "ttlSeconds", "asOf", "expiresAt", "decisionRef", "packageDigest", "blocks", "evidence", "gaps", "budgetUsage", "coverage"],
       "properties": {
         "organizationRef": {"$ref": "#/$defs/nonEmptyString"},
         "purpose": {"$ref": "#/$defs/nonEmptyString"},
@@ -697,6 +716,7 @@
         "asOf": {"$ref": "#/$defs/nonEmptyString"},
         "expiresAt": {"$ref": "#/$defs/nonEmptyString"},
         "decisionRef": {"$ref": "#/$defs/nonEmptyString"},
+        "packageDigest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
         "blocks": {
           "type": "array",
           "uniqueItems": true,

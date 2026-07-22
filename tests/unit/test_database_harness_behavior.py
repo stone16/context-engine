@@ -48,8 +48,7 @@ def _run_stubbed_harness(checkout: Path, stub_directory: Path) -> tuple[str, str
 def _stub_harness_dependencies(stub_directory: Path) -> None:
     _write_executable(
         stub_directory / "docker",
-        "#!/usr/bin/env bash\n"
-        "printf '%s\\n' \"$*\" >>\"$HARNESS_COMMAND_LOG\"\n",
+        '#!/usr/bin/env bash\nprintf \'%s\\n\' "$*" >>"$HARNESS_COMMAND_LOG"\n',
     )
     _write_executable(stub_directory / "uv", "#!/usr/bin/env bash\nexit 0\n")
 
@@ -63,9 +62,7 @@ def test_two_checkouts_generate_distinct_persistent_compose_projects(
     first_checkout = tmp_path / "first"
     second_checkout = tmp_path / "second"
 
-    first_project, first_command = _run_stubbed_harness(
-        first_checkout, stub_directory
-    )
+    first_project, first_command = _run_stubbed_harness(first_checkout, stub_directory)
     second_project, second_command = _run_stubbed_harness(
         second_checkout, stub_directory
     )
@@ -83,6 +80,41 @@ def test_two_checkouts_generate_distinct_persistent_compose_projects(
     assert f"--project-name {first_project}" in repeated_command
 
 
+def test_fresh_environment_has_a_dedicated_security_operator_credential(
+    tmp_path: Path,
+) -> None:
+    stub_directory = tmp_path / "bin"
+    stub_directory.mkdir()
+    _stub_harness_dependencies(stub_directory)
+    checkout = tmp_path / "checkout"
+
+    _run_stubbed_harness(checkout, stub_directory)
+
+    environment_path = checkout / ".context-engine/database.env"
+    generated = dict(
+        line.split("=", maxsplit=1)
+        for line in environment_path.read_text(encoding="utf-8").splitlines()
+    )
+    operator_password = generated["CONTEXT_ENGINE_SECURITY_OPERATOR_PASSWORD"]
+    assert generated["CONTEXT_ENGINE_SECURITY_OPERATOR_ROLE"] == (
+        "context_engine_security_operator"
+    )
+    assert re.fullmatch(r"[0-9a-f]{64}", operator_password)
+    assert generated["CONTEXT_ENGINE_SECURITY_OPERATOR_DATABASE_URL"] == (
+        "postgresql+psycopg://context_engine_security_operator:"
+        f"{operator_password}@127.0.0.1:"
+        f"{generated['CONTEXT_ENGINE_POSTGRES_PORT']}/context_engine"
+    )
+    assert operator_password not in {
+        generated["POSTGRES_PASSWORD"],
+        generated["CONTEXT_ENGINE_MIGRATOR_PASSWORD"],
+        generated["CONTEXT_ENGINE_CONTROL_PASSWORD"],
+        generated["CONTEXT_ENGINE_RUNTIME_PASSWORD"],
+        generated["CONTEXT_ENGINE_WORKER_PASSWORD"],
+    }
+    assert environment_path.stat().st_mode & 0o777 == 0o600
+
+
 def test_concurrent_first_use_converges_on_one_persisted_compose_project(
     tmp_path: Path,
 ) -> None:
@@ -94,21 +126,21 @@ def test_concurrent_first_use_converges_on_one_persisted_compose_project(
     _write_executable(
         stub_directory / "ln",
         "#!/usr/bin/env bash\n"
-        "if [[ \"$2\" == */database.env ]]; then\n"
-        "  marker=\"$HARNESS_BARRIER_DIR/$$\"\n"
-        "  : >\"$marker\"\n"
-        "  if mkdir \"$HARNESS_BARRIER_DIR/leader\" 2>/dev/null; then\n"
-        "    while [[ $(find \"$HARNESS_BARRIER_DIR\" -type f | wc -l) -lt 2 ]]; do\n"
+        'if [[ "$2" == */database.env ]]; then\n'
+        '  marker="$HARNESS_BARRIER_DIR/$$"\n'
+        '  : >"$marker"\n'
+        '  if mkdir "$HARNESS_BARRIER_DIR/leader" 2>/dev/null; then\n'
+        '    while [[ $(find "$HARNESS_BARRIER_DIR" -type f | wc -l) -lt 2 ]]; do\n'
         "      sleep 0.01\n"
         "    done\n"
         "  else\n"
-        "    while [[ $(find \"$HARNESS_BARRIER_DIR\" -type f | wc -l) -lt 2 ]]; do\n"
+        '    while [[ $(find "$HARNESS_BARRIER_DIR" -type f | wc -l) -lt 2 ]]; do\n'
         "      sleep 0.01\n"
         "    done\n"
         "    sleep 0.3\n"
         "  fi\n"
         "fi\n"
-        "exec /bin/ln \"$@\"\n",
+        'exec /bin/ln "$@"\n',
     )
     checkout = tmp_path / "checkout"
     scripts = checkout / "scripts"
@@ -211,3 +243,51 @@ def test_legacy_environment_gains_one_generated_control_credential(
         f"{migrated['CONTEXT_ENGINE_POSTGRES_PORT']}/context_engine"
     )
     assert environment_path.stat().st_mode & 0o777 == 0o600
+
+
+def test_legacy_environment_gains_one_generated_security_operator_credential(
+    tmp_path: Path,
+) -> None:
+    stub_directory = tmp_path / "bin"
+    stub_directory.mkdir()
+    _stub_harness_dependencies(stub_directory)
+    checkout = tmp_path / "checkout"
+    project, _ = _run_stubbed_harness(checkout, stub_directory)
+    environment_path = checkout / ".context-engine/database.env"
+    original = dict(
+        line.split("=", maxsplit=1)
+        for line in environment_path.read_text(encoding="utf-8").splitlines()
+    )
+    legacy_environment = "\n".join(
+        line
+        for line in environment_path.read_text(encoding="utf-8").splitlines()
+        if not line.startswith("CONTEXT_ENGINE_SECURITY_OPERATOR_")
+    )
+    environment_path.write_text(f"{legacy_environment}\n", encoding="utf-8")
+    environment_path.chmod(0o600)
+
+    migrated_project, command = _run_stubbed_harness(checkout, stub_directory)
+
+    migrated_lines = environment_path.read_text(encoding="utf-8").splitlines()
+    migrated = dict(line.split("=", maxsplit=1) for line in migrated_lines)
+    assert migrated_project == project
+    assert f"--project-name {project}" in command
+    assert migrated["CONTEXT_ENGINE_SECURITY_OPERATOR_ROLE"] == (
+        "context_engine_security_operator"
+    )
+    operator_password = migrated["CONTEXT_ENGINE_SECURITY_OPERATOR_PASSWORD"]
+    assert re.fullmatch(r"[0-9a-f]{64}", operator_password)
+    assert migrated["CONTEXT_ENGINE_SECURITY_OPERATOR_DATABASE_URL"] == (
+        "postgresql+psycopg://context_engine_security_operator:"
+        f"{operator_password}@127.0.0.1:"
+        f"{migrated['CONTEXT_ENGINE_POSTGRES_PORT']}/context_engine"
+    )
+    for name, value in original.items():
+        if not name.startswith("CONTEXT_ENGINE_SECURITY_OPERATOR_"):
+            assert migrated[name] == value
+    assert environment_path.stat().st_mode & 0o777 == 0o600
+
+    persisted_environment = environment_path.read_text(encoding="utf-8")
+    repeated_project, _ = _run_stubbed_harness(checkout, stub_directory)
+    assert repeated_project == project
+    assert environment_path.read_text(encoding="utf-8") == persisted_environment

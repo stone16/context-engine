@@ -49,6 +49,7 @@ def test_compose_project_identity_is_generated_per_checkout() -> None:
         "control_role",
         "runtime_role",
         "worker_role",
+        "security_operator_role",
     ],
 )
 def test_role_bootstrap_keeps_each_login_nonsuperuser_nobypass_noinherit(
@@ -76,29 +77,61 @@ def test_database_harness_generates_secret_state_and_never_sources_it() -> None:
     assert "role-isolated URL contract" in script
     assert "CONTEXT_ENGINE_CONTROL_ROLE=context_engine_control" in script
     assert "CONTEXT_ENGINE_CONTROL_DATABASE_URL" in script
+    assert (
+        "CONTEXT_ENGINE_SECURITY_OPERATOR_ROLE=context_engine_security_operator"
+        in script
+    )
+    assert "CONTEXT_ENGINE_SECURITY_OPERATOR_DATABASE_URL" in script
+    assert script.count("\n  generate_environment\n") == 1
 
 
-def test_compose_passes_the_dedicated_control_credential_to_bootstrap() -> None:
+def test_compose_passes_dedicated_operator_credentials_to_bootstrap() -> None:
     compose = repository_text("compose.yaml")
 
     assert "CONTEXT_ENGINE_CONTROL_ROLE" in compose
     assert "CONTEXT_ENGINE_CONTROL_PASSWORD" in compose
+    assert "CONTEXT_ENGINE_SECURITY_OPERATOR_ROLE" in compose
+    assert "CONTEXT_ENGINE_SECURITY_OPERATOR_PASSWORD" in compose
 
 
-def test_readiness_probe_includes_the_dedicated_control_configuration() -> None:
+def test_readiness_probe_includes_dedicated_operator_configuration() -> None:
     wait_script = repository_text("scripts/wait_for_database.py")
 
     assert "configurations.control" in wait_script
-    assert "migration, control, runtime, worker" in wait_script
+    assert "configurations.operator" in wait_script
+    assert (
+        "                    if configuration.purpose is "
+        "DatabasePurpose.SECURITY_OPERATOR:"
+    ) in wait_script
+    assert "                        assert_security_operator_role(connection)" in (
+        wait_script
+    )
+    assert "migration, control, runtime, worker, security-operator" in wait_script
 
 
 def test_harness_provisions_post_init_roles_before_readiness() -> None:
     harness = repository_text("scripts/database_harness.sh")
     provisioner = repository_text("scripts/provision_database_roles.py")
+    configuration = repository_text("engine/persistence/configuration.py")
 
-    assert harness.count("  provision_database_roles\n  wait_for_database") == 2
+    assert harness.count("  provision_database_roles\n  wait_for_database") == 3
+    integration_body = harness.split("run_integration() {", maxsplit=1)[1].split(
+        "\n}", maxsplit=1
+    )[0]
+    assert (
+        "  load_environment\n"
+        "  compose up --detach --wait\n"
+        "  provision_database_roles\n"
+        "  wait_for_database\n" in integration_body
+    )
+    assert (
+        'CONTEXT_RUN_READER_DEFINER_ROLE = "context_engine_context_run_reader_definer"'
+    ) in configuration
     assert "ACCESS_POLICY_DEFINER_ROLE" in provisioner
     assert "WORKER_LEASE_DEFINER_ROLE" in provisioner
+    assert "CONTEXT_RUN_READER_DEFINER_ROLE" in provisioner
+    assert "contract.context_run_reader_definer_role" in provisioner
+    assert "OPERATOR_ROLE" in provisioner
     assert "NOLOGIN NOSUPERUSER" in provisioner
     assert "WITH ADMIN FALSE, INHERIT FALSE, SET TRUE" in provisioner
     assert "database security-role provisioning failed" in provisioner
@@ -128,6 +161,15 @@ def test_runtime_role_guard_rejects_every_membership() -> None:
     assert "membership.member = role.oid" in guard
     assert "AS has_no_role_memberships" in guard
     assert '"has_no_role_memberships": True' in guard
+
+
+def test_role_guard_rejects_any_database_object_ownership() -> None:
+    guard = repository_text("engine/persistence/role_guard.py")
+
+    assert "FROM pg_shdepend AS dependency" in guard
+    assert "dependency.deptype = 'o'" in guard
+    assert "AS owns_no_database_objects" in guard
+    assert "tuple(operator_facts) != (True, True)" in guard
 
 
 def test_ci_runs_the_same_make_database_contract_as_local() -> None:
