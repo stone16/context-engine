@@ -19,6 +19,7 @@ from engine.control.contracts import _require_bounded_text, _require_utc
 
 
 class ControlOperation(StrEnum):
+    IMPORT_FILE = "import_file"
     REGISTER_SOURCE = "register_source"
     READ_SOURCE = "read_source"
 

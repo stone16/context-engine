@@ -456,7 +456,7 @@ class AuthorizationKernel:
                 raise RuntimeConfigurationError(
                     "candidate discovery requires same-transaction projection session"
                 )
-            discovered = candidate_index.discover(request)
+            discovered = candidate_index.discover(request, projection_session)
             if type(discovered) is not tuple or any(
                 type(candidate) is not CandidateRef for candidate in discovered
             ):

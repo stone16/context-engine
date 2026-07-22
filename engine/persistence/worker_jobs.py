@@ -12,8 +12,10 @@ from uuid import UUID
 from sqlalchemy import Connection, Engine, text
 from sqlalchemy.exc import SQLAlchemyError
 
+from engine.control import PreparedFileImport
 from engine.persistence.role_guard import assert_control_role, assert_worker_role
 from engine.supply.jobs import (
+    FILE_IMPORT_WORKER_LEASE_OPERATION,
     WORKER_LEASE_ACTOR_KIND,
     WORKER_LEASE_OPERATION,
     WorkerLeaseClaims,
@@ -233,6 +235,66 @@ class PostgreSQLWorkerLeaseIssuer:
         except SQLAlchemyError:
             raise WorkerLeaseAuthorityUnavailable(
                 "worker lease issuance database work failed"
+            ) from None
+
+    def issue_file_import_lease(
+        self,
+        prepared: PreparedFileImport,
+    ) -> WorkerLeaseToken:
+        """Lease one prepared File import with exact Source binding."""
+
+        if type(prepared) is not PreparedFileImport:
+            raise TypeError("File import lease requires PreparedFileImport")
+        nonce = generate_worker_lease_nonce()
+        try:
+            with self._control_engine.begin() as connection:
+                self._require_control_role(connection)
+                row = connection.execute(
+                    text(
+                        """
+                        SELECT issued_at, expires_at
+                        FROM public.context_worker_issue_file_import_lease(
+                            :organization_id, :job_id,
+                            :service_principal_id, :source_ref,
+                            :signing_key_version, :nonce,
+                            :lease_ttl_seconds
+                        )
+                        """
+                    ),
+                    {
+                        "organization_id": prepared.organization_id,
+                        "job_id": prepared.job_id,
+                        "service_principal_id": prepared.service_principal_id,
+                        "source_ref": str(prepared.source_ref.value),
+                        "signing_key_version": (
+                            self._codec.active_signing_key_version
+                        ),
+                        "nonce": nonce,
+                        "lease_ttl_seconds": self._lease_ttl_seconds,
+                    },
+                ).one_or_none()
+                if row is None:
+                    raise WorkerLeaseIssueNotAvailable
+                claims = WorkerLeaseClaims(
+                    signing_key_version=self._codec.active_signing_key_version,
+                    organization_id=prepared.organization_id,
+                    job_id=prepared.job_id,
+                    service_principal_id=prepared.service_principal_id,
+                    workload=prepared.workload,
+                    worker_audience=prepared.worker_audience,
+                    issued_at=_require_utc("issued_at", row.issued_at),
+                    expires_at=_require_utc("expires_at", row.expires_at),
+                    nonce=nonce,
+                    operation=FILE_IMPORT_WORKER_LEASE_OPERATION,
+                    source_ref=str(prepared.source_ref.value),
+                )
+                token = self._codec.mint(claims)
+            return token
+        except (WorkerLeaseIssueNotAvailable, WorkerLeaseAuthorityUnavailable):
+            raise
+        except SQLAlchemyError:
+            raise WorkerLeaseAuthorityUnavailable(
+                "File import lease issuance database work failed"
             ) from None
 
     @staticmethod

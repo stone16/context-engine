@@ -23,6 +23,12 @@ from engine.control import (
     TrustedControlCall,
     VerifiedControlOperatorIdentity,
 )
+from engine.supply import (
+    FileImportAudience,
+    FileImportPath,
+    PreparedFileImport,
+    PrepareFileImport,
+)
 
 ORGANIZATION_ID = UUID("a6776454-3a24-4c1c-998c-3a69a1d3de23")
 NOW = datetime(2026, 7, 22, 18, 50, tzinfo=UTC)
@@ -38,7 +44,11 @@ class _Authenticator:
             authentication_binding_ref="control-binding-a",
             authority_ref="source-admin-a",
             allowed_operations=frozenset(
-                {ControlOperation.REGISTER_SOURCE, ControlOperation.READ_SOURCE}
+                {
+                    ControlOperation.IMPORT_FILE,
+                    ControlOperation.REGISTER_SOURCE,
+                    ControlOperation.READ_SOURCE,
+                }
             ),
             valid_from=NOW - timedelta(minutes=1),
             expires_at=NOW + timedelta(hours=1),
@@ -73,6 +83,20 @@ class _Store(ControlStorePort):
         if self.manifest is None or source_ref != self.manifest.source_ref:
             raise SourceNotAvailable
         return self.manifest
+
+    def prepare_file_import(
+        self, call: TrustedControlCall, command: PrepareFileImport
+    ) -> PreparedFileImport:
+        assert call.organization_id == ORGANIZATION_ID
+        assert call.operation is ControlOperation.IMPORT_FILE
+        assert self.manifest is not None
+        assert command.source_ref == self.manifest.source_ref
+        return PreparedFileImport(
+            organization_id=ORGANIZATION_ID,
+            job_id=UUID("9de5b515-540b-4c9c-b1d3-f9b691dfbb7a"),
+            source_ref=command.source_ref,
+            service_principal_id=UUID("0f7bc78d-a76a-477c-b097-ce557b7844b9"),
+        )
 
 
 def _authority() -> ControlOperatorAuthority:
@@ -180,6 +204,44 @@ def test_authorized_operator_registers_and_reads_one_honest_file_manifest() -> N
         request_id="read-request-a",
     ) as call:
         assert control.read_source(call, registered.source_ref) == registered
+
+
+def test_authorized_operator_prepares_one_credential_free_file_import() -> None:
+    store = _Store()
+    authority = _authority()
+    control = ContextControl(store=store, authority=authority, clock=lambda: NOW)
+    with authority.authorize(
+        opaque_credential="control-credential-a",
+        operation=ControlOperation.REGISTER_SOURCE,
+        request_id="register-for-import",
+    ) as call:
+        source = control.register_source(
+            call,
+            RegisterFileSource("Handbook", FileRootRef("handbook"), "handbook"),
+        )
+    command = PrepareFileImport(
+        source_ref=source.source_ref,
+        path=FileImportPath("handbook.md"),
+        audience=FileImportAudience(
+            principal_ref="principal:handbook-reader",
+            membership_id=UUID("82a11990-7a87-4693-a3de-c3cab5fab7aa"),
+            membership_version=1,
+        ),
+        idempotency_key="handbook-import-v1",
+    )
+
+    with authority.authorize(
+        opaque_credential="control-credential-a",
+        operation=ControlOperation.IMPORT_FILE,
+        request_id="prepare-import",
+    ) as call:
+        prepared = control.prepare_file_import(call, command)
+
+    assert prepared.organization_id == ORGANIZATION_ID
+    assert prepared.source_ref == source.source_ref
+    assert prepared.workload == "supply.file-import"
+    assert prepared.operation == "file.import"
+    assert "credential" not in repr(prepared).casefold()
 
 
 def test_source_ref_and_forged_or_wrong_operation_calls_never_authorize_control() -> (

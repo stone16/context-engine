@@ -180,7 +180,10 @@ class SameContentFreeCandidateIndex:
         self.calls: list[Acquire] = []
         self.returned_candidates: list[CandidateRef] = []
 
-    def discover(self, request: Acquire) -> tuple[CandidateRef, ...]:
+    def discover(
+        self, request: Acquire, projection_session: object
+    ) -> tuple[CandidateRef, ...]:
+        del projection_session
         self.calls.append(request)
         self.returned_candidates.append(self.candidate)
         return (self.candidate,)

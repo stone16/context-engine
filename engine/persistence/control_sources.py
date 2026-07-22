@@ -14,6 +14,7 @@ from sqlalchemy.exc import DBAPIError, SQLAlchemyError
 
 from engine.control import (
     FILE_CAPABILITY_MANIFEST,
+    FILE_IMPORT_CAPABILITY_MANIFEST,
     FileRootRef,
     RegisterFileSource,
     SourceControlUnavailable,
@@ -23,6 +24,11 @@ from engine.control import (
     TrustedControlCall,
 )
 from engine.persistence.role_guard import assert_control_role
+from engine.supply import (
+    FileImportReceiver,
+    PreparedFileImport,
+    PrepareFileImport,
+)
 
 _REGISTRATION_OPERATION = "register_source"
 _ACTIVE_SOURCE_SELECT = """
@@ -49,7 +55,13 @@ def _capability_document() -> dict[str, object]:
     return FILE_CAPABILITY_MANIFEST.document()
 
 
-_CAPABILITY_DOCUMENT = _capability_document()
+_REGISTRATION_CAPABILITY_DOCUMENT = FILE_CAPABILITY_MANIFEST.document()
+_KNOWN_CAPABILITY_DOCUMENTS = {
+    FILE_CAPABILITY_MANIFEST.declaration_version: FILE_CAPABILITY_MANIFEST,
+    FILE_IMPORT_CAPABILITY_MANIFEST.declaration_version: (
+        FILE_IMPORT_CAPABILITY_MANIFEST
+    ),
+}
 
 
 def _registration_digest(command: RegisterFileSource) -> str:
@@ -89,12 +101,19 @@ class PostgreSQLControlStore:
         *,
         clock: Callable[[], datetime],
         uuid_factory: Callable[[], UUID] = uuid4,
+        file_import_receiver: FileImportReceiver | None = None,
     ) -> None:
         if not callable(clock) or not callable(uuid_factory):
             raise TypeError("PostgreSQLControlStore requires clock and UUID factory")
         self._engine = engine
         self._clock = clock
         self._uuid_factory = uuid_factory
+        if (
+            file_import_receiver is not None
+            and type(file_import_receiver) is not FileImportReceiver
+        ):
+            raise TypeError("file_import_receiver must be FileImportReceiver")
+        self._file_import_receiver = file_import_receiver
 
     def register_file_source(
         self,
@@ -166,7 +185,7 @@ class PostgreSQLControlStore:
                             "version_id": version_id,
                             "root_ref": command.root_ref.value,
                             "capabilities": rfc8785.dumps(
-                                cast(Any, _CAPABILITY_DOCUMENT)
+                                cast(Any, _REGISTRATION_CAPABILITY_DOCUMENT)
                             ).decode("utf-8"),
                             "created_at": created_at,
                         },
@@ -220,6 +239,91 @@ class PostgreSQLControlStore:
                 "File source read database authority is unavailable"
             ) from None
 
+    def prepare_file_import(
+        self,
+        call: TrustedControlCall,
+        command: PrepareFileImport,
+    ) -> PreparedFileImport:
+        """Atomically persist one acquisition and its exact worker job."""
+
+        receiver = self._file_import_receiver
+        if (
+            type(call) is not TrustedControlCall
+            or type(command) is not PrepareFileImport
+            or receiver is None
+        ):
+            raise SourceNotAvailable
+        job_id = self._uuid_factory()
+        acquisition_id = self._uuid_factory()
+        activated_version_id = self._uuid_factory()
+        document = {
+            "audience_membership_id": str(command.audience.membership_id),
+            "audience_membership_version": command.audience.membership_version,
+            "audience_principal_ref": command.audience.principal_ref,
+            "idempotency_key": command.idempotency_key,
+            "operation": receiver.operation,
+            "path": command.path.value,
+            "source_id": str(command.source_ref.value),
+        }
+        digest = hashlib.sha256(
+            b"context-engine.prepare-file-import.v1\x00"
+            + rfc8785.dumps(cast(Any, document))
+        ).hexdigest()
+        try:
+            with self._engine.begin() as connection:
+                assert_control_role(connection)
+                row = connection.execute(
+                    text(
+                        """
+                        SELECT job_id, service_principal_id
+                        FROM public.context_control_prepare_file_import(
+                            :organization_id,
+                            :acquisition_id,
+                            :job_id,
+                            :activated_version_id,
+                            :source_id,
+                            :relative_path,
+                            :audience_principal_ref,
+                            :audience_membership_id,
+                            :audience_membership_version,
+                            :idempotency_key,
+                            :request_digest,
+                            :service_principal_id
+                        )
+                        """
+                    ),
+                    {
+                        "organization_id": call.organization_id,
+                        "acquisition_id": acquisition_id,
+                        "job_id": job_id,
+                        "activated_version_id": activated_version_id,
+                        "source_id": command.source_ref.value,
+                        "relative_path": command.path.value,
+                        "audience_principal_ref": command.audience.principal_ref,
+                        "audience_membership_id": command.audience.membership_id,
+                        "audience_membership_version": (
+                            command.audience.membership_version
+                        ),
+                        "idempotency_key": command.idempotency_key,
+                        "request_digest": digest,
+                        "service_principal_id": receiver.service_principal_id,
+                    },
+                ).one_or_none()
+                if row is None:
+                    raise SourceNotAvailable
+                return PreparedFileImport(
+                    organization_id=call.organization_id,
+                    job_id=row.job_id,
+                    source_ref=command.source_ref,
+                    service_principal_id=row.service_principal_id,
+                )
+        except SourceNotAvailable:
+            raise
+        except (DBAPIError, SQLAlchemyError, AssertionError):
+            raise SourceControlUnavailable(
+                "File import Control database authority is unavailable"
+            ) from None
+
     @staticmethod
     def _select_registration(
         connection: Any,
@@ -249,7 +353,21 @@ class PostgreSQLControlStore:
     @staticmethod
     def _manifest(row: Mapping[str, object]) -> SourceManifest:
         capabilities = row["capability_manifest"]
-        if capabilities != _CAPABILITY_DOCUMENT:
+        if type(capabilities) is not dict:
+            raise SourceControlUnavailable(
+                "stored File capability declaration is not recognized"
+            )
+        declaration_version_value = capabilities.get("declarationVersion")
+        declaration_version = (
+            declaration_version_value
+            if type(declaration_version_value) is str
+            else ""
+        )
+        capability_manifest = _KNOWN_CAPABILITY_DOCUMENTS.get(declaration_version)
+        if (
+            capability_manifest is None
+            or capabilities != capability_manifest.document()
+        ):
             raise SourceControlUnavailable(
                 "stored File capability declaration is not recognized"
             )
@@ -270,13 +388,15 @@ class PostgreSQLControlStore:
             or type(root_ref) is not str
             or type(source_created_at) is not datetime
             or type(version_created_at) is not datetime
-            or source_created_at != version_created_at
+            or version_created_at < source_created_at
         ):
             raise SourceControlUnavailable("stored File source manifest is invalid")
-        return SourceManifest.issue_21_file(
+        return SourceManifest.registered_file(
             source_ref=SourceRef(source_id),
             version_ref=version_id,
             display_name=display_name,
             root_ref=FileRootRef(root_ref),
             created_at=source_created_at,
+            version_created_at=version_created_at,
+            capabilities=capability_manifest,
         )

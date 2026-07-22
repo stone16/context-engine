@@ -86,8 +86,8 @@ class ContentIoTwin:
         self.provider_calls = 0
         self.source_calls = 0
 
-    def discover(self, request: Acquire) -> tuple[()]:
-        del request
+    def discover(self, request: Acquire, projection_session: object) -> tuple[()]:
+        del request, projection_session
         self.index_calls += 1
         return ()
 
@@ -319,7 +319,9 @@ def test_content_twins_are_observable_controls_for_every_prohibited_call() -> No
     twin = ContentIoTwin()
     content_io = RuntimeContentIo(index=twin, provider=twin, source_content=twin)
 
-    content_io.index.discover(Acquire(need=ContextNeed(query="control")))
+    content_io.index.discover(
+        Acquire(need=ContextNeed(query="control")), cast(Any, None)
+    )
     content_io.provider.authorize_and_project()
     content_io.source_content.read_content()
 

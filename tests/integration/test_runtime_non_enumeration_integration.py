@@ -123,7 +123,10 @@ class SequencedCandidateIndex:
         self.rankings = rankings
         self.calls: list[Acquire] = []
 
-    def discover(self, request: Acquire) -> tuple[CandidateRef, ...]:
+    def discover(
+        self, request: Acquire, projection_session: object
+    ) -> tuple[CandidateRef, ...]:
+        del projection_session
         call_index = len(self.calls)
         self.calls.append(request)
         if call_index >= len(self.rankings):

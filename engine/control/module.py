@@ -20,6 +20,7 @@ from engine.control.contracts import (
     SourceNotAvailable,
     SourceRef,
 )
+from engine.control.file_imports import PreparedFileImport, PrepareFileImport
 
 
 class ControlStorePort(Protocol):
@@ -37,9 +38,15 @@ class ControlStorePort(Protocol):
         source_ref: SourceRef,
     ) -> SourceManifest: ...
 
+    def prepare_file_import(
+        self,
+        call: TrustedControlCall,
+        command: PrepareFileImport,
+    ) -> PreparedFileImport: ...
+
 
 class ContextControl:
-    """Own File source enrollment and read-back, but no acquisition behavior."""
+    """Own trusted File enrollment, read-back, and import preparation."""
 
     __slots__ = ("_authority", "_clock", "_store")
 
@@ -50,7 +57,11 @@ class ContextControl:
         authority: ControlOperatorAuthority,
         clock: Callable[[], datetime],
     ) -> None:
-        for method_name in ("register_file_source", "read_source"):
+        for method_name in (
+            "prepare_file_import",
+            "register_file_source",
+            "read_source",
+        ):
             if not callable(getattr(store, method_name, None)):
                 raise TypeError("ContextControl store is incomplete")
         if type(authority) is not ControlOperatorAuthority:
@@ -118,6 +129,44 @@ class ContextControl:
             raise
         except Exception:
             raise SourceControlUnavailable("source read is unavailable") from None
+
+    def prepare_file_import(
+        self,
+        call: TrustedControlCall,
+        command: PrepareFileImport,
+    ) -> PreparedFileImport:
+        """Create one durable acquisition/job under trusted Control authority."""
+
+        if type(command) is not PrepareFileImport:
+            raise TypeError("prepare_file_import requires PrepareFileImport")
+        try:
+            _validate_and_consume_control_call(
+                call,
+                authority=self._authority,
+                expected_operation=ControlOperation.IMPORT_FILE,
+                checked_at=self._clock(),
+            )
+            prepared = self._store.prepare_file_import(call, command)
+            if type(prepared) is not PreparedFileImport:
+                raise SourceControlUnavailable(
+                    "source store returned an invalid File import"
+                )
+            if (
+                prepared.organization_id != call.organization_id
+                or prepared.source_ref != command.source_ref
+            ):
+                raise SourceControlUnavailable(
+                    "source store returned a mismatched File import"
+                )
+            return prepared
+        except (ControlOperatorAuthenticationRejected, SourceNotAvailable):
+            raise SourceNotAvailable from None
+        except SourceControlUnavailable:
+            raise
+        except Exception:
+            raise SourceControlUnavailable(
+                "File import preparation is unavailable"
+            ) from None
 
     @staticmethod
     def _require_manifest(manifest: object) -> None:

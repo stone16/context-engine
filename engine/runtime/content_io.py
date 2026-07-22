@@ -1,16 +1,32 @@
 """Content-free discovery plus prohibited legacy content seams."""
 
 from dataclasses import dataclass
+from hashlib import sha256
 from typing import Protocol
 
 from engine.runtime.contracts import Acquire
 from engine.runtime.evidence import CandidateRef
+from engine.runtime.materialized import MaterializedProjectionSession
+
+_EXACT_PHRASE_DIGEST_DOMAIN = b"context-engine.exact-phrase.v1\x00"
+
+
+def exact_phrase_digest(value: str) -> str:
+    """Digest exact UTF-8 query text for the content-free candidate index."""
+
+    if type(value) is not str or not value or value.isspace():
+        raise ValueError("exact phrase must be nonblank")
+    return sha256(_EXACT_PHRASE_DIGEST_DOMAIN + value.encode("utf-8")).hexdigest()
 
 
 class CandidateIndex(Protocol):
     """Content-free candidate discovery seam; never an authorization source."""
 
-    def discover(self, request: Acquire) -> tuple[CandidateRef, ...]: ...
+    def discover(
+        self,
+        request: Acquire,
+        projection_session: MaterializedProjectionSession,
+    ) -> tuple[CandidateRef, ...]: ...
 
 
 class ContextProvider(Protocol):
@@ -35,7 +51,11 @@ class RuntimeContentIo:
 
 
 class _ProhibitedCandidateIndex:
-    def discover(self, request: Acquire) -> tuple[()]:
+    def discover(
+        self,
+        request: Acquire,
+        projection_session: MaterializedProjectionSession,
+    ) -> tuple[()]:
         raise RuntimeError("candidate index is prohibited on the empty Package path")
 
 

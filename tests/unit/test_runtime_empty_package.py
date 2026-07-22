@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
+from typing import Any, cast
 from uuid import UUID
 
 import pytest
@@ -68,7 +69,8 @@ class ContentIoSpy:
         self.provider_calls = 0
         self.source_content_calls = 0
 
-    def discover(self, request: Acquire) -> tuple[()]:
+    def discover(self, request: Acquire, projection_session: object) -> tuple[()]:
+        del projection_session
         self.index_calls += 1
         return ()
 
@@ -235,7 +237,7 @@ def test_content_io_spy_would_detect_every_runtime_dependency_call() -> None:
     candidate = runtime(spy)
     request = Acquire(need=ContextNeed(query="mutation control"))
 
-    candidate._content_io.index.discover(request)
+    candidate._content_io.index.discover(request, cast(Any, None))
     candidate._content_io.provider.authorize_and_project()
     candidate._content_io.source_content.read_content()
 

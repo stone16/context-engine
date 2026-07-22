@@ -510,6 +510,7 @@ def test_runtime_worker_and_public_grants_are_least_privilege(
         assert security == (True, True)
         assert set(policies) == {
             "membership_current_user_actor",
+            "membership_file_import_definer_select",
             "membership_migrator_administration",
         }
         runtime_policy = policies["membership_current_user_actor"]
