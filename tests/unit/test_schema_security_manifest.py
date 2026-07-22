@@ -142,10 +142,24 @@ def test_issue_21_file_source_manifest_is_closed_and_role_separated() -> None:
     assert "materialized" in capability_constraint["expression"]
     assert "markdown" in capability_constraint["expression"]
     assert "mirrored" in capability_constraint["expression"]
+    assert '"resourceKinds": ["markdown_document"]' in (
+        capability_constraint["expression"]
+    )
+    assert '"projectionFields": []' in capability_constraint["expression"]
+    for dimension in (
+        "batchLimits",
+        "checkpointSemantics",
+        "consistencyGuarantees",
+        "cursorSemantics",
+        "freshness",
+    ):
+        assert f'"{dimension}": "unavailable"' in (
+            capability_constraint["expression"]
+        )
     assert "\"describeCapabilities\": \"unavailable\"" in (
         capability_constraint["expression"]
     )
-    assert capability_constraint["expression"].count("unavailable") == 8
+    assert capability_constraint["expression"].count("unavailable") == 13
 
     for entry in (source, version):
         assert entry["permittedOperations"] == {

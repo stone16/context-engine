@@ -459,7 +459,7 @@
         },
         {
           "name": "ck_source_version_issue_21_capabilities",
-          "expression": "capability_manifest = '{\"aclEvidenceMode\": \"mirrored\", \"authorizeAndProject\": \"unavailable\", \"checkpoint\": \"unavailable\", \"contentKinds\": [\"markdown\"], \"declarationVersion\": \"file-capabilities-v1\", \"deletion\": \"unavailable\", \"describeCapabilities\": \"unavailable\", \"discover\": \"unavailable\", \"fileSourceAccess\": \"unavailable\", \"ingestionJobs\": \"unavailable\", \"readChanges\": \"unavailable\", \"sourceMode\": \"materialized\"}'::jsonb"
+          "expression": "capability_manifest = '{\"aclEvidenceMode\": \"mirrored\", \"authorizeAndProject\": \"unavailable\", \"batchLimits\": \"unavailable\", \"checkpoint\": \"unavailable\", \"checkpointSemantics\": \"unavailable\", \"contentKinds\": [\"markdown\"], \"consistencyGuarantees\": \"unavailable\", \"cursorSemantics\": \"unavailable\", \"declarationVersion\": \"file-capabilities-v1\", \"deletion\": \"unavailable\", \"describeCapabilities\": \"unavailable\", \"discover\": \"unavailable\", \"fileSourceAccess\": \"unavailable\", \"freshness\": \"unavailable\", \"ingestionJobs\": \"unavailable\", \"projectionFields\": [], \"readChanges\": \"unavailable\", \"resourceKinds\": [\"markdown_document\"], \"sourceMode\": \"materialized\"}'::jsonb"
         }
       ],
       "rowLevelSecurity": {

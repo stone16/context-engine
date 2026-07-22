@@ -156,15 +156,22 @@ def upgrade() -> None:
             "capability_manifest = "
             "'{\"aclEvidenceMode\": \"mirrored\", "
             "\"authorizeAndProject\": \"unavailable\", "
+            "\"batchLimits\": \"unavailable\", "
             "\"checkpoint\": \"unavailable\", "
+            "\"checkpointSemantics\": \"unavailable\", "
             "\"contentKinds\": [\"markdown\"], "
+            "\"consistencyGuarantees\": \"unavailable\", "
+            "\"cursorSemantics\": \"unavailable\", "
             "\"declarationVersion\": \"file-capabilities-v1\", "
             "\"deletion\": \"unavailable\", "
             "\"describeCapabilities\": \"unavailable\", "
             "\"discover\": \"unavailable\", "
             "\"fileSourceAccess\": \"unavailable\", "
+            "\"freshness\": \"unavailable\", "
             "\"ingestionJobs\": \"unavailable\", "
+            "\"projectionFields\": [], "
             "\"readChanges\": \"unavailable\", "
+            "\"resourceKinds\": [\"markdown_document\"], "
             "\"sourceMode\": \"materialized\"}'::jsonb",
             name="ck_source_version_issue_21_capabilities",
         ),

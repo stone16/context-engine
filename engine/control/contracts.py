@@ -58,6 +58,10 @@ class SourceContentKind(StrEnum):
     MARKDOWN = "markdown"
 
 
+class SourceResourceKind(StrEnum):
+    MARKDOWN_DOCUMENT = "markdown_document"
+
+
 class SourceAclEvidenceMode(StrEnum):
     MIRRORED = "mirrored"
 
@@ -74,7 +78,16 @@ class FileCapabilityManifest:
     declaration_version: str = "file-capabilities-v1"
     source_mode: SourceMode = SourceMode.MATERIALIZED
     content_kinds: tuple[SourceContentKind, ...] = (SourceContentKind.MARKDOWN,)
+    resource_kinds: tuple[SourceResourceKind, ...] = (
+        SourceResourceKind.MARKDOWN_DOCUMENT,
+    )
     acl_evidence_mode: SourceAclEvidenceMode = SourceAclEvidenceMode.MIRRORED
+    projection_fields: tuple[str, ...] = ()
+    cursor_semantics: CapabilityStatus = CapabilityStatus.UNAVAILABLE
+    checkpoint_semantics: CapabilityStatus = CapabilityStatus.UNAVAILABLE
+    batch_limits: CapabilityStatus = CapabilityStatus.UNAVAILABLE
+    freshness: CapabilityStatus = CapabilityStatus.UNAVAILABLE
+    consistency_guarantees: CapabilityStatus = CapabilityStatus.UNAVAILABLE
     describe_capabilities: CapabilityStatus = CapabilityStatus.UNAVAILABLE
     read_changes: CapabilityStatus = CapabilityStatus.UNAVAILABLE
     discover: CapabilityStatus = CapabilityStatus.UNAVAILABLE
@@ -89,10 +102,17 @@ class FileCapabilityManifest:
             self.declaration_version != "file-capabilities-v1"
             or self.source_mode is not SourceMode.MATERIALIZED
             or self.content_kinds != (SourceContentKind.MARKDOWN,)
+            or self.resource_kinds != (SourceResourceKind.MARKDOWN_DOCUMENT,)
             or self.acl_evidence_mode is not SourceAclEvidenceMode.MIRRORED
+            or self.projection_fields != ()
             or any(
                 status is not CapabilityStatus.UNAVAILABLE
                 for status in (
+                    self.cursor_semantics,
+                    self.checkpoint_semantics,
+                    self.batch_limits,
+                    self.freshness,
+                    self.consistency_guarantees,
                     self.describe_capabilities,
                     self.read_changes,
                     self.discover,
@@ -112,15 +132,22 @@ class FileCapabilityManifest:
         return {
             "aclEvidenceMode": self.acl_evidence_mode.value,
             "authorizeAndProject": self.authorize_and_project.value,
+            "batchLimits": self.batch_limits.value,
             "checkpoint": self.checkpoint.value,
+            "checkpointSemantics": self.checkpoint_semantics.value,
             "contentKinds": [value.value for value in self.content_kinds],
+            "consistencyGuarantees": self.consistency_guarantees.value,
+            "cursorSemantics": self.cursor_semantics.value,
             "declarationVersion": self.declaration_version,
             "deletion": self.deletion.value,
             "describeCapabilities": self.describe_capabilities.value,
             "discover": self.discover.value,
             "fileSourceAccess": self.file_source_access.value,
+            "freshness": self.freshness.value,
             "ingestionJobs": self.ingestion_jobs.value,
+            "projectionFields": list(self.projection_fields),
             "readChanges": self.read_changes.value,
+            "resourceKinds": [value.value for value in self.resource_kinds],
             "sourceMode": self.source_mode.value,
         }
 
@@ -129,11 +156,30 @@ FILE_CAPABILITY_MANIFEST = FileCapabilityManifest()
 
 
 @dataclass(frozen=True, slots=True)
+class FileRootRef:
+    """Opaque logical File root identity; never a host filesystem path."""
+
+    value: str = field(repr=False)
+
+    def __post_init__(self) -> None:
+        try:
+            value = _require_token("FileRootRef", self.value)
+        except ValueError:
+            raise ValueError(
+                "FileRootRef must be an opaque logical File root reference"
+            ) from None
+        if value in {".", ".."}:
+            raise ValueError(
+                "FileRootRef must be an opaque logical File root reference"
+            )
+
+
+@dataclass(frozen=True, slots=True)
 class RegisterFileSource:
     """Untrusted registration values; trusted identity and mode are absent."""
 
     display_name: str
-    root_ref: str = field(repr=False)
+    root_ref: FileRootRef = field(repr=False)
     idempotency_key: str = field(repr=False)
 
     def __post_init__(self) -> None:
@@ -142,14 +188,8 @@ class RegisterFileSource:
             self.display_name,
             MAX_SOURCE_DISPLAY_NAME_LENGTH,
         )
-        try:
-            root_ref = _require_token("File root_ref", self.root_ref)
-        except ValueError:
-            raise ValueError(
-                "root_ref must be an opaque logical File root reference"
-            ) from None
-        if root_ref in {".", ".."}:
-            raise ValueError("root_ref must be an opaque logical File root reference")
+        if type(self.root_ref) is not FileRootRef:
+            raise TypeError("root_ref must be FileRootRef")
         _require_token("File registration idempotency_key", self.idempotency_key)
 
     def __reduce__(self) -> NoReturn:
@@ -174,7 +214,7 @@ class SourceVersion:
     source_ref: SourceRef
     version_ref: UUID = field(repr=False)
     kind: SourceKind
-    root_ref: str = field(repr=False)
+    root_ref: FileRootRef = field(repr=False)
     capabilities: FileCapabilityManifest
     created_at: datetime
 
@@ -185,12 +225,8 @@ class SourceVersion:
             raise TypeError("SourceVersion version_ref must be UUID")
         if self.kind is not SourceKind.FILE:
             raise ValueError("SourceVersion kind must be file")
-        try:
-            _require_token("SourceVersion root_ref", self.root_ref)
-        except ValueError:
-            raise ValueError(
-                "SourceVersion root_ref must be a logical File root reference"
-            ) from None
+        if type(self.root_ref) is not FileRootRef:
+            raise TypeError("SourceVersion root_ref must be FileRootRef")
         if type(self.capabilities) is not FileCapabilityManifest:
             raise TypeError("SourceVersion requires FileCapabilityManifest")
         _require_utc("SourceVersion created_at", self.created_at)
@@ -231,7 +267,7 @@ class SourceManifest:
         source_ref: SourceRef,
         version_ref: UUID,
         display_name: str,
-        root_ref: str,
+        root_ref: FileRootRef,
         created_at: datetime,
     ) -> SourceManifest:
         """Construct the exact first File manifest from trusted stored facts."""

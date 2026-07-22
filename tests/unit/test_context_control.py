@@ -15,6 +15,7 @@ from engine.control import (
     ControlOperatorAuthenticationRejected,
     ControlOperatorAuthority,
     ControlStorePort,
+    FileRootRef,
     RegisterFileSource,
     SourceManifest,
     SourceNotAvailable,
@@ -85,7 +86,7 @@ def _authority() -> ControlOperatorAuthority:
 def test_file_registration_command_has_no_identity_mode_or_host_path_input() -> None:
     command = RegisterFileSource(
         display_name="Engineering handbook",
-        root_ref="engineering-handbook",
+        root_ref=FileRootRef("engineering-handbook"),
         idempotency_key="register-handbook-v1",
     )
 
@@ -94,7 +95,7 @@ def test_file_registration_command_has_no_identity_mode_or_host_path_input() -> 
         "root_ref",
         "idempotency_key",
     ]
-    assert command.root_ref == "engineering-handbook"
+    assert command.root_ref == FileRootRef("engineering-handbook")
 
     for host_path in (
         "/srv/knowledge",
@@ -107,11 +108,7 @@ def test_file_registration_command_has_no_identity_mode_or_host_path_input() -> 
         "知识库",
     ):
         with pytest.raises(ValueError, match="logical File root reference"):
-            RegisterFileSource(
-                display_name="Engineering handbook",
-                root_ref=host_path,
-                idempotency_key="register-handbook-v1",
-            )
+            FileRootRef(host_path)
 
 
 def test_authorized_operator_registers_and_reads_one_honest_file_manifest() -> None:
@@ -120,7 +117,7 @@ def test_authorized_operator_registers_and_reads_one_honest_file_manifest() -> N
     control = ContextControl(store=store, authority=authority, clock=lambda: NOW)
     command = RegisterFileSource(
         display_name="Engineering handbook",
-        root_ref="engineering-handbook",
+        root_ref=FileRootRef("engineering-handbook"),
         idempotency_key="register-handbook-v1",
     )
 
@@ -140,6 +137,11 @@ def test_authorized_operator_registers_and_reads_one_honest_file_manifest() -> N
     assert all(
         status is CapabilityStatus.UNAVAILABLE
         for status in (
+            registered.active_version.capabilities.cursor_semantics,
+            registered.active_version.capabilities.checkpoint_semantics,
+            registered.active_version.capabilities.batch_limits,
+            registered.active_version.capabilities.freshness,
+            registered.active_version.capabilities.consistency_guarantees,
             registered.active_version.capabilities.describe_capabilities,
             registered.active_version.capabilities.read_changes,
             registered.active_version.capabilities.discover,
@@ -153,15 +155,22 @@ def test_authorized_operator_registers_and_reads_one_honest_file_manifest() -> N
     assert registered.active_version.capabilities.document() == {
         "aclEvidenceMode": "mirrored",
         "authorizeAndProject": "unavailable",
+        "batchLimits": "unavailable",
         "checkpoint": "unavailable",
+        "checkpointSemantics": "unavailable",
         "contentKinds": ["markdown"],
+        "consistencyGuarantees": "unavailable",
+        "cursorSemantics": "unavailable",
         "declarationVersion": "file-capabilities-v1",
         "deletion": "unavailable",
         "describeCapabilities": "unavailable",
         "discover": "unavailable",
         "fileSourceAccess": "unavailable",
+        "freshness": "unavailable",
         "ingestionJobs": "unavailable",
+        "projectionFields": [],
         "readChanges": "unavailable",
+        "resourceKinds": ["markdown_document"],
         "sourceMode": "materialized",
     }
 
@@ -181,7 +190,7 @@ def test_source_ref_and_forged_or_wrong_operation_calls_never_authorize_control(
     control = ContextControl(store=store, authority=authority, clock=lambda: NOW)
     command = RegisterFileSource(
         display_name="Engineering handbook",
-        root_ref="engineering-handbook",
+        root_ref=FileRootRef("engineering-handbook"),
         idempotency_key="register-handbook-v1",
     )
 
@@ -230,7 +239,9 @@ def test_trusted_control_call_rejects_claim_tampering(
     store = _Store()
     authority = _authority()
     control = ContextControl(store=store, authority=authority, clock=lambda: NOW)
-    command = RegisterFileSource("Handbook", "handbook", "handbook-v1")
+    command = RegisterFileSource(
+        "Handbook", FileRootRef("handbook"), "handbook-v1"
+    )
 
     with authority.authorize(
         opaque_credential="control-credential-a",

@@ -14,6 +14,7 @@ from engine.control import (
     ContextControl,
     ControlOperation,
     ControlOperatorAuthority,
+    FileRootRef,
     RegisterFileSource,
     SourceManifest,
     SourceNotAvailable,
@@ -135,7 +136,7 @@ def test_control_registers_reads_and_idempotently_isolates_file_sources(
     control_b, authority_b = _control(guarded_control_engine, organization_b)
     command = RegisterFileSource(
         display_name="Engineering handbook",
-        root_ref="engineering-handbook",
+        root_ref=FileRootRef("engineering-handbook"),
         idempotency_key="shared-registration-key",
     )
 
@@ -201,7 +202,7 @@ def test_control_registers_reads_and_idempotently_isolates_file_sources(
             organization_a,
             RegisterFileSource(
                 display_name="Different request",
-                root_ref="different-root",
+                root_ref=FileRootRef("different-root"),
                 idempotency_key=command.idempotency_key,
             ),
             request_id="register-a-conflict",
@@ -323,14 +324,14 @@ def test_source_version_is_immutable_and_active_pointer_stays_in_organization(
         control_a,
         authority_a,
         organization_a,
-        RegisterFileSource("A", "root-a", "key-a"),
+        RegisterFileSource("A", FileRootRef("root-a"), "key-a"),
         request_id="register-a",
     )
     source_b = _register(
         control_b,
         authority_b,
         organization_b,
-        RegisterFileSource("B", "root-b", "key-b"),
+        RegisterFileSource("B", FileRootRef("root-b"), "key-b"),
         request_id="register-b",
     )
 
@@ -373,7 +374,7 @@ def test_source_registration_retry_matrix_is_atomic_under_concurrency(
     organization_a, _ = organizations
     command = RegisterFileSource(
         "Concurrent handbook",
-        "concurrent-handbook",
+        FileRootRef("concurrent-handbook"),
         "concurrent-handbook-v1",
     )
 

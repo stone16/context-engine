@@ -69,12 +69,14 @@ different Organizations are independent. Source read-back always derives its
 Organization from the trusted call. Cross-Organization and unknown source
 references therefore share one `SourceNotAvailable` result.
 
-The File declaration fixes `materialized` source mode, Markdown content, and
-Mirrored ACL policy while marking every Provider carrier not implemented in
-Issue #21 unavailable: capability-description dispatch, change reading,
-discovery, authorization/projection, checkpoint, deletion, ingestion jobs, and
-FileSourceAccess activation. A
-registered source is configuration only and is not acquisition-ready.
+The File declaration fixes `materialized` source mode, Markdown content, the
+`markdown_document` resource kind, and Mirrored ACL policy. It declares no
+projectable fields and marks cursor semantics, checkpoint semantics, batch
+limits, freshness, consistency guarantees, and every Provider carrier not
+implemented in Issue #21 unavailable: capability-description dispatch, change
+reading, discovery, authorization/projection, checkpoint, deletion, ingestion
+jobs, and FileSourceAccess activation. A registered source is configuration
+only and is not acquisition-ready.
 
 ## Rationale
 

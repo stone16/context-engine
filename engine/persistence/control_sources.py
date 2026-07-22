@@ -14,6 +14,7 @@ from sqlalchemy.exc import DBAPIError, SQLAlchemyError
 
 from engine.control import (
     FILE_CAPABILITY_MANIFEST,
+    FileRootRef,
     RegisterFileSource,
     SourceControlUnavailable,
     SourceManifest,
@@ -24,6 +25,24 @@ from engine.control import (
 from engine.persistence.role_guard import assert_control_role
 
 _REGISTRATION_OPERATION = "register_source"
+_ACTIVE_SOURCE_SELECT = """
+    SELECT
+        source.source_id,
+        source.display_name,
+        source.source_kind,
+        source.created_at AS source_created_at,
+        source.registration_digest,
+        version.version_id,
+        version.source_kind AS version_source_kind,
+        version.root_ref,
+        version.capability_manifest,
+        version.created_at AS version_created_at
+    FROM context_source AS source
+    JOIN source_version AS version
+      ON version.organization_id = source.organization_id
+     AND version.source_id = source.source_id
+     AND version.version_id = source.active_version_id
+"""
 
 
 def _capability_document() -> dict[str, object]:
@@ -38,7 +57,7 @@ def _registration_digest(command: RegisterFileSource) -> str:
         "display_name": command.display_name,
         "idempotency_key": command.idempotency_key,
         "operation": _REGISTRATION_OPERATION,
-        "root_ref": command.root_ref,
+        "root_ref": command.root_ref.value,
         "source_kind": "file",
     }
     return hashlib.sha256(
@@ -145,7 +164,7 @@ class PostgreSQLControlStore:
                             "organization_id": call.organization_id,
                             "source_id": source_id,
                             "version_id": version_id,
-                            "root_ref": command.root_ref,
+                            "root_ref": command.root_ref.value,
                             "capabilities": rfc8785.dumps(
                                 cast(Any, _CAPABILITY_DOCUMENT)
                             ).decode("utf-8"),
@@ -180,22 +199,8 @@ class PostgreSQLControlStore:
                 _set_organization_context(connection, call.organization_id)
                 row = connection.execute(
                     text(
-                        """
-                        SELECT
-                            source.source_id,
-                            source.display_name,
-                            source.source_kind,
-                            source.created_at AS source_created_at,
-                            version.version_id,
-                            version.source_kind AS version_source_kind,
-                            version.root_ref,
-                            version.capability_manifest,
-                            version.created_at AS version_created_at
-                        FROM context_source AS source
-                        JOIN source_version AS version
-                          ON version.organization_id = source.organization_id
-                         AND version.source_id = source.source_id
-                         AND version.version_id = source.active_version_id
+                        _ACTIVE_SOURCE_SELECT
+                        + """
                         WHERE source.organization_id = :organization_id
                           AND source.source_id = :source_id
                         """
@@ -224,23 +229,8 @@ class PostgreSQLControlStore:
     ) -> Mapping[str, object] | None:
         row = connection.execute(
             text(
-                """
-                SELECT
-                    source.source_id,
-                    source.display_name,
-                    source.source_kind,
-                    source.created_at AS source_created_at,
-                    source.registration_digest,
-                    version.version_id,
-                    version.source_kind AS version_source_kind,
-                    version.root_ref,
-                    version.capability_manifest,
-                    version.created_at AS version_created_at
-                FROM context_source AS source
-                JOIN source_version AS version
-                  ON version.organization_id = source.organization_id
-                 AND version.source_id = source.source_id
-                 AND version.version_id = source.active_version_id
+                _ACTIVE_SOURCE_SELECT
+                + """
                 WHERE source.organization_id = :organization_id
                   AND source.registration_operation = :registration_operation
                   AND source.idempotency_key = :idempotency_key
@@ -287,6 +277,6 @@ class PostgreSQLControlStore:
             source_ref=SourceRef(source_id),
             version_ref=version_id,
             display_name=display_name,
-            root_ref=root_ref,
+            root_ref=FileRootRef(root_ref),
             created_at=source_created_at,
         )
