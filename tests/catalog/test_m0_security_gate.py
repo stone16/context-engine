@@ -504,6 +504,31 @@ def test_release_report_keeps_four_gates_independent_and_has_no_score() -> None:
 
 
 @pytest.mark.parametrize(
+    ("rls_audit", "expected_failure"),
+    [
+        (
+            {"passed": False, "failures": ["tenant table missing FORCE RLS"]},
+            "tenant table missing FORCE RLS",
+        ),
+        ({"passed": False}, "RLS audit did not pass"),
+    ],
+)
+def test_release_report_surfaces_rls_failure_reason(
+    rls_audit: dict[str, object], expected_failure: str
+) -> None:
+    report = build_release_gate_report(
+        reconciliation=reconcile_execution(registry(), raw_execution()),
+        rls_audit=rls_audit,
+        provenance=complete_provenance(),
+        raw_result_digest="b" * 64,
+    )
+
+    gates = cast(dict[str, dict[str, Any]], report["gates"])
+    assert gates["Security"]["status"] == "fail"
+    assert expected_failure in gates["Security"]["failures"]
+
+
+@pytest.mark.parametrize(
     "mutation",
     [
         lambda provenance: provenance.update(commit="unavailable"),

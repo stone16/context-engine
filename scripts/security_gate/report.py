@@ -574,8 +574,12 @@ def build_release_gate_report(
         and rls_audit.get("passed") is True
         and not provenance_failures
     )
+    rls_failures = _strings(rls_audit.get("failures"))
+    if rls_audit.get("passed") is not True and not rls_failures:
+        rls_failures = ["RLS audit did not pass"]
     security_failures = [
         *_strings(reconciliation.get("failures")),
+        *rls_failures,
         *provenance_failures,
     ]
     security = {

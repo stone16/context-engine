@@ -99,7 +99,7 @@
     {"id": "FIXTURE-ACCEPT-009", "layer": "runtime", "selector": "tests/unit/test_http_unavailable_capabilities.py::test_accept_009_server_owned_unavailable_source_paths_are_generic_and_zero_io"},
     {"id": "FIXTURE-ACCEPT-010", "layer": "runtime", "selector": "tests/unit/test_http_unavailable_capabilities.py::test_accept_010_open_citation_is_generic_and_zero_io"},
     {"id": "FIXTURE-ACCEPT-011", "layer": "runtime", "selector": "tests/integration/test_runtime_non_enumeration_integration.py::test_real_postgres_http_denied_and_missing_are_externally_equivalent"},
-    {"id": "FIXTURE-ACCEPT-012", "layer": "runtime", "selector": "tests/unit/test_m0_delivery_carriers.py::test_accept_012_action_plane_is_unavailable_before_ticket_or_effect"}
+    {"id": "FIXTURE-ACCEPT-012", "layer": "runtime", "selector": "tests/unit/test_ticket_audience_separation.py::test_accept_012_context_read_ticket_cannot_create_an_action_effect"}
   ],
   "invariantMappings": [
     {"invariantRef": "TENANT-OWNERSHIP-001", "evidenceRefs": {"property": ["PROP-TENANT-OWNERSHIP-001"], "postgres": ["PG-RLS-ALL-TENANT-TABLES"], "runtime": ["RUNTIME-TENANT-OWNERSHIP-001"]}},
