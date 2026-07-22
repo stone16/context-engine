@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
@@ -11,6 +12,7 @@ from sqlalchemy import Engine, text
 from sqlalchemy.exc import DBAPIError
 
 from engine.control import (
+    FILE_CAPABILITY_MANIFEST,
     ContextControl,
     ControlOperation,
     ControlOperatorAuthority,
@@ -336,6 +338,69 @@ def test_source_version_is_immutable_and_active_pointer_stays_in_organization(
         request_id="register-b",
     )
 
+    with pytest.raises(DBAPIError), guarded_control_engine.begin() as connection:
+        assert connection.execute(text("SELECT current_user")).scalar_one() == (
+            "context_engine_control"
+        )
+        connection.execute(
+            text("SELECT set_config('app.organization_id', :value, true)"),
+            {"value": str(organization_a)},
+        )
+        connection.execute(
+            text(
+                """
+                INSERT INTO source_version (
+                    organization_id, source_id, version_id, source_kind,
+                    root_ref, capability_manifest, created_at
+                ) VALUES (
+                    :organization_a, :source_b_id, :version_id, 'file',
+                    'cross-organization-root', CAST(:capabilities AS jsonb),
+                    :created_at
+                )
+                """
+            ),
+            {
+                "organization_a": organization_a,
+                "source_b_id": source_b.source_ref.value,
+                "version_id": uuid4(),
+                "capabilities": json.dumps(
+                    FILE_CAPABILITY_MANIFEST.document(),
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ),
+                "created_at": NOW,
+            },
+        )
+
+    with pytest.raises(DBAPIError), guarded_control_engine.begin() as connection:
+        connection.execute(
+            text("SELECT set_config('app.organization_id', :value, true)"),
+            {"value": str(organization_a)},
+        )
+        connection.execute(
+            text(
+                """
+                INSERT INTO context_source (
+                    organization_id, source_id, display_name, source_kind,
+                    registration_operation, idempotency_key,
+                    registration_digest, active_version_id, created_at
+                ) VALUES (
+                    :organization_a, :source_id, 'Broken pointer', 'file',
+                    'register_source', :idempotency_key, :digest,
+                    :active_version_id, :created_at
+                )
+                """
+            ),
+            {
+                "organization_a": organization_a,
+                "source_id": uuid4(),
+                "idempotency_key": f"invalid-pointer-{uuid4().hex}",
+                "digest": "0" * 64,
+                "active_version_id": source_b.active_version.version_ref,
+                "created_at": NOW,
+            },
+        )
+
     engine = create_database_engine(migration_configuration)
     try:
         with engine.connect() as connection:
@@ -354,30 +419,6 @@ def test_source_version_is_immutable_and_active_pointer_stays_in_organization(
         with pytest.raises(DBAPIError), engine.begin() as connection:
             connection.execute(
                 text(
-                    """
-                    INSERT INTO source_version (
-                        organization_id, source_id, version_id, source_kind,
-                        root_ref, capability_manifest, created_at
-                    )
-                    SELECT
-                        :organization_a, :source_b_id, :version_id, source_kind,
-                        root_ref, capability_manifest, :created_at
-                    FROM source_version
-                    WHERE organization_id = :organization_b
-                      AND source_id = :source_b_id
-                    """
-                ),
-                {
-                    "organization_a": organization_a,
-                    "organization_b": organization_b,
-                    "source_b_id": source_b.source_ref.value,
-                    "version_id": uuid4(),
-                    "created_at": NOW,
-                },
-            )
-        with pytest.raises(DBAPIError), engine.begin() as connection:
-            connection.execute(
-                text(
                     "UPDATE source_version SET root_ref = 'changed' "
                     "WHERE organization_id = :organization_id "
                     "AND source_id = :source_id"
@@ -385,19 +426,6 @@ def test_source_version_is_immutable_and_active_pointer_stays_in_organization(
                 {
                     "organization_id": organization_a,
                     "source_id": source_a.source_ref.value,
-                },
-            )
-        with pytest.raises(DBAPIError), engine.begin() as connection:
-            connection.execute(
-                text(
-                    "UPDATE context_source SET active_version_id = :version_id "
-                    "WHERE organization_id = :organization_id "
-                    "AND source_id = :source_id"
-                ),
-                {
-                    "organization_id": organization_a,
-                    "source_id": source_a.source_ref.value,
-                    "version_id": source_b.active_version.version_ref,
                 },
             )
     finally:
