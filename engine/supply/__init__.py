@@ -24,7 +24,11 @@ from engine.supply.jobs import (
 )
 from engine.supply.markdown import (
     MARKDOWN_CANONICALIZATION_PROFILE,
+    MARKDOWN_CANONICALIZATION_V1_PROFILE,
+    MARKDOWN_CODE_LANGUAGE_MAX_LENGTH,
     MARKDOWN_COMPILATION_DIGEST_PROFILE,
+    MARKDOWN_COMPILATION_DIGEST_V1_PROFILE,
+    MARKDOWN_COMPILER_V1_VERSION,
     MARKDOWN_COMPILER_VERSION,
     MARKDOWN_CONTENT_HASH_PROFILE,
     CompilationFailure,
@@ -33,6 +37,7 @@ from engine.supply.markdown import (
     CompilationProvenance,
     CompilationWarning,
     CompilationWarningCode,
+    CompiledFragment,
     MarkdownCompilerConfig,
     ParsedDocument,
     ParsedSection,
@@ -46,8 +51,12 @@ from engine.supply.markdown import (
 
 __all__ = [
     "MARKDOWN_CANONICALIZATION_PROFILE",
+    "MARKDOWN_CODE_LANGUAGE_MAX_LENGTH",
+    "MARKDOWN_CANONICALIZATION_V1_PROFILE",
     "MARKDOWN_COMPILATION_DIGEST_PROFILE",
+    "MARKDOWN_COMPILATION_DIGEST_V1_PROFILE",
     "MARKDOWN_COMPILER_VERSION",
+    "MARKDOWN_COMPILER_V1_VERSION",
     "MARKDOWN_CONTENT_HASH_PROFILE",
     "WORKER_LEASE_ACTOR_KIND",
     "WORKER_LEASE_OPERATION",
@@ -57,6 +66,7 @@ __all__ = [
     "CompilationProvenance",
     "CompilationWarning",
     "CompilationWarningCode",
+    "CompiledFragment",
     "FileImportAudience",
     "FileImportPath",
     "FileImportReceiver",

@@ -8,16 +8,20 @@ import socket
 import subprocess
 import sys
 import urllib.request
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from adapters.parsers.markdown import compile_markdown
 from engine.supply import (
+    MARKDOWN_CODE_LANGUAGE_MAX_LENGTH,
+    MARKDOWN_COMPILER_V1_VERSION,
     MARKDOWN_COMPILER_VERSION,
     CompilationFailure,
     CompilationFailureCode,
     CompilationProvenance,
+    CompiledFragment,
     MarkdownCompilerConfig,
     ParsedDocument,
     ParsedSection,
@@ -31,6 +35,7 @@ from engine.supply import (
 
 FIXTURES = Path(__file__).parents[1] / "fixtures/markdown"
 CONFIG = MarkdownCompilerConfig(version="markdown-config-v1")
+STRUCTURAL_CONFIG = MarkdownCompilerConfig(version="markdown-config-v2")
 
 
 def _hex_fixture(name: str) -> bytes:
@@ -46,7 +51,7 @@ def test_frozen_heading_and_paragraph_compile_to_exact_typed_document() -> None:
     assert outcome.canonical_text == (
         "# Handbook\n\nContextEngine delivers context.\n"
     )
-    assert outcome.provenance.compiler_version == MARKDOWN_COMPILER_VERSION
+    assert outcome.provenance.compiler_version == MARKDOWN_COMPILER_V1_VERSION
     assert outcome.provenance.config_version == "markdown-config-v1"
     assert outcome.warnings == ()
     assert [section.kind for section in outcome.sections] == [
@@ -84,6 +89,357 @@ def test_frozen_heading_and_paragraph_compile_to_exact_typed_document() -> None:
 
     expected = (FIXTURES / "heading-paragraph.expected.json").read_bytes().strip()
     assert canonicalize_parsed_document(outcome) == expected
+
+
+def test_original_v1_fixture_remains_byte_for_byte_compatible() -> None:
+    outcome = compile_markdown(
+        (FIXTURES / "heading-paragraph.md").read_bytes(),
+        CONFIG,
+    )
+
+    assert type(outcome) is ParsedDocument
+    assert outcome.provenance.compiler_version == MARKDOWN_COMPILER_V1_VERSION
+    assert canonicalize_parsed_document(outcome) == (
+        FIXTURES / "heading-paragraph.expected.json"
+    ).read_bytes().strip()
+    assert tuple(fragment.fragment_ref for fragment in outcome.fragments) == (
+        "fragment:paragraph:1",
+    )
+
+
+@pytest.mark.parametrize(
+    ("fixture", "expected_kinds", "expected_content_hash", "expected_digest"),
+    [
+        (
+            "heading-hierarchy-v2.md",
+            ("heading", "heading", "paragraph"),
+            "7970abe84516234ca531acb6abd55363886891ec57e84d946c5b9de7cd8fafd0",
+            "71541e71ce54f473564c34f8078167271ca92e3dcf66b99f903cec23898d5901",
+        ),
+        (
+            "paragraph-v2.md",
+            ("heading", "paragraph"),
+            "96fc494ff5c02bf23e0da24de9ce5ecbb64a80b1d208a9543d36c0e5b57a448d",
+            "c0c73a76e5c1d993f0e1fc33edf6e7bc4bb36c36285dfed7186d71386a251296",
+        ),
+        (
+            "list-v2.md",
+            ("heading", "list"),
+            "4bf1b4e1761a1d00b21b4c843d9b8b31d46b372c426eee773d67023f0b6c8fa8",
+            "faf6783ea8fd3fb417ddbd6125d01803ee17e29f788da0bf310fd33f5bda68f9",
+        ),
+        (
+            "fenced-code-v2.md",
+            ("heading", "fenced_code"),
+            "4607f0735707d06d6e5d7ebb0e101109eaa07f69f54b8aecfee9504c73fbedd9",
+            "27045b719589f71783c28a16c3457bfd513f9c9ba4ca42bf85d54065a3907b0f",
+        ),
+        (
+            "table-v2.md",
+            ("heading", "table"),
+            "6e8aaf65707887acac679262c90eb0e1ba8687bd365f8678330d36de8f3d937e",
+            "817ede3a3fc2eb24715a19a11b136e606b36d3b2968edc1020ed7fa4bbf5b2de",
+        ),
+    ],
+)
+def test_v2_fixtures_have_typed_sections_and_one_fragment_per_logical_unit(
+    fixture: str,
+    expected_kinds: tuple[str, ...],
+    expected_content_hash: str,
+    expected_digest: str,
+) -> None:
+    outcome = compile_markdown((FIXTURES / fixture).read_bytes(), STRUCTURAL_CONFIG)
+
+    assert type(outcome) is ParsedDocument
+    assert outcome.provenance.compiler_version == MARKDOWN_COMPILER_VERSION
+    assert outcome.provenance.config_version == "markdown-config-v2"
+    assert outcome.content_hash == expected_content_hash
+    assert outcome.compilation_digest == expected_digest
+    assert tuple(section.kind.value for section in outcome.sections) == expected_kinds
+    assert (
+        tuple(fragment.kind.value for fragment in outcome.fragments) == expected_kinds
+    )
+    assert all(type(fragment) is CompiledFragment for fragment in outcome.fragments)
+    assert all(
+        fragment.position.start.byte_offset < fragment.position.end.byte_offset
+        for fragment in outcome.fragments
+    )
+    assert all(
+        fragment.path.segments[0] == "document"
+        for fragment in outcome.fragments
+    )
+    assert len({fragment.fragment_ref for fragment in outcome.fragments}) == len(
+        outcome.fragments
+    )
+
+
+def test_v2_contiguous_text_lines_form_one_source_exact_paragraph() -> None:
+    outcome = compile_markdown(
+        (FIXTURES / "paragraph-v2.md").read_bytes(),
+        STRUCTURAL_CONFIG,
+    )
+
+    assert type(outcome) is ParsedDocument
+    assert len(outcome.fragments) == 2
+    paragraph = outcome.fragments[1]
+    assert paragraph.kind is SectionKind.PARAGRAPH
+    assert paragraph.source_text == (
+        "ContextEngine delivers coherent\ncontext across source lines."
+    )
+    assert paragraph.contextual_text == (
+        "# Handbook\n\n"
+        "ContextEngine delivers coherent\ncontext across source lines."
+    )
+    assert (
+        paragraph.position.start.line,
+        paragraph.position.end.line,
+    ) == (3, 4)
+
+
+def test_combined_v2_fixture_preserves_source_and_injects_heading_ancestry() -> None:
+    outcome = compile_markdown(
+        (FIXTURES / "combined-v2.md").read_bytes(),
+        STRUCTURAL_CONFIG,
+    )
+
+    assert type(outcome) is ParsedDocument
+    assert outcome.content_hash == (
+        "592cc2ab04409a1b52952e6b5f4edb69d3e1134e0ec7001b0f59dd60acb2e515"
+    )
+    assert outcome.compilation_digest == (
+        "0c9fcc66ab890bff8962504881f830c0814e5942af88dba6eacd994a640a1e35"
+    )
+    assert tuple(section.kind.value for section in outcome.sections) == (
+        "heading",
+        "paragraph",
+        "heading",
+        "list",
+        "fenced_code",
+        "table",
+    )
+    list_fragment, code_fragment, table_fragment = outcome.fragments[3:]
+    assert list_fragment.path.segments == (
+        "document",
+        "heading[1]",
+        "heading[1]",
+        "list[1]",
+    )
+    assert list_fragment.source_text == (
+        "- Keep exact lineage.\n- Escalate red-rocket immediately."
+    )
+    assert list_fragment.contextual_text == (
+        "# Handbook\n\n## Operations\n\n"
+        "- Keep exact lineage.\n- Escalate red-rocket immediately."
+    )
+    assert tuple(heading.text for heading in list_fragment.parent_headings) == (
+        "Handbook",
+        "Operations",
+    )
+    assert list_fragment.search_phrases == (
+        "- Keep exact lineage.\n- Escalate red-rocket immediately.",
+        "Keep exact lineage.",
+        "Escalate red-rocket immediately.",
+    )
+    assert code_fragment.source_text == (
+        '```python\nrelease_marker = "blue-comet"\n```'
+    )
+    assert code_fragment.search_phrases == (
+        '```python\nrelease_marker = "blue-comet"\n```',
+        'release_marker = "blue-comet"',
+    )
+    assert table_fragment.source_text == (
+        "| Mode | Result |\n| --- | --- |\n| strict | silver-compass |"
+    )
+    assert table_fragment.search_phrases == (
+        "| Mode | Result |\n| --- | --- |\n| strict | silver-compass |",
+        "Mode",
+        "Result",
+        "strict",
+        "silver-compass",
+    )
+    assert (
+        list_fragment.position.start.line,
+        list_fragment.position.end.line,
+        code_fragment.position.start.line,
+        code_fragment.position.end.line,
+        table_fragment.position.start.line,
+        table_fragment.position.end.line,
+    ) == (7, 8, 10, 12, 14, 16)
+    assert all(
+        fragment.source_text
+        == outcome.canonical_text.encode("utf-8")[
+            fragment.position.start.byte_offset : fragment.position.end.byte_offset
+        ].decode("utf-8")
+        for fragment in outcome.fragments
+    )
+
+
+def test_v2_combined_fixture_is_identical_across_fresh_processes() -> None:
+    program = """
+import sys
+from adapters.parsers.markdown import compile_markdown
+from engine.supply import (
+    MarkdownCompilerConfig,
+    ParsedDocument,
+    canonicalize_parsed_document,
+)
+result = compile_markdown(
+    sys.stdin.buffer.read(),
+    MarkdownCompilerConfig('markdown-config-v2'),
+)
+if type(result) is not ParsedDocument:
+    raise SystemExit(2)
+sys.stdout.buffer.write(canonicalize_parsed_document(result))
+"""
+    source = (FIXTURES / "combined-v2.md").read_bytes()
+    outputs: list[bytes] = []
+    for seed in ("17", "941"):
+        environment = dict(os.environ)
+        environment["PYTHONHASHSEED"] = seed
+        outputs.append(
+            subprocess.run(
+                [sys.executable, "-c", program],
+                input=source,
+                capture_output=True,
+                check=True,
+                env=environment,
+            ).stdout
+        )
+
+    assert outputs[0] == outputs[1]
+    document = json.loads(outputs[0])
+    assert document["provenance"]["compilerVersion"] == MARKDOWN_COMPILER_VERSION
+    assert [fragment["kind"] for fragment in document["fragments"]] == [
+        "heading",
+        "paragraph",
+        "heading",
+        "list",
+        "fenced_code",
+        "table",
+    ]
+
+
+def test_structural_factory_rejects_forged_context_or_search_derivation() -> None:
+    outcome = compile_markdown(
+        (FIXTURES / "combined-v2.md").read_bytes(),
+        STRUCTURAL_CONFIG,
+    )
+    assert type(outcome) is ParsedDocument
+    list_fragment = outcome.fragments[3]
+
+    for forged in (
+        replace(list_fragment, parent_headings=(outcome.sections[2],)),
+        replace(list_fragment, search_phrases=(list_fragment.source_text,)),
+    ):
+        fragments = (*outcome.fragments[:3], forged, *outcome.fragments[4:])
+        with pytest.raises(ValueError, match="derivation must be exact"):
+            ParsedDocument.structural_v2(
+                canonical_text=outcome.canonical_text,
+                sections=outcome.sections,
+                fragments=fragments,
+                provenance=outcome.provenance,
+            )
+
+
+def test_structural_factory_rejects_whitespace_only_omitted_source() -> None:
+    outcome = compile_markdown(
+        b"# Handbook\n\nParagraph.\n",
+        STRUCTURAL_CONFIG,
+    )
+    assert type(outcome) is ParsedDocument
+    paragraph = outcome.sections[1]
+    shifted_position = SourceSpan(
+        start=SourcePoint(
+            paragraph.position.start.line,
+            paragraph.position.start.column,
+            paragraph.position.start.byte_offset + 1,
+        ),
+        end=SourcePoint(
+            paragraph.position.end.line,
+            paragraph.position.end.column,
+            paragraph.position.end.byte_offset + 1,
+        ),
+    )
+
+    with pytest.raises(ValueError, match="cannot omit canonical content"):
+        ParsedDocument.structural_v2(
+            canonical_text="# Handbook\n \nParagraph.\n",
+            sections=(
+                outcome.sections[0],
+                replace(paragraph, position=shifted_position),
+            ),
+            fragments=(
+                outcome.fragments[0],
+                replace(outcome.fragments[1], position=shifted_position),
+            ),
+            provenance=outcome.provenance,
+        )
+
+
+def test_v2_table_ends_when_the_next_structure_starts_without_a_blank_line() -> None:
+    outcome = compile_markdown(
+        b"# Handbook\n\n| Key | Value |\n| --- | --- |\n| one | two |\n"
+        b"## Next\nFollowing paragraph.\n",
+        STRUCTURAL_CONFIG,
+    )
+
+    assert type(outcome) is ParsedDocument
+    assert tuple(section.kind for section in outcome.sections) == (
+        SectionKind.HEADING,
+        SectionKind.TABLE,
+        SectionKind.HEADING,
+        SectionKind.PARAGRAPH,
+    )
+    assert outcome.fragments[1].source_text.endswith("| one | two |")
+    assert outcome.fragments[3].contextual_text == (
+        "# Handbook\n\n## Next\n\nFollowing paragraph."
+    )
+
+
+def test_v2_code_language_token_is_bounded_in_parser_and_domain() -> None:
+    oversized = "x" * (MARKDOWN_CODE_LANGUAGE_MAX_LENGTH + 1)
+    outcome = compile_markdown(
+        f"# Handbook\n\n```{oversized}\npass\n```\n".encode(),
+        STRUCTURAL_CONFIG,
+    )
+
+    assert type(outcome) is CompilationFailure
+    assert outcome.construct is UnsupportedConstruct.CODE_BLOCK
+    with pytest.raises(ValueError, match="bounded opaque token"):
+        ParsedSection(
+            kind=SectionKind.FENCED_CODE,
+            text=f"```{oversized}\npass\n```",
+            path=StructuralPath(("document", "heading[1]", "fenced_code[1]")),
+            position=SourceSpan(
+                start=SourcePoint(3, 1, 12),
+                end=SourcePoint(5, 4, 12 + len(oversized) + 13),
+            ),
+            code_language=oversized,
+            code_body="pass",
+        )
+
+
+@pytest.mark.parametrize(
+    ("markdown", "construct"),
+    [
+        (b"# Handbook\n\n> still unsupported\n", UnsupportedConstruct.BLOCKQUOTE),
+        (b"# Handbook\n\n  - nested item\n", UnsupportedConstruct.LIST),
+        (b"# Handbook\n\n```python\nunclosed\n", UnsupportedConstruct.CODE_BLOCK),
+        (
+            b"# Handbook\n\n| A | B |\n| --- |\n| one | two |\n",
+            UnsupportedConstruct.TABLE,
+        ),
+    ],
+)
+def test_v2_unsupported_or_malformed_constructs_still_fail_closed(
+    markdown: bytes,
+    construct: UnsupportedConstruct,
+) -> None:
+    outcome = compile_markdown(markdown, STRUCTURAL_CONFIG)
+
+    assert type(outcome) is CompilationFailure
+    assert outcome.code is CompilationFailureCode.UNSUPPORTED_CONSTRUCT
+    assert outcome.construct is construct
 
 
 def test_bom_crlf_and_missing_final_newline_have_one_canonical_identity() -> None:
@@ -313,7 +669,7 @@ def test_parsed_document_factory_cannot_bypass_closed_grammar() -> None:
                 ),
             ),
             provenance=CompilationProvenance(
-                compiler_version=MARKDOWN_COMPILER_VERSION,
+                compiler_version=MARKDOWN_COMPILER_V1_VERSION,
                 config_version=CONFIG.version,
             ),
         )
