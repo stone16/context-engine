@@ -128,6 +128,11 @@ def test_issue_21_file_source_manifest_is_closed_and_role_separated() -> None:
             "columns": ["organization_id", "source_id", "version_id"],
         }
     ]
+    version_foreign_key = version["foreignKeys"][0]
+    assert version_foreign_key["name"] == (
+        "fk_source_version_source_same_organization"
+    )
+    assert "onDelete" not in version_foreign_key
     assert version["immutableRows"] == {
         "trigger": "source_version_immutable",
         "function": "source_version_reject_mutation",

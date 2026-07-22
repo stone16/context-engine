@@ -338,6 +338,19 @@ def test_source_version_is_immutable_and_active_pointer_stays_in_organization(
 
     engine = create_database_engine(migration_configuration)
     try:
+        with engine.connect() as connection:
+            delete_action = connection.execute(
+                text(
+                    """
+                    SELECT constraint_record.confdeltype
+                    FROM pg_constraint AS constraint_record
+                    WHERE constraint_record.conname =
+                        'fk_source_version_source_same_organization'
+                    """
+                )
+            ).scalar_one()
+        assert delete_action == "a"
+
         with pytest.raises(DBAPIError), engine.begin() as connection:
             connection.execute(
                 text(

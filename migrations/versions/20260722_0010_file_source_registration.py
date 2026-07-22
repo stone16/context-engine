@@ -140,7 +140,6 @@ def upgrade() -> None:
             ["organization_id", "source_id"],
             ["context_source.organization_id", "context_source.source_id"],
             name="fk_source_version_source_same_organization",
-            ondelete="CASCADE",
             deferrable=True,
             initially="DEFERRED",
         ),

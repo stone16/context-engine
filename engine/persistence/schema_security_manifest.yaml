@@ -443,7 +443,6 @@
             "table": "context_source",
             "columns": ["organization_id", "source_id"]
           },
-          "onDelete": "CASCADE",
           "deferrable": true,
           "initially": "DEFERRED"
         }
