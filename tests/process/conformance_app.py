@@ -28,6 +28,10 @@ from engine.runtime.policy_epoch import (
     _observe_current_policy_epoch,
     _open_policy_epoch_authority_scope,
 )
+from tests.support.context_run import (
+    TEST_QUERY_DIGEST_KEYRING,
+    recording_context_run_session,
+)
 
 PROCESS_VALID_TOKEN = "process-test-credential"
 PROCESS_ORGANIZATION_REF = "81e18bca-86a1-478a-937d-7675c6fe69b0"
@@ -84,18 +88,20 @@ class ProcessTestMembershipAuthority:
                     port=CurrentEpochPort(),
                 )
             )
-            yield _construct_current_membership_verification(
-                authority_scope=scope,
-                organization_id=identity.organization_id,
-                user_id=identity.user_id,
-                membership_id=identity.membership_id,
-                membership_version=identity.membership_version,
-                principal_ref=identity.principal_ref,
-                request_id=identity.request_id,
-                authentication_binding_ref=identity.authentication_binding_ref,
-                checked_at=identity.checked_at,
-                policy_epoch_verification=verification,
-            )
+            with recording_context_run_session() as (persistence_session, _):
+                yield _construct_current_membership_verification(
+                    authority_scope=scope,
+                    organization_id=identity.organization_id,
+                    user_id=identity.user_id,
+                    membership_id=identity.membership_id,
+                    membership_version=identity.membership_version,
+                    principal_ref=identity.principal_ref,
+                    request_id=identity.request_id,
+                    authentication_binding_ref=identity.authentication_binding_ref,
+                    checked_at=identity.checked_at,
+                    policy_epoch_verification=verification,
+                    context_run_persistence_session=persistence_session,
+                )
         finally:
             _close_policy_epoch_authority_scope(policy_epoch_scope)
             _close_membership_authority_scope(scope)
@@ -125,4 +131,5 @@ app = create_app(
     authenticator=ProcessTestAuthenticator(),
     organization_authority=ProcessTestOrganizationAuthority(),
     membership_authority=ProcessTestMembershipAuthority(),
+    query_digest_keyring=TEST_QUERY_DIGEST_KEYRING,
 )

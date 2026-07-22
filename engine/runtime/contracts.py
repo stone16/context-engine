@@ -12,6 +12,7 @@ from engine.runtime.delivery import (
     _construct_direct_delivery_context,
 )
 from engine.runtime.evidence import Evidence, PackageBlock, validate_package_content
+from engine.runtime.package_digest import context_package_digest
 
 __all__ = [
     "Acquire",
@@ -20,6 +21,8 @@ __all__ = [
     "CitationOpenRef",
     "ContextNeed",
     "ContextPackage",
+    "context_package_digest_document",
+    "context_package_public_document",
     "Continue",
     "ContinuationToken",
     "Coverage",
@@ -79,9 +82,7 @@ def _require_optional_ref_tuple(
     if type(value) is not tuple or not value:
         raise ValueError(f"narrowing {field_name} must be a non-empty tuple")
     if len(value) > MAX_NARROWING_REFS:
-        raise ValueError(
-            f"narrowing {field_name} exceeds the active profile ref limit"
-        )
+        raise ValueError(f"narrowing {field_name} exceeds the active profile ref limit")
     for ref in value:
         _require_nonblank_string(f"narrowing {field_name} ref", ref)
         if len(ref) > MAX_NARROWING_REF_LENGTH:
@@ -266,6 +267,7 @@ class ContextPackage:
     as_of: datetime
     expires_at: datetime
     decision_ref: str
+    package_digest: str = field(init=False)
     blocks: tuple[PackageBlock, ...]
     evidence: tuple[Evidence, ...]
     gaps: tuple[()]
@@ -342,6 +344,76 @@ class ContextPackage:
                 for usage_field in fields(BudgetUsage)
             ):
                 raise ValueError("empty package usage must be zero")
+        object.__setattr__(
+            self,
+            "package_digest",
+            context_package_digest(context_package_digest_document(self)),
+        )
+
+
+def _wire_datetime(value: datetime) -> str:
+    return value.isoformat().replace("+00:00", "Z")
+
+
+def context_package_digest_document(package: ContextPackage) -> dict[str, object]:
+    """Return the exact active public Package document covered by its digest."""
+
+    if type(package) is not ContextPackage:
+        raise TypeError("package digest document requires ContextPackage")
+    coverage_document: dict[str, object] = {
+        "status": package.coverage.status.value,
+    }
+    if package.coverage.reason is not None:
+        coverage_document["reason"] = package.coverage.reason.value
+    return {
+        "organizationRef": package.organization_ref,
+        "purpose": package.purpose,
+        "ttlSeconds": package.ttl_seconds,
+        "asOf": _wire_datetime(package.as_of),
+        "expiresAt": _wire_datetime(package.expires_at),
+        "decisionRef": package.decision_ref,
+        "blocks": [
+            {
+                "blockId": f"block_{block.evidence_ref.removeprefix('ev_')}",
+                "text": block.body,
+                "evidenceRefs": [block.evidence_ref],
+            }
+            for block in package.blocks
+        ],
+        "evidence": [
+            {
+                "evidenceRef": item.evidence_ref,
+                "sourceRef": item.source_ref,
+                "resourceRef": item.resource_ref,
+                "revisionRef": item.revision_ref,
+                "fragmentRef": item.fragment_ref,
+                "runRef": item.lineage.run_ref,
+                "purpose": item.lineage.purpose,
+                "authorizationAsOf": _wire_datetime(item.lineage.as_of),
+                "decisionRef": item.lineage.decision_ref,
+                "policySnapshotRef": item.lineage.policy_snapshot_ref,
+                "policyEpoch": item.lineage.policy_epoch,
+                "sourceDecisionRef": item.lineage.source_acl_decision_ref,
+            }
+            for item in package.evidence
+        ],
+        "gaps": [],
+        "budgetUsage": {
+            "tokens": package.budget_usage.tokens,
+            "providerCalls": package.budget_usage.provider_calls,
+            "costMicrounits": package.budget_usage.cost_microunits,
+            "elapsedMs": package.budget_usage.elapsed_ms,
+        },
+        "coverage": coverage_document,
+    }
+
+
+def context_package_public_document(package: ContextPackage) -> dict[str, object]:
+    """Return the sole public Package projection, including its digest."""
+
+    document = context_package_digest_document(package)
+    document["packageDigest"] = package.package_digest
+    return document
 
 
 @dataclass(frozen=True, slots=True)

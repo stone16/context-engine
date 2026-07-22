@@ -21,6 +21,7 @@ from engine.persistence import (
 )
 from engine.runtime.construction import Runtime, required_kernel_dependencies
 from engine.runtime.content_io import CandidateIndex
+from engine.runtime.package_digest import QueryDigestKeyring
 from tests.integration.test_runtime_authorized_evidence_integration import (
     RECEIVED_AT,
     ExactScopeAuthority,
@@ -45,21 +46,19 @@ def _client(
     active: OrganizationEvidenceFixture,
     guarded_runtime_engine: Engine,
     index: CandidateIndex,
+    query_digest_keyring: QueryDigestKeyring,
 ) -> TestClient:
     return TestClient(
         create_app(
             authenticator=SeededAuthenticator(active, token=TOKEN),
-            organization_authority=SeededOrganizationAuthority(
-                active.organization_id
-            ),
-            membership_authority=PostgreSQLMembershipAuthority(
-                guarded_runtime_engine
-            ),
+            organization_authority=SeededOrganizationAuthority(active.organization_id),
+            membership_authority=PostgreSQLMembershipAuthority(guarded_runtime_engine),
             scope_authority=ExactScopeAuthority(active.authorized),
             runtime=Runtime(
                 required_kernel_dependencies(),
                 candidate_index=index,
                 clock=lambda: RECEIVED_AT,
+                query_digest_keyring=query_digest_keyring,
             ),
             clock=lambda: RECEIVED_AT,
             request_id_factory=lambda: REQUEST_ID,
@@ -121,6 +120,7 @@ def test_same_http_acquire_revokes_next_delivery_without_candidate_cleanup(
     control_configuration: DatabaseConfiguration,
     migration_configuration: DatabaseConfiguration,
     guarded_runtime_engine: Engine,
+    query_digest_keyring: QueryDigestKeyring,
 ) -> None:
     """RUN-006: one committed revoke invalidates the first following Acquire."""
 
@@ -139,11 +139,13 @@ def test_same_http_acquire_revokes_next_delivery_without_candidate_cleanup(
         active=fixture.org_a,
         guarded_runtime_engine=guarded_runtime_engine,
         index=org_a_index,
+        query_digest_keyring=query_digest_keyring,
     )
     org_b_client = _client(
         active=fixture.org_b,
         guarded_runtime_engine=guarded_runtime_engine,
         index=org_b_index,
+        query_digest_keyring=query_digest_keyring,
     )
     try:
         _seed_fixture(migration_engine, fixture)
@@ -157,9 +159,7 @@ def test_same_http_acquire_revokes_next_delivery_without_candidate_cleanup(
             ResourceAccessRevocation(
                 organization_id=fixture.org_a.organization_id,
                 resource_ref=fixture.org_a.authorized.resource_ref,
-                principal_ref=(
-                    f"principal:authorized-evidence:{fixture.org_a.label}"
-                ),
+                principal_ref=(f"principal:authorized-evidence:{fixture.org_a.label}"),
                 expected_access_version=1,
             )
         )
@@ -223,6 +223,7 @@ def test_mid_resolve_revoke_is_visible_despite_repeatable_read_engine_default(
     migration_configuration: DatabaseConfiguration,
     runtime_configuration: DatabaseConfiguration,
     monkeypatch: pytest.MonkeyPatch,
+    query_digest_keyring: QueryDigestKeyring,
 ) -> None:
     """RUN-006: final epoch read cannot reuse a pre-revoke MVCC snapshot."""
 
@@ -268,6 +269,7 @@ def test_mid_resolve_revoke_is_visible_despite_repeatable_read_engine_default(
         active=fixture.org_a,
         guarded_runtime_engine=drifted_runtime_engine,
         index=cast(CandidateIndex, index),
+        query_digest_keyring=query_digest_keyring,
     )
     try:
         _seed_fixture(migration_engine, fixture)

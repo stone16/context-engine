@@ -19,6 +19,7 @@ from engine.runtime.capabilities import (
 )
 from engine.runtime.construction import Runtime, required_kernel_dependencies
 from engine.runtime.content_io import RuntimeContentIo
+from tests.support.context_run import TEST_QUERY_DIGEST_KEYRING
 from tests.unit.test_http_effective_scope import (
     DeterministicScopeAuthority,
     operands,
@@ -70,6 +71,7 @@ def client_for(
         candidate_index=(content_io if detect_materialized_discovery else None),
         acquire_capability=acquire_capability,
         clock=lambda: RECEIVED_AT,
+        query_digest_keyring=TEST_QUERY_DIGEST_KEYRING,
     )
     invocation_spy = InvocationSpy()
     client = TestClient(

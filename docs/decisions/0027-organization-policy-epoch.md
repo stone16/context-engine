@@ -1,6 +1,6 @@
 ---
 name: adr-0027-organization-policy-epoch
-version: "1.1.0"
+version: "1.2.0"
 description: >
   Select an Organization-level Policy Epoch for the first Acquire revocation
   slice and freeze its atomic mutation and final-delivery validation boundary.
@@ -68,10 +68,14 @@ The first post-commit Acquire therefore observes the revoke without waiting for
 cleanup, including when revocation commits after content projection but before
 the final epoch read.
 
-Only access mutation and epoch advancement are atomic in the active slice.
-Durable DecisionAudit and outbox publication remain `NOT_ACTIVE`; their owning
-issues must add them to the same authoritative transaction before claiming the
-full design-level linearization contract.
+Only access mutation and epoch advancement are atomic in the active Control
+slice. ADR-0031 separately activates a delivered-empty DecisionAudit that
+commits with its final ContextRun in the current UserActor delivery transaction.
+It does not audit the access mutation, join the Control transaction, or publish
+an outbox event. Access-mutation DecisionAudit and outbox publication therefore
+remain `NOT_ACTIVE`; their owning issues must add them to the same authoritative
+Control transaction before claiming the full design-level linearization
+contract.
 
 [ADR-0030](0030-bound-ticket-audiences.md) independently reuses this
 Organization V0 epoch for the bounded Issue #18 `ContextAccessTicket` synthetic
@@ -109,8 +113,10 @@ authorization product before its identity and approval workflows are designed.
 ## Revisit trigger
 
 Revisit when measured Organization-level contention or invalidation cost
-justifies a finer epoch, or when DecisionAudit, outbox, Continue, OpenCitation,
-cleanup, or any production WorkerLease, ContextAccessTicket, or ActionTicket
-carrier activates beyond the bounded ADR-0029/ADR-0030 proofs. Any refinement
+justifies a finer epoch, or when access-mutation DecisionAudit, outbox,
+Continue, OpenCitation, cleanup, or any production WorkerLease,
+ContextAccessTicket, or ActionTicket carrier activates beyond the bounded
+ADR-0029/ADR-0030 proofs. ADR-0031's delivered-empty audit is independent of
+that Control linearization trigger. Any refinement
 must preserve monotonic tenant isolation, atomic access-change linearization,
 and final current-epoch validation before newly delivered bytes or effects.

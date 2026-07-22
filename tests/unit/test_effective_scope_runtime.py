@@ -45,6 +45,10 @@ from engine.runtime.scope_authority import (
     _construct_trusted_scope_snapshot,
     _open_scope_authority_scope,
 )
+from tests.support.context_run import (
+    TEST_QUERY_DIGEST_KEYRING,
+    recording_context_run_session,
+)
 
 AS_OF = datetime(2026, 7, 21, 9, 0, tzinfo=UTC)
 ORGANIZATION_ID = UUID("81e18bca-86a1-478a-937d-7675c6fe69b0")
@@ -78,6 +82,7 @@ def make_runtime(spy: ContentIoSpy) -> Runtime:
         required_kernel_dependencies(),
         content_io=RuntimeContentIo(index=spy, provider=spy, source_content=spy),
         clock=lambda: AS_OF,
+        query_digest_keyring=TEST_QUERY_DIGEST_KEYRING,
     )
 
 
@@ -105,6 +110,7 @@ def bound_runtime_inputs(
     policy_epoch_scope = _open_policy_epoch_authority_scope()
     scope_authority_scope = _open_scope_authority_scope()
     try:
+
         class CurrentEpochPort:
             def read_current_epoch(self, organization_id: UUID) -> object:
                 assert organization_id == ORGANIZATION_ID
@@ -117,70 +123,70 @@ def bound_runtime_inputs(
                 port=CurrentEpochPort(),
             )
         )
-        organization_verification = (
-            _construct_existing_http_organization_verification(
+        organization_verification = _construct_existing_http_organization_verification(
+            organization_id=ORGANIZATION_ID,
+            request_id="request-1",
+            authentication_binding_ref="binding-1",
+            verified_at=AS_OF,
+        )
+        with recording_context_run_session() as (persistence_session, _):
+            membership_verification = _construct_current_membership_verification(
+                authority_scope=membership_scope,
                 organization_id=ORGANIZATION_ID,
+                user_id=USER_ID,
+                membership_id=MEMBERSHIP_ID,
+                membership_version=3,
+                principal_ref="principal-1",
                 request_id="request-1",
                 authentication_binding_ref="binding-1",
-                verified_at=AS_OF,
+                checked_at=AS_OF,
+                policy_epoch_verification=policy_epoch_verification,
+                context_run_persistence_session=persistence_session,
             )
-        )
-        membership_verification = _construct_current_membership_verification(
-            authority_scope=membership_scope,
-            organization_id=ORGANIZATION_ID,
-            user_id=USER_ID,
-            membership_id=MEMBERSHIP_ID,
-            membership_version=3,
-            principal_ref="principal-1",
-            request_id="request-1",
-            authentication_binding_ref="binding-1",
-            checked_at=AS_OF,
-            policy_epoch_verification=policy_epoch_verification,
-        )
-        scope_snapshot = _construct_trusted_scope_snapshot(
-            authority_scope=scope_authority_scope,
-            organization_id=ORGANIZATION_ID,
-            user_id=USER_ID,
-            membership_id=MEMBERSHIP_ID,
-            membership_version=3,
-            policy_epoch=3,
-            principal_ref="principal-1",
-            agent_version_ref="agent-version-1",
-            purpose="context.answer",
-            request_id="request-1",
-            authentication_binding_ref="binding-1",
-            checked_at=AS_OF,
-            organization_boundary=operands.organization_boundary,
-            membership_rights=operands.membership_rights,
-            principal_grants=operands.principal_grants,
-            agent_ceiling=operands.agent_ceiling,
-            source_native_acl=operands.source_native_acl,
-            resource_acl=operands.resource_acl,
-            purpose_policy=operands.purpose_policy,
-        )
-        invocation = _construct_authenticated_http_invocation(
-            request_id="request-1",
-            authenticated_organization_ref=str(ORGANIZATION_ID),
-            organization_verification=organization_verification,
-            user_ref=str(USER_ID),
-            principal_ref="principal-1",
-            membership_ref=str(MEMBERSHIP_ID),
-            membership_version=3,
-            current_membership_verification=membership_verification,
-            agent_version_ref="agent-version-1",
-            authenticated_application_ref="application-1",
-            authentication_binding_ref="binding-1",
-            trusted_purpose="context.answer",
-            received_at=AS_OF,
-            trusted_scope_snapshot=scope_snapshot,
-        )
-        delivery = _construct_direct_delivery_context(
-            purpose="context.answer",
-            authenticated_application_ref="application-1",
-            delivery_binding_ref="binding-1",
-            established_at=AS_OF,
-        )
-        yield invocation, delivery
+            scope_snapshot = _construct_trusted_scope_snapshot(
+                authority_scope=scope_authority_scope,
+                organization_id=ORGANIZATION_ID,
+                user_id=USER_ID,
+                membership_id=MEMBERSHIP_ID,
+                membership_version=3,
+                policy_epoch=3,
+                principal_ref="principal-1",
+                agent_version_ref="agent-version-1",
+                purpose="context.answer",
+                request_id="request-1",
+                authentication_binding_ref="binding-1",
+                checked_at=AS_OF,
+                organization_boundary=operands.organization_boundary,
+                membership_rights=operands.membership_rights,
+                principal_grants=operands.principal_grants,
+                agent_ceiling=operands.agent_ceiling,
+                source_native_acl=operands.source_native_acl,
+                resource_acl=operands.resource_acl,
+                purpose_policy=operands.purpose_policy,
+            )
+            invocation = _construct_authenticated_http_invocation(
+                request_id="request-1",
+                authenticated_organization_ref=str(ORGANIZATION_ID),
+                organization_verification=organization_verification,
+                user_ref=str(USER_ID),
+                principal_ref="principal-1",
+                membership_ref=str(MEMBERSHIP_ID),
+                membership_version=3,
+                current_membership_verification=membership_verification,
+                agent_version_ref="agent-version-1",
+                authenticated_application_ref="application-1",
+                authentication_binding_ref="binding-1",
+                trusted_purpose="context.answer",
+                received_at=AS_OF,
+                trusted_scope_snapshot=scope_snapshot,
+            )
+            delivery = _construct_direct_delivery_context(
+                purpose="context.answer",
+                authenticated_application_ref="application-1",
+                delivery_binding_ref="binding-1",
+                established_at=AS_OF,
+            )
+            yield invocation, delivery
     finally:
         _close_policy_epoch_authority_scope(policy_epoch_scope)
         _close_scope_authority_scope(scope_authority_scope)
@@ -207,8 +213,7 @@ def resolve(
     return outcome
 
 
-def test_runtime_observes_only_the_effective_scope_receipt_and_returns_empty_package(
-) -> None:
+def test_runtime_observes_only_effective_scope_and_returns_empty_package() -> None:
     spy = ContentIoSpy()
 
     outcome = resolve(make_operands(), spy=spy)
@@ -303,8 +308,7 @@ def test_each_missing_or_empty_trusted_operand_absorbs_to_empty_without_io(
     assert outcome.package.coverage.reason == "no_authorized_evidence"
 
 
-def test_runtime_rejects_scope_snapshot_mutated_to_another_purpose_before_io(
-) -> None:
+def test_runtime_rejects_scope_snapshot_mutated_to_another_purpose_before_io() -> None:
     spy = ContentIoSpy()
 
     with bound_runtime_inputs(make_operands()) as (invocation, delivery):
@@ -323,14 +327,11 @@ def test_runtime_rejects_scope_snapshot_mutated_to_another_purpose_before_io(
     assert spy.calls == 0
 
 
-def test_runtime_rejects_scope_snapshot_after_its_authority_scope_closes(
-) -> None:
+def test_runtime_rejects_scope_snapshot_after_its_authority_scope_closes() -> None:
     spy = ContentIoSpy()
     with bound_runtime_inputs(make_operands()) as inputs:
         invocation, delivery = inputs
-        _close_scope_authority_scope(
-            invocation.trusted_scope_snapshot._authority_scope
-        )
+        _close_scope_authority_scope(invocation.trusted_scope_snapshot._authority_scope)
 
         with pytest.raises(ValueError, match="active trusted scope authority"):
             make_runtime(spy).resolve(

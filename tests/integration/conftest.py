@@ -11,13 +11,17 @@ from sqlalchemy import Engine
 from engine.persistence import (
     DatabaseConfiguration,
     HarnessDatabaseConfigurations,
+    assert_control_role,
     assert_runtime_role,
+    assert_security_operator_role,
     assert_worker_role,
     create_database_engine,
     load_harness_database_configurations,
 )
+from engine.runtime.package_digest import QueryDigestKeyring
 
 ROOT = Path(__file__).parents[2]
+TEST_QUERY_DIGEST_KEY = b"issue-19-query-digest-test-key!!"
 
 
 @pytest.fixture(scope="session")
@@ -55,6 +59,20 @@ def worker_configuration(
     return database_configurations.worker
 
 
+@pytest.fixture(scope="session")
+def operator_configuration(
+    database_configurations: HarnessDatabaseConfigurations,
+) -> DatabaseConfiguration:
+    return database_configurations.operator
+
+
+@pytest.fixture(scope="session")
+def query_digest_keyring() -> QueryDigestKeyring:
+    """Explicit test-only key; production composition has no fallback secret."""
+
+    return QueryDigestKeyring(active_version=1, keys={1: TEST_QUERY_DIGEST_KEY})
+
+
 @pytest.fixture(scope="session", autouse=True)
 def guarded_runtime_engine(
     runtime_configuration: DatabaseConfiguration,
@@ -80,6 +98,36 @@ def guarded_worker_engine(
     try:
         with engine.connect() as connection:
             assert_worker_role(connection)
+        yield engine
+    finally:
+        engine.dispose()
+
+
+@pytest.fixture(scope="session")
+def guarded_control_engine(
+    control_configuration: DatabaseConfiguration,
+) -> Iterator[Engine]:
+    """Expose only the verified non-owner ContextControl engine."""
+
+    engine = create_database_engine(control_configuration)
+    try:
+        with engine.connect() as connection:
+            assert_control_role(connection)
+        yield engine
+    finally:
+        engine.dispose()
+
+
+@pytest.fixture(scope="session")
+def guarded_operator_engine(
+    operator_configuration: DatabaseConfiguration,
+) -> Iterator[Engine]:
+    """Expose only the verified restricted security-operator engine."""
+
+    engine = create_database_engine(operator_configuration)
+    try:
+        with engine.connect() as connection:
+            assert_security_operator_role(connection)
         yield engine
     finally:
         engine.dispose()

@@ -20,6 +20,7 @@ from scripts.validate_security_catalog import (
     ACL_PROOF_CASE_IDS,
     AUDIENCE_ACTION_CASE_IDS,
     CANONICAL_ACTIVATION_ISSUE_LIST,
+    CANONICAL_CONTEXT_RUN_ACTIVATION,
     CANONICAL_FAIL_CLOSED_OUTCOMES,
     CANONICAL_INVARIANT_IDS,
     CANONICAL_REVOCATION_ACTIVATION,
@@ -255,9 +256,15 @@ def make_catalog() -> dict[str, object]:
                     package_or_error.pop("coverageReason")
                     package_or_error["unauthorizedFieldCount"] = 0
                     package_or_error["unauthorizedEvidenceRefCount"] = 0
+                    package["packageDigest"] = (
+                        "8e593896cded830ecb39162d17b43a84148355f0b9470926d05b9e5ce957ace9"
+                    )
             if fixture_id in {"ACCEPT-005", "ACCEPT-009"}:
                 body["retryable"] = False
             if fixture_id == "ACCEPT-011":
+                package["packageDigest"] = (
+                    "27f6a284027ab9446aa577125727b33263f24c8f252b8cd4616bd17b8545185e"
+                )
                 external_response["headers"] = {
                     "Content-Type": "application/json",
                     "Cache-Control": "no-store",
@@ -276,6 +283,7 @@ def make_catalog() -> dict[str, object]:
                     "body.package.decisionRef",
                     "body.package.asOf",
                     "body.package.expiresAt",
+                    "body.package.packageDigest",
                     "headers.X-Context-Request-Id",
                 ]
                 adversarial_mutation["probes"] = [
@@ -488,6 +496,7 @@ def make_catalog() -> dict[str, object]:
             copy.deepcopy(CANONICAL_UNAVAILABLE_CAPABILITY_ACTIVATION),
             copy.deepcopy(CANONICAL_WORKER_LEASE_ACTIVATION),
             copy.deepcopy(CANONICAL_TICKET_AUDIENCE_ACTIVATION),
+            copy.deepcopy(CANONICAL_CONTEXT_RUN_ACTIVATION),
         ],
         "invariants": invariants,
         "fixtures": fixtures,
@@ -558,8 +567,8 @@ def make_schema() -> dict[str, object]:
             },
             "activations": {
                 "type": "array",
-                "minItems": 4,
-                "maxItems": 4,
+                "minItems": 5,
+                "maxItems": 5,
                 "uniqueItems": True,
                 "prefixItems": [
                     {"const": copy.deepcopy(CANONICAL_REVOCATION_ACTIVATION)},
@@ -570,6 +579,7 @@ def make_schema() -> dict[str, object]:
                     },
                     {"const": copy.deepcopy(CANONICAL_WORKER_LEASE_ACTIVATION)},
                     {"const": copy.deepcopy(CANONICAL_TICKET_AUDIENCE_ACTIVATION)},
+                    {"const": copy.deepcopy(CANONICAL_CONTEXT_RUN_ACTIVATION)},
                 ],
                 "items": False,
             },
@@ -756,9 +766,7 @@ def make_schema() -> dict[str, object]:
                         "then": {
                             "properties": {
                                 "carrier": {
-                                    "const": copy.deepcopy(
-                                        ACCEPT_008_FUTURE_CARRIER
-                                    )
+                                    "const": copy.deepcopy(ACCEPT_008_FUTURE_CARRIER)
                                 }
                             }
                         },
@@ -973,6 +981,51 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
             "synthetic ticket-audience carrier",
         )
 
+    def test_issue_19_context_run_activation_is_bounded_and_frozen(self) -> None:
+        catalog = make_catalog()
+        activation = object_list_at(catalog, "activations")[4]
+        self.assertEqual(activation, CANONICAL_CONTEXT_RUN_ACTIVATION)
+        self.assertEqual(activation["invariantRef"], "TRACE-REDACTION-012")
+        self.assertEqual(activation["policyEpochScope"], "organization-v0")
+        self.assertEqual(
+            [
+                (evidence["id"], evidence["surface"])
+                for evidence in object_list_at(activation, "testEvidence")
+            ],
+            [
+                ("DIGEST-019", "tests/unit/test_package_digest.py"),
+                (
+                    "RUN-LINEAGE-019",
+                    "tests/integration/test_runtime_empty_package_integration.py",
+                ),
+                (
+                    "AUTHORIZED-RUN-019",
+                    "tests/integration/test_runtime_authorized_evidence_integration.py",
+                ),
+                (
+                    "PG-TRACE-REDACTION-012",
+                    "tests/integration/test_context_run_schema.py",
+                ),
+            ],
+        )
+        not_active = activation["notActive"]
+        assert isinstance(not_active, list)
+        self.assertIn("raw query retention", not_active)
+        self.assertIn("full ContextPackage body retention", not_active)
+
+        object_list_at(activation, "testEvidence")[1]["surface"] = (
+            "tests/unit/false_green.py"
+        )
+        activation["futureCarriers"] = []
+        activation["notActive"] = []
+
+        self.assert_catalog_error(
+            catalog,
+            "activations: must exactly preserve the canonical ordered "
+            f"{CANONICAL_ACTIVATION_ISSUE_LIST} activation records and their "
+            "future/NOT_ACTIVE boundaries",
+        )
+
     def test_issue_17_noop_does_not_false_green_full_accept_008(self) -> None:
         catalog = make_catalog()
         fixture = object_list_at(catalog, "fixtures")[7]
@@ -1003,8 +1056,7 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
     def test_issue_16_refusal_does_not_false_green_future_carriers(self) -> None:
         catalog = make_catalog()
         fixtures = {
-            fixture["id"]: fixture
-            for fixture in object_list_at(catalog, "fixtures")
+            fixture["id"]: fixture for fixture in object_list_at(catalog, "fixtures")
         }
 
         for fixture_id in ("ACCEPT-005", "ACCEPT-009", "ACCEPT-010"):
@@ -1155,8 +1207,7 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
         runtime.remove("RUN-006")
 
         fixtures = {
-            fixture["id"]: fixture
-            for fixture in object_list_at(catalog, "fixtures")
+            fixture["id"]: fixture for fixture in object_list_at(catalog, "fixtures")
         }
         accept_005 = fixtures["ACCEPT-005"]
         accept_005["carrier"] = {
@@ -1461,7 +1512,7 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
         self.assertEqual(report.invariant_count, 15)
         self.assertEqual(report.fixture_count, 12)
 
-    def test_tracked_catalog_freezes_issue_18_authority_and_bounded_scope(
+    def test_tracked_catalog_freezes_issue_19_authority_and_bounded_scope(
         self,
     ) -> None:
         catalog = load_document(DEFAULT_CATALOG_PATH)
@@ -1474,19 +1525,20 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
         assert isinstance(reconciliation, str)
 
         self.assertEqual(catalog["catalogVersion"], "1.1.0")
-        self.assertEqual(issue_refs[-4:], ["#15", "#16", "#17", "#18"])
+        self.assertEqual(issue_refs[-5:], ["#15", "#16", "#17", "#18", "#19"])
         self.assertIn(
-            "docs/decisions/0030-bound-ticket-audiences.md",
+            "docs/decisions/0031-persist-authorized-context-run-lineage.md",
             document_refs,
         )
         for boundary in (
-            "production ContextAccessTicket/ActionTicket",
-            "TICKET-AUDIENCE-018 and PG-TICKET-EPOCH-018",
-            "distinct signed synthetic ContextAccessTicket Provider-read",
-            "full M2 ActionPlane.prepare/perform",
-            "payload/destination/approval/idempotency binding",
-            "durable one-shot/replay/reconciliation",
-            "full ACCEPT-012 PASS",
+            "Issue #19 activates only the current Acquire authorized-only ContextRun",
+            "DIGEST-019",
+            "RUN-LINEAGE-019",
+            "AUTHORIZED-RUN-019",
+            "PG-TRACE-REDACTION-012",
+            "Raw query retention",
+            "full ContextPackage body retention",
+            "general observability redaction",
         ):
             self.assertIn(boundary, reconciliation)
 
@@ -1495,18 +1547,17 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
             for invariant in object_list_at(catalog, "invariants")
         }
         fixtures = {
-            fixture["id"]: fixture
-            for fixture in object_list_at(catalog, "fixtures")
+            fixture["id"]: fixture for fixture in object_list_at(catalog, "fixtures")
         }
         for authority_owner in (
-            invariants["ACTION-SEPARATION-014"],
-            fixtures["ACCEPT-012"],
+            invariants["TRACE-REDACTION-012"],
+            fixtures["ACCEPT-011"],
         ):
             refs = authority_owner["authorityRefs"]
             assert isinstance(refs, list)
-            self.assertIn("#18", refs)
+            self.assertIn("#19", refs)
             self.assertIn(
-                "docs/decisions/0030-bound-ticket-audiences.md#decision",
+                "docs/decisions/0031-persist-authorized-context-run-lineage.md#decision",
                 refs,
             )
 
@@ -1578,9 +1629,9 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
             ],
         )
 
-        accept_011_package = fixtures["ACCEPT-011"]["expected"][
-            "externalResponse"
-        ]["body"]["package"]
+        accept_011_package = fixtures["ACCEPT-011"]["expected"]["externalResponse"][
+            "body"
+        ]["package"]
         self.assertEqual(
             accept_011_package["coverage"],
             {"status": "empty", "reason": "no_authorized_evidence"},
@@ -1625,8 +1676,7 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
         catalog = load_document(DEFAULT_CATALOG_PATH)
         schema = load_document(DEFAULT_SCHEMA_PATH)
         fixtures = {
-            fixture["id"]: fixture
-            for fixture in object_list_at(catalog, "fixtures")
+            fixture["id"]: fixture for fixture in object_list_at(catalog, "fixtures")
         }
         accept_006 = fixtures["ACCEPT-006"]
         rank_orders = object_at(accept_006, "adversarialMutation")[
@@ -1741,8 +1791,7 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
         catalog = load_document(DEFAULT_CATALOG_PATH)
         schema = load_document(DEFAULT_SCHEMA_PATH)
         fixtures = {
-            fixture["id"]: fixture
-            for fixture in object_list_at(catalog, "fixtures")
+            fixture["id"]: fixture for fixture in object_list_at(catalog, "fixtures")
         }
         evidence = object_list_at(
             fixtures["ACCEPT-006"],
@@ -1838,6 +1887,7 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
                 "body.package.decisionRef",
                 "body.package.asOf",
                 "body.package.expiresAt",
+                "body.package.packageDigest",
                 "headers.X-Context-Request-Id",
             ],
         )
@@ -2139,8 +2189,7 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
         catalog = load_document(DEFAULT_CATALOG_PATH)
         schema = load_document(DEFAULT_SCHEMA_PATH)
         fixtures = {
-            fixture["id"]: fixture
-            for fixture in object_list_at(catalog, "fixtures")
+            fixture["id"]: fixture for fixture in object_list_at(catalog, "fixtures")
         }
         object_at(fixtures["ACCEPT-007"], "expected")["externalResponse"] = {
             "status": 200,
@@ -2244,8 +2293,7 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
         )
         self.assertTrue(
             any(
-                "normalizationAllowlist" in error
-                and "canonical ordered" in error
+                "normalizationAllowlist" in error and "canonical ordered" in error
                 for error in errors
             )
         )
@@ -2253,9 +2301,7 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
         self.assertTrue(
             any("normalizedByteIdenticalAcrossProbes" in error for error in errors)
         )
-        self.assertTrue(
-            any("externalResponse.headers" in error for error in errors)
-        )
+        self.assertTrue(any("externalResponse.headers" in error for error in errors))
         self.assertTrue(any("packageOrError" in error for error in errors))
         self.assertTrue(any("expected.io" in error for error in errors))
         self.assertTrue(
@@ -2263,6 +2309,28 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
         )
         self.assertTrue(any("expected.evidence" in error for error in errors))
         self.assertTrue(any("expected.businessEffects" in error for error in errors))
+
+    def test_public_package_digest_fixture_drift_is_rejected(self) -> None:
+        catalog = load_document(DEFAULT_CATALOG_PATH)
+        schema = load_document(DEFAULT_SCHEMA_PATH)
+        package = object_at(
+            object_list_at(catalog, "fixtures")[10],
+            "expected",
+            "externalResponse",
+            "body",
+            "package",
+        )
+        package["ttlSeconds"] = 31
+
+        with self.assertRaises(CatalogValidationError) as raised:
+            validate_catalog(catalog, schema)
+
+        self.assertIn(
+            "fixtures[10].expected.externalResponse.body.package.packageDigest: "
+            "must equal SHA-256 over the RFC 8785-canonicalized UTF-8 public "
+            "Package document with packageDigest omitted",
+            raised.exception.errors,
+        )
 
     def test_milestone_drift_is_rejected(self) -> None:
         catalog = load_document(DEFAULT_CATALOG_PATH)

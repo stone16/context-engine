@@ -19,6 +19,7 @@ from engine.runtime.contracts import (
     Resolved,
 )
 from engine.runtime.evidence import Evidence, EvidenceLineage, PackageBlock
+from engine.runtime.package_digest import verify_context_package_digest
 
 AS_OF = datetime(2026, 7, 21, 5, 0, tzinfo=UTC)
 EVIDENCE_ENTROPY = "a" * 64
@@ -74,7 +75,7 @@ def authorized_outcome() -> Resolved:
         fragment_ref="fragment:authorized",
         lineage=lineage,
     )
-    package = SimpleNamespace(
+    package = ContextPackage(
         organization_ref="orgpkg_" + "c" * 32,
         purpose="context.answer",
         ttl_seconds=300,
@@ -84,13 +85,13 @@ def authorized_outcome() -> Resolved:
         blocks=(PackageBlock(evidence_ref=EVIDENCE_REF, body="authorized body"),),
         evidence=(evidence,),
         gaps=(),
-        budget_usage=SimpleNamespace(
+        budget_usage=BudgetUsage(
             tokens=len(b"authorized body"),
             provider_calls=0,
             cost_microunits=0,
             elapsed_ms=0,
         ),
-        coverage=SimpleNamespace(status="sufficient", reason=None),
+        coverage=Coverage(status=CoverageStatus.SUFFICIENT),
     )
     return cast(
         Resolved,
@@ -121,6 +122,9 @@ def test_authorized_package_maps_to_the_exact_closed_public_shape() -> None:
             "asOf": "2026-07-21T05:00:00Z",
             "expiresAt": "2026-07-21T05:05:00Z",
             "decisionRef": DECISION_REF,
+            "packageDigest": (
+                "1e94624bcee1de8c0212efdfcb0f9b85e209d651d65bef821c57fd8bbd7e31c9"
+            ),
             "blocks": [
                 {
                     "blockId": BLOCK_ID,
@@ -164,6 +168,9 @@ def test_authorized_package_maps_to_the_exact_closed_public_shape() -> None:
         "candidatecount",
     ):
         assert forbidden not in serialized
+    package_document = dict(document["package"])
+    package_digest = package_document.pop("packageDigest")
+    assert verify_context_package_digest(package_document, package_digest)
 
 
 def test_context_package_wire_requires_exact_block_evidence_closure() -> None:
@@ -207,9 +214,11 @@ def test_empty_package_wire_rejects_existence_and_denial_metadata(
 
 @pytest.mark.parametrize("forbidden", ["principalRef", "candidateRef"])
 def test_evidence_wire_rejects_internal_authority_fields(forbidden: str) -> None:
-    evidence_document = _resolved_to_wire(authorized_outcome()).package.evidence[
-        0
-    ].model_dump(mode="json", by_alias=True)
+    evidence_document = (
+        _resolved_to_wire(authorized_outcome())
+        .package.evidence[0]
+        .model_dump(mode="json", by_alias=True)
+    )
     evidence_document[forbidden] = "must-not-cross-http"
 
     with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
@@ -237,4 +246,17 @@ def test_authorized_wire_rejects_misaccounted_content_bytes() -> None:
     document["budgetUsage"]["tokens"] = 14
 
     with pytest.raises(ValidationError, match="authorized UTF-8 bytes"):
+        ContextPackageWire.model_validate(document)
+
+
+def test_authorized_wire_detects_a_shape_preserving_package_alteration() -> None:
+    document = _resolved_to_wire(authorized_outcome()).package.model_dump(
+        mode="json",
+        by_alias=True,
+        exclude_none=True,
+    )
+    document["blocks"][0]["text"] = "altered content"
+    document["budgetUsage"]["tokens"] = len(b"altered content")
+
+    with pytest.raises(ValidationError, match="packageDigest must match"):
         ContextPackageWire.model_validate(document)

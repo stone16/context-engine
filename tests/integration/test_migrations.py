@@ -59,7 +59,7 @@ def test_empty_baseline_remains_a_reversible_historical_revision(
         assert _application_tables(migration_configuration) == ["alembic_version"]
     finally:
         command.upgrade(alembic_configuration, "head")
-    assert _revision_rows(migration_configuration) == ["20260722_0006"]
+    assert _revision_rows(migration_configuration) == ["20260722_0007"]
 
 
 def test_organization_isolation_revision_downgrades_and_reapplies_cleanly(
@@ -74,12 +74,15 @@ def test_organization_isolation_revision_downgrades_and_reapplies_cleanly(
     finally:
         command.upgrade(alembic_configuration, "head")
 
-    assert _revision_rows(migration_configuration) == ["20260722_0006"]
+    assert _revision_rows(migration_configuration) == ["20260722_0007"]
     assert _application_tables(migration_configuration) == [
         "alembic_version",
         "context_fragment",
         "context_resource",
         "context_revision",
+        "context_run",
+        "context_run_operator_read_ticket",
+        "decision_audit",
         "membership",
         "organization",
         "organization_policy_epoch",
@@ -107,7 +110,7 @@ def test_membership_revision_downgrades_to_issue_8_and_reapplies_cleanly(
     finally:
         command.upgrade(alembic_configuration, "head")
 
-    assert _revision_rows(migration_configuration) == ["20260722_0006"]
+    assert _revision_rows(migration_configuration) == ["20260722_0007"]
 
 
 def test_content_schema_revision_downgrades_to_membership_and_reapplies_cleanly(
@@ -128,12 +131,15 @@ def test_content_schema_revision_downgrades_to_membership_and_reapplies_cleanly(
     finally:
         command.upgrade(alembic_configuration, "head")
 
-    assert _revision_rows(migration_configuration) == ["20260722_0006"]
+    assert _revision_rows(migration_configuration) == ["20260722_0007"]
     assert _application_tables(migration_configuration) == [
         "alembic_version",
         "context_fragment",
         "context_resource",
         "context_revision",
+        "context_run",
+        "context_run_operator_read_ticket",
+        "decision_audit",
         "membership",
         "organization",
         "organization_policy_epoch",
@@ -168,12 +174,15 @@ def test_policy_epoch_revision_downgrades_to_content_and_reapplies_cleanly(
     finally:
         command.upgrade(alembic_configuration, "head")
 
-    assert _revision_rows(migration_configuration) == ["20260722_0006"]
+    assert _revision_rows(migration_configuration) == ["20260722_0007"]
     assert _application_tables(migration_configuration) == [
         "alembic_version",
         "context_fragment",
         "context_resource",
         "context_revision",
+        "context_run",
+        "context_run_operator_read_ticket",
+        "decision_audit",
         "membership",
         "organization",
         "organization_policy_epoch",
@@ -210,12 +219,53 @@ def test_worker_lease_revision_downgrades_to_policy_epoch_and_reapplies_cleanly(
     finally:
         command.upgrade(alembic_configuration, "head")
 
-    assert _revision_rows(migration_configuration) == ["20260722_0006"]
+    assert _revision_rows(migration_configuration) == ["20260722_0007"]
     assert _application_tables(migration_configuration) == [
         "alembic_version",
         "context_fragment",
         "context_resource",
         "context_revision",
+        "context_run",
+        "context_run_operator_read_ticket",
+        "decision_audit",
+        "membership",
+        "organization",
+        "organization_policy_epoch",
+        "organization_record",
+        "resource_access_policy",
+        "service_principal",
+        "user_account",
+        "worker_noop_job",
+    ]
+
+
+def test_decision_lineage_revision_downgrades_to_worker_lease_and_reapplies_cleanly(
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    """Issue #19 durable decision lineage is one reversible schema revision."""
+
+    alembic_configuration = Config(ROOT / "alembic.ini")
+
+    try:
+        command.downgrade(alembic_configuration, "20260722_0006")
+        assert _revision_rows(migration_configuration) == ["20260722_0006"]
+        assert "context_run" not in _application_tables(migration_configuration)
+        assert "context_run_operator_read_ticket" not in _application_tables(
+            migration_configuration
+        )
+        assert "decision_audit" not in _application_tables(migration_configuration)
+    finally:
+        command.upgrade(alembic_configuration, "head")
+
+    assert _revision_rows(migration_configuration) == ["20260722_0007"]
+    assert _application_tables(migration_configuration) == [
+        "alembic_version",
+        "context_fragment",
+        "context_resource",
+        "context_revision",
+        "context_run",
+        "context_run_operator_read_ticket",
+        "decision_audit",
         "membership",
         "organization",
         "organization_policy_epoch",

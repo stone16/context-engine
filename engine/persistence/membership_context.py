@@ -9,7 +9,8 @@ from datetime import datetime, timedelta
 from typing import Protocol
 from uuid import UUID
 
-from sqlalchemy import Connection, Engine, text
+from sqlalchemy import Connection, Engine, bindparam, text
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import SQLAlchemyError
 
 from engine.persistence.role_guard import assert_runtime_role
@@ -20,6 +21,13 @@ from engine.runtime.actor import (
     _close_membership_authority_scope,
     _construct_current_membership_verification,
     _open_membership_authority_scope,
+)
+from engine.runtime.context_run import (
+    ContextRunRecord,
+    DecisionAuditRecord,
+    _close_context_run_persistence_scope,
+    _construct_context_run_persistence_session,
+    _open_context_run_persistence_scope,
 )
 from engine.runtime.evidence import CandidateRef
 from engine.runtime.materialized import (
@@ -254,6 +262,94 @@ class _PostgreSQLPolicyEpochPort:
             ) from None
 
 
+class _PostgreSQLContextRunPersistencePort:
+    """Final run/audit inserts on the retained current-UserActor transaction."""
+
+    def __init__(self, connection: Connection) -> None:
+        self._connection = connection
+
+    def persist(
+        self,
+        run: ContextRunRecord,
+        audit: DecisionAuditRecord | None,
+    ) -> None:
+        values = {
+            field_name: getattr(run, field_name)
+            for field_name in run.__dataclass_fields__
+        }
+        values["outcome"] = run.outcome.value
+        values["authorized_evidence_refs"] = list(run.authorized_evidence_refs)
+        insert_run = text(
+            """
+            INSERT INTO context_run (
+                organization_id, run_ref, decision_ref,
+                user_id, membership_id, membership_version,
+                principal_ref, agent_version_ref,
+                authenticated_application_ref, authentication_binding_ref,
+                request_id, purpose, policy_snapshot_ref, policy_epoch,
+                effective_scope_digest, query_digest_profile,
+                query_digest_key_version, query_digest, outcome,
+                package_digest_profile, package_digest,
+                package_retention_mode, authorized_evidence_refs,
+                effective_max_tokens, effective_max_provider_calls,
+                effective_max_cost_microunits, effective_max_elapsed_ms,
+                usage_tokens, usage_provider_calls,
+                usage_cost_microunits, usage_elapsed_ms,
+                accepted_at, finalized_at, package_as_of, package_expires_at
+            ) VALUES (
+                :organization_id, :run_ref, :decision_ref,
+                :user_id, :membership_id, :membership_version,
+                :principal_ref, :agent_version_ref,
+                :authenticated_application_ref, :authentication_binding_ref,
+                :request_id, :purpose, :policy_snapshot_ref, :policy_epoch,
+                :effective_scope_digest, :query_digest_profile,
+                :query_digest_key_version, :query_digest, :outcome,
+                :package_digest_profile, :package_digest,
+                :package_retention_mode, :authorized_evidence_refs,
+                :effective_max_tokens, :effective_max_provider_calls,
+                :effective_max_cost_microunits, :effective_max_elapsed_ms,
+                :usage_tokens, :usage_provider_calls,
+                :usage_cost_microunits, :usage_elapsed_ms,
+                :accepted_at, :finalized_at, :package_as_of,
+                :package_expires_at
+            )
+            """
+        ).bindparams(
+            bindparam(
+                "authorized_evidence_refs",
+                type_=postgresql.JSONB(),
+            )
+        )
+        self._connection.execute(
+            insert_run,
+            values,
+        )
+        if audit is None:
+            return
+        self._connection.execute(
+            text(
+                """
+                INSERT INTO decision_audit (
+                    organization_id, run_ref, decision_ref,
+                    policy_snapshot_ref, policy_epoch, category, recorded_at
+                ) VALUES (
+                    :organization_id, :run_ref, :decision_ref,
+                    :policy_snapshot_ref, :policy_epoch, :category, :recorded_at
+                )
+                """
+            ),
+            {
+                "organization_id": audit.organization_id,
+                "run_ref": audit.run_ref,
+                "decision_ref": audit.decision_ref,
+                "policy_snapshot_ref": audit.policy_snapshot_ref,
+                "policy_epoch": audit.policy_epoch,
+                "category": audit.category.value,
+                "recorded_at": audit.recorded_at,
+            },
+        )
+
+
 class PostgreSQLMembershipAuthority:
     """Open and retain the exact UserActor transaction through Runtime work."""
 
@@ -311,11 +407,7 @@ class PostgreSQLMembershipAuthority:
         for setting_name, value_factory in _ACTOR_SETTINGS.items():
             expected = value_factory(identity)
             connection.execute(
-                text(
-                    "SELECT set_config("
-                    ":setting_name, :setting_value, true"
-                    ")"
-                ),
+                text("SELECT set_config(:setting_name, :setting_value, true)"),
                 {
                     "setting_name": setting_name,
                     "setting_value": expected,
@@ -326,9 +418,7 @@ class PostgreSQLMembershipAuthority:
                 {"setting_name": setting_name},
             ).scalar_one()
             if observed != expected:
-                raise MembershipAuthorityUnavailable(
-                    "UserActor context binding failed"
-                )
+                raise MembershipAuthorityUnavailable("UserActor context binding failed")
 
         row = connection.execute(
             text(
@@ -361,6 +451,7 @@ class PostgreSQLMembershipAuthority:
         scope = _open_membership_authority_scope()
         projection_scope = _open_materialized_projection_scope()
         policy_epoch_scope = _open_policy_epoch_authority_scope()
+        context_run_scope = _open_context_run_persistence_scope()
         try:
             projection_session = _construct_materialized_projection_session(
                 authority_scope=projection_scope,
@@ -374,6 +465,10 @@ class PostgreSQLMembershipAuthority:
             policy_epoch_verification = _observe_current_policy_epoch(
                 policy_epoch_session
             )
+            context_run_session = _construct_context_run_persistence_session(
+                authority_scope=context_run_scope,
+                port=_PostgreSQLContextRunPersistencePort(connection),
+            )
             yield _construct_current_membership_verification(
                 organization_id=identity.organization_id,
                 user_id=identity.user_id,
@@ -381,15 +476,15 @@ class PostgreSQLMembershipAuthority:
                 membership_version=identity.membership_version,
                 principal_ref=identity.principal_ref,
                 request_id=identity.request_id,
-                authentication_binding_ref=(
-                    identity.authentication_binding_ref
-                ),
+                authentication_binding_ref=(identity.authentication_binding_ref),
                 checked_at=identity.checked_at,
                 policy_epoch_verification=policy_epoch_verification,
                 authority_scope=scope,
                 materialized_projection_session=projection_session,
+                context_run_persistence_session=context_run_session,
             )
         finally:
+            _close_context_run_persistence_scope(context_run_scope)
             _close_policy_epoch_authority_scope(policy_epoch_scope)
             _close_materialized_projection_scope(projection_scope)
             _close_membership_authority_scope(scope)

@@ -14,8 +14,10 @@ MIGRATOR_ROLE = "context_engine_migrator"
 CONTROL_ROLE = "context_engine_control"
 ACCESS_POLICY_DEFINER_ROLE = "context_engine_access_policy_definer"
 WORKER_LEASE_DEFINER_ROLE = "context_engine_worker_lease_definer"
+CONTEXT_RUN_READER_DEFINER_ROLE = "context_engine_context_run_reader_definer"
 RUNTIME_ROLE = "context_engine_runtime"
 WORKER_ROLE = "context_engine_worker"
+OPERATOR_ROLE = "context_engine_security_operator"
 
 
 class DatabasePurpose(Enum):
@@ -25,6 +27,10 @@ class DatabasePurpose(Enum):
     CONTROL_PLANE = ("CONTEXT_ENGINE_CONTROL_DATABASE_URL", CONTROL_ROLE)
     API_RUNTIME = ("CONTEXT_ENGINE_RUNTIME_DATABASE_URL", RUNTIME_ROLE)
     SUPPLY_WORKER = ("CONTEXT_ENGINE_WORKER_DATABASE_URL", WORKER_ROLE)
+    SECURITY_OPERATOR = (
+        "CONTEXT_ENGINE_SECURITY_OPERATOR_DATABASE_URL",
+        OPERATOR_ROLE,
+    )
     SECURITY_TEST = ("CONTEXT_ENGINE_TEST_DATABASE_URL", RUNTIME_ROLE)
 
     @property
@@ -41,6 +47,7 @@ ROLE_ENVIRONMENT_VARIABLES: dict[DatabasePurpose, str] = {
     DatabasePurpose.CONTROL_PLANE: "CONTEXT_ENGINE_CONTROL_ROLE",
     DatabasePurpose.API_RUNTIME: "CONTEXT_ENGINE_RUNTIME_ROLE",
     DatabasePurpose.SUPPLY_WORKER: "CONTEXT_ENGINE_WORKER_ROLE",
+    DatabasePurpose.SECURITY_OPERATOR: "CONTEXT_ENGINE_SECURITY_OPERATOR_ROLE",
     DatabasePurpose.SECURITY_TEST: "CONTEXT_ENGINE_RUNTIME_ROLE",
 }
 
@@ -100,6 +107,7 @@ class HarnessDatabaseConfigurations:
     control: DatabaseConfiguration
     runtime: DatabaseConfiguration
     worker: DatabaseConfiguration
+    operator: DatabaseConfiguration
     security_test: DatabaseConfiguration
 
 
@@ -163,7 +171,7 @@ def load_database_configuration(
 def load_harness_database_configurations(
     environment: Mapping[str, str] | None = None,
 ) -> HarnessDatabaseConfigurations:
-    """Load and cross-check the five explicit harness credential contracts."""
+    """Load and cross-check the six explicit harness credential contracts."""
 
     source = os.environ if environment is None else environment
     configurations = HarnessDatabaseConfigurations(
@@ -171,6 +179,7 @@ def load_harness_database_configurations(
         control=load_database_configuration(DatabasePurpose.CONTROL_PLANE, source),
         runtime=load_database_configuration(DatabasePurpose.API_RUNTIME, source),
         worker=load_database_configuration(DatabasePurpose.SUPPLY_WORKER, source),
+        operator=load_database_configuration(DatabasePurpose.SECURITY_OPERATOR, source),
         security_test=load_database_configuration(
             DatabasePurpose.SECURITY_TEST, source
         ),
@@ -180,10 +189,12 @@ def load_harness_database_configurations(
         configurations.control.expected_role,
         configurations.runtime.expected_role,
         configurations.worker.expected_role,
+        configurations.operator.expected_role,
     }
-    if len(distinct_roles) != 4:
+    if len(distinct_roles) != 5:
         raise DatabaseConfigurationError(
-            "migration, control, runtime, and worker database roles must be distinct"
+            "migration, control, runtime, worker, and security-operator database "
+            "roles must be distinct"
         )
     if configurations.security_test.url != configurations.runtime.url:
         raise DatabaseConfigurationError(

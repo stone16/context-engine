@@ -1,5 +1,5 @@
 {
-  "manifestVersion": "5.2.0",
+  "manifestVersion": "7.0.0",
   "controlOperations": [
     {
       "name": "change_resource_access",
@@ -563,6 +563,389 @@
         "DB-009",
         "DB-010",
         "PG-REVOCATION-006"
+      ]
+    },
+    {
+      "name": "context_run",
+      "classification": "tenant_owned",
+      "purpose": "Authorized-only durable lineage for one finalized ContextPackage delivery; package and query bodies are never retained",
+      "organizationColumn": "organization_id",
+      "organizationInclusiveKeys": [
+        {
+          "name": "pk_context_run",
+          "kind": "primary_key",
+          "columns": ["organization_id", "run_ref"]
+        },
+        {
+          "name": "uq_context_run_decision_ref",
+          "kind": "unique",
+          "columns": ["organization_id", "decision_ref"]
+        },
+        {
+          "name": "uq_context_run_lineage",
+          "kind": "unique",
+          "columns": ["organization_id", "run_ref", "decision_ref"]
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_context_run_organization",
+          "columns": ["organization_id"],
+          "references": {
+            "table": "organization",
+            "columns": ["organization_id"]
+          }
+        },
+        {
+          "name": "fk_context_run_membership_same_organization",
+          "columns": ["organization_id", "membership_id"],
+          "references": {
+            "table": "membership",
+            "columns": ["organization_id", "membership_id"]
+          }
+        }
+      ],
+      "checkConstraints": [
+        {
+          "name": "ck_context_run_reference_fields_nonblank",
+          "expression": "btrim(run_ref) <> '' AND btrim(decision_ref) <> '' AND btrim(principal_ref) <> '' AND btrim(agent_version_ref) <> '' AND btrim(authenticated_application_ref) <> '' AND btrim(authentication_binding_ref) <> '' AND btrim(request_id) <> '' AND btrim(purpose) <> '' AND btrim(policy_snapshot_ref) <> ''"
+        },
+        {
+          "name": "ck_context_run_membership_version_positive",
+          "expression": "membership_version BETWEEN 1 AND 9223372036854775807"
+        },
+        {
+          "name": "ck_context_run_policy_epoch_positive",
+          "expression": "policy_epoch BETWEEN 1 AND 9223372036854775807"
+        },
+        {
+          "name": "ck_context_run_effective_scope_digest_sha256",
+          "expression": "char_length(effective_scope_digest) = 64 AND effective_scope_digest = lower(effective_scope_digest) AND effective_scope_digest ~ '^[0-9a-f]{64}$'"
+        },
+        {
+          "name": "ck_context_run_query_digest_profile",
+          "expression": "query_digest_profile = 'context-query-json-hmac-sha256-v1'"
+        },
+        {
+          "name": "ck_context_run_query_digest_key_version_positive",
+          "expression": "query_digest_key_version BETWEEN 1 AND 9223372036854775807"
+        },
+        {
+          "name": "ck_context_run_query_digest_sha256",
+          "expression": "char_length(query_digest) = 64 AND query_digest = lower(query_digest) AND query_digest ~ '^[0-9a-f]{64}$'"
+        },
+        {
+          "name": "ck_context_run_outcome",
+          "expression": "outcome IN ('delivered_authorized', 'delivered_empty')"
+        },
+        {
+          "name": "ck_context_run_package_digest_profile",
+          "expression": "package_digest_profile = 'context-package-canonical-json-v1'"
+        },
+        {
+          "name": "ck_context_run_package_digest_sha256",
+          "expression": "char_length(package_digest) = 64 AND package_digest = lower(package_digest) AND package_digest ~ '^[0-9a-f]{64}$'"
+        },
+        {
+          "name": "ck_context_run_package_retention_digest_only",
+          "expression": "package_retention_mode = 'digest_only'"
+        },
+        {
+          "name": "ck_context_run_authorized_evidence_refs_array",
+          "expression": "jsonb_typeof(authorized_evidence_refs) = 'array' AND NOT jsonb_path_exists(authorized_evidence_refs, '$[*] ? (@.type() != \"string\" || !(@ like_regex \"^ev_[0-9a-f]{64}$\"))')"
+        },
+        {
+          "name": "ck_context_run_budget_ceilings_positive",
+          "expression": "effective_max_tokens > 0 AND effective_max_provider_calls > 0 AND effective_max_cost_microunits > 0 AND effective_max_elapsed_ms > 0"
+        },
+        {
+          "name": "ck_context_run_budget_usage_nonnegative",
+          "expression": "usage_tokens >= 0 AND usage_provider_calls >= 0 AND usage_cost_microunits >= 0 AND usage_elapsed_ms >= 0"
+        },
+        {
+          "name": "ck_context_run_budget_usage_within_ceiling",
+          "expression": "usage_tokens <= effective_max_tokens AND usage_provider_calls <= effective_max_provider_calls AND usage_cost_microunits <= effective_max_cost_microunits AND usage_elapsed_ms <= effective_max_elapsed_ms"
+        },
+        {
+          "name": "ck_context_run_outcome_evidence_consistency",
+          "expression": "(outcome = 'delivered_authorized' AND jsonb_array_length(authorized_evidence_refs) > 0) OR (outcome = 'delivered_empty' AND jsonb_array_length(authorized_evidence_refs) = 0)"
+        },
+        {
+          "name": "ck_context_run_timestamp_order",
+          "expression": "finalized_at >= accepted_at AND package_as_of = finalized_at AND package_expires_at > package_as_of"
+        }
+      ],
+      "rowLevelSecurity": {
+        "enabled": true,
+        "forced": true,
+        "policies": [
+          {
+            "name": "context_run_current_user_actor_insert",
+            "command": "INSERT",
+            "roles": ["context_engine_runtime"],
+            "withCheck": "context_run.organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid AND current_setting('app.actor_kind', true) = 'user' AND context_run.user_id = NULLIF(current_setting('app.user_id', true), '')::uuid AND context_run.membership_id = NULLIF(current_setting('app.membership_id', true), '')::uuid AND context_run.membership_version = NULLIF(current_setting('app.membership_version', true), '')::bigint AND context_run.principal_ref = current_setting('app.principal_ref', true) AND context_run.request_id = current_setting('app.request_id', true) AND context_run.authentication_binding_ref = current_setting('app.authentication_binding_ref', true) AND context_run.accepted_at = NULLIF(current_setting('app.checked_at', true), '')::timestamptz AND EXISTS (SELECT 1 FROM public.membership AS actor_membership WHERE actor_membership.organization_id = context_run.organization_id AND actor_membership.user_id = context_run.user_id AND actor_membership.membership_id = context_run.membership_id AND actor_membership.membership_version = context_run.membership_version AND actor_membership.status = 'active' AND actor_membership.valid_from <= context_run.accepted_at AND (actor_membership.valid_until IS NULL OR actor_membership.valid_until > context_run.accepted_at))"
+          },
+          {
+            "name": "context_run_context_run_reader_definer_read",
+            "command": "SELECT",
+            "roles": ["context_engine_context_run_reader_definer"],
+            "using": "context_run.organization_id = NULLIF(current_setting('app.context_run_operator_ticket_organization_id', true), '')::uuid AND context_run.decision_ref = current_setting('app.context_run_operator_ticket_decision_ref', true) AND current_setting('app.context_run_operator_ticket_mode', true) IN ('issue', 'read')"
+          },
+          {
+            "name": "context_run_migrator_administration",
+            "command": "ALL",
+            "roles": ["context_engine_migrator"],
+            "using": "true",
+            "withCheck": "true"
+          }
+        ]
+      },
+      "permittedOperations": {
+        "context_engine_runtime": ["INSERT"],
+        "context_engine_security_operator": ["EXECUTE read_context_run_by_operator_ticket"],
+        "context_engine_context_run_reader_definer": ["SELECT"],
+        "context_engine_worker": [],
+        "context_engine_control": ["EXECUTE issue_context_run_operator_read_ticket", "EXECUTE revoke_context_run_operator_read_ticket"]
+      },
+      "partitions": [],
+      "securityInvariantIds": [
+        "TENANT-OWNERSHIP-001",
+        "TENANT-FK-002",
+        "RLS-FAIL-CLOSED-003",
+        "TRACE-REDACTION-012"
+      ],
+      "negativeTestIds": [
+        "DB-001",
+        "DB-002",
+        "DB-003",
+        "DB-004",
+        "DB-006",
+        "DB-008",
+        "DB-009",
+        "DB-010",
+        "OBS-004",
+        "OBS-005",
+        "PG-TRACE-REDACTION-012"
+      ]
+    },
+    {
+      "name": "context_run_operator_read_ticket",
+      "classification": "tenant_owned",
+      "purpose": "Digest-only 60-second exact-read capability for one Organization and ContextRun decision; plaintext ticket material is never retained",
+      "organizationColumn": "organization_id",
+      "organizationInclusiveKeys": [
+        {
+          "name": "pk_context_run_operator_read_ticket",
+          "kind": "primary_key",
+          "columns": ["organization_id", "ticket_digest"]
+        }
+      ],
+      "capabilityUniqueKeys": [
+        {
+          "name": "uq_context_run_operator_read_ticket_digest",
+          "kind": "unique",
+          "columns": ["ticket_digest"],
+          "rationale": "A raw ticket can identify at most one Organization-bound capability; replay cannot revoke or consume a second tenant's row"
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_context_run_operator_ticket_exact_decision",
+          "columns": ["organization_id", "decision_ref"],
+          "references": {
+            "table": "context_run",
+            "columns": ["organization_id", "decision_ref"]
+          },
+          "onDelete": "CASCADE"
+        }
+      ],
+      "checkConstraints": [
+        {
+          "name": "ck_context_run_operator_ticket_digest_sha256",
+          "expression": "octet_length(ticket_digest) = 32"
+        },
+        {
+          "name": "ck_context_run_operator_ticket_bindings_nonblank",
+          "expression": "btrim(decision_ref) <> '' AND btrim(operator_ref) <> '' AND btrim(request_id) <> '' AND btrim(authentication_binding_ref) <> ''"
+        },
+        {
+          "name": "ck_context_run_operator_ticket_exact_ttl",
+          "expression": "expires_at = issued_at + interval '60 seconds'"
+        }
+      ],
+      "rowLevelSecurity": {
+        "enabled": true,
+        "forced": true,
+        "policies": [
+          {
+            "name": "context_run_operator_read_ticket_context_run_reader_definer_insert",
+            "command": "INSERT",
+            "roles": ["context_engine_context_run_reader_definer"],
+            "withCheck": "current_setting('app.context_run_operator_ticket_mode', true) = 'issue' AND context_run_operator_read_ticket.organization_id = NULLIF(current_setting('app.context_run_operator_ticket_organization_id', true), '')::uuid AND context_run_operator_read_ticket.decision_ref = current_setting('app.context_run_operator_ticket_decision_ref', true) AND context_run_operator_read_ticket.ticket_digest = pg_catalog.decode(NULLIF(current_setting('app.context_run_operator_ticket_digest', true), ''), 'hex')"
+          },
+          {
+            "name": "context_run_operator_read_ticket_context_run_reader_definer_delete",
+            "command": "DELETE",
+            "roles": ["context_engine_context_run_reader_definer"],
+            "using": "(current_setting('app.context_run_operator_ticket_mode', true) = 'revoke' OR (current_setting('app.context_run_operator_ticket_mode', true) = 'read' AND context_run_operator_read_ticket.organization_id = NULLIF(current_setting('app.context_run_operator_ticket_organization_id', true), '')::uuid AND context_run_operator_read_ticket.decision_ref = current_setting('app.context_run_operator_ticket_decision_ref', true))) AND context_run_operator_read_ticket.ticket_digest = pg_catalog.decode(NULLIF(current_setting('app.context_run_operator_ticket_digest', true), ''), 'hex')"
+          },
+          {
+            "name": "context_run_operator_read_ticket_context_run_reader_definer_select",
+            "command": "SELECT",
+            "roles": ["context_engine_context_run_reader_definer"],
+            "using": "(current_setting('app.context_run_operator_ticket_mode', true) = 'revoke' OR (current_setting('app.context_run_operator_ticket_mode', true) = 'read' AND context_run_operator_read_ticket.organization_id = NULLIF(current_setting('app.context_run_operator_ticket_organization_id', true), '')::uuid AND context_run_operator_read_ticket.decision_ref = current_setting('app.context_run_operator_ticket_decision_ref', true))) AND context_run_operator_read_ticket.ticket_digest = pg_catalog.decode(NULLIF(current_setting('app.context_run_operator_ticket_digest', true), ''), 'hex')"
+          },
+          {
+            "name": "context_run_operator_read_ticket_migrator_administration",
+            "command": "ALL",
+            "roles": ["context_engine_migrator"],
+            "using": "true",
+            "withCheck": "true"
+          }
+        ]
+      },
+      "operatorReadBoundary": {
+        "ticketFormat": "64 lowercase hexadecimal characters",
+        "storedAs": "sha256_digest_only",
+        "databaseOwnedTtlSeconds": 60,
+        "issueFunction": "issue_context_run_operator_read_ticket",
+        "revokeFunction": "revoke_context_run_operator_read_ticket",
+        "readFunction": "read_context_run_by_operator_ticket",
+        "functionOwner": "context_engine_context_run_reader_definer",
+        "securityDefiner": true,
+        "searchPath": ["pg_catalog", "pg_temp"],
+        "rowSecurity": true,
+        "issueSessionUser": "context_engine_control",
+        "readSessionUser": "context_engine_security_operator",
+        "consumeMode": "atomic_delete_before_exact_projection"
+      },
+      "permittedOperations": {
+        "context_engine_runtime": [],
+        "context_engine_security_operator": ["EXECUTE read_context_run_by_operator_ticket"],
+        "context_engine_context_run_reader_definer": ["SELECT", "INSERT", "DELETE"],
+        "context_engine_worker": [],
+        "context_engine_control": ["EXECUTE issue_context_run_operator_read_ticket", "EXECUTE revoke_context_run_operator_read_ticket"]
+      },
+      "partitions": [],
+      "securityInvariantIds": [
+        "TENANT-OWNERSHIP-001",
+        "TENANT-FK-002",
+        "RLS-FAIL-CLOSED-003",
+        "TRACE-REDACTION-012"
+      ],
+      "negativeTestIds": [
+        "DB-001",
+        "DB-003",
+        "DB-004",
+        "DB-008",
+        "DB-009",
+        "DB-010",
+        "OBS-004",
+        "OBS-005",
+        "PG-TRACE-REDACTION-012"
+      ]
+    },
+    {
+      "name": "decision_audit",
+      "classification": "tenant_owned",
+      "purpose": "Restricted generic security lineage for a delivered-empty decision; never tenant-visible and structurally unable to retain denied detail",
+      "organizationColumn": "organization_id",
+      "organizationInclusiveKeys": [
+        {
+          "name": "pk_decision_audit",
+          "kind": "primary_key",
+          "columns": ["organization_id", "decision_ref"]
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_decision_audit_context_run_same_organization",
+          "columns": ["organization_id", "run_ref", "decision_ref"],
+          "references": {
+            "table": "context_run",
+            "columns": ["organization_id", "run_ref", "decision_ref"]
+          }
+        }
+      ],
+      "checkConstraints": [
+        {
+          "name": "ck_decision_audit_policy_snapshot_ref_nonblank",
+          "expression": "btrim(policy_snapshot_ref) <> ''"
+        },
+        {
+          "name": "ck_decision_audit_policy_epoch_positive",
+          "expression": "policy_epoch BETWEEN 1 AND 9223372036854775807"
+        },
+        {
+          "name": "ck_decision_audit_category_no_authorized_evidence",
+          "expression": "category = 'no_authorized_evidence'"
+        }
+      ],
+      "rowLevelSecurity": {
+        "enabled": true,
+        "forced": true,
+        "policies": [
+          {
+            "name": "decision_audit_current_user_actor_insert",
+            "command": "INSERT",
+            "roles": ["context_engine_runtime"],
+            "withCheck": "decision_audit.organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid AND current_setting('app.actor_kind', true) = 'user' AND EXISTS (SELECT 1 FROM public.membership AS actor_membership WHERE actor_membership.organization_id = decision_audit.organization_id AND actor_membership.user_id = NULLIF(current_setting('app.user_id', true), '')::uuid AND actor_membership.membership_id = NULLIF(current_setting('app.membership_id', true), '')::uuid AND actor_membership.membership_version = NULLIF(current_setting('app.membership_version', true), '')::bigint AND NULLIF(current_setting('app.principal_ref', true), '') IS NOT NULL AND NULLIF(current_setting('app.request_id', true), '') IS NOT NULL AND NULLIF(current_setting('app.authentication_binding_ref', true), '') IS NOT NULL AND NULLIF(current_setting('app.checked_at', true), '') IS NOT NULL AND actor_membership.status = 'active' AND actor_membership.valid_from <= NULLIF(current_setting('app.checked_at', true), '')::timestamptz AND (actor_membership.valid_until IS NULL OR actor_membership.valid_until > NULLIF(current_setting('app.checked_at', true), '')::timestamptz))"
+          },
+          {
+            "name": "decision_audit_context_run_reader_definer_read",
+            "command": "SELECT",
+            "roles": ["context_engine_context_run_reader_definer"],
+            "using": "decision_audit.organization_id = NULLIF(current_setting('app.context_run_operator_ticket_organization_id', true), '')::uuid AND decision_audit.decision_ref = current_setting('app.context_run_operator_ticket_decision_ref', true) AND current_setting('app.context_run_operator_ticket_mode', true) = 'read'"
+          },
+          {
+            "name": "decision_audit_migrator_administration",
+            "command": "ALL",
+            "roles": ["context_engine_migrator"],
+            "using": "true",
+            "withCheck": "true"
+          }
+        ]
+      },
+      "parentLineageGuard": {
+        "trigger": "decision_audit_exact_empty_parent_guard",
+        "function": "decision_audit_require_exact_empty_parent",
+        "timing": "BEFORE",
+        "orientation": "ROW",
+        "events": ["INSERT"],
+        "sqlstate": "42501",
+        "securityDefiner": true,
+        "searchPath": ["pg_catalog", "pg_temp"],
+        "requiredParentOutcome": "delivered_empty",
+        "bindsCurrentUserActor": true,
+        "bindsParentPolicy": true,
+        "bindsParentFinalizedAt": true
+      },
+      "permittedOperations": {
+        "context_engine_runtime": ["INSERT"],
+        "context_engine_security_operator": ["EXECUTE read_context_run_by_operator_ticket"],
+        "context_engine_context_run_reader_definer": ["SELECT"],
+        "context_engine_worker": [],
+        "context_engine_control": ["EXECUTE issue_context_run_operator_read_ticket", "EXECUTE revoke_context_run_operator_read_ticket"]
+      },
+      "partitions": [],
+      "securityInvariantIds": [
+        "TENANT-OWNERSHIP-001",
+        "TENANT-FK-002",
+        "RLS-FAIL-CLOSED-003",
+        "TRACE-REDACTION-012"
+      ],
+      "negativeTestIds": [
+        "DB-001",
+        "DB-002",
+        "DB-003",
+        "DB-004",
+        "DB-006",
+        "DB-008",
+        "DB-009",
+        "DB-010",
+        "OBS-004",
+        "OBS-005",
+        "PG-TRACE-REDACTION-012"
       ]
     },
     {

@@ -29,6 +29,10 @@ from engine.runtime.construction import (
     required_kernel_dependencies,
 )
 from engine.runtime.content_io import RuntimeContentIo
+from engine.runtime.context_run import (
+    ContextRunPersistenceSession,
+    ContextRunPersistenceUnavailable,
+)
 from engine.runtime.contracts import (
     Acquire,
     CitationNotAvailable,
@@ -62,6 +66,10 @@ from engine.runtime.scope_authority import (
     _close_scope_authority_scope,
     _construct_trusted_scope_snapshot,
     _open_scope_authority_scope,
+)
+from tests.support.context_run import (
+    TEST_QUERY_DIGEST_KEYRING,
+    recording_context_run_session,
 )
 
 AS_OF = datetime(2026, 7, 21, 10, 0, tzinfo=UTC)
@@ -100,6 +108,7 @@ class ContentIoTwin:
 def trusted_operands(
     *,
     purpose: str,
+    context_run_persistence_session: ContextRunPersistenceSession | None = None,
 ) -> Iterator[tuple[AuthenticatedInvocation, TrustedDeliveryContext]]:
     membership_scope = _open_membership_authority_scope()
     epoch_scope = _open_policy_epoch_authority_scope()
@@ -136,6 +145,7 @@ def trusted_operands(
             authentication_binding_ref="unavailable-binding",
             checked_at=AS_OF,
             policy_epoch_verification=epoch_verification,
+            context_run_persistence_session=context_run_persistence_session,
         )
         scope_identity = ScopeAuthorityIdentity(
             organization_id=ORGANIZATION_ID,
@@ -215,6 +225,7 @@ def runtime(
         candidate_index=twin,
         acquire_capability=acquire_capability,
         clock=lambda: AS_OF,
+        query_digest_keyring=TEST_QUERY_DIGEST_KEYRING,
     )
 
 
@@ -277,7 +288,13 @@ def test_server_owned_unavailable_acquire_plan_fails_before_any_content_io(
 ) -> None:
     twin = ContentIoTwin()
 
-    with trusted_operands(purpose="context.answer") as (invocation, delivery):
+    with (
+        recording_context_run_session() as (persistence_session, persistence_port),
+        trusted_operands(
+            purpose="context.answer",
+            context_run_persistence_session=persistence_session,
+        ) as (invocation, delivery),
+    ):
         selected_runtime = runtime(twin, acquire_capability=acquire_capability)
         outcome = selected_runtime.resolve(
             invocation,
@@ -295,6 +312,7 @@ def test_server_owned_unavailable_acquire_plan_fails_before_any_content_io(
         0,
     )
     assert twin.calls == (0, 0, 0)
+    assert persistence_port.calls == []
 
 
 def test_content_twins_are_observable_controls_for_every_prohibited_call() -> None:
@@ -326,7 +344,13 @@ def test_runtime_rejects_a_split_candidate_index_composition() -> None:
 def test_default_materialized_acquire_path_remains_resolved() -> None:
     twin = ContentIoTwin()
 
-    with trusted_operands(purpose="context.answer") as (invocation, delivery):
+    with (
+        recording_context_run_session() as (persistence_session, persistence_port),
+        trusted_operands(
+            purpose="context.answer",
+            context_run_persistence_session=persistence_session,
+        ) as (invocation, delivery),
+    ):
         outcome = runtime(twin).resolve(
             invocation,
             delivery,
@@ -335,6 +359,26 @@ def test_default_materialized_acquire_path_remains_resolved() -> None:
 
     assert type(outcome) is Resolved
     assert outcome.kind == "resolved"
+    assert len(persistence_port.calls) == 1
+    assert twin.calls == (0, 0, 0)
+
+
+def test_materialized_acquire_without_persistence_session_fails_closed() -> None:
+    twin = ContentIoTwin()
+
+    with (
+        trusted_operands(purpose="context.answer") as (invocation, delivery),
+        pytest.raises(
+            ContextRunPersistenceUnavailable,
+            match="requires durable ContextRun persistence",
+        ),
+    ):
+        runtime(twin).resolve(
+            invocation,
+            delivery,
+            Acquire(need=ContextNeed(query="missing persistence authority")),
+        )
+
     assert twin.calls == (0, 0, 0)
 
 

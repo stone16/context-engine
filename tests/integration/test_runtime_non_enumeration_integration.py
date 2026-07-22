@@ -21,8 +21,13 @@ from engine.persistence import (
 )
 from engine.runtime.construction import Runtime, required_kernel_dependencies
 from engine.runtime.content_io import CandidateIndex
+from engine.runtime.context_run import (
+    ContextRunOutcome,
+    DecisionAuditCategory,
+)
 from engine.runtime.contracts import Acquire, Resolved
 from engine.runtime.evidence import CandidateRef
+from engine.runtime.package_digest import QueryDigestKeyring
 from tests.integration.test_runtime_authorized_evidence_integration import (
     ExactScopeAuthority,
     OrganizationEvidenceFixture,
@@ -33,6 +38,7 @@ from tests.integration.test_runtime_authorized_evidence_integration import (
     _new_fixture,
     _seed_fixture,
 )
+from tests.support.context_run_operator import exact_test_context_run_operator_read
 
 pytestmark = pytest.mark.integration
 
@@ -47,6 +53,7 @@ NORMALIZATION_ALLOWLIST = (
     "body.package.decisionRef",
     "body.package.asOf",
     "body.package.expiresAt",
+    "body.package.packageDigest",
     "headers.X-Context-Request-Id",
 )
 BODY_PACKAGE_PATH_PREFIX = "body.package."
@@ -56,6 +63,52 @@ RELEVANT_HEADERS = (
     "Cache-Control",
     "X-Context-Request-Id",
 )
+CONTEXT_RUN_COLUMNS = {
+    "organization_id",
+    "run_ref",
+    "decision_ref",
+    "user_id",
+    "membership_id",
+    "membership_version",
+    "principal_ref",
+    "agent_version_ref",
+    "authenticated_application_ref",
+    "authentication_binding_ref",
+    "request_id",
+    "purpose",
+    "policy_snapshot_ref",
+    "policy_epoch",
+    "effective_scope_digest",
+    "query_digest_profile",
+    "query_digest_key_version",
+    "query_digest",
+    "outcome",
+    "package_digest_profile",
+    "package_digest",
+    "package_retention_mode",
+    "authorized_evidence_refs",
+    "effective_max_tokens",
+    "effective_max_provider_calls",
+    "effective_max_cost_microunits",
+    "effective_max_elapsed_ms",
+    "usage_tokens",
+    "usage_provider_calls",
+    "usage_cost_microunits",
+    "usage_elapsed_ms",
+    "accepted_at",
+    "finalized_at",
+    "package_as_of",
+    "package_expires_at",
+}
+DECISION_AUDIT_COLUMNS = {
+    "organization_id",
+    "run_ref",
+    "decision_ref",
+    "policy_snapshot_ref",
+    "policy_epoch",
+    "category",
+    "recorded_at",
+}
 
 
 class SequencedCandidateIndex:
@@ -97,10 +150,7 @@ def _external_response_document(response: Response) -> dict[str, object]:
     return {
         "status": response.status_code,
         "body": response.json(),
-        "headers": {
-            header: response.headers[header]
-            for header in RELEVANT_HEADERS
-        },
+        "headers": {header: response.headers[header] for header in RELEVANT_HEADERS},
     }
 
 
@@ -130,9 +180,7 @@ def _differing_paths(
         if len(left) != len(right):
             return {prefix}
         differences = set()
-        for index, (left_item, right_item) in enumerate(
-            zip(left, right, strict=True)
-        ):
+        for index, (left_item, right_item) in enumerate(zip(left, right, strict=True)):
             differences.update(
                 _differing_paths(
                     left_item,
@@ -231,6 +279,7 @@ def _assert_empty_non_enumerating_response(
         "asOf",
         "expiresAt",
         "decisionRef",
+        "packageDigest",
         "blocks",
         "evidence",
         "gaps",
@@ -291,6 +340,7 @@ def _normalized_domain_outcome(outcome: Resolved) -> bytes:
     package = cast(dict[str, object], document["package"])
     package["organization_ref"] = "<normalized-per-run-value>"
     package["decision_ref"] = "<normalized-per-run-value>"
+    package["package_digest"] = "<normalized-per-run-value>"
     package["as_of"] = "<normalized-per-run-value>"
     package["expires_at"] = "<normalized-per-run-value>"
     return dumps(
@@ -331,6 +381,9 @@ def _assert_non_owner_force_rls(engine: Engine) -> None:
 def test_real_postgres_http_denied_and_missing_are_externally_equivalent(
     migration_configuration: DatabaseConfiguration,
     guarded_runtime_engine: Engine,
+    guarded_control_engine: Engine,
+    guarded_operator_engine: Engine,
+    query_digest_keyring: QueryDigestKeyring,
 ) -> None:
     """NON-ENUMERATION-009 compares content semantics, not response timing."""
 
@@ -353,16 +406,13 @@ def test_real_postgres_http_denied_and_missing_are_externally_equivalent(
         package_ttl_seconds=30,
         candidate_index=cast(CandidateIndex, index),
         clock=lambda: RECEIVED_AT,
+        query_digest_keyring=query_digest_keyring,
     )
     client = TestClient(
         create_app(
             authenticator=SeededAuthenticator(active, token=TOKEN),
-            organization_authority=SeededOrganizationAuthority(
-                active.organization_id
-            ),
-            membership_authority=PostgreSQLMembershipAuthority(
-                guarded_runtime_engine
-            ),
+            organization_authority=SeededOrganizationAuthority(active.organization_id),
+            membership_authority=PostgreSQLMembershipAuthority(guarded_runtime_engine),
             scope_authority=scope_authority,
             runtime=runtime,
             resolution_observer=outcomes.append,
@@ -375,9 +425,7 @@ def test_real_postgres_http_denied_and_missing_are_externally_equivalent(
     operation = cast(dict[str, object], accept_011["operation"])
     expected = cast(dict[str, object], accept_011["expected"])
     external_response = cast(dict[str, object], expected["externalResponse"])
-    normalization_allowlist = cast(
-        list[str], operation["normalizationAllowlist"]
-    )
+    normalization_allowlist = cast(list[str], operation["normalizationAllowlist"])
     assert tuple(normalization_allowlist) == NORMALIZATION_ALLOWLIST
     assert external_response["timingEqualityClaimed"] is False
 
@@ -404,8 +452,7 @@ def test_real_postgres_http_denied_and_missing_are_externally_equivalent(
                 missing=missing,
             )
         normalized = tuple(
-            _normalize_external_response(response)
-            for response in probe_responses
+            _normalize_external_response(response) for response in probe_responses
         )
         assert normalized == (normalized[0],) * len(normalized)
         baseline_document = _external_response_document(probe_responses[0])
@@ -422,6 +469,7 @@ def test_real_postgres_http_denied_and_missing_are_externally_equivalent(
         assert raw_difference_paths == {
             "body.package.organizationRef",
             "body.package.decisionRef",
+            "body.package.packageDigest",
             "headers.X-Context-Request-Id",
         }
         content_lengths = {
@@ -429,15 +477,128 @@ def test_real_postgres_http_denied_and_missing_are_externally_equivalent(
         }
         assert len(content_lengths) == 1
 
+        denied_decision_refs = tuple(
+            response.json()["package"]["decisionRef"] for response in probe_responses
+        )
+        denied_runs = []
+        for decision_ref in denied_decision_refs:
+            with exact_test_context_run_operator_read(
+                control_engine=guarded_control_engine,
+                operator_engine=guarded_operator_engine,
+                organization_id=active.organization_id,
+                decision_ref=decision_ref,
+                request_id=f"test:issue-19:denied-probe:{decision_ref}",
+                opaque_credential="test:issue-19:denied-probes:credential",
+                authorized_at=RECEIVED_AT,
+            ) as (reader, operator_authorization):
+                denied_runs.append(
+                    reader.find_by_decision_ref(
+                        operator_authorization,
+                        decision_ref,
+                    )
+                )
+        assert all(run is not None for run in denied_runs)
+        for run in denied_runs:
+            assert run is not None
+            assert run.outcome is ContextRunOutcome.DELIVERED_EMPTY
+            assert run.decision_audit_category is (
+                DecisionAuditCategory.NO_AUTHORIZED_EVIDENCE
+            )
+            assert run.authorized_evidence_refs == ()
+            serialized = repr(run)
+            for forbidden in (
+                *_candidate_wire_values(active.denied, body=active.denied_body),
+                *_candidate_wire_values(other.authorized, body=other.authorized_body),
+                missing.source_ref,
+                missing.resource_ref,
+                missing.revision_ref,
+                missing.fragment_ref,
+            ):
+                assert forbidden not in serialized
+            assert "denied_count" not in serialized
+            assert "candidate_count" not in serialized
+
+        persisted_documents: list[str] = []
+        with migration_engine.connect() as connection:
+            persisted_columns = {
+                table_name: set(columns)
+                for table_name, columns in (
+                    (
+                        table_name,
+                        connection.execute(
+                            text(
+                                """
+                                SELECT column_name
+                                FROM information_schema.columns
+                                WHERE table_schema = 'public'
+                                  AND table_name = :table_name
+                                """
+                            ),
+                            {"table_name": table_name},
+                        ).scalars(),
+                    )
+                    for table_name in ("context_run", "decision_audit")
+                )
+            }
+            assert persisted_columns == {
+                "context_run": CONTEXT_RUN_COLUMNS,
+                "decision_audit": DECISION_AUDIT_COLUMNS,
+            }
+            for decision_ref in denied_decision_refs:
+                persisted_documents.extend(
+                    (
+                        connection.execute(
+                            text(
+                                """
+                                SELECT row_to_json(persisted_run)::text
+                                FROM context_run AS persisted_run
+                                WHERE organization_id = :organization_id
+                                  AND decision_ref = :decision_ref
+                                """
+                            ),
+                            {
+                                "organization_id": active.organization_id,
+                                "decision_ref": decision_ref,
+                            },
+                        ).scalar_one(),
+                        connection.execute(
+                            text(
+                                """
+                                SELECT row_to_json(persisted_audit)::text
+                                FROM decision_audit AS persisted_audit
+                                WHERE organization_id = :organization_id
+                                  AND decision_ref = :decision_ref
+                                """
+                            ),
+                            {
+                                "organization_id": active.organization_id,
+                                "decision_ref": decision_ref,
+                            },
+                        ).scalar_one(),
+                    )
+                )
+        serialized_persisted_rows = "\n".join(persisted_documents)
+        for forbidden in (
+            QUERY,
+            *_candidate_wire_values(active.denied, body=active.denied_body),
+            *_candidate_wire_values(other.authorized, body=other.authorized_body),
+            *_candidate_wire_values(missing, body="missing-body-must-not-exist"),
+            "denied_count",
+            "candidate_count",
+            "resource_name",
+            "fragment_name",
+        ):
+            assert forbidden not in serialized_persisted_rows
+
         assert len(outcomes) == len(rankings)
         for outcome in outcomes[:4]:
             _assert_empty_runtime_outcome(outcome)
         normalized_domain_outcomes = tuple(
             _normalized_domain_outcome(outcome) for outcome in outcomes[:4]
         )
-        assert normalized_domain_outcomes == (
-            normalized_domain_outcomes[0],
-        ) * len(normalized_domain_outcomes)
+        assert normalized_domain_outcomes == (normalized_domain_outcomes[0],) * len(
+            normalized_domain_outcomes
+        )
         assert len({outcome.scope_decision.digest for outcome in outcomes}) == 1
 
         authorized_response = responses[4]

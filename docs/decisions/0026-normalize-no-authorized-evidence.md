@@ -1,6 +1,6 @@
 ---
 name: adr-0026-normalize-no-authorized-evidence
-version: "1.0.0"
+version: "1.1.0"
 description: >
   Make denied, cross-Organization, and nonexistent Acquire candidates share one
   externally indistinguishable no-authorized-Evidence outcome.
@@ -54,20 +54,29 @@ values, in this order:
 2. `body.package.decisionRef`
 3. `body.package.asOf`
 4. `body.package.expiresAt`
-5. `headers.X-Context-Request-Id`
+5. `body.package.packageDigest`
+6. `headers.X-Context-Request-Id`
 
 The compared product headers are `Content-Type`, `Cache-Control`, and
 `X-Context-Request-Id`. Incidental framework or server headers are not part of
 the product contract. Fixed zero usage, including `elapsedMs`, is compared and
 cannot be normalized away.
 
-The sealed audit gate currently records only the generic
+The sealed in-memory audit gate records only the generic
 `no_authorized_evidence` category, authorized Evidence count zero, and denied
-detail count zero. It retains no existence-specific branch. A later restricted
-DecisionAudit may add redacted operator categories only when they are bound to
-the trusted invocation Organization, contain no Candidate/Resource content or
-counts, remain absent from `Resolved` and HTTP, and cannot treat hostile
-Candidate metadata as an observed fact.
+detail count zero. It retains no existence-specific branch. ADR-0031 now
+persists the same generic category for a delivered-empty run in a separately
+restricted DecisionAudit with exactly Organization/run/decision,
+PolicySnapshot/epoch, category, and timestamp. It contains no
+Candidate/Fragment/Resource content, identifier, name, score, reason, or count,
+remains absent from `Resolved` and HTTP, and cannot treat hostile Candidate
+metadata as an observed fact.
+
+`packageDigest` joins the normalization allowlist because every per-resolve
+Package contains fresh Organization and decision references, so the correct
+digest necessarily changes with them. The digest is still required and is
+verified against each exact unnormalized Package before comparison; adding it
+to this allowlist does not permit arbitrary body drift.
 
 ## Rationale
 
@@ -93,8 +102,9 @@ Resource lookup behavior.
 
 ## Revisit trigger
 
-Revisit when a new public read carrier, Provider outcome, citation-open path, or
-restricted durable DecisionAudit activates, or at the separately preregistered
-M5 timing gate. Every revision must preserve the generic empty outcome,
+Revisit when a new public read carrier, Provider outcome, citation-open path, a
+new restricted DecisionAudit category or carrier, or the separately
+preregistered M5 timing gate activates. The current delivered-empty audit is
+bounded by ADR-0031. Every revision must preserve the generic empty outcome,
 document an exact normalization allowlist, keep infrastructure failure distinct,
 and retain an authorized control.

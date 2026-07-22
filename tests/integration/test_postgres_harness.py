@@ -13,12 +13,15 @@ from sqlalchemy.exc import ProgrammingError
 from engine.persistence import (
     DatabaseConfiguration,
     assert_runtime_role,
+    assert_security_operator_role,
     create_database_engine,
 )
 from engine.persistence.configuration import (
     ACCESS_POLICY_DEFINER_ROLE,
+    CONTEXT_RUN_READER_DEFINER_ROLE,
     CONTROL_ROLE,
     MIGRATOR_ROLE,
+    OPERATOR_ROLE,
     RUNTIME_ROLE,
     WORKER_LEASE_DEFINER_ROLE,
     WORKER_ROLE,
@@ -79,17 +82,19 @@ def test_server_has_pinned_postgresql_pgvector_and_bootstrap_pgcrypto(
     assert extensions == {"pgcrypto": "1.3", "vector": "0.8.5"}
 
 
-def test_migration_control_runtime_and_worker_roles_have_reviewed_capabilities(
+def test_all_login_roles_have_reviewed_capabilities(
     migration_configuration: DatabaseConfiguration,
     control_configuration: DatabaseConfiguration,
     runtime_configuration: DatabaseConfiguration,
     worker_configuration: DatabaseConfiguration,
+    operator_configuration: DatabaseConfiguration,
 ) -> None:
     configurations = (
         migration_configuration,
         control_configuration,
         runtime_configuration,
         worker_configuration,
+        operator_configuration,
     )
     results: dict[str, tuple[object, ...]] = {}
     for configuration in configurations:
@@ -104,6 +109,7 @@ def test_migration_control_runtime_and_worker_roles_have_reviewed_capabilities(
         CONTROL_ROLE,
         RUNTIME_ROLE,
         WORKER_ROLE,
+        OPERATOR_ROLE,
     }
     for role_name, attributes in results.items():
         assert attributes == (
@@ -119,7 +125,8 @@ def test_migration_control_runtime_and_worker_roles_have_reviewed_capabilities(
 
 
 def test_post_init_role_provisioning_repairs_a_legacy_volume_idempotently(
-    control_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+    guarded_operator_engine: Engine,
 ) -> None:
     contract = RoleProvisioningContract(
         database_name=os.environ["POSTGRES_DB"],
@@ -129,11 +136,18 @@ def test_post_init_role_provisioning_repairs_a_legacy_volume_idempotently(
         migrator_role=MIGRATOR_ROLE,
         control_role=CONTROL_ROLE,
         control_password=os.environ["CONTEXT_ENGINE_CONTROL_PASSWORD"],
+        security_operator_role=OPERATOR_ROLE,
+        security_operator_password=os.environ[
+            "CONTEXT_ENGINE_SECURITY_OPERATOR_PASSWORD"
+        ],
         definer_role=ACCESS_POLICY_DEFINER_ROLE,
         worker_lease_definer_role=WORKER_LEASE_DEFINER_ROLE,
+        context_run_reader_definer_role=CONTEXT_RUN_READER_DEFINER_ROLE,
     )
     alembic_configuration = Config(ROOT / "alembic.ini")
     try:
+        guarded_control_engine.dispose()
+        guarded_operator_engine.dispose()
         command.downgrade(alembic_configuration, "20260721_0004")
         with psycopg.connect(
             host="127.0.0.1",
@@ -148,7 +162,9 @@ def test_post_init_role_provisioning_repairs_a_legacy_volume_idempotently(
             for role_name in (
                 ACCESS_POLICY_DEFINER_ROLE,
                 WORKER_LEASE_DEFINER_ROLE,
+                CONTEXT_RUN_READER_DEFINER_ROLE,
                 CONTROL_ROLE,
+                OPERATOR_ROLE,
             ):
                 bootstrap_connection.execute(f"DROP OWNED BY {role_name}")
                 bootstrap_connection.execute(f"DROP ROLE {role_name}")
@@ -157,12 +173,14 @@ def test_post_init_role_provisioning_repairs_a_legacy_volume_idempotently(
                 """
                 SELECT count(*)
                 FROM pg_roles
-                WHERE rolname IN (%s, %s, %s)
+                WHERE rolname IN (%s, %s, %s, %s, %s)
                 """,
                 (
                     CONTROL_ROLE,
                     ACCESS_POLICY_DEFINER_ROLE,
                     WORKER_LEASE_DEFINER_ROLE,
+                    CONTEXT_RUN_READER_DEFINER_ROLE,
+                    OPERATOR_ROLE,
                 ),
             ).fetchone()
             assert missing_roles == (0,)
@@ -177,6 +195,14 @@ def test_post_init_role_provisioning_repairs_a_legacy_volume_idempotently(
                     control.rolcanlogin,
                     control.rolsuper,
                     control.rolinherit,
+                    operator.rolcanlogin,
+                    operator.rolsuper,
+                    operator.rolinherit,
+                    NOT EXISTS (
+                        SELECT 1
+                        FROM pg_auth_members AS operator_membership
+                        WHERE operator_membership.member = operator.oid
+                    ),
                     definer.rolcanlogin,
                     definer.rolsuper,
                     definer.rolinherit,
@@ -188,10 +214,32 @@ def test_post_init_role_provisioning_repairs_a_legacy_volume_idempotently(
                     worker_definer.rolinherit,
                     worker_membership.admin_option,
                     worker_membership.inherit_option,
-                    worker_membership.set_option
+                    worker_membership.set_option,
+                    reader_definer.rolcanlogin,
+                    reader_definer.rolsuper,
+                    reader_definer.rolcreaterole,
+                    reader_definer.rolcreatedb,
+                    reader_definer.rolinherit,
+                    reader_definer.rolreplication,
+                    reader_definer.rolbypassrls,
+                    reader_membership.admin_option,
+                    reader_membership.inherit_option,
+                    reader_membership.set_option,
+                    NOT EXISTS (
+                        SELECT 1
+                        FROM pg_auth_members AS granted_to_reader
+                        WHERE granted_to_reader.member = reader_definer.oid
+                    ),
+                    (
+                        SELECT count(*)
+                        FROM pg_auth_members AS reader_members
+                        WHERE reader_members.roleid = reader_definer.oid
+                    )
                 FROM pg_roles AS control
+                CROSS JOIN pg_roles AS operator
                 CROSS JOIN pg_roles AS definer
                 CROSS JOIN pg_roles AS worker_definer
+                CROSS JOIN pg_roles AS reader_definer
                 JOIN pg_auth_members AS access_membership
                   ON access_membership.roleid = definer.oid
                 JOIN pg_roles AS migrator
@@ -199,15 +247,22 @@ def test_post_init_role_provisioning_repairs_a_legacy_volume_idempotently(
                 JOIN pg_auth_members AS worker_membership
                   ON worker_membership.roleid = worker_definer.oid
                  AND worker_membership.member = migrator.oid
+                JOIN pg_auth_members AS reader_membership
+                  ON reader_membership.roleid = reader_definer.oid
+                 AND reader_membership.member = migrator.oid
                 WHERE control.rolname = %s
+                  AND operator.rolname = %s
                   AND definer.rolname = %s
                   AND worker_definer.rolname = %s
+                  AND reader_definer.rolname = %s
                   AND migrator.rolname = %s
                 """,
                 (
                     CONTROL_ROLE,
+                    OPERATOR_ROLE,
                     ACCESS_POLICY_DEFINER_ROLE,
                     WORKER_LEASE_DEFINER_ROLE,
+                    CONTEXT_RUN_READER_DEFINER_ROLE,
                     MIGRATOR_ROLE,
                 ),
             ).fetchone()
@@ -215,6 +270,16 @@ def test_post_init_role_provisioning_repairs_a_legacy_volume_idempotently(
                 True,
                 False,
                 False,
+                True,
+                False,
+                False,
+                True,
+                False,
+                False,
+                False,
+                False,
+                False,
+                True,
                 False,
                 False,
                 False,
@@ -226,16 +291,22 @@ def test_post_init_role_provisioning_repairs_a_legacy_volume_idempotently(
                 False,
                 False,
                 False,
+                False,
+                False,
+                False,
+                False,
                 True,
+                True,
+                1,
             )
 
         command.upgrade(alembic_configuration, "head")
-        control_engine = create_database_engine(control_configuration)
-        try:
-            assert role_attributes(control_engine)[0] == CONTROL_ROLE
-        finally:
-            control_engine.dispose()
+        assert role_attributes(guarded_control_engine)[0] == CONTROL_ROLE
+        with guarded_operator_engine.connect() as connection:
+            assert_security_operator_role(connection)
     finally:
+        guarded_control_engine.dispose()
+        guarded_operator_engine.dispose()
         with psycopg.connect(
             host="127.0.0.1",
             port=contract.postgres_port,
@@ -245,6 +316,102 @@ def test_post_init_role_provisioning_repairs_a_legacy_volume_idempotently(
         ) as bootstrap_connection:
             provision_security_roles(bootstrap_connection, contract)
         command.upgrade(alembic_configuration, "head")
+
+
+def test_context_run_reader_definer_role_has_only_its_exact_set_membership(
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    engine = create_database_engine(migration_configuration)
+    try:
+        with engine.connect() as connection:
+            role_facts = tuple(
+                connection.execute(
+                    text(
+                        """
+                        SELECT
+                            reader.rolcanlogin,
+                            reader.rolsuper,
+                            reader.rolcreaterole,
+                            reader.rolcreatedb,
+                            reader.rolinherit,
+                            reader.rolreplication,
+                            reader.rolbypassrls,
+                            has_database_privilege(
+                                :reader, current_database(), 'CONNECT'
+                            ),
+                            has_database_privilege(
+                                :reader, current_database(), 'CREATE'
+                            ),
+                            has_database_privilege(
+                                :reader, current_database(), 'TEMPORARY'
+                            ),
+                            has_schema_privilege(:reader, 'public', 'USAGE'),
+                            has_schema_privilege(:reader, 'public', 'CREATE'),
+                            pg_has_role(:migrator, :reader, 'SET')
+                        FROM pg_roles AS reader
+                        WHERE reader.rolname = :reader
+                        """
+                    ),
+                    {
+                        "migrator": MIGRATOR_ROLE,
+                        "reader": CONTEXT_RUN_READER_DEFINER_ROLE,
+                    },
+                ).one()
+            )
+            granted_roles = connection.execute(
+                text(
+                    """
+                    SELECT granted_role.rolname
+                    FROM pg_auth_members AS membership
+                    JOIN pg_roles AS granted_role
+                      ON granted_role.oid = membership.roleid
+                    JOIN pg_roles AS member_role
+                      ON member_role.oid = membership.member
+                    WHERE member_role.rolname = :reader
+                    """
+                ),
+                {"reader": CONTEXT_RUN_READER_DEFINER_ROLE},
+            ).all()
+            members = connection.execute(
+                text(
+                    """
+                    SELECT
+                        member_role.rolname,
+                        membership.admin_option,
+                        membership.inherit_option,
+                        membership.set_option
+                    FROM pg_auth_members AS membership
+                    JOIN pg_roles AS granted_role
+                      ON granted_role.oid = membership.roleid
+                    JOIN pg_roles AS member_role
+                      ON member_role.oid = membership.member
+                    WHERE granted_role.rolname = :reader
+                    """
+                ),
+                {"reader": CONTEXT_RUN_READER_DEFINER_ROLE},
+            ).all()
+    finally:
+        engine.dispose()
+
+    assert role_facts == (
+        False,
+        False,
+        False,
+        False,
+        False,
+        False,
+        False,
+        False,
+        False,
+        False,
+        True,
+        False,
+        True,
+    )
+    assert granted_roles == []
+    assert [tuple(member) for member in members] == [
+        (MIGRATOR_ROLE, False, False, True)
+    ]
 
 
 def test_worker_lease_definer_and_functions_are_narrow_and_non_public(
@@ -423,23 +590,27 @@ def test_worker_and_control_cannot_cross_worker_lease_function_authority(
             worker_engine.connect() as connection,
             pytest.raises(ProgrammingError, match="permission denied for table"),
         ):
-            connection.execute(
-                text("UPDATE public.worker_noop_job SET state = state")
-            )
+            connection.execute(text("UPDATE public.worker_noop_job SET state = state"))
     finally:
         control_engine.dispose()
         worker_engine.dispose()
 
 
-def test_control_runtime_and_worker_are_not_owners_or_migrator_members(
+def test_application_roles_are_not_owners_or_migrator_members(
     guarded_runtime_engine: Engine,
     control_configuration: DatabaseConfiguration,
     worker_configuration: DatabaseConfiguration,
+    guarded_operator_engine: Engine,
 ) -> None:
     worker_engine = create_database_engine(worker_configuration)
     control_engine = create_database_engine(control_configuration)
     try:
-        engines = (control_engine, guarded_runtime_engine, worker_engine)
+        engines = (
+            control_engine,
+            guarded_runtime_engine,
+            worker_engine,
+            guarded_operator_engine,
+        )
         for engine in engines:
             with engine.connect() as connection:
                 facts = tuple(
@@ -472,15 +643,21 @@ def test_control_runtime_and_worker_are_not_owners_or_migrator_members(
         worker_engine.dispose()
 
 
-def test_control_runtime_and_worker_have_no_create_or_temporary_table_privilege(
+def test_application_roles_have_no_create_or_temporary_table_privilege(
     guarded_runtime_engine: Engine,
     control_configuration: DatabaseConfiguration,
     worker_configuration: DatabaseConfiguration,
+    guarded_operator_engine: Engine,
 ) -> None:
     worker_engine = create_database_engine(worker_configuration)
     control_engine = create_database_engine(control_configuration)
     try:
-        for engine in (control_engine, guarded_runtime_engine, worker_engine):
+        for engine in (
+            control_engine,
+            guarded_runtime_engine,
+            worker_engine,
+            guarded_operator_engine,
+        ):
             with engine.connect() as connection:
                 privileges = tuple(
                     connection.execute(
@@ -554,6 +731,69 @@ def test_role_guard_passes_runtime_and_rejects_owner_credentials(
         migration_engine.dispose()
 
 
+def test_security_operator_role_guard_passes_operator_and_rejects_runtime(
+    guarded_operator_engine: Engine,
+    guarded_runtime_engine: Engine,
+) -> None:
+    with guarded_operator_engine.connect() as connection:
+        assert_security_operator_role(connection)
+
+    with (
+        guarded_runtime_engine.connect() as connection,
+        pytest.raises(AssertionError, match="exact non-owner login"),
+    ):
+        assert_security_operator_role(connection)
+
+
+@pytest.mark.parametrize(
+    ("grant_sql", "revoke_sql"),
+    [
+        (
+            f"GRANT context_engine_operator_guard_probe TO {OPERATOR_ROLE} "
+            "WITH SET FALSE, INHERIT FALSE, ADMIN FALSE",
+            f"REVOKE context_engine_operator_guard_probe FROM {OPERATOR_ROLE}",
+        ),
+        (
+            f"GRANT {OPERATOR_ROLE} TO context_engine_operator_guard_probe "
+            "WITH SET FALSE, INHERIT FALSE, ADMIN FALSE",
+            f"REVOKE {OPERATOR_ROLE} FROM context_engine_operator_guard_probe",
+        ),
+    ],
+)
+def test_security_operator_role_guard_rejects_membership_in_either_direction(
+    guarded_operator_engine: Engine,
+    grant_sql: str,
+    revoke_sql: str,
+) -> None:
+    with psycopg.connect(
+        host="127.0.0.1",
+        port=int(os.environ["CONTEXT_ENGINE_POSTGRES_PORT"]),
+        dbname=os.environ["POSTGRES_DB"],
+        user=os.environ["POSTGRES_USER"],
+        password=os.environ["POSTGRES_PASSWORD"],
+    ) as bootstrap_connection:
+        bootstrap_connection.execute(
+            "DROP ROLE IF EXISTS context_engine_operator_guard_probe"
+        )
+        bootstrap_connection.execute(
+            "CREATE ROLE context_engine_operator_guard_probe NOLOGIN NOSUPERUSER"
+        )
+        bootstrap_connection.execute(grant_sql)
+        bootstrap_connection.commit()
+        try:
+            with (
+                guarded_operator_engine.connect() as connection,
+                pytest.raises(AssertionError, match="role memberships"),
+            ):
+                assert_security_operator_role(connection)
+        finally:
+            bootstrap_connection.execute(revoke_sql)
+            bootstrap_connection.execute(
+                "DROP ROLE context_engine_operator_guard_probe"
+            )
+            bootstrap_connection.commit()
+
+
 @pytest.mark.parametrize(
     ("membership_options", "inherits_probe_privilege"),
     [
@@ -582,18 +822,20 @@ def test_role_guard_rejects_every_unrelated_role_membership(
             "GRANT SELECT ON public.alembic_version TO context_engine_guard_probe"
         )
         bootstrap_connection.execute(
-            f"GRANT context_engine_guard_probe TO {RUNTIME_ROLE} "
-            f"{membership_options}"
+            f"GRANT context_engine_guard_probe TO {RUNTIME_ROLE} {membership_options}"
         )
         bootstrap_connection.commit()
         try:
             with guarded_runtime_engine.connect() as connection:
-                assert connection.execute(
-                    text(
-                        "SELECT has_table_privilege("
-                        "current_user, 'public.alembic_version', 'SELECT')"
-                    )
-                ).scalar_one() is inherits_probe_privilege
+                assert (
+                    connection.execute(
+                        text(
+                            "SELECT has_table_privilege("
+                            "current_user, 'public.alembic_version', 'SELECT')"
+                        )
+                    ).scalar_one()
+                    is inherits_probe_privilege
+                )
             with (
                 guarded_runtime_engine.connect() as connection,
                 pytest.raises(AssertionError, match="role_memberships"),

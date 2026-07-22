@@ -12,6 +12,7 @@ from engine.runtime.contracts import (
     MAX_OPAQUE_CAPABILITY_LENGTH,
     ORGANIZATION_PACKAGE_REF_PATTERN,
 )
+from engine.runtime.package_digest import verify_context_package_digest
 
 PositiveExactInteger = Annotated[int, Field(strict=True, gt=0)]
 NonnegativeExactInteger = Annotated[int, Field(strict=True, ge=0)]
@@ -47,6 +48,10 @@ OpaqueOutputRef = Annotated[
 EvidenceOutputRef = Annotated[
     str,
     Field(strict=True, pattern=r"^ev_[0-9a-f]{64}$"),
+]
+PackageDigestOutput = Annotated[
+    str,
+    Field(strict=True, pattern=r"^[0-9a-f]{64}$"),
 ]
 BlockOutputRef = Annotated[
     str,
@@ -226,6 +231,7 @@ class ContextPackageWire(ClosedWireModel):
     asOf: datetime
     expiresAt: datetime
     decisionRef: DecisionOutputRef
+    packageDigest: PackageDigestOutput
     blocks: tuple[BlockWire, ...]
     evidence: tuple[EvidenceWire, ...]
     gaps: tuple[()]
@@ -264,6 +270,19 @@ class ContextPackageWire(ClosedWireModel):
                 raise ValueError(
                     "Evidence lineage must match its enclosing package decision"
                 )
+        digest_document = self.model_dump(
+            mode="json",
+            by_alias=True,
+            exclude={"packageDigest"},
+            exclude_none=True,
+        )
+        if not verify_context_package_digest(
+            digest_document,
+            self.packageDigest,
+        ):
+            raise ValueError(
+                "packageDigest must match the exact public Package document"
+            )
         return self
 
 

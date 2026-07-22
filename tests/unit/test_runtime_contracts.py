@@ -16,6 +16,8 @@ from engine.runtime.contracts import (
     RequestNarrowing,
     Resolved,
     ScopeDecisionReceipt,
+    context_package_digest_document,
+    context_package_public_document,
 )
 from engine.runtime.delivery import (
     DirectDeliveryConstructionProvenance,
@@ -23,6 +25,7 @@ from engine.runtime.delivery import (
     _construct_direct_delivery_context,
 )
 from engine.runtime.evidence import Evidence, EvidenceLineage, PackageBlock
+from engine.runtime.package_digest import context_package_digest
 
 AS_OF = datetime(2026, 7, 21, 5, 0, tzinfo=UTC)
 EXPIRES_AT = AS_OF + timedelta(seconds=300)
@@ -295,6 +298,9 @@ def test_context_package_is_the_tenant_safe_evidence_free_deliverable() -> None:
     assert package.coverage == EMPTY_COVERAGE
     assert package.ttl_seconds == 300
     assert package.expires_at > package.as_of
+    assert package.package_digest == (
+        "3e454e57a97eb4bb47bde1af0d6c7817b080630ecbc88275837329cbd2c4a4a5"
+    )
     assert not hasattr(package, "denied_count")
     assert not hasattr(package.coverage, "details")
     assert {field.name for field in fields(package)} == {
@@ -304,6 +310,7 @@ def test_context_package_is_the_tenant_safe_evidence_free_deliverable() -> None:
         "as_of",
         "expires_at",
         "decision_ref",
+        "package_digest",
         "blocks",
         "evidence",
         "gaps",
@@ -330,6 +337,24 @@ def test_context_package_accepts_only_closed_exact_authorized_content() -> None:
 
     assert package.blocks == (AUTHORIZED_BLOCK,)
     assert package.evidence == (AUTHORIZED_EVIDENCE,)
+
+
+def test_package_digest_detects_any_alteration_to_the_public_package() -> None:
+    package = make_package()
+    document = context_package_digest_document(package)
+    document["ttlSeconds"] = 301
+
+    assert context_package_digest(document) != package.package_digest
+    assert "packageDigest" not in document
+
+
+def test_public_package_projection_is_digest_document_plus_digest() -> None:
+    package = make_package()
+    public_document = context_package_public_document(package)
+    package_digest = public_document.pop("packageDigest")
+
+    assert public_document == context_package_digest_document(package)
+    assert package_digest == package.package_digest
 
 
 @pytest.mark.parametrize(

@@ -1,6 +1,6 @@
 ---
 name: adr-0022-stage-tenant-safe-empty-context-package
-version: "1.0.0"
+version: "1.1.0"
 description: >
   Activate the first evidence-free Runtime outcome without manufacturing later
   Membership, policy-epoch, release, audit, or egress authority.
@@ -65,8 +65,12 @@ instrumented conformance composition can prove that the actual call graph used
 none of them. It still crosses the non-pluggable AuthorizationKernel. With zero
 CandidateRefs the Kernel has no content to project, but its fixed policy,
 finite-budget, provenance, and safe in-memory audit gates each produce a
-receipt consumed by package construction. Durable DecisionAudit persistence
-and broader policy lineage remain owned by their later issues.
+receipt consumed by package construction. Durable decision lineage remained
+owned by its later issue at this decision's original activation.
+[ADR-0031](0031-persist-authorized-context-run-lineage.md) now refines the
+successful current Acquire path: its final ContextRun and the generic
+delivered-empty DecisionAudit commit in the retained UserActor transaction
+before the response.
 
 Before nominal `AuthenticatedInvocation` construction, a trusted
 Organization-authority sub-boundary must attest that the Organization exists.
@@ -85,10 +89,14 @@ PostgreSQL positive conformance seeds an Organization using the migration role,
 then verifies the HTTP empty-package behavior; the inherited missing-GUC and
 pool-reset tests independently preserve #8's fail-closed database evidence.
 
-This staged outcome deliberately does not emit a placeholder EgressGrant,
-Policy Epoch, audience digest, release/retention/tokenizer reference, package
-digest, or persistent run/audit reference. Their owning issues must add real
-values and update the public contract and canonical catalog carrier together.
+This staged outcome deliberately did not emit a placeholder EgressGrant,
+Policy Epoch, audience digest, release/tokenizer reference, Package digest, or
+persistent run/audit reference. ADR-0027 subsequently activated the real
+Organization V0 Policy Epoch, while ADR-0031 adds the real Package digest and
+digest-only persistent run/audit lineage. EgressGrant, audience digest,
+release, tokenizer, and any full-Package retention remain unavailable until
+their owning issues add real values and update the public contract and
+canonical catalog carrier together.
 The outbound references use closed prefix plus independent server entropy,
 reject embedded trusted Organization identifiers, and reject reuse within a
 Runtime instance. The opaque decision reference here identifies only the
@@ -123,9 +131,11 @@ not populate `gaps` with denied counts, names, identifiers, or hints.
 
 ## Revisit trigger
 
-Revisit when Issue #11 activates Membership/UserActor database binding, when a
-real delivery caller requires a signed EgressGrant, or when the owning Policy
-Epoch, release, PackageRecord, and audit issues activate their fields. Preserve
+Revisit when a real delivery caller requires a signed EgressGrant, or when the
+owning release, PackageRecord body-retention, or later audit carriers activate
+their fields. Membership/UserActor binding, Organization Policy Epoch, Package
+digest, and current Acquire run lineage are now active only within their
+bounded ADR-0023, ADR-0027, and ADR-0031 scopes. Preserve
 the closed body, server-authored purpose and Organization reference, finite
 budget intersection, zero-content-I/O empty path, and no-enumeration coverage
 semantics.
