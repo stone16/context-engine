@@ -446,6 +446,7 @@ def test_runtime_can_only_append_exact_current_user_actor_lineage(
         migration_engine.dispose()
 
 
+@pytest.mark.security_evidence(id="PG-TRACE-REDACTION-012", layer="postgres")
 def test_runtime_cross_organization_insert_attempts_are_bidirectionally_zero_effect(
     guarded_runtime_engine: Engine,
     migration_configuration: DatabaseConfiguration,

@@ -87,12 +87,14 @@
     {
       "name": "alembic_version",
       "classification": "global",
+      "classificationRationale": "Migration metadata has no tenant-owned domain state.",
       "purpose": "Alembic migration metadata",
       "partitions": []
     },
     {
       "name": "organization",
       "classification": "global",
+      "classificationRationale": "Organization is the global tenant security root and is not owned by another Organization.",
       "purpose": "Organization security root",
       "primaryKey": {
         "name": "pk_organization",
@@ -107,6 +109,7 @@
     {
       "name": "user_account",
       "classification": "global",
+      "classificationRationale": "User is a global identity root; tenant rights exist only through tenant-owned Membership rows.",
       "purpose": "Global user identity root without tenant rights",
       "primaryKey": {
         "name": "pk_user_account",
@@ -121,6 +124,10 @@
     {
       "name": "membership",
       "classification": "tenant_owned",
+      "nonOwnerEvidence": {
+        "evidenceId": "PG-SCOPE-INTERSECTION-004",
+        "selector": {"table": "membership"}
+      },
       "purpose": "Organization-scoped current UserActor membership authority",
       "organizationColumn": "organization_id",
       "organizationInclusiveKeys": [
@@ -211,6 +218,10 @@
     {
       "name": "organization_record",
       "classification": "tenant_owned",
+      "nonOwnerEvidence": {
+        "evidenceId": "PG-TENANT-FK-002",
+        "selector": {"table": "organization_record"}
+      },
       "purpose": "Representative tenant-owned record protected by current UserActor Membership",
       "organizationColumn": "organization_id",
       "organizationInclusiveKeys": [
@@ -295,6 +306,10 @@
     {
       "name": "context_resource",
       "classification": "tenant_owned",
+      "nonOwnerEvidence": {
+        "evidenceId": "PG-INDEX-NOT-AUTHORITY-005",
+        "selector": {"table": "context_resource"}
+      },
       "purpose": "Stable Organization-owned source object and active immutable Revision pointer",
       "organizationColumn": "organization_id",
       "organizationInclusiveKeys": [
@@ -358,6 +373,10 @@
     {
       "name": "context_revision",
       "classification": "tenant_owned",
+      "nonOwnerEvidence": {
+        "evidenceId": "PG-INDEX-NOT-AUTHORITY-005",
+        "selector": {"table": "context_revision"}
+      },
       "purpose": "Immutable canonical Revision lineage selected only by its Resource active pointer",
       "organizationColumn": "organization_id",
       "organizationInclusiveKeys": [
@@ -425,6 +444,10 @@
     {
       "name": "organization_policy_epoch",
       "classification": "tenant_owned",
+      "nonOwnerEvidence": {
+        "evidenceId": "PG-REVOCATION-006",
+        "selector": {"table": "organization_policy_epoch"}
+      },
       "purpose": "Organization-owned monotonic freshness authority for Acquire decisions",
       "organizationColumn": "organization_id",
       "organizationInclusiveKeys": [
@@ -507,6 +530,10 @@
     {
       "name": "resource_access_policy",
       "classification": "tenant_owned",
+      "nonOwnerEvidence": {
+        "evidenceId": "PG-REVOCATION-006",
+        "selector": {"table": "resource_access_policy"}
+      },
       "purpose": "Exact Principal-to-Resource access state changed only with its Organization epoch",
       "organizationColumn": "organization_id",
       "organizationInclusiveKeys": [
@@ -615,6 +642,10 @@
     {
       "name": "context_run",
       "classification": "tenant_owned",
+      "nonOwnerEvidence": {
+        "evidenceId": "PG-TRACE-REDACTION-012",
+        "selector": {"table": "context_run"}
+      },
       "purpose": "Authorized-only durable lineage for one finalized ContextPackage delivery; package and query bodies are never retained",
       "organizationColumn": "organization_id",
       "organizationInclusiveKeys": [
@@ -778,6 +809,10 @@
     {
       "name": "context_run_operator_read_ticket",
       "classification": "tenant_owned",
+      "nonOwnerEvidence": {
+        "evidenceId": "PG-TRACE-REDACTION-012",
+        "selector": {"table": "context_run_operator_read_ticket"}
+      },
       "purpose": "Digest-only 60-second exact-read capability for one Organization and ContextRun decision; plaintext ticket material is never retained",
       "organizationColumn": "organization_id",
       "organizationInclusiveKeys": [
@@ -825,19 +860,19 @@
         "forced": true,
         "policies": [
           {
-            "name": "context_run_operator_read_ticket_context_run_reader_definer_insert",
+            "name": "context_run_operator_read_ticket_context_run_reader_definer_ins",
             "command": "INSERT",
             "roles": ["context_engine_context_run_reader_definer"],
             "withCheck": "current_setting('app.context_run_operator_ticket_mode', true) = 'issue' AND context_run_operator_read_ticket.organization_id = NULLIF(current_setting('app.context_run_operator_ticket_organization_id', true), '')::uuid AND context_run_operator_read_ticket.decision_ref = current_setting('app.context_run_operator_ticket_decision_ref', true) AND context_run_operator_read_ticket.ticket_digest = pg_catalog.decode(NULLIF(current_setting('app.context_run_operator_ticket_digest', true), ''), 'hex')"
           },
           {
-            "name": "context_run_operator_read_ticket_context_run_reader_definer_delete",
+            "name": "context_run_operator_read_ticket_context_run_reader_definer_del",
             "command": "DELETE",
             "roles": ["context_engine_context_run_reader_definer"],
             "using": "(current_setting('app.context_run_operator_ticket_mode', true) = 'revoke' OR (current_setting('app.context_run_operator_ticket_mode', true) = 'read' AND context_run_operator_read_ticket.organization_id = NULLIF(current_setting('app.context_run_operator_ticket_organization_id', true), '')::uuid AND context_run_operator_read_ticket.decision_ref = current_setting('app.context_run_operator_ticket_decision_ref', true))) AND context_run_operator_read_ticket.ticket_digest = pg_catalog.decode(NULLIF(current_setting('app.context_run_operator_ticket_digest', true), ''), 'hex')"
           },
           {
-            "name": "context_run_operator_read_ticket_context_run_reader_definer_select",
+            "name": "context_run_operator_read_ticket_context_run_reader_definer_sel",
             "command": "SELECT",
             "roles": ["context_engine_context_run_reader_definer"],
             "using": "(current_setting('app.context_run_operator_ticket_mode', true) = 'revoke' OR (current_setting('app.context_run_operator_ticket_mode', true) = 'read' AND context_run_operator_read_ticket.organization_id = NULLIF(current_setting('app.context_run_operator_ticket_organization_id', true), '')::uuid AND context_run_operator_read_ticket.decision_ref = current_setting('app.context_run_operator_ticket_decision_ref', true))) AND context_run_operator_read_ticket.ticket_digest = pg_catalog.decode(NULLIF(current_setting('app.context_run_operator_ticket_digest', true), ''), 'hex')"
@@ -895,6 +930,10 @@
     {
       "name": "decision_audit",
       "classification": "tenant_owned",
+      "nonOwnerEvidence": {
+        "evidenceId": "PG-TRACE-REDACTION-012",
+        "selector": {"table": "decision_audit"}
+      },
       "purpose": "Restricted generic security lineage for a delivered-empty decision; never tenant-visible and structurally unable to retain denied detail",
       "organizationColumn": "organization_id",
       "organizationInclusiveKeys": [
@@ -998,6 +1037,10 @@
     {
       "name": "service_principal",
       "classification": "tenant_owned",
+      "nonOwnerEvidence": {
+        "evidenceId": "PG-WORKER-LEASE-007",
+        "selector": {"table": "service_principal"}
+      },
       "purpose": "Bounded registered receiver principal for the Issue #17 no-op carrier; not the full canonical ServiceActor",
       "organizationColumn": "organization_id",
       "organizationInclusiveKeys": [
@@ -1091,6 +1134,10 @@
     {
       "name": "worker_noop_job",
       "classification": "tenant_owned",
+      "nonOwnerEvidence": {
+        "evidenceId": "PG-WORKER-LEASE-007",
+        "selector": {"table": "worker_noop_job"}
+      },
       "purpose": "Exact-job durable state and one-shot receipt for the bounded no-op WorkerLease",
       "organizationColumn": "organization_id",
       "organizationInclusiveKeys": [
@@ -1216,6 +1263,10 @@
     {
       "name": "context_fragment",
       "classification": "tenant_owned",
+      "nonOwnerEvidence": {
+        "evidenceId": "PG-INDEX-NOT-AUTHORITY-005",
+        "selector": {"table": "context_fragment"}
+      },
       "purpose": "Immutable active-Revision Fragment content; persistent rows are never Evidence",
       "organizationColumn": "organization_id",
       "organizationInclusiveKeys": [
@@ -1312,6 +1363,10 @@
     {
       "name": "context_fragment_field",
       "classification": "tenant_owned",
+      "nonOwnerEvidence": {
+        "evidenceId": "PG-FIELD-PROJECTION-RLS-048",
+        "selector": {"table": "context_fragment_field"}
+      },
       "purpose": "Immutable structured Fragment fields filtered by exact current Membership Resource rights before Runtime can read values",
       "organizationColumn": "organization_id",
       "organizationInclusiveKeys": [
@@ -1392,6 +1447,10 @@
     {
       "name": "membership_resource_field_right",
       "classification": "tenant_owned",
+      "nonOwnerEvidence": {
+        "evidenceId": "PG-FIELD-PROJECTION-RLS-048",
+        "selector": {"table": "membership_resource_field_right"}
+      },
       "purpose": "Closed allowlist binding one exact Membership version to readable fields of one same-Organization Resource; absence denies",
       "organizationColumn": "organization_id",
       "organizationInclusiveKeys": [
@@ -1466,6 +1525,10 @@
     {
       "name": "release_manifest",
       "classification": "tenant_owned",
+      "nonOwnerEvidence": {
+        "evidenceId": "PG-RELEASE-OWNER-019",
+        "selector": {"table": "release_manifest"}
+      },
       "purpose": "Immutable Organization-owned release profile composition and curation compatibility lineage",
       "organizationColumn": "organization_id",
       "organizationInclusiveKeys": [
@@ -1566,6 +1629,10 @@
     {
       "name": "release_candidate",
       "classification": "tenant_owned",
+      "nonOwnerEvidence": {
+        "evidenceId": "PG-RELEASE-OWNER-019",
+        "selector": {"table": "release_candidate"}
+      },
       "purpose": "Immutable Organization-owned candidate binding an exact manifest and generation-bound expected active state",
       "organizationColumn": "organization_id",
       "organizationInclusiveKeys": [
@@ -1669,6 +1736,10 @@
     {
       "name": "release_evaluation",
       "classification": "tenant_owned",
+      "nonOwnerEvidence": {
+        "evidenceId": "PG-RELEASE-OWNER-019",
+        "selector": {"table": "release_evaluation"}
+      },
       "purpose": "Immutable signed evaluation evidence binding one exact candidate, manifest, veto gates and compatibility result",
       "organizationColumn": "organization_id",
       "organizationInclusiveKeys": [
@@ -1784,6 +1855,10 @@
     {
       "name": "release_operator_grant",
       "classification": "tenant_owned",
+      "nonOwnerEvidence": {
+        "evidenceId": "PG-RELEASE-OWNER-019",
+        "selector": {"table": "release_operator_grant"}
+      },
       "purpose": "Current Organization-scoped release-operator authority revalidated only by the promotion definer",
       "organizationColumn": "organization_id",
       "organizationInclusiveKeys": [
@@ -1858,6 +1933,10 @@
     {
       "name": "active_release_manifest",
       "classification": "tenant_owned",
+      "nonOwnerEvidence": {
+        "evidenceId": "PG-RELEASE-OWNER-019",
+        "selector": {"table": "active_release_manifest"}
+      },
       "purpose": "Generation-bound Organization active release pointer changed only by the sole promotion function",
       "organizationColumn": "organization_id",
       "organizationInclusiveKeys": [
@@ -1933,6 +2012,10 @@
     {
       "name": "release_promotion_audit",
       "classification": "tenant_owned",
+      "nonOwnerEvidence": {
+        "evidenceId": "PG-RELEASE-OWNER-019",
+        "selector": {"table": "release_promotion_audit"}
+      },
       "purpose": "Immutable append-only success audit paired atomically with each active release generation",
       "organizationColumn": "organization_id",
       "organizationInclusiveKeys": [

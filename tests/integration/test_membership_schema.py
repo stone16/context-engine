@@ -190,6 +190,7 @@ def membership_rows(connection: Connection) -> list[tuple[UUID, UUID, UUID]]:
     ]
 
 
+@pytest.mark.security_evidence(id="PG-SCOPE-INTERSECTION-004", layer="postgres")
 def test_runtime_membership_rls_is_bidirectional_and_exact(
     guarded_runtime_engine: Engine,
     identities: IdentityFixture,
@@ -295,6 +296,7 @@ def test_status_version_and_validity_fail_closed_at_the_database_seam(
         migration_engine.dispose()
 
 
+@pytest.mark.security_evidence(id="PG-TRANSPORT-UNTRUSTED-008", layer="postgres")
 def test_organization_only_and_user_only_context_have_no_tenant_rights(
     guarded_runtime_engine: Engine,
     identities: IdentityFixture,

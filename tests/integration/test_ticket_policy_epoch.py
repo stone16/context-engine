@@ -70,6 +70,7 @@ class _ActionEffectCounter:
         self.effects += 1
 
 
+@pytest.mark.security_evidence(id="PG-ACTION-SEPARATION-014", layer="postgres")
 def test_committed_epoch_bump_rejects_both_previously_valid_ticket_types(
     control_configuration: DatabaseConfiguration,
     migration_configuration: DatabaseConfiguration,

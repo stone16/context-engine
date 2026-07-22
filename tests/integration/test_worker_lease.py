@@ -44,6 +44,7 @@ from engine.supply import (
     WorkNotAvailable,
     worker_lease_digest,
 )
+from tests.support.security_gate import record_security_oracles
 
 pytestmark = pytest.mark.integration
 
@@ -447,8 +448,11 @@ def test_control_issuer_uses_db_time_and_signs_every_required_exact_job_claim(
     assert state["effect_count"] == 0
 
 
+@pytest.mark.security_evidence(id="RUNTIME-WORKER-LEASE-007", layer="runtime")
+@pytest.mark.security_evidence(id="FIXTURE-ACCEPT-008", layer="runtime")
 def test_valid_lease_completes_once_through_worker_application_and_replay_is_zero(
     worker_jobs: WorkerJobFixture,
+    record_property: Callable[[str, object], None],
 ) -> None:
     request = worker_jobs.seed_job()
     token = worker_jobs.issue(request)
@@ -470,6 +474,25 @@ def test_valid_lease_completes_once_through_worker_application_and_replay_is_zer
     replayed_state = worker_jobs.job_state(request)
     assert replayed_state["state"] == "completed"
     assert replayed_state["effect_count"] == 1
+    serialized_token = token.serialize()
+    unauthorized_evidence_count = int(
+        serialized_token in str(error.value) or serialized_token in repr(error.value)
+    )
+    wrong_organization_effect_count = replayed_state["effect_count"] - 1
+    missing_context_fallback_count = int(
+        str(error.value) != "work not available"
+        or replayed_state["state"] != "completed"
+    )
+    assert unauthorized_evidence_count == 0
+    assert wrong_organization_effect_count == 0
+    assert missing_context_fallback_count == 0
+    record_security_oracles(
+        record_property,
+        fixture_ref="ACCEPT-008",
+        unauthorized_evidence_count=unauthorized_evidence_count,
+        wrong_organization_effect_count=wrong_organization_effect_count,
+        missing_context_fallback_count=missing_context_fallback_count,
+    )
 
 
 def test_two_concurrent_redemptions_commit_exactly_one_effect(
@@ -537,6 +560,7 @@ def test_wrong_signed_lease_binding_has_zero_effect(
     assert worker_jobs.job_state(request)["effect_count"] == 0
 
 
+@pytest.mark.security_evidence(id="PG-WORKER-LEASE-007", layer="postgres")
 def test_wrong_organization_cannot_affect_same_job_identifier_in_another_tenant(
     worker_jobs: WorkerJobFixture,
 ) -> None:

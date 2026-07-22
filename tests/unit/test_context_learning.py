@@ -5,6 +5,8 @@ from contextlib import AbstractContextManager, contextmanager
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
+import pytest
+
 from engine.learning import (
     ContentProfileRef,
     ContextLearning,
@@ -278,6 +280,7 @@ def test_evaluate_persists_only_immutable_evaluation_and_never_publishes() -> No
     assert len(evaluation.signature) == 32
 
 
+@pytest.mark.security_evidence(id="RUNTIME-RELEASE-OWNER-019", layer="runtime")
 def test_initial_activation_ordinary_promotion_and_rollback_share_promote() -> None:
     initial_manifest = _manifest()
     ordinary_manifest = _manifest(suffix="ordinary-v2", profile_digit=2)

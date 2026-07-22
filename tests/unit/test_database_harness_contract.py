@@ -191,8 +191,42 @@ def test_ci_runs_the_same_make_database_contract_as_local() -> None:
     makefile = repository_text("Makefile")
 
     assert "make db-up" in workflow
-    assert "make check" in workflow
+    assert "run: make check" in workflow
     assert "if: always()" in workflow
     assert "make db-down" in workflow
-    assert "check: build lint typecheck test catalog smoke integration" in makefile
+    assert (
+        "check: build lint typecheck test catalog smoke integration security-gate"
+        in makefile
+    )
     assert "./scripts/database_harness.sh integration" in makefile
+
+
+def test_ci_runs_and_retains_the_single_m0_security_gate_contract() -> None:
+    workflow = repository_text(".github/workflows/ci.yml")
+    makefile = repository_text("Makefile")
+
+    assert "security-gate:" in makefile
+    assert (
+        "uv run python scripts/run_m0_security_gate.py "
+        "--output-dir .context-engine/security-gate" in makefile
+    )
+    assert (
+        "check: build lint typecheck test catalog smoke integration security-gate"
+        in makefile.splitlines()
+    )
+    assert "actions/upload-artifact@v4" in workflow
+    assert ".context-engine/security-gate/raw-evidence.json" in workflow
+    assert ".context-engine/security-gate/release-gate-report.json" in workflow
+    upload_step = workflow.split("actions/upload-artifact@v4", maxsplit=1)[1]
+    upload_prefix = workflow.split("actions/upload-artifact@v4", maxsplit=1)[0]
+    assert "if: always()" in upload_prefix
+    assert "include-hidden-files: true" in upload_step
+    assert "if-no-files-found: error" in upload_step
+    assert "retention-days:" in upload_step
+    assert "retry" not in makefile.casefold()
+    assert "continue-on-error" not in workflow
+
+    check_step = workflow.split("run: make check", maxsplit=1)[1]
+    upload_index = check_step.index("actions/upload-artifact@v4")
+    teardown_index = check_step.index("run: make db-down")
+    assert upload_index < teardown_index

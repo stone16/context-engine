@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from json import dumps, loads
@@ -39,6 +40,7 @@ from tests.integration.test_runtime_authorized_evidence_integration import (
     _seed_fixture,
 )
 from tests.support.context_run_operator import exact_test_context_run_operator_read
+from tests.support.security_gate import record_security_oracles
 
 pytestmark = pytest.mark.integration
 
@@ -378,12 +380,15 @@ def _assert_non_owner_force_rls(engine: Engine) -> None:
     assert all(row.relrowsecurity and row.relforcerowsecurity for row in rows)
 
 
+@pytest.mark.security_evidence(id="PG-NON-ENUMERATION-009", layer="postgres")
+@pytest.mark.security_evidence(id="FIXTURE-ACCEPT-011", layer="runtime")
 def test_real_postgres_http_denied_and_missing_are_externally_equivalent(
     migration_configuration: DatabaseConfiguration,
     guarded_runtime_engine: Engine,
     guarded_control_engine: Engine,
     guarded_operator_engine: Engine,
     query_digest_keyring: QueryDigestKeyring,
+    record_property: Callable[[str, object], None],
 ) -> None:
     """NON-ENUMERATION-009 compares content semantics, not response timing."""
 
@@ -476,6 +481,31 @@ def test_real_postgres_http_denied_and_missing_are_externally_equivalent(
             response.headers["content-length"] for response in probe_responses
         }
         assert len(content_lengths) == 1
+        unauthorized_evidence_count = sum(
+            len(response.json()["package"]["evidence"])
+            for response in probe_responses
+        )
+        wrong_organization_effect_count = sum(
+            len(response.json()["package"].get("effects", ()))
+            for response in probe_responses
+        )
+        missing_context_fallback_count = sum(
+            int(
+                response.json()["package"]["coverage"]
+                != {"status": "empty", "reason": "no_authorized_evidence"}
+            )
+            for response in probe_responses
+        )
+        assert unauthorized_evidence_count == 0
+        assert wrong_organization_effect_count == 0
+        assert missing_context_fallback_count == 0
+        record_security_oracles(
+            record_property,
+            fixture_ref="ACCEPT-011",
+            unauthorized_evidence_count=unauthorized_evidence_count,
+            wrong_organization_effect_count=wrong_organization_effect_count,
+            missing_context_fallback_count=missing_context_fallback_count,
+        )
 
         denied_decision_refs = tuple(
             response.json()["package"]["decisionRef"] for response in probe_responses

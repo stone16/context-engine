@@ -399,6 +399,7 @@ def test_bidirectional_rls_hides_and_blocks_wrong_organization_effects(
             ]
 
 
+@pytest.mark.security_evidence(id="PG-TENANT-FK-002", layer="postgres")
 def test_composite_ownership_accepts_same_org_and_rejects_cross_org_parent(
     guarded_runtime_engine: Engine,
     organizations: OrganizationPair,
@@ -487,6 +488,7 @@ def test_organization_foreign_key_rejects_orphan_record(
         migration_engine.dispose()
 
 
+@pytest.mark.security_evidence(id="PG-RLS-FAIL-CLOSED-003", layer="postgres")
 def test_missing_tenant_context_is_fail_closed_for_every_operation(
     guarded_runtime_engine: Engine,
     organizations: OrganizationPair,

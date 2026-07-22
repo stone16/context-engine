@@ -454,6 +454,7 @@ def test_revoked_resource_acl_filters_every_projection_row_and_right(
         migration_engine.dispose()
 
 
+@pytest.mark.security_evidence(id="PG-FIELD-PROJECTION-RLS-048", layer="postgres")
 def test_cross_organization_field_authority_and_values_fail_closed(
     guarded_runtime_engine: Engine,
     migration_configuration: DatabaseConfiguration,

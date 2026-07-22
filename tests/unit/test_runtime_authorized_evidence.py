@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import fields, replace
 from datetime import UTC, datetime
@@ -78,6 +78,7 @@ from tests.support.context_run import (
     RecordingContextRunPort,
     recording_context_run_session,
 )
+from tests.support.security_gate import record_security_oracles
 
 AS_OF = datetime(2026, 7, 21, 10, 0, tzinfo=UTC)
 ORGANIZATION_ID = UUID("81e18bca-86a1-478a-937d-7675c6fe69b0")
@@ -247,6 +248,19 @@ def exact_operands() -> TrustedScopeOperands:
     )
 
 
+def scope_for(*candidates: CandidateRef) -> ScopeSet:
+    return ScopeSet(
+        frozenset(
+            ScopeTarget(
+                candidate.organization_id,
+                candidate.source_ref,
+                candidate.resource_ref,
+            )
+            for candidate in candidates
+        )
+    )
+
+
 @contextmanager
 def trusted_operands(
     port: RecordingMaterializedPort,
@@ -352,12 +366,15 @@ def trusted_operands(
         _close_membership_authority_scope(membership_scope)
 
 
+@pytest.mark.security_evidence(id="RUNTIME-INDEX-NOT-AUTHORITY-005", layer="runtime")
+@pytest.mark.security_evidence(id="FIXTURE-ACCEPT-006", layer="runtime")
 @pytest.mark.parametrize(
     "ranked",
     tuple(permutations((AUTHORIZED, DENIED, CROSS_ORGANIZATION))),
 )
 def test_hostile_candidate_order_delivers_only_exact_authorized_evidence(
     ranked: tuple[CandidateRef, ...],
+    record_property: Callable[[str, object], None],
 ) -> None:
     index = HostileCandidateIndex(ranked)
     port = RecordingMaterializedPort()
@@ -408,6 +425,29 @@ def test_hostile_candidate_order_delivers_only_exact_authorized_evidence(
         str(OTHER_ORGANIZATION_ID),
     ):
         assert forbidden not in rendered
+    unauthorized_evidence_count = sum(
+        item.fragment_ref
+        in {DENIED.fragment_ref, CROSS_ORGANIZATION.fragment_ref}
+        for item in package.evidence
+    )
+    wrong_organization_effect_count = sum(
+        selected == locator(CROSS_ORGANIZATION) for selected in port.body_calls
+    )
+    missing_context_fallback_count = int(
+        package.coverage.status != "sufficient"
+        or len(package.blocks) == 0
+        or len(package.evidence) == 0
+    )
+    assert unauthorized_evidence_count == 0
+    assert wrong_organization_effect_count == 0
+    assert missing_context_fallback_count == 0
+    record_security_oracles(
+        record_property,
+        fixture_ref="ACCEPT-006",
+        unauthorized_evidence_count=unauthorized_evidence_count,
+        wrong_organization_effect_count=wrong_organization_effect_count,
+        missing_context_fallback_count=missing_context_fallback_count,
+    )
 
 
 def test_stale_scope_epoch_stops_before_candidate_or_body_io() -> None:
@@ -741,6 +781,7 @@ def _canonical_empty_package(package: ContextPackage) -> tuple[object, ...]:
     )
 
 
+@pytest.mark.security_evidence(id="RUNTIME-NON-ENUMERATION-009", layer="runtime")
 def test_runtime_canonical_empty_package_is_equal_for_every_internal_branch() -> None:
     scenarios: tuple[
         tuple[tuple[CandidateRef, ...], RecordingMaterializedPort], ...
@@ -771,6 +812,7 @@ def test_runtime_canonical_empty_package_is_equal_for_every_internal_branch() ->
     assert packages == [packages[0]] * len(packages)
 
 
+@pytest.mark.security_evidence(id="PROP-NON-ENUMERATION-009", layer="property")
 @pytest.mark.parametrize(
     "ranked",
     (
@@ -841,6 +883,7 @@ def test_denied_cross_organization_and_missing_candidates_share_one_runtime_outc
         assert forbidden_field not in rendered.casefold()
 
 
+@pytest.mark.security_evidence(id="RUNTIME-TRACE-REDACTION-012", layer="runtime")
 def test_empty_decision_audit_is_generic_and_retains_no_denied_detail() -> None:
     receipt = DecisionAuditGate().record(
         DecisionProvenanceReceipt(
@@ -1033,8 +1076,11 @@ def test_hostile_index_duplicate_candidates_are_deduplicated_before_projection()
     assert len(outcome.package.evidence) == 1
 
 
-def test_agent_ceiling_denial_keeps_candidate_content_out_of_package() -> None:
-    index = HostileCandidateIndex((AUTHORIZED,))
+@pytest.mark.security_evidence(id="FIXTURE-ACCEPT-003", layer="runtime")
+def test_accept_003_agent_ceiling_delivers_only_authorized_projection(
+    record_property: Callable[[str, object], None],
+) -> None:
+    index = HostileCandidateIndex((AUTHORIZED, AUTHORIZED_SECOND))
     port = RecordingMaterializedPort()
     runtime = Runtime(
         required_kernel_dependencies(),
@@ -1044,25 +1090,61 @@ def test_agent_ceiling_denial_keeps_candidate_content_out_of_package() -> None:
     )
 
     with trusted_operands(port) as (invocation, delivery):
+        broad = scope_for(AUTHORIZED, AUTHORIZED_SECOND)
+        for operand_name in (
+            "organization_boundary",
+            "membership_rights",
+            "principal_grants",
+            "source_native_acl",
+            "resource_acl",
+            "purpose_policy",
+        ):
+            object.__setattr__(invocation.trusted_scope_snapshot, operand_name, broad)
         object.__setattr__(
             invocation.trusted_scope_snapshot,
             "agent_ceiling",
-            ScopeSet(frozenset()),
+            scope_for(AUTHORIZED),
         )
         outcome = runtime.resolve(
             invocation,
             delivery,
-            Acquire(need=ContextNeed(query="agent ceiling")),
+            Acquire(need=ContextNeed(query="agent ceiling cannot expand")),
         )
 
     assert type(outcome) is Resolved
-    assert outcome.package.evidence == ()
-    assert index.calls == 0
-    assert port.body_calls == []
+    assert index.calls == 1
+    assert port.body_calls == [locator(AUTHORIZED)]
+    assert tuple(block.body for block in outcome.package.blocks) == ("A-safe",)
+    assert tuple(item.resource_ref for item in outcome.package.evidence) == (
+        AUTHORIZED.resource_ref,
+    )
+    unauthorized_evidence_count = sum(
+        item.resource_ref == AUTHORIZED_SECOND.resource_ref
+        for item in outcome.package.evidence
+    )
+    wrong_organization_effect_count = 0
+    missing_context_fallback_count = int(
+        outcome.package.coverage.status != "sufficient"
+        or not outcome.package.blocks
+        or not outcome.package.evidence
+    )
+    assert unauthorized_evidence_count == 0
+    assert missing_context_fallback_count == 0
+    record_security_oracles(
+        record_property,
+        fixture_ref="ACCEPT-003",
+        unauthorized_evidence_count=unauthorized_evidence_count,
+        wrong_organization_effect_count=wrong_organization_effect_count,
+        missing_context_fallback_count=missing_context_fallback_count,
+    )
 
 
-def test_request_narrowing_filters_candidate_before_body_projection() -> None:
-    index = HostileCandidateIndex((AUTHORIZED,))
+@pytest.mark.security_evidence(id="FIXTURE-ACCEPT-004", layer="runtime")
+def test_request_narrowing_filters_candidate_before_body_projection(
+    record_property: Callable[[str, object], None],
+) -> None:
+    excluded = replace(AUTHORIZED_SECOND, source_ref="source:other")
+    index = HostileCandidateIndex((AUTHORIZED, excluded))
     port = RecordingMaterializedPort()
     runtime = Runtime(
         required_kernel_dependencies(),
@@ -1072,16 +1154,50 @@ def test_request_narrowing_filters_candidate_before_body_projection() -> None:
     )
 
     with trusted_operands(port) as (invocation, delivery):
+        broad = scope_for(AUTHORIZED, excluded)
+        for operand_name in (
+            "organization_boundary",
+            "membership_rights",
+            "principal_grants",
+            "agent_ceiling",
+            "source_native_acl",
+            "resource_acl",
+            "purpose_policy",
+        ):
+            object.__setattr__(invocation.trusted_scope_snapshot, operand_name, broad)
         outcome = runtime.resolve(
             invocation,
             delivery,
             Acquire(
                 need=ContextNeed(query="monotonic narrowing"),
-                narrowing=RequestNarrowing(source_refs=("source:other",)),
+                narrowing=RequestNarrowing(source_refs=(AUTHORIZED.source_ref,)),
             ),
         )
 
     assert type(outcome) is Resolved
-    assert outcome.package.evidence == ()
-    assert index.calls == 0
-    assert port.body_calls == []
+    assert index.calls == 1
+    assert port.body_calls == [locator(AUTHORIZED)]
+    assert tuple(block.body for block in outcome.package.blocks) == ("A-safe",)
+    assert tuple(item.source_ref for item in outcome.package.evidence) == (
+        AUTHORIZED.source_ref,
+    )
+    unauthorized_evidence_count = sum(
+        item.source_ref == excluded.source_ref
+        for item in outcome.package.evidence
+    )
+    wrong_organization_effect_count = 0
+    missing_context_fallback_count = int(
+        outcome.package.coverage.status != "sufficient"
+        or not outcome.package.blocks
+        or not outcome.package.evidence
+    )
+    assert unauthorized_evidence_count == 0
+    assert wrong_organization_effect_count == 0
+    assert missing_context_fallback_count == 0
+    record_security_oracles(
+        record_property,
+        fixture_ref="ACCEPT-004",
+        unauthorized_evidence_count=unauthorized_evidence_count,
+        wrong_organization_effect_count=wrong_organization_effect_count,
+        missing_context_fallback_count=missing_context_fallback_count,
+    )

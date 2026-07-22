@@ -118,6 +118,7 @@ def _assert_revoked_empty(
         assert forbidden not in response.text
 
 
+@pytest.mark.security_evidence(id="RUNTIME-REVOCATION-006", layer="runtime")
 def test_same_http_acquire_revokes_next_delivery_without_candidate_cleanup(
     control_configuration: DatabaseConfiguration,
     migration_configuration: DatabaseConfiguration,

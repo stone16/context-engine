@@ -8,6 +8,7 @@ has no dependency on an application environment or a third-party YAML parser.
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import html
 import json
@@ -25,7 +26,14 @@ from engine.runtime.package_digest import canonicalize_context_package
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CATALOG_PATH = REPOSITORY_ROOT / "eval/catalogs/security-invariants.yaml"
 DEFAULT_SCHEMA_PATH = REPOSITORY_ROOT / "eval/catalogs/security-catalog.schema.json"
+DEFAULT_EXECUTION_REGISTRY_PATH = (
+    REPOSITORY_ROOT / "eval/catalogs/m0-security-evidence.yaml"
+)
+DEFAULT_EXECUTION_REGISTRY_SCHEMA_PATH = (
+    REPOSITORY_ROOT / "eval/catalogs/m0-security-evidence.schema.json"
+)
 SUPPORTED_CATALOG_VERSION = "1.1.0"
+SUPPORTED_EXECUTION_REGISTRY_VERSION = "1.0.0"
 EXPECTED_INVARIANT_COUNT = 15
 EXPECTED_FIXTURE_COUNT = 12
 ID_PATTERN = re.compile(r"^[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)*-[0-9]{3}$")
@@ -57,6 +65,13 @@ HARD_ORACLES: tuple[str, ...] = (
     "Unauthorized Evidence",
     "wrong-Organization effect",
     "missing-context fallback",
+)
+
+EVIDENCE_LAYERS: tuple[str, ...] = ("property", "postgres", "runtime")
+HARD_ORACLE_RESULT_KEYS: tuple[str, ...] = (
+    "unauthorizedEvidenceCount",
+    "wrongOrganizationEffectCount",
+    "missingContextFallbackCount",
 )
 
 TOP_LEVEL_FIELDS = (
@@ -926,6 +941,16 @@ class ValidationReport:
     invariant_count: int
     fixture_count: int
     fixture_mappings: tuple[tuple[str, tuple[str, ...]], ...]
+
+
+@dataclass(frozen=True)
+class ExecutionRegistryReport:
+    """Static proof that the current executable evidence covers the authority."""
+
+    invariant_count: int
+    fixture_count: int
+    evidence_count: int
+    selectors: tuple[str, ...]
 
 
 class CatalogValidationError(ValueError):
@@ -2912,6 +2937,556 @@ def validate_catalog(
     )
 
 
+def _catalog_ids(catalog: Mapping[str, Any], field: str) -> tuple[str, ...]:
+    values = catalog.get(field)
+    if not isinstance(values, list):
+        return ()
+    return tuple(
+        value["id"]
+        for value in values
+        if isinstance(value, Mapping) and isinstance(value.get("id"), str)
+    )
+
+
+def _security_evidence_markers(
+    source: str,
+    *,
+    function_ref: str,
+    path: str,
+    collector: _Collector,
+) -> tuple[tuple[str, str], ...]:
+    try:
+        module = ast.parse(source)
+    except SyntaxError as error:
+        collector.add(path, f"test file is not valid Python: {error.msg}")
+        return ()
+    function = next(
+        (
+            node
+            for node in module.body
+            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+            and node.name == function_ref
+        ),
+        None,
+    )
+    if function is None:
+        collector.add(path, f"test function does not exist: {function_ref!r}")
+        return ()
+
+    markers: list[tuple[str, str]] = []
+    malformed = False
+    for decorator in function.decorator_list:
+        if not isinstance(decorator, ast.Call):
+            continue
+        marker = decorator.func
+        if not (
+            isinstance(marker, ast.Attribute)
+            and marker.attr == "security_evidence"
+            and isinstance(marker.value, ast.Attribute)
+            and marker.value.attr == "mark"
+            and isinstance(marker.value.value, ast.Name)
+            and marker.value.value.id == "pytest"
+        ):
+            continue
+        keyword_values = {keyword.arg: keyword.value for keyword in decorator.keywords}
+        evidence_id_node = keyword_values.get("id")
+        layer_node = keyword_values.get("layer")
+        if (
+            decorator.args
+            or any(keyword.arg is None for keyword in decorator.keywords)
+            or set(keyword_values) != {"id", "layer"}
+            or not isinstance(evidence_id_node, ast.Constant)
+            or not isinstance(evidence_id_node.value, str)
+            or not isinstance(layer_node, ast.Constant)
+            or not isinstance(layer_node.value, str)
+        ):
+            malformed = True
+            continue
+        markers.append((evidence_id_node.value, layer_node.value))
+    if malformed:
+        collector.add(
+            path,
+            "@pytest.mark.security_evidence must use exact id= and layer= "
+            "string arguments",
+        )
+    if not markers and not malformed:
+        collector.add(path, "missing @pytest.mark.security_evidence")
+    if len(markers) != len(set(markers)):
+        collector.add(path, "duplicate @pytest.mark.security_evidence declaration")
+    return tuple(markers)
+
+
+def _reject_unregistered_security_evidence_markers(
+    repository_root: Path,
+    expected_selectors: set[str],
+    collector: _Collector,
+) -> None:
+    """Reject evidence declarations that are not owned by the registry."""
+
+    tests_root = repository_root / "tests"
+    if not tests_root.is_dir():
+        return
+    for test_path in sorted(tests_root.rglob("*.py")):
+        try:
+            source = test_path.read_text(encoding="utf-8")
+            module = ast.parse(source)
+        except (OSError, UnicodeError, SyntaxError) as error:
+            collector.add(
+                str(test_path.relative_to(repository_root)),
+                f"cannot inspect security_evidence markers: {error}",
+            )
+            continue
+        relative = test_path.relative_to(repository_root).as_posix()
+        for function in ast.walk(module):
+            if not isinstance(function, ast.FunctionDef | ast.AsyncFunctionDef):
+                continue
+            has_security_marker = any(
+                isinstance(decorator, ast.Call)
+                and isinstance(decorator.func, ast.Attribute)
+                and decorator.func.attr == "security_evidence"
+                and isinstance(decorator.func.value, ast.Attribute)
+                and decorator.func.value.attr == "mark"
+                and isinstance(decorator.func.value.value, ast.Name)
+                and decorator.func.value.value.id == "pytest"
+                for decorator in function.decorator_list
+            )
+            if not has_security_marker:
+                continue
+            selector = f"{relative}::{function.name}"
+            if selector not in expected_selectors:
+                collector.add(
+                    f"registry selector {selector!r}",
+                    "security_evidence marker is not declared by the registry",
+                )
+
+
+def _validate_pytest_selector(
+    selector: object,
+    path: str,
+    repository_root: Path,
+    collector: _Collector,
+) -> tuple[str, tuple[tuple[str, str], ...]] | None:
+    if not collector.require_nonempty_string(selector, path):
+        return None
+    assert isinstance(selector, str)
+    if selector != selector.strip() or any(
+        character.isspace() for character in selector
+    ):
+        collector.add(path, "must be one exact whitespace-free pytest node selector")
+        return None
+    file_ref, separator, function_ref = selector.partition("::")
+    if separator != "::" or not file_ref or not function_ref.startswith("test_"):
+        collector.add(path, "must be an exact test-file::test_function pytest selector")
+        return None
+    if "::" in function_ref or "[" in function_ref or "]" in function_ref:
+        collector.add(
+            path,
+            "must select the stable test function, not one parameter instance",
+        )
+        return None
+    file_path = Path(file_ref)
+    if file_path.is_absolute() or ".." in file_path.parts:
+        collector.add(path, "must stay inside the repository")
+        return None
+    root = repository_root.resolve()
+    resolved = (root / file_path).resolve()
+    try:
+        resolved.relative_to(root)
+    except ValueError:
+        collector.add(path, "must resolve inside the repository")
+        return None
+    if not resolved.is_file():
+        collector.add(path, f"test file does not exist: {file_ref!r}")
+        return None
+    try:
+        source = resolved.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as error:
+        collector.add(path, f"cannot read test file: {error}")
+        return None
+    markers = _security_evidence_markers(
+        source,
+        function_ref=function_ref,
+        path=path,
+        collector=collector,
+    )
+    return selector, markers
+
+
+def validate_execution_registry(
+    registry: Mapping[str, Any],
+    schema: Mapping[str, Any],
+    catalog: Mapping[str, Any],
+    *,
+    repository_root: str | Path = REPOSITORY_ROOT,
+) -> ExecutionRegistryReport:
+    """Validate the executable evidence registry against the semantic catalog."""
+
+    collector = _Collector()
+    root = Path(repository_root)
+    top_level_fields = (
+        "registryVersion",
+        "catalog",
+        "execution",
+        "hardOracleAdapters",
+        "evidence",
+        "invariantMappings",
+        "fixtureMappings",
+    )
+    collector.require_exact_fields(registry, top_level_fields, "registry")
+    if registry.get("registryVersion") != SUPPORTED_EXECUTION_REGISTRY_VERSION:
+        collector.add(
+            "registry.registryVersion",
+            "must be the supported version "
+            f"{SUPPORTED_EXECUTION_REGISTRY_VERSION!r}",
+        )
+
+    catalog_link = collector.require_mapping(
+        registry.get("catalog"), "registry.catalog"
+    )
+    if catalog_link is not None:
+        collector.require_exact_fields(
+            catalog_link,
+            ("path", "schemaPath", "catalogVersion"),
+            "registry.catalog",
+        )
+        expected_link = {
+            "path": "eval/catalogs/security-invariants.yaml",
+            "schemaPath": "eval/catalogs/security-catalog.schema.json",
+            "catalogVersion": catalog.get("catalogVersion"),
+        }
+        if dict(catalog_link) != expected_link:
+            collector.add(
+                "registry.catalog",
+                "must exactly bind the tracked catalog, schema, and current version",
+            )
+
+    execution = collector.require_mapping(
+        registry.get("execution"), "registry.execution"
+    )
+    if execution is not None:
+        collector.require_exact_fields(
+            execution,
+            ("framework", "forbidOutcomes", "evidenceLayers", "observationProperty"),
+            "registry.execution",
+        )
+        if execution.get("framework") != "pytest":
+            collector.add("registry.execution.framework", "must be 'pytest'")
+        if execution.get("forbidOutcomes") != [
+            "failed",
+            "error",
+            "skipped",
+            "xfailed",
+            "xpassed",
+            "incomplete",
+        ]:
+            collector.add(
+                "registry.execution.forbidOutcomes",
+                "must reject failed, error, skipped, xfailed, xpassed, and "
+                "incomplete outcomes",
+            )
+        if execution.get("evidenceLayers") != list(EVIDENCE_LAYERS):
+            collector.add(
+                "registry.execution.evidenceLayers",
+                "must declare property, postgres, and runtime in canonical order",
+            )
+        if execution.get("observationProperty") != (
+            "context_engine.security_gate.observation.v1"
+        ):
+            collector.add(
+                "registry.execution.observationProperty",
+                "must declare the versioned explicit pytest user-property contract",
+            )
+
+    adapters = registry.get("hardOracleAdapters")
+    if not isinstance(adapters, list):
+        collector.add("registry.hardOracleAdapters", "must be an array")
+        adapters = []
+    expected_adapters = tuple(zip(HARD_ORACLES, HARD_ORACLE_RESULT_KEYS, strict=True))
+    if len(adapters) != len(expected_adapters):
+        collector.add(
+            "registry.hardOracleAdapters",
+            "must contain exactly the three canonical hard-oracle adapters",
+        )
+    observed_adapters: list[tuple[object, object]] = []
+    for index, value in enumerate(adapters):
+        path = f"registry.hardOracleAdapters[{index}]"
+        adapter = collector.require_mapping(value, path)
+        if adapter is None:
+            continue
+        collector.require_exact_fields(
+            adapter,
+            ("oracleRef", "resultKey", "assertion", "requiredValue", "observation"),
+            path,
+        )
+        observed_adapters.append((adapter.get("oracleRef"), adapter.get("resultKey")))
+        if adapter.get("assertion") != "equals":
+            collector.add(f"{path}.assertion", "must be 'equals'")
+        if type(adapter.get("requiredValue")) is not int or adapter.get(
+            "requiredValue"
+        ) != 0:
+            collector.add(f"{path}.requiredValue", "must be the numeric constant 0")
+        observation = collector.require_mapping(
+            adapter.get("observation"), f"{path}.observation"
+        )
+        if observation is not None and dict(observation) != {
+            "source": "pytest-user-property",
+            "reducer": "sum",
+        }:
+            collector.add(
+                f"{path}.observation",
+                "must derive the sum from explicit pytest user-property values",
+            )
+    if tuple(observed_adapters) != expected_adapters:
+        collector.add(
+            "registry.hardOracleAdapters",
+            "must exactly map catalog hard oracles to their canonical result keys",
+        )
+
+    evidence_values = registry.get("evidence")
+    if not isinstance(evidence_values, list) or not evidence_values:
+        collector.add("registry.evidence", "must be a non-empty array")
+        evidence_values = []
+    evidence_by_id: dict[str, tuple[str, str]] = {}
+    duplicate_ids: set[str] = set()
+    selectors: list[str] = []
+    marker_pairs_by_selector: dict[str, tuple[tuple[str, str], ...]] = {}
+    for index, value in enumerate(evidence_values):
+        path = f"registry.evidence[{index}]"
+        evidence = collector.require_mapping(value, path)
+        if evidence is None:
+            continue
+        collector.require_exact_fields(evidence, ("id", "layer", "selector"), path)
+        evidence_id = evidence.get("id")
+        if not collector.require_nonempty_string(evidence_id, f"{path}.id"):
+            continue
+        assert isinstance(evidence_id, str)
+        layer = evidence.get("layer")
+        if layer not in EVIDENCE_LAYERS:
+            collector.add(f"{path}.layer", "must be property, postgres, or runtime")
+            continue
+        selector_result = _validate_pytest_selector(
+            evidence.get("selector"), f"{path}.selector", root, collector
+        )
+        if evidence_id in evidence_by_id:
+            duplicate_ids.add(evidence_id)
+            collector.add("registry.evidence", f"duplicate evidence id {evidence_id!r}")
+        elif selector_result is not None:
+            selector, marker_pairs = selector_result
+            evidence_by_id[evidence_id] = (layer, selector)
+            selectors.append(selector)
+            marker_pairs_by_selector[selector] = marker_pairs
+
+    expected_marker_pairs: dict[str, set[tuple[str, str]]] = {}
+    for evidence_id, (layer, selector) in evidence_by_id.items():
+        expected_marker_pairs.setdefault(selector, set()).add((evidence_id, layer))
+    for selector, expected_pairs in expected_marker_pairs.items():
+        observed_pairs = marker_pairs_by_selector.get(selector, ())
+        observed_set = set(observed_pairs)
+        expected_layers_by_id = dict(expected_pairs)
+        if {evidence_id for evidence_id, _layer in observed_set} != {
+            evidence_id for evidence_id, _layer in expected_pairs
+        }:
+            collector.add(
+                f"registry selector {selector!r}",
+                "security_evidence marker IDs differ from registry IDs",
+            )
+        for evidence_id, observed_layer in observed_set:
+            expected_layer = expected_layers_by_id.get(evidence_id)
+            if expected_layer is None:
+                continue
+            if observed_layer != expected_layer:
+                collector.add(
+                    f"registry selector {selector!r}",
+                    f"security_evidence marker layer for {evidence_id!r} is "
+                    f"{observed_layer!r}, not {expected_layer!r}",
+                )
+    _reject_unregistered_security_evidence_markers(
+        root,
+        set(expected_marker_pairs),
+        collector,
+    )
+
+    referenced_ids: set[str] = set()
+
+    def validate_refs(
+        value: object,
+        path: str,
+        *,
+        expected_layer: str | None = None,
+    ) -> tuple[str, ...]:
+        refs = collector.require_string_list(value, path)
+        if refs is None:
+            return ()
+        for ref_index, evidence_ref in enumerate(refs):
+            declared = evidence_by_id.get(evidence_ref)
+            if declared is None:
+                if evidence_ref not in duplicate_ids:
+                    collector.add(
+                        f"{path}[{ref_index}]",
+                        f"unknown evidence ref {evidence_ref!r}",
+                    )
+                continue
+            referenced_ids.add(evidence_ref)
+            if expected_layer is not None and declared[0] != expected_layer:
+                collector.add(
+                    f"{path}[{ref_index}]",
+                    f"is declared as layer {declared[0]!r}, not {expected_layer!r}",
+                )
+        return tuple(refs)
+
+    invariant_values = registry.get("invariantMappings")
+    if not isinstance(invariant_values, list):
+        collector.add("registry.invariantMappings", "must be an array")
+        invariant_values = []
+    invariant_refs: list[str] = []
+    for index, value in enumerate(invariant_values):
+        path = f"registry.invariantMappings[{index}]"
+        mapping = collector.require_mapping(value, path)
+        if mapping is None:
+            continue
+        collector.require_exact_fields(mapping, ("invariantRef", "evidenceRefs"), path)
+        invariant_ref = mapping.get("invariantRef")
+        if collector.require_nonempty_string(invariant_ref, f"{path}.invariantRef"):
+            assert isinstance(invariant_ref, str)
+            invariant_refs.append(invariant_ref)
+        evidence_refs = collector.require_mapping(
+            mapping.get("evidenceRefs"), f"{path}.evidenceRefs"
+        )
+        if evidence_refs is None:
+            continue
+        collector.require_exact_fields(
+            evidence_refs, EVIDENCE_LAYERS, f"{path}.evidenceRefs"
+        )
+        for layer in EVIDENCE_LAYERS:
+            validate_refs(
+                evidence_refs.get(layer),
+                f"{path}.evidenceRefs.{layer}",
+                expected_layer=layer,
+            )
+    canonical_catalog_invariants = _catalog_ids(catalog, "invariants")
+    if tuple(invariant_refs) != CANONICAL_INVARIANT_IDS or tuple(
+        invariant_refs
+    ) != canonical_catalog_invariants:
+        collector.add(
+            "registry.invariantMappings",
+            "must map every canonical catalog invariant exactly once in "
+            "canonical order",
+        )
+
+    fixture_values = registry.get("fixtureMappings")
+    if not isinstance(fixture_values, list):
+        collector.add("registry.fixtureMappings", "must be an array")
+        fixture_values = []
+    fixture_refs: list[str] = []
+    for index, value in enumerate(fixture_values):
+        path = f"registry.fixtureMappings[{index}]"
+        mapping = collector.require_mapping(value, path)
+        if mapping is None:
+            continue
+        collector.require_exact_fields(
+            mapping,
+            (
+                "fixtureRef",
+                "carrierStatusAtM0",
+                "m0Expectation",
+                "evidenceRefs",
+                "hardOracleEvidenceRefs",
+            ),
+            path,
+        )
+        fixture_ref = mapping.get("fixtureRef")
+        if collector.require_nonempty_string(fixture_ref, f"{path}.fixtureRef"):
+            assert isinstance(fixture_ref, str)
+            fixture_refs.append(fixture_ref)
+            catalog_fixture = next(
+                (
+                    fixture
+                    for fixture in catalog.get("fixtures", [])
+                    if isinstance(fixture, Mapping)
+                    and fixture.get("id") == fixture_ref
+                ),
+                None,
+            )
+            catalog_carrier = (
+                catalog_fixture.get("carrier")
+                if isinstance(catalog_fixture, Mapping)
+                else None
+            )
+            expected_carrier = (
+                {
+                    "carrierStatusAtM0": catalog_carrier.get("statusAtM0"),
+                    "m0Expectation": catalog_carrier.get("m0Expectation"),
+                }
+                if isinstance(catalog_carrier, Mapping)
+                else None
+            )
+            observed_carrier = {
+                "carrierStatusAtM0": mapping.get("carrierStatusAtM0"),
+                "m0Expectation": mapping.get("m0Expectation"),
+            }
+            if expected_carrier is None or observed_carrier != expected_carrier:
+                collector.add(
+                    path,
+                    "carrierStatusAtM0 and m0Expectation must exactly match "
+                    "catalog fixture.carrier",
+                )
+        fixture_evidence = validate_refs(
+            mapping.get("evidenceRefs"), f"{path}.evidenceRefs"
+        )
+        hard_oracle_refs = collector.require_mapping(
+            mapping.get("hardOracleEvidenceRefs"),
+            f"{path}.hardOracleEvidenceRefs",
+        )
+        if hard_oracle_refs is None:
+            continue
+        collector.require_exact_fields(
+            hard_oracle_refs,
+            HARD_ORACLE_RESULT_KEYS,
+            f"{path}.hardOracleEvidenceRefs",
+        )
+        for result_key in HARD_ORACLE_RESULT_KEYS:
+            oracle_refs = validate_refs(
+                hard_oracle_refs.get(result_key),
+                f"{path}.hardOracleEvidenceRefs.{result_key}",
+            )
+            for evidence_ref in oracle_refs:
+                if evidence_ref not in fixture_evidence:
+                    collector.add(
+                        f"{path}.hardOracleEvidenceRefs.{result_key}",
+                        f"must reference a fixture evidenceRef, got {evidence_ref!r}",
+                    )
+    canonical_catalog_fixtures = _catalog_ids(catalog, "fixtures")
+    if tuple(fixture_refs) != CANONICAL_FIXTURE_IDS or tuple(
+        fixture_refs
+    ) != canonical_catalog_fixtures:
+        collector.add(
+            "registry.fixtureMappings",
+            "must map every canonical catalog fixture exactly once in canonical order",
+        )
+
+    for evidence_id in evidence_by_id:
+        if evidence_id not in referenced_ids:
+            collector.add("registry.evidence", f"orphan evidence id {evidence_id!r}")
+
+    if isinstance(schema, Mapping):
+        if schema.get("$schema") != "https://json-schema.org/draft/2020-12/schema":
+            collector.add("registrySchema.$schema", "must declare Draft 2020-12")
+        _validate_schema_instance(
+            registry, schema, schema, "registry", collector
+        )
+    else:
+        collector.add("registrySchema", "must be an object")
+
+    if collector.errors:
+        raise CatalogValidationError(collector.errors)
+    return ExecutionRegistryReport(
+        invariant_count=len(invariant_refs),
+        fixture_count=len(fixture_refs),
+        evidence_count=len(evidence_by_id),
+        selectors=tuple(selectors),
+    )
+
+
 _MARKDOWN_HEADING = re.compile(r"^ {0,3}#{1,6}(?:[ \t]+|$)(.*)$")
 _MARKDOWN_CLOSING_HASHES = re.compile(r"[ \t]+#+[ \t]*$")
 _MARKDOWN_FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
@@ -3079,12 +3654,23 @@ def validate_files(
     schema_path: str | Path = DEFAULT_SCHEMA_PATH,
     *,
     repository_root: str | Path = REPOSITORY_ROOT,
+    registry_path: str | Path | None = None,
+    registry_schema_path: str | Path | None = None,
 ) -> ValidationReport:
     """Load and validate the tracked catalog and schema files."""
 
     catalog = load_document(catalog_path)
     report = validate_catalog(catalog, load_document(schema_path))
     _validate_document_paths(catalog, Path(repository_root))
+    if registry_path is not None or registry_schema_path is not None:
+        validate_execution_registry(
+            load_document(registry_path or DEFAULT_EXECUTION_REGISTRY_PATH),
+            load_document(
+                registry_schema_path or DEFAULT_EXECUTION_REGISTRY_SCHEMA_PATH
+            ),
+            catalog,
+            repository_root=repository_root,
+        )
     return report
 
 
@@ -3123,13 +3709,36 @@ def build_parser() -> argparse.ArgumentParser:
             "eval/catalogs/security-catalog.schema.json)"
         ),
     )
+    parser.add_argument(
+        "--registry",
+        type=Path,
+        default=DEFAULT_EXECUTION_REGISTRY_PATH,
+        help=(
+            "executable evidence registry path (default: repository "
+            "eval/catalogs/m0-security-evidence.yaml)"
+        ),
+    )
+    parser.add_argument(
+        "--registry-schema",
+        type=Path,
+        default=DEFAULT_EXECUTION_REGISTRY_SCHEMA_PATH,
+        help=(
+            "execution registry schema path (default: repository "
+            "eval/catalogs/m0-security-evidence.schema.json)"
+        ),
+    )
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
-        report = validate_files(args.catalog, args.schema)
+        report = validate_files(
+            args.catalog,
+            args.schema,
+            registry_path=args.registry,
+            registry_schema_path=args.registry_schema,
+        )
     except CatalogValidationError as error:
         print("security catalog invalid:", file=sys.stderr)
         for message in error.errors:

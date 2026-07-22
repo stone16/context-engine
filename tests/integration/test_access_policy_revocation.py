@@ -354,6 +354,7 @@ def _state(
     )
 
 
+@pytest.mark.security_evidence(id="PG-REVOCATION-006", layer="postgres")
 def test_change_access_atomically_revokes_exact_grant_and_advances_epoch(
     control_configuration: DatabaseConfiguration,
     migration_configuration: DatabaseConfiguration,

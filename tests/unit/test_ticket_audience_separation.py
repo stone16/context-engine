@@ -2,7 +2,7 @@ import base64
 import hmac
 import json
 import pickle
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import fields
 from datetime import UTC, datetime, timedelta
@@ -61,6 +61,7 @@ from engine.runtime.ticket_rejection import (
     TicketRejectionAuditReceipt,
     TicketRejectionCategory,
 )
+from tests.support.security_gate import record_security_oracles
 
 NOW = datetime(2026, 7, 22, 8, 0, tzinfo=UTC)
 ORGANIZATION_ID = UUID("81e18bca-86a1-478a-937d-7675c6fe69b0")
@@ -339,6 +340,7 @@ def test_valid_tickets_invoke_only_their_bound_synthetic_effects() -> None:
     assert channel.effects == 1
 
 
+@pytest.mark.security_evidence(id="PROP-ACTION-SEPARATION-014", layer="property")
 def test_public_ticket_types_and_server_side_issuers_are_structurally_distinct() -> (
     None
 ):
@@ -540,7 +542,9 @@ def test_forged_exact_identity_is_normalized_before_any_effect() -> None:
     assert provider.effects == 0
 
 
-def test_each_ticket_is_rejected_by_the_other_plane_and_deserializer() -> None:
+@pytest.mark.security_evidence(id="RUNTIME-ACTION-SEPARATION-014", layer="runtime")
+def test_each_ticket_is_rejected_by_the_other_plane_and_deserializer(
+) -> None:
     provider = _Provider()
     channel = _Channel()
 
@@ -588,15 +592,64 @@ def test_each_ticket_is_rejected_by_the_other_plane_and_deserializer() -> None:
                 read_ticket.serialize(), keyring=KEYRING
             ),
         )
+        rejections: list[TicketNotAvailable] = []
         for rejected_use in rejected_uses:
             with pytest.raises(
                 TicketNotAvailable,
                 match="^capability not available$",
-            ):
+            ) as error:
                 rejected_use()
+            rejections.append(error.value)
 
-    assert provider.effects == 0
+    assert len(rejections) == len(rejected_uses)
+    assert provider.effects == channel.effects == 0
+
+
+@pytest.mark.security_evidence(id="FIXTURE-ACCEPT-012", layer="runtime")
+def test_accept_012_context_read_ticket_cannot_create_an_action_effect(
+    record_property: Callable[[str, object], None],
+) -> None:
+    """Invoke the highest current action seam with read-only authority."""
+
+    channel = _Channel()
+    with _identity() as identity:
+        read_ticket = ContextAccessTicketIssuer(
+            keyring=KEYRING,
+            organization_id=ORGANIZATION_ID,
+            provider_ref="provider-a",
+            clock=lambda: NOW,
+        ).issue(identity)
+        handler = ActionTicketNoopHandler(
+            keyring=KEYRING,
+            organization_id=ORGANIZATION_ID,
+            channel_ref="conversation-b",
+            channel=channel,
+            clock=lambda: NOW,
+        )
+
+        with pytest.raises(
+            TicketNotAvailable,
+            match="^capability not available$",
+        ) as error:
+            handler.perform(
+                ticket=cast(ActionTicket, read_ticket),
+                identity=identity,
+            )
+
+    rejection = error.value
+    non_generic_rejection_count = int(
+        rejection.audit_receipt.category
+        is not TicketRejectionCategory.CAPABILITY_NOT_AVAILABLE
+        or rejection.audit_receipt.denied_detail_count != 0
+    )
     assert channel.effects == 0
+    record_security_oracles(
+        record_property,
+        fixture_ref="ACCEPT-012",
+        unauthorized_evidence_count=0,
+        wrong_organization_effect_count=channel.effects,
+        missing_context_fallback_count=non_generic_rejection_count,
+    )
 
 
 @pytest.mark.parametrize("segment_index", [0, 1, 2])

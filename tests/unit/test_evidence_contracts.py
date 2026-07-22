@@ -337,6 +337,7 @@ def test_package_content_is_deterministic_and_exactly_links_each_projection() ->
     _close_authorization_kernel_scope(kernel_scope)
 
 
+@pytest.mark.security_evidence(id="PROP-INDEX-NOT-AUTHORITY-005", layer="property")
 def test_package_content_can_only_be_constructed_from_authorized_projections() -> None:
     with pytest.raises(TypeError, match="authorized projections"):
         PackageContent(blocks=(), evidence=())
@@ -365,6 +366,7 @@ def test_package_constructor_rejects_expired_projection_authority() -> None:
         construct_package_content((authorized,))
 
 
+@pytest.mark.security_evidence(id="PROP-EGRESS-011", layer="property")
 def test_package_constructor_rejects_cross_organization_or_mixed_request() -> None:
     kernel_scope = _open_authorization_kernel_scope()
     authorized = projection("a", "authorized body", kernel_scope=kernel_scope)

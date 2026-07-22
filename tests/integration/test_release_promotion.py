@@ -933,6 +933,7 @@ def test_application_roles_cannot_directly_mutate_release_pointer_or_audit(
     _assert_empty_publication_state(release_database, organization_id)
 
 
+@pytest.mark.security_evidence(id="PG-RELEASE-OWNER-019", layer="postgres")
 def test_promote_rechecks_current_operator_authority_digests_and_compatibility(
     release_database: _ReleaseDatabaseFixture,
     guarded_learning_engine: Engine,

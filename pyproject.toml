@@ -52,6 +52,7 @@ files = [
 testpaths = ["tests"]
 markers = [
   "integration: requires the real PostgreSQL 17 + pgvector harness",
+  "security_evidence(id, layer): exact executable M0 security evidence registration",
 ]
 
 [tool.ruff]
