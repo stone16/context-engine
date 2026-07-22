@@ -306,7 +306,7 @@ _ENTITY_PATTERN: Final = re.compile(
 _ESCAPE_PATTERN: Final = re.compile(
     r'''\\[!"#$%&'()*+,\-./:;<=>?@\[\]\\^_`{|}~]'''
 )
-_ATX_CLOSING_SEQUENCE_PATTERN: Final = re.compile(r"[ \t]+#+[ \t]*$")
+_ATX_CLOSING_SEQUENCE_PATTERN: Final = re.compile(r"(?:^|[ \t]+)#+[ \t]*$")
 _EMPHASIS_PATTERN: Final = re.compile(
     r"(?:\*\*(?=\S)(?:(?!\*\*).)*\S\*\*|"
     r"(?<![\w_])__(?=\S)(?:(?!__).)*\S__(?![\w_])|"

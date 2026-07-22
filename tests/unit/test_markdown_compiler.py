@@ -184,6 +184,14 @@ def test_unsupported_markdown_is_typed_failure_not_reinterpreted_text() -> None:
             b"# Handbook ###\n\nParagraph.\n",
             UnsupportedConstruct.ATX_CLOSING_SEQUENCE,
         ),
+        (
+            b"# #\n\nParagraph.\n",
+            UnsupportedConstruct.ATX_CLOSING_SEQUENCE,
+        ),
+        (
+            b"# ####\n\nParagraph.\n",
+            UnsupportedConstruct.ATX_CLOSING_SEQUENCE,
+        ),
         (b"## Nested\n\nParagraph.\n", UnsupportedConstruct.NESTED_HEADING),
         (b"# Handbook\n\n## Nested\n", UnsupportedConstruct.NESTED_HEADING),
         (b"# Handbook\n\n# Second\n", UnsupportedConstruct.NESTED_HEADING),
