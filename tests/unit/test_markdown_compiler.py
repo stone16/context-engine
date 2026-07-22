@@ -20,9 +20,11 @@ from engine.supply import (
     CompilationProvenance,
     MarkdownCompilerConfig,
     ParsedDocument,
+    ParsedSection,
     SectionKind,
     SourcePoint,
     SourceSpan,
+    StructuralPath,
     UnsupportedConstruct,
     canonicalize_parsed_document,
 )
@@ -258,7 +260,10 @@ def test_backslash_before_non_punctuation_remains_plain_text() -> None:
     assert outcome.sections[1].text == r"C:\Users"
 
 
-@pytest.mark.parametrize("paragraph", ("[literal]", "foo_bar_baz"))
+@pytest.mark.parametrize(
+    "paragraph",
+    ("[literal]", "foo_bar_baz", "2 * 3 * 4", "Use * literally * here"),
+)
 def test_plain_brackets_and_intraword_underscores_remain_text(
     paragraph: str,
 ) -> None:
@@ -266,6 +271,51 @@ def test_plain_brackets_and_intraword_underscores_remain_text(
 
     assert type(outcome) is ParsedDocument
     assert outcome.sections[1].text == paragraph
+
+
+def test_parsed_document_factory_cannot_bypass_closed_grammar() -> None:
+    canonical_text = "# *Heading*\n\nParagraph.\n"
+    heading_line = "# *Heading*"
+    paragraph_start = len(heading_line.encode()) + 2
+
+    with pytest.raises(ValueError, match="unsupported Markdown construct"):
+        ParsedDocument.issue_22(
+            canonical_text=canonical_text,
+            sections=(
+                ParsedSection(
+                    kind=SectionKind.HEADING,
+                    text="*Heading*",
+                    path=StructuralPath(("document", "heading[1]")),
+                    position=SourceSpan(
+                        start=SourcePoint(1, 1, 0),
+                        end=SourcePoint(1, len(heading_line) + 1, len(heading_line)),
+                    ),
+                    level=1,
+                ),
+                ParsedSection(
+                    kind=SectionKind.PARAGRAPH,
+                    text="Paragraph.",
+                    path=StructuralPath(
+                        ("document", "heading[1]", "paragraph[1]")
+                    ),
+                    position=SourceSpan(
+                        start=SourcePoint(3, 1, paragraph_start),
+                        end=SourcePoint(3, 11, paragraph_start + 10),
+                    ),
+                ),
+            ),
+            provenance=CompilationProvenance(
+                compiler_version=MARKDOWN_COMPILER_VERSION,
+                config_version=CONFIG.version,
+            ),
+        )
+
+
+def test_structural_path_rejects_blank_or_padded_segments() -> None:
+    with pytest.raises(ValueError, match="nonblank"):
+        StructuralPath(("document", "   "))
+    with pytest.raises(ValueError, match="nonblank"):
+        StructuralPath(("document", " paragraph[1]"))
 
 
 @pytest.mark.parametrize("control", ("\x7f", "\x80", "\x9f"))

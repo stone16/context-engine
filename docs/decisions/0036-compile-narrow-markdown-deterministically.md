@@ -45,6 +45,11 @@ typed all-or-nothing `CompilationFailure`. They never return a partial
 `ParsedDocument`. The current compiler emits an exact empty warning tuple; it
 does not claim any lossy warning behavior.
 
+The closed-grammar classifier is a Supply-domain invariant shared by the
+adapter and `ParsedDocument` self-validation. Parser ingress is therefore not
+the only enforcement point: direct typed construction cannot manufacture a
+valid digest for content that the active narrow grammar rejects.
+
 `ParsedDocument` contains canonical text, source-ordered typed sections,
 structural paths, canonical source spans, compiler/configuration provenance,
 and two distinct SHA-256 identities:

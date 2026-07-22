@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from enum import StrEnum
 from hashlib import sha256
@@ -103,7 +104,12 @@ class StructuralPath:
         if (
             type(self.segments) is not tuple
             or not self.segments
-            or any(type(segment) is not str or not segment for segment in self.segments)
+            or any(
+                type(segment) is not str
+                or not segment
+                or segment != segment.strip()
+                for segment in self.segments
+            )
         ):
             raise ValueError("structural path requires nonblank string segments")
 
@@ -286,6 +292,79 @@ class UnsupportedConstruct(StrEnum):
     TABLE = "table"
 
 
+_LIST_PATTERN: Final = re.compile(r"^ {0,3}(?:[-+*]|[0-9]+[.)])\s+")
+_HEADING_BLOCK_PATTERN: Final = re.compile(r"^ {0,3}#{1,6}(?:[ \t]+|$)")
+_THEMATIC_BREAK_PATTERN: Final = re.compile(
+    r"^ {0,3}(?:(?:\*[ \t]*){3,}|(?:_[ \t]*){3,}|(?:-[ \t]*){3,})$"
+)
+_REFERENCE_LINK_PATTERN: Final = re.compile(
+    r"!?\[[^]]*](?:\[[^]]*]|\s*:)"
+)
+_ENTITY_PATTERN: Final = re.compile(
+    r"&(?:#[0-9]+|#[xX][0-9A-Fa-f]+|[A-Za-z][A-Za-z0-9]+);"
+)
+_ESCAPE_PATTERN: Final = re.compile(
+    r'''\\[!"#$%&'()*+,\-./:;<=>?@\[\]\\^_`{|}~]'''
+)
+_ATX_CLOSING_SEQUENCE_PATTERN: Final = re.compile(r"[ \t]+#+[ \t]*$")
+_EMPHASIS_PATTERN: Final = re.compile(
+    r"(?:\*\*(?=\S)(?:(?!\*\*).)*\S\*\*|"
+    r"(?<![\w_])__(?=\S)(?:(?!__).)*\S__(?![\w_])|"
+    r"(?<!\*)\*(?=\S)(?:[^*\n]*\S)?\*(?!\*)|"
+    r"(?<![\w_])_(?=\S)(?:[^_\n]*\S)?_(?![\w_]))"
+)
+
+
+def unsupported_markdown_construct(
+    line: str,
+    *,
+    supported_heading: bool,
+) -> UnsupportedConstruct | None:
+    """Classify syntax outside the deliberately closed Issue #22 grammar."""
+
+    inspected = line[2:] if supported_heading and line.startswith("# ") else line
+    if line.startswith(("    ", "\t")):
+        return UnsupportedConstruct.CODE_BLOCK
+    if any(
+        ord(character) < 0x20 or 0x7F <= ord(character) <= 0x9F
+        for character in line
+    ):
+        return UnsupportedConstruct.CONTROL_CHARACTER
+    if re.match(r"^ {0,3}(?:`{3,}|~{3,})", line):
+        return UnsupportedConstruct.CODE_BLOCK
+    if re.match(r"^ {0,3}>", line):
+        return UnsupportedConstruct.BLOCKQUOTE
+    if _HEADING_BLOCK_PATTERN.match(line) and not (
+        supported_heading and line.startswith("# ")
+    ):
+        return UnsupportedConstruct.NESTED_HEADING
+    if supported_heading and _ATX_CLOSING_SEQUENCE_PATTERN.search(inspected):
+        return UnsupportedConstruct.ATX_CLOSING_SEQUENCE
+    if _THEMATIC_BREAK_PATTERN.fullmatch(line):
+        return UnsupportedConstruct.FRONTMATTER_OR_RULE
+    if _LIST_PATTERN.match(line):
+        return UnsupportedConstruct.LIST
+    if re.search(r"!?\[[^]]*]\([^)]*\)", inspected):
+        return UnsupportedConstruct.LINK_OR_IMAGE
+    if _REFERENCE_LINK_PATTERN.search(inspected):
+        return UnsupportedConstruct.LINK_OR_IMAGE
+    if "`" in inspected:
+        return UnsupportedConstruct.INLINE_CODE
+    if _EMPHASIS_PATTERN.search(inspected):
+        return UnsupportedConstruct.EMPHASIS
+    if "~~" in inspected:
+        return UnsupportedConstruct.STRIKETHROUGH
+    if re.search(r"<[/!?A-Za-z][^>]*>", inspected):
+        return UnsupportedConstruct.HTML
+    if _ESCAPE_PATTERN.search(inspected):
+        return UnsupportedConstruct.ESCAPE
+    if _ENTITY_PATTERN.search(inspected):
+        return UnsupportedConstruct.ENTITY
+    if inspected.endswith(("  ", "\\")):
+        return UnsupportedConstruct.HARD_BREAK
+    return None
+
+
 @dataclass(frozen=True, slots=True)
 class CompilationFailure:
     """Typed all-or-nothing failure; it never carries partial ParsedDocument data."""
@@ -417,6 +496,12 @@ def _validate_issue_22_content(
         raise ValueError("canonical Markdown must contain a level-one heading")
     heading_line = lines[0]
     paragraph_line = lines[2]
+    if any(
+        unsupported_markdown_construct(line, supported_heading=index == 0)
+        is not None
+        for index, line in ((0, heading_line), (2, paragraph_line))
+    ):
+        raise ValueError("canonical text contains an unsupported Markdown construct")
     heading_end = len(heading_line.encode("utf-8"))
     paragraph_start = heading_end + 2
     paragraph_end = paragraph_start + len(paragraph_line.encode("utf-8"))

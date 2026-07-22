@@ -18,26 +18,11 @@ from engine.supply.markdown import (
     SourcePoint,
     SourceSpan,
     StructuralPath,
-    UnsupportedConstruct,
+    unsupported_markdown_construct,
 )
 
 _UTF8_BOM: Final = b"\xef\xbb\xbf"
 _HEADING_PATTERN: Final = re.compile(r"^# (\S(?:.*\S)?)$")
-_LIST_PATTERN: Final = re.compile(r"^ {0,3}(?:[-+*]|[0-9]+[.)])\s+")
-_HEADING_BLOCK_PATTERN: Final = re.compile(r"^ {0,3}#{1,6}(?:[ \t]+|$)")
-_THEMATIC_BREAK_PATTERN: Final = re.compile(
-    r"^ {0,3}(?:(?:\*[ \t]*){3,}|(?:_[ \t]*){3,}|(?:-[ \t]*){3,})$"
-)
-_REFERENCE_LINK_PATTERN: Final = re.compile(
-    r"!?\[[^]]*](?:\[[^]]*]|\s*:)"
-)
-_ENTITY_PATTERN: Final = re.compile(
-    r"&(?:#[0-9]+|#[xX][0-9A-Fa-f]+|[A-Za-z][A-Za-z0-9]+);"
-)
-_ESCAPE_PATTERN: Final = re.compile(
-    r'''\\[!"#$%&'()*+,\-./:;<=>?@\[\]\\^_`{|}~]'''
-)
-_ATX_CLOSING_SEQUENCE_PATTERN: Final = re.compile(r"[ \t]+#+[ \t]*$")
 
 
 def _point(line: int, column: int, byte_offset: int) -> SourcePoint:
@@ -60,58 +45,6 @@ def _normalized_text(source: bytes) -> str | CompilationFailure:
         )
     normalized = decoded.replace("\r\n", "\n").replace("\r", "\n")
     return normalized.rstrip("\n") + "\n"
-
-
-def _unsupported_construct(
-    line: str,
-    *,
-    supported_heading: bool,
-) -> UnsupportedConstruct | None:
-    inspected = line[2:] if supported_heading and line.startswith("# ") else line
-    if line.startswith(("    ", "\t")):
-        return UnsupportedConstruct.CODE_BLOCK
-    if any(
-        ord(character) < 0x20 or 0x7F <= ord(character) <= 0x9F
-        for character in line
-    ):
-        return UnsupportedConstruct.CONTROL_CHARACTER
-    if re.match(r"^ {0,3}(?:`{3,}|~{3,})", line):
-        return UnsupportedConstruct.CODE_BLOCK
-    if re.match(r"^ {0,3}>", line):
-        return UnsupportedConstruct.BLOCKQUOTE
-    if _HEADING_BLOCK_PATTERN.match(line) and not (
-        supported_heading and line.startswith("# ")
-    ):
-        return UnsupportedConstruct.NESTED_HEADING
-    if supported_heading and _ATX_CLOSING_SEQUENCE_PATTERN.search(inspected):
-        return UnsupportedConstruct.ATX_CLOSING_SEQUENCE
-    if _THEMATIC_BREAK_PATTERN.fullmatch(line):
-        return UnsupportedConstruct.FRONTMATTER_OR_RULE
-    if _LIST_PATTERN.match(line):
-        return UnsupportedConstruct.LIST
-    if re.search(r"!?\[[^]]*]\([^)]*\)", inspected):
-        return UnsupportedConstruct.LINK_OR_IMAGE
-    if _REFERENCE_LINK_PATTERN.search(inspected):
-        return UnsupportedConstruct.LINK_OR_IMAGE
-    if "`" in inspected:
-        return UnsupportedConstruct.INLINE_CODE
-    if re.search(
-        r"(?:\*\*[^*]+\*\*|(?<![\w_])__[^_]+__(?![\w_])|"
-        r"(?<!\*)\*[^*]+\*|(?<![\w_])_[^_]+_(?![\w_]))",
-        inspected,
-    ):
-        return UnsupportedConstruct.EMPHASIS
-    if "~~" in inspected:
-        return UnsupportedConstruct.STRIKETHROUGH
-    if re.search(r"<[/!?A-Za-z][^>]*>", inspected):
-        return UnsupportedConstruct.HTML
-    if _ESCAPE_PATTERN.search(inspected):
-        return UnsupportedConstruct.ESCAPE
-    if _ENTITY_PATTERN.search(inspected):
-        return UnsupportedConstruct.ENTITY
-    if inspected.endswith(("  ", "\\")):
-        return UnsupportedConstruct.HARD_BREAK
-    return None
 
 
 def _failure_point(lines: list[str], line_index: int) -> SourcePoint:
@@ -169,7 +102,7 @@ def compile_markdown(
 
     lines = normalized.removesuffix("\n").split("\n")
     for line_index, line in enumerate(lines):
-        construct = _unsupported_construct(
+        construct = unsupported_markdown_construct(
             line,
             supported_heading=line_index == 0,
         )
