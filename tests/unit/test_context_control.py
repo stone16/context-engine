@@ -1,0 +1,242 @@
+from __future__ import annotations
+
+from dataclasses import fields
+from datetime import UTC, datetime, timedelta
+from typing import cast
+from uuid import UUID
+
+import pytest
+
+from engine.control import (
+    FILE_CAPABILITY_MANIFEST,
+    CapabilityStatus,
+    ContextControl,
+    ControlOperation,
+    ControlOperatorAuthenticationRejected,
+    ControlOperatorAuthority,
+    ControlStorePort,
+    RegisterFileSource,
+    SourceManifest,
+    SourceNotAvailable,
+    SourceRef,
+    TrustedControlCall,
+    VerifiedControlOperatorIdentity,
+)
+
+ORGANIZATION_ID = UUID("a6776454-3a24-4c1c-998c-3a69a1d3de23")
+NOW = datetime(2026, 7, 22, 18, 50, tzinfo=UTC)
+
+
+class _Authenticator:
+    def authenticate(self, opaque_credential: str) -> VerifiedControlOperatorIdentity:
+        if opaque_credential != "control-credential-a":
+            raise ControlOperatorAuthenticationRejected
+        return VerifiedControlOperatorIdentity(
+            organization_id=ORGANIZATION_ID,
+            operator_ref="control-operator-a",
+            authentication_binding_ref="control-binding-a",
+            authority_ref="source-admin-a",
+            allowed_operations=frozenset(
+                {ControlOperation.REGISTER_SOURCE, ControlOperation.READ_SOURCE}
+            ),
+            valid_from=NOW - timedelta(minutes=1),
+            expires_at=NOW + timedelta(hours=1),
+        )
+
+
+class _Store(ControlStorePort):
+    def __init__(self) -> None:
+        self.manifest: SourceManifest | None = None
+
+    def register_file_source(
+        self, call: TrustedControlCall, command: RegisterFileSource
+    ) -> SourceManifest:
+        assert call.organization_id == ORGANIZATION_ID
+        assert call.operation is ControlOperation.REGISTER_SOURCE
+        self.manifest = SourceManifest.issue_21_file(
+            source_ref=SourceRef(
+                UUID("5d37f20a-6a2b-4534-8909-e0118bbc4b47")
+            ),
+            version_ref=UUID("54ae2c20-02a1-44e7-98bf-4034841fb7ac"),
+            display_name=command.display_name,
+            root_ref=command.root_ref,
+            created_at=NOW,
+        )
+        return self.manifest
+
+    def read_source(
+        self, call: TrustedControlCall, source_ref: SourceRef
+    ) -> SourceManifest:
+        assert call.organization_id == ORGANIZATION_ID
+        assert call.operation is ControlOperation.READ_SOURCE
+        if self.manifest is None or source_ref != self.manifest.source_ref:
+            raise SourceNotAvailable
+        return self.manifest
+
+
+def _authority() -> ControlOperatorAuthority:
+    return ControlOperatorAuthority(
+        _Authenticator(),
+        call_ttl=timedelta(minutes=5),
+        clock=lambda: NOW,
+    )
+
+
+def test_file_registration_command_has_no_identity_mode_or_host_path_input() -> None:
+    command = RegisterFileSource(
+        display_name="Engineering handbook",
+        root_ref="engineering-handbook",
+        idempotency_key="register-handbook-v1",
+    )
+
+    assert [field.name for field in fields(command)] == [
+        "display_name",
+        "root_ref",
+        "idempotency_key",
+    ]
+    assert command.root_ref == "engineering-handbook"
+
+    for host_path in (
+        "/srv/knowledge",
+        "../knowledge",
+        "~/knowledge",
+        "C:\\knowledge",
+        "file:///srv/knowledge",
+        "folder/knowledge",
+        "folder\\knowledge",
+        "知识库",
+    ):
+        with pytest.raises(ValueError, match="logical File root reference"):
+            RegisterFileSource(
+                display_name="Engineering handbook",
+                root_ref=host_path,
+                idempotency_key="register-handbook-v1",
+            )
+
+
+def test_authorized_operator_registers_and_reads_one_honest_file_manifest() -> None:
+    store = _Store()
+    authority = _authority()
+    control = ContextControl(store=store, authority=authority, clock=lambda: NOW)
+    command = RegisterFileSource(
+        display_name="Engineering handbook",
+        root_ref="engineering-handbook",
+        idempotency_key="register-handbook-v1",
+    )
+
+    with authority.authorize(
+        opaque_credential="control-credential-a",
+        operation=ControlOperation.REGISTER_SOURCE,
+        request_id="register-request-a",
+    ) as call:
+        registered = control.register_source(call, command)
+        with pytest.raises(SourceNotAvailable):
+            control.register_source(call, command)
+
+    assert registered.active_version.capabilities == FILE_CAPABILITY_MANIFEST
+    assert registered.active_version.capabilities.source_mode.value == "materialized"
+    assert registered.active_version.capabilities.content_kinds[0].value == "markdown"
+    assert registered.active_version.capabilities.acl_evidence_mode.value == "mirrored"
+    assert all(
+        status is CapabilityStatus.UNAVAILABLE
+        for status in (
+            registered.active_version.capabilities.describe_capabilities,
+            registered.active_version.capabilities.read_changes,
+            registered.active_version.capabilities.discover,
+            registered.active_version.capabilities.authorize_and_project,
+            registered.active_version.capabilities.checkpoint,
+            registered.active_version.capabilities.deletion,
+            registered.active_version.capabilities.file_source_access,
+            registered.active_version.capabilities.ingestion_jobs,
+        )
+    )
+    assert registered.active_version.capabilities.document() == {
+        "aclEvidenceMode": "mirrored",
+        "authorizeAndProject": "unavailable",
+        "checkpoint": "unavailable",
+        "contentKinds": ["markdown"],
+        "declarationVersion": "file-capabilities-v1",
+        "deletion": "unavailable",
+        "describeCapabilities": "unavailable",
+        "discover": "unavailable",
+        "fileSourceAccess": "unavailable",
+        "ingestionJobs": "unavailable",
+        "readChanges": "unavailable",
+        "sourceMode": "materialized",
+    }
+
+    with authority.authorize(
+        opaque_credential="control-credential-a",
+        operation=ControlOperation.READ_SOURCE,
+        request_id="read-request-a",
+    ) as call:
+        assert control.read_source(call, registered.source_ref) == registered
+
+
+def test_source_ref_and_forged_or_wrong_operation_calls_never_authorize_control() -> (
+    None
+):
+    store = _Store()
+    authority = _authority()
+    control = ContextControl(store=store, authority=authority, clock=lambda: NOW)
+    command = RegisterFileSource(
+        display_name="Engineering handbook",
+        root_ref="engineering-handbook",
+        idempotency_key="register-handbook-v1",
+    )
+
+    with pytest.raises(TypeError, match="authority-constructed"):
+        TrustedControlCall()
+    with pytest.raises(SourceNotAvailable):
+        control.register_source(cast(TrustedControlCall, object()), command)
+    with pytest.raises(SourceNotAvailable):
+        control.register_source(
+            cast(TrustedControlCall, SourceRef(ORGANIZATION_ID)), command
+        )
+
+    with authority.authorize(
+        opaque_credential="control-credential-a",
+        operation=ControlOperation.READ_SOURCE,
+        request_id="wrong-operation-request",
+    ) as read_call, pytest.raises(SourceNotAvailable):
+        control.register_source(read_call, command)
+
+    with authority.authorize(
+        opaque_credential="control-credential-a",
+        operation=ControlOperation.REGISTER_SOURCE,
+        request_id="scope-state-request",
+    ) as scoped_call:
+        scope = object.__getattribute__(scoped_call, "_scope")
+        assert not hasattr(scope, "active")
+        assert not hasattr(scope, "consumed")
+        control.register_source(scoped_call, command)
+        with pytest.raises(SourceNotAvailable):
+            control.register_source(scoped_call, command)
+
+
+@pytest.mark.parametrize(
+    ("field_name", "replacement"),
+    [
+        ("organization_id", UUID("629a286b-34b5-41f4-a7d4-7793b3b5b013")),
+        ("operator_ref", "substituted-operator"),
+        ("request_id", "substituted-request"),
+        ("expires_at", NOW + timedelta(days=1)),
+    ],
+)
+def test_trusted_control_call_rejects_claim_tampering(
+    field_name: str,
+    replacement: object,
+) -> None:
+    store = _Store()
+    authority = _authority()
+    control = ContextControl(store=store, authority=authority, clock=lambda: NOW)
+    command = RegisterFileSource("Handbook", "handbook", "handbook-v1")
+
+    with authority.authorize(
+        opaque_credential="control-credential-a",
+        operation=ControlOperation.REGISTER_SOURCE,
+        request_id="register-request-a",
+    ) as call:
+        object.__setattr__(call, field_name, replacement)
+        with pytest.raises(SourceNotAvailable):
+            control.register_source(call, command)

@@ -18,6 +18,7 @@ PINNED_GLOBAL_TABLES = frozenset(
     {"alembic_version", "organization", "user_account"}
 )
 NON_OWNER_EVIDENCE_BY_TABLE: Mapping[str, str] = {
+    "context_source": "PG-FILE-SOURCE-RLS-021",
     "membership": "PG-SCOPE-INTERSECTION-004",
     "organization_record": "PG-TENANT-FK-002",
     "context_resource": "PG-INDEX-NOT-AUTHORITY-005",
@@ -29,6 +30,7 @@ NON_OWNER_EVIDENCE_BY_TABLE: Mapping[str, str] = {
     "context_run_operator_read_ticket": "PG-TRACE-REDACTION-012",
     "decision_audit": "PG-TRACE-REDACTION-012",
     "service_principal": "PG-WORKER-LEASE-007",
+    "source_version": "PG-FILE-SOURCE-RLS-021",
     "worker_noop_job": "PG-WORKER-LEASE-007",
     "context_fragment_field": "PG-FIELD-PROJECTION-RLS-048",
     "membership_resource_field_right": "PG-FIELD-PROJECTION-RLS-048",

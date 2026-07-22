@@ -42,7 +42,8 @@
     }
   ],
   "evidence": [
-    {"id": "PROP-TENANT-OWNERSHIP-001", "layer": "property", "selector": "tests/unit/test_schema_security_manifest.py::test_manifest_classifies_the_exact_issue_49_release_schema"},
+    {"id": "PROP-TENANT-OWNERSHIP-001", "layer": "property", "selector": "tests/unit/test_schema_security_manifest.py::test_manifest_classifies_the_exact_current_release_schema"},
+    {"id": "PG-FILE-SOURCE-RLS-021", "layer": "postgres", "selector": "tests/integration/test_file_source_registration.py::test_control_registers_reads_and_idempotently_isolates_file_sources"},
     {"id": "PG-RLS-ALL-TENANT-TABLES", "layer": "postgres", "selector": "tests/integration/test_m0_security_gate_rls.py::test_all_manifest_tenant_tables_pass_live_non_owner_rls_audit"},
     {"id": "RUNTIME-TENANT-OWNERSHIP-001", "layer": "runtime", "selector": "tests/integration/test_runtime_authorized_evidence_integration.py::test_real_postgres_http_delivers_only_exact_authorized_evidence_bidirectionally"},
     {"id": "PROP-TENANT-FK-002", "layer": "property", "selector": "tests/unit/test_schema_security_manifest.py::test_content_manifest_preserves_lineage_visibility_and_immutability"},
@@ -102,7 +103,7 @@
     {"id": "FIXTURE-ACCEPT-012", "layer": "runtime", "selector": "tests/unit/test_ticket_audience_separation.py::test_accept_012_context_read_ticket_cannot_create_an_action_effect"}
   ],
   "invariantMappings": [
-    {"invariantRef": "TENANT-OWNERSHIP-001", "evidenceRefs": {"property": ["PROP-TENANT-OWNERSHIP-001"], "postgres": ["PG-RLS-ALL-TENANT-TABLES"], "runtime": ["RUNTIME-TENANT-OWNERSHIP-001"]}},
+    {"invariantRef": "TENANT-OWNERSHIP-001", "evidenceRefs": {"property": ["PROP-TENANT-OWNERSHIP-001"], "postgres": ["PG-FILE-SOURCE-RLS-021", "PG-RLS-ALL-TENANT-TABLES"], "runtime": ["RUNTIME-TENANT-OWNERSHIP-001"]}},
     {"invariantRef": "TENANT-FK-002", "evidenceRefs": {"property": ["PROP-TENANT-FK-002"], "postgres": ["PG-TENANT-FK-002"], "runtime": ["RUNTIME-TENANT-FK-002"]}},
     {"invariantRef": "RLS-FAIL-CLOSED-003", "evidenceRefs": {"property": ["PROP-RLS-FAIL-CLOSED-003"], "postgres": ["PG-RLS-FAIL-CLOSED-003", "PG-RLS-ALL-TENANT-TABLES"], "runtime": ["RUNTIME-RLS-FAIL-CLOSED-003"]}},
     {"invariantRef": "SCOPE-INTERSECTION-004", "evidenceRefs": {"property": ["PROP-SCOPE-INTERSECTION-004"], "postgres": ["PG-SCOPE-INTERSECTION-004", "PG-FIELD-PROJECTION-RLS-048"], "runtime": ["RUNTIME-SCOPE-INTERSECTION-004"]}},

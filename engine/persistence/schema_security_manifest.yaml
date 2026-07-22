@@ -1,6 +1,17 @@
 {
-  "manifestVersion": "9.0.0",
+  "manifestVersion": "10.0.0",
   "controlOperations": [
+    {
+      "name": "register_file_source",
+      "role": "context_engine_control",
+      "directTableMutationAllowed": true,
+      "trustedOrganizationSource": "TrustedControlCall",
+      "transactionLocalOrganizationSetting": "app.organization_id",
+      "organizationScopedIdempotency": true,
+      "filesystemAccessAllowed": false,
+      "durableJobCreationAllowed": false,
+      "atomicWrites": ["context_source", "source_version"]
+    },
     {
       "name": "change_resource_access",
       "databaseFunction": "context_control_revoke_resource_access",
@@ -302,6 +313,200 @@
         "MIG-001",
         "MIG-002"
       ]
+    },
+    {
+      "name": "context_source",
+      "classification": "tenant_owned",
+      "nonOwnerEvidence": {
+        "evidenceId": "PG-FILE-SOURCE-RLS-021",
+        "selector": {"table": "context_source"}
+      },
+      "purpose": "Stable Organization-owned File source identity and active immutable SourceVersion pointer",
+      "organizationColumn": "organization_id",
+      "organizationInclusiveKeys": [
+        {
+          "name": "pk_context_source",
+          "kind": "primary_key",
+          "columns": ["organization_id", "source_id"]
+        },
+        {
+          "name": "uq_context_source_registration_idempotency",
+          "kind": "unique",
+          "columns": ["organization_id", "registration_operation", "idempotency_key"]
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_context_source_organization",
+          "columns": ["organization_id"],
+          "references": {
+            "table": "organization",
+            "columns": ["organization_id"]
+          },
+          "onDelete": "CASCADE"
+        },
+        {
+          "name": "fk_context_source_active_version_same_organization",
+          "columns": ["organization_id", "source_id", "active_version_id"],
+          "references": {
+            "table": "source_version",
+            "columns": ["organization_id", "source_id", "version_id"]
+          },
+          "onDelete": "RESTRICT",
+          "deferrable": true,
+          "initially": "DEFERRED"
+        }
+      ],
+      "checkConstraints": [
+        {
+          "name": "ck_context_source_kind_file",
+          "expression": "source_kind = 'file'"
+        },
+        {
+          "name": "ck_context_source_registration_operation",
+          "expression": "registration_operation = 'register_source'"
+        },
+        {
+          "name": "ck_context_source_display_name",
+          "expression": "btrim(display_name) <> '' AND char_length(display_name) <= 200 AND display_name !~ '[[:cntrl:]]'"
+        },
+        {
+          "name": "ck_context_source_idempotency_key",
+          "expression": "idempotency_key ~ '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$'"
+        },
+        {
+          "name": "ck_context_source_registration_digest",
+          "expression": "registration_digest ~ '^[0-9a-f]{64}$'"
+        }
+      ],
+      "rowLevelSecurity": {
+        "enabled": true,
+        "forced": true,
+        "policies": [
+          {
+            "name": "context_source_control_insert",
+            "command": "INSERT",
+            "roles": ["context_engine_control"],
+            "withCheck": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"
+          },
+          {
+            "name": "context_source_control_select",
+            "command": "SELECT",
+            "roles": ["context_engine_control"],
+            "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"
+          },
+          {
+            "name": "context_source_migrator_administration",
+            "command": "ALL",
+            "roles": ["context_engine_migrator"],
+            "using": "true",
+            "withCheck": "true"
+          }
+        ]
+      },
+      "permittedOperations": {
+        "context_engine_control": ["SELECT", "INSERT"],
+        "context_engine_learning": [],
+        "context_engine_runtime": [],
+        "context_engine_security_operator": [],
+        "context_engine_worker": []
+      },
+      "partitions": [],
+      "securityInvariantIds": [
+        "TENANT-OWNERSHIP-001",
+        "TENANT-FK-002",
+        "RLS-FAIL-CLOSED-003"
+      ],
+      "negativeTestIds": ["DB-001", "DB-003", "DB-004", "DB-008"]
+    },
+    {
+      "name": "source_version",
+      "classification": "tenant_owned",
+      "nonOwnerEvidence": {
+        "evidenceId": "PG-FILE-SOURCE-RLS-021",
+        "selector": {"table": "source_version"}
+      },
+      "purpose": "Immutable Organization-owned File source configuration and exact capability declaration",
+      "organizationColumn": "organization_id",
+      "organizationInclusiveKeys": [
+        {
+          "name": "pk_source_version",
+          "kind": "primary_key",
+          "columns": ["organization_id", "source_id", "version_id"]
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_source_version_source_same_organization",
+          "columns": ["organization_id", "source_id"],
+          "references": {
+            "table": "context_source",
+            "columns": ["organization_id", "source_id"]
+          },
+          "onDelete": "CASCADE",
+          "deferrable": true,
+          "initially": "DEFERRED"
+        }
+      ],
+      "checkConstraints": [
+        {
+          "name": "ck_source_version_kind_file",
+          "expression": "source_kind = 'file'"
+        },
+        {
+          "name": "ck_source_version_logical_root_ref",
+          "expression": "root_ref ~ '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$' AND root_ref NOT IN ('.', '..')"
+        },
+        {
+          "name": "ck_source_version_issue_21_capabilities",
+          "expression": "capability_manifest = '{\"aclEvidenceMode\": \"mirrored\", \"authorizeAndProject\": \"unavailable\", \"checkpoint\": \"unavailable\", \"contentKinds\": [\"markdown\"], \"declarationVersion\": \"file-capabilities-v1\", \"deletion\": \"unavailable\", \"describeCapabilities\": \"unavailable\", \"discover\": \"unavailable\", \"fileSourceAccess\": \"unavailable\", \"ingestionJobs\": \"unavailable\", \"readChanges\": \"unavailable\", \"sourceMode\": \"materialized\"}'::jsonb"
+        }
+      ],
+      "rowLevelSecurity": {
+        "enabled": true,
+        "forced": true,
+        "policies": [
+          {
+            "name": "source_version_control_insert",
+            "command": "INSERT",
+            "roles": ["context_engine_control"],
+            "withCheck": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"
+          },
+          {
+            "name": "source_version_control_select",
+            "command": "SELECT",
+            "roles": ["context_engine_control"],
+            "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"
+          },
+          {
+            "name": "source_version_migrator_administration",
+            "command": "ALL",
+            "roles": ["context_engine_migrator"],
+            "using": "true",
+            "withCheck": "true"
+          }
+        ]
+      },
+      "immutableRows": {
+        "trigger": "source_version_immutable",
+        "function": "source_version_reject_mutation",
+        "events": ["UPDATE", "DELETE"],
+        "sqlstate": "55000"
+      },
+      "permittedOperations": {
+        "context_engine_control": ["SELECT", "INSERT"],
+        "context_engine_learning": [],
+        "context_engine_runtime": [],
+        "context_engine_security_operator": [],
+        "context_engine_worker": []
+      },
+      "partitions": [],
+      "securityInvariantIds": [
+        "TENANT-OWNERSHIP-001",
+        "TENANT-FK-002",
+        "RLS-FAIL-CLOSED-003"
+      ],
+      "negativeTestIds": ["DB-001", "DB-003", "DB-004", "DB-008"]
     },
     {
       "name": "context_resource",

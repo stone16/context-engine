@@ -31,6 +31,7 @@ from engine.persistence.context_runs import (
     PostgreSQLContextRunReader,
     VerifiedContextRunOperatorIdentity,
 )
+from engine.persistence.control_sources import PostgreSQLControlStore
 from engine.persistence.database import create_database_engine
 from engine.persistence.membership_context import (
     MembershipAuthorityUnavailable,
@@ -90,6 +91,7 @@ __all__ = [
     "ContextRunView",
     "OperatorAuthorizationProvenance",
     "PostgreSQLContextRunReader",
+    "PostgreSQLControlStore",
     "VerifiedContextRunOperatorIdentity",
     "ResourceAccessRevocation",
     "OrganizationContextBindingError",
