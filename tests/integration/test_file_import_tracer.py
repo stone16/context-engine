@@ -44,14 +44,21 @@ from engine.persistence import (
     PostgreSQLWorkerLeaseIssuer,
     create_database_engine,
 )
-from engine.persistence.membership_context import MembershipIdentity
+from engine.persistence.membership_context import (
+    MembershipIdentity,
+    _PostgreSQLMaterializedProjectionPort,
+)
 from engine.runtime.construction import Runtime, required_kernel_dependencies
+from engine.runtime.content_io import exact_phrase_digest
 from engine.runtime.context_run import ContextRunOutcome
-from engine.runtime.contracts import Acquire
+from engine.runtime.contracts import Acquire, ContextNeed
 from engine.runtime.evidence import CandidateRef
 from engine.runtime.materialized import (
     MaterializedProjectionSession,
+    _close_materialized_projection_scope,
+    _construct_materialized_projection_session,
     _observe_materialized_publication,
+    _open_materialized_projection_scope,
 )
 from engine.runtime.organization import (
     ExistingOrganizationVerification,
@@ -392,6 +399,25 @@ def _prepare_file_import_scenario(
                 idempotency_key="file-security-scenario",
             ),
         )
+    with authority.authorize(
+        opaque_credential="control-secret",
+        operation=ControlOperation.IMPORT_FILE,
+        request_id="retry-import-after-lost-response",
+    ) as call:
+        prepared_retry = control.prepare_file_import(
+            call,
+            PrepareFileImport(
+                source_ref=source.source_ref,
+                path=FileImportPath("handbook.md"),
+                audience=FileImportAudience(
+                    principal_ref="principal:file-reader",
+                    membership_id=membership_id,
+                    membership_version=1,
+                ),
+                idempotency_key="file-security-scenario",
+            ),
+        )
+    assert prepared_retry == prepared
     codec = WorkerLeaseCodec(
         WorkerLeaseKeyring(active_version=1, keys={1: SIGNING_KEY})
     )
@@ -1140,6 +1166,106 @@ def test_missing_file_after_redemption_records_terminal_zero_effect_failure(
             0,
             0,
         )
+
+
+def test_exact_phrase_discovery_does_not_hide_a_match_after_sixty_four_rows(
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    organization_id = uuid4()
+    candidate_rows: list[dict[str, object]] = []
+    for index in range(65):
+        resource_ref = f"resource:exact-limit:{index:03d}"
+        candidate_rows.append(
+            {
+                "organization_id": organization_id,
+                "source_ref": "source:exact-limit",
+                "resource_ref": resource_ref,
+                "revision_id": uuid4(),
+                "fragment_ref": "fragment:paragraph:1",
+                "ordinal": index,
+            }
+        )
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.connect() as connection:
+            transaction = connection.begin()
+            connection.execute(
+                text("INSERT INTO organization (organization_id) VALUES (:org)"),
+                {"org": organization_id},
+            )
+            connection.execute(text("SET CONSTRAINTS ALL DEFERRED"))
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO context_resource (
+                        organization_id, resource_ref, source_ref,
+                        active_revision_id, tombstoned
+                    ) VALUES (:organization_id, :resource_ref, :source_ref,
+                        :revision_id, false)
+                    """
+                ),
+                candidate_rows,
+            )
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO context_revision (
+                        organization_id, resource_ref, revision_id
+                    ) VALUES (:organization_id, :resource_ref, :revision_id)
+                    """
+                ),
+                candidate_rows,
+            )
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO context_fragment (
+                        organization_id, resource_ref, revision_id,
+                        fragment_ref, ordinal, content, projection_kind
+                    ) VALUES (:organization_id, :resource_ref, :revision_id,
+                        :fragment_ref, 0, 'same exact paragraph', 'body')
+                    """
+                ),
+                candidate_rows,
+            )
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO exact_phrase_candidate (
+                        organization_id, phrase_digest, source_ref,
+                        resource_ref, revision_id, fragment_ref
+                    ) VALUES (:organization_id, :phrase_digest, :source_ref,
+                        :resource_ref, :revision_id, :fragment_ref)
+                    """
+                ),
+                [
+                    {
+                        **row,
+                        "phrase_digest": exact_phrase_digest(
+                            "same exact paragraph"
+                        ),
+                    }
+                    for row in candidate_rows
+                ],
+            )
+            projection_scope = _open_materialized_projection_scope()
+            try:
+                projection_session = _construct_materialized_projection_session(
+                    authority_scope=projection_scope,
+                    port=_PostgreSQLMaterializedProjectionPort(connection),
+                )
+                discovered = PostgreSQLExactPhraseCandidateIndex().discover(
+                    Acquire(need=ContextNeed(query="same exact paragraph")),
+                    projection_session,
+                )
+            finally:
+                _close_materialized_projection_scope(projection_scope)
+                transaction.rollback()
+    finally:
+        migration_engine.dispose()
+
+    assert len(discovered) == 65
+    assert discovered[-1].resource_ref == "resource:exact-limit:064"
 
 
 @pytest.mark.parametrize(

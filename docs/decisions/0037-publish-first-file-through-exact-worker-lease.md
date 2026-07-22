@@ -59,7 +59,9 @@ before restoring the Issue #21 and Issue #17 constraints.
 The exact-phrase index stores a SHA-256 query digest and lineage references, not
 content. Its Runtime SELECT requires the complete current UserActor transaction
 context and runs inside the same retained projection transaction used by the
-Kernel; returned `CandidateRef` values remain untrusted discovery output.
+Kernel. It does not truncate digest matches before authorization because doing
+so could hide a later authorized candidate behind earlier denied candidates;
+returned `CandidateRef` values remain untrusted discovery output.
 Every candidate still crosses the sealed AuthorizationKernel and
 `AuthorizedProjection` gates before content-bearing assembly. Cross-Organization
 or scope-denied resolution returns the canonical empty package.

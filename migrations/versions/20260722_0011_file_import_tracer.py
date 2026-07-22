@@ -314,11 +314,19 @@ def upgrade() -> None:
         f"AND workload = '{_WORKLOAD}' AND worker_audience = '{_AUDIENCE}' "
         f"AND operation = '{_OPERATION}'"
     )
+    job_select_binding = (
+        f"organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid "
+        "AND (job_id = NULLIF(current_setting('app.worker_job_id', true), '')::uuid "
+        "OR acquisition_id = NULLIF(current_setting('app.file_acquisition_id', true), '')::uuid) "
+        f"AND workload = '{_WORKLOAD}' AND worker_audience = '{_AUDIENCE}' "
+        f"AND operation = '{_OPERATION}'"
+    )
     for command in ("SELECT", "UPDATE"):
         check = f" WITH CHECK ({job_binding})" if command == "UPDATE" else ""
+        using = job_select_binding if command == "SELECT" else job_binding
         op.execute(
             f"CREATE POLICY file_import_job_definer_{command.lower()} ON file_import_job "
-            f"FOR {command} TO {_DEFINER} USING ({job_binding}){check}"
+            f"FOR {command} TO {_DEFINER} USING ({using}){check}"
         )
     op.execute(f"GRANT INSERT ON TABLE source_version TO {_DEFINER}")
     op.execute(
@@ -552,6 +560,9 @@ def _create_functions() -> None:
               AND idempotency_key = requested_idempotency_key
               AND request_digest = requested_request_digest;
             IF selected_acquisition_id IS NULL THEN RETURN; END IF;
+            PERFORM pg_catalog.set_config(
+                'app.file_acquisition_id', selected_acquisition_id::text, true
+            );
             INSERT INTO public.file_import_job (
                 organization_id, job_id, acquisition_id, source_id,
                 service_principal_id, workload, worker_audience, actor_kind,
@@ -561,6 +572,15 @@ def _create_functions() -> None:
                 requested_source_id, requested_service_principal_id, '{_WORKLOAD}',
                 '{_AUDIENCE}', 'service', '{_OPERATION}', 'available', trusted_now
             ) ON CONFLICT (organization_id, acquisition_id) DO NOTHING;
+            SELECT job.job_id INTO requested_job_id
+            FROM public.file_import_job AS job
+            WHERE job.organization_id = requested_organization_id
+              AND job.acquisition_id = selected_acquisition_id
+              AND job.service_principal_id = requested_service_principal_id;
+            IF requested_job_id IS NULL THEN RETURN; END IF;
+            PERFORM pg_catalog.set_config(
+                'app.worker_job_id', requested_job_id::text, true
+            );
             RETURN QUERY SELECT job.job_id, job.service_principal_id
             FROM public.file_import_job AS job
             WHERE job.organization_id = requested_organization_id

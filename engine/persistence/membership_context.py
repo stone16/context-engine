@@ -156,7 +156,6 @@ class _PostgreSQLMaterializedProjectionPort:
                 FROM exact_phrase_candidate
                 WHERE phrase_digest = :phrase_digest
                 ORDER BY resource_ref, revision_id, fragment_ref
-                LIMIT 64
                 """
             ),
             {"phrase_digest": phrase_digest},
