@@ -498,6 +498,126 @@ def test_identical_content_in_different_organizations_remains_independent(
     assert first.content_identity_digest != second.content_identity_digest
 
 
+@pytest.mark.parametrize("membership_state", ("revoked", "expired"))
+def test_revoked_or_expired_membership_never_takes_noop_path(
+    tmp_path: Path,
+    migration_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+    guarded_worker_engine: Engine,
+    membership_state: str,
+) -> None:
+    scenario = _prepare_file_import_scenario(
+        tmp_path,
+        migration_configuration,
+        guarded_control_engine,
+    )
+    assert scenario.token is not None
+    first = _run_file_import(
+        scenario,
+        scenario.prepared,
+        scenario.token,
+        guarded_worker_engine,
+    )
+    repeat_prepared, repeat_token = _prepare_repeat_file_import(
+        scenario,
+        guarded_control_engine,
+        idempotency_key=f"membership-{membership_state}-before-repeat",
+    )
+
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.begin() as connection:
+            if membership_state == "revoked":
+                connection.execute(
+                    text(
+                        """
+                        UPDATE membership SET status = 'revoked'
+                        WHERE organization_id = :organization_id
+                          AND membership_id = :membership_id
+                        """
+                    ),
+                    {
+                        "organization_id": scenario.organization_id,
+                        "membership_id": scenario.membership_id,
+                    },
+                )
+            else:
+                connection.execute(
+                    text(
+                        """
+                        UPDATE membership SET valid_until = :valid_until
+                        WHERE organization_id = :organization_id
+                          AND membership_id = :membership_id
+                        """
+                    ),
+                    {
+                        "organization_id": scenario.organization_id,
+                        "membership_id": scenario.membership_id,
+                        "valid_until": NOW,
+                    },
+                )
+
+        with pytest.raises(WorkNotAvailable):
+            _run_file_import(
+                scenario,
+                repeat_prepared,
+                repeat_token,
+                guarded_worker_engine,
+            )
+
+        with migration_engine.connect() as connection:
+            assert _publication_effect_counts(
+                connection,
+                scenario.organization_id,
+            ) == (2, 2, 1, 1, 1, 1, 3, 1, 1, 1)
+            assert (
+                connection.execute(
+                    text(
+                        """
+                        SELECT count(*) FROM file_acquisition_result
+                        WHERE organization_id = :organization_id
+                        """
+                    ),
+                    {"organization_id": scenario.organization_id},
+                ).scalar_one()
+                == 0
+            )
+            assert (
+                connection.execute(
+                    text(
+                        """
+                        SELECT active_revision_id FROM context_resource
+                        WHERE organization_id = :organization_id
+                          AND resource_ref = :resource_ref
+                        """
+                    ),
+                    {
+                        "organization_id": scenario.organization_id,
+                        "resource_ref": first.candidate_ref.resource_ref,
+                    },
+                ).scalar_one()
+                == UUID(first.candidate_ref.revision_ref)
+            )
+            assert (
+                connection.execute(
+                    text(
+                        """
+                        SELECT state FROM file_import_job
+                        WHERE organization_id = :organization_id
+                          AND job_id = :job_id
+                        """
+                    ),
+                    {
+                        "organization_id": scenario.organization_id,
+                        "job_id": repeat_prepared.job_id,
+                    },
+                ).scalar_one()
+                == "failed"
+            )
+    finally:
+        migration_engine.dispose()
+
+
 def test_incomplete_active_artifact_is_not_treated_as_unchanged(
     tmp_path: Path,
     migration_configuration: DatabaseConfiguration,

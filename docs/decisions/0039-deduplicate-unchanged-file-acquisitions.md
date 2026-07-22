@@ -66,11 +66,11 @@ active Revision whose immutable snapshot has the exact canonical content hash,
 compiler version, and configuration version; its publication events are exactly
 `prepared -> indexed -> active`; and its version-specific stored compilation,
 Fragments, and exact-phrase candidates match the freshly compiled artifact. The
-current acquisition's exact Principal and Membership version must also retain
-the published body access; content equality never grants or repairs access.
-Missing or inconsistent active artifacts or access fail closed. Initial
-publication and classification remain in the same transaction and under the
-same guard lock.
+current acquisition's exact Principal and Membership version must also remain
+active, be temporally valid at classification, and retain the published body
+access; content equality never grants or repairs access. Missing or
+inconsistent active artifacts or access fail closed. Initial publication and
+classification remain in the same transaction and under the same guard lock.
 
 Every unchanged observation creates one immutable, Organization-owned
 `file_acquisition_result`. Initial publication retains its existing acquisition,

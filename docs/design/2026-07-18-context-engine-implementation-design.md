@@ -546,12 +546,12 @@ records only active lineage, a tenant-scoped content-identity digest, and the
 fixed no-op reason/digest; it retains no source content. The job completes with
 zero publication effects while Revision, Fragment, access, candidate, event,
 and active-pointer state remain unchanged. The acquisition's exact Principal
-and Membership version must already retain body access; content equality never
-creates or repairs authorization. Equal content in another Organization is
-independently owned. Changed bytes, compiler/config changes, revoked/different
-access, and partial publication never take this path; replacement and crash
-recovery remain unavailable. ADR-0039 owns the byte domain and concurrency
-boundary.
+and Membership version must still be active, temporally valid, and retain body
+access; content equality never creates or repairs authorization. Equal content
+in another Organization is independently owned. Changed bytes,
+compiler/config changes, revoked/different access, and partial publication
+never take this path; replacement and crash recovery remain unavailable.
+ADR-0039 owns the byte domain and concurrency boundary.
 
 Markdown compilation is representation-versioned. The frozen v1 contract keeps
 its original heading-plus-paragraph bytes. Version 2 emits one source-ordered

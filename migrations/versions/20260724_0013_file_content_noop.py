@@ -380,6 +380,19 @@ def upgrade() -> None:
               AND EXISTS (
                   SELECT 1
                   FROM public.file_acquisition AS acquisition
+                  JOIN public.membership AS audience_membership
+                    ON audience_membership.organization_id =
+                        acquisition.organization_id
+                   AND audience_membership.membership_id =
+                        acquisition.audience_membership_id
+                   AND audience_membership.membership_version =
+                        acquisition.audience_membership_version
+                   AND audience_membership.status = 'active'
+                   AND audience_membership.valid_from <= now_at
+                   AND (
+                        audience_membership.valid_until IS NULL
+                        OR audience_membership.valid_until > now_at
+                   )
                   JOIN public.resource_access_policy AS access_policy
                     ON access_policy.organization_id =
                         acquisition.organization_id
