@@ -17,6 +17,7 @@ MARKDOWN_CANONICALIZATION_PROFILE: Final = "markdown-structural-units-v2"
 MARKDOWN_CONTENT_HASH_PROFILE: Final = "sha256-canonical-utf8-v1"
 MARKDOWN_COMPILATION_DIGEST_V1_PROFILE: Final = "rfc8785-sha256-v1"
 MARKDOWN_COMPILATION_DIGEST_PROFILE: Final = "rfc8785-sha256-v2"
+MARKDOWN_CODE_LANGUAGE_MAX_LENGTH: Final = 64
 _COMPILATION_DIGEST_V1_DOMAIN: Final = b"context-engine.markdown-compilation.v1\x00"
 _COMPILATION_DIGEST_DOMAIN: Final = b"context-engine.markdown-compilation.v2\x00"
 _MAX_VERSION_LENGTH: Final = 128
@@ -176,6 +177,7 @@ class ParsedSection:
                 raise ValueError("fenced code sections require a nonblank body")
             if self.code_language is not None and (
                 not self.code_language
+                or len(self.code_language) > MARKDOWN_CODE_LANGUAGE_MAX_LENGTH
                 or self.code_language != self.code_language.strip()
                 or any(character.isspace() for character in self.code_language)
             ):
@@ -778,7 +780,10 @@ def _validate_section_source(section: ParsedSection, source_text: str) -> None:
         )
     elif section.kind is SectionKind.FENCED_CODE:
         assert section.code_body is not None
-        fence = re.fullmatch(r"```([A-Za-z0-9_.+-]+)?", lines[0])
+        fence = re.fullmatch(
+            rf"```([A-Za-z0-9_.+-]{{1,{MARKDOWN_CODE_LANGUAGE_MAX_LENGTH}}})?",
+            lines[0],
+        )
         valid = (
             len(lines) >= 3
             and fence is not None

@@ -15,6 +15,7 @@ import pytest
 
 from adapters.parsers.markdown import compile_markdown
 from engine.supply import (
+    MARKDOWN_CODE_LANGUAGE_MAX_LENGTH,
     MARKDOWN_COMPILER_V1_VERSION,
     MARKDOWN_COMPILER_VERSION,
     CompilationFailure,
@@ -338,6 +339,49 @@ def test_structural_factory_rejects_forged_context_or_search_derivation() -> Non
                 fragments=fragments,
                 provenance=outcome.provenance,
             )
+
+
+def test_v2_table_ends_when_the_next_structure_starts_without_a_blank_line() -> None:
+    outcome = compile_markdown(
+        b"# Handbook\n\n| Key | Value |\n| --- | --- |\n| one | two |\n"
+        b"## Next\nFollowing paragraph.\n",
+        STRUCTURAL_CONFIG,
+    )
+
+    assert type(outcome) is ParsedDocument
+    assert tuple(section.kind for section in outcome.sections) == (
+        SectionKind.HEADING,
+        SectionKind.TABLE,
+        SectionKind.HEADING,
+        SectionKind.PARAGRAPH,
+    )
+    assert outcome.fragments[1].source_text.endswith("| one | two |")
+    assert outcome.fragments[3].contextual_text == (
+        "# Handbook\n\n## Next\n\nFollowing paragraph."
+    )
+
+
+def test_v2_code_language_token_is_bounded_in_parser_and_domain() -> None:
+    oversized = "x" * (MARKDOWN_CODE_LANGUAGE_MAX_LENGTH + 1)
+    outcome = compile_markdown(
+        f"# Handbook\n\n```{oversized}\npass\n```\n".encode(),
+        STRUCTURAL_CONFIG,
+    )
+
+    assert type(outcome) is CompilationFailure
+    assert outcome.construct is UnsupportedConstruct.CODE_BLOCK
+    with pytest.raises(ValueError, match="bounded opaque token"):
+        ParsedSection(
+            kind=SectionKind.FENCED_CODE,
+            text=f"```{oversized}\npass\n```",
+            path=StructuralPath(("document", "heading[1]", "fenced_code[1]")),
+            position=SourceSpan(
+                start=SourcePoint(3, 1, 12),
+                end=SourcePoint(5, 4, 12 + len(oversized) + 13),
+            ),
+            code_language=oversized,
+            code_body="pass",
+        )
 
 
 @pytest.mark.parametrize(

@@ -20,11 +20,67 @@ depends_on: str | Sequence[str] | None = None
 _WORKER = "context_engine_worker"
 _DEFINER = "context_engine_worker_lease_definer"
 _SIGNATURE = "(uuid, uuid, uuid, text, text, uuid, text, text, text, text, text, jsonb, bigint, bytea, timestamp with time zone, timestamp with time zone)"
+_V1_SIGNATURE = "(uuid, uuid, uuid, text, text, uuid, text, text, text, text, text, text, text, text, bigint, bytea, timestamp with time zone, timestamp with time zone)"
 
 
 def upgrade() -> None:
     """Add immutable structural lineage and one atomic multi-Fragment publisher."""
 
+    op.execute(f"GRANT CREATE ON SCHEMA public TO {_DEFINER}")
+    op.execute(f"SET LOCAL ROLE {_DEFINER}")
+    op.execute(
+        "ALTER FUNCTION public.context_worker_publish_file_import"
+        f"{_V1_SIGNATURE} RENAME TO "
+        "context_worker_publish_file_import_v1_internal"
+    )
+    op.execute(
+        "REVOKE EXECUTE ON FUNCTION "
+        "public.context_worker_publish_file_import_v1_internal"
+        f"{_V1_SIGNATURE} FROM {_WORKER}, PUBLIC"
+    )
+    op.execute(
+        f"""
+        CREATE FUNCTION public.context_worker_publish_file_import(
+            requested_organization_id uuid, requested_job_id uuid,
+            requested_service_principal_id uuid, requested_source_ref text,
+            requested_resource_ref text, requested_revision_id uuid,
+            requested_fragment_ref text, requested_canonical_text text,
+            requested_paragraph text, requested_content_hash text,
+            requested_compilation_digest text, requested_compiler_version text,
+            requested_config_version text, requested_phrase_digest text,
+            requested_signing_key_version bigint, requested_nonce bytea,
+            requested_issued_at timestamptz, requested_expires_at timestamptz
+        ) RETURNS TABLE (effect_count smallint)
+        LANGUAGE plpgsql SECURITY DEFINER
+        SET search_path = pg_catalog, pg_temp SET row_security = on
+        AS $function$
+        BEGIN
+            IF SESSION_USER <> '{_WORKER}'
+               OR requested_compiler_version <> 'context-engine-markdown-v1'
+               OR requested_config_version <> 'markdown-config-v1'
+            THEN RETURN; END IF;
+            RETURN QUERY
+            SELECT published.effect_count
+            FROM public.context_worker_publish_file_import_v1_internal(
+                requested_organization_id, requested_job_id,
+                requested_service_principal_id, requested_source_ref,
+                requested_resource_ref, requested_revision_id,
+                requested_fragment_ref, requested_canonical_text,
+                requested_paragraph, requested_content_hash,
+                requested_compilation_digest, requested_compiler_version,
+                requested_config_version, requested_phrase_digest,
+                requested_signing_key_version, requested_nonce,
+                requested_issued_at, requested_expires_at
+            ) AS published;
+        END; $function$
+        """
+    )
+    op.execute(
+        "REVOKE ALL ON FUNCTION "
+        f"public.context_worker_publish_file_import{_V1_SIGNATURE} FROM PUBLIC"
+    )
+    op.execute("RESET ROLE")
+    op.execute(f"REVOKE CREATE ON SCHEMA public FROM {_DEFINER}")
     op.execute(
         "ALTER TABLE file_revision_snapshot "
         "ADD COLUMN compilation_document jsonb"
@@ -34,8 +90,13 @@ def upgrade() -> None:
         ALTER TABLE file_revision_snapshot
         ADD CONSTRAINT ck_file_revision_snapshot_structural_document
         CHECK (
-            compilation_document IS NULL OR (
-                compiler_version = 'context-engine-markdown-v2'
+            (
+                compilation_document IS NULL
+                AND compiler_version = 'context-engine-markdown-v1'
+                AND config_version = 'markdown-config-v1'
+            ) OR (
+                compilation_document IS NOT NULL
+                AND compiler_version = 'context-engine-markdown-v2'
                 AND config_version = 'markdown-config-v2'
                 AND jsonb_typeof(compilation_document) = 'object'
                 AND compilation_document->>'canonicalText' = canonical_text
@@ -392,6 +453,10 @@ def upgrade() -> None:
     op.execute(f"SET LOCAL ROLE {_DEFINER}")
     op.execute(
         "GRANT EXECUTE ON FUNCTION "
+        f"public.context_worker_publish_file_import{_V1_SIGNATURE} TO {_WORKER}"
+    )
+    op.execute(
+        "GRANT EXECUTE ON FUNCTION "
         f"public.context_worker_publish_structural_file_import{_SIGNATURE} "
         f"TO {_WORKER}"
     )
@@ -417,10 +482,27 @@ def downgrade() -> None:
         raise RuntimeError(
             "structural Markdown downgrade requires no v2 snapshots"
         )
+    op.execute(f"GRANT CREATE ON SCHEMA public TO {_DEFINER}")
+    op.execute(f"SET LOCAL ROLE {_DEFINER}")
+    op.execute(
+        "DROP FUNCTION public.context_worker_publish_file_import"
+        f"{_V1_SIGNATURE}"
+    )
+    op.execute(
+        "ALTER FUNCTION "
+        "public.context_worker_publish_file_import_v1_internal"
+        f"{_V1_SIGNATURE} RENAME TO context_worker_publish_file_import"
+    )
+    op.execute(
+        "GRANT EXECUTE ON FUNCTION "
+        f"public.context_worker_publish_file_import{_V1_SIGNATURE} TO {_WORKER}"
+    )
     op.execute(
         "DROP FUNCTION "
         f"public.context_worker_publish_structural_file_import{_SIGNATURE}"
     )
+    op.execute("RESET ROLE")
+    op.execute(f"REVOKE CREATE ON SCHEMA public FROM {_DEFINER}")
     op.execute(
         "ALTER TABLE file_revision_snapshot "
         "DROP CONSTRAINT ck_file_revision_snapshot_structural_document"

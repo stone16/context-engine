@@ -8,6 +8,7 @@ from typing import Final
 
 from engine.supply.markdown import (
     MARKDOWN_CANONICALIZATION_PROFILE,
+    MARKDOWN_CODE_LANGUAGE_MAX_LENGTH,
     MARKDOWN_COMPILATION_DIGEST_PROFILE,
     MARKDOWN_COMPILER_V1_VERSION,
     MARKDOWN_COMPILER_VERSION,
@@ -32,7 +33,9 @@ _HEADING_PATTERN: Final = re.compile(r"^# (\S(?:.*\S)?)$")
 _STRUCTURAL_HEADING_PATTERN: Final = re.compile(r"^(#{1,6}) (\S(?:.*\S)?)$")
 _UNORDERED_LIST_PATTERN: Final = re.compile(r"^- (\S(?:.*\S)?)$")
 _ORDERED_LIST_PATTERN: Final = re.compile(r"^[1-9][0-9]*\. (\S(?:.*\S)?)$")
-_FENCE_PATTERN: Final = re.compile(r"^```([A-Za-z0-9_.+-]+)?$")
+_FENCE_PATTERN: Final = re.compile(
+    rf"^```([A-Za-z0-9_.+-]{{1,{MARKDOWN_CODE_LANGUAGE_MAX_LENGTH}}})?$"
+)
 _TABLE_DELIMITER_CELL: Final = re.compile(r"^-{3,}$")
 
 
@@ -352,7 +355,15 @@ def _structural_blocks(
                 end = index + 2
                 while end < len(lines) and lines[end] != "":
                     row = _table_cells(lines[end])
-                    if row is None or len(row) != len(header):
+                    if row is None:
+                        if lines[end].startswith("|"):
+                            return CompilationFailure(
+                                code=CompilationFailureCode.UNSUPPORTED_CONSTRUCT,
+                                position=_failure_point(lines, end),
+                                construct=UnsupportedConstruct.TABLE,
+                            )
+                        break
+                    if len(row) != len(header):
                         return CompilationFailure(
                             code=CompilationFailureCode.UNSUPPORTED_CONSTRUCT,
                             position=_failure_point(lines, end),

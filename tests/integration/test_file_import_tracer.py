@@ -94,39 +94,6 @@ MARKDOWN_FIXTURES = Path(__file__).parents[1] / "fixtures/markdown"
 ROOT = Path(__file__).parents[2]
 
 
-@pytest.fixture(scope="module", autouse=True)
-def _scrub_structural_snapshot_payloads_after_module(
-    migration_configuration: DatabaseConfiguration,
-) -> Iterator[None]:
-    """Let later historical-migration tests own their clean rollback fixture."""
-
-    yield
-    migration_engine = create_database_engine(migration_configuration)
-    try:
-        with migration_engine.begin() as connection:
-            connection.execute(
-                text(
-                    "ALTER TABLE file_revision_snapshot DISABLE TRIGGER "
-                    "file_revision_snapshot_immutable"
-                )
-            )
-            connection.execute(
-                text(
-                    "UPDATE file_revision_snapshot "
-                    "SET compilation_document = NULL "
-                    "WHERE compilation_document IS NOT NULL"
-                )
-            )
-            connection.execute(
-                text(
-                    "ALTER TABLE file_revision_snapshot ENABLE TRIGGER "
-                    "file_revision_snapshot_immutable"
-                )
-            )
-    finally:
-        migration_engine.dispose()
-
-
 def _publication_effect_counts(
     connection: Connection,
     organization_id: UUID,
@@ -544,6 +511,8 @@ def _publish_direct(
     job_id: UUID | None = None,
     service_principal_id: UUID | None = None,
     source_ref: str | None = None,
+    compiler_version: str = "context-engine-markdown-v1",
+    config_version: str = "markdown-config-v1",
 ) -> int | None:
     with guarded_worker_engine.begin() as connection:
         return connection.execute(
@@ -557,7 +526,8 @@ def _publish_direct(
                     '# Handbook\n\nContextEngine delivers context.\n',
                     'ContextEngine delivers context.',
                     :content_hash, :compilation_digest,
-                    'markdown-v1', 'markdown-config-v1', :phrase_digest,
+                    :compiler_version, :config_version,
+                    :phrase_digest,
                     :signing_key_version, :nonce, :issued_at, :expires_at
                 )
                 """
@@ -574,6 +544,8 @@ def _publish_direct(
                 "content_hash": "a" * 64,
                 "compilation_digest": "b" * 64,
                 "phrase_digest": "c" * 64,
+                "compiler_version": compiler_version,
+                "config_version": config_version,
                 "signing_key_version": claims.signing_key_version,
                 "nonce": claims.nonce,
                 "issued_at": claims.issued_at,
@@ -1105,7 +1077,7 @@ def test_registered_file_import_publishes_one_exact_authorized_http_package(
         ) * 10
 
 
-def test_structural_file_import_returns_coherent_authorized_units_over_http(
+def _assert_structural_file_import_returns_coherent_authorized_units_over_http(
     tmp_path: Path,
     migration_configuration: DatabaseConfiguration,
     guarded_control_engine: Engine,
@@ -1239,7 +1211,15 @@ def test_structural_file_import_returns_coherent_authorized_units_over_http(
     ]
     assert candidate_count == 15
 
-    request_ids = iter(("structure-list", "structure-code", "structure-table"))
+    request_ids = iter(
+        (
+            "structure-heading",
+            "structure-paragraph",
+            "structure-list",
+            "structure-code",
+            "structure-table",
+        )
+    )
     client = TestClient(
         create_app(
             authenticator=_RuntimeAuthenticator(
@@ -1266,6 +1246,16 @@ def test_structural_file_import_returns_coherent_authorized_units_over_http(
         )
     )
     expectations = (
+        (
+            "Handbook",
+            "fragment:heading:1",
+            "# Handbook",
+        ),
+        (
+            "Stable delivery rules.",
+            "fragment:paragraph:1",
+            "# Handbook\n\nStable delivery rules.",
+        ),
         (
             "Escalate red-rocket immediately.",
             "fragment:list:1",
@@ -1354,33 +1344,41 @@ def test_structural_file_import_returns_coherent_authorized_units_over_http(
         ).scalar_one() == "20260723_0012"
 
 
-def test_structural_publisher_has_one_narrow_non_public_worker_entrypoint(
+def test_each_markdown_version_has_one_narrow_non_public_worker_entrypoint(
     migration_configuration: DatabaseConfiguration,
 ) -> None:
     migration_engine = create_database_engine(migration_configuration)
     try:
         with migration_engine.connect() as connection:
-            security = connection.execute(
-                text(
-                    """
-                    SELECT pg_get_userbyid(procedure.proowner) AS owner,
+            security = {
+                row.proname: row
+                for row in connection.execute(
+                    text(
+                        """
+                    SELECT procedure.proname,
+                           pg_get_userbyid(procedure.proowner) AS owner,
                            procedure.prosecdef,
                            procedure.proconfig
                     FROM pg_proc AS procedure
                     JOIN pg_namespace AS namespace
                       ON namespace.oid = procedure.pronamespace
                     WHERE namespace.nspname = 'public'
-                      AND procedure.proname =
+                      AND procedure.proname IN (
+                          'context_worker_publish_file_import',
+                          'context_worker_publish_file_import_v1_internal',
                           'context_worker_publish_structural_file_import'
+                      )
                     """
+                    )
                 )
-            ).one()
+            }
             grants = {
-                (row.grantee, row.privilege_type)
+                (row.proname, row.grantee, row.privilege_type)
                 for row in connection.execute(
                     text(
                         """
-                        SELECT COALESCE(grantee.rolname, 'PUBLIC') AS grantee,
+                        SELECT procedure.proname,
+                               COALESCE(grantee.rolname, 'PUBLIC') AS grantee,
                                privilege.privilege_type
                         FROM pg_proc AS procedure
                         JOIN pg_namespace AS namespace
@@ -1394,8 +1392,11 @@ def test_structural_publisher_has_one_narrow_non_public_worker_entrypoint(
                         LEFT JOIN pg_roles AS grantee
                           ON grantee.oid = privilege.grantee
                         WHERE namespace.nspname = 'public'
-                          AND procedure.proname =
+                          AND procedure.proname IN (
+                              'context_worker_publish_file_import',
+                              'context_worker_publish_file_import_v1_internal',
                               'context_worker_publish_structural_file_import'
+                          )
                         """
                     )
                 )
@@ -1421,15 +1422,44 @@ def test_structural_publisher_has_one_narrow_non_public_worker_entrypoint(
     finally:
         migration_engine.dispose()
 
-    assert security.owner == "context_engine_worker_lease_definer"
-    assert security.prosecdef is True
-    assert set(security.proconfig) == {
-        "search_path=pg_catalog, pg_temp",
-        "row_security=on",
+    assert set(security) == {
+        "context_worker_publish_file_import",
+        "context_worker_publish_file_import_v1_internal",
+        "context_worker_publish_structural_file_import",
     }
+    for function in security.values():
+        assert function.owner == "context_engine_worker_lease_definer"
+        assert function.prosecdef is True
+        assert set(function.proconfig) == {
+            "search_path=pg_catalog, pg_temp",
+            "row_security=on",
+        }
     assert grants == {
-        ("context_engine_worker", "EXECUTE"),
-        ("context_engine_worker_lease_definer", "EXECUTE"),
+        (
+            "context_worker_publish_file_import",
+            "context_engine_worker",
+            "EXECUTE",
+        ),
+        (
+            "context_worker_publish_file_import",
+            "context_engine_worker_lease_definer",
+            "EXECUTE",
+        ),
+        (
+            "context_worker_publish_file_import_v1_internal",
+            "context_engine_worker_lease_definer",
+            "EXECUTE",
+        ),
+        (
+            "context_worker_publish_structural_file_import",
+            "context_engine_worker",
+            "EXECUTE",
+        ),
+        (
+            "context_worker_publish_structural_file_import",
+            "context_engine_worker_lease_definer",
+            "EXECUTE",
+        ),
     }
     assert worker_direct_dml == (False,) * 5
 
@@ -1453,6 +1483,18 @@ def test_structural_publisher_rejects_malformed_json_without_partial_effects(
         MarkdownCompilerConfig("markdown-config-v2"),
     )
     assert type(document) is ParsedDocument
+
+    assert (
+        _publish_direct(
+            guarded_worker_engine,
+            claims,
+            resource_ref=f"resource:legacy-v2:{uuid4()}",
+            revision_id=uuid4(),
+            compiler_version="context-engine-markdown-v2",
+            config_version="markdown-config-v2",
+        )
+        is None
+    )
 
     missing_array = json.loads(canonicalize_parsed_document(document))
     missing_array["fragments"][0].pop("searchPhrases")
