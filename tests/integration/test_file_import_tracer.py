@@ -5,6 +5,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from hashlib import sha256
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -46,6 +47,7 @@ from engine.persistence import (
     PostgreSQLFileImportWorker,
     PostgreSQLMembershipAuthority,
     PostgreSQLWorkerLeaseIssuer,
+    PublishedFileImport,
     create_database_engine,
 )
 from engine.persistence.membership_context import (
@@ -199,7 +201,6 @@ class _MultiTenantRuntimeAuthenticator:
 
 
 class _OrganizationAuthority:
-
     def verify_existing(
         self,
         authentication: VerifiedAuthenticationContext,
@@ -466,6 +467,80 @@ def _scenario_claims(scenario: _FileImportScenario) -> WorkerLeaseClaims:
     )
 
 
+def _prepare_repeat_file_import(
+    scenario: _FileImportScenario,
+    guarded_control_engine: Engine,
+    *,
+    idempotency_key: str,
+) -> tuple[PreparedFileImport, WorkerLeaseToken]:
+    authority = ControlOperatorAuthority(
+        _ControlAuthenticator(scenario.organization_id),
+        call_ttl=timedelta(minutes=5),
+        clock=lambda: NOW,
+    )
+    control = ContextControl(
+        store=PostgreSQLControlStore(
+            guarded_control_engine,
+            clock=lambda: NOW,
+            file_import_receiver=scenario.receiver,
+        ),
+        authority=authority,
+        clock=lambda: NOW,
+    )
+    with authority.authorize(
+        opaque_credential="control-secret",
+        operation=ControlOperation.IMPORT_FILE,
+        request_id=f"repeat-{idempotency_key}",
+    ) as call:
+        prepared = control.prepare_file_import(
+            call,
+            PrepareFileImport(
+                source_ref=scenario.source_ref,
+                path=FileImportPath("handbook.md"),
+                audience=FileImportAudience(
+                    principal_ref="principal:file-reader",
+                    membership_id=scenario.membership_id,
+                    membership_version=1,
+                ),
+                idempotency_key=idempotency_key,
+            ),
+        )
+    token = PostgreSQLWorkerLeaseIssuer(
+        guarded_control_engine,
+        scenario.codec,
+        lease_ttl_seconds=300,
+    ).issue_file_import_lease(prepared)
+    return prepared, token
+
+
+def _run_file_import(
+    scenario: _FileImportScenario,
+    prepared: PreparedFileImport,
+    token: WorkerLeaseToken,
+    guarded_worker_engine: Engine,
+    *,
+    config_version: str = "markdown-config-v1",
+) -> PublishedFileImport:
+    return PostgreSQLFileImportWorker(
+        guarded_worker_engine,
+        scenario.codec,
+        scenario.receiver,
+        FileRootRegistry(
+            {scenario.root_ref: scenario.root},
+            limits=FileReadLimits(max_file_bytes=4096),
+        ),
+        MarkdownCompilerConfig(config_version),
+        clock=lambda: datetime.now(UTC).replace(microsecond=0),
+    ).run(
+        FileImportLeaseRedemption(
+            token,
+            prepared.organization_id,
+            prepared.job_id,
+            prepared.source_ref,
+        )
+    )
+
+
 def _redeem_direct(
     guarded_worker_engine: Engine,
     claims: WorkerLeaseClaims,
@@ -519,7 +594,7 @@ def _publish_direct(
             text(
                 """
                 SELECT effect_count
-                FROM public.context_worker_publish_file_import(
+                FROM public.context_worker_publish_file_import_v2(
                     :organization_id, :job_id, :service_principal_id,
                     :source_ref, :resource_ref,
                     :revision_id, 'fragment:paragraph:1',
@@ -541,7 +616,9 @@ def _publish_direct(
                 "source_ref": source_ref or claims.source_ref,
                 "resource_ref": resource_ref,
                 "revision_id": revision_id,
-                "content_hash": "a" * 64,
+                "content_hash": sha256(
+                    b"# Handbook\n\nContextEngine delivers context.\n"
+                ).hexdigest(),
                 "compilation_digest": "b" * 64,
                 "phrase_digest": "c" * 64,
                 "compiler_version": compiler_version,
@@ -565,7 +642,7 @@ def _publish_structural_direct(
             text(
                 """
                 SELECT effect_count
-                FROM public.context_worker_publish_structural_file_import(
+                FROM public.context_worker_publish_structural_file_import_v2(
                     :organization_id, :job_id, :service_principal_id,
                     :source_ref, :resource_ref, :revision_id,
                     :canonical_text, :content_hash, :compilation_digest,
@@ -698,8 +775,7 @@ def test_registered_file_import_publishes_one_exact_authorized_http_package(
         )
         connection.execute(
             text(
-                "INSERT INTO user_account (user_id) "
-                "VALUES (:user_id), (:other_user_id)"
+                "INSERT INTO user_account (user_id) VALUES (:user_id), (:other_user_id)"
             ),
             {"user_id": user_id, "other_user_id": other_user_id},
         )
@@ -791,9 +867,11 @@ def test_registered_file_import_publishes_one_exact_authorized_http_package(
             idempotency_key="outside-import",
         )
     with migration_engine.connect() as connection:
-        assert _publication_effect_counts(
-            connection, organization_id
-        ) == before_invalid == (0,) * 10
+        assert (
+            _publication_effect_counts(connection, organization_id)
+            == before_invalid
+            == (0,) * 10
+        )
     with authority.authorize(
         opaque_credential="control-secret",
         operation=ControlOperation.IMPORT_FILE,
@@ -966,9 +1044,7 @@ def test_registered_file_import_publishes_one_exact_authorized_http_package(
         run = reader.find_by_decision_ref(authorization, package["decisionRef"])
     assert run is not None
     assert run.outcome is ContextRunOutcome.DELIVERED_AUTHORIZED
-    assert run.authorized_evidence_refs == (
-        package["evidence"][0]["evidenceRef"],
-    )
+    assert run.authorized_evidence_refs == (package["evidence"][0]["evidenceRef"],)
     assert run.decision_audit_category is None
 
     with PostgreSQLMembershipAuthority(
@@ -1006,9 +1082,9 @@ def test_registered_file_import_publishes_one_exact_authorized_http_package(
             1,
             1,
         )
-        assert _publication_effect_counts(connection, other_organization_id) == (
-            0,
-        ) * 10
+        assert (
+            _publication_effect_counts(connection, other_organization_id) == (0,) * 10
+        )
 
     unauthorized_runtime = Runtime(
         required_kernel_dependencies(),
@@ -1022,9 +1098,7 @@ def test_registered_file_import_publishes_one_exact_authorized_http_package(
                 organization_id, user_id, membership_id
             ),
             organization_authority=_OrganizationAuthority(),
-            membership_authority=PostgreSQLMembershipAuthority(
-                guarded_runtime_engine
-            ),
+            membership_authority=PostgreSQLMembershipAuthority(guarded_runtime_engine),
             scope_authority=_ExactScopeAuthority(
                 published.candidate_ref.source_ref,
                 published.candidate_ref.resource_ref,
@@ -1072,9 +1146,9 @@ def test_registered_file_import_publishes_one_exact_authorized_http_package(
             1,
             1,
         )
-        assert _publication_effect_counts(connection, other_organization_id) == (
-            0,
-        ) * 10
+        assert (
+            _publication_effect_counts(connection, other_organization_id) == (0,) * 10
+        )
 
 
 def _assert_structural_file_import_returns_coherent_authorized_units_over_http(
@@ -1110,9 +1184,7 @@ def _assert_structural_file_import_returns_coherent_authorized_units_over_http(
             scenario.prepared.source_ref,
         )
     )
-    assert tuple(
-        candidate.fragment_ref for candidate in published.candidate_refs
-    ) == (
+    assert tuple(candidate.fragment_ref for candidate in published.candidate_refs) == (
         "fragment:heading:1",
         "fragment:paragraph:1",
         "fragment:heading:2",
@@ -1203,11 +1275,9 @@ def _assert_structural_file_import_returns_coherent_authorized_units_over_http(
         snapshot.compilation_digest
     )
     assert [
-        fragment["position"]
-        for fragment in snapshot.compilation_document["fragments"]
+        fragment["position"] for fragment in snapshot.compilation_document["fragments"]
     ] == [
-        fragment["position"]
-        for fragment in snapshot.compilation_document["sections"]
+        fragment["position"] for fragment in snapshot.compilation_document["sections"]
     ]
     assert candidate_count == 15
 
@@ -1228,9 +1298,7 @@ def _assert_structural_file_import_returns_coherent_authorized_units_over_http(
                 scenario.membership_id,
             ),
             organization_authority=_OrganizationAuthority(),
-            membership_authority=PostgreSQLMembershipAuthority(
-                guarded_runtime_engine
-            ),
+            membership_authority=PostgreSQLMembershipAuthority(guarded_runtime_engine),
             scope_authority=_ExactScopeAuthority(
                 published.candidate_ref.source_ref,
                 published.candidate_ref.resource_ref,
@@ -1302,9 +1370,7 @@ def _assert_structural_file_import_returns_coherent_authorized_units_over_http(
                 scenario.membership_id,
             ),
             organization_authority=_OrganizationAuthority(),
-            membership_authority=PostgreSQLMembershipAuthority(
-                guarded_runtime_engine
-            ),
+            membership_authority=PostgreSQLMembershipAuthority(guarded_runtime_engine),
             scope_authority=_ExactScopeAuthority(
                 published.candidate_ref.source_ref,
                 published.candidate_ref.resource_ref,
@@ -1339,12 +1405,15 @@ def _assert_structural_file_import_returns_coherent_authorized_units_over_http(
     ):
         command.downgrade(Config(ROOT / "alembic.ini"), "20260722_0011")
     with migration_engine.connect() as connection:
-        assert connection.execute(
-            text("SELECT version_num FROM alembic_version")
-        ).scalar_one() == "20260723_0012"
+        assert (
+            connection.execute(
+                text("SELECT version_num FROM alembic_version")
+            ).scalar_one()
+            == "20260724_0013"
+        )
 
 
-def test_each_markdown_version_has_one_narrow_non_public_worker_entrypoint(
+def test_file_publication_requires_noop_aware_versioned_worker_entrypoints(
     migration_configuration: DatabaseConfiguration,
 ) -> None:
     migration_engine = create_database_engine(migration_configuration)
@@ -1366,7 +1435,10 @@ def test_each_markdown_version_has_one_narrow_non_public_worker_entrypoint(
                       AND procedure.proname IN (
                           'context_worker_publish_file_import',
                           'context_worker_publish_file_import_v1_internal',
-                          'context_worker_publish_structural_file_import'
+                          'context_worker_publish_structural_file_import',
+                          'context_worker_classify_file_import_internal',
+                          'context_worker_publish_file_import_v2',
+                          'context_worker_publish_structural_file_import_v2'
                       )
                     """
                     )
@@ -1395,7 +1467,10 @@ def test_each_markdown_version_has_one_narrow_non_public_worker_entrypoint(
                           AND procedure.proname IN (
                               'context_worker_publish_file_import',
                               'context_worker_publish_file_import_v1_internal',
-                              'context_worker_publish_structural_file_import'
+                              'context_worker_publish_structural_file_import',
+                              'context_worker_classify_file_import_internal',
+                              'context_worker_publish_file_import_v2',
+                              'context_worker_publish_structural_file_import_v2'
                           )
                         """
                     )
@@ -1413,7 +1488,9 @@ def test_each_markdown_version_has_one_narrow_non_public_worker_entrypoint(
                             'public.context_revision',
                             'public.file_revision_snapshot',
                             'public.context_fragment',
-                            'public.exact_phrase_candidate'
+                            'public.exact_phrase_candidate',
+                            'public.file_resource_ingestion_guard',
+                            'public.file_acquisition_result'
                         ]) AS table_name
                         """
                     )
@@ -1426,6 +1503,9 @@ def test_each_markdown_version_has_one_narrow_non_public_worker_entrypoint(
         "context_worker_publish_file_import",
         "context_worker_publish_file_import_v1_internal",
         "context_worker_publish_structural_file_import",
+        "context_worker_classify_file_import_internal",
+        "context_worker_publish_file_import_v2",
+        "context_worker_publish_structural_file_import_v2",
     }
     for function in security.values():
         assert function.owner == "context_engine_worker_lease_definer"
@@ -1435,11 +1515,6 @@ def test_each_markdown_version_has_one_narrow_non_public_worker_entrypoint(
             "row_security=on",
         }
     assert grants == {
-        (
-            "context_worker_publish_file_import",
-            "context_engine_worker",
-            "EXECUTE",
-        ),
         (
             "context_worker_publish_file_import",
             "context_engine_worker_lease_definer",
@@ -1452,16 +1527,36 @@ def test_each_markdown_version_has_one_narrow_non_public_worker_entrypoint(
         ),
         (
             "context_worker_publish_structural_file_import",
+            "context_engine_worker_lease_definer",
+            "EXECUTE",
+        ),
+        (
+            "context_worker_classify_file_import_internal",
+            "context_engine_worker_lease_definer",
+            "EXECUTE",
+        ),
+        (
+            "context_worker_publish_file_import_v2",
             "context_engine_worker",
             "EXECUTE",
         ),
         (
-            "context_worker_publish_structural_file_import",
+            "context_worker_publish_file_import_v2",
+            "context_engine_worker_lease_definer",
+            "EXECUTE",
+        ),
+        (
+            "context_worker_publish_structural_file_import_v2",
+            "context_engine_worker",
+            "EXECUTE",
+        ),
+        (
+            "context_worker_publish_structural_file_import_v2",
             "context_engine_worker_lease_definer",
             "EXECUTE",
         ),
     }
-    assert worker_direct_dml == (False,) * 5
+    assert worker_direct_dml == (False,) * 7
 
 
 def test_structural_publisher_rejects_malformed_json_without_partial_effects(
@@ -1499,9 +1594,7 @@ def test_structural_publisher_rejects_malformed_json_without_partial_effects(
     missing_array = json.loads(canonicalize_parsed_document(document))
     missing_array["fragments"][0].pop("searchPhrases")
     malformed_offset = json.loads(canonicalize_parsed_document(document))
-    malformed_offset["fragments"][0]["position"]["start"]["byteOffset"] = (
-        "not-a-number"
-    )
+    malformed_offset["fragments"][0]["position"]["start"]["byteOffset"] = "not-a-number"
     mismatched_section = json.loads(canonicalize_parsed_document(document))
     mismatched_section["sections"][0]["kind"] = "paragraph"
 
@@ -1523,19 +1616,22 @@ def test_structural_publisher_rejects_malformed_json_without_partial_effects(
                 connection,
                 scenario.organization_id,
             ) == (1, 1, 0, 0, 0, 0, 0, 0, 0, 0)
-            assert connection.execute(
-                text(
-                    """
+            assert (
+                connection.execute(
+                    text(
+                        """
                     SELECT state FROM file_import_job
                     WHERE organization_id = :organization_id
                       AND job_id = :job_id
                     """
-                ),
-                {
-                    "organization_id": scenario.organization_id,
-                    "job_id": scenario.prepared.job_id,
-                },
-            ).scalar_one() == "running"
+                    ),
+                    {
+                        "organization_id": scenario.organization_id,
+                        "job_id": scenario.prepared.job_id,
+                    },
+                ).scalar_one()
+                == "running"
+            )
     finally:
         migration_engine.dispose()
 
@@ -1759,9 +1855,7 @@ def test_exact_phrase_discovery_does_not_hide_a_match_after_sixty_four_rows(
                 [
                     {
                         **row,
-                        "phrase_digest": exact_phrase_digest(
-                            "same exact paragraph"
-                        ),
+                        "phrase_digest": exact_phrase_digest("same exact paragraph"),
                     }
                     for row in candidate_rows
                 ],
@@ -1854,9 +1948,7 @@ def test_redeem_is_one_shot_before_any_content_effect(
     assert _redeem_direct(guarded_worker_engine, claims) is not None
     assert _redeem_direct(guarded_worker_engine, claims) is None
     assert _job_state(migration_configuration, scenario) == ("running", 0)
-    assert _scenario_effect_counts(migration_configuration, scenario)[2:] == (
-        0,
-    ) * 8
+    assert _scenario_effect_counts(migration_configuration, scenario)[2:] == (0,) * 8
 
 
 @pytest.mark.parametrize("operation", ["publish", "fail"])
@@ -1913,9 +2005,7 @@ def test_running_job_database_boundary_rejects_every_wrong_exact_binding(
         )
         assert result is False
     assert _job_state(migration_configuration, scenario) == ("running", 0)
-    assert _scenario_effect_counts(migration_configuration, scenario)[2:] == (
-        0,
-    ) * 8
+    assert _scenario_effect_counts(migration_configuration, scenario)[2:] == (0,) * 8
 
 
 def test_completed_file_import_rejects_redeem_publish_and_fail_replay(
@@ -1953,9 +2043,11 @@ def test_completed_file_import_rejects_redeem_publish_and_fail_replay(
     )
     assert _fail_direct(guarded_worker_engine, claims) is False
     assert _job_state(migration_configuration, scenario) == ("completed", 1)
-    assert _scenario_effect_counts(
-        migration_configuration, scenario
-    ) == before_replay == (1, 1, 1, 1, 1, 1, 3, 1, 1, 1)
+    assert (
+        _scenario_effect_counts(migration_configuration, scenario)
+        == before_replay
+        == (1, 1, 1, 1, 1, 1, 3, 1, 1, 1)
+    )
 
 
 def test_failed_file_import_rejects_fail_redeem_and_publish_replay(
@@ -1984,9 +2076,11 @@ def test_failed_file_import_rejects_fail_redeem_and_publish_replay(
         is None
     )
     assert _job_state(migration_configuration, scenario) == ("failed", 0)
-    assert _scenario_effect_counts(
-        migration_configuration, scenario
-    ) == before_replay == (1, 1, 0, 0, 0, 0, 0, 0, 0, 0)
+    assert (
+        _scenario_effect_counts(migration_configuration, scenario)
+        == before_replay
+        == (1, 1, 0, 0, 0, 0, 0, 0, 0, 0)
+    )
 
 
 def test_disabled_receiver_after_redeem_cannot_publish_or_record_failure(
@@ -2030,9 +2124,7 @@ def test_disabled_receiver_after_redeem_cannot_publish_or_record_failure(
     )
     assert _fail_direct(guarded_worker_engine, claims) is False
     assert _job_state(migration_configuration, scenario) == ("running", 0)
-    assert _scenario_effect_counts(migration_configuration, scenario)[2:] == (
-        0,
-    ) * 8
+    assert _scenario_effect_counts(migration_configuration, scenario)[2:] == (0,) * 8
 
 
 def test_expired_redeemed_lease_cannot_publish_or_record_failure(
@@ -2067,9 +2159,7 @@ def test_expired_redeemed_lease_cannot_publish_or_record_failure(
     )
     assert _fail_direct(guarded_worker_engine, claims) is False
     assert _job_state(migration_configuration, scenario) == ("running", 0)
-    assert _scenario_effect_counts(migration_configuration, scenario)[2:] == (
-        0,
-    ) * 8
+    assert _scenario_effect_counts(migration_configuration, scenario)[2:] == (0,) * 8
 
 
 def test_invalid_markdown_records_terminal_failure_without_content_effects(

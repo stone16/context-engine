@@ -14,9 +14,7 @@ from sqlalchemy import Connection, text
 PUBLIC_SCHEMA = "public"
 GLOBAL_CLASSIFICATION = "global"
 TENANT_CLASSIFICATION = "tenant_owned"
-PINNED_GLOBAL_TABLES = frozenset(
-    {"alembic_version", "organization", "user_account"}
-)
+PINNED_GLOBAL_TABLES = frozenset({"alembic_version", "organization", "user_account"})
 NON_OWNER_EVIDENCE_BY_TABLE: Mapping[str, str] = {
     "context_source": "PG-FILE-SOURCE-RLS-021",
     "membership": "PG-SCOPE-INTERSECTION-004",
@@ -26,7 +24,9 @@ NON_OWNER_EVIDENCE_BY_TABLE: Mapping[str, str] = {
     "context_fragment": "PG-INDEX-NOT-AUTHORITY-005",
     "exact_phrase_candidate": "PG-FILE-IMPORT-023",
     "file_acquisition": "PG-FILE-IMPORT-023",
+    "file_acquisition_result": "PG-FILE-IMPORT-023",
     "file_import_job": "PG-FILE-IMPORT-023",
+    "file_resource_ingestion_guard": "PG-FILE-IMPORT-023",
     "file_revision_snapshot": "PG-FILE-IMPORT-023",
     "organization_policy_epoch": "PG-REVOCATION-006",
     "resource_access_policy": "PG-REVOCATION-006",
@@ -56,9 +56,10 @@ _SQL_TOKEN = re.compile(
 def snapshot_public_schema(connection: Connection) -> dict[str, object]:
     """Read the live public-table controls through the injected DB connection."""
 
-    role = connection.execute(
-        text(
-            """
+    role = (
+        connection.execute(
+            text(
+                """
             SELECT
                 current_user AS name,
                 role.rolsuper AS superuser,
@@ -67,8 +68,11 @@ def snapshot_public_schema(connection: Connection) -> dict[str, object]:
             FROM pg_roles AS role
             WHERE role.rolname = current_user
             """
+            )
         )
-    ).mappings().one()
+        .mappings()
+        .one()
+    )
     relations = connection.execute(
         text(
             """
@@ -121,9 +125,7 @@ def snapshot_public_schema(connection: Connection) -> dict[str, object]:
     for column in columns:
         table = tables.get(cast(str, column["table_name"]))
         if table is not None:
-            cast(list[str], table["columns"]).append(
-                cast(str, column["column_name"])
-            )
+            cast(list[str], table["columns"]).append(cast(str, column["column_name"]))
 
     policies = connection.execute(
         text(
@@ -152,9 +154,7 @@ def snapshot_public_schema(connection: Connection) -> dict[str, object]:
                     "command": cast(str, policy["command"]),
                     "roles": list(cast(Sequence[str], policy["roles"])),
                     "using": cast(str | None, policy["using_expression"]),
-                    "withCheck": cast(
-                        str | None, policy["with_check_expression"]
-                    ),
+                    "withCheck": cast(str | None, policy["with_check_expression"]),
                 }
             )
 
@@ -252,9 +252,11 @@ def audit_rls_snapshot(
 
     failures: list[str] = []
     raw_entries = manifest.get("tables", [])
-    manifest_entries = [
-        entry for entry in raw_entries if isinstance(entry, Mapping)
-    ] if isinstance(raw_entries, list) else []
+    manifest_entries = (
+        [entry for entry in raw_entries if isinstance(entry, Mapping)]
+        if isinstance(raw_entries, list)
+        else []
+    )
     names = [entry.get("name") for entry in manifest_entries]
     manifest_names = [name for name in names if isinstance(name, str)]
     duplicate_names = sorted(
@@ -299,8 +301,7 @@ def audit_rls_snapshot(
     )
     if invalid_classifications:
         failures.append(
-            "tables have invalid classifications: "
-            + ", ".join(invalid_classifications)
+            "tables have invalid classifications: " + ", ".join(invalid_classifications)
         )
 
     global_names = sorted(
@@ -318,9 +319,7 @@ def audit_rls_snapshot(
     missing_global_names = sorted(PINNED_GLOBAL_TABLES - global_name_set)
     global_inventory_exact = not unexpected_global_names and not missing_global_names
     if not global_inventory_exact:
-        failures.append(
-            "global table allowlist differs from the pinned M0 allowlist"
-        )
+        failures.append("global table allowlist differs from the pinned M0 allowlist")
     global_allowlist: list[dict[str, object]] = []
     for name in global_names:
         rationale = entries[name].get("classificationRationale")
@@ -385,9 +384,7 @@ def audit_rls_snapshot(
         expected_policy_semantics = _normalized_policy_semantics(
             name, declared_policy_rows
         )
-        observed_policy_semantics = _normalized_policy_semantics(
-            name, live_policy_rows
-        )
+        observed_policy_semantics = _normalized_policy_semantics(name, live_policy_rows)
         policy_semantics_match = (
             policy_inventory_matches
             and expected_policy_semantics == observed_policy_semantics
@@ -404,10 +401,7 @@ def audit_rls_snapshot(
             and evidence_id == expected_evidence_id
             and selector_table == name
         )
-        evidence_passed = (
-            evidence_mapping_exact
-            and evidence_id in passed_ids
-        )
+        evidence_passed = evidence_mapping_exact and evidence_id in passed_ids
         owner = _string(live.get("owner"))
         role_is_non_owner = bool(session_role) and bool(owner) and owner != session_role
         non_owner_passed = (
@@ -429,9 +423,7 @@ def audit_rls_snapshot(
         if not rls_enabled:
             table_failures.append(f"{name}: row level security is disabled")
         if not rls_forced:
-            table_failures.append(
-                f"{name}: FORCE ROW LEVEL SECURITY is disabled"
-            )
+            table_failures.append(f"{name}: FORCE ROW LEVEL SECURITY is disabled")
         if not policy_inventory_matches:
             table_failures.append(
                 f"{name}: live RLS policy inventory differs from manifest"
@@ -512,9 +504,7 @@ def audit_rls_snapshot(
         and not invalid_classifications
         and global_inventory_exact
     )
-    coverage_percent = (
-        round((numerator / denominator) * 100, 2) if denominator else 0.0
-    )
+    coverage_percent = round((numerator / denominator) * 100, 2) if denominator else 0.0
     return {
         "passed": inventory_exact and not failures and numerator == denominator,
         "schema": _string(snapshot.get("schema")) or PUBLIC_SCHEMA,
@@ -587,8 +577,7 @@ def _verified_ownership_edges(
                 continue
             if (
                 organization_index >= len(declared_referenced_columns)
-                or declared_referenced_columns[organization_index]
-                != "organization_id"
+                or declared_referenced_columns[organization_index] != "organization_id"
             ):
                 continue
             edges[table_name].append(
@@ -712,9 +701,13 @@ def _canonical_boolean_expression(tokens: Sequence[str]) -> str:
     for operator in ("or", "and"):
         operands = _split_top_level(current, operator)
         if len(operands) > 1:
-            return f"{operator}(" + ",".join(
-                _canonical_boolean_expression(operand) for operand in operands
-            ) + ")"
+            return (
+                f"{operator}("
+                + ",".join(
+                    _canonical_boolean_expression(operand) for operand in operands
+                )
+                + ")"
+            )
     if current and current[0] == "exists":
         return _canonical_exists(current)
     comparison_index = _find_top_level_comparison(current)
@@ -776,9 +769,11 @@ def _canonical_any(tokens: Sequence[str]) -> str:
 
 def _canonical_list(tokens: Sequence[str]) -> str:
     current = _strip_redundant_parentheses(list(tokens))
-    return "list(" + ",".join(
-        _canonical_term(item) for item in _split_top_level(current, ",")
-    ) + ")"
+    return (
+        "list("
+        + ",".join(_canonical_term(item) for item in _split_top_level(current, ","))
+        + ")"
+    )
 
 
 def _find_top_level_comparison(
@@ -795,17 +790,22 @@ def _find_top_level_comparison(
             bracket_depth += 1
         elif token == "]":
             bracket_depth -= 1
-        elif depth == 0 and bracket_depth == 0 and token in {
-            "=",
-            "!=",
-            "<>",
-            "<",
-            "<=",
-            ">",
-            ">=",
-            "is",
-            "in",
-        }:
+        elif (
+            depth == 0
+            and bracket_depth == 0
+            and token
+            in {
+                "=",
+                "!=",
+                "<>",
+                "<",
+                "<=",
+                ">",
+                ">=",
+                "is",
+                "in",
+            }
+        ):
             return index, token
     return None
 

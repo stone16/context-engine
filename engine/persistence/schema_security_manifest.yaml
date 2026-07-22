@@ -1,5 +1,5 @@
 {
-  "manifestVersion": "12.0.0",
+  "manifestVersion": "13.0.0",
   "controlOperations": [
     {
       "name": "register_file_source",
@@ -92,14 +92,22 @@
     {
       "name": "publish_file_import",
       "versionedDatabaseFunctions": {
-        "markdown-config-v1": "context_worker_publish_file_import",
-        "markdown-config-v2": "context_worker_publish_structural_file_import"
+        "markdown-config-v1": "context_worker_publish_file_import_v2",
+        "markdown-config-v2": "context_worker_publish_structural_file_import_v2"
       },
       "role": "context_engine_worker",
       "definerRole": "context_engine_worker_lease_definer",
       "directTableMutationAllowed": false,
       "rawNonceComparedAsSha256": true,
+      "contentIdentity": {
+        "domain": "context-engine.file-content-identity.v1",
+        "dimensions": ["organization_id", "source_id", "resource_ref", "canonical_content_hash", "compiler_version", "config_version"],
+        "concurrencyArbitration": "file_resource_ingestion_guard row lock",
+        "unchangedReasonCode": "active-content-identity-match",
+        "sourceContentRetainedInOutcome": false
+      },
       "atomicWrites": [
+        "file_resource_ingestion_guard", "file_acquisition_result",
         "context_resource", "context_revision", "file_revision_snapshot",
         "context_fragment", "revision_publication_event",
         "exact_phrase_candidate", "resource_access_policy",
@@ -951,6 +959,12 @@
             "command": "INSERT",
             "roles": ["context_engine_worker_lease_definer"],
             "withCheck": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"
+          },
+          {
+            "name": "resource_access_policy_file_noop_definer_select",
+            "command": "SELECT",
+            "roles": ["context_engine_worker_lease_definer"],
+            "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"
           }
         ]
       },
@@ -959,7 +973,7 @@
         "context_engine_control": ["EXECUTE change_resource_access"],
         "context_engine_runtime": ["SELECT"],
         "context_engine_worker": [],
-        "context_engine_worker_lease_definer": ["INSERT"]
+        "context_engine_worker_lease_definer": ["SELECT", "INSERT"]
       },
       "partitions": [],
       "securityInvariantIds": [
@@ -1693,6 +1707,12 @@
             "command": "INSERT",
             "roles": ["context_engine_worker_lease_definer"],
             "withCheck": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"
+          },
+          {
+            "name": "context_fragment_file_noop_definer_select",
+            "command": "SELECT",
+            "roles": ["context_engine_worker_lease_definer"],
+            "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"
           }
         ]
       },
@@ -1705,7 +1725,7 @@
       "permittedOperations": {
         "context_engine_runtime": ["SELECT"],
         "context_engine_worker": [],
-        "context_engine_worker_lease_definer": ["INSERT"]
+        "context_engine_worker_lease_definer": ["SELECT", "INSERT"]
       },
       "partitions": [],
       "securityInvariantIds": [
@@ -1872,13 +1892,19 @@
             "command": "INSERT",
             "roles": ["context_engine_worker_lease_definer"],
             "withCheck": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"
+          },
+          {
+            "name": "membership_resource_field_right_file_noop_definer_select",
+            "command": "SELECT",
+            "roles": ["context_engine_worker_lease_definer"],
+            "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"
           }
         ]
       },
       "permittedOperations": {
         "context_engine_runtime": ["SELECT"],
         "context_engine_worker": [],
-        "context_engine_worker_lease_definer": ["INSERT"]
+        "context_engine_worker_lease_definer": ["SELECT", "INSERT"]
       },
       "partitions": [],
       "securityInvariantIds": ["TENANT-OWNERSHIP-001", "TENANT-FK-002", "RLS-FAIL-CLOSED-003", "SCOPE-INTERSECTION-004", "INDEX-NOT-AUTHORITY-005"],
@@ -2382,7 +2408,8 @@
       "organizationColumn": "organization_id",
       "organizationInclusiveKeys": [
         {"name": "pk_file_acquisition", "kind": "primary_key", "columns": ["organization_id", "acquisition_id"]},
-        {"name": "uq_file_acquisition_source_idempotency", "kind": "unique", "columns": ["organization_id", "source_id", "idempotency_key"]}
+        {"name": "uq_file_acquisition_source_idempotency", "kind": "unique", "columns": ["organization_id", "source_id", "idempotency_key"]},
+        {"name": "uq_file_acquisition_identity_source", "kind": "unique", "columns": ["organization_id", "acquisition_id", "source_id"]}
       ],
       "foreignKeys": [
         {
@@ -2418,6 +2445,80 @@
       "partitions": [],
       "securityInvariantIds": ["TENANT-OWNERSHIP-001", "TENANT-FK-002", "RLS-FAIL-CLOSED-003", "WORKER-LEASE-007"],
       "negativeTestIds": ["DB-001", "DB-004", "DB-008", "JOB-001", "WORKER-LEASE-007"]
+    },
+    {
+      "name": "file_resource_ingestion_guard",
+      "classification": "tenant_owned",
+      "nonOwnerEvidence": {
+        "evidenceId": "PG-FILE-IMPORT-023",
+        "selector": {"table": "file_resource_ingestion_guard"}
+      },
+      "purpose": "Organization, Source and stable Resource scoped transaction lock for concurrent File content classification",
+      "organizationColumn": "organization_id",
+      "organizationInclusiveKeys": [
+        {"name": "pk_file_resource_ingestion_guard", "kind": "primary_key", "columns": ["organization_id", "source_id", "resource_ref"]},
+        {"name": "uq_file_resource_ingestion_guard_resource", "kind": "unique", "columns": ["organization_id", "resource_ref"]}
+      ],
+      "foreignKeys": [
+        {"name": "fk_file_resource_ingestion_guard_source_same_organization", "columns": ["organization_id", "source_id"], "references": {"table": "context_source", "columns": ["organization_id", "source_id"]}}
+      ],
+      "checkConstraints": [
+        {"name": "ck_file_resource_ingestion_guard_resource_nonblank", "expression": "btrim(resource_ref) <> ''"}
+      ],
+      "rowLevelSecurity": {
+        "enabled": true,
+        "forced": true,
+        "policies": [
+          {"name": "file_resource_ingestion_guard_migrator_administration", "command": "ALL", "roles": ["context_engine_migrator"], "using": "true", "withCheck": "true"},
+          {"name": "file_resource_ingestion_guard_file_import_definer_select", "command": "SELECT", "roles": ["context_engine_worker_lease_definer"], "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"},
+          {"name": "file_resource_ingestion_guard_file_import_definer_insert", "command": "INSERT", "roles": ["context_engine_worker_lease_definer"], "withCheck": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"},
+          {"name": "file_resource_ingestion_guard_file_import_definer_update", "command": "UPDATE", "roles": ["context_engine_worker_lease_definer"], "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid", "withCheck": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"}
+        ]
+      },
+      "immutableRows": {"trigger": "file_resource_ingestion_guard_immutable", "function": "context_content_reject_mutation", "events": ["UPDATE", "DELETE"], "sqlstate": "55000"},
+      "functionOnlyMutation": {"databaseFunctions": ["context_worker_publish_file_import_v2", "context_worker_publish_structural_file_import_v2"], "definerRole": "context_engine_worker_lease_definer", "directTableMutationAllowed": false},
+      "permittedOperations": {"context_engine_control": [], "context_engine_runtime": [], "context_engine_worker": ["EXECUTE context_worker_publish_file_import_v2", "EXECUTE context_worker_publish_structural_file_import_v2"], "context_engine_worker_lease_definer": ["SELECT", "INSERT", "UPDATE resource_ref"]},
+      "partitions": [],
+      "securityInvariantIds": ["TENANT-OWNERSHIP-001", "TENANT-FK-002", "RLS-FAIL-CLOSED-003", "WORKER-LEASE-007"],
+      "negativeTestIds": ["DB-001", "DB-004", "DB-008", "PG-FILE-IMPORT-023"]
+    },
+    {
+      "name": "file_acquisition_result",
+      "classification": "tenant_owned",
+      "nonOwnerEvidence": {
+        "evidenceId": "PG-FILE-IMPORT-023",
+        "selector": {"table": "file_acquisition_result"}
+      },
+      "purpose": "Immutable unchanged-acquisition outcome binding one deduplicated observation to an Organization-owned active Revision",
+      "organizationColumn": "organization_id",
+      "organizationInclusiveKeys": [
+        {"name": "pk_file_acquisition_result", "kind": "primary_key", "columns": ["organization_id", "acquisition_id"]}
+      ],
+      "foreignKeys": [
+        {"name": "fk_file_acquisition_result_acquisition_source_same_organization", "columns": ["organization_id", "acquisition_id", "source_id"], "references": {"table": "file_acquisition", "columns": ["organization_id", "acquisition_id", "source_id"]}},
+        {"name": "fk_file_acquisition_result_guard_same_organization", "columns": ["organization_id", "source_id", "resource_ref"], "references": {"table": "file_resource_ingestion_guard", "columns": ["organization_id", "source_id", "resource_ref"]}},
+        {"name": "fk_file_acquisition_result_revision_same_organization", "columns": ["organization_id", "resource_ref", "active_revision_id"], "references": {"table": "context_revision", "columns": ["organization_id", "resource_ref", "revision_id"]}}
+      ],
+      "checkConstraints": [
+        {"name": "ck_file_acquisition_result_identity_digest", "expression": "content_identity_digest ~ '^[0-9a-f]{64}$'"},
+        {"name": "ck_file_acquisition_result_outcome", "expression": "outcome is unchanged with active-content-identity-match and one SHA-256 reason_digest"}
+      ],
+      "rowLevelSecurity": {
+        "enabled": true,
+        "forced": true,
+        "policies": [
+          {"name": "file_acquisition_result_migrator_administration", "command": "ALL", "roles": ["context_engine_migrator"], "using": "true", "withCheck": "true"},
+          {"name": "file_acquisition_result_file_import_definer_select", "command": "SELECT", "roles": ["context_engine_worker_lease_definer"], "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"},
+          {"name": "file_acquisition_result_file_import_definer_insert", "command": "INSERT", "roles": ["context_engine_worker_lease_definer"], "withCheck": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"}
+        ]
+      },
+      "immutableRows": {"trigger": "file_acquisition_result_immutable", "function": "context_content_reject_mutation", "events": ["UPDATE", "DELETE"], "sqlstate": "55000"},
+      "functionOnlyMutation": {"databaseFunctions": ["context_worker_publish_file_import_v2", "context_worker_publish_structural_file_import_v2"], "definerRole": "context_engine_worker_lease_definer", "directTableMutationAllowed": false},
+      "permittedOperations": {"context_engine_control": [], "context_engine_runtime": [], "context_engine_worker": ["EXECUTE context_worker_publish_file_import_v2", "EXECUTE context_worker_publish_structural_file_import_v2"], "context_engine_worker_lease_definer": ["SELECT", "INSERT"]},
+      "retention": {"sourceContent": "none", "reason": "fixed code plus organization-scoped digest only"},
+      "partitions": [],
+      "securityInvariantIds": ["TENANT-OWNERSHIP-001", "TENANT-FK-002", "RLS-FAIL-CLOSED-003", "WORKER-LEASE-007", "TRACE-REDACTION-012"],
+      "negativeTestIds": ["DB-001", "DB-004", "DB-008", "PG-FILE-IMPORT-023"]
     },
     {
       "name": "file_import_job",
@@ -2462,8 +2563,8 @@
           {"name": "file_import_job_definer_update", "command": "UPDATE", "roles": ["context_engine_worker_lease_definer"], "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid AND job_id = NULLIF(current_setting('app.worker_job_id', true), '')::uuid AND workload = 'supply.file-import' AND worker_audience = 'context-engine-worker' AND operation = 'file.import'", "withCheck": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid AND job_id = NULLIF(current_setting('app.worker_job_id', true), '')::uuid AND workload = 'supply.file-import' AND worker_audience = 'context-engine-worker' AND operation = 'file.import'"}
         ]
       },
-      "functionOnlyMutation": {"databaseFunctions": ["context_control_prepare_file_import", "context_worker_issue_file_import_lease", "context_worker_redeem_file_import", "context_worker_fail_file_import", "context_worker_publish_file_import", "context_worker_publish_structural_file_import"], "definerRole": "context_engine_worker_lease_definer", "directTableMutationAllowed": false},
-      "permittedOperations": {"context_engine_control": ["EXECUTE context_control_prepare_file_import", "EXECUTE context_worker_issue_file_import_lease"], "context_engine_runtime": [], "context_engine_worker": ["EXECUTE context_worker_redeem_file_import", "EXECUTE context_worker_fail_file_import", "EXECUTE context_worker_publish_file_import", "EXECUTE context_worker_publish_structural_file_import"], "context_engine_worker_lease_definer": ["SELECT", "INSERT", "UPDATE"]},
+      "functionOnlyMutation": {"databaseFunctions": ["context_control_prepare_file_import", "context_worker_issue_file_import_lease", "context_worker_redeem_file_import", "context_worker_fail_file_import", "context_worker_publish_file_import_v2", "context_worker_publish_structural_file_import_v2"], "definerRole": "context_engine_worker_lease_definer", "directTableMutationAllowed": false},
+      "permittedOperations": {"context_engine_control": ["EXECUTE context_control_prepare_file_import", "EXECUTE context_worker_issue_file_import_lease"], "context_engine_runtime": [], "context_engine_worker": ["EXECUTE context_worker_redeem_file_import", "EXECUTE context_worker_fail_file_import", "EXECUTE context_worker_publish_file_import_v2", "EXECUTE context_worker_publish_structural_file_import_v2"], "context_engine_worker_lease_definer": ["SELECT", "INSERT", "UPDATE"]},
       "partitions": [],
       "securityInvariantIds": ["TENANT-OWNERSHIP-001", "TENANT-FK-002", "RLS-FAIL-CLOSED-003", "WORKER-LEASE-007"],
       "negativeTestIds": ["DB-001", "DB-004", "DB-008", "JOB-001", "JOB-005", "WORKER-LEASE-007"]
@@ -2504,10 +2605,11 @@
       },
       "rowLevelSecurity": {"enabled": true, "forced": true, "policies": [
         {"name": "file_revision_snapshot_migrator_administration", "command": "ALL", "roles": ["context_engine_migrator"], "using": "true", "withCheck": "true"},
-        {"name": "file_revision_snapshot_file_import_definer_insert", "command": "INSERT", "roles": ["context_engine_worker_lease_definer"], "withCheck": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"}
+        {"name": "file_revision_snapshot_file_import_definer_insert", "command": "INSERT", "roles": ["context_engine_worker_lease_definer"], "withCheck": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"},
+        {"name": "file_revision_snapshot_file_noop_definer_select", "command": "SELECT", "roles": ["context_engine_worker_lease_definer"], "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"}
       ]},
       "immutableRows": {"trigger": "file_revision_snapshot_immutable", "function": "context_content_reject_mutation", "events": ["UPDATE", "DELETE"], "sqlstate": "55000"},
-      "permittedOperations": {"context_engine_control": [], "context_engine_runtime": [], "context_engine_worker": ["EXECUTE context_worker_publish_file_import", "EXECUTE context_worker_publish_structural_file_import"], "context_engine_worker_lease_definer": ["INSERT"]},
+      "permittedOperations": {"context_engine_control": [], "context_engine_runtime": [], "context_engine_worker": ["EXECUTE context_worker_publish_file_import_v2", "EXECUTE context_worker_publish_structural_file_import_v2"], "context_engine_worker_lease_definer": ["SELECT", "INSERT"]},
       "partitions": [],
       "securityInvariantIds": ["TENANT-OWNERSHIP-001", "TENANT-FK-002", "RLS-FAIL-CLOSED-003", "TRACE-REDACTION-012"],
       "negativeTestIds": ["DB-001", "DB-004", "DB-008", "WORKER-LEASE-007"]
@@ -2532,12 +2634,13 @@
         {"name": "ck_revision_publication_event_order", "expression": "(ordinal, state) IN ((0, 'prepared'), (1, 'indexed'), (2, 'active'))"}
       ],
       "rowLevelSecurity": {"enabled": true, "forced": true, "policies": [
-        {"name": "revision_publication_event_migrator_administration", "command": "ALL", "roles": ["context_engine_migrator"], "using": "true", "withCheck": "true"},
+          {"name": "revision_publication_event_migrator_administration", "command": "ALL", "roles": ["context_engine_migrator"], "using": "true", "withCheck": "true"},
           {"name": "revision_publication_event_file_import_definer_insert", "command": "INSERT", "roles": ["context_engine_worker_lease_definer"], "withCheck": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"},
+          {"name": "revision_publication_event_file_noop_definer_select", "command": "SELECT", "roles": ["context_engine_worker_lease_definer"], "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"},
           {"name": "revision_publication_event_current_user_actor", "command": "SELECT", "roles": ["context_engine_runtime"], "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid AND current_setting('app.actor_kind', true) = 'user' AND EXISTS (SELECT 1 FROM public.membership AS actor_membership WHERE actor_membership.organization_id = revision_publication_event.organization_id AND actor_membership.user_id = NULLIF(current_setting('app.user_id', true), '')::uuid AND actor_membership.membership_id = NULLIF(current_setting('app.membership_id', true), '')::uuid AND actor_membership.membership_version = NULLIF(current_setting('app.membership_version', true), '')::bigint AND actor_membership.status = 'active' AND actor_membership.valid_from <= NULLIF(current_setting('app.checked_at', true), '')::timestamptz AND (actor_membership.valid_until IS NULL OR actor_membership.valid_until > NULLIF(current_setting('app.checked_at', true), '')::timestamptz)) AND EXISTS (SELECT 1 FROM public.resource_access_policy AS access_policy WHERE access_policy.organization_id = revision_publication_event.organization_id AND access_policy.resource_ref = revision_publication_event.resource_ref AND access_policy.principal_ref = current_setting('app.principal_ref', true) AND access_policy.access_state = 'allowed')"}
       ]},
       "immutableRows": {"trigger": "revision_publication_event_immutable", "function": "context_content_reject_mutation", "events": ["UPDATE", "DELETE"], "sqlstate": "55000"},
-      "permittedOperations": {"context_engine_control": [], "context_engine_runtime": ["SELECT"], "context_engine_worker": ["EXECUTE context_worker_publish_file_import", "EXECUTE context_worker_publish_structural_file_import"], "context_engine_worker_lease_definer": ["INSERT"]},
+      "permittedOperations": {"context_engine_control": [], "context_engine_runtime": ["SELECT"], "context_engine_worker": ["EXECUTE context_worker_publish_file_import_v2", "EXECUTE context_worker_publish_structural_file_import_v2"], "context_engine_worker_lease_definer": ["SELECT", "INSERT"]},
       "partitions": [],
       "securityInvariantIds": ["TENANT-OWNERSHIP-001", "TENANT-FK-002", "RLS-FAIL-CLOSED-003", "TRACE-REDACTION-012"],
       "negativeTestIds": ["DB-001", "DB-004", "DB-008", "WORKER-LEASE-007"]
@@ -2566,11 +2669,12 @@
         "policies": [
           {"name": "exact_phrase_candidate_migrator_administration", "command": "ALL", "roles": ["context_engine_migrator"], "using": "true", "withCheck": "true"},
           {"name": "exact_phrase_candidate_file_import_definer_insert", "command": "INSERT", "roles": ["context_engine_worker_lease_definer"], "withCheck": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"},
+          {"name": "exact_phrase_candidate_file_noop_definer_select", "command": "SELECT", "roles": ["context_engine_worker_lease_definer"], "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"},
           {"name": "exact_phrase_candidate_runtime", "command": "SELECT", "roles": ["context_engine_runtime"], "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid AND current_setting('app.actor_kind', true) = 'user' AND NULLIF(current_setting('app.principal_ref', true), '') IS NOT NULL AND NULLIF(current_setting('app.request_id', true), '') IS NOT NULL AND NULLIF(current_setting('app.authentication_binding_ref', true), '') IS NOT NULL AND NULLIF(current_setting('app.checked_at', true), '') IS NOT NULL AND EXISTS (SELECT 1 FROM public.membership AS actor_membership WHERE actor_membership.organization_id = exact_phrase_candidate.organization_id AND actor_membership.user_id = NULLIF(current_setting('app.user_id', true), '')::uuid AND actor_membership.membership_id = NULLIF(current_setting('app.membership_id', true), '')::uuid AND actor_membership.membership_version = NULLIF(current_setting('app.membership_version', true), '')::bigint AND actor_membership.status = 'active' AND actor_membership.valid_from <= NULLIF(current_setting('app.checked_at', true), '')::timestamptz AND (actor_membership.valid_until IS NULL OR actor_membership.valid_until > NULLIF(current_setting('app.checked_at', true), '')::timestamptz))"}
         ]
       },
       "immutableRows": {"trigger": "exact_phrase_candidate_immutable", "function": "context_content_reject_mutation", "events": ["UPDATE", "DELETE"], "sqlstate": "55000"},
-      "permittedOperations": {"context_engine_control": [], "context_engine_runtime": ["SELECT"], "context_engine_worker": ["EXECUTE context_worker_publish_file_import", "EXECUTE context_worker_publish_structural_file_import"], "context_engine_worker_lease_definer": ["INSERT"]},
+      "permittedOperations": {"context_engine_control": [], "context_engine_runtime": ["SELECT"], "context_engine_worker": ["EXECUTE context_worker_publish_file_import_v2", "EXECUTE context_worker_publish_structural_file_import_v2"], "context_engine_worker_lease_definer": ["SELECT", "INSERT"]},
       "partitions": [],
       "securityInvariantIds": ["TENANT-OWNERSHIP-001", "TENANT-FK-002", "RLS-FAIL-CLOSED-003", "INDEX-NOT-AUTHORITY-005"],
       "negativeTestIds": ["DB-001", "DB-002", "DB-004", "DB-008", "DB-009", "DB-010", "PG-INDEX-NOT-AUTHORITY-005"]

@@ -43,6 +43,7 @@ schema、Python type、threat fixture 或新的架构决策。
 | `ContextAccessTicket` | Short-lived signed source-read capability | One Organization, identity chain, provider audience, purpose, epoch, and expiry | Authority only for its declared read audience |
 | `ActionTicket` | Short-lived signed one-effect capability | One Organization, identity chain, effect/audience/payload, epoch, and expiry | Authority only for its declared external effect |
 | `WorkerLease` | Short-lived signed one-shot work capability | One Organization, durable job, registered service workload, expiry, and nonce | Authority only for the matching job attempt |
+| `File acquisition outcome` | Persistent immutable completed-observation lineage | One Organization, ContextSource, acquisition, ContextResource, and active ContextRevision | None; deduplication evidence is not content or authority |
 | `acquisition checkpoint` | Persistent monotonic acquisition progress | One Organization and ContextSource | None |
 | `publish watermark` | Persistent monotonic visibility progress | One Organization and ContextSource | None |
 
@@ -337,6 +338,22 @@ registered service workload，并防 cross-job/cross-tenant replay。
   Epoch, and the remaining ActorContext fields exist.
 - **Do not confuse with:** queue message, durable job, lock,
   ContextAccessTicket, ActionTicket, or ServicePrincipal.
+
+### `File acquisition outcome`
+
+The immutable result of one completed File-content observation. 中文：File
+acquisition outcome 记录一次 File acquisition 是首次发布还是命中 unchanged
+no-op；它只保留安全 lineage 和 digest，不保存 source content。
+
+- **Owner/scope:** one Organization, ContextSource, acquisition, stable
+  ContextResource, and active ContextRevision.
+- **Lifecycle:** created atomically when unchanged classification completes; it
+  is append-only per deduplicated acquisition. Initial publication retains its
+  existing publication lineage instead.
+- **Invariant:** it may explain deduplication but cannot authorize content,
+  replace current policy, or create cross-Organization content identity.
+- **Do not confuse with:** ContextRevision, publication event, index job,
+  acquisition checkpoint, publish watermark, or WorkerLease completion.
 
 ### `acquisition checkpoint`
 

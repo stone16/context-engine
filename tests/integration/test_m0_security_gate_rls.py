@@ -30,7 +30,7 @@ def _manifest() -> dict[str, object]:
 def test_all_manifest_tenant_tables_pass_live_non_owner_rls_audit(
     guarded_runtime_engine: Engine,
 ) -> None:
-    """PG-RLS-ALL-TENANT-TABLES: the live denominator is exactly 27/27."""
+    """PG-RLS-ALL-TENANT-TABLES: the live denominator is exactly 29/29."""
 
     with guarded_runtime_engine.connect() as connection:
         report = audit_live_rls(
@@ -41,13 +41,13 @@ def test_all_manifest_tenant_tables_pass_live_non_owner_rls_audit(
 
     assert report["passed"] is True
     assert report["denominator"] == {
-        "allTables": 30,
-        "tenantOwned": 27,
+        "allTables": 32,
+        "tenantOwned": 29,
         "global": 3,
     }
     assert report["coverage"] == {
-        "numerator": 27,
-        "denominator": 27,
+        "numerator": 29,
+        "denominator": 29,
         "percent": 100.0,
     }
     assert report["failures"] == []
@@ -74,10 +74,7 @@ def test_no_force_row_level_security_mutation_fails_and_rolls_back(
             transaction = migration_connection.begin()
             try:
                 migration_connection.execute(
-                    text(
-                        "ALTER TABLE organization_record "
-                        "NO FORCE ROW LEVEL SECURITY"
-                    )
+                    text("ALTER TABLE organization_record NO FORCE ROW LEVEL SECURITY")
                 )
                 mutated_snapshot = snapshot_public_schema(migration_connection)
                 mutated_snapshot["currentRole"] = runtime_snapshot["currentRole"]
@@ -89,13 +86,11 @@ def test_no_force_row_level_security_mutation_fails_and_rolls_back(
 
                 assert mutated["passed"] is False
                 assert mutated["coverage"] == {
-                    "numerator": 26,
-                    "denominator": 27,
-                    "percent": 96.3,
+                    "numerator": 28,
+                    "denominator": 29,
+                    "percent": 96.55,
                 }
-                tenant_tables = cast(
-                    list[dict[str, Any]], mutated["tenantTables"]
-                )
+                tenant_tables = cast(list[dict[str, Any]], mutated["tenantTables"])
                 organization_record = next(
                     table
                     for table in tenant_tables
@@ -116,8 +111,8 @@ def test_no_force_row_level_security_mutation_fails_and_rolls_back(
         )
     assert restored["passed"] is True
     assert restored["coverage"] == {
-        "numerator": 27,
-        "denominator": 27,
+        "numerator": 29,
+        "denominator": 29,
         "percent": 100.0,
     }
 
@@ -160,17 +155,16 @@ def test_transactional_permissive_allow_all_policy_mutation_fails_and_rolls_back
                 assert mutated["passed"] is False
                 organization_record = next(
                     table
-                    for table in cast(
-                        list[dict[str, Any]], mutated["tenantTables"]
-                    )
+                    for table in cast(list[dict[str, Any]], mutated["tenantTables"])
                     if table["table"] == "organization_record"
                 )
-                assert organization_record["policies"][
-                    "inventoryMatchesDeclared"
-                ] is False
+                assert (
+                    organization_record["policies"]["inventoryMatchesDeclared"] is False
+                )
                 assert organization_record["policies"]["passed"] is False
-                assert "organization_record_allow_all_mutation" in (
-                    organization_record["policies"]["live"]
+                assert (
+                    "organization_record_allow_all_mutation"
+                    in (organization_record["policies"]["live"])
                 )
             finally:
                 transaction.rollback()
@@ -224,9 +218,7 @@ def test_transactional_policy_replacement_mutation_fails_and_rolls_back(
                 assert mutated["passed"] is False
                 organization_record = next(
                     table
-                    for table in cast(
-                        list[dict[str, Any]], mutated["tenantTables"]
-                    )
+                    for table in cast(list[dict[str, Any]], mutated["tenantTables"])
                     if table["table"] == "organization_record"
                 )
                 policies = organization_record["policies"]
