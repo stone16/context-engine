@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 readonly ROOT_DIR
 readonly STATE_DIR="$ROOT_DIR/.context-engine"
 readonly ENV_FILE="$STATE_DIR/database.env"
+readonly ENV_MIGRATION_LOCK="$STATE_DIR/database.env.migration.lock"
 readonly LEGACY_PROJECT_FILE="$STATE_DIR/compose-project"
 readonly COMPOSE_FILE="$ROOT_DIR/compose.yaml"
 COMPOSE_PROJECT=''
@@ -42,6 +43,7 @@ generate_environment() {
     local control_password
     local runtime_password
     local worker_password
+    local learning_password
     local security_operator_password
     local postgres_port
     local compose_project
@@ -50,6 +52,7 @@ generate_environment() {
     control_password="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
     runtime_password="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
     worker_password="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+    learning_password="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
     security_operator_password="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
     postgres_port="$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')"
     compose_project="context-engine-$(python3 -c \
@@ -74,6 +77,8 @@ generate_environment() {
         printf 'CONTEXT_ENGINE_RUNTIME_PASSWORD=%s\n' "$runtime_password"
         printf 'CONTEXT_ENGINE_WORKER_ROLE=context_engine_worker\n'
         printf 'CONTEXT_ENGINE_WORKER_PASSWORD=%s\n' "$worker_password"
+        printf 'CONTEXT_ENGINE_LEARNING_ROLE=context_engine_learning\n'
+        printf 'CONTEXT_ENGINE_LEARNING_PASSWORD=%s\n' "$learning_password"
         printf 'CONTEXT_ENGINE_SECURITY_OPERATOR_ROLE=context_engine_security_operator\n'
         printf 'CONTEXT_ENGINE_SECURITY_OPERATOR_PASSWORD=%s\n' \
           "$security_operator_password"
@@ -85,6 +90,8 @@ generate_environment() {
           "$runtime_password" "$postgres_port"
         printf 'CONTEXT_ENGINE_WORKER_DATABASE_URL=postgresql+psycopg://context_engine_worker:%s@127.0.0.1:%s/context_engine\n' \
           "$worker_password" "$postgres_port"
+        printf 'CONTEXT_ENGINE_LEARNING_DATABASE_URL=postgresql+psycopg://context_engine_learning:%s@127.0.0.1:%s/context_engine\n' \
+          "$learning_password" "$postgres_port"
         printf 'CONTEXT_ENGINE_SECURITY_OPERATOR_DATABASE_URL=postgresql+psycopg://context_engine_security_operator:%s@127.0.0.1:%s/context_engine\n' \
           "$security_operator_password" "$postgres_port"
         printf 'CONTEXT_ENGINE_TEST_DATABASE_URL=postgresql+psycopg://context_engine_runtime:%s@127.0.0.1:%s/context_engine\n' \
@@ -108,9 +115,28 @@ generate_environment() {
     exit 1
   fi
   chmod 600 "$ENV_FILE"
-  migrate_legacy_project_identity
-  migrate_legacy_control_identity
-  migrate_legacy_security_operator_identity
+  migrate_legacy_environment
+}
+
+migrate_legacy_environment() {
+  local lock_attempt=0
+  until mkdir "$ENV_MIGRATION_LOCK" 2>/dev/null; do
+    lock_attempt=$((lock_attempt + 1))
+    if ((lock_attempt >= 400)); then
+      printf 'timed out acquiring database environment migration lock: %s\n' \
+        "$ENV_MIGRATION_LOCK" >&2
+      exit 1
+    fi
+    sleep 0.05
+  done
+
+  trap 'rmdir "$ENV_MIGRATION_LOCK" 2>/dev/null || true' EXIT
+  (migrate_legacy_project_identity)
+  (migrate_legacy_control_identity)
+  (migrate_legacy_learning_identity)
+  (migrate_legacy_security_operator_identity)
+  rmdir "$ENV_MIGRATION_LOCK"
+  trap - EXIT
 }
 
 read_embedded_project_identity() {
@@ -193,6 +219,59 @@ migrate_legacy_control_identity() {
   trap - EXIT
 }
 
+migrate_legacy_learning_identity() {
+  local learning_role_count
+  local learning_password_count
+  local learning_url_count
+  learning_role_count="$(grep -c '^CONTEXT_ENGINE_LEARNING_ROLE=' "$ENV_FILE" || true)"
+  learning_password_count="$(
+    grep -c '^CONTEXT_ENGINE_LEARNING_PASSWORD=' "$ENV_FILE" || true
+  )"
+  learning_url_count="$(
+    grep -c '^CONTEXT_ENGINE_LEARNING_DATABASE_URL=' "$ENV_FILE" || true
+  )"
+  if [[ "$learning_role_count" == '1' && \
+        "$learning_password_count" == '1' && \
+        "$learning_url_count" == '1' ]]; then
+    return
+  fi
+
+  local postgres_port
+  postgres_port="$(sed -n 's/^CONTEXT_ENGINE_POSTGRES_PORT=//p' "$ENV_FILE")"
+  if [[ ! "$postgres_port" =~ ^[0-9]+$ ]]; then
+    printf 'legacy database environment has no valid PostgreSQL port\n' >&2
+    exit 1
+  fi
+
+  local learning_password
+  learning_password="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+  local migration_file
+  migration_file="$(mktemp "$STATE_DIR/database.env.learning.XXXXXX")"
+  trap 'rm -f "$migration_file"' EXIT
+  (
+    umask 077
+    while IFS= read -r environment_line || [[ -n "$environment_line" ]]; do
+      case "$environment_line" in
+        CONTEXT_ENGINE_LEARNING_ROLE=*|\
+        CONTEXT_ENGINE_LEARNING_PASSWORD=*|\
+        CONTEXT_ENGINE_LEARNING_DATABASE_URL=*)
+          continue
+          ;;
+        *)
+          printf '%s\n' "$environment_line"
+          ;;
+      esac
+    done <"$ENV_FILE"
+    printf 'CONTEXT_ENGINE_LEARNING_ROLE=context_engine_learning\n'
+    printf 'CONTEXT_ENGINE_LEARNING_PASSWORD=%s\n' "$learning_password"
+    printf 'CONTEXT_ENGINE_LEARNING_DATABASE_URL=postgresql+psycopg://context_engine_learning:%s@127.0.0.1:%s/context_engine\n' \
+      "$learning_password" "$postgres_port"
+  ) >"$migration_file"
+  chmod 600 "$migration_file"
+  mv "$migration_file" "$ENV_FILE"
+  trap - EXIT
+}
+
 migrate_legacy_security_operator_identity() {
   if grep -q '^CONTEXT_ENGINE_SECURITY_OPERATOR_ROLE=' "$ENV_FILE"; then
     return
@@ -232,7 +311,7 @@ load_environment() {
   local variable_name
   local variable_value
   local loaded_variable_names=' '
-  local allowed_variables=' POSTGRES_DB POSTGRES_USER POSTGRES_PASSWORD CONTEXT_ENGINE_POSTGRES_PORT CONTEXT_ENGINE_COMPOSE_PROJECT CONTEXT_ENGINE_MIGRATOR_ROLE CONTEXT_ENGINE_MIGRATOR_PASSWORD CONTEXT_ENGINE_CONTROL_ROLE CONTEXT_ENGINE_CONTROL_PASSWORD CONTEXT_ENGINE_RUNTIME_ROLE CONTEXT_ENGINE_RUNTIME_PASSWORD CONTEXT_ENGINE_WORKER_ROLE CONTEXT_ENGINE_WORKER_PASSWORD CONTEXT_ENGINE_SECURITY_OPERATOR_ROLE CONTEXT_ENGINE_SECURITY_OPERATOR_PASSWORD CONTEXT_ENGINE_MIGRATION_DATABASE_URL CONTEXT_ENGINE_CONTROL_DATABASE_URL CONTEXT_ENGINE_RUNTIME_DATABASE_URL CONTEXT_ENGINE_WORKER_DATABASE_URL CONTEXT_ENGINE_SECURITY_OPERATOR_DATABASE_URL CONTEXT_ENGINE_TEST_DATABASE_URL '
+  local allowed_variables=' POSTGRES_DB POSTGRES_USER POSTGRES_PASSWORD CONTEXT_ENGINE_POSTGRES_PORT CONTEXT_ENGINE_COMPOSE_PROJECT CONTEXT_ENGINE_MIGRATOR_ROLE CONTEXT_ENGINE_MIGRATOR_PASSWORD CONTEXT_ENGINE_CONTROL_ROLE CONTEXT_ENGINE_CONTROL_PASSWORD CONTEXT_ENGINE_RUNTIME_ROLE CONTEXT_ENGINE_RUNTIME_PASSWORD CONTEXT_ENGINE_WORKER_ROLE CONTEXT_ENGINE_WORKER_PASSWORD CONTEXT_ENGINE_LEARNING_ROLE CONTEXT_ENGINE_LEARNING_PASSWORD CONTEXT_ENGINE_SECURITY_OPERATOR_ROLE CONTEXT_ENGINE_SECURITY_OPERATOR_PASSWORD CONTEXT_ENGINE_MIGRATION_DATABASE_URL CONTEXT_ENGINE_CONTROL_DATABASE_URL CONTEXT_ENGINE_RUNTIME_DATABASE_URL CONTEXT_ENGINE_WORKER_DATABASE_URL CONTEXT_ENGINE_LEARNING_DATABASE_URL CONTEXT_ENGINE_SECURITY_OPERATOR_DATABASE_URL CONTEXT_ENGINE_TEST_DATABASE_URL '
 
   while IFS='=' read -r variable_name variable_value; do
     if [[ -z "$variable_name" || "$allowed_variables" != *" $variable_name "* ]]; then
@@ -264,6 +343,7 @@ load_environment() {
         "$CONTEXT_ENGINE_CONTROL_ROLE" != 'context_engine_control' || \
         "$CONTEXT_ENGINE_RUNTIME_ROLE" != 'context_engine_runtime' || \
         "$CONTEXT_ENGINE_WORKER_ROLE" != 'context_engine_worker' || \
+        "$CONTEXT_ENGINE_LEARNING_ROLE" != 'context_engine_learning' || \
         "$CONTEXT_ENGINE_SECURITY_OPERATOR_ROLE" != \
           'context_engine_security_operator' || \
         ! "$CONTEXT_ENGINE_POSTGRES_PORT" =~ ^[0-9]+$ || \
@@ -273,6 +353,7 @@ load_environment() {
         ! "$CONTEXT_ENGINE_CONTROL_PASSWORD" =~ ^[0-9a-f]{64}$ || \
         ! "$CONTEXT_ENGINE_RUNTIME_PASSWORD" =~ ^[0-9a-f]{64}$ || \
         ! "$CONTEXT_ENGINE_WORKER_PASSWORD" =~ ^[0-9a-f]{64}$ || \
+        ! "$CONTEXT_ENGINE_LEARNING_PASSWORD" =~ ^[0-9a-f]{64}$ || \
         ! "$CONTEXT_ENGINE_SECURITY_OPERATOR_PASSWORD" =~ ^[0-9a-f]{64}$ ]]; then
     printf 'database environment failed its generated-value contract\n' >&2
     exit 1
@@ -288,6 +369,8 @@ load_environment() {
           "postgresql+psycopg://context_engine_runtime:$CONTEXT_ENGINE_RUNTIME_PASSWORD@$database_endpoint" || \
         "$CONTEXT_ENGINE_WORKER_DATABASE_URL" != \
           "postgresql+psycopg://context_engine_worker:$CONTEXT_ENGINE_WORKER_PASSWORD@$database_endpoint" || \
+        "$CONTEXT_ENGINE_LEARNING_DATABASE_URL" != \
+          "postgresql+psycopg://context_engine_learning:$CONTEXT_ENGINE_LEARNING_PASSWORD@$database_endpoint" || \
         "$CONTEXT_ENGINE_SECURITY_OPERATOR_DATABASE_URL" != \
           "postgresql+psycopg://context_engine_security_operator:$CONTEXT_ENGINE_SECURITY_OPERATOR_PASSWORD@$database_endpoint" || \
         "$CONTEXT_ENGINE_TEST_DATABASE_URL" != \

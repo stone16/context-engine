@@ -1,5 +1,5 @@
 {
-  "manifestVersion": "8.0.0",
+  "manifestVersion": "9.0.0",
   "controlOperations": [
     {
       "name": "change_resource_access",
@@ -39,6 +39,48 @@
       },
       "callerSuppliedReceiverDimensions": [],
       "atomicWrites": ["worker_noop_job"]
+    },
+    {
+      "name": "context_learning_promote_release",
+      "databaseFunction": "context_learning_promote_release",
+      "role": "context_engine_learning",
+      "definerRole": "context_engine_release_definer",
+      "directTableMutationAllowed": false,
+      "databaseOwnedTime": true,
+      "securityDefiner": true,
+      "searchPath": ["pg_catalog", "pg_temp"],
+      "rowSecurity": true,
+      "sessionUser": "context_engine_learning",
+      "expectedState": {
+        "generationBound": true,
+        "initialGeneration": 0,
+        "initialPointerAbsent": true
+      },
+      "revalidates": [
+        "release_operator_grant",
+        "release_candidate",
+        "release_evaluation",
+        "release_manifest",
+        "active_release_manifest"
+      ],
+      "candidateEvaluationExactBindings": [
+        "security_status",
+        "security_evidence_digest",
+        "reliability_status",
+        "reliability_evidence_digest",
+        "quality_status",
+        "quality_evidence_digest",
+        "budget_status",
+        "budget_evidence_digest",
+        "capability_coverage_digest",
+        "fixture_digest",
+        "verification_commands"
+      ],
+      "requiredManifestCurationMode": "curation_off",
+      "atomicWrites": [
+        "active_release_manifest",
+        "release_promotion_audit"
+      ]
     }
   ],
   "tables": [
@@ -1420,6 +1462,582 @@
       "partitions": [],
       "securityInvariantIds": ["TENANT-OWNERSHIP-001", "TENANT-FK-002", "RLS-FAIL-CLOSED-003", "SCOPE-INTERSECTION-004", "INDEX-NOT-AUTHORITY-005"],
       "negativeTestIds": ["DB-001", "DB-002", "DB-004", "DB-009", "DB-010", "PG-SCOPE-INTERSECTION-004", "PG-INDEX-NOT-AUTHORITY-005"]
+    },
+    {
+      "name": "release_manifest",
+      "classification": "tenant_owned",
+      "purpose": "Immutable Organization-owned release profile composition and curation compatibility lineage",
+      "organizationColumn": "organization_id",
+      "organizationInclusiveKeys": [
+        {
+          "name": "pk_release_manifest",
+          "kind": "primary_key",
+          "columns": ["organization_id", "manifest_ref"]
+        },
+        {
+          "name": "uq_release_manifest_exact_digest",
+          "kind": "unique",
+          "columns": ["organization_id", "manifest_ref", "manifest_digest"]
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_release_manifest_organization",
+          "columns": ["organization_id"],
+          "references": {
+            "table": "organization",
+            "columns": ["organization_id"]
+          },
+          "onDelete": "CASCADE"
+        }
+      ],
+      "checkConstraints": [
+        {
+          "name": "ck_release_manifest_refs_bounded",
+          "expression": "char_length(manifest_ref) BETWEEN 1 AND 255 AND manifest_ref = btrim(manifest_ref) AND manifest_ref !~ '[[:space:]]' AND char_length(content_profile_ref) BETWEEN 1 AND 255 AND content_profile_ref = btrim(content_profile_ref) AND content_profile_ref !~ '[[:space:]]' AND char_length(content_schema_ref) BETWEEN 1 AND 255 AND content_schema_ref = btrim(content_schema_ref) AND content_schema_ref !~ '[[:space:]]' AND char_length(index_profile_ref) BETWEEN 1 AND 255 AND index_profile_ref = btrim(index_profile_ref) AND index_profile_ref !~ '[[:space:]]' AND char_length(index_content_schema_ref) BETWEEN 1 AND 255 AND index_content_schema_ref = btrim(index_content_schema_ref) AND index_content_schema_ref !~ '[[:space:]]' AND char_length(index_schema_ref) BETWEEN 1 AND 255 AND index_schema_ref = btrim(index_schema_ref) AND index_schema_ref !~ '[[:space:]]' AND char_length(runtime_profile_ref) BETWEEN 1 AND 255 AND runtime_profile_ref = btrim(runtime_profile_ref) AND runtime_profile_ref !~ '[[:space:]]' AND char_length(runtime_content_schema_ref) BETWEEN 1 AND 255 AND runtime_content_schema_ref = btrim(runtime_content_schema_ref) AND runtime_content_schema_ref !~ '[[:space:]]' AND char_length(runtime_index_schema_ref) BETWEEN 1 AND 255 AND runtime_index_schema_ref = btrim(runtime_index_schema_ref) AND runtime_index_schema_ref !~ '[[:space:]]' AND char_length(runtime_tokenizer_ref) BETWEEN 1 AND 255 AND runtime_tokenizer_ref = btrim(runtime_tokenizer_ref) AND runtime_tokenizer_ref !~ '[[:space:]]' AND char_length(runtime_package_schema_ref) BETWEEN 1 AND 255 AND runtime_package_schema_ref = btrim(runtime_package_schema_ref) AND runtime_package_schema_ref !~ '[[:space:]]' AND char_length(curation_profile_ref) BETWEEN 1 AND 255 AND curation_profile_ref = btrim(curation_profile_ref) AND curation_profile_ref !~ '[[:space:]]'"
+        },
+        {
+          "name": "ck_release_manifest_digests",
+          "expression": "char_length(manifest_digest) = 64 AND manifest_digest = lower(manifest_digest) AND manifest_digest ~ '^[0-9a-f]{64}$' AND char_length(lineage_digest) = 64 AND lineage_digest = lower(lineage_digest) AND lineage_digest ~ '^[0-9a-f]{64}$' AND char_length(content_profile_digest) = 64 AND content_profile_digest = lower(content_profile_digest) AND content_profile_digest ~ '^[0-9a-f]{64}$' AND char_length(index_profile_digest) = 64 AND index_profile_digest = lower(index_profile_digest) AND index_profile_digest ~ '^[0-9a-f]{64}$' AND char_length(index_content_profile_digest) = 64 AND index_content_profile_digest = lower(index_content_profile_digest) AND index_content_profile_digest ~ '^[0-9a-f]{64}$' AND char_length(runtime_profile_digest) = 64 AND runtime_profile_digest = lower(runtime_profile_digest) AND runtime_profile_digest ~ '^[0-9a-f]{64}$' AND char_length(runtime_content_profile_digest) = 64 AND runtime_content_profile_digest = lower(runtime_content_profile_digest) AND runtime_content_profile_digest ~ '^[0-9a-f]{64}$' AND char_length(runtime_index_profile_digest) = 64 AND runtime_index_profile_digest = lower(runtime_index_profile_digest) AND runtime_index_profile_digest ~ '^[0-9a-f]{64}$' AND char_length(curation_profile_digest) = 64 AND curation_profile_digest = lower(curation_profile_digest) AND curation_profile_digest ~ '^[0-9a-f]{64}$'"
+        },
+        {
+          "name": "ck_release_manifest_profile_compatibility",
+          "expression": "index_content_profile_digest = content_profile_digest AND index_content_schema_ref = content_schema_ref AND runtime_content_profile_digest = content_profile_digest AND runtime_index_profile_digest = index_profile_digest AND runtime_content_schema_ref = content_schema_ref AND runtime_index_schema_ref = index_schema_ref"
+        },
+        {
+          "name": "ck_release_manifest_revision_ref_arrays",
+          "expression": "jsonb_typeof(compatible_revision_refs) = 'array' AND NOT jsonb_path_exists(compatible_revision_refs, '$[*] ? (@.type() != \"string\")') AND jsonb_typeof(active_revision_refs) = 'array' AND NOT jsonb_path_exists(active_revision_refs, '$[*] ? (@.type() != \"string\")')"
+        },
+        {
+          "name": "ck_release_manifest_curation_shape",
+          "expression": "(curation_mode = 'curation_off' AND curation_snapshot_ref IS NULL AND jsonb_array_length(compatible_revision_refs) = 0 AND curation_evaluation_digest IS NULL) OR (curation_mode = 'curation_on' AND curation_snapshot_ref IS NOT NULL AND char_length(curation_snapshot_ref) BETWEEN 1 AND 255 AND curation_snapshot_ref = btrim(curation_snapshot_ref) AND curation_snapshot_ref !~ '[[:space:]]' AND jsonb_array_length(compatible_revision_refs) > 0 AND compatible_revision_refs = active_revision_refs AND curation_evaluation_digest IS NOT NULL AND char_length(curation_evaluation_digest) = 64 AND curation_evaluation_digest = lower(curation_evaluation_digest) AND curation_evaluation_digest ~ '^[0-9a-f]{64}$')"
+        }
+      ],
+      "rowLevelSecurity": {
+        "enabled": true,
+        "forced": true,
+        "policies": [
+          {
+            "name": "release_manifest_learning_insert",
+            "command": "INSERT",
+            "roles": ["context_engine_learning"],
+            "withCheck": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"
+          },
+          {
+            "name": "release_manifest_learning_select",
+            "command": "SELECT",
+            "roles": ["context_engine_learning"],
+            "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"
+          },
+          {
+            "name": "release_manifest_release_definer",
+            "command": "ALL",
+            "roles": ["context_engine_release_definer"],
+            "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid",
+            "withCheck": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"
+          },
+          {
+            "name": "release_manifest_migrator_administration",
+            "command": "ALL",
+            "roles": ["context_engine_migrator"],
+            "using": "true",
+            "withCheck": "true"
+          }
+        ]
+      },
+      "immutableRows": {
+        "trigger": "release_manifest_reject_mutation",
+        "function": "release_lineage_reject_mutation",
+        "events": ["UPDATE", "DELETE"],
+        "sqlstate": "55000"
+      },
+      "permittedOperations": {
+        "context_engine_control": [],
+        "context_engine_learning": ["SELECT", "INSERT"],
+        "context_engine_release_definer": ["SELECT"],
+        "context_engine_runtime": [],
+        "context_engine_security_operator": [],
+        "context_engine_worker": []
+      },
+      "partitions": [],
+      "securityInvariantIds": ["TENANT-OWNERSHIP-001", "TENANT-FK-002", "RLS-FAIL-CLOSED-003", "RELEASE-OWNER-019"],
+      "negativeTestIds": ["DB-001", "DB-003", "DB-004", "DB-005", "DB-008", "LEARN-004", "LEARN-006", "LEARN-007", "LEARN-008", "LEARN-009"]
+    },
+    {
+      "name": "release_candidate",
+      "classification": "tenant_owned",
+      "purpose": "Immutable Organization-owned candidate binding an exact manifest and generation-bound expected active state",
+      "organizationColumn": "organization_id",
+      "organizationInclusiveKeys": [
+        {
+          "name": "pk_release_candidate",
+          "kind": "primary_key",
+          "columns": ["organization_id", "candidate_ref"]
+        },
+        {
+          "name": "uq_release_candidate_exact_digest",
+          "kind": "unique",
+          "columns": ["organization_id", "candidate_ref", "candidate_digest"]
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_release_candidate_manifest_exact",
+          "columns": ["organization_id", "manifest_ref", "manifest_digest"],
+          "references": {
+            "table": "release_manifest",
+            "columns": ["organization_id", "manifest_ref", "manifest_digest"]
+          }
+        }
+      ],
+      "checkConstraints": [
+        {
+          "name": "ck_release_candidate_refs_bounded",
+          "expression": "char_length(candidate_ref) BETWEEN 1 AND 255 AND candidate_ref = btrim(candidate_ref) AND candidate_ref !~ '[[:space:]]' AND char_length(manifest_ref) BETWEEN 1 AND 255 AND manifest_ref = btrim(manifest_ref) AND manifest_ref !~ '[[:space:]]'"
+        },
+        {
+          "name": "ck_release_candidate_digests",
+          "expression": "char_length(candidate_digest) = 64 AND candidate_digest = lower(candidate_digest) AND candidate_digest ~ '^[0-9a-f]{64}$' AND char_length(manifest_digest) = 64 AND manifest_digest = lower(manifest_digest) AND manifest_digest ~ '^[0-9a-f]{64}$' AND char_length(security_evidence_digest) = 64 AND security_evidence_digest = lower(security_evidence_digest) AND security_evidence_digest ~ '^[0-9a-f]{64}$' AND char_length(reliability_evidence_digest) = 64 AND reliability_evidence_digest = lower(reliability_evidence_digest) AND reliability_evidence_digest ~ '^[0-9a-f]{64}$' AND char_length(quality_evidence_digest) = 64 AND quality_evidence_digest = lower(quality_evidence_digest) AND quality_evidence_digest ~ '^[0-9a-f]{64}$' AND char_length(budget_evidence_digest) = 64 AND budget_evidence_digest = lower(budget_evidence_digest) AND budget_evidence_digest ~ '^[0-9a-f]{64}$' AND char_length(capability_coverage_digest) = 64 AND capability_coverage_digest = lower(capability_coverage_digest) AND capability_coverage_digest ~ '^[0-9a-f]{64}$' AND char_length(fixture_digest) = 64 AND fixture_digest = lower(fixture_digest) AND fixture_digest ~ '^[0-9a-f]{64}$'"
+        },
+        {
+          "name": "ck_release_candidate_generation_incrementable",
+          "expression": "expected_active_generation BETWEEN 0 AND 9223372036854775806"
+        },
+        {
+          "name": "ck_release_candidate_expected_base",
+          "expression": "(expected_active_generation = 0 AND expected_base_manifest_digest IS NULL) OR (expected_active_generation > 0 AND expected_base_manifest_digest IS NOT NULL AND char_length(expected_base_manifest_digest) = 64 AND expected_base_manifest_digest = lower(expected_base_manifest_digest) AND expected_base_manifest_digest ~ '^[0-9a-f]{64}$')"
+        },
+        {
+          "name": "ck_release_candidate_gate_statuses",
+          "expression": "security_status IN ('pass', 'fail') AND reliability_status IN ('pass', 'fail') AND quality_status IN ('pass', 'fail') AND budget_status IN ('pass', 'fail')"
+        },
+        {
+          "name": "ck_release_candidate_commands",
+          "expression": "jsonb_typeof(verification_commands) = 'array' AND NOT jsonb_path_exists(verification_commands, '$[*] ? (@.type() != \"string\")') AND jsonb_array_length(verification_commands) > 0"
+        }
+      ],
+      "rowLevelSecurity": {
+        "enabled": true,
+        "forced": true,
+        "policies": [
+          {
+            "name": "release_candidate_learning_insert",
+            "command": "INSERT",
+            "roles": ["context_engine_learning"],
+            "withCheck": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"
+          },
+          {
+            "name": "release_candidate_learning_select",
+            "command": "SELECT",
+            "roles": ["context_engine_learning"],
+            "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"
+          },
+          {
+            "name": "release_candidate_release_definer",
+            "command": "ALL",
+            "roles": ["context_engine_release_definer"],
+            "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid",
+            "withCheck": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"
+          },
+          {
+            "name": "release_candidate_migrator_administration",
+            "command": "ALL",
+            "roles": ["context_engine_migrator"],
+            "using": "true",
+            "withCheck": "true"
+          }
+        ]
+      },
+      "immutableRows": {
+        "trigger": "release_candidate_reject_mutation",
+        "function": "release_lineage_reject_mutation",
+        "events": ["UPDATE", "DELETE"],
+        "sqlstate": "55000"
+      },
+      "permittedOperations": {
+        "context_engine_control": [],
+        "context_engine_learning": ["SELECT", "INSERT"],
+        "context_engine_release_definer": ["SELECT"],
+        "context_engine_runtime": [],
+        "context_engine_security_operator": [],
+        "context_engine_worker": []
+      },
+      "partitions": [],
+      "securityInvariantIds": ["TENANT-OWNERSHIP-001", "TENANT-FK-002", "RLS-FAIL-CLOSED-003", "RELEASE-OWNER-019"],
+      "negativeTestIds": ["DB-001", "DB-003", "DB-004", "DB-005", "DB-008", "LEARN-004", "LEARN-006", "LEARN-007", "LEARN-008", "LEARN-009"]
+    },
+    {
+      "name": "release_evaluation",
+      "classification": "tenant_owned",
+      "purpose": "Immutable signed evaluation evidence binding one exact candidate, manifest, veto gates and compatibility result",
+      "organizationColumn": "organization_id",
+      "organizationInclusiveKeys": [
+        {
+          "name": "pk_release_evaluation",
+          "kind": "primary_key",
+          "columns": ["organization_id", "evaluation_ref"]
+        },
+        {
+          "name": "uq_release_evaluation_exact_digest",
+          "kind": "unique",
+          "columns": ["organization_id", "evaluation_ref", "evaluation_digest"]
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_release_evaluation_candidate_exact",
+          "columns": ["organization_id", "candidate_ref", "candidate_digest"],
+          "references": {
+            "table": "release_candidate",
+            "columns": ["organization_id", "candidate_ref", "candidate_digest"]
+          }
+        },
+        {
+          "name": "fk_release_evaluation_manifest_exact",
+          "columns": ["organization_id", "manifest_ref", "manifest_digest"],
+          "references": {
+            "table": "release_manifest",
+            "columns": ["organization_id", "manifest_ref", "manifest_digest"]
+          }
+        }
+      ],
+      "checkConstraints": [
+        {
+          "name": "ck_release_evaluation_refs_bounded",
+          "expression": "char_length(evaluation_ref) BETWEEN 1 AND 255 AND evaluation_ref = btrim(evaluation_ref) AND evaluation_ref !~ '[[:space:]]' AND char_length(candidate_ref) BETWEEN 1 AND 255 AND candidate_ref = btrim(candidate_ref) AND candidate_ref !~ '[[:space:]]' AND char_length(manifest_ref) BETWEEN 1 AND 255 AND manifest_ref = btrim(manifest_ref) AND manifest_ref !~ '[[:space:]]'"
+        },
+        {
+          "name": "ck_release_evaluation_digests",
+          "expression": "char_length(evaluation_digest) = 64 AND evaluation_digest = lower(evaluation_digest) AND evaluation_digest ~ '^[0-9a-f]{64}$' AND char_length(candidate_digest) = 64 AND candidate_digest = lower(candidate_digest) AND candidate_digest ~ '^[0-9a-f]{64}$' AND char_length(manifest_digest) = 64 AND manifest_digest = lower(manifest_digest) AND manifest_digest ~ '^[0-9a-f]{64}$' AND char_length(security_evidence_digest) = 64 AND security_evidence_digest = lower(security_evidence_digest) AND security_evidence_digest ~ '^[0-9a-f]{64}$' AND char_length(reliability_evidence_digest) = 64 AND reliability_evidence_digest = lower(reliability_evidence_digest) AND reliability_evidence_digest ~ '^[0-9a-f]{64}$' AND char_length(quality_evidence_digest) = 64 AND quality_evidence_digest = lower(quality_evidence_digest) AND quality_evidence_digest ~ '^[0-9a-f]{64}$' AND char_length(budget_evidence_digest) = 64 AND budget_evidence_digest = lower(budget_evidence_digest) AND budget_evidence_digest ~ '^[0-9a-f]{64}$' AND char_length(compatibility_evidence_digest) = 64 AND compatibility_evidence_digest = lower(compatibility_evidence_digest) AND compatibility_evidence_digest ~ '^[0-9a-f]{64}$' AND char_length(capability_coverage_digest) = 64 AND capability_coverage_digest = lower(capability_coverage_digest) AND capability_coverage_digest ~ '^[0-9a-f]{64}$' AND char_length(fixture_digest) = 64 AND fixture_digest = lower(fixture_digest) AND fixture_digest ~ '^[0-9a-f]{64}$'"
+        },
+        {
+          "name": "ck_release_evaluation_generation_incrementable",
+          "expression": "expected_active_generation BETWEEN 0 AND 9223372036854775806"
+        },
+        {
+          "name": "ck_release_evaluation_expected_base",
+          "expression": "(expected_active_generation = 0 AND expected_base_manifest_digest IS NULL) OR (expected_active_generation > 0 AND expected_base_manifest_digest IS NOT NULL AND char_length(expected_base_manifest_digest) = 64 AND expected_base_manifest_digest = lower(expected_base_manifest_digest) AND expected_base_manifest_digest ~ '^[0-9a-f]{64}$')"
+        },
+        {
+          "name": "ck_release_evaluation_gate_statuses",
+          "expression": "security_status IN ('pass', 'fail') AND reliability_status IN ('pass', 'fail') AND quality_status IN ('pass', 'fail') AND budget_status IN ('pass', 'fail')"
+        },
+        {
+          "name": "ck_release_evaluation_commands",
+          "expression": "jsonb_typeof(verification_commands) = 'array' AND NOT jsonb_path_exists(verification_commands, '$[*] ? (@.type() != \"string\")') AND jsonb_array_length(verification_commands) > 0"
+        },
+        {
+          "name": "ck_release_evaluation_signature_profile",
+          "expression": "digest_profile = 'release-evaluation-rfc8785-sha256-v1' AND signature_profile = 'release-evaluation-hmac-sha256-v1' AND signing_key_version BETWEEN 1 AND 9223372036854775807 AND octet_length(signature) = 32"
+        }
+      ],
+      "rowLevelSecurity": {
+        "enabled": true,
+        "forced": true,
+        "policies": [
+          {
+            "name": "release_evaluation_learning_insert",
+            "command": "INSERT",
+            "roles": ["context_engine_learning"],
+            "withCheck": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"
+          },
+          {
+            "name": "release_evaluation_learning_select",
+            "command": "SELECT",
+            "roles": ["context_engine_learning"],
+            "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"
+          },
+          {
+            "name": "release_evaluation_release_definer",
+            "command": "ALL",
+            "roles": ["context_engine_release_definer"],
+            "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid",
+            "withCheck": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"
+          },
+          {
+            "name": "release_evaluation_migrator_administration",
+            "command": "ALL",
+            "roles": ["context_engine_migrator"],
+            "using": "true",
+            "withCheck": "true"
+          }
+        ]
+      },
+      "immutableRows": {
+        "trigger": "release_evaluation_reject_mutation",
+        "function": "release_lineage_reject_mutation",
+        "events": ["UPDATE", "DELETE"],
+        "sqlstate": "55000"
+      },
+      "permittedOperations": {
+        "context_engine_control": [],
+        "context_engine_learning": ["SELECT", "INSERT"],
+        "context_engine_release_definer": ["SELECT"],
+        "context_engine_runtime": [],
+        "context_engine_security_operator": [],
+        "context_engine_worker": []
+      },
+      "partitions": [],
+      "securityInvariantIds": ["TENANT-OWNERSHIP-001", "TENANT-FK-002", "RLS-FAIL-CLOSED-003", "RELEASE-OWNER-019"],
+      "negativeTestIds": ["DB-001", "DB-003", "DB-004", "DB-005", "DB-008", "LEARN-004", "LEARN-006", "LEARN-007", "LEARN-008", "LEARN-009"]
+    },
+    {
+      "name": "release_operator_grant",
+      "classification": "tenant_owned",
+      "purpose": "Current Organization-scoped release-operator authority revalidated only by the promotion definer",
+      "organizationColumn": "organization_id",
+      "organizationInclusiveKeys": [
+        {
+          "name": "pk_release_operator_grant",
+          "kind": "primary_key",
+          "columns": ["organization_id", "authority_ref"]
+        },
+        {
+          "name": "uq_release_operator_grant_exact_digest",
+          "kind": "unique",
+          "columns": ["organization_id", "authority_ref", "authority_digest"]
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_release_operator_grant_organization",
+          "columns": ["organization_id"],
+          "references": {
+            "table": "organization",
+            "columns": ["organization_id"]
+          },
+          "onDelete": "CASCADE"
+        }
+      ],
+      "checkConstraints": [
+        {
+          "name": "ck_release_operator_grant_refs_bounded",
+          "expression": "char_length(authority_ref) BETWEEN 1 AND 255 AND authority_ref = btrim(authority_ref) AND authority_ref !~ '[[:space:]]' AND char_length(operator_ref) BETWEEN 1 AND 255 AND operator_ref = btrim(operator_ref) AND operator_ref !~ '[[:space:]]' AND char_length(authentication_binding_ref) BETWEEN 1 AND 255 AND authentication_binding_ref = btrim(authentication_binding_ref) AND authentication_binding_ref !~ '[[:space:]]'"
+        },
+        {
+          "name": "ck_release_operator_grant_digest",
+          "expression": "char_length(authority_digest) = 64 AND authority_digest = lower(authority_digest) AND authority_digest ~ '^[0-9a-f]{64}$'"
+        },
+        {
+          "name": "ck_release_operator_grant_lifetime",
+          "expression": "expires_at > valid_from AND (revoked_at IS NULL OR revoked_at >= valid_from)"
+        }
+      ],
+      "rowLevelSecurity": {
+        "enabled": true,
+        "forced": true,
+        "policies": [
+          {
+            "name": "release_operator_grant_release_definer",
+            "command": "ALL",
+            "roles": ["context_engine_release_definer"],
+            "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid",
+            "withCheck": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"
+          },
+          {
+            "name": "release_operator_grant_migrator_administration",
+            "command": "ALL",
+            "roles": ["context_engine_migrator"],
+            "using": "true",
+            "withCheck": "true"
+          }
+        ]
+      },
+      "permittedOperations": {
+        "context_engine_control": [],
+        "context_engine_learning": [],
+        "context_engine_release_definer": ["SELECT"],
+        "context_engine_runtime": [],
+        "context_engine_security_operator": [],
+        "context_engine_worker": []
+      },
+      "partitions": [],
+      "securityInvariantIds": ["TENANT-OWNERSHIP-001", "TENANT-FK-002", "RLS-FAIL-CLOSED-003", "RELEASE-OWNER-019"],
+      "negativeTestIds": ["DB-001", "DB-004", "DB-005", "DB-008", "LEARN-006", "LEARN-007"]
+    },
+    {
+      "name": "active_release_manifest",
+      "classification": "tenant_owned",
+      "purpose": "Generation-bound Organization active release pointer changed only by the sole promotion function",
+      "organizationColumn": "organization_id",
+      "organizationInclusiveKeys": [
+        {
+          "name": "pk_active_release_manifest",
+          "kind": "primary_key",
+          "columns": ["organization_id"]
+        },
+        {
+          "name": "uq_active_release_manifest_promotion",
+          "kind": "unique",
+          "columns": ["organization_id", "promotion_ref"]
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_active_release_manifest_exact",
+          "columns": ["organization_id", "manifest_ref", "manifest_digest"],
+          "references": {
+            "table": "release_manifest",
+            "columns": ["organization_id", "manifest_ref", "manifest_digest"]
+          }
+        }
+      ],
+      "checkConstraints": [
+        {
+          "name": "ck_active_release_manifest_generation",
+          "expression": "active_generation BETWEEN 1 AND 9223372036854775807"
+        },
+        {
+          "name": "ck_active_release_manifest_bindings",
+          "expression": "char_length(manifest_ref) BETWEEN 1 AND 255 AND manifest_ref = btrim(manifest_ref) AND manifest_ref !~ '[[:space:]]' AND char_length(promotion_ref) BETWEEN 1 AND 255 AND promotion_ref = btrim(promotion_ref) AND promotion_ref !~ '[[:space:]]' AND char_length(manifest_digest) = 64 AND manifest_digest = lower(manifest_digest) AND manifest_digest ~ '^[0-9a-f]{64}$'"
+        }
+      ],
+      "rowLevelSecurity": {
+        "enabled": true,
+        "forced": true,
+        "policies": [
+          {
+            "name": "active_release_manifest_release_definer",
+            "command": "ALL",
+            "roles": ["context_engine_release_definer"],
+            "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid",
+            "withCheck": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"
+          },
+          {
+            "name": "active_release_manifest_migrator_administration",
+            "command": "ALL",
+            "roles": ["context_engine_migrator"],
+            "using": "true",
+            "withCheck": "true"
+          }
+        ]
+      },
+      "functionOnlyMutation": {
+        "databaseFunction": "context_learning_promote_release",
+        "role": "context_engine_learning",
+        "definerRole": "context_engine_release_definer",
+        "directTableMutationAllowed": false
+      },
+      "permittedOperations": {
+        "context_engine_control": [],
+        "context_engine_learning": ["EXECUTE context_learning_promote_release"],
+        "context_engine_release_definer": ["SELECT", "INSERT", "UPDATE"],
+        "context_engine_runtime": [],
+        "context_engine_security_operator": [],
+        "context_engine_worker": []
+      },
+      "partitions": [],
+      "securityInvariantIds": ["TENANT-OWNERSHIP-001", "TENANT-FK-002", "RLS-FAIL-CLOSED-003", "RELEASE-OWNER-019"],
+      "negativeTestIds": ["DB-001", "DB-004", "DB-005", "DB-008", "LEARN-004", "LEARN-006", "LEARN-007"]
+    },
+    {
+      "name": "release_promotion_audit",
+      "classification": "tenant_owned",
+      "purpose": "Immutable append-only success audit paired atomically with each active release generation",
+      "organizationColumn": "organization_id",
+      "organizationInclusiveKeys": [
+        {
+          "name": "pk_release_promotion_audit",
+          "kind": "primary_key",
+          "columns": ["organization_id", "active_generation"]
+        },
+        {
+          "name": "uq_release_promotion_audit_ref",
+          "kind": "unique",
+          "columns": ["organization_id", "promotion_ref"]
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_release_promotion_audit_candidate_exact",
+          "columns": ["organization_id", "candidate_ref", "candidate_digest"],
+          "references": {
+            "table": "release_candidate",
+            "columns": ["organization_id", "candidate_ref", "candidate_digest"]
+          }
+        },
+        {
+          "name": "fk_release_promotion_audit_manifest_exact",
+          "columns": ["organization_id", "manifest_ref", "manifest_digest"],
+          "references": {
+            "table": "release_manifest",
+            "columns": ["organization_id", "manifest_ref", "manifest_digest"]
+          }
+        },
+        {
+          "name": "fk_release_promotion_audit_evaluation_exact",
+          "columns": ["organization_id", "evaluation_ref", "evaluation_digest"],
+          "references": {
+            "table": "release_evaluation",
+            "columns": ["organization_id", "evaluation_ref", "evaluation_digest"]
+          }
+        }
+      ],
+      "checkConstraints": [
+        {
+          "name": "ck_release_promotion_audit_generation",
+          "expression": "active_generation = expected_active_generation + 1 AND active_generation BETWEEN 1 AND 9223372036854775807"
+        },
+        {
+          "name": "ck_release_promotion_audit_lifetime",
+          "expression": "call_expires_at > call_issued_at AND promoted_at >= call_issued_at"
+        },
+        {
+          "name": "ck_release_promotion_audit_refs_bounded",
+          "expression": "char_length(promotion_ref) BETWEEN 1 AND 255 AND promotion_ref = btrim(promotion_ref) AND promotion_ref !~ '[[:space:]]' AND char_length(operator_ref) BETWEEN 1 AND 255 AND operator_ref = btrim(operator_ref) AND operator_ref !~ '[[:space:]]' AND char_length(authentication_binding_ref) BETWEEN 1 AND 255 AND authentication_binding_ref = btrim(authentication_binding_ref) AND authentication_binding_ref !~ '[[:space:]]' AND char_length(authority_ref) BETWEEN 1 AND 255 AND authority_ref = btrim(authority_ref) AND authority_ref !~ '[[:space:]]' AND char_length(candidate_ref) BETWEEN 1 AND 255 AND candidate_ref = btrim(candidate_ref) AND candidate_ref !~ '[[:space:]]' AND char_length(manifest_ref) BETWEEN 1 AND 255 AND manifest_ref = btrim(manifest_ref) AND manifest_ref !~ '[[:space:]]' AND char_length(evaluation_ref) BETWEEN 1 AND 255 AND evaluation_ref = btrim(evaluation_ref) AND evaluation_ref !~ '[[:space:]]' AND char_length(request_id) BETWEEN 1 AND 255 AND request_id = btrim(request_id) AND request_id !~ '[[:space:]]'"
+        },
+        {
+          "name": "ck_release_promotion_audit_digests",
+          "expression": "char_length(authority_digest) = 64 AND authority_digest = lower(authority_digest) AND authority_digest ~ '^[0-9a-f]{64}$' AND char_length(candidate_digest) = 64 AND candidate_digest = lower(candidate_digest) AND candidate_digest ~ '^[0-9a-f]{64}$' AND char_length(manifest_digest) = 64 AND manifest_digest = lower(manifest_digest) AND manifest_digest ~ '^[0-9a-f]{64}$' AND char_length(evaluation_digest) = 64 AND evaluation_digest = lower(evaluation_digest) AND evaluation_digest ~ '^[0-9a-f]{64}$' AND char_length(audit_reason_digest) = 64 AND audit_reason_digest = lower(audit_reason_digest) AND audit_reason_digest ~ '^[0-9a-f]{64}$' AND char_length(promotion_call_digest) = 64 AND promotion_call_digest = lower(promotion_call_digest) AND promotion_call_digest ~ '^[0-9a-f]{64}$'"
+        },
+        {
+          "name": "ck_release_promotion_audit_expected_base",
+          "expression": "(expected_active_generation = 0 AND expected_base_manifest_digest IS NULL) OR (expected_active_generation > 0 AND expected_base_manifest_digest IS NOT NULL AND char_length(expected_base_manifest_digest) = 64 AND expected_base_manifest_digest = lower(expected_base_manifest_digest) AND expected_base_manifest_digest ~ '^[0-9a-f]{64}$')"
+        }
+      ],
+      "rowLevelSecurity": {
+        "enabled": true,
+        "forced": true,
+        "policies": [
+          {
+            "name": "release_promotion_audit_release_definer",
+            "command": "ALL",
+            "roles": ["context_engine_release_definer"],
+            "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid",
+            "withCheck": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"
+          },
+          {
+            "name": "release_promotion_audit_migrator_administration",
+            "command": "ALL",
+            "roles": ["context_engine_migrator"],
+            "using": "true",
+            "withCheck": "true"
+          }
+        ]
+      },
+      "immutableRows": {
+        "trigger": "release_promotion_audit_reject_mutation",
+        "function": "release_lineage_reject_mutation",
+        "events": ["UPDATE", "DELETE"],
+        "sqlstate": "55000"
+      },
+      "functionOnlyMutation": {
+        "databaseFunction": "context_learning_promote_release",
+        "role": "context_engine_learning",
+        "definerRole": "context_engine_release_definer",
+        "directTableMutationAllowed": false
+      },
+      "permittedOperations": {
+        "context_engine_control": [],
+        "context_engine_learning": ["EXECUTE context_learning_promote_release"],
+        "context_engine_release_definer": ["SELECT", "INSERT"],
+        "context_engine_runtime": [],
+        "context_engine_security_operator": [],
+        "context_engine_worker": []
+      },
+      "partitions": [],
+      "securityInvariantIds": ["TENANT-OWNERSHIP-001", "TENANT-FK-002", "RLS-FAIL-CLOSED-003", "RELEASE-OWNER-019"],
+      "negativeTestIds": ["DB-001", "DB-004", "DB-005", "DB-008", "LEARN-004", "LEARN-006", "LEARN-007"]
     }
   ]
 }

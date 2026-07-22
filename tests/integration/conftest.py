@@ -18,6 +18,7 @@ from engine.persistence import (
     create_database_engine,
     load_harness_database_configurations,
 )
+from engine.persistence.role_guard import assert_learning_role
 from engine.runtime.package_digest import QueryDigestKeyring
 
 ROOT = Path(__file__).parents[2]
@@ -60,6 +61,13 @@ def worker_configuration(
 
 
 @pytest.fixture(scope="session")
+def learning_configuration(
+    database_configurations: HarnessDatabaseConfigurations,
+) -> DatabaseConfiguration:
+    return database_configurations.learning
+
+
+@pytest.fixture(scope="session")
 def operator_configuration(
     database_configurations: HarnessDatabaseConfigurations,
 ) -> DatabaseConfiguration:
@@ -98,6 +106,21 @@ def guarded_worker_engine(
     try:
         with engine.connect() as connection:
             assert_worker_role(connection)
+        yield engine
+    finally:
+        engine.dispose()
+
+
+@pytest.fixture(scope="session")
+def guarded_learning_engine(
+    learning_configuration: DatabaseConfiguration,
+) -> Iterator[Engine]:
+    """Expose only the verified non-owner ContextLearning engine."""
+
+    engine = create_database_engine(learning_configuration)
+    try:
+        with engine.connect() as connection:
+            assert_learning_role(connection)
         yield engine
     finally:
         engine.dispose()

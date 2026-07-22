@@ -8,7 +8,9 @@ from engine.persistence.access_policy import (
     ResourceAccessRevocation,
 )
 from engine.persistence.configuration import (
+    LEARNING_ROLE,
     OPERATOR_ROLE,
+    RELEASE_DEFINER_ROLE,
     DatabaseConfiguration,
     DatabaseConfigurationError,
     DatabasePurpose,
@@ -36,8 +38,10 @@ from engine.persistence.membership_context import (
     MembershipNotCurrent,
     PostgreSQLMembershipAuthority,
 )
+from engine.persistence.releases import PostgreSQLReleaseStore
 from engine.persistence.role_guard import (
     assert_control_role,
+    assert_learning_role,
     assert_runtime_role,
     assert_security_operator_role,
     assert_worker_role,
@@ -68,7 +72,9 @@ __all__ = [
     "DatabaseConfigurationError",
     "DatabasePurpose",
     "HarnessDatabaseConfigurations",
+    "LEARNING_ROLE",
     "OPERATOR_ROLE",
+    "RELEASE_DEFINER_ROLE",
     "MembershipAuthorityUnavailable",
     "MembershipIdentity",
     "MembershipNotCurrent",
@@ -88,6 +94,7 @@ __all__ = [
     "ResourceAccessRevocation",
     "OrganizationContextBindingError",
     "PostgreSQLMembershipAuthority",
+    "PostgreSQLReleaseStore",
     "PostgreSQLWorkerLeaseAuthority",
     "PostgreSQLWorkerLeaseIssuer",
     "WorkerExecutionIdentity",
@@ -101,6 +108,7 @@ __all__ = [
     "DEFAULT_WORKER_LEASE_TTL_SECONDS",
     "MAX_WORKER_LEASE_TTL_SECONDS",
     "assert_runtime_role",
+    "assert_learning_role",
     "assert_security_operator_role",
     "assert_control_role",
     "assert_worker_role",

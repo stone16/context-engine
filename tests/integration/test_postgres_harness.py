@@ -20,12 +20,15 @@ from engine.persistence.configuration import (
     ACCESS_POLICY_DEFINER_ROLE,
     CONTEXT_RUN_READER_DEFINER_ROLE,
     CONTROL_ROLE,
+    LEARNING_ROLE,
     MIGRATOR_ROLE,
     OPERATOR_ROLE,
+    RELEASE_DEFINER_ROLE,
     RUNTIME_ROLE,
     WORKER_LEASE_DEFINER_ROLE,
     WORKER_ROLE,
 )
+from engine.persistence.role_guard import assert_learning_role
 from scripts.provision_database_roles import (
     RoleProvisioningContract,
     provision_security_roles,
@@ -87,6 +90,7 @@ def test_all_login_roles_have_reviewed_capabilities(
     control_configuration: DatabaseConfiguration,
     runtime_configuration: DatabaseConfiguration,
     worker_configuration: DatabaseConfiguration,
+    learning_configuration: DatabaseConfiguration,
     operator_configuration: DatabaseConfiguration,
 ) -> None:
     configurations = (
@@ -94,6 +98,7 @@ def test_all_login_roles_have_reviewed_capabilities(
         control_configuration,
         runtime_configuration,
         worker_configuration,
+        learning_configuration,
         operator_configuration,
     )
     results: dict[str, tuple[object, ...]] = {}
@@ -109,6 +114,7 @@ def test_all_login_roles_have_reviewed_capabilities(
         CONTROL_ROLE,
         RUNTIME_ROLE,
         WORKER_ROLE,
+        LEARNING_ROLE,
         OPERATOR_ROLE,
     }
     for role_name, attributes in results.items():
@@ -126,6 +132,7 @@ def test_all_login_roles_have_reviewed_capabilities(
 
 def test_post_init_role_provisioning_repairs_a_legacy_volume_idempotently(
     guarded_control_engine: Engine,
+    guarded_learning_engine: Engine,
     guarded_operator_engine: Engine,
 ) -> None:
     contract = RoleProvisioningContract(
@@ -136,6 +143,8 @@ def test_post_init_role_provisioning_repairs_a_legacy_volume_idempotently(
         migrator_role=MIGRATOR_ROLE,
         control_role=CONTROL_ROLE,
         control_password=os.environ["CONTEXT_ENGINE_CONTROL_PASSWORD"],
+        learning_role=LEARNING_ROLE,
+        learning_password=os.environ["CONTEXT_ENGINE_LEARNING_PASSWORD"],
         security_operator_role=OPERATOR_ROLE,
         security_operator_password=os.environ[
             "CONTEXT_ENGINE_SECURITY_OPERATOR_PASSWORD"
@@ -143,10 +152,12 @@ def test_post_init_role_provisioning_repairs_a_legacy_volume_idempotently(
         definer_role=ACCESS_POLICY_DEFINER_ROLE,
         worker_lease_definer_role=WORKER_LEASE_DEFINER_ROLE,
         context_run_reader_definer_role=CONTEXT_RUN_READER_DEFINER_ROLE,
+        release_definer_role=RELEASE_DEFINER_ROLE,
     )
     alembic_configuration = Config(ROOT / "alembic.ini")
     try:
         guarded_control_engine.dispose()
+        guarded_learning_engine.dispose()
         guarded_operator_engine.dispose()
         command.downgrade(alembic_configuration, "20260721_0004")
         with psycopg.connect(
@@ -163,7 +174,9 @@ def test_post_init_role_provisioning_repairs_a_legacy_volume_idempotently(
                 ACCESS_POLICY_DEFINER_ROLE,
                 WORKER_LEASE_DEFINER_ROLE,
                 CONTEXT_RUN_READER_DEFINER_ROLE,
+                RELEASE_DEFINER_ROLE,
                 CONTROL_ROLE,
+                LEARNING_ROLE,
                 OPERATOR_ROLE,
             ):
                 bootstrap_connection.execute(f"DROP OWNED BY {role_name}")
@@ -173,14 +186,16 @@ def test_post_init_role_provisioning_repairs_a_legacy_volume_idempotently(
                 """
                 SELECT count(*)
                 FROM pg_roles
-                WHERE rolname IN (%s, %s, %s, %s, %s)
+                WHERE rolname IN (%s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     CONTROL_ROLE,
                     ACCESS_POLICY_DEFINER_ROLE,
                     WORKER_LEASE_DEFINER_ROLE,
                     CONTEXT_RUN_READER_DEFINER_ROLE,
+                    RELEASE_DEFINER_ROLE,
                     OPERATOR_ROLE,
+                    LEARNING_ROLE,
                 ),
             ).fetchone()
             assert missing_roles == (0,)
@@ -299,13 +314,50 @@ def test_post_init_role_provisioning_repairs_a_legacy_volume_idempotently(
                 True,
                 1,
             )
+            learning_facts = bootstrap_connection.execute(
+                """
+                SELECT
+                    learning.rolcanlogin,
+                    learning.rolsuper,
+                    learning.rolinherit,
+                    release_definer.rolcanlogin,
+                    release_definer.rolsuper,
+                    release_definer.rolinherit,
+                    membership.admin_option,
+                    membership.inherit_option,
+                    membership.set_option
+                FROM pg_roles AS learning
+                CROSS JOIN pg_roles AS release_definer
+                JOIN pg_auth_members AS membership
+                  ON membership.roleid = release_definer.oid
+                JOIN pg_roles AS migrator
+                  ON migrator.oid = membership.member
+                WHERE learning.rolname = %s
+                  AND release_definer.rolname = %s
+                  AND migrator.rolname = %s
+                """,
+                (LEARNING_ROLE, RELEASE_DEFINER_ROLE, MIGRATOR_ROLE),
+            ).fetchone()
+            assert learning_facts == (
+                True,
+                False,
+                False,
+                False,
+                False,
+                False,
+                False,
+                False,
+                True,
+            )
 
         command.upgrade(alembic_configuration, "head")
         assert role_attributes(guarded_control_engine)[0] == CONTROL_ROLE
+        assert role_attributes(guarded_learning_engine)[0] == LEARNING_ROLE
         with guarded_operator_engine.connect() as connection:
             assert_security_operator_role(connection)
     finally:
         guarded_control_engine.dispose()
+        guarded_learning_engine.dispose()
         guarded_operator_engine.dispose()
         with psycopg.connect(
             host="127.0.0.1",
@@ -730,6 +782,185 @@ def test_role_guard_passes_runtime_and_rejects_owner_credentials(
     finally:
         migration_engine.dispose()
 
+
+def test_learning_role_guard_passes_learning_and_rejects_runtime(
+    guarded_learning_engine: Engine,
+    guarded_runtime_engine: Engine,
+) -> None:
+    with guarded_learning_engine.connect() as connection:
+        assert_learning_role(connection)
+
+    with (
+        guarded_runtime_engine.connect() as connection,
+        pytest.raises(AssertionError, match="exact non-owner login"),
+    ):
+        assert_learning_role(connection)
+
+
+def test_learning_and_release_definer_roles_have_exact_authority(
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    engine = create_database_engine(migration_configuration)
+    try:
+        with engine.connect() as connection:
+            role_facts = tuple(
+                connection.execute(
+                    text(
+                        """
+                        SELECT
+                            learning.rolcanlogin,
+                            learning.rolsuper,
+                            learning.rolcreaterole,
+                            learning.rolcreatedb,
+                            learning.rolinherit,
+                            learning.rolreplication,
+                            learning.rolbypassrls,
+                            has_database_privilege(
+                                :learning, current_database(), 'CONNECT'
+                            ),
+                            has_database_privilege(
+                                :learning, current_database(), 'CREATE'
+                            ),
+                            has_database_privilege(
+                                :learning, current_database(), 'TEMPORARY'
+                            ),
+                            has_schema_privilege(:learning, 'public', 'USAGE'),
+                            has_schema_privilege(:learning, 'public', 'CREATE'),
+                            definer.rolcanlogin,
+                            definer.rolsuper,
+                            definer.rolcreaterole,
+                            definer.rolcreatedb,
+                            definer.rolinherit,
+                            definer.rolreplication,
+                            definer.rolbypassrls,
+                            has_database_privilege(
+                                :definer, current_database(), 'CONNECT'
+                            ),
+                            has_database_privilege(
+                                :definer, current_database(), 'CREATE'
+                            ),
+                            has_database_privilege(
+                                :definer, current_database(), 'TEMPORARY'
+                            ),
+                            has_schema_privilege(:definer, 'public', 'USAGE'),
+                            has_schema_privilege(:definer, 'public', 'CREATE'),
+                            pg_has_role(:migrator, :definer, 'SET')
+                        FROM pg_roles AS learning
+                        CROSS JOIN pg_roles AS definer
+                        WHERE learning.rolname = :learning
+                          AND definer.rolname = :definer
+                        """
+                    ),
+                    {
+                        "definer": RELEASE_DEFINER_ROLE,
+                        "learning": LEARNING_ROLE,
+                        "migrator": MIGRATOR_ROLE,
+                    },
+                ).one()
+            )
+            memberships = [
+                tuple(row)
+                for row in connection.execute(
+                    text(
+                        """
+                        SELECT
+                            granted.rolname,
+                            member.rolname,
+                            membership.admin_option,
+                            membership.inherit_option,
+                            membership.set_option
+                        FROM pg_auth_members AS membership
+                        JOIN pg_roles AS granted
+                          ON granted.oid = membership.roleid
+                        JOIN pg_roles AS member
+                          ON member.oid = membership.member
+                        WHERE granted.rolname IN (:learning, :definer)
+                           OR member.rolname IN (:learning, :definer)
+                        ORDER BY granted.rolname, member.rolname
+                        """
+                    ),
+                    {"definer": RELEASE_DEFINER_ROLE, "learning": LEARNING_ROLE},
+                )
+            ]
+            owned_objects = [
+                tuple(row)
+                for row in connection.execute(
+                    text(
+                        """
+                        SELECT owner.rolname, dependency.classid::regclass::text,
+                               dependency.objid
+                        FROM pg_shdepend AS dependency
+                        JOIN pg_roles AS owner
+                          ON owner.oid = dependency.refobjid
+                        WHERE dependency.refclassid = 'pg_authid'::regclass
+                          AND dependency.deptype = 'o'
+                          AND owner.rolname IN (:learning, :definer)
+                        ORDER BY owner.rolname,
+                                 dependency.classid::regclass::text,
+                                 dependency.objid
+                        """
+                    ),
+                    {"definer": RELEASE_DEFINER_ROLE, "learning": LEARNING_ROLE},
+                )
+            ]
+            promote_owner = connection.execute(
+                text(
+                    """
+                    SELECT pg_get_userbyid(procedure.proowner)
+                    FROM pg_proc AS procedure
+                    WHERE procedure.oid = CAST(
+                        :signature AS regprocedure
+                    )
+                    """
+                ),
+                {
+                    "signature": (
+                        "public.context_learning_promote_release("
+                        "uuid,text,text,text,text,text,text,text,text,text,text,"
+                        "text,bigint,bytea,bigint,text,timestamptz,timestamptz,"
+                        "text,text,text)"
+                    )
+                },
+            ).scalar_one()
+    finally:
+        engine.dispose()
+
+    assert role_facts == (
+        True,
+        False,
+        False,
+        False,
+        False,
+        False,
+        False,
+        True,
+        False,
+        False,
+        True,
+        False,
+        False,
+        False,
+        False,
+        False,
+        False,
+        False,
+        False,
+        False,
+        False,
+        False,
+        True,
+        False,
+        True,
+    )
+    assert memberships == [
+        (RELEASE_DEFINER_ROLE, MIGRATOR_ROLE, False, False, True)
+    ]
+    assert not [row for row in owned_objects if row[0] == LEARNING_ROLE]
+    assert promote_owner == RELEASE_DEFINER_ROLE
+    assert any(
+        owner == RELEASE_DEFINER_ROLE and catalog == "pg_proc"
+        for owner, catalog, _object_id in owned_objects
+    )
 
 def test_security_operator_role_guard_passes_operator_and_rejects_runtime(
     guarded_operator_engine: Engine,

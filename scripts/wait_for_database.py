@@ -16,6 +16,7 @@ from engine.persistence import (
     create_database_engine,
     load_harness_database_configurations,
 )
+from engine.persistence.role_guard import assert_learning_role
 
 
 def wait_for_database(timeout_seconds: float) -> None:
@@ -32,6 +33,7 @@ def wait_for_database(timeout_seconds: float) -> None:
                 configurations.control,
                 configurations.runtime,
                 configurations.worker,
+                configurations.learning,
                 configurations.operator,
                 configurations.security_test,
             ):
@@ -47,6 +49,8 @@ def wait_for_database(timeout_seconds: float) -> None:
                         )
                     if configuration.purpose is DatabasePurpose.SECURITY_OPERATOR:
                         assert_security_operator_role(connection)
+                    if configuration.purpose is DatabasePurpose.LEARNING:
+                        assert_learning_role(connection)
             return
         except SQLAlchemyError as error:
             last_error = error
@@ -65,7 +69,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     arguments = parser.parse_args(argv)
     wait_for_database(arguments.timeout)
     purpose_names = (
-        "migration, control, runtime, worker, security-operator, security-test"
+        "migration, control, runtime, worker, learning, security-operator, "
+        "security-test"
     )
     print("PostgreSQL harness ready: " + purpose_names)
     return 0

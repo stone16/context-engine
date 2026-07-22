@@ -115,6 +115,40 @@ def test_fresh_environment_has_a_dedicated_security_operator_credential(
     assert environment_path.stat().st_mode & 0o777 == 0o600
 
 
+def test_fresh_environment_has_a_dedicated_learning_credential(
+    tmp_path: Path,
+) -> None:
+    stub_directory = tmp_path / "bin"
+    stub_directory.mkdir()
+    _stub_harness_dependencies(stub_directory)
+    checkout = tmp_path / "checkout"
+
+    _run_stubbed_harness(checkout, stub_directory)
+
+    environment_path = checkout / ".context-engine/database.env"
+    generated = dict(
+        line.split("=", maxsplit=1)
+        for line in environment_path.read_text(encoding="utf-8").splitlines()
+    )
+    learning_password = generated["CONTEXT_ENGINE_LEARNING_PASSWORD"]
+    assert generated["CONTEXT_ENGINE_LEARNING_ROLE"] == "context_engine_learning"
+    assert re.fullmatch(r"[0-9a-f]{64}", learning_password)
+    assert generated["CONTEXT_ENGINE_LEARNING_DATABASE_URL"] == (
+        "postgresql+psycopg://context_engine_learning:"
+        f"{learning_password}@127.0.0.1:"
+        f"{generated['CONTEXT_ENGINE_POSTGRES_PORT']}/context_engine"
+    )
+    assert learning_password not in {
+        generated["POSTGRES_PASSWORD"],
+        generated["CONTEXT_ENGINE_MIGRATOR_PASSWORD"],
+        generated["CONTEXT_ENGINE_CONTROL_PASSWORD"],
+        generated["CONTEXT_ENGINE_RUNTIME_PASSWORD"],
+        generated["CONTEXT_ENGINE_WORKER_PASSWORD"],
+        generated["CONTEXT_ENGINE_SECURITY_OPERATOR_PASSWORD"],
+    }
+    assert environment_path.stat().st_mode & 0o777 == 0o600
+
+
 def test_concurrent_first_use_converges_on_one_persisted_compose_project(
     tmp_path: Path,
 ) -> None:
@@ -284,6 +318,153 @@ def test_legacy_environment_gains_one_generated_security_operator_credential(
     )
     for name, value in original.items():
         if not name.startswith("CONTEXT_ENGINE_SECURITY_OPERATOR_"):
+            assert migrated[name] == value
+    assert environment_path.stat().st_mode & 0o777 == 0o600
+
+    persisted_environment = environment_path.read_text(encoding="utf-8")
+    repeated_project, _ = _run_stubbed_harness(checkout, stub_directory)
+    assert repeated_project == project
+    assert environment_path.read_text(encoding="utf-8") == persisted_environment
+
+
+def test_partial_legacy_learning_identity_is_replaced_as_one_exact_triple(
+    tmp_path: Path,
+) -> None:
+    stub_directory = tmp_path / "bin"
+    stub_directory.mkdir()
+    _stub_harness_dependencies(stub_directory)
+    checkout = tmp_path / "checkout"
+    project, _ = _run_stubbed_harness(checkout, stub_directory)
+    environment_path = checkout / ".context-engine/database.env"
+    non_learning = [
+        line
+        for line in environment_path.read_text(encoding="utf-8").splitlines()
+        if not line.startswith("CONTEXT_ENGINE_LEARNING_")
+    ]
+    environment_path.write_text(
+        "\n".join(
+            [
+                *non_learning,
+                "CONTEXT_ENGINE_LEARNING_ROLE=context_engine_learning",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    environment_path.chmod(0o600)
+
+    migrated_project, _ = _run_stubbed_harness(checkout, stub_directory)
+
+    lines = environment_path.read_text(encoding="utf-8").splitlines()
+    learning_lines = [
+        line for line in lines if line.startswith("CONTEXT_ENGINE_LEARNING_")
+    ]
+    migrated = dict(line.split("=", maxsplit=1) for line in lines)
+    assert migrated_project == project
+    assert len(learning_lines) == 3
+    assert len({line.split("=", maxsplit=1)[0] for line in learning_lines}) == 3
+    password = migrated["CONTEXT_ENGINE_LEARNING_PASSWORD"]
+    assert migrated["CONTEXT_ENGINE_LEARNING_DATABASE_URL"] == (
+        "postgresql+psycopg://context_engine_learning:"
+        f"{password}@127.0.0.1:"
+        f"{migrated['CONTEXT_ENGINE_POSTGRES_PORT']}/context_engine"
+    )
+
+
+def test_concurrent_legacy_learning_migration_generates_one_password(
+    tmp_path: Path,
+) -> None:
+    stub_directory = tmp_path / "bin"
+    stub_directory.mkdir()
+    _stub_harness_dependencies(stub_directory)
+    checkout = tmp_path / "checkout"
+    _run_stubbed_harness(checkout, stub_directory)
+    environment_path = checkout / ".context-engine/database.env"
+    retained_lines = [
+        line
+        for line in environment_path.read_text(encoding="utf-8").splitlines()
+        if not line.startswith("CONTEXT_ENGINE_LEARNING_")
+    ]
+    environment_path.write_text("\n".join(retained_lines) + "\n", encoding="utf-8")
+    environment_path.chmod(0o600)
+
+    python_log = tmp_path / "python-calls.log"
+    _write_executable(
+        stub_directory / "python3",
+        "#!/usr/bin/env bash\n"
+        "printf 'called\\n' >>\"$HARNESS_PYTHON_LOG\"\n"
+        "sleep 0.2\n"
+        "printf '%064d\\n' 0\n",
+    )
+    scripts = checkout / "scripts"
+    command_log = checkout / "docker-command.log"
+    environment = {
+        **os.environ,
+        "HARNESS_COMMAND_LOG": str(command_log),
+        "HARNESS_PYTHON_LOG": str(python_log),
+        "PATH": f"{stub_directory}{os.pathsep}{os.environ['PATH']}",
+    }
+    processes = [
+        subprocess.Popen(
+            ["/bin/bash", str(scripts / "database_harness.sh"), "up"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=environment,
+        )
+        for _ in range(2)
+    ]
+    outputs = [process.communicate(timeout=15) for process in processes]
+
+    assert [process.returncode for process in processes] == [0, 0], outputs
+    assert python_log.read_text(encoding="utf-8").splitlines() == ["called"]
+    lines = environment_path.read_text(encoding="utf-8").splitlines()
+    learning_lines = [
+        line for line in lines if line.startswith("CONTEXT_ENGINE_LEARNING_")
+    ]
+    assert len(learning_lines) == 3
+    assert len({line.split("=", maxsplit=1)[0] for line in learning_lines}) == 3
+
+
+def test_legacy_environment_gains_one_generated_learning_credential(
+    tmp_path: Path,
+) -> None:
+    stub_directory = tmp_path / "bin"
+    stub_directory.mkdir()
+    _stub_harness_dependencies(stub_directory)
+    checkout = tmp_path / "checkout"
+    project, _ = _run_stubbed_harness(checkout, stub_directory)
+    environment_path = checkout / ".context-engine/database.env"
+    original = dict(
+        line.split("=", maxsplit=1)
+        for line in environment_path.read_text(encoding="utf-8").splitlines()
+    )
+    legacy_environment = "\n".join(
+        line
+        for line in environment_path.read_text(encoding="utf-8").splitlines()
+        if not line.startswith("CONTEXT_ENGINE_LEARNING_")
+    )
+    environment_path.write_text(f"{legacy_environment}\n", encoding="utf-8")
+    environment_path.chmod(0o600)
+
+    migrated_project, command = _run_stubbed_harness(checkout, stub_directory)
+
+    migrated = dict(
+        line.split("=", maxsplit=1)
+        for line in environment_path.read_text(encoding="utf-8").splitlines()
+    )
+    assert migrated_project == project
+    assert f"--project-name {project}" in command
+    assert migrated["CONTEXT_ENGINE_LEARNING_ROLE"] == "context_engine_learning"
+    learning_password = migrated["CONTEXT_ENGINE_LEARNING_PASSWORD"]
+    assert re.fullmatch(r"[0-9a-f]{64}", learning_password)
+    assert migrated["CONTEXT_ENGINE_LEARNING_DATABASE_URL"] == (
+        "postgresql+psycopg://context_engine_learning:"
+        f"{learning_password}@127.0.0.1:"
+        f"{migrated['CONTEXT_ENGINE_POSTGRES_PORT']}/context_engine"
+    )
+    for name, value in original.items():
+        if not name.startswith("CONTEXT_ENGINE_LEARNING_"):
             assert migrated[name] == value
     assert environment_path.stat().st_mode & 0o777 == 0o600
 

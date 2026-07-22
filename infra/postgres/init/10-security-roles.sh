@@ -12,6 +12,8 @@ required_environment=(
   CONTEXT_ENGINE_RUNTIME_PASSWORD
   CONTEXT_ENGINE_WORKER_ROLE
   CONTEXT_ENGINE_WORKER_PASSWORD
+  CONTEXT_ENGINE_LEARNING_ROLE
+  CONTEXT_ENGINE_LEARNING_PASSWORD
   CONTEXT_ENGINE_SECURITY_OPERATOR_ROLE
   CONTEXT_ENGINE_SECURITY_OPERATOR_PASSWORD
 )
@@ -37,6 +39,8 @@ psql \
 \getenv runtime_password CONTEXT_ENGINE_RUNTIME_PASSWORD
 \getenv worker_role CONTEXT_ENGINE_WORKER_ROLE
 \getenv worker_password CONTEXT_ENGINE_WORKER_PASSWORD
+\getenv learning_role CONTEXT_ENGINE_LEARNING_ROLE
+\getenv learning_password CONTEXT_ENGINE_LEARNING_PASSWORD
 \getenv security_operator_role CONTEXT_ENGINE_SECURITY_OPERATOR_ROLE
 \getenv security_operator_password CONTEXT_ENGINE_SECURITY_OPERATOR_PASSWORD
 
@@ -80,6 +84,16 @@ CREATE ROLE :"worker_role"
   NOREPLICATION
   NOBYPASSRLS;
 
+CREATE ROLE :"learning_role"
+  LOGIN
+  PASSWORD :'learning_password'
+  NOSUPERUSER
+  NOCREATEDB
+  NOCREATEROLE
+  NOINHERIT
+  NOREPLICATION
+  NOBYPASSRLS;
+
 CREATE ROLE :"security_operator_role"
   LOGIN
   PASSWORD :'security_operator_password'
@@ -93,14 +107,14 @@ CREATE ROLE :"security_operator_role"
 REVOKE ALL ON DATABASE :"database_name" FROM PUBLIC;
 GRANT CONNECT ON DATABASE :"database_name"
   TO :"migrator_role", :"control_role", :"runtime_role", :"worker_role",
-     :"security_operator_role";
+     :"learning_role", :"security_operator_role";
 ALTER DATABASE :"database_name" OWNER TO :"migrator_role";
 
 REVOKE ALL ON SCHEMA public FROM PUBLIC;
 ALTER SCHEMA public OWNER TO :"migrator_role";
 GRANT USAGE ON SCHEMA public
   TO :"control_role", :"runtime_role", :"worker_role",
-     :"security_operator_role";
+     :"learning_role", :"security_operator_role";
 
 -- pgvector is an untrusted extension, so only the disposable bootstrap
 -- superuser creates it. Application schema objects remain migrator-owned.

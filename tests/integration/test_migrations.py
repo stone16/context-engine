@@ -67,7 +67,7 @@ def test_empty_baseline_remains_a_reversible_historical_revision(
         assert _application_tables(migration_configuration) == ["alembic_version"]
     finally:
         command.upgrade(alembic_configuration, "head")
-    assert _revision_rows(migration_configuration) == ["20260722_0008"]
+    assert _revision_rows(migration_configuration) == ["20260722_0009"]
 
 
 def test_organization_isolation_revision_downgrades_and_reapplies_cleanly(
@@ -82,8 +82,9 @@ def test_organization_isolation_revision_downgrades_and_reapplies_cleanly(
     finally:
         command.upgrade(alembic_configuration, "head")
 
-    assert _revision_rows(migration_configuration) == ["20260722_0008"]
+    assert _revision_rows(migration_configuration) == ["20260722_0009"]
     assert _application_tables(migration_configuration) == [
+        "active_release_manifest",
         "alembic_version",
         "context_fragment",
         "context_fragment_field",
@@ -97,6 +98,11 @@ def test_organization_isolation_revision_downgrades_and_reapplies_cleanly(
         "organization",
         "organization_policy_epoch",
         "organization_record",
+        "release_candidate",
+        "release_evaluation",
+        "release_manifest",
+        "release_operator_grant",
+        "release_promotion_audit",
         "resource_access_policy",
         "service_principal",
         "user_account",
@@ -120,7 +126,7 @@ def test_membership_revision_downgrades_to_issue_8_and_reapplies_cleanly(
     finally:
         command.upgrade(alembic_configuration, "head")
 
-    assert _revision_rows(migration_configuration) == ["20260722_0008"]
+    assert _revision_rows(migration_configuration) == ["20260722_0009"]
 
 
 def test_content_schema_revision_downgrades_to_membership_and_reapplies_cleanly(
@@ -141,8 +147,9 @@ def test_content_schema_revision_downgrades_to_membership_and_reapplies_cleanly(
     finally:
         command.upgrade(alembic_configuration, "head")
 
-    assert _revision_rows(migration_configuration) == ["20260722_0008"]
+    assert _revision_rows(migration_configuration) == ["20260722_0009"]
     assert _application_tables(migration_configuration) == [
+        "active_release_manifest",
         "alembic_version",
         "context_fragment",
         "context_fragment_field",
@@ -156,6 +163,11 @@ def test_content_schema_revision_downgrades_to_membership_and_reapplies_cleanly(
         "organization",
         "organization_policy_epoch",
         "organization_record",
+        "release_candidate",
+        "release_evaluation",
+        "release_manifest",
+        "release_operator_grant",
+        "release_promotion_audit",
         "resource_access_policy",
         "service_principal",
         "user_account",
@@ -186,8 +198,9 @@ def test_policy_epoch_revision_downgrades_to_content_and_reapplies_cleanly(
     finally:
         command.upgrade(alembic_configuration, "head")
 
-    assert _revision_rows(migration_configuration) == ["20260722_0008"]
+    assert _revision_rows(migration_configuration) == ["20260722_0009"]
     assert _application_tables(migration_configuration) == [
+        "active_release_manifest",
         "alembic_version",
         "context_fragment",
         "context_fragment_field",
@@ -201,6 +214,11 @@ def test_policy_epoch_revision_downgrades_to_content_and_reapplies_cleanly(
         "organization",
         "organization_policy_epoch",
         "organization_record",
+        "release_candidate",
+        "release_evaluation",
+        "release_manifest",
+        "release_operator_grant",
+        "release_promotion_audit",
         "resource_access_policy",
         "service_principal",
         "user_account",
@@ -233,8 +251,9 @@ def test_worker_lease_revision_downgrades_to_policy_epoch_and_reapplies_cleanly(
     finally:
         command.upgrade(alembic_configuration, "head")
 
-    assert _revision_rows(migration_configuration) == ["20260722_0008"]
+    assert _revision_rows(migration_configuration) == ["20260722_0009"]
     assert _application_tables(migration_configuration) == [
+        "active_release_manifest",
         "alembic_version",
         "context_fragment",
         "context_fragment_field",
@@ -248,6 +267,11 @@ def test_worker_lease_revision_downgrades_to_policy_epoch_and_reapplies_cleanly(
         "organization",
         "organization_policy_epoch",
         "organization_record",
+        "release_candidate",
+        "release_evaluation",
+        "release_manifest",
+        "release_operator_grant",
+        "release_promotion_audit",
         "resource_access_policy",
         "service_principal",
         "user_account",
@@ -273,8 +297,9 @@ def test_decision_lineage_revision_downgrades_to_worker_lease_and_reapplies_clea
     finally:
         command.upgrade(alembic_configuration, "head")
 
-    assert _revision_rows(migration_configuration) == ["20260722_0008"]
+    assert _revision_rows(migration_configuration) == ["20260722_0009"]
     assert _application_tables(migration_configuration) == [
+        "active_release_manifest",
         "alembic_version",
         "context_fragment",
         "context_fragment_field",
@@ -288,6 +313,11 @@ def test_decision_lineage_revision_downgrades_to_worker_lease_and_reapplies_clea
         "organization",
         "organization_policy_epoch",
         "organization_record",
+        "release_candidate",
+        "release_evaluation",
+        "release_manifest",
+        "release_operator_grant",
+        "release_promotion_audit",
         "resource_access_policy",
         "service_principal",
         "user_account",
@@ -329,7 +359,7 @@ def test_field_projection_revision_downgrades_to_decision_lineage_and_reapplies_
     finally:
         command.upgrade(alembic_configuration, "head")
 
-    assert _revision_rows(migration_configuration) == ["20260722_0008"]
+    assert _revision_rows(migration_configuration) == ["20260722_0009"]
     assert "context_fragment_field" in _application_tables(migration_configuration)
     assert "membership_resource_field_right" in _application_tables(
         migration_configuration
@@ -568,7 +598,7 @@ def test_field_projection_downgrade_refuses_populated_content_atomically(
         ):
             command.downgrade(alembic_configuration, "20260722_0007")
 
-        assert _revision_rows(migration_configuration) == ["20260722_0008"]
+        assert _revision_rows(migration_configuration) == ["20260722_0009"]
         with engine.connect() as connection:
             assert connection.execute(
                 text(
@@ -630,7 +660,7 @@ def test_field_projection_downgrade_refuses_populated_content_atomically(
                 ):
                     connection.execute(text(statement), parameters)
         except SQLAlchemyError:
-            if _revision_rows(migration_configuration) != ["20260722_0008"]:
+            if _revision_rows(migration_configuration) != ["20260722_0009"]:
                 command.upgrade(alembic_configuration, "head")
             raise
         finally:
@@ -666,6 +696,9 @@ def test_field_projection_downgrade_serializes_with_concurrent_fragment_insert(
         "resource_ref": resource_ref,
         "fragment_ref": fragment_ref,
     }
+    # Exercise the Issue #48 downgrade directly. Later reversible revisions
+    # have their own lock graphs and must not obscure the lock being observed.
+    command.downgrade(alembic_configuration, "20260722_0008")
     engine = create_database_engine(migration_configuration)
     try:
         with engine.begin() as connection:
@@ -778,7 +811,7 @@ def test_field_projection_downgrade_serializes_with_concurrent_fragment_insert(
                 parameters,
             ).scalar_one() == "concurrent-private-body"
     finally:
-        if _revision_rows(migration_configuration) != ["20260722_0008"]:
+        if _revision_rows(migration_configuration) != ["20260722_0009"]:
             command.upgrade(alembic_configuration, "head")
         with engine.begin() as connection:
             connection.execute(

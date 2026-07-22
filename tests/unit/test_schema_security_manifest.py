@@ -23,14 +23,15 @@ def table_entries(document: dict[str, Any]) -> dict[str, dict[str, Any]]:
     }
 
 
-def test_manifest_classifies_the_exact_issue_48_field_projection_schema() -> None:
+def test_manifest_classifies_the_exact_issue_49_release_schema() -> None:
     """PROP-TENANT-OWNERSHIP-001: no current table is left unclassified."""
 
     document = manifest()
     tables = table_entries(document)
 
-    assert document["manifestVersion"] == "8.0.0"
+    assert document["manifestVersion"] == "9.0.0"
     assert set(tables) == {
+        "active_release_manifest",
         "alembic_version",
         "context_fragment",
         "context_fragment_field",
@@ -44,6 +45,11 @@ def test_manifest_classifies_the_exact_issue_48_field_projection_schema() -> Non
         "organization",
         "organization_policy_epoch",
         "organization_record",
+        "release_candidate",
+        "release_evaluation",
+        "release_manifest",
+        "release_operator_grant",
+        "release_promotion_audit",
         "resource_access_policy",
         "service_principal",
         "user_account",
@@ -70,6 +76,15 @@ def test_manifest_classifies_the_exact_issue_48_field_projection_schema() -> Non
     assert tables["decision_audit"]["classification"] == "tenant_owned"
     assert tables["service_principal"]["classification"] == "tenant_owned"
     assert tables["worker_noop_job"]["classification"] == "tenant_owned"
+    for release_table in (
+        "active_release_manifest",
+        "release_candidate",
+        "release_evaluation",
+        "release_manifest",
+        "release_operator_grant",
+        "release_promotion_audit",
+    ):
+        assert tables[release_table]["classification"] == "tenant_owned"
 
 
 def test_issue_19_lineage_manifest_is_closed_and_role_separated() -> None:
@@ -499,7 +514,7 @@ def test_worker_lease_manifest_requires_exact_receiver_and_job() -> None:
         assert receiver_value in update_policy["using"]
 
     operations = manifest()["controlOperations"]
-    assert operations[1:] == [
+    assert operations[1:3] == [
         {
             "name": "issue_noop_worker_lease",
             "databaseFunction": "context_worker_issue_noop_lease",
@@ -895,8 +910,7 @@ def test_content_manifest_preserves_lineage_visibility_and_immutability() -> Non
         {
             "name": "ck_context_fragment_field_ref",
             "expression": (
-                "field_ref ~ '^[a-z][a-z0-9_]{0,63}$' "
-                "AND field_ref <> 'body'"
+                "field_ref ~ '^[a-z][a-z0-9_]{0,63}$' AND field_ref <> 'body'"
             ),
         },
         {
@@ -1127,3 +1141,432 @@ def test_policy_epoch_manifest_seals_runtime_reads_and_control_mutation() -> Non
             "organization_policy_epoch",
         ],
     }
+
+
+def test_release_manifest_records_exact_immutable_lineage_keys() -> None:
+    """RELEASE-OWNER-019: release identity is immutable and Organization-owned."""
+
+    entries = table_entries(manifest())
+    release = entries["release_manifest"]
+    candidate = entries["release_candidate"]
+    evaluation = entries["release_evaluation"]
+
+    assert release["organizationInclusiveKeys"] == [
+        {
+            "name": "pk_release_manifest",
+            "kind": "primary_key",
+            "columns": ["organization_id", "manifest_ref"],
+        },
+        {
+            "name": "uq_release_manifest_exact_digest",
+            "kind": "unique",
+            "columns": ["organization_id", "manifest_ref", "manifest_digest"],
+        },
+    ]
+    assert release["foreignKeys"] == [
+        {
+            "name": "fk_release_manifest_organization",
+            "columns": ["organization_id"],
+            "references": {
+                "table": "organization",
+                "columns": ["organization_id"],
+            },
+            "onDelete": "CASCADE",
+        }
+    ]
+    assert candidate["organizationInclusiveKeys"] == [
+        {
+            "name": "pk_release_candidate",
+            "kind": "primary_key",
+            "columns": ["organization_id", "candidate_ref"],
+        },
+        {
+            "name": "uq_release_candidate_exact_digest",
+            "kind": "unique",
+            "columns": ["organization_id", "candidate_ref", "candidate_digest"],
+        },
+    ]
+    assert candidate["foreignKeys"] == [
+        {
+            "name": "fk_release_candidate_manifest_exact",
+            "columns": ["organization_id", "manifest_ref", "manifest_digest"],
+            "references": {
+                "table": "release_manifest",
+                "columns": [
+                    "organization_id",
+                    "manifest_ref",
+                    "manifest_digest",
+                ],
+            },
+        }
+    ]
+    assert evaluation["organizationInclusiveKeys"] == [
+        {
+            "name": "pk_release_evaluation",
+            "kind": "primary_key",
+            "columns": ["organization_id", "evaluation_ref"],
+        },
+        {
+            "name": "uq_release_evaluation_exact_digest",
+            "kind": "unique",
+            "columns": [
+                "organization_id",
+                "evaluation_ref",
+                "evaluation_digest",
+            ],
+        },
+    ]
+    assert evaluation["foreignKeys"] == [
+        {
+            "name": "fk_release_evaluation_candidate_exact",
+            "columns": ["organization_id", "candidate_ref", "candidate_digest"],
+            "references": {
+                "table": "release_candidate",
+                "columns": [
+                    "organization_id",
+                    "candidate_ref",
+                    "candidate_digest",
+                ],
+            },
+        },
+        {
+            "name": "fk_release_evaluation_manifest_exact",
+            "columns": ["organization_id", "manifest_ref", "manifest_digest"],
+            "references": {
+                "table": "release_manifest",
+                "columns": [
+                    "organization_id",
+                    "manifest_ref",
+                    "manifest_digest",
+                ],
+            },
+        },
+    ]
+
+    assert {item["name"] for item in release["checkConstraints"]} == {
+        "ck_release_manifest_refs_bounded",
+        "ck_release_manifest_digests",
+        "ck_release_manifest_profile_compatibility",
+        "ck_release_manifest_revision_ref_arrays",
+        "ck_release_manifest_curation_shape",
+    }
+    assert {item["name"] for item in candidate["checkConstraints"]} == {
+        "ck_release_candidate_refs_bounded",
+        "ck_release_candidate_digests",
+        "ck_release_candidate_generation_incrementable",
+        "ck_release_candidate_expected_base",
+        "ck_release_candidate_gate_statuses",
+        "ck_release_candidate_commands",
+    }
+    assert {item["name"] for item in evaluation["checkConstraints"]} == {
+        "ck_release_evaluation_refs_bounded",
+        "ck_release_evaluation_digests",
+        "ck_release_evaluation_generation_incrementable",
+        "ck_release_evaluation_expected_base",
+        "ck_release_evaluation_gate_statuses",
+        "ck_release_evaluation_commands",
+        "ck_release_evaluation_signature_profile",
+    }
+
+    release_document = json.dumps(release, sort_keys=True)
+    assert "curation_mode = 'curation_off'" in release_document
+    assert "compatible_revision_refs = active_revision_refs" in release_document
+    evaluation_document = json.dumps(evaluation, sort_keys=True)
+    assert "release-evaluation-rfc8785-sha256-v1" in evaluation_document
+    assert "release-evaluation-hmac-sha256-v1" in evaluation_document
+    for entry in (release, candidate, evaluation):
+        assert entry["immutableRows"] == {
+            "trigger": f"{entry['name']}_reject_mutation",
+            "function": "release_lineage_reject_mutation",
+            "events": ["UPDATE", "DELETE"],
+            "sqlstate": "55000",
+        }
+
+
+def test_release_authority_pointer_and_audit_are_function_only() -> None:
+    """LEARN-006/007: only Learning promote may publish or append success audit."""
+
+    entries = table_entries(manifest())
+    grant = entries["release_operator_grant"]
+    pointer = entries["active_release_manifest"]
+    audit = entries["release_promotion_audit"]
+
+    assert grant["organizationInclusiveKeys"] == [
+        {
+            "name": "pk_release_operator_grant",
+            "kind": "primary_key",
+            "columns": ["organization_id", "authority_ref"],
+        },
+        {
+            "name": "uq_release_operator_grant_exact_digest",
+            "kind": "unique",
+            "columns": ["organization_id", "authority_ref", "authority_digest"],
+        },
+    ]
+    assert grant["foreignKeys"] == [
+        {
+            "name": "fk_release_operator_grant_organization",
+            "columns": ["organization_id"],
+            "references": {
+                "table": "organization",
+                "columns": ["organization_id"],
+            },
+            "onDelete": "CASCADE",
+        }
+    ]
+    assert {item["name"] for item in grant["checkConstraints"]} == {
+        "ck_release_operator_grant_refs_bounded",
+        "ck_release_operator_grant_digest",
+        "ck_release_operator_grant_lifetime",
+    }
+
+    assert pointer["organizationInclusiveKeys"] == [
+        {
+            "name": "pk_active_release_manifest",
+            "kind": "primary_key",
+            "columns": ["organization_id"],
+        },
+        {
+            "name": "uq_active_release_manifest_promotion",
+            "kind": "unique",
+            "columns": ["organization_id", "promotion_ref"],
+        },
+    ]
+    assert pointer["foreignKeys"] == [
+        {
+            "name": "fk_active_release_manifest_exact",
+            "columns": ["organization_id", "manifest_ref", "manifest_digest"],
+            "references": {
+                "table": "release_manifest",
+                "columns": [
+                    "organization_id",
+                    "manifest_ref",
+                    "manifest_digest",
+                ],
+            },
+        }
+    ]
+    assert {item["name"] for item in pointer["checkConstraints"]} == {
+        "ck_active_release_manifest_generation",
+        "ck_active_release_manifest_bindings",
+    }
+
+    assert audit["organizationInclusiveKeys"] == [
+        {
+            "name": "pk_release_promotion_audit",
+            "kind": "primary_key",
+            "columns": ["organization_id", "active_generation"],
+        },
+        {
+            "name": "uq_release_promotion_audit_ref",
+            "kind": "unique",
+            "columns": ["organization_id", "promotion_ref"],
+        },
+    ]
+    assert audit["foreignKeys"] == [
+        {
+            "name": "fk_release_promotion_audit_candidate_exact",
+            "columns": ["organization_id", "candidate_ref", "candidate_digest"],
+            "references": {
+                "table": "release_candidate",
+                "columns": [
+                    "organization_id",
+                    "candidate_ref",
+                    "candidate_digest",
+                ],
+            },
+        },
+        {
+            "name": "fk_release_promotion_audit_manifest_exact",
+            "columns": ["organization_id", "manifest_ref", "manifest_digest"],
+            "references": {
+                "table": "release_manifest",
+                "columns": [
+                    "organization_id",
+                    "manifest_ref",
+                    "manifest_digest",
+                ],
+            },
+        },
+        {
+            "name": "fk_release_promotion_audit_evaluation_exact",
+            "columns": ["organization_id", "evaluation_ref", "evaluation_digest"],
+            "references": {
+                "table": "release_evaluation",
+                "columns": [
+                    "organization_id",
+                    "evaluation_ref",
+                    "evaluation_digest",
+                ],
+            },
+        },
+    ]
+    assert {item["name"] for item in audit["checkConstraints"]} == {
+        "ck_release_promotion_audit_generation",
+        "ck_release_promotion_audit_lifetime",
+        "ck_release_promotion_audit_refs_bounded",
+        "ck_release_promotion_audit_digests",
+        "ck_release_promotion_audit_expected_base",
+    }
+    assert audit["immutableRows"] == {
+        "trigger": "release_promotion_audit_reject_mutation",
+        "function": "release_lineage_reject_mutation",
+        "events": ["UPDATE", "DELETE"],
+        "sqlstate": "55000",
+    }
+    for entry in (pointer, audit):
+        assert entry["functionOnlyMutation"] == {
+            "databaseFunction": "context_learning_promote_release",
+            "role": "context_engine_learning",
+            "definerRole": "context_engine_release_definer",
+            "directTableMutationAllowed": False,
+        }
+
+
+def test_release_force_rls_and_grants_match_the_promotion_boundary() -> None:
+    """DB-008/RELEASE-OWNER-019: release roles are least privilege."""
+
+    entries = table_entries(manifest())
+    release_names = (
+        "release_manifest",
+        "release_candidate",
+        "release_evaluation",
+        "release_operator_grant",
+        "active_release_manifest",
+        "release_promotion_audit",
+    )
+    lineage_names = set(release_names[:3])
+
+    for name in release_names:
+        entry = entries[name]
+        assert entry["organizationColumn"] == "organization_id"
+        assert entry["partitions"] == []
+        rls = entry["rowLevelSecurity"]
+        assert rls["enabled"] is True
+        assert rls["forced"] is True
+        assert {
+            (policy["roles"][0], policy["command"]) for policy in rls["policies"]
+        } >= {
+            ("context_engine_migrator", "ALL"),
+            ("context_engine_release_definer", "ALL"),
+        }
+        definer_policy = next(
+            policy
+            for policy in rls["policies"]
+            if policy["roles"] == ["context_engine_release_definer"]
+        )
+        assert definer_policy["using"] == definer_policy["withCheck"]
+        assert "app.organization_id" in definer_policy["using"]
+        assert entry["permittedOperations"]["context_engine_control"] == []
+        assert entry["permittedOperations"]["context_engine_runtime"] == []
+        assert entry["permittedOperations"]["context_engine_worker"] == []
+        assert entry["permittedOperations"]["context_engine_security_operator"] == []
+
+        if name in lineage_names:
+            learning_policies = {
+                policy["command"]: policy
+                for policy in rls["policies"]
+                if policy["roles"] == ["context_engine_learning"]
+            }
+            assert set(learning_policies) == {"INSERT", "SELECT"}
+            assert "using" not in learning_policies["INSERT"]
+            assert "app.organization_id" in learning_policies["INSERT"]["withCheck"]
+            assert "withCheck" not in learning_policies["SELECT"]
+            assert "app.organization_id" in learning_policies["SELECT"]["using"]
+            assert entry["permittedOperations"]["context_engine_learning"] == [
+                "SELECT",
+                "INSERT",
+            ]
+        elif name == "release_operator_grant":
+            assert entry["permittedOperations"]["context_engine_learning"] == []
+            assert all(
+                policy["roles"] != ["context_engine_learning"]
+                for policy in rls["policies"]
+            )
+        else:
+            assert entry["permittedOperations"]["context_engine_learning"] == [
+                "EXECUTE context_learning_promote_release"
+            ]
+            assert all(
+                policy["roles"] != ["context_engine_learning"]
+                for policy in rls["policies"]
+            )
+
+    assert entries["release_manifest"]["permittedOperations"][
+        "context_engine_release_definer"
+    ] == ["SELECT"]
+    assert entries["release_candidate"]["permittedOperations"][
+        "context_engine_release_definer"
+    ] == ["SELECT"]
+    assert entries["release_evaluation"]["permittedOperations"][
+        "context_engine_release_definer"
+    ] == ["SELECT"]
+    assert entries["release_operator_grant"]["permittedOperations"][
+        "context_engine_release_definer"
+    ] == ["SELECT"]
+    assert entries["active_release_manifest"]["permittedOperations"][
+        "context_engine_release_definer"
+    ] == ["SELECT", "INSERT", "UPDATE"]
+    assert entries["release_promotion_audit"]["permittedOperations"][
+        "context_engine_release_definer"
+    ] == ["SELECT", "INSERT"]
+
+
+def test_context_learning_promote_release_is_the_single_atomic_operation() -> None:
+    """RELEASE-OWNER-019: promotion owns one generation-bound pointer/audit pair."""
+
+    operations = manifest()["controlOperations"]
+    promotion = next(
+        operation
+        for operation in operations
+        if operation["name"] == "context_learning_promote_release"
+    )
+    assert promotion == {
+        "name": "context_learning_promote_release",
+        "databaseFunction": "context_learning_promote_release",
+        "role": "context_engine_learning",
+        "definerRole": "context_engine_release_definer",
+        "directTableMutationAllowed": False,
+        "databaseOwnedTime": True,
+        "securityDefiner": True,
+        "searchPath": ["pg_catalog", "pg_temp"],
+        "rowSecurity": True,
+        "sessionUser": "context_engine_learning",
+        "expectedState": {
+            "generationBound": True,
+            "initialGeneration": 0,
+            "initialPointerAbsent": True,
+        },
+        "revalidates": [
+            "release_operator_grant",
+            "release_candidate",
+            "release_evaluation",
+            "release_manifest",
+            "active_release_manifest",
+        ],
+        "candidateEvaluationExactBindings": [
+            "security_status",
+            "security_evidence_digest",
+            "reliability_status",
+            "reliability_evidence_digest",
+            "quality_status",
+            "quality_evidence_digest",
+            "budget_status",
+            "budget_evidence_digest",
+            "capability_coverage_digest",
+            "fixture_digest",
+            "verification_commands",
+        ],
+        "requiredManifestCurationMode": "curation_off",
+        "atomicWrites": [
+            "active_release_manifest",
+            "release_promotion_audit",
+        ],
+    }
+    assert (
+        sum(
+            "active_release_manifest" in operation.get("atomicWrites", [])
+            for operation in operations
+        )
+        == 1
+    )

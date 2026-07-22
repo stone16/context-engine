@@ -49,6 +49,7 @@ def test_compose_project_identity_is_generated_per_checkout() -> None:
         "control_role",
         "runtime_role",
         "worker_role",
+        "learning_role",
         "security_operator_role",
     ],
 )
@@ -92,12 +93,15 @@ def test_compose_passes_dedicated_operator_credentials_to_bootstrap() -> None:
     assert "CONTEXT_ENGINE_CONTROL_PASSWORD" in compose
     assert "CONTEXT_ENGINE_SECURITY_OPERATOR_ROLE" in compose
     assert "CONTEXT_ENGINE_SECURITY_OPERATOR_PASSWORD" in compose
+    assert "CONTEXT_ENGINE_LEARNING_ROLE" in compose
+    assert "CONTEXT_ENGINE_LEARNING_PASSWORD" in compose
 
 
 def test_readiness_probe_includes_dedicated_operator_configuration() -> None:
     wait_script = repository_text("scripts/wait_for_database.py")
 
     assert "configurations.control" in wait_script
+    assert "configurations.learning" in wait_script
     assert "configurations.operator" in wait_script
     assert (
         "                    if configuration.purpose is "
@@ -106,7 +110,10 @@ def test_readiness_probe_includes_dedicated_operator_configuration() -> None:
     assert "                        assert_security_operator_role(connection)" in (
         wait_script
     )
-    assert "migration, control, runtime, worker, security-operator" in wait_script
+    assert "                        assert_learning_role(connection)" in wait_script
+    assert "migration, control, runtime, worker, learning, security-operator" in (
+        wait_script
+    )
 
 
 def test_harness_provisions_post_init_roles_before_readiness() -> None:
@@ -131,6 +138,10 @@ def test_harness_provisions_post_init_roles_before_readiness() -> None:
     assert "WORKER_LEASE_DEFINER_ROLE" in provisioner
     assert "CONTEXT_RUN_READER_DEFINER_ROLE" in provisioner
     assert "contract.context_run_reader_definer_role" in provisioner
+    assert "RELEASE_DEFINER_ROLE" in provisioner
+    assert "contract.release_definer_role" in provisioner
+    assert "LEARNING_ROLE" in provisioner
+    assert "contract.learning_role" in provisioner
     assert "OPERATOR_ROLE" in provisioner
     assert "NOLOGIN NOSUPERUSER" in provisioner
     assert "WITH ADMIN FALSE, INHERIT FALSE, SET TRUE" in provisioner
@@ -170,6 +181,9 @@ def test_role_guard_rejects_any_database_object_ownership() -> None:
     assert "dependency.deptype = 'o'" in guard
     assert "AS owns_no_database_objects" in guard
     assert "tuple(operator_facts) != (True, True)" in guard
+    assert "assert_learning_role" in guard
+    learning_guard = guard.split("def assert_learning_role", maxsplit=1)[1]
+    assert "_assert_no_owned_objects_or_role_members(connection)" in learning_guard
 
 
 def test_ci_runs_the_same_make_database_contract_as_local() -> None:

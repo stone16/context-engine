@@ -6,6 +6,7 @@ from sqlalchemy import Connection, text
 
 from engine.persistence.configuration import (
     CONTROL_ROLE,
+    LEARNING_ROLE,
     MIGRATOR_ROLE,
     OPERATOR_ROLE,
     RUNTIME_ROLE,
@@ -113,10 +114,9 @@ def assert_worker_role(connection: Connection) -> None:
     _assert_non_owner_role(connection, WORKER_ROLE)
 
 
-def assert_security_operator_role(connection: Connection) -> None:
-    """Require the dedicated restricted security-audit login."""
+def _assert_no_owned_objects_or_role_members(connection: Connection) -> None:
+    """Reject object ownership and incoming memberships for sensitive roles."""
 
-    _assert_non_owner_role(connection, OPERATOR_ROLE)
     operator_facts = connection.execute(
         text(
             """
@@ -142,6 +142,20 @@ def assert_security_operator_role(connection: Connection) -> None:
     ).one()
     if tuple(operator_facts) != (True, True):
         raise AssertionError(
-            "PostgreSQL security-operator authority must own no database objects "
-            "and have no role memberships in either direction"
+            "PostgreSQL sensitive application authority must own no database "
+            "objects and have no role memberships in either direction"
         )
+
+
+def assert_learning_role(connection: Connection) -> None:
+    """Require the dedicated least-privilege ContextLearning login."""
+
+    _assert_non_owner_role(connection, LEARNING_ROLE)
+    _assert_no_owned_objects_or_role_members(connection)
+
+
+def assert_security_operator_role(connection: Connection) -> None:
+    """Require the dedicated restricted security-audit login."""
+
+    _assert_non_owner_role(connection, OPERATOR_ROLE)
+    _assert_no_owned_objects_or_role_members(connection)
