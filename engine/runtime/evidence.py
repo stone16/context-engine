@@ -12,6 +12,7 @@ __all__ = [
     "CandidateRef",
     "Evidence",
     "EvidenceLineage",
+    "MAX_PROJECTED_FIELD_REF_LENGTH",
     "MAX_PROJECTED_FIELD_REFS",
     "PackageBlock",
     "PackageContent",

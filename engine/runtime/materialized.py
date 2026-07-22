@@ -6,6 +6,7 @@ from typing import Final, NoReturn, Protocol
 from uuid import UUID
 
 from engine.runtime.evidence import (
+    MAX_PROJECTED_FIELD_REF_LENGTH,
     MAX_PROJECTED_FIELD_REFS,
     CandidateRef,
     validate_projected_field_refs,
@@ -20,7 +21,9 @@ __all__ = [
     "MaterializedProjectionSession",
 ]
 
-MAX_FIELD_REF_LENGTH: Final = 64
+_STRUCTURED_FIELD_LINE_BREAKS: Final = frozenset(
+    "\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029"
+)
 
 
 def _require_nonblank_ref(field_name: str, value: object) -> str:
@@ -33,7 +36,7 @@ def _require_field_ref(value: object) -> str:
     if (
         type(value) is not str
         or not value
-        or len(value) > MAX_FIELD_REF_LENGTH
+        or len(value) > MAX_PROJECTED_FIELD_REF_LENGTH
         or value[0] not in "abcdefghijklmnopqrstuvwxyz"
         or any(
             character not in "abcdefghijklmnopqrstuvwxyz0123456789_"
@@ -44,6 +47,22 @@ def _require_field_ref(value: object) -> str:
             "materialized field_ref must be a bounded lowercase identifier"
         )
     return value
+
+
+def _encode_structured_field_value(value: str) -> str:
+    """Escape structural delimiters while preserving ordinary text exactly."""
+
+    encoded: list[str] = []
+    for character in value:
+        if character == "\\":
+            encoded.append("\\\\")
+        elif character == "=":
+            encoded.append("\\=")
+        elif character in _STRUCTURED_FIELD_LINE_BREAKS:
+            encoded.append(f"\\u{ord(character):04x}")
+        else:
+            encoded.append(character)
+    return "".join(encoded)
 
 
 class MaterializedProjectionKind(StrEnum):
@@ -130,7 +149,8 @@ class MaterializedFragmentProjection:
         if self.kind is MaterializedProjectionKind.LEGACY_BODY:
             return self.fields[0].field_value
         return "\n".join(
-            f"{value.field_ref}={value.field_value}" for value in self.fields
+            f"{value.field_ref}={_encode_structured_field_value(value.field_value)}"
+            for value in self.fields
         )
 
 

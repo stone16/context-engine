@@ -88,9 +88,13 @@ and the public `context-package-canonical-json-v2` digest bind those references
 together with the rendered body. Version 2 adds `projectedFields` to the exact
 public Package document; persisted version 1 rows remain historical lineage but
 new ContextRuns use version 2. Structured bodies render deterministically as one
-`field_ref=field_value` line per ordinal; legacy `body` renders as its exact
-value. ContextRun continues to retain only authorized Evidence references and
-the Package digest, never field values, denied field names, or denied counts.
+`field_ref=field_value` line per ordinal. Ordinary values remain exact; inside a
+structured value, `\\` becomes `\\\\`, `=` becomes `\\=`, and every Unicode
+line separator becomes its lowercase `\\uXXXX` form. This closed escaping order
+is reversible and keeps one physical line per field. Legacy `body` renders as
+its exact value. ContextRun continues to retain only authorized Evidence
+references and the Package digest, never field values, denied field names, or
+denied counts.
 
 The internal PostgreSQL materialized projection is not an external provider
 call. PackageBudget's provider-call usage therefore remains zero; the catalog's

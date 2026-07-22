@@ -122,12 +122,12 @@ def test_structured_projection_renders_only_ceiling_fields_canonically() -> None
 def test_missing_or_nonmatching_projection_ceiling_absorbs_content(
     ceiling: frozenset[str],
 ) -> None:
-    with pytest.raises(ValueError, match="projection.*ceiling|trusted ceiling"):
+    with pytest.raises(ValueError, match=r"projection.*ceiling|trusted ceiling"):
         projection("status", ceiling=ceiling)
 
 
 def test_projection_rejects_a_field_outside_the_trusted_ceiling() -> None:
-    with pytest.raises(ValueError, match="outside.*ceiling"):
+    with pytest.raises(ValueError, match=r"outside.*ceiling"):
         projection(
             "status",
             "private_note",
@@ -166,6 +166,28 @@ def test_projection_rejects_noncanonical_or_duplicate_field_order() -> None:
             ),
             projection_ceiling=frozenset({"status"}),
         )
+
+
+def test_structured_projection_escapes_delimiters_and_every_line_break() -> None:
+    line_breaks = "\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029"
+    selected = MaterializedFragmentProjection(
+        kind=MaterializedProjectionKind.STRUCTURED_FIELDS,
+        fields=(
+            MaterializedFieldValue(
+                field_ref="note",
+                field_value=f"left=right\\literal{line_breaks}tail",
+                ordinal=0,
+            ),
+        ),
+        projection_ceiling=frozenset({"note"}),
+    )
+
+    assert selected.rendered_body == (
+        "note=left\\=right\\\\literal"
+        "\\u000a\\u000d\\u000b\\u000c\\u001c"
+        "\\u001d\\u001e\\u0085\\u2028\\u2029tail"
+    )
+    assert selected.rendered_body.count("\n") == 0
 
 
 def test_legacy_body_is_an_explicit_single_field_not_a_wildcard() -> None:

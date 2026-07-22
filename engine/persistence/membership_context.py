@@ -326,6 +326,13 @@ class _PostgreSQLMaterializedProjectionPort:
         authorized_rows = tuple(row for row in rows if row.field_ref is not None)
         if not authorized_rows:
             return None
+        if any(
+            type(row.field_value) is not str
+            or not row.field_value
+            or row.field_value.isspace()
+            for row in authorized_rows
+        ):
+            return None
         fields = tuple(
             MaterializedFieldValue(
                 field_ref=row.field_ref,

@@ -13,6 +13,7 @@ from engine.runtime.contracts import (
     ORGANIZATION_PACKAGE_REF_PATTERN,
 )
 from engine.runtime.evidence import (
+    MAX_PROJECTED_FIELD_REF_LENGTH,
     MAX_PROJECTED_FIELD_REFS,
     validate_projected_field_refs,
 )
@@ -51,7 +52,10 @@ OpaqueOutputRef = Annotated[
 ]
 ProjectedFieldOutputRef = Annotated[
     str,
-    Field(strict=True, pattern=r"^[a-z][a-z0-9_]{0,63}$"),
+    Field(
+        strict=True,
+        pattern=rf"^[a-z][a-z0-9_]{{0,{MAX_PROJECTED_FIELD_REF_LENGTH - 1}}}$",
+    ),
 ]
 EvidenceOutputRef = Annotated[
     str,
