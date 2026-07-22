@@ -43,7 +43,7 @@ schema、Python type、threat fixture 或新的架构决策。
 | `ContextAccessTicket` | Short-lived signed source-read capability | One Organization, identity chain, provider audience, purpose, epoch, and expiry | Authority only for its declared read audience |
 | `ActionTicket` | Short-lived signed one-effect capability | One Organization, identity chain, effect/audience/payload, epoch, and expiry | Authority only for its declared external effect |
 | `WorkerLease` | Short-lived signed one-shot work capability | One Organization, durable job, registered service workload, expiry, and nonce | Authority only for the matching job attempt |
-| `File acquisition outcome` | Persistent immutable completed-observation lineage | One Organization, ContextSource, acquisition, and ContextResource | None; deduplication evidence is not content or authority |
+| `File acquisition outcome` | Persistent immutable completed-observation lineage | One Organization, ContextSource, acquisition, ContextResource, and active ContextRevision | None; deduplication evidence is not content or authority |
 | `acquisition checkpoint` | Persistent monotonic acquisition progress | One Organization and ContextSource | None |
 | `publish watermark` | Persistent monotonic visibility progress | One Organization and ContextSource | None |
 

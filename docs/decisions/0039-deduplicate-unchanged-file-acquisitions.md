@@ -9,7 +9,7 @@ description: >
 # 0039. Deduplicate unchanged File acquisitions before publication
 
 - Status: accepted
-- Date: 2026-07-24
+- Date: 2026-07-22
 - Refines: ADR-0018, ADR-0037, ADR-0038
 
 ## Context
@@ -41,6 +41,14 @@ UTF8("context-engine.file-content-identity.v1") || 0x00
 || UTF8(compiler_version) || 0x00
 || UTF8(config_version)
 ~~~
+
+Every variable field in this domain is a PostgreSQL `text` value at the hashing
+boundary. PostgreSQL rejects U+0000 before a `text` argument reaches the
+classifier, so no variable field can contain the `0x00` delimiter. The two UUID
+fields and the lowercase hexadecimal content hash have fixed lengths. These
+input-type invariants make the displayed encoding length-unambiguous; a future
+carrier that admits U+0000 must introduce a new length-prefixed identity
+version rather than reuse version 1.
 
 Each dimension is intentional. Organization prevents cross-tenant identity
 sharing. Source and stable Resource restrict comparison to the same registered

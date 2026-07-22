@@ -88,7 +88,7 @@ def test_no_force_row_level_security_mutation_fails_and_rolls_back(
                 assert mutated["coverage"] == {
                     "numerator": 28,
                     "denominator": 29,
-                    "percent": 96.6,
+                    "percent": 96.55,
                 }
                 tenant_tables = cast(list[dict[str, Any]], mutated["tenantTables"])
                 organization_record = next(
