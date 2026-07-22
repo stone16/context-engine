@@ -22,8 +22,21 @@ from engine.supply.markdown import (
 )
 
 _UTF8_BOM: Final = b"\xef\xbb\xbf"
-_HEADING_PATTERN: Final = re.compile(r"^# ([^\n]+)$")
+_HEADING_PATTERN: Final = re.compile(r"^# (\S(?:.*\S)?)$")
 _LIST_PATTERN: Final = re.compile(r"^ {0,3}(?:[-+*]|[0-9]+[.)])\s+")
+_HEADING_BLOCK_PATTERN: Final = re.compile(r"^ {0,3}#{1,6}(?:[ \t]+|$)")
+_THEMATIC_BREAK_PATTERN: Final = re.compile(
+    r"^ {0,3}(?:(?:\*[ \t]*){3,}|(?:_[ \t]*){3,}|(?:-[ \t]*){3,})$"
+)
+_REFERENCE_LINK_PATTERN: Final = re.compile(
+    r"!?\[[^]]*](?:\[[^]]*]|\s*:)|!?\[[^]]+]"
+)
+_ENTITY_PATTERN: Final = re.compile(
+    r"&(?:#[0-9]+|#[xX][0-9A-Fa-f]+|[A-Za-z][A-Za-z0-9]+);"
+)
+_ESCAPE_PATTERN: Final = re.compile(
+    r'''\\[!"#$%&'()*+,\-./:;<=>?@\[\]\\^_`{|}~]'''
+)
 
 
 def _point(line: int, column: int, byte_offset: int) -> SourcePoint:
@@ -48,31 +61,49 @@ def _normalized_text(source: bytes) -> str | CompilationFailure:
     return normalized.rstrip("\n") + "\n"
 
 
-def _unsupported_construct(line: str) -> UnsupportedConstruct | None:
+def _unsupported_construct(
+    line: str,
+    *,
+    supported_heading: bool,
+) -> UnsupportedConstruct | None:
+    inspected = line[2:] if supported_heading and line.startswith("# ") else line
     if line.startswith(("    ", "\t")):
         return UnsupportedConstruct.CODE_BLOCK
     if any(ord(character) < 0x20 for character in line):
         return UnsupportedConstruct.CONTROL_CHARACTER
+    if re.match(r"^ {0,3}(?:`{3,}|~{3,})", line):
+        return UnsupportedConstruct.CODE_BLOCK
+    if re.match(r"^ {0,3}>", line):
+        return UnsupportedConstruct.BLOCKQUOTE
+    if _HEADING_BLOCK_PATTERN.match(line) and not (
+        supported_heading and line.startswith("# ")
+    ):
+        return UnsupportedConstruct.NESTED_HEADING
+    if _THEMATIC_BREAK_PATTERN.fullmatch(line):
+        return UnsupportedConstruct.FRONTMATTER_OR_RULE
     if _LIST_PATTERN.match(line):
         return UnsupportedConstruct.LIST
-    if line.startswith("```") or line.startswith("~~~"):
-        return UnsupportedConstruct.CODE_BLOCK
-    if line.startswith(">"):
-        return UnsupportedConstruct.BLOCKQUOTE
-    if line.startswith("##"):
-        return UnsupportedConstruct.NESTED_HEADING
-    if line == "---":
-        return UnsupportedConstruct.FRONTMATTER_OR_RULE
-    if line.startswith("|") or "|" in line:
-        return UnsupportedConstruct.TABLE
-    if re.search(r"!?\[[^]]*]\([^)]*\)", line):
+    if re.search(r"!?\[[^]]*]\([^)]*\)", inspected):
         return UnsupportedConstruct.LINK_OR_IMAGE
-    if "`" in line:
+    if _REFERENCE_LINK_PATTERN.search(inspected):
+        return UnsupportedConstruct.LINK_OR_IMAGE
+    if "`" in inspected:
         return UnsupportedConstruct.INLINE_CODE
-    if re.search(r"(?:\*\*[^*]+\*\*|__[^_]+__|(?<!\*)\*[^*]+\*)", line):
+    if re.search(
+        r"(?:\*\*[^*]+\*\*|__[^_]+__|(?<!\*)\*[^*]+\*|(?<!_)_[^_]+_(?!_))",
+        inspected,
+    ):
         return UnsupportedConstruct.EMPHASIS
-    if re.search(r"<[/!?A-Za-z][^>]*>", line):
+    if "~~" in inspected:
+        return UnsupportedConstruct.STRIKETHROUGH
+    if re.search(r"<[/!?A-Za-z][^>]*>", inspected):
         return UnsupportedConstruct.HTML
+    if _ESCAPE_PATTERN.search(inspected):
+        return UnsupportedConstruct.ESCAPE
+    if _ENTITY_PATTERN.search(inspected):
+        return UnsupportedConstruct.ENTITY
+    if inspected.endswith("  "):
+        return UnsupportedConstruct.HARD_BREAK
     return None
 
 
@@ -131,14 +162,22 @@ def compile_markdown(
 
     lines = normalized.removesuffix("\n").split("\n")
     for line_index, line in enumerate(lines):
-        construct = _unsupported_construct(line)
+        construct = _unsupported_construct(
+            line,
+            supported_heading=line_index == 0,
+        )
         if construct is not None:
             return CompilationFailure(
                 code=CompilationFailureCode.UNSUPPORTED_CONSTRUCT,
                 position=_failure_point(lines, line_index),
                 construct=construct,
             )
-    if len(lines) != 3 or lines[1] != "" or not lines[2]:
+    if (
+        len(lines) != 3
+        or lines[1] != ""
+        or not lines[2]
+        or lines[2] != lines[2].strip()
+    ):
         return CompilationFailure(
             code=CompilationFailureCode.UNSUPPORTED_DOCUMENT_SHAPE,
             position=_point(1, 1, 0),

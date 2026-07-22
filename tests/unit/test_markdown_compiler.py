@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import ast
+import builtins
 import json
 import os
+import socket
 import subprocess
 import sys
+import urllib.request
 from pathlib import Path
 
 import pytest
@@ -18,6 +21,8 @@ from engine.supply import (
     MarkdownCompilerConfig,
     ParsedDocument,
     SectionKind,
+    SourcePoint,
+    SourceSpan,
     UnsupportedConstruct,
     canonicalize_parsed_document,
 )
@@ -169,17 +174,36 @@ def test_unsupported_markdown_is_typed_failure_not_reinterpreted_text() -> None:
 @pytest.mark.parametrize(
     ("markdown", "construct"),
     [
+        (b"## Nested\n\nParagraph.\n", UnsupportedConstruct.NESTED_HEADING),
         (b"# Handbook\n\n## Nested\n", UnsupportedConstruct.NESTED_HEADING),
+        (b"# Handbook\n\n# Second\n", UnsupportedConstruct.NESTED_HEADING),
+        (b"# Handbook\n\n   ## Nested\n", UnsupportedConstruct.NESTED_HEADING),
         (b"# Handbook\n\n```text\n", UnsupportedConstruct.CODE_BLOCK),
         (b"# Handbook\n\n    indented code\n", UnsupportedConstruct.CODE_BLOCK),
         (b"# Handbook\n\n  - indented item\n", UnsupportedConstruct.LIST),
         (b"# Handbook\n\n> quoted\n", UnsupportedConstruct.BLOCKQUOTE),
+        (b"# Handbook\n\n   > quoted\n", UnsupportedConstruct.BLOCKQUOTE),
         (
             b"# Handbook\n\n[linked](https://invalid.example)\n",
             UnsupportedConstruct.LINK_OR_IMAGE,
         ),
+        (
+            b"# Handbook\n\n[linked][target]\n",
+            UnsupportedConstruct.LINK_OR_IMAGE,
+        ),
+        (
+            b"# Handbook\n\n![image][target]\n",
+            UnsupportedConstruct.LINK_OR_IMAGE,
+        ),
         (b"# Handbook\n\n**emphasized**\n", UnsupportedConstruct.EMPHASIS),
+        (b"# Handbook\n\n_emphasized_\n", UnsupportedConstruct.EMPHASIS),
+        (b"# Handbook\n\n___\n", UnsupportedConstruct.FRONTMATTER_OR_RULE),
+        (b"# Handbook\n\n***\n", UnsupportedConstruct.FRONTMATTER_OR_RULE),
+        (b"# Handbook\n\n* * *\n", UnsupportedConstruct.FRONTMATTER_OR_RULE),
         (b"# Handbook\n\n<span>html</span>\n", UnsupportedConstruct.HTML),
+        (b"# Handbook\n\n&lt;escaped&gt;\n", UnsupportedConstruct.ENTITY),
+        (b"# Handbook\n\nescaped\\*text\n", UnsupportedConstruct.ESCAPE),
+        (b"# *Handbook*\n\nParagraph.\n", UnsupportedConstruct.EMPHASIS),
     ],
 )
 def test_other_out_of_scope_constructs_fail_closed(
@@ -191,6 +215,51 @@ def test_other_out_of_scope_constructs_fail_closed(
     assert type(outcome) is CompilationFailure
     assert outcome.code is CompilationFailureCode.UNSUPPORTED_CONSTRUCT
     assert outcome.construct is construct
+
+
+@pytest.mark.parametrize(
+    "markdown",
+    [
+        b"#  \n\nParagraph.\n",
+        b"# Handbook\n\n   \n",
+        b"# Handbook  \n\nParagraph.\n",
+        b"# Handbook\n\n Paragraph.\n",
+        b"# Handbook\n\nParagraph. \n",
+    ],
+)
+def test_whitespace_is_not_silently_canonicalized_as_content(
+    markdown: bytes,
+) -> None:
+    outcome = compile_markdown(markdown, CONFIG)
+
+    assert type(outcome) is CompilationFailure
+
+
+def test_pipe_in_plain_single_line_paragraph_is_not_a_table() -> None:
+    outcome = compile_markdown(b"# Handbook\n\nA | B\n", CONFIG)
+
+    assert type(outcome) is ParsedDocument
+    assert outcome.sections[1].text == "A | B"
+
+
+def test_backslash_before_non_punctuation_remains_plain_text() -> None:
+    outcome = compile_markdown(b"# Handbook\n\nC:\\Users\n", CONFIG)
+
+    assert type(outcome) is ParsedDocument
+    assert outcome.sections[1].text == r"C:\Users"
+
+
+def test_source_span_rejects_inconsistent_coordinate_order() -> None:
+    with pytest.raises(ValueError, match="must not precede"):
+        SourceSpan(
+            start=SourcePoint(line=2, column=1, byte_offset=0),
+            end=SourcePoint(line=1, column=2, byte_offset=1),
+        )
+    with pytest.raises(ValueError, match="must not precede"):
+        SourceSpan(
+            start=SourcePoint(line=1, column=2, byte_offset=1),
+            end=SourcePoint(line=1, column=1, byte_offset=2),
+        )
 
 
 def test_unicode_columns_and_canonical_utf8_byte_offsets_are_distinct() -> None:
@@ -245,7 +314,9 @@ sys.stdout.buffer.write(canonicalize_parsed_document(result))
     )
 
 
-def test_compiler_module_has_no_io_or_outer_layer_dependencies() -> None:
+def test_compiler_module_has_no_io_or_outer_layer_dependencies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     module = Path(__file__).parents[2] / "adapters/parsers/markdown.py"
     tree = ast.parse(module.read_text(encoding="utf-8"))
     imports: set[str] = set()
@@ -265,3 +336,33 @@ def test_compiler_module_has_no_io_or_outer_layer_dependencies() -> None:
         "typing",
         "rfc8785",
     }
+    forbidden_calls = {
+        node.func.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    } & {"__import__", "compile", "eval", "exec", "open"}
+    assert forbidden_calls == set()
+
+    calls: list[str] = []
+
+    def reject(name: str) -> None:
+        calls.append(name)
+        raise AssertionError(f"compiler performed forbidden I/O: {name}")
+
+    monkeypatch.setattr(builtins, "open", lambda *args, **kwargs: reject("open"))
+    monkeypatch.setattr(Path, "open", lambda *args, **kwargs: reject("Path.open"))
+    monkeypatch.setattr(Path, "read_bytes", lambda *args, **kwargs: reject("read"))
+    monkeypatch.setattr(socket, "socket", lambda *args, **kwargs: reject("socket"))
+    monkeypatch.setattr(
+        urllib.request,
+        "urlopen",
+        lambda *args, **kwargs: reject("urlopen"),
+    )
+
+    outcome = compile_markdown(
+        b"# Handbook\n\nContextEngine delivers context.\n",
+        CONFIG,
+    )
+
+    assert type(outcome) is ParsedDocument
+    assert calls == []

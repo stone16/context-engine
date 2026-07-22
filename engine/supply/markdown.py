@@ -79,7 +79,10 @@ class SourceSpan:
     def __post_init__(self) -> None:
         if type(self.start) is not SourcePoint or type(self.end) is not SourcePoint:
             raise TypeError("source span requires exact SourcePoint values")
-        if self.end.byte_offset < self.start.byte_offset:
+        if (
+            self.end.byte_offset < self.start.byte_offset
+            or (self.end.line, self.end.column) < (self.start.line, self.start.column)
+        ):
             raise ValueError("source span end must not precede its start")
 
 
@@ -116,7 +119,13 @@ class ParsedSection:
     def __post_init__(self) -> None:
         if type(self.kind) is not SectionKind:
             raise TypeError("parsed section kind must be SectionKind")
-        if type(self.text) is not str or not self.text or "\n" in self.text:
+        if (
+            type(self.text) is not str
+            or not self.text
+            or self.text.isspace()
+            or self.text != self.text.strip()
+            or "\n" in self.text
+        ):
             raise ValueError("parsed section text must be one nonblank line")
         if type(self.path) is not StructuralPath:
             raise TypeError("parsed section path must be StructuralPath")
@@ -256,12 +265,16 @@ class UnsupportedConstruct(StrEnum):
     CODE_BLOCK = "code_block"
     CONTROL_CHARACTER = "control_character"
     EMPHASIS = "emphasis"
+    ENTITY = "entity"
+    ESCAPE = "escape"
     FRONTMATTER_OR_RULE = "frontmatter_or_rule"
+    HARD_BREAK = "hard_break"
     HTML = "html"
     INLINE_CODE = "inline_code"
     LINK_OR_IMAGE = "link_or_image"
     LIST = "list"
     NESTED_HEADING = "nested_heading"
+    STRIKETHROUGH = "strikethrough"
     TABLE = "table"
 
 
@@ -387,7 +400,12 @@ def _validate_issue_22_content(
     lines = canonical_text.removesuffix("\n").split("\n")
     if len(lines) != 3 or lines[1] != "" or not lines[2]:
         raise ValueError("canonical Markdown must contain the supported shape")
-    if not lines[0].startswith("# ") or not lines[0][2:]:
+    if (
+        not lines[0].startswith("# ")
+        or not lines[0][2:]
+        or lines[0][2:] != lines[0][2:].strip()
+        or lines[2] != lines[2].strip()
+    ):
         raise ValueError("canonical Markdown must contain a level-one heading")
     heading_line = lines[0]
     paragraph_line = lines[2]
