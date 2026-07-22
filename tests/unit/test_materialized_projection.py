@@ -50,6 +50,13 @@ class RecordingProjectionPort:
         self.locator_calls: list[CandidateRef] = []
         self.projection_calls: list[MaterializedFragmentLocator] = []
 
+    def discover_exact_phrase(self, phrase_digest: str) -> tuple[CandidateRef, ...]:
+        del phrase_digest
+        return ()
+
+    def observe_publication(self, candidate_ref: CandidateRef) -> None:
+        del candidate_ref
+
     def locate(
         self,
         selected_candidate: CandidateRef,

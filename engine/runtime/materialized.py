@@ -19,6 +19,7 @@ __all__ = [
     "MaterializedProjectionKind",
     "MaterializedProjectionPort",
     "MaterializedProjectionSession",
+    "MaterializedPublicationTrace",
 ]
 
 _STRUCTURED_FIELD_LINE_BREAKS: Final = frozenset(
@@ -179,8 +180,31 @@ class MaterializedFragmentLocator:
             )
 
 
+@dataclass(frozen=True, slots=True)
+class MaterializedPublicationTrace:
+    """Authorized, content-free observation of one active publication lineage."""
+
+    states: tuple[str, ...]
+    active_revision_ref: str
+
+    def __post_init__(self) -> None:
+        if self.states != ("prepared", "indexed", "active"):
+            raise ValueError("publication trace must have the closed initial sequence")
+        _require_nonblank_ref("active revision ref", self.active_revision_ref)
+
+
 class MaterializedProjectionPort(Protocol):
     """Narrow operations executed by the owning current database transaction."""
+
+    def discover_exact_phrase(
+        self,
+        phrase_digest: str,
+    ) -> tuple[CandidateRef, ...]: ...
+
+    def observe_publication(
+        self,
+        candidate_ref: CandidateRef,
+    ) -> MaterializedPublicationTrace | None: ...
 
     def locate(
         self,
@@ -277,8 +301,11 @@ def _construct_materialized_projection_session(
             "materialized projection requires an active materialized projection "
             "scope"
         )
-    if not callable(getattr(port, "locate", None)) or not callable(
-        getattr(port, "project", None)
+    if (
+        not callable(getattr(port, "locate", None))
+        or not callable(getattr(port, "project", None))
+        or not callable(getattr(port, "discover_exact_phrase", None))
+        or not callable(getattr(port, "observe_publication", None))
     ):
         raise TypeError("materialized projection port is incomplete")
     session = object.__new__(MaterializedProjectionSession)
@@ -298,6 +325,40 @@ def _locate_materialized_fragment(
     if locator is not None and type(locator) is not MaterializedFragmentLocator:
         raise TypeError("materialized locator port returned the wrong nominal type")
     return locator
+
+
+def _discover_materialized_exact_phrase(
+    session: MaterializedProjectionSession,
+    phrase_digest: str,
+) -> tuple[CandidateRef, ...]:
+    """Discover content-free lineage on the retained current-UserActor transaction."""
+
+    _require_active_materialized_projection_session(session)
+    if type(phrase_digest) is not str or not phrase_digest:
+        raise ValueError("exact phrase digest must be nonblank")
+    candidates = session._port.discover_exact_phrase(phrase_digest)
+    if type(candidates) is not tuple or any(
+        type(candidate) is not CandidateRef for candidate in candidates
+    ):
+        raise TypeError(
+            "materialized exact discovery must return exact CandidateRef values"
+        )
+    return candidates
+
+
+def _observe_materialized_publication(
+    session: MaterializedProjectionSession,
+    candidate_ref: CandidateRef,
+) -> MaterializedPublicationTrace | None:
+    """Read initial publication state on the current UserActor transaction."""
+
+    _require_active_materialized_projection_session(session)
+    if type(candidate_ref) is not CandidateRef:
+        raise TypeError("publication observation requires CandidateRef")
+    observed = session._port.observe_publication(candidate_ref)
+    if observed is not None and type(observed) is not MaterializedPublicationTrace:
+        raise TypeError("publication observation returned the wrong nominal type")
+    return observed
 
 
 def _project_materialized_fragment(

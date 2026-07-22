@@ -1,6 +1,14 @@
 """Public Supply domain contracts."""
 
+from engine.control.file_imports import (
+    FileImportAudience,
+    FileImportPath,
+    FileImportReceiver,
+    PreparedFileImport,
+    PrepareFileImport,
+)
 from engine.supply.jobs import (
+    FILE_IMPORT_WORKER_LEASE_OPERATION,
     WORKER_LEASE_ACTOR_KIND,
     WORKER_LEASE_OPERATION,
     WorkerLeaseClaims,
@@ -49,9 +57,15 @@ __all__ = [
     "CompilationProvenance",
     "CompilationWarning",
     "CompilationWarningCode",
+    "FileImportAudience",
+    "FileImportPath",
+    "FileImportReceiver",
+    "FILE_IMPORT_WORKER_LEASE_OPERATION",
     "MarkdownCompilerConfig",
     "ParsedDocument",
     "ParsedSection",
+    "PrepareFileImport",
+    "PreparedFileImport",
     "SectionKind",
     "SourcePoint",
     "SourceSpan",

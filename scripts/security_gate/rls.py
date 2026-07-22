@@ -24,6 +24,10 @@ NON_OWNER_EVIDENCE_BY_TABLE: Mapping[str, str] = {
     "context_resource": "PG-INDEX-NOT-AUTHORITY-005",
     "context_revision": "PG-INDEX-NOT-AUTHORITY-005",
     "context_fragment": "PG-INDEX-NOT-AUTHORITY-005",
+    "exact_phrase_candidate": "PG-FILE-IMPORT-023",
+    "file_acquisition": "PG-FILE-IMPORT-023",
+    "file_import_job": "PG-FILE-IMPORT-023",
+    "file_revision_snapshot": "PG-FILE-IMPORT-023",
     "organization_policy_epoch": "PG-REVOCATION-006",
     "resource_access_policy": "PG-REVOCATION-006",
     "context_run": "PG-TRACE-REDACTION-012",
@@ -40,6 +44,7 @@ NON_OWNER_EVIDENCE_BY_TABLE: Mapping[str, str] = {
     "release_operator_grant": "PG-RELEASE-OWNER-019",
     "active_release_manifest": "PG-RELEASE-OWNER-019",
     "release_promotion_audit": "PG-RELEASE-OWNER-019",
+    "revision_publication_event": "PG-FILE-IMPORT-023",
 }
 
 _SQL_TOKEN = re.compile(

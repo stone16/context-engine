@@ -32,7 +32,7 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
     document = manifest()
     tables = table_entries(document)
 
-    assert document["manifestVersion"] == "10.0.0"
+    assert document["manifestVersion"] == "11.0.0"
     assert set(tables) == {
         "active_release_manifest",
         "alembic_version",
@@ -44,6 +44,10 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
         "context_run_operator_read_ticket",
         "context_source",
         "decision_audit",
+        "exact_phrase_candidate",
+        "file_acquisition",
+        "file_import_job",
+        "file_revision_snapshot",
         "membership",
         "membership_resource_field_right",
         "organization",
@@ -54,6 +58,7 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
         "release_manifest",
         "release_operator_grant",
         "release_promotion_audit",
+        "revision_publication_event",
         "resource_access_policy",
         "service_principal",
         "source_version",
@@ -83,6 +88,14 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
     assert tables["worker_noop_job"]["classification"] == "tenant_owned"
     assert tables["context_source"]["classification"] == "tenant_owned"
     assert tables["source_version"]["classification"] == "tenant_owned"
+    for file_import_table in (
+        "exact_phrase_candidate",
+        "file_acquisition",
+        "file_import_job",
+        "file_revision_snapshot",
+        "revision_publication_event",
+    ):
+        assert tables[file_import_table]["classification"] == "tenant_owned"
     for release_table in (
         "active_release_manifest",
         "release_candidate",
@@ -142,7 +155,7 @@ def test_issue_21_file_source_manifest_is_closed_and_role_separated() -> None:
     capability_constraint = next(
         constraint
         for constraint in version["checkConstraints"]
-        if constraint["name"] == "ck_source_version_issue_21_capabilities"
+        if constraint["name"] == "ck_source_version_file_capabilities"
     )
     assert "materialized" in capability_constraint["expression"]
     assert "markdown" in capability_constraint["expression"]
@@ -164,16 +177,36 @@ def test_issue_21_file_source_manifest_is_closed_and_role_separated() -> None:
     assert "\"describeCapabilities\": \"unavailable\"" in (
         capability_constraint["expression"]
     )
-    assert capability_constraint["expression"].count("unavailable") == 13
+    assert '"declarationVersion": "file-capabilities-v1"' in (
+        capability_constraint["expression"]
+    )
+    assert '"declarationVersion": "file-capabilities-v2"' in (
+        capability_constraint["expression"]
+    )
+    assert '"fileSourceAccess": "available"' in (
+        capability_constraint["expression"]
+    )
+    assert '"ingestionJobs": "available"' in (
+        capability_constraint["expression"]
+    )
 
+    assert source["permittedOperations"] == {
+        "context_engine_control": ["SELECT", "INSERT"],
+        "context_engine_learning": [],
+        "context_engine_runtime": [],
+        "context_engine_security_operator": [],
+        "context_engine_worker": [],
+        "context_engine_worker_lease_definer": ["SELECT", "UPDATE"],
+    }
+    assert version["permittedOperations"] == {
+        "context_engine_control": ["SELECT", "INSERT"],
+        "context_engine_learning": [],
+        "context_engine_runtime": [],
+        "context_engine_security_operator": [],
+        "context_engine_worker": [],
+        "context_engine_worker_lease_definer": ["SELECT", "INSERT"],
+    }
     for entry in (source, version):
-        assert entry["permittedOperations"] == {
-            "context_engine_control": ["SELECT", "INSERT"],
-            "context_engine_learning": [],
-            "context_engine_runtime": [],
-            "context_engine_security_operator": [],
-            "context_engine_worker": [],
-        }
         assert entry["rowLevelSecurity"]["enabled"] is True
         assert entry["rowLevelSecurity"]["forced"] is True
 
@@ -525,6 +558,7 @@ def test_worker_lease_manifest_requires_exact_receiver_and_job() -> None:
         "ck_service_principal_worker_audience_bounds",
         "ck_service_principal_worker_audience_issue17",
         "ck_service_principal_operation_noop_complete",
+        "ck_service_principal_workload_operation_binding",
     }
     assert {constraint["name"] for constraint in job["checkConstraints"]} == {
         "ck_worker_noop_job_workload_bounds",
@@ -689,6 +723,7 @@ def test_membership_manifest_requires_exact_user_actor_and_read_only_runtime() -
     assert entry["permittedOperations"] == {
         "context_engine_runtime": ["SELECT"],
         "context_engine_worker": [],
+        "context_engine_worker_lease_definer": ["SELECT"],
     }
 
     rls = entry["rowLevelSecurity"]
@@ -917,11 +952,19 @@ def test_content_manifest_preserves_lineage_visibility_and_immutability() -> Non
         },
     }
 
+    expected_definer_operations = {
+        "context_resource": ["SELECT", "INSERT", "UPDATE"],
+        "context_revision": ["INSERT"],
+        "context_fragment": ["INSERT"],
+    }
     for entry in (resource, revision, fragment):
         assert entry["organizationColumn"] == "organization_id"
         assert entry["permittedOperations"] == {
             "context_engine_runtime": ["SELECT"],
             "context_engine_worker": [],
+            "context_engine_worker_lease_definer": expected_definer_operations[
+                entry["name"]
+            ],
         }
         rls = entry["rowLevelSecurity"]
         assert rls["enabled"] is True
@@ -1089,10 +1132,13 @@ def test_content_manifest_preserves_lineage_visibility_and_immutability() -> Non
 
     for entry in (field, right):
         assert entry["organizationColumn"] == "organization_id"
-        assert entry["permittedOperations"] == {
+        expected_operations = {
             "context_engine_runtime": ["SELECT"],
             "context_engine_worker": [],
         }
+        if entry["name"] == "membership_resource_field_right":
+            expected_operations["context_engine_worker_lease_definer"] = ["INSERT"]
+        assert entry["permittedOperations"] == expected_operations
         rls = entry["rowLevelSecurity"]
         assert rls["enabled"] is True
         assert rls["forced"] is True
@@ -1204,12 +1250,15 @@ def test_policy_epoch_manifest_seals_runtime_reads_and_control_mutation() -> Non
 
     for entry in (epoch, access):
         assert entry["organizationColumn"] == "organization_id"
-        assert entry["permittedOperations"] == {
+        expected_operations = {
             "context_engine_access_policy_definer": ["SELECT", "UPDATE"],
             "context_engine_control": ["EXECUTE change_resource_access"],
             "context_engine_runtime": ["SELECT"],
             "context_engine_worker": [],
         }
+        if entry["name"] == "resource_access_policy":
+            expected_operations["context_engine_worker_lease_definer"] = ["INSERT"]
+        assert entry["permittedOperations"] == expected_operations
         rls = entry["rowLevelSecurity"]
         assert rls["enabled"] is True
         assert rls["forced"] is True

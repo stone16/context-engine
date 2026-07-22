@@ -39,6 +39,13 @@ class StructuredProjectionPort:
         self.projection = projection
         self.calls: list[MaterializedFragmentLocator] = []
 
+    def discover_exact_phrase(self, phrase_digest: str) -> tuple[()]:
+        del phrase_digest
+        return ()
+
+    def observe_publication(self, candidate_ref: object) -> None:
+        del candidate_ref
+
     def locate(self, candidate_ref: object) -> MaterializedFragmentLocator:
         del candidate_ref
         return locator()

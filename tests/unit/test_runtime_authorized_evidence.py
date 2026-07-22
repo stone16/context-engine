@@ -138,8 +138,10 @@ class HostileCandidateIndex:
         self.ranked = ranked
         self.calls = 0
 
-    def discover(self, request: Acquire) -> tuple[CandidateRef, ...]:
-        del request
+    def discover(
+        self, request: Acquire, projection_session: object
+    ) -> tuple[CandidateRef, ...]:
+        del request, projection_session
         self.calls += 1
         return self.ranked
 
@@ -154,6 +156,13 @@ class RecordingMaterializedPort:
             DENIED: "DENIED-BODY-MUST-NEVER-BE-READ",
             CROSS_ORGANIZATION: "CROSS-ORG-BODY-MUST-NEVER-BE-READ",
         }
+
+    def discover_exact_phrase(self, phrase_digest: str) -> tuple[()]:
+        del phrase_digest
+        return ()
+
+    def observe_publication(self, candidate_ref: CandidateRef) -> None:
+        del candidate_ref
 
     def locate(
         self,

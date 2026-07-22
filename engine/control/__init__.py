@@ -11,6 +11,7 @@ from engine.control.authority import (
 )
 from engine.control.contracts import (
     FILE_CAPABILITY_MANIFEST,
+    FILE_IMPORT_CAPABILITY_MANIFEST,
     CapabilityStatus,
     FileCapabilityManifest,
     FileRootRef,
@@ -26,10 +27,18 @@ from engine.control.contracts import (
     SourceResourceKind,
     SourceVersion,
 )
+from engine.control.file_imports import (
+    FileImportAudience,
+    FileImportPath,
+    FileImportReceiver,
+    PreparedFileImport,
+    PrepareFileImport,
+)
 from engine.control.module import ContextControl, ControlStorePort
 
 __all__ = [
     "FILE_CAPABILITY_MANIFEST",
+    "FILE_IMPORT_CAPABILITY_MANIFEST",
     "CapabilityStatus",
     "ContextControl",
     "ControlOperation",
@@ -39,8 +48,13 @@ __all__ = [
     "ControlOperatorAuthorityUnavailable",
     "ControlStorePort",
     "FileCapabilityManifest",
+    "FileImportAudience",
+    "FileImportPath",
+    "FileImportReceiver",
     "FileRootRef",
     "RegisterFileSource",
+    "PrepareFileImport",
+    "PreparedFileImport",
     "SourceAclEvidenceMode",
     "SourceControlUnavailable",
     "SourceContentKind",

@@ -11,6 +11,7 @@ import pytest
 
 import engine.supply as supply
 from engine.supply import (
+    FILE_IMPORT_WORKER_LEASE_OPERATION,
     WORKER_LEASE_OPERATION,
     WorkerLeaseClaims,
     WorkerLeaseCodec,
@@ -175,7 +176,7 @@ def test_wrong_binding_not_yet_valid_and_expired_are_generic(
 def test_unknown_signing_key_version_is_generic() -> None:
     token = _codec(version=8).mint(_claims(signing_key_version=8))
 
-    with pytest.raises(WorkNotAvailable, match="^work not available$"):
+    with pytest.raises(WorkNotAvailable, match=r"^work not available$"):
         _codec().verify(token, **_verification_arguments())  # type: ignore[arg-type]
 
 
@@ -226,6 +227,52 @@ def test_token_uses_one_exact_protected_header_and_fixed_claim_set() -> None:
         "worker_audience": "context-engine:supply-worker",
         "workload": "supply.noop",
     }
+
+
+def test_file_import_lease_uses_a_distinct_version_and_exact_source_binding() -> None:
+    codec = _codec()
+    token = codec.mint(
+        _claims(
+            workload="supply.file-import",
+            operation=FILE_IMPORT_WORKER_LEASE_OPERATION,
+            source_ref="source:handbook",
+        )
+    )
+
+    header, payload = _decoded_token(token)
+
+    assert header["v"] == 2
+    assert payload["operation"] == "file.import"
+    assert payload["source_ref"] == "source:handbook"
+    assert codec.verify(
+        token,
+        **_verification_arguments(
+            expected_workload="supply.file-import",
+            expected_operation=FILE_IMPORT_WORKER_LEASE_OPERATION,
+            expected_source_ref="source:handbook",
+        ),  # type: ignore[arg-type]
+    ).source_ref == "source:handbook"
+
+
+def test_file_import_lease_rejects_a_wrong_source_generically() -> None:
+    codec = _codec()
+    token = codec.mint(
+        _claims(
+            workload="supply.file-import",
+            operation=FILE_IMPORT_WORKER_LEASE_OPERATION,
+            source_ref="source:handbook",
+        )
+    )
+
+    with pytest.raises(WorkNotAvailable, match="^work not available$"):
+        codec.verify(
+            token,
+            **_verification_arguments(
+                expected_workload="supply.file-import",
+                expected_operation=FILE_IMPORT_WORKER_LEASE_OPERATION,
+                expected_source_ref="source:other",
+            ),  # type: ignore[arg-type]
+        )
 
 
 @pytest.mark.parametrize(

@@ -35,6 +35,8 @@ from engine.runtime.materialized import (
     MaterializedFragmentLocator,
     MaterializedFragmentProjection,
     MaterializedProjectionKind,
+    MaterializedProjectionSession,
+    MaterializedPublicationTrace,
     _close_materialized_projection_scope,
     _construct_materialized_projection_session,
     _open_materialized_projection_scope,
@@ -137,6 +139,76 @@ class _PostgreSQLMaterializedProjectionPort:
 
     def __init__(self, connection: Connection) -> None:
         self._connection = connection
+
+    def discover_exact_phrase(
+        self,
+        phrase_digest: str,
+    ) -> tuple[CandidateRef, ...]:
+        rows = self._connection.execute(
+            text(
+                """
+                SELECT
+                    organization_id,
+                    source_ref,
+                    resource_ref,
+                    revision_id,
+                    fragment_ref
+                FROM exact_phrase_candidate
+                WHERE phrase_digest = :phrase_digest
+                ORDER BY resource_ref, revision_id, fragment_ref
+                """
+            ),
+            {"phrase_digest": phrase_digest},
+        )
+        return tuple(
+            CandidateRef(
+                organization_id=row.organization_id,
+                source_ref=row.source_ref,
+                resource_ref=row.resource_ref,
+                revision_ref=str(row.revision_id),
+                fragment_ref=row.fragment_ref,
+            )
+            for row in rows
+        )
+
+    def observe_publication(
+        self,
+        candidate_ref: CandidateRef,
+    ) -> MaterializedPublicationTrace | None:
+        revision_id = _canonical_candidate_revision(candidate_ref.revision_ref)
+        if revision_id is None:
+            return None
+        row = self._connection.execute(
+            text(
+                """
+                SELECT
+                    resource.active_revision_id,
+                    array_agg(event.state ORDER BY event.ordinal) AS states
+                FROM context_resource AS resource
+                JOIN revision_publication_event AS event
+                  ON event.organization_id = resource.organization_id
+                 AND event.resource_ref = resource.resource_ref
+                 AND event.revision_id = resource.active_revision_id
+                WHERE resource.organization_id = :organization_id
+                  AND resource.source_ref = :source_ref
+                  AND resource.resource_ref = :resource_ref
+                  AND resource.active_revision_id = :revision_id
+                GROUP BY resource.active_revision_id
+                """
+            ),
+            {
+                "organization_id": candidate_ref.organization_id,
+                "source_ref": candidate_ref.source_ref,
+                "resource_ref": candidate_ref.resource_ref,
+                "revision_id": revision_id,
+            },
+        ).one_or_none()
+        if row is None:
+            return None
+        return MaterializedPublicationTrace(
+            states=tuple(row.states),
+            active_revision_ref=str(row.active_revision_id),
+        )
 
     def locate(
         self,
@@ -465,6 +537,21 @@ class PostgreSQLMembershipAuthority:
 
     def __init__(self, engine: Engine) -> None:
         self._engine = engine
+
+    @contextmanager
+    def current_projection_session(
+        self,
+        identity: MembershipIdentity,
+    ) -> Iterator[MaterializedProjectionSession]:
+        """Expose the retained authorized projection seam to trusted callers."""
+
+        with self.current_user_actor(identity) as verification:
+            session = verification.materialized_projection_session
+            if session is None:  # pragma: no cover - closed PostgreSQL composition
+                raise MembershipAuthorityUnavailable(
+                    "materialized projection session is unavailable"
+                )
+            yield session
 
     @contextmanager
     def current_user_actor(

@@ -73,7 +73,7 @@ class CapabilityStatus(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class FileCapabilityManifest:
-    """Exact Issue #21 declaration; registration is not acquisition readiness."""
+    """Immutable File capability snapshot for registration or manual import."""
 
     declaration_version: str = "file-capabilities-v1"
     source_mode: SourceMode = SourceMode.MATERIALIZED
@@ -98,33 +98,47 @@ class FileCapabilityManifest:
     ingestion_jobs: CapabilityStatus = CapabilityStatus.UNAVAILABLE
 
     def __post_init__(self) -> None:
+        unavailable_statuses = (
+            self.cursor_semantics,
+            self.checkpoint_semantics,
+            self.batch_limits,
+            self.freshness,
+            self.consistency_guarantees,
+            self.describe_capabilities,
+            self.read_changes,
+            self.discover,
+            self.authorize_and_project,
+            self.checkpoint,
+            self.deletion,
+        )
         if (
-            self.declaration_version != "file-capabilities-v1"
-            or self.source_mode is not SourceMode.MATERIALIZED
+            self.source_mode is not SourceMode.MATERIALIZED
             or self.content_kinds != (SourceContentKind.MARKDOWN,)
             or self.resource_kinds != (SourceResourceKind.MARKDOWN_DOCUMENT,)
             or self.acl_evidence_mode is not SourceAclEvidenceMode.MIRRORED
             or self.projection_fields != ()
             or any(
                 status is not CapabilityStatus.UNAVAILABLE
-                for status in (
-                    self.cursor_semantics,
-                    self.checkpoint_semantics,
-                    self.batch_limits,
-                    self.freshness,
-                    self.consistency_guarantees,
-                    self.describe_capabilities,
-                    self.read_changes,
-                    self.discover,
-                    self.authorize_and_project,
-                    self.checkpoint,
-                    self.deletion,
-                    self.file_source_access,
-                    self.ingestion_jobs,
+                for status in unavailable_statuses
+            )
+            or (
+                self.declaration_version == "file-capabilities-v1"
+                and (
+                    self.file_source_access is not CapabilityStatus.UNAVAILABLE
+                    or self.ingestion_jobs is not CapabilityStatus.UNAVAILABLE
                 )
             )
+            or (
+                self.declaration_version == "file-capabilities-v2"
+                and (
+                    self.file_source_access is not CapabilityStatus.AVAILABLE
+                    or self.ingestion_jobs is not CapabilityStatus.AVAILABLE
+                )
+            )
+            or self.declaration_version
+            not in {"file-capabilities-v1", "file-capabilities-v2"}
         ):
-            raise ValueError("File capability manifest is closed at Issue #21")
+            raise ValueError("File capability manifest is not a recognized snapshot")
 
     def document(self) -> dict[str, object]:
         """Return the exact persisted/public declaration without activation claims."""
@@ -153,6 +167,11 @@ class FileCapabilityManifest:
 
 
 FILE_CAPABILITY_MANIFEST = FileCapabilityManifest()
+FILE_IMPORT_CAPABILITY_MANIFEST = FileCapabilityManifest(
+    declaration_version="file-capabilities-v2",
+    file_source_access=CapabilityStatus.AVAILABLE,
+    ingestion_jobs=CapabilityStatus.AVAILABLE,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -261,6 +280,38 @@ class SourceManifest:
         _require_utc("SourceManifest created_at", self.created_at)
 
     @classmethod
+    def registered_file(
+        cls,
+        *,
+        source_ref: SourceRef,
+        version_ref: UUID,
+        display_name: str,
+        root_ref: FileRootRef,
+        created_at: datetime,
+        version_created_at: datetime | None = None,
+        capabilities: FileCapabilityManifest = FILE_CAPABILITY_MANIFEST,
+    ) -> SourceManifest:
+        """Construct the exact first File manifest from trusted stored facts."""
+
+        version = SourceVersion(
+            source_ref=source_ref,
+            version_ref=version_ref,
+            kind=SourceKind.FILE,
+            root_ref=root_ref,
+            capabilities=capabilities,
+            created_at=(
+                created_at if version_created_at is None else version_created_at
+            ),
+        )
+        return cls(
+            source_ref=source_ref,
+            display_name=display_name,
+            kind=SourceKind.FILE,
+            active_version=version,
+            created_at=created_at,
+        )
+
+    @classmethod
     def issue_21_file(
         cls,
         *,
@@ -270,21 +321,13 @@ class SourceManifest:
         root_ref: FileRootRef,
         created_at: datetime,
     ) -> SourceManifest:
-        """Construct the exact first File manifest from trusted stored facts."""
+        """Construct the original registration-only v1 snapshot."""
 
-        version = SourceVersion(
+        return cls.registered_file(
             source_ref=source_ref,
             version_ref=version_ref,
-            kind=SourceKind.FILE,
-            root_ref=root_ref,
-            capabilities=FILE_CAPABILITY_MANIFEST,
-            created_at=created_at,
-        )
-        return cls(
-            source_ref=source_ref,
             display_name=display_name,
-            kind=SourceKind.FILE,
-            active_version=version,
+            root_ref=root_ref,
             created_at=created_at,
         )
 

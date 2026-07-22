@@ -33,6 +33,12 @@ from engine.persistence.context_runs import (
 )
 from engine.persistence.control_sources import PostgreSQLControlStore
 from engine.persistence.database import create_database_engine
+from engine.persistence.file_imports import (
+    FileImportLeaseRedemption,
+    FileImportUnavailable,
+    PostgreSQLFileImportWorker,
+    PublishedFileImport,
+)
 from engine.persistence.membership_context import (
     MembershipAuthorityUnavailable,
     MembershipIdentity,
@@ -92,6 +98,10 @@ __all__ = [
     "OperatorAuthorizationProvenance",
     "PostgreSQLContextRunReader",
     "PostgreSQLControlStore",
+    "FileImportLeaseRedemption",
+    "FileImportUnavailable",
+    "PostgreSQLFileImportWorker",
+    "PublishedFileImport",
     "VerifiedContextRunOperatorIdentity",
     "ResourceAccessRevocation",
     "OrganizationContextBindingError",

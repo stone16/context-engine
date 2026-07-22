@@ -18,9 +18,11 @@ from uuid import UUID
 
 WORKER_LEASE_ACTOR_KIND: Final = "service"
 WORKER_LEASE_OPERATION: Final = "noop.complete"
+FILE_IMPORT_WORKER_LEASE_OPERATION: Final = "file.import"
 _ALGORITHM: Final = "HS256"
 _TOKEN_TYPE: Final = "CE-WorkerLease"
 _TOKEN_VERSION: Final = 1
+_FILE_IMPORT_TOKEN_VERSION: Final = 2
 _DOMAIN: Final = "context-engine.worker-lease"
 _MAX_KEY_VERSION: Final = (1 << 63) - 1
 _MINIMUM_SECRET_BYTES: Final = 32
@@ -42,6 +44,7 @@ _CLAIM_FIELDS: Final = frozenset(
         "workload",
     }
 )
+_FILE_IMPORT_CLAIM_FIELDS: Final = _CLAIM_FIELDS | frozenset({"source_ref"})
 
 
 def _require_key_version(value: object) -> int:
@@ -95,11 +98,10 @@ class WorkerLeaseClaims:
     issued_at: datetime = field(repr=False)
     expires_at: datetime = field(repr=False)
     nonce: bytes = field(repr=False)
+    operation: str = field(default=WORKER_LEASE_OPERATION, repr=False)
+    source_ref: str | None = field(default=None, repr=False)
     actor_kind: Literal["service"] = field(
         default=WORKER_LEASE_ACTOR_KIND, init=False, repr=False
-    )
-    operation: Literal["noop.complete"] = field(
-        default=WORKER_LEASE_OPERATION, init=False, repr=False
     )
 
     def __post_init__(self) -> None:
@@ -117,6 +119,16 @@ class WorkerLeaseClaims:
             raise ValueError("WorkerLease expiry must follow issuance")
         if type(self.nonce) is not bytes or len(self.nonce) != _NONCE_BYTES:
             raise ValueError("WorkerLease nonce must contain exactly 256 bits")
+        if self.operation not in {
+            WORKER_LEASE_OPERATION,
+            FILE_IMPORT_WORKER_LEASE_OPERATION,
+        }:
+            raise ValueError("WorkerLease operation must be closed")
+        if self.operation == WORKER_LEASE_OPERATION:
+            if self.source_ref is not None:
+                raise ValueError("no-op WorkerLease cannot bind a source")
+        else:
+            _require_identifier("source_ref", self.source_ref, maximum_length=255)
 
     def __reduce__(self) -> NoReturn:
         raise TypeError("WorkerLeaseClaims are not serializable")
@@ -257,7 +269,7 @@ def _timestamp(value: datetime) -> str:
 
 
 def _claims_document(claims: WorkerLeaseClaims) -> dict[str, object]:
-    return {
+    document: dict[str, object] = {
         "actor_kind": claims.actor_kind,
         "expires_at": _timestamp(claims.expires_at),
         "issued_at": _timestamp(claims.issued_at),
@@ -270,6 +282,9 @@ def _claims_document(claims: WorkerLeaseClaims) -> dict[str, object]:
         "worker_audience": claims.worker_audience,
         "workload": claims.workload,
     }
+    if claims.operation == FILE_IMPORT_WORKER_LEASE_OPERATION:
+        document["source_ref"] = claims.source_ref
+    return document
 
 
 class WorkerLeaseCodec:
@@ -296,12 +311,17 @@ class WorkerLeaseCodec:
         key = self._keyring._key_for(claims.signing_key_version)
         if key is None:  # pragma: no cover - keyring construction proves this
             raise ValueError("active WorkerLease signing key is unavailable")
+        token_version = (
+            _TOKEN_VERSION
+            if claims.operation == WORKER_LEASE_OPERATION
+            else _FILE_IMPORT_TOKEN_VERSION
+        )
         header = {
             "alg": _ALGORITHM,
             "dom": _DOMAIN,
             "kid": claims.signing_key_version,
             "typ": _TOKEN_TYPE,
-            "v": _TOKEN_VERSION,
+            "v": token_version,
         }
         encoded_header = _base64url_encode(_canonical_json(header))
         encoded_claims = _base64url_encode(_canonical_json(_claims_document(claims)))
@@ -319,9 +339,10 @@ class WorkerLeaseCodec:
         expected_job_id: UUID,
         expected_service_principal_id: UUID,
         expected_workload: str,
-        expected_operation: Literal["noop.complete"],
+        expected_operation: str,
         expected_worker_audience: str,
         now: datetime,
+        expected_source_ref: str | None = None,
     ) -> WorkerLeaseClaims:
         if type(token) is not WorkerLeaseToken:
             raise TypeError("token must be WorkerLeaseToken")
@@ -336,6 +357,19 @@ class WorkerLeaseCodec:
             expected_worker_audience,
             maximum_length=255,
         )
+        if expected_operation not in {
+            WORKER_LEASE_OPERATION,
+            FILE_IMPORT_WORKER_LEASE_OPERATION,
+        }:
+            raise WorkNotAvailable(
+                WorkerLeaseRejectionAuditReceipt(worker_lease_digest(token))
+            )
+        if expected_operation == FILE_IMPORT_WORKER_LEASE_OPERATION:
+            _require_identifier(
+                "expected_source_ref", expected_source_ref, maximum_length=255
+            )
+        elif expected_source_ref is not None:
+            raise ValueError("no-op verification cannot bind a source")
         checked_at = _require_utc("now", now)
         try:
             claims = self._verify_signed(token)
@@ -345,6 +379,7 @@ class WorkerLeaseCodec:
                 or claims.service_principal_id != expected_service_principal_id
                 or claims.workload != expected_workload
                 or claims.operation != expected_operation
+                or claims.source_ref != expected_source_ref
                 or claims.worker_audience != expected_worker_audience
                 or checked_at < claims.issued_at
                 or checked_at >= claims.expires_at
@@ -367,12 +402,15 @@ class WorkerLeaseCodec:
         header = _decode_document(encoded_header, _HEADER_FIELDS)
         if type(header["v"]) is not int:
             raise ValueError
+        token_version = header["v"]
+        if token_version not in {_TOKEN_VERSION, _FILE_IMPORT_TOKEN_VERSION}:
+            raise ValueError
         if header != {
             "alg": _ALGORITHM,
             "dom": _DOMAIN,
             "kid": header.get("kid"),
             "typ": _TOKEN_TYPE,
-            "v": _TOKEN_VERSION,
+            "v": token_version,
         }:
             raise ValueError
         key_version = _require_key_version(header["kid"])
@@ -386,7 +424,12 @@ class WorkerLeaseCodec:
         expected_signature = hmac.digest(key, signing_input, "sha256")
         if not hmac.compare_digest(supplied_signature, expected_signature):
             raise ValueError
-        document = _decode_document(encoded_claims, _CLAIM_FIELDS)
+        claim_fields = (
+            _CLAIM_FIELDS
+            if token_version == _TOKEN_VERSION
+            else _FILE_IMPORT_CLAIM_FIELDS
+        )
+        document = _decode_document(encoded_claims, claim_fields)
         if (
             type(document["signing_key_version"]) is not int
             or document["signing_key_version"] != key_version
@@ -394,7 +437,12 @@ class WorkerLeaseCodec:
             raise ValueError
         if document["actor_kind"] != WORKER_LEASE_ACTOR_KIND:
             raise ValueError
-        if document["operation"] != WORKER_LEASE_OPERATION:
+        expected_operation = (
+            WORKER_LEASE_OPERATION
+            if token_version == _TOKEN_VERSION
+            else FILE_IMPORT_WORKER_LEASE_OPERATION
+        )
+        if document["operation"] != expected_operation:
             raise ValueError
         return WorkerLeaseClaims(
             signing_key_version=key_version,
@@ -406,6 +454,12 @@ class WorkerLeaseCodec:
             issued_at=_parse_timestamp(document["issued_at"]),
             expires_at=_parse_timestamp(document["expires_at"]),
             nonce=_base64url_decode(cast(str, document["nonce"])),
+            operation=cast(str, document["operation"]),
+            source_ref=(
+                cast(str, document["source_ref"])
+                if token_version == _FILE_IMPORT_TOKEN_VERSION
+                else None
+            ),
         )
 
 
