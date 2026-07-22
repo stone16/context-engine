@@ -12,7 +12,11 @@ from sqlalchemy import Connection, Engine, text
 from sqlalchemy.exc import DBAPIError, IntegrityError
 
 from engine.persistence import DatabaseConfiguration, create_database_engine
-from engine.persistence.configuration import RUNTIME_ROLE, WORKER_ROLE
+from engine.persistence.configuration import (
+    RUNTIME_ROLE,
+    WORKER_LEASE_DEFINER_ROLE,
+    WORKER_ROLE,
+)
 
 pytestmark = pytest.mark.integration
 CHECKED_AT = datetime(2026, 7, 21, 8, 0, tzinfo=UTC)
@@ -537,6 +541,16 @@ def test_runtime_worker_and_public_grants_are_least_privilege(
             "valid_until",
         ):
             assert required_fragment in normalized_policy
+
+        file_import_policy = policies["membership_file_import_definer_select"]
+        assert file_import_policy[:3] == (
+            "PERMISSIVE",
+            (WORKER_LEASE_DEFINER_ROLE,),
+            "SELECT",
+        )
+        assert file_import_policy[3] is not None
+        assert file_import_policy[4] is None
+        assert "app.organization_id" in str(file_import_policy[3]).lower()
 
         migrator_policy = policies["membership_migrator_administration"]
         assert migrator_policy[:3] == (

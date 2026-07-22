@@ -176,7 +176,7 @@ def test_wrong_binding_not_yet_valid_and_expired_are_generic(
 def test_unknown_signing_key_version_is_generic() -> None:
     token = _codec(version=8).mint(_claims(signing_key_version=8))
 
-    with pytest.raises(WorkNotAvailable, match="^work not available$"):
+    with pytest.raises(WorkNotAvailable, match=r"^work not available$"):
         _codec().verify(token, **_verification_arguments())  # type: ignore[arg-type]
 
 
