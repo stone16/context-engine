@@ -10,6 +10,7 @@ from alembic import command
 from alembic.config import Config
 from fastapi.testclient import TestClient
 from sqlalchemy import Engine, text
+from sqlalchemy.exc import IntegrityError
 
 from adapters.exact_phrase import PostgreSQLExactPhraseCandidateIndex
 from adapters.http.app import create_app
@@ -317,6 +318,72 @@ def test_concurrent_identical_file_imports_publish_at_most_once(
                     {"organization_id": scenario.organization_id},
                 ).scalar_one()
                 == 1
+            )
+    finally:
+        migration_engine.dispose()
+
+
+@pytest.mark.parametrize(
+    ("reason_code", "reason_digest"),
+    (
+        (None, "a" * 64),
+        ("active-content-identity-match", None),
+    ),
+)
+def test_unchanged_outcome_requires_complete_reason_lineage(
+    tmp_path: Path,
+    migration_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+    guarded_worker_engine: Engine,
+    reason_code: str | None,
+    reason_digest: str | None,
+) -> None:
+    scenario = _prepare_file_import_scenario(
+        tmp_path,
+        migration_configuration,
+        guarded_control_engine,
+    )
+    assert scenario.token is not None
+    first = _run_file_import(
+        scenario,
+        scenario.prepared,
+        scenario.token,
+        guarded_worker_engine,
+    )
+
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with (
+            pytest.raises(IntegrityError),
+            migration_engine.begin() as connection,
+        ):
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO file_acquisition_result (
+                        organization_id, acquisition_id, source_id,
+                        resource_ref, active_revision_id, outcome,
+                        content_identity_digest, reason_code,
+                        reason_digest, observed_at
+                    ) VALUES (
+                        :organization_id, :acquisition_id, :source_id,
+                        :resource_ref, :active_revision_id, 'unchanged',
+                        :content_identity_digest, :reason_code,
+                        :reason_digest, :observed_at
+                    )
+                    """
+                ),
+                {
+                    "organization_id": scenario.organization_id,
+                    "acquisition_id": first.acquisition_id,
+                    "source_id": scenario.source_ref.value,
+                    "resource_ref": first.candidate_ref.resource_ref,
+                    "active_revision_id": UUID(first.candidate_ref.revision_ref),
+                    "content_identity_digest": first.content_identity_digest,
+                    "reason_code": reason_code,
+                    "reason_digest": reason_digest,
+                    "observed_at": NOW,
+                },
             )
     finally:
         migration_engine.dispose()

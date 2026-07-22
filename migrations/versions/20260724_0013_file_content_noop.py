@@ -98,8 +98,8 @@ def upgrade() -> None:
         sa.Column("active_revision_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("outcome", sa.Text(), nullable=False),
         sa.Column("content_identity_digest", sa.Text(), nullable=False),
-        sa.Column("reason_code", sa.Text(), nullable=True),
-        sa.Column("reason_digest", sa.Text(), nullable=True),
+        sa.Column("reason_code", sa.Text(), nullable=False),
+        sa.Column("reason_digest", sa.Text(), nullable=False),
         sa.Column("observed_at", sa.DateTime(timezone=True), nullable=False),
         sa.PrimaryKeyConstraint(
             "organization_id",
