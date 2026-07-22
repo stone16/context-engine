@@ -79,10 +79,12 @@ class _FakeConnection:
         issue_result: bool = True,
         read_result: Mapping[str, Any] | None = None,
         read_error: Exception | None = None,
+        revoke_error: Exception | None = None,
     ) -> None:
         self.issue_result = issue_result
         self.read_result = read_result
         self.read_error = read_error
+        self.revoke_error = revoke_error
         self.calls: list[tuple[str, dict[str, object]]] = []
 
     def execute(
@@ -96,6 +98,8 @@ class _FakeConnection:
         if "issue_context_run_operator_read_ticket" in sql:
             return _FakeResult(self.issue_result)
         if "revoke_context_run_operator_read_ticket" in sql:
+            if self.revoke_error is not None:
+                raise self.revoke_error
             return _FakeResult(True)
         if "read_context_run_by_operator_ticket" in sql:
             if self.read_error is not None:
@@ -133,8 +137,12 @@ def _reader(
     issue_result: bool = True,
     row: Mapping[str, Any] | None = None,
     read_error: Exception | None = None,
+    revoke_error: Exception | None = None,
 ) -> tuple[PostgreSQLContextRunReader, _FakeConnection, _FakeConnection]:
-    control = _FakeConnection(issue_result=issue_result)
+    control = _FakeConnection(
+        issue_result=issue_result,
+        revoke_error=revoke_error,
+    )
     operator = _FakeConnection(read_result=row, read_error=read_error)
     return (
         PostgreSQLContextRunReader(
@@ -396,6 +404,45 @@ def test_reader_normalizes_database_failure_and_revokes_the_ticket() -> None:
         reader.find_by_decision_ref(authorization, DECISION_REF)
     assert str(unavailable.value) == "ContextRun reader is unavailable"
     assert unavailable.value.__cause__ is None
+    assert len(control.calls) == 2
+
+
+def test_reader_propagates_revoke_failure_after_a_successful_read() -> None:
+    authority = ContextRunOperatorAuthority(_ExactAuthenticator())
+    reader, control, operator = _reader(
+        authority,
+        row=_safe_row(),
+        revoke_error=RuntimeError("private revoke failure with ticket material"),
+    )
+
+    with (
+        authority.authorize(_request()) as authorization,
+        pytest.raises(ContextRunReaderUnavailable) as unavailable,
+    ):
+        reader.find_by_decision_ref(authorization, DECISION_REF)
+
+    assert str(unavailable.value) == "ContextRun reader is unavailable"
+    assert unavailable.value.__cause__ is None
+    assert len(control.calls) == 2
+    assert len(operator.calls) == 1
+
+
+def test_reader_preserves_primary_failure_when_ticket_revoke_also_fails() -> None:
+    primary_error = ContextRunReaderUnavailable("primary read failure")
+    authority = ContextRunOperatorAuthority(_ExactAuthenticator())
+    reader, control, _ = _reader(
+        authority,
+        read_error=primary_error,
+        revoke_error=RuntimeError("private revoke failure with ticket material"),
+    )
+
+    with (
+        authority.authorize(_request()) as authorization,
+        pytest.raises(ContextRunReaderUnavailable) as unavailable,
+    ):
+        reader.find_by_decision_ref(authorization, DECISION_REF)
+
+    assert unavailable.value is primary_error
     assert len(control.calls) == 2
 
 

@@ -345,8 +345,10 @@ database_reset() {
 }
 
 run_integration() {
+  require_command docker
   require_command uv
   load_environment
+  compose up --detach --wait
   provision_database_roles
   wait_for_database
   uv run pytest -q -m integration tests/integration

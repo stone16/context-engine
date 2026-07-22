@@ -22,6 +22,7 @@ from engine.persistence import (
 from engine.runtime.construction import Runtime, required_kernel_dependencies
 from engine.runtime.content_io import CandidateIndex
 from engine.runtime.package_digest import QueryDigestKeyring
+from engine.runtime.scope import EffectiveScope
 from tests.integration.test_runtime_authorized_evidence_integration import (
     RECEIVED_AT,
     ExactScopeAuthority,
@@ -34,6 +35,7 @@ from tests.integration.test_runtime_authorized_evidence_integration import (
     _persistent_content_snapshot,
     _seed_fixture,
 )
+from tests.support.context_run_operator import exact_test_context_run_operator_read
 
 pytestmark = pytest.mark.integration
 QUERY = "same policy epoch revocation probe"
@@ -222,6 +224,8 @@ def test_mid_resolve_revoke_is_visible_despite_repeatable_read_engine_default(
     control_configuration: DatabaseConfiguration,
     migration_configuration: DatabaseConfiguration,
     runtime_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+    guarded_operator_engine: Engine,
     monkeypatch: pytest.MonkeyPatch,
     query_digest_keyring: QueryDigestKeyring,
 ) -> None:
@@ -294,6 +298,19 @@ def test_mid_resolve_revoke_is_visible_despite_repeatable_read_engine_default(
             response = pending_response.result(timeout=10)
 
         _assert_revoked_empty(response, fixture.org_a)
+        decision_ref = response.json()["package"]["decisionRef"]
+        with exact_test_context_run_operator_read(
+            control_engine=guarded_control_engine,
+            operator_engine=guarded_operator_engine,
+            organization_id=fixture.org_a.organization_id,
+            decision_ref=decision_ref,
+            request_id="test:issue-19:mid-resolve-epoch-veto",
+            opaque_credential="test:issue-19:mid-resolve-epoch-veto",
+            authorized_at=RECEIVED_AT,
+        ) as (reader, authorization):
+            run = reader.find_by_decision_ref(authorization, decision_ref)
+        assert run is not None
+        assert run.effective_scope_digest == EffectiveScope(frozenset()).digest
         assert read_count == 3
         assert len(index.calls) == 1
         assert _persistent_content_snapshot(migration_engine, fixture) == (

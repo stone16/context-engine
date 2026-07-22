@@ -52,7 +52,8 @@ an unavailable request and returns no `decisionRef` claiming a durable run.
 `ContextRun` records the Organization and trusted identity lineage, request and
 authentication binding references, purpose, run and decision references,
 PolicySnapshot reference and Organization V0 Policy Epoch, effective-scope
-digest, effective and used PackageBudget dimensions, terminal outcome,
+digest after the final delivery veto, effective and used PackageBudget
+dimensions, terminal outcome,
 authorized Evidence references, Package digest profile and value, explicit
 Package retention mode, and accepted/finalized/as-of/expiry timestamps. The
 active terminal outcomes are exactly `delivered_authorized` and

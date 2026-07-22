@@ -59,7 +59,12 @@ from engine.runtime.policy_epoch import (
     _observe_current_policy_epoch,
     _open_policy_epoch_authority_scope,
 )
-from engine.runtime.scope import ScopeSet, ScopeTarget, TrustedScopeOperands
+from engine.runtime.scope import (
+    EffectiveScope,
+    ScopeSet,
+    ScopeTarget,
+    TrustedScopeOperands,
+)
 from engine.runtime.scope_authority import (
     _close_scope_authority_scope,
     _construct_trusted_scope_snapshot,
@@ -67,6 +72,7 @@ from engine.runtime.scope_authority import (
 )
 from tests.support.context_run import (
     TEST_QUERY_DIGEST_KEYRING,
+    RecordingContextRunPort,
     recording_context_run_session,
 )
 
@@ -234,6 +240,7 @@ def trusted_operands(
     *,
     policy_epoch_port: SequencedPolicyEpochPort | None = None,
     scope_policy_epoch: int | None = None,
+    context_run_port: RecordingContextRunPort | None = None,
 ) -> Iterator[tuple[AuthenticatedInvocation, TrustedDeliveryContext]]:
     membership_scope = _open_membership_authority_scope()
     materialized_scope = _open_materialized_projection_scope()
@@ -259,7 +266,10 @@ def trusted_operands(
             verified_at=AS_OF,
         )
         operands = exact_operands()
-        with recording_context_run_session() as (persistence_session, _):
+        with recording_context_run_session(port=context_run_port) as (
+            persistence_session,
+            _,
+        ):
             membership_verification = _construct_current_membership_verification(
                 authority_scope=membership_scope,
                 organization_id=ORGANIZATION_ID,
@@ -418,6 +428,7 @@ def test_stale_scope_epoch_stops_before_candidate_or_body_io() -> None:
 def test_mid_resolve_epoch_change_discards_content_before_delivery() -> None:
     index = HostileCandidateIndex((AUTHORIZED,))
     port = RecordingMaterializedPort()
+    context_run_port = RecordingContextRunPort()
     epoch = SequencedPolicyEpochPort(7, 7, 8)
     runtime = Runtime(
         required_kernel_dependencies(),
@@ -426,7 +437,11 @@ def test_mid_resolve_epoch_change_discards_content_before_delivery() -> None:
         query_digest_keyring=TEST_QUERY_DIGEST_KEYRING,
     )
 
-    with trusted_operands(port, policy_epoch_port=epoch) as (invocation, delivery):
+    with trusted_operands(
+        port,
+        policy_epoch_port=epoch,
+        context_run_port=context_run_port,
+    ) as (invocation, delivery):
         outcome = runtime.resolve(
             invocation,
             delivery,
@@ -445,6 +460,55 @@ def test_mid_resolve_epoch_change_discards_content_before_delivery() -> None:
     assert outcome.package.coverage.reason == "no_authorized_evidence"
     assert outcome.package.budget_usage.tokens == 0
     assert "A-safe" not in repr(outcome)
+    assert len(context_run_port.calls) == 1
+    persisted_run, persisted_audit = context_run_port.calls[0]
+    assert persisted_run.effective_scope_digest == outcome.scope_decision.digest
+    assert (
+        persisted_run.effective_scope_digest
+        != EffectiveScope(
+            frozenset(
+                {
+                    ScopeTarget(
+                        ORGANIZATION_ID,
+                        AUTHORIZED.source_ref,
+                        AUTHORIZED.resource_ref,
+                    )
+                }
+            )
+        ).digest
+    )
+    assert persisted_audit is not None
+
+
+def test_final_epoch_veto_changes_only_the_decision_scope_digest() -> None:
+    index = HostileCandidateIndex((AUTHORIZED,))
+    port = RecordingMaterializedPort()
+    kernel = AuthorizationKernel(required_kernel_dependencies())
+    issuer = _OpaqueReferenceIssuer()
+
+    with trusted_operands(
+        port,
+        policy_epoch_port=SequencedPolicyEpochPort(7, 7, 8),
+    ) as (invocation, delivery):
+        decision = kernel.authorize_acquire(
+            invocation,
+            delivery,
+            Acquire(need=ContextNeed(query="finalized provenance")),
+            server_budget=DEFAULT_SERVER_PACKAGE_BUDGET,
+            as_of=AS_OF,
+            reference_issuer=issuer,
+            candidate_index=cast(CandidateIndex, index),
+            projection_session=invocation.user_actor.materialized_projection_session,
+        )
+        finalized = kernel.finalize_for_delivery(invocation, decision)
+
+    assert finalized.policy_receipt.effective_scope == EffectiveScope(frozenset())
+    assert finalized.provenance_receipt == replace(
+        decision.provenance_receipt,
+        effective_scope_digest=finalized.policy_receipt.effective_scope.digest,
+    )
+    assert finalized.content.evidence == ()
+    assert finalized.audit_receipt.authorized_evidence_count == 0
 
 
 def test_pre_revocation_decision_cannot_be_laundered_by_fresh_invocation() -> None:
@@ -479,13 +543,16 @@ def test_pre_revocation_decision_cannot_be_laundered_by_fresh_invocation() -> No
         RecordingMaterializedPort(),
         policy_epoch_port=SequencedPolicyEpochPort(8),
     ) as (post_revocation_invocation, _delivery):
-        policy_receipt, content, audit_receipt = kernel.finalize_for_delivery(
+        finalized = kernel.finalize_for_delivery(
             post_revocation_invocation,
             stale_decision,
         )
 
     # Mutation witness: checking only the fresh invocation's current epoch leaks
     # the stale decision's already assembled A-safe content here.
+    policy_receipt = finalized.policy_receipt
+    content = finalized.content
+    audit_receipt = finalized.audit_receipt
     assert policy_receipt.effective_scope.targets == frozenset()
     assert content.blocks == ()
     assert content.evidence == ()
@@ -543,13 +610,16 @@ def test_stale_content_cannot_be_spliced_into_a_current_decision() -> None:
             current_decision,
             content=stale_decision.content,
         )
-        policy_receipt, content, audit_receipt = kernel.finalize_for_delivery(
+        finalized = kernel.finalize_for_delivery(
             post_revocation_invocation,
             spliced_decision,
         )
 
     # Mutation witness: receipt/invocation epoch checks alone accept the epoch-8
     # wrapper and leak the epoch-7 A-safe content.
+    policy_receipt = finalized.policy_receipt
+    content = finalized.content
+    audit_receipt = finalized.audit_receipt
     assert policy_receipt.effective_scope.targets == frozenset()
     assert content.blocks == ()
     assert content.evidence == ()

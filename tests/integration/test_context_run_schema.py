@@ -601,7 +601,7 @@ def test_operator_has_no_direct_read_even_with_forgeable_settings(
                     text("SELECT set_config(:name, :value, true)"),
                     {"name": setting_name, "value": setting_value},
                 )
-                connection.execute(text(f"SELECT * FROM {table_name}"))
+            connection.execute(text(f"SELECT * FROM {table_name}"))
 
 
 def issue_operator_ticket(

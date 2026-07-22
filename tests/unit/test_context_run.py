@@ -62,7 +62,7 @@ from engine.runtime.policy_epoch import (
     _observe_current_policy_epoch,
     _open_policy_epoch_authority_scope,
 )
-from engine.runtime.scope import EffectiveScope, ScopeSet
+from engine.runtime.scope import EffectiveScope, ScopeSet, ScopeTarget
 from engine.runtime.scope_authority import (
     _close_scope_authority_scope,
     _construct_trusted_scope_snapshot,
@@ -86,7 +86,19 @@ EFFECTIVE_BUDGET = PackageBudget(
     max_cost_microunits=25_000,
     max_elapsed_ms=2_500,
 )
-EFFECTIVE_SCOPE_DIGEST = EffectiveScope(frozenset()).digest
+AUTHORIZED_SCOPE = ScopeSet(
+    frozenset(
+        {
+            ScopeTarget(
+                ORGANIZATION_ID,
+                "source-authorized",
+                "resource-authorized",
+            )
+        }
+    )
+)
+FINAL_EFFECTIVE_SCOPE = EffectiveScope(AUTHORIZED_SCOPE.targets)
+EFFECTIVE_SCOPE_DIGEST = FINAL_EFFECTIVE_SCOPE.digest
 
 
 class _PolicyEpochPort:
@@ -120,7 +132,6 @@ def _trusted_invocation() -> Iterator[AuthenticatedInvocation]:
             checked_at=ACCEPTED_AT,
             policy_epoch_verification=epoch,
         )
-        empty_scope = ScopeSet(frozenset())
         scope_snapshot = _construct_trusted_scope_snapshot(
             authority_scope=scope_authority_scope,
             organization_id=ORGANIZATION_ID,
@@ -134,13 +145,13 @@ def _trusted_invocation() -> Iterator[AuthenticatedInvocation]:
             request_id="request-context-run",
             authentication_binding_ref="binding-context-run-secret",
             checked_at=ACCEPTED_AT,
-            organization_boundary=empty_scope,
-            membership_rights=empty_scope,
-            principal_grants=empty_scope,
-            agent_ceiling=empty_scope,
-            source_native_acl=empty_scope,
-            resource_acl=empty_scope,
-            purpose_policy=empty_scope,
+            organization_boundary=AUTHORIZED_SCOPE,
+            membership_rights=AUTHORIZED_SCOPE,
+            principal_grants=AUTHORIZED_SCOPE,
+            agent_ceiling=AUTHORIZED_SCOPE,
+            source_native_acl=AUTHORIZED_SCOPE,
+            resource_acl=AUTHORIZED_SCOPE,
+            purpose_policy=AUTHORIZED_SCOPE,
         )
         organization = _construct_existing_http_organization_verification(
             organization_id=ORGANIZATION_ID,
@@ -345,6 +356,7 @@ def test_projection_builds_complete_authorized_and_empty_final_records() -> None
             request=request,
             provenance=_provenance(),
             package=_authorized_package(),
+            final_effective_scope=FINAL_EFFECTIVE_SCOPE,
             effective_budget=EFFECTIVE_BUDGET,
             keyring=QUERY_KEYRING,
         )
@@ -353,6 +365,7 @@ def test_projection_builds_complete_authorized_and_empty_final_records() -> None
             request=request,
             provenance=_provenance(),
             package=_empty_package(),
+            final_effective_scope=FINAL_EFFECTIVE_SCOPE,
             effective_budget=EFFECTIVE_BUDGET,
             keyring=QUERY_KEYRING,
         )
@@ -369,6 +382,60 @@ def test_projection_builds_complete_authorized_and_empty_final_records() -> None
     assert empty_audit == _audit()
     assert empty.accepted_at == ACCEPTED_AT
     assert empty.finalized_at == empty.package_as_of == FINALIZED_AT
+    assert empty.effective_scope_digest == FINAL_EFFECTIVE_SCOPE.digest
+    assert empty.effective_scope_digest != EffectiveScope(frozenset()).digest
+
+
+def test_projection_rejects_final_scope_outside_original_or_empty_scope() -> None:
+    unrelated_scope = EffectiveScope(
+        frozenset(
+            {
+                ScopeTarget(
+                    ORGANIZATION_ID,
+                    "source-unrelated",
+                    "resource-unrelated",
+                )
+            }
+        )
+    )
+
+    with (
+        _trusted_invocation() as invocation,
+        pytest.raises(ValueError, match="preserve or veto scope"),
+    ):
+        build_context_run_records(
+            invocation=invocation,
+            request=Acquire(need=ContextNeed(query="safe query")),
+            provenance=replace(
+                _provenance(),
+                effective_scope_digest=unrelated_scope.digest,
+            ),
+            package=_empty_package(),
+            final_effective_scope=unrelated_scope,
+            effective_budget=EFFECTIVE_BUDGET,
+            keyring=QUERY_KEYRING,
+        )
+
+
+def test_projection_rejects_evidence_after_final_scope_veto() -> None:
+    empty_scope = EffectiveScope(frozenset())
+
+    with (
+        _trusted_invocation() as invocation,
+        pytest.raises(ValueError, match="cannot carry Evidence"),
+    ):
+        build_context_run_records(
+            invocation=invocation,
+            request=Acquire(need=ContextNeed(query="safe query")),
+            provenance=replace(
+                _provenance(),
+                effective_scope_digest=empty_scope.digest,
+            ),
+            package=_authorized_package(),
+            final_effective_scope=empty_scope,
+            effective_budget=EFFECTIVE_BUDGET,
+            keyring=QUERY_KEYRING,
+        )
 
 
 @pytest.mark.parametrize(
@@ -403,6 +470,7 @@ def test_projection_rejects_provenance_not_bound_to_invocation_or_package(
             request=Acquire(need=ContextNeed(query="safe query")),
             provenance=replace(_provenance(), **cast(Any, provenance_change)),
             package=_authorized_package(),
+            final_effective_scope=FINAL_EFFECTIVE_SCOPE,
             effective_budget=EFFECTIVE_BUDGET,
             keyring=QUERY_KEYRING,
         )
@@ -449,6 +517,7 @@ def test_projection_rejects_evidence_lineage_not_bound_to_provenance(
             request=Acquire(need=ContextNeed(query="safe query")),
             provenance=_provenance(),
             package=package,
+            final_effective_scope=FINAL_EFFECTIVE_SCOPE,
             effective_budget=EFFECTIVE_BUDGET,
             keyring=QUERY_KEYRING,
         )
@@ -472,6 +541,7 @@ def test_projection_rejects_package_purpose_or_time_not_bound_to_invocation() ->
                     request=Acquire(need=ContextNeed(query="safe query")),
                     provenance=replace(_provenance(), as_of=package.as_of),
                     package=package,
+                    final_effective_scope=FINAL_EFFECTIVE_SCOPE,
                     effective_budget=EFFECTIVE_BUDGET,
                     keyring=QUERY_KEYRING,
                 )
@@ -490,6 +560,7 @@ def test_projection_rejects_package_altered_after_digest_creation() -> None:
             request=Acquire(need=ContextNeed(query="safe query")),
             provenance=_provenance(),
             package=package,
+            final_effective_scope=FINAL_EFFECTIVE_SCOPE,
             effective_budget=EFFECTIVE_BUDGET,
             keyring=QUERY_KEYRING,
         )

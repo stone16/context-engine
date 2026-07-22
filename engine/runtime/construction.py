@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from hmac import new as new_hmac
@@ -153,6 +153,16 @@ class AuthorizationDecision:
     policy_receipt: PolicyReceipt
     provenance_receipt: DecisionProvenanceReceipt
     content: PackageContent
+
+
+@dataclass(frozen=True, slots=True)
+class FinalizedAuthorizationResult:
+    """Final policy, provenance, content, and audit after the delivery veto."""
+
+    policy_receipt: PolicyReceipt
+    provenance_receipt: DecisionProvenanceReceipt
+    content: PackageContent
+    audit_receipt: DecisionAuditReceipt
 
 
 @dataclass(frozen=True, slots=True)
@@ -510,7 +520,7 @@ class AuthorizationKernel:
         self,
         invocation: AuthenticatedInvocation,
         decision: AuthorizationDecision,
-    ) -> tuple[PolicyReceipt, PackageContent, DecisionAuditReceipt]:
+    ) -> FinalizedAuthorizationResult:
         """Revalidate immediately before audit and Package construction."""
 
         if type(decision) is not AuthorizationDecision:
@@ -554,12 +564,15 @@ class AuthorizationKernel:
             and provenance.effective_scope_digest
             == policy_receipt.effective_scope.digest
         )
-        if (
-            not content_binding_matches_decision
-            or not decision_binding_matches_invocation
-            or not self._policy_epoch.is_current(
+        final_epoch_is_current = False
+        if content_binding_matches_decision and decision_binding_matches_invocation:
+            final_epoch_is_current = self._policy_epoch.is_current(
                 invocation.user_actor.policy_epoch_verification
             )
+        if not (
+            content_binding_matches_decision
+            and decision_binding_matches_invocation
+            and final_epoch_is_current
         ):
             policy_receipt = PolicyReceipt(
                 request_id=policy_receipt.request_id,
@@ -568,13 +581,27 @@ class AuthorizationKernel:
                 effective_scope=EffectiveScope(frozenset()),
             )
             content = construct_package_content(())
+            if (
+                content_binding_matches_decision
+                and decision_binding_matches_invocation
+                and not final_epoch_is_current
+            ):
+                provenance = replace(
+                    provenance,
+                    effective_scope_digest=policy_receipt.effective_scope.digest,
+                )
         audit_receipt = self._audit.record(
-            decision.provenance_receipt,
+            provenance,
             authorized_evidence_count=len(content.evidence),
         )
-        if audit_receipt.decision_ref != decision.provenance_receipt.decision_ref:
+        if audit_receipt.decision_ref != provenance.decision_ref:
             raise RuntimeConfigurationError("audit and provenance decision mismatch")
-        return policy_receipt, content, audit_receipt
+        return FinalizedAuthorizationResult(
+            policy_receipt=policy_receipt,
+            provenance_receipt=provenance,
+            content=content,
+            audit_receipt=audit_receipt,
+        )
 
     def _authorize_and_assemble(
         self,
@@ -895,10 +922,11 @@ class Runtime:
             ),
             projection_session=(invocation.user_actor.materialized_projection_session),
         )
-        policy_receipt, content, audit_receipt = self._kernel.finalize_for_delivery(
-            invocation, decision
-        )
-        provenance = decision.provenance_receipt
+        finalized = self._kernel.finalize_for_delivery(invocation, decision)
+        policy_receipt = finalized.policy_receipt
+        content = finalized.content
+        audit_receipt = finalized.audit_receipt
+        provenance = finalized.provenance_receipt
 
         package = ContextPackage(
             organization_ref=provenance.package_organization_ref,
@@ -939,6 +967,7 @@ class Runtime:
             request=acquire,
             provenance=provenance,
             package=package,
+            final_effective_scope=policy_receipt.effective_scope,
             effective_budget=decision.effective_budget,
             keyring=self._query_digest_keyring,
         )

@@ -115,9 +115,17 @@ def test_harness_provisions_post_init_roles_before_readiness() -> None:
     configuration = repository_text("engine/persistence/configuration.py")
 
     assert harness.count("  provision_database_roles\n  wait_for_database") == 3
+    integration_body = harness.split("run_integration() {", maxsplit=1)[1].split(
+        "\n}", maxsplit=1
+    )[0]
     assert (
-        'CONTEXT_RUN_READER_DEFINER_ROLE = '
-        '"context_engine_context_run_reader_definer"'
+        "  load_environment\n"
+        "  compose up --detach --wait\n"
+        "  provision_database_roles\n"
+        "  wait_for_database\n" in integration_body
+    )
+    assert (
+        'CONTEXT_RUN_READER_DEFINER_ROLE = "context_engine_context_run_reader_definer"'
     ) in configuration
     assert "ACCESS_POLICY_DEFINER_ROLE" in provisioner
     assert "WORKER_LEASE_DEFINER_ROLE" in provisioner

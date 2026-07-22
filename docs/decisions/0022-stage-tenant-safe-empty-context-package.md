@@ -99,8 +99,9 @@ their owning issues add real values and update the public contract and
 canonical catalog carrier together.
 The outbound references use closed prefix plus independent server entropy,
 reject embedded trusted Organization identifiers, and reject reuse within a
-Runtime instance. The opaque decision reference here identifies only the
-in-memory, evidence-free Runtime decision.
+Runtime instance. The opaque decision reference identifies the evidence-free
+Runtime decision and, after ADR-0031, resolves through the exact
+same-Organization durable `ContextRun` operator path.
 
 ## Rationale
 

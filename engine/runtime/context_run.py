@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import StrEnum
-from typing import Final, NoReturn, Protocol, cast
+from typing import TYPE_CHECKING, Final, NoReturn, Protocol, cast
 from uuid import UUID
 
 from engine.runtime.budget import PackageBudget
@@ -22,6 +22,9 @@ from engine.runtime.package_digest import (
     query_digest,
     verify_context_package_digest,
 )
+
+if TYPE_CHECKING:
+    from engine.runtime.scope import EffectiveScope
 
 MAX_SIGNED_BIGINT: Final = (1 << 63) - 1
 PACKAGE_RETENTION_MODE: Final = "digest_only"
@@ -383,6 +386,7 @@ def build_context_run_records(
     request: Acquire,
     provenance: object,
     package: ContextPackage,
+    final_effective_scope: EffectiveScope,
     effective_budget: PackageBudget,
     keyring: QueryDigestKeyring,
 ) -> tuple[ContextRunRecord, DecisionAuditRecord | None]:
@@ -402,6 +406,8 @@ def build_context_run_records(
         raise TypeError("ContextRun projection requires Acquire")
     if type(package) is not ContextPackage:
         raise TypeError("ContextRun projection requires ContextPackage")
+    if type(final_effective_scope) is not EffectiveScope:
+        raise TypeError("ContextRun projection requires final EffectiveScope")
     if type(effective_budget) is not PackageBudget:
         raise TypeError("ContextRun projection requires PackageBudget")
     if not verify_context_package_digest(
@@ -432,14 +438,19 @@ def build_context_run_records(
     if any(not hasattr(provenance, name) for name in required_provenance_fields):
         raise TypeError("ContextRun projection requires decision provenance")
     decision_provenance = cast(DecisionProvenance, provenance)
-    expected_scope_digest = compute_effective_scope(
+    authorized_scope = compute_effective_scope(
         _trusted_operands_from_snapshot(invocation.trusted_scope_snapshot),
         request.narrowing
         if request.narrowing is not None
         else OMITTED_REQUEST_NARROWING,
-    ).digest
+    )
     if invocation.trusted_scope_snapshot.policy_epoch != invocation.policy_epoch:
-        expected_scope_digest = EffectiveScope(frozenset()).digest
+        authorized_scope = EffectiveScope(frozenset())
+    empty_scope = EffectiveScope(frozenset())
+    if final_effective_scope not in (authorized_scope, empty_scope):
+        raise ValueError("ContextRun final EffectiveScope must preserve or veto scope")
+    if not final_effective_scope.targets and package.evidence:
+        raise ValueError("ContextRun empty final EffectiveScope cannot carry Evidence")
     if (
         decision_provenance.organization_id != invocation.user_actor.organization_id
         or decision_provenance.user_id != invocation.user_actor.user_id
@@ -458,7 +469,7 @@ def build_context_run_records(
         or decision_provenance.package_organization_ref != package.organization_ref
         or decision_provenance.decision_ref != package.decision_ref
         or decision_provenance.policy_epoch != invocation.policy_epoch
-        or decision_provenance.effective_scope_digest != expected_scope_digest
+        or decision_provenance.effective_scope_digest != final_effective_scope.digest
         or package.purpose != invocation.trusted_scope_snapshot.purpose
         or package.as_of < invocation.received_at
     ):
