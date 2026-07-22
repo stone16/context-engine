@@ -32,7 +32,7 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
     document = manifest()
     tables = table_entries(document)
 
-    assert document["manifestVersion"] == "11.0.0"
+    assert document["manifestVersion"] == "12.0.0"
     assert set(tables) == {
         "active_release_manifest",
         "alembic_version",
@@ -105,6 +105,58 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
         "release_promotion_audit",
     ):
         assert tables[release_table]["classification"] == "tenant_owned"
+
+
+def test_issue_24_structural_markdown_contract_is_versioned_and_function_only() -> None:
+    document = manifest()
+    entries = table_entries(document)
+    operation = next(
+        value
+        for value in document["controlOperations"]
+        if value["name"] == "publish_file_import"
+    )
+
+    assert operation["versionedDatabaseFunctions"] == {
+        "markdown-config-v1": "context_worker_publish_file_import",
+        "markdown-config-v2": "context_worker_publish_structural_file_import",
+    }
+    snapshot = entries["file_revision_snapshot"]
+    contract = snapshot["versionedCompilationContract"]
+    assert contract["markdown-config-v1"]["compilationDocument"] == "null"
+    assert contract["markdown-config-v2"] == {
+        "compilationDocument": "required immutable JSONB",
+        "logicalUnits": [
+            "heading",
+            "paragraph",
+            "list",
+            "fenced_code",
+            "table",
+        ],
+        "fragmentBoundary": "one Fragment per logical unit",
+        "contextBoundary": (
+            "parent heading ancestry is copied into the same authorized Fragment; "
+            "no parent expansion is performed"
+        ),
+        "provenance": [
+            "stable structural path",
+            "exact source position",
+            "source text",
+            "compiler/config profiles",
+        ],
+    }
+    structural_function = "EXECUTE context_worker_publish_structural_file_import"
+    for table_name in (
+        "file_import_job",
+        "file_revision_snapshot",
+        "revision_publication_event",
+        "exact_phrase_candidate",
+    ):
+        assert structural_function in entries[table_name]["permittedOperations"][
+            "context_engine_worker"
+        ]
+    assert entries["context_fragment"]["permittedOperations"][
+        "context_engine_worker"
+    ] == []
 
 
 def test_issue_21_file_source_manifest_is_closed_and_role_separated() -> None:

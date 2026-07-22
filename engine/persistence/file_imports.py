@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from hashlib import sha256
@@ -32,6 +33,7 @@ from engine.supply import (
     WorkerLeaseRejectionAuditReceipt,
     WorkerLeaseToken,
     WorkNotAvailable,
+    canonicalize_parsed_document,
     worker_lease_digest,
 )
 from engine.supply.jobs import _require_utc
@@ -62,7 +64,7 @@ class FileImportLeaseRedemption:
 class PublishedFileImport:
     """Complete immutable lineage for the one committed publication effect."""
 
-    candidate_ref: CandidateRef
+    candidate_refs: tuple[CandidateRef, ...]
     acquisition_id: UUID = field(repr=False)
     publication_states: tuple[str, str, str] = (
         "prepared",
@@ -72,14 +74,40 @@ class PublishedFileImport:
     effect_count: Literal[1] = 1
 
     def __post_init__(self) -> None:
-        if type(self.candidate_ref) is not CandidateRef:
-            raise TypeError("published File import requires CandidateRef")
+        if (
+            type(self.candidate_refs) is not tuple
+            or not self.candidate_refs
+            or any(
+                type(candidate) is not CandidateRef
+                for candidate in self.candidate_refs
+            )
+        ):
+            raise TypeError("published File import requires CandidateRef values")
+        first = self.candidate_refs[0]
+        if any(
+            candidate.organization_id != first.organization_id
+            or candidate.source_ref != first.source_ref
+            or candidate.resource_ref != first.resource_ref
+            or candidate.revision_ref != first.revision_ref
+            for candidate in self.candidate_refs
+        ) or len({candidate.fragment_ref for candidate in self.candidate_refs}) != len(
+            self.candidate_refs
+        ):
+            raise ValueError(
+                "published File candidates must share exact Revision lineage"
+            )
         if type(self.acquisition_id) is not UUID:
             raise TypeError("published File import acquisition must be UUID")
         if self.publication_states != ("prepared", "indexed", "active"):
             raise ValueError("File publication state sequence must remain closed")
         if self.effect_count != 1:
             raise ValueError("published File import has exactly one effect")
+
+    @property
+    def candidate_ref(self) -> CandidateRef:
+        """Compatibility locator for the first source-ordered Fragment."""
+
+        return self.candidate_refs[0]
 
 
 class FileImportUnavailable(RuntimeError):
@@ -245,25 +273,53 @@ class PostgreSQLFileImportWorker:
             raise _rejection(token)
         revision_id = self._uuid_factory()
         resource_ref = _resource_ref(redeemed.source_ref, redeemed.path)
-        fragment_ref = "fragment:paragraph:1"
-        paragraph = document.sections[1].text
+        structural = document.provenance.is_structural_v2
+        if structural:
+            compilation_document = json.loads(
+                canonicalize_parsed_document(document).decode("utf-8")
+            )
+            statement = """
+                SELECT effect_count
+                FROM public.context_worker_publish_structural_file_import(
+                    :organization_id, :job_id, :service_principal_id,
+                    :source_ref, :resource_ref,
+                    :revision_id, :canonical_text,
+                    :content_hash, :compilation_digest,
+                    :compiler_version, :config_version,
+                    CAST(:compilation_document AS jsonb),
+                    :signing_key_version, :nonce, :issued_at, :expires_at
+                )
+            """
+            payload: dict[str, object] = {
+                "compilation_document": json.dumps(
+                    compilation_document,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+            }
+        else:
+            fragment = document.fragments[0]
+            statement = """
+                SELECT effect_count
+                FROM public.context_worker_publish_file_import(
+                    :organization_id, :job_id, :service_principal_id,
+                    :source_ref, :resource_ref,
+                    :revision_id, :fragment_ref, :canonical_text,
+                    :paragraph, :content_hash, :compilation_digest,
+                    :compiler_version, :config_version, :phrase_digest,
+                    :signing_key_version, :nonce, :issued_at, :expires_at
+                )
+            """
+            payload = {
+                "fragment_ref": fragment.fragment_ref,
+                "paragraph": fragment.contextual_text,
+                "phrase_digest": exact_phrase_digest(fragment.search_phrases[0]),
+            }
         try:
             with self._engine.begin() as connection:
                 assert_worker_role(connection)
                 row = connection.execute(
-                    text(
-                        """
-                        SELECT effect_count
-                        FROM public.context_worker_publish_file_import(
-                            :organization_id, :job_id, :service_principal_id,
-                            :source_ref, :resource_ref,
-                            :revision_id, :fragment_ref, :canonical_text,
-                            :paragraph, :content_hash, :compilation_digest,
-                            :compiler_version, :config_version, :phrase_digest,
-                            :signing_key_version, :nonce, :issued_at, :expires_at
-                        )
-                        """
-                    ),
+                    text(statement),
                     {
                         "organization_id": claims.organization_id,
                         "job_id": claims.job_id,
@@ -271,18 +327,16 @@ class PostgreSQLFileImportWorker:
                         "source_ref": claims.source_ref,
                         "resource_ref": resource_ref,
                         "revision_id": revision_id,
-                        "fragment_ref": fragment_ref,
                         "canonical_text": document.canonical_text,
-                        "paragraph": paragraph,
                         "content_hash": document.content_hash,
                         "compilation_digest": document.compilation_digest,
                         "compiler_version": document.provenance.compiler_version,
                         "config_version": document.provenance.config_version,
-                        "phrase_digest": exact_phrase_digest(paragraph),
                         "signing_key_version": claims.signing_key_version,
                         "nonce": claims.nonce,
                         "issued_at": claims.issued_at,
                         "expires_at": claims.expires_at,
+                        **payload,
                     },
                 ).one_or_none()
                 if row is None or row.effect_count != 1:
@@ -292,12 +346,15 @@ class PostgreSQLFileImportWorker:
         except (SQLAlchemyError, AssertionError):
             raise FileImportUnavailable("File publication is unavailable") from None
         return PublishedFileImport(
-            candidate_ref=CandidateRef(
-                organization_id=claims.organization_id,
-                source_ref=str(redeemed.source_ref.value),
-                resource_ref=resource_ref,
-                revision_ref=str(revision_id),
-                fragment_ref=fragment_ref,
+            candidate_refs=tuple(
+                CandidateRef(
+                    organization_id=claims.organization_id,
+                    source_ref=str(redeemed.source_ref.value),
+                    resource_ref=resource_ref,
+                    revision_ref=str(revision_id),
+                    fragment_ref=fragment.fragment_ref,
+                )
+                for fragment in document.fragments
             ),
             acquisition_id=redeemed.acquisition_id,
         )

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -8,6 +9,8 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
+from alembic import command
+from alembic.config import Config
 from fastapi.testclient import TestClient
 from sqlalchemy import Engine, text
 from sqlalchemy.engine import Connection
@@ -19,6 +22,7 @@ from adapters.http.app import create_app
 from adapters.http.authentication import VerifiedAuthenticationContext
 from adapters.http.organization_authority import OrganizationVerificationRejected
 from adapters.http.scope_authority import ScopeAuthorityIdentity
+from adapters.parsers.markdown import compile_markdown
 from engine.control import (
     ContextControl,
     ControlOperation,
@@ -74,16 +78,53 @@ from engine.runtime.scope_authority import (
 )
 from engine.supply import (
     MarkdownCompilerConfig,
+    ParsedDocument,
     WorkerLeaseClaims,
     WorkerLeaseCodec,
     WorkerLeaseKeyring,
     WorkerLeaseToken,
+    canonicalize_parsed_document,
 )
 from tests.support.context_run_operator import exact_test_context_run_operator_read
 
 pytestmark = pytest.mark.integration
 NOW = datetime.now(UTC).replace(microsecond=0)
 SIGNING_KEY = bytes(range(32))
+MARKDOWN_FIXTURES = Path(__file__).parents[1] / "fixtures/markdown"
+ROOT = Path(__file__).parents[2]
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _scrub_structural_snapshot_payloads_after_module(
+    migration_configuration: DatabaseConfiguration,
+) -> Iterator[None]:
+    """Let later historical-migration tests own their clean rollback fixture."""
+
+    yield
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.begin() as connection:
+            connection.execute(
+                text(
+                    "ALTER TABLE file_revision_snapshot DISABLE TRIGGER "
+                    "file_revision_snapshot_immutable"
+                )
+            )
+            connection.execute(
+                text(
+                    "UPDATE file_revision_snapshot "
+                    "SET compilation_document = NULL "
+                    "WHERE compilation_document IS NOT NULL"
+                )
+            )
+            connection.execute(
+                text(
+                    "ALTER TABLE file_revision_snapshot ENABLE TRIGGER "
+                    "file_revision_snapshot_immutable"
+                )
+            )
+    finally:
+        migration_engine.dispose()
 
 
 def _publication_effect_counts(
@@ -533,6 +574,48 @@ def _publish_direct(
                 "content_hash": "a" * 64,
                 "compilation_digest": "b" * 64,
                 "phrase_digest": "c" * 64,
+                "signing_key_version": claims.signing_key_version,
+                "nonce": claims.nonce,
+                "issued_at": claims.issued_at,
+                "expires_at": claims.expires_at,
+            },
+        ).scalar_one_or_none()
+
+
+def _publish_structural_direct(
+    guarded_worker_engine: Engine,
+    claims: WorkerLeaseClaims,
+    document: ParsedDocument,
+    compilation_document: dict[str, object],
+) -> int | None:
+    with guarded_worker_engine.begin() as connection:
+        return connection.execute(
+            text(
+                """
+                SELECT effect_count
+                FROM public.context_worker_publish_structural_file_import(
+                    :organization_id, :job_id, :service_principal_id,
+                    :source_ref, :resource_ref, :revision_id,
+                    :canonical_text, :content_hash, :compilation_digest,
+                    :compiler_version, :config_version,
+                    CAST(:compilation_document AS jsonb),
+                    :signing_key_version, :nonce, :issued_at, :expires_at
+                )
+                """
+            ),
+            {
+                "organization_id": claims.organization_id,
+                "job_id": claims.job_id,
+                "service_principal_id": claims.service_principal_id,
+                "source_ref": claims.source_ref,
+                "resource_ref": f"resource:malformed:{uuid4()}",
+                "revision_id": uuid4(),
+                "canonical_text": document.canonical_text,
+                "content_hash": document.content_hash,
+                "compilation_digest": document.compilation_digest,
+                "compiler_version": document.provenance.compiler_version,
+                "config_version": document.provenance.config_version,
+                "compilation_document": json.dumps(compilation_document),
                 "signing_key_version": claims.signing_key_version,
                 "nonce": claims.nonce,
                 "issued_at": claims.issued_at,
@@ -1020,6 +1103,399 @@ def test_registered_file_import_publishes_one_exact_authorized_http_package(
         assert _publication_effect_counts(connection, other_organization_id) == (
             0,
         ) * 10
+
+
+def test_structural_file_import_returns_coherent_authorized_units_over_http(
+    tmp_path: Path,
+    migration_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+    guarded_worker_engine: Engine,
+    guarded_runtime_engine: Engine,
+    query_digest_keyring: QueryDigestKeyring,
+) -> None:
+    scenario = _prepare_file_import_scenario(
+        tmp_path,
+        migration_configuration,
+        guarded_control_engine,
+        payload=(MARKDOWN_FIXTURES / "combined-v2.md").read_bytes(),
+    )
+    assert scenario.token is not None
+    published = PostgreSQLFileImportWorker(
+        guarded_worker_engine,
+        scenario.codec,
+        scenario.receiver,
+        FileRootRegistry(
+            {scenario.root_ref: scenario.root},
+            limits=FileReadLimits(max_file_bytes=4096),
+        ),
+        MarkdownCompilerConfig("markdown-config-v2"),
+        clock=lambda: datetime.now(UTC).replace(microsecond=0),
+    ).run(
+        FileImportLeaseRedemption(
+            scenario.token,
+            scenario.prepared.organization_id,
+            scenario.prepared.job_id,
+            scenario.prepared.source_ref,
+        )
+    )
+    assert tuple(
+        candidate.fragment_ref for candidate in published.candidate_refs
+    ) == (
+        "fragment:heading:1",
+        "fragment:paragraph:1",
+        "fragment:heading:2",
+        "fragment:list:1",
+        "fragment:fenced_code:1",
+        "fragment:table:1",
+    )
+
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.connect() as connection:
+            user_id = connection.execute(
+                text(
+                    """
+                    SELECT user_id FROM membership
+                    WHERE organization_id = :organization_id
+                      AND membership_id = :membership_id
+                    """
+                ),
+                {
+                    "organization_id": scenario.organization_id,
+                    "membership_id": scenario.membership_id,
+                },
+            ).scalar_one()
+            fragments = connection.execute(
+                text(
+                    """
+                    SELECT fragment_ref, ordinal, content
+                    FROM context_fragment
+                    WHERE organization_id = :organization_id
+                      AND resource_ref = :resource_ref
+                      AND revision_id = :revision_id
+                    ORDER BY ordinal
+                    """
+                ),
+                {
+                    "organization_id": scenario.organization_id,
+                    "resource_ref": published.candidate_ref.resource_ref,
+                    "revision_id": UUID(published.candidate_ref.revision_ref),
+                },
+            ).all()
+            snapshot = connection.execute(
+                text(
+                    """
+                    SELECT compiler_version, config_version, compilation_digest,
+                           compilation_document
+                    FROM file_revision_snapshot
+                    WHERE organization_id = :organization_id
+                      AND resource_ref = :resource_ref
+                      AND revision_id = :revision_id
+                    """
+                ),
+                {
+                    "organization_id": scenario.organization_id,
+                    "resource_ref": published.candidate_ref.resource_ref,
+                    "revision_id": UUID(published.candidate_ref.revision_ref),
+                },
+            ).one()
+            candidate_count = connection.execute(
+                text(
+                    """
+                    SELECT count(*) FROM exact_phrase_candidate
+                    WHERE organization_id = :organization_id
+                      AND resource_ref = :resource_ref
+                      AND revision_id = :revision_id
+                    """
+                ),
+                {
+                    "organization_id": scenario.organization_id,
+                    "resource_ref": published.candidate_ref.resource_ref,
+                    "revision_id": UUID(published.candidate_ref.revision_ref),
+                },
+            ).scalar_one()
+    finally:
+        migration_engine.dispose()
+
+    assert tuple((row.fragment_ref, row.ordinal) for row in fragments) == (
+        ("fragment:heading:1", 0),
+        ("fragment:paragraph:1", 1),
+        ("fragment:heading:2", 2),
+        ("fragment:list:1", 3),
+        ("fragment:fenced_code:1", 4),
+        ("fragment:table:1", 5),
+    )
+    assert snapshot.compiler_version == "context-engine-markdown-v2"
+    assert snapshot.config_version == "markdown-config-v2"
+    assert snapshot.compilation_document["compilationDigest"] == (
+        snapshot.compilation_digest
+    )
+    assert [
+        fragment["position"]
+        for fragment in snapshot.compilation_document["fragments"]
+    ] == [
+        fragment["position"]
+        for fragment in snapshot.compilation_document["sections"]
+    ]
+    assert candidate_count == 15
+
+    request_ids = iter(("structure-list", "structure-code", "structure-table"))
+    client = TestClient(
+        create_app(
+            authenticator=_RuntimeAuthenticator(
+                scenario.organization_id,
+                user_id,
+                scenario.membership_id,
+            ),
+            organization_authority=_OrganizationAuthority(),
+            membership_authority=PostgreSQLMembershipAuthority(
+                guarded_runtime_engine
+            ),
+            scope_authority=_ExactScopeAuthority(
+                published.candidate_ref.source_ref,
+                published.candidate_ref.resource_ref,
+            ),
+            runtime=Runtime(
+                required_kernel_dependencies(),
+                candidate_index=PostgreSQLExactPhraseCandidateIndex(),
+                clock=lambda: NOW,
+                query_digest_keyring=query_digest_keyring,
+            ),
+            clock=lambda: NOW,
+            request_id_factory=lambda: next(request_ids),
+        )
+    )
+    expectations = (
+        (
+            "Escalate red-rocket immediately.",
+            "fragment:list:1",
+            "# Handbook\n\n## Operations\n\n"
+            "- Keep exact lineage.\n- Escalate red-rocket immediately.",
+        ),
+        (
+            'release_marker = "blue-comet"',
+            "fragment:fenced_code:1",
+            "# Handbook\n\n## Operations\n\n"
+            '```python\nrelease_marker = "blue-comet"\n```',
+        ),
+        (
+            "silver-compass",
+            "fragment:table:1",
+            "# Handbook\n\n## Operations\n\n"
+            "| Mode | Result |\n| --- | --- |\n| strict | silver-compass |",
+        ),
+    )
+    for query, fragment_ref, expected_text in expectations:
+        response = client.post(
+            "/v1/context:resolve",
+            headers={"Authorization": "Bearer runtime-secret"},
+            json={"kind": "acquire", "need": {"query": query}},
+        )
+
+        assert response.status_code == 200
+        package = response.json()["package"]
+        assert len(package["blocks"]) == 1
+        assert package["blocks"][0]["text"] == expected_text
+        assert package["blocks"][0]["evidenceRefs"] == [
+            package["evidence"][0]["evidenceRef"]
+        ]
+        assert package["evidence"][0]["fragmentRef"] == fragment_ref
+        assert package["evidence"][0]["revisionRef"] == (
+            published.candidate_ref.revision_ref
+        )
+
+    denied = TestClient(
+        create_app(
+            authenticator=_RuntimeAuthenticator(
+                scenario.organization_id,
+                user_id,
+                scenario.membership_id,
+            ),
+            organization_authority=_OrganizationAuthority(),
+            membership_authority=PostgreSQLMembershipAuthority(
+                guarded_runtime_engine
+            ),
+            scope_authority=_ExactScopeAuthority(
+                published.candidate_ref.source_ref,
+                published.candidate_ref.resource_ref,
+                allowed=False,
+            ),
+            runtime=Runtime(
+                required_kernel_dependencies(),
+                candidate_index=PostgreSQLExactPhraseCandidateIndex(),
+                clock=lambda: NOW,
+                query_digest_keyring=query_digest_keyring,
+            ),
+            clock=lambda: NOW,
+            request_id_factory=lambda: "structure-denied",
+        )
+    ).post(
+        "/v1/context:resolve",
+        headers={"Authorization": "Bearer runtime-secret"},
+        json={
+            "kind": "acquire",
+            "need": {"query": "Escalate red-rocket immediately."},
+        },
+    )
+    assert denied.status_code == 200
+    assert denied.json()["package"]["blocks"] == []
+    assert denied.json()["package"]["evidence"] == []
+    assert "Handbook" not in denied.text
+    assert "red-rocket" not in denied.text
+
+    with pytest.raises(
+        RuntimeError,
+        match="structural Markdown downgrade requires no v2 snapshots",
+    ):
+        command.downgrade(Config(ROOT / "alembic.ini"), "20260722_0011")
+    with migration_engine.connect() as connection:
+        assert connection.execute(
+            text("SELECT version_num FROM alembic_version")
+        ).scalar_one() == "20260723_0012"
+
+
+def test_structural_publisher_has_one_narrow_non_public_worker_entrypoint(
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.connect() as connection:
+            security = connection.execute(
+                text(
+                    """
+                    SELECT pg_get_userbyid(procedure.proowner) AS owner,
+                           procedure.prosecdef,
+                           procedure.proconfig
+                    FROM pg_proc AS procedure
+                    JOIN pg_namespace AS namespace
+                      ON namespace.oid = procedure.pronamespace
+                    WHERE namespace.nspname = 'public'
+                      AND procedure.proname =
+                          'context_worker_publish_structural_file_import'
+                    """
+                )
+            ).one()
+            grants = {
+                (row.grantee, row.privilege_type)
+                for row in connection.execute(
+                    text(
+                        """
+                        SELECT COALESCE(grantee.rolname, 'PUBLIC') AS grantee,
+                               privilege.privilege_type
+                        FROM pg_proc AS procedure
+                        JOIN pg_namespace AS namespace
+                          ON namespace.oid = procedure.pronamespace
+                        CROSS JOIN LATERAL aclexplode(
+                            COALESCE(
+                                procedure.proacl,
+                                acldefault('f', procedure.proowner)
+                            )
+                        ) AS privilege
+                        LEFT JOIN pg_roles AS grantee
+                          ON grantee.oid = privilege.grantee
+                        WHERE namespace.nspname = 'public'
+                          AND procedure.proname =
+                              'context_worker_publish_structural_file_import'
+                        """
+                    )
+                )
+            }
+            worker_direct_dml = tuple(
+                connection.execute(
+                    text(
+                        """
+                        SELECT has_table_privilege(
+                                   'context_engine_worker', table_name, 'INSERT'
+                               )
+                        FROM unnest(ARRAY[
+                            'public.context_resource',
+                            'public.context_revision',
+                            'public.file_revision_snapshot',
+                            'public.context_fragment',
+                            'public.exact_phrase_candidate'
+                        ]) AS table_name
+                        """
+                    )
+                ).scalars()
+            )
+    finally:
+        migration_engine.dispose()
+
+    assert security.owner == "context_engine_worker_lease_definer"
+    assert security.prosecdef is True
+    assert set(security.proconfig) == {
+        "search_path=pg_catalog, pg_temp",
+        "row_security=on",
+    }
+    assert grants == {
+        ("context_engine_worker", "EXECUTE"),
+        ("context_engine_worker_lease_definer", "EXECUTE"),
+    }
+    assert worker_direct_dml == (False,) * 5
+
+
+def test_structural_publisher_rejects_malformed_json_without_partial_effects(
+    tmp_path: Path,
+    migration_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+    guarded_worker_engine: Engine,
+) -> None:
+    scenario = _prepare_file_import_scenario(
+        tmp_path,
+        migration_configuration,
+        guarded_control_engine,
+        payload=(MARKDOWN_FIXTURES / "combined-v2.md").read_bytes(),
+    )
+    claims = _scenario_claims(scenario)
+    assert _redeem_direct(guarded_worker_engine, claims) is not None
+    document = compile_markdown(
+        (MARKDOWN_FIXTURES / "combined-v2.md").read_bytes(),
+        MarkdownCompilerConfig("markdown-config-v2"),
+    )
+    assert type(document) is ParsedDocument
+
+    missing_array = json.loads(canonicalize_parsed_document(document))
+    missing_array["fragments"][0].pop("searchPhrases")
+    malformed_offset = json.loads(canonicalize_parsed_document(document))
+    malformed_offset["fragments"][0]["position"]["start"]["byteOffset"] = (
+        "not-a-number"
+    )
+    mismatched_section = json.loads(canonicalize_parsed_document(document))
+    mismatched_section["sections"][0]["kind"] = "paragraph"
+
+    for malformed in (missing_array, malformed_offset, mismatched_section):
+        assert (
+            _publish_structural_direct(
+                guarded_worker_engine,
+                claims,
+                document,
+                malformed,
+            )
+            is None
+        )
+
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.connect() as connection:
+            assert _publication_effect_counts(
+                connection,
+                scenario.organization_id,
+            ) == (1, 1, 0, 0, 0, 0, 0, 0, 0, 0)
+            assert connection.execute(
+                text(
+                    """
+                    SELECT state FROM file_import_job
+                    WHERE organization_id = :organization_id
+                      AND job_id = :job_id
+                    """
+                ),
+                {
+                    "organization_id": scenario.organization_id,
+                    "job_id": scenario.prepared.job_id,
+                },
+            ).scalar_one() == "running"
+    finally:
+        migration_engine.dispose()
 
 
 def test_missing_file_after_redemption_records_terminal_zero_effect_failure(

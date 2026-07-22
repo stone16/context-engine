@@ -99,7 +99,7 @@ def test_empty_baseline_remains_a_reversible_historical_revision(
         assert _application_tables(migration_configuration) == ["alembic_version"]
     finally:
         command.upgrade(alembic_configuration, "head")
-    assert _revision_rows(migration_configuration) == ["20260722_0011"]
+    assert _revision_rows(migration_configuration) == ["20260723_0012"]
 
 
 def test_organization_isolation_revision_downgrades_and_reapplies_cleanly(
@@ -114,7 +114,7 @@ def test_organization_isolation_revision_downgrades_and_reapplies_cleanly(
     finally:
         command.upgrade(alembic_configuration, "head")
 
-    assert _revision_rows(migration_configuration) == ["20260722_0011"]
+    assert _revision_rows(migration_configuration) == ["20260723_0012"]
     assert _application_tables(migration_configuration) == HEAD_TABLES
 
 
@@ -134,7 +134,7 @@ def test_membership_revision_downgrades_to_issue_8_and_reapplies_cleanly(
     finally:
         command.upgrade(alembic_configuration, "head")
 
-    assert _revision_rows(migration_configuration) == ["20260722_0011"]
+    assert _revision_rows(migration_configuration) == ["20260723_0012"]
 
 
 def test_content_schema_revision_downgrades_to_membership_and_reapplies_cleanly(
@@ -155,7 +155,7 @@ def test_content_schema_revision_downgrades_to_membership_and_reapplies_cleanly(
     finally:
         command.upgrade(alembic_configuration, "head")
 
-    assert _revision_rows(migration_configuration) == ["20260722_0011"]
+    assert _revision_rows(migration_configuration) == ["20260723_0012"]
     assert _application_tables(migration_configuration) == HEAD_TABLES
 
 
@@ -182,7 +182,7 @@ def test_policy_epoch_revision_downgrades_to_content_and_reapplies_cleanly(
     finally:
         command.upgrade(alembic_configuration, "head")
 
-    assert _revision_rows(migration_configuration) == ["20260722_0011"]
+    assert _revision_rows(migration_configuration) == ["20260723_0012"]
     assert _application_tables(migration_configuration) == HEAD_TABLES
 
 
@@ -211,7 +211,7 @@ def test_worker_lease_revision_downgrades_to_policy_epoch_and_reapplies_cleanly(
     finally:
         command.upgrade(alembic_configuration, "head")
 
-    assert _revision_rows(migration_configuration) == ["20260722_0011"]
+    assert _revision_rows(migration_configuration) == ["20260723_0012"]
     assert _application_tables(migration_configuration) == HEAD_TABLES
 
 
@@ -233,7 +233,7 @@ def test_decision_lineage_revision_downgrades_to_worker_lease_and_reapplies_clea
     finally:
         command.upgrade(alembic_configuration, "head")
 
-    assert _revision_rows(migration_configuration) == ["20260722_0011"]
+    assert _revision_rows(migration_configuration) == ["20260723_0012"]
     assert _application_tables(migration_configuration) == HEAD_TABLES
 
 
@@ -271,7 +271,7 @@ def test_field_projection_revision_downgrades_to_decision_lineage_and_reapplies_
     finally:
         command.upgrade(alembic_configuration, "head")
 
-    assert _revision_rows(migration_configuration) == ["20260722_0011"]
+    assert _revision_rows(migration_configuration) == ["20260723_0012"]
     assert "context_fragment_field" in _application_tables(migration_configuration)
     assert "membership_resource_field_right" in _application_tables(
         migration_configuration
@@ -294,10 +294,81 @@ def test_file_source_revision_downgrades_to_learning_release_and_reapplies_clean
     finally:
         command.upgrade(alembic_configuration, "head")
 
-    assert _revision_rows(migration_configuration) == ["20260722_0011"]
+    assert _revision_rows(migration_configuration) == ["20260723_0012"]
     tables = _application_tables(migration_configuration)
     assert "context_source" in tables
     assert "source_version" in tables
+
+
+def test_structural_markdown_revision_downgrades_and_reapplies_cleanly(
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    """Issue #24 owns one explicit, reversible compiler-v2 schema boundary."""
+
+    alembic_configuration = Config(ROOT / "alembic.ini")
+    engine = create_database_engine(migration_configuration)
+    try:
+        command.downgrade(alembic_configuration, "20260722_0011")
+        assert _revision_rows(migration_configuration) == ["20260722_0011"]
+        with engine.connect() as connection:
+            assert connection.execute(
+                text(
+                    """
+                    SELECT count(*)
+                    FROM information_schema.columns
+                    WHERE table_schema = 'public'
+                      AND table_name = 'file_revision_snapshot'
+                      AND column_name = 'compilation_document'
+                    """
+                )
+            ).scalar_one() == 0
+            assert connection.execute(
+                text(
+                    """
+                    SELECT count(*)
+                    FROM pg_proc AS procedure
+                    JOIN pg_namespace AS namespace
+                      ON namespace.oid = procedure.pronamespace
+                    WHERE namespace.nspname = 'public'
+                      AND procedure.proname =
+                          'context_worker_publish_structural_file_import'
+                    """
+                )
+            ).scalar_one() == 0
+    finally:
+        command.upgrade(alembic_configuration, "head")
+        engine.dispose()
+
+    assert _revision_rows(migration_configuration) == ["20260723_0012"]
+    engine = create_database_engine(migration_configuration)
+    try:
+        with engine.connect() as connection:
+            assert connection.execute(
+                text(
+                    """
+                    SELECT count(*)
+                    FROM information_schema.columns
+                    WHERE table_schema = 'public'
+                      AND table_name = 'file_revision_snapshot'
+                      AND column_name = 'compilation_document'
+                    """
+                )
+            ).scalar_one() == 1
+            assert connection.execute(
+                text(
+                    """
+                    SELECT count(*)
+                    FROM pg_proc AS procedure
+                    JOIN pg_namespace AS namespace
+                      ON namespace.oid = procedure.pronamespace
+                    WHERE namespace.nspname = 'public'
+                      AND procedure.proname =
+                          'context_worker_publish_structural_file_import'
+                    """
+                )
+            ).scalar_one() == 1
+    finally:
+        engine.dispose()
 
 
 def test_empty_content_downgrade_preserves_v2_context_run_history(
@@ -532,7 +603,7 @@ def test_field_projection_downgrade_refuses_populated_content_atomically(
         ):
             command.downgrade(alembic_configuration, "20260722_0007")
 
-        assert _revision_rows(migration_configuration) == ["20260722_0011"]
+        assert _revision_rows(migration_configuration) == ["20260723_0012"]
         with engine.connect() as connection:
             assert connection.execute(
                 text(
@@ -594,7 +665,7 @@ def test_field_projection_downgrade_refuses_populated_content_atomically(
                 ):
                     connection.execute(text(statement), parameters)
         except SQLAlchemyError:
-            if _revision_rows(migration_configuration) != ["20260722_0011"]:
+            if _revision_rows(migration_configuration) != ["20260723_0012"]:
                 command.upgrade(alembic_configuration, "head")
             raise
         finally:
@@ -745,7 +816,7 @@ def test_field_projection_downgrade_serializes_with_concurrent_fragment_insert(
                 parameters,
             ).scalar_one() == "concurrent-private-body"
     finally:
-        if _revision_rows(migration_configuration) != ["20260722_0011"]:
+        if _revision_rows(migration_configuration) != ["20260723_0012"]:
             command.upgrade(alembic_configuration, "head")
         with engine.begin() as connection:
             connection.execute(

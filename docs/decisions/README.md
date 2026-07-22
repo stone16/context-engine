@@ -38,6 +38,7 @@ kernel, capability separation, and publication visibility model.
 | Executable M0 security veto | [0034 — Registered executable security evidence](0034-execute-the-m0-security-veto-from-registered-evidence.md) | Exact current tests, explicit hard-oracle observations, and live all-table RLS facts produce provenance-bearing independent gate artifacts | Planned IDs presented as executed proof, skip/retry-to-green, manifest-only RLS claims, or aggregate scoring |
 | First File source registration | [0035 — Trusted File source registration](0035-register-file-sources-through-context-control.md) | One operation-bound trusted Control call atomically creates an Organization-owned source plus immutable active first version; all acquisition carriers remain unavailable | Caller-authored Organization/mode, host paths, registration-time File I/O, future capability claims, or cross-tenant idempotency |
 | First Markdown compiler | [0036 — Deterministic narrow Markdown compilation](0036-compile-narrow-markdown-deterministically.md) | Exact bytes compile purely into one canonical heading-plus-paragraph ParsedDocument with normalized coordinates and versioned content/compilation identities | Path-coupled parsing, silent unsupported syntax, partial documents, unversioned derived identities, or parser-side I/O |
+| Structural Markdown compiler | [0038 — Structural Markdown units](0038-compile-and-publish-structural-markdown.md) | Explicit v2 compilation publishes one coherent Fragment per heading, paragraph, list, fenced code block, or table with exact provenance and same-Fragment heading ancestry | Silent v1 reinterpretation, item/cell fragmentation, post-authorization parent expansion, or unbudgeted context |
 
 Each baseline ADR is `accepted` and contains Context, Decision, Rationale,
 Consequences, and Revisit trigger sections. A revisit trigger permits review; it
@@ -121,3 +122,5 @@ touched:
 - [0034 — Registered executable security evidence](0034-execute-the-m0-security-veto-from-registered-evidence.md)
 - [0035 — Trusted File source registration](0035-register-file-sources-through-context-control.md)
 - [0036 — Deterministic narrow Markdown compilation](0036-compile-narrow-markdown-deterministically.md)
+- [0037 — First File publication](0037-publish-first-file-through-exact-worker-lease.md)
+- [0038 — Structural Markdown units](0038-compile-and-publish-structural-markdown.md)

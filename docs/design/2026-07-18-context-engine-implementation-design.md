@@ -534,6 +534,20 @@ Three change domains are separate:
 
 There is no generic metadata-only mutation of immutable Revision data.
 
+Markdown compilation is representation-versioned. The frozen v1 contract keeps
+its original heading-plus-paragraph bytes. Version 2 emits one source-ordered
+Fragment for each heading, paragraph, flat list, fenced code block, or table,
+with a stable structural path and exact canonical UTF-8 source span. Lists,
+code blocks, and tables remain coherent units rather than item, line, or cell
+Fragments. Parent heading ancestry is copied into the same Fragment during pure
+compilation, so Runtime performs no parent expansion: the complete contextual
+block crosses one `CandidateRef -> AuthorizationKernel -> AuthorizedProjection`
+decision and consumes Package budget as one content-bearing value. Unsupported
+syntax fails all-or-nothing. The immutable Revision snapshot binds the complete
+versioned compilation document; publication of every Fragment and index alias
+remains one transaction. ADR-0038 owns the detailed grammar and compatibility
+boundary.
+
 ### 6.2 CurationSnapshot
 
 Curation runs after Revision activation and is not on the publication critical
