@@ -99,13 +99,20 @@ def upgrade() -> None:
                 AND compiler_version = 'context-engine-markdown-v2'
                 AND config_version = 'markdown-config-v2'
                 AND jsonb_typeof(compilation_document) = 'object'
-                AND compilation_document->>'canonicalText' = canonical_text
-                AND compilation_document->>'contentHash' = content_hash
-                AND compilation_document->>'compilationDigest' = compilation_digest
-                AND compilation_document#>>'{provenance,compilerVersion}' = compiler_version
-                AND compilation_document#>>'{provenance,configVersion}' = config_version
-                AND compilation_document#>>'{provenance,canonicalizationProfile}' = 'markdown-structural-units-v2'
-                AND compilation_document#>>'{provenance,compilationDigestProfile}' = 'rfc8785-sha256-v2'
+                AND compilation_document->>'canonicalText'
+                    IS NOT DISTINCT FROM canonical_text
+                AND compilation_document->>'contentHash'
+                    IS NOT DISTINCT FROM content_hash
+                AND compilation_document->>'compilationDigest'
+                    IS NOT DISTINCT FROM compilation_digest
+                AND compilation_document#>>'{provenance,compilerVersion}'
+                    IS NOT DISTINCT FROM compiler_version
+                AND compilation_document#>>'{provenance,configVersion}'
+                    IS NOT DISTINCT FROM config_version
+                AND compilation_document#>>'{provenance,canonicalizationProfile}'
+                    IS NOT DISTINCT FROM 'markdown-structural-units-v2'
+                AND compilation_document#>>'{provenance,compilationDigestProfile}'
+                    IS NOT DISTINCT FROM 'rfc8785-sha256-v2'
             )
         )
         """

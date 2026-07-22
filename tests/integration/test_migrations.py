@@ -9,7 +9,7 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import text
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from engine.persistence import DatabaseConfiguration, create_database_engine
 from tests.integration.test_context_run_schema import (
@@ -369,6 +369,53 @@ def test_structural_markdown_revision_downgrades_and_reapplies_cleanly(
             ).scalar_one() == 1
     finally:
         engine.dispose()
+
+
+def test_structural_snapshot_constraint_rejects_missing_json_bindings(
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    """A v2 snapshot cannot exploit PostgreSQL CHECK's UNKNOWN result."""
+
+    engine = create_database_engine(migration_configuration)
+    try:
+        with pytest.raises(IntegrityError) as raised, engine.begin() as connection:
+            connection.execute(
+                text(
+                    """
+                    CREATE TEMP TABLE structural_snapshot_constraint_probe
+                    (LIKE file_revision_snapshot INCLUDING CONSTRAINTS)
+                    ON COMMIT DROP
+                    """
+                )
+            )
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO structural_snapshot_constraint_probe (
+                        organization_id, resource_ref, revision_id,
+                        acquisition_id, canonical_text, content_hash,
+                        compilation_digest, compiler_version, config_version,
+                        compilation_document
+                    ) VALUES (
+                        :organization_id, :resource_ref, :revision_id,
+                        :acquisition_id, '# Missing bindings\n', :digest,
+                        :digest, 'context-engine-markdown-v2',
+                        'markdown-config-v2', '{}'::jsonb
+                    )
+                    """
+                ),
+                {
+                    "organization_id": uuid4(),
+                    "resource_ref": f"resource:missing-bindings:{uuid4()}",
+                    "revision_id": uuid4(),
+                    "acquisition_id": uuid4(),
+                    "digest": "0" * 64,
+                },
+            )
+    finally:
+        engine.dispose()
+
+    assert "ck_file_revision_snapshot_structural_document" in str(raised.value.orig)
 
 
 def test_empty_content_downgrade_preserves_v2_context_run_history(

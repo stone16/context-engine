@@ -2487,7 +2487,7 @@
       "checkConstraints": [
         {"name": "ck_file_revision_snapshot_content_hash", "expression": "content_hash ~ '^[0-9a-f]{64}$'"},
         {"name": "ck_file_revision_snapshot_compilation_digest", "expression": "compilation_digest ~ '^[0-9a-f]{64}$'"},
-        {"name": "ck_file_revision_snapshot_structural_document", "expression": "(compilation_document IS NULL AND compiler_version = 'context-engine-markdown-v1' AND config_version = 'markdown-config-v1') OR (compilation_document IS NOT NULL AND compiler_version = 'context-engine-markdown-v2' AND config_version = 'markdown-config-v2' AND compilation_document binds canonical_text, content_hash, compilation_digest, compiler/config versions, markdown-structural-units-v2, and rfc8785-sha256-v2)"}
+        {"name": "ck_file_revision_snapshot_structural_document", "expression": "(compilation_document IS NULL AND compiler_version = 'context-engine-markdown-v1' AND config_version = 'markdown-config-v1') OR (compilation_document IS NOT NULL AND compiler_version = 'context-engine-markdown-v2' AND config_version = 'markdown-config-v2' AND null-safe compilation_document bindings require canonical_text, content_hash, compilation_digest, compiler/config versions, markdown-structural-units-v2, and rfc8785-sha256-v2)"}
       ],
       "versionedCompilationContract": {
         "markdown-config-v1": {
