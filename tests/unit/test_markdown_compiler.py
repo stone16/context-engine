@@ -174,6 +174,14 @@ def test_unsupported_markdown_is_typed_failure_not_reinterpreted_text() -> None:
 @pytest.mark.parametrize(
     ("markdown", "construct"),
     [
+        (
+            b"# Handbook #\n\nParagraph.\n",
+            UnsupportedConstruct.ATX_CLOSING_SEQUENCE,
+        ),
+        (
+            b"# Handbook ###\n\nParagraph.\n",
+            UnsupportedConstruct.ATX_CLOSING_SEQUENCE,
+        ),
         (b"## Nested\n\nParagraph.\n", UnsupportedConstruct.NESTED_HEADING),
         (b"# Handbook\n\n## Nested\n", UnsupportedConstruct.NESTED_HEADING),
         (b"# Handbook\n\n# Second\n", UnsupportedConstruct.NESTED_HEADING),
@@ -203,6 +211,7 @@ def test_unsupported_markdown_is_typed_failure_not_reinterpreted_text() -> None:
         (b"# Handbook\n\n<span>html</span>\n", UnsupportedConstruct.HTML),
         (b"# Handbook\n\n&lt;escaped&gt;\n", UnsupportedConstruct.ENTITY),
         (b"# Handbook\n\nescaped\\*text\n", UnsupportedConstruct.ESCAPE),
+        (b"# Handbook\n\nParagraph.\\\n", UnsupportedConstruct.HARD_BREAK),
         (b"# *Handbook*\n\nParagraph.\n", UnsupportedConstruct.EMPHASIS),
     ],
 )
@@ -249,6 +258,28 @@ def test_backslash_before_non_punctuation_remains_plain_text() -> None:
     assert outcome.sections[1].text == r"C:\Users"
 
 
+@pytest.mark.parametrize("paragraph", ("[literal]", "foo_bar_baz"))
+def test_plain_brackets_and_intraword_underscores_remain_text(
+    paragraph: str,
+) -> None:
+    outcome = compile_markdown(f"# Handbook\n\n{paragraph}\n".encode(), CONFIG)
+
+    assert type(outcome) is ParsedDocument
+    assert outcome.sections[1].text == paragraph
+
+
+@pytest.mark.parametrize("control", ("\x7f", "\x80", "\x9f"))
+def test_unicode_control_characters_fail_closed(control: str) -> None:
+    outcome = compile_markdown(
+        f"# Handbook\n\nParagraph{control}.\n".encode(),
+        CONFIG,
+    )
+
+    assert type(outcome) is CompilationFailure
+    assert outcome.code is CompilationFailureCode.UNSUPPORTED_CONSTRUCT
+    assert outcome.construct is UnsupportedConstruct.CONTROL_CHARACTER
+
+
 def test_source_span_rejects_inconsistent_coordinate_order() -> None:
     with pytest.raises(ValueError, match="must not precede"):
         SourceSpan(
@@ -259,6 +290,16 @@ def test_source_span_rejects_inconsistent_coordinate_order() -> None:
         SourceSpan(
             start=SourcePoint(line=1, column=2, byte_offset=1),
             end=SourcePoint(line=1, column=1, byte_offset=2),
+        )
+    with pytest.raises(ValueError, match="must advance together"):
+        SourceSpan(
+            start=SourcePoint(line=1, column=1, byte_offset=0),
+            end=SourcePoint(line=2, column=1, byte_offset=0),
+        )
+    with pytest.raises(ValueError, match="must advance together"):
+        SourceSpan(
+            start=SourcePoint(line=1, column=1, byte_offset=0),
+            end=SourcePoint(line=1, column=1, byte_offset=1),
         )
 
 

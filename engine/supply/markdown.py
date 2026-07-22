@@ -84,6 +84,13 @@ class SourceSpan:
             or (self.end.line, self.end.column) < (self.start.line, self.start.column)
         ):
             raise ValueError("source span end must not precede its start")
+        byte_advanced = self.end.byte_offset > self.start.byte_offset
+        coordinate_advanced = (self.end.line, self.end.column) > (
+            self.start.line,
+            self.start.column,
+        )
+        if byte_advanced is not coordinate_advanced:
+            raise ValueError("source span coordinates and bytes must advance together")
 
 
 @dataclass(frozen=True, slots=True)
@@ -261,6 +268,7 @@ class CompilationFailureCode(StrEnum):
 
 
 class UnsupportedConstruct(StrEnum):
+    ATX_CLOSING_SEQUENCE = "atx_closing_sequence"
     BLOCKQUOTE = "blockquote"
     CODE_BLOCK = "code_block"
     CONTROL_CHARACTER = "control_character"

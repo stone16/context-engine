@@ -29,7 +29,7 @@ _THEMATIC_BREAK_PATTERN: Final = re.compile(
     r"^ {0,3}(?:(?:\*[ \t]*){3,}|(?:_[ \t]*){3,}|(?:-[ \t]*){3,})$"
 )
 _REFERENCE_LINK_PATTERN: Final = re.compile(
-    r"!?\[[^]]*](?:\[[^]]*]|\s*:)|!?\[[^]]+]"
+    r"!?\[[^]]*](?:\[[^]]*]|\s*:)"
 )
 _ENTITY_PATTERN: Final = re.compile(
     r"&(?:#[0-9]+|#[xX][0-9A-Fa-f]+|[A-Za-z][A-Za-z0-9]+);"
@@ -37,6 +37,7 @@ _ENTITY_PATTERN: Final = re.compile(
 _ESCAPE_PATTERN: Final = re.compile(
     r'''\\[!"#$%&'()*+,\-./:;<=>?@\[\]\\^_`{|}~]'''
 )
+_ATX_CLOSING_SEQUENCE_PATTERN: Final = re.compile(r"[ \t]+#+[ \t]*$")
 
 
 def _point(line: int, column: int, byte_offset: int) -> SourcePoint:
@@ -69,7 +70,10 @@ def _unsupported_construct(
     inspected = line[2:] if supported_heading and line.startswith("# ") else line
     if line.startswith(("    ", "\t")):
         return UnsupportedConstruct.CODE_BLOCK
-    if any(ord(character) < 0x20 for character in line):
+    if any(
+        ord(character) < 0x20 or 0x7F <= ord(character) <= 0x9F
+        for character in line
+    ):
         return UnsupportedConstruct.CONTROL_CHARACTER
     if re.match(r"^ {0,3}(?:`{3,}|~{3,})", line):
         return UnsupportedConstruct.CODE_BLOCK
@@ -79,6 +83,8 @@ def _unsupported_construct(
         supported_heading and line.startswith("# ")
     ):
         return UnsupportedConstruct.NESTED_HEADING
+    if supported_heading and _ATX_CLOSING_SEQUENCE_PATTERN.search(inspected):
+        return UnsupportedConstruct.ATX_CLOSING_SEQUENCE
     if _THEMATIC_BREAK_PATTERN.fullmatch(line):
         return UnsupportedConstruct.FRONTMATTER_OR_RULE
     if _LIST_PATTERN.match(line):
@@ -90,7 +96,8 @@ def _unsupported_construct(
     if "`" in inspected:
         return UnsupportedConstruct.INLINE_CODE
     if re.search(
-        r"(?:\*\*[^*]+\*\*|__[^_]+__|(?<!\*)\*[^*]+\*|(?<!_)_[^_]+_(?!_))",
+        r"(?:\*\*[^*]+\*\*|(?<![\w_])__[^_]+__(?![\w_])|"
+        r"(?<!\*)\*[^*]+\*|(?<![\w_])_[^_]+_(?![\w_]))",
         inspected,
     ):
         return UnsupportedConstruct.EMPHASIS
@@ -102,7 +109,7 @@ def _unsupported_construct(
         return UnsupportedConstruct.ESCAPE
     if _ENTITY_PATTERN.search(inspected):
         return UnsupportedConstruct.ENTITY
-    if inspected.endswith("  "):
+    if inspected.endswith(("  ", "\\")):
         return UnsupportedConstruct.HARD_BREAK
     return None
 
