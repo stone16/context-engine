@@ -67,7 +67,7 @@ from engine.runtime.materialized import (
     MaterializedFragmentLocator,
     MaterializedProjectionSession,
     _locate_materialized_fragment,
-    _project_materialized_fragment_body,
+    _project_materialized_fragment,
 )
 from engine.runtime.package_digest import QueryDigestKeyring
 from engine.runtime.policy_epoch import (
@@ -644,16 +644,19 @@ class AuthorizationKernel:
                 )
                 if exact_target not in policy_receipt.effective_scope.targets:
                     continue
-                body = _project_materialized_fragment_body(
+                field_projection = _project_materialized_fragment(
                     projection_session,
                     locator,
                 )
-                if body is None:
+                if field_projection is None:
                     continue
                 projection = _construct_authorized_projection(
                     kernel_scope=kernel_scope,
                     candidate_ref=candidate,
-                    body=body,
+                    body=field_projection.rendered_body,
+                    projected_field_refs=(
+                        field_projection.projected_field_refs
+                    ),
                     lineage=EvidenceLineage(
                         run_ref=provenance_receipt.run_ref,
                         principal_ref=invocation.principal_ref,

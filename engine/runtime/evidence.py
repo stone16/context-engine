@@ -12,14 +12,19 @@ __all__ = [
     "CandidateRef",
     "Evidence",
     "EvidenceLineage",
+    "MAX_PROJECTED_FIELD_REF_LENGTH",
+    "MAX_PROJECTED_FIELD_REFS",
     "PackageBlock",
     "PackageContent",
     "construct_package_content",
+    "validate_projected_field_refs",
     "validate_package_content",
 ]
 
 MAX_OPAQUE_REF_LENGTH: Final = 256
 MAX_POLICY_EPOCH: Final = (1 << 63) - 1
+MAX_PROJECTED_FIELD_REFS: Final = 64
+MAX_PROJECTED_FIELD_REF_LENGTH: Final = 64
 EVIDENCE_REF_PREFIX: Final = "ev"
 EVIDENCE_REF_ENTROPY_LENGTH: Final = 64
 
@@ -189,9 +194,10 @@ def _close_authorization_kernel_scope(scope: _AuthorizationKernelScope) -> None:
 def _projection_integrity_digest(
     candidate_ref: CandidateRef,
     projected_body: str,
+    projected_field_refs: tuple[str, ...],
     lineage: EvidenceLineage,
 ) -> str:
-    canonical = b"context-engine:authorized-projection:v1"
+    canonical = b"context-engine:authorized-projection:v2"
     canonical += _length_prefix(candidate_ref.organization_id.bytes)
     for value in (
         candidate_ref.source_ref,
@@ -209,7 +215,37 @@ def _projection_integrity_digest(
         lineage.source_acl_decision_ref,
     ):
         canonical += _encode_text(value)
+    for field_ref in projected_field_refs:
+        canonical += _encode_text(field_ref)
     return sha256(canonical).hexdigest()
+
+
+def validate_projected_field_refs(value: object) -> tuple[str, ...]:
+    """Return one exact field set that every public projection layer accepts."""
+
+    if type(value) is not tuple or not value:
+        raise ValueError("projected field refs must be a nonempty exact tuple")
+    refs = value
+    if len(refs) > MAX_PROJECTED_FIELD_REFS:
+        raise ValueError(
+            f"projected field refs must contain at most {MAX_PROJECTED_FIELD_REFS} "
+            "items"
+        )
+    if any(
+        type(ref) is not str
+        or not ref
+        or len(ref) > MAX_PROJECTED_FIELD_REF_LENGTH
+        or ref[0] not in "abcdefghijklmnopqrstuvwxyz"
+        or any(
+            character not in "abcdefghijklmnopqrstuvwxyz0123456789_"
+            for character in ref
+        )
+        for ref in refs
+    ):
+        raise ValueError("projected field refs must use closed lowercase identifiers")
+    if len(refs) != len(set(refs)):
+        raise ValueError("projected field refs must be unique")
+    return refs
 
 
 @dataclass(frozen=True, slots=True, init=False)
@@ -218,6 +254,7 @@ class AuthorizedProjection:
 
     candidate_ref: CandidateRef = field(repr=False)
     projected_body: str = field(repr=False)
+    projected_field_refs: tuple[str, ...] = field(repr=False)
     lineage: EvidenceLineage = field(repr=False)
     construction_provenance: AuthorizedProjectionProvenance
     _kernel_scope: _AuthorizationKernelScope = field(repr=False)
@@ -248,6 +285,7 @@ def _construct_authorized_projection(
     kernel_scope: _AuthorizationKernelScope,
     candidate_ref: CandidateRef,
     body: str,
+    projected_field_refs: tuple[str, ...],
     lineage: EvidenceLineage,
 ) -> AuthorizedProjection:
     """Construct content after exact Kernel authorization and field projection."""
@@ -258,9 +296,11 @@ def _construct_authorized_projection(
     if type(lineage) is not EvidenceLineage:
         raise TypeError("authorized lineage must be EvidenceLineage")
     projected_body = _require_nonblank_body(body)
+    field_refs = validate_projected_field_refs(projected_field_refs)
     projection = object.__new__(AuthorizedProjection)
     object.__setattr__(projection, "candidate_ref", candidate_ref)
     object.__setattr__(projection, "projected_body", projected_body)
+    object.__setattr__(projection, "projected_field_refs", field_refs)
     object.__setattr__(projection, "lineage", lineage)
     object.__setattr__(
         projection,
@@ -271,7 +311,12 @@ def _construct_authorized_projection(
     object.__setattr__(
         projection,
         "_integrity_digest",
-        _projection_integrity_digest(candidate_ref, projected_body, lineage),
+        _projection_integrity_digest(
+            candidate_ref,
+            projected_body,
+            field_refs,
+            lineage,
+        ),
     )
     return projection
 
@@ -294,6 +339,7 @@ def _require_active_authorized_projection(
     _require_active_authorization_kernel_scope(kernel_scope)
     candidate_ref = getattr(projection, "candidate_ref", None)
     projected_body = getattr(projection, "projected_body", None)
+    projected_field_refs = getattr(projection, "projected_field_refs", None)
     lineage = getattr(projection, "lineage", None)
     if type(candidate_ref) is not CandidateRef:
         raise ValueError("AuthorizedProjection candidate integrity is invalid")
@@ -301,9 +347,15 @@ def _require_active_authorized_projection(
         raise ValueError("AuthorizedProjection lineage integrity is invalid")
     try:
         body = _require_nonblank_body(projected_body)
+        field_refs = validate_projected_field_refs(projected_field_refs)
     except ValueError as error:
-        raise ValueError("AuthorizedProjection body integrity is invalid") from error
-    expected_digest = _projection_integrity_digest(candidate_ref, body, lineage)
+        raise ValueError("AuthorizedProjection field integrity is invalid") from error
+    expected_digest = _projection_integrity_digest(
+        candidate_ref,
+        body,
+        field_refs,
+        lineage,
+    )
     if getattr(projection, "_integrity_digest", None) != expected_digest:
         raise ValueError("AuthorizedProjection integrity check failed")
 
@@ -317,6 +369,7 @@ class Evidence:
     resource_ref: str
     revision_ref: str
     fragment_ref: str
+    projected_field_refs: tuple[str, ...]
     lineage: EvidenceLineage
     _integrity_digest: str = field(init=False, repr=False)
 
@@ -334,6 +387,7 @@ class Evidence:
             )
         if type(self.lineage) is not EvidenceLineage:
             raise TypeError("Evidence lineage must be EvidenceLineage")
+        validate_projected_field_refs(self.projected_field_refs)
         self.lineage.__post_init__()
         object.__setattr__(self, "_integrity_digest", _evidence_integrity_digest(self))
 
@@ -369,7 +423,7 @@ def _lineage_canonical_bytes(lineage: EvidenceLineage) -> bytes:
 
 
 def _evidence_integrity_digest(evidence: Evidence) -> str:
-    canonical = b"context-engine:evidence-integrity:v1"
+    canonical = b"context-engine:evidence-integrity:v2"
     for value in (
         evidence.evidence_ref,
         evidence.source_ref,
@@ -378,6 +432,8 @@ def _evidence_integrity_digest(evidence: Evidence) -> str:
         evidence.fragment_ref,
     ):
         canonical += _encode_text(value)
+    for field_ref in evidence.projected_field_refs:
+        canonical += _encode_text(field_ref)
     canonical += _lineage_canonical_bytes(evidence.lineage)
     return sha256(canonical).hexdigest()
 
@@ -497,13 +553,14 @@ def _candidate_sort_key(candidate_ref: CandidateRef) -> tuple[object, ...]:
 def _evidence_ref_for_projection(projection: AuthorizedProjection) -> str:
     candidate_ref = projection.candidate_ref
     lineage = projection.lineage
-    canonical = b"context-engine:evidence-ref:v1"
+    canonical = b"context-engine:evidence-ref:v2"
     canonical += _length_prefix(candidate_ref.organization_id.bytes)
     for value in (
         candidate_ref.source_ref,
         candidate_ref.resource_ref,
         candidate_ref.revision_ref,
         candidate_ref.fragment_ref,
+        projection.projected_body,
         lineage.run_ref,
         lineage.principal_ref,
         lineage.purpose,
@@ -514,6 +571,8 @@ def _evidence_ref_for_projection(projection: AuthorizedProjection) -> str:
         lineage.source_acl_decision_ref,
     ):
         canonical += _encode_text(value)
+    for field_ref in projection.projected_field_refs:
+        canonical += _encode_text(field_ref)
     return f"{EVIDENCE_REF_PREFIX}_{sha256(canonical).hexdigest()}"
 
 
@@ -559,6 +618,7 @@ def construct_package_content(
                 resource_ref=candidate_ref.resource_ref,
                 revision_ref=candidate_ref.revision_ref,
                 fragment_ref=candidate_ref.fragment_ref,
+                projected_field_refs=projection.projected_field_refs,
                 lineage=projection.lineage,
             )
         )

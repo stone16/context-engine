@@ -8,7 +8,8 @@
       "#16",
       "#17",
       "#18",
-      "#19"
+      "#19",
+      "#48"
     ],
     "documentRefs": [
       "README.md",
@@ -21,9 +22,10 @@
       "docs/decisions/0027-organization-policy-epoch.md",
       "docs/decisions/0028-fail-closed-unavailable-runtime-capabilities.md",
       "docs/decisions/0030-bound-ticket-audiences.md",
-      "docs/decisions/0031-persist-authorized-context-run-lineage.md"
+      "docs/decisions/0031-persist-authorized-context-run-lineage.md",
+      "docs/decisions/0032-bind-materialized-fields-to-membership-projection-rights.md"
     ],
-    "reconciliation": "Issue #2 fixes the product and testing decisions, issue #5 requires exactly fifteen release invariants and twelve canonical acceptance fixtures, and ADR-0019 resolves the later nineteen-label prose expansion without weakening any safeguard. Issue #15 activates only Organization-level next-request resolve(Acquire) revocation evidence under REVOCATION-006: PG-REVOCATION-006, RUN-006, and CACHE-002 are active while BLOB-002 and Continue, citation, Policy-Epoch-bound WorkerLease, production ContextAccessTicket/ActionTicket, audit, outbox, cleanup, finer-epoch, UI, and external-admin carriers remain future or NOT_ACTIVE. Issue #16 activates only the M0 refusal gate for unavailable Continue, OpenCitation, and server-owned unavailable Acquire plans: its real continuation, citation, federated/source-native, and File carriers remain future, while its Runtime and HTTP refusal surfaces prove generic outcomes before content I/O. Issue #17 activates only the signed one-shot persistent no-op durable-job WorkerLease subcarrier under WORKER-LEASE-007. It binds one exact worker audience but no end-user delivery audience or Policy Epoch, and proves only LEASE-SIGNING-017, PG-WORKER-LEASE-NOOP-017, and WORKER-LEASE-REPLAY-007; Source, Resource, Revision, Policy Epoch, end-user delivery audience, idempotency, generation, business mutation, outbox, File publication, and the full ACCEPT-008 matrix remain deferred or NOT_ACTIVE. Issue #18 activates only distinct signed synthetic ContextAccessTicket Provider-read and ActionTicket no-op channel-action subcarriers under ACTION-SEPARATION-014, with current Organization-v0 Policy Epoch validation. TICKET-AUDIENCE-018 and PG-TICKET-EPOCH-018 do not activate production ContextProvider integration, ContextRuntime ticket integration, BotDelivery, full M2 ActionPlane.prepare/perform, a real Sender or external effect, payload/destination/approval/idempotency binding, durable one-shot/replay/reconciliation, or full ACCEPT-012 PASS; those remain future or NOT_ACTIVE. Issue #19 activates only the current Acquire authorized-only ContextRun and restricted delivered-empty DecisionAudit subcarrier under TRACE-REDACTION-012. DIGEST-019, RUN-LINEAGE-019, AUTHORIZED-RUN-019, and PG-TRACE-REDACTION-012 prove deterministic Package and Organization-bound query digests, retained-UserActor-transaction persistence, decisionRef resolution, redaction, and short-lived exact-Organization operator ticket reads with no application-role table access; the supported reader commits deletion before returning, while a direct caller rollback is not claimed as durable exactly-once redemption. Raw query retention, full ContextPackage body retention, unauthenticated transport failures as ContextRuns, cross-Organization analytics, and general observability redaction remain NOT_ACTIVE. The canonical set is IDs 001 through 012, 014, 015, and 019: CACHE-SCOPE-013 remains a preregistered conditional extension; AUDIENCE-016 is absorbed by SCOPE-INTERSECTION-004 and EGRESS-011; ACL-PROOF-017 is absorbed by INDEX-NOT-AUTHORITY-005 and REVOCATION-006; DELIVERY-EVIDENCE-018 is absorbed by TRANSPORT-UNTRUSTED-008. ACCEPT-001 through ACCEPT-012 follow ADR-0019's category order. Protected-asset references A-01 through A-08 refer, in order, to the eight bullets in the threat model's Protected assets section. Every expectedEvidence value below is a stable planned case identifier, not a claim that the case ran or passed; only an exact activation record upgrades named evidence, while fixture carrier status and the explicit M0 oracle preserve every other accepted-versus-active distinction."
+    "reconciliation": "Issue #2 fixes the product and testing decisions, issue #5 requires exactly fifteen release invariants and twelve canonical acceptance fixtures, and ADR-0019 resolves the later nineteen-label prose expansion without weakening any safeguard. Issue #15 activates only Organization-level next-request resolve(Acquire) revocation evidence under REVOCATION-006: PG-REVOCATION-006, RUN-006, and CACHE-002 are active while BLOB-002 and Continue, citation, Policy-Epoch-bound WorkerLease, production ContextAccessTicket/ActionTicket, audit, outbox, cleanup, finer-epoch, UI, and external-admin carriers remain future or NOT_ACTIVE. Issue #16 activates only the M0 refusal gate for unavailable Continue, OpenCitation, and server-owned unavailable Acquire plans: its real continuation, citation, federated/source-native, and File carriers remain future, while its Runtime and HTTP refusal surfaces prove generic outcomes before content I/O. Issue #17 activates only the signed one-shot persistent no-op durable-job WorkerLease subcarrier under WORKER-LEASE-007. It binds one exact worker audience but no end-user delivery audience or Policy Epoch, and proves only LEASE-SIGNING-017, PG-WORKER-LEASE-NOOP-017, and WORKER-LEASE-REPLAY-007; Source, Resource, Revision, Policy Epoch, end-user delivery audience, idempotency, generation, business mutation, outbox, File publication, and the full ACCEPT-008 matrix remain deferred or NOT_ACTIVE. Issue #18 activates only distinct signed synthetic ContextAccessTicket Provider-read and ActionTicket no-op channel-action subcarriers under ACTION-SEPARATION-014, with current Organization-v0 Policy Epoch validation. TICKET-AUDIENCE-018 and PG-TICKET-EPOCH-018 do not activate production ContextProvider integration, ContextRuntime ticket integration, BotDelivery, full M2 ActionPlane.prepare/perform, a real Sender or external effect, payload/destination/approval/idempotency binding, durable one-shot/replay/reconciliation, or full ACCEPT-012 PASS; those remain future or NOT_ACTIVE. Issue #19 activates only the current Acquire authorized-only ContextRun and restricted delivered-empty DecisionAudit subcarrier under TRACE-REDACTION-012. DIGEST-019, RUN-LINEAGE-019, AUTHORIZED-RUN-019, and PG-TRACE-REDACTION-012 prove deterministic Package and Organization-bound query digests, retained-UserActor-transaction persistence, decisionRef resolution, redaction, and short-lived exact-Organization operator ticket reads with no application-role table access; the supported reader commits deletion before returning, while a direct caller rollback is not claimed as durable exactly-once redemption. Raw query retention, full ContextPackage body retention, unauthenticated transport failures as ContextRuns, cross-Organization analytics, and general observability redaction remain NOT_ACTIVE. Issue #48 activates only the current ACCEPT-002 authenticated HTTP Acquire Membership field-projection carrier under SCOPE-INTERSECTION-004, INDEX-NOT-AUTHORITY-005, and TRACE-REDACTION-012. PROP-FIELD-PROJECTION-048, PG-FIELD-PROJECTION-048, and HTTP-ACCEPT-002-048 bind one current Membership/version field ceiling to same-transaction FORCE-RLS reduction, the sealed AuthorizationKernel, AuthorizedProjection and Evidence integrity, and authorized-only ContextRun/audit persistence. General permission DSLs, caller-authored projection lists, CandidateRef or index field authority, production Provider/source-native ACL negotiation, Supply publication, File/Base field ACL, typed fields, Continue/OpenCitation, and Issue #20 runner substitution remain future or NOT_ACTIVE. The canonical set is IDs 001 through 012, 014, 015, and 019: CACHE-SCOPE-013 remains a preregistered conditional extension; AUDIENCE-016 is absorbed by SCOPE-INTERSECTION-004 and EGRESS-011; ACL-PROOF-017 is absorbed by INDEX-NOT-AUTHORITY-005 and REVOCATION-006; DELIVERY-EVIDENCE-018 is absorbed by TRANSPORT-UNTRUSTED-008. ACCEPT-001 through ACCEPT-012 follow ADR-0019's category order. Protected-asset references A-01 through A-08 refer, in order, to the eight bullets in the threat model's Protected assets section. Every expectedEvidence value below is a stable planned case identifier, not a claim that the case ran or passed; only an exact activation record upgrades named evidence, while fixture carrier status and the explicit M0 oracle preserve every other accepted-versus-active distinction."
   },
   "hardOracles": [
     {
@@ -177,6 +179,34 @@
       "deferredEvidence": ["PROP-TRACE-REDACTION-012 across every future observability carrier", "OBS-002 secret scanning beyond the activated query/key contracts", "OBS-003 production debug-endpoint authorization"],
       "futureCarriers": ["Continue and OpenCitation ContextRun lineage", "full retrieval candidate/ranking traces", "authorized feedback and golden-set extraction", "explicitly approved full-Package retention"],
       "notActive": ["raw query retention", "full ContextPackage body retention", "unauthenticated transport failures as ContextRuns", "cross-Organization analytics", "general logs/metrics/debug/evaluation/Learning redaction coverage"]
+    },
+    {
+      "issueRef": "#48",
+      "invariantRef": "SCOPE-INTERSECTION-004",
+      "carrier": "ACCEPT-002 ContextRuntime.resolve(Acquire) Membership field projection",
+      "status": "active_fail_closed",
+      "policyEpochScope": "organization-v0",
+      "controlBoundary": "CandidateRef -> same-transaction active-lineage locator -> EffectiveScope -> current Membership/version field ceiling -> PostgreSQL/FORCE-RLS field reduction -> AuthorizationKernel -> AuthorizedProjection",
+      "testEvidence": [
+        {
+          "id": "PROP-FIELD-PROJECTION-048",
+          "surface": "tests/unit/test_membership_field_projection.py::test_generated_projection_narrowing_never_expands_or_leaks_denied_values tests/unit/test_membership_field_projection.py::test_missing_or_nonmatching_projection_ceiling_absorbs_content tests/unit/test_evidence_contracts.py::test_authorized_projection_and_evidence_bind_exact_projected_fields",
+          "oracle": "The closed projection value admits only fields inside one trusted finite ceiling, renders their canonical order, absorbs missing or nonmatching ceilings, and binds the exact projected field tuple into AuthorizedProjection and Evidence integrity; no denied field name, value, or count becomes public evidence."
+        },
+        {
+          "id": "PG-FIELD-PROJECTION-048",
+          "surface": "tests/integration/test_authorized_field_schema.py::test_runtime_field_rows_and_legacy_body_are_filtered_by_exact_right tests/integration/test_authorized_field_schema.py::test_revoked_resource_acl_filters_every_projection_row_and_right tests/integration/test_authorized_field_schema.py::test_cross_organization_field_authority_and_values_fail_closed tests/integration/test_authorized_field_schema.py::test_stale_or_forged_membership_context_exposes_zero_field_content tests/integration/test_authorized_field_schema.py::test_field_row_requires_a_fields_parent_and_exact_same_org_parents tests/integration/test_authorized_field_schema.py::test_field_authority_tables_have_force_rls_and_least_privilege_grants tests/integration/test_membership_field_projection_integration.py::test_concurrent_field_right_revoke_cannot_commit_before_delivery_transaction tests/integration/test_migrations.py::test_field_projection_downgrade_refuses_populated_content_atomically tests/integration/test_migrations.py::test_field_projection_downgrade_serializes_with_concurrent_fragment_insert",
+          "oracle": "Real PostgreSQL under the non-owner Runtime role exposes status only to the limited current Membership/version and status plus private_note to the full one, exposes zero Fragment, right-name, or field bytes after Resource ACL revocation, serializes concurrent right mutation behind the delivery transaction, refuses populated schema downgrade before DDL, serializes its empty-schema decision with concurrent Fragment publication, exposes zero Fragment or field bytes for stale or forged Membership context, keeps legacy body as an explicit right, requires exact same-Organization parents, and enforces FORCE RLS with least-privilege grants."
+        },
+        {
+          "id": "HTTP-ACCEPT-002-048",
+          "surface": "tests/integration/test_membership_field_projection_integration.py::test_accept_002_same_organization_memberships_receive_only_authorized_fields",
+          "oracle": "The authenticated HTTP Acquire seam reuses one content-free CandidateRef for same-Organization limited and full Memberships; the limited Package contains only status=open while the full Package contains both authorized fields, and after the limited right is removed the next resolve returns generic empty coverage. The limited response, ContextRun, and DecisionAudit contain zero private_note or secret bytes and no denied names, identifiers, or counts."
+        }
+      ],
+      "deferredEvidence": ["production Provider-native field authorization", "File and Base source-field authorization", "typed or non-text field projection"],
+      "futureCarriers": ["production ContextProvider native field projection", "File and Base ingestion field ACL", "Continue and OpenCitation field projection", "field-policy change independent of Membership version"],
+      "notActive": ["general permission DSL", "caller-authored projection lists", "CandidateRef or index field authority", "Provider capability negotiation or source-native field ACL", "Supply publication and field classification", "ranking or relevance-model field authority", "Issue #20 gate or runner substitution"]
     }
   ],
   "invariants": [
@@ -278,14 +308,16 @@
       "requiredMilestones": ["M0", "M1", "M5"],
       "evidenceStatus": "accepted",
       "expectedEvidence": {
-        "property": ["PROP-SCOPE-INTERSECTION-004"],
-        "postgres": ["PG-SCOPE-INTERSECTION-004", "DB-010"],
-        "runtimeOrDelivery": ["AUTH-006", "AUTH-007", "AUTH-010", "AUTH-011", "RUN-014"]
+        "property": ["PROP-SCOPE-INTERSECTION-004", "PROP-FIELD-PROJECTION-048"],
+        "postgres": ["PG-SCOPE-INTERSECTION-004", "DB-010", "PG-FIELD-PROJECTION-048"],
+        "runtimeOrDelivery": ["AUTH-006", "AUTH-007", "AUTH-010", "AUTH-011", "RUN-014", "HTTP-ACCEPT-002-048"]
       },
       "authorityRefs": [
         "docs/agents/prd-contextengine-implementation.md#solution",
         "docs/security/Test-Architecture-与可验证性设计.md#5-property-based-authorization-tests",
-        "docs/decisions/0019-security-catalog-normalization.md#decision"
+        "docs/decisions/0019-security-catalog-normalization.md#decision",
+        "#48",
+        "docs/decisions/0032-bind-materialized-fields-to-membership-projection-rights.md#decision"
       ]
     },
     {
@@ -305,14 +337,16 @@
       "requiredMilestones": ["M0", "M1", "M3"],
       "evidenceStatus": "accepted",
       "expectedEvidence": {
-        "property": ["PROP-INDEX-NOT-AUTHORITY-005"],
-        "postgres": ["PG-INDEX-NOT-AUTHORITY-005", "IDX-001", "IDX-002"],
-        "runtimeOrDelivery": ["RUN-002", "RUN-003", "RUN-013", "PROV-010", "PROV-013", "PROV-014", "PROV-015", "PROV-018", "PROV-019", "PROV-020"]
+        "property": ["PROP-INDEX-NOT-AUTHORITY-005", "PROP-FIELD-PROJECTION-048"],
+        "postgres": ["PG-INDEX-NOT-AUTHORITY-005", "IDX-001", "IDX-002", "PG-FIELD-PROJECTION-048"],
+        "runtimeOrDelivery": ["RUN-002", "RUN-003", "RUN-013", "PROV-010", "PROV-013", "PROV-014", "PROV-015", "PROV-018", "PROV-019", "PROV-020", "HTTP-ACCEPT-002-048"]
       },
       "authorityRefs": [
         "docs/design/2026-07-18-context-engine-implementation-design.md#3-runtime-security-pipeline",
         "docs/security/context-engine-threat-model.md#6-threat-register",
-        "docs/security/安全负向测试清单.md#6-runtimeassemblycitation-与-egress"
+        "docs/security/安全负向测试清单.md#6-runtimeassemblycitation-与-egress",
+        "#48",
+        "docs/decisions/0032-bind-materialized-fields-to-membership-projection-rights.md#decision"
       ]
     },
     {
@@ -496,16 +530,18 @@
       "requiredMilestones": ["M0", "M1"],
       "evidenceStatus": "accepted",
       "expectedEvidence": {
-        "property": ["PROP-TRACE-REDACTION-012"],
-        "postgres": ["PG-TRACE-REDACTION-012", "OBS-004", "OBS-005"],
-        "runtimeOrDelivery": ["OBS-001", "OBS-002", "OBS-003"]
+        "property": ["PROP-TRACE-REDACTION-012", "PROP-FIELD-PROJECTION-048"],
+        "postgres": ["PG-TRACE-REDACTION-012", "OBS-004", "OBS-005", "PG-FIELD-PROJECTION-048"],
+        "runtimeOrDelivery": ["OBS-001", "OBS-002", "OBS-003", "HTTP-ACCEPT-002-048"]
       },
       "authorityRefs": [
         "docs/security/context-engine-threat-model.md#6-threat-register",
         "docs/security/Test-Architecture-与可验证性设计.md#11-contract-snapshots-与-schema-evolution",
         "docs/security/安全负向测试清单.md#7-tracedebugnon-enumeration-与-learning",
         "#19",
-        "docs/decisions/0031-persist-authorized-context-run-lineage.md#decision"
+        "docs/decisions/0031-persist-authorized-context-run-lineage.md#decision",
+        "#48",
+        "docs/decisions/0032-bind-materialized-fields-to-membership-projection-rights.md#decision"
       ]
     },
     {
@@ -641,9 +677,9 @@
               "asOf": "2026-07-21T09:30:00Z",
               "expiresAt": "2026-07-21T09:30:30Z",
               "decisionRef": "dec_0000000000000000000000000000000a",
-              "packageDigest": "8e593896cded830ecb39162d17b43a84148355f0b9470926d05b9e5ce957ace9",
+              "packageDigest": "60891a2328498f53607c4bb67e0e17804c1e91debdbfb2489f67f681573ffcc7",
               "blocks": [{"blockId": "block_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "text": "A-safe", "evidenceRefs": ["ev_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]}],
-              "evidence": [{"evidenceRef": "ev_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "sourceRef": "source-synthetic-a", "resourceRef": "resource-authorized-a", "revisionRef": "revision-authorized-a", "fragmentRef": "fragment-authorized-a", "runRef": "run-authorized-a", "purpose": "context.answer", "authorizationAsOf": "2026-07-21T09:30:00Z", "decisionRef": "dec_0000000000000000000000000000000a", "policySnapshotRef": "policy-snapshot-a", "policyEpoch": 1, "sourceDecisionRef": "source-decision-a"}],
+              "evidence": [{"evidenceRef": "ev_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "sourceRef": "source-synthetic-a", "resourceRef": "resource-authorized-a", "revisionRef": "revision-authorized-a", "fragmentRef": "fragment-authorized-a", "projectedFields": ["body"], "runRef": "run-authorized-a", "purpose": "context.answer", "authorizationAsOf": "2026-07-21T09:30:00Z", "decisionRef": "dec_0000000000000000000000000000000a", "policySnapshotRef": "policy-snapshot-a", "policyEpoch": 1, "sourceDecisionRef": "source-decision-a"}],
               "gaps": [],
               "budgetUsage": {"tokens": 6, "providerCalls": 0, "costMicrounits": 0, "elapsedMs": 0},
               "coverage": {"status": "sufficient"}
@@ -670,7 +706,7 @@
       "carrier": {
         "statusAtM0": "available",
         "m0Expectation": "active_fail_closed",
-        "upgradeTrigger": "Issue #11 upgrades this authority fixture with current Membership validation before content I/O."
+        "upgradeTrigger": "Issue #48 activates the current non-owner PostgreSQL, sealed Runtime, and authenticated HTTP Acquire carrier; extend only when production Provider-native field authorization activates."
       },
       "setup": {
         "preconditions": [
@@ -707,7 +743,9 @@
       "authorityRefs": [
         "docs/security/安全负向测试清单.md#9-minimal-release-matrix",
         "docs/security/安全负向测试清单.md#2-identitytenant-与-delegation",
-        "docs/decisions/0019-security-catalog-normalization.md#decision"
+        "docs/decisions/0019-security-catalog-normalization.md#decision",
+        "#48",
+        "docs/decisions/0032-bind-materialized-fields-to-membership-projection-rights.md#decision"
       ]
     },
     {
@@ -744,7 +782,7 @@
         "expectedEffectiveScope": ["public-1"]
       },
       "expected": {
-        "externalResponse": {"status": 200, "body": {"kind": "resolved", "package": {"organizationRef": "orgpkg_0000000000000000000000000000000a", "purpose": "context.answer", "ttlSeconds": 30, "asOf": "2026-07-21T09:30:00Z", "expiresAt": "2026-07-21T09:30:30Z", "decisionRef": "dec_0000000000000000000000000000000a", "packageDigest": "8e593896cded830ecb39162d17b43a84148355f0b9470926d05b9e5ce957ace9", "blocks": [{"blockId": "block_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "text": "A-safe", "evidenceRefs": ["ev_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]}], "evidence": [{"evidenceRef": "ev_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "sourceRef": "source-synthetic-a", "resourceRef": "resource-authorized-a", "revisionRef": "revision-authorized-a", "fragmentRef": "fragment-authorized-a", "runRef": "run-authorized-a", "purpose": "context.answer", "authorizationAsOf": "2026-07-21T09:30:00Z", "decisionRef": "dec_0000000000000000000000000000000a", "policySnapshotRef": "policy-snapshot-a", "policyEpoch": 1, "sourceDecisionRef": "source-decision-a"}], "gaps": [], "budgetUsage": {"tokens": 6, "providerCalls": 0, "costMicrounits": 0, "elapsedMs": 0}, "coverage": {"status": "sufficient"}}}, "authorizedPayloadUtf8": "A-safe", "authorizedPayloadBytes": 6, "privateResourcePresent": false},
+        "externalResponse": {"status": 200, "body": {"kind": "resolved", "package": {"organizationRef": "orgpkg_0000000000000000000000000000000a", "purpose": "context.answer", "ttlSeconds": 30, "asOf": "2026-07-21T09:30:00Z", "expiresAt": "2026-07-21T09:30:30Z", "decisionRef": "dec_0000000000000000000000000000000a", "packageDigest": "60891a2328498f53607c4bb67e0e17804c1e91debdbfb2489f67f681573ffcc7", "blocks": [{"blockId": "block_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "text": "A-safe", "evidenceRefs": ["ev_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]}], "evidence": [{"evidenceRef": "ev_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "sourceRef": "source-synthetic-a", "resourceRef": "resource-authorized-a", "revisionRef": "revision-authorized-a", "fragmentRef": "fragment-authorized-a", "projectedFields": ["body"], "runRef": "run-authorized-a", "purpose": "context.answer", "authorizationAsOf": "2026-07-21T09:30:00Z", "decisionRef": "dec_0000000000000000000000000000000a", "policySnapshotRef": "policy-snapshot-a", "policyEpoch": 1, "sourceDecisionRef": "source-decision-a"}], "gaps": [], "budgetUsage": {"tokens": 6, "providerCalls": 0, "costMicrounits": 0, "elapsedMs": 0}, "coverage": {"status": "sufficient"}}}, "authorizedPayloadUtf8": "A-safe", "authorizedPayloadBytes": 6, "privateResourcePresent": false},
         "packageOrError": {"kind": "ContextPackage", "evidenceResourceRefs": ["resource-authorized-a"], "blocksPerPackage": 1, "evidencePerPackage": 1, "unauthorizedFieldCount": 0, "unauthorizedEvidenceRefCount": 0},
         "evidence": {"unauthorizedEvidenceCount": 0, "unauthorizedContentBytes": 0, "missingContextFallbackCount": 0, "outboundBytes": 6},
         "businessEffects": {"wrongOrganizationEffectCount": 0, "mutationEffectCount": 0, "totalEffectsAfterScenario": 0},
@@ -790,7 +828,7 @@
         "comparison": "Result set must be a subset of the same invocation without RequestNarrowing."
       },
       "expected": {
-        "externalResponse": {"status": 200, "body": {"kind": "resolved", "package": {"organizationRef": "orgpkg_0000000000000000000000000000000a", "purpose": "context.answer", "ttlSeconds": 30, "asOf": "2026-07-21T09:30:00Z", "expiresAt": "2026-07-21T09:30:30Z", "decisionRef": "dec_0000000000000000000000000000000a", "packageDigest": "8e593896cded830ecb39162d17b43a84148355f0b9470926d05b9e5ce957ace9", "blocks": [{"blockId": "block_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "text": "A-safe", "evidenceRefs": ["ev_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]}], "evidence": [{"evidenceRef": "ev_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "sourceRef": "source-synthetic-a", "resourceRef": "resource-authorized-a", "revisionRef": "revision-authorized-a", "fragmentRef": "fragment-authorized-a", "runRef": "run-authorized-a", "purpose": "context.answer", "authorizationAsOf": "2026-07-21T09:30:00Z", "decisionRef": "dec_0000000000000000000000000000000a", "policySnapshotRef": "policy-snapshot-a", "policyEpoch": 1, "sourceDecisionRef": "source-decision-a"}], "gaps": [], "budgetUsage": {"tokens": 6, "providerCalls": 0, "costMicrounits": 0, "elapsedMs": 0}, "coverage": {"status": "sufficient"}}}, "authorizedPayloadUtf8": "A-safe", "authorizedPayloadBytes": 6, "source2Present": false},
+        "externalResponse": {"status": 200, "body": {"kind": "resolved", "package": {"organizationRef": "orgpkg_0000000000000000000000000000000a", "purpose": "context.answer", "ttlSeconds": 30, "asOf": "2026-07-21T09:30:00Z", "expiresAt": "2026-07-21T09:30:30Z", "decisionRef": "dec_0000000000000000000000000000000a", "packageDigest": "60891a2328498f53607c4bb67e0e17804c1e91debdbfb2489f67f681573ffcc7", "blocks": [{"blockId": "block_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "text": "A-safe", "evidenceRefs": ["ev_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]}], "evidence": [{"evidenceRef": "ev_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "sourceRef": "source-synthetic-a", "resourceRef": "resource-authorized-a", "revisionRef": "revision-authorized-a", "fragmentRef": "fragment-authorized-a", "projectedFields": ["body"], "runRef": "run-authorized-a", "purpose": "context.answer", "authorizationAsOf": "2026-07-21T09:30:00Z", "decisionRef": "dec_0000000000000000000000000000000a", "policySnapshotRef": "policy-snapshot-a", "policyEpoch": 1, "sourceDecisionRef": "source-decision-a"}], "gaps": [], "budgetUsage": {"tokens": 6, "providerCalls": 0, "costMicrounits": 0, "elapsedMs": 0}, "coverage": {"status": "sufficient"}}}, "authorizedPayloadUtf8": "A-safe", "authorizedPayloadBytes": 6, "source2Present": false},
         "packageOrError": {"kind": "ContextPackage", "sourceRefs": ["source-synthetic-a"], "expandedSourceCallCount": 0, "blocksPerPackage": 1, "evidencePerPackage": 1, "unauthorizedFieldCount": 0, "unauthorizedEvidenceRefCount": 0},
         "evidence": {"unauthorizedEvidenceCount": 0, "unauthorizedContentBytes": 0, "missingContextFallbackCount": 0, "outboundBytes": 6},
         "businessEffects": {"wrongOrganizationEffectCount": 0, "mutationEffectCount": 0, "totalEffectsAfterScenario": 0},
@@ -884,7 +922,7 @@
         "requiredTypeFlow": ["CandidateRef", "AuthorizationKernel", "AuthorizedProjection"]
       },
       "expected": {
-        "externalResponse": {"status": 200, "body": {"kind": "resolved", "package": {"organizationRef": "orgpkg_0000000000000000000000000000000a", "purpose": "context.answer", "ttlSeconds": 30, "asOf": "2026-07-21T09:30:00Z", "expiresAt": "2026-07-21T09:30:30Z", "decisionRef": "dec_0000000000000000000000000000000a", "packageDigest": "8e593896cded830ecb39162d17b43a84148355f0b9470926d05b9e5ce957ace9", "blocks": [{"blockId": "block_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "text": "A-safe", "evidenceRefs": ["ev_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]}], "evidence": [{"evidenceRef": "ev_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "sourceRef": "source-synthetic-a", "resourceRef": "resource-authorized-a", "revisionRef": "revision-authorized-a", "fragmentRef": "fragment-authorized-a", "runRef": "run-authorized-a", "purpose": "context.answer", "authorizationAsOf": "2026-07-21T09:30:00Z", "decisionRef": "dec_0000000000000000000000000000000a", "policySnapshotRef": "policy-snapshot-a", "policyEpoch": 1, "sourceDecisionRef": "source-decision-a"}], "gaps": [], "budgetUsage": {"tokens": 6, "providerCalls": 0, "costMicrounits": 0, "elapsedMs": 0}, "coverage": {"status": "sufficient"}}}, "authorizedPayloadUtf8": "A-safe", "authorizedPayloadBytes": 6, "orgBContentPresent": false},
+        "externalResponse": {"status": 200, "body": {"kind": "resolved", "package": {"organizationRef": "orgpkg_0000000000000000000000000000000a", "purpose": "context.answer", "ttlSeconds": 30, "asOf": "2026-07-21T09:30:00Z", "expiresAt": "2026-07-21T09:30:30Z", "decisionRef": "dec_0000000000000000000000000000000a", "packageDigest": "60891a2328498f53607c4bb67e0e17804c1e91debdbfb2489f67f681573ffcc7", "blocks": [{"blockId": "block_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "text": "A-safe", "evidenceRefs": ["ev_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]}], "evidence": [{"evidenceRef": "ev_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "sourceRef": "source-synthetic-a", "resourceRef": "resource-authorized-a", "revisionRef": "revision-authorized-a", "fragmentRef": "fragment-authorized-a", "projectedFields": ["body"], "runRef": "run-authorized-a", "purpose": "context.answer", "authorizationAsOf": "2026-07-21T09:30:00Z", "decisionRef": "dec_0000000000000000000000000000000a", "policySnapshotRef": "policy-snapshot-a", "policyEpoch": 1, "sourceDecisionRef": "source-decision-a"}], "gaps": [], "budgetUsage": {"tokens": 6, "providerCalls": 0, "costMicrounits": 0, "elapsedMs": 0}, "coverage": {"status": "sufficient"}}}, "authorizedPayloadUtf8": "A-safe", "authorizedPayloadBytes": 6, "orgBContentPresent": false},
         "packageOrError": {"kind": "ContextPackage", "evidenceRefs": ["ev_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "blocksPerPackage": 1, "evidencePerPackage": 1, "unauthorizedFieldCount": 0, "unauthorizedEvidenceRefCount": 0, "deniedCandidateCountExposed": false},
         "evidence": {"unauthorizedEvidenceCount": 0, "unauthorizedContentBytes": 0, "missingContextFallbackCount": 0, "outboundBytes": 6},
         "businessEffects": {"wrongOrganizationEffectCount": 0, "mutationEffectCount": 0, "totalEffectsAfterScenario": 0},

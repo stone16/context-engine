@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from contextlib import AbstractContextManager
 from datetime import UTC, datetime
-from types import TracebackType
+from types import SimpleNamespace, TracebackType
 from typing import Any, cast
 from uuid import UUID, uuid4
 
@@ -23,6 +23,7 @@ from engine.runtime.actor import (
 )
 from engine.runtime.construction import PolicyEpochGate
 from engine.runtime.materialized import (
+    MaterializedFragmentLocator,
     _require_active_materialized_projection_session,
 )
 from engine.runtime.policy_epoch import PolicyEpochAuthorityUnavailable
@@ -47,6 +48,31 @@ class _ScalarResult:
 class _MembershipRow:
     def __init__(self, user_id: UUID) -> None:
         self.user_id = user_id
+
+
+class _ProjectionRowsResult:
+    def __init__(self, rows: tuple[SimpleNamespace, ...] = ()) -> None:
+        self._rows = rows
+
+    def all(self) -> tuple[SimpleNamespace, ...]:
+        return self._rows
+
+
+class _ProjectionConnection:
+    def __init__(self, row: SimpleNamespace) -> None:
+        self._row = row
+        self.calls = 0
+
+    def execute(
+        self,
+        statement: object,
+        parameters: dict[str, object] | None = None,
+    ) -> _ProjectionRowsResult:
+        del statement, parameters
+        self.calls += 1
+        if self.calls == 1:
+            return _ProjectionRowsResult()
+        return _ProjectionRowsResult((self._row,))
 
 
 class _FakeConnection:
@@ -245,6 +271,37 @@ def identity() -> MembershipIdentity:
         authentication_binding_ref="binding-from-auth",
         checked_at=CHECKED_AT,
     )
+
+
+@pytest.mark.parametrize("invalid_value", (None, "", " \t"))
+def test_postgres_projection_absorbs_malformed_structured_field_values(
+    invalid_value: object,
+) -> None:
+    connection = _ProjectionConnection(
+        SimpleNamespace(
+            projection_kind="fields",
+            content=None,
+            field_ref="status",
+            field_value=invalid_value,
+            ordinal=0,
+        )
+    )
+    port = membership_context_module._PostgreSQLMaterializedProjectionPort(
+        cast(Connection, connection)
+    )
+
+    observed = port.project(
+        MaterializedFragmentLocator(
+            organization_id=identity().organization_id,
+            source_ref="source:synthetic",
+            resource_ref="resource:authorized",
+            revision_ref="05b82c43-4e8f-49ae-a286-a40289a3413e",
+            fragment_ref="fragment:authorized",
+        )
+    )
+
+    assert observed is None
+    assert connection.calls == 2
 
 
 def test_current_membership_transaction_binds_every_actor_fact_before_lookup() -> None:

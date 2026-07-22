@@ -232,6 +232,7 @@ PUBLIC_EVIDENCE_FIELDS: tuple[str, ...] = (
     "resourceRef",
     "revisionRef",
     "fragmentRef",
+    "projectedFields",
     "runRef",
     "purpose",
     "authorizationAsOf",
@@ -325,7 +326,11 @@ CANONICAL_ACTIVATED_ORACLE_DIGESTS: dict[str, str] = {
 }
 
 REQUIRED_RUNTIME_EVIDENCE: dict[str, tuple[str, ...]] = {
-    "SCOPE-INTERSECTION-004": ("AUTH-010", "RUN-014"),
+    "SCOPE-INTERSECTION-004": (
+        "AUTH-010",
+        "RUN-014",
+        "HTTP-ACCEPT-002-048",
+    ),
     "INDEX-NOT-AUTHORITY-005": (
         "PROV-010",
         "PROV-013",
@@ -334,6 +339,7 @@ REQUIRED_RUNTIME_EVIDENCE: dict[str, tuple[str, ...]] = {
         "PROV-018",
         "PROV-019",
         "PROV-020",
+        "HTTP-ACCEPT-002-048",
     ),
     "REVOCATION-006": (
         "RUN-006",
@@ -351,11 +357,34 @@ REQUIRED_RUNTIME_EVIDENCE: dict[str, tuple[str, ...]] = {
         "DELIV-004",
     ),
     "EGRESS-011": ("EGR-003", "EGR-005", "EGR-006", "RUN-014"),
+    "TRACE-REDACTION-012": ("HTTP-ACCEPT-002-048",),
     "ACTION-SEPARATION-014": tuple(f"ACTION-{number:03d}" for number in range(1, 10)),
 }
 
+REQUIRED_PROPERTY_EVIDENCE: dict[str, tuple[str, ...]] = {
+    invariant_id: ("PROP-FIELD-PROJECTION-048",)
+    for invariant_id in (
+        "SCOPE-INTERSECTION-004",
+        "INDEX-NOT-AUTHORITY-005",
+        "TRACE-REDACTION-012",
+    )
+}
+
 REQUIRED_POSTGRES_EVIDENCE: dict[str, tuple[str, ...]] = {
+    "SCOPE-INTERSECTION-004": ("PG-FIELD-PROJECTION-048",),
+    "INDEX-NOT-AUTHORITY-005": ("PG-FIELD-PROJECTION-048",),
     "REVOCATION-006": ("PG-REVOCATION-006", "CACHE-002", "BLOB-002"),
+    "TRACE-REDACTION-012": ("PG-FIELD-PROJECTION-048",),
+}
+
+ACCEPT_002_ACTIVE_CARRIER: dict[str, str] = {
+    "statusAtM0": "available",
+    "m0Expectation": "active_fail_closed",
+    "upgradeTrigger": (
+        "Issue #48 activates the current non-owner PostgreSQL, sealed Runtime, "
+        "and authenticated HTTP Acquire carrier; extend only when production "
+        "Provider-native field authorization activates."
+    ),
 }
 
 ACCEPT_005_FUTURE_CARRIER: dict[str, str] = {
@@ -768,12 +797,122 @@ CANONICAL_CONTEXT_RUN_ACTIVATION: dict[str, object] = {
     ],
 }
 
+CANONICAL_FIELD_PROJECTION_ACTIVATION: dict[str, object] = {
+    "issueRef": "#48",
+    "invariantRef": "SCOPE-INTERSECTION-004",
+    "carrier": "ACCEPT-002 ContextRuntime.resolve(Acquire) Membership field projection",
+    "status": "active_fail_closed",
+    "policyEpochScope": "organization-v0",
+    "controlBoundary": (
+        "CandidateRef -> same-transaction active-lineage locator -> "
+        "EffectiveScope -> current Membership/version field ceiling -> "
+        "PostgreSQL/FORCE-RLS field reduction -> AuthorizationKernel -> "
+        "AuthorizedProjection"
+    ),
+    "testEvidence": [
+        {
+            "id": "PROP-FIELD-PROJECTION-048",
+            "surface": (
+                "tests/unit/test_membership_field_projection.py::"
+                "test_generated_projection_narrowing_never_expands_or_leaks_"
+                "denied_values "
+                "tests/unit/test_membership_field_projection.py::"
+                "test_missing_or_nonmatching_projection_ceiling_absorbs_content "
+                "tests/unit/test_evidence_contracts.py::"
+                "test_authorized_projection_and_evidence_bind_exact_projected_fields"
+            ),
+            "oracle": (
+                "The closed projection value admits only fields inside one trusted "
+                "finite ceiling, renders their canonical order, absorbs missing or "
+                "nonmatching ceilings, and binds the exact projected field tuple "
+                "into AuthorizedProjection and Evidence integrity; no denied field "
+                "name, value, or count becomes public evidence."
+            ),
+        },
+        {
+            "id": "PG-FIELD-PROJECTION-048",
+            "surface": (
+                "tests/integration/test_authorized_field_schema.py::"
+                "test_runtime_field_rows_and_legacy_body_are_filtered_by_exact_right "
+                "tests/integration/test_authorized_field_schema.py::"
+                "test_revoked_resource_acl_filters_every_projection_row_and_right "
+                "tests/integration/test_authorized_field_schema.py::"
+                "test_cross_organization_field_authority_and_values_fail_closed "
+                "tests/integration/test_authorized_field_schema.py::"
+                "test_stale_or_forged_membership_context_exposes_zero_field_content "
+                "tests/integration/test_authorized_field_schema.py::"
+                "test_field_row_requires_a_fields_parent_and_exact_same_org_parents "
+                "tests/integration/test_authorized_field_schema.py::"
+                "test_field_authority_tables_have_force_rls_and_least_privilege_grants "
+                "tests/integration/test_membership_field_projection_integration.py::"
+                "test_concurrent_field_right_revoke_cannot_commit_before_delivery_"
+                "transaction "
+                "tests/integration/test_migrations.py::"
+                "test_field_projection_downgrade_refuses_populated_content_atomically "
+                "tests/integration/test_migrations.py::"
+                "test_field_projection_downgrade_serializes_with_concurrent_"
+                "fragment_insert"
+            ),
+            "oracle": (
+                "Real PostgreSQL under the non-owner Runtime role exposes status "
+                "only to the limited current Membership/version and status plus "
+                "private_note to the full one, exposes zero Fragment, right-name, "
+                "or field bytes after Resource ACL revocation, serializes concurrent "
+                "right mutation behind the delivery transaction, refuses populated "
+                "schema downgrade before DDL, serializes its empty-schema decision "
+                "with concurrent Fragment publication, exposes zero Fragment or "
+                "field bytes for stale or forged Membership context, keeps legacy "
+                "body as an explicit right, requires exact same-Organization "
+                "parents, and enforces FORCE RLS with least-privilege grants."
+            ),
+        },
+        {
+            "id": "HTTP-ACCEPT-002-048",
+            "surface": (
+                "tests/integration/test_membership_field_projection_integration.py::"
+                "test_accept_002_same_organization_memberships_receive_only_authorized_fields"
+            ),
+            "oracle": (
+                "The authenticated HTTP Acquire seam reuses one content-free "
+                "CandidateRef for same-Organization limited and full Memberships; "
+                "the limited Package contains only status=open while the full "
+                "Package contains both authorized fields, and after the limited "
+                "right is removed the next resolve returns generic empty coverage. "
+                "The limited response, ContextRun, and DecisionAudit contain zero "
+                "private_note or secret bytes and no denied names, identifiers, or "
+                "counts."
+            ),
+        },
+    ],
+    "deferredEvidence": [
+        "production Provider-native field authorization",
+        "File and Base source-field authorization",
+        "typed or non-text field projection",
+    ],
+    "futureCarriers": [
+        "production ContextProvider native field projection",
+        "File and Base ingestion field ACL",
+        "Continue and OpenCitation field projection",
+        "field-policy change independent of Membership version",
+    ],
+    "notActive": [
+        "general permission DSL",
+        "caller-authored projection lists",
+        "CandidateRef or index field authority",
+        "Provider capability negotiation or source-native field ACL",
+        "Supply publication and field classification",
+        "ranking or relevance-model field authority",
+        "Issue #20 gate or runner substitution",
+    ],
+}
+
 CANONICAL_ACTIVATIONS: list[dict[str, object]] = [
     CANONICAL_REVOCATION_ACTIVATION,
     CANONICAL_UNAVAILABLE_CAPABILITY_ACTIVATION,
     CANONICAL_WORKER_LEASE_ACTIVATION,
     CANONICAL_TICKET_AUDIENCE_ACTIVATION,
     CANONICAL_CONTEXT_RUN_ACTIVATION,
+    CANONICAL_FIELD_PROJECTION_ACTIVATION,
 ]
 CANONICAL_ACTIVATION_ISSUE_LIST = ", ".join(
     f"Issue {activation['issueRef']}" for activation in CANONICAL_ACTIVATIONS
@@ -1121,6 +1260,21 @@ def _validate_invariants(
                 collector.require_string_list(
                     expected_evidence.get(field), f"{path}.expectedEvidence.{field}"
                 )
+            property_evidence = collector.require_string_list(
+                expected_evidence.get("property"),
+                f"{path}.expectedEvidence.property",
+            )
+            if (
+                property_evidence is not None
+                and invariant_id in REQUIRED_PROPERTY_EVIDENCE
+            ):
+                for case_id in REQUIRED_PROPERTY_EVIDENCE[invariant_id]:
+                    if case_id not in property_evidence:
+                        collector.add(
+                            f"{path}.expectedEvidence.property",
+                            "must preserve activated field-projection evidence "
+                            f"{case_id!r} for {invariant_id}",
+                        )
             runtime_evidence = collector.require_string_list(
                 expected_evidence.get("runtimeOrDelivery"),
                 f"{path}.expectedEvidence.runtimeOrDelivery",
@@ -1146,9 +1300,14 @@ def _validate_invariants(
             ):
                 for case_id in REQUIRED_POSTGRES_EVIDENCE[invariant_id]:
                     if case_id not in postgres_evidence:
+                        evidence_label = (
+                            "canonical revocation evidence"
+                            if invariant_id == "REVOCATION-006"
+                            else "activated field-projection evidence"
+                        )
                         collector.add(
                             f"{path}.expectedEvidence.postgres",
-                            "must preserve canonical revocation evidence "
+                            f"must preserve {evidence_label} "
                             f"{case_id!r} for {invariant_id}",
                         )
         _validate_authority_refs(
@@ -1307,6 +1466,12 @@ def _validate_fixture(
         collector.require_nonempty_string(
             carrier.get("upgradeTrigger"), f"{path}.carrier.upgradeTrigger"
         )
+        if fixture_id == "ACCEPT-002" and carrier != ACCEPT_002_ACTIVE_CARRIER:
+            collector.add(
+                f"{path}.carrier",
+                "must preserve ACCEPT-002 as the exact Issue #48 active "
+                "Membership field-projection carrier",
+            )
         canonical_deferred_carrier = CANONICAL_DEFERRED_FIXTURE_CARRIERS.get(
             fixture_id or ""
         )
@@ -1718,6 +1883,12 @@ def _validate_fixture(
                                 f"{path}.expected.externalResponse.body.package.evidence[0].{evidence_field}",
                                 f"must equal enclosing Package {package_field}",
                             )
+                    if item.get("projectedFields") != ["body"]:
+                        collector.add(
+                            f"{path}.expected.externalResponse.body.package.evidence[0].projectedFields",
+                            "must be exactly ['body'] for the canonical legacy-body "
+                            "Package example",
+                        )
                     if tuple(item) != PUBLIC_EVIDENCE_FIELDS:
                         collector.add(
                             f"{path}.expected.externalResponse.body.package.evidence[0]",
@@ -2570,6 +2741,10 @@ def _validate_schema(
 
         all_of = fixture_item.get("allOf")
         frozen_fixture_carriers = {
+            "ACCEPT-002": (
+                ACCEPT_002_ACTIVE_CARRIER,
+                "available/active_fail_closed",
+            ),
             "ACCEPT-008": (
                 ACCEPT_008_FUTURE_CARRIER,
                 "future/fail_closed",

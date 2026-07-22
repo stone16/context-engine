@@ -1648,6 +1648,7 @@ def test_openapi_body_is_closed_and_contains_no_trusted_fields() -> None:
         "resourceRef",
         "revisionRef",
         "fragmentRef",
+        "projectedFields",
         "runRef",
         "purpose",
         "authorizationAsOf",
@@ -1656,6 +1657,8 @@ def test_openapi_body_is_closed_and_contains_no_trusted_fields() -> None:
         "policyEpoch",
         "sourceDecisionRef",
     }
+    assert evidence_schema["properties"]["projectedFields"]["minItems"] == 1
+    assert evidence_schema["properties"]["projectedFields"]["maxItems"] == 64
     assert all(
         response_model["additionalProperties"] is False
         for name, response_model in response_models.items()

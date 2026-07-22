@@ -547,6 +547,7 @@ def test_runtime_worker_and_public_grants_are_least_privilege(
         assert set(constraints) == {
             "pk_membership",
             "uq_membership_organization_user",
+            "uq_membership_organization_id_version",
             "fk_membership_organization",
             "fk_membership_user_account",
             "ck_membership_status",
@@ -558,6 +559,9 @@ def test_runtime_worker_and_public_grants_are_least_privilege(
         )
         assert constraints["uq_membership_organization_user"].lower() == (
             "unique (organization_id, user_id)"
+        )
+        assert constraints["uq_membership_organization_id_version"].lower() == (
+            "unique (organization_id, membership_id, membership_version)"
         )
         assert constraints["fk_membership_organization"].lower().startswith(
             "foreign key (organization_id) references organization(organization_id)"

@@ -387,6 +387,7 @@ def context_package_digest_document(package: ContextPackage) -> dict[str, object
                 "resourceRef": item.resource_ref,
                 "revisionRef": item.revision_ref,
                 "fragmentRef": item.fragment_ref,
+                "projectedFields": list(item.projected_field_refs),
                 "runRef": item.lineage.run_ref,
                 "purpose": item.lineage.purpose,
                 "authorizationAsOf": _wire_datetime(item.lineage.as_of),

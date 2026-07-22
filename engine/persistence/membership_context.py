@@ -31,7 +31,10 @@ from engine.runtime.context_run import (
 )
 from engine.runtime.evidence import CandidateRef
 from engine.runtime.materialized import (
+    MaterializedFieldValue,
     MaterializedFragmentLocator,
+    MaterializedFragmentProjection,
+    MaterializedProjectionKind,
     _close_materialized_projection_scope,
     _construct_materialized_projection_session,
     _open_materialized_projection_scope,
@@ -193,17 +196,36 @@ class _PostgreSQLMaterializedProjectionPort:
             fragment_ref=row.fragment_ref,
         )
 
-    def project_body(
+    def project(
         self,
         locator: MaterializedFragmentLocator,
-    ) -> str | None:
+    ) -> MaterializedFragmentProjection | None:
         revision_id = _canonical_candidate_revision(locator.revision_ref)
         if revision_id is None:
             return None
-        return self._connection.execute(
+        self._connection.execute(
             text(
                 """
-                SELECT fragment.content
+                SELECT pg_catalog.pg_advisory_xact_lock_shared(
+                    pg_catalog.hashtextextended(
+                        'context-engine.field-rights:' ||
+                        CAST(:organization_id AS text),
+                        0
+                    )
+                )
+                """
+            ),
+            {"organization_id": locator.organization_id},
+        )
+        rows = self._connection.execute(
+            text(
+                """
+                SELECT
+                    fragment.projection_kind,
+                    fragment.content,
+                    field.field_ref,
+                    field.field_value,
+                    field.ordinal
                 FROM context_resource AS resource
                 JOIN context_revision AS revision
                   ON revision.organization_id = resource.organization_id
@@ -213,6 +235,33 @@ class _PostgreSQLMaterializedProjectionPort:
                   ON fragment.organization_id = revision.organization_id
                  AND fragment.resource_ref = revision.resource_ref
                  AND fragment.revision_id = revision.revision_id
+                LEFT JOIN context_fragment_field AS field
+                  ON field.organization_id = fragment.organization_id
+                 AND field.resource_ref = fragment.resource_ref
+                 AND field.revision_id = fragment.revision_id
+                 AND field.fragment_ref = fragment.fragment_ref
+                 AND fragment.projection_kind = 'fields'
+                JOIN membership AS actor_membership
+                  ON actor_membership.organization_id = resource.organization_id
+                 AND actor_membership.user_id = NULLIF(
+                     current_setting('app.user_id'), ''
+                 )::uuid
+                 AND actor_membership.membership_id = NULLIF(
+                     current_setting('app.membership_id'), ''
+                 )::uuid
+                 AND actor_membership.membership_version = NULLIF(
+                     current_setting('app.membership_version'), ''
+                 )::bigint
+                 AND actor_membership.status = 'active'
+                 AND actor_membership.valid_from <= NULLIF(
+                     current_setting('app.checked_at'), ''
+                 )::timestamptz
+                 AND (
+                     actor_membership.valid_until IS NULL
+                     OR actor_membership.valid_until > NULLIF(
+                         current_setting('app.checked_at'), ''
+                     )::timestamptz
+                 )
                 JOIN resource_access_policy AS access_policy
                   ON access_policy.organization_id = resource.organization_id
                  AND access_policy.resource_ref = resource.resource_ref
@@ -220,12 +269,23 @@ class _PostgreSQLMaterializedProjectionPort:
                      'app.principal_ref'
                  )
                  AND access_policy.access_state = 'allowed'
+                JOIN membership_resource_field_right AS field_right
+                  ON field_right.organization_id = fragment.organization_id
+                 AND field_right.membership_id = actor_membership.membership_id
+                 AND field_right.membership_version =
+                     actor_membership.membership_version
+                 AND field_right.resource_ref = fragment.resource_ref
+                 AND field_right.field_ref = CASE
+                     WHEN fragment.projection_kind = 'body' THEN 'body'
+                     ELSE field.field_ref
+                 END
                 WHERE resource.organization_id = :organization_id
                   AND resource.source_ref = :source_ref
                   AND resource.resource_ref = :resource_ref
                   AND resource.active_revision_id = :revision_id
                   AND resource.tombstoned IS FALSE
                   AND fragment.fragment_ref = :fragment_ref
+                ORDER BY field.ordinal NULLS LAST, field.field_ref
                 """
             ),
             {
@@ -235,7 +295,57 @@ class _PostgreSQLMaterializedProjectionPort:
                 "revision_id": revision_id,
                 "fragment_ref": locator.fragment_ref,
             },
-        ).scalar_one_or_none()
+        ).all()
+        if not rows:
+            return None
+        try:
+            kind = MaterializedProjectionKind(rows[0].projection_kind)
+        except (TypeError, ValueError):
+            return None
+        if kind is MaterializedProjectionKind.LEGACY_BODY:
+            content = rows[0].content
+            if (
+                len(rows) != 1
+                or type(content) is not str
+                or not content
+                or content.isspace()
+            ):
+                return None
+            return MaterializedFragmentProjection(
+                kind=kind,
+                fields=(
+                    MaterializedFieldValue(
+                        field_ref="body",
+                        field_value=content,
+                        ordinal=0,
+                    ),
+                ),
+                projection_ceiling=frozenset({"body"}),
+            )
+
+        authorized_rows = tuple(row for row in rows if row.field_ref is not None)
+        if not authorized_rows:
+            return None
+        if any(
+            type(row.field_value) is not str
+            or not row.field_value
+            or row.field_value.isspace()
+            for row in authorized_rows
+        ):
+            return None
+        fields = tuple(
+            MaterializedFieldValue(
+                field_ref=row.field_ref,
+                field_value=row.field_value,
+                ordinal=ordinal,
+            )
+            for ordinal, row in enumerate(authorized_rows)
+        )
+        return MaterializedFragmentProjection(
+            kind=kind,
+            fields=fields,
+            projection_ceiling=frozenset(field.field_ref for field in fields),
+        )
 
 
 class _PostgreSQLPolicyEpochPort:

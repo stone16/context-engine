@@ -419,6 +419,33 @@ def _seed_fixture(
                 for organization in organizations
             ],
         )
+        connection.execute(
+            text(
+                """
+                INSERT INTO membership_resource_field_right (
+                    organization_id,
+                    membership_id,
+                    membership_version,
+                    resource_ref,
+                    field_ref
+                ) VALUES (
+                    :organization_id,
+                    :membership_id,
+                    1,
+                    :resource_ref,
+                    'body'
+                )
+                """
+            ),
+            [
+                {
+                    "organization_id": organization.organization_id,
+                    "membership_id": organization.membership_id,
+                    "resource_ref": organization.authorized.resource_ref,
+                }
+                for organization in organizations
+            ],
+        )
 
 
 def _persistent_content_snapshot(
@@ -497,6 +524,18 @@ def _cleanup_fixture(engine: Engine, fixture: RuntimeEvidenceFixture) -> None:
                     """
                     DELETE FROM context_run
                     WHERE organization_id IN (:org_a_id, :org_b_id)
+                    """
+                ),
+                organizations,
+            )
+            connection.execute(
+                text(
+                    """
+                    DELETE FROM membership_resource_field_right
+                    WHERE organization_id IN (
+                        :org_a_id,
+                        :org_b_id
+                    )
                     """
                 ),
                 organizations,
@@ -755,6 +794,7 @@ def _assert_exact_authorized_http_resolve(
         "resourceRef": active.authorized.resource_ref,
         "revisionRef": active.authorized.revision_ref,
         "fragmentRef": active.authorized.fragment_ref,
+        "projectedFields": ["body"],
         "runRef": evidence["runRef"],
         "purpose": package["purpose"],
         "authorizationAsOf": package["asOf"],

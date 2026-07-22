@@ -67,6 +67,7 @@ AUTHORIZED_EVIDENCE = Evidence(
     resource_ref="resource-authorized",
     revision_ref="revision-authorized",
     fragment_ref="fragment-authorized",
+    projected_field_refs=("body",),
     lineage=AUTHORIZED_LINEAGE,
 )
 AUTHORIZED_BLOCK = PackageBlock(

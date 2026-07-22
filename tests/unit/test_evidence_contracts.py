@@ -7,6 +7,7 @@ from uuid import UUID
 import pytest
 
 from engine.runtime.evidence import (
+    MAX_PROJECTED_FIELD_REFS,
     AuthorizedProjection,
     CandidateRef,
     Evidence,
@@ -63,6 +64,7 @@ def projection(
     body: str,
     *,
     kernel_scope: object,
+    projected_field_refs: tuple[str, ...] = ("body",),
     organization_id: UUID = ORGANIZATION_ID,
     evidence_lineage: EvidenceLineage | None = None,
 ) -> AuthorizedProjection:
@@ -70,6 +72,7 @@ def projection(
         kernel_scope=cast(Any, kernel_scope),
         candidate_ref=candidate(suffix, organization_id=organization_id),
         body=body,
+        projected_field_refs=projected_field_refs,
         lineage=evidence_lineage or lineage(),
     )
 
@@ -186,6 +189,7 @@ def test_authorized_projection_is_kernel_only_hidden_and_scope_lived() -> None:
     _require_active_authorized_projection(authorized)
     assert authorized.candidate_ref.fragment_ref == "fragment-a"
     assert authorized.projected_body == "authorized body"
+    assert authorized.projected_field_refs == ("body",)
     assert authorized.lineage == lineage()
     rendered = repr(authorized)
     assert "authorized body" not in rendered
@@ -210,6 +214,87 @@ def test_authorized_projection_revalidates_integrity_before_content_use() -> Non
     with pytest.raises(ValueError, match="integrity"):
         construct_package_content((authorized,))
 
+    _close_authorization_kernel_scope(kernel_scope)
+
+
+def test_authorized_projection_and_evidence_bind_exact_projected_fields() -> None:
+    kernel_scope = _open_authorization_kernel_scope()
+    authorized = projection(
+        "a",
+        "status=open",
+        kernel_scope=kernel_scope,
+        projected_field_refs=("status",),
+    )
+    content = construct_package_content((authorized,))
+
+    assert content.evidence[0].projected_field_refs == ("status",)
+    object.__setattr__(authorized, "projected_field_refs", ("private_note",))
+    with pytest.raises(ValueError, match="integrity"):
+        construct_package_content((authorized,))
+
+    object.__setattr__(content.evidence[0], "projected_field_refs", ("private_note",))
+    with pytest.raises(ValueError, match="Evidence integrity"):
+        validate_package_content(content.blocks, content.evidence)
+    _close_authorization_kernel_scope(kernel_scope)
+
+
+def test_authorized_projection_rejects_more_than_the_public_field_bound() -> None:
+    kernel_scope = _open_authorization_kernel_scope()
+    maximum_refs = tuple(f"field_{index}" for index in range(MAX_PROJECTED_FIELD_REFS))
+    too_many_refs = tuple(
+        f"field_{index}" for index in range(MAX_PROJECTED_FIELD_REFS + 1)
+    )
+
+    maximum_projection = projection(
+        "a",
+        "authorized body",
+        kernel_scope=kernel_scope,
+        projected_field_refs=maximum_refs,
+    )
+    maximum_content = construct_package_content((maximum_projection,))
+
+    assert maximum_content.evidence[0].projected_field_refs == maximum_refs
+    with pytest.raises(ValueError, match="at most 64"):
+        projection(
+            "a",
+            "authorized body",
+            kernel_scope=kernel_scope,
+            projected_field_refs=too_many_refs,
+        )
+
+    _close_authorization_kernel_scope(kernel_scope)
+
+
+def test_evidence_ref_binds_the_exact_projected_body() -> None:
+    kernel_scope = _open_authorization_kernel_scope()
+    open_content = construct_package_content(
+        (
+            projection(
+                "a",
+                "status=open",
+                kernel_scope=kernel_scope,
+                projected_field_refs=("status",),
+            ),
+        )
+    )
+    closed_content = construct_package_content(
+        (
+            projection(
+                "a",
+                "status=closed",
+                kernel_scope=kernel_scope,
+                projected_field_refs=("status",),
+            ),
+        )
+    )
+
+    assert (
+        open_content.evidence[0].evidence_ref != closed_content.evidence[0].evidence_ref
+    )
+    assert open_content.blocks[0].evidence_ref == open_content.evidence[0].evidence_ref
+    assert (
+        closed_content.blocks[0].evidence_ref == closed_content.evidence[0].evidence_ref
+    )
     _close_authorization_kernel_scope(kernel_scope)
 
 
@@ -401,6 +486,7 @@ def test_package_integrity_revalidates_mutated_block_and_evidence_values() -> No
                 "resource_ref": "resource-a",
                 "revision_ref": "revision-a",
                 "fragment_ref": "fragment-a",
+                "projected_field_refs": ("body",),
                 "lineage": lineage(),
             },
         ),

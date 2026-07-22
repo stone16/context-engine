@@ -44,7 +44,10 @@ from engine.runtime.invocation import (
     _construct_authenticated_http_invocation,
 )
 from engine.runtime.materialized import (
+    MaterializedFieldValue,
     MaterializedFragmentLocator,
+    MaterializedFragmentProjection,
+    MaterializedProjectionKind,
     MaterializedProjectionPort,
     _close_materialized_projection_scope,
     _construct_materialized_projection_session,
@@ -160,14 +163,24 @@ class RecordingMaterializedPort:
             return None
         return locator(candidate_ref)
 
-    def project_body(
+    def project(
         self,
         selected_locator: MaterializedFragmentLocator,
-    ) -> str | None:
+    ) -> MaterializedFragmentProjection | None:
         self.body_calls.append(selected_locator)
         for candidate, body in self.body_by_candidate.items():
             if selected_locator == locator(candidate):
-                return body
+                return MaterializedFragmentProjection(
+                    kind=MaterializedProjectionKind.LEGACY_BODY,
+                    fields=(
+                        MaterializedFieldValue(
+                            field_ref="body",
+                            field_value=body,
+                            ordinal=0,
+                        ),
+                    ),
+                    projection_ceiling=frozenset({"body"}),
+                )
         return None
 
 
@@ -203,7 +216,7 @@ class MissingLocatorPort(RecordingMaterializedPort):
 
 
 class MissingBodyPort(RecordingMaterializedPort):
-    def project_body(
+    def project(
         self,
         selected_locator: MaterializedFragmentLocator,
     ) -> None:
