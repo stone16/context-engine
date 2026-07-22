@@ -872,7 +872,10 @@ def _validate_structural_content(
         ):
             raise ValueError("structural source coordinates must match UTF-8 offsets")
         gap_start = 0 if prior_end < 0 else prior_end
-        if canonical_bytes[gap_start : section.position.start.byte_offset].strip():
+        source_gap = canonical_bytes[
+            gap_start : section.position.start.byte_offset
+        ]
+        if any(byte != 0x0A for byte in source_gap):
             raise ValueError("structural sections cannot omit canonical content")
         source_text = canonical_bytes[
             section.position.start.byte_offset : section.position.end.byte_offset
@@ -920,7 +923,7 @@ def _validate_structural_content(
             headings.append(section)
         fragment_refs.add(fragment.fragment_ref)
         prior_end = section.position.end.byte_offset
-    if canonical_bytes[prior_end:].strip():
+    if canonical_bytes[prior_end:] != b"\n":
         raise ValueError("structural sections cannot omit trailing canonical content")
 
 

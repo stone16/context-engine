@@ -341,6 +341,41 @@ def test_structural_factory_rejects_forged_context_or_search_derivation() -> Non
             )
 
 
+def test_structural_factory_rejects_whitespace_only_omitted_source() -> None:
+    outcome = compile_markdown(
+        b"# Handbook\n\nParagraph.\n",
+        STRUCTURAL_CONFIG,
+    )
+    assert type(outcome) is ParsedDocument
+    paragraph = outcome.sections[1]
+    shifted_position = SourceSpan(
+        start=SourcePoint(
+            paragraph.position.start.line,
+            paragraph.position.start.column,
+            paragraph.position.start.byte_offset + 1,
+        ),
+        end=SourcePoint(
+            paragraph.position.end.line,
+            paragraph.position.end.column,
+            paragraph.position.end.byte_offset + 1,
+        ),
+    )
+
+    with pytest.raises(ValueError, match="cannot omit canonical content"):
+        ParsedDocument.structural_v2(
+            canonical_text="# Handbook\n \nParagraph.\n",
+            sections=(
+                outcome.sections[0],
+                replace(paragraph, position=shifted_position),
+            ),
+            fragments=(
+                outcome.fragments[0],
+                replace(outcome.fragments[1], position=shifted_position),
+            ),
+            provenance=outcome.provenance,
+        )
+
+
 def test_v2_table_ends_when_the_next_structure_starts_without_a_blank_line() -> None:
     outcome = compile_markdown(
         b"# Handbook\n\n| Key | Value |\n| --- | --- |\n| one | two |\n"
