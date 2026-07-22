@@ -802,6 +802,55 @@ def test_gate_fails_before_pytest_when_live_revision_differs_from_head(
     assert called is False
 
 
+def test_gate_scrubs_ambient_pytest_control_variables(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("PYTEST_ADDOPTS", "-k injected-selector")
+    monkeypatch.setenv("PYTEST_PLUGINS", "hostile.pytest_plugin")
+    monkeypatch.setattr(
+        "scripts.security_gate.runner._load_gate_inputs",
+        lambda _paths, _validator: (
+            {"fixtures": []},
+            {},
+            registry(),
+            {},
+            {},
+        ),
+    )
+    monkeypatch.setattr(
+        "scripts.security_gate.runner.load_database_environment", lambda _path: {}
+    )
+    monkeypatch.setattr(
+        "scripts.security_gate.runner._alembic_head", lambda _paths: "head"
+    )
+    monkeypatch.setattr(
+        "scripts.security_gate.runner._live_database_revision",
+        lambda _environment: "head",
+    )
+
+    def executor(
+        command: Sequence[str], *, cwd: Path, env: Mapping[str, str]
+    ) -> int:
+        del command, cwd
+        assert "PYTEST_ADDOPTS" not in env
+        assert "PYTEST_PLUGINS" not in env
+        raise RuntimeError("environment inspected")
+
+    paths = GatePaths(
+        repository_root=tmp_path,
+        catalog=tmp_path / "catalog.json",
+        catalog_schema=tmp_path / "catalog-schema.json",
+        registry=tmp_path / "registry.json",
+        registry_schema=tmp_path / "registry-schema.json",
+        manifest=tmp_path / "manifest.json",
+        database_environment=tmp_path / "database.env",
+        output_directory=tmp_path / "artifacts",
+    )
+
+    with pytest.raises(RuntimeError, match="environment inspected"):
+        run_gate(paths, pytest_executor=executor)
+
+
 def test_gate_rejects_stale_or_spoofed_raw_execution(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

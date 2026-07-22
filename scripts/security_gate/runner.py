@@ -57,6 +57,7 @@ _GIT_EXCLUDE_PATHS = (
     ":(exclude).context-engine/**",
     ":(exclude).harness/**",
 )
+_AMBIENT_PYTEST_CONTROL_KEYS = ("PYTEST_ADDOPTS", "PYTEST_PLUGINS")
 _ENVIRONMENT_KEY = re.compile(r"^[A-Z][A-Z0-9_]*$")
 _ALLOWED_DATABASE_ENVIRONMENT_KEYS = frozenset(
     {
@@ -680,6 +681,8 @@ def run_gate(
         runner_execution_id = secrets.token_hex(32)
         command = build_pytest_command(selectors, raw_path=raw_path)
         process_environment = dict(os.environ)
+        for key in _AMBIENT_PYTEST_CONTROL_KEYS:
+            process_environment.pop(key, None)
         process_environment.update(environment)
         process_environment[RAW_EXECUTION_ID_ENVIRONMENT] = runner_execution_id
         with suppress(FileNotFoundError):
