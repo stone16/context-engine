@@ -148,6 +148,16 @@ def test_m0_registry_uses_honest_unavailable_carrier_and_learning_evidence() -> 
         "tests/integration/test_authorized_field_schema.py::"
         "test_cross_organization_field_authority_and_values_fail_closed"
     )
+    assert evidence["PG-FILE-SOURCE-FK-021"] == (
+        "tests/integration/test_file_source_registration.py::"
+        "test_source_version_is_immutable_and_active_pointer_stays_in_organization"
+    )
+    tenant_fk = next(
+        mapping
+        for mapping in registry["invariantMappings"]
+        if mapping["invariantRef"] == "TENANT-FK-002"
+    )
+    assert "PG-FILE-SOURCE-FK-021" in tenant_fk["evidenceRefs"]["postgres"]
 
 
 def test_registry_requires_every_invariant_evidence_layer() -> None:

@@ -312,6 +312,7 @@ def test_file_source_tables_fail_closed_for_non_owner_role_matrix(
         ).scalar_one() == 0
 
 
+@pytest.mark.security_evidence(id="PG-FILE-SOURCE-FK-021", layer="postgres")
 def test_source_version_is_immutable_and_active_pointer_stays_in_organization(
     guarded_control_engine: Engine,
     migration_configuration: DatabaseConfiguration,
@@ -337,6 +338,30 @@ def test_source_version_is_immutable_and_active_pointer_stays_in_organization(
 
     engine = create_database_engine(migration_configuration)
     try:
+        with pytest.raises(DBAPIError), engine.begin() as connection:
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO source_version (
+                        organization_id, source_id, version_id, source_kind,
+                        root_ref, capability_manifest, created_at
+                    )
+                    SELECT
+                        :organization_a, :source_b_id, :version_id, source_kind,
+                        root_ref, capability_manifest, :created_at
+                    FROM source_version
+                    WHERE organization_id = :organization_b
+                      AND source_id = :source_b_id
+                    """
+                ),
+                {
+                    "organization_a": organization_a,
+                    "organization_b": organization_b,
+                    "source_b_id": source_b.source_ref.value,
+                    "version_id": uuid4(),
+                    "created_at": NOW,
+                },
+            )
         with pytest.raises(DBAPIError), engine.begin() as connection:
             connection.execute(
                 text(
