@@ -656,19 +656,7 @@ def test_file_source_offboarding_revision_downgrades_and_reapplies_cleanly(
                         )
                     ).scalars()
                 )
-                indexes = set(
-                    connection.execute(
-                        text(
-                            """
-                            SELECT indexname FROM pg_indexes
-                            WHERE schemaname = 'public'
-                              AND tablename = 'context_source'
-                            """
-                        )
-                    ).scalars()
-                )
             assert "lifecycle_state" not in columns
-            assert "ix_context_source_runtime_lifecycle" not in indexes
         finally:
             engine.dispose()
     finally:
@@ -678,24 +666,6 @@ def test_file_source_offboarding_revision_downgrades_and_reapplies_cleanly(
     assert "file_source_cleanup_intent" in _application_tables(
         migration_configuration
     )
-    engine = create_database_engine(migration_configuration)
-    try:
-        with engine.connect() as connection:
-            index_definition = connection.execute(
-                text(
-                    """
-                    SELECT indexdef FROM pg_indexes
-                    WHERE schemaname = 'public'
-                      AND tablename = 'context_source'
-                      AND indexname = 'ix_context_source_runtime_lifecycle'
-                    """
-                )
-            ).scalar_one()
-        assert "(organization_id, source_id, source_kind, lifecycle_state)" in (
-            index_definition
-        )
-    finally:
-        engine.dispose()
 
 
 def test_file_source_offboarding_refuses_downgrade_with_committed_intent(

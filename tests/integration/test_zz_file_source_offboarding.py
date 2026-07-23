@@ -6,7 +6,7 @@ from contextlib import contextmanager
 from datetime import timedelta
 from pathlib import Path
 from time import monotonic, sleep
-from typing import Any
+from typing import Any, cast
 from uuid import UUID
 
 import pytest
@@ -32,6 +32,8 @@ from engine.control import (
 )
 from engine.persistence import (
     DatabaseConfiguration,
+    FileImportInterrupted,
+    FilePublicationBoundary,
     MembershipIdentity,
     PostgreSQLControlStore,
     PostgreSQLMembershipAuthority,
@@ -62,6 +64,13 @@ from tests.integration.test_file_import_tracer import (
     _prepare_file_import_scenario,
     _prepare_repeat_file_import,
     _run_file_import,
+    _scenario_claims,
+)
+from tests.integration.test_zz_file_publication_recovery import (
+    _run as _run_recoverable_file_import,
+)
+from tests.integration.test_zz_file_publication_recovery import (
+    _worker as _recovery_worker,
 )
 from tests.integration.test_zz_file_revision_replacement import (
     OLD_MARKDOWN,
@@ -149,6 +158,87 @@ def _offboard(
             call,
             OffboardFileSource(source_ref=scenario.source_ref),
         )
+
+
+def _activate_recoverable_direct(
+    scenario: _FileImportScenario,
+    migration_configuration: DatabaseConfiguration,
+    guarded_worker_engine: Engine,
+) -> object | None:
+    claims = _scenario_claims(scenario)
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.connect() as connection:
+            publication = connection.execute(
+                text(
+                    """
+                    SELECT resource_ref, revision_id
+                    FROM file_import_job
+                    WHERE organization_id = :organization_id
+                      AND job_id = :job_id
+                    """
+                ),
+                {
+                    "organization_id": scenario.organization_id,
+                    "job_id": scenario.prepared.job_id,
+                },
+            ).one()
+    finally:
+        migration_engine.dispose()
+    with guarded_worker_engine.begin() as connection:
+        return connection.execute(
+            text(
+                """
+                SELECT *
+                FROM public.context_worker_activate_recoverable_file_publication(
+                    :organization_id, :job_id, :service_principal_id,
+                    :source_ref, :resource_ref, :revision_id,
+                    :lease_generation, :signing_key_version, :nonce,
+                    :issued_at, :expires_at
+                )
+                """
+            ),
+            {
+                "organization_id": claims.organization_id,
+                "job_id": claims.job_id,
+                "service_principal_id": claims.service_principal_id,
+                "source_ref": claims.source_ref,
+                "resource_ref": publication.resource_ref,
+                "revision_id": publication.revision_id,
+                "lease_generation": claims.lease_generation,
+                "signing_key_version": claims.signing_key_version,
+                "nonce": claims.nonce,
+                "issued_at": claims.issued_at,
+                "expires_at": claims.expires_at,
+            },
+        ).one_or_none()
+
+
+def _prepare_ready_interrupted_import(
+    tmp_path: Path,
+    migration_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+    guarded_worker_engine: Engine,
+) -> _FileImportScenario:
+    scenario = _prepare_file_import_scenario(
+        tmp_path,
+        migration_configuration,
+        guarded_control_engine,
+        payload=OLD_MARKDOWN,
+    )
+    assert scenario.token is not None
+    with pytest.raises(FileImportInterrupted):
+        _run_recoverable_file_import(
+            _recovery_worker(
+                scenario,
+                guarded_worker_engine,
+                config_version="markdown-config-v2",
+                interrupt_after=FilePublicationBoundary.INDEXED,
+            ),
+            scenario,
+            scenario.token,
+        )
+    return scenario
 
 
 def _stable_empty_package(package: dict[str, Any]) -> dict[str, Any]:
@@ -538,22 +628,137 @@ def test_offboard_counts_resources_committed_before_job_cancellation(
     tmp_path: Path,
     migration_configuration: DatabaseConfiguration,
     guarded_control_engine: Engine,
+    guarded_worker_engine: Engine,
 ) -> None:
-    scenario = _prepare_file_import_scenario(
+    scenario = _prepare_ready_interrupted_import(
         tmp_path,
         migration_configuration,
         guarded_control_engine,
-        issue_lease=False,
+        guarded_worker_engine,
     )
     migration_engine = create_database_engine(migration_configuration)
-    resource_ref = "resource:offboard-cancellation-race"
     try:
-        with migration_engine.connect() as locking_connection:
-            transaction = locking_connection.begin()
-            locking_transaction_id = locking_connection.execute(
+        with migration_engine.connect() as barrier_connection:
+            barrier_transaction = barrier_connection.begin()
+            barrier_connection.execute(
+                text(
+                    """
+                    SELECT pg_catalog.pg_advisory_xact_lock_shared(
+                        pg_catalog.hashtextextended(
+                            'context-engine.file-publication:'
+                            || CAST(:organization_id AS text),
+                            0
+                        )
+                    )
+                    """
+                ),
+                {"organization_id": scenario.organization_id},
+            )
+
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                offboarding = executor.submit(
+                    _offboard, scenario, guarded_control_engine
+                )
+                deadline = monotonic() + 10
+                while monotonic() < deadline:
+                    with migration_engine.connect() as observer:
+                        waiters = observer.execute(
+                            text(
+                                """
+                                SELECT count(*) FROM pg_locks
+                                WHERE locktype = 'advisory'
+                                  AND granted IS FALSE
+                                """
+                            )
+                        ).scalar_one()
+                    if waiters >= 1:
+                        break
+                    sleep(0.01)
+                else:
+                    barrier_transaction.rollback()
+                    offboarding.result(timeout=5)
+                    pytest.fail("offboarding did not reach the publication fence")
+
+                activation = executor.submit(
+                    _activate_recoverable_direct,
+                    scenario,
+                    migration_configuration,
+                    guarded_worker_engine,
+                )
+                deadline = monotonic() + 10
+                while monotonic() < deadline:
+                    with migration_engine.connect() as observer:
+                        waiters = observer.execute(
+                            text(
+                                """
+                                SELECT count(*) FROM pg_locks
+                                WHERE locktype = 'advisory'
+                                  AND granted IS FALSE
+                                """
+                            )
+                        ).scalar_one()
+                    if waiters >= 2:
+                        break
+                    sleep(0.01)
+                else:
+                    barrier_transaction.rollback()
+                    activation.result(timeout=5)
+                    offboarding.result(timeout=5)
+                    pytest.fail("activation did not reach the publication fence")
+
+                barrier_transaction.commit()
+                committed = offboarding.result(timeout=10)
+                assert activation.result(timeout=10) is None
+
+        with migration_engine.connect() as connection:
+            state = connection.execute(
+                text(
+                    """
+                    SELECT intent.retained_resource_count, job.state,
+                           job.effect_count,
+                           (SELECT count(*) FROM context_resource AS resource
+                            WHERE resource.organization_id = intent.organization_id
+                              AND resource.source_ref = :source_ref)
+                    FROM file_source_cleanup_intent AS intent
+                    JOIN file_import_job AS job
+                      ON job.organization_id = intent.organization_id
+                     AND job.source_id = intent.source_id
+                    WHERE intent.organization_id = :organization_id
+                      AND intent.source_id = :source_id
+                    """
+                ),
+                {
+                    "organization_id": scenario.organization_id,
+                    "source_id": scenario.source_ref.value,
+                    "source_ref": str(scenario.source_ref.value),
+                },
+            ).one()
+        assert committed.retained_resource_count == 1
+        assert tuple(state) == (1, "cancelled", 0, 1)
+    finally:
+        migration_engine.dispose()
+
+
+def test_offboard_waits_for_activation_that_already_crossed_publication_fence(
+    tmp_path: Path,
+    migration_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+    guarded_worker_engine: Engine,
+) -> None:
+    scenario = _prepare_ready_interrupted_import(
+        tmp_path,
+        migration_configuration,
+        guarded_control_engine,
+        guarded_worker_engine,
+    )
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.connect() as job_barrier:
+            barrier_transaction = job_barrier.begin()
+            transaction_id = job_barrier.execute(
                 text("SELECT pg_current_xact_id()::text")
             ).scalar_one()
-            locking_connection.execute(
+            job_barrier.execute(
                 text(
                     """
                     SELECT 1 FROM file_import_job
@@ -568,8 +773,13 @@ def test_offboard_counts_resources_committed_before_job_cancellation(
                 },
             ).one()
 
-            with ThreadPoolExecutor(max_workers=1) as executor:
-                pending = executor.submit(_offboard, scenario, guarded_control_engine)
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                activation = executor.submit(
+                    _activate_recoverable_direct,
+                    scenario,
+                    migration_configuration,
+                    guarded_worker_engine,
+                )
                 deadline = monotonic() + 10
                 while monotonic() < deadline:
                     with migration_engine.connect() as observer:
@@ -584,58 +794,70 @@ def test_offboard_counts_resources_committed_before_job_cancellation(
                                 )
                                 """
                             ),
-                            {"transaction_id": locking_transaction_id},
+                            {"transaction_id": transaction_id},
                         ).scalar_one()
                     if blocked:
                         break
                     sleep(0.01)
                 else:
-                    transaction.rollback()
-                    pending.result(timeout=5)
-                    pytest.fail("offboarding did not reach the locked job fence")
+                    barrier_transaction.rollback()
+                    activation.result(timeout=5)
+                    pytest.fail("activation did not reach the locked job")
 
-                locking_connection.execute(
-                    text(
-                        """
-                        INSERT INTO context_resource (
-                            organization_id, resource_ref, source_ref,
-                            active_revision_id, tombstoned
-                        ) VALUES (
-                            :organization_id, :resource_ref, :source_ref,
-                            NULL, false
-                        )
-                        """
-                    ),
-                    {
-                        "organization_id": scenario.organization_id,
-                        "resource_ref": resource_ref,
-                        "source_ref": str(scenario.source_ref.value),
-                    },
+                offboarding = executor.submit(
+                    _offboard, scenario, guarded_control_engine
                 )
-                transaction.commit()
-                committed = pending.result(timeout=10)
+                deadline = monotonic() + 10
+                while monotonic() < deadline:
+                    with migration_engine.connect() as observer:
+                        blocked = observer.execute(
+                            text(
+                                """
+                                SELECT EXISTS (
+                                    SELECT 1 FROM pg_locks
+                                    WHERE locktype = 'advisory'
+                                      AND granted IS FALSE
+                                )
+                                """
+                            )
+                        ).scalar_one()
+                    if blocked:
+                        break
+                    sleep(0.01)
+                else:
+                    barrier_transaction.rollback()
+                    activation.result(timeout=5)
+                    offboarding.result(timeout=5)
+                    pytest.fail("offboarding did not wait behind activation")
 
+                barrier_transaction.commit()
+                activated = activation.result(timeout=10)
+                committed = offboarding.result(timeout=10)
+
+        assert activated is not None
+        assert cast(Any, activated).effect_count == 1
+        assert committed.cancelled_job_count == 0
+        assert committed.retained_resource_count == 1
         with migration_engine.connect() as connection:
-            retained = connection.execute(
+            state = connection.execute(
                 text(
                     """
-                    SELECT intent.retained_resource_count,
-                           (SELECT count(*) FROM context_resource AS resource
-                            WHERE resource.organization_id = intent.organization_id
-                              AND resource.source_ref = :source_ref)
-                    FROM file_source_cleanup_intent AS intent
-                    WHERE intent.organization_id = :organization_id
-                      AND intent.source_id = :source_id
+                    SELECT job.state, job.effect_count,
+                           intent.retained_resource_count
+                    FROM file_import_job AS job
+                    JOIN file_source_cleanup_intent AS intent
+                      ON intent.organization_id = job.organization_id
+                     AND intent.source_id = job.source_id
+                    WHERE job.organization_id = :organization_id
+                      AND job.job_id = :job_id
                     """
                 ),
                 {
                     "organization_id": scenario.organization_id,
-                    "source_id": scenario.source_ref.value,
-                    "source_ref": str(scenario.source_ref.value),
+                    "job_id": scenario.prepared.job_id,
                 },
             ).one()
-        assert committed.retained_resource_count == 1
-        assert tuple(retained) == (1, 1)
+        assert tuple(state) == ("completed", 1, 1)
     finally:
         migration_engine.dispose()
 

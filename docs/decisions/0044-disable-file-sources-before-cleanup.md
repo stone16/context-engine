@@ -35,8 +35,8 @@ trusted time, cleanup-intent identity, retained-artifact counts, and the next
 Policy Epoch are database-owned facts.
 
 One SECURITY DEFINER PostgreSQL transaction takes the Organization publication
-advisory lock exclusively, locks the active ContextSource and current Policy
-Epoch, and then atomically:
+advisory lock exclusively, locks the active ContextSource, current Policy
+Epoch, and every cancellable source-bound job, and then atomically:
 
 1. changes the stable ContextSource lifecycle from `active` to `disabled` and
    records the exact immutable active SourceVersion at that boundary;
@@ -57,6 +57,12 @@ disabled Source. Worker job/lease database policies require the exact Source to
 remain active, so an available job cannot obtain a new lease and a previously
 issued lease cannot redeem, recover, or publish after commit. The source check
 is a database authorization predicate, not a process-local scheduling hint.
+Every activation entry point takes its Resource replacement fence and then the
+Organization publication lock before any job or Resource row lock. This global
+lock order preserves old-version reads while a replacement activation is
+waiting, lets an activation that already crossed the publication fence finish
+before offboarding counts retained artifacts, and makes work arriving behind
+offboarding observe the disabled Source with zero effect and no deadlock victim.
 
 The existing `ContextAccessTicket` carrier validates current Policy Epoch
 before signing. When issuance or redemption explicitly binds a File Source,

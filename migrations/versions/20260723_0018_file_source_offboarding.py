@@ -27,6 +27,22 @@ _FUNCTION = "context_control_offboard_file_source"
 _SIGNATURE = "(uuid, uuid, uuid)"
 _RUNTIME_SOURCE_FUNCTION = "context_runtime_file_source_lifecycle_allows"
 _RUNTIME_SOURCE_SIGNATURE = "(uuid, text)"
+_RECOVERABLE_ACTIVATE_FUNCTION = "context_worker_activate_recoverable_file_publication"
+_RECOVERABLE_ACTIVATE_PRIVATE = (
+    "context_worker_activate_recoverable_file_publication_pre_offboarding"
+)
+_RECOVERABLE_ACTIVATE_SIGNATURE = (
+    "(uuid, uuid, uuid, text, text, uuid, bigint, bigint, bytea, "
+    "timestamp with time zone, timestamp with time zone)"
+)
+_REPLACEMENT_ACTIVATE_FUNCTION = "context_worker_activate_file_replacement"
+_REPLACEMENT_ACTIVATE_PRIVATE = (
+    "context_worker_activate_file_replacement_pre_offboarding"
+)
+_REPLACEMENT_ACTIVATE_SIGNATURE = (
+    "(uuid, uuid, uuid, text, text, uuid, uuid, bigint, bigint, bytea, "
+    "timestamp with time zone, timestamp with time zone)"
+)
 _PREPARE_SIGNATURE = (
     "(uuid, uuid, uuid, uuid, uuid, text, text, uuid, bigint, text, text, uuid)"
 )
@@ -170,6 +186,91 @@ def _previous_current_user_actor() -> str:
     )[0]
 
 
+def _wrap_activation_with_publication_fence(
+    function_name: str,
+    private_name: str,
+    signature: str,
+    parameter_declarations: str,
+    call_arguments: str,
+    return_columns: str,
+) -> None:
+    """Make the Organization publication fence precede every job-row lock."""
+
+    op.execute(f"SET LOCAL ROLE {_WORKER_DEFINER}")
+    op.execute(
+        f"ALTER FUNCTION public.{function_name}{signature} "
+        f"RENAME TO {private_name}"
+    )
+    op.execute(
+        f"REVOKE ALL ON FUNCTION public.{private_name}{signature} FROM {_WORKER}"
+    )
+    op.execute("RESET ROLE")
+    op.execute(
+        f"""
+        CREATE FUNCTION public.{function_name}(
+            {parameter_declarations}
+        ) RETURNS TABLE ({return_columns})
+        LANGUAGE plpgsql SECURITY DEFINER
+        SET search_path = pg_catalog, pg_temp
+        SET row_security = on
+        AS $function$
+        BEGIN
+            IF SESSION_USER <> '{_WORKER}'
+               OR requested_organization_id IS NULL
+               OR requested_resource_ref IS NULL
+            THEN RETURN; END IF;
+            PERFORM pg_catalog.pg_advisory_xact_lock(
+                pg_catalog.hashtextextended(
+                    'context-engine.file-replacement:'
+                    || requested_organization_id::text || ':'
+                    || requested_resource_ref,
+                    0
+                )
+            );
+            PERFORM pg_catalog.pg_advisory_xact_lock(
+                pg_catalog.hashtextextended(
+                    'context-engine.file-publication:'
+                    || requested_organization_id::text,
+                    0
+                )
+            );
+            RETURN QUERY
+            SELECT wrapped.effect_count, wrapped.outcome,
+                   wrapped.active_revision_id, wrapped.fragment_refs,
+                   wrapped.content_identity_digest, wrapped.reason_digest
+            FROM public.{private_name}({call_arguments}) AS wrapped;
+        END;
+        $function$
+        """
+    )
+    op.execute(
+        f"REVOKE ALL ON FUNCTION public.{function_name}{signature} FROM PUBLIC"
+    )
+    op.execute(
+        f"GRANT EXECUTE ON FUNCTION public.{function_name}{signature} TO {_WORKER}"
+    )
+    op.execute(
+        f"ALTER FUNCTION public.{function_name}{signature} OWNER TO {_WORKER_DEFINER}"
+    )
+
+
+def _restore_activation_without_publication_fence(
+    function_name: str,
+    private_name: str,
+    signature: str,
+) -> None:
+    op.execute(f"SET LOCAL ROLE {_WORKER_DEFINER}")
+    op.execute(f"DROP FUNCTION public.{function_name}{signature}")
+    op.execute(
+        f"ALTER FUNCTION public.{private_name}{signature} "
+        f"RENAME TO {function_name}"
+    )
+    op.execute(
+        f"GRANT EXECUTE ON FUNCTION public.{function_name}{signature} TO {_WORKER}"
+    )
+    op.execute("RESET ROLE")
+
+
 def upgrade() -> None:
     """Add one atomic source-offboarding and cancellation authority."""
 
@@ -207,12 +308,6 @@ def upgrade() -> None:
         deferrable=True,
         initially="DEFERRED",
     )
-    op.create_index(
-        "ix_context_source_runtime_lifecycle",
-        "context_source",
-        ["organization_id", "source_id", "source_kind", "lifecycle_state"],
-    )
-
     op.create_table(
         _TABLE,
         sa.Column("organization_id", postgresql.UUID(as_uuid=True), nullable=False),
@@ -476,6 +571,52 @@ def upgrade() -> None:
         "AS PERMISSIVE FOR SELECT TO context_engine_runtime USING ("
         f"{_current_user_actor()})"
     )
+
+    # Existing activation functions take a job row before the Organization
+    # publication fence. Public wrappers establish the shared global order:
+    # Resource replacement fence, Organization publication fence, then rows.
+    activation_returns = (
+        "effect_count smallint, outcome text, active_revision_id uuid, "
+        "fragment_refs text[], content_identity_digest text, reason_digest text"
+    )
+    op.execute(f"GRANT CREATE ON SCHEMA public TO {_WORKER_DEFINER}")
+    _wrap_activation_with_publication_fence(
+        _REPLACEMENT_ACTIVATE_FUNCTION,
+        _REPLACEMENT_ACTIVATE_PRIVATE,
+        _REPLACEMENT_ACTIVATE_SIGNATURE,
+        "requested_organization_id uuid, requested_job_id uuid, "
+        "requested_service_principal_id uuid, requested_source_ref text, "
+        "requested_resource_ref text, requested_previous_revision_id uuid, "
+        "requested_replacement_revision_id uuid, "
+        "requested_lease_generation bigint, requested_signing_key_version bigint, "
+        "requested_nonce bytea, requested_issued_at timestamptz, "
+        "requested_expires_at timestamptz",
+        "requested_organization_id, requested_job_id, "
+        "requested_service_principal_id, requested_source_ref, "
+        "requested_resource_ref, requested_previous_revision_id, "
+        "requested_replacement_revision_id, requested_lease_generation, "
+        "requested_signing_key_version, requested_nonce, requested_issued_at, "
+        "requested_expires_at",
+        activation_returns,
+    )
+    _wrap_activation_with_publication_fence(
+        _RECOVERABLE_ACTIVATE_FUNCTION,
+        _RECOVERABLE_ACTIVATE_PRIVATE,
+        _RECOVERABLE_ACTIVATE_SIGNATURE,
+        "requested_organization_id uuid, requested_job_id uuid, "
+        "requested_service_principal_id uuid, requested_source_ref text, "
+        "requested_resource_ref text, requested_revision_id uuid, "
+        "requested_lease_generation bigint, requested_signing_key_version bigint, "
+        "requested_nonce bytea, requested_issued_at timestamptz, "
+        "requested_expires_at timestamptz",
+        "requested_organization_id, requested_job_id, "
+        "requested_service_principal_id, requested_source_ref, "
+        "requested_resource_ref, requested_revision_id, "
+        "requested_lease_generation, requested_signing_key_version, "
+        "requested_nonce, requested_issued_at, requested_expires_at",
+        activation_returns,
+    )
+    op.execute(f"REVOKE CREATE ON SCHEMA public FROM {_WORKER_DEFINER}")
 
     # Retain the earlier implementation only as a private implementation detail.
     # The public wrapper serializes prepare with source offboarding and rechecks
@@ -755,6 +896,18 @@ def downgrade() -> None:
     op.execute(f"SET LOCAL ROLE {_ACCESS_DEFINER}")
     op.execute(f"DROP FUNCTION public.{_FUNCTION}{_SIGNATURE}")
     op.execute("RESET ROLE")
+    op.execute(f"GRANT CREATE ON SCHEMA public TO {_WORKER_DEFINER}")
+    _restore_activation_without_publication_fence(
+        _RECOVERABLE_ACTIVATE_FUNCTION,
+        _RECOVERABLE_ACTIVATE_PRIVATE,
+        _RECOVERABLE_ACTIVATE_SIGNATURE,
+    )
+    _restore_activation_without_publication_fence(
+        _REPLACEMENT_ACTIVATE_FUNCTION,
+        _REPLACEMENT_ACTIVATE_PRIVATE,
+        _REPLACEMENT_ACTIVATE_SIGNATURE,
+    )
+    op.execute(f"REVOKE CREATE ON SCHEMA public FROM {_WORKER_DEFINER}")
     tenant = (
         "organization_id = NULLIF("
         "current_setting('app.organization_id', true), ''"
@@ -876,7 +1029,6 @@ def downgrade() -> None:
         "context_source",
         type_="foreignkey",
     )
-    op.drop_index("ix_context_source_runtime_lifecycle", table_name="context_source")
     op.drop_constraint("ck_context_source_lifecycle", "context_source", type_="check")
     op.drop_column("context_source", "disabled_at")
     op.drop_column("context_source", "disabled_version_id")
