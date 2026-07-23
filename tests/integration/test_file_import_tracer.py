@@ -176,11 +176,13 @@ class _RuntimeAuthenticator:
         membership_id: UUID,
         *,
         token: str = "runtime-secret",
+        private_delivery: bool = False,
     ) -> None:
         self.organization_id = organization_id
         self.user_id = user_id
         self.membership_id = membership_id
         self.token = token
+        self.private_delivery = private_delivery
 
     def authenticate(self, opaque_credential: str) -> VerifiedAuthenticationContext:
         assert opaque_credential == self.token
@@ -193,9 +195,13 @@ class _RuntimeAuthenticator:
             agent_version_ref="agent:file-tracer",
             authenticated_application_ref="application:file-tracer",
             authentication_binding_ref="binding:file-tracer",
-            private_delivery_binding=VerifiedPrivateDeliveryBinding(
-                destination_ref="private-chat:file-tracer",
-                consumer_ref="consumer:file-tracer",
+            private_delivery_binding=(
+                VerifiedPrivateDeliveryBinding(
+                    destination_ref="private-chat:file-tracer",
+                    consumer_ref="consumer:file-tracer",
+                )
+                if self.private_delivery
+                else None
             ),
         )
 
@@ -1096,8 +1102,29 @@ def test_registered_file_import_publishes_one_exact_authorized_http_package(
         "Authorization": "Bearer runtime-secret",
         "X-Context-Delivery-Evidence-Ref": evidence_ref.evidence_ref,
     }
+    private_client = TestClient(
+        create_app(
+            authenticator=_RuntimeAuthenticator(
+                organization_id,
+                user_id,
+                membership_id,
+                private_delivery=True,
+            ),
+            organization_authority=_OrganizationAuthority(),
+            membership_authority=PostgreSQLMembershipAuthority(
+                guarded_runtime_engine
+            ),
+            scope_authority=_ExactScopeAuthority(
+                published.candidate_ref.source_ref,
+                published.candidate_ref.resource_ref,
+            ),
+            runtime=runtime,
+            clock=lambda: NOW,
+            request_id_factory=lambda: "file-import-http",
+        )
+    )
     try:
-        private_response = client.post(
+        private_response = private_client.post(
             "/v1/context:resolve",
             headers=private_headers,
             json={
@@ -1105,7 +1132,7 @@ def test_registered_file_import_publishes_one_exact_authorized_http_package(
                 "need": {"query": "ContextEngine delivers context."},
             },
         )
-        private_retry = client.post(
+        private_retry = private_client.post(
             "/v1/context:resolve",
             headers=private_headers,
             json={

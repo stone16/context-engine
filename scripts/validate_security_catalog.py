@@ -995,9 +995,11 @@ CANONICAL_PRIVATE_DELIVERY_EVIDENCE_ACTIVATION: dict[str, object] = {
             ),
             "oracle": (
                 "Authenticated HTTP metadata carries only the opaque reference; "
-                "exact redemption constructs private TrustedDeliveryContext while "
-                "forged or wrong authenticated-route destination evidence returns "
-                "the same generic authentication failure before index, Provider, "
+                "exact redemption constructs private TrustedDeliveryContext, "
+                "a private route binding without evidence and evidence without a "
+                "nominal private route binding fail closed, while forged or wrong "
+                "authenticated-route destination evidence returns the same generic "
+                "authentication failure before Runtime resolution, index, Provider, "
                 "source-content, Package, model, or effect work, and response, "
                 "ordinary authentication/invocation/outcome trace, and captured "
                 "logs omit bearer, raw Organization/User/Membership/principal/agent/"

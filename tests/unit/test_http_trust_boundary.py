@@ -89,7 +89,7 @@ class DeterministicAuthenticator:
     def __init__(
         self,
         *,
-        private_destination_ref: str = "chat:private:42",
+        private_destination_ref: str | None = None,
         private_consumer_ref: str = "application-from-auth",
     ) -> None:
         self.calls: list[str] = []
@@ -109,9 +109,13 @@ class DeterministicAuthenticator:
             agent_version_ref="agent-version-from-auth",
             authenticated_application_ref="application-from-auth",
             authentication_binding_ref="binding-from-auth",
-            private_delivery_binding=VerifiedPrivateDeliveryBinding(
-                destination_ref=self.private_destination_ref,
-                consumer_ref=self.private_consumer_ref,
+            private_delivery_binding=(
+                VerifiedPrivateDeliveryBinding(
+                    destination_ref=self.private_destination_ref,
+                    consumer_ref=self.private_consumer_ref,
+                )
+                if self.private_destination_ref is not None
+                else None
             ),
         )
 
@@ -541,7 +545,9 @@ def test_private_delivery_evidence_is_redeemed_before_runtime_content_work(
     outcomes: list[Resolved] = []
     client = TestClient(
         create_app(
-            authenticator=DeterministicAuthenticator(),
+            authenticator=DeterministicAuthenticator(
+                private_destination_ref="chat:private:42"
+            ),
             organization_authority=DeterministicOrganizationAuthority(),
             membership_authority=DeterministicMembershipAuthority(valid_port),
             runtime=runtime,
@@ -592,6 +598,34 @@ def test_private_delivery_evidence_is_redeemed_before_runtime_content_work(
         },
         json=VALID_BODY,
     )
+    missing_binding_client = TestClient(
+        create_app(
+            authenticator=DeterministicAuthenticator(),
+            organization_authority=DeterministicOrganizationAuthority(),
+            membership_authority=DeterministicMembershipAuthority(valid_port),
+            runtime=runtime,
+            clock=lambda: RECEIVED_AT,
+            invocation_observer=invocations.append,
+            resolution_observer=outcomes.append,
+        )
+    )
+    missing_binding = missing_binding_client.post(
+        "/v1/context:resolve",
+        headers={
+            "Authorization": f"Bearer {VALID_TOKEN}",
+            "X-Context-Request-Id": "private-request",
+            "X-Context-Delivery-Evidence-Ref": PRIVATE_EVIDENCE_REF,
+        },
+        json=VALID_BODY,
+    )
+    missing_evidence = client.post(
+        "/v1/context:resolve",
+        headers={
+            "Authorization": f"Bearer {VALID_TOKEN}",
+            "X-Context-Request-Id": "private-request",
+        },
+        json=VALID_BODY,
+    )
 
     assert valid.status_code == 200
     assert len(valid_port.requests) == 3
@@ -608,6 +642,11 @@ def test_private_delivery_evidence_is_redeemed_before_runtime_content_work(
     assert forged.content == b'{"code":"authentication_failed"}'
     assert wrong_destination.status_code == 401
     assert wrong_destination.content == b'{"code":"authentication_failed"}'
+    assert missing_binding.status_code == 401
+    assert missing_binding.content == b'{"code":"authentication_failed"}'
+    assert missing_evidence.status_code == 401
+    assert missing_evidence.content == b'{"code":"authentication_failed"}'
+    assert len(outcomes) == 1
     assert content_io.total_calls == calls_after_valid
     protected_values = (
         PRIVATE_EVIDENCE_REF,
@@ -622,8 +661,16 @@ def test_private_delivery_evidence_is_redeemed_before_runtime_content_work(
         "chat:private:wrong",
         valid_port.requests[0].audience_digest,
     )
-    public_output = valid.text + forged.text + wrong_destination.text
-    authenticated_context = DeterministicAuthenticator().authenticate(VALID_TOKEN)
+    public_output = (
+        valid.text
+        + forged.text
+        + wrong_destination.text
+        + missing_binding.text
+        + missing_evidence.text
+    )
+    authenticated_context = DeterministicAuthenticator(
+        private_destination_ref="chat:private:42"
+    ).authenticate(VALID_TOKEN)
     ordinary_trace = (
         repr(authenticated_context) + repr(invocations) + repr(outcomes)
     )
@@ -639,7 +686,9 @@ def test_delivery_evidence_is_rejected_for_inactive_non_acquire_carriers() -> No
     content_io = DownstreamContentIoSpy()
     client = TestClient(
         create_app(
-            authenticator=DeterministicAuthenticator(),
+            authenticator=DeterministicAuthenticator(
+                private_destination_ref="chat:private:42"
+            ),
             organization_authority=DeterministicOrganizationAuthority(),
             membership_authority=DeterministicMembershipAuthority(port),
             runtime=Runtime(
@@ -670,55 +719,6 @@ def test_delivery_evidence_is_rejected_for_inactive_non_acquire_carriers() -> No
     assert response.content == b'{"code":"authentication_failed"}'
     assert port.requests == []
     assert content_io.total_calls == 0
-
-
-def test_private_evidence_requires_nominal_authenticated_route_binding() -> None:
-    port = ExactPrivateDeliveryEvidencePort(evidence_digest=PRIVATE_EVIDENCE_DIGEST)
-
-    class MissingPrivateBindingAuthenticator(DeterministicAuthenticator):
-        def authenticate(
-            self,
-            opaque_credential: str,
-        ) -> VerifiedAuthenticationContext:
-            verified = super().authenticate(opaque_credential)
-            return VerifiedAuthenticationContext(
-                organization_ref=verified.organization_ref,
-                user_ref=verified.user_ref,
-                principal_ref=verified.principal_ref,
-                membership_ref=verified.membership_ref,
-                membership_version=verified.membership_version,
-                agent_version_ref=verified.agent_version_ref,
-                authenticated_application_ref=(verified.authenticated_application_ref),
-                authentication_binding_ref=verified.authentication_binding_ref,
-            )
-
-    client = TestClient(
-        create_app(
-            authenticator=MissingPrivateBindingAuthenticator(),
-            organization_authority=DeterministicOrganizationAuthority(),
-            membership_authority=DeterministicMembershipAuthority(port),
-            runtime=Runtime(
-                required_kernel_dependencies(),
-                query_digest_keyring=TEST_QUERY_DIGEST_KEYRING,
-                clock=lambda: RECEIVED_AT,
-            ),
-            clock=lambda: RECEIVED_AT,
-        )
-    )
-
-    response = client.post(
-        "/v1/context:resolve",
-        headers={
-            "Authorization": f"Bearer {VALID_TOKEN}",
-            "X-Context-Request-Id": "private-request",
-            "X-Context-Delivery-Evidence-Ref": PRIVATE_EVIDENCE_REF,
-        },
-        json=VALID_BODY,
-    )
-
-    assert response.status_code == 401
-    assert response.content == b'{"code":"authentication_failed"}'
-    assert port.requests == []
 
 
 def test_valid_auth_constructs_exact_trusted_invocation_once() -> None:

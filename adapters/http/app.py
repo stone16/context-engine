@@ -387,6 +387,15 @@ def create_app(
         runtime_request = _runtime_request_from_wire(body)
         request_id = context_request_id or request_id_factory()
         received_at = clock()
+        private_binding = authentication.private_delivery_binding
+        if delivery_evidence_ref is None:
+            if private_binding is not None:
+                raise TransportAuthenticationFailed
+        elif (
+            type(runtime_request) is not Acquire
+            or type(private_binding) is not VerifiedPrivateDeliveryBinding
+        ):
+            raise TransportAuthenticationFailed
         try:
             organization_verification = selected_organization_authority.verify_existing(
                 authentication,
@@ -488,9 +497,6 @@ def create_app(
                             established_at=invocation.received_at,
                         )
                     else:
-                        if type(runtime_request) is not Acquire:
-                            raise TransportAuthenticationFailed
-                        private_binding = authentication.private_delivery_binding
                         if type(private_binding) is not VerifiedPrivateDeliveryBinding:
                             raise TransportAuthenticationFailed
                         redemption_session = (

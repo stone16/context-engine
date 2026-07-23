@@ -231,7 +231,7 @@
         {
           "id": "HTTP-DELIVERY-EVIDENCE-063",
           "surface": "tests/unit/test_http_trust_boundary.py::test_private_delivery_evidence_is_redeemed_before_runtime_content_work",
-          "oracle": "Authenticated HTTP metadata carries only the opaque reference; exact redemption constructs private TrustedDeliveryContext while forged or wrong authenticated-route destination evidence returns the same generic authentication failure before index, Provider, source-content, Package, model, or effect work, and response, ordinary authentication/invocation/outcome trace, and captured logs omit bearer, raw Organization/User/Membership/principal/agent/application/binding facts, destination, consumer, and audience digest."
+          "oracle": "Authenticated HTTP metadata carries only the opaque reference; exact redemption constructs private TrustedDeliveryContext, a private route binding without evidence and evidence without a nominal private route binding fail closed, while forged or wrong authenticated-route destination evidence returns the same generic authentication failure before Runtime resolution, index, Provider, source-content, Package, model, or effect work, and response, ordinary authentication/invocation/outcome trace, and captured logs omit bearer, raw Organization/User/Membership/principal/agent/application/binding facts, destination, consumer, and audience digest."
         },
         {
           "id": "FILE-DELIVERY-EVIDENCE-063",

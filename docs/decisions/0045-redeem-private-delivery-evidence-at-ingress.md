@@ -81,6 +81,11 @@ or non-private references map to the same external authentication failure before
 Provider, index, Package, model, or effect work. Authority failure maps to the
 existing generic service-unavailable response.
 
+The authenticated route and metadata carrier are an exact pair: a private route
+binding without a `DeliveryEvidenceRef`, or a reference without a nominal private
+route binding, fails authentication. Only an authenticated context with no
+private binding may enter the existing direct-delivery construction path.
+
 Bearer and trusted private-delivery carriers redact their representations. The
 bearer, destination, consumer, audience digest, and other raw trusted
 private-delivery or audience facts are absent from wire bodies, responses,
