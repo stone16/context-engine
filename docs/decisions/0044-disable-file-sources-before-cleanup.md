@@ -63,6 +63,14 @@ lock order preserves old-version reads while a replacement activation is
 waiting, lets an activation that already crossed the publication fence finish
 before offboarding counts retained artifacts, and makes work arriving behind
 offboarding observe the disabled Source with zero effect and no deadlock victim.
+Before either fence, the sealed worker entry point performs a read-only exact
+job, ServiceActor, lease, recovery/plan, and Resource binding check and derives
+the lock keys from that durable row. Caller-provided unverified bindings cannot
+acquire Organization or Resource advisory locks; the implementation revalidates
+the same authority after locking to close the race.
+The database captures one trusted completion time only after those blocking
+fences, then uses it for source disablement, cleanup intent, and job cancellation
+so the audit boundary cannot predate work it waited for and retained.
 
 The existing `ContextAccessTicket` carrier validates current Policy Epoch
 before signing. When issuance or redemption explicitly binds a File Source,

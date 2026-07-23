@@ -219,12 +219,15 @@ def _prepare_ready_interrupted_import(
     migration_configuration: DatabaseConfiguration,
     guarded_control_engine: Engine,
     guarded_worker_engine: Engine,
+    *,
+    lease_ttl_seconds: int = 300,
 ) -> _FileImportScenario:
     scenario = _prepare_file_import_scenario(
         tmp_path,
         migration_configuration,
         guarded_control_engine,
         payload=OLD_MARKDOWN,
+        lease_ttl_seconds=lease_ttl_seconds,
     )
     assert scenario.token is not None
     with pytest.raises(FileImportInterrupted):
@@ -239,6 +242,46 @@ def _prepare_ready_interrupted_import(
             scenario.token,
         )
     return scenario
+
+
+def _publication_lock_waiter_count(
+    connection: Any,
+    organization_id: UUID,
+) -> int:
+    """Count waiters only for this Organization's bigint publication lock."""
+
+    return int(
+        connection.execute(
+            text(
+                """
+                WITH expected AS (
+                    SELECT pg_catalog.hashtextextended(
+                        'context-engine.file-publication:'
+                        || CAST(:organization_id AS text),
+                        0
+                    ) AS lock_key
+                )
+                SELECT count(*)
+                FROM pg_catalog.pg_locks AS held
+                CROSS JOIN expected
+                WHERE held.locktype = 'advisory'
+                  AND held.database = (
+                      SELECT oid FROM pg_catalog.pg_database
+                      WHERE datname = pg_catalog.current_database()
+                  )
+                  AND held.classid = (
+                      (expected.lock_key >> 32) & 4294967295
+                  )::oid
+                  AND held.objid = (
+                      expected.lock_key & 4294967295
+                  )::oid
+                  AND held.objsubid = 1
+                  AND held.granted IS FALSE
+                """
+            ),
+            {"organization_id": organization_id},
+        ).scalar_one()
+    )
 
 
 def _stable_empty_package(package: dict[str, Any]) -> dict[str, Any]:
@@ -662,15 +705,10 @@ def test_offboard_counts_resources_committed_before_job_cancellation(
                 deadline = monotonic() + 10
                 while monotonic() < deadline:
                     with migration_engine.connect() as observer:
-                        waiters = observer.execute(
-                            text(
-                                """
-                                SELECT count(*) FROM pg_locks
-                                WHERE locktype = 'advisory'
-                                  AND granted IS FALSE
-                                """
-                            )
-                        ).scalar_one()
+                        waiters = _publication_lock_waiter_count(
+                            observer,
+                            scenario.organization_id,
+                        )
                     if waiters >= 1:
                         break
                     sleep(0.01)
@@ -688,15 +726,10 @@ def test_offboard_counts_resources_committed_before_job_cancellation(
                 deadline = monotonic() + 10
                 while monotonic() < deadline:
                     with migration_engine.connect() as observer:
-                        waiters = observer.execute(
-                            text(
-                                """
-                                SELECT count(*) FROM pg_locks
-                                WHERE locktype = 'advisory'
-                                  AND granted IS FALSE
-                                """
-                            )
-                        ).scalar_one()
+                        waiters = _publication_lock_waiter_count(
+                            observer,
+                            scenario.organization_id,
+                        )
                     if waiters >= 2:
                         break
                     sleep(0.01)
@@ -706,6 +739,9 @@ def test_offboard_counts_resources_committed_before_job_cancellation(
                     offboarding.result(timeout=5)
                     pytest.fail("activation did not reach the publication fence")
 
+                released_at = barrier_connection.execute(
+                    text("SELECT pg_catalog.clock_timestamp()")
+                ).scalar_one()
                 barrier_transaction.commit()
                 committed = offboarding.result(timeout=10)
                 assert activation.result(timeout=10) is None
@@ -715,11 +751,15 @@ def test_offboard_counts_resources_committed_before_job_cancellation(
                 text(
                     """
                     SELECT intent.retained_resource_count, job.state,
-                           job.effect_count,
+                           job.effect_count, source.disabled_at,
+                           intent.security_completed_at, job.cancelled_at,
                            (SELECT count(*) FROM context_resource AS resource
                             WHERE resource.organization_id = intent.organization_id
                               AND resource.source_ref = :source_ref)
                     FROM file_source_cleanup_intent AS intent
+                    JOIN context_source AS source
+                      ON source.organization_id = intent.organization_id
+                     AND source.source_id = intent.source_id
                     JOIN file_import_job AS job
                       ON job.organization_id = intent.organization_id
                      AND job.source_id = intent.source_id
@@ -734,7 +774,10 @@ def test_offboard_counts_resources_committed_before_job_cancellation(
                 },
             ).one()
         assert committed.retained_resource_count == 1
-        assert tuple(state) == (1, "cancelled", 0, 1)
+        assert tuple(state[:3]) == (1, "cancelled", 0)
+        assert state.disabled_at == state.security_completed_at == state.cancelled_at
+        assert state.disabled_at >= released_at
+        assert state[6] == 1
     finally:
         migration_engine.dispose()
 
@@ -810,18 +853,11 @@ def test_offboard_waits_for_activation_that_already_crossed_publication_fence(
                 deadline = monotonic() + 10
                 while monotonic() < deadline:
                     with migration_engine.connect() as observer:
-                        blocked = observer.execute(
-                            text(
-                                """
-                                SELECT EXISTS (
-                                    SELECT 1 FROM pg_locks
-                                    WHERE locktype = 'advisory'
-                                      AND granted IS FALSE
-                                )
-                                """
-                            )
-                        ).scalar_one()
-                    if blocked:
+                        waiters = _publication_lock_waiter_count(
+                            observer,
+                            scenario.organization_id,
+                        )
+                    if waiters >= 1:
                         break
                     sleep(0.01)
                 else:
@@ -858,6 +894,187 @@ def test_offboard_waits_for_activation_that_already_crossed_publication_fence(
                 },
             ).one()
         assert tuple(state) == ("completed", 1, 1)
+    finally:
+        migration_engine.dispose()
+
+
+@pytest.mark.parametrize("wrong_binding", ["organization", "job", "resource"])
+def test_invalid_activation_binding_cannot_acquire_advisory_fences(
+    wrong_binding: str,
+    tmp_path: Path,
+    migration_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+    guarded_worker_engine: Engine,
+) -> None:
+    scenario = _prepare_ready_interrupted_import(
+        tmp_path,
+        migration_configuration,
+        guarded_control_engine,
+        guarded_worker_engine,
+    )
+    claims = _scenario_claims(scenario)
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.connect() as connection:
+            publication = connection.execute(
+                text(
+                    """
+                    SELECT resource_ref, revision_id
+                    FROM file_import_job
+                    WHERE organization_id = :organization_id
+                      AND job_id = :job_id
+                    """
+                ),
+                {
+                    "organization_id": scenario.organization_id,
+                    "job_id": scenario.prepared.job_id,
+                },
+            ).one()
+    finally:
+        migration_engine.dispose()
+
+    arguments: dict[str, Any] = {
+        "organization_id": claims.organization_id,
+        "job_id": claims.job_id,
+        "service_principal_id": claims.service_principal_id,
+        "source_ref": claims.source_ref,
+        "resource_ref": publication.resource_ref,
+        "revision_id": publication.revision_id,
+        "lease_generation": claims.lease_generation,
+        "signing_key_version": claims.signing_key_version,
+        "nonce": claims.nonce,
+        "issued_at": claims.issued_at,
+        "expires_at": claims.expires_at,
+    }
+    arguments[{
+        "organization": "organization_id",
+        "job": "job_id",
+        "resource": "resource_ref",
+    }[wrong_binding]] = (
+        "resource:wrong-binding"
+        if wrong_binding == "resource"
+        else UUID(int=0)
+    )
+    with guarded_worker_engine.begin() as connection:
+        assert connection.execute(
+            text(
+                """
+                SELECT *
+                FROM public.context_worker_activate_recoverable_file_publication(
+                    :organization_id, :job_id, :service_principal_id,
+                    :source_ref, :resource_ref, :revision_id,
+                    :lease_generation, :signing_key_version, :nonce,
+                    :issued_at, :expires_at
+                )
+                """
+            ),
+            arguments,
+        ).one_or_none() is None
+        held_fences = connection.execute(
+            text(
+                """
+                SELECT count(*) FROM pg_catalog.pg_locks
+                WHERE pid = pg_catalog.pg_backend_pid()
+                  AND locktype = 'advisory'
+                """
+            )
+        ).scalar_one()
+        assert held_fences == 0
+
+
+def test_activation_revalidates_lease_after_waiting_for_publication_fence(
+    tmp_path: Path,
+    migration_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+    guarded_worker_engine: Engine,
+) -> None:
+    scenario = _prepare_ready_interrupted_import(
+        tmp_path,
+        migration_configuration,
+        guarded_control_engine,
+        guarded_worker_engine,
+        lease_ttl_seconds=5,
+    )
+    claims = _scenario_claims(scenario)
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.connect() as barrier_connection:
+            barrier_transaction = barrier_connection.begin()
+            barrier_connection.execute(
+                text(
+                    """
+                    SELECT pg_catalog.pg_advisory_xact_lock_shared(
+                        pg_catalog.hashtextextended(
+                            'context-engine.file-publication:'
+                            || CAST(:organization_id AS text),
+                            0
+                        )
+                    )
+                    """
+                ),
+                {"organization_id": scenario.organization_id},
+            )
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                activation = executor.submit(
+                    _activate_recoverable_direct,
+                    scenario,
+                    migration_configuration,
+                    guarded_worker_engine,
+                )
+                deadline = monotonic() + 10
+                while monotonic() < deadline:
+                    with migration_engine.connect() as observer:
+                        waiters = _publication_lock_waiter_count(
+                            observer,
+                            scenario.organization_id,
+                        )
+                    if waiters == 1:
+                        break
+                    sleep(0.01)
+                else:
+                    barrier_transaction.rollback()
+                    activation.result(timeout=5)
+                    pytest.fail("activation did not reach the publication fence")
+
+                barrier_connection.execute(
+                    text(
+                        """
+                        SELECT pg_catalog.pg_sleep(
+                            GREATEST(
+                                EXTRACT(EPOCH FROM (
+                                    CAST(:expires_at AS timestamptz)
+                                    - pg_catalog.clock_timestamp()
+                                )) + 0.1,
+                                0
+                            )::double precision
+                        )
+                        """
+                    ),
+                    {"expires_at": claims.expires_at},
+                )
+                barrier_transaction.commit()
+                assert activation.result(timeout=10) is None
+
+        with migration_engine.connect() as connection:
+            state = connection.execute(
+                text(
+                    """
+                    SELECT job.state, job.effect_count,
+                           resource.active_revision_id
+                    FROM file_import_job AS job
+                    JOIN context_resource AS resource
+                      ON resource.organization_id = job.organization_id
+                     AND resource.resource_ref = job.resource_ref
+                    WHERE job.organization_id = :organization_id
+                      AND job.job_id = :job_id
+                    """
+                ),
+                {
+                    "organization_id": scenario.organization_id,
+                    "job_id": scenario.prepared.job_id,
+                },
+            ).one()
+        assert tuple(state) == ("ready", 0, None)
     finally:
         migration_engine.dispose()
 

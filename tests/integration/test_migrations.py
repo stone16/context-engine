@@ -656,7 +656,50 @@ def test_file_source_offboarding_revision_downgrades_and_reapplies_cleanly(
                         )
                     ).scalars()
                 )
+                private_functions = connection.execute(
+                    text(
+                        """
+                        SELECT count(*) FROM pg_catalog.pg_proc AS procedure
+                        JOIN pg_catalog.pg_namespace AS namespace
+                          ON namespace.oid = procedure.pronamespace
+                        WHERE namespace.nspname = 'public'
+                          AND (
+                            (procedure.proname =
+                                'context_worker_activate_file_replacement_impl'
+                             AND procedure.pronargs = 12)
+                            OR
+                            (procedure.proname =
+                                'context_worker_activate_recoverable_file_publication_impl'
+                             AND procedure.pronargs = 11)
+                          )
+                        """
+                    )
+                ).scalar_one()
+                public_execute = connection.execute(
+                    text(
+                        """
+                        SELECT bool_and(pg_catalog.has_function_privilege(
+                            'context_engine_worker', procedure.oid, 'EXECUTE'
+                        ))
+                        FROM pg_catalog.pg_proc AS procedure
+                        JOIN pg_catalog.pg_namespace AS namespace
+                          ON namespace.oid = procedure.pronamespace
+                        WHERE namespace.nspname = 'public'
+                          AND (
+                            (procedure.proname =
+                                'context_worker_activate_file_replacement'
+                             AND procedure.pronargs = 12)
+                            OR
+                            (procedure.proname =
+                                'context_worker_activate_recoverable_file_publication'
+                             AND procedure.pronargs = 11)
+                          )
+                        """
+                    )
+                ).scalar_one()
             assert "lifecycle_state" not in columns
+            assert private_functions == 0
+            assert public_execute is True
         finally:
             engine.dispose()
     finally:
@@ -666,6 +709,46 @@ def test_file_source_offboarding_revision_downgrades_and_reapplies_cleanly(
     assert "file_source_cleanup_intent" in _application_tables(
         migration_configuration
     )
+    engine = create_database_engine(migration_configuration)
+    try:
+        with engine.connect() as connection:
+            privileges = connection.execute(
+                text(
+                    """
+                    SELECT procedure.proname,
+                           pg_catalog.has_function_privilege(
+                               'context_engine_worker', procedure.oid, 'EXECUTE'
+                           ) AS worker_execute,
+                           pg_catalog.has_function_privilege(
+                               'context_engine_control', procedure.oid, 'EXECUTE'
+                           ) AS control_execute,
+                           pg_catalog.has_function_privilege(
+                               'context_engine_runtime', procedure.oid, 'EXECUTE'
+                           ) AS runtime_execute,
+                           pg_catalog.has_function_privilege(
+                               'public', procedure.oid, 'EXECUTE'
+                           ) AS public_execute
+                    FROM pg_catalog.pg_proc AS procedure
+                    JOIN pg_catalog.pg_namespace AS namespace
+                      ON namespace.oid = procedure.pronamespace
+                    WHERE namespace.nspname = 'public'
+                      AND (
+                        (procedure.proname =
+                            'context_worker_activate_file_replacement_impl'
+                         AND procedure.pronargs = 12)
+                        OR
+                        (procedure.proname =
+                            'context_worker_activate_recoverable_file_publication_impl'
+                         AND procedure.pronargs = 11)
+                      )
+                    ORDER BY procedure.proname
+                    """
+                )
+            ).all()
+        assert len(privileges) == 2
+        assert all(tuple(row)[1:] == (False, False, False, False) for row in privileges)
+    finally:
+        engine.dispose()
 
 
 def test_file_source_offboarding_refuses_downgrade_with_committed_intent(

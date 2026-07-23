@@ -29,7 +29,7 @@ _RUNTIME_SOURCE_FUNCTION = "context_runtime_file_source_lifecycle_allows"
 _RUNTIME_SOURCE_SIGNATURE = "(uuid, text)"
 _RECOVERABLE_ACTIVATE_FUNCTION = "context_worker_activate_recoverable_file_publication"
 _RECOVERABLE_ACTIVATE_PRIVATE = (
-    "context_worker_activate_recoverable_file_publication_pre_offboarding"
+    "context_worker_activate_recoverable_file_publication_impl"
 )
 _RECOVERABLE_ACTIVATE_SIGNATURE = (
     "(uuid, uuid, uuid, text, text, uuid, bigint, bigint, bytea, "
@@ -37,7 +37,7 @@ _RECOVERABLE_ACTIVATE_SIGNATURE = (
 )
 _REPLACEMENT_ACTIVATE_FUNCTION = "context_worker_activate_file_replacement"
 _REPLACEMENT_ACTIVATE_PRIVATE = (
-    "context_worker_activate_file_replacement_pre_offboarding"
+    "context_worker_activate_file_replacement_impl"
 )
 _REPLACEMENT_ACTIVATE_SIGNATURE = (
     "(uuid, uuid, uuid, text, text, uuid, uuid, bigint, bigint, bytea, "
@@ -193,9 +193,35 @@ def _wrap_activation_with_publication_fence(
     parameter_declarations: str,
     call_arguments: str,
     return_columns: str,
+    binding_predicate: str,
 ) -> None:
     """Make the Organization publication fence precede every job-row lock."""
 
+    validated_binding = f"""
+            SELECT job.organization_id, job.resource_ref
+            INTO trusted_organization_id, trusted_resource_ref
+            FROM public.file_import_job AS job
+            JOIN public.service_principal AS principal
+              ON principal.organization_id = job.organization_id
+             AND principal.service_principal_id = job.service_principal_id
+             AND principal.workload = job.workload
+             AND principal.worker_audience = job.worker_audience
+             AND principal.operation = job.operation
+             AND principal.enabled IS TRUE
+            WHERE job.organization_id = requested_organization_id
+              AND job.job_id = requested_job_id
+              AND job.service_principal_id = requested_service_principal_id
+              AND job.source_id::text = requested_source_ref
+              AND job.state = 'ready'
+              AND job.resource_ref = requested_resource_ref
+              AND job.lease_generation = requested_lease_generation
+              AND job.signing_key_version = requested_signing_key_version
+              AND job.lease_nonce_digest = public.digest(requested_nonce, 'sha256')
+              AND job.lease_issued_at = requested_issued_at
+              AND job.lease_expires_at = requested_expires_at
+              AND pg_catalog.clock_timestamp() < job.lease_expires_at
+              AND ({binding_predicate})
+    """
     op.execute(f"SET LOCAL ROLE {_WORKER_DEFINER}")
     op.execute(
         f"ALTER FUNCTION public.{function_name}{signature} "
@@ -214,26 +240,47 @@ def _wrap_activation_with_publication_fence(
         SET search_path = pg_catalog, pg_temp
         SET row_security = on
         AS $function$
+        DECLARE
+            trusted_organization_id uuid;
+            trusted_resource_ref text;
         BEGIN
             IF SESSION_USER <> '{_WORKER}'
                OR requested_organization_id IS NULL
+               OR requested_job_id IS NULL
                OR requested_resource_ref IS NULL
+            THEN RETURN; END IF;
+            PERFORM pg_catalog.set_config(
+                'app.organization_id', requested_organization_id::text, true
+            );
+            PERFORM pg_catalog.set_config(
+                'app.worker_job_id', requested_job_id::text, true
+            );
+            {validated_binding};
+            IF trusted_organization_id IS NULL OR trusted_resource_ref IS NULL
             THEN RETURN; END IF;
             PERFORM pg_catalog.pg_advisory_xact_lock(
                 pg_catalog.hashtextextended(
                     'context-engine.file-replacement:'
-                    || requested_organization_id::text || ':'
-                    || requested_resource_ref,
+                    || trusted_organization_id::text || ':'
+                    || trusted_resource_ref,
                     0
                 )
             );
             PERFORM pg_catalog.pg_advisory_xact_lock(
                 pg_catalog.hashtextextended(
                     'context-engine.file-publication:'
-                    || requested_organization_id::text,
+                    || trusted_organization_id::text,
                     0
                 )
             );
+            -- Revalidate against current database time after every blocking
+            -- fence, and keep the exact job stable through activation.
+            trusted_organization_id := NULL;
+            trusted_resource_ref := NULL;
+            {validated_binding}
+            FOR UPDATE OF job;
+            IF trusted_organization_id IS NULL OR trusted_resource_ref IS NULL
+            THEN RETURN; END IF;
             RETURN QUERY
             SELECT wrapped.effect_count, wrapped.outcome,
                    wrapped.active_revision_id, wrapped.fragment_refs,
@@ -598,6 +645,15 @@ def upgrade() -> None:
         "requested_signing_key_version, requested_nonce, requested_issued_at, "
         "requested_expires_at",
         activation_returns,
+        "job.revision_id = requested_replacement_revision_id AND EXISTS ("
+        "SELECT 1 FROM public.file_revision_replacement_plan AS plan "
+        "WHERE plan.organization_id = job.organization_id "
+        "AND plan.job_id = job.job_id "
+        "AND plan.acquisition_id = job.acquisition_id "
+        "AND plan.source_id = job.source_id "
+        "AND plan.resource_ref = job.resource_ref "
+        "AND plan.previous_revision_id = requested_previous_revision_id "
+        "AND plan.replacement_revision_id = requested_replacement_revision_id)",
     )
     _wrap_activation_with_publication_fence(
         _RECOVERABLE_ACTIVATE_FUNCTION,
@@ -615,6 +671,14 @@ def upgrade() -> None:
         "requested_lease_generation, requested_signing_key_version, "
         "requested_nonce, requested_issued_at, requested_expires_at",
         activation_returns,
+        "job.revision_id = requested_revision_id AND EXISTS ("
+        "SELECT 1 FROM public.file_publication_recovery AS recovery "
+        "WHERE recovery.organization_id = job.organization_id "
+        "AND recovery.job_id = job.job_id "
+        "AND recovery.source_id = job.source_id "
+        "AND recovery.resource_ref = job.resource_ref "
+        "AND recovery.revision_id = requested_revision_id "
+        "AND recovery.checkpoint = 'ready')",
     )
     op.execute(f"REVOKE CREATE ON SCHEMA public FROM {_WORKER_DEFINER}")
 
@@ -799,7 +863,9 @@ def upgrade() -> None:
             WHERE resource.organization_id = requested_organization_id
               AND resource.source_ref = requested_source_id::text;
 
-            trusted_now := pg_catalog.statement_timestamp();
+            -- This boundary must be later than every publication/job fence we
+            -- just crossed. statement_timestamp() is fixed before those waits.
+            trusted_now := pg_catalog.clock_timestamp();
             UPDATE public.context_source AS source
             SET lifecycle_state = 'disabled',
                 disabled_version_id = selected_version_id,
