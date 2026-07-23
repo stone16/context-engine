@@ -27,6 +27,10 @@ from engine.control.contracts import (
     SourceResourceKind,
     SourceVersion,
 )
+from engine.control.file_deletions import (
+    FileResourceTombstone,
+    TombstoneFileResource,
+)
 from engine.control.file_imports import (
     FileImportAudience,
     FileImportPath,
@@ -52,6 +56,7 @@ __all__ = [
     "FileImportPath",
     "FileImportReceiver",
     "FileRootRef",
+    "FileResourceTombstone",
     "RegisterFileSource",
     "PrepareFileImport",
     "PreparedFileImport",
@@ -66,5 +71,6 @@ __all__ = [
     "SourceResourceKind",
     "SourceVersion",
     "TrustedControlCall",
+    "TombstoneFileResource",
     "VerifiedControlOperatorIdentity",
 ]

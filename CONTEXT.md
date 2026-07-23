@@ -44,6 +44,7 @@ schema、Python type、threat fixture 或新的架构决策。
 | `ActionTicket` | Short-lived signed one-effect capability | One Organization, identity chain, effect/audience/payload, epoch, and expiry | Authority only for its declared external effect |
 | `WorkerLease` | Short-lived signed one-shot work capability | One Organization, durable job, registered service workload, expiry, and nonce | Authority only for the matching job attempt |
 | `File acquisition outcome` | Persistent immutable completed-observation lineage | One Organization, ContextSource, acquisition, ContextResource, and active ContextRevision | None; deduplication evidence is not content or authority |
+| `File cleanup intent` | Persistent immutable pending-cleanup lineage | One Organization, ContextSource, tombstoned ContextResource, and retained ContextRevision | None; it neither authorizes reads nor performs cleanup |
 | `acquisition checkpoint` | Persistent monotonic acquisition progress | One Organization and ContextSource | None |
 | `publish watermark` | Persistent monotonic visibility progress | One Organization and ContextSource | None |
 
@@ -257,9 +258,10 @@ cleanup 可异步。
 - **Owner/scope:** persistent tenant-owned state. V0 stores exactly one value
   per Organization; Source/Resource refinement remains a measured future
   decision rather than an active second authority.
-- **Lifecycle:** only moves forward through a trusted access change. The active
-  V0 Control transaction commits the access mutation and epoch advancement
-  together; failure commits neither and a value is never reused.
+- **Lifecycle:** only moves forward through a trusted access or Resource
+  visibility change. Active V0 Control transactions commit the policy/tombstone
+  mutation and epoch advancement together; failure commits neither and a value
+  is never reused.
 - **Invariant:** an Acquire decision must bind the observed Organization epoch
   and pass a current-value check immediately before delivery. Stale decisions
   fail closed. Epoch cannot detect an upstream change not yet observed, grant
@@ -418,6 +420,23 @@ The immutable old-to-new Revision edge recorded by successful File activation.
   can make Evidence visible.
 - **Do not confuse with:** physical deletion, tombstone, active pointer, or
   rollback/recovery command.
+
+### `File cleanup intent`
+
+The immutable obligation to remove retained physical artifacts after a File
+Resource is already synchronously invisible. 中文：File cleanup intent 在
+Resource tombstone 与 Policy Epoch 同一事务中创建；它记录后续物理清理责任，而不
+决定 Runtime 可见性。
+
+- **Owner/scope:** one Organization, ContextSource, stable ContextResource, and
+  the exact retained active ContextRevision at tombstone time.
+- **Lifecycle:** created once in `pending`; Issue #28 does not activate a
+  cleanup worker, completion transition, restore, or retention expiry.
+- **Invariant:** tombstone, Organization Policy Epoch advancement, and intent
+  creation commit atomically. Runtime authorization becomes empty before any
+  Revision, Fragment, snapshot, or candidate row is physically removed.
+- **Do not confuse with:** tombstone visibility state, publish watermark,
+  acquisition checkpoint, File revision supersession, or physical cleanup.
 
 ### `acquisition checkpoint`
 

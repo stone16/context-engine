@@ -1,5 +1,5 @@
 {
-  "manifestVersion": "15.0.0",
+  "manifestVersion": "16.0.0",
   "controlOperations": [
     {
       "name": "register_file_source",
@@ -22,6 +22,18 @@
         "resource_access_policy",
         "organization_policy_epoch"
       ]
+    },
+    {
+      "name": "tombstone_file_resource",
+      "databaseFunction": "context_control_tombstone_file_resource",
+      "role": "context_engine_control",
+      "definerRole": "context_engine_access_policy_definer",
+      "directTableMutationAllowed": false,
+      "trustedOrganizationSource": "TrustedControlCall",
+      "databaseOwnedTime": true,
+      "idempotencyBinding": ["organization_id", "source_id", "resource_ref"],
+      "runtimeVisibilityBarrier": "Organization-scoped shared Runtime/exclusive publication transaction advisory lock",
+      "atomicWrites": ["context_resource", "organization_policy_epoch", "file_resource_cleanup_intent"]
     },
     {
       "name": "issue_noop_worker_lease",
@@ -741,11 +753,26 @@
             "roles": ["context_engine_worker_lease_definer"],
             "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid",
             "withCheck": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"
+          },
+          {
+            "name": "context_resource_access_policy_definer_select",
+            "command": "SELECT",
+            "roles": ["context_engine_access_policy_definer"],
+            "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"
+          },
+          {
+            "name": "context_resource_access_policy_definer_update",
+            "command": "UPDATE",
+            "roles": ["context_engine_access_policy_definer"],
+            "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid",
+            "withCheck": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"
           }
         ]
       },
-      "functionOnlyMutation": {"databaseFunctions": ["context_worker_prepare_file_publication", "context_worker_activate_recoverable_file_publication"], "definerRole": "context_engine_worker_lease_definer", "directTableMutationAllowed": false},
+      "functionOnlyMutation": {"databaseFunctions": ["context_worker_prepare_file_publication", "context_worker_activate_recoverable_file_publication", "context_control_tombstone_file_resource"], "definerRoles": ["context_engine_worker_lease_definer", "context_engine_access_policy_definer"], "directTableMutationAllowed": false},
       "permittedOperations": {
+        "context_engine_access_policy_definer": ["SELECT", "UPDATE tombstoned"],
+        "context_engine_control": ["EXECUTE context_control_tombstone_file_resource"],
         "context_engine_runtime": ["SELECT"],
         "context_engine_worker": ["EXECUTE context_worker_prepare_file_publication", "EXECUTE context_worker_activate_recoverable_file_publication"],
         "context_engine_worker_lease_definer": ["SELECT", "INSERT", "UPDATE"]
@@ -754,9 +781,11 @@
       "securityInvariantIds": [
         "TENANT-OWNERSHIP-001",
         "TENANT-FK-002",
-        "RLS-FAIL-CLOSED-003"
+        "RLS-FAIL-CLOSED-003",
+        "INDEX-NOT-AUTHORITY-005",
+        "REVOCATION-006"
       ],
-      "negativeTestIds": ["DB-001", "DB-002", "DB-004", "DB-009", "DB-010"]
+      "negativeTestIds": ["DB-001", "DB-002", "DB-004", "DB-009", "DB-010", "PG-FILE-TOMBSTONE-028"]
     },
     {
       "name": "context_revision",
@@ -904,7 +933,7 @@
       },
       "permittedOperations": {
         "context_engine_access_policy_definer": ["SELECT", "UPDATE"],
-        "context_engine_control": ["EXECUTE change_resource_access"],
+        "context_engine_control": ["EXECUTE change_resource_access", "EXECUTE context_control_tombstone_file_resource"],
         "context_engine_runtime": ["SELECT"],
         "context_engine_worker": []
       },
@@ -2886,6 +2915,44 @@
       "partitions": [],
       "securityInvariantIds": ["TENANT-OWNERSHIP-001", "TENANT-FK-002", "RLS-FAIL-CLOSED-003", "WORKER-LEASE-007"],
       "negativeTestIds": ["DB-001", "DB-004", "DB-008", "PG-FILE-REPLACEMENT-026"]
+    },
+    {
+      "name": "file_resource_cleanup_intent",
+      "classification": "tenant_owned",
+      "nonOwnerEvidence": {
+        "evidenceId": "PG-FILE-TOMBSTONE-028",
+        "selector": {"table": "file_resource_cleanup_intent"}
+      },
+      "purpose": "Immutable pending physical-cleanup obligation committed atomically with one File Resource tombstone and Organization Policy Epoch",
+      "organizationColumn": "organization_id",
+      "organizationInclusiveKeys": [
+        {"name": "pk_file_resource_cleanup_intent", "kind": "primary_key", "columns": ["organization_id", "cleanup_intent_id"]},
+        {"name": "uq_file_resource_cleanup_intent_resource", "kind": "unique", "columns": ["organization_id", "resource_ref"]},
+        {"name": "uq_file_resource_cleanup_intent_event", "kind": "unique", "columns": ["organization_id", "event_ref"]}
+      ],
+      "foreignKeys": [
+        {"name": "fk_file_resource_cleanup_intent_source_same_organization", "columns": ["organization_id", "source_id"], "references": {"table": "context_source", "columns": ["organization_id", "source_id"]}},
+        {"name": "fk_file_resource_cleanup_intent_revision_same_organization", "columns": ["organization_id", "resource_ref", "revision_id"], "references": {"table": "context_revision", "columns": ["organization_id", "resource_ref", "revision_id"]}}
+      ],
+      "checkConstraints": [
+        {"name": "ck_file_resource_cleanup_intent_resource_ref", "expression": "resource_ref ~ '^resource:file:[0-9a-f]{64}$'"},
+        {"name": "ck_file_resource_cleanup_intent_event_ref", "expression": "event_ref ~ '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$'"},
+        {"name": "ck_file_resource_cleanup_intent_event_sequence", "expression": "event_sequence BETWEEN 1 AND 9223372036854775807"},
+        {"name": "ck_file_resource_cleanup_intent_policy_epoch", "expression": "policy_epoch BETWEEN 1 AND 9223372036854775807"},
+        {"name": "ck_file_resource_cleanup_intent_state", "expression": "state = 'pending'"}
+      ],
+      "rowLevelSecurity": {"enabled": true, "forced": true, "policies": [
+        {"name": "file_resource_cleanup_intent_migrator_administration", "command": "ALL", "roles": ["context_engine_migrator"], "using": "true", "withCheck": "true"},
+        {"name": "file_resource_cleanup_intent_access_policy_definer_select", "command": "SELECT", "roles": ["context_engine_access_policy_definer"], "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"},
+        {"name": "file_resource_cleanup_intent_access_policy_definer_insert", "command": "INSERT", "roles": ["context_engine_access_policy_definer"], "withCheck": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"}
+      ]},
+      "immutableRows": {"trigger": "file_resource_cleanup_intent_immutable", "function": "context_content_reject_mutation", "events": ["UPDATE", "DELETE"], "sqlstate": "55000"},
+      "functionOnlyMutation": {"databaseFunction": "context_control_tombstone_file_resource", "role": "context_engine_control", "definerRole": "context_engine_access_policy_definer", "directTableMutationAllowed": false},
+      "permittedOperations": {"context_engine_access_policy_definer": ["SELECT", "INSERT"], "context_engine_control": ["EXECUTE context_control_tombstone_file_resource"], "context_engine_runtime": [], "context_engine_worker": []},
+      "retention": {"state": "pending", "physicalCleanupCompletion": "not active in Issue #28", "sourceContent": "none"},
+      "partitions": [],
+      "securityInvariantIds": ["TENANT-OWNERSHIP-001", "TENANT-FK-002", "RLS-FAIL-CLOSED-003", "INDEX-NOT-AUTHORITY-005", "REVOCATION-006"],
+      "negativeTestIds": ["DB-001", "DB-004", "DB-008", "PG-FILE-TOMBSTONE-028"]
     },
     {
       "name": "release_promotion_audit",

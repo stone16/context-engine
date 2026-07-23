@@ -32,7 +32,7 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
     document = manifest()
     tables = table_entries(document)
 
-    assert document["manifestVersion"] == "15.0.0"
+    assert document["manifestVersion"] == "16.0.0"
     assert set(tables) == {
         "active_release_manifest",
         "alembic_version",
@@ -50,6 +50,7 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
         "file_import_job",
         "file_import_job_event",
         "file_publication_recovery",
+        "file_resource_cleanup_intent",
         "file_resource_ingestion_guard",
         "file_revision_snapshot",
         "file_revision_replacement_plan",
@@ -101,6 +102,7 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
         "file_import_job",
         "file_import_job_event",
         "file_publication_recovery",
+        "file_resource_cleanup_intent",
         "file_resource_ingestion_guard",
         "file_revision_snapshot",
         "file_revision_replacement_plan",
@@ -381,6 +383,83 @@ def test_issue_27_file_recovery_contract_is_generation_fenced_and_auditable() ->
                     "context_engine_worker"
                 ]
             )
+
+
+def test_issue_28_file_tombstone_contract_is_atomic_and_function_only() -> None:
+    document = manifest()
+    entries = table_entries(document)
+    operation = next(
+        value
+        for value in document["controlOperations"]
+        if value["name"] == "tombstone_file_resource"
+    )
+
+    assert operation == {
+        "name": "tombstone_file_resource",
+        "databaseFunction": "context_control_tombstone_file_resource",
+        "role": "context_engine_control",
+        "definerRole": "context_engine_access_policy_definer",
+        "directTableMutationAllowed": False,
+        "trustedOrganizationSource": "TrustedControlCall",
+        "databaseOwnedTime": True,
+        "idempotencyBinding": [
+            "organization_id",
+            "source_id",
+            "resource_ref",
+        ],
+        "runtimeVisibilityBarrier": (
+            "Organization-scoped shared Runtime/exclusive publication "
+            "transaction advisory lock"
+        ),
+        "atomicWrites": [
+            "context_resource",
+            "organization_policy_epoch",
+            "file_resource_cleanup_intent",
+        ],
+    }
+    cleanup = entries["file_resource_cleanup_intent"]
+    assert cleanup["organizationInclusiveKeys"] == [
+        {
+            "name": "pk_file_resource_cleanup_intent",
+            "kind": "primary_key",
+            "columns": ["organization_id", "cleanup_intent_id"],
+        },
+        {
+            "name": "uq_file_resource_cleanup_intent_resource",
+            "kind": "unique",
+            "columns": ["organization_id", "resource_ref"],
+        },
+        {
+            "name": "uq_file_resource_cleanup_intent_event",
+            "kind": "unique",
+            "columns": ["organization_id", "event_ref"],
+        },
+    ]
+    assert cleanup["rowLevelSecurity"]["enabled"] is True
+    assert cleanup["rowLevelSecurity"]["forced"] is True
+    assert cleanup["immutableRows"]["events"] == ["UPDATE", "DELETE"]
+    assert cleanup["functionOnlyMutation"] == {
+        "databaseFunction": "context_control_tombstone_file_resource",
+        "role": "context_engine_control",
+        "definerRole": "context_engine_access_policy_definer",
+        "directTableMutationAllowed": False,
+    }
+    assert cleanup["permittedOperations"]["context_engine_runtime"] == []
+    assert cleanup["permittedOperations"]["context_engine_worker"] == []
+    assert cleanup["retention"] == {
+        "state": "pending",
+        "physicalCleanupCompletion": "not active in Issue #28",
+        "sourceContent": "none",
+    }
+    resource = entries["context_resource"]
+    assert (
+        "context_control_tombstone_file_resource"
+        in resource["functionOnlyMutation"]["databaseFunctions"]
+    )
+    assert resource["functionOnlyMutation"]["definerRoles"] == [
+        "context_engine_worker_lease_definer",
+        "context_engine_access_policy_definer",
+    ]
 
 
 def test_issue_21_file_source_manifest_is_closed_and_role_separated() -> None:
@@ -1237,13 +1316,22 @@ def test_content_manifest_preserves_lineage_visibility_and_immutability() -> Non
     }
     for entry in (resource, revision, fragment):
         assert entry["organizationColumn"] == "organization_id"
-        assert entry["permittedOperations"] == {
+        expected_operations = {
             "context_engine_runtime": ["SELECT"],
             "context_engine_worker": worker_operations[entry["name"]],
             "context_engine_worker_lease_definer": expected_definer_operations[
                 entry["name"]
             ],
         }
+        if entry["name"] == "context_resource":
+            expected_operations["context_engine_access_policy_definer"] = [
+                "SELECT",
+                "UPDATE tombstoned",
+            ]
+            expected_operations["context_engine_control"] = [
+                "EXECUTE context_control_tombstone_file_resource"
+            ]
+        assert entry["permittedOperations"] == expected_operations
         rls = entry["rowLevelSecurity"]
         assert rls["enabled"] is True
         assert rls["forced"] is True
@@ -1540,6 +1628,10 @@ def test_policy_epoch_manifest_seals_runtime_reads_and_control_mutation() -> Non
             "context_engine_runtime": ["SELECT"],
             "context_engine_worker": [],
         }
+        if entry["name"] == "organization_policy_epoch":
+            expected_operations["context_engine_control"].append(
+                "EXECUTE context_control_tombstone_file_resource"
+            )
         if entry["name"] == "resource_access_policy":
             expected_operations["context_engine_worker"] = [
                 "EXECUTE context_worker_prepare_file_publication"

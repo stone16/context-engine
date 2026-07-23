@@ -15,12 +15,14 @@ from sqlalchemy.exc import DBAPIError, SQLAlchemyError
 from engine.control import (
     FILE_CAPABILITY_MANIFEST,
     FILE_IMPORT_CAPABILITY_MANIFEST,
+    FileResourceTombstone,
     FileRootRef,
     RegisterFileSource,
     SourceControlUnavailable,
     SourceManifest,
     SourceNotAvailable,
     SourceRef,
+    TombstoneFileResource,
     TrustedControlCall,
 )
 from engine.persistence.role_guard import assert_control_role
@@ -322,6 +324,62 @@ class PostgreSQLControlStore:
         except (DBAPIError, SQLAlchemyError, AssertionError):
             raise SourceControlUnavailable(
                 "File import Control database authority is unavailable"
+            ) from None
+
+    def tombstone_file_resource(
+        self,
+        call: TrustedControlCall,
+        command: TombstoneFileResource,
+    ) -> FileResourceTombstone:
+        """Commit one tombstone, epoch bump, and pending cleanup intent."""
+
+        if (
+            type(call) is not TrustedControlCall
+            or type(command) is not TombstoneFileResource
+        ):
+            raise SourceNotAvailable
+        cleanup_intent_id = self._uuid_factory()
+        try:
+            with self._engine.begin() as connection:
+                assert_control_role(connection)
+                _set_organization_context(connection, call.organization_id)
+                row = connection.execute(
+                    text(
+                        """
+                        SELECT *
+                        FROM public.context_control_tombstone_file_resource(
+                            :organization_id, :source_id, :resource_ref,
+                            :event_ref, :event_sequence, :cleanup_intent_id
+                        )
+                        """
+                    ),
+                    {
+                        "organization_id": call.organization_id,
+                        "source_id": command.source_ref.value,
+                        "resource_ref": command.resource_ref,
+                        "event_ref": command.event_ref,
+                        "event_sequence": command.event_sequence,
+                        "cleanup_intent_id": cleanup_intent_id,
+                    },
+                ).one_or_none()
+                if row is None:
+                    raise SourceNotAvailable
+                return FileResourceTombstone(
+                    organization_id=call.organization_id,
+                    source_ref=SourceRef(row.source_id),
+                    resource_ref=row.resource_ref,
+                    revision_ref=row.revision_id,
+                    event_ref=row.event_ref,
+                    event_sequence=row.event_sequence,
+                    policy_epoch=row.policy_epoch,
+                    cleanup_intent_ref=row.cleanup_intent_id,
+                    tombstoned_at=row.tombstoned_at,
+                )
+        except SourceNotAvailable:
+            raise
+        except (DBAPIError, SQLAlchemyError, AssertionError, TypeError, ValueError):
+            raise SourceControlUnavailable(
+                "File Resource tombstone database authority is unavailable"
             ) from None
 
     @staticmethod

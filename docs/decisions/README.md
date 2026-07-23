@@ -40,6 +40,7 @@ kernel, capability separation, and publication visibility model.
 | First Markdown compiler | [0036 — Deterministic narrow Markdown compilation](0036-compile-narrow-markdown-deterministically.md) | Exact bytes compile purely into one canonical heading-plus-paragraph ParsedDocument with normalized coordinates and versioned content/compilation identities | Path-coupled parsing, silent unsupported syntax, partial documents, unversioned derived identities, or parser-side I/O |
 | Structural Markdown compiler | [0038 — Structural Markdown units](0038-compile-and-publish-structural-markdown.md) | Explicit v2 compilation publishes one coherent Fragment per heading, paragraph, list, fenced code block, or table with exact provenance and same-Fragment heading ancestry | Silent v1 reinterpretation, item/cell fragmentation, post-authorization parent expansion, or unbudgeted context |
 | Unchanged File acquisition | [0039 — File acquisition no-op](0039-deduplicate-unchanged-file-acquisitions.md) | Tenant/source/resource-scoped canonical identity and one PostgreSQL guard lock classify a complete active artifact before publication; each observation retains an immutable digest-only outcome | Cross-tenant/global deduplication, process-local locking, partial-artifact reuse, silent version reuse, or no-op by bypassing publication validation |
+| File Resource deletion | [0042 — Tombstone before cleanup](0042-tombstone-file-resources-before-cleanup.md) | One trusted Control transaction tombstones the active File Resource, advances its Organization Policy Epoch, and records immutable pending cleanup lineage before any physical deletion | Cleanup-defined visibility, caller-authored tenant/epoch/cleanup identity, index deletion as authorization, restore, or native watcher claims |
 
 Each baseline ADR is `accepted` and contains Context, Decision, Rationale,
 Consequences, and Revisit trigger sections. A revisit trigger permits review; it
@@ -128,3 +129,4 @@ touched:
 - [0039 — File acquisition no-op](0039-deduplicate-unchanged-file-acquisitions.md)
 - [0040 — Atomic File replacement](0040-stage-and-atomically-activate-file-replacements.md)
 - [0041 — Durable File publication recovery](0041-recover-file-publication-by-durable-boundary.md)
+- [0042 — Tombstone File Resources before cleanup](0042-tombstone-file-resources-before-cleanup.md)

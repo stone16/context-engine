@@ -1177,7 +1177,15 @@ def test_control_function_and_table_grants_seal_the_only_mutation_path(
                 "context_control_revoke_resource_access",
                 "requested_organization_id uuid, requested_resource_ref text, "
                 "requested_principal_ref text, expected_access_version bigint",
-            )
+            ),
+            (
+                "public",
+                "context_control_tombstone_file_resource",
+                "requested_organization_id uuid, requested_source_id uuid, "
+                "requested_resource_ref text, requested_event_ref text, "
+                "requested_event_sequence bigint, "
+                "requested_cleanup_intent_id uuid",
+            ),
         }
         assert definer_owned_namespaces == set()
         assert definer_owned_databases == set()
@@ -1205,12 +1213,38 @@ def test_control_function_and_table_grants_seal_the_only_mutation_path(
                 "UPDATE",
                 (ACCESS_POLICY_DEFINER_ROLE,),
             ),
+            (
+                "context_resource",
+                "SELECT",
+                (ACCESS_POLICY_DEFINER_ROLE,),
+            ),
+            (
+                "context_resource",
+                "UPDATE",
+                (ACCESS_POLICY_DEFINER_ROLE,),
+            ),
+            (
+                "file_resource_cleanup_intent",
+                "SELECT",
+                (ACCESS_POLICY_DEFINER_ROLE,),
+            ),
+            (
+                "file_resource_cleanup_intent",
+                "INSERT",
+                (ACCESS_POLICY_DEFINER_ROLE,),
+            ),
         }
         for _, command, _, using_expression, check_expression in definer_policies:
             if command == "SELECT":
                 assert check_expression is None
+                tenant_expression = using_expression
+            elif command == "INSERT":
+                assert using_expression is None
+                tenant_expression = check_expression
             else:
                 assert using_expression == check_expression
-            assert "app.organization_id" in using_expression
+                tenant_expression = using_expression
+            assert tenant_expression is not None
+            assert "app.organization_id" in tenant_expression
     finally:
         migration_engine.dispose()

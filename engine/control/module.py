@@ -20,6 +20,10 @@ from engine.control.contracts import (
     SourceNotAvailable,
     SourceRef,
 )
+from engine.control.file_deletions import (
+    FileResourceTombstone,
+    TombstoneFileResource,
+)
 from engine.control.file_imports import PreparedFileImport, PrepareFileImport
 
 
@@ -44,6 +48,12 @@ class ControlStorePort(Protocol):
         command: PrepareFileImport,
     ) -> PreparedFileImport: ...
 
+    def tombstone_file_resource(
+        self,
+        call: TrustedControlCall,
+        command: TombstoneFileResource,
+    ) -> FileResourceTombstone: ...
+
 
 class ContextControl:
     """Own trusted File enrollment, read-back, and import preparation."""
@@ -61,6 +71,7 @@ class ContextControl:
             "prepare_file_import",
             "register_file_source",
             "read_source",
+            "tombstone_file_resource",
         ):
             if not callable(getattr(store, method_name, None)):
                 raise TypeError("ContextControl store is incomplete")
@@ -166,6 +177,45 @@ class ContextControl:
         except Exception:
             raise SourceControlUnavailable(
                 "File import preparation is unavailable"
+            ) from None
+
+    def tombstone_file_resource(
+        self,
+        call: TrustedControlCall,
+        command: TombstoneFileResource,
+    ) -> FileResourceTombstone:
+        """Make one published File Resource immediately invisible."""
+
+        if type(command) is not TombstoneFileResource:
+            raise TypeError("tombstone_file_resource requires TombstoneFileResource")
+        try:
+            _validate_and_consume_control_call(
+                call,
+                authority=self._authority,
+                expected_operation=ControlOperation.TOMBSTONE_FILE_RESOURCE,
+                checked_at=self._clock(),
+            )
+            result = self._store.tombstone_file_resource(call, command)
+            if type(result) is not FileResourceTombstone:
+                raise SourceControlUnavailable(
+                    "source store returned an invalid File tombstone"
+                )
+            if (
+                result.organization_id != call.organization_id
+                or result.source_ref != command.source_ref
+                or result.resource_ref != command.resource_ref
+            ):
+                raise SourceControlUnavailable(
+                    "source store returned a mismatched File tombstone"
+                )
+            return result
+        except (ControlOperatorAuthenticationRejected, SourceNotAvailable):
+            raise SourceNotAvailable from None
+        except SourceControlUnavailable:
+            raise
+        except Exception:
+            raise SourceControlUnavailable(
+                "File Resource tombstone is unavailable"
             ) from None
 
     @staticmethod
