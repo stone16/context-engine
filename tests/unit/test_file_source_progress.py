@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import fields
+from dataclasses import fields, replace
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
@@ -183,6 +183,57 @@ def test_progress_contracts_keep_checkpoint_and_watermark_semantics_separate() -
                 event_ref=None,
                 event_sequence=None,
                 published_at=NOW,
+            ),
+        )
+
+
+def test_equal_progress_sequences_require_exact_checkpoint_lineage() -> None:
+    checkpoint_ref = "facp_" + "a" * 64
+    checkpoint = FileSourceAcquisitionCheckpoint(
+        sequence=1,
+        checkpoint_ref=checkpoint_ref,
+        change_kind=FileSourceChangeKind.FILE_IMPORT,
+        acquisition_ref=ACQUISITION_ID,
+        job_ref=JOB_ID,
+        cleanup_intent_ref=None,
+        resource_ref=RESOURCE_REF,
+        revision_ref=REVISION_ID,
+        event_ref=None,
+        event_sequence=None,
+        accepted_at=NOW,
+    )
+    watermark = FileSourcePublishWatermark(
+        sequence=1,
+        watermark_ref="fpwm_" + "b" * 64,
+        checkpoint_ref=checkpoint_ref,
+        change_kind=FileSourceChangeKind.FILE_IMPORT,
+        outcome=FileSourcePublishOutcome.PUBLISHED,
+        acquisition_ref=ACQUISITION_ID,
+        job_ref=JOB_ID,
+        cleanup_intent_ref=None,
+        resource_ref=RESOURCE_REF,
+        revision_ref=REVISION_ID,
+        event_ref=None,
+        event_sequence=None,
+        published_at=NOW,
+    )
+
+    progress = FileSourceProgress(
+        organization_id=ORGANIZATION_ID,
+        source_ref=SOURCE_REF,
+        acquisition_checkpoint=checkpoint,
+        publish_watermark=watermark,
+    )
+    assert progress.publish_watermark == watermark
+
+    with pytest.raises(ValueError, match="watermark lineage is invalid"):
+        FileSourceProgress(
+            organization_id=ORGANIZATION_ID,
+            source_ref=SOURCE_REF,
+            acquisition_checkpoint=checkpoint,
+            publish_watermark=replace(
+                watermark,
+                checkpoint_ref="facp_" + "c" * 64,
             ),
         )
 

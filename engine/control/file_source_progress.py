@@ -198,3 +198,11 @@ class FileSourceProgress:
             > self.acquisition_checkpoint.sequence
         ):
             raise ValueError("File Source publish watermark cannot exceed checkpoint")
+        if (
+            self.publish_watermark is not None
+            and self.acquisition_checkpoint is not None
+            and self.publish_watermark.sequence == self.acquisition_checkpoint.sequence
+            and self.publish_watermark.checkpoint_ref
+            != self.acquisition_checkpoint.checkpoint_ref
+        ):
+            raise ValueError("File Source publish watermark lineage is invalid")

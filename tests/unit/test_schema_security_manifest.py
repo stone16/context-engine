@@ -109,6 +109,8 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
         "file_revision_snapshot",
         "file_revision_replacement_plan",
         "file_revision_supersession",
+        "file_source_acquisition_checkpoint",
+        "file_source_publish_watermark",
         "revision_publication_event",
     ):
         assert tables[file_import_table]["classification"] == "tenant_owned"
@@ -202,6 +204,7 @@ def test_issue_25_file_noop_contract_is_tenant_scoped_and_function_only() -> Non
         "unchangedReasonCode": "active-content-identity-match",
         "sourceContentRetainedInOutcome": False,
     }
+    assert "file_source_publish_watermark" in operation["atomicWrites"]
     guard = entries["file_resource_ingestion_guard"]
     result = entries["file_acquisition_result"]
     assert guard["organizationInclusiveKeys"][0]["columns"] == [
@@ -282,6 +285,8 @@ def test_issue_26_file_replacement_contract_is_staged_and_function_only() -> Non
         "file_resource_ingestion_guard",
         "file_acquisition_result",
     ]
+    assert "file_source_publish_watermark" in operation["stageAtomicWrites"]
+    assert "file_source_publish_watermark" in operation["activationAtomicWrites"]
     stage_functions = {
         "context_worker_stage_file_replacement",
         "context_worker_stage_structural_file_replacement",

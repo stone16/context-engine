@@ -137,7 +137,8 @@
         "context_resource", "context_revision", "file_revision_snapshot",
         "context_fragment", "revision_publication_event",
         "exact_phrase_candidate", "resource_access_policy",
-        "membership_resource_field_right", "file_import_job"
+        "membership_resource_field_right", "file_import_job",
+        "file_source_publish_watermark"
       ]
     },
     {
@@ -161,11 +162,13 @@
         "file_resource_ingestion_guard", "file_acquisition_result",
         "context_revision", "file_revision_snapshot", "context_fragment",
         "revision_publication_event", "exact_phrase_candidate",
-        "file_revision_replacement_plan", "file_import_job"
+        "file_revision_replacement_plan", "file_import_job",
+        "file_source_publish_watermark"
       ],
       "activationAtomicWrites": [
         "context_resource", "revision_publication_event",
-        "file_revision_supersession", "file_import_job"
+        "file_revision_supersession", "file_import_job",
+        "file_source_publish_watermark"
       ]
     },
     {
