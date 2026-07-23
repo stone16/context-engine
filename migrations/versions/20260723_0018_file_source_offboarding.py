@@ -31,18 +31,20 @@ _PREPARE_SIGNATURE = (
     "(uuid, uuid, uuid, uuid, uuid, text, text, uuid, bigint, text, text, uuid)"
 )
 _MAX_BIGINT = 9223372036854775807
+_LEASE_CONSTRAINT = (
+    "lease_generation > 0 AND signing_key_version > 0 AND "
+    "octet_length(lease_nonce_digest) = 32 AND "
+    "lease_issued_at IS NOT NULL AND lease_expires_at > lease_issued_at"
+)
+_NO_LINEAGE_CONSTRAINT = (
+    "resource_ref IS NULL AND revision_id IS NULL AND fragment_ref IS NULL"
+)
+_DURABLE_IDENTITY_CONSTRAINT = (
+    "resource_ref IS NOT NULL AND revision_id IS NOT NULL"
+)
 
 
 def _noncancelled_job_constraint(active_constraint: str | None = None) -> str:
-    lease = (
-        "lease_generation > 0 AND signing_key_version > 0 AND "
-        "octet_length(lease_nonce_digest) = 32 AND "
-        "lease_issued_at IS NOT NULL AND lease_expires_at > lease_issued_at"
-    )
-    no_lineage = (
-        "resource_ref IS NULL AND revision_id IS NULL AND fragment_ref IS NULL"
-    )
-    durable_identity = "resource_ref IS NOT NULL AND revision_id IS NOT NULL"
     active = f"{active_constraint} AND " if active_constraint is not None else ""
     return (
         f"(state = 'available' AND {active}lease_generation = 0 AND "
@@ -50,31 +52,32 @@ def _noncancelled_job_constraint(active_constraint: str | None = None) -> str:
         "lease_issued_at IS NULL AND lease_expires_at IS NULL AND "
         "lease_redeemed_at IS NULL AND recovery_from_state IS NULL AND "
         "failed_at IS NULL AND completed_at IS NULL AND "
-        f"{no_lineage} AND effect_count = 0) OR "
-        f"(state = 'leased' AND {active}{lease} AND "
+        f"{_NO_LINEAGE_CONSTRAINT} AND effect_count = 0) OR "
+        f"(state = 'leased' AND {active}{_LEASE_CONSTRAINT} AND "
         "lease_redeemed_at IS NULL AND "
         "failed_at IS NULL AND completed_at IS NULL AND effect_count = 0 AND "
-        f"((recovery_from_state IS NULL AND {no_lineage}) OR "
+        f"((recovery_from_state IS NULL AND {_NO_LINEAGE_CONSTRAINT}) OR "
         "(recovery_from_state = 'running' AND fragment_ref IS NULL) OR "
         "(recovery_from_state IN ('prepared', 'ready') AND "
-        f"{durable_identity} AND fragment_ref IS NOT NULL))) OR "
-        f"(state = 'running' AND {active}{lease} AND "
+        f"{_DURABLE_IDENTITY_CONSTRAINT} AND fragment_ref IS NOT NULL))) OR "
+        f"(state = 'running' AND {active}{_LEASE_CONSTRAINT} AND "
         "lease_redeemed_at >= lease_issued_at AND recovery_from_state IS NULL "
         "AND failed_at IS NULL AND completed_at IS NULL AND fragment_ref IS NULL "
         "AND ((resource_ref IS NULL AND revision_id IS NULL) OR "
-        f"{durable_identity}) AND effect_count = 0) OR "
-        f"(state IN ('prepared', 'ready') AND {active}{lease} AND "
+        f"{_DURABLE_IDENTITY_CONSTRAINT}) AND effect_count = 0) OR "
+        f"(state IN ('prepared', 'ready') AND {active}{_LEASE_CONSTRAINT} AND "
         "lease_redeemed_at >= lease_issued_at AND recovery_from_state IS NULL "
         "AND failed_at IS NULL AND completed_at IS NULL AND "
-        f"{durable_identity} AND fragment_ref IS NOT NULL AND effect_count = 0) OR "
-        f"(state = 'failed' AND {active}{lease} AND "
+        f"{_DURABLE_IDENTITY_CONSTRAINT} AND fragment_ref IS NOT NULL AND "
+        "effect_count = 0) OR "
+        f"(state = 'failed' AND {active}{_LEASE_CONSTRAINT} AND "
         "lease_redeemed_at >= lease_issued_at AND recovery_from_state IS NULL "
         "AND failed_at >= lease_redeemed_at AND completed_at IS NULL AND "
-        f"{no_lineage} AND effect_count = 0) OR "
-        f"(state = 'completed' AND {active}{lease} AND "
+        f"{_NO_LINEAGE_CONSTRAINT} AND effect_count = 0) OR "
+        f"(state = 'completed' AND {active}{_LEASE_CONSTRAINT} AND "
         "lease_redeemed_at >= lease_issued_at AND recovery_from_state IS NULL "
         "AND failed_at IS NULL AND completed_at >= lease_redeemed_at AND "
-        f"{durable_identity} AND fragment_ref IS NOT NULL AND "
+        f"{_DURABLE_IDENTITY_CONSTRAINT} AND fragment_ref IS NOT NULL AND "
         "effect_count IN (0, 1))"
     )
 
@@ -84,15 +87,6 @@ def _previous_job_constraint() -> str:
 
 
 def _job_constraint() -> str:
-    lease = (
-        "lease_generation > 0 AND signing_key_version > 0 AND "
-        "octet_length(lease_nonce_digest) = 32 AND "
-        "lease_issued_at IS NOT NULL AND lease_expires_at > lease_issued_at"
-    )
-    no_lineage = (
-        "resource_ref IS NULL AND revision_id IS NULL AND fragment_ref IS NULL"
-    )
-    durable_identity = "resource_ref IS NOT NULL AND revision_id IS NOT NULL"
     active = (
         "cancelled_from_state IS NULL AND cancelled_at IS NULL AND "
         "cancellation_intent_id IS NULL"
@@ -108,19 +102,20 @@ def _job_constraint() -> str:
         "signing_key_version IS NULL AND lease_nonce_digest IS NULL AND "
         "lease_issued_at IS NULL AND lease_expires_at IS NULL AND "
         "lease_redeemed_at IS NULL AND recovery_from_state IS NULL AND "
-        f"{no_lineage}) OR "
-        f"(cancelled_from_state = 'leased' AND {lease} AND "
+        f"{_NO_LINEAGE_CONSTRAINT}) OR "
+        f"(cancelled_from_state = 'leased' AND {_LEASE_CONSTRAINT} AND "
         "lease_redeemed_at IS NULL AND ((recovery_from_state IS NULL AND "
-        f"{no_lineage}) OR (recovery_from_state = 'running' AND "
+        f"{_NO_LINEAGE_CONSTRAINT}) OR (recovery_from_state = 'running' AND "
         "fragment_ref IS NULL) OR (recovery_from_state IN ('prepared', "
-        f"'ready') AND {durable_identity} AND fragment_ref IS NOT NULL))) OR "
-        f"(cancelled_from_state = 'running' AND {lease} AND "
+        f"'ready') AND {_DURABLE_IDENTITY_CONSTRAINT} AND "
+        "fragment_ref IS NOT NULL))) OR "
+        f"(cancelled_from_state = 'running' AND {_LEASE_CONSTRAINT} AND "
         "lease_redeemed_at >= lease_issued_at AND recovery_from_state IS NULL "
         "AND fragment_ref IS NULL AND ((resource_ref IS NULL AND "
-        f"revision_id IS NULL) OR {durable_identity})) OR "
+        f"revision_id IS NULL) OR {_DURABLE_IDENTITY_CONSTRAINT})) OR "
         "(cancelled_from_state IN ('prepared', 'ready') AND "
-        f"{lease} AND lease_redeemed_at >= lease_issued_at AND "
-        f"recovery_from_state IS NULL AND {durable_identity} AND "
+        f"{_LEASE_CONSTRAINT} AND lease_redeemed_at >= lease_issued_at AND "
+        f"recovery_from_state IS NULL AND {_DURABLE_IDENTITY_CONSTRAINT} AND "
         "fragment_ref IS NOT NULL)))"
     )
 
