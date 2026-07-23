@@ -207,6 +207,11 @@ def upgrade() -> None:
         deferrable=True,
         initially="DEFERRED",
     )
+    op.create_index(
+        "ix_context_source_runtime_lifecycle",
+        "context_source",
+        ["organization_id", "source_id", "source_kind", "lifecycle_state"],
+    )
 
     op.create_table(
         _TABLE,
@@ -634,15 +639,24 @@ def upgrade() -> None:
                 RETURN;
             END IF;
 
-            SELECT count(*) INTO retained_count
-            FROM public.context_resource AS resource
-            WHERE resource.organization_id = requested_organization_id
-              AND resource.source_ref = requested_source_id::text;
+            -- Fence every cancellable job before capturing retained lineage.
+            -- An in-flight worker that already holds a job lock finishes first;
+            -- its committed artifacts are therefore visible to the count below.
+            PERFORM 1
+            FROM public.file_import_job AS job
+            WHERE job.organization_id = requested_organization_id
+              AND job.source_id = requested_source_id
+              AND job.state IN ('available', 'leased', 'running', 'prepared', 'ready')
+            FOR UPDATE;
             SELECT count(*) INTO cancelled_count
             FROM public.file_import_job AS job
             WHERE job.organization_id = requested_organization_id
               AND job.source_id = requested_source_id
               AND job.state IN ('available', 'leased', 'running', 'prepared', 'ready');
+            SELECT count(*) INTO retained_count
+            FROM public.context_resource AS resource
+            WHERE resource.organization_id = requested_organization_id
+              AND resource.source_ref = requested_source_id::text;
 
             trusted_now := pg_catalog.statement_timestamp();
             UPDATE public.context_source AS source
@@ -862,6 +876,7 @@ def downgrade() -> None:
         "context_source",
         type_="foreignkey",
     )
+    op.drop_index("ix_context_source_runtime_lifecycle", table_name="context_source")
     op.drop_constraint("ck_context_source_lifecycle", "context_source", type_="check")
     op.drop_column("context_source", "disabled_at")
     op.drop_column("context_source", "disabled_version_id")

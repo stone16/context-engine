@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import timedelta
 from pathlib import Path
+from time import monotonic, sleep
 from typing import Any
 from uuid import UUID
 
@@ -528,6 +530,112 @@ def test_offboard_epoch_disable_cancellation_and_intent_roll_back_together(
                 },
             ).one()
         assert tuple(state) == ("active", None, 1, "available", None, 0)
+    finally:
+        migration_engine.dispose()
+
+
+def test_offboard_counts_resources_committed_before_job_cancellation(
+    tmp_path: Path,
+    migration_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+) -> None:
+    scenario = _prepare_file_import_scenario(
+        tmp_path,
+        migration_configuration,
+        guarded_control_engine,
+        issue_lease=False,
+    )
+    migration_engine = create_database_engine(migration_configuration)
+    resource_ref = "resource:offboard-cancellation-race"
+    try:
+        with migration_engine.connect() as locking_connection:
+            transaction = locking_connection.begin()
+            locking_transaction_id = locking_connection.execute(
+                text("SELECT pg_current_xact_id()::text")
+            ).scalar_one()
+            locking_connection.execute(
+                text(
+                    """
+                    SELECT 1 FROM file_import_job
+                    WHERE organization_id = :organization_id
+                      AND job_id = :job_id
+                    FOR UPDATE
+                    """
+                ),
+                {
+                    "organization_id": scenario.organization_id,
+                    "job_id": scenario.prepared.job_id,
+                },
+            ).one()
+
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                pending = executor.submit(_offboard, scenario, guarded_control_engine)
+                deadline = monotonic() + 10
+                while monotonic() < deadline:
+                    with migration_engine.connect() as observer:
+                        blocked = observer.execute(
+                            text(
+                                """
+                                SELECT EXISTS (
+                                    SELECT 1 FROM pg_locks
+                                    WHERE locktype = 'transactionid'
+                                      AND transactionid::text = :transaction_id
+                                      AND granted IS FALSE
+                                )
+                                """
+                            ),
+                            {"transaction_id": locking_transaction_id},
+                        ).scalar_one()
+                    if blocked:
+                        break
+                    sleep(0.01)
+                else:
+                    transaction.rollback()
+                    pending.result(timeout=5)
+                    pytest.fail("offboarding did not reach the locked job fence")
+
+                locking_connection.execute(
+                    text(
+                        """
+                        INSERT INTO context_resource (
+                            organization_id, resource_ref, source_ref,
+                            active_revision_id, tombstoned
+                        ) VALUES (
+                            :organization_id, :resource_ref, :source_ref,
+                            NULL, false
+                        )
+                        """
+                    ),
+                    {
+                        "organization_id": scenario.organization_id,
+                        "resource_ref": resource_ref,
+                        "source_ref": str(scenario.source_ref.value),
+                    },
+                )
+                transaction.commit()
+                committed = pending.result(timeout=10)
+
+        with migration_engine.connect() as connection:
+            retained = connection.execute(
+                text(
+                    """
+                    SELECT intent.retained_resource_count,
+                           (SELECT count(*) FROM context_resource AS resource
+                            WHERE resource.organization_id = intent.organization_id
+                              AND resource.source_ref = :source_ref)
+                    FROM file_source_cleanup_intent AS intent
+                    WHERE intent.organization_id = :organization_id
+                      AND intent.source_id = :source_id
+                    """
+                ),
+                {
+                    "organization_id": scenario.organization_id,
+                    "source_id": scenario.source_ref.value,
+                    "source_ref": str(scenario.source_ref.value),
+                },
+            ).one()
+        assert committed.retained_resource_count == 1
+        assert tuple(retained) == (1, 1)
     finally:
         migration_engine.dispose()
 
