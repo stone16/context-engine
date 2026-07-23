@@ -129,6 +129,7 @@ def _delete_issue_27_upgrade_fixture(
                     "file_publication_recovery",
                     "file_revision_supersession",
                     "file_revision_replacement_plan",
+                    "file_acquisition_result",
                     "exact_phrase_candidate",
                     "revision_publication_event",
                     "membership_resource_field_right",
@@ -137,7 +138,6 @@ def _delete_issue_27_upgrade_fixture(
                     "file_revision_snapshot",
                     "context_revision",
                     "context_resource",
-                    "file_acquisition_result",
                     "file_resource_ingestion_guard",
                     "file_import_job",
                     "file_acquisition",
@@ -609,13 +609,13 @@ def test_file_progress_revision_downgrades_and_reapplies_cleanly(
     )
 
 
-def test_file_progress_refuses_downgrade_after_an_accepted_change(
+def test_file_progress_refs_remain_stable_after_projection_rebuild(
     tmp_path: Path,
     migration_configuration: DatabaseConfiguration,
     guarded_control_engine: Engine,
     guarded_worker_engine: Engine,
 ) -> None:
-    """Issue #29 never discards the database ordering behind opaque refs."""
+    """Issue #29 rebuild derives the same opaque refs from retained order."""
 
     scenario = _prepare_file_import_scenario(
         tmp_path,
@@ -629,49 +629,84 @@ def test_file_progress_refuses_downgrade_after_an_accepted_change(
         scenario.token,
         guarded_worker_engine,
     )
+    repeated, repeated_token = _prepare_repeat_file_import(
+        scenario,
+        guarded_control_engine,
+        idempotency_key="progress-ref-rebuild-repeat",
+    )
+    repeated_result = _run_file_import(
+        scenario,
+        repeated,
+        repeated_token,
+        guarded_worker_engine,
+    )
+    _tombstone(
+        scenario,
+        guarded_control_engine,
+        resource_ref=repeated_result.candidate_ref.resource_ref,
+        event_ref="progress-ref-rebuild-delete",
+        event_sequence=1,
+    )
     migration_engine = create_database_engine(migration_configuration)
 
-    def progress_refs() -> tuple[str, str]:
+    def progress_refs() -> tuple[
+        tuple[tuple[int, str, str], ...],
+        tuple[tuple[int, str, str], ...],
+    ]:
         with migration_engine.connect() as connection:
-            checkpoint_ref = connection.execute(
+            checkpoint_rows = connection.execute(
                 text(
                     """
-                    SELECT checkpoint_ref
+                    SELECT sequence, checkpoint_ref, change_kind
                     FROM file_source_acquisition_checkpoint
                     WHERE organization_id = :organization_id
                       AND source_id = :source_id
+                    ORDER BY sequence
                     """
                 ),
                 {
                     "organization_id": scenario.organization_id,
                     "source_id": scenario.source_ref.value,
                 },
-            ).scalar_one()
-            watermark_ref = connection.execute(
+            ).all()
+            watermark_rows = connection.execute(
                 text(
                     """
-                    SELECT watermark_ref
+                    SELECT sequence, watermark_ref, outcome
                     FROM file_source_publish_watermark
                     WHERE organization_id = :organization_id
                       AND source_id = :source_id
+                    ORDER BY sequence
                     """
                 ),
                 {
                     "organization_id": scenario.organization_id,
                     "source_id": scenario.source_ref.value,
                 },
-            ).scalar_one()
-        return str(checkpoint_ref), str(watermark_ref)
+            ).all()
+        return (
+            tuple(
+                (int(row.sequence), str(row.checkpoint_ref), str(row.change_kind))
+                for row in checkpoint_rows
+            ),
+            tuple(
+                (int(row.sequence), str(row.watermark_ref), str(row.outcome))
+                for row in watermark_rows
+            ),
+        )
 
     before = progress_refs()
+    assert [row[0] for row in before[0]] == [1, 2, 3]
+    assert [row[2] for row in before[0]] == [
+        "file_import",
+        "file_import",
+        "file_tombstone",
+    ]
+    assert [row[0] for row in before[1]] == [1, 2, 3]
     alembic_configuration = Config(ROOT / "alembic.ini")
     try:
-        with pytest.raises(
-            RuntimeError,
-            match="requires empty progress streams",
-        ):
-            command.downgrade(alembic_configuration, "20260723_0016")
-        assert _revision_rows(migration_configuration) == ["20260723_0017"]
+        command.downgrade(alembic_configuration, "20260723_0016")
+        command.upgrade(alembic_configuration, "head")
         assert progress_refs() == before
     finally:
         if _revision_rows(migration_configuration) != ["20260723_0017"]:
