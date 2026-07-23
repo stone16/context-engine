@@ -148,6 +148,7 @@ class _ControlAuthenticator:
                     ControlOperation.REGISTER_SOURCE,
                     ControlOperation.READ_SOURCE,
                     ControlOperation.IMPORT_FILE,
+                    ControlOperation.TOMBSTONE_FILE_RESOURCE,
                 }
             ),
             valid_from=NOW - timedelta(minutes=1),
@@ -1419,7 +1420,7 @@ def _assert_structural_file_import_returns_coherent_authorized_units_over_http(
             connection.execute(
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one()
-            == "20260723_0015"
+            == "20260723_0016"
         )
 
 

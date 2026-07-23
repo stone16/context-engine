@@ -28,6 +28,7 @@ NON_OWNER_EVIDENCE_BY_TABLE: Mapping[str, str] = {
     "file_import_job": "PG-FILE-IMPORT-023",
     "file_import_job_event": "PG-FILE-RECOVERY-027",
     "file_publication_recovery": "PG-FILE-RECOVERY-027",
+    "file_resource_cleanup_intent": "PG-FILE-TOMBSTONE-028",
     "file_resource_ingestion_guard": "PG-FILE-IMPORT-023",
     "file_revision_snapshot": "PG-FILE-IMPORT-023",
     "file_revision_replacement_plan": "PG-FILE-REPLACEMENT-026",

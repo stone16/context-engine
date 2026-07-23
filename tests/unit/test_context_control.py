@@ -15,11 +15,13 @@ from engine.control import (
     ControlOperatorAuthenticationRejected,
     ControlOperatorAuthority,
     ControlStorePort,
+    FileResourceTombstone,
     FileRootRef,
     RegisterFileSource,
     SourceManifest,
     SourceNotAvailable,
     SourceRef,
+    TombstoneFileResource,
     TrustedControlCall,
     VerifiedControlOperatorIdentity,
 )
@@ -48,6 +50,7 @@ class _Authenticator:
                     ControlOperation.IMPORT_FILE,
                     ControlOperation.REGISTER_SOURCE,
                     ControlOperation.READ_SOURCE,
+                    ControlOperation.TOMBSTONE_FILE_RESOURCE,
                 }
             ),
             valid_from=NOW - timedelta(minutes=1),
@@ -96,6 +99,23 @@ class _Store(ControlStorePort):
             job_id=UUID("9de5b515-540b-4c9c-b1d3-f9b691dfbb7a"),
             source_ref=command.source_ref,
             service_principal_id=UUID("0f7bc78d-a76a-477c-b097-ce557b7844b9"),
+        )
+
+    def tombstone_file_resource(
+        self, call: TrustedControlCall, command: TombstoneFileResource
+    ) -> FileResourceTombstone:
+        assert call.organization_id == ORGANIZATION_ID
+        assert call.operation is ControlOperation.TOMBSTONE_FILE_RESOURCE
+        return FileResourceTombstone(
+            organization_id=ORGANIZATION_ID,
+            source_ref=command.source_ref,
+            resource_ref=command.resource_ref,
+            revision_ref=UUID("77cc56d7-fc94-42db-987e-12c6910c5ea9"),
+            event_ref=command.event_ref,
+            event_sequence=command.event_sequence,
+            policy_epoch=2,
+            cleanup_intent_ref=UUID("d46d2310-b9fb-4058-8205-1198df75963b"),
+            tombstoned_at=NOW,
         )
 
 
@@ -242,6 +262,64 @@ def test_authorized_operator_prepares_one_credential_free_file_import() -> None:
     assert prepared.workload == "supply.file-import"
     assert prepared.operation == "file.import"
     assert "credential" not in repr(prepared).casefold()
+
+
+def test_authorized_operator_tombstones_one_exact_file_resource() -> None:
+    store = _Store()
+    authority = _authority()
+    control = ContextControl(store=store, authority=authority, clock=lambda: NOW)
+    command = TombstoneFileResource(
+        source_ref=SourceRef(UUID("5d37f20a-6a2b-4534-8909-e0118bbc4b47")),
+        resource_ref="resource:file:" + "a" * 64,
+        event_ref="manual-delete-17",
+        event_sequence=17,
+    )
+
+    with authority.authorize(
+        opaque_credential="control-credential-a",
+        operation=ControlOperation.TOMBSTONE_FILE_RESOURCE,
+        request_id="tombstone-resource-a",
+    ) as call:
+        result = control.tombstone_file_resource(call, command)
+
+    assert result.organization_id == ORGANIZATION_ID
+    assert result.source_ref == command.source_ref
+    assert result.resource_ref == command.resource_ref
+    assert result.event_ref == command.event_ref
+    assert result.event_sequence == command.event_sequence
+    assert result.policy_epoch == 2
+
+
+def test_file_tombstone_command_cannot_supply_tenant_epoch_or_cleanup_identity() -> (
+    None
+):
+    command = TombstoneFileResource(
+        source_ref=SourceRef(UUID("5d37f20a-6a2b-4534-8909-e0118bbc4b47")),
+        resource_ref="resource:file:" + "a" * 64,
+        event_ref="manual-delete-17",
+        event_sequence=17,
+    )
+
+    assert [field.name for field in fields(command)] == [
+        "source_ref",
+        "resource_ref",
+        "event_ref",
+        "event_sequence",
+    ]
+    with pytest.raises(ValueError, match="ResourceRef"):
+        TombstoneFileResource(
+            source_ref=command.source_ref,
+            resource_ref="resource:unknown",
+            event_ref=command.event_ref,
+            event_sequence=command.event_sequence,
+        )
+    with pytest.raises(ValueError, match="event sequence"):
+        TombstoneFileResource(
+            source_ref=command.source_ref,
+            resource_ref=command.resource_ref,
+            event_ref=command.event_ref,
+            event_sequence=0,
+        )
 
 
 def test_source_ref_and_forged_or_wrong_operation_calls_never_authorize_control() -> (

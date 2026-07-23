@@ -561,8 +561,9 @@ durable replacement plan before marking the job `ready`. The old Revision stays
 active throughout staging. A second transaction revalidates authority and
 readiness, compare-and-swaps the Resource active pointer, appends `active`,
 records immutable supersession lineage, and completes the job. Superseded
-artifacts remain `retained_until_explicit_cleanup`; deletion is not active in
-this slice. When an equivalent concurrent
+artifacts remain `retained_until_explicit_cleanup`; ADR-0042 activates only
+manual deletion of the current File Resource, not superseded-revision cleanup.
+When an equivalent concurrent
 replacement activates between the initial publish attempt and replacement
 staging, the guarded stage classification completes the later job as
 `unchanged` and returns that durable zero-effect result. V1 and V2 each reprove
@@ -581,6 +582,17 @@ current audience authority and complete Fragment/candidate evidence before the
 single pointer transaction, so a recovered replacement leaves old active
 content visible until the new Revision is complete. Automatic retry scheduling,
 arbitrary chaos, delete recovery, and dead-letter handling remain inactive.
+
+ADR-0042 activates the manual trusted-Control tombstone carrier for one known
+published File Resource. One transaction shares the Organization publication
+visibility lock with Runtime and activation, flips only the Resource tombstone,
+advances the Organization Policy Epoch, and appends an immutable pending cleanup
+intent bound to the retained active Revision. Runtime then exposes neither the
+Resource nor its physical Revision/Fragments; a deliberately stale candidate
+still produces the same canonical empty HTTP Package as an unknown Resource.
+Duplicate and older deletion observations return the original result without
+another epoch bump. Physical cleanup, restore, native watcher detection, source
+offboarding, and cleanup-job execution remain inactive.
 
 Because Runtime resolves through multiple SQL statements at `READ COMMITTED`,
 each UserActor transaction takes an Organization-scoped shared publication
