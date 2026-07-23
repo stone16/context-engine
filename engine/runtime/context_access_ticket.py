@@ -118,7 +118,7 @@ class _ContextAccessClaims:
     purpose: str = field(repr=False)
     policy_epoch: int = field(repr=False)
     provider_ref: str = field(repr=False)
-    source_ref: str | None = field(repr=False)
+    source_ref: UUID | None = field(repr=False)
     audience: str = field(repr=False)
     issued_at: datetime = field(repr=False)
     expires_at: datetime = field(repr=False)
@@ -142,7 +142,7 @@ def _claims_document(claims: _ContextAccessClaims) -> dict[str, object]:
         "provider_ref": claims.provider_ref,
         "purpose": claims.purpose,
         "signing_key_version": claims.signing_key_version,
-        "source_ref": claims.source_ref,
+        "source_ref": None if claims.source_ref is None else str(claims.source_ref),
         "subject_membership_id": str(claims.subject_membership_id),
         "subject_membership_version": claims.subject_membership_version,
         "subject_user_id": str(claims.subject_user_id),
@@ -177,7 +177,7 @@ def _claims_from_document(document: Mapping[str, object]) -> _ContextAccessClaim
         provider_ref=_require_identifier(
             "Provider", document["provider_ref"], maximum_length=128
         ),
-        source_ref=_optional_file_source_ref(document.get("source_ref")),
+        source_ref=_parse_optional_file_source_ref(document.get("source_ref")),
         audience=_require_identifier(
             "read audience", document["audience"], maximum_length=256
         ),
@@ -216,17 +216,16 @@ def _verify_context_access_ticket(
         )
 
 
-def _optional_file_source_ref(value: object) -> str | None:
+def _parse_optional_file_source_ref(value: object) -> UUID | None:
     if value is None:
         return None
-    source_ref = _require_identifier("File source", value, maximum_length=128)
-    try:
-        parsed = UUID(source_ref)
-    except ValueError:
-        raise ValueError("File source must be a canonical UUID") from None
-    if str(parsed) != source_ref:
-        raise ValueError("File source must be a canonical UUID")
-    return source_ref
+    return _parse_uuid(value)
+
+
+def _optional_file_source_ref(value: object) -> UUID | None:
+    if value is None:
+        return None
+    return _require_uuid("File source", value)
 
 
 def _construct_context_access_ticket(value: str) -> ContextAccessTicket:
@@ -253,7 +252,7 @@ class ContextAccessTicketIssuer:
         keyring: TicketSigningKeyring,
         organization_id: UUID,
         provider_ref: str,
-        source_ref: str | None = None,
+        source_ref: UUID | None = None,
         clock: Callable[[], datetime] = _utc_now,
         ttl_seconds: int = _DEFAULT_TTL_SECONDS,
         nonce_factory: Callable[[], bytes] = _generate_nonce,
@@ -348,7 +347,7 @@ class ContextAccessTicketReadHandler:
         keyring: TicketSigningKeyring,
         organization_id: UUID,
         provider_ref: str,
-        source_ref: str | None = None,
+        source_ref: UUID | None = None,
         provider: SyntheticReadProvider,
         clock: Callable[[], datetime] = _utc_now,
     ) -> None:

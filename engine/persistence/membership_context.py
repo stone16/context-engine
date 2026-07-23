@@ -140,7 +140,7 @@ class _PostgreSQLMaterializedProjectionPort:
     def __init__(self, connection: Connection) -> None:
         self._connection = connection
 
-    def source_is_active(self, source_ref: str) -> bool:
+    def source_is_active(self, source_ref: UUID) -> bool:
         observed = self._connection.execute(
             text(
                 """
@@ -150,7 +150,7 @@ class _PostgreSQLMaterializedProjectionPort:
                 )
                 """
             ),
-            {"source_ref": source_ref},
+            {"source_ref": str(source_ref)},
         ).scalar_one()
         return observed is True
 

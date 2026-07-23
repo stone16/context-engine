@@ -371,7 +371,7 @@ def test_source_bound_context_access_ticket_requires_lifecycle_authority() -> No
             keyring=KEYRING,
             organization_id=ORGANIZATION_ID,
             provider_ref="provider-a",
-            source_ref="5d37f20a-6a2b-4534-8909-e0118bbc4b47",
+            source_ref=UUID("5d37f20a-6a2b-4534-8909-e0118bbc4b47"),
             clock=lambda: NOW,
         )
 
@@ -381,15 +381,15 @@ def test_source_bound_context_access_ticket_requires_lifecycle_authority() -> No
 
 @pytest.mark.parametrize(
     "source_ref",
-    ["source-a", "5D37F20A-6A2B-4534-8909-E0118BBC4B47"],
+    ["source-a", "5d37f20a-6a2b-4534-8909-e0118bbc4b47"],
 )
-def test_source_bound_ticket_requires_a_canonical_source_uuid(source_ref: str) -> None:
-    with pytest.raises(ValueError, match="canonical UUID"):
+def test_source_bound_ticket_requires_a_uuid_domain_value(source_ref: str) -> None:
+    with pytest.raises(TypeError, match="must be UUID"):
         ContextAccessTicketIssuer(
             keyring=KEYRING,
             organization_id=ORGANIZATION_ID,
             provider_ref="provider-a",
-            source_ref=source_ref,
+            source_ref=cast(UUID, source_ref),
             clock=lambda: NOW,
         )
 
@@ -519,7 +519,7 @@ def test_signed_ticket_schemas_bind_distinct_domains_audiences_and_identity(
 
 def test_pre_source_binding_ticket_remains_only_an_unbound_synthetic_ticket() -> None:
     provider = _Provider()
-    source_ref = "5d37f20a-6a2b-4534-8909-e0118bbc4b47"
+    source_ref = UUID("5d37f20a-6a2b-4534-8909-e0118bbc4b47")
     with _identity() as identity:
         issued = ContextAccessTicketIssuer(
             keyring=KEYRING,

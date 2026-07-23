@@ -367,7 +367,7 @@ def test_offboard_is_immediate_with_stale_candidates_and_zero_worker_effects(
                 ),
                 organization_id=scenario.organization_id,
                 provider_ref="provider:file",
-                source_ref=str(scenario.source_ref.value),
+                source_ref=scenario.source_ref.value,
                 clock=lambda: NOW,
             ).issue(fresh_identity)
 

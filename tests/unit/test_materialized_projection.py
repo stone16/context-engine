@@ -54,6 +54,10 @@ class RecordingProjectionPort:
         del phrase_digest
         return ()
 
+    def source_is_active(self, source_ref: UUID) -> bool:
+        del source_ref
+        return True
+
     def observe_publication(self, candidate_ref: CandidateRef) -> None:
         del candidate_ref
 
@@ -85,6 +89,20 @@ class RecordingProjectionPort:
 def test_projection_session_is_nominal_lifetime_bound_and_nonserializable() -> None:
     with pytest.raises(TypeError):
         MaterializedProjectionSession()
+
+    class MissingLifecyclePort:
+        def locate(self, *args: object) -> None:
+            del args
+
+        project = locate
+        discover_exact_phrase = locate
+        observe_publication = locate
+
+    with pytest.raises(TypeError, match="port is incomplete"):
+        _construct_materialized_projection_session(
+            authority_scope=_open_materialized_projection_scope(),
+            port=cast(MaterializedProjectionPort, MissingLifecyclePort()),
+        )
 
     scope = _open_materialized_projection_scope()
     port = RecordingProjectionPort()

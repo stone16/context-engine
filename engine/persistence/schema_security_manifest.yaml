@@ -3029,6 +3029,7 @@
         {"name": "uq_file_source_cleanup_intent_source", "kind": "unique", "columns": ["organization_id", "source_id"]}
       ],
       "foreignKeys": [
+        {"name": "fk_file_source_cleanup_intent_organization", "columns": ["organization_id"], "references": {"table": "organization", "columns": ["organization_id"]}},
         {"name": "fk_file_source_cleanup_intent_version_exact", "columns": ["organization_id", "source_id", "source_version_id"], "references": {"table": "source_version", "columns": ["organization_id", "source_id", "version_id"]}}
       ],
       "checkConstraints": [

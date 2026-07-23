@@ -509,6 +509,17 @@ def test_issue_30_file_source_offboarding_is_atomic_and_function_only() -> None:
         "file_import_job",
     ]
     cleanup = entries["file_source_cleanup_intent"]
+    cleanup_foreign_keys = {
+        foreign_key["name"]: foreign_key for foreign_key in cleanup["foreignKeys"]
+    }
+    assert cleanup_foreign_keys["fk_file_source_cleanup_intent_organization"] == {
+        "name": "fk_file_source_cleanup_intent_organization",
+        "columns": ["organization_id"],
+        "references": {
+            "table": "organization",
+            "columns": ["organization_id"],
+        },
+    }
     assert cleanup["rowLevelSecurity"]["enabled"] is True
     assert cleanup["rowLevelSecurity"]["forced"] is True
     assert cleanup["immutableRows"]["events"] == ["UPDATE", "DELETE"]
