@@ -32,7 +32,11 @@ not expand this success-path authority.
 
 The existing tenant/source/resource ingestion-guard row remains the
 classification and writer-serialization authority. The unchanged classifier
-runs first. Only its `changed` result may enter replacement.
+runs first. Only its `changed` result may enter replacement. If a competing
+publication wins after a worker first observed `changed`, the stage entrypoint
+may reclassify that exact job as `unchanged`; it returns the completed no-op
+receipt only after the active v1/v2 artifact matches the supplied compiled
+payload in full.
 
 Replacement has two database transactions under version-bound SECURITY DEFINER
 entrypoints:
@@ -75,7 +79,8 @@ the next resolve sees the new pointer; there is no mixed or empty window.
 
 The worker retains no direct table mutation privilege. V1 and structural V2
 staging have separate closed entrypoints, followed by the same activation
-entrypoint. Initial publication and unchanged no-op behavior remain unchanged.
+entrypoint. A stage-time concurrent winner is returned to the worker as the
+same durable zero-effect no-op result, rather than being misreported as failed.
 Any failed pre-ready attempt rolls back its staging transaction. Reclaim or
 replay of a committed `ready` job is explicitly deferred to recovery work.
 
@@ -102,6 +107,8 @@ transaction.
   still feeds `CandidateRef -> AuthorizationKernel -> AuthorizedProjection`.
 - Other Organizations do not share the visibility barrier; other Resources are
   not mutated by the exact Resource compare-and-swap.
+- Concurrent equivalent replacements yield one replacement effect; a late job
+  completes as an auditable no-op against that exact active artifact.
 - Superseded storage grows until an explicit cleanup policy and authority are
   accepted. This issue performs no garbage collection.
 - A crash after `ready` can leave a complete inactive replacement and ready job;

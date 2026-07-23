@@ -127,10 +127,12 @@
       "rawNonceComparedAsSha256": true,
       "transactions": ["stage complete replacement", "activate active pointer"],
       "stageInvariant": "the old active Revision remains the only Runtime-visible Revision until the complete replacement is prepared and indexed",
+      "stageRaceOutcome": "an equivalent concurrent winner completes the late job as unchanged only after the supplied v1/v2 compilation exactly matches the active artifact",
       "activationInvariant": "one compare-and-swap transaction changes the active pointer, appends active evidence and supersession lineage, and completes the job",
       "runtimeVisibilityBarrier": "Organization-scoped shared Runtime/exclusive activation transaction advisory lock",
       "retention": "superseded Revisions remain immutable and retained_until_explicit_cleanup",
       "stageAtomicWrites": [
+        "file_resource_ingestion_guard", "file_acquisition_result",
         "context_revision", "file_revision_snapshot", "context_fragment",
         "revision_publication_event", "exact_phrase_candidate",
         "file_revision_replacement_plan", "file_import_job"
@@ -2502,8 +2504,8 @@
         ]
       },
       "immutableRows": {"trigger": "file_resource_ingestion_guard_immutable", "function": "context_content_reject_mutation", "events": ["UPDATE", "DELETE"], "sqlstate": "55000"},
-      "functionOnlyMutation": {"databaseFunctions": ["context_worker_publish_file_import_v2", "context_worker_publish_structural_file_import_v2"], "definerRole": "context_engine_worker_lease_definer", "directTableMutationAllowed": false},
-      "permittedOperations": {"context_engine_control": [], "context_engine_runtime": [], "context_engine_worker": ["EXECUTE context_worker_publish_file_import_v2", "EXECUTE context_worker_publish_structural_file_import_v2"], "context_engine_worker_lease_definer": ["SELECT", "INSERT", "UPDATE resource_ref"]},
+      "functionOnlyMutation": {"databaseFunctions": ["context_worker_publish_file_import_v2", "context_worker_publish_structural_file_import_v2", "context_worker_stage_file_replacement", "context_worker_stage_structural_file_replacement"], "definerRole": "context_engine_worker_lease_definer", "directTableMutationAllowed": false},
+      "permittedOperations": {"context_engine_control": [], "context_engine_runtime": [], "context_engine_worker": ["EXECUTE context_worker_publish_file_import_v2", "EXECUTE context_worker_publish_structural_file_import_v2", "EXECUTE context_worker_stage_file_replacement", "EXECUTE context_worker_stage_structural_file_replacement"], "context_engine_worker_lease_definer": ["SELECT", "INSERT", "UPDATE resource_ref"]},
       "partitions": [],
       "securityInvariantIds": ["TENANT-OWNERSHIP-001", "TENANT-FK-002", "RLS-FAIL-CLOSED-003", "WORKER-LEASE-007"],
       "negativeTestIds": ["DB-001", "DB-004", "DB-008", "PG-FILE-IMPORT-023"]
@@ -2539,8 +2541,8 @@
         ]
       },
       "immutableRows": {"trigger": "file_acquisition_result_immutable", "function": "context_content_reject_mutation", "events": ["UPDATE", "DELETE"], "sqlstate": "55000"},
-      "functionOnlyMutation": {"databaseFunctions": ["context_worker_publish_file_import_v2", "context_worker_publish_structural_file_import_v2"], "definerRole": "context_engine_worker_lease_definer", "directTableMutationAllowed": false},
-      "permittedOperations": {"context_engine_control": [], "context_engine_runtime": [], "context_engine_worker": ["EXECUTE context_worker_publish_file_import_v2", "EXECUTE context_worker_publish_structural_file_import_v2"], "context_engine_worker_lease_definer": ["SELECT", "INSERT"]},
+      "functionOnlyMutation": {"databaseFunctions": ["context_worker_publish_file_import_v2", "context_worker_publish_structural_file_import_v2", "context_worker_stage_file_replacement", "context_worker_stage_structural_file_replacement"], "definerRole": "context_engine_worker_lease_definer", "directTableMutationAllowed": false},
+      "permittedOperations": {"context_engine_control": [], "context_engine_runtime": [], "context_engine_worker": ["EXECUTE context_worker_publish_file_import_v2", "EXECUTE context_worker_publish_structural_file_import_v2", "EXECUTE context_worker_stage_file_replacement", "EXECUTE context_worker_stage_structural_file_replacement"], "context_engine_worker_lease_definer": ["SELECT", "INSERT"]},
       "retention": {"sourceContent": "none", "reason": "fixed code plus organization-scoped digest only"},
       "partitions": [],
       "securityInvariantIds": ["TENANT-OWNERSHIP-001", "TENANT-FK-002", "RLS-FAIL-CLOSED-003", "WORKER-LEASE-007", "TRACE-REDACTION-012"],

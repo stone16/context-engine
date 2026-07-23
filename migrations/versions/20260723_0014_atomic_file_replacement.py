@@ -249,7 +249,9 @@ def upgrade() -> None:
             requested_issued_at timestamptz, requested_expires_at timestamptz
         ) RETURNS TABLE (
             previous_revision_id uuid, replacement_revision_id uuid,
-            fragment_refs text[], content_identity_digest text
+            fragment_refs text[], content_identity_digest text,
+            effect_count smallint, outcome text, active_revision_id uuid,
+            reason_digest text
         )
         LANGUAGE plpgsql SECURITY DEFINER
         SET search_path = pg_catalog, pg_temp SET row_security = on
@@ -280,7 +282,60 @@ def upgrade() -> None:
                 requested_config_version, requested_signing_key_version,
                 requested_nonce, requested_issued_at, requested_expires_at
             );
-            IF decision.classification IS DISTINCT FROM 'changed' THEN
+            IF decision.classification = 'unchanged' THEN
+                IF NOT EXISTS (
+                    SELECT 1
+                    FROM public.file_revision_snapshot AS snapshot
+                    JOIN public.context_fragment AS fragment
+                      ON fragment.organization_id = snapshot.organization_id
+                     AND fragment.resource_ref = snapshot.resource_ref
+                     AND fragment.revision_id = snapshot.revision_id
+                    JOIN public.exact_phrase_candidate AS candidate
+                      ON candidate.organization_id = fragment.organization_id
+                     AND candidate.resource_ref = fragment.resource_ref
+                     AND candidate.revision_id = fragment.revision_id
+                     AND candidate.fragment_ref = fragment.fragment_ref
+                    WHERE snapshot.organization_id = requested_organization_id
+                      AND snapshot.resource_ref = requested_resource_ref
+                      AND snapshot.revision_id = decision.active_revision_id
+                      AND snapshot.compilation_digest =
+                          requested_compilation_digest
+                      AND fragment.fragment_ref = requested_fragment_ref
+                      AND fragment.ordinal = 0
+                      AND fragment.content = requested_paragraph
+                      AND fragment.projection_kind = 'body'
+                      AND candidate.source_ref = requested_source_ref
+                      AND candidate.phrase_digest = requested_phrase_digest
+                      AND (
+                          SELECT count(*)
+                          FROM public.context_fragment AS active_fragment
+                          WHERE active_fragment.organization_id =
+                              requested_organization_id
+                            AND active_fragment.resource_ref =
+                              requested_resource_ref
+                            AND active_fragment.revision_id =
+                              decision.active_revision_id
+                      ) = 1
+                      AND (
+                          SELECT count(*)
+                          FROM public.exact_phrase_candidate AS active_candidate
+                          WHERE active_candidate.organization_id =
+                              requested_organization_id
+                            AND active_candidate.resource_ref =
+                              requested_resource_ref
+                            AND active_candidate.revision_id =
+                              decision.active_revision_id
+                      ) = 1
+                ) THEN
+                    RAISE EXCEPTION 'v1 no-op payload is not the active artifact'
+                        USING ERRCODE = '22023';
+                END IF;
+                RETURN QUERY SELECT NULL::uuid, NULL::uuid,
+                    decision.fragment_refs, decision.content_identity_digest,
+                    0::smallint, decision.classification,
+                    decision.active_revision_id, decision.reason_digest;
+                RETURN;
+            ELSIF decision.classification IS DISTINCT FROM 'changed' THEN
                 RETURN;
             END IF;
             now_at := pg_catalog.statement_timestamp();
@@ -409,7 +464,8 @@ def upgrade() -> None:
             IF NOT FOUND THEN RETURN; END IF;
             RETURN QUERY SELECT old_revision, requested_revision_id,
                 ARRAY[requested_fragment_ref]::text[],
-                decision.content_identity_digest;
+                decision.content_identity_digest, NULL::smallint, NULL::text,
+                NULL::uuid, NULL::text;
         END; $function$
         """
     )
@@ -426,7 +482,9 @@ def upgrade() -> None:
             requested_issued_at timestamptz, requested_expires_at timestamptz
         ) RETURNS TABLE (
             previous_revision_id uuid, replacement_revision_id uuid,
-            fragment_refs text[], content_identity_digest text
+            fragment_refs text[], content_identity_digest text,
+            effect_count smallint, outcome text, active_revision_id uuid,
+            reason_digest text
         )
         LANGUAGE plpgsql SECURITY DEFINER
         SET search_path = pg_catalog, pg_temp SET row_security = on
@@ -612,7 +670,115 @@ def upgrade() -> None:
                 requested_config_version, requested_signing_key_version,
                 requested_nonce, requested_issued_at, requested_expires_at
             );
-            IF decision.classification IS DISTINCT FROM 'changed' THEN
+            IF decision.classification = 'unchanged' THEN
+                IF NOT EXISTS (
+                    SELECT 1
+                    FROM public.file_revision_snapshot AS snapshot
+                    WHERE snapshot.organization_id = requested_organization_id
+                      AND snapshot.resource_ref = requested_resource_ref
+                      AND snapshot.revision_id = decision.active_revision_id
+                      AND snapshot.compilation_digest =
+                          requested_compilation_digest
+                      AND snapshot.compilation_document =
+                          requested_compilation_document
+                      AND (
+                          SELECT count(*)
+                          FROM public.context_fragment AS active_fragment
+                          WHERE active_fragment.organization_id =
+                              requested_organization_id
+                            AND active_fragment.resource_ref =
+                              requested_resource_ref
+                            AND active_fragment.revision_id =
+                              decision.active_revision_id
+                      ) = jsonb_array_length(
+                          requested_compilation_document->'fragments'
+                      )
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM jsonb_array_elements(
+                              requested_compilation_document->'fragments'
+                          ) WITH ORDINALITY AS expected(fragment, ordinal)
+                          WHERE NOT EXISTS (
+                              SELECT 1
+                              FROM public.context_fragment AS active_fragment
+                              WHERE active_fragment.organization_id =
+                                  requested_organization_id
+                                AND active_fragment.resource_ref =
+                                  requested_resource_ref
+                                AND active_fragment.revision_id =
+                                  decision.active_revision_id
+                                AND active_fragment.fragment_ref =
+                                  expected.fragment->>'fragmentRef'
+                                AND active_fragment.ordinal =
+                                  (expected.ordinal - 1)::integer
+                                AND active_fragment.content =
+                                  expected.fragment->>'contextualText'
+                                AND active_fragment.projection_kind = 'body'
+                          )
+                      )
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM jsonb_array_elements(
+                              requested_compilation_document->'fragments'
+                          ) AS expected(fragment)
+                          CROSS JOIN LATERAL jsonb_array_elements_text(
+                              expected.fragment->'searchPhrases'
+                          ) AS phrase(value)
+                          WHERE NOT EXISTS (
+                              SELECT 1
+                              FROM public.exact_phrase_candidate AS candidate
+                              WHERE candidate.organization_id =
+                                  requested_organization_id
+                                AND candidate.source_ref = requested_source_ref
+                                AND candidate.resource_ref =
+                                  requested_resource_ref
+                                AND candidate.revision_id =
+                                  decision.active_revision_id
+                                AND candidate.fragment_ref =
+                                  expected.fragment->>'fragmentRef'
+                                AND candidate.phrase_digest = encode(
+                                    public.digest(
+                                        pg_catalog.convert_to(
+                                            'context-engine.exact-phrase.v1',
+                                            'UTF8'
+                                        ) || decode('00', 'hex')
+                                        || pg_catalog.convert_to(
+                                            phrase.value, 'UTF8'
+                                        ),
+                                        'sha256'
+                                    ),
+                                    'hex'
+                                )
+                          )
+                      )
+                      AND (
+                          SELECT count(*)
+                          FROM public.exact_phrase_candidate AS active_candidate
+                          WHERE active_candidate.organization_id =
+                              requested_organization_id
+                            AND active_candidate.resource_ref =
+                              requested_resource_ref
+                            AND active_candidate.revision_id =
+                              decision.active_revision_id
+                      ) = (
+                          SELECT count(*)
+                          FROM jsonb_array_elements(
+                              requested_compilation_document->'fragments'
+                          ) AS expected(fragment)
+                          CROSS JOIN LATERAL jsonb_array_elements_text(
+                              expected.fragment->'searchPhrases'
+                          ) AS phrase(value)
+                      )
+                ) THEN
+                    RAISE EXCEPTION 'v2 no-op payload is not the active artifact'
+                        USING ERRCODE = '22023';
+                END IF;
+                RETURN QUERY SELECT NULL::uuid, NULL::uuid,
+                    decision.fragment_refs, decision.content_identity_digest,
+                    0::smallint, decision.classification,
+                    decision.active_revision_id, decision.reason_digest;
+                RETURN;
+            ELSIF decision.classification IS DISTINCT FROM 'changed' THEN
                 RETURN;
             END IF;
 
@@ -777,7 +943,8 @@ def upgrade() -> None:
               AND job_id = requested_job_id AND state = 'running';
             IF NOT FOUND THEN RETURN; END IF;
             RETURN QUERY SELECT old_revision, requested_revision_id,
-                ready_fragments, decision.content_identity_digest;
+                ready_fragments, decision.content_identity_digest,
+                NULL::smallint, NULL::text, NULL::uuid, NULL::text;
         END; $function$
         """
     )

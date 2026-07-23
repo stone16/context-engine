@@ -462,6 +462,17 @@ class PostgreSQLFileImportWorker:
             ).one_or_none()
         if staged is None:
             return None
+        if staged.outcome == "unchanged":
+            return staged
+        if (
+            staged.outcome is not None
+            or staged.effect_count is not None
+            or staged.active_revision_id is not None
+            or staged.reason_digest is not None
+            or staged.previous_revision_id is None
+            or staged.replacement_revision_id is None
+        ):
+            return None
         with self._engine.begin() as connection:
             assert_worker_role(connection)
             return connection.execute(

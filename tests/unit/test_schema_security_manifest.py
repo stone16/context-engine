@@ -264,6 +264,26 @@ def test_issue_26_file_replacement_contract_is_staged_and_function_only() -> Non
         "stage complete replacement",
         "activate active pointer",
     ]
+    assert operation["stageRaceOutcome"] == (
+        "an equivalent concurrent winner completes the late job as unchanged "
+        "only after the supplied v1/v2 compilation exactly matches the active "
+        "artifact"
+    )
+    assert operation["stageAtomicWrites"][:2] == [
+        "file_resource_ingestion_guard",
+        "file_acquisition_result",
+    ]
+    stage_functions = {
+        "context_worker_stage_file_replacement",
+        "context_worker_stage_structural_file_replacement",
+    }
+    for table in ("file_resource_ingestion_guard", "file_acquisition_result"):
+        assert stage_functions <= set(
+            entries[table]["functionOnlyMutation"]["databaseFunctions"]
+        )
+        assert {
+            f"EXECUTE {function}" for function in stage_functions
+        } <= set(entries[table]["permittedOperations"]["context_engine_worker"])
     assert operation["directTableMutationAllowed"] is False
     assert operation["retention"] == (
         "superseded Revisions remain immutable and "

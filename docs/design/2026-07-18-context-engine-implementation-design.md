@@ -562,7 +562,12 @@ active throughout staging. A second transaction revalidates authority and
 readiness, compare-and-swaps the Resource active pointer, appends `active`,
 records immutable supersession lineage, and completes the job. Superseded
 artifacts remain `retained_until_explicit_cleanup`; deletion and recovery of a
-committed ready job are not active in this slice.
+committed ready job are not active in this slice. When an equivalent concurrent
+replacement activates between the initial publish attempt and replacement
+staging, the guarded stage classification completes the later job as
+`unchanged` and returns that durable zero-effect result. V1 and V2 each reprove
+that the supplied compilation exactly matches the now-active snapshot,
+Fragments, and candidates before reporting success.
 
 Because Runtime resolves through multiple SQL statements at `READ COMMITTED`,
 each UserActor transaction takes an Organization-scoped shared publication

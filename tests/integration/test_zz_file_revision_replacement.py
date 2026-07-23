@@ -23,7 +23,7 @@ from engine.persistence import (
     PostgreSQLMembershipAuthority,
     create_database_engine,
 )
-from engine.persistence.file_imports import _resource_ref
+from engine.persistence.file_imports import PostgreSQLFileImportWorker, _resource_ref
 from engine.runtime.construction import Runtime, required_kernel_dependencies
 from engine.runtime.content_io import CandidateIndex, exact_phrase_digest
 from engine.runtime.contracts import Acquire
@@ -425,6 +425,167 @@ def test_changed_v1_file_uses_the_same_atomic_replacement_path(
     assert second.effect_count == 1
     assert second.candidate_ref.resource_ref == first.candidate_ref.resource_ref
     assert second.candidate_ref.revision_ref != first.candidate_ref.revision_ref
+
+
+@pytest.mark.parametrize(
+    ("old_payload", "new_payload", "config_version"),
+    [
+        (OLD_V1_MARKDOWN, NEW_V1_MARKDOWN, "markdown-config-v1"),
+        (OLD_MARKDOWN, NEW_MARKDOWN, "markdown-config-v2"),
+    ],
+)
+def test_changed_import_race_returns_the_late_job_as_a_successful_noop(
+    tmp_path: Path,
+    migration_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+    guarded_worker_engine: Engine,
+    monkeypatch: pytest.MonkeyPatch,
+    old_payload: bytes,
+    new_payload: bytes,
+    config_version: str,
+) -> None:
+    scenario = _prepare_file_import_scenario(
+        tmp_path,
+        migration_configuration,
+        guarded_control_engine,
+        payload=old_payload,
+    )
+    assert scenario.token is not None
+    first = _run_file_import(
+        scenario,
+        scenario.prepared,
+        scenario.token,
+        guarded_worker_engine,
+        config_version=config_version,
+    )
+    (scenario.root / "handbook.md").write_bytes(new_payload)
+    winner_prepared, winner_token = _prepare_repeat_file_import(
+        scenario,
+        guarded_control_engine,
+        idempotency_key=f"replacement-race-winner-{config_version}",
+    )
+    late_prepared, late_token = _prepare_repeat_file_import(
+        scenario,
+        guarded_control_engine,
+        idempotency_key=f"replacement-race-late-{config_version}",
+    )
+    late_reached_replace = Event()
+    winner_completed = Event()
+    original_replace = PostgreSQLFileImportWorker._replace
+
+    def pause_late_replace(
+        worker: PostgreSQLFileImportWorker,
+        claims: WorkerLeaseClaims,
+        resource_ref: str,
+        revision_id: UUID,
+        document: ParsedDocument,
+        payload: dict[str, object],
+        *,
+        structural: bool,
+    ) -> object | None:
+        if claims.job_id == late_prepared.job_id:
+            late_reached_replace.set()
+            if not winner_completed.wait(timeout=5):
+                raise AssertionError("replacement race winner did not complete")
+        return original_replace(
+            worker,
+            claims,
+            resource_ref,
+            revision_id,
+            document,
+            payload,
+            structural=structural,
+        )
+
+    monkeypatch.setattr(PostgreSQLFileImportWorker, "_replace", pause_late_replace)
+    try:
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            late_future = executor.submit(
+                _run_file_import,
+                scenario,
+                late_prepared,
+                late_token,
+                guarded_worker_engine,
+                config_version=config_version,
+            )
+            assert late_reached_replace.wait(timeout=5)
+            winner = _run_file_import(
+                scenario,
+                winner_prepared,
+                winner_token,
+                guarded_worker_engine,
+                config_version=config_version,
+            )
+            winner_completed.set()
+            late = late_future.result(timeout=5)
+    finally:
+        winner_completed.set()
+
+    assert winner.outcome == "replaced"
+    assert winner.effect_count == 1
+    assert late.outcome == "unchanged"
+    assert late.effect_count == 0
+    assert late.candidate_refs == winner.candidate_refs
+    assert winner.candidate_ref.revision_ref != first.candidate_ref.revision_ref
+
+    engine = create_database_engine(migration_configuration)
+    try:
+        with engine.connect() as connection:
+            durable = connection.execute(
+                text(
+                    """
+                    SELECT job.state, job.effect_count, job.revision_id,
+                           job.completed_at IS NOT NULL,
+                           result.outcome, result.active_revision_id,
+                           result.content_identity_digest, result.reason_code,
+                           result.reason_digest,
+                           resource.active_revision_id,
+                        (SELECT count(*) FROM context_revision
+                         WHERE organization_id = :organization_id
+                           AND resource_ref = :resource_ref),
+                        (SELECT count(*) FROM file_revision_replacement_plan
+                         WHERE organization_id = :organization_id
+                           AND resource_ref = :resource_ref),
+                        (SELECT count(*) FROM file_revision_supersession
+                         WHERE organization_id = :organization_id
+                           AND resource_ref = :resource_ref)
+                    FROM file_import_job AS job
+                    JOIN file_acquisition_result AS result
+                      ON result.organization_id = job.organization_id
+                     AND result.acquisition_id = job.acquisition_id
+                     AND result.source_id = job.source_id
+                    JOIN context_resource AS resource
+                      ON resource.organization_id = job.organization_id
+                     AND resource.resource_ref = result.resource_ref
+                    WHERE job.organization_id = :organization_id
+                      AND job.job_id = :job_id
+                    """
+                ),
+                {
+                    "organization_id": scenario.organization_id,
+                    "resource_ref": winner.candidate_ref.resource_ref,
+                    "job_id": late_prepared.job_id,
+                },
+            ).one()
+        assert tuple(durable[:4]) == (
+            "completed",
+            0,
+            UUID(winner.candidate_ref.revision_ref),
+            True,
+        )
+        assert tuple(durable[4:10]) == (
+            "unchanged",
+            UUID(winner.candidate_ref.revision_ref),
+            late.content_identity_digest,
+            "active-content-identity-match",
+            late.reason_digest,
+            UUID(winner.candidate_ref.revision_ref),
+        )
+        assert late.reason_digest is not None
+        assert len(late.reason_digest) == 64
+        assert tuple(durable[10:]) == (2, 1, 1)
+    finally:
+        engine.dispose()
 
 
 def test_ready_replacement_keeps_old_http_package_until_atomic_activation(
