@@ -150,6 +150,7 @@ class _ControlAuthenticator:
                     ControlOperation.READ_SOURCE,
                     ControlOperation.READ_SOURCE_PROGRESS,
                     ControlOperation.IMPORT_FILE,
+                    ControlOperation.OFFBOARD_FILE_SOURCE,
                     ControlOperation.TOMBSTONE_FILE_RESOURCE,
                 }
             ),
@@ -1423,7 +1424,7 @@ def _assert_structural_file_import_returns_coherent_authorized_units_over_http(
             connection.execute(
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one()
-            == "20260723_0017"
+            == "20260723_0018"
         )
 
 

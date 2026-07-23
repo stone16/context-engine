@@ -216,7 +216,6 @@ class MaterializedProjectionPort(Protocol):
         locator: MaterializedFragmentLocator,
     ) -> MaterializedFragmentProjection | None: ...
 
-
 class _MaterializedProjectionScope:
     """Private lifetime token owned by one current UserActor transaction."""
 
@@ -312,6 +311,24 @@ def _construct_materialized_projection_session(
     object.__setattr__(session, "_authority_scope", authority_scope)
     object.__setattr__(session, "_port", port)
     return session
+
+
+def _is_materialized_source_active(
+    session: MaterializedProjectionSession,
+    source_ref: str,
+) -> bool:
+    """Read File-source lifecycle on the current UserActor transaction."""
+
+    _require_active_materialized_projection_session(session)
+    if type(source_ref) is not str or not source_ref:
+        raise ValueError("materialized source reference must be nonblank")
+    lifecycle_reader = getattr(session._port, "source_is_active", None)
+    if not callable(lifecycle_reader):
+        raise TypeError("materialized source lifecycle authority is unavailable")
+    observed = lifecycle_reader(source_ref)
+    if type(observed) is not bool:
+        raise TypeError("materialized source lifecycle returned a non-boolean")
+    return observed
 
 
 def _locate_materialized_fragment(

@@ -25,6 +25,10 @@ from engine.control.file_deletions import (
     TombstoneFileResource,
 )
 from engine.control.file_imports import PreparedFileImport, PrepareFileImport
+from engine.control.file_source_offboarding import (
+    FileSourceOffboarding,
+    OffboardFileSource,
+)
 from engine.control.file_source_progress import FileSourceProgress
 
 
@@ -61,6 +65,12 @@ class ControlStorePort(Protocol):
         source_ref: SourceRef,
     ) -> FileSourceProgress: ...
 
+    def offboard_file_source(
+        self,
+        call: TrustedControlCall,
+        command: OffboardFileSource,
+    ) -> FileSourceOffboarding: ...
+
 
 class ContextControl:
     """Own trusted File enrollment, read-back, and import preparation."""
@@ -75,6 +85,7 @@ class ContextControl:
         clock: Callable[[], datetime],
     ) -> None:
         for method_name in (
+            "offboard_file_source",
             "prepare_file_import",
             "register_file_source",
             "read_source",
@@ -90,6 +101,41 @@ class ContextControl:
         self._store = store
         self._authority = authority
         self._clock = clock
+
+    def offboard_file_source(
+        self,
+        call: TrustedControlCall,
+        command: OffboardFileSource,
+    ) -> FileSourceOffboarding:
+        """Disable one File source synchronously and queue retained cleanup."""
+
+        if type(command) is not OffboardFileSource:
+            raise TypeError("offboard_file_source requires OffboardFileSource")
+        try:
+            _validate_and_consume_control_call(
+                call,
+                authority=self._authority,
+                expected_operation=ControlOperation.OFFBOARD_FILE_SOURCE,
+                checked_at=self._clock(),
+            )
+            result = self._store.offboard_file_source(call, command)
+            if (
+                type(result) is not FileSourceOffboarding
+                or result.organization_id != call.organization_id
+                or result.source_ref != command.source_ref
+            ):
+                raise SourceControlUnavailable(
+                    "source store returned mismatched File offboarding"
+                )
+            return result
+        except (ControlOperatorAuthenticationRejected, SourceNotAvailable):
+            raise SourceNotAvailable from None
+        except SourceControlUnavailable:
+            raise
+        except Exception:
+            raise SourceControlUnavailable(
+                "File source offboarding is unavailable"
+            ) from None
 
     def register_source(
         self,

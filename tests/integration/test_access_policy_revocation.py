@@ -1186,6 +1186,17 @@ def test_control_function_and_table_grants_seal_the_only_mutation_path(
                 "requested_event_sequence bigint, "
                 "requested_cleanup_intent_id uuid",
             ),
+            (
+                "public",
+                "context_control_offboard_file_source",
+                "requested_organization_id uuid, requested_source_id uuid, "
+                "requested_cleanup_intent_id uuid",
+            ),
+            (
+                "public",
+                "context_runtime_file_source_lifecycle_allows",
+                "requested_organization_id uuid, requested_source_ref text",
+            ),
         }
         assert definer_owned_namespaces == set()
         assert definer_owned_databases == set()
@@ -1230,6 +1241,36 @@ def test_control_function_and_table_grants_seal_the_only_mutation_path(
             ),
             (
                 "file_resource_cleanup_intent",
+                "INSERT",
+                (ACCESS_POLICY_DEFINER_ROLE,),
+            ),
+            (
+                "context_source",
+                "SELECT",
+                (ACCESS_POLICY_DEFINER_ROLE,),
+            ),
+            (
+                "context_source",
+                "UPDATE",
+                (ACCESS_POLICY_DEFINER_ROLE,),
+            ),
+            (
+                "file_import_job",
+                "SELECT",
+                (ACCESS_POLICY_DEFINER_ROLE,),
+            ),
+            (
+                "file_import_job",
+                "UPDATE",
+                (ACCESS_POLICY_DEFINER_ROLE,),
+            ),
+            (
+                "file_source_cleanup_intent",
+                "SELECT",
+                (ACCESS_POLICY_DEFINER_ROLE,),
+            ),
+            (
+                "file_source_cleanup_intent",
                 "INSERT",
                 (ACCESS_POLICY_DEFINER_ROLE,),
             ),

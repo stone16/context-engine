@@ -26,6 +26,7 @@ from engine.runtime._ticket_signing import (
     _verify_signed_ticket,
 )
 from engine.runtime.construction import PolicyEpochGate
+from engine.runtime.materialized import _is_materialized_source_active
 from engine.runtime.policy_epoch import PolicyEpochAuthorityUnavailable
 from engine.runtime.ticket_identity import (
     TicketExecutionIdentity,
@@ -53,11 +54,13 @@ _CLAIM_FIELDS: Final = frozenset(
         "provider_ref",
         "purpose",
         "signing_key_version",
+        "source_ref",
         "subject_membership_id",
         "subject_membership_version",
         "subject_user_id",
     }
 )
+_LEGACY_CLAIM_FIELDS: Final = _CLAIM_FIELDS - {"source_ref"}
 
 
 def _utc_now() -> datetime:
@@ -87,13 +90,7 @@ class ContextAccessTicket:
         if type(keyring) is not TicketSigningKeyring:
             raise TypeError("keyring must be TicketSigningKeyring")
         try:
-            document = _verify_signed_ticket(
-                value,
-                keyring,
-                domain=_DOMAIN,
-                token_type=_TOKEN_TYPE,
-                claim_fields=_CLAIM_FIELDS,
-            )
+            document = _verify_context_access_ticket(value, keyring)
             _claims_from_document(document)
         except _EXPECTED_DECODING_ERRORS:
             raise TicketNotAvailable from None
@@ -121,6 +118,7 @@ class _ContextAccessClaims:
     purpose: str = field(repr=False)
     policy_epoch: int = field(repr=False)
     provider_ref: str = field(repr=False)
+    source_ref: str | None = field(repr=False)
     audience: str = field(repr=False)
     issued_at: datetime = field(repr=False)
     expires_at: datetime = field(repr=False)
@@ -144,6 +142,7 @@ def _claims_document(claims: _ContextAccessClaims) -> dict[str, object]:
         "provider_ref": claims.provider_ref,
         "purpose": claims.purpose,
         "signing_key_version": claims.signing_key_version,
+        "source_ref": claims.source_ref,
         "subject_membership_id": str(claims.subject_membership_id),
         "subject_membership_version": claims.subject_membership_version,
         "subject_user_id": str(claims.subject_user_id),
@@ -178,6 +177,7 @@ def _claims_from_document(document: Mapping[str, object]) -> _ContextAccessClaim
         provider_ref=_require_identifier(
             "Provider", document["provider_ref"], maximum_length=128
         ),
+        source_ref=_optional_file_source_ref(document.get("source_ref")),
         audience=_require_identifier(
             "read audience", document["audience"], maximum_length=256
         ),
@@ -190,6 +190,43 @@ def _claims_from_document(document: Mapping[str, object]) -> _ContextAccessClaim
     ):
         raise ValueError
     return claims
+
+
+def _verify_context_access_ticket(
+    value: str,
+    keyring: TicketSigningKeyring,
+) -> dict[str, object]:
+    """Accept the pre-source-binding synthetic document without widening it."""
+
+    try:
+        return _verify_signed_ticket(
+            value,
+            keyring,
+            domain=_DOMAIN,
+            token_type=_TOKEN_TYPE,
+            claim_fields=_CLAIM_FIELDS,
+        )
+    except _EXPECTED_DECODING_ERRORS:
+        return _verify_signed_ticket(
+            value,
+            keyring,
+            domain=_DOMAIN,
+            token_type=_TOKEN_TYPE,
+            claim_fields=_LEGACY_CLAIM_FIELDS,
+        )
+
+
+def _optional_file_source_ref(value: object) -> str | None:
+    if value is None:
+        return None
+    source_ref = _require_identifier("File source", value, maximum_length=128)
+    try:
+        parsed = UUID(source_ref)
+    except ValueError:
+        raise ValueError("File source must be a canonical UUID") from None
+    if str(parsed) != source_ref:
+        raise ValueError("File source must be a canonical UUID")
+    return source_ref
 
 
 def _construct_context_access_ticket(value: str) -> ContextAccessTicket:
@@ -216,6 +253,7 @@ class ContextAccessTicketIssuer:
         keyring: TicketSigningKeyring,
         organization_id: UUID,
         provider_ref: str,
+        source_ref: str | None = None,
         clock: Callable[[], datetime] = _utc_now,
         ttl_seconds: int = _DEFAULT_TTL_SECONDS,
         nonce_factory: Callable[[], bytes] = _generate_nonce,
@@ -233,6 +271,7 @@ class ContextAccessTicketIssuer:
         self._provider_ref = _require_identifier(
             "Provider", provider_ref, maximum_length=128
         )
+        self._source_ref = _optional_file_source_ref(source_ref)
         self._clock = clock
         self._ttl_seconds = ttl_seconds
         self._nonce_factory = nonce_factory
@@ -241,6 +280,26 @@ class ContextAccessTicketIssuer:
         _require_active_ticket_execution_identity(identity)
         if identity.organization_id != self._organization_id:
             raise ValueError("ticket identity does not match configured Organization")
+        try:
+            if not PolicyEpochGate().is_current(
+                identity.policy_epoch_verification
+            ):
+                raise TicketNotAvailable
+            if self._source_ref is not None:
+                projection_session = (
+                    identity.user_actor.materialized_projection_session
+                )
+                if projection_session is None or not _is_materialized_source_active(
+                    projection_session,
+                    self._source_ref,
+                ):
+                    raise TicketNotAvailable
+        except (
+            PolicyEpochAuthorityUnavailable,
+            TypeError,
+            ValueError,
+        ):
+            raise TicketNotAvailable from None
         issued_at = _require_utc("ticket issuance time", self._clock())
         claims = _ContextAccessClaims(
             signing_key_version=self._keyring.active_version,
@@ -253,6 +312,7 @@ class ContextAccessTicketIssuer:
             purpose=identity.purpose,
             policy_epoch=identity.policy_epoch,
             provider_ref=self._provider_ref,
+            source_ref=self._source_ref,
             audience=_read_audience(self._provider_ref),
             issued_at=issued_at,
             expires_at=issued_at + timedelta(seconds=self._ttl_seconds),
@@ -288,6 +348,7 @@ class ContextAccessTicketReadHandler:
         keyring: TicketSigningKeyring,
         organization_id: UUID,
         provider_ref: str,
+        source_ref: str | None = None,
         provider: SyntheticReadProvider,
         clock: Callable[[], datetime] = _utc_now,
     ) -> None:
@@ -302,6 +363,7 @@ class ContextAccessTicketReadHandler:
         self._provider_ref = _require_identifier(
             "Provider", provider_ref, maximum_length=128
         )
+        self._source_ref = _optional_file_source_ref(source_ref)
         self._provider = provider
         self._clock = clock
 
@@ -316,13 +378,7 @@ class ContextAccessTicketReadHandler:
         try:
             _require_active_ticket_execution_identity(identity)
             checked_at = _require_utc("ticket validation time", self._clock())
-            document = _verify_signed_ticket(
-                ticket._value,
-                self._keyring,
-                domain=_DOMAIN,
-                token_type=_TOKEN_TYPE,
-                claim_fields=_CLAIM_FIELDS,
-            )
+            document = _verify_context_access_ticket(ticket._value, self._keyring)
             claims = _claims_from_document(document)
             if (
                 claims.organization_id != identity.organization_id
@@ -336,6 +392,7 @@ class ContextAccessTicketReadHandler:
                 or claims.purpose != identity.purpose
                 or claims.policy_epoch != identity.policy_epoch
                 or claims.provider_ref != self._provider_ref
+                or claims.source_ref != self._source_ref
                 or claims.audience != _read_audience(self._provider_ref)
                 or checked_at < claims.issued_at
                 or checked_at >= claims.expires_at
@@ -345,6 +402,15 @@ class ContextAccessTicketReadHandler:
                 identity.policy_epoch_verification
             ):
                 raise ValueError
+            if self._source_ref is not None:
+                projection_session = (
+                    identity.user_actor.materialized_projection_session
+                )
+                if projection_session is None or not _is_materialized_source_active(
+                    projection_session,
+                    self._source_ref,
+                ):
+                    raise ValueError
         except (*_EXPECTED_DECODING_ERRORS, PolicyEpochAuthorityUnavailable):
             raise TicketNotAvailable from None
         self._provider.read(
