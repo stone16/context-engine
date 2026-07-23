@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "exactOptionalPropertyTypes": true,
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "noEmit": true,
+    "noUncheckedIndexedAccess": true,
+    "skipLibCheck": false,
+    "strict": true,
+    "target": "ES2023",
+    "verbatimModuleSyntax": true
+  },
+  "include": ["contract.ts"]
+}

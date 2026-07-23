@@ -1,0 +1,55 @@
+{
+  "name": "@context-engine/resolve-sdk",
+  "version": "0.0.0-v0",
+  "description": "Generated TypeScript client for the frozen ContextEngine resolve v0 contract",
+  "type": "module",
+  "private": true,
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/stone16/context-engine.git",
+    "directory": "sdk/typescript"
+  },
+  "engines": {
+    "node": "22.12.0",
+    "npm": "10.9.0"
+  },
+  "packageManager": "npm@10.9.0",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./contract/openapi-v0.sha256": "./contract/openapi-v0.sha256"
+  },
+  "types": "./dist/index.d.ts",
+  "files": [
+    "contract/openapi-v0.sha256",
+    "dist",
+    "README.md",
+    "THIRD_PARTY_NOTICES.md"
+  ],
+  "scripts": {
+    "verify:runtime": "node scripts/verify-runtime.mjs",
+    "generate": "npm run verify:runtime && node scripts/generate.mjs",
+    "check:generated": "npm run verify:runtime && node scripts/generate.mjs --check",
+    "typecheck": "npm run verify:runtime && tsc --project tsconfig.json --noEmit",
+    "build": "npm run verify:runtime && node scripts/clean.mjs && tsc --project tsconfig.build.json",
+    "test:runtime": "npm run verify:runtime && node --test test/runtime.test.mjs",
+    "test:package": "npm run verify:runtime && node scripts/test-package.mjs",
+    "test": "npm run check:generated && npm run typecheck && npm run build && npm run test:runtime && npm run test:package",
+    "pack:artifact": "npm run verify:runtime && node scripts/pack.mjs",
+    "prepack": "npm run check:generated && npm run build"
+  },
+  "contextEngineContract": {
+    "version": "v0",
+    "snapshot": "../../openapi/v0/openapi.json",
+    "checksum": "../../openapi/v0/openapi.sha256",
+    "generator": "@hey-api/openapi-ts@0.95.0"
+  },
+  "devDependencies": {
+    "@hey-api/openapi-ts": "0.95.0",
+    "@types/node": "22.10.2",
+    "typescript": "5.9.3"
+  }
+}

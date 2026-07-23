@@ -95,8 +95,8 @@
     },
     "activations": {
       "type": "array",
-      "minItems": 9,
-      "maxItems": 9,
+      "minItems": 10,
+      "maxItems": 10,
       "uniqueItems": true,
       "prefixItems": [
         {
@@ -524,6 +524,49 @@
               "external effects"
             ]
           }
+        },
+        {
+          "const": {
+            "issueRef": "#64",
+            "invariantRef": "TRANSPORT-UNTRUSTED-008",
+            "carrier": "packaged generated TypeScript POST /v0/resolve client",
+            "status": "active_fail_closed",
+            "policyEpochScope": "organization-v0",
+            "controlBoundary": "immutable OpenAPI v0 -> pinned generator -> generated semantic types and internal fetch client -> closed package exports and metadata-safe facade -> authenticated HTTP ingress -> sealed ContextRuntime.resolve",
+            "testEvidence": [
+              {
+                "id": "SDK-CONTRACT-064",
+                "surface": "tests/unit/test_typescript_sdk_contract.py::test_typescript_sdk_metadata_locks_contract_and_public_exports",
+                "oracle": "Tracked package metadata and lockfile exactly pin Node, npm, the generator, TypeScript, and Node declarations; the public export map exposes only the facade and OpenAPI checksum, while the packaged contract checksum equals the immutable snapshot checksum and the generated tree retains a SHA-256 digest."
+              },
+              {
+                "id": "SDK-LIVE-FILE-064",
+                "surface": "tests/integration/test_z_egress_grant_file.py::test_packed_typescript_sdk_resolves_authorized_file_package_over_live_http",
+                "oracle": "A tarball installed into a temporary TypeScript consumer calls a real local POST /v0/resolve server with only authentication, request id, and opaque DeliveryEvidenceRef metadata; real PostgreSQL redemption and File acquisition prove CandidateRef through the sealed AuthorizationKernel to AuthorizedProjection, an audience-bound ContextPackage, and an opaque model egress grant, while generated Continue and OpenCitation calls return their generic inactive outcomes."
+              }
+            ],
+            "deferredEvidence": [
+              "signed package-registry publication provenance",
+              "production BotDelivery generated-SDK caller",
+              "real Continue and OpenCitation issuance and redemption"
+            ],
+            "futureCarriers": [
+              "published package-registry SDK",
+              "BotDelivery application",
+              "MCP",
+              "Continue redemption",
+              "OpenCitation redemption"
+            ],
+            "notActive": [
+              "external package publication",
+              "production BotDelivery application process",
+              "MCP",
+              "continuation issuance or redemption",
+              "citation persistence or redemption",
+              "group AudienceSnapshot",
+              "external effects"
+            ]
+          }
         }
       ],
       "items": false
@@ -798,7 +841,9 @@
             "OPENAPI-CONTRACT-066",
             "OPENAPI-BREAKING-066",
             "HTTP-V0-066",
-            "PG-RUNTIME-RELEASE-066"
+            "PG-RUNTIME-RELEASE-066",
+            "SDK-CONTRACT-064",
+            "SDK-LIVE-FILE-064"
           ]
         },
         "surface": {
@@ -835,7 +880,8 @@
             "#48",
             "#63",
             "#65",
-            "#66"
+            "#66",
+            "#64"
           ]
         },
         "invariantRef": {
@@ -860,7 +906,8 @@
             "ACCEPT-002 ContextRuntime.resolve(Acquire) Membership field projection",
             "private authenticated HTTP Acquire DeliveryEvidenceRef",
             "opaque one-shot model or channel EgressGrant with deterministic boundary spies",
-            "frozen public POST /v0/resolve OpenAPI contract"
+            "frozen public POST /v0/resolve OpenAPI contract",
+            "packaged generated TypeScript POST /v0/resolve client"
           ]
         },
         "status": {
@@ -882,7 +929,8 @@
             "CandidateRef -> same-transaction active-lineage locator -> EffectiveScope -> current Membership/version field ceiling -> PostgreSQL/FORCE-RLS field reduction -> AuthorizationKernel -> AuthorizedProjection",
             "PrivateDeliveryEvidenceIssuer -> PostgreSQL identity function -> authenticated HTTP metadata -> current UserActor transaction redemption -> TrustedDeliveryContext -> sealed ContextRuntime.resolve(Acquire)",
             "ContextPackage -> final EgressGate -> digest-only PostgreSQL grant -> AuthorizedModelInput | AuthorizedChannelPayload -> exact one-shot redemption -> ModelGateway | Sender preflight spy",
-            "authenticated HTTP metadata -> closed ResolveWire -> current UserActor and active release observation -> sealed ContextRuntime.resolve -> closed ResolutionOutcome"
+            "authenticated HTTP metadata -> closed ResolveWire -> current UserActor and active release observation -> sealed ContextRuntime.resolve -> closed ResolutionOutcome",
+            "immutable OpenAPI v0 -> pinned generator -> generated semantic types and internal fetch client -> closed package exports and metadata-safe facade -> authenticated HTTP ingress -> sealed ContextRuntime.resolve"
           ]
         },
         "testEvidence": {

@@ -373,6 +373,7 @@ REQUIRED_RUNTIME_EVIDENCE: dict[str, tuple[str, ...]] = {
         "DELIV-004",
         "HTTP-DELIVERY-EVIDENCE-063",
         "FILE-DELIVERY-EVIDENCE-063",
+        "SDK-LIVE-FILE-064",
     ),
     "EGRESS-011": ("EGR-003", "EGR-005", "EGR-006", "RUN-014"),
     "TRACE-REDACTION-012": ("HTTP-ACCEPT-002-048",),
@@ -387,7 +388,10 @@ REQUIRED_PROPERTY_EVIDENCE: dict[str, tuple[str, ...]] = {
         "TRACE-REDACTION-012",
     )
 }
-REQUIRED_PROPERTY_EVIDENCE["TRANSPORT-UNTRUSTED-008"] = ("PROP-DELIVERY-EVIDENCE-063",)
+REQUIRED_PROPERTY_EVIDENCE["TRANSPORT-UNTRUSTED-008"] = (
+    "PROP-DELIVERY-EVIDENCE-063",
+    "SDK-CONTRACT-064",
+)
 
 REQUIRED_POSTGRES_EVIDENCE: dict[str, tuple[str, ...]] = {
     "SCOPE-INTERSECTION-004": ("PG-FIELD-PROJECTION-048",),
@@ -1223,6 +1227,74 @@ CANONICAL_OPENAPI_V0_ACTIVATION: dict[str, object] = {
     ],
 }
 
+CANONICAL_TYPESCRIPT_SDK_ACTIVATION: dict[str, object] = {
+    "issueRef": "#64",
+    "invariantRef": "TRANSPORT-UNTRUSTED-008",
+    "carrier": "packaged generated TypeScript POST /v0/resolve client",
+    "status": "active_fail_closed",
+    "policyEpochScope": "organization-v0",
+    "controlBoundary": (
+        "immutable OpenAPI v0 -> pinned generator -> generated semantic types "
+        "and internal fetch client -> closed package exports and metadata-safe "
+        "facade -> authenticated HTTP ingress -> sealed ContextRuntime.resolve"
+    ),
+    "testEvidence": [
+        {
+            "id": "SDK-CONTRACT-064",
+            "surface": (
+                "tests/unit/test_typescript_sdk_contract.py::"
+                "test_typescript_sdk_metadata_locks_contract_and_public_exports"
+            ),
+            "oracle": (
+                "Tracked package metadata and lockfile exactly pin Node, npm, "
+                "the generator, TypeScript, and Node declarations; the public "
+                "export map exposes only the facade and OpenAPI checksum, while "
+                "the packaged contract checksum equals the immutable snapshot "
+                "checksum and the generated tree retains a SHA-256 digest."
+            ),
+        },
+        {
+            "id": "SDK-LIVE-FILE-064",
+            "surface": (
+                "tests/integration/test_z_egress_grant_file.py::"
+                "test_packed_typescript_sdk_resolves_authorized_file_package_"
+                "over_live_http"
+            ),
+            "oracle": (
+                "A tarball installed into a temporary TypeScript consumer calls "
+                "a real local POST /v0/resolve server with only authentication, "
+                "request id, and opaque DeliveryEvidenceRef metadata; real "
+                "PostgreSQL redemption and File acquisition prove CandidateRef "
+                "through the sealed AuthorizationKernel to AuthorizedProjection, "
+                "an audience-bound ContextPackage, and an opaque model egress "
+                "grant, while generated Continue and OpenCitation calls return "
+                "their generic inactive outcomes."
+            ),
+        },
+    ],
+    "deferredEvidence": [
+        "signed package-registry publication provenance",
+        "production BotDelivery generated-SDK caller",
+        "real Continue and OpenCitation issuance and redemption",
+    ],
+    "futureCarriers": [
+        "published package-registry SDK",
+        "BotDelivery application",
+        "MCP",
+        "Continue redemption",
+        "OpenCitation redemption",
+    ],
+    "notActive": [
+        "external package publication",
+        "production BotDelivery application process",
+        "MCP",
+        "continuation issuance or redemption",
+        "citation persistence or redemption",
+        "group AudienceSnapshot",
+        "external effects",
+    ],
+}
+
 CANONICAL_ACTIVATIONS: list[dict[str, object]] = [
     CANONICAL_REVOCATION_ACTIVATION,
     CANONICAL_UNAVAILABLE_CAPABILITY_ACTIVATION,
@@ -1233,6 +1305,7 @@ CANONICAL_ACTIVATIONS: list[dict[str, object]] = [
     CANONICAL_PRIVATE_DELIVERY_EVIDENCE_ACTIVATION,
     CANONICAL_EGRESS_GRANT_ACTIVATION,
     CANONICAL_OPENAPI_V0_ACTIVATION,
+    CANONICAL_TYPESCRIPT_SDK_ACTIVATION,
 ]
 CANONICAL_ACTIVATION_ISSUE_LIST = ", ".join(
     f"Issue {activation['issueRef']}" for activation in CANONICAL_ACTIVATIONS
@@ -1600,9 +1673,14 @@ def _validate_invariants(
             ):
                 for case_id in REQUIRED_PROPERTY_EVIDENCE[invariant_id]:
                     if case_id not in property_evidence:
+                        evidence_label = (
+                            "activated TypeScript SDK evidence"
+                            if case_id == "SDK-CONTRACT-064"
+                            else "activated field-projection evidence"
+                        )
                         collector.add(
                             f"{path}.expectedEvidence.property",
-                            "must preserve activated field-projection evidence "
+                            f"must preserve {evidence_label} "
                             f"{case_id!r} for {invariant_id}",
                         )
             runtime_evidence = collector.require_string_list(
@@ -1615,9 +1693,14 @@ def _validate_invariants(
             ):
                 for case_id in REQUIRED_RUNTIME_EVIDENCE[invariant_id]:
                     if case_id not in runtime_evidence:
+                        evidence_label = (
+                            "activated TypeScript SDK runtime evidence"
+                            if case_id == "SDK-LIVE-FILE-064"
+                            else "absorbed derived case"
+                        )
                         collector.add(
                             f"{path}.expectedEvidence.runtimeOrDelivery",
-                            "must preserve absorbed derived case "
+                            f"must preserve {evidence_label} "
                             f"{case_id!r} for {invariant_id}",
                         )
             postgres_evidence = collector.require_string_list(
