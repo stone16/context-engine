@@ -472,6 +472,8 @@ def _prepare_repeat_file_import(
     guarded_control_engine: Engine,
     *,
     idempotency_key: str,
+    path: FileImportPath | None = None,
+    lease_ttl_seconds: int = 300,
 ) -> tuple[PreparedFileImport, WorkerLeaseToken]:
     authority = ControlOperatorAuthority(
         _ControlAuthenticator(scenario.organization_id),
@@ -496,7 +498,7 @@ def _prepare_repeat_file_import(
             call,
             PrepareFileImport(
                 source_ref=scenario.source_ref,
-                path=FileImportPath("handbook.md"),
+                path=path or FileImportPath("handbook.md"),
                 audience=FileImportAudience(
                     principal_ref="principal:file-reader",
                     membership_id=scenario.membership_id,
@@ -508,7 +510,7 @@ def _prepare_repeat_file_import(
     token = PostgreSQLWorkerLeaseIssuer(
         guarded_control_engine,
         scenario.codec,
-        lease_ttl_seconds=300,
+        lease_ttl_seconds=lease_ttl_seconds,
     ).issue_file_import_lease(prepared)
     return prepared, token
 

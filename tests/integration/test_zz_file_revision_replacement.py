@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Event, Lock
 from time import monotonic
@@ -10,9 +12,11 @@ from uuid import UUID
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import Engine, text
+from sqlalchemy.exc import DBAPIError
 
 from adapters.exact_phrase import PostgreSQLExactPhraseCandidateIndex
 from adapters.http.app import create_app
+from adapters.parsers.markdown import compile_markdown
 from engine.control import FileImportPath
 from engine.persistence import (
     DatabaseConfiguration,
@@ -21,11 +25,17 @@ from engine.persistence import (
 )
 from engine.persistence.file_imports import _resource_ref
 from engine.runtime.construction import Runtime, required_kernel_dependencies
-from engine.runtime.content_io import CandidateIndex
+from engine.runtime.content_io import CandidateIndex, exact_phrase_digest
 from engine.runtime.contracts import Acquire
 from engine.runtime.evidence import CandidateRef
 from engine.runtime.materialized import MaterializedProjectionSession
 from engine.runtime.package_digest import QueryDigestKeyring
+from engine.supply import (
+    MarkdownCompilerConfig,
+    ParsedDocument,
+    WorkerLeaseClaims,
+    canonicalize_parsed_document,
+)
 from tests.integration.test_file_import_tracer import (
     NOW,
     _ExactScopeAuthority,
@@ -33,6 +43,7 @@ from tests.integration.test_file_import_tracer import (
     _OrganizationAuthority,
     _prepare_file_import_scenario,
     _prepare_repeat_file_import,
+    _redeem_direct,
     _run_file_import,
     _RuntimeAuthenticator,
 )
@@ -51,6 +62,7 @@ NEW_CONCURRENT_MARKDOWN = (
     b"# Alpha\n\nNEW alpha.\n\nShared query.\n\n"
     b"## Beta\n\nNEW beta.\n\nShared query.\n"
 )
+UNAFFECTED_MARKDOWN = b"# Reference\n\nUNAFFECTED resource marker.\n"
 
 
 def _resolve(
@@ -62,6 +74,7 @@ def _resolve(
     query: str,
     request_id: str,
     candidate_index: CandidateIndex | None = None,
+    resource_ref: str | None = None,
 ) -> dict[str, Any]:
     client = TestClient(
         create_app(
@@ -76,7 +89,8 @@ def _resolve(
             ),
             scope_authority=_ExactScopeAuthority(
                 str(scenario.source_ref.value),
-                _resource_ref(scenario.source_ref, FileImportPath("handbook.md")),
+                resource_ref
+                or _resource_ref(scenario.source_ref, FileImportPath("handbook.md")),
             ),
             runtime=Runtime(
                 required_kernel_dependencies(),
@@ -99,6 +113,164 @@ def _resolve(
     package = response.json()["package"]
     assert isinstance(package, dict)
     return cast(dict[str, Any], package)
+
+
+def _compile_replacement(payload: bytes, *, structural: bool) -> ParsedDocument:
+    result = compile_markdown(
+        payload,
+        MarkdownCompilerConfig(
+            "markdown-config-v2" if structural else "markdown-config-v1"
+        ),
+    )
+    assert type(result) is ParsedDocument
+    return result
+
+
+def _stage_replacement_direct(
+    guarded_worker_engine: Engine,
+    claims: WorkerLeaseClaims,
+    document: ParsedDocument,
+    *,
+    resource_ref: str,
+    revision_id: UUID,
+    overrides: dict[str, object] | None = None,
+) -> object | None:
+    parameters: dict[str, object] = {
+        "organization_id": claims.organization_id,
+        "job_id": claims.job_id,
+        "service_principal_id": claims.service_principal_id,
+        "source_ref": claims.source_ref,
+        "resource_ref": resource_ref,
+        "revision_id": revision_id,
+        "canonical_text": document.canonical_text,
+        "content_hash": document.content_hash,
+        "compilation_digest": document.compilation_digest,
+        "compiler_version": document.provenance.compiler_version,
+        "config_version": document.provenance.config_version,
+        "signing_key_version": claims.signing_key_version,
+        "nonce": claims.nonce,
+        "issued_at": claims.issued_at,
+        "expires_at": claims.expires_at,
+    }
+    parameters.update(overrides or {})
+    if document.provenance.is_structural_v2:
+        statement = """
+            SELECT *
+            FROM public.context_worker_stage_structural_file_replacement(
+                :organization_id, :job_id, :service_principal_id,
+                :source_ref, :resource_ref, :revision_id,
+                :canonical_text, :content_hash, :compilation_digest,
+                :compiler_version, :config_version,
+                CAST(:compilation_document AS jsonb),
+                :signing_key_version, :nonce, :issued_at, :expires_at
+            )
+        """
+        parameters["compilation_document"] = json.dumps(
+            json.loads(canonicalize_parsed_document(document)),
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+    else:
+        fragment = document.fragments[0]
+        statement = """
+            SELECT *
+            FROM public.context_worker_stage_file_replacement(
+                :organization_id, :job_id, :service_principal_id,
+                :source_ref, :resource_ref, :revision_id,
+                :fragment_ref, :canonical_text, :paragraph,
+                :content_hash, :compilation_digest,
+                :compiler_version, :config_version, :phrase_digest,
+                :signing_key_version, :nonce, :issued_at, :expires_at
+            )
+        """
+        parameters.update(
+            {
+                "fragment_ref": fragment.fragment_ref,
+                "paragraph": fragment.contextual_text,
+                "phrase_digest": exact_phrase_digest(fragment.search_phrases[0]),
+            }
+        )
+    with guarded_worker_engine.begin() as connection:
+        return connection.execute(text(statement), parameters).one_or_none()
+
+
+def _activate_replacement_direct(
+    guarded_worker_engine: Engine,
+    claims: WorkerLeaseClaims,
+    *,
+    resource_ref: str,
+    previous_revision_id: UUID,
+    replacement_revision_id: UUID,
+    overrides: dict[str, object] | None = None,
+) -> object | None:
+    parameters: dict[str, object] = {
+        "organization_id": claims.organization_id,
+        "job_id": claims.job_id,
+        "service_principal_id": claims.service_principal_id,
+        "source_ref": claims.source_ref,
+        "resource_ref": resource_ref,
+        "previous_revision_id": previous_revision_id,
+        "replacement_revision_id": replacement_revision_id,
+        "signing_key_version": claims.signing_key_version,
+        "nonce": claims.nonce,
+        "issued_at": claims.issued_at,
+        "expires_at": claims.expires_at,
+    }
+    parameters.update(overrides or {})
+    with guarded_worker_engine.begin() as connection:
+        return connection.execute(
+            text(
+                """
+                SELECT * FROM public.context_worker_activate_file_replacement(
+                    :organization_id, :job_id, :service_principal_id,
+                    :source_ref, :resource_ref, :previous_revision_id,
+                    :replacement_revision_id, :signing_key_version,
+                    :nonce, :issued_at, :expires_at
+                )
+                """
+            ),
+            parameters,
+        ).one_or_none()
+
+
+def _replacement_state(
+    migration_engine: Engine,
+    scenario: _FileImportScenario,
+    *,
+    job_id: UUID,
+    resource_ref: str,
+) -> tuple[object, ...]:
+    with migration_engine.connect() as connection:
+        row = connection.execute(
+            text(
+                """
+                SELECT job.state, resource.active_revision_id,
+                       (SELECT count(*) FROM context_revision AS revision
+                        WHERE revision.organization_id = job.organization_id
+                          AND revision.resource_ref = :resource_ref),
+                       (SELECT count(*)
+                        FROM file_revision_replacement_plan AS plan
+                        WHERE plan.organization_id = job.organization_id
+                          AND plan.resource_ref = :resource_ref),
+                       (SELECT count(*)
+                        FROM file_revision_supersession AS supersession
+                        WHERE supersession.organization_id = job.organization_id
+                          AND supersession.resource_ref = :resource_ref)
+                FROM file_import_job AS job
+                JOIN context_resource AS resource
+                  ON resource.organization_id = job.organization_id
+                 AND resource.resource_ref = :resource_ref
+                WHERE job.organization_id = :organization_id
+                  AND job.job_id = :job_id
+                """
+            ),
+            {
+                "organization_id": scenario.organization_id,
+                "job_id": job_id,
+                "resource_ref": resource_ref,
+            },
+        ).one()
+    return tuple(row)
 
 
 class _BlockingCandidateIndex:
@@ -718,6 +890,7 @@ def test_activation_waits_for_an_inflight_http_resolution_transaction(
         migration_engine.dispose()
 
 
+@pytest.mark.security_evidence(id="PG-FILE-REPLACEMENT-026", layer="postgres")
 def test_replacement_does_not_change_another_organization_resource(
     tmp_path: Path,
     migration_configuration: DatabaseConfiguration,
@@ -800,6 +973,703 @@ def test_replacement_does_not_change_another_organization_resource(
                 ),
                 {"organization_id": unaffected.organization_id},
             ).scalar_one() == 0
+    finally:
+        engine.dispose()
+
+    for table_name in (
+        "file_revision_replacement_plan",
+        "file_revision_supersession",
+    ):
+        with pytest.raises(DBAPIError), guarded_runtime_engine.connect() as connection:
+            connection.execute(
+                text(
+                    f"SELECT count(*) FROM {table_name}"  # noqa: S608 - fixed list
+                )
+            ).scalar_one()
+        with pytest.raises(DBAPIError), guarded_worker_engine.begin() as connection:
+            connection.execute(
+                text(f"DELETE FROM {table_name}")  # noqa: S608 - fixed list
+            )
+
+
+def test_replacement_does_not_change_another_resource_in_the_same_organization(
+    tmp_path: Path,
+    migration_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+    guarded_worker_engine: Engine,
+    guarded_runtime_engine: Engine,
+    query_digest_keyring: QueryDigestKeyring,
+) -> None:
+    scenario = _prepare_file_import_scenario(
+        tmp_path,
+        migration_configuration,
+        guarded_control_engine,
+        payload=OLD_MARKDOWN,
+    )
+    assert scenario.token is not None
+    replacing_first = _run_file_import(
+        scenario,
+        scenario.prepared,
+        scenario.token,
+        guarded_worker_engine,
+        config_version="markdown-config-v2",
+    )
+    (scenario.root / "reference.md").write_bytes(UNAFFECTED_MARKDOWN)
+    unaffected_prepared, unaffected_token = _prepare_repeat_file_import(
+        scenario,
+        guarded_control_engine,
+        idempotency_key="same-organization-unaffected-resource",
+        path=FileImportPath("reference.md"),
+    )
+    unaffected_first = _run_file_import(
+        scenario,
+        unaffected_prepared,
+        unaffected_token,
+        guarded_worker_engine,
+        config_version="markdown-config-v2",
+    )
+    unaffected_resource_ref = unaffected_first.candidate_ref.resource_ref
+
+    engine = create_database_engine(migration_configuration)
+    try:
+        with engine.connect() as connection:
+            unaffected_before = connection.execute(
+                text(
+                    """
+                    SELECT resource.active_revision_id,
+                           (SELECT count(*) FROM context_revision AS revision
+                            WHERE revision.organization_id = resource.organization_id
+                              AND revision.resource_ref = resource.resource_ref),
+                           (SELECT count(*) FROM context_fragment AS fragment
+                            WHERE fragment.organization_id = resource.organization_id
+                              AND fragment.resource_ref = resource.resource_ref),
+                           (SELECT count(*)
+                            FROM exact_phrase_candidate AS candidate
+                            WHERE candidate.organization_id =
+                                  resource.organization_id
+                              AND candidate.resource_ref = resource.resource_ref)
+                    FROM context_resource AS resource
+                    WHERE resource.organization_id = :organization_id
+                      AND resource.resource_ref = :resource_ref
+                    """
+                ),
+                {
+                    "organization_id": scenario.organization_id,
+                    "resource_ref": unaffected_resource_ref,
+                },
+            ).one()
+
+        (scenario.root / "handbook.md").write_bytes(NEW_MARKDOWN)
+        changed_prepared, changed_token = _prepare_repeat_file_import(
+            scenario,
+            guarded_control_engine,
+            idempotency_key="replace-only-one-same-organization-resource",
+        )
+        replacing_second = _run_file_import(
+            scenario,
+            changed_prepared,
+            changed_token,
+            guarded_worker_engine,
+            config_version="markdown-config-v2",
+        )
+
+        with engine.connect() as connection:
+            unaffected_after = connection.execute(
+                text(
+                    """
+                    SELECT resource.active_revision_id,
+                           (SELECT count(*) FROM context_revision AS revision
+                            WHERE revision.organization_id = resource.organization_id
+                              AND revision.resource_ref = resource.resource_ref),
+                           (SELECT count(*) FROM context_fragment AS fragment
+                            WHERE fragment.organization_id = resource.organization_id
+                              AND fragment.resource_ref = resource.resource_ref),
+                           (SELECT count(*)
+                            FROM exact_phrase_candidate AS candidate
+                            WHERE candidate.organization_id =
+                                  resource.organization_id
+                              AND candidate.resource_ref = resource.resource_ref)
+                    FROM context_resource AS resource
+                    WHERE resource.organization_id = :organization_id
+                      AND resource.resource_ref = :resource_ref
+                    """
+                ),
+                {
+                    "organization_id": scenario.organization_id,
+                    "resource_ref": unaffected_resource_ref,
+                },
+            ).one()
+
+        user_id = _scenario_user_id(scenario, migration_configuration)
+        package = _resolve(
+            scenario,
+            guarded_runtime_engine,
+            query_digest_keyring,
+            user_id=user_id,
+            query="UNAFFECTED resource marker.",
+            request_id="replacement-unaffected-same-organization-resource",
+            resource_ref=unaffected_resource_ref,
+        )
+        assert replacing_second.candidate_ref.revision_ref != (
+            replacing_first.candidate_ref.revision_ref
+        )
+        assert tuple(unaffected_after) == tuple(unaffected_before)
+        assert unaffected_after.active_revision_id == UUID(
+            unaffected_first.candidate_ref.revision_ref
+        )
+        assert package["evidence"][0]["resourceRef"] == unaffected_resource_ref
+        assert package["evidence"][0]["revisionRef"] == (
+            unaffected_first.candidate_ref.revision_ref
+        )
+        assert [block["text"] for block in package["blocks"]] == [
+            "# Reference\n\nUNAFFECTED resource marker."
+        ]
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.parametrize("structural", (False, True), ids=("v1", "v2"))
+@pytest.mark.parametrize(
+    "wrong_binding",
+    (
+        "organization",
+        "job",
+        "receiver",
+        "source",
+        "resource",
+        "revision",
+        "nonce",
+        "expires_binding",
+    ),
+)
+def test_replacement_stage_rejects_wrong_exact_bindings_with_zero_effect(
+    tmp_path: Path,
+    migration_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+    guarded_worker_engine: Engine,
+    structural: bool,
+    wrong_binding: str,
+) -> None:
+    scenario = _prepare_file_import_scenario(
+        tmp_path,
+        migration_configuration,
+        guarded_control_engine,
+        payload=OLD_MARKDOWN if structural else OLD_V1_MARKDOWN,
+    )
+    assert scenario.token is not None
+    first = _run_file_import(
+        scenario,
+        scenario.prepared,
+        scenario.token,
+        guarded_worker_engine,
+        config_version=("markdown-config-v2" if structural else "markdown-config-v1"),
+    )
+    replacement_payload = NEW_MARKDOWN if structural else NEW_V1_MARKDOWN
+    (scenario.root / "handbook.md").write_bytes(replacement_payload)
+    prepared, token = _prepare_repeat_file_import(
+        scenario,
+        guarded_control_engine,
+        idempotency_key=f"stage-wrong-{wrong_binding}-{structural}",
+    )
+    claims = scenario.codec.verify(
+        token,
+        expected_organization_id=scenario.organization_id,
+        expected_job_id=prepared.job_id,
+        expected_service_principal_id=scenario.receiver.service_principal_id,
+        expected_workload=scenario.receiver.workload,
+        expected_operation=scenario.receiver.operation,
+        expected_worker_audience=scenario.receiver.worker_audience,
+        expected_source_ref=str(scenario.source_ref.value),
+        now=datetime.now(UTC).replace(microsecond=0),
+    )
+    assert _redeem_direct(guarded_worker_engine, claims) is not None
+    resource_ref = first.candidate_ref.resource_ref
+    revision_id = UUID(int=prepared.job_id.int ^ 1)
+    overrides: dict[str, object] = {}
+    requested_resource_ref = resource_ref
+    requested_revision_id = revision_id
+    if wrong_binding == "organization":
+        overrides["organization_id"] = UUID(int=scenario.organization_id.int ^ 1)
+    elif wrong_binding == "job":
+        overrides["job_id"] = UUID(int=prepared.job_id.int ^ 1)
+    elif wrong_binding == "receiver":
+        overrides["service_principal_id"] = UUID(
+            int=claims.service_principal_id.int ^ 1
+        )
+    elif wrong_binding == "source":
+        overrides["source_ref"] = str(UUID(int=scenario.source_ref.value.int ^ 1))
+    elif wrong_binding == "resource":
+        requested_resource_ref = f"resource:wrong:{prepared.job_id}"
+    elif wrong_binding == "revision":
+        requested_revision_id = UUID(first.candidate_ref.revision_ref)
+    elif wrong_binding == "nonce":
+        overrides["nonce"] = bytes([claims.nonce[0] ^ 1]) + claims.nonce[1:]
+    else:
+        overrides["expires_at"] = claims.issued_at - timedelta(seconds=1)
+
+    engine = create_database_engine(migration_configuration)
+    try:
+        before = _replacement_state(
+            engine,
+            scenario,
+            job_id=prepared.job_id,
+            resource_ref=resource_ref,
+        )
+        assert _stage_replacement_direct(
+            guarded_worker_engine,
+            claims,
+            _compile_replacement(replacement_payload, structural=structural),
+            resource_ref=requested_resource_ref,
+            revision_id=requested_revision_id,
+            overrides=overrides,
+        ) is None
+        assert _replacement_state(
+            engine,
+            scenario,
+            job_id=prepared.job_id,
+            resource_ref=resource_ref,
+        ) == before
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.parametrize(
+    "wrong_binding",
+    (
+        "organization",
+        "job",
+        "receiver",
+        "source",
+        "resource",
+        "previous_revision",
+        "replacement_revision",
+        "nonce",
+        "expires_binding",
+    ),
+)
+def test_replacement_activation_rejects_wrong_exact_bindings_with_zero_effect(
+    tmp_path: Path,
+    migration_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+    guarded_worker_engine: Engine,
+    wrong_binding: str,
+) -> None:
+    scenario = _prepare_file_import_scenario(
+        tmp_path,
+        migration_configuration,
+        guarded_control_engine,
+        payload=OLD_V1_MARKDOWN,
+    )
+    assert scenario.token is not None
+    first = _run_file_import(
+        scenario,
+        scenario.prepared,
+        scenario.token,
+        guarded_worker_engine,
+    )
+    (scenario.root / "handbook.md").write_bytes(NEW_V1_MARKDOWN)
+    prepared, token = _prepare_repeat_file_import(
+        scenario,
+        guarded_control_engine,
+        idempotency_key=f"activate-wrong-{wrong_binding}",
+    )
+    claims = scenario.codec.verify(
+        token,
+        expected_organization_id=scenario.organization_id,
+        expected_job_id=prepared.job_id,
+        expected_service_principal_id=scenario.receiver.service_principal_id,
+        expected_workload=scenario.receiver.workload,
+        expected_operation=scenario.receiver.operation,
+        expected_worker_audience=scenario.receiver.worker_audience,
+        expected_source_ref=str(scenario.source_ref.value),
+        now=datetime.now(UTC).replace(microsecond=0),
+    )
+    assert _redeem_direct(guarded_worker_engine, claims) is not None
+    resource_ref = first.candidate_ref.resource_ref
+    replacement_revision_id = UUID(int=prepared.job_id.int ^ 1)
+    staged = _stage_replacement_direct(
+        guarded_worker_engine,
+        claims,
+        _compile_replacement(NEW_V1_MARKDOWN, structural=False),
+        resource_ref=resource_ref,
+        revision_id=replacement_revision_id,
+    )
+    assert staged is not None
+    previous_revision_id = UUID(first.candidate_ref.revision_ref)
+    requested_resource_ref = resource_ref
+    requested_previous_revision_id = previous_revision_id
+    requested_replacement_revision_id = replacement_revision_id
+    overrides: dict[str, object] = {}
+    if wrong_binding == "organization":
+        overrides["organization_id"] = UUID(int=scenario.organization_id.int ^ 1)
+    elif wrong_binding == "job":
+        overrides["job_id"] = UUID(int=prepared.job_id.int ^ 1)
+    elif wrong_binding == "receiver":
+        overrides["service_principal_id"] = UUID(
+            int=claims.service_principal_id.int ^ 1
+        )
+    elif wrong_binding == "source":
+        overrides["source_ref"] = str(UUID(int=scenario.source_ref.value.int ^ 1))
+    elif wrong_binding == "resource":
+        requested_resource_ref = f"resource:wrong:{prepared.job_id}"
+    elif wrong_binding == "previous_revision":
+        requested_previous_revision_id = UUID(int=previous_revision_id.int ^ 1)
+    elif wrong_binding == "replacement_revision":
+        requested_replacement_revision_id = UUID(
+            int=replacement_revision_id.int ^ 1
+        )
+    elif wrong_binding == "nonce":
+        overrides["nonce"] = bytes([claims.nonce[0] ^ 1]) + claims.nonce[1:]
+    else:
+        overrides["expires_at"] = claims.issued_at - timedelta(seconds=1)
+
+    engine = create_database_engine(migration_configuration)
+    try:
+        before = _replacement_state(
+            engine,
+            scenario,
+            job_id=prepared.job_id,
+            resource_ref=resource_ref,
+        )
+        assert _activate_replacement_direct(
+            guarded_worker_engine,
+            claims,
+            resource_ref=requested_resource_ref,
+            previous_revision_id=requested_previous_revision_id,
+            replacement_revision_id=requested_replacement_revision_id,
+            overrides=overrides,
+        ) is None
+        assert _replacement_state(
+            engine,
+            scenario,
+            job_id=prepared.job_id,
+            resource_ref=resource_ref,
+        ) == before
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.parametrize(
+    "revoked_authority",
+    ("principal", "membership", "access"),
+)
+def test_replacement_activation_rejects_revoked_authority_with_zero_effect(
+    tmp_path: Path,
+    migration_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+    guarded_worker_engine: Engine,
+    revoked_authority: str,
+) -> None:
+    scenario = _prepare_file_import_scenario(
+        tmp_path,
+        migration_configuration,
+        guarded_control_engine,
+        payload=OLD_V1_MARKDOWN,
+    )
+    assert scenario.token is not None
+    first = _run_file_import(
+        scenario,
+        scenario.prepared,
+        scenario.token,
+        guarded_worker_engine,
+    )
+    (scenario.root / "handbook.md").write_bytes(NEW_V1_MARKDOWN)
+    prepared, token = _prepare_repeat_file_import(
+        scenario,
+        guarded_control_engine,
+        idempotency_key=f"activate-revoked-{revoked_authority}",
+    )
+    claims = scenario.codec.verify(
+        token,
+        expected_organization_id=scenario.organization_id,
+        expected_job_id=prepared.job_id,
+        expected_service_principal_id=scenario.receiver.service_principal_id,
+        expected_workload=scenario.receiver.workload,
+        expected_operation=scenario.receiver.operation,
+        expected_worker_audience=scenario.receiver.worker_audience,
+        expected_source_ref=str(scenario.source_ref.value),
+        now=datetime.now(UTC).replace(microsecond=0),
+    )
+    assert _redeem_direct(guarded_worker_engine, claims) is not None
+    resource_ref = first.candidate_ref.resource_ref
+    replacement_revision_id = UUID(int=prepared.job_id.int ^ 1)
+    assert _stage_replacement_direct(
+        guarded_worker_engine,
+        claims,
+        _compile_replacement(NEW_V1_MARKDOWN, structural=False),
+        resource_ref=resource_ref,
+        revision_id=replacement_revision_id,
+    ) is not None
+
+    engine = create_database_engine(migration_configuration)
+    try:
+        with engine.begin() as connection:
+            if revoked_authority == "principal":
+                connection.execute(
+                    text(
+                        """
+                        UPDATE service_principal SET enabled = false
+                        WHERE organization_id = :organization_id
+                          AND service_principal_id = :principal_id
+                        """
+                    ),
+                    {
+                        "organization_id": scenario.organization_id,
+                        "principal_id": scenario.receiver.service_principal_id,
+                    },
+                )
+            elif revoked_authority == "membership":
+                connection.execute(
+                    text(
+                        """
+                        UPDATE membership SET status = 'revoked'
+                        WHERE organization_id = :organization_id
+                          AND membership_id = :membership_id
+                        """
+                    ),
+                    {
+                        "organization_id": scenario.organization_id,
+                        "membership_id": scenario.membership_id,
+                    },
+                )
+            else:
+                connection.execute(
+                    text(
+                        """
+                        UPDATE resource_access_policy
+                        SET access_state = 'revoked', revoked_at = :revoked_at
+                        WHERE organization_id = :organization_id
+                          AND resource_ref = :resource_ref
+                        """
+                    ),
+                    {
+                        "organization_id": scenario.organization_id,
+                        "resource_ref": resource_ref,
+                        "revoked_at": NOW,
+                    },
+                )
+        before = _replacement_state(
+            engine,
+            scenario,
+            job_id=prepared.job_id,
+            resource_ref=resource_ref,
+        )
+        assert _activate_replacement_direct(
+            guarded_worker_engine,
+            claims,
+            resource_ref=resource_ref,
+            previous_revision_id=UUID(first.candidate_ref.revision_ref),
+            replacement_revision_id=replacement_revision_id,
+        ) is None
+        assert _replacement_state(
+            engine,
+            scenario,
+            job_id=prepared.job_id,
+            resource_ref=resource_ref,
+        ) == before
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.parametrize("boundary", ("stage", "activate"))
+def test_replacement_rejects_a_lease_that_expires_at_the_durable_boundary(
+    tmp_path: Path,
+    migration_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+    guarded_worker_engine: Engine,
+    boundary: str,
+) -> None:
+    scenario = _prepare_file_import_scenario(
+        tmp_path,
+        migration_configuration,
+        guarded_control_engine,
+        payload=OLD_V1_MARKDOWN,
+    )
+    assert scenario.token is not None
+    first = _run_file_import(
+        scenario,
+        scenario.prepared,
+        scenario.token,
+        guarded_worker_engine,
+    )
+    (scenario.root / "handbook.md").write_bytes(NEW_V1_MARKDOWN)
+    prepared, token = _prepare_repeat_file_import(
+        scenario,
+        guarded_control_engine,
+        idempotency_key=f"expire-at-{boundary}-boundary",
+        lease_ttl_seconds=2,
+    )
+    claims = scenario.codec.verify(
+        token,
+        expected_organization_id=scenario.organization_id,
+        expected_job_id=prepared.job_id,
+        expected_service_principal_id=scenario.receiver.service_principal_id,
+        expected_workload=scenario.receiver.workload,
+        expected_operation=scenario.receiver.operation,
+        expected_worker_audience=scenario.receiver.worker_audience,
+        expected_source_ref=str(scenario.source_ref.value),
+        now=datetime.now(UTC).replace(microsecond=0),
+    )
+    assert _redeem_direct(guarded_worker_engine, claims) is not None
+    resource_ref = first.candidate_ref.resource_ref
+    replacement_revision_id = UUID(int=prepared.job_id.int ^ 1)
+    document = _compile_replacement(NEW_V1_MARKDOWN, structural=False)
+    if boundary == "activate":
+        assert _stage_replacement_direct(
+            guarded_worker_engine,
+            claims,
+            document,
+            resource_ref=resource_ref,
+            revision_id=replacement_revision_id,
+        ) is not None
+
+    engine = create_database_engine(migration_configuration)
+    try:
+        before = _replacement_state(
+            engine,
+            scenario,
+            job_id=prepared.job_id,
+            resource_ref=resource_ref,
+        )
+        with engine.connect() as connection:
+            connection.execute(text("SELECT pg_sleep(2.1)"))
+        result = (
+            _stage_replacement_direct(
+                guarded_worker_engine,
+                claims,
+                document,
+                resource_ref=resource_ref,
+                revision_id=replacement_revision_id,
+            )
+            if boundary == "stage"
+            else _activate_replacement_direct(
+                guarded_worker_engine,
+                claims,
+                resource_ref=resource_ref,
+                previous_revision_id=UUID(first.candidate_ref.revision_ref),
+                replacement_revision_id=replacement_revision_id,
+            )
+        )
+        assert result is None
+        assert _replacement_state(
+            engine,
+            scenario,
+            job_id=prepared.job_id,
+            resource_ref=resource_ref,
+        ) == before
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.parametrize(
+    "revoked_authority",
+    ("principal", "membership", "access"),
+)
+def test_replacement_stage_rejects_revoked_authority_with_zero_effect(
+    tmp_path: Path,
+    migration_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+    guarded_worker_engine: Engine,
+    revoked_authority: str,
+) -> None:
+    scenario = _prepare_file_import_scenario(
+        tmp_path,
+        migration_configuration,
+        guarded_control_engine,
+        payload=OLD_V1_MARKDOWN,
+    )
+    assert scenario.token is not None
+    first = _run_file_import(
+        scenario,
+        scenario.prepared,
+        scenario.token,
+        guarded_worker_engine,
+    )
+    (scenario.root / "handbook.md").write_bytes(NEW_V1_MARKDOWN)
+    prepared, token = _prepare_repeat_file_import(
+        scenario,
+        guarded_control_engine,
+        idempotency_key=f"stage-revoked-{revoked_authority}",
+    )
+    claims = scenario.codec.verify(
+        token,
+        expected_organization_id=scenario.organization_id,
+        expected_job_id=prepared.job_id,
+        expected_service_principal_id=scenario.receiver.service_principal_id,
+        expected_workload=scenario.receiver.workload,
+        expected_operation=scenario.receiver.operation,
+        expected_worker_audience=scenario.receiver.worker_audience,
+        expected_source_ref=str(scenario.source_ref.value),
+        now=datetime.now(UTC).replace(microsecond=0),
+    )
+    assert _redeem_direct(guarded_worker_engine, claims) is not None
+    resource_ref = first.candidate_ref.resource_ref
+    engine = create_database_engine(migration_configuration)
+    try:
+        with engine.begin() as connection:
+            if revoked_authority == "principal":
+                connection.execute(
+                    text(
+                        """
+                        UPDATE service_principal SET enabled = false
+                        WHERE organization_id = :organization_id
+                          AND service_principal_id = :principal_id
+                        """
+                    ),
+                    {
+                        "organization_id": scenario.organization_id,
+                        "principal_id": scenario.receiver.service_principal_id,
+                    },
+                )
+            elif revoked_authority == "membership":
+                connection.execute(
+                    text(
+                        """
+                        UPDATE membership SET status = 'revoked'
+                        WHERE organization_id = :organization_id
+                          AND membership_id = :membership_id
+                        """
+                    ),
+                    {
+                        "organization_id": scenario.organization_id,
+                        "membership_id": scenario.membership_id,
+                    },
+                )
+            else:
+                connection.execute(
+                    text(
+                        """
+                        UPDATE resource_access_policy
+                        SET access_state = 'revoked', revoked_at = :revoked_at
+                        WHERE organization_id = :organization_id
+                          AND resource_ref = :resource_ref
+                        """
+                    ),
+                    {
+                        "organization_id": scenario.organization_id,
+                        "resource_ref": resource_ref,
+                        "revoked_at": NOW,
+                    },
+                )
+        before = _replacement_state(
+            engine,
+            scenario,
+            job_id=prepared.job_id,
+            resource_ref=resource_ref,
+        )
+        assert _stage_replacement_direct(
+            guarded_worker_engine,
+            claims,
+            _compile_replacement(NEW_V1_MARKDOWN, structural=False),
+            resource_ref=resource_ref,
+            revision_id=UUID(int=prepared.job_id.int ^ 1),
+        ) is None
+        assert _replacement_state(
+            engine,
+            scenario,
+            job_id=prepared.job_id,
+            resource_ref=resource_ref,
+        ) == before
     finally:
         engine.dispose()
 

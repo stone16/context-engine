@@ -46,12 +46,15 @@ entrypoints:
    Resource, acquisition, job, and content identity. Move the job to `ready`.
    The Resource active pointer is not changed.
 2. **Activate.** Revalidate the exact still-live WorkerLease and all current
-   authority, lock the ingestion guard and replacement plan, and prove the new
-   snapshot, Fragments, candidates, and exact `prepared -> indexed` history are
-   complete. Compare-and-swap the Resource pointer from the plan's previous
-   Revision to its replacement. In the same transaction append `active`, write
-   one immutable `file_revision_supersession`, and complete the job with one
-   publication effect.
+   authority, lock the mutable job and ingestion guard, bind the immutable
+   replacement plan, and prove the new snapshot, Fragments, candidates, and
+   exact `prepared -> indexed` history are complete. Compare-and-swap the
+   Resource pointer from the plan's previous Revision to its replacement. In
+   the same transaction append `active`, write one immutable
+   `file_revision_supersession`, and complete the job with one publication
+   effect. The definer deliberately has no UPDATE privilege on the plan: its
+   mutation trigger makes the row stable, while downgrade's ACCESS EXCLUSIVE
+   table lock cannot remove the schema during this ordinary read transaction.
 
 The replacement plan is the durable ready boundary; it is not Runtime-visible
 content or authorization. `file_revision_supersession` records the exact old to

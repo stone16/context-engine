@@ -2709,7 +2709,7 @@
       "name": "file_revision_replacement_plan",
       "classification": "tenant_owned",
       "nonOwnerEvidence": {
-        "evidenceId": "PG-FILE-IMPORT-023",
+        "evidenceId": "PG-FILE-REPLACEMENT-026",
         "selector": {"table": "file_revision_replacement_plan"}
       },
       "purpose": "Immutable durable ready boundary binding one complete replacement Revision to the exact old active Revision and File import job",
@@ -2740,13 +2740,13 @@
       "permittedOperations": {"context_engine_control": [], "context_engine_runtime": [], "context_engine_worker": ["EXECUTE context_worker_stage_file_replacement", "EXECUTE context_worker_stage_structural_file_replacement"], "context_engine_worker_lease_definer": ["SELECT", "INSERT"]},
       "partitions": [],
       "securityInvariantIds": ["TENANT-OWNERSHIP-001", "TENANT-FK-002", "RLS-FAIL-CLOSED-003", "WORKER-LEASE-007"],
-      "negativeTestIds": ["DB-001", "DB-004", "DB-008", "PG-FILE-IMPORT-023"]
+      "negativeTestIds": ["DB-001", "DB-004", "DB-008", "PG-FILE-REPLACEMENT-026"]
     },
     {
       "name": "file_revision_supersession",
       "classification": "tenant_owned",
       "nonOwnerEvidence": {
-        "evidenceId": "PG-FILE-IMPORT-023",
+        "evidenceId": "PG-FILE-REPLACEMENT-026",
         "selector": {"table": "file_revision_supersession"}
       },
       "purpose": "Immutable activation lineage retaining each superseded Revision until an explicit future cleanup policy",
@@ -2776,7 +2776,7 @@
       "retention": {"supersededRevision": "retained_until_explicit_cleanup", "cleanupAuthority": "not active in Issue #26"},
       "partitions": [],
       "securityInvariantIds": ["TENANT-OWNERSHIP-001", "TENANT-FK-002", "RLS-FAIL-CLOSED-003", "WORKER-LEASE-007"],
-      "negativeTestIds": ["DB-001", "DB-004", "DB-008", "PG-FILE-IMPORT-023"]
+      "negativeTestIds": ["DB-001", "DB-004", "DB-008", "PG-FILE-REPLACEMENT-026"]
     },
     {
       "name": "release_promotion_audit",
