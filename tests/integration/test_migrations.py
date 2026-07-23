@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -37,6 +38,7 @@ from tests.integration.test_file_import_tracer import (
 )
 from tests.integration.test_zz_file_resource_tombstone import _tombstone
 from tests.integration.test_zz_file_revision_replacement import NEW_MARKDOWN
+from tests.support.file_source_progress import clear_file_source_progress_projection
 
 pytestmark = pytest.mark.integration
 ROOT = Path(__file__).parents[2]
@@ -81,6 +83,20 @@ HEAD_TABLES = [
     "user_account",
     "worker_noop_job",
 ]
+
+
+@pytest.fixture(autouse=True)
+def isolated_migration_progress_projection(
+    migration_configuration: DatabaseConfiguration,
+) -> Iterator[None]:
+    """Give destructive migration compatibility checks an empty projection."""
+
+    clear_file_source_progress_projection(migration_configuration)
+    try:
+        yield
+    finally:
+        if _revision_rows(migration_configuration) == ["20260723_0017"]:
+            clear_file_source_progress_projection(migration_configuration)
 
 
 def _delete_issue_27_upgrade_fixture(
@@ -609,13 +625,13 @@ def test_file_progress_revision_downgrades_and_reapplies_cleanly(
     )
 
 
-def test_file_progress_refs_remain_stable_after_projection_rebuild(
+def test_file_progress_refuses_downgrade_and_preserves_refs(
     tmp_path: Path,
     migration_configuration: DatabaseConfiguration,
     guarded_control_engine: Engine,
     guarded_worker_engine: Engine,
 ) -> None:
-    """Issue #29 rebuild derives the same opaque refs from retained order."""
+    """Issue #29 never discards the database ordering behind opaque refs."""
 
     scenario = _prepare_file_import_scenario(
         tmp_path,
@@ -705,8 +721,12 @@ def test_file_progress_refs_remain_stable_after_projection_rebuild(
     assert [row[0] for row in before[1]] == [1, 2, 3]
     alembic_configuration = Config(ROOT / "alembic.ini")
     try:
-        command.downgrade(alembic_configuration, "20260723_0016")
-        command.upgrade(alembic_configuration, "head")
+        with pytest.raises(
+            RuntimeError,
+            match="requires empty progress streams",
+        ):
+            command.downgrade(alembic_configuration, "20260723_0016")
+        assert _revision_rows(migration_configuration) == ["20260723_0017"]
         assert progress_refs() == before
     finally:
         if _revision_rows(migration_configuration) != ["20260723_0017"]:
@@ -745,6 +765,7 @@ def test_file_tombstone_revision_refuses_downgrade_with_committed_intent(
         event_sequence=1,
     )
 
+    clear_file_source_progress_projection(migration_configuration)
     alembic_configuration = Config(ROOT / "alembic.ini")
     with pytest.raises(SQLAlchemyError):
         command.downgrade(alembic_configuration, "20260723_0015")
@@ -826,6 +847,7 @@ def test_recovery_upgrade_adopts_an_existing_ready_replacement(
     resource_ref = initial.candidate_ref.resource_ref
     alembic_configuration = Config(ROOT / "alembic.ini")
     try:
+        clear_file_source_progress_projection(migration_configuration)
         command.downgrade(alembic_configuration, "20260723_0014")
         with guarded_worker_engine.begin() as connection:
             redeemed = connection.execute(

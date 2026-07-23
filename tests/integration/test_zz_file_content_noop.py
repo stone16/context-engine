@@ -38,6 +38,7 @@ from tests.integration.test_file_import_tracer import (
     _run_file_import,
     _RuntimeAuthenticator,
 )
+from tests.support.file_source_progress import clear_file_source_progress_projection
 
 pytestmark = pytest.mark.integration
 
@@ -245,6 +246,7 @@ def test_repeated_canonically_identical_file_import_is_an_auditable_noop(
     assert job.effect_count == 0
     assert job.revision_id == UUID(first.candidate_ref.revision_ref)
 
+    clear_file_source_progress_projection(migration_configuration)
     with pytest.raises(
         RuntimeError,
         match="File (?:recovery|replacement|no-op) downgrade requires",

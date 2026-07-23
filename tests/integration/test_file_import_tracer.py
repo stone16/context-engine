@@ -88,6 +88,7 @@ from engine.supply import (
     canonicalize_parsed_document,
 )
 from tests.support.context_run_operator import exact_test_context_run_operator_read
+from tests.support.file_source_progress import clear_file_source_progress_projection
 
 pytestmark = pytest.mark.integration
 NOW = datetime.now(UTC).replace(microsecond=0)
@@ -1411,6 +1412,7 @@ def _assert_structural_file_import_returns_coherent_authorized_units_over_http(
     assert "Handbook" not in denied.text
     assert "red-rocket" not in denied.text
 
+    clear_file_source_progress_projection(migration_configuration)
     with pytest.raises(
         RuntimeError,
         match="structural Markdown downgrade requires no v2 snapshots",

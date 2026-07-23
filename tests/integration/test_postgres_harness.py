@@ -33,6 +33,7 @@ from scripts.provision_database_roles import (
     RoleProvisioningContract,
     provision_security_roles,
 )
+from tests.support.file_source_progress import clear_file_source_progress_projection
 
 pytestmark = pytest.mark.integration
 ROOT = Path(__file__).parents[2]
@@ -131,6 +132,7 @@ def test_all_login_roles_have_reviewed_capabilities(
 
 
 def test_post_init_role_provisioning_repairs_a_legacy_volume_idempotently(
+    migration_configuration: DatabaseConfiguration,
     guarded_control_engine: Engine,
     guarded_learning_engine: Engine,
     guarded_operator_engine: Engine,
@@ -159,6 +161,7 @@ def test_post_init_role_provisioning_repairs_a_legacy_volume_idempotently(
         guarded_control_engine.dispose()
         guarded_learning_engine.dispose()
         guarded_operator_engine.dispose()
+        clear_file_source_progress_projection(migration_configuration)
         command.downgrade(alembic_configuration, "20260721_0004")
         with psycopg.connect(
             host="127.0.0.1",

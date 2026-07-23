@@ -262,7 +262,7 @@ def _backfill_progress() -> None:
                    acquisition.source_id,
                    'file_import'::text AS change_kind,
                    job.job_id AS carrier_id,
-                   job.created_at AS accepted_at,
+                   acquisition.created_at AS accepted_at,
                    acquisition.acquisition_id,
                    job.job_id,
                    NULL::uuid AS cleanup_intent_id,
@@ -564,35 +564,6 @@ def _create_progress_functions() -> None:
 def _create_progress_triggers() -> None:
     op.execute(
         f"""
-        CREATE FUNCTION public.context_file_source_order_import_job()
-        RETURNS trigger
-        LANGUAGE plpgsql SECURITY DEFINER
-        SET search_path = pg_catalog, pg_temp SET row_security = on
-        AS $function$
-        DECLARE latest_accepted_at timestamptz;
-        BEGIN
-            PERFORM pg_advisory_xact_lock(hashtextextended(
-                'context-engine.file-source-progress:'
-                || NEW.organization_id::text || ':' || NEW.source_id::text, 0
-            ));
-            SELECT max(checkpoint.accepted_at)
-            INTO latest_accepted_at
-            FROM public.{_CHECKPOINT} AS checkpoint
-            WHERE checkpoint.organization_id = NEW.organization_id
-              AND checkpoint.source_id = NEW.source_id;
-            IF latest_accepted_at IS NOT NULL
-               AND NEW.created_at <= latest_accepted_at
-            THEN
-                NEW.created_at := latest_accepted_at
-                    + interval '1 microsecond';
-            END IF;
-            RETURN NEW;
-        END;
-        $function$
-        """
-    )
-    op.execute(
-        f"""
         CREATE FUNCTION public.context_file_source_checkpoint_import_job()
         RETURNS trigger
         LANGUAGE plpgsql SECURITY DEFINER
@@ -627,7 +598,7 @@ def _create_progress_triggers() -> None:
                        || uuid_send(NEW.job_id), 'sha256'
                    ), 'hex'),
                    'file_import', NEW.acquisition_id, NEW.job_id,
-                   NEW.created_at
+                   acquisition.created_at
             FROM public.file_acquisition AS acquisition
             WHERE acquisition.organization_id = NEW.organization_id
               AND acquisition.acquisition_id = NEW.acquisition_id
@@ -714,35 +685,6 @@ def _create_progress_triggers() -> None:
     )
     op.execute(
         f"""
-        CREATE FUNCTION public.context_file_source_order_tombstone()
-        RETURNS trigger
-        LANGUAGE plpgsql SECURITY DEFINER
-        SET search_path = pg_catalog, pg_temp SET row_security = on
-        AS $function$
-        DECLARE latest_accepted_at timestamptz;
-        BEGIN
-            PERFORM pg_advisory_xact_lock(hashtextextended(
-                'context-engine.file-source-progress:'
-                || NEW.organization_id::text || ':' || NEW.source_id::text, 0
-            ));
-            SELECT max(checkpoint.accepted_at)
-            INTO latest_accepted_at
-            FROM public.{_CHECKPOINT} AS checkpoint
-            WHERE checkpoint.organization_id = NEW.organization_id
-              AND checkpoint.source_id = NEW.source_id;
-            IF latest_accepted_at IS NOT NULL
-               AND NEW.tombstoned_at <= latest_accepted_at
-            THEN
-                NEW.tombstoned_at := latest_accepted_at
-                    + interval '1 microsecond';
-            END IF;
-            RETURN NEW;
-        END;
-        $function$
-        """
-    )
-    op.execute(
-        f"""
         CREATE FUNCTION public.context_file_source_checkpoint_tombstone()
         RETURNS trigger
         LANGUAGE plpgsql SECURITY DEFINER
@@ -791,20 +733,13 @@ def _create_progress_triggers() -> None:
         """
     )
     trigger_functions = (
-        "context_file_source_order_import_job",
         "context_file_source_checkpoint_import_job",
         "context_file_source_publish_active_revision",
         "context_file_source_publish_unchanged_acquisition",
-        "context_file_source_order_tombstone",
         "context_file_source_checkpoint_tombstone",
     )
     for function_name in trigger_functions:
         op.execute(f"REVOKE ALL ON FUNCTION public.{function_name}() FROM PUBLIC")
-    op.execute(
-        "CREATE TRIGGER file_import_job_source_order "
-        "BEFORE INSERT ON file_import_job FOR EACH ROW "
-        "EXECUTE FUNCTION public.context_file_source_order_import_job()"
-    )
     op.execute(
         "CREATE TRIGGER file_import_job_source_checkpoint "
         "AFTER INSERT ON file_import_job FOR EACH ROW "
@@ -822,11 +757,6 @@ def _create_progress_triggers() -> None:
         "EXECUTE FUNCTION public.context_file_source_publish_unchanged_acquisition()"
     )
     op.execute(
-        "CREATE TRIGGER file_resource_cleanup_intent_source_order "
-        "BEFORE INSERT ON file_resource_cleanup_intent FOR EACH ROW "
-        "EXECUTE FUNCTION public.context_file_source_order_tombstone()"
-    )
-    op.execute(
         "CREATE TRIGGER file_resource_cleanup_intent_source_progress "
         "AFTER INSERT ON file_resource_cleanup_intent FOR EACH ROW "
         "EXECUTE FUNCTION public.context_file_source_checkpoint_tombstone()"
@@ -838,13 +768,35 @@ def _create_progress_triggers() -> None:
 
 
 def downgrade() -> None:
-    """Drop progress that can be rebuilt from retained ordered lineage."""
+    """Remove only unused progress state; never renumber accepted changes."""
+
+    op.execute(
+        "LOCK TABLE file_source_publish_watermark, "
+        "file_source_acquisition_checkpoint, file_import_job, "
+        "file_resource_cleanup_intent, revision_publication_event, "
+        "file_acquisition_result IN ACCESS EXCLUSIVE MODE"
+    )
+    has_progress = bool(
+        op.get_bind()
+        .execute(
+            sa.text(
+                "SELECT EXISTS ("
+                "SELECT 1 FROM file_source_acquisition_checkpoint "
+                "UNION ALL "
+                "SELECT 1 FROM file_source_publish_watermark"
+                ")"
+            )
+        )
+        .scalar_one()
+    )
+    if has_progress:
+        raise RuntimeError(
+            "File source progress downgrade requires empty progress streams; "
+            "use a forward fix to preserve monotonic ordering and opaque refs"
+        )
 
     op.execute(
         "DROP TRIGGER file_resource_cleanup_intent_source_progress ON file_resource_cleanup_intent"
-    )
-    op.execute(
-        "DROP TRIGGER file_resource_cleanup_intent_source_order ON file_resource_cleanup_intent"
     )
     op.execute(
         "DROP TRIGGER file_acquisition_result_source_watermark ON file_acquisition_result"
@@ -853,15 +805,12 @@ def downgrade() -> None:
         "DROP TRIGGER revision_publication_event_source_watermark ON revision_publication_event"
     )
     op.execute("DROP TRIGGER file_import_job_source_checkpoint ON file_import_job")
-    op.execute("DROP TRIGGER file_import_job_source_order ON file_import_job")
     op.execute(f"SET LOCAL ROLE {_DEFINER}")
     for function_name in (
         "context_file_source_checkpoint_tombstone",
-        "context_file_source_order_tombstone",
         "context_file_source_publish_unchanged_acquisition",
         "context_file_source_publish_active_revision",
         "context_file_source_checkpoint_import_job",
-        "context_file_source_order_import_job",
     ):
         op.execute(f"DROP FUNCTION public.{function_name}()")
     op.execute(f"DROP FUNCTION public.{_READ_FUNCTION}{_READ_SIGNATURE}")
