@@ -561,13 +561,26 @@ durable replacement plan before marking the job `ready`. The old Revision stays
 active throughout staging. A second transaction revalidates authority and
 readiness, compare-and-swaps the Resource active pointer, appends `active`,
 records immutable supersession lineage, and completes the job. Superseded
-artifacts remain `retained_until_explicit_cleanup`; deletion and recovery of a
-committed ready job are not active in this slice. When an equivalent concurrent
+artifacts remain `retained_until_explicit_cleanup`; deletion is not active in
+this slice. When an equivalent concurrent
 replacement activates between the initial publish attempt and replacement
 staging, the guarded stage classification completes the later job as
 `unchanged` and returns that durable zero-effect result. V1 and V2 each reprove
 that the supplied compilation exactly matches the now-active snapshot,
 Fragments, and candidates before reporting success.
+
+ADR-0041 makes publication recoverable after exactly the committed `acquired`,
+`prepared`, and `ready` boundaries. One tenant-owned checkpoint binds the
+existing File job to its stable Resource/Revision/content identity, while an
+immutable job-event stream records interruption, reclaim, and completion.
+Reclaim issues a higher signed lease generation only after expiry; the replaced
+generation and nonce cannot resume or mutate, including through compatibility
+publication seams. Each idempotent step revalidates the exact current lease and
+advances one checkpoint. Initial and replacement activation recheck
+current audience authority and complete Fragment/candidate evidence before the
+single pointer transaction, so a recovered replacement leaves old active
+content visible until the new Revision is complete. Automatic retry scheduling,
+arbitrary chaos, delete recovery, and dead-letter handling remain inactive.
 
 Because Runtime resolves through multiple SQL statements at `READ COMMITTED`,
 each UserActor transaction takes an Organization-scoped shared publication
@@ -832,8 +845,7 @@ versioned public wire and activates breaking-change checks.
 Exit:
 
 - Markdown AST, hash incrementality, delete detection, checkpoint replay,
-  publication crash recovery, lease reclaim, dead-letter, and full-resync
-  runbook are complete;
+  broader crash recovery, dead-letter, and full-resync runbook are complete;
 - before experiment execution, the frozen dataset registers a sample plan based
   on failure-slice coverage and a declared uncertainty/power target; negative
   cases cover every active refusal/security category, and an underpowered set is

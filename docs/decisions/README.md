@@ -127,3 +127,4 @@ touched:
 - [0038 — Structural Markdown units](0038-compile-and-publish-structural-markdown.md)
 - [0039 — File acquisition no-op](0039-deduplicate-unchanged-file-acquisitions.md)
 - [0040 — Atomic File replacement](0040-stage-and-atomically-activate-file-replacements.md)
+- [0041 — Durable File publication recovery](0041-recover-file-publication-by-durable-boundary.md)

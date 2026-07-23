@@ -236,14 +236,16 @@ def test_file_import_lease_uses_a_distinct_version_and_exact_source_binding() ->
             workload="supply.file-import",
             operation=FILE_IMPORT_WORKER_LEASE_OPERATION,
             source_ref="source:handbook",
+            lease_generation=1,
         )
     )
 
     header, payload = _decoded_token(token)
 
-    assert header["v"] == 2
+    assert header["v"] == 3
     assert payload["operation"] == "file.import"
     assert payload["source_ref"] == "source:handbook"
+    assert payload["lease_generation"] == 1
     assert codec.verify(
         token,
         **_verification_arguments(
@@ -261,6 +263,7 @@ def test_file_import_lease_rejects_a_wrong_source_generically() -> None:
             workload="supply.file-import",
             operation=FILE_IMPORT_WORKER_LEASE_OPERATION,
             source_ref="source:handbook",
+            lease_generation=1,
         )
     )
 

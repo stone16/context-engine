@@ -252,7 +252,7 @@ class PostgreSQLWorkerLeaseIssuer:
                 row = connection.execute(
                     text(
                         """
-                        SELECT issued_at, expires_at
+                        SELECT issued_at, expires_at, lease_generation
                         FROM public.context_worker_issue_file_import_lease(
                             :organization_id, :job_id,
                             :service_principal_id, :source_ref,
@@ -287,6 +287,7 @@ class PostgreSQLWorkerLeaseIssuer:
                     nonce=nonce,
                     operation=FILE_IMPORT_WORKER_LEASE_OPERATION,
                     source_ref=str(prepared.source_ref.value),
+                    lease_generation=row.lease_generation,
                 )
                 token = self._codec.mint(claims)
             return token

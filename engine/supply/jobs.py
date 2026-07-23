@@ -22,7 +22,7 @@ FILE_IMPORT_WORKER_LEASE_OPERATION: Final = "file.import"
 _ALGORITHM: Final = "HS256"
 _TOKEN_TYPE: Final = "CE-WorkerLease"
 _TOKEN_VERSION: Final = 1
-_FILE_IMPORT_TOKEN_VERSION: Final = 2
+_FILE_IMPORT_TOKEN_VERSION: Final = 3
 _DOMAIN: Final = "context-engine.worker-lease"
 _MAX_KEY_VERSION: Final = (1 << 63) - 1
 _MINIMUM_SECRET_BYTES: Final = 32
@@ -44,7 +44,9 @@ _CLAIM_FIELDS: Final = frozenset(
         "workload",
     }
 )
-_FILE_IMPORT_CLAIM_FIELDS: Final = _CLAIM_FIELDS | frozenset({"source_ref"})
+_FILE_IMPORT_CLAIM_FIELDS: Final = _CLAIM_FIELDS | frozenset(
+    {"lease_generation", "source_ref"}
+)
 
 
 def _require_key_version(value: object) -> int:
@@ -100,6 +102,7 @@ class WorkerLeaseClaims:
     nonce: bytes = field(repr=False)
     operation: str = field(default=WORKER_LEASE_OPERATION, repr=False)
     source_ref: str | None = field(default=None, repr=False)
+    lease_generation: int | None = field(default=None, repr=False)
     actor_kind: Literal["service"] = field(
         default=WORKER_LEASE_ACTOR_KIND, init=False, repr=False
     )
@@ -125,10 +128,20 @@ class WorkerLeaseClaims:
         }:
             raise ValueError("WorkerLease operation must be closed")
         if self.operation == WORKER_LEASE_OPERATION:
-            if self.source_ref is not None:
-                raise ValueError("no-op WorkerLease cannot bind a source")
+            if self.source_ref is not None or self.lease_generation is not None:
+                raise ValueError(
+                    "no-op WorkerLease cannot bind a source or lease generation"
+                )
         else:
             _require_identifier("source_ref", self.source_ref, maximum_length=255)
+            if (
+                type(self.lease_generation) is not int
+                or not 1 <= self.lease_generation <= _MAX_KEY_VERSION
+            ):
+                raise ValueError(
+                    "File WorkerLease generation must be a positive signed "
+                    "64-bit integer"
+                )
 
     def __reduce__(self) -> NoReturn:
         raise TypeError("WorkerLeaseClaims are not serializable")
@@ -284,6 +297,7 @@ def _claims_document(claims: WorkerLeaseClaims) -> dict[str, object]:
     }
     if claims.operation == FILE_IMPORT_WORKER_LEASE_OPERATION:
         document["source_ref"] = claims.source_ref
+        document["lease_generation"] = claims.lease_generation
     return document
 
 
@@ -457,6 +471,11 @@ class WorkerLeaseCodec:
             operation=cast(str, document["operation"]),
             source_ref=(
                 cast(str, document["source_ref"])
+                if token_version == _FILE_IMPORT_TOKEN_VERSION
+                else None
+            ),
+            lease_generation=(
+                cast(int, document["lease_generation"])
                 if token_version == _FILE_IMPORT_TOKEN_VERSION
                 else None
             ),

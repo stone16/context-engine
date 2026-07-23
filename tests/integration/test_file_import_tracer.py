@@ -558,7 +558,8 @@ def _redeem_direct(
                 """
                 SELECT * FROM public.context_worker_redeem_file_import(
                     :organization_id, :job_id, :service_principal_id,
-                    :source_ref, :signing_key_version, :nonce,
+                    :source_ref, :lease_generation,
+                    :signing_key_version, :nonce,
                     :issued_at, :expires_at
                 )
                 """
@@ -570,6 +571,7 @@ def _redeem_direct(
                     service_principal_id or claims.service_principal_id
                 ),
                 "source_ref": source_ref or claims.source_ref,
+                "lease_generation": claims.lease_generation,
                 "signing_key_version": claims.signing_key_version,
                 "nonce": claims.nonce,
                 "issued_at": claims.issued_at,
@@ -605,7 +607,8 @@ def _publish_direct(
                     :content_hash, :compilation_digest,
                     :compiler_version, :config_version,
                     :phrase_digest,
-                    :signing_key_version, :nonce, :issued_at, :expires_at
+                    :lease_generation, :signing_key_version, :nonce,
+                    :issued_at, :expires_at
                 )
                 """
             ),
@@ -625,6 +628,7 @@ def _publish_direct(
                 "phrase_digest": "c" * 64,
                 "compiler_version": compiler_version,
                 "config_version": config_version,
+                "lease_generation": claims.lease_generation,
                 "signing_key_version": claims.signing_key_version,
                 "nonce": claims.nonce,
                 "issued_at": claims.issued_at,
@@ -650,7 +654,8 @@ def _publish_structural_direct(
                     :canonical_text, :content_hash, :compilation_digest,
                     :compiler_version, :config_version,
                     CAST(:compilation_document AS jsonb),
-                    :signing_key_version, :nonce, :issued_at, :expires_at
+                    :lease_generation, :signing_key_version, :nonce,
+                    :issued_at, :expires_at
                 )
                 """
             ),
@@ -667,6 +672,7 @@ def _publish_structural_direct(
                 "compiler_version": document.provenance.compiler_version,
                 "config_version": document.provenance.config_version,
                 "compilation_document": json.dumps(compilation_document),
+                "lease_generation": claims.lease_generation,
                 "signing_key_version": claims.signing_key_version,
                 "nonce": claims.nonce,
                 "issued_at": claims.issued_at,
@@ -691,7 +697,8 @@ def _fail_direct(
                     """
                     SELECT public.context_worker_fail_file_import(
                         :organization_id, :job_id, :service_principal_id,
-                        :source_ref, :signing_key_version, :nonce,
+                        :source_ref, :lease_generation,
+                        :signing_key_version, :nonce,
                         :issued_at, :expires_at
                     )
                     """
@@ -703,6 +710,7 @@ def _fail_direct(
                         service_principal_id or claims.service_principal_id
                     ),
                     "source_ref": source_ref or claims.source_ref,
+                    "lease_generation": claims.lease_generation,
                     "signing_key_version": claims.signing_key_version,
                     "nonce": claims.nonce,
                     "issued_at": claims.issued_at,
@@ -1411,7 +1419,7 @@ def _assert_structural_file_import_returns_coherent_authorized_units_over_http(
             connection.execute(
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one()
-            == "20260723_0014"
+            == "20260723_0015"
         )
 
 

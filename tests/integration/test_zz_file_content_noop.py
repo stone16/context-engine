@@ -17,6 +17,7 @@ from adapters.http.app import create_app
 from engine.control import FileImportPath
 from engine.persistence import (
     DatabaseConfiguration,
+    FileImportUnavailable,
     PostgreSQLMembershipAuthority,
     create_database_engine,
 )
@@ -246,7 +247,7 @@ def test_repeated_canonically_identical_file_import_is_an_auditable_noop(
 
     with pytest.raises(
         RuntimeError,
-        match="File (?:replacement|no-op) downgrade requires",
+        match="File (?:recovery|replacement|no-op) downgrade requires",
     ):
         command.downgrade(Config(ROOT / "alembic.ini"), "20260723_0012")
     with migration_engine.connect() as connection:
@@ -254,7 +255,7 @@ def test_repeated_canonically_identical_file_import_is_an_auditable_noop(
             connection.execute(
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one()
-            == "20260723_0014"
+            == "20260723_0015"
         )
 
 
@@ -435,6 +436,101 @@ def test_repeated_identical_structural_import_reuses_exact_active_artifact(
                 connection,
                 scenario.organization_id,
             ) == (2, 2, 1, 1, 6, 1, 3, 15, 1, 1)
+    finally:
+        migration_engine.dispose()
+
+
+def test_extra_active_index_candidate_is_not_treated_as_unchanged(
+    tmp_path: Path,
+    migration_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+    guarded_worker_engine: Engine,
+) -> None:
+    scenario = _prepare_file_import_scenario(
+        tmp_path,
+        migration_configuration,
+        guarded_control_engine,
+        payload=(MARKDOWN_FIXTURES / "combined-v2.md").read_bytes(),
+    )
+    assert scenario.token is not None
+    first = _run_file_import(
+        scenario,
+        scenario.prepared,
+        scenario.token,
+        guarded_worker_engine,
+        config_version="markdown-config-v2",
+    )
+    repeat_prepared, repeat_token = _prepare_repeat_file_import(
+        scenario,
+        guarded_control_engine,
+        idempotency_key="repeat-corrupted-active-index",
+    )
+
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.begin() as connection:
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO exact_phrase_candidate (
+                        organization_id, phrase_digest, source_ref,
+                        resource_ref, revision_id, fragment_ref
+                    ) VALUES (
+                        :organization_id, :phrase_digest, :source_ref,
+                        :resource_ref, :revision_id, :fragment_ref
+                    )
+                    """
+                ),
+                {
+                    "organization_id": scenario.organization_id,
+                    "phrase_digest": sha256(
+                        b"context-engine.exact-phrase.v1\x00unexpected phrase"
+                    ).hexdigest(),
+                    "source_ref": first.candidate_ref.source_ref,
+                    "resource_ref": first.candidate_ref.resource_ref,
+                    "revision_id": UUID(first.candidate_ref.revision_ref),
+                    "fragment_ref": first.candidate_ref.fragment_ref,
+                },
+            )
+
+        with pytest.raises(FileImportUnavailable):
+            _run_file_import(
+                scenario,
+                repeat_prepared,
+                repeat_token,
+                guarded_worker_engine,
+                config_version="markdown-config-v2",
+            )
+
+        with migration_engine.connect() as connection:
+            assert (
+                connection.execute(
+                    text(
+                        """
+                        SELECT state FROM file_import_job
+                        WHERE organization_id = :organization_id
+                          AND job_id = :job_id
+                        """
+                    ),
+                    {
+                        "organization_id": scenario.organization_id,
+                        "job_id": repeat_prepared.job_id,
+                    },
+                ).scalar_one()
+                == "failed"
+            )
+            assert (
+                connection.execute(
+                    text(
+                        """
+                        SELECT count(*) FROM file_acquisition_result
+                        WHERE organization_id = :organization_id
+                        """
+                    ),
+                    {"organization_id": scenario.organization_id},
+                ).scalar_one()
+                == 0
+            )
     finally:
         migration_engine.dispose()
 

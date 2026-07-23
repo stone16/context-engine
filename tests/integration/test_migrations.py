@@ -1,21 +1,41 @@
 from __future__ import annotations
 
+import json
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 from time import monotonic, sleep
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import text
+from sqlalchemy import Engine, text
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
-from engine.persistence import DatabaseConfiguration, create_database_engine
+from adapters.parsers.markdown import compile_markdown
+from engine.persistence import (
+    DatabaseConfiguration,
+    PostgreSQLWorkerLeaseIssuer,
+    create_database_engine,
+)
+from engine.supply import (
+    MarkdownCompilerConfig,
+    ParsedDocument,
+    canonicalize_parsed_document,
+)
 from tests.integration.test_context_run_schema import (
     LineageIdentity,
     insert_context_run,
 )
+from tests.integration.test_file_import_tracer import (
+    _prepare_file_import_scenario,
+    _prepare_repeat_file_import,
+    _run_file_import,
+    _scenario_claims,
+)
+from tests.integration.test_zz_file_revision_replacement import NEW_MARKDOWN
 
 pytestmark = pytest.mark.integration
 ROOT = Path(__file__).parents[2]
@@ -34,6 +54,8 @@ HEAD_TABLES = [
     "file_acquisition",
     "file_acquisition_result",
     "file_import_job",
+    "file_import_job_event",
+    "file_publication_recovery",
     "file_resource_ingestion_guard",
     "file_revision_replacement_plan",
     "file_revision_snapshot",
@@ -55,6 +77,82 @@ HEAD_TABLES = [
     "user_account",
     "worker_noop_job",
 ]
+
+
+def _delete_issue_27_upgrade_fixture(
+    configuration: DatabaseConfiguration,
+    organization_id: UUID,
+) -> None:
+    """Remove only the disposable migration-compatibility scenario."""
+
+    engine = create_database_engine(configuration)
+    immutable_tables = (
+        ("file_import_job_event", "file_import_job_event_immutable"),
+        ("file_revision_supersession", "file_revision_supersession_immutable"),
+        ("file_revision_replacement_plan", "file_revision_replacement_plan_immutable"),
+        ("exact_phrase_candidate", "exact_phrase_candidate_immutable"),
+        ("revision_publication_event", "revision_publication_event_immutable"),
+        ("context_fragment", "context_fragment_reject_mutation"),
+        ("file_revision_snapshot", "file_revision_snapshot_immutable"),
+        ("context_revision", "context_revision_reject_mutation"),
+        ("file_acquisition_result", "file_acquisition_result_immutable"),
+        ("file_resource_ingestion_guard", "file_resource_ingestion_guard_immutable"),
+        ("file_acquisition", "file_acquisition_immutable"),
+        ("source_version", "source_version_immutable"),
+    )
+    try:
+        with engine.begin() as connection:
+            for table, trigger in immutable_tables:
+                connection.execute(
+                    text(f"ALTER TABLE {table} DISABLE TRIGGER {trigger}")
+                )
+        try:
+            with engine.begin() as connection:
+                for table in (
+                    "file_import_job_event",
+                    "file_publication_recovery",
+                    "file_revision_supersession",
+                    "file_revision_replacement_plan",
+                    "exact_phrase_candidate",
+                    "revision_publication_event",
+                    "membership_resource_field_right",
+                    "resource_access_policy",
+                    "context_fragment",
+                    "file_revision_snapshot",
+                    "context_revision",
+                    "context_resource",
+                    "file_acquisition_result",
+                    "file_resource_ingestion_guard",
+                    "file_import_job",
+                    "file_acquisition",
+                    "context_source",
+                    "source_version",
+                    "service_principal",
+                    "membership",
+                ):
+                    connection.execute(
+                        text(f"DELETE FROM {table} WHERE organization_id = :org"),
+                        {"org": organization_id},
+                    )
+                connection.execute(
+                    text(
+                        "DELETE FROM user_account WHERE NOT EXISTS ("
+                        "SELECT 1 FROM membership "
+                        "WHERE membership.user_id = user_account.user_id)"
+                    )
+                )
+                connection.execute(
+                    text("DELETE FROM organization WHERE organization_id = :org"),
+                    {"org": organization_id},
+                )
+        finally:
+            with engine.begin() as connection:
+                for table, trigger in reversed(immutable_tables):
+                    connection.execute(
+                        text(f"ALTER TABLE {table} ENABLE TRIGGER {trigger}")
+                    )
+    finally:
+        engine.dispose()
 
 
 def _revision_rows(configuration: DatabaseConfiguration) -> list[str]:
@@ -103,7 +201,7 @@ def test_empty_baseline_remains_a_reversible_historical_revision(
         assert _application_tables(migration_configuration) == ["alembic_version"]
     finally:
         command.upgrade(alembic_configuration, "head")
-    assert _revision_rows(migration_configuration) == ["20260723_0014"]
+    assert _revision_rows(migration_configuration) == ["20260723_0015"]
 
 
 def test_organization_isolation_revision_downgrades_and_reapplies_cleanly(
@@ -118,7 +216,7 @@ def test_organization_isolation_revision_downgrades_and_reapplies_cleanly(
     finally:
         command.upgrade(alembic_configuration, "head")
 
-    assert _revision_rows(migration_configuration) == ["20260723_0014"]
+    assert _revision_rows(migration_configuration) == ["20260723_0015"]
     assert _application_tables(migration_configuration) == HEAD_TABLES
 
 
@@ -138,7 +236,7 @@ def test_membership_revision_downgrades_to_issue_8_and_reapplies_cleanly(
     finally:
         command.upgrade(alembic_configuration, "head")
 
-    assert _revision_rows(migration_configuration) == ["20260723_0014"]
+    assert _revision_rows(migration_configuration) == ["20260723_0015"]
 
 
 def test_content_schema_revision_downgrades_to_membership_and_reapplies_cleanly(
@@ -159,7 +257,7 @@ def test_content_schema_revision_downgrades_to_membership_and_reapplies_cleanly(
     finally:
         command.upgrade(alembic_configuration, "head")
 
-    assert _revision_rows(migration_configuration) == ["20260723_0014"]
+    assert _revision_rows(migration_configuration) == ["20260723_0015"]
     assert _application_tables(migration_configuration) == HEAD_TABLES
 
 
@@ -186,7 +284,7 @@ def test_policy_epoch_revision_downgrades_to_content_and_reapplies_cleanly(
     finally:
         command.upgrade(alembic_configuration, "head")
 
-    assert _revision_rows(migration_configuration) == ["20260723_0014"]
+    assert _revision_rows(migration_configuration) == ["20260723_0015"]
     assert _application_tables(migration_configuration) == HEAD_TABLES
 
 
@@ -215,7 +313,7 @@ def test_worker_lease_revision_downgrades_to_policy_epoch_and_reapplies_cleanly(
     finally:
         command.upgrade(alembic_configuration, "head")
 
-    assert _revision_rows(migration_configuration) == ["20260723_0014"]
+    assert _revision_rows(migration_configuration) == ["20260723_0015"]
     assert _application_tables(migration_configuration) == HEAD_TABLES
 
 
@@ -237,7 +335,7 @@ def test_decision_lineage_revision_downgrades_to_worker_lease_and_reapplies_clea
     finally:
         command.upgrade(alembic_configuration, "head")
 
-    assert _revision_rows(migration_configuration) == ["20260723_0014"]
+    assert _revision_rows(migration_configuration) == ["20260723_0015"]
     assert _application_tables(migration_configuration) == HEAD_TABLES
 
 
@@ -275,7 +373,7 @@ def test_field_projection_revision_downgrades_to_decision_lineage_and_reapplies_
     finally:
         command.upgrade(alembic_configuration, "head")
 
-    assert _revision_rows(migration_configuration) == ["20260723_0014"]
+    assert _revision_rows(migration_configuration) == ["20260723_0015"]
     assert "context_fragment_field" in _application_tables(migration_configuration)
     assert "membership_resource_field_right" in _application_tables(
         migration_configuration
@@ -298,7 +396,7 @@ def test_file_source_revision_downgrades_to_learning_release_and_reapplies_clean
     finally:
         command.upgrade(alembic_configuration, "head")
 
-    assert _revision_rows(migration_configuration) == ["20260723_0014"]
+    assert _revision_rows(migration_configuration) == ["20260723_0015"]
     tables = _application_tables(migration_configuration)
     assert "context_source" in tables
     assert "source_version" in tables
@@ -349,7 +447,7 @@ def test_structural_markdown_revision_downgrades_and_reapplies_cleanly(
         command.upgrade(alembic_configuration, "head")
         engine.dispose()
 
-    assert _revision_rows(migration_configuration) == ["20260723_0014"]
+    assert _revision_rows(migration_configuration) == ["20260723_0015"]
     engine = create_database_engine(migration_configuration)
     try:
         with engine.connect() as connection:
@@ -402,7 +500,7 @@ def test_file_noop_revision_downgrades_and_reapplies_cleanly(
     finally:
         command.upgrade(alembic_configuration, "head")
 
-    assert _revision_rows(migration_configuration) == ["20260723_0014"]
+    assert _revision_rows(migration_configuration) == ["20260723_0015"]
     tables = _application_tables(migration_configuration)
     assert "file_acquisition_result" in tables
     assert "file_resource_ingestion_guard" in tables
@@ -423,10 +521,171 @@ def test_file_replacement_revision_downgrades_and_reapplies_cleanly(
     finally:
         command.upgrade(alembic_configuration, "head")
 
-    assert _revision_rows(migration_configuration) == ["20260723_0014"]
+    assert _revision_rows(migration_configuration) == ["20260723_0015"]
     tables = _application_tables(migration_configuration)
     assert "file_revision_replacement_plan" in tables
     assert "file_revision_supersession" in tables
+
+
+def test_file_recovery_revision_downgrades_and_reapplies_cleanly(
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    """Issue #27 owns one reversible empty recovery schema boundary."""
+
+    alembic_configuration = Config(ROOT / "alembic.ini")
+    try:
+        command.downgrade(alembic_configuration, "20260723_0014")
+        assert _revision_rows(migration_configuration) == ["20260723_0014"]
+        tables = _application_tables(migration_configuration)
+        assert "file_publication_recovery" not in tables
+        assert "file_import_job_event" not in tables
+    finally:
+        command.upgrade(alembic_configuration, "head")
+
+    assert _revision_rows(migration_configuration) == ["20260723_0015"]
+    tables = _application_tables(migration_configuration)
+    assert "file_publication_recovery" in tables
+    assert "file_import_job_event" in tables
+
+
+def test_recovery_upgrade_adopts_an_existing_ready_replacement(
+    tmp_path: Path,
+    migration_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+    guarded_worker_engine: Engine,
+) -> None:
+    """An Issue #26 ready job remains resumable after the Issue #27 upgrade."""
+
+    scenario = _prepare_file_import_scenario(
+        tmp_path,
+        migration_configuration,
+        guarded_control_engine,
+        payload=b"# Handbook\n\nOLD marker.\n\n## Shared\n\nShared query.\n",
+    )
+    assert scenario.token is not None
+    initial = _run_file_import(
+        scenario,
+        scenario.prepared,
+        scenario.token,
+        guarded_worker_engine,
+        config_version="markdown-config-v2",
+    )
+    (scenario.root / "handbook.md").write_bytes(NEW_MARKDOWN)
+    replacement, replacement_token = _prepare_repeat_file_import(
+        scenario,
+        guarded_control_engine,
+        idempotency_key="ready-before-recovery-upgrade",
+        lease_ttl_seconds=2,
+    )
+    claims = _scenario_claims(
+        replace(scenario, prepared=replacement, token=replacement_token)
+    )
+    document = compile_markdown(
+        NEW_MARKDOWN, MarkdownCompilerConfig("markdown-config-v2")
+    )
+    assert type(document) is ParsedDocument
+    revision_id = uuid4()
+    resource_ref = initial.candidate_ref.resource_ref
+    alembic_configuration = Config(ROOT / "alembic.ini")
+    try:
+        command.downgrade(alembic_configuration, "20260723_0014")
+        with guarded_worker_engine.begin() as connection:
+            redeemed = connection.execute(
+                text(
+                    """
+                    SELECT * FROM public.context_worker_redeem_file_import(
+                        :organization_id, :job_id, :service_principal_id,
+                        :source_ref, :signing_key_version, :nonce,
+                        :issued_at, :expires_at
+                    )
+                    """
+                ),
+                {
+                    "organization_id": claims.organization_id,
+                    "job_id": claims.job_id,
+                    "service_principal_id": claims.service_principal_id,
+                    "source_ref": claims.source_ref,
+                    "signing_key_version": claims.signing_key_version,
+                    "nonce": claims.nonce,
+                    "issued_at": claims.issued_at,
+                    "expires_at": claims.expires_at,
+                },
+            ).one_or_none()
+            assert redeemed is not None
+            staged = connection.execute(
+                text(
+                    """
+                    SELECT *
+                    FROM public.context_worker_stage_structural_file_replacement(
+                        :organization_id, :job_id, :service_principal_id,
+                        :source_ref, :resource_ref, :revision_id,
+                        :canonical_text, :content_hash, :compilation_digest,
+                        :compiler_version, :config_version,
+                        CAST(:compilation_document AS jsonb),
+                        :signing_key_version, :nonce, :issued_at, :expires_at
+                    )
+                    """
+                ),
+                {
+                    "organization_id": claims.organization_id,
+                    "job_id": claims.job_id,
+                    "service_principal_id": claims.service_principal_id,
+                    "source_ref": claims.source_ref,
+                    "resource_ref": resource_ref,
+                    "revision_id": revision_id,
+                    "canonical_text": document.canonical_text,
+                    "content_hash": document.content_hash,
+                    "compilation_digest": document.compilation_digest,
+                    "compiler_version": document.provenance.compiler_version,
+                    "config_version": document.provenance.config_version,
+                    "compilation_document": json.dumps(
+                        json.loads(canonicalize_parsed_document(document)),
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
+                    "signing_key_version": claims.signing_key_version,
+                    "nonce": claims.nonce,
+                    "issued_at": claims.issued_at,
+                    "expires_at": claims.expires_at,
+                },
+            ).one_or_none()
+            assert staged is not None
+        command.upgrade(alembic_configuration, "head")
+        migration_engine = create_database_engine(migration_configuration)
+        try:
+            with migration_engine.connect() as connection:
+                assert connection.execute(
+                    text(
+                        "SELECT checkpoint FROM file_publication_recovery "
+                        "WHERE organization_id = :organization_id "
+                        "AND job_id = :job_id"
+                    ),
+                    {
+                        "organization_id": claims.organization_id,
+                        "job_id": claims.job_id,
+                    },
+                ).scalar_one() == "ready"
+        finally:
+            migration_engine.dispose()
+        while datetime.now(UTC) <= claims.expires_at:
+            sleep(0.05)
+        recovered_token = PostgreSQLWorkerLeaseIssuer(
+            guarded_control_engine, scenario.codec
+        ).issue_file_import_lease(replacement)
+        recovered = _run_file_import(
+            scenario,
+            replacement,
+            recovered_token,
+            guarded_worker_engine,
+            config_version="markdown-config-v2",
+        )
+        assert recovered.outcome == "replaced"
+        assert recovered.candidate_ref.revision_ref == str(revision_id)
+    finally:
+        command.upgrade(alembic_configuration, "head")
+        _delete_issue_27_upgrade_fixture(
+            migration_configuration, scenario.organization_id
+        )
 
 
 def test_structural_snapshot_constraint_rejects_missing_json_bindings(
@@ -706,7 +965,7 @@ def test_field_projection_downgrade_refuses_populated_content_atomically(
         ):
             command.downgrade(alembic_configuration, "20260722_0007")
 
-        assert _revision_rows(migration_configuration) == ["20260723_0014"]
+        assert _revision_rows(migration_configuration) == ["20260723_0015"]
         with engine.connect() as connection:
             assert (
                 connection.execute(
@@ -772,7 +1031,7 @@ def test_field_projection_downgrade_refuses_populated_content_atomically(
                 ):
                     connection.execute(text(statement), parameters)
         except SQLAlchemyError:
-            if _revision_rows(migration_configuration) != ["20260723_0014"]:
+            if _revision_rows(migration_configuration) != ["20260723_0015"]:
                 command.upgrade(alembic_configuration, "head")
             raise
         finally:
@@ -926,7 +1185,7 @@ def test_field_projection_downgrade_serializes_with_concurrent_fragment_insert(
                 == "concurrent-private-body"
             )
     finally:
-        if _revision_rows(migration_configuration) != ["20260723_0014"]:
+        if _revision_rows(migration_configuration) != ["20260723_0015"]:
             command.upgrade(alembic_configuration, "head")
         with engine.begin() as connection:
             connection.execute(
