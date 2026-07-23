@@ -38,6 +38,11 @@ from engine.control.file_imports import (
     PreparedFileImport,
     PrepareFileImport,
 )
+from engine.control.file_source_offboarding import (
+    FileSourceCleanupState,
+    FileSourceOffboarding,
+    OffboardFileSource,
+)
 from engine.control.file_source_progress import (
     FileSourceAcquisitionCheckpoint,
     FileSourceChangeKind,
@@ -66,10 +71,13 @@ __all__ = [
     "FileSourceAcquisitionCheckpoint",
     "FileSourceChangeKind",
     "FileSourceProgress",
+    "FileSourceCleanupState",
+    "FileSourceOffboarding",
     "FileSourcePublishOutcome",
     "FileSourcePublishWatermark",
     "FileResourceTombstone",
     "RegisterFileSource",
+    "OffboardFileSource",
     "PrepareFileImport",
     "PreparedFileImport",
     "SourceAclEvidenceMode",

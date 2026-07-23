@@ -21,7 +21,10 @@ from engine.control import (
     ControlStorePort,
     FileResourceTombstone,
     FileRootRef,
+    FileSourceCleanupState,
+    FileSourceOffboarding,
     FileSourceProgress,
+    OffboardFileSource,
     RegisterFileSource,
     SourceControlUnavailable,
     SourceManifest,
@@ -55,6 +58,7 @@ class _Authenticator:
             allowed_operations=frozenset(
                 {
                     ControlOperation.IMPORT_FILE,
+                    ControlOperation.OFFBOARD_FILE_SOURCE,
                     ControlOperation.REGISTER_SOURCE,
                     ControlOperation.READ_SOURCE,
                     ControlOperation.READ_SOURCE_PROGRESS,
@@ -119,6 +123,23 @@ class _Store(ControlStorePort):
             source_ref=source_ref,
             acquisition_checkpoint=None,
             publish_watermark=None,
+        )
+
+    def offboard_file_source(
+        self, call: TrustedControlCall, command: OffboardFileSource
+    ) -> FileSourceOffboarding:
+        assert call.organization_id == ORGANIZATION_ID
+        assert call.operation is ControlOperation.OFFBOARD_FILE_SOURCE
+        return FileSourceOffboarding(
+            organization_id=ORGANIZATION_ID,
+            source_ref=command.source_ref,
+            source_version_ref=UUID("54ae2c20-02a1-44e7-98bf-4034841fb7ac"),
+            policy_epoch=2,
+            cleanup_intent_ref=UUID("d46d2310-b9fb-4058-8205-1198df75963b"),
+            cancelled_job_count=1,
+            retained_resource_count=1,
+            security_completed_at=NOW,
+            cleanup_state=FileSourceCleanupState.PENDING,
         )
 
     def tombstone_file_resource(
@@ -308,6 +329,31 @@ def test_authorized_operator_tombstones_one_exact_file_resource() -> None:
     assert result.event_ref == command.event_ref
     assert result.event_sequence == command.event_sequence
     assert result.policy_epoch == 2
+
+
+def test_authorized_operator_offboards_one_file_source_without_cleanup_input() -> None:
+    store = _Store()
+    authority = _authority()
+    control = ContextControl(store=store, authority=authority, clock=lambda: NOW)
+    command = OffboardFileSource(
+        source_ref=SourceRef(UUID("5d37f20a-6a2b-4534-8909-e0118bbc4b47"))
+    )
+
+    assert [field.name for field in fields(command)] == ["source_ref"]
+    with authority.authorize(
+        opaque_credential="control-credential-a",
+        operation=ControlOperation.OFFBOARD_FILE_SOURCE,
+        request_id="offboard-file-source-a",
+    ) as call:
+        result = control.offboard_file_source(call, command)
+
+    assert result.organization_id == ORGANIZATION_ID
+    assert result.source_ref == command.source_ref
+    assert result.policy_epoch == 2
+    assert result.cancelled_job_count == 1
+    assert result.retained_resource_count == 1
+    assert result.cleanup_state is FileSourceCleanupState.PENDING
+    assert result.security_completed_at == NOW
 
 
 def test_postgres_tombstone_store_absorbs_malformed_result_types(

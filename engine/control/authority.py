@@ -20,6 +20,7 @@ from engine.control.contracts import _require_bounded_text, _require_utc
 
 class ControlOperation(StrEnum):
     IMPORT_FILE = "import_file"
+    OFFBOARD_FILE_SOURCE = "offboard_file_source"
     REGISTER_SOURCE = "register_source"
     READ_SOURCE = "read_source"
     READ_SOURCE_PROGRESS = "read_source_progress"

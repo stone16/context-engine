@@ -120,6 +120,16 @@ def _resign_ticket(
     return f"{encoded_header}.{encoded_claims}.{_b64url(signature_value)}"
 
 
+def _remove_claim_and_resign(
+    ticket: ContextAccessTicket,
+    *,
+    claim_name: str,
+) -> str:
+    header, claims = _decode_ticket(ticket.serialize())
+    del claims[claim_name]
+    return _sign_raw_documents(_canonical_json(header), _canonical_json(claims))
+
+
 def _sign_raw_documents(header: bytes, claims: bytes) -> str:
     encoded_header = _b64url(header)
     encoded_claims = _b64url(claims)
@@ -340,6 +350,50 @@ def test_valid_tickets_invoke_only_their_bound_synthetic_effects() -> None:
     assert channel.effects == 1
 
 
+def test_context_access_ticket_issuer_rejects_a_stale_policy_epoch() -> None:
+    epoch_port = _EpochPort(current=11)
+    with _identity(epoch_port=epoch_port) as identity:
+        issuer = ContextAccessTicketIssuer(
+            keyring=KEYRING,
+            organization_id=ORGANIZATION_ID,
+            provider_ref="provider-a",
+            clock=lambda: NOW,
+        )
+        epoch_port.current = 12
+
+        with pytest.raises(TicketNotAvailable):
+            issuer.issue(identity)
+
+
+def test_source_bound_context_access_ticket_requires_lifecycle_authority() -> None:
+    with _identity() as identity:
+        issuer = ContextAccessTicketIssuer(
+            keyring=KEYRING,
+            organization_id=ORGANIZATION_ID,
+            provider_ref="provider-a",
+            source_ref=UUID("5d37f20a-6a2b-4534-8909-e0118bbc4b47"),
+            clock=lambda: NOW,
+        )
+
+        with pytest.raises(TicketNotAvailable):
+            issuer.issue(identity)
+
+
+@pytest.mark.parametrize(
+    "source_ref",
+    ["source-a", "5d37f20a-6a2b-4534-8909-e0118bbc4b47"],
+)
+def test_source_bound_ticket_requires_a_uuid_domain_value(source_ref: str) -> None:
+    with pytest.raises(TypeError, match="must be UUID"):
+        ContextAccessTicketIssuer(
+            keyring=KEYRING,
+            organization_id=ORGANIZATION_ID,
+            provider_ref="provider-a",
+            source_ref=cast(UUID, source_ref),
+            clock=lambda: NOW,
+        )
+
+
 @pytest.mark.security_evidence(id="PROP-ACTION-SEPARATION-014", layer="property")
 def test_public_ticket_types_and_server_side_issuers_are_structurally_distinct() -> (
     None
@@ -453,6 +507,7 @@ def test_signed_ticket_schemas_bind_distinct_domains_audiences_and_identity(
         "audience": "context-read:provider-a",
         "operation": "synthetic.provider.read",
         "provider_ref": "provider-a",
+        "source_ref": None,
     }
     assert action_claims == {
         **shared_identity_claims,
@@ -460,6 +515,41 @@ def test_signed_ticket_schemas_bind_distinct_domains_audiences_and_identity(
         "channel_ref": "channel-a",
         "operation": "synthetic.channel.noop",
     }
+
+
+def test_pre_source_binding_ticket_remains_only_an_unbound_synthetic_ticket() -> None:
+    provider = _Provider()
+    source_ref = UUID("5d37f20a-6a2b-4534-8909-e0118bbc4b47")
+    with _identity() as identity:
+        issued = ContextAccessTicketIssuer(
+            keyring=KEYRING,
+            organization_id=ORGANIZATION_ID,
+            provider_ref="provider-a",
+            clock=lambda: NOW,
+        ).issue(identity)
+        legacy = ContextAccessTicket.deserialize(
+            _remove_claim_and_resign(issued, claim_name="source_ref"),
+            keyring=KEYRING,
+        )
+
+        ContextAccessTicketReadHandler(
+            keyring=KEYRING,
+            organization_id=ORGANIZATION_ID,
+            provider_ref="provider-a",
+            provider=provider,
+            clock=lambda: NOW,
+        ).read(ticket=legacy, identity=identity)
+        with pytest.raises(TicketNotAvailable):
+            ContextAccessTicketReadHandler(
+                keyring=KEYRING,
+                organization_id=ORGANIZATION_ID,
+                provider_ref="provider-a",
+                source_ref=source_ref,
+                provider=provider,
+                clock=lambda: NOW,
+            ).read(ticket=legacy, identity=identity)
+
+    assert provider.effects == 1
 
 
 def test_ticket_targets_are_bound_to_a_trusted_organization_configuration(

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import FrozenInstanceError
 from typing import cast
+from uuid import UUID
 
 import pytest
 from hypothesis import given, seed, settings
@@ -42,6 +43,10 @@ class StructuredProjectionPort:
     def discover_exact_phrase(self, phrase_digest: str) -> tuple[()]:
         del phrase_digest
         return ()
+
+    def source_is_active(self, source_ref: UUID) -> bool:
+        del source_ref
+        return True
 
     def observe_publication(self, candidate_ref: object) -> None:
         del candidate_ref

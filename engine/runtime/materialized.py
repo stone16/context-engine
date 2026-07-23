@@ -201,6 +201,8 @@ class MaterializedProjectionPort(Protocol):
         phrase_digest: str,
     ) -> tuple[CandidateRef, ...]: ...
 
+    def source_is_active(self, source_ref: UUID) -> bool: ...
+
     def observe_publication(
         self,
         candidate_ref: CandidateRef,
@@ -215,7 +217,6 @@ class MaterializedProjectionPort(Protocol):
         self,
         locator: MaterializedFragmentLocator,
     ) -> MaterializedFragmentProjection | None: ...
-
 
 class _MaterializedProjectionScope:
     """Private lifetime token owned by one current UserActor transaction."""
@@ -302,7 +303,8 @@ def _construct_materialized_projection_session(
             "scope"
         )
     if (
-        not callable(getattr(port, "locate", None))
+        not callable(getattr(port, "source_is_active", None))
+        or not callable(getattr(port, "locate", None))
         or not callable(getattr(port, "project", None))
         or not callable(getattr(port, "discover_exact_phrase", None))
         or not callable(getattr(port, "observe_publication", None))
@@ -312,6 +314,21 @@ def _construct_materialized_projection_session(
     object.__setattr__(session, "_authority_scope", authority_scope)
     object.__setattr__(session, "_port", port)
     return session
+
+
+def _is_materialized_source_active(
+    session: MaterializedProjectionSession,
+    source_ref: UUID,
+) -> bool:
+    """Read File-source lifecycle on the current UserActor transaction."""
+
+    _require_active_materialized_projection_session(session)
+    if type(source_ref) is not UUID:
+        raise TypeError("materialized source reference must be UUID")
+    observed = session._port.source_is_active(source_ref)
+    if type(observed) is not bool:
+        raise TypeError("materialized source lifecycle returned a non-boolean")
+    return observed
 
 
 def _locate_materialized_fragment(

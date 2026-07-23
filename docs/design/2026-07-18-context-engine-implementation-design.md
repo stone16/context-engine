@@ -592,7 +592,8 @@ Resource nor its physical Revision/Fragments; a deliberately stale candidate
 still produces the same canonical empty HTTP Package as an unknown Resource.
 Duplicate and older deletion observations return the original result without
 another epoch bump. Physical cleanup, restore, native watcher detection, source
-offboarding, and cleanup-job execution remain inactive.
+offboarding, and cleanup-job execution remain inactive for this Resource-level
+carrier.
 
 ADR-0043 separates operational File progress into two append-only,
 Organization/Source-scoped streams. Import-job or tombstone acceptance appends
@@ -604,6 +605,20 @@ contiguous completed sequence: a later publication cannot jump over an earlier
 interrupted job, while recovery closes the gap without rewriting history.
 Runtime has no privilege on or dependency upon either signal, and the deferred
 standard ProviderPort cursor/checkpoint operations remain unavailable.
+
+ADR-0044 activates manual trusted-Control offboarding for one known File
+ContextSource. The exclusive Organization publication lock serializes a single
+transaction that disables the stable Source, records the exact immutable active
+SourceVersion, advances Policy Epoch, cancels all nonterminal File jobs with
+zero effects, and appends a pending source-cleanup intent. Runtime and every
+WorkerLease database effect require the Source to remain active, so retained
+Resources, Revisions, Fragments, candidates, jobs, and progress history cannot
+deliver or publish after commit. ContextAccessTicket issuance checks current
+epoch before signing and, when explicitly File-source-bound, requires that exact
+Source to remain active at issuance and redemption. Repeat offboarding returns
+the original database result; wrong-Organization and missing Source share one
+generic refusal. Cleanup execution, re-enable, native watcher offboarding, and
+remote credential revocation remain inactive.
 
 Because Runtime resolves through multiple SQL statements at `READ COMMITTED`,
 each UserActor transaction takes an Organization-scoped shared publication

@@ -32,7 +32,7 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
     document = manifest()
     tables = table_entries(document)
 
-    assert document["manifestVersion"] == "17.0.0"
+    assert document["manifestVersion"] == "18.0.0"
     assert set(tables) == {
         "active_release_manifest",
         "alembic_version",
@@ -53,6 +53,7 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
         "file_resource_cleanup_intent",
         "file_resource_ingestion_guard",
         "file_source_acquisition_checkpoint",
+        "file_source_cleanup_intent",
         "file_source_publish_watermark",
         "file_revision_snapshot",
         "file_revision_replacement_plan",
@@ -110,6 +111,7 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
         "file_revision_replacement_plan",
         "file_revision_supersession",
         "file_source_acquisition_checkpoint",
+        "file_source_cleanup_intent",
         "file_source_publish_watermark",
         "revision_publication_event",
     ):
@@ -483,6 +485,75 @@ def test_issue_28_file_tombstone_contract_is_atomic_and_function_only() -> None:
     ]
 
 
+def test_issue_30_file_source_offboarding_is_atomic_and_function_only() -> None:
+    document = manifest()
+    entries = table_entries(document)
+    operation = next(
+        value
+        for value in document["controlOperations"]
+        if value["name"] == "offboard_file_source"
+    )
+
+    assert operation["databaseFunction"] == (
+        "context_control_offboard_file_source"
+    )
+    assert operation["definerRole"] == (
+        "context_engine_access_policy_definer"
+    )
+    assert operation["directTableMutationAllowed"] is False
+    assert operation["idempotencyBinding"] == ["organization_id", "source_id"]
+    assert operation["atomicWrites"] == [
+        "context_source",
+        "organization_policy_epoch",
+        "file_source_cleanup_intent",
+        "file_import_job",
+    ]
+    cleanup = entries["file_source_cleanup_intent"]
+    cleanup_foreign_keys = {
+        foreign_key["name"]: foreign_key for foreign_key in cleanup["foreignKeys"]
+    }
+    assert cleanup_foreign_keys["fk_file_source_cleanup_intent_organization"] == {
+        "name": "fk_file_source_cleanup_intent_organization",
+        "columns": ["organization_id"],
+        "references": {
+            "table": "organization",
+            "columns": ["organization_id"],
+        },
+    }
+    assert cleanup["rowLevelSecurity"]["enabled"] is True
+    assert cleanup["rowLevelSecurity"]["forced"] is True
+    assert cleanup["immutableRows"]["events"] == ["UPDATE", "DELETE"]
+    assert cleanup["functionOnlyMutation"] == {
+        "databaseFunction": "context_control_offboard_file_source",
+        "role": "context_engine_control",
+        "definerRole": "context_engine_access_policy_definer",
+        "directTableMutationAllowed": False,
+    }
+    assert cleanup["permittedOperations"]["context_engine_runtime"] == []
+    assert cleanup["permittedOperations"]["context_engine_worker"] == []
+    assert cleanup["retention"] == {
+        "state": "pending",
+        "physicalCleanupCompletion": "not active in Issue #30",
+        "sourceContent": "none",
+    }
+    assert entries["context_source"]["permittedOperations"][
+        "context_engine_runtime"
+    ] == []
+    resource_policy = next(
+        policy
+        for policy in entries["context_resource"]["rowLevelSecurity"]["policies"]
+        if policy["name"] == "context_resource_current_user_actor"
+    )
+    assert "context_runtime_file_source_lifecycle_allows" in (
+        resource_policy["using"]
+    )
+    for policy in entries["file_import_job"]["rowLevelSecurity"]["policies"]:
+        if policy["roles"] == ["context_engine_worker_lease_definer"] and (
+            policy["command"] in {"SELECT", "UPDATE"}
+        ):
+            assert "active_source.lifecycle_state = 'active'" in policy["using"]
+
+
 def test_issue_21_file_source_manifest_is_closed_and_role_separated() -> None:
     entries = table_entries(manifest())
     source = entries["context_source"]
@@ -510,6 +581,9 @@ def test_issue_21_file_source_manifest_is_closed_and_role_separated() -> None:
     assert source_foreign_keys["fk_context_source_active_version_same_organization"][
         "columns"
     ] == ["organization_id", "source_id", "active_version_id"]
+    assert source_foreign_keys["fk_context_source_disabled_version_exact"][
+        "columns"
+    ] == ["organization_id", "source_id", "disabled_version_id"]
     assert version["organizationInclusiveKeys"] == [
         {
             "name": "pk_source_version",
@@ -562,7 +636,15 @@ def test_issue_21_file_source_manifest_is_closed_and_role_separated() -> None:
     assert '"ingestionJobs": "available"' in (capability_constraint["expression"])
 
     assert source["permittedOperations"] == {
-        "context_engine_control": ["SELECT", "INSERT"],
+        "context_engine_access_policy_definer": [
+            "SELECT",
+            "UPDATE lifecycle_state, disabled_version_id, disabled_at",
+        ],
+        "context_engine_control": [
+            "SELECT",
+            "INSERT",
+            "EXECUTE context_control_offboard_file_source",
+        ],
         "context_engine_learning": [],
         "context_engine_runtime": [],
         "context_engine_security_operator": [],
@@ -1652,6 +1734,9 @@ def test_policy_epoch_manifest_seals_runtime_reads_and_control_mutation() -> Non
         if entry["name"] == "organization_policy_epoch":
             expected_operations["context_engine_control"].append(
                 "EXECUTE context_control_tombstone_file_resource"
+            )
+            expected_operations["context_engine_control"].append(
+                "EXECUTE context_control_offboard_file_source"
             )
         if entry["name"] == "resource_access_policy":
             expected_operations["context_engine_worker"] = [

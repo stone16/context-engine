@@ -19,9 +19,12 @@ from engine.control import (
     FileRootRef,
     FileSourceAcquisitionCheckpoint,
     FileSourceChangeKind,
+    FileSourceCleanupState,
+    FileSourceOffboarding,
     FileSourceProgress,
     FileSourcePublishOutcome,
     FileSourcePublishWatermark,
+    OffboardFileSource,
     RegisterFileSource,
     SourceControlUnavailable,
     SourceManifest,
@@ -55,6 +58,7 @@ _ACTIVE_SOURCE_SELECT = """
       ON version.organization_id = source.organization_id
      AND version.source_id = source.source_id
      AND version.version_id = source.active_version_id
+     AND source.lifecycle_state = 'active'
 """
 
 
@@ -244,6 +248,58 @@ class PostgreSQLControlStore:
         except (DBAPIError, SQLAlchemyError, AssertionError):
             raise SourceControlUnavailable(
                 "File source read database authority is unavailable"
+            ) from None
+
+    def offboard_file_source(
+        self,
+        call: TrustedControlCall,
+        command: OffboardFileSource,
+    ) -> FileSourceOffboarding:
+        """Commit source disable, epoch advance, cancellation and cleanup intent."""
+
+        if (
+            type(call) is not TrustedControlCall
+            or type(command) is not OffboardFileSource
+        ):
+            raise SourceNotAvailable
+        cleanup_intent_id = self._uuid_factory()
+        try:
+            with self._engine.begin() as connection:
+                assert_control_role(connection)
+                _set_organization_context(connection, call.organization_id)
+                row = connection.execute(
+                    text(
+                        """
+                        SELECT *
+                        FROM public.context_control_offboard_file_source(
+                            :organization_id, :source_id, :cleanup_intent_id
+                        )
+                        """
+                    ),
+                    {
+                        "organization_id": call.organization_id,
+                        "source_id": command.source_ref.value,
+                        "cleanup_intent_id": cleanup_intent_id,
+                    },
+                ).one_or_none()
+                if row is None:
+                    raise SourceNotAvailable
+                return FileSourceOffboarding(
+                    organization_id=call.organization_id,
+                    source_ref=SourceRef(row.source_id),
+                    source_version_ref=row.source_version_id,
+                    policy_epoch=row.policy_epoch,
+                    cleanup_intent_ref=row.cleanup_intent_id,
+                    cancelled_job_count=row.cancelled_job_count,
+                    retained_resource_count=row.retained_resource_count,
+                    security_completed_at=row.security_completed_at,
+                    cleanup_state=FileSourceCleanupState(row.cleanup_state),
+                )
+        except SourceNotAvailable:
+            raise
+        except (DBAPIError, SQLAlchemyError, AssertionError, TypeError, ValueError):
+            raise SourceControlUnavailable(
+                "File source offboarding database authority is unavailable"
             ) from None
 
     def prepare_file_import(

@@ -14,9 +14,11 @@ from engine.control import (
     FileResourceTombstone,
     FileSourceAcquisitionCheckpoint,
     FileSourceChangeKind,
+    FileSourceOffboarding,
     FileSourceProgress,
     FileSourcePublishOutcome,
     FileSourcePublishWatermark,
+    OffboardFileSource,
     RegisterFileSource,
     SourceManifest,
     SourceNotAvailable,
@@ -53,6 +55,11 @@ class _Authenticator:
 
 
 class _Store:
+    def offboard_file_source(
+        self, call: TrustedControlCall, command: OffboardFileSource
+    ) -> FileSourceOffboarding:
+        raise AssertionError("unexpected offboarding")
+
     def register_file_source(
         self, call: TrustedControlCall, command: RegisterFileSource
     ) -> SourceManifest:

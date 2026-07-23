@@ -140,6 +140,20 @@ class _PostgreSQLMaterializedProjectionPort:
     def __init__(self, connection: Connection) -> None:
         self._connection = connection
 
+    def source_is_active(self, source_ref: UUID) -> bool:
+        observed = self._connection.execute(
+            text(
+                """
+                SELECT public.context_runtime_file_source_lifecycle_allows(
+                    NULLIF(current_setting('app.organization_id', true), '')::uuid,
+                    :source_ref
+                )
+                """
+            ),
+            {"source_ref": str(source_ref)},
+        ).scalar_one()
+        return observed is True
+
     def discover_exact_phrase(
         self,
         phrase_digest: str,
