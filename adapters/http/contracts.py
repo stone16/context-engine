@@ -65,6 +65,14 @@ PackageDigestOutput = Annotated[
     str,
     Field(strict=True, pattern=r"^[0-9a-f]{64}$"),
 ]
+OpaqueModelEgressGrant = Annotated[
+    str,
+    Field(strict=True, pattern=r"^egrm_[0-9a-f]{64}$", repr=False),
+]
+OpaqueChannelEgressGrant = Annotated[
+    str,
+    Field(strict=True, pattern=r"^egrc_[0-9a-f]{64}$", repr=False),
+]
 BlockOutputRef = Annotated[
     str,
     Field(strict=True, pattern=r"^block_[0-9a-f]{64}$"),
@@ -313,11 +321,30 @@ class ContextPackageWire(ClosedWireModel):
         return self
 
 
+class ModelEgressGrantWire(ClosedWireModel):
+    """Opaque one-hop model grant; no trusted claim is exposed on the wire."""
+
+    kind: Literal["model"]
+    value: OpaqueModelEgressGrant = Field(repr=False)
+
+
+class ChannelEgressGrantWire(ClosedWireModel):
+    """Opaque one-hop channel grant; it carries no write authority."""
+
+    kind: Literal["channel"]
+    value: OpaqueChannelEgressGrant = Field(repr=False)
+
+
 class ResolvedWire(ClosedWireModel):
     """Successful public resolution envelope."""
 
     kind: Literal["resolved"]
     package: ContextPackageWire
+    egressGrant: ModelEgressGrantWire | ChannelEgressGrantWire | None = Field(
+        default=None,
+        discriminator="kind",
+        repr=False,
+    )
 
 
 class RequestNotAvailableWire(ClosedWireModel):

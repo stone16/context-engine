@@ -23,6 +23,7 @@ from scripts.security_gate.report import (
     reconcile_execution,
 )
 from scripts.security_gate.runner import (
+    _ALLOWED_DATABASE_ENVIRONMENT_KEYS,
     DatabaseEnvironmentError,
     GatePaths,
     GateRunError,
@@ -40,6 +41,14 @@ ORACLE_KEYS = (
     "wrongOrganizationEffectCount",
     "missingContextFallbackCount",
 )
+
+
+def test_security_gate_database_contract_includes_the_egress_role() -> None:
+    assert {
+        "CONTEXT_ENGINE_EGRESS_ROLE",
+        "CONTEXT_ENGINE_EGRESS_PASSWORD",
+        "CONTEXT_ENGINE_EGRESS_DATABASE_URL",
+    } <= _ALLOWED_DATABASE_ENVIRONMENT_KEYS
 
 
 def complete_provenance(*, commit: str = "a" * 40) -> dict[str, object]:

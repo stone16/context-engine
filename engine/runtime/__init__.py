@@ -65,6 +65,13 @@ from engine.runtime.contracts import (
     ScopeDecisionReceipt,
     TrustedDeliveryContext,
 )
+from engine.runtime.egress import (
+    ChannelEgressGrant,
+    ChannelEgressProfile,
+    EgressGrant,
+    ModelEgressGrant,
+    ModelEgressProfile,
+)
 from engine.runtime.evidence import (
     AuthorizedProjection,
     CandidateRef,
@@ -128,8 +135,13 @@ __all__ = [
     "MembershipVerificationProvenance",
     "MembershipRejectionAuditReceipt",
     "MembershipRejectionCategory",
+    "ModelEgressGrant",
+    "ModelEgressProfile",
     "Evidence",
     "EvidenceLineage",
+    "EgressGrant",
+    "ChannelEgressGrant",
+    "ChannelEgressProfile",
     "PackageBudget",
     "PackageBudgetRequest",
     "PackageBlock",

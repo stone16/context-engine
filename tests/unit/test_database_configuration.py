@@ -9,6 +9,7 @@ from sqlalchemy.pool import QueuePool
 
 from engine.persistence.configuration import (
     CONTROL_ROLE,
+    EGRESS_ROLE,
     IDENTITY_ROLE,
     LEARNING_ROLE,
     MIGRATOR_ROLE,
@@ -41,6 +42,10 @@ def database_environment() -> dict[str, str]:
             "postgresql+psycopg://context_engine_identity:identity-secret@"
             "127.0.0.1:5432/context_engine"
         ),
+        "CONTEXT_ENGINE_EGRESS_DATABASE_URL": (
+            "postgresql+psycopg://context_engine_egress:egress-secret@"
+            "127.0.0.1:5432/context_engine"
+        ),
         "CONTEXT_ENGINE_WORKER_DATABASE_URL": (
             "postgresql+psycopg://context_engine_worker:worker-secret@"
             "127.0.0.1:5432/context_engine"
@@ -61,6 +66,7 @@ def database_environment() -> dict[str, str]:
         "CONTEXT_ENGINE_RUNTIME_ROLE": RUNTIME_ROLE,
         "CONTEXT_ENGINE_CONTROL_ROLE": CONTROL_ROLE,
         "CONTEXT_ENGINE_IDENTITY_ROLE": IDENTITY_ROLE,
+        "CONTEXT_ENGINE_EGRESS_ROLE": EGRESS_ROLE,
         "CONTEXT_ENGINE_WORKER_ROLE": WORKER_ROLE,
         "CONTEXT_ENGINE_LEARNING_ROLE": LEARNING_ROLE,
         "CONTEXT_ENGINE_SECURITY_OPERATOR_ROLE": OPERATOR_ROLE,
@@ -73,6 +79,7 @@ def database_environment() -> dict[str, str]:
         (DatabasePurpose.MIGRATION, "CONTEXT_ENGINE_MIGRATION_DATABASE_URL"),
         (DatabasePurpose.CONTROL_PLANE, "CONTEXT_ENGINE_CONTROL_DATABASE_URL"),
         (DatabasePurpose.TRUSTED_IDENTITY, "CONTEXT_ENGINE_IDENTITY_DATABASE_URL"),
+        (DatabasePurpose.TRUSTED_EGRESS, "CONTEXT_ENGINE_EGRESS_DATABASE_URL"),
         (DatabasePurpose.API_RUNTIME, "CONTEXT_ENGINE_RUNTIME_DATABASE_URL"),
         (DatabasePurpose.SUPPLY_WORKER, "CONTEXT_ENGINE_WORKER_DATABASE_URL"),
         (DatabasePurpose.LEARNING, "CONTEXT_ENGINE_LEARNING_DATABASE_URL"),
@@ -205,6 +212,7 @@ def test_harness_contract_keeps_roles_distinct_and_test_uses_runtime() -> None:
 
     assert configurations.migration.expected_role == MIGRATOR_ROLE
     assert configurations.control.expected_role == CONTROL_ROLE
+    assert configurations.egress.expected_role == EGRESS_ROLE
     assert configurations.runtime.expected_role == RUNTIME_ROLE
     assert configurations.worker.expected_role == WORKER_ROLE
     assert configurations.learning.expected_role == LEARNING_ROLE

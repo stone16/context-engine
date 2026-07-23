@@ -32,7 +32,7 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
     document = manifest()
     tables = table_entries(document)
 
-    assert document["manifestVersion"] == "19.0.0"
+    assert document["manifestVersion"] == "20.0.0"
     assert set(tables) == {
         "active_release_manifest",
         "alembic_version",
@@ -45,6 +45,8 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
         "context_source",
         "decision_audit",
         "delivery_evidence",
+        "egress_audit",
+        "egress_grant",
         "exact_phrase_candidate",
         "file_acquisition",
         "file_acquisition_result",
@@ -96,6 +98,8 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
     )
     assert tables["decision_audit"]["classification"] == "tenant_owned"
     assert tables["delivery_evidence"]["classification"] == "tenant_owned"
+    assert tables["egress_grant"]["classification"] == "tenant_owned"
+    assert tables["egress_audit"]["classification"] == "tenant_owned"
     assert tables["service_principal"]["classification"] == "tenant_owned"
     assert tables["worker_noop_job"]["classification"] == "tenant_owned"
     assert tables["context_source"]["classification"] == "tenant_owned"
@@ -127,6 +131,18 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
         "release_promotion_audit",
     ):
         assert tables[release_table]["classification"] == "tenant_owned"
+
+
+def test_egress_audit_primary_key_is_organization_inclusive() -> None:
+    audit = table_entries(manifest())["egress_audit"]
+
+    assert audit["organizationInclusiveKeys"] == [
+        {
+            "name": "pk_egress_audit",
+            "kind": "primary_key",
+            "columns": ["organization_id", "audit_id"],
+        }
+    ]
 
 
 def test_issue_24_structural_markdown_contract_is_versioned_and_function_only() -> None:
@@ -1179,6 +1195,7 @@ def test_membership_manifest_requires_exact_user_actor_and_read_only_runtime() -
         "context_engine_worker": [],
         "context_engine_worker_lease_definer": ["SELECT"],
         "context_engine_delivery_evidence_definer": ["SELECT"],
+        "context_engine_egress_grant_definer": ["SELECT"],
     }
 
     rls = entry["rowLevelSecurity"]
@@ -1738,6 +1755,9 @@ def test_policy_epoch_manifest_seals_runtime_reads_and_control_mutation() -> Non
             expected_operations[
                 "context_engine_delivery_evidence_definer"
             ] = ["SELECT"]
+            expected_operations["context_engine_egress_grant_definer"] = [
+                "SELECT"
+            ]
             expected_operations["context_engine_control"].append(
                 "EXECUTE context_control_tombstone_file_resource"
             )

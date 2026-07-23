@@ -122,16 +122,27 @@ def test_planned_catalog_evidence_is_separate_from_executable_refs() -> None:
     }
 
 
-def test_m0_registry_uses_honest_unavailable_carrier_and_learning_evidence() -> None:
+def test_m0_registry_uses_activated_egress_and_honest_learning_evidence() -> None:
     registry, _, _ = _documents()
     evidence = {entry["id"]: entry["selector"] for entry in registry["evidence"]}
 
     unavailable_carrier = (
         "tests/integration/test_m0_unavailable_security_carriers.py::"
-        "test_m0_unavailable_citation_and_egress_carriers_fail_closed"
+        "test_unavailable_citation_and_real_provider_carriers_fail_closed"
     )
     assert evidence["PG-CITATION-AUTH-010"] == unavailable_carrier
-    assert evidence["PG-EGRESS-011"] == unavailable_carrier
+    assert evidence["PROP-EGRESS-011"] == (
+        "tests/unit/test_egress_grant.py::"
+        "test_each_egress_binding_mutation_and_cross_kind_emits_zero_bytes_effects"
+    )
+    assert evidence["PG-EGRESS-011"] == (
+        "tests/integration/test_egress_grant.py::"
+        "test_digest_only_grant_is_atomic_one_shot_and_audited"
+    )
+    assert evidence["RUNTIME-EGRESS-011"] == (
+        "tests/integration/test_z_egress_grant_file.py::"
+        "test_file_http_package_redeems_exact_model_grant_before_gateway_bytes"
+    )
     assert evidence["PROP-CROSS-ORG-LEARN-015"] == (
         "tests/unit/test_m0_learning_isolation.py::"
         "test_m0_learning_artifact_contract_has_no_cross_organization_carrier"

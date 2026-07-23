@@ -21,6 +21,8 @@ from engine.persistence.configuration import (
     CONTEXT_RUN_READER_DEFINER_ROLE,
     CONTROL_ROLE,
     DELIVERY_EVIDENCE_DEFINER_ROLE,
+    EGRESS_GRANT_DEFINER_ROLE,
+    EGRESS_ROLE,
     IDENTITY_ROLE,
     LEARNING_ROLE,
     MIGRATOR_ROLE,
@@ -92,6 +94,7 @@ def test_all_login_roles_have_reviewed_capabilities(
     migration_configuration: DatabaseConfiguration,
     control_configuration: DatabaseConfiguration,
     identity_configuration: DatabaseConfiguration,
+    egress_configuration: DatabaseConfiguration,
     runtime_configuration: DatabaseConfiguration,
     worker_configuration: DatabaseConfiguration,
     learning_configuration: DatabaseConfiguration,
@@ -101,6 +104,7 @@ def test_all_login_roles_have_reviewed_capabilities(
         migration_configuration,
         control_configuration,
         identity_configuration,
+        egress_configuration,
         runtime_configuration,
         worker_configuration,
         learning_configuration,
@@ -118,6 +122,7 @@ def test_all_login_roles_have_reviewed_capabilities(
         MIGRATOR_ROLE,
         CONTROL_ROLE,
         IDENTITY_ROLE,
+        EGRESS_ROLE,
         RUNTIME_ROLE,
         WORKER_ROLE,
         LEARNING_ROLE,
@@ -142,6 +147,7 @@ def test_post_init_role_provisioning_repairs_a_legacy_volume_idempotently(
     guarded_learning_engine: Engine,
     guarded_operator_engine: Engine,
     identity_configuration: DatabaseConfiguration,
+    egress_configuration: DatabaseConfiguration,
 ) -> None:
     contract = RoleProvisioningContract(
         database_name=os.environ["POSTGRES_DB"],
@@ -153,6 +159,8 @@ def test_post_init_role_provisioning_repairs_a_legacy_volume_idempotently(
         control_password=os.environ["CONTEXT_ENGINE_CONTROL_PASSWORD"],
         identity_role=IDENTITY_ROLE,
         identity_password=os.environ["CONTEXT_ENGINE_IDENTITY_PASSWORD"],
+        egress_role=EGRESS_ROLE,
+        egress_password=os.environ["CONTEXT_ENGINE_EGRESS_PASSWORD"],
         learning_role=LEARNING_ROLE,
         learning_password=os.environ["CONTEXT_ENGINE_LEARNING_PASSWORD"],
         security_operator_role=OPERATOR_ROLE,
@@ -164,14 +172,17 @@ def test_post_init_role_provisioning_repairs_a_legacy_volume_idempotently(
         context_run_reader_definer_role=CONTEXT_RUN_READER_DEFINER_ROLE,
         release_definer_role=RELEASE_DEFINER_ROLE,
         delivery_evidence_definer_role=DELIVERY_EVIDENCE_DEFINER_ROLE,
+        egress_grant_definer_role=EGRESS_GRANT_DEFINER_ROLE,
     )
     alembic_configuration = Config(ROOT / "alembic.ini")
     try:
         identity_engine = create_database_engine(identity_configuration)
+        egress_engine = create_database_engine(egress_configuration)
         guarded_control_engine.dispose()
         guarded_learning_engine.dispose()
         guarded_operator_engine.dispose()
         identity_engine.dispose()
+        egress_engine.dispose()
         clear_file_source_progress_projection(migration_configuration)
         command.downgrade(alembic_configuration, "20260721_0004")
         with psycopg.connect(
@@ -189,9 +200,11 @@ def test_post_init_role_provisioning_repairs_a_legacy_volume_idempotently(
                 WORKER_LEASE_DEFINER_ROLE,
                 CONTEXT_RUN_READER_DEFINER_ROLE,
                 DELIVERY_EVIDENCE_DEFINER_ROLE,
+                EGRESS_GRANT_DEFINER_ROLE,
                 RELEASE_DEFINER_ROLE,
                 CONTROL_ROLE,
                 IDENTITY_ROLE,
+                EGRESS_ROLE,
                 LEARNING_ROLE,
                 OPERATOR_ROLE,
             ):
@@ -202,7 +215,9 @@ def test_post_init_role_provisioning_repairs_a_legacy_volume_idempotently(
                 """
                 SELECT count(*)
                 FROM pg_roles
-                WHERE rolname IN (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                WHERE rolname IN (
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                )
                 """,
                 (
                     CONTROL_ROLE,
@@ -214,6 +229,8 @@ def test_post_init_role_provisioning_repairs_a_legacy_volume_idempotently(
                     OPERATOR_ROLE,
                     LEARNING_ROLE,
                     IDENTITY_ROLE,
+                    EGRESS_ROLE,
+                    EGRESS_GRANT_DEFINER_ROLE,
                 ),
             ).fetchone()
             assert missing_roles == (0,)

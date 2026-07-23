@@ -50,8 +50,25 @@ from engine.runtime.contracts import (
     RuntimeRequest,
     ScopeDecisionReceipt,
     _require_closed_opaque_ref,
+    context_package_digest_document,
 )
-from engine.runtime.delivery import TrustedDeliveryContext
+from engine.runtime.delivery import (
+    DeliveryConstructionProvenance,
+    TrustedDeliveryContext,
+)
+from engine.runtime.egress import (
+    INTERNAL_ONLY_EGRESS_PROFILE,
+    ChannelEgressProfile,
+    EgressGrant,
+    EgressGrantIssuanceUnavailable,
+    EgressGrantIssue,
+    EgressProfile,
+    InternalOnlyEgressProfile,
+    ModelEgressProfile,
+    direct_egress_audience_digest,
+    issue_egress_grant,
+)
+from engine.runtime.egress_payload import channel_payload_digest, model_input_digest
 from engine.runtime.evidence import (
     CandidateRef,
     EvidenceLineage,
@@ -69,7 +86,7 @@ from engine.runtime.materialized import (
     _locate_materialized_fragment,
     _project_materialized_fragment,
 )
-from engine.runtime.package_digest import QueryDigestKeyring
+from engine.runtime.package_digest import QueryDigestKeyring, context_package_digest
 from engine.runtime.policy_epoch import (
     PolicyEpochAuthorityUnavailable,
     PolicyEpochVerification,
@@ -309,6 +326,107 @@ class ProvenanceGate:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class EgressGate:
+    """Concrete final Package/hop policy gate; no external profile is a closed deny."""
+
+    def finalize(
+        self,
+        *,
+        invocation: AuthenticatedInvocation,
+        delivery_context: TrustedDeliveryContext,
+        provenance: DecisionProvenanceReceipt,
+        package: ContextPackage,
+        profile: EgressProfile,
+        issued_at: datetime,
+    ) -> EgressGrant | None:
+        if type(profile) not in {
+            InternalOnlyEgressProfile,
+            ModelEgressProfile,
+            ChannelEgressProfile,
+        }:
+            raise RuntimeConfigurationError("egress profile has the wrong nominal type")
+        _require_active_user_actor(invocation.user_actor)
+        if (
+            package.package_digest != context_package_digest(
+                context_package_digest_document(package)
+            )
+            or provenance.organization_id != invocation.user_actor.organization_id
+            or provenance.package_organization_ref != package.organization_ref
+            or provenance.decision_ref != package.decision_ref
+            or provenance.purpose != package.purpose
+            or provenance.purpose != delivery_context.purpose
+            or provenance.policy_epoch
+            != invocation.policy_epoch
+            != invocation.user_actor.policy_epoch
+            or provenance.as_of != package.as_of
+            or issued_at != package.as_of
+            or package.expires_at <= issued_at
+        ):
+            raise EgressGrantIssuanceUnavailable(
+                "final egress policy could not bind the current Package"
+            )
+        if type(profile) is InternalOnlyEgressProfile:
+            return None
+        assert isinstance(profile, ModelEgressProfile | ChannelEgressProfile)
+        if type(profile) is ChannelEgressProfile and (
+            delivery_context.construction_provenance
+            is not DeliveryConstructionProvenance.REDEEMED_PRIVATE_DELIVERY_EVIDENCE
+            or delivery_context.destination_ref != profile.destination_ref
+            or delivery_context.consumer_ref != profile.consumer_ref
+        ):
+            raise EgressGrantIssuanceUnavailable(
+                "channel egress is not bound to the trusted private delivery"
+            )
+        session = invocation.user_actor.egress_grant_issuance_session
+        if session is None:
+            raise EgressGrantIssuanceUnavailable(
+                "external egress requires durable one-shot issuance"
+            )
+        audience_digest = delivery_context.audience_digest
+        if audience_digest is None:
+            audience_digest = direct_egress_audience_digest(
+                organization_id=invocation.user_actor.organization_id,
+                membership_id=invocation.user_actor.membership_id,
+                membership_version=invocation.user_actor.membership_version,
+                authenticated_application_ref=(
+                    delivery_context.authenticated_application_ref
+                ),
+                delivery_binding_ref=delivery_context.delivery_binding_ref,
+            )
+        expires_at = min(
+            package.expires_at,
+            issued_at + profile.maximum_ttl,
+        )
+        if type(profile) is ModelEgressProfile:
+            issue = EgressGrantIssue.for_model(
+                organization_id=invocation.user_actor.organization_id,
+                package_digest=package.package_digest,
+                payload_digest=model_input_digest(package),
+                purpose=package.purpose,
+                audience_digest=audience_digest,
+                policy_epoch=invocation.policy_epoch,
+                issued_at=issued_at,
+                expires_at=expires_at,
+                profile=profile,
+            )
+        elif type(profile) is ChannelEgressProfile:
+            issue = EgressGrantIssue.for_channel(
+                organization_id=invocation.user_actor.organization_id,
+                package_digest=package.package_digest,
+                payload_digest=channel_payload_digest(package),
+                purpose=package.purpose,
+                audience_digest=audience_digest,
+                policy_epoch=invocation.policy_epoch,
+                issued_at=issued_at,
+                expires_at=expires_at,
+                profile=profile,
+            )
+        else:  # pragma: no cover - closed nominal union above
+            raise RuntimeConfigurationError("egress profile variant is unavailable")
+        return issue_egress_grant(session, issue)
+
+
 class DecisionAuditGate:
     """Concrete safe in-memory audit gate; persistence belongs to Issue #19."""
 
@@ -372,6 +490,7 @@ type KernelDependency = (
     | DecisionAuditGate
     | PackageBudgetGate
     | ProvenanceGate
+    | EgressGate
 )
 
 
@@ -384,6 +503,7 @@ class KernelDependencies:
     audit: DecisionAuditGate
     budget: PackageBudgetGate
     provenance: ProvenanceGate
+    egress: EgressGate
 
 
 def _validate_kernel_dependencies(dependencies: object) -> KernelDependencies:
@@ -397,6 +517,7 @@ def _validate_kernel_dependencies(dependencies: object) -> KernelDependencies:
         ("audit", DecisionAuditGate),
         ("budget", PackageBudgetGate),
         ("provenance", ProvenanceGate),
+        ("egress", EgressGate),
     ):
         if type(getattr(dependencies, field_name)) is not expected_type:
             raise RuntimeConfigurationError(
@@ -415,6 +536,7 @@ class AuthorizationKernel:
         self._audit = validated.audit
         self._budget = validated.budget
         self._provenance = validated.provenance
+        self._egress = validated.egress
 
     def authorize_acquire(
         self,
@@ -603,6 +725,29 @@ class AuthorizationKernel:
             audit_receipt=audit_receipt,
         )
 
+    def finalize_egress(
+        self,
+        *,
+        invocation: AuthenticatedInvocation,
+        delivery_context: TrustedDeliveryContext,
+        provenance: DecisionProvenanceReceipt,
+        package: ContextPackage,
+        profile: EgressProfile,
+        issued_at: datetime,
+    ) -> EgressGrant | None:
+        """Apply the mandatory final egress gate after Package construction."""
+
+        if type(self._egress) is not EgressGate:
+            raise RuntimeConfigurationError("mandatory final egress gate is invalid")
+        return self._egress.finalize(
+            invocation=invocation,
+            delivery_context=delivery_context,
+            provenance=provenance,
+            package=package,
+            profile=profile,
+            issued_at=issued_at,
+        )
+
     def _authorize_and_assemble(
         self,
         invocation: AuthenticatedInvocation,
@@ -778,6 +923,7 @@ class Runtime:
         ),
         clock: Callable[[], datetime] = _utc_now,
         query_digest_keyring: QueryDigestKeyring | None = None,
+        egress_profile: EgressProfile = INTERNAL_ONLY_EGRESS_PROFILE,
     ) -> None:
         validated = _validate_kernel_dependencies(dependencies)
         if type(package_ttl_seconds) is not int or package_ttl_seconds <= 0:
@@ -830,6 +976,15 @@ class Runtime:
         ):
             raise TypeError("query_digest_keyring must be QueryDigestKeyring")
         self._query_digest_keyring = query_digest_keyring
+        if type(egress_profile) not in {
+            InternalOnlyEgressProfile,
+            ModelEgressProfile,
+            ChannelEgressProfile,
+        }:
+            raise RuntimeConfigurationError(
+                "egress_profile must be one closed server-owned profile"
+            )
+        self._egress_profile = egress_profile
         self._reference_issuer = _OpaqueReferenceIssuer()
 
     @overload
@@ -956,6 +1111,14 @@ class Runtime:
                 reason=audit_receipt.reason,
             ),
         )
+        egress_grant = self._kernel.finalize_egress(
+            invocation=invocation,
+            delivery_context=delivery_context,
+            provenance=provenance,
+            package=package,
+            profile=self._egress_profile,
+            issued_at=as_of,
+        )
         persistence_session = invocation.user_actor.context_run_persistence_session
         if persistence_session is None:
             raise ContextRunPersistenceUnavailable(
@@ -987,6 +1150,7 @@ class Runtime:
                 target_count=len(policy_receipt.effective_scope.targets),
                 is_empty=not policy_receipt.effective_scope.targets,
             ),
+            egress_grant=egress_grant,
         )
 
     def _required_capability(self, request: RuntimeRequest) -> RuntimeCapability:
@@ -1025,4 +1189,5 @@ def required_kernel_dependencies() -> KernelDependencies:
         audit=DecisionAuditGate(),
         budget=PackageBudgetGate(),
         provenance=ProvenanceGate(),
+        egress=EgressGate(),
     )

@@ -32,7 +32,7 @@ DEFAULT_EXECUTION_REGISTRY_PATH = (
 DEFAULT_EXECUTION_REGISTRY_SCHEMA_PATH = (
     REPOSITORY_ROOT / "eval/catalogs/m0-security-evidence.schema.json"
 )
-SUPPORTED_CATALOG_VERSION = "1.2.0"
+SUPPORTED_CATALOG_VERSION = "1.3.0"
 SUPPORTED_EXECUTION_REGISTRY_VERSION = "1.0.0"
 EXPECTED_INVARIANT_COUNT = 15
 EXPECTED_FIXTURE_COUNT = 12
@@ -1039,12 +1039,92 @@ CANONICAL_PRIVATE_DELIVERY_EVIDENCE_ACTIVATION: dict[str, object] = {
     "notActive": [
         "group delivery",
         "AudienceSnapshot",
-        "EgressGrant",
-        "ModelGateway",
+        "production ModelGateway",
         "ActionPlane",
-        "BotDelivery",
+        "BotDelivery application",
         "OpenAPI compatibility freeze",
         "generated SDK",
+    ],
+}
+
+CANONICAL_EGRESS_GRANT_ACTIVATION: dict[str, object] = {
+    "issueRef": "#65",
+    "invariantRef": "EGRESS-011",
+    "carrier": (
+        "opaque one-shot model or channel EgressGrant with deterministic "
+        "boundary spies"
+    ),
+    "status": "active_fail_closed",
+    "policyEpochScope": "organization-v0",
+    "controlBoundary": (
+        "ContextPackage -> final EgressGate -> digest-only PostgreSQL grant -> "
+        "AuthorizedModelInput | AuthorizedChannelPayload -> exact one-shot "
+        "redemption -> ModelGateway | Sender preflight spy"
+    ),
+    "testEvidence": [
+        {
+            "id": "PROP-EGRESS-011",
+            "surface": (
+                "tests/unit/test_egress_grant.py::"
+                "test_each_egress_binding_mutation_and_cross_kind_emits_zero_bytes_effects"
+            ),
+            "oracle": (
+                "Every common and hop-specific model or channel redemption "
+                "binding mutation, plus cross-kind use, is non-enumerating and "
+                "emits zero gateway bytes, Sender preflight bytes, or effects."
+            ),
+        },
+        {
+            "id": "PG-EGRESS-011",
+            "surface": (
+                "tests/integration/test_egress_grant.py::"
+                "test_digest_only_grant_is_atomic_one_shot_and_audited"
+            ),
+            "oracle": (
+                "Real PostgreSQL under separate non-owner Runtime and egress "
+                "roles stores only grant and payload digests, binds the exact "
+                "Package, Organization, purpose, audience, Policy Epoch, hop, "
+                "retention, sensitivity, issuer, consumer, provider/model or "
+                "channel/destination, region, lifetime, and profile, consumes "
+                "atomically once, and retains only restricted issued, consumed, "
+                "or not-available audit categories."
+            ),
+        },
+        {
+            "id": "RUNTIME-EGRESS-011",
+            "surface": (
+                "tests/integration/test_z_egress_grant_file.py::"
+                "test_file_http_package_redeems_exact_model_grant_before_gateway_"
+                "bytes"
+            ),
+            "oracle": (
+                "A real File-backed authenticated HTTP Acquire proves "
+                "CandidateRef through the sealed AuthorizationKernel to an "
+                "audience-bound ContextPackage, returns one model grant only "
+                "after final policy, and the independent egress role permits "
+                "exactly one deterministic ModelGateway spy request; replay "
+                "emits zero additional model bytes."
+            ),
+        },
+    ],
+    "deferredEvidence": [
+        "production provider ModelGateway conformance",
+        "production Sender and ActionPlane effect conformance",
+        "group AudienceSnapshot send-time revalidation",
+    ],
+    "futureCarriers": [
+        "production ModelGateway",
+        "production Sender preflight",
+        "ActionPlane prepare and perform",
+        "group-public and asker-private delivery",
+    ],
+    "notActive": [
+        "real model or provider network call",
+        "real Sender or channel write",
+        "ActionTicket or external effect",
+        "group AudienceSnapshot",
+        "BotDelivery application process",
+        "generated SDK consumer",
     ],
 }
 
@@ -1056,6 +1136,7 @@ CANONICAL_ACTIVATIONS: list[dict[str, object]] = [
     CANONICAL_CONTEXT_RUN_ACTIVATION,
     CANONICAL_FIELD_PROJECTION_ACTIVATION,
     CANONICAL_PRIVATE_DELIVERY_EVIDENCE_ACTIVATION,
+    CANONICAL_EGRESS_GRANT_ACTIVATION,
 ]
 CANONICAL_ACTIVATION_ISSUE_LIST = ", ".join(
     f"Issue {activation['issueRef']}" for activation in CANONICAL_ACTIVATIONS

@@ -9,6 +9,8 @@ from engine.persistence.access_policy import (
 )
 from engine.persistence.configuration import (
     DELIVERY_EVIDENCE_DEFINER_ROLE,
+    EGRESS_GRANT_DEFINER_ROLE,
+    EGRESS_ROLE,
     IDENTITY_ROLE,
     LEARNING_ROLE,
     OPERATOR_ROLE,
@@ -39,6 +41,7 @@ from engine.persistence.delivery_evidence import (
     PostgreSQLDeliveryEvidenceIssuerPort,
     PostgreSQLDeliveryEvidenceRetentionPort,
 )
+from engine.persistence.egress import PostgreSQLEgressGrantRedemptionAuthority
 from engine.persistence.file_imports import (
     FileImportInterrupted,
     FileImportLeaseRedemption,
@@ -56,6 +59,7 @@ from engine.persistence.membership_context import (
 from engine.persistence.releases import PostgreSQLReleaseStore
 from engine.persistence.role_guard import (
     assert_control_role,
+    assert_egress_role,
     assert_identity_role,
     assert_learning_role,
     assert_runtime_role,
@@ -90,6 +94,8 @@ __all__ = [
     "HarnessDatabaseConfigurations",
     "IDENTITY_ROLE",
     "DELIVERY_EVIDENCE_DEFINER_ROLE",
+    "EGRESS_GRANT_DEFINER_ROLE",
+    "EGRESS_ROLE",
     "LEARNING_ROLE",
     "OPERATOR_ROLE",
     "RELEASE_DEFINER_ROLE",
@@ -111,6 +117,7 @@ __all__ = [
     "PostgreSQLControlStore",
     "PostgreSQLDeliveryEvidenceIssuerPort",
     "PostgreSQLDeliveryEvidenceRetentionPort",
+    "PostgreSQLEgressGrantRedemptionAuthority",
     "FileImportLeaseRedemption",
     "FileImportInterrupted",
     "FileImportUnavailable",
@@ -137,6 +144,7 @@ __all__ = [
     "assert_runtime_role",
     "assert_learning_role",
     "assert_identity_role",
+    "assert_egress_role",
     "assert_security_operator_role",
     "assert_control_role",
     "assert_worker_role",

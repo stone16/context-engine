@@ -11,7 +11,7 @@ from engine.runtime.construction import required_kernel_dependencies
 
 
 @pytest.mark.parametrize(
-    "missing", ["policy", "policy_epoch", "audit", "budget", "provenance"]
+    "missing", ["policy", "policy_epoch", "audit", "budget", "provenance", "egress"]
 )
 def test_runtime_rejects_each_missing_kernel_dependency(missing: str) -> None:
     dependencies = required_kernel_dependencies()
@@ -32,6 +32,7 @@ def test_runtime_rejects_a_dependency_in_the_wrong_slot() -> None:
         audit=dependencies.audit,
         budget=dependencies.budget,
         provenance=dependencies.provenance,
+        egress=dependencies.egress,
     )
 
     with pytest.raises(RuntimeConfigurationError, match="invalid: policy"):
@@ -49,6 +50,7 @@ def test_runtime_rejects_a_subclass_that_overrides_validation() -> None:
         audit=None,  # type: ignore[arg-type]
         budget=None,  # type: ignore[arg-type]
         provenance=None,  # type: ignore[arg-type]
+        egress=None,  # type: ignore[arg-type]
     )
 
     with pytest.raises(RuntimeConfigurationError, match="must be KernelDependencies"):

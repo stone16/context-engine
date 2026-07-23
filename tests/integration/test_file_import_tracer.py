@@ -1560,7 +1560,7 @@ def _assert_structural_file_import_returns_coherent_authorized_units_over_http(
             connection.execute(
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one()
-            == "20260723_0019"
+            == "20260723_0020"
         )
 
 

@@ -13,6 +13,8 @@ from sqlalchemy.exc import ArgumentError
 MIGRATOR_ROLE = "context_engine_migrator"
 CONTROL_ROLE = "context_engine_control"
 IDENTITY_ROLE = "context_engine_identity"
+EGRESS_ROLE = "context_engine_egress"
+EGRESS_GRANT_DEFINER_ROLE = "context_engine_egress_grant_definer"
 DELIVERY_EVIDENCE_DEFINER_ROLE = "context_engine_delivery_evidence_definer"
 ACCESS_POLICY_DEFINER_ROLE = "context_engine_access_policy_definer"
 WORKER_LEASE_DEFINER_ROLE = "context_engine_worker_lease_definer"
@@ -30,6 +32,7 @@ class DatabasePurpose(Enum):
     MIGRATION = ("CONTEXT_ENGINE_MIGRATION_DATABASE_URL", MIGRATOR_ROLE)
     CONTROL_PLANE = ("CONTEXT_ENGINE_CONTROL_DATABASE_URL", CONTROL_ROLE)
     TRUSTED_IDENTITY = ("CONTEXT_ENGINE_IDENTITY_DATABASE_URL", IDENTITY_ROLE)
+    TRUSTED_EGRESS = ("CONTEXT_ENGINE_EGRESS_DATABASE_URL", EGRESS_ROLE)
     API_RUNTIME = ("CONTEXT_ENGINE_RUNTIME_DATABASE_URL", RUNTIME_ROLE)
     SUPPLY_WORKER = ("CONTEXT_ENGINE_WORKER_DATABASE_URL", WORKER_ROLE)
     LEARNING = ("CONTEXT_ENGINE_LEARNING_DATABASE_URL", LEARNING_ROLE)
@@ -52,6 +55,7 @@ ROLE_ENVIRONMENT_VARIABLES: dict[DatabasePurpose, str] = {
     DatabasePurpose.MIGRATION: "CONTEXT_ENGINE_MIGRATOR_ROLE",
     DatabasePurpose.CONTROL_PLANE: "CONTEXT_ENGINE_CONTROL_ROLE",
     DatabasePurpose.TRUSTED_IDENTITY: "CONTEXT_ENGINE_IDENTITY_ROLE",
+    DatabasePurpose.TRUSTED_EGRESS: "CONTEXT_ENGINE_EGRESS_ROLE",
     DatabasePurpose.API_RUNTIME: "CONTEXT_ENGINE_RUNTIME_ROLE",
     DatabasePurpose.SUPPLY_WORKER: "CONTEXT_ENGINE_WORKER_ROLE",
     DatabasePurpose.LEARNING: "CONTEXT_ENGINE_LEARNING_ROLE",
@@ -114,6 +118,7 @@ class HarnessDatabaseConfigurations:
     migration: DatabaseConfiguration
     control: DatabaseConfiguration
     identity: DatabaseConfiguration
+    egress: DatabaseConfiguration
     runtime: DatabaseConfiguration
     worker: DatabaseConfiguration
     learning: DatabaseConfiguration
@@ -188,6 +193,7 @@ def load_harness_database_configurations(
         migration=load_database_configuration(DatabasePurpose.MIGRATION, source),
         control=load_database_configuration(DatabasePurpose.CONTROL_PLANE, source),
         identity=load_database_configuration(DatabasePurpose.TRUSTED_IDENTITY, source),
+        egress=load_database_configuration(DatabasePurpose.TRUSTED_EGRESS, source),
         runtime=load_database_configuration(DatabasePurpose.API_RUNTIME, source),
         worker=load_database_configuration(DatabasePurpose.SUPPLY_WORKER, source),
         learning=load_database_configuration(DatabasePurpose.LEARNING, source),
@@ -200,14 +206,15 @@ def load_harness_database_configurations(
         configurations.migration.expected_role,
         configurations.control.expected_role,
         configurations.identity.expected_role,
+        configurations.egress.expected_role,
         configurations.runtime.expected_role,
         configurations.worker.expected_role,
         configurations.learning.expected_role,
         configurations.operator.expected_role,
     }
-    if len(distinct_roles) != 7:
+    if len(distinct_roles) != 8:
         raise DatabaseConfigurationError(
-            "migration, control, identity, runtime, worker, learning, and "
+            "migration, control, identity, egress, runtime, worker, learning, and "
             "security-operator "
             "database roles must be distinct"
         )

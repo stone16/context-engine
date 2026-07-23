@@ -26,10 +26,12 @@ from adapters.http.authentication import (
 from adapters.http.contracts import (
     AcquireWire,
     AuthenticationFailureWire,
+    ChannelEgressGrantWire,
     CitationNotAvailableWire,
     ContextPackageWire,
     ContinueWire,
     InvalidRequestWire,
+    ModelEgressGrantWire,
     OpenCitationWire,
     RequestNotAvailableWire,
     ResolutionOutcomeWire,
@@ -97,6 +99,11 @@ from engine.runtime.delivery_evidence import (
     PrivateDeliveryEvidenceRedemption,
     private_delivery_audience_digest_for_binding,
     redeem_private_delivery_evidence,
+)
+from engine.runtime.egress import (
+    ChannelEgressGrant,
+    EgressGrantIssuanceUnavailable,
+    ModelEgressGrant,
 )
 from engine.runtime.invocation import (
     _construct_authenticated_http_invocation,
@@ -606,6 +613,8 @@ def create_app(
             raise TrustedAuthorityUnavailable from None
         except ContextRunPersistenceUnavailable:
             raise TrustedAuthorityUnavailable from None
+        except EgressGrantIssuanceUnavailable:
+            raise TrustedAuthorityUnavailable from None
         except ScopeAuthorityUnavailable:
             raise TrustedAuthorityUnavailable from None
         except InvalidTrustedScopeSnapshot:
@@ -679,11 +688,23 @@ def _resolution_outcome_to_wire(
 
 
 def _resolved_to_wire(outcome: Resolved) -> ResolvedWire:
+    egress_grant: ModelEgressGrantWire | ChannelEgressGrantWire | None = None
+    if type(outcome.egress_grant) is ModelEgressGrant:
+        egress_grant = ModelEgressGrantWire(
+            kind="model",
+            value=outcome.egress_grant.value,
+        )
+    elif type(outcome.egress_grant) is ChannelEgressGrant:
+        egress_grant = ChannelEgressGrantWire(
+            kind="channel",
+            value=outcome.egress_grant.value,
+        )
     return ResolvedWire(
         kind=outcome.kind,
         package=ContextPackageWire.model_validate(
             context_package_public_document(outcome.package)
         ),
+        egressGrant=egress_grant,
     )
 
 

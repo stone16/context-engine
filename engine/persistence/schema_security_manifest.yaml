@@ -1,5 +1,5 @@
 {
-  "manifestVersion": "19.0.0",
+  "manifestVersion": "20.0.0",
   "controlOperations": [
     {
       "name": "register_file_source",
@@ -388,6 +388,12 @@
             "command": "SELECT",
             "roles": ["context_engine_delivery_evidence_definer"],
             "using": "true"
+          },
+          {
+            "name": "membership_egress_definer_select",
+            "command": "SELECT",
+            "roles": ["context_engine_egress_grant_definer"],
+            "using": "true"
           }
         ]
       },
@@ -395,7 +401,8 @@
         "context_engine_runtime": ["SELECT"],
         "context_engine_worker": [],
         "context_engine_worker_lease_definer": ["SELECT"],
-        "context_engine_delivery_evidence_definer": ["SELECT"]
+        "context_engine_delivery_evidence_definer": ["SELECT"],
+        "context_engine_egress_grant_definer": ["SELECT"]
       },
       "partitions": [],
       "securityInvariantIds": [
@@ -1050,6 +1057,12 @@
             "command": "SELECT",
             "roles": ["context_engine_delivery_evidence_definer"],
             "using": "true"
+          },
+          {
+            "name": "organization_policy_epoch_egress_definer_select",
+            "command": "SELECT",
+            "roles": ["context_engine_egress_grant_definer"],
+            "using": "true"
           }
         ]
       },
@@ -1057,6 +1070,7 @@
         "context_engine_access_policy_definer": ["SELECT", "UPDATE"],
         "context_engine_control": ["EXECUTE change_resource_access", "EXECUTE context_control_tombstone_file_resource", "EXECUTE context_control_offboard_file_source"],
         "context_engine_delivery_evidence_definer": ["SELECT"],
+        "context_engine_egress_grant_definer": ["SELECT"],
         "context_engine_runtime": ["SELECT"],
         "context_engine_worker": []
       },
@@ -1595,6 +1609,97 @@
         "OBS-005",
         "PG-TRACE-REDACTION-012"
       ]
+    },
+    {
+      "name": "egress_grant",
+      "classification": "tenant_owned",
+      "nonOwnerEvidence": {
+        "evidenceId": "PG-EGRESS-011",
+        "selector": {"table": "egress_grant"}
+      },
+      "purpose": "Digest-only exact one-hop grant state with atomic replay prevention",
+      "organizationColumn": "organization_id",
+      "organizationInclusiveKeys": [
+        {"name": "pk_egress_grant", "kind": "primary_key", "columns": ["organization_id", "grant_digest"]}
+      ],
+      "capabilityUniqueKeys": [
+        {"name": "uq_egress_grant_digest_global", "kind": "unique", "columns": ["grant_digest"], "rationale": "one opaque locator digest identifies at most one Organization-bound hop"}
+      ],
+      "foreignKeys": [
+        {"name": "fk_egress_grant_organization", "columns": ["organization_id"], "references": {"table": "organization", "columns": ["organization_id"]}, "onDelete": "CASCADE"}
+      ],
+      "checkConstraints": [
+        {"name": "ck_egress_grant_sha256_digests", "expression": "grant, Package, payload, and audience digests are 32-byte SHA-256"},
+        {"name": "ck_egress_grant_profiles", "expression": "locator and grant profile lineage are exact active versions"},
+        {"name": "ck_egress_grant_positive_epoch", "expression": "policy_epoch > 0"},
+        {"name": "ck_egress_grant_timestamp_order", "expression": "issued_at < expires_at and consumption, when present, is inside the grant lifetime"},
+        {"name": "ck_egress_grant_exact_hop_variant", "expression": "exactly one model or channel hop variant is populated"},
+        {"name": "ck_egress_grant_bindings_nonblank", "expression": "all common egress bindings are nonblank"}
+      ],
+      "rowLevelSecurity": {
+        "enabled": true,
+        "forced": true,
+        "policies": [
+          {"name": "egress_grant_migrator_administration", "command": "ALL", "roles": ["context_engine_migrator"], "using": "true", "withCheck": "true"},
+          {"name": "egress_grant_definer_all", "command": "ALL", "roles": ["context_engine_egress_grant_definer"], "using": "true", "withCheck": "true"}
+        ]
+      },
+      "functionOnlyMutation": {"databaseFunctions": ["context_runtime_issue_egress_grant", "context_egress_redeem_grant"], "definerRole": "context_engine_egress_grant_definer", "directTableMutationAllowed": false},
+      "retention": {"class": "short_lived_digest_only", "bearerStored": false, "payloadStored": false, "expirySource": "versioned egress profile"},
+      "permittedOperations": {
+        "context_engine_runtime": ["EXECUTE context_runtime_issue_egress_grant"],
+        "context_engine_egress": ["EXECUTE context_egress_redeem_grant"],
+        "context_engine_egress_grant_definer": ["SELECT", "INSERT", "UPDATE", "DELETE"],
+        "context_engine_control": [],
+        "context_engine_worker": [],
+        "context_engine_learning": [],
+        "context_engine_security_operator": []
+      },
+      "partitions": [],
+      "securityInvariantIds": ["TENANT-OWNERSHIP-001", "TENANT-FK-002", "RLS-FAIL-CLOSED-003", "REVOCATION-006", "EGRESS-011", "NON-ENUMERATION-009", "TRACE-REDACTION-012", "ACTION-SEPARATION-014"],
+      "negativeTestIds": ["EGR-001", "EGR-004", "RUN-013", "DB-001", "DB-002", "DB-004", "DB-008", "DB-009", "DB-010", "OBS-004", "OBS-005"]
+    },
+    {
+      "name": "egress_audit",
+      "classification": "tenant_owned",
+      "nonOwnerEvidence": {
+        "evidenceId": "PG-EGRESS-011",
+        "selector": {"table": "egress_audit"}
+      },
+      "purpose": "Restricted digest-only issued, consumed, or not-available egress decisions",
+      "organizationColumn": "organization_id",
+      "organizationInclusiveKeys": [
+        {"name": "pk_egress_audit", "kind": "primary_key", "columns": ["organization_id", "audit_id"]}
+      ],
+      "foreignKeys": [
+        {"name": "fk_egress_audit_exact_grant", "columns": ["organization_id", "grant_digest"], "references": {"table": "egress_grant", "columns": ["organization_id", "grant_digest"]}, "onDelete": "CASCADE"}
+      ],
+      "checkConstraints": [
+        {"name": "ck_egress_audit_sha256_digests", "expression": "grant and payload digests are 32-byte SHA-256"},
+        {"name": "ck_egress_audit_restricted_category", "expression": "category is issued, consumed, or not_available"}
+      ],
+      "rowLevelSecurity": {
+        "enabled": true,
+        "forced": true,
+        "policies": [
+          {"name": "egress_audit_migrator_administration", "command": "ALL", "roles": ["context_engine_migrator"], "using": "true", "withCheck": "true"},
+          {"name": "egress_audit_definer_all", "command": "ALL", "roles": ["context_engine_egress_grant_definer"], "using": "true", "withCheck": "true"}
+        ]
+      },
+      "functionOnlyMutation": {"databaseFunctions": ["context_runtime_issue_egress_grant", "context_egress_redeem_grant"], "definerRole": "context_engine_egress_grant_definer", "directTableMutationAllowed": false},
+      "retention": {"class": "restricted_digest_audit", "bearerStored": false, "payloadStored": false, "deniedContentStored": false},
+      "permittedOperations": {
+        "context_engine_runtime": ["EXECUTE context_runtime_issue_egress_grant"],
+        "context_engine_egress": ["EXECUTE context_egress_redeem_grant"],
+        "context_engine_egress_grant_definer": ["SELECT", "INSERT", "UPDATE", "DELETE"],
+        "context_engine_control": [],
+        "context_engine_worker": [],
+        "context_engine_learning": [],
+        "context_engine_security_operator": []
+      },
+      "partitions": [],
+      "securityInvariantIds": ["TENANT-OWNERSHIP-001", "TENANT-FK-002", "RLS-FAIL-CLOSED-003", "EGRESS-011", "NON-ENUMERATION-009", "TRACE-REDACTION-012"],
+      "negativeTestIds": ["EGR-001", "EGR-004", "DB-001", "DB-002", "DB-004", "DB-008", "DB-009", "DB-010", "OBS-004", "OBS-005"]
     },
     {
       "name": "service_principal",
