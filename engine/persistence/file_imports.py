@@ -9,7 +9,7 @@ from hashlib import sha256
 from typing import Literal
 from uuid import UUID, uuid4
 
-from sqlalchemy import Engine, text
+from sqlalchemy import Engine, Row, text
 from sqlalchemy.exc import SQLAlchemyError
 
 from adapters.file_source import FileRootRegistry
@@ -67,7 +67,7 @@ class PublishedFileImport:
     candidate_refs: tuple[CandidateRef, ...]
     acquisition_id: UUID = field(repr=False)
     content_identity_digest: str = field(repr=False)
-    outcome: Literal["published", "unchanged"] = "published"
+    outcome: Literal["published", "replaced", "unchanged"] = "published"
     reason_digest: str | None = field(default=None, repr=False)
     publication_states: tuple[str, str, str] = (
         "prepared",
@@ -111,7 +111,7 @@ class PublishedFileImport:
             raise ValueError("File import content identity must be SHA-256")
         if self.publication_states != ("prepared", "indexed", "active"):
             raise ValueError("File publication state sequence must remain closed")
-        if self.outcome == "published":
+        if self.outcome in {"published", "replaced"}:
             if self.effect_count != 1 or self.reason_digest is not None:
                 raise ValueError("published File import has exactly one effect")
         elif self.outcome == "unchanged":
@@ -364,14 +364,23 @@ class PostgreSQLFileImportWorker:
                         **payload,
                     },
                 ).one_or_none()
-                if (
-                    row is None
-                    or row.effect_count not in {0, 1}
-                    or row.outcome not in {"published", "unchanged"}
-                    or row.active_revision_id is None
-                    or not row.fragment_refs
-                ):
-                    raise _rejection(token)
+            if row is None:
+                row = self._replace(
+                    claims,
+                    resource_ref,
+                    revision_id,
+                    document,
+                    payload,
+                    structural=structural,
+                )
+            if (
+                row is None
+                or row.effect_count not in {0, 1}
+                or row.outcome not in {"published", "replaced", "unchanged"}
+                or row.active_revision_id is None
+                or not row.fragment_refs
+            ):
+                raise _rejection(token)
         except WorkNotAvailable:
             raise
         except (SQLAlchemyError, AssertionError):
@@ -393,6 +402,105 @@ class PostgreSQLFileImportWorker:
             reason_digest=row.reason_digest,
             effect_count=row.effect_count,
         )
+
+    def _replace(
+        self,
+        claims: WorkerLeaseClaims,
+        resource_ref: str,
+        revision_id: UUID,
+        document: ParsedDocument,
+        payload: dict[str, object],
+        *,
+        structural: bool,
+    ) -> Row[tuple[object, ...]] | None:
+        if structural:
+            stage_statement = """
+                SELECT *
+                FROM public.context_worker_stage_structural_file_replacement(
+                    :organization_id, :job_id, :service_principal_id,
+                    :source_ref, :resource_ref, :revision_id,
+                    :canonical_text, :content_hash, :compilation_digest,
+                    :compiler_version, :config_version,
+                    CAST(:compilation_document AS jsonb),
+                    :signing_key_version, :nonce, :issued_at, :expires_at
+                )
+            """
+        else:
+            stage_statement = """
+                SELECT *
+                FROM public.context_worker_stage_file_replacement(
+                    :organization_id, :job_id, :service_principal_id,
+                    :source_ref, :resource_ref, :revision_id,
+                    :fragment_ref, :canonical_text, :paragraph,
+                    :content_hash, :compilation_digest,
+                    :compiler_version, :config_version, :phrase_digest,
+                    :signing_key_version, :nonce, :issued_at, :expires_at
+                )
+            """
+        with self._engine.begin() as connection:
+            assert_worker_role(connection)
+            staged = connection.execute(
+                text(stage_statement),
+                {
+                    "organization_id": claims.organization_id,
+                    "job_id": claims.job_id,
+                    "service_principal_id": claims.service_principal_id,
+                    "source_ref": claims.source_ref,
+                    "resource_ref": resource_ref,
+                    "revision_id": revision_id,
+                    "canonical_text": document.canonical_text,
+                    "content_hash": document.content_hash,
+                    "compilation_digest": document.compilation_digest,
+                    "compiler_version": document.provenance.compiler_version,
+                    "config_version": document.provenance.config_version,
+                    "signing_key_version": claims.signing_key_version,
+                    "nonce": claims.nonce,
+                    "issued_at": claims.issued_at,
+                    "expires_at": claims.expires_at,
+                    **payload,
+                },
+            ).one_or_none()
+        if staged is None:
+            return None
+        if staged.outcome == "unchanged":
+            return staged
+        if (
+            staged.outcome is not None
+            or staged.effect_count is not None
+            or staged.active_revision_id is not None
+            or staged.reason_digest is not None
+            or staged.previous_revision_id is None
+            or staged.replacement_revision_id is None
+        ):
+            return None
+        with self._engine.begin() as connection:
+            assert_worker_role(connection)
+            return connection.execute(
+                text(
+                    """
+                    SELECT *
+                    FROM public.context_worker_activate_file_replacement(
+                        :organization_id, :job_id, :service_principal_id,
+                        :source_ref, :resource_ref,
+                        :previous_revision_id, :replacement_revision_id,
+                        :signing_key_version, :nonce, :issued_at, :expires_at
+                    )
+                    """
+                ),
+                {
+                    "organization_id": claims.organization_id,
+                    "job_id": claims.job_id,
+                    "service_principal_id": claims.service_principal_id,
+                    "source_ref": claims.source_ref,
+                    "resource_ref": resource_ref,
+                    "previous_revision_id": staged.previous_revision_id,
+                    "replacement_revision_id": staged.replacement_revision_id,
+                    "signing_key_version": claims.signing_key_version,
+                    "nonce": claims.nonce,
+                    "issued_at": claims.issued_at,
+                    "expires_at": claims.expires_at,
+                },
+            ).one_or_none()
 
     def _fail(
         self,

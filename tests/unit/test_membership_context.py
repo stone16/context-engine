@@ -335,6 +335,13 @@ def test_current_membership_transaction_binds_every_actor_fact_before_lookup() -
         if "FROM membership" in event
     )
     assert lookup_position > 17
+    publication_barrier_position = next(
+        index
+        for index, event in enumerate(fake_engine.events)
+        if "context-engine.file-publication:" in event
+    )
+    runtime_position = fake_engine.events.index("runtime-resolve")
+    assert lookup_position < publication_barrier_position < runtime_position
     assert fake_engine.events[-2:] == ["runtime-resolve", "commit"]
     assert fake_engine.settings == {
         "app.organization_id": str(expected.organization_id),
@@ -364,6 +371,10 @@ def test_missing_or_mismatched_membership_is_one_generic_denial(
         pytest.fail("an invalid Membership must not reach Runtime")
 
     assert fake_engine.events[-1] == "rollback"
+    assert all(
+        "context-engine.file-publication:" not in event
+        for event in fake_engine.events
+    )
     assert rejection.value.audit_receipt == MembershipRejectionAuditReceipt(
         category=MembershipRejectionCategory.NOT_CURRENT,
         denied_detail_count=0,

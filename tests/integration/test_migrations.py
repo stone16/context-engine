@@ -35,7 +35,9 @@ HEAD_TABLES = [
     "file_acquisition_result",
     "file_import_job",
     "file_resource_ingestion_guard",
+    "file_revision_replacement_plan",
     "file_revision_snapshot",
+    "file_revision_supersession",
     "membership",
     "membership_resource_field_right",
     "organization",
@@ -101,7 +103,7 @@ def test_empty_baseline_remains_a_reversible_historical_revision(
         assert _application_tables(migration_configuration) == ["alembic_version"]
     finally:
         command.upgrade(alembic_configuration, "head")
-    assert _revision_rows(migration_configuration) == ["20260724_0013"]
+    assert _revision_rows(migration_configuration) == ["20260723_0014"]
 
 
 def test_organization_isolation_revision_downgrades_and_reapplies_cleanly(
@@ -116,7 +118,7 @@ def test_organization_isolation_revision_downgrades_and_reapplies_cleanly(
     finally:
         command.upgrade(alembic_configuration, "head")
 
-    assert _revision_rows(migration_configuration) == ["20260724_0013"]
+    assert _revision_rows(migration_configuration) == ["20260723_0014"]
     assert _application_tables(migration_configuration) == HEAD_TABLES
 
 
@@ -136,7 +138,7 @@ def test_membership_revision_downgrades_to_issue_8_and_reapplies_cleanly(
     finally:
         command.upgrade(alembic_configuration, "head")
 
-    assert _revision_rows(migration_configuration) == ["20260724_0013"]
+    assert _revision_rows(migration_configuration) == ["20260723_0014"]
 
 
 def test_content_schema_revision_downgrades_to_membership_and_reapplies_cleanly(
@@ -157,7 +159,7 @@ def test_content_schema_revision_downgrades_to_membership_and_reapplies_cleanly(
     finally:
         command.upgrade(alembic_configuration, "head")
 
-    assert _revision_rows(migration_configuration) == ["20260724_0013"]
+    assert _revision_rows(migration_configuration) == ["20260723_0014"]
     assert _application_tables(migration_configuration) == HEAD_TABLES
 
 
@@ -184,7 +186,7 @@ def test_policy_epoch_revision_downgrades_to_content_and_reapplies_cleanly(
     finally:
         command.upgrade(alembic_configuration, "head")
 
-    assert _revision_rows(migration_configuration) == ["20260724_0013"]
+    assert _revision_rows(migration_configuration) == ["20260723_0014"]
     assert _application_tables(migration_configuration) == HEAD_TABLES
 
 
@@ -213,7 +215,7 @@ def test_worker_lease_revision_downgrades_to_policy_epoch_and_reapplies_cleanly(
     finally:
         command.upgrade(alembic_configuration, "head")
 
-    assert _revision_rows(migration_configuration) == ["20260724_0013"]
+    assert _revision_rows(migration_configuration) == ["20260723_0014"]
     assert _application_tables(migration_configuration) == HEAD_TABLES
 
 
@@ -235,7 +237,7 @@ def test_decision_lineage_revision_downgrades_to_worker_lease_and_reapplies_clea
     finally:
         command.upgrade(alembic_configuration, "head")
 
-    assert _revision_rows(migration_configuration) == ["20260724_0013"]
+    assert _revision_rows(migration_configuration) == ["20260723_0014"]
     assert _application_tables(migration_configuration) == HEAD_TABLES
 
 
@@ -273,7 +275,7 @@ def test_field_projection_revision_downgrades_to_decision_lineage_and_reapplies_
     finally:
         command.upgrade(alembic_configuration, "head")
 
-    assert _revision_rows(migration_configuration) == ["20260724_0013"]
+    assert _revision_rows(migration_configuration) == ["20260723_0014"]
     assert "context_fragment_field" in _application_tables(migration_configuration)
     assert "membership_resource_field_right" in _application_tables(
         migration_configuration
@@ -296,7 +298,7 @@ def test_file_source_revision_downgrades_to_learning_release_and_reapplies_clean
     finally:
         command.upgrade(alembic_configuration, "head")
 
-    assert _revision_rows(migration_configuration) == ["20260724_0013"]
+    assert _revision_rows(migration_configuration) == ["20260723_0014"]
     tables = _application_tables(migration_configuration)
     assert "context_source" in tables
     assert "source_version" in tables
@@ -347,7 +349,7 @@ def test_structural_markdown_revision_downgrades_and_reapplies_cleanly(
         command.upgrade(alembic_configuration, "head")
         engine.dispose()
 
-    assert _revision_rows(migration_configuration) == ["20260724_0013"]
+    assert _revision_rows(migration_configuration) == ["20260723_0014"]
     engine = create_database_engine(migration_configuration)
     try:
         with engine.connect() as connection:
@@ -400,10 +402,31 @@ def test_file_noop_revision_downgrades_and_reapplies_cleanly(
     finally:
         command.upgrade(alembic_configuration, "head")
 
-    assert _revision_rows(migration_configuration) == ["20260724_0013"]
+    assert _revision_rows(migration_configuration) == ["20260723_0014"]
     tables = _application_tables(migration_configuration)
     assert "file_acquisition_result" in tables
     assert "file_resource_ingestion_guard" in tables
+
+
+def test_file_replacement_revision_downgrades_and_reapplies_cleanly(
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    """Issue #26 owns one reversible empty replacement-lineage boundary."""
+
+    alembic_configuration = Config(ROOT / "alembic.ini")
+    try:
+        command.downgrade(alembic_configuration, "20260724_0013")
+        assert _revision_rows(migration_configuration) == ["20260724_0013"]
+        tables = _application_tables(migration_configuration)
+        assert "file_revision_replacement_plan" not in tables
+        assert "file_revision_supersession" not in tables
+    finally:
+        command.upgrade(alembic_configuration, "head")
+
+    assert _revision_rows(migration_configuration) == ["20260723_0014"]
+    tables = _application_tables(migration_configuration)
+    assert "file_revision_replacement_plan" in tables
+    assert "file_revision_supersession" in tables
 
 
 def test_structural_snapshot_constraint_rejects_missing_json_bindings(
@@ -683,7 +706,7 @@ def test_field_projection_downgrade_refuses_populated_content_atomically(
         ):
             command.downgrade(alembic_configuration, "20260722_0007")
 
-        assert _revision_rows(migration_configuration) == ["20260724_0013"]
+        assert _revision_rows(migration_configuration) == ["20260723_0014"]
         with engine.connect() as connection:
             assert (
                 connection.execute(
@@ -749,7 +772,7 @@ def test_field_projection_downgrade_refuses_populated_content_atomically(
                 ):
                     connection.execute(text(statement), parameters)
         except SQLAlchemyError:
-            if _revision_rows(migration_configuration) != ["20260724_0013"]:
+            if _revision_rows(migration_configuration) != ["20260723_0014"]:
                 command.upgrade(alembic_configuration, "head")
             raise
         finally:
@@ -903,7 +926,7 @@ def test_field_projection_downgrade_serializes_with_concurrent_fragment_insert(
                 == "concurrent-private-body"
             )
     finally:
-        if _revision_rows(migration_configuration) != ["20260724_0013"]:
+        if _revision_rows(migration_configuration) != ["20260723_0014"]:
             command.upgrade(alembic_configuration, "head")
         with engine.begin() as connection:
             connection.execute(

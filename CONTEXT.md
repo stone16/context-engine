@@ -355,6 +355,38 @@ no-op；它只保留安全 lineage 和 digest，不保存 source content。
 - **Do not confuse with:** ContextRevision, publication event, index job,
   acquisition checkpoint, publish watermark, or WorkerLease completion.
 
+### `File replacement plan`
+
+The immutable durable ready boundary for one changed File Revision. 中文：File
+replacement plan 把完整但尚未 active 的新版与旧 active Revision、job 和
+acquisition 精确绑定。
+
+- **Owner/scope:** one Organization, ContextSource, ContextResource,
+  acquisition, and File import job.
+- **Lifecycle:** created only after the replacement snapshot, Fragments,
+  candidates, and `prepared -> indexed` evidence are complete; retained as
+  activation lineage.
+- **Invariant:** does not make content visible or authorize delivery; activation
+  must still revalidate authority and compare-and-swap the exact previous
+  Revision.
+- **Do not confuse with:** active ContextRevision, publish watermark,
+  acquisition checkpoint, or recovery lease.
+
+### `File revision supersession`
+
+The immutable old-to-new Revision edge recorded by successful File activation.
+中文：File revision supersession 记录哪个旧 Revision 被哪个新版替代，并保留清理状态。
+
+- **Owner/scope:** one Organization and ContextResource, with exact acquisition
+  and File import job lineage.
+- **Lifecycle:** created in the active-pointer transaction and retained with
+  `retained_until_explicit_cleanup` until a future cleanup policy exists.
+- **Invariant:** neither the retained old Revision nor this edge authorizes
+  Runtime delivery; only the current Resource pointer plus exact authorization
+  can make Evidence visible.
+- **Do not confuse with:** physical deletion, tombstone, active pointer, or
+  rollback/recovery command.
+
 ### `acquisition checkpoint`
 
 The durable, opaque, monotonic signal recording which source changes have been

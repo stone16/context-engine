@@ -550,8 +550,33 @@ and Membership version must still be active, temporally valid, and retain body
 access; content equality never creates or repairs authorization. Equal content
 in another Organization is independently owned. Changed bytes,
 compiler/config changes, revoked/different access, and partial publication
-never take this path; replacement and crash recovery remain unavailable.
-ADR-0039 owns the byte domain and concurrency boundary.
+never take this path. ADR-0039 owns the byte domain and no-op concurrency
+boundary.
+
+Changed File content enters the separate ADR-0040 replacement path. One staging
+transaction revalidates the exact WorkerLease, current acquisition authority,
+and complete old active artifact, then persists the complete immutable new
+Revision, snapshot, Fragments, candidates, `prepared -> indexed` events, and a
+durable replacement plan before marking the job `ready`. The old Revision stays
+active throughout staging. A second transaction revalidates authority and
+readiness, compare-and-swaps the Resource active pointer, appends `active`,
+records immutable supersession lineage, and completes the job. Superseded
+artifacts remain `retained_until_explicit_cleanup`; deletion and recovery of a
+committed ready job are not active in this slice. When an equivalent concurrent
+replacement activates between the initial publish attempt and replacement
+staging, the guarded stage classification completes the later job as
+`unchanged` and returns that durable zero-effect result. V1 and V2 each reprove
+that the supplied compilation exactly matches the now-active snapshot,
+Fragments, and candidates before reporting success.
+
+Because Runtime resolves through multiple SQL statements at `READ COMMITTED`,
+each UserActor transaction takes an Organization-scoped shared publication
+barrier and activation takes the matching exclusive transaction barrier around
+validation and pointer swap. This barrier supplies all-old/all-new transaction
+visibility; it is not authorization and does not replace the
+`CandidateRef -> AuthorizationKernel -> AuthorizedProjection` path. Other
+Organizations do not share the barrier, and activation mutates only the exact
+Resource named by the replacement plan.
 
 Markdown compilation is representation-versioned. The frozen v1 contract keeps
 its original heading-plus-paragraph bytes. Version 2 emits one source-ordered

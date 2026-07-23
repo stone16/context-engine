@@ -1,5 +1,5 @@
 {
-  "manifestVersion": "13.0.0",
+  "manifestVersion": "14.0.0",
   "controlOperations": [
     {
       "name": "register_file_source",
@@ -112,6 +112,34 @@
         "context_fragment", "revision_publication_event",
         "exact_phrase_candidate", "resource_access_policy",
         "membership_resource_field_right", "file_import_job"
+      ]
+    },
+    {
+      "name": "replace_file_import",
+      "stageDatabaseFunctions": {
+        "markdown-config-v1": "context_worker_stage_file_replacement",
+        "markdown-config-v2": "context_worker_stage_structural_file_replacement"
+      },
+      "activateDatabaseFunction": "context_worker_activate_file_replacement",
+      "role": "context_engine_worker",
+      "definerRole": "context_engine_worker_lease_definer",
+      "directTableMutationAllowed": false,
+      "rawNonceComparedAsSha256": true,
+      "transactions": ["stage complete replacement", "activate active pointer"],
+      "stageInvariant": "the old active Revision remains the only Runtime-visible Revision until the complete replacement is prepared and indexed",
+      "stageRaceOutcome": "an equivalent concurrent winner completes the late job as unchanged only after the supplied v1/v2 compilation exactly matches the active artifact",
+      "activationInvariant": "one compare-and-swap transaction changes the active pointer, appends active evidence and supersession lineage, and completes the job",
+      "runtimeVisibilityBarrier": "Organization-scoped shared Runtime/exclusive activation transaction advisory lock",
+      "retention": "superseded Revisions remain immutable and retained_until_explicit_cleanup",
+      "stageAtomicWrites": [
+        "file_resource_ingestion_guard", "file_acquisition_result",
+        "context_revision", "file_revision_snapshot", "context_fragment",
+        "revision_publication_event", "exact_phrase_candidate",
+        "file_revision_replacement_plan", "file_import_job"
+      ],
+      "activationAtomicWrites": [
+        "context_resource", "revision_publication_event",
+        "file_revision_supersession", "file_import_job"
       ]
     },
     {
@@ -2476,8 +2504,8 @@
         ]
       },
       "immutableRows": {"trigger": "file_resource_ingestion_guard_immutable", "function": "context_content_reject_mutation", "events": ["UPDATE", "DELETE"], "sqlstate": "55000"},
-      "functionOnlyMutation": {"databaseFunctions": ["context_worker_publish_file_import_v2", "context_worker_publish_structural_file_import_v2"], "definerRole": "context_engine_worker_lease_definer", "directTableMutationAllowed": false},
-      "permittedOperations": {"context_engine_control": [], "context_engine_runtime": [], "context_engine_worker": ["EXECUTE context_worker_publish_file_import_v2", "EXECUTE context_worker_publish_structural_file_import_v2"], "context_engine_worker_lease_definer": ["SELECT", "INSERT", "UPDATE resource_ref"]},
+      "functionOnlyMutation": {"databaseFunctions": ["context_worker_publish_file_import_v2", "context_worker_publish_structural_file_import_v2", "context_worker_stage_file_replacement", "context_worker_stage_structural_file_replacement"], "definerRole": "context_engine_worker_lease_definer", "directTableMutationAllowed": false},
+      "permittedOperations": {"context_engine_control": [], "context_engine_runtime": [], "context_engine_worker": ["EXECUTE context_worker_publish_file_import_v2", "EXECUTE context_worker_publish_structural_file_import_v2", "EXECUTE context_worker_stage_file_replacement", "EXECUTE context_worker_stage_structural_file_replacement"], "context_engine_worker_lease_definer": ["SELECT", "INSERT", "UPDATE resource_ref"]},
       "partitions": [],
       "securityInvariantIds": ["TENANT-OWNERSHIP-001", "TENANT-FK-002", "RLS-FAIL-CLOSED-003", "WORKER-LEASE-007"],
       "negativeTestIds": ["DB-001", "DB-004", "DB-008", "PG-FILE-IMPORT-023"]
@@ -2513,8 +2541,8 @@
         ]
       },
       "immutableRows": {"trigger": "file_acquisition_result_immutable", "function": "context_content_reject_mutation", "events": ["UPDATE", "DELETE"], "sqlstate": "55000"},
-      "functionOnlyMutation": {"databaseFunctions": ["context_worker_publish_file_import_v2", "context_worker_publish_structural_file_import_v2"], "definerRole": "context_engine_worker_lease_definer", "directTableMutationAllowed": false},
-      "permittedOperations": {"context_engine_control": [], "context_engine_runtime": [], "context_engine_worker": ["EXECUTE context_worker_publish_file_import_v2", "EXECUTE context_worker_publish_structural_file_import_v2"], "context_engine_worker_lease_definer": ["SELECT", "INSERT"]},
+      "functionOnlyMutation": {"databaseFunctions": ["context_worker_publish_file_import_v2", "context_worker_publish_structural_file_import_v2", "context_worker_stage_file_replacement", "context_worker_stage_structural_file_replacement"], "definerRole": "context_engine_worker_lease_definer", "directTableMutationAllowed": false},
+      "permittedOperations": {"context_engine_control": [], "context_engine_runtime": [], "context_engine_worker": ["EXECUTE context_worker_publish_file_import_v2", "EXECUTE context_worker_publish_structural_file_import_v2", "EXECUTE context_worker_stage_file_replacement", "EXECUTE context_worker_stage_structural_file_replacement"], "context_engine_worker_lease_definer": ["SELECT", "INSERT"]},
       "retention": {"sourceContent": "none", "reason": "fixed code plus organization-scoped digest only"},
       "partitions": [],
       "securityInvariantIds": ["TENANT-OWNERSHIP-001", "TENANT-FK-002", "RLS-FAIL-CLOSED-003", "WORKER-LEASE-007", "TRACE-REDACTION-012"],
@@ -2678,6 +2706,79 @@
       "partitions": [],
       "securityInvariantIds": ["TENANT-OWNERSHIP-001", "TENANT-FK-002", "RLS-FAIL-CLOSED-003", "INDEX-NOT-AUTHORITY-005"],
       "negativeTestIds": ["DB-001", "DB-002", "DB-004", "DB-008", "DB-009", "DB-010", "PG-INDEX-NOT-AUTHORITY-005"]
+    },
+    {
+      "name": "file_revision_replacement_plan",
+      "classification": "tenant_owned",
+      "nonOwnerEvidence": {
+        "evidenceId": "PG-FILE-REPLACEMENT-026",
+        "selector": {"table": "file_revision_replacement_plan"}
+      },
+      "purpose": "Immutable durable ready boundary binding one complete replacement Revision to the exact old active Revision and File import job",
+      "organizationColumn": "organization_id",
+      "organizationInclusiveKeys": [
+        {"name": "pk_file_revision_replacement_plan", "kind": "primary_key", "columns": ["organization_id", "resource_ref", "replacement_revision_id"]},
+        {"name": "uq_file_revision_replacement_plan_job", "kind": "unique", "columns": ["organization_id", "job_id"]},
+        {"name": "uq_file_revision_replacement_plan_previous", "kind": "unique", "columns": ["organization_id", "resource_ref", "previous_revision_id"]}
+      ],
+      "foreignKeys": [
+        {"name": "fk_file_revision_replacement_plan_guard_same_organization", "columns": ["organization_id", "source_id", "resource_ref"], "references": {"table": "file_resource_ingestion_guard", "columns": ["organization_id", "source_id", "resource_ref"]}},
+        {"name": "fk_file_revision_replacement_plan_previous_same_organization", "columns": ["organization_id", "resource_ref", "previous_revision_id"], "references": {"table": "context_revision", "columns": ["organization_id", "resource_ref", "revision_id"]}},
+        {"name": "fk_file_revision_replacement_plan_replacement_same_organization", "columns": ["organization_id", "resource_ref", "replacement_revision_id"], "references": {"table": "context_revision", "columns": ["organization_id", "resource_ref", "revision_id"]}},
+        {"name": "fk_file_revision_replacement_plan_acquisition_same_organization", "columns": ["organization_id", "acquisition_id", "source_id"], "references": {"table": "file_acquisition", "columns": ["organization_id", "acquisition_id", "source_id"]}},
+        {"name": "fk_file_revision_replacement_plan_job_same_organization", "columns": ["organization_id", "job_id"], "references": {"table": "file_import_job", "columns": ["organization_id", "job_id"]}}
+      ],
+      "checkConstraints": [
+        {"name": "ck_file_revision_replacement_plan_distinct_revisions", "expression": "previous_revision_id <> replacement_revision_id"},
+        {"name": "ck_file_revision_replacement_plan_identity_digest", "expression": "content_identity_digest ~ '^[0-9a-f]{64}$'"}
+      ],
+      "rowLevelSecurity": {"enabled": true, "forced": true, "policies": [
+        {"name": "file_revision_replacement_plan_migrator_administration", "command": "ALL", "roles": ["context_engine_migrator"], "using": "true", "withCheck": "true"},
+        {"name": "file_revision_replacement_plan_file_import_definer_select", "command": "SELECT", "roles": ["context_engine_worker_lease_definer"], "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"},
+        {"name": "file_revision_replacement_plan_file_import_definer_insert", "command": "INSERT", "roles": ["context_engine_worker_lease_definer"], "withCheck": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"}
+      ]},
+      "immutableRows": {"trigger": "file_revision_replacement_plan_immutable", "function": "context_content_reject_mutation", "events": ["UPDATE", "DELETE"], "sqlstate": "55000"},
+      "functionOnlyMutation": {"databaseFunctions": ["context_worker_stage_file_replacement", "context_worker_stage_structural_file_replacement"], "definerRole": "context_engine_worker_lease_definer", "directTableMutationAllowed": false},
+      "permittedOperations": {"context_engine_control": [], "context_engine_runtime": [], "context_engine_worker": ["EXECUTE context_worker_stage_file_replacement", "EXECUTE context_worker_stage_structural_file_replacement"], "context_engine_worker_lease_definer": ["SELECT", "INSERT"]},
+      "partitions": [],
+      "securityInvariantIds": ["TENANT-OWNERSHIP-001", "TENANT-FK-002", "RLS-FAIL-CLOSED-003", "WORKER-LEASE-007"],
+      "negativeTestIds": ["DB-001", "DB-004", "DB-008", "PG-FILE-REPLACEMENT-026"]
+    },
+    {
+      "name": "file_revision_supersession",
+      "classification": "tenant_owned",
+      "nonOwnerEvidence": {
+        "evidenceId": "PG-FILE-REPLACEMENT-026",
+        "selector": {"table": "file_revision_supersession"}
+      },
+      "purpose": "Immutable activation lineage retaining each superseded Revision until an explicit future cleanup policy",
+      "organizationColumn": "organization_id",
+      "organizationInclusiveKeys": [
+        {"name": "pk_file_revision_supersession", "kind": "primary_key", "columns": ["organization_id", "resource_ref", "superseded_revision_id"]},
+        {"name": "uq_file_revision_supersession_replacement", "kind": "unique", "columns": ["organization_id", "resource_ref", "replacement_revision_id"]}
+      ],
+      "foreignKeys": [
+        {"name": "fk_file_revision_supersession_plan_same_organization", "columns": ["organization_id", "resource_ref", "replacement_revision_id"], "references": {"table": "file_revision_replacement_plan", "columns": ["organization_id", "resource_ref", "replacement_revision_id"]}},
+        {"name": "fk_file_revision_supersession_previous_same_organization", "columns": ["organization_id", "resource_ref", "superseded_revision_id"], "references": {"table": "context_revision", "columns": ["organization_id", "resource_ref", "revision_id"]}},
+        {"name": "fk_file_revision_supersession_acquisition_same_organization", "columns": ["organization_id", "acquisition_id"], "references": {"table": "file_acquisition", "columns": ["organization_id", "acquisition_id"]}},
+        {"name": "fk_file_revision_supersession_job_same_organization", "columns": ["organization_id", "job_id"], "references": {"table": "file_import_job", "columns": ["organization_id", "job_id"]}}
+      ],
+      "checkConstraints": [
+        {"name": "ck_file_revision_supersession_distinct_revisions", "expression": "superseded_revision_id <> replacement_revision_id"},
+        {"name": "ck_file_revision_supersession_retention_state", "expression": "retention_state = 'retained_until_explicit_cleanup'"}
+      ],
+      "rowLevelSecurity": {"enabled": true, "forced": true, "policies": [
+        {"name": "file_revision_supersession_migrator_administration", "command": "ALL", "roles": ["context_engine_migrator"], "using": "true", "withCheck": "true"},
+        {"name": "file_revision_supersession_file_import_definer_select", "command": "SELECT", "roles": ["context_engine_worker_lease_definer"], "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"},
+        {"name": "file_revision_supersession_file_import_definer_insert", "command": "INSERT", "roles": ["context_engine_worker_lease_definer"], "withCheck": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"}
+      ]},
+      "immutableRows": {"trigger": "file_revision_supersession_immutable", "function": "context_content_reject_mutation", "events": ["UPDATE", "DELETE"], "sqlstate": "55000"},
+      "functionOnlyMutation": {"databaseFunction": "context_worker_activate_file_replacement", "definerRole": "context_engine_worker_lease_definer", "directTableMutationAllowed": false},
+      "permittedOperations": {"context_engine_control": [], "context_engine_runtime": [], "context_engine_worker": ["EXECUTE context_worker_activate_file_replacement"], "context_engine_worker_lease_definer": ["SELECT", "INSERT"]},
+      "retention": {"supersededRevision": "retained_until_explicit_cleanup", "cleanupAuthority": "not active in Issue #26"},
+      "partitions": [],
+      "securityInvariantIds": ["TENANT-OWNERSHIP-001", "TENANT-FK-002", "RLS-FAIL-CLOSED-003", "WORKER-LEASE-007"],
+      "negativeTestIds": ["DB-001", "DB-004", "DB-008", "PG-FILE-REPLACEMENT-026"]
     },
     {
       "name": "release_promotion_audit",

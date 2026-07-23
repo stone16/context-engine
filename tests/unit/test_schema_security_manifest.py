@@ -32,7 +32,7 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
     document = manifest()
     tables = table_entries(document)
 
-    assert document["manifestVersion"] == "13.0.0"
+    assert document["manifestVersion"] == "14.0.0"
     assert set(tables) == {
         "active_release_manifest",
         "alembic_version",
@@ -50,6 +50,8 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
         "file_import_job",
         "file_resource_ingestion_guard",
         "file_revision_snapshot",
+        "file_revision_replacement_plan",
+        "file_revision_supersession",
         "membership",
         "membership_resource_field_right",
         "organization",
@@ -97,6 +99,8 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
         "file_import_job",
         "file_resource_ingestion_guard",
         "file_revision_snapshot",
+        "file_revision_replacement_plan",
+        "file_revision_supersession",
         "revision_publication_event",
     ):
         assert tables[file_import_table]["classification"] == "tenant_owned"
@@ -235,6 +239,73 @@ def test_issue_25_file_noop_contract_is_tenant_scoped_and_function_only() -> Non
         assert entry["rowLevelSecurity"]["forced"] is True
         assert entry["functionOnlyMutation"]["directTableMutationAllowed"] is False
         assert entry["immutableRows"]["events"] == ["UPDATE", "DELETE"]
+        assert entry["permittedOperations"]["context_engine_runtime"] == []
+
+
+def test_issue_26_file_replacement_contract_is_staged_and_function_only() -> None:
+    document = manifest()
+    entries = table_entries(document)
+    operation = next(
+        value
+        for value in document["controlOperations"]
+        if value["name"] == "replace_file_import"
+    )
+
+    assert operation["stageDatabaseFunctions"] == {
+        "markdown-config-v1": "context_worker_stage_file_replacement",
+        "markdown-config-v2": (
+            "context_worker_stage_structural_file_replacement"
+        ),
+    }
+    assert operation["activateDatabaseFunction"] == (
+        "context_worker_activate_file_replacement"
+    )
+    assert operation["transactions"] == [
+        "stage complete replacement",
+        "activate active pointer",
+    ]
+    assert operation["stageRaceOutcome"] == (
+        "an equivalent concurrent winner completes the late job as unchanged "
+        "only after the supplied v1/v2 compilation exactly matches the active "
+        "artifact"
+    )
+    assert operation["stageAtomicWrites"][:2] == [
+        "file_resource_ingestion_guard",
+        "file_acquisition_result",
+    ]
+    stage_functions = {
+        "context_worker_stage_file_replacement",
+        "context_worker_stage_structural_file_replacement",
+    }
+    for table in ("file_resource_ingestion_guard", "file_acquisition_result"):
+        assert stage_functions <= set(
+            entries[table]["functionOnlyMutation"]["databaseFunctions"]
+        )
+        assert {
+            f"EXECUTE {function}" for function in stage_functions
+        } <= set(entries[table]["permittedOperations"]["context_engine_worker"])
+    assert operation["directTableMutationAllowed"] is False
+    assert operation["retention"] == (
+        "superseded Revisions remain immutable and "
+        "retained_until_explicit_cleanup"
+    )
+
+    plan = entries["file_revision_replacement_plan"]
+    supersession = entries["file_revision_supersession"]
+    assert plan["organizationInclusiveKeys"][0]["columns"] == [
+        "organization_id",
+        "resource_ref",
+        "replacement_revision_id",
+    ]
+    assert supersession["retention"] == {
+        "supersededRevision": "retained_until_explicit_cleanup",
+        "cleanupAuthority": "not active in Issue #26",
+    }
+    for entry in (plan, supersession):
+        assert entry["rowLevelSecurity"]["enabled"] is True
+        assert entry["rowLevelSecurity"]["forced"] is True
+        assert entry["immutableRows"]["events"] == ["UPDATE", "DELETE"]
+        assert entry["functionOnlyMutation"]["directTableMutationAllowed"] is False
         assert entry["permittedOperations"]["context_engine_runtime"] == []
 
 
