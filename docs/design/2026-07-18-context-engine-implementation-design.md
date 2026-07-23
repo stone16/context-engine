@@ -594,6 +594,17 @@ Duplicate and older deletion observations return the original result without
 another epoch bump. Physical cleanup, restore, native watcher detection, source
 offboarding, and cleanup-job execution remain inactive.
 
+ADR-0043 separates operational File progress into two append-only,
+Organization/Source-scoped streams. Import-job or tombstone acceptance appends
+an acquisition checkpoint at the durable acceptance boundary. Unchanged
+classification, active Revision publication/replacement, or tombstone commit
+appends a distinct publish completion at the existing visibility boundary. The
+Control status seam exposes the latest accepted sequence and only the greatest
+contiguous completed sequence: a later publication cannot jump over an earlier
+interrupted job, while recovery closes the gap without rewriting history.
+Runtime has no privilege on or dependency upon either signal, and the deferred
+standard ProviderPort cursor/checkpoint operations remain unavailable.
+
 Because Runtime resolves through multiple SQL statements at `READ COMMITTED`,
 each UserActor transaction takes an Organization-scoped shared publication
 barrier and activation takes the matching exclusive transaction barrier around

@@ -38,6 +38,13 @@ from engine.control.file_imports import (
     PreparedFileImport,
     PrepareFileImport,
 )
+from engine.control.file_source_progress import (
+    FileSourceAcquisitionCheckpoint,
+    FileSourceChangeKind,
+    FileSourceProgress,
+    FileSourcePublishOutcome,
+    FileSourcePublishWatermark,
+)
 from engine.control.module import ContextControl, ControlStorePort
 
 __all__ = [
@@ -56,6 +63,11 @@ __all__ = [
     "FileImportPath",
     "FileImportReceiver",
     "FileRootRef",
+    "FileSourceAcquisitionCheckpoint",
+    "FileSourceChangeKind",
+    "FileSourceProgress",
+    "FileSourcePublishOutcome",
+    "FileSourcePublishWatermark",
     "FileResourceTombstone",
     "RegisterFileSource",
     "PrepareFileImport",

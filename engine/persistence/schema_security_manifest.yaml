@@ -1,5 +1,5 @@
 {
-  "manifestVersion": "16.0.0",
+  "manifestVersion": "17.0.0",
   "controlOperations": [
     {
       "name": "register_file_source",
@@ -33,7 +33,19 @@
       "databaseOwnedTime": true,
       "idempotencyBinding": ["organization_id", "source_id", "resource_ref"],
       "runtimeVisibilityBarrier": "Organization-scoped shared Runtime/exclusive publication transaction advisory lock",
-      "atomicWrites": ["context_resource", "organization_policy_epoch", "file_resource_cleanup_intent"]
+      "atomicWrites": ["context_resource", "organization_policy_epoch", "file_resource_cleanup_intent", "file_source_acquisition_checkpoint", "file_source_publish_watermark"]
+    },
+    {
+      "name": "read_file_source_progress",
+      "databaseFunction": "context_control_read_file_source_progress",
+      "role": "context_engine_control",
+      "definerRole": "context_engine_worker_lease_definer",
+      "directTableMutationAllowed": false,
+      "trustedOrganizationSource": "TrustedControlCall",
+      "scope": ["organization_id", "source_id"],
+      "watermarkRule": "highest contiguous acquisition sequence with a committed visibility outcome",
+      "runtimeAuthorityAllowed": false,
+      "reads": ["context_source", "file_source_acquisition_checkpoint", "file_source_publish_watermark"]
     },
     {
       "name": "issue_noop_worker_lease",
@@ -74,7 +86,7 @@
       "databaseOwnedTime": true,
       "filesystemAccessAllowed": false,
       "durableJobCreationAllowed": true,
-      "atomicWrites": ["source_version", "context_source", "file_acquisition", "file_import_job"]
+      "atomicWrites": ["source_version", "context_source", "file_acquisition", "file_import_job", "file_source_acquisition_checkpoint"]
     },
     {
       "name": "issue_file_import_lease",
@@ -175,10 +187,10 @@
       "concurrentPublicationArbitration": "the Organization/Source/Resource ingestion guard serializes classification; a late identical job observes the winner as unchanged",
       "activationInvariant": "authorization and complete Fragment/index evidence are revalidated before one active-pointer transaction",
       "atomicWritesByBoundary": {
-        "acquired": ["file_resource_ingestion_guard", "file_acquisition_result", "file_publication_recovery", "file_import_job", "file_import_job_event"],
+        "acquired": ["file_resource_ingestion_guard", "file_acquisition_result", "file_source_publish_watermark", "file_publication_recovery", "file_import_job", "file_import_job_event"],
         "prepared": ["context_resource", "context_revision", "file_revision_snapshot", "context_fragment", "revision_publication_event", "resource_access_policy", "membership_resource_field_right", "file_publication_recovery", "file_import_job", "file_import_job_event"],
         "ready": ["exact_phrase_candidate", "revision_publication_event", "file_revision_replacement_plan", "file_publication_recovery", "file_import_job", "file_import_job_event"],
-        "completed": ["context_resource", "revision_publication_event", "file_revision_supersession", "file_publication_recovery", "file_import_job", "file_import_job_event"]
+        "completed": ["context_resource", "revision_publication_event", "file_source_publish_watermark", "file_revision_supersession", "file_publication_recovery", "file_import_job", "file_import_job_event"]
       }
     },
     {
@@ -2620,7 +2632,8 @@
       "organizationColumn": "organization_id",
       "organizationInclusiveKeys": [
         {"name": "pk_file_import_job", "kind": "primary_key", "columns": ["organization_id", "job_id"]},
-        {"name": "uq_file_import_job_acquisition", "kind": "unique", "columns": ["organization_id", "acquisition_id"]}
+        {"name": "uq_file_import_job_acquisition", "kind": "unique", "columns": ["organization_id", "acquisition_id"]},
+        {"name": "uq_file_import_job_progress_lineage", "kind": "unique", "columns": ["organization_id", "job_id", "acquisition_id", "source_id"]}
       ],
       "foreignKeys": [
         {
@@ -2928,7 +2941,8 @@
       "organizationInclusiveKeys": [
         {"name": "pk_file_resource_cleanup_intent", "kind": "primary_key", "columns": ["organization_id", "cleanup_intent_id"]},
         {"name": "uq_file_resource_cleanup_intent_resource", "kind": "unique", "columns": ["organization_id", "resource_ref"]},
-        {"name": "uq_file_resource_cleanup_intent_event", "kind": "unique", "columns": ["organization_id", "event_ref"]}
+        {"name": "uq_file_resource_cleanup_intent_event", "kind": "unique", "columns": ["organization_id", "event_ref"]},
+        {"name": "uq_file_resource_cleanup_intent_progress_lineage", "kind": "unique", "columns": ["organization_id", "cleanup_intent_id", "source_id", "resource_ref", "revision_id"]}
       ],
       "foreignKeys": [
         {"name": "fk_file_resource_cleanup_intent_source_same_organization", "columns": ["organization_id", "source_id"], "references": {"table": "context_source", "columns": ["organization_id", "source_id"]}},
@@ -2953,6 +2967,73 @@
       "partitions": [],
       "securityInvariantIds": ["TENANT-OWNERSHIP-001", "TENANT-FK-002", "RLS-FAIL-CLOSED-003", "INDEX-NOT-AUTHORITY-005", "REVOCATION-006"],
       "negativeTestIds": ["DB-001", "DB-004", "DB-008", "PG-FILE-TOMBSTONE-028"]
+    },
+    {
+      "name": "file_source_acquisition_checkpoint",
+      "classification": "tenant_owned",
+      "nonOwnerEvidence": {"evidenceId": "PG-FILE-PROGRESS-029", "selector": {"table": "file_source_acquisition_checkpoint"}},
+      "purpose": "Immutable Organization/Source sequence for each durably accepted File import or tombstone change",
+      "organizationColumn": "organization_id",
+      "organizationInclusiveKeys": [
+        {"name": "pk_file_source_acquisition_checkpoint", "kind": "primary_key", "columns": ["organization_id", "source_id", "sequence"]},
+        {"name": "uq_file_source_acquisition_checkpoint_exact", "kind": "unique", "columns": ["organization_id", "source_id", "sequence", "checkpoint_ref", "change_kind"]},
+        {"name": "uq_file_source_acquisition_checkpoint_ref", "kind": "unique", "columns": ["organization_id", "checkpoint_ref"]},
+        {"name": "uq_file_source_acquisition_checkpoint_acquisition", "kind": "unique", "columns": ["organization_id", "acquisition_id"]},
+        {"name": "uq_file_source_acquisition_checkpoint_cleanup", "kind": "unique", "columns": ["organization_id", "cleanup_intent_id"]}
+      ],
+      "foreignKeys": [
+        {"name": "fk_file_source_acquisition_checkpoint_source_same_organization", "columns": ["organization_id", "source_id"], "references": {"table": "context_source", "columns": ["organization_id", "source_id"]}},
+        {"name": "fk_file_source_acquisition_checkpoint_job_exact", "columns": ["organization_id", "job_id", "acquisition_id", "source_id"], "references": {"table": "file_import_job", "columns": ["organization_id", "job_id", "acquisition_id", "source_id"]}},
+        {"name": "fk_file_source_acquisition_checkpoint_cleanup_exact", "columns": ["organization_id", "cleanup_intent_id", "source_id", "resource_ref", "revision_id"], "references": {"table": "file_resource_cleanup_intent", "columns": ["organization_id", "cleanup_intent_id", "source_id", "resource_ref", "revision_id"]}}
+      ],
+      "checkConstraints": [
+        {"name": "ck_file_source_acquisition_checkpoint_sequence", "expression": "sequence BETWEEN 1 AND 9223372036854775807"},
+        {"name": "ck_file_source_acquisition_checkpoint_ref", "expression": "checkpoint_ref is facp_ plus one SHA-256 hex digest"},
+        {"name": "ck_file_source_acquisition_checkpoint_lineage", "expression": "exactly one complete file_import or file_tombstone durable lineage is present"}
+      ],
+      "rowLevelSecurity": {"enabled": true, "forced": true, "policies": [
+        {"name": "file_source_acquisition_checkpoint_migrator_administration", "command": "ALL", "roles": ["context_engine_migrator"], "using": "true", "withCheck": "true"},
+        {"name": "file_source_acquisition_checkpoint_file_progress_definer_select", "command": "SELECT", "roles": ["context_engine_worker_lease_definer"], "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"},
+        {"name": "file_source_acquisition_checkpoint_file_progress_definer_insert", "command": "INSERT", "roles": ["context_engine_worker_lease_definer"], "withCheck": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"}
+      ]},
+      "immutableRows": {"trigger": "file_source_acquisition_checkpoint_immutable", "function": "context_content_reject_mutation", "events": ["UPDATE", "DELETE"], "sqlstate": "55000"},
+      "functionOnlyMutation": {"databaseFunctions": ["context_file_source_checkpoint_import_job", "context_file_source_checkpoint_tombstone"], "causalDatabaseFunctions": ["context_control_prepare_file_import", "context_control_tombstone_file_resource"], "definerRole": "context_engine_worker_lease_definer", "directTableMutationAllowed": false},
+      "permittedOperations": {"context_engine_control": ["EXECUTE context_control_prepare_file_import", "EXECUTE context_control_read_file_source_progress", "EXECUTE context_control_tombstone_file_resource"], "context_engine_runtime": [], "context_engine_worker": [], "context_engine_worker_lease_definer": ["SELECT", "INSERT"]},
+      "partitions": [],
+      "securityInvariantIds": ["TENANT-OWNERSHIP-001", "TENANT-FK-002", "RLS-FAIL-CLOSED-003", "WORKER-LEASE-007"],
+      "negativeTestIds": ["DB-001", "DB-004", "DB-008", "PG-FILE-PROGRESS-029"]
+    },
+    {
+      "name": "file_source_publish_watermark",
+      "classification": "tenant_owned",
+      "nonOwnerEvidence": {"evidenceId": "PG-FILE-PROGRESS-029", "selector": {"table": "file_source_publish_watermark"}},
+      "purpose": "Immutable per-change visibility completion; the operator watermark is its highest contiguous acquisition sequence",
+      "organizationColumn": "organization_id",
+      "organizationInclusiveKeys": [
+        {"name": "pk_file_source_publish_watermark", "kind": "primary_key", "columns": ["organization_id", "source_id", "sequence"]},
+        {"name": "uq_file_source_publish_watermark_ref", "kind": "unique", "columns": ["organization_id", "watermark_ref"]}
+      ],
+      "foreignKeys": [
+        {"name": "fk_file_source_publish_watermark_checkpoint_exact", "columns": ["organization_id", "source_id", "sequence", "checkpoint_ref", "change_kind"], "references": {"table": "file_source_acquisition_checkpoint", "columns": ["organization_id", "source_id", "sequence", "checkpoint_ref", "change_kind"]}},
+        {"name": "fk_file_source_publish_watermark_revision_same_organization", "columns": ["organization_id", "resource_ref", "revision_id"], "references": {"table": "context_revision", "columns": ["organization_id", "resource_ref", "revision_id"]}}
+      ],
+      "checkConstraints": [
+        {"name": "ck_file_source_publish_watermark_sequence", "expression": "sequence BETWEEN 1 AND 9223372036854775807"},
+        {"name": "ck_file_source_publish_watermark_ref", "expression": "watermark_ref is fpwm_ plus one SHA-256 hex digest"},
+        {"name": "ck_file_source_publish_watermark_resource", "expression": "resource_ref is bounded nonblank Unicode without control characters"},
+        {"name": "ck_file_source_publish_watermark_outcome", "expression": "import outcomes are published, replaced or unchanged; tombstone outcome is tombstoned"}
+      ],
+      "rowLevelSecurity": {"enabled": true, "forced": true, "policies": [
+        {"name": "file_source_publish_watermark_migrator_administration", "command": "ALL", "roles": ["context_engine_migrator"], "using": "true", "withCheck": "true"},
+        {"name": "file_source_publish_watermark_file_progress_definer_select", "command": "SELECT", "roles": ["context_engine_worker_lease_definer"], "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"},
+        {"name": "file_source_publish_watermark_file_progress_definer_insert", "command": "INSERT", "roles": ["context_engine_worker_lease_definer"], "withCheck": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"}
+      ]},
+      "immutableRows": {"trigger": "file_source_publish_watermark_immutable", "function": "context_content_reject_mutation", "events": ["UPDATE", "DELETE"], "sqlstate": "55000"},
+      "functionOnlyMutation": {"databaseFunctions": ["context_file_source_append_publish_watermark", "context_file_source_publish_active_revision", "context_file_source_publish_unchanged_acquisition", "context_file_source_checkpoint_tombstone"], "causalDatabaseFunctions": ["context_worker_acquire_file_publication", "context_worker_activate_recoverable_file_publication", "context_control_tombstone_file_resource"], "definerRole": "context_engine_worker_lease_definer", "directTableMutationAllowed": false},
+      "permittedOperations": {"context_engine_control": ["EXECUTE context_control_read_file_source_progress", "EXECUTE context_control_tombstone_file_resource"], "context_engine_runtime": [], "context_engine_worker": ["EXECUTE context_worker_acquire_file_publication", "EXECUTE context_worker_activate_recoverable_file_publication"], "context_engine_worker_lease_definer": ["SELECT", "INSERT"]},
+      "partitions": [],
+      "securityInvariantIds": ["TENANT-OWNERSHIP-001", "TENANT-FK-002", "RLS-FAIL-CLOSED-003", "WORKER-LEASE-007"],
+      "negativeTestIds": ["DB-001", "DB-004", "DB-008", "PG-FILE-PROGRESS-029"]
     },
     {
       "name": "release_promotion_audit",

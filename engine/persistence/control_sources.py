@@ -17,6 +17,11 @@ from engine.control import (
     FILE_IMPORT_CAPABILITY_MANIFEST,
     FileResourceTombstone,
     FileRootRef,
+    FileSourceAcquisitionCheckpoint,
+    FileSourceChangeKind,
+    FileSourceProgress,
+    FileSourcePublishOutcome,
+    FileSourcePublishWatermark,
     RegisterFileSource,
     SourceControlUnavailable,
     SourceManifest,
@@ -324,6 +329,96 @@ class PostgreSQLControlStore:
         except (DBAPIError, SQLAlchemyError, AssertionError):
             raise SourceControlUnavailable(
                 "File import Control database authority is unavailable"
+            ) from None
+
+    def read_file_source_progress(
+        self,
+        call: TrustedControlCall,
+        source_ref: SourceRef,
+    ) -> FileSourceProgress:
+        """Read the current contiguous progress signals and durable lineage."""
+
+        if type(call) is not TrustedControlCall or type(source_ref) is not SourceRef:
+            raise SourceNotAvailable
+        try:
+            with self._engine.begin() as connection:
+                assert_control_role(connection)
+                _set_organization_context(connection, call.organization_id)
+                row = connection.execute(
+                    text(
+                        """
+                        SELECT *
+                        FROM public.context_control_read_file_source_progress(
+                            :organization_id, :source_id
+                        )
+                        """
+                    ),
+                    {
+                        "organization_id": call.organization_id,
+                        "source_id": source_ref.value,
+                    },
+                ).mappings().one_or_none()
+                if row is None:
+                    raise SourceNotAvailable
+                checkpoint = (
+                    None
+                    if row["acquisition_sequence"] is None
+                    else FileSourceAcquisitionCheckpoint(
+                        sequence=row["acquisition_sequence"],
+                        checkpoint_ref=row["acquisition_checkpoint_ref"],
+                        change_kind=FileSourceChangeKind(
+                            row["acquisition_change_kind"]
+                        ),
+                        acquisition_ref=row["acquisition_acquisition_id"],
+                        job_ref=row["acquisition_job_id"],
+                        cleanup_intent_ref=row[
+                            "acquisition_cleanup_intent_id"
+                        ],
+                        resource_ref=row["acquisition_resource_ref"],
+                        revision_ref=row["acquisition_revision_id"],
+                        event_ref=row["acquisition_event_ref"],
+                        event_sequence=row["acquisition_event_sequence"],
+                        accepted_at=row["acquisition_accepted_at"],
+                    )
+                )
+                watermark = (
+                    None
+                    if row["publish_sequence"] is None
+                    else FileSourcePublishWatermark(
+                        sequence=row["publish_sequence"],
+                        watermark_ref=row["publish_watermark_ref"],
+                        checkpoint_ref=row["publish_checkpoint_ref"],
+                        change_kind=FileSourceChangeKind(
+                            row["publish_change_kind"]
+                        ),
+                        outcome=FileSourcePublishOutcome(row["publish_outcome"]),
+                        acquisition_ref=row["publish_acquisition_id"],
+                        job_ref=row["publish_job_id"],
+                        cleanup_intent_ref=row["publish_cleanup_intent_id"],
+                        resource_ref=row["publish_resource_ref"],
+                        revision_ref=row["publish_revision_id"],
+                        event_ref=row["publish_event_ref"],
+                        event_sequence=row["publish_event_sequence"],
+                        published_at=row["publish_published_at"],
+                    )
+                )
+                return FileSourceProgress(
+                    organization_id=call.organization_id,
+                    source_ref=source_ref,
+                    acquisition_checkpoint=checkpoint,
+                    publish_watermark=watermark,
+                )
+        except SourceNotAvailable:
+            raise
+        except (
+            DBAPIError,
+            SQLAlchemyError,
+            AssertionError,
+            TypeError,
+            ValueError,
+        ):
+            raise SourceControlUnavailable(
+                "File Source progress database authority is unavailable"
             ) from None
 
     def tombstone_file_resource(
