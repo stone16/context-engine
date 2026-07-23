@@ -34,8 +34,10 @@ from engine.persistence.context_runs import (
 from engine.persistence.control_sources import PostgreSQLControlStore
 from engine.persistence.database import create_database_engine
 from engine.persistence.file_imports import (
+    FileImportInterrupted,
     FileImportLeaseRedemption,
     FileImportUnavailable,
+    FilePublicationBoundary,
     PostgreSQLFileImportWorker,
     PublishedFileImport,
 )
@@ -99,7 +101,9 @@ __all__ = [
     "PostgreSQLContextRunReader",
     "PostgreSQLControlStore",
     "FileImportLeaseRedemption",
+    "FileImportInterrupted",
     "FileImportUnavailable",
+    "FilePublicationBoundary",
     "PostgreSQLFileImportWorker",
     "PublishedFileImport",
     "VerifiedContextRunOperatorIdentity",

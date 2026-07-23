@@ -32,7 +32,7 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
     document = manifest()
     tables = table_entries(document)
 
-    assert document["manifestVersion"] == "14.0.0"
+    assert document["manifestVersion"] == "15.0.0"
     assert set(tables) == {
         "active_release_manifest",
         "alembic_version",
@@ -48,6 +48,8 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
         "file_acquisition",
         "file_acquisition_result",
         "file_import_job",
+        "file_import_job_event",
+        "file_publication_recovery",
         "file_resource_ingestion_guard",
         "file_revision_snapshot",
         "file_revision_replacement_plan",
@@ -97,6 +99,8 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
         "file_acquisition",
         "file_acquisition_result",
         "file_import_job",
+        "file_import_job_event",
+        "file_publication_recovery",
         "file_resource_ingestion_guard",
         "file_revision_snapshot",
         "file_revision_replacement_plan",
@@ -153,20 +157,21 @@ def test_issue_24_structural_markdown_contract_is_versioned_and_function_only() 
         ],
     }
     structural_function = "EXECUTE context_worker_publish_structural_file_import_v2"
-    for table_name in (
-        "file_import_job",
-        "file_revision_snapshot",
-        "revision_publication_event",
-        "exact_phrase_candidate",
-    ):
-        assert (
-            structural_function
-            in entries[table_name]["permittedOperations"]["context_engine_worker"]
-        )
-    assert (
-        entries["context_fragment"]["permittedOperations"]["context_engine_worker"]
-        == []
+    assert structural_function in entries["file_revision_snapshot"][
+        "permittedOperations"
+    ]["context_engine_worker"]
+    recovery_steps = {
+        "EXECUTE context_worker_acquire_file_publication",
+        "EXECUTE context_worker_prepare_file_publication",
+        "EXECUTE context_worker_index_file_publication",
+        "EXECUTE context_worker_activate_recoverable_file_publication",
+    }
+    assert recovery_steps <= set(
+        entries["file_import_job"]["permittedOperations"]["context_engine_worker"]
     )
+    assert entries["context_fragment"]["permittedOperations"][
+        "context_engine_worker"
+    ] == ["EXECUTE context_worker_prepare_file_publication"]
 
 
 def test_issue_25_file_noop_contract_is_tenant_scoped_and_function_only() -> None:
@@ -307,6 +312,75 @@ def test_issue_26_file_replacement_contract_is_staged_and_function_only() -> Non
         assert entry["immutableRows"]["events"] == ["UPDATE", "DELETE"]
         assert entry["functionOnlyMutation"]["directTableMutationAllowed"] is False
         assert entry["permittedOperations"]["context_engine_runtime"] == []
+
+
+def test_issue_27_file_recovery_contract_is_generation_fenced_and_auditable() -> None:
+    document = manifest()
+    entries = table_entries(document)
+    operation = next(
+        value
+        for value in document["controlOperations"]
+        if value["name"] == "recover_file_publication"
+    )
+    lease_issue = next(
+        value
+        for value in document["controlOperations"]
+        if value["name"] == "issue_file_import_lease"
+    )
+
+    assert operation["durableBoundaries"] == [
+        "acquired",
+        "prepared",
+        "ready",
+        "completed",
+    ]
+    assert operation["idempotencyBinding"] == [
+        "organization_id",
+        "job_id",
+        "source_id",
+        "resource_ref",
+        "revision_id",
+        "content_identity_digest",
+        "publication_payload_digest",
+    ]
+    assert "context_worker_issue_file_import_lease" not in operation[
+        "databaseFunctions"
+    ]
+    assert lease_issue["atomicWrites"] == [
+        "file_import_job",
+        "file_import_job_event",
+    ]
+    assert "higher lease generation" in operation["leaseReclaim"]
+    checkpoint = entries["file_publication_recovery"]
+    history = entries["file_import_job_event"]
+    for entry in (checkpoint, history):
+        assert entry["rowLevelSecurity"]["enabled"] is True
+        assert entry["rowLevelSecurity"]["forced"] is True
+        assert entry["functionOnlyMutation"]["directTableMutationAllowed"] is False
+        assert entry["permittedOperations"]["context_engine_runtime"] == []
+    assert history["immutableRows"]["events"] == ["UPDATE", "DELETE"]
+    assert checkpoint["retention"]["sourceContent"] == "none"
+
+    boundary_functions = {
+        "acquired": "context_worker_acquire_file_publication",
+        "prepared": "context_worker_prepare_file_publication",
+        "ready": "context_worker_index_file_publication",
+        "completed": "context_worker_activate_recoverable_file_publication",
+    }
+    for boundary, tables in operation["atomicWritesByBoundary"].items():
+        database_function = boundary_functions[boundary]
+        for table_name in tables:
+            function_only = entries[table_name]["functionOnlyMutation"]
+            declared = function_only.get(
+                "databaseFunctions", [function_only.get("databaseFunction")]
+            )
+            assert database_function in declared
+            assert (
+                f"EXECUTE {database_function}"
+                in entries[table_name]["permittedOperations"][
+                    "context_engine_worker"
+                ]
+            )
 
 
 def test_issue_21_file_source_manifest_is_closed_and_role_separated() -> None:
@@ -1153,11 +1227,19 @@ def test_content_manifest_preserves_lineage_visibility_and_immutability() -> Non
         "context_revision": ["INSERT"],
         "context_fragment": ["SELECT", "INSERT"],
     }
+    worker_operations = {
+        "context_resource": [
+            "EXECUTE context_worker_prepare_file_publication",
+            "EXECUTE context_worker_activate_recoverable_file_publication",
+        ],
+        "context_revision": ["EXECUTE context_worker_prepare_file_publication"],
+        "context_fragment": ["EXECUTE context_worker_prepare_file_publication"],
+    }
     for entry in (resource, revision, fragment):
         assert entry["organizationColumn"] == "organization_id"
         assert entry["permittedOperations"] == {
             "context_engine_runtime": ["SELECT"],
-            "context_engine_worker": [],
+            "context_engine_worker": worker_operations[entry["name"]],
             "context_engine_worker_lease_definer": expected_definer_operations[
                 entry["name"]
             ],
@@ -1333,6 +1415,9 @@ def test_content_manifest_preserves_lineage_visibility_and_immutability() -> Non
             "context_engine_worker": [],
         }
         if entry["name"] == "membership_resource_field_right":
+            expected_operations["context_engine_worker"] = [
+                "EXECUTE context_worker_prepare_file_publication"
+            ]
             expected_operations["context_engine_worker_lease_definer"] = [
                 "SELECT",
                 "INSERT",
@@ -1456,6 +1541,9 @@ def test_policy_epoch_manifest_seals_runtime_reads_and_control_mutation() -> Non
             "context_engine_worker": [],
         }
         if entry["name"] == "resource_access_policy":
+            expected_operations["context_engine_worker"] = [
+                "EXECUTE context_worker_prepare_file_publication"
+            ]
             expected_operations["context_engine_worker_lease_definer"] = [
                 "SELECT",
                 "INSERT",

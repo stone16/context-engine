@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass, field
+from enum import StrEnum
 from hashlib import sha256
 from typing import Literal
 from uuid import UUID, uuid4
@@ -21,7 +24,6 @@ from engine.control import (
     SourceRef,
 )
 from engine.persistence.role_guard import assert_worker_role
-from engine.runtime.content_io import exact_phrase_digest
 from engine.runtime.evidence import CandidateRef
 from engine.supply import (
     FILE_IMPORT_WORKER_LEASE_OPERATION,
@@ -37,6 +39,9 @@ from engine.supply import (
     worker_lease_digest,
 )
 from engine.supply.jobs import _require_utc
+
+_CONCURRENT_PUBLICATION_WAIT_SECONDS = 5.0
+_CONCURRENT_PUBLICATION_POLL_SECONDS = 0.01
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,6 +144,24 @@ class FileImportUnavailable(RuntimeError):
     """Generic failure after a valid lease reaches acquisition/publication."""
 
 
+class FilePublicationBoundary(StrEnum):
+    """The three explicit post-commit fault-injection boundaries."""
+
+    ACQUIRED = "acquired"
+    PREPARED = "prepared"
+    INDEXED = "indexed"
+
+
+class FileImportInterrupted(RuntimeError):
+    """Deterministic test interruption recorded after a durable boundary."""
+
+    def __init__(self, boundary: FilePublicationBoundary) -> None:
+        if type(boundary) is not FilePublicationBoundary:
+            raise TypeError("File interruption requires an exact boundary")
+        self.boundary = boundary
+        super().__init__(f"File publication interrupted after {boundary.value}")
+
+
 @dataclass(frozen=True, slots=True)
 class _RedeemedFileImport:
     source_ref: SourceRef
@@ -171,6 +194,7 @@ class PostgreSQLFileImportWorker:
         "_config",
         "_engine",
         "_identity",
+        "_interrupt_after",
         "_roots",
         "_uuid_factory",
     )
@@ -185,6 +209,7 @@ class PostgreSQLFileImportWorker:
         *,
         clock: Callable[[], object],
         uuid_factory: Callable[[], UUID] = uuid4,
+        interrupt_after: FilePublicationBoundary | None = None,
     ) -> None:
         if type(codec) is not WorkerLeaseCodec:
             raise TypeError("File import worker requires WorkerLeaseCodec")
@@ -196,6 +221,11 @@ class PostgreSQLFileImportWorker:
             raise TypeError("File import worker requires MarkdownCompilerConfig")
         if not callable(clock) or not callable(uuid_factory):
             raise TypeError("File import worker requires clock and UUID factory")
+        if (
+            interrupt_after is not None
+            and type(interrupt_after) is not FilePublicationBoundary
+        ):
+            raise TypeError("File import interruption requires a closed boundary")
         self._engine = engine
         self._codec = codec
         self._identity = identity
@@ -203,6 +233,7 @@ class PostgreSQLFileImportWorker:
         self._config = config
         self._clock = clock
         self._uuid_factory = uuid_factory
+        self._interrupt_after = interrupt_after
 
     def run(self, redemption: FileImportLeaseRedemption) -> PublishedFileImport:
         """Perform file I/O only after signature and durable lease redemption."""
@@ -237,8 +268,11 @@ class PostgreSQLFileImportWorker:
             raise FileImportUnavailable("File import is unavailable")
         try:
             return self._publish(redemption.token, claims, redeemed, outcome)
+        except FileImportInterrupted:
+            raise
         except (FileImportUnavailable, WorkNotAvailable):
-            self._fail(redemption.token, claims)
+            with suppress(FileImportUnavailable, WorkNotAvailable):
+                self._fail(redemption.token, claims)
             raise
 
     def _redeem(
@@ -256,7 +290,8 @@ class PostgreSQLFileImportWorker:
                         """
                         SELECT * FROM public.context_worker_redeem_file_import(
                             :organization_id, :job_id, :service_principal_id,
-                            :source_ref, :signing_key_version, :nonce,
+                            :source_ref, :lease_generation,
+                            :signing_key_version, :nonce,
                             :issued_at, :expires_at
                         )
                         """
@@ -266,6 +301,7 @@ class PostgreSQLFileImportWorker:
                         "job_id": claims.job_id,
                         "service_principal_id": claims.service_principal_id,
                         "source_ref": claims.source_ref,
+                        "lease_generation": claims.lease_generation,
                         "signing_key_version": claims.signing_key_version,
                         "nonce": claims.nonce,
                         "issued_at": claims.issued_at,
@@ -296,83 +332,137 @@ class PostgreSQLFileImportWorker:
     ) -> PublishedFileImport:
         if type(claims) is not WorkerLeaseClaims:
             raise _rejection(token)
-        revision_id = self._uuid_factory()
+        requested_revision_id = self._uuid_factory()
         resource_ref = _resource_ref(redeemed.source_ref, redeemed.path)
-        structural = document.provenance.is_structural_v2
-        if structural:
-            compilation_document = json.loads(
+        if document.provenance.is_structural_v2:
+            raw_compilation_document = json.loads(
                 canonicalize_parsed_document(document).decode("utf-8")
             )
-            statement = """
-                SELECT *
-                FROM public.context_worker_publish_structural_file_import_v2(
+            compilation_document: str | None = json.dumps(
+                raw_compilation_document,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+        else:
+            compilation_document = None
+        artifact_document = json.dumps(
+            [
+                {
+                    "fragmentRef": fragment.fragment_ref,
+                    "contextualText": fragment.contextual_text,
+                    "searchPhrases": list(fragment.search_phrases),
+                }
+                for fragment in document.fragments
+            ],
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        parameters: dict[str, object] = {
+            "organization_id": claims.organization_id,
+            "job_id": claims.job_id,
+            "service_principal_id": claims.service_principal_id,
+            "source_ref": claims.source_ref,
+            "resource_ref": resource_ref,
+            "revision_id": requested_revision_id,
+            "canonical_text": document.canonical_text,
+            "content_hash": document.content_hash,
+            "compilation_digest": document.compilation_digest,
+            "compiler_version": document.provenance.compiler_version,
+            "config_version": document.provenance.config_version,
+            "compilation_document": compilation_document,
+            "artifact_document": artifact_document,
+            "lease_generation": claims.lease_generation,
+            "signing_key_version": claims.signing_key_version,
+            "nonce": claims.nonce,
+            "issued_at": claims.issued_at,
+            "expires_at": claims.expires_at,
+        }
+        try:
+            acquired = self._execute_one(
+                """
+                SELECT * FROM public.context_worker_acquire_file_publication(
                     :organization_id, :job_id, :service_principal_id,
-                    :source_ref, :resource_ref,
-                    :revision_id, :canonical_text,
-                    :content_hash, :compilation_digest,
+                    :source_ref, :resource_ref, :revision_id,
+                    :canonical_text, :content_hash, :compilation_digest,
                     :compiler_version, :config_version,
                     CAST(:compilation_document AS jsonb),
-                    :signing_key_version, :nonce, :issued_at, :expires_at
+                    CAST(:artifact_document AS jsonb),
+                    :lease_generation, :signing_key_version, :nonce,
+                    :issued_at, :expires_at
                 )
-            """
-            payload: dict[str, object] = {
-                "compilation_document": json.dumps(
-                    compilation_document,
-                    ensure_ascii=False,
-                    separators=(",", ":"),
+                """,
+                parameters,
+            )
+            if acquired is None:
+                raise _rejection(token)
+            if acquired.checkpoint == "contended":
+                acquired = self._await_concurrent_publication(token, parameters)
+            if acquired.outcome == "unchanged":
+                row = acquired
+            else:
+                parameters["revision_id"] = acquired.stable_revision_id
+                if acquired.checkpoint == "acquired":
+                    self._interrupt_if_requested(
+                        token, claims, FilePublicationBoundary.ACQUIRED
+                    )
+                    prepared = self._execute_one(
+                        """
+                        SELECT * FROM public.context_worker_prepare_file_publication(
+                            :organization_id, :job_id, :service_principal_id,
+                            :source_ref, :resource_ref, :revision_id,
+                            :canonical_text,
+                            CAST(:compilation_document AS jsonb),
+                            CAST(:artifact_document AS jsonb),
+                            :lease_generation, :signing_key_version, :nonce,
+                            :issued_at, :expires_at
+                        )
+                        """,
+                        parameters,
+                    )
+                    if prepared is None or prepared.checkpoint != "prepared":
+                        raise _rejection(token)
+                    acquired = prepared
+                if acquired.checkpoint == "prepared":
+                    self._interrupt_if_requested(
+                        token, claims, FilePublicationBoundary.PREPARED
+                    )
+                    indexed = self._execute_one(
+                        """
+                        SELECT * FROM public.context_worker_index_file_publication(
+                            :organization_id, :job_id, :service_principal_id,
+                            :source_ref, :resource_ref, :revision_id,
+                            :canonical_text,
+                            CAST(:compilation_document AS jsonb),
+                            CAST(:artifact_document AS jsonb),
+                            :lease_generation, :signing_key_version, :nonce,
+                            :issued_at, :expires_at
+                        )
+                        """,
+                        parameters,
+                    )
+                    if indexed is None or indexed.checkpoint != "ready":
+                        raise _rejection(token)
+                    acquired = indexed
+                if acquired.checkpoint != "ready":
+                    raise _rejection(token)
+                self._interrupt_if_requested(
+                    token, claims, FilePublicationBoundary.INDEXED
                 )
-            }
-        else:
-            fragment = document.fragments[0]
-            statement = """
-                SELECT *
-                FROM public.context_worker_publish_file_import_v2(
-                    :organization_id, :job_id, :service_principal_id,
-                    :source_ref, :resource_ref,
-                    :revision_id, :fragment_ref, :canonical_text,
-                    :paragraph, :content_hash, :compilation_digest,
-                    :compiler_version, :config_version, :phrase_digest,
-                    :signing_key_version, :nonce, :issued_at, :expires_at
+                activated = self._execute_one(
+                    """
+                    SELECT *
+                    FROM public.context_worker_activate_recoverable_file_publication(
+                        :organization_id, :job_id, :service_principal_id,
+                        :source_ref, :resource_ref, :revision_id,
+                        :lease_generation, :signing_key_version, :nonce,
+                        :issued_at, :expires_at
+                    )
+                    """,
+                    parameters,
                 )
-            """
-            payload = {
-                "fragment_ref": fragment.fragment_ref,
-                "paragraph": fragment.contextual_text,
-                "phrase_digest": exact_phrase_digest(fragment.search_phrases[0]),
-            }
-        try:
-            with self._engine.begin() as connection:
-                assert_worker_role(connection)
-                row = connection.execute(
-                    text(statement),
-                    {
-                        "organization_id": claims.organization_id,
-                        "job_id": claims.job_id,
-                        "service_principal_id": claims.service_principal_id,
-                        "source_ref": claims.source_ref,
-                        "resource_ref": resource_ref,
-                        "revision_id": revision_id,
-                        "canonical_text": document.canonical_text,
-                        "content_hash": document.content_hash,
-                        "compilation_digest": document.compilation_digest,
-                        "compiler_version": document.provenance.compiler_version,
-                        "config_version": document.provenance.config_version,
-                        "signing_key_version": claims.signing_key_version,
-                        "nonce": claims.nonce,
-                        "issued_at": claims.issued_at,
-                        "expires_at": claims.expires_at,
-                        **payload,
-                    },
-                ).one_or_none()
-            if row is None:
-                row = self._replace(
-                    claims,
-                    resource_ref,
-                    revision_id,
-                    document,
-                    payload,
-                    structural=structural,
-                )
+                if activated is None:
+                    raise _rejection(token)
+                row = activated
             if (
                 row is None
                 or row.effect_count not in {0, 1}
@@ -381,7 +471,7 @@ class PostgreSQLFileImportWorker:
                 or not row.fragment_refs
             ):
                 raise _rejection(token)
-        except WorkNotAvailable:
+        except (WorkNotAvailable, FileImportInterrupted):
             raise
         except (SQLAlchemyError, AssertionError):
             raise FileImportUnavailable("File publication is unavailable") from None
@@ -403,86 +493,62 @@ class PostgreSQLFileImportWorker:
             effect_count=row.effect_count,
         )
 
-    def _replace(
+    def _await_concurrent_publication(
         self,
-        claims: WorkerLeaseClaims,
-        resource_ref: str,
-        revision_id: UUID,
-        document: ParsedDocument,
-        payload: dict[str, object],
-        *,
-        structural: bool,
-    ) -> Row[tuple[object, ...]] | None:
-        if structural:
-            stage_statement = """
-                SELECT *
-                FROM public.context_worker_stage_structural_file_replacement(
+        token: WorkerLeaseToken,
+        parameters: dict[str, object],
+    ) -> Row[tuple[object, ...]]:
+        """Let a concurrently committed winner become this job's no-op input."""
+
+        deadline = time.monotonic() + _CONCURRENT_PUBLICATION_WAIT_SECONDS
+        while time.monotonic() < deadline:
+            time.sleep(_CONCURRENT_PUBLICATION_POLL_SECONDS)
+            acquired = self._execute_one(
+                """
+                SELECT * FROM public.context_worker_acquire_file_publication(
                     :organization_id, :job_id, :service_principal_id,
                     :source_ref, :resource_ref, :revision_id,
                     :canonical_text, :content_hash, :compilation_digest,
                     :compiler_version, :config_version,
                     CAST(:compilation_document AS jsonb),
-                    :signing_key_version, :nonce, :issued_at, :expires_at
+                    CAST(:artifact_document AS jsonb),
+                    :lease_generation, :signing_key_version, :nonce,
+                    :issued_at, :expires_at
                 )
-            """
-        else:
-            stage_statement = """
-                SELECT *
-                FROM public.context_worker_stage_file_replacement(
-                    :organization_id, :job_id, :service_principal_id,
-                    :source_ref, :resource_ref, :revision_id,
-                    :fragment_ref, :canonical_text, :paragraph,
-                    :content_hash, :compilation_digest,
-                    :compiler_version, :config_version, :phrase_digest,
-                    :signing_key_version, :nonce, :issued_at, :expires_at
-                )
-            """
+                """,
+                parameters,
+            )
+            if acquired is None:
+                raise _rejection(token)
+            if acquired.checkpoint != "contended":
+                return acquired
+        raise _rejection(token)
+
+    def _execute_one(
+        self,
+        statement: str,
+        parameters: dict[str, object],
+    ) -> Row[tuple[object, ...]] | None:
         with self._engine.begin() as connection:
             assert_worker_role(connection)
-            staged = connection.execute(
-                text(stage_statement),
-                {
-                    "organization_id": claims.organization_id,
-                    "job_id": claims.job_id,
-                    "service_principal_id": claims.service_principal_id,
-                    "source_ref": claims.source_ref,
-                    "resource_ref": resource_ref,
-                    "revision_id": revision_id,
-                    "canonical_text": document.canonical_text,
-                    "content_hash": document.content_hash,
-                    "compilation_digest": document.compilation_digest,
-                    "compiler_version": document.provenance.compiler_version,
-                    "config_version": document.provenance.config_version,
-                    "signing_key_version": claims.signing_key_version,
-                    "nonce": claims.nonce,
-                    "issued_at": claims.issued_at,
-                    "expires_at": claims.expires_at,
-                    **payload,
-                },
-            ).one_or_none()
-        if staged is None:
-            return None
-        if staged.outcome == "unchanged":
-            return staged
-        if (
-            staged.outcome is not None
-            or staged.effect_count is not None
-            or staged.active_revision_id is not None
-            or staged.reason_digest is not None
-            or staged.previous_revision_id is None
-            or staged.replacement_revision_id is None
-        ):
-            return None
+            return connection.execute(text(statement), parameters).one_or_none()
+
+    def _interrupt_if_requested(
+        self,
+        token: WorkerLeaseToken,
+        claims: WorkerLeaseClaims,
+        boundary: FilePublicationBoundary,
+    ) -> None:
+        if self._interrupt_after is not boundary:
+            return
         with self._engine.begin() as connection:
             assert_worker_role(connection)
-            return connection.execute(
+            recorded = connection.execute(
                 text(
                     """
-                    SELECT *
-                    FROM public.context_worker_activate_file_replacement(
+                    SELECT public.context_worker_record_file_import_interruption(
                         :organization_id, :job_id, :service_principal_id,
-                        :source_ref, :resource_ref,
-                        :previous_revision_id, :replacement_revision_id,
+                        :source_ref, :boundary, :lease_generation,
                         :signing_key_version, :nonce, :issued_at, :expires_at
                     )
                     """
@@ -492,15 +558,17 @@ class PostgreSQLFileImportWorker:
                     "job_id": claims.job_id,
                     "service_principal_id": claims.service_principal_id,
                     "source_ref": claims.source_ref,
-                    "resource_ref": resource_ref,
-                    "previous_revision_id": staged.previous_revision_id,
-                    "replacement_revision_id": staged.replacement_revision_id,
+                    "boundary": boundary.value,
+                    "lease_generation": claims.lease_generation,
                     "signing_key_version": claims.signing_key_version,
                     "nonce": claims.nonce,
                     "issued_at": claims.issued_at,
                     "expires_at": claims.expires_at,
                 },
-            ).one_or_none()
+            ).scalar_one()
+            if recorded is not True:
+                raise _rejection(token)
+        raise FileImportInterrupted(boundary)
 
     def _fail(
         self,
@@ -517,7 +585,8 @@ class PostgreSQLFileImportWorker:
                         """
                         SELECT public.context_worker_fail_file_import(
                             :organization_id, :job_id, :service_principal_id,
-                            :source_ref, :signing_key_version, :nonce,
+                            :source_ref, :lease_generation,
+                            :signing_key_version, :nonce,
                             :issued_at, :expires_at
                         )
                         """
@@ -527,6 +596,7 @@ class PostgreSQLFileImportWorker:
                         "job_id": claims.job_id,
                         "service_principal_id": claims.service_principal_id,
                         "source_ref": claims.source_ref,
+                        "lease_generation": claims.lease_generation,
                         "signing_key_version": claims.signing_key_version,
                         "nonce": claims.nonce,
                         "issued_at": claims.issued_at,

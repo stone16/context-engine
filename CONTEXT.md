@@ -329,7 +329,9 @@ registered service workload，并防 cross-job/cross-tenant replay。
 - **Owner/scope:** one Organization, one durable job attempt, its declared work,
   and the registered service workload that may perform it.
 - **Lifecycle:** short-lived and one-shot; mismatch, expiry, staleness, or replay
-  makes it invalid. Exact claim/redemption fields belong to the owning ADR.
+  makes it invalid. A reclaimed job receives a higher signed lease generation,
+  so the replaced generation and nonce cannot resume or mutate it. Exact
+  claim/redemption fields belong to the owning ADR.
 - **Invariant:** no general tenant/read/action authority and no long-lived source
   credential; rejected lease produces zero business effect.
 - **Activation note:** Issue #17 binds a registered ServicePrincipal to
@@ -371,6 +373,36 @@ acquisition 精确绑定。
   Revision.
 - **Do not confuse with:** active ContextRevision, publish watermark,
   acquisition checkpoint, or recovery lease.
+
+### `File publication recovery checkpoint`
+
+The mutable durable step marker for one interrupted File publication. 中文：File
+publication recovery checkpoint 将同一个 job 固定到唯一 Resource、Revision、内容
+identity，并允许新租约从已提交边界继续。
+
+- **Owner/scope:** one Organization, File import job, ContextSource,
+  ContextResource, and stable target ContextRevision.
+- **Lifecycle:** advances `acquired -> prepared -> ready -> completed`; an
+  expired attempt may be reclaimed only by a higher signed lease generation.
+- **Invariant:** it neither authorizes delivery nor makes a Revision active;
+  every resumed step and activation revalidates the current lease generation,
+  exact compilation/write-artifact digest, and current authority.
+- **Do not confuse with:** File acquisition outcome, replacement plan,
+  publication event, active pointer, or automatic retry scheduler.
+
+### `File import job event`
+
+The immutable ordered audit of File publication boundaries and recovery. 中文：
+File import job event 记录中断、租约回收及最终激活，且不保存源内容。
+
+- **Owner/scope:** one Organization and File import job, with lease generation
+  and optional stable Revision lineage.
+- **Lifecycle:** append-only events for acquired, prepared, indexed,
+  interrupted, reclaimed, unchanged, and active transitions.
+- **Invariant:** interruption/reclaim reasons are fixed-category digests; the
+  event is audit evidence, never execution or content authority.
+- **Do not confuse with:** Revision publication event, WorkerLease, queue
+  delivery, checkpoint, or retry policy.
 
 ### `File revision supersession`
 

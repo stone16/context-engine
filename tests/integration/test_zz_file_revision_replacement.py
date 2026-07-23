@@ -147,6 +147,7 @@ def _stage_replacement_direct(
         "compilation_digest": document.compilation_digest,
         "compiler_version": document.provenance.compiler_version,
         "config_version": document.provenance.config_version,
+        "lease_generation": claims.lease_generation,
         "signing_key_version": claims.signing_key_version,
         "nonce": claims.nonce,
         "issued_at": claims.issued_at,
@@ -162,7 +163,8 @@ def _stage_replacement_direct(
                 :canonical_text, :content_hash, :compilation_digest,
                 :compiler_version, :config_version,
                 CAST(:compilation_document AS jsonb),
-                :signing_key_version, :nonce, :issued_at, :expires_at
+                :lease_generation, :signing_key_version, :nonce,
+                :issued_at, :expires_at
             )
         """
         parameters["compilation_document"] = json.dumps(
@@ -180,7 +182,8 @@ def _stage_replacement_direct(
                 :fragment_ref, :canonical_text, :paragraph,
                 :content_hash, :compilation_digest,
                 :compiler_version, :config_version, :phrase_digest,
-                :signing_key_version, :nonce, :issued_at, :expires_at
+                :lease_generation, :signing_key_version, :nonce,
+                :issued_at, :expires_at
             )
         """
         parameters.update(
@@ -211,6 +214,7 @@ def _activate_replacement_direct(
         "resource_ref": resource_ref,
         "previous_revision_id": previous_revision_id,
         "replacement_revision_id": replacement_revision_id,
+        "lease_generation": claims.lease_generation,
         "signing_key_version": claims.signing_key_version,
         "nonce": claims.nonce,
         "issued_at": claims.issued_at,
@@ -224,7 +228,8 @@ def _activate_replacement_direct(
                 SELECT * FROM public.context_worker_activate_file_replacement(
                     :organization_id, :job_id, :service_principal_id,
                     :source_ref, :resource_ref, :previous_revision_id,
-                    :replacement_revision_id, :signing_key_version,
+                    :replacement_revision_id, :lease_generation,
+                    :signing_key_version,
                     :nonce, :issued_at, :expires_at
                 )
                 """
@@ -471,33 +476,27 @@ def test_changed_import_race_returns_the_late_job_as_a_successful_noop(
     )
     late_reached_replace = Event()
     winner_completed = Event()
-    original_replace = PostgreSQLFileImportWorker._replace
+    original_execute_one = PostgreSQLFileImportWorker._execute_one
 
-    def pause_late_replace(
+    def pause_late_acquire(
         worker: PostgreSQLFileImportWorker,
-        claims: WorkerLeaseClaims,
-        resource_ref: str,
-        revision_id: UUID,
-        document: ParsedDocument,
-        payload: dict[str, object],
-        *,
-        structural: bool,
+        statement: str,
+        parameters: dict[str, object],
     ) -> object | None:
-        if claims.job_id == late_prepared.job_id:
+        if (
+            parameters["job_id"] == late_prepared.job_id
+            and "context_worker_acquire_file_publication" in statement
+        ):
             late_reached_replace.set()
             if not winner_completed.wait(timeout=5):
                 raise AssertionError("replacement race winner did not complete")
-        return original_replace(
-            worker,
-            claims,
-            resource_ref,
-            revision_id,
-            document,
-            payload,
-            structural=structural,
-        )
+        return original_execute_one(worker, statement, parameters)
 
-    monkeypatch.setattr(PostgreSQLFileImportWorker, "_replace", pause_late_replace)
+    monkeypatch.setattr(
+        PostgreSQLFileImportWorker,
+        "_execute_one",
+        pause_late_acquire,
+    )
     try:
         with ThreadPoolExecutor(max_workers=1) as executor:
             late_future = executor.submit(
