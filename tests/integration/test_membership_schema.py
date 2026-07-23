@@ -14,6 +14,7 @@ from sqlalchemy.exc import DBAPIError, IntegrityError
 from engine.persistence import DatabaseConfiguration, create_database_engine
 from engine.persistence.configuration import (
     DELIVERY_EVIDENCE_DEFINER_ROLE,
+    EGRESS_GRANT_DEFINER_ROLE,
     RUNTIME_ROLE,
     WORKER_LEASE_DEFINER_ROLE,
     WORKER_ROLE,
@@ -465,7 +466,8 @@ def test_runtime_worker_and_public_grants_are_least_privilege(
                           AND table_name IN ('user_account', 'membership')
                           AND grantee IN (
                               'PUBLIC', :runtime_role, :worker_role,
-                              :delivery_evidence_definer_role
+                              :delivery_evidence_definer_role,
+                              :egress_grant_definer_role
                           )
                         """
                     ),
@@ -475,6 +477,7 @@ def test_runtime_worker_and_public_grants_are_least_privilege(
                         "delivery_evidence_definer_role": (
                             DELIVERY_EVIDENCE_DEFINER_ROLE
                         ),
+                        "egress_grant_definer_role": EGRESS_GRANT_DEFINER_ROLE,
                     },
                 )
             }
@@ -523,11 +526,13 @@ def test_runtime_worker_and_public_grants_are_least_privilege(
         assert grants == {
             (RUNTIME_ROLE, "membership", "SELECT"),
             (DELIVERY_EVIDENCE_DEFINER_ROLE, "membership", "SELECT"),
+            (EGRESS_GRANT_DEFINER_ROLE, "membership", "SELECT"),
         }
         assert security == (True, True)
         assert set(policies) == {
             "membership_current_user_actor",
             "membership_delivery_evidence_definer_select",
+            "membership_egress_definer_select",
             "membership_file_import_definer_select",
             "membership_migrator_administration",
         }
@@ -572,6 +577,13 @@ def test_runtime_worker_and_public_grants_are_least_privilege(
         assert delivery_evidence_policy == (
             "PERMISSIVE",
             (DELIVERY_EVIDENCE_DEFINER_ROLE,),
+            "SELECT",
+            "true",
+            None,
+        )
+        assert policies["membership_egress_definer_select"] == (
+            "PERMISSIVE",
+            (EGRESS_GRANT_DEFINER_ROLE,),
             "SELECT",
             "true",
             None,

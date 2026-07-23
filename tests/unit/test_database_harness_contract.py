@@ -81,6 +81,8 @@ def test_database_harness_generates_secret_state_and_never_sources_it() -> None:
     assert "CONTEXT_ENGINE_CONTROL_DATABASE_URL" in script
     assert "CONTEXT_ENGINE_IDENTITY_ROLE=context_engine_identity" in script
     assert "CONTEXT_ENGINE_IDENTITY_DATABASE_URL" in script
+    assert "CONTEXT_ENGINE_EGRESS_ROLE=context_engine_egress" in script
+    assert "CONTEXT_ENGINE_EGRESS_DATABASE_URL" in script
     assert (
         "CONTEXT_ENGINE_SECURITY_OPERATOR_ROLE=context_engine_security_operator"
         in script
@@ -96,6 +98,8 @@ def test_compose_passes_dedicated_operator_credentials_to_bootstrap() -> None:
     assert "CONTEXT_ENGINE_CONTROL_PASSWORD" in compose
     assert "CONTEXT_ENGINE_IDENTITY_ROLE" in compose
     assert "CONTEXT_ENGINE_IDENTITY_PASSWORD" in compose
+    assert "CONTEXT_ENGINE_EGRESS_ROLE" in compose
+    assert "CONTEXT_ENGINE_EGRESS_PASSWORD" in compose
     assert "CONTEXT_ENGINE_SECURITY_OPERATOR_ROLE" in compose
     assert "CONTEXT_ENGINE_SECURITY_OPERATOR_PASSWORD" in compose
     assert "CONTEXT_ENGINE_LEARNING_ROLE" in compose
@@ -107,6 +111,7 @@ def test_readiness_probe_includes_dedicated_operator_configuration() -> None:
 
     assert "configurations.control" in wait_script
     assert "configurations.identity" in wait_script
+    assert "configurations.egress" in wait_script
     assert "configurations.learning" in wait_script
     assert "configurations.operator" in wait_script
     assert (
@@ -117,11 +122,11 @@ def test_readiness_probe_includes_dedicated_operator_configuration() -> None:
         wait_script
     )
     assert "                        assert_learning_role(connection)" in wait_script
-    purpose_sequence = (
-        "migration, control, identity, runtime, worker, learning, "
-        "security-operator"
+    assert (
+        "migration, control, identity, egress, runtime, worker, learning, "
+        in wait_script
     )
-    assert purpose_sequence in wait_script
+    assert '"security-operator, "' in wait_script
 
 
 def test_harness_provisions_post_init_roles_before_readiness() -> None:

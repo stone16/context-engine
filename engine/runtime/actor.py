@@ -14,6 +14,10 @@ from engine.runtime.delivery_evidence import (
     DeliveryEvidenceRedemptionSession,
     _require_active_delivery_evidence_redemption_session,
 )
+from engine.runtime.egress import (
+    EgressGrantIssuanceSession,
+    _require_active_egress_grant_issuance_session,
+)
 from engine.runtime.materialized import (
     MaterializedProjectionSession,
     _require_active_materialized_projection_session,
@@ -108,6 +112,9 @@ class CurrentMembershipVerification:
     delivery_evidence_redemption_session: (
         DeliveryEvidenceRedemptionSession | None
     ) = field(repr=False)
+    egress_grant_issuance_session: EgressGrantIssuanceSession | None = field(
+        repr=False
+    )
     construction_provenance: MembershipVerificationProvenance
     _authority_scope: _MembershipAuthorityScope = field(repr=False)
 
@@ -138,6 +145,7 @@ def _construct_current_membership_verification(
     delivery_evidence_redemption_session: (
         DeliveryEvidenceRedemptionSession | None
     ) = None,
+    egress_grant_issuance_session: EgressGrantIssuanceSession | None = None,
 ) -> CurrentMembershipVerification:
     """Construct proof after the trusted authority verifies the durable row."""
 
@@ -186,6 +194,10 @@ def _construct_current_membership_verification(
         _require_active_delivery_evidence_redemption_session(
             delivery_evidence_redemption_session
         )
+    if egress_grant_issuance_session is not None:
+        _require_active_egress_grant_issuance_session(
+            egress_grant_issuance_session
+        )
     _require_active_policy_epoch_verification(policy_epoch_verification)
     if policy_epoch_verification.organization_id != organization_id:
         raise ValueError("current Membership Policy Epoch must stay in Organization")
@@ -230,6 +242,11 @@ def _construct_current_membership_verification(
     )
     object.__setattr__(
         verification,
+        "egress_grant_issuance_session",
+        egress_grant_issuance_session,
+    )
+    object.__setattr__(
+        verification,
         "construction_provenance",
         MembershipVerificationProvenance.TRUSTED_MEMBERSHIP_AUTHORITY,
     )
@@ -267,6 +284,10 @@ def _require_active_current_membership_verification(
         _require_active_delivery_evidence_redemption_session(
             verification.delivery_evidence_redemption_session
         )
+    if verification.egress_grant_issuance_session is not None:
+        _require_active_egress_grant_issuance_session(
+            verification.egress_grant_issuance_session
+        )
     _require_active_policy_epoch_verification(verification.policy_epoch_verification)
     if (
         verification.policy_epoch != verification.policy_epoch_verification.policy_epoch
@@ -301,6 +322,9 @@ class UserActor:
     delivery_evidence_redemption_session: (
         DeliveryEvidenceRedemptionSession | None
     ) = field(repr=False)
+    egress_grant_issuance_session: EgressGrantIssuanceSession | None = field(
+        repr=False
+    )
     current_membership_verification: CurrentMembershipVerification = field(repr=False)
     construction_provenance: UserActorConstructionProvenance
 
@@ -349,6 +373,10 @@ def _construct_user_actor(
             "delivery_evidence_redemption_session",
             verification.delivery_evidence_redemption_session,
         ),
+        (
+            "egress_grant_issuance_session",
+            verification.egress_grant_issuance_session,
+        ),
         ("current_membership_verification", verification),
         (
             "construction_provenance",
@@ -388,5 +416,7 @@ def _require_active_user_actor(actor: UserActor) -> None:
         is not verification.context_run_persistence_session
         or actor.delivery_evidence_redemption_session
         is not verification.delivery_evidence_redemption_session
+        or actor.egress_grant_issuance_session
+        is not verification.egress_grant_issuance_session
     ):
         raise ValueError("UserActor does not match its current Membership proof")

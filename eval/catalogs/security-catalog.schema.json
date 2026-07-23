@@ -14,7 +14,7 @@
   "properties": {
     "catalogVersion": {
       "type": "string",
-      "const": "1.2.0"
+      "const": "1.3.0"
     },
     "authority": {
       "$ref": "#/$defs/authority"
@@ -59,8 +59,8 @@
     },
     "activations": {
       "type": "array",
-      "minItems": 7,
-      "maxItems": 7,
+      "minItems": 8,
+      "maxItems": 8,
       "uniqueItems": true,
       "prefixItems": [
         {
@@ -186,7 +186,25 @@
             ],
             "deferredEvidence": ["group AudienceSnapshot DeliveryEvidenceRef", "frozen OpenAPI and generated TypeScript SDK carrier", "production BotDelivery caller"],
             "futureCarriers": ["public group DeliveryEvidenceRef", "OpenCitation delivery evidence", "generated TypeScript SDK", "private BotDelivery application"],
-            "notActive": ["group delivery", "AudienceSnapshot", "EgressGrant", "ModelGateway", "ActionPlane", "BotDelivery", "OpenAPI compatibility freeze", "generated SDK"]
+            "notActive": ["group delivery", "AudienceSnapshot", "production ModelGateway", "ActionPlane", "BotDelivery application", "OpenAPI compatibility freeze", "generated SDK"]
+          }
+        },
+        {
+          "const": {
+            "issueRef": "#65",
+            "invariantRef": "EGRESS-011",
+            "carrier": "opaque one-shot model or channel EgressGrant with deterministic boundary spies",
+            "status": "active_fail_closed",
+            "policyEpochScope": "organization-v0",
+            "controlBoundary": "ContextPackage -> final EgressGate -> digest-only PostgreSQL grant -> AuthorizedModelInput | AuthorizedChannelPayload -> exact one-shot redemption -> ModelGateway | Sender preflight spy",
+            "testEvidence": [
+              {"id": "PROP-EGRESS-011", "surface": "tests/unit/test_egress_grant.py::test_each_egress_binding_mutation_and_cross_kind_emits_zero_bytes_effects", "oracle": "Every common and hop-specific model or channel redemption binding mutation, plus cross-kind use, is non-enumerating and emits zero gateway bytes, Sender preflight bytes, or effects."},
+              {"id": "PG-EGRESS-011", "surface": "tests/integration/test_egress_grant.py::test_digest_only_grant_is_atomic_one_shot_and_audited", "oracle": "Real PostgreSQL under separate non-owner Runtime and egress roles stores only grant and payload digests, binds the exact Package, Organization, purpose, audience, Policy Epoch, hop, retention, sensitivity, issuer, consumer, provider/model or channel/destination, region, lifetime, and profile, consumes atomically once, and retains only restricted issued, consumed, or not-available audit categories."},
+              {"id": "RUNTIME-EGRESS-011", "surface": "tests/integration/test_z_egress_grant_file.py::test_file_http_package_redeems_exact_model_grant_before_gateway_bytes", "oracle": "A real File-backed authenticated HTTP Acquire proves CandidateRef through the sealed AuthorizationKernel to an audience-bound ContextPackage, returns one model grant only after final policy, and the independent egress role permits exactly one deterministic ModelGateway spy request; replay emits zero additional model bytes."}
+            ],
+            "deferredEvidence": ["production provider ModelGateway conformance", "production Sender and ActionPlane effect conformance", "group AudienceSnapshot send-time revalidation"],
+            "futureCarriers": ["production ModelGateway", "production Sender preflight", "ActionPlane prepare and perform", "group-public and asker-private delivery"],
+            "notActive": ["real model or provider network call", "real Sender or channel write", "ActionTicket or external effect", "group AudienceSnapshot", "BotDelivery application process", "generated SDK consumer"]
           }
         }
       ],
@@ -391,7 +409,7 @@
       "additionalProperties": false,
       "required": ["id", "surface", "oracle"],
       "properties": {
-        "id": {"enum": ["PG-REVOCATION-006", "RUN-006", "CACHE-002", "RUN-UNAVAILABLE-016", "HTTP-UNAVAILABLE-016", "LEASE-SIGNING-017", "PG-WORKER-LEASE-NOOP-017", "WORKER-LEASE-REPLAY-007", "TICKET-AUDIENCE-018", "PG-TICKET-EPOCH-018", "DIGEST-019", "RUN-LINEAGE-019", "AUTHORIZED-RUN-019", "PG-TRACE-REDACTION-012", "PROP-FIELD-PROJECTION-048", "PG-FIELD-PROJECTION-048", "HTTP-ACCEPT-002-048", "PROP-DELIVERY-EVIDENCE-063", "PG-DELIVERY-EVIDENCE-063", "HTTP-DELIVERY-EVIDENCE-063", "FILE-DELIVERY-EVIDENCE-063"]},
+        "id": {"enum": ["PG-REVOCATION-006", "RUN-006", "CACHE-002", "RUN-UNAVAILABLE-016", "HTTP-UNAVAILABLE-016", "LEASE-SIGNING-017", "PG-WORKER-LEASE-NOOP-017", "WORKER-LEASE-REPLAY-007", "TICKET-AUDIENCE-018", "PG-TICKET-EPOCH-018", "DIGEST-019", "RUN-LINEAGE-019", "AUTHORIZED-RUN-019", "PG-TRACE-REDACTION-012", "PROP-FIELD-PROJECTION-048", "PG-FIELD-PROJECTION-048", "HTTP-ACCEPT-002-048", "PROP-DELIVERY-EVIDENCE-063", "PG-DELIVERY-EVIDENCE-063", "HTTP-DELIVERY-EVIDENCE-063", "FILE-DELIVERY-EVIDENCE-063", "PROP-EGRESS-011", "PG-EGRESS-011", "RUNTIME-EGRESS-011"]},
         "surface": {"$ref": "#/$defs/pytestSurface"},
         "oracle": {"$ref": "#/$defs/nonEmptyString"}
       }
@@ -401,12 +419,12 @@
       "additionalProperties": false,
       "required": ["issueRef", "invariantRef", "carrier", "status", "policyEpochScope", "controlBoundary", "testEvidence", "deferredEvidence", "futureCarriers", "notActive"],
       "properties": {
-        "issueRef": {"enum": ["#15", "#16", "#17", "#18", "#19", "#48", "#63"]},
-        "invariantRef": {"enum": ["REVOCATION-006", "INDEX-NOT-AUTHORITY-005", "WORKER-LEASE-007", "ACTION-SEPARATION-014", "TRACE-REDACTION-012", "SCOPE-INTERSECTION-004", "TRANSPORT-UNTRUSTED-008"]},
-        "carrier": {"enum": ["ContextRuntime.resolve(Acquire)", "ContextRuntime.resolve(Continue | OpenCitation | server-owned unavailable Acquire plan)", "signed one-shot persistent no-op durable-job WorkerLease", "signed synthetic ContextAccessTicket Provider read | signed synthetic ActionTicket no-op channel action", "ContextRuntime.resolve(Acquire) authorized-only ContextRun | restricted delivered-empty DecisionAudit", "ACCEPT-002 ContextRuntime.resolve(Acquire) Membership field projection", "private authenticated HTTP Acquire DeliveryEvidenceRef"]},
+        "issueRef": {"enum": ["#15", "#16", "#17", "#18", "#19", "#48", "#63", "#65"]},
+        "invariantRef": {"enum": ["REVOCATION-006", "INDEX-NOT-AUTHORITY-005", "WORKER-LEASE-007", "ACTION-SEPARATION-014", "TRACE-REDACTION-012", "SCOPE-INTERSECTION-004", "TRANSPORT-UNTRUSTED-008", "EGRESS-011"]},
+        "carrier": {"enum": ["ContextRuntime.resolve(Acquire)", "ContextRuntime.resolve(Continue | OpenCitation | server-owned unavailable Acquire plan)", "signed one-shot persistent no-op durable-job WorkerLease", "signed synthetic ContextAccessTicket Provider read | signed synthetic ActionTicket no-op channel action", "ContextRuntime.resolve(Acquire) authorized-only ContextRun | restricted delivered-empty DecisionAudit", "ACCEPT-002 ContextRuntime.resolve(Acquire) Membership field projection", "private authenticated HTTP Acquire DeliveryEvidenceRef", "opaque one-shot model or channel EgressGrant with deterministic boundary spies"]},
         "status": {"const": "active_fail_closed"},
         "policyEpochScope": {"enum": ["organization-v0", "not-bound-issue-17"]},
-        "controlBoundary": {"enum": ["PostgreSQLAccessPolicyControl.change_access(ResourceAccessRevocation)", "RuntimeCapabilityGate.require_available(RuntimeCapability)", "complete_persistent_noop_job(PostgreSQLWorkerLeaseAuthority, WorkerLeaseRedemption)", "ContextAccessTicketReadHandler.read | ActionTicketNoopHandler.perform", "persist_context_run(ContextRunPersistenceSession, ContextRunRecord, DecisionAuditRecord | None) | PostgreSQLContextRunReader.find_by_decision_ref", "CandidateRef -> same-transaction active-lineage locator -> EffectiveScope -> current Membership/version field ceiling -> PostgreSQL/FORCE-RLS field reduction -> AuthorizationKernel -> AuthorizedProjection", "PrivateDeliveryEvidenceIssuer -> PostgreSQL identity function -> authenticated HTTP metadata -> current UserActor transaction redemption -> TrustedDeliveryContext -> sealed ContextRuntime.resolve(Acquire)"]},
+        "controlBoundary": {"enum": ["PostgreSQLAccessPolicyControl.change_access(ResourceAccessRevocation)", "RuntimeCapabilityGate.require_available(RuntimeCapability)", "complete_persistent_noop_job(PostgreSQLWorkerLeaseAuthority, WorkerLeaseRedemption)", "ContextAccessTicketReadHandler.read | ActionTicketNoopHandler.perform", "persist_context_run(ContextRunPersistenceSession, ContextRunRecord, DecisionAuditRecord | None) | PostgreSQLContextRunReader.find_by_decision_ref", "CandidateRef -> same-transaction active-lineage locator -> EffectiveScope -> current Membership/version field ceiling -> PostgreSQL/FORCE-RLS field reduction -> AuthorizationKernel -> AuthorizedProjection", "PrivateDeliveryEvidenceIssuer -> PostgreSQL identity function -> authenticated HTTP metadata -> current UserActor transaction redemption -> TrustedDeliveryContext -> sealed ContextRuntime.resolve(Acquire)", "ContextPackage -> final EgressGate -> digest-only PostgreSQL grant -> AuthorizedModelInput | AuthorizedChannelPayload -> exact one-shot redemption -> ModelGateway | Sender preflight spy"]},
         "testEvidence": {
           "type": "array",
           "minItems": 2,

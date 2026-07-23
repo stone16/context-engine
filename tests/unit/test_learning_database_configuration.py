@@ -4,6 +4,7 @@ import pytest
 
 from engine.persistence.configuration import (
     CONTROL_ROLE,
+    EGRESS_ROLE,
     IDENTITY_ROLE,
     LEARNING_ROLE,
     MIGRATOR_ROLE,
@@ -31,6 +32,10 @@ def _database_environment() -> dict[str, str]:
             "postgresql+psycopg://context_engine_identity:identity-secret@"
             "127.0.0.1:5432/context_engine"
         ),
+        "CONTEXT_ENGINE_EGRESS_DATABASE_URL": (
+            "postgresql+psycopg://context_engine_egress:egress-secret@"
+            "127.0.0.1:5432/context_engine"
+        ),
         "CONTEXT_ENGINE_RUNTIME_DATABASE_URL": (
             "postgresql+psycopg://context_engine_runtime:runtime-secret@"
             "127.0.0.1:5432/context_engine"
@@ -54,6 +59,7 @@ def _database_environment() -> dict[str, str]:
         "CONTEXT_ENGINE_MIGRATOR_ROLE": MIGRATOR_ROLE,
         "CONTEXT_ENGINE_CONTROL_ROLE": CONTROL_ROLE,
         "CONTEXT_ENGINE_IDENTITY_ROLE": IDENTITY_ROLE,
+        "CONTEXT_ENGINE_EGRESS_ROLE": EGRESS_ROLE,
         "CONTEXT_ENGINE_RUNTIME_ROLE": RUNTIME_ROLE,
         "CONTEXT_ENGINE_WORKER_ROLE": WORKER_ROLE,
         "CONTEXT_ENGINE_LEARNING_ROLE": LEARNING_ROLE,

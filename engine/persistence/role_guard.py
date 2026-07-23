@@ -6,6 +6,7 @@ from sqlalchemy import Connection, text
 
 from engine.persistence.configuration import (
     CONTROL_ROLE,
+    EGRESS_ROLE,
     IDENTITY_ROLE,
     LEARNING_ROLE,
     MIGRATOR_ROLE,
@@ -107,6 +108,13 @@ def assert_identity_role(connection: Connection) -> None:
     """Require the dedicated trusted-identity evidence issuer login."""
 
     _assert_non_owner_role(connection, IDENTITY_ROLE)
+    _assert_no_owned_objects_or_role_members(connection)
+
+
+def assert_egress_role(connection: Connection) -> None:
+    """Require the dedicated trusted cleartext-hop consumer login."""
+
+    _assert_non_owner_role(connection, EGRESS_ROLE)
     _assert_no_owned_objects_or_role_members(connection)
 
 

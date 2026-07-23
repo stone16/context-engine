@@ -52,6 +52,15 @@ from engine.runtime.delivery_evidence import (
     _construct_delivery_evidence_redemption_session,
     _open_delivery_evidence_redemption_scope,
 )
+from engine.runtime.egress import (
+    EgressGrantIssuancePort,
+    EgressGrantIssuanceUnavailable,
+    EgressGrantIssue,
+    ModelEgressProfile,
+    _close_egress_grant_issuance_scope,
+    _construct_egress_grant_issuance_session,
+    _open_egress_grant_issuance_scope,
+)
 from engine.runtime.organization import (
     ExistingOrganizationVerification,
     OrganizationVerificationProvenance,
@@ -127,10 +136,12 @@ class DeterministicMembershipAuthority:
     def __init__(
         self,
         delivery_evidence_port: DeliveryEvidenceRedemptionPort | None = None,
+        egress_issuance_port: EgressGrantIssuancePort | None = None,
     ) -> None:
         self.identities: list[MembershipIdentity] = []
         self.events: list[str] = []
         self.delivery_evidence_port = delivery_evidence_port
+        self.egress_issuance_port = egress_issuance_port
 
     @contextmanager
     def current_user_actor(
@@ -149,6 +160,7 @@ class DeterministicMembershipAuthority:
         scope = _open_membership_authority_scope()
         policy_epoch_scope = _open_policy_epoch_authority_scope()
         delivery_evidence_scope = _open_delivery_evidence_redemption_scope()
+        egress_issuance_scope = _open_egress_grant_issuance_scope()
 
         class CurrentEpochPort:
             def read_current_epoch(self, organization_id: UUID) -> object:
@@ -184,8 +196,17 @@ class DeterministicMembershipAuthority:
                         if self.delivery_evidence_port is not None
                         else None
                     ),
+                    egress_grant_issuance_session=(
+                        _construct_egress_grant_issuance_session(
+                            authority_scope=egress_issuance_scope,
+                            port=self.egress_issuance_port,
+                        )
+                        if self.egress_issuance_port is not None
+                        else None
+                    ),
                 )
         finally:
+            _close_egress_grant_issuance_scope(egress_issuance_scope)
             _close_delivery_evidence_redemption_scope(delivery_evidence_scope)
             _close_policy_epoch_authority_scope(policy_epoch_scope)
             _close_membership_authority_scope(scope)
@@ -208,6 +229,19 @@ class UnavailableTestMembershipAuthority:
     ) -> AbstractContextManager[CurrentMembershipVerification]:
         del identity
         return _RaisingMembershipContext(MembershipAuthorityUnavailable())
+
+
+class UnavailableEgressIssuancePort:
+    def __init__(self, *, raise_error: bool) -> None:
+        self.calls: list[EgressGrantIssue] = []
+        self.raise_error = raise_error
+
+    def issue(self, request: EgressGrantIssue, grant_digest: bytes) -> bool:
+        del grant_digest
+        self.calls.append(request)
+        if self.raise_error:
+            raise EgressGrantIssuanceUnavailable("private database detail")
+        return False
 
 
 class _RaisingMembershipContext(AbstractContextManager[CurrentMembershipVerification]):
@@ -1015,6 +1049,60 @@ def test_membership_authority_unavailability_is_generic_503_and_zero_io() -> Non
             INTERNAL_MEMBERSHIP_REF,
         )
     )
+
+
+@pytest.mark.parametrize("raise_error", (False, True))
+def test_egress_issuance_unavailability_is_generic_503_without_leakage(
+    raise_error: bool,
+) -> None:
+    port = UnavailableEgressIssuancePort(raise_error=raise_error)
+    profile = ModelEgressProfile(
+        profile_ref="http-model-egress-test-v1",
+        retention_policy_ref="no-provider-retention-v1",
+        sensitivity_policy_ref="authorized-package-only-v1",
+        issuer_ref="context-runtime-test",
+        consumer_ref="model-gateway-test",
+        provider_ref="provider-test",
+        model_ref="model-test",
+        region_ref="region-test",
+        maximum_ttl=timedelta(seconds=60),
+    )
+    candidate = Runtime(
+        required_kernel_dependencies(),
+        egress_profile=profile,
+        clock=lambda: RECEIVED_AT,
+        query_digest_keyring=TEST_QUERY_DIGEST_KEYRING,
+    )
+    client = TestClient(
+        create_app(
+            authenticator=DeterministicAuthenticator(),
+            organization_authority=DeterministicOrganizationAuthority(),
+            membership_authority=DeterministicMembershipAuthority(
+                egress_issuance_port=port
+            ),
+            runtime=candidate,
+            clock=lambda: RECEIVED_AT,
+        )
+    )
+
+    response = client.post(
+        "/v1/context:resolve",
+        headers={"Authorization": f"Bearer {VALID_TOKEN}"},
+        json=VALID_BODY,
+    )
+
+    assert response.status_code == 503
+    assert response.content == b'{"code":"service_unavailable"}'
+    assert len(port.calls) == 1
+    for prohibited in (
+        "egressGrant",
+        "package",
+        "private database detail",
+        INTERNAL_ORGANIZATION_REF,
+        INTERNAL_USER_REF,
+        INTERNAL_MEMBERSHIP_REF,
+    ):
+        assert prohibited not in response.text
 
 
 def test_membership_transaction_exit_failure_suppresses_prepared_200_as_503() -> None:
@@ -1955,7 +2043,21 @@ def test_openapi_body_is_closed_and_contains_no_trusted_fields() -> None:
         "EvidenceWire",
         "BudgetUsageWire",
         "CoverageWire",
+        "ModelEgressGrantWire",
+        "ChannelEgressGrantWire",
     }
+    resolved_schema = response_models["ResolvedWire"]
+    assert set(resolved_schema["properties"]) == {
+        "kind",
+        "package",
+        "egressGrant",
+    }
+    assert response_models["ModelEgressGrantWire"]["properties"]["value"][
+        "pattern"
+    ] == "^egrm_[0-9a-f]{64}$"
+    assert response_models["ChannelEgressGrantWire"]["properties"]["value"][
+        "pattern"
+    ] == "^egrc_[0-9a-f]{64}$"
     package_schema = response_models["ContextPackageWire"]
     assert package_schema["additionalProperties"] is False
     assert package_schema["required"] == [

@@ -11,6 +11,7 @@ from engine.runtime.delivery import (
     TrustedDeliveryContext,
     _construct_direct_delivery_context,
 )
+from engine.runtime.egress import ChannelEgressGrant, EgressGrant, ModelEgressGrant
 from engine.runtime.evidence import Evidence, PackageBlock, validate_package_content
 from engine.runtime.package_digest import context_package_digest
 
@@ -447,6 +448,7 @@ class Resolved:
     package: ContextPackage
     effective_budget: PackageBudget
     scope_decision: ScopeDecisionReceipt = field(repr=False)
+    egress_grant: EgressGrant | None = field(default=None, repr=False)
     kind: Literal["resolved"] = "resolved"
 
     def __post_init__(self) -> None:
@@ -456,6 +458,11 @@ class Resolved:
             raise TypeError("resolved effective_budget must be PackageBudget")
         if type(self.scope_decision) is not ScopeDecisionReceipt:
             raise TypeError("resolved scope_decision must be ScopeDecisionReceipt")
+        if self.egress_grant is not None and type(self.egress_grant) not in {
+            ModelEgressGrant,
+            ChannelEgressGrant,
+        }:
+            raise TypeError("resolved egress_grant has the wrong nominal type")
         if self.kind != "resolved":
             raise ValueError("resolved outcome kind must be resolved")
 

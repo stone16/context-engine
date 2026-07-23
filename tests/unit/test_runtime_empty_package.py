@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 from uuid import UUID
 
@@ -32,6 +32,14 @@ from engine.runtime.contracts import (
 from engine.runtime.delivery import (
     TrustedDeliveryContext,
     _construct_direct_delivery_context,
+    _construct_private_delivery_context,
+)
+from engine.runtime.egress import (
+    ChannelEgressGrant,
+    ChannelEgressProfile,
+    EgressGrantIssuanceUnavailable,
+    ModelEgressGrant,
+    ModelEgressProfile,
 )
 from engine.runtime.invocation import (
     AuthenticatedInvocation,
@@ -50,6 +58,7 @@ from tests.support.context_run import (
     TEST_QUERY_DIGEST_KEYRING,
     recording_context_run_session,
 )
+from tests.support.egress import recording_egress_issuance_session
 
 AS_OF = datetime(2026, 7, 21, 5, 0, tzinfo=UTC)
 INTERNAL_ORGANIZATION_REF = "81e18bca-86a1-478a-937d-7675c6fe69b0"
@@ -88,7 +97,10 @@ class ContentIoSpy:
 
 
 @contextmanager
-def trusted_operands() -> Iterator[
+def trusted_operands(
+    *,
+    egress_enabled: bool = False,
+) -> Iterator[
     tuple[AuthenticatedInvocation, TrustedDeliveryContext]
 ]:
     authority_scope = _open_membership_authority_scope()
@@ -113,7 +125,9 @@ def trusted_operands() -> Iterator[
         verified_at=AS_OF,
     )
     try:
-        with recording_context_run_session() as (persistence_session, _):
+        with recording_context_run_session() as (persistence_session, _), (
+            recording_egress_issuance_session()
+        ) as (egress_session, _):
             membership_verification = _construct_current_membership_verification(
                 authority_scope=authority_scope,
                 organization_id=UUID(INTERNAL_ORGANIZATION_REF),
@@ -126,6 +140,9 @@ def trusted_operands() -> Iterator[
                 checked_at=AS_OF,
                 policy_epoch_verification=policy_epoch_verification,
                 context_run_persistence_session=persistence_session,
+                egress_grant_issuance_session=(
+                    egress_session if egress_enabled else None
+                ),
             )
             scope_identity = ScopeAuthorityIdentity(
                 organization_id=UUID(INTERNAL_ORGANIZATION_REF),
@@ -187,6 +204,146 @@ def runtime(content_io_spy: ContentIoSpy | None = None) -> Runtime:
         clock=lambda: AS_OF,
         query_digest_keyring=TEST_QUERY_DIGEST_KEYRING,
     )
+
+
+def test_runtime_issues_one_model_grant_only_after_final_package_policy() -> None:
+    profile = ModelEgressProfile(
+        profile_ref="model-egress-test-v1",
+        retention_policy_ref="no-provider-retention-v1",
+        sensitivity_policy_ref="internal-authorized-package-v1",
+        issuer_ref="context-runtime-test",
+        consumer_ref="model-gateway-test",
+        provider_ref="provider-test",
+        model_ref="model-test",
+        region_ref="region-test",
+        maximum_ttl=timedelta(seconds=60),
+    )
+    candidate = Runtime(
+        required_kernel_dependencies(),
+        package_ttl_seconds=300,
+        server_budget=SERVER_BUDGET,
+        egress_profile=profile,
+        clock=lambda: AS_OF,
+        query_digest_keyring=TEST_QUERY_DIGEST_KEYRING,
+    )
+
+    with trusted_operands(egress_enabled=True) as (invocation, delivery):
+        outcome = candidate.resolve(
+            invocation,
+            delivery,
+            Acquire(need=ContextNeed(query="issue exact model hop")),
+        )
+
+    assert type(outcome) is Resolved
+    assert type(outcome.egress_grant) is ModelEgressGrant
+
+
+def test_channel_grant_requires_exact_redeemed_private_destination_and_consumer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    profile = ChannelEgressProfile(
+        profile_ref="channel-egress-test-v1",
+        retention_policy_ref="no-channel-retention-v1",
+        sensitivity_policy_ref="internal-authorized-package-v1",
+        issuer_ref="context-runtime-test",
+        consumer_ref="sender-preflight-test",
+        channel_ref="private-chat-test",
+        destination_ref="chat:private:42",
+        region_ref="region-test",
+        maximum_ttl=timedelta(seconds=60),
+    )
+    candidate = Runtime(
+        required_kernel_dependencies(),
+        package_ttl_seconds=300,
+        server_budget=SERVER_BUDGET,
+        egress_profile=profile,
+        clock=lambda: AS_OF,
+        query_digest_keyring=TEST_QUERY_DIGEST_KEYRING,
+    )
+    issuance_calls = 0
+
+    def observe_issuance(*args: object, **kwargs: object) -> None:
+        nonlocal issuance_calls
+        del args, kwargs
+        issuance_calls += 1
+
+    monkeypatch.setattr(
+        "engine.runtime.construction.issue_egress_grant",
+        observe_issuance,
+    )
+    with trusted_operands(egress_enabled=True) as (invocation, direct_delivery):
+        with pytest.raises(EgressGrantIssuanceUnavailable):
+            candidate.resolve(
+                invocation,
+                direct_delivery,
+                Acquire(need=ContextNeed(query="direct cannot issue channel")),
+            )
+        for destination_ref, consumer_ref in (
+            ("chat:private:wrong", profile.consumer_ref),
+            (profile.destination_ref, "sender-preflight-wrong"),
+        ):
+            mismatched_delivery = _construct_private_delivery_context(
+                purpose="context.answer",
+                authenticated_application_ref="application-internal",
+                delivery_binding_ref="binding-internal",
+                established_at=AS_OF,
+                destination_ref=destination_ref,
+                consumer_ref=consumer_ref,
+                audience_digest="a" * 64,
+                logical_resolution_ref="logical-resolution-test",
+                delivery_profile_ref="private-delivery-test-v1",
+            )
+            with pytest.raises(EgressGrantIssuanceUnavailable):
+                candidate.resolve(
+                    invocation,
+                    mismatched_delivery,
+                    Acquire(need=ContextNeed(query="wrong trusted channel binding")),
+                )
+
+    assert issuance_calls == 0
+
+
+def test_channel_grant_uses_the_exact_redeemed_private_delivery_binding() -> None:
+    profile = ChannelEgressProfile(
+        profile_ref="channel-egress-test-v1",
+        retention_policy_ref="no-channel-retention-v1",
+        sensitivity_policy_ref="internal-authorized-package-v1",
+        issuer_ref="context-runtime-test",
+        consumer_ref="sender-preflight-test",
+        channel_ref="private-chat-test",
+        destination_ref="chat:private:42",
+        region_ref="region-test",
+        maximum_ttl=timedelta(seconds=60),
+    )
+    candidate = Runtime(
+        required_kernel_dependencies(),
+        package_ttl_seconds=300,
+        server_budget=SERVER_BUDGET,
+        egress_profile=profile,
+        clock=lambda: AS_OF,
+        query_digest_keyring=TEST_QUERY_DIGEST_KEYRING,
+    )
+
+    with trusted_operands(egress_enabled=True) as (invocation, _):
+        delivery = _construct_private_delivery_context(
+            purpose="context.answer",
+            authenticated_application_ref="application-internal",
+            delivery_binding_ref="binding-internal",
+            established_at=AS_OF,
+            destination_ref=profile.destination_ref,
+            consumer_ref=profile.consumer_ref,
+            audience_digest="a" * 64,
+            logical_resolution_ref="logical-resolution-test",
+            delivery_profile_ref="private-delivery-test-v1",
+        )
+        outcome = candidate.resolve(
+            invocation,
+            delivery,
+            Acquire(need=ContextNeed(query="exact trusted channel binding")),
+        )
+
+    assert type(outcome) is Resolved
+    assert type(outcome.egress_grant) is ChannelEgressGrant
 
 
 def test_resolve_returns_one_tenant_safe_empty_package() -> None:

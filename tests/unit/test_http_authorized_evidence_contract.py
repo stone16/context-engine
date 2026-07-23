@@ -57,7 +57,7 @@ def empty_outcome() -> Resolved:
     )
     return cast(
         Resolved,
-        SimpleNamespace(kind="resolved", package=package),
+        SimpleNamespace(kind="resolved", package=package, egress_grant=None),
     )
 
 
@@ -104,6 +104,7 @@ def authorized_outcome() -> Resolved:
         SimpleNamespace(
             kind="resolved",
             package=package,
+            egress_grant=None,
             effective_budget=PackageBudget(
                 max_tokens=4_096,
                 max_provider_calls=8,

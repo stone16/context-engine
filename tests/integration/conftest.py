@@ -54,6 +54,13 @@ def identity_configuration(
 
 
 @pytest.fixture(scope="session")
+def egress_configuration(
+    database_configurations: HarnessDatabaseConfigurations,
+) -> DatabaseConfiguration:
+    return database_configurations.egress
+
+
+@pytest.fixture(scope="session")
 def migration_configuration(
     database_configurations: HarnessDatabaseConfigurations,
 ) -> DatabaseConfiguration:

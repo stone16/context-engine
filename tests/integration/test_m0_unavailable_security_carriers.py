@@ -11,13 +11,11 @@ pytestmark = pytest.mark.integration
 
 UNAVAILABLE_M0_TABLE_STEMS = (
     "citation",
-    "egress",
     "model_gateway",
     "model_input",
 )
 UNAVAILABLE_M0_FUNCTION_STEMS = (
     "citation",
-    "egress",
     "model_gateway",
     "model_input",
 )
@@ -64,11 +62,10 @@ def _public_application_objects(engine: Engine) -> tuple[set[str], set[str]]:
 
 
 @pytest.mark.security_evidence(id="PG-CITATION-AUTH-010", layer="postgres")
-@pytest.mark.security_evidence(id="PG-EGRESS-011", layer="postgres")
-def test_m0_unavailable_citation_and_egress_carriers_fail_closed(
+def test_unavailable_citation_and_real_provider_carriers_fail_closed(
     guarded_runtime_engine: Engine,
 ) -> None:
-    """M0 exposes no database carrier that could mint future citation/egress auth."""
+    """Activated egress state does not activate citation or real-provider state."""
 
     tables, functions = _public_application_objects(guarded_runtime_engine)
     with guarded_runtime_engine.connect() as connection:

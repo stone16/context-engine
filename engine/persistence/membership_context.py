@@ -37,6 +37,14 @@ from engine.runtime.delivery_evidence import (
     _construct_delivery_evidence_redemption_session,
     _open_delivery_evidence_redemption_scope,
 )
+from engine.runtime.egress import (
+    EGRESS_GRANT_DIGEST_PROFILE,
+    EgressGrantIssuanceUnavailable,
+    EgressGrantIssue,
+    _close_egress_grant_issuance_scope,
+    _construct_egress_grant_issuance_session,
+    _open_egress_grant_issuance_scope,
+)
 from engine.runtime.evidence import CandidateRef
 from engine.runtime.materialized import (
     MaterializedFieldValue,
@@ -628,6 +636,60 @@ class _PostgreSQLDeliveryEvidenceRedemptionPort:
         )
 
 
+class _PostgreSQLEgressGrantIssuancePort:
+    """Persist digest-only grant state on the retained Runtime transaction."""
+
+    def __init__(self, connection: Connection) -> None:
+        self._connection = connection
+
+    def issue(self, request: EgressGrantIssue, grant_digest: bytes) -> bool:
+        try:
+            accepted = self._connection.execute(
+                text(
+                    """
+                    SELECT context_runtime_issue_egress_grant(
+                        :organization_id, :grant_digest, :digest_profile,
+                        :hop_kind, :package_digest, :payload_digest,
+                        :purpose, :audience_digest, :policy_epoch,
+                        :retention_policy_ref, :sensitivity_policy_ref,
+                        :issuer_ref, :consumer_ref, :provider_ref,
+                        :model_ref, :channel_ref, :destination_ref,
+                        :region_ref, :issued_at, :expires_at,
+                        :profile_ref, :grant_profile_ref, :category
+                    )
+                    """
+                ),
+                {
+                    "organization_id": request.organization_id,
+                    "grant_digest": grant_digest,
+                    "digest_profile": EGRESS_GRANT_DIGEST_PROFILE,
+                    "hop_kind": request.hop_kind,
+                    "package_digest": bytes.fromhex(request.package_digest),
+                    "payload_digest": bytes.fromhex(request.payload_digest),
+                    "purpose": request.purpose,
+                    "audience_digest": bytes.fromhex(request.audience_digest),
+                    "policy_epoch": request.policy_epoch,
+                    "retention_policy_ref": request.retention_policy_ref,
+                    "sensitivity_policy_ref": request.sensitivity_policy_ref,
+                    "issuer_ref": request.issuer_ref,
+                    "consumer_ref": request.consumer_ref,
+                    "provider_ref": request.provider_ref,
+                    "model_ref": request.model_ref,
+                    "channel_ref": request.channel_ref,
+                    "destination_ref": request.destination_ref,
+                    "region_ref": request.region_ref,
+                    "issued_at": request.issued_at,
+                    "expires_at": request.expires_at,
+                    "profile_ref": request.profile_ref,
+                    "grant_profile_ref": request.grant_profile_ref,
+                    "category": request.category.value,
+                },
+            ).scalar_one()
+        except SQLAlchemyError:
+            raise EgressGrantIssuanceUnavailable from None
+        return accepted is True
+
+
 class PostgreSQLMembershipAuthority:
     """Open and retain the exact UserActor transaction through Runtime work."""
 
@@ -760,6 +822,7 @@ class PostgreSQLMembershipAuthority:
         policy_epoch_scope = _open_policy_epoch_authority_scope()
         context_run_scope = _open_context_run_persistence_scope()
         delivery_evidence_scope = _open_delivery_evidence_redemption_scope()
+        egress_issuance_scope = _open_egress_grant_issuance_scope()
         try:
             projection_session = _construct_materialized_projection_session(
                 authority_scope=projection_scope,
@@ -796,8 +859,15 @@ class PostgreSQLMembershipAuthority:
                         port=_PostgreSQLDeliveryEvidenceRedemptionPort(connection),
                     )
                 ),
+                egress_grant_issuance_session=(
+                    _construct_egress_grant_issuance_session(
+                        authority_scope=egress_issuance_scope,
+                        port=_PostgreSQLEgressGrantIssuancePort(connection),
+                    )
+                ),
             )
         finally:
+            _close_egress_grant_issuance_scope(egress_issuance_scope)
             _close_delivery_evidence_redemption_scope(delivery_evidence_scope)
             _close_context_run_persistence_scope(context_run_scope)
             _close_policy_epoch_authority_scope(policy_epoch_scope)

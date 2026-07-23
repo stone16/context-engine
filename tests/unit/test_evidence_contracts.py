@@ -366,7 +366,6 @@ def test_package_constructor_rejects_expired_projection_authority() -> None:
         construct_package_content((authorized,))
 
 
-@pytest.mark.security_evidence(id="PROP-EGRESS-011", layer="property")
 def test_package_constructor_rejects_cross_organization_or_mixed_request() -> None:
     kernel_scope = _open_authorization_kernel_scope()
     authorized = projection("a", "authorized body", kernel_scope=kernel_scope)
