@@ -1138,7 +1138,9 @@ def test_replacement_does_not_change_another_resource_in_the_same_organization(
         "source",
         "resource",
         "revision",
+        "signing_key_version",
         "nonce",
+        "issued_at",
         "expires_binding",
     ),
 )
@@ -1202,8 +1204,12 @@ def test_replacement_stage_rejects_wrong_exact_bindings_with_zero_effect(
         requested_resource_ref = f"resource:wrong:{prepared.job_id}"
     elif wrong_binding == "revision":
         requested_revision_id = UUID(first.candidate_ref.revision_ref)
+    elif wrong_binding == "signing_key_version":
+        overrides["signing_key_version"] = claims.signing_key_version + 1
     elif wrong_binding == "nonce":
         overrides["nonce"] = bytes([claims.nonce[0] ^ 1]) + claims.nonce[1:]
+    elif wrong_binding == "issued_at":
+        overrides["issued_at"] = claims.issued_at + timedelta(seconds=1)
     else:
         overrides["expires_at"] = claims.issued_at - timedelta(seconds=1)
 
@@ -1471,19 +1477,26 @@ def test_replacement_activation_rejects_revoked_authority_with_zero_effect(
         engine.dispose()
 
 
-@pytest.mark.parametrize("boundary", ("stage", "activate"))
+@pytest.mark.parametrize(
+    ("boundary", "structural"),
+    (("stage", False), ("stage", True), ("activate", False)),
+    ids=("stage-v1", "stage-v2", "activate"),
+)
 def test_replacement_rejects_a_lease_that_expires_at_the_durable_boundary(
     tmp_path: Path,
     migration_configuration: DatabaseConfiguration,
     guarded_control_engine: Engine,
     guarded_worker_engine: Engine,
     boundary: str,
+    structural: bool,
 ) -> None:
+    old_payload = OLD_MARKDOWN if structural else OLD_V1_MARKDOWN
+    replacement_payload = NEW_MARKDOWN if structural else NEW_V1_MARKDOWN
     scenario = _prepare_file_import_scenario(
         tmp_path,
         migration_configuration,
         guarded_control_engine,
-        payload=OLD_V1_MARKDOWN,
+        payload=old_payload,
     )
     assert scenario.token is not None
     first = _run_file_import(
@@ -1491,12 +1504,13 @@ def test_replacement_rejects_a_lease_that_expires_at_the_durable_boundary(
         scenario.prepared,
         scenario.token,
         guarded_worker_engine,
+        config_version=("markdown-config-v2" if structural else "markdown-config-v1"),
     )
-    (scenario.root / "handbook.md").write_bytes(NEW_V1_MARKDOWN)
+    (scenario.root / "handbook.md").write_bytes(replacement_payload)
     prepared, token = _prepare_repeat_file_import(
         scenario,
         guarded_control_engine,
-        idempotency_key=f"expire-at-{boundary}-boundary",
+        idempotency_key=f"expire-at-{boundary}-{structural}-boundary",
         lease_ttl_seconds=2,
     )
     claims = scenario.codec.verify(
@@ -1513,7 +1527,7 @@ def test_replacement_rejects_a_lease_that_expires_at_the_durable_boundary(
     assert _redeem_direct(guarded_worker_engine, claims) is not None
     resource_ref = first.candidate_ref.resource_ref
     replacement_revision_id = UUID(int=prepared.job_id.int ^ 1)
-    document = _compile_replacement(NEW_V1_MARKDOWN, structural=False)
+    document = _compile_replacement(replacement_payload, structural=structural)
     if boundary == "activate":
         assert _stage_replacement_direct(
             guarded_worker_engine,
@@ -1565,18 +1579,22 @@ def test_replacement_rejects_a_lease_that_expires_at_the_durable_boundary(
     "revoked_authority",
     ("principal", "membership", "access"),
 )
+@pytest.mark.parametrize("structural", (False, True), ids=("v1", "v2"))
 def test_replacement_stage_rejects_revoked_authority_with_zero_effect(
     tmp_path: Path,
     migration_configuration: DatabaseConfiguration,
     guarded_control_engine: Engine,
     guarded_worker_engine: Engine,
     revoked_authority: str,
+    structural: bool,
 ) -> None:
+    old_payload = OLD_MARKDOWN if structural else OLD_V1_MARKDOWN
+    replacement_payload = NEW_MARKDOWN if structural else NEW_V1_MARKDOWN
     scenario = _prepare_file_import_scenario(
         tmp_path,
         migration_configuration,
         guarded_control_engine,
-        payload=OLD_V1_MARKDOWN,
+        payload=old_payload,
     )
     assert scenario.token is not None
     first = _run_file_import(
@@ -1584,12 +1602,13 @@ def test_replacement_stage_rejects_revoked_authority_with_zero_effect(
         scenario.prepared,
         scenario.token,
         guarded_worker_engine,
+        config_version=("markdown-config-v2" if structural else "markdown-config-v1"),
     )
-    (scenario.root / "handbook.md").write_bytes(NEW_V1_MARKDOWN)
+    (scenario.root / "handbook.md").write_bytes(replacement_payload)
     prepared, token = _prepare_repeat_file_import(
         scenario,
         guarded_control_engine,
-        idempotency_key=f"stage-revoked-{revoked_authority}",
+        idempotency_key=f"stage-revoked-{revoked_authority}-{structural}",
     )
     claims = scenario.codec.verify(
         token,
@@ -1660,7 +1679,7 @@ def test_replacement_stage_rejects_revoked_authority_with_zero_effect(
         assert _stage_replacement_direct(
             guarded_worker_engine,
             claims,
-            _compile_replacement(NEW_V1_MARKDOWN, structural=False),
+            _compile_replacement(replacement_payload, structural=structural),
             resource_ref=resource_ref,
             revision_id=UUID(int=prepared.job_id.int ^ 1),
         ) is None
