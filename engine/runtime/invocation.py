@@ -32,21 +32,21 @@ class InvocationConstructionProvenance(StrEnum):
 class AuthenticatedInvocation:
     """Trusted identity facts unavailable to request-body deserialization."""
 
-    request_id: str
-    organization_ref: str
-    user_ref: str
-    principal_ref: str
-    membership_ref: str
-    membership_version: int
-    policy_epoch: int
-    agent_version_ref: str
-    authenticated_application_ref: str
-    authentication_binding_ref: str
-    received_at: datetime
-    organization_verification: ExistingOrganizationVerification
+    request_id: str = field(repr=False)
+    organization_ref: str = field(repr=False)
+    user_ref: str = field(repr=False)
+    principal_ref: str = field(repr=False)
+    membership_ref: str = field(repr=False)
+    membership_version: int = field(repr=False)
+    policy_epoch: int = field(repr=False)
+    agent_version_ref: str = field(repr=False)
+    authenticated_application_ref: str = field(repr=False)
+    authentication_binding_ref: str = field(repr=False)
+    received_at: datetime = field(repr=False)
+    organization_verification: ExistingOrganizationVerification = field(repr=False)
     user_actor: UserActor = field(repr=False)
     trusted_scope_snapshot: TrustedScopeSnapshot = field(repr=False)
-    construction_provenance: InvocationConstructionProvenance
+    construction_provenance: InvocationConstructionProvenance = field(repr=False)
 
     def __init__(self, *args: object, **kwargs: object) -> None:
         raise TypeError(

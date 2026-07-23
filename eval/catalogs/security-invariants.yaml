@@ -1,5 +1,5 @@
 {
-  "catalogVersion": "1.1.0",
+  "catalogVersion": "1.2.0",
   "authority": {
     "issueRefs": [
       "#2",
@@ -9,7 +9,8 @@
       "#17",
       "#18",
       "#19",
-      "#48"
+      "#48",
+      "#63"
     ],
     "documentRefs": [
       "README.md",
@@ -23,9 +24,10 @@
       "docs/decisions/0028-fail-closed-unavailable-runtime-capabilities.md",
       "docs/decisions/0030-bound-ticket-audiences.md",
       "docs/decisions/0031-persist-authorized-context-run-lineage.md",
-      "docs/decisions/0032-bind-materialized-fields-to-membership-projection-rights.md"
+      "docs/decisions/0032-bind-materialized-fields-to-membership-projection-rights.md",
+      "docs/decisions/0045-redeem-private-delivery-evidence-at-ingress.md"
     ],
-    "reconciliation": "Issue #2 fixes the product and testing decisions, issue #5 requires exactly fifteen release invariants and twelve canonical acceptance fixtures, and ADR-0019 resolves the later nineteen-label prose expansion without weakening any safeguard. Issue #15 activates only Organization-level next-request resolve(Acquire) revocation evidence under REVOCATION-006: PG-REVOCATION-006, RUN-006, and CACHE-002 are active while BLOB-002 and Continue, citation, Policy-Epoch-bound WorkerLease, production ContextAccessTicket/ActionTicket, audit, outbox, cleanup, finer-epoch, UI, and external-admin carriers remain future or NOT_ACTIVE. Issue #16 activates only the M0 refusal gate for unavailable Continue, OpenCitation, and server-owned unavailable Acquire plans: its real continuation, citation, federated/source-native, and File carriers remain future, while its Runtime and HTTP refusal surfaces prove generic outcomes before content I/O. Issue #17 activates only the signed one-shot persistent no-op durable-job WorkerLease subcarrier under WORKER-LEASE-007. It binds one exact worker audience but no end-user delivery audience or Policy Epoch, and proves only LEASE-SIGNING-017, PG-WORKER-LEASE-NOOP-017, and WORKER-LEASE-REPLAY-007; Source, Resource, Revision, Policy Epoch, end-user delivery audience, idempotency, generation, business mutation, outbox, File publication, and the full ACCEPT-008 matrix remain deferred or NOT_ACTIVE. Issue #18 activates only distinct signed synthetic ContextAccessTicket Provider-read and ActionTicket no-op channel-action subcarriers under ACTION-SEPARATION-014, with current Organization-v0 Policy Epoch validation. TICKET-AUDIENCE-018 and PG-TICKET-EPOCH-018 do not activate production ContextProvider integration, ContextRuntime ticket integration, BotDelivery, full M2 ActionPlane.prepare/perform, a real Sender or external effect, payload/destination/approval/idempotency binding, durable one-shot/replay/reconciliation, or full ACCEPT-012 PASS; those remain future or NOT_ACTIVE. Issue #19 activates only the current Acquire authorized-only ContextRun and restricted delivered-empty DecisionAudit subcarrier under TRACE-REDACTION-012. DIGEST-019, RUN-LINEAGE-019, AUTHORIZED-RUN-019, and PG-TRACE-REDACTION-012 prove deterministic Package and Organization-bound query digests, retained-UserActor-transaction persistence, decisionRef resolution, redaction, and short-lived exact-Organization operator ticket reads with no application-role table access; the supported reader commits deletion before returning, while a direct caller rollback is not claimed as durable exactly-once redemption. Raw query retention, full ContextPackage body retention, unauthenticated transport failures as ContextRuns, cross-Organization analytics, and general observability redaction remain NOT_ACTIVE. Issue #48 activates only the current ACCEPT-002 authenticated HTTP Acquire Membership field-projection carrier under SCOPE-INTERSECTION-004, INDEX-NOT-AUTHORITY-005, and TRACE-REDACTION-012. PROP-FIELD-PROJECTION-048, PG-FIELD-PROJECTION-048, and HTTP-ACCEPT-002-048 bind one current Membership/version field ceiling to same-transaction FORCE-RLS reduction, the sealed AuthorizationKernel, AuthorizedProjection and Evidence integrity, and authorized-only ContextRun/audit persistence. General permission DSLs, caller-authored projection lists, CandidateRef or index field authority, production Provider/source-native ACL negotiation, Supply publication, File/Base field ACL, typed fields, Continue/OpenCitation, and Issue #20 runner substitution remain future or NOT_ACTIVE. The canonical set is IDs 001 through 012, 014, 015, and 019: CACHE-SCOPE-013 remains a preregistered conditional extension; AUDIENCE-016 is absorbed by SCOPE-INTERSECTION-004 and EGRESS-011; ACL-PROOF-017 is absorbed by INDEX-NOT-AUTHORITY-005 and REVOCATION-006; DELIVERY-EVIDENCE-018 is absorbed by TRANSPORT-UNTRUSTED-008. ACCEPT-001 through ACCEPT-012 follow ADR-0019's category order. Protected-asset references A-01 through A-08 refer, in order, to the eight bullets in the threat model's Protected assets section. Every expectedEvidence value below is a stable planned case identifier, not a claim that the case ran or passed; only an exact activation record upgrades named evidence, while fixture carrier status and the explicit M0 oracle preserve every other accepted-versus-active distinction."
+    "reconciliation": "Issue #2 fixes the product and testing decisions, issue #5 requires exactly fifteen release invariants and twelve canonical acceptance fixtures, and ADR-0019 resolves the later nineteen-label prose expansion without weakening any safeguard. Issue #15 activates only Organization-level next-request resolve(Acquire) revocation evidence under REVOCATION-006: PG-REVOCATION-006, RUN-006, and CACHE-002 are active while BLOB-002 and Continue, citation, Policy-Epoch-bound WorkerLease, production ContextAccessTicket/ActionTicket, audit, outbox, cleanup, finer-epoch, UI, and external-admin carriers remain future or NOT_ACTIVE. Issue #16 activates only the M0 refusal gate for unavailable Continue, OpenCitation, and server-owned unavailable Acquire plans: its real continuation, citation, federated/source-native, and File carriers remain future, while its Runtime and HTTP refusal surfaces prove generic outcomes before content I/O. Issue #17 activates only the signed one-shot persistent no-op durable-job WorkerLease subcarrier under WORKER-LEASE-007. It binds one exact worker audience but no end-user delivery audience or Policy Epoch, and proves only LEASE-SIGNING-017, PG-WORKER-LEASE-NOOP-017, and WORKER-LEASE-REPLAY-007; Source, Resource, Revision, Policy Epoch, end-user delivery audience, idempotency, generation, business mutation, outbox, File publication, and the full ACCEPT-008 matrix remain deferred or NOT_ACTIVE. Issue #18 activates only distinct signed synthetic ContextAccessTicket Provider-read and ActionTicket no-op channel-action subcarriers under ACTION-SEPARATION-014, with current Organization-v0 Policy Epoch validation. TICKET-AUDIENCE-018 and PG-TICKET-EPOCH-018 do not activate production ContextProvider integration, ContextRuntime ticket integration, BotDelivery, full M2 ActionPlane.prepare/perform, a real Sender or external effect, payload/destination/approval/idempotency binding, durable one-shot/replay/reconciliation, or full ACCEPT-012 PASS; those remain future or NOT_ACTIVE. Issue #19 activates only the current Acquire authorized-only ContextRun and restricted delivered-empty DecisionAudit subcarrier under TRACE-REDACTION-012. DIGEST-019, RUN-LINEAGE-019, AUTHORIZED-RUN-019, and PG-TRACE-REDACTION-012 prove deterministic Package and Organization-bound query digests, retained-UserActor-transaction persistence, decisionRef resolution, redaction, and short-lived exact-Organization operator ticket reads with no application-role table access; the supported reader commits deletion before returning, while a direct caller rollback is not claimed as durable exactly-once redemption. Raw query retention, full ContextPackage body retention, unauthenticated transport failures as ContextRuns, cross-Organization analytics, and general observability redaction remain NOT_ACTIVE. Issue #48 activates only the current ACCEPT-002 authenticated HTTP Acquire Membership field-projection carrier under SCOPE-INTERSECTION-004, INDEX-NOT-AUTHORITY-005, and TRACE-REDACTION-012. PROP-FIELD-PROJECTION-048, PG-FIELD-PROJECTION-048, and HTTP-ACCEPT-002-048 bind one current Membership/version field ceiling to same-transaction FORCE-RLS reduction, the sealed AuthorizationKernel, AuthorizedProjection and Evidence integrity, and authorized-only ContextRun/audit persistence. General permission DSLs, caller-authored projection lists, CandidateRef or index field authority, production Provider/source-native ACL negotiation, Supply publication, File/Base field ACL, typed fields, Continue/OpenCitation, and Issue #20 runner substitution remain future or NOT_ACTIVE. Issue #63 activates only the digest-only private authenticated HTTP Acquire DeliveryEvidenceRef carrier under TRANSPORT-UNTRUSTED-008. PROP-DELIVERY-EVIDENCE-063, PG-DELIVERY-EVIDENCE-063, HTTP-DELIVERY-EVIDENCE-063, and FILE-DELIVERY-EVIDENCE-063 prove exact service/request/Organization/asker/Membership-version/destination/consumer/purpose/audience/epoch/lifetime binding, stable identical retry identity, role isolation, expiry cleanup, pre-content generic rejection, and one File-backed sealed Runtime delivery. Group AudienceSnapshot, group/public DeliveryEvidenceRef, OpenCitation, EgressGrant, ModelGateway, ActionPlane, BotDelivery, frozen OpenAPI compatibility, and the generated TypeScript SDK remain future or NOT_ACTIVE. The canonical set is IDs 001 through 012, 014, 015, and 019: CACHE-SCOPE-013 remains a preregistered conditional extension; AUDIENCE-016 is absorbed by SCOPE-INTERSECTION-004 and EGRESS-011; ACL-PROOF-017 is absorbed by INDEX-NOT-AUTHORITY-005 and REVOCATION-006; DELIVERY-EVIDENCE-018 is absorbed by TRANSPORT-UNTRUSTED-008. ACCEPT-001 through ACCEPT-012 follow ADR-0019's category order. Protected-asset references A-01 through A-08 refer, in order, to the eight bullets in the threat model's Protected assets section. Every expectedEvidence value below is a stable planned case identifier, not a claim that the case ran or passed; only an exact activation record upgrades named evidence, while fixture carrier status and the explicit M0 oracle preserve every other accepted-versus-active distinction."
   },
   "hardOracles": [
     {
@@ -207,6 +209,39 @@
       "deferredEvidence": ["production Provider-native field authorization", "File and Base source-field authorization", "typed or non-text field projection"],
       "futureCarriers": ["production ContextProvider native field projection", "File and Base ingestion field ACL", "Continue and OpenCitation field projection", "field-policy change independent of Membership version"],
       "notActive": ["general permission DSL", "caller-authored projection lists", "CandidateRef or index field authority", "Provider capability negotiation or source-native field ACL", "Supply publication and field classification", "ranking or relevance-model field authority", "Issue #20 gate or runner substitution"]
+    },
+    {
+      "issueRef": "#63",
+      "invariantRef": "TRANSPORT-UNTRUSTED-008",
+      "carrier": "private authenticated HTTP Acquire DeliveryEvidenceRef",
+      "status": "active_fail_closed",
+      "policyEpochScope": "organization-v0",
+      "controlBoundary": "PrivateDeliveryEvidenceIssuer -> PostgreSQL identity function -> authenticated HTTP metadata -> current UserActor transaction redemption -> TrustedDeliveryContext -> sealed ContextRuntime.resolve(Acquire)",
+      "testEvidence": [
+        {
+          "id": "PROP-DELIVERY-EVIDENCE-063",
+          "surface": "tests/unit/test_delivery_evidence.py::test_delivery_evidence_values_redact_all_trusted_facts_from_repr",
+          "oracle": "Versioned private issuance returns one opaque random reference while persisting only its SHA-256 digest and exact audience digest; issuance, redemption, and nominal TrustedDeliveryContext carriers redact bearer and raw trusted facts from normal representations."
+        },
+        {
+          "id": "PG-DELIVERY-EVIDENCE-063",
+          "surface": "tests/integration/test_delivery_evidence_ref.py::test_identity_issues_digest_only_and_runtime_redeems_one_stable_private_request tests/integration/test_delivery_evidence_ref.py::test_private_evidence_one_field_mutations_are_equivalent_not_available tests/integration/test_delivery_evidence_ref.py::test_same_logical_request_cannot_be_rebound_to_another_private_audience tests/integration/test_delivery_evidence_ref.py::test_expired_private_evidence_cleanup_is_exactly_organization_scoped tests/integration/test_delivery_evidence_ref.py::test_identity_cannot_backdate_issuance_for_a_membership_not_current_now tests/integration/test_delivery_evidence_ref.py::test_delivery_evidence_table_and_functions_enforce_exact_role_split",
+          "oracle": "Real PostgreSQL with FORCE RLS stores no bearer, accepts only the dedicated identity issuer for a database-current Membership, redeems only through Runtime for the exact service/request/Organization/asker/Membership version/destination/consumer/private kind/audience digest/purpose/epoch/lifetime, preserves one stable retry identity, rejects every one-field mutation and audience rebind, restricts expired cleanup to one Organization, blocks populated downgrade, and gives ordinary application roles zero table or cross-capability access."
+        },
+        {
+          "id": "HTTP-DELIVERY-EVIDENCE-063",
+          "surface": "tests/unit/test_http_trust_boundary.py::test_private_delivery_evidence_is_redeemed_before_runtime_content_work",
+          "oracle": "Authenticated HTTP metadata carries only the opaque reference; exact redemption constructs private TrustedDeliveryContext, a private route binding without evidence and evidence without a nominal private route binding fail closed, while forged or wrong authenticated-route destination evidence returns the same generic authentication failure before Runtime resolution, index, Provider, source-content, Package, model, or effect work, and response, ordinary authentication/invocation/outcome trace, and captured logs omit bearer, raw Organization/User/Membership/principal/agent/application/binding facts, destination, consumer, and audience digest."
+        },
+        {
+          "id": "FILE-DELIVERY-EVIDENCE-063",
+          "surface": "tests/integration/test_file_import_tracer.py::test_registered_file_import_publishes_one_exact_authorized_http_package",
+          "oracle": "The real File-backed authenticated HTTP Acquire redeems private evidence inside the current UserActor transaction and still proves CandidateRef through the sealed AuthorizationKernel to AuthorizedProjection; an identical retry returns authorized content under one stored logical redemption identity, and both private responses plus their ContextRuns omit the bearer and raw private delivery bindings."
+        }
+      ],
+      "deferredEvidence": ["group AudienceSnapshot DeliveryEvidenceRef", "frozen OpenAPI and generated TypeScript SDK carrier", "production BotDelivery caller"],
+      "futureCarriers": ["public group DeliveryEvidenceRef", "OpenCitation delivery evidence", "generated TypeScript SDK", "private BotDelivery application"],
+      "notActive": ["group delivery", "AudienceSnapshot", "EgressGrant", "ModelGateway", "ActionPlane", "BotDelivery", "OpenAPI compatibility freeze", "generated SDK"]
     }
   ],
   "invariants": [
@@ -422,9 +457,9 @@
       "requiredMilestones": ["M1", "M2"],
       "evidenceStatus": "accepted",
       "expectedEvidence": {
-        "property": ["PROP-TRANSPORT-UNTRUSTED-008"],
-        "postgres": ["PG-TRANSPORT-UNTRUSTED-008"],
-        "runtimeOrDelivery": ["AUTH-002", "AUTH-009", "DELIV-001", "DELIV-002", "DELIV-003", "DELIV-004", "RUN-012"]
+        "property": ["PROP-TRANSPORT-UNTRUSTED-008", "PROP-DELIVERY-EVIDENCE-063"],
+        "postgres": ["PG-TRANSPORT-UNTRUSTED-008", "PG-DELIVERY-EVIDENCE-063"],
+        "runtimeOrDelivery": ["AUTH-002", "AUTH-009", "DELIV-001", "DELIV-002", "DELIV-003", "DELIV-004", "RUN-012", "HTTP-DELIVERY-EVIDENCE-063", "FILE-DELIVERY-EVIDENCE-063"]
       },
       "authorityRefs": [
         "docs/design/2026-07-18-context-engine-implementation-design.md#21-contextcontrol",

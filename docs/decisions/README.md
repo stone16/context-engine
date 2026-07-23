@@ -43,6 +43,7 @@ kernel, capability separation, and publication visibility model.
 | File Resource deletion | [0042 — Tombstone before cleanup](0042-tombstone-file-resources-before-cleanup.md) | One trusted Control transaction tombstones the active File Resource, advances its Organization Policy Epoch, and records immutable pending cleanup lineage before any physical deletion | Cleanup-defined visibility, caller-authored tenant/epoch/cleanup identity, index deletion as authorization, restore, or native watcher claims |
 | File Source progress | [0043 — Separate acquisition and publication progress](0043-separate-file-acquisition-progress-from-publication-progress.md) | Append accepted changes separately from contiguous Runtime-visibility completion and expose them through an Organization/Source-scoped Control read | One ambiguous checkpoint, skipped publication gaps, Runtime authorization from watermarks, or false standard ProviderPort capability claims |
 | File Source offboarding | [0044 — Disable before cleanup](0044-disable-file-sources-before-cleanup.md) | One trusted Control transaction terminally disables the Source, advances its Organization Policy Epoch, cancels outstanding work, and records immutable pending cleanup lineage | Cleanup-defined revocation, bulk Resource deletion, application-only lifecycle checks, post-disable leases/tickets, or treating progress as authority |
+| Private delivery ingress | [0045 — Redeem private delivery evidence at ingress](0045-redeem-private-delivery-evidence-at-ingress.md) | One digest-only service/request/asker/audience/epoch-bound DeliveryEvidenceRef constructs private TrustedDeliveryContext inside the current UserActor transaction before content work | Raw trusted delivery facts on the wire, bearer persistence, application-role minting/table reads, alternate Runtime paths, or claiming later M2 carriers |
 
 Each baseline ADR is `accepted` and contains Context, Decision, Rationale,
 Consequences, and Revisit trigger sections. A revisit trigger permits review; it
@@ -134,3 +135,4 @@ touched:
 - [0042 — Tombstone File Resources before cleanup](0042-tombstone-file-resources-before-cleanup.md)
 - [0043 — Separate File acquisition and publication progress](0043-separate-file-acquisition-progress-from-publication-progress.md)
 - [0044 — Disable File sources before cleanup](0044-disable-file-sources-before-cleanup.md)
+- [0045 — Redeem private delivery evidence at ingress](0045-redeem-private-delivery-evidence-at-ingress.md)

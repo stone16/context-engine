@@ -9,6 +9,7 @@ from sqlalchemy.pool import QueuePool
 
 from engine.persistence.configuration import (
     CONTROL_ROLE,
+    IDENTITY_ROLE,
     LEARNING_ROLE,
     MIGRATOR_ROLE,
     OPERATOR_ROLE,
@@ -36,6 +37,10 @@ def database_environment() -> dict[str, str]:
             "postgresql+psycopg://context_engine_control:control-secret@"
             "127.0.0.1:5432/context_engine"
         ),
+        "CONTEXT_ENGINE_IDENTITY_DATABASE_URL": (
+            "postgresql+psycopg://context_engine_identity:identity-secret@"
+            "127.0.0.1:5432/context_engine"
+        ),
         "CONTEXT_ENGINE_WORKER_DATABASE_URL": (
             "postgresql+psycopg://context_engine_worker:worker-secret@"
             "127.0.0.1:5432/context_engine"
@@ -55,6 +60,7 @@ def database_environment() -> dict[str, str]:
         "CONTEXT_ENGINE_MIGRATOR_ROLE": MIGRATOR_ROLE,
         "CONTEXT_ENGINE_RUNTIME_ROLE": RUNTIME_ROLE,
         "CONTEXT_ENGINE_CONTROL_ROLE": CONTROL_ROLE,
+        "CONTEXT_ENGINE_IDENTITY_ROLE": IDENTITY_ROLE,
         "CONTEXT_ENGINE_WORKER_ROLE": WORKER_ROLE,
         "CONTEXT_ENGINE_LEARNING_ROLE": LEARNING_ROLE,
         "CONTEXT_ENGINE_SECURITY_OPERATOR_ROLE": OPERATOR_ROLE,
@@ -66,6 +72,7 @@ def database_environment() -> dict[str, str]:
     [
         (DatabasePurpose.MIGRATION, "CONTEXT_ENGINE_MIGRATION_DATABASE_URL"),
         (DatabasePurpose.CONTROL_PLANE, "CONTEXT_ENGINE_CONTROL_DATABASE_URL"),
+        (DatabasePurpose.TRUSTED_IDENTITY, "CONTEXT_ENGINE_IDENTITY_DATABASE_URL"),
         (DatabasePurpose.API_RUNTIME, "CONTEXT_ENGINE_RUNTIME_DATABASE_URL"),
         (DatabasePurpose.SUPPLY_WORKER, "CONTEXT_ENGINE_WORKER_DATABASE_URL"),
         (DatabasePurpose.LEARNING, "CONTEXT_ENGINE_LEARNING_DATABASE_URL"),
@@ -103,6 +110,11 @@ def test_runtime_never_falls_back_to_migration_credentials() -> None:
         (
             DatabasePurpose.CONTROL_PLANE,
             "CONTEXT_ENGINE_CONTROL_DATABASE_URL",
+            MIGRATOR_ROLE,
+        ),
+        (
+            DatabasePurpose.TRUSTED_IDENTITY,
+            "CONTEXT_ENGINE_IDENTITY_DATABASE_URL",
             MIGRATOR_ROLE,
         ),
         (

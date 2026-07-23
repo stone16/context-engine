@@ -13,6 +13,7 @@ from sqlalchemy.exc import DBAPIError, IntegrityError
 
 from engine.persistence import DatabaseConfiguration, create_database_engine
 from engine.persistence.configuration import (
+    DELIVERY_EVIDENCE_DEFINER_ROLE,
     RUNTIME_ROLE,
     WORKER_LEASE_DEFINER_ROLE,
     WORKER_ROLE,
@@ -462,10 +463,19 @@ def test_runtime_worker_and_public_grants_are_least_privilege(
                         FROM information_schema.table_privileges
                         WHERE table_schema = 'public'
                           AND table_name IN ('user_account', 'membership')
-                          AND grantee IN ('PUBLIC', :runtime_role, :worker_role)
+                          AND grantee IN (
+                              'PUBLIC', :runtime_role, :worker_role,
+                              :delivery_evidence_definer_role
+                          )
                         """
                     ),
-                    {"runtime_role": RUNTIME_ROLE, "worker_role": WORKER_ROLE},
+                    {
+                        "runtime_role": RUNTIME_ROLE,
+                        "worker_role": WORKER_ROLE,
+                        "delivery_evidence_definer_role": (
+                            DELIVERY_EVIDENCE_DEFINER_ROLE
+                        ),
+                    },
                 )
             }
             security = tuple(
@@ -510,10 +520,14 @@ def test_runtime_worker_and_public_grants_are_least_privilege(
                     )
                 )
             }
-        assert grants == {(RUNTIME_ROLE, "membership", "SELECT")}
+        assert grants == {
+            (RUNTIME_ROLE, "membership", "SELECT"),
+            (DELIVERY_EVIDENCE_DEFINER_ROLE, "membership", "SELECT"),
+        }
         assert security == (True, True)
         assert set(policies) == {
             "membership_current_user_actor",
+            "membership_delivery_evidence_definer_select",
             "membership_file_import_definer_select",
             "membership_migrator_administration",
         }
@@ -551,6 +565,17 @@ def test_runtime_worker_and_public_grants_are_least_privilege(
         assert file_import_policy[3] is not None
         assert file_import_policy[4] is None
         assert "app.organization_id" in str(file_import_policy[3]).lower()
+
+        delivery_evidence_policy = policies[
+            "membership_delivery_evidence_definer_select"
+        ]
+        assert delivery_evidence_policy == (
+            "PERMISSIVE",
+            (DELIVERY_EVIDENCE_DEFINER_ROLE,),
+            "SELECT",
+            "true",
+            None,
+        )
 
         migrator_policy = policies["membership_migrator_administration"]
         assert migrator_policy[:3] == (

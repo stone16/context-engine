@@ -4,6 +4,7 @@ import pytest
 
 from engine.persistence.configuration import (
     CONTROL_ROLE,
+    IDENTITY_ROLE,
     LEARNING_ROLE,
     MIGRATOR_ROLE,
     OPERATOR_ROLE,
@@ -24,6 +25,10 @@ def _database_environment() -> dict[str, str]:
         ),
         "CONTEXT_ENGINE_CONTROL_DATABASE_URL": (
             "postgresql+psycopg://context_engine_control:control-secret@"
+            "127.0.0.1:5432/context_engine"
+        ),
+        "CONTEXT_ENGINE_IDENTITY_DATABASE_URL": (
+            "postgresql+psycopg://context_engine_identity:identity-secret@"
             "127.0.0.1:5432/context_engine"
         ),
         "CONTEXT_ENGINE_RUNTIME_DATABASE_URL": (
@@ -48,6 +53,7 @@ def _database_environment() -> dict[str, str]:
         ),
         "CONTEXT_ENGINE_MIGRATOR_ROLE": MIGRATOR_ROLE,
         "CONTEXT_ENGINE_CONTROL_ROLE": CONTROL_ROLE,
+        "CONTEXT_ENGINE_IDENTITY_ROLE": IDENTITY_ROLE,
         "CONTEXT_ENGINE_RUNTIME_ROLE": RUNTIME_ROLE,
         "CONTEXT_ENGINE_WORKER_ROLE": WORKER_ROLE,
         "CONTEXT_ENGINE_LEARNING_ROLE": LEARNING_ROLE,
@@ -77,6 +83,7 @@ def test_harness_exposes_learning_as_a_distinct_login() -> None:
     assert {
         configurations.migration.expected_role,
         configurations.control.expected_role,
+        configurations.identity.expected_role,
         configurations.runtime.expected_role,
         configurations.worker.expected_role,
         configurations.learning.expected_role,
@@ -84,6 +91,7 @@ def test_harness_exposes_learning_as_a_distinct_login() -> None:
     } == {
         MIGRATOR_ROLE,
         CONTROL_ROLE,
+        IDENTITY_ROLE,
         RUNTIME_ROLE,
         WORKER_ROLE,
         LEARNING_ROLE,

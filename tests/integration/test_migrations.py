@@ -43,7 +43,7 @@ from tests.support.file_source_progress import clear_file_source_progress_projec
 
 pytestmark = pytest.mark.integration
 ROOT = Path(__file__).parents[2]
-_HEAD_REVISION = "20260723_0018"
+_HEAD_REVISION = "20260723_0019"
 HEAD_TABLES = [
     "active_release_manifest",
     "alembic_version",
@@ -55,6 +55,7 @@ HEAD_TABLES = [
     "context_run_operator_read_ticket",
     "context_source",
     "decision_audit",
+    "delivery_evidence",
     "exact_phrase_candidate",
     "file_acquisition",
     "file_acquisition_result",
@@ -746,9 +747,37 @@ def test_file_source_offboarding_revision_downgrades_and_reapplies_cleanly(
                 )
             ).all()
         assert len(privileges) == 2
-        assert all(tuple(row)[1:] == (False, False, False, False) for row in privileges)
+        assert all(
+            tuple(row)[1:] == (False, False, False, False)
+            for row in privileges
+        )
     finally:
         engine.dispose()
+
+
+def test_delivery_evidence_revision_downgrades_only_while_empty(
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    """Issue #63 carrier can be removed only before any attestation exists."""
+
+    alembic_configuration = Config(ROOT / "alembic.ini")
+    engine = create_database_engine(migration_configuration)
+    try:
+        with engine.begin() as connection:
+            connection.execute(text("DELETE FROM delivery_evidence"))
+    finally:
+        engine.dispose()
+    try:
+        command.downgrade(alembic_configuration, "20260723_0018")
+        assert _revision_rows(migration_configuration) == ["20260723_0018"]
+        assert "delivery_evidence" not in _application_tables(
+            migration_configuration
+        )
+    finally:
+        command.upgrade(alembic_configuration, "head")
+
+    assert _revision_rows(migration_configuration) == [_HEAD_REVISION]
+    assert "delivery_evidence" in _application_tables(migration_configuration)
 
 
 def test_file_source_offboarding_refuses_downgrade_with_committed_intent(

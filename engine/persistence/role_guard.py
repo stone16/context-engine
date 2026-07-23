@@ -6,6 +6,7 @@ from sqlalchemy import Connection, text
 
 from engine.persistence.configuration import (
     CONTROL_ROLE,
+    IDENTITY_ROLE,
     LEARNING_ROLE,
     MIGRATOR_ROLE,
     OPERATOR_ROLE,
@@ -100,6 +101,13 @@ def assert_control_role(connection: Connection) -> None:
     """Require the dedicated least-privilege internal Control login."""
 
     _assert_non_owner_role(connection, CONTROL_ROLE)
+
+
+def assert_identity_role(connection: Connection) -> None:
+    """Require the dedicated trusted-identity evidence issuer login."""
+
+    _assert_non_owner_role(connection, IDENTITY_ROLE)
+    _assert_no_owned_objects_or_role_members(connection)
 
 
 def assert_runtime_role(connection: Connection) -> None:

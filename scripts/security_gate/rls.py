@@ -17,6 +17,7 @@ TENANT_CLASSIFICATION = "tenant_owned"
 PINNED_GLOBAL_TABLES = frozenset({"alembic_version", "organization", "user_account"})
 NON_OWNER_EVIDENCE_BY_TABLE: Mapping[str, str] = {
     "context_source": "PG-FILE-SOURCE-RLS-021",
+    "delivery_evidence": "PG-DELIVERY-EVIDENCE-063",
     "membership": "PG-SCOPE-INTERSECTION-004",
     "organization_record": "PG-TENANT-FK-002",
     "context_resource": "PG-INDEX-NOT-AUTHORITY-005",

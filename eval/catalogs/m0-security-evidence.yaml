@@ -3,7 +3,7 @@
   "catalog": {
     "path": "eval/catalogs/security-invariants.yaml",
     "schemaPath": "eval/catalogs/security-catalog.schema.json",
-    "catalogVersion": "1.1.0"
+    "catalogVersion": "1.2.0"
   },
   "execution": {
     "framework": "pytest",
@@ -73,8 +73,12 @@
     {"id": "PG-WORKER-LEASE-007", "layer": "postgres", "selector": "tests/integration/test_worker_lease.py::test_wrong_organization_cannot_affect_same_job_identifier_in_another_tenant"},
     {"id": "RUNTIME-WORKER-LEASE-007", "layer": "runtime", "selector": "tests/integration/test_worker_lease.py::test_valid_lease_completes_once_through_worker_application_and_replay_is_zero"},
     {"id": "PROP-TRANSPORT-UNTRUSTED-008", "layer": "property", "selector": "tests/unit/test_actor_contracts.py::test_authenticated_invocation_rejects_mismatched_current_membership"},
+    {"id": "PROP-DELIVERY-EVIDENCE-063", "layer": "property", "selector": "tests/unit/test_delivery_evidence.py::test_delivery_evidence_values_redact_all_trusted_facts_from_repr"},
     {"id": "PG-TRANSPORT-UNTRUSTED-008", "layer": "postgres", "selector": "tests/integration/test_membership_schema.py::test_organization_only_and_user_only_context_have_no_tenant_rights"},
+    {"id": "PG-DELIVERY-EVIDENCE-063", "layer": "postgres", "selector": "tests/integration/test_delivery_evidence_ref.py::test_delivery_evidence_table_and_functions_enforce_exact_role_split"},
     {"id": "RUNTIME-TRANSPORT-UNTRUSTED-008", "layer": "runtime", "selector": "tests/unit/test_http_trust_boundary.py::test_trusted_field_injection_is_closed_before_domain_execution"},
+    {"id": "HTTP-DELIVERY-EVIDENCE-063", "layer": "runtime", "selector": "tests/unit/test_http_trust_boundary.py::test_private_delivery_evidence_is_redeemed_before_runtime_content_work"},
+    {"id": "FILE-DELIVERY-EVIDENCE-063", "layer": "runtime", "selector": "tests/integration/test_file_import_tracer.py::test_registered_file_import_publishes_one_exact_authorized_http_package"},
     {"id": "PROP-NON-ENUMERATION-009", "layer": "property", "selector": "tests/unit/test_runtime_authorized_evidence.py::test_denied_cross_organization_and_missing_candidates_share_one_runtime_outcome"},
     {"id": "PG-NON-ENUMERATION-009", "layer": "postgres", "selector": "tests/integration/test_runtime_non_enumeration_integration.py::test_real_postgres_http_denied_and_missing_are_externally_equivalent"},
     {"id": "RUNTIME-NON-ENUMERATION-009", "layer": "runtime", "selector": "tests/unit/test_runtime_authorized_evidence.py::test_runtime_canonical_empty_package_is_equal_for_every_internal_branch"},
@@ -117,7 +121,7 @@
     {"invariantRef": "INDEX-NOT-AUTHORITY-005", "evidenceRefs": {"property": ["PROP-INDEX-NOT-AUTHORITY-005"], "postgres": ["PG-INDEX-NOT-AUTHORITY-005", "PG-FILE-IMPORT-023", "PG-FILE-REPLACEMENT-026", "PG-FILE-TOMBSTONE-028", "PG-FILE-SOURCE-OFFBOARD-030"], "runtime": ["RUNTIME-INDEX-NOT-AUTHORITY-005"]}},
     {"invariantRef": "REVOCATION-006", "evidenceRefs": {"property": ["PROP-REVOCATION-006"], "postgres": ["PG-REVOCATION-006", "PG-FILE-TOMBSTONE-028", "PG-FILE-SOURCE-OFFBOARD-030"], "runtime": ["RUNTIME-REVOCATION-006"]}},
     {"invariantRef": "WORKER-LEASE-007", "evidenceRefs": {"property": ["PROP-WORKER-LEASE-007"], "postgres": ["PG-WORKER-LEASE-007", "PG-FILE-IMPORT-023", "PG-FILE-REPLACEMENT-026", "PG-FILE-RECOVERY-027", "PG-FILE-PROGRESS-029", "PG-FILE-SOURCE-OFFBOARD-030"], "runtime": ["RUNTIME-WORKER-LEASE-007"]}},
-    {"invariantRef": "TRANSPORT-UNTRUSTED-008", "evidenceRefs": {"property": ["PROP-TRANSPORT-UNTRUSTED-008"], "postgres": ["PG-TRANSPORT-UNTRUSTED-008"], "runtime": ["RUNTIME-TRANSPORT-UNTRUSTED-008"]}},
+    {"invariantRef": "TRANSPORT-UNTRUSTED-008", "evidenceRefs": {"property": ["PROP-TRANSPORT-UNTRUSTED-008", "PROP-DELIVERY-EVIDENCE-063"], "postgres": ["PG-TRANSPORT-UNTRUSTED-008", "PG-DELIVERY-EVIDENCE-063"], "runtime": ["RUNTIME-TRANSPORT-UNTRUSTED-008", "HTTP-DELIVERY-EVIDENCE-063", "FILE-DELIVERY-EVIDENCE-063"]}},
     {"invariantRef": "NON-ENUMERATION-009", "evidenceRefs": {"property": ["PROP-NON-ENUMERATION-009"], "postgres": ["PG-NON-ENUMERATION-009"], "runtime": ["RUNTIME-NON-ENUMERATION-009"]}},
     {"invariantRef": "CITATION-AUTH-010", "evidenceRefs": {"property": ["PROP-CITATION-AUTH-010"], "postgres": ["PG-CITATION-AUTH-010"], "runtime": ["RUNTIME-CITATION-AUTH-010"]}},
     {"invariantRef": "EGRESS-011", "evidenceRefs": {"property": ["PROP-EGRESS-011"], "postgres": ["PG-EGRESS-011"], "runtime": ["RUNTIME-EGRESS-011"]}},

@@ -1,6 +1,6 @@
 """Trusted HTTP authentication adapter contracts and fail-closed default."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 from uuid import UUID
 
@@ -16,17 +16,43 @@ class InvalidAuthenticationContext(ValueError):
 
 
 @dataclass(frozen=True, slots=True)
+class VerifiedPrivateDeliveryBinding:
+    """Trusted route/session facts for one private delivery destination."""
+
+    destination_ref: str = field(repr=False)
+    consumer_ref: str = field(repr=False)
+    delivery_kind: str = field(default="private", repr=False)
+
+    def __post_init__(self) -> None:
+        if any(
+            type(value) is not str or not value or value.isspace()
+            for value in (self.destination_ref, self.consumer_ref)
+        ):
+            raise InvalidAuthenticationContext(
+                "verified private delivery refs must be non-empty"
+            )
+        if self.delivery_kind != "private":
+            raise InvalidAuthenticationContext(
+                "verified private delivery kind is not active"
+            )
+
+
+@dataclass(frozen=True, slots=True)
 class VerifiedAuthenticationContext:
     """Identity facts emitted by a verified transport/session authenticator."""
 
-    organization_ref: str
-    user_ref: str
-    principal_ref: str
-    membership_ref: str
-    membership_version: int
-    agent_version_ref: str
-    authenticated_application_ref: str
-    authentication_binding_ref: str
+    organization_ref: str = field(repr=False)
+    user_ref: str = field(repr=False)
+    principal_ref: str = field(repr=False)
+    membership_ref: str = field(repr=False)
+    membership_version: int = field(repr=False)
+    agent_version_ref: str = field(repr=False)
+    authenticated_application_ref: str = field(repr=False)
+    authentication_binding_ref: str = field(repr=False)
+    private_delivery_binding: VerifiedPrivateDeliveryBinding | None = field(
+        default=None,
+        repr=False,
+    )
 
     def __post_init__(self) -> None:
         required_refs = (
@@ -60,8 +86,15 @@ class VerifiedAuthenticationContext:
             or not 1 <= self.membership_version <= MAX_MEMBERSHIP_VERSION
         ):
             raise InvalidAuthenticationContext(
-                "verified Membership version must fit a positive signed 64-bit "
-                "integer"
+                "verified Membership version must fit a positive signed 64-bit integer"
+            )
+        if (
+            self.private_delivery_binding is not None
+            and type(self.private_delivery_binding)
+            is not VerifiedPrivateDeliveryBinding
+        ):
+            raise InvalidAuthenticationContext(
+                "verified private delivery binding has the wrong nominal type"
             )
 
 

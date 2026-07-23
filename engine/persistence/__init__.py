@@ -8,6 +8,8 @@ from engine.persistence.access_policy import (
     ResourceAccessRevocation,
 )
 from engine.persistence.configuration import (
+    DELIVERY_EVIDENCE_DEFINER_ROLE,
+    IDENTITY_ROLE,
     LEARNING_ROLE,
     OPERATOR_ROLE,
     RELEASE_DEFINER_ROLE,
@@ -33,6 +35,10 @@ from engine.persistence.context_runs import (
 )
 from engine.persistence.control_sources import PostgreSQLControlStore
 from engine.persistence.database import create_database_engine
+from engine.persistence.delivery_evidence import (
+    PostgreSQLDeliveryEvidenceIssuerPort,
+    PostgreSQLDeliveryEvidenceRetentionPort,
+)
 from engine.persistence.file_imports import (
     FileImportInterrupted,
     FileImportLeaseRedemption,
@@ -50,6 +56,7 @@ from engine.persistence.membership_context import (
 from engine.persistence.releases import PostgreSQLReleaseStore
 from engine.persistence.role_guard import (
     assert_control_role,
+    assert_identity_role,
     assert_learning_role,
     assert_runtime_role,
     assert_security_operator_role,
@@ -81,6 +88,8 @@ __all__ = [
     "DatabaseConfigurationError",
     "DatabasePurpose",
     "HarnessDatabaseConfigurations",
+    "IDENTITY_ROLE",
+    "DELIVERY_EVIDENCE_DEFINER_ROLE",
     "LEARNING_ROLE",
     "OPERATOR_ROLE",
     "RELEASE_DEFINER_ROLE",
@@ -100,6 +109,8 @@ __all__ = [
     "OperatorAuthorizationProvenance",
     "PostgreSQLContextRunReader",
     "PostgreSQLControlStore",
+    "PostgreSQLDeliveryEvidenceIssuerPort",
+    "PostgreSQLDeliveryEvidenceRetentionPort",
     "FileImportLeaseRedemption",
     "FileImportInterrupted",
     "FileImportUnavailable",
@@ -125,6 +136,7 @@ __all__ = [
     "MAX_WORKER_LEASE_TTL_SECONDS",
     "assert_runtime_role",
     "assert_learning_role",
+    "assert_identity_role",
     "assert_security_operator_role",
     "assert_control_role",
     "assert_worker_role",

@@ -47,6 +47,7 @@ def test_compose_project_identity_is_generated_per_checkout() -> None:
     [
         "migrator_role",
         "control_role",
+        "identity_role",
         "runtime_role",
         "worker_role",
         "learning_role",
@@ -78,6 +79,8 @@ def test_database_harness_generates_secret_state_and_never_sources_it() -> None:
     assert "role-isolated URL contract" in script
     assert "CONTEXT_ENGINE_CONTROL_ROLE=context_engine_control" in script
     assert "CONTEXT_ENGINE_CONTROL_DATABASE_URL" in script
+    assert "CONTEXT_ENGINE_IDENTITY_ROLE=context_engine_identity" in script
+    assert "CONTEXT_ENGINE_IDENTITY_DATABASE_URL" in script
     assert (
         "CONTEXT_ENGINE_SECURITY_OPERATOR_ROLE=context_engine_security_operator"
         in script
@@ -91,6 +94,8 @@ def test_compose_passes_dedicated_operator_credentials_to_bootstrap() -> None:
 
     assert "CONTEXT_ENGINE_CONTROL_ROLE" in compose
     assert "CONTEXT_ENGINE_CONTROL_PASSWORD" in compose
+    assert "CONTEXT_ENGINE_IDENTITY_ROLE" in compose
+    assert "CONTEXT_ENGINE_IDENTITY_PASSWORD" in compose
     assert "CONTEXT_ENGINE_SECURITY_OPERATOR_ROLE" in compose
     assert "CONTEXT_ENGINE_SECURITY_OPERATOR_PASSWORD" in compose
     assert "CONTEXT_ENGINE_LEARNING_ROLE" in compose
@@ -101,6 +106,7 @@ def test_readiness_probe_includes_dedicated_operator_configuration() -> None:
     wait_script = repository_text("scripts/wait_for_database.py")
 
     assert "configurations.control" in wait_script
+    assert "configurations.identity" in wait_script
     assert "configurations.learning" in wait_script
     assert "configurations.operator" in wait_script
     assert (
@@ -111,9 +117,11 @@ def test_readiness_probe_includes_dedicated_operator_configuration() -> None:
         wait_script
     )
     assert "                        assert_learning_role(connection)" in wait_script
-    assert "migration, control, runtime, worker, learning, security-operator" in (
-        wait_script
+    purpose_sequence = (
+        "migration, control, identity, runtime, worker, learning, "
+        "security-operator"
     )
+    assert purpose_sequence in wait_script
 
 
 def test_harness_provisions_post_init_roles_before_readiness() -> None:
@@ -135,9 +143,14 @@ def test_harness_provisions_post_init_roles_before_readiness() -> None:
         'CONTEXT_RUN_READER_DEFINER_ROLE = "context_engine_context_run_reader_definer"'
     ) in configuration
     assert "ACCESS_POLICY_DEFINER_ROLE" in provisioner
+    assert "IDENTITY_ROLE" in provisioner
+    assert "contract.identity_role" in provisioner
+    assert "contract.identity_password" in provisioner
+    assert "DELIVERY_EVIDENCE_DEFINER_ROLE" in provisioner
     assert "WORKER_LEASE_DEFINER_ROLE" in provisioner
     assert "CONTEXT_RUN_READER_DEFINER_ROLE" in provisioner
     assert "contract.context_run_reader_definer_role" in provisioner
+    assert "contract.delivery_evidence_definer_role" in provisioner
     assert "RELEASE_DEFINER_ROLE" in provisioner
     assert "contract.release_definer_role" in provisioner
     assert "LEARNING_ROLE" in provisioner

@@ -22,12 +22,14 @@ class HttpTransportProfile:
     max_resolve_body_bytes: int
     max_json_nesting_depth: int
     max_correlation_id_characters: int = 256
+    max_delivery_evidence_ref_characters: int = 4096
 
     def __post_init__(self) -> None:
         limits = (
             self.max_resolve_body_bytes,
             self.max_json_nesting_depth,
             self.max_correlation_id_characters,
+            self.max_delivery_evidence_ref_characters,
         )
         if any(type(limit) is not int or limit <= 0 for limit in limits):
             raise ValueError("HTTP transport limits must be positive integers")
@@ -37,6 +39,7 @@ HTTP_TRANSPORT_PROFILE_V1: Final = HttpTransportProfile(
     max_resolve_body_bytes=64 * 1024,
     max_json_nesting_depth=16,
     max_correlation_id_characters=256,
+    max_delivery_evidence_ref_characters=4096,
 )
 
 
