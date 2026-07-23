@@ -35,7 +35,15 @@ DECISION_REF = "dec_" + "b" * 32
 
 def empty_outcome() -> Resolved:
     package = ContextPackage(
-        organization_ref="orgpkg_" + "c" * 32,
+        package_id="pkg_" + "c" * 32,
+        audience_digest="a" * 64,
+        policy_epoch=17,
+        policy_snapshot_ref="policy-snapshot-current",
+        run_ref="run-authorized-request",
+        release_manifest_ref="manifest-test",
+        retention_policy_ref="package-digest-only-retention-v1",
+        tokenizer_ref="utf8-byte-budget-test",
+        package_schema_ref="context-package-openapi-v0",
         purpose="context.answer",
         ttl_seconds=300,
         as_of=AS_OF,
@@ -82,7 +90,15 @@ def authorized_outcome() -> Resolved:
         lineage=lineage,
     )
     package = ContextPackage(
-        organization_ref="orgpkg_" + "c" * 32,
+        package_id="pkg_" + "c" * 32,
+        audience_digest="a" * 64,
+        policy_epoch=17,
+        policy_snapshot_ref="policy-snapshot-current",
+        run_ref="run-authorized-request",
+        release_manifest_ref="manifest-test",
+        retention_policy_ref="package-digest-only-retention-v1",
+        tokenizer_ref="utf8-byte-budget-test",
+        package_schema_ref="context-package-openapi-v0",
         purpose="context.answer",
         ttl_seconds=300,
         as_of=AS_OF,
@@ -123,15 +139,23 @@ def test_authorized_package_maps_to_the_exact_closed_public_shape() -> None:
     assert document == {
         "kind": "resolved",
         "package": {
-            "organizationRef": "orgpkg_" + "c" * 32,
+            "packageId": "pkg_" + "c" * 32,
+            "packageDigest": (
+                "cab1b244227cbdb1a817d6c102337b819e5e7d12d30b7d9aa9e6be096773b03d"
+            ),
             "purpose": "context.answer",
-            "ttlSeconds": 300,
+            "audienceDigest": "a" * 64,
+            "policyEpoch": 17,
+            "policySnapshotRef": "policy-snapshot-current",
+            "decisionRef": DECISION_REF,
+            "runRef": "run-authorized-request",
+            "releaseManifestRef": "manifest-test",
+            "retentionPolicyRef": "package-digest-only-retention-v1",
             "asOf": "2026-07-21T05:00:00Z",
             "expiresAt": "2026-07-21T05:05:00Z",
-            "decisionRef": DECISION_REF,
-            "packageDigest": (
-                "4905f3fb20b9d4cc1b78d75dbd1a92bf4fc59a8475a1cf27e9298e2bafc71750"
-            ),
+            "ttlSeconds": 300,
+            "tokenizerRef": "utf8-byte-budget-test",
+            "packageSchemaRef": "context-package-openapi-v0",
             "blocks": [
                 {
                     "blockId": BLOCK_ID,
@@ -153,7 +177,14 @@ def test_authorized_package_maps_to_the_exact_closed_public_shape() -> None:
                     "decisionRef": DECISION_REF,
                     "policySnapshotRef": "policy-snapshot-current",
                     "policyEpoch": 17,
-                    "sourceDecisionRef": "source-decision-current",
+                    "sourceAclEvidence": {
+                        "kind": "mirrored",
+                        "projectionRef": "source-decision-current",
+                        "aclAsOf": "2026-07-21T05:00:00Z",
+                        "freshnessProfileRef": (
+                            "file-source-access-current-transaction-v1"
+                        ),
+                    },
                 }
             ],
             "gaps": [],
@@ -178,6 +209,8 @@ def test_authorized_package_maps_to_the_exact_closed_public_shape() -> None:
         assert forbidden not in serialized
     package_document = dict(document["package"])
     package_digest = package_document.pop("packageDigest")
+    package_document["evidence"][0]["citationOpenRef"] = None
+    package_document["continuation"] = None
     assert verify_context_package_digest(package_document, package_digest)
 
 
@@ -187,6 +220,8 @@ def test_context_package_wire_requires_exact_block_evidence_closure() -> None:
         by_alias=True,
         exclude_none=True,
     )
+    document["evidence"][0]["citationOpenRef"] = None
+    document["continuation"] = None
     document["blocks"][0]["evidenceRefs"] = ["ev_" + "d" * 64]
     document["blocks"][0]["blockId"] = "block_" + "d" * 64
 
@@ -265,6 +300,8 @@ def test_authorized_budget_usage_allows_tokens_but_no_external_consumption() -> 
         by_alias=True,
         exclude_none=True,
     )
+    document["evidence"][0]["citationOpenRef"] = None
+    document["continuation"] = None
     document["budgetUsage"]["providerCalls"] = 1
 
     with pytest.raises(ValidationError):
@@ -277,6 +314,8 @@ def test_authorized_wire_rejects_misaccounted_content_bytes() -> None:
         by_alias=True,
         exclude_none=True,
     )
+    document["evidence"][0]["citationOpenRef"] = None
+    document["continuation"] = None
     document["budgetUsage"]["tokens"] = 14
 
     with pytest.raises(ValidationError, match="authorized UTF-8 bytes"):
@@ -289,6 +328,8 @@ def test_authorized_wire_detects_a_shape_preserving_package_alteration() -> None
         by_alias=True,
         exclude_none=True,
     )
+    document["evidence"][0]["citationOpenRef"] = None
+    document["continuation"] = None
     document["blocks"][0]["text"] = "altered content"
     document["budgetUsage"]["tokens"] = len(b"altered content")
 

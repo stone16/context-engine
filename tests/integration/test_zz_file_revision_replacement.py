@@ -47,6 +47,7 @@ from tests.integration.test_file_import_tracer import (
     _run_file_import,
     _RuntimeAuthenticator,
 )
+from tests.support.releases import ensure_test_runtime_release
 
 pytestmark = pytest.mark.integration
 
@@ -55,12 +56,10 @@ NEW_MARKDOWN = b"# Handbook\n\nNEW marker.\n\n## Shared\n\nShared query.\n"
 OLD_V1_MARKDOWN = b"# Handbook\n\nOLD marker.\n"
 NEW_V1_MARKDOWN = b"# Handbook\n\nNEW marker.\n"
 OLD_CONCURRENT_MARKDOWN = (
-    b"# Alpha\n\nOLD alpha.\n\nShared query.\n\n"
-    b"## Beta\n\nOLD beta.\n\nShared query.\n"
+    b"# Alpha\n\nOLD alpha.\n\nShared query.\n\n## Beta\n\nOLD beta.\n\nShared query.\n"
 )
 NEW_CONCURRENT_MARKDOWN = (
-    b"# Alpha\n\nNEW alpha.\n\nShared query.\n\n"
-    b"## Beta\n\nNEW beta.\n\nShared query.\n"
+    b"# Alpha\n\nNEW alpha.\n\nShared query.\n\n## Beta\n\nNEW beta.\n\nShared query.\n"
 )
 UNAFFECTED_MARKDOWN = b"# Reference\n\nUNAFFECTED resource marker.\n"
 
@@ -76,6 +75,7 @@ def _resolve(
     candidate_index: CandidateIndex | None = None,
     resource_ref: str | None = None,
 ) -> dict[str, Any]:
+    ensure_test_runtime_release(scenario.organization_id)
     client = TestClient(
         create_app(
             authenticator=_RuntimeAuthenticator(
@@ -84,9 +84,7 @@ def _resolve(
                 scenario.membership_id,
             ),
             organization_authority=_OrganizationAuthority(),
-            membership_authority=PostgreSQLMembershipAuthority(
-                guarded_runtime_engine
-            ),
+            membership_authority=PostgreSQLMembershipAuthority(guarded_runtime_engine),
             scope_authority=_ExactScopeAuthority(
                 str(scenario.source_ref.value),
                 resource_ref
@@ -825,9 +823,7 @@ def test_ready_replacement_keeps_old_http_package_until_atomic_activation(
         )
         assert supersession.retention_state == "retained_until_explicit_cleanup"
         assert old_text == OLD_MARKDOWN.decode()
-        assert activated.active_revision_id == UUID(
-            second.candidate_ref.revision_ref
-        )
+        assert activated.active_revision_id == UUID(second.candidate_ref.revision_ref)
         assert (activated.state, activated.effect_count) == ("completed", 1)
         assert activated.states == ["prepared", "indexed", "active"]
     finally:
@@ -1124,15 +1120,18 @@ def test_replacement_does_not_change_another_organization_resource(
     engine = create_database_engine(migration_configuration)
     try:
         with engine.connect() as connection:
-            assert connection.execute(
-                text(
-                    """
+            assert (
+                connection.execute(
+                    text(
+                        """
                     SELECT count(*) FROM file_revision_supersession
                     WHERE organization_id = :organization_id
                     """
-                ),
-                {"organization_id": unaffected.organization_id},
-            ).scalar_one() == 0
+                    ),
+                    {"organization_id": unaffected.organization_id},
+                ).scalar_one()
+                == 0
+            )
     finally:
         engine.dispose()
 
@@ -1381,20 +1380,26 @@ def test_replacement_stage_rejects_wrong_exact_bindings_with_zero_effect(
             job_id=prepared.job_id,
             resource_ref=resource_ref,
         )
-        assert _stage_replacement_direct(
-            guarded_worker_engine,
-            claims,
-            _compile_replacement(replacement_payload, structural=structural),
-            resource_ref=requested_resource_ref,
-            revision_id=requested_revision_id,
-            overrides=overrides,
-        ) is None
-        assert _replacement_state(
-            engine,
-            scenario,
-            job_id=prepared.job_id,
-            resource_ref=resource_ref,
-        ) == before
+        assert (
+            _stage_replacement_direct(
+                guarded_worker_engine,
+                claims,
+                _compile_replacement(replacement_payload, structural=structural),
+                resource_ref=requested_resource_ref,
+                revision_id=requested_revision_id,
+                overrides=overrides,
+            )
+            is None
+        )
+        assert (
+            _replacement_state(
+                engine,
+                scenario,
+                job_id=prepared.job_id,
+                resource_ref=resource_ref,
+            )
+            == before
+        )
     finally:
         engine.dispose()
 
@@ -1481,9 +1486,7 @@ def test_replacement_activation_rejects_wrong_exact_bindings_with_zero_effect(
     elif wrong_binding == "previous_revision":
         requested_previous_revision_id = UUID(int=previous_revision_id.int ^ 1)
     elif wrong_binding == "replacement_revision":
-        requested_replacement_revision_id = UUID(
-            int=replacement_revision_id.int ^ 1
-        )
+        requested_replacement_revision_id = UUID(int=replacement_revision_id.int ^ 1)
     elif wrong_binding == "nonce":
         overrides["nonce"] = bytes([claims.nonce[0] ^ 1]) + claims.nonce[1:]
     else:
@@ -1497,20 +1500,26 @@ def test_replacement_activation_rejects_wrong_exact_bindings_with_zero_effect(
             job_id=prepared.job_id,
             resource_ref=resource_ref,
         )
-        assert _activate_replacement_direct(
-            guarded_worker_engine,
-            claims,
-            resource_ref=requested_resource_ref,
-            previous_revision_id=requested_previous_revision_id,
-            replacement_revision_id=requested_replacement_revision_id,
-            overrides=overrides,
-        ) is None
-        assert _replacement_state(
-            engine,
-            scenario,
-            job_id=prepared.job_id,
-            resource_ref=resource_ref,
-        ) == before
+        assert (
+            _activate_replacement_direct(
+                guarded_worker_engine,
+                claims,
+                resource_ref=requested_resource_ref,
+                previous_revision_id=requested_previous_revision_id,
+                replacement_revision_id=requested_replacement_revision_id,
+                overrides=overrides,
+            )
+            is None
+        )
+        assert (
+            _replacement_state(
+                engine,
+                scenario,
+                job_id=prepared.job_id,
+                resource_ref=resource_ref,
+            )
+            == before
+        )
     finally:
         engine.dispose()
 
@@ -1559,13 +1568,16 @@ def test_replacement_activation_rejects_revoked_authority_with_zero_effect(
     assert _redeem_direct(guarded_worker_engine, claims) is not None
     resource_ref = first.candidate_ref.resource_ref
     replacement_revision_id = UUID(int=prepared.job_id.int ^ 1)
-    assert _stage_replacement_direct(
-        guarded_worker_engine,
-        claims,
-        _compile_replacement(NEW_V1_MARKDOWN, structural=False),
-        resource_ref=resource_ref,
-        revision_id=replacement_revision_id,
-    ) is not None
+    assert (
+        _stage_replacement_direct(
+            guarded_worker_engine,
+            claims,
+            _compile_replacement(NEW_V1_MARKDOWN, structural=False),
+            resource_ref=resource_ref,
+            revision_id=replacement_revision_id,
+        )
+        is not None
+    )
 
     engine = create_database_engine(migration_configuration)
     try:
@@ -1620,19 +1632,25 @@ def test_replacement_activation_rejects_revoked_authority_with_zero_effect(
             job_id=prepared.job_id,
             resource_ref=resource_ref,
         )
-        assert _activate_replacement_direct(
-            guarded_worker_engine,
-            claims,
-            resource_ref=resource_ref,
-            previous_revision_id=UUID(first.candidate_ref.revision_ref),
-            replacement_revision_id=replacement_revision_id,
-        ) is None
-        assert _replacement_state(
-            engine,
-            scenario,
-            job_id=prepared.job_id,
-            resource_ref=resource_ref,
-        ) == before
+        assert (
+            _activate_replacement_direct(
+                guarded_worker_engine,
+                claims,
+                resource_ref=resource_ref,
+                previous_revision_id=UUID(first.candidate_ref.revision_ref),
+                replacement_revision_id=replacement_revision_id,
+            )
+            is None
+        )
+        assert (
+            _replacement_state(
+                engine,
+                scenario,
+                job_id=prepared.job_id,
+                resource_ref=resource_ref,
+            )
+            == before
+        )
     finally:
         engine.dispose()
 
@@ -1689,13 +1707,16 @@ def test_replacement_rejects_a_lease_that_expires_at_the_durable_boundary(
     replacement_revision_id = UUID(int=prepared.job_id.int ^ 1)
     document = _compile_replacement(replacement_payload, structural=structural)
     if boundary == "activate":
-        assert _stage_replacement_direct(
-            guarded_worker_engine,
-            claims,
-            document,
-            resource_ref=resource_ref,
-            revision_id=replacement_revision_id,
-        ) is not None
+        assert (
+            _stage_replacement_direct(
+                guarded_worker_engine,
+                claims,
+                document,
+                resource_ref=resource_ref,
+                revision_id=replacement_revision_id,
+            )
+            is not None
+        )
 
     engine = create_database_engine(migration_configuration)
     try:
@@ -1725,12 +1746,15 @@ def test_replacement_rejects_a_lease_that_expires_at_the_durable_boundary(
             )
         )
         assert result is None
-        assert _replacement_state(
-            engine,
-            scenario,
-            job_id=prepared.job_id,
-            resource_ref=resource_ref,
-        ) == before
+        assert (
+            _replacement_state(
+                engine,
+                scenario,
+                job_id=prepared.job_id,
+                resource_ref=resource_ref,
+            )
+            == before
+        )
     finally:
         engine.dispose()
 
@@ -1836,19 +1860,25 @@ def test_replacement_stage_rejects_revoked_authority_with_zero_effect(
             job_id=prepared.job_id,
             resource_ref=resource_ref,
         )
-        assert _stage_replacement_direct(
-            guarded_worker_engine,
-            claims,
-            _compile_replacement(replacement_payload, structural=structural),
-            resource_ref=resource_ref,
-            revision_id=UUID(int=prepared.job_id.int ^ 1),
-        ) is None
-        assert _replacement_state(
-            engine,
-            scenario,
-            job_id=prepared.job_id,
-            resource_ref=resource_ref,
-        ) == before
+        assert (
+            _stage_replacement_direct(
+                guarded_worker_engine,
+                claims,
+                _compile_replacement(replacement_payload, structural=structural),
+                resource_ref=resource_ref,
+                revision_id=UUID(int=prepared.job_id.int ^ 1),
+            )
+            is None
+        )
+        assert (
+            _replacement_state(
+                engine,
+                scenario,
+                job_id=prepared.job_id,
+                resource_ref=resource_ref,
+            )
+            == before
+        )
     finally:
         engine.dispose()
 

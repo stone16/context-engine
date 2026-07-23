@@ -61,6 +61,7 @@ from engine.runtime.ticket_rejection import (
     TicketRejectionAuditReceipt,
     TicketRejectionCategory,
 )
+from tests.support.releases import active_runtime_release
 from tests.support.security_gate import record_security_oracles
 
 NOW = datetime(2026, 7, 22, 8, 0, tzinfo=UTC)
@@ -84,10 +85,8 @@ def _decode_ticket(value: str) -> tuple[dict[str, object], dict[str, object]]:
 def _flip_one_ascii_bit(value: str) -> str:
     for index, character in enumerate(value):
         replacement = chr(ord(character) ^ 1)
-        if replacement.isascii() and (
-            replacement.isalnum() or replacement in "-_"
-        ):
-            return f"{value[:index]}{replacement}{value[index + 1:]}"
+        if replacement.isascii() and (replacement.isalnum() or replacement in "-_"):
+            return f"{value[:index]}{replacement}{value[index + 1 :]}"
     raise AssertionError("fixture has no base64url character with a safe bit peer")
 
 
@@ -224,6 +223,7 @@ def _trusted_inputs(
         authentication_binding_ref="binding-a",
         checked_at=NOW,
         policy_epoch_verification=epoch,
+        active_runtime_release=active_runtime_release(organization_id),
     )
     try:
         scope_identity = ScopeAuthorityIdentity(
@@ -453,8 +453,7 @@ def test_mismatched_trusted_invocation_and_delivery_cannot_build_identity() -> N
         )
 
 
-def test_signed_ticket_schemas_bind_distinct_domains_audiences_and_identity(
-) -> None:
+def test_signed_ticket_schemas_bind_distinct_domains_audiences_and_identity() -> None:
     with _identity() as identity:
         read_ticket = ContextAccessTicketIssuer(
             keyring=KEYRING,
@@ -552,8 +551,7 @@ def test_pre_source_binding_ticket_remains_only_an_unbound_synthetic_ticket() ->
     assert provider.effects == 1
 
 
-def test_ticket_targets_are_bound_to_a_trusted_organization_configuration(
-) -> None:
+def test_ticket_targets_are_bound_to_a_trusted_organization_configuration() -> None:
     other_organization = UUID("115f61f7-9006-44ba-bd82-d395c3bc57df")
     provider = _Provider()
     channel = _Channel()
@@ -633,8 +631,7 @@ def test_forged_exact_identity_is_normalized_before_any_effect() -> None:
 
 
 @pytest.mark.security_evidence(id="RUNTIME-ACTION-SEPARATION-014", layer="runtime")
-def test_each_ticket_is_rejected_by_the_other_plane_and_deserializer(
-) -> None:
+def test_each_ticket_is_rejected_by_the_other_plane_and_deserializer() -> None:
     provider = _Provider()
     channel = _Channel()
 
@@ -678,9 +675,7 @@ def test_each_ticket_is_rejected_by_the_other_plane_and_deserializer(
             lambda: ContextAccessTicket.deserialize(
                 action_ticket.serialize(), keyring=KEYRING
             ),
-            lambda: ActionTicket.deserialize(
-                read_ticket.serialize(), keyring=KEYRING
-            ),
+            lambda: ActionTicket.deserialize(read_ticket.serialize(), keyring=KEYRING),
         )
         rejections: list[TicketNotAvailable] = []
         for rejected_use in rejected_uses:
@@ -764,9 +759,7 @@ def test_one_bit_tamper_in_each_signed_segment_is_rejected_before_effect(
         ).issue(identity)
         read_segments = read_ticket.serialize().split(".")
         action_segments = action_ticket.serialize().split(".")
-        read_segments[segment_index] = _flip_one_ascii_bit(
-            read_segments[segment_index]
-        )
+        read_segments[segment_index] = _flip_one_ascii_bit(read_segments[segment_index])
         action_segments[segment_index] = _flip_one_ascii_bit(
             action_segments[segment_index]
         )
@@ -1038,8 +1031,7 @@ def test_deep_validly_signed_json_is_normalized_before_effect() -> None:
     assert provider.effects == 0
 
 
-def test_tickets_for_target_a_or_at_expiry_are_rejected_at_target_b(
-) -> None:
+def test_tickets_for_target_a_or_at_expiry_are_rejected_at_target_b() -> None:
     provider_b = _Provider()
     channel_b = _Channel()
 
@@ -1114,8 +1106,7 @@ def test_ticket_rejection_is_one_closed_non_enumerating_result() -> None:
         TicketRejectionAuditReceipt(denied_detail_count=1)  # type: ignore[arg-type]
 
 
-def test_public_ticket_authority_objects_are_redacted_and_not_serializable(
-) -> None:
+def test_public_ticket_authority_objects_are_redacted_and_not_serializable() -> None:
     with _identity() as identity:
         read_ticket = ContextAccessTicketIssuer(
             keyring=KEYRING,

@@ -20,9 +20,18 @@ from engine.persistence import (
 )
 from engine.persistence.role_guard import assert_learning_role
 from engine.runtime.package_digest import QueryDigestKeyring
+from tests.support.releases import clear_all_test_runtime_releases
 
 ROOT = Path(__file__).parents[2]
 TEST_QUERY_DIGEST_KEY = b"issue-19-query-digest-test-key!!"
+
+
+@pytest.fixture(autouse=True)
+def clear_openapi_v0_test_release_after_each_test() -> Iterator[None]:
+    """Keep test-only v0 Runtime history from polluting migration boundaries."""
+
+    yield
+    clear_all_test_runtime_releases()
 
 
 @pytest.fixture(scope="session")

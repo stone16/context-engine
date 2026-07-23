@@ -49,6 +49,7 @@ from tests.support.context_run import (
     TEST_QUERY_DIGEST_KEYRING,
     recording_context_run_session,
 )
+from tests.support.releases import active_runtime_release
 
 AS_OF = datetime(2026, 7, 21, 9, 0, tzinfo=UTC)
 ORGANIZATION_ID = UUID("81e18bca-86a1-478a-937d-7675c6fe69b0")
@@ -141,6 +142,7 @@ def bound_runtime_inputs(
                 authentication_binding_ref="binding-1",
                 checked_at=AS_OF,
                 policy_epoch_verification=policy_epoch_verification,
+                active_runtime_release=active_runtime_release(ORGANIZATION_ID),
                 context_run_persistence_session=persistence_session,
             )
             scope_snapshot = _construct_trusted_scope_snapshot(
@@ -233,8 +235,7 @@ def test_runtime_observes_only_effective_scope_and_returns_empty_package() -> No
     assert outcome.scope_decision.digest not in serialized_package
 
 
-def test_agent_ceiling_can_only_reduce_other_trusted_grants(
-) -> None:
+def test_agent_ceiling_can_only_reduce_other_trusted_grants() -> None:
     broad_spy = ContentIoSpy()
     broad_agent = resolve(
         make_operands(

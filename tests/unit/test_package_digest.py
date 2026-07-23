@@ -30,7 +30,7 @@ def test_context_package_digest_has_a_fixed_canonical_unicode_vector() -> None:
         "blocks": [{"ordinal": 1, "body": "你好, 🌍"}],
     }
 
-    assert PACKAGE_DIGEST_PROFILE == "context-package-canonical-json-v2"
+    assert PACKAGE_DIGEST_PROFILE == "context-package-canonical-json-v3"
     assert context_package_digest(document) == (
         "630ba3a578634388e9d107f318a9ba7e2f7c2b9313f8c1bd9034e9325797aa43"
     )

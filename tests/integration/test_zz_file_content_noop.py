@@ -39,6 +39,10 @@ from tests.integration.test_file_import_tracer import (
     _RuntimeAuthenticator,
 )
 from tests.support.file_source_progress import clear_file_source_progress_projection
+from tests.support.releases import (
+    clear_test_runtime_release,
+    ensure_test_runtime_release,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -53,6 +57,7 @@ def _resolve_lineage(
     resource_ref: str,
     request_id: str,
 ) -> tuple[str, str, str, str, str]:
+    ensure_test_runtime_release(scenario.organization_id)
     migration_engine = create_database_engine(migration_configuration)
     try:
         with migration_engine.connect() as connection:
@@ -246,6 +251,22 @@ def test_repeated_canonically_identical_file_import_is_an_auditable_noop(
     assert job.effect_count == 0
     assert job.revision_id == UUID(first.candidate_ref.revision_ref)
 
+    with migration_engine.begin() as connection:
+        connection.execute(
+            text(
+                "DELETE FROM decision_audit "
+                "WHERE organization_id = :organization_id"
+            ),
+            {"organization_id": scenario.organization_id},
+        )
+        connection.execute(
+            text(
+                "DELETE FROM context_run "
+                "WHERE organization_id = :organization_id"
+            ),
+            {"organization_id": scenario.organization_id},
+        )
+    clear_test_runtime_release(scenario.organization_id)
     clear_file_source_progress_projection(migration_configuration)
     with pytest.raises(
         RuntimeError,
@@ -257,7 +278,7 @@ def test_repeated_canonically_identical_file_import_is_an_auditable_noop(
             connection.execute(
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one()
-            == "20260723_0020"
+            == "20260723_0021"
         )
 
 

@@ -28,6 +28,7 @@ if TYPE_CHECKING:
 
 MAX_SIGNED_BIGINT: Final = (1 << 63) - 1
 PACKAGE_RETENTION_MODE: Final = "digest_only"
+PACKAGE_RETENTION_POLICY_REF: Final = "package-digest-only-retention-v1"
 
 
 class ContextRunPersistenceUnavailable(RuntimeError):
@@ -251,7 +252,7 @@ class ContextRunPersistencePort(Protocol):
 
 
 class DecisionProvenance(Protocol):
-    package_organization_ref: str
+    package_id: str
     organization_id: UUID
     user_id: UUID
     membership_id: UUID
@@ -406,6 +407,9 @@ def build_context_run_records(
         raise TypeError("ContextRun projection requires Acquire")
     if type(package) is not ContextPackage:
         raise TypeError("ContextRun projection requires ContextPackage")
+    active_release = invocation.user_actor.active_runtime_release
+    if active_release is None:
+        raise ValueError("ContextRun requires an active Runtime release")
     if type(final_effective_scope) is not EffectiveScope:
         raise TypeError("ContextRun projection requires final EffectiveScope")
     if type(effective_budget) is not PackageBudget:
@@ -416,7 +420,7 @@ def build_context_run_records(
     ):
         raise ValueError("ContextRun Package digest must match its public document")
     required_provenance_fields = (
-        "package_organization_ref",
+        "package_id",
         "organization_id",
         "user_id",
         "membership_id",
@@ -466,11 +470,18 @@ def build_context_run_records(
         or decision_provenance.request_id != invocation.request_id
         or decision_provenance.purpose != invocation.trusted_scope_snapshot.purpose
         or decision_provenance.as_of != package.as_of
-        or decision_provenance.package_organization_ref != package.organization_ref
+        or decision_provenance.package_id != package.package_id
         or decision_provenance.decision_ref != package.decision_ref
         or decision_provenance.policy_epoch != invocation.policy_epoch
         or decision_provenance.effective_scope_digest != final_effective_scope.digest
         or package.purpose != invocation.trusted_scope_snapshot.purpose
+        or package.policy_epoch != decision_provenance.policy_epoch
+        or package.policy_snapshot_ref != decision_provenance.policy_snapshot_ref
+        or package.run_ref != decision_provenance.run_ref
+        or package.release_manifest_ref != active_release.manifest_ref
+        or package.tokenizer_ref != active_release.tokenizer_ref
+        or package.package_schema_ref != active_release.package_schema_ref
+        or package.retention_policy_ref != PACKAGE_RETENTION_POLICY_REF
         or package.as_of < invocation.received_at
     ):
         raise ValueError("ContextRun Package and provenance must match invocation")

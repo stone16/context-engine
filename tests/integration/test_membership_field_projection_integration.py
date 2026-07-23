@@ -54,6 +54,10 @@ from engine.runtime.scope_authority import (
     _open_scope_authority_scope,
 )
 from tests.support.context_run_operator import exact_test_context_run_operator_read
+from tests.support.releases import (
+    clear_test_runtime_release,
+    ensure_test_runtime_release,
+)
 from tests.support.security_gate import record_security_oracles
 
 pytestmark = pytest.mark.integration
@@ -374,6 +378,7 @@ def _seed_fixture(engine: Engine, fixture: FieldProjectionFixture) -> None:
 
 
 def _cleanup_fixture(engine: Engine, fixture: FieldProjectionFixture) -> None:
+    clear_test_runtime_release(fixture.organization_id)
     parameters = {
         "organization_id": fixture.organization_id,
         "full_user_id": fixture.full.user_id,
@@ -574,6 +579,7 @@ def test_accept_002_same_organization_memberships_receive_only_authorized_fields
 
     try:
         _seed_fixture(migration_engine, fixture)
+        ensure_test_runtime_release(fixture.organization_id)
 
         full_response = _resolve(
             client,
@@ -838,6 +844,7 @@ def test_concurrent_field_right_revoke_cannot_commit_before_delivery_transaction
 
     try:
         _seed_fixture(migration_engine, fixture)
+        ensure_test_runtime_release(fixture.organization_id)
         with ThreadPoolExecutor(max_workers=2) as executor:
             pending_response = executor.submit(
                 _resolve,

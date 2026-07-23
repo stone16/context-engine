@@ -44,9 +44,9 @@ __all__ = [
 MAX_NARROWING_REFS = 64
 MAX_NARROWING_REF_LENGTH = 256
 MAX_OPAQUE_CAPABILITY_LENGTH = 4096
-ORGANIZATION_PACKAGE_REF_PREFIX = "orgpkg"
+PACKAGE_REF_PREFIX = "pkg"
 DECISION_REF_PREFIX = "dec"
-ORGANIZATION_PACKAGE_REF_PATTERN = r"^orgpkg_[0-9a-f]{32}$"
+PACKAGE_REF_PATTERN = r"^pkg_[0-9a-f]{32}$"
 DECISION_REF_PATTERN = r"^dec_[0-9a-f]{32}$"
 
 
@@ -262,8 +262,16 @@ def _require_utc(field_name: str, value: object) -> None:
 class ContextPackage:
     """Tenant-safe Runtime deliverable with exact authorized Evidence closure."""
 
-    organization_ref: str
+    package_id: str
     purpose: str
+    audience_digest: str
+    policy_epoch: int
+    policy_snapshot_ref: str
+    run_ref: str
+    release_manifest_ref: str
+    retention_policy_ref: str
+    tokenizer_ref: str
+    package_schema_ref: str
     ttl_seconds: int
     as_of: datetime
     expires_at: datetime
@@ -277,11 +285,36 @@ class ContextPackage:
 
     def __post_init__(self) -> None:
         _require_closed_opaque_ref(
-            "package organization_ref",
-            self.organization_ref,
-            prefix=ORGANIZATION_PACKAGE_REF_PREFIX,
+            "package package_id",
+            self.package_id,
+            prefix=PACKAGE_REF_PREFIX,
         )
         _require_nonblank_string("package purpose", self.purpose)
+        if (
+            type(self.audience_digest) is not str
+            or len(self.audience_digest) != 64
+            or any(
+                character not in "0123456789abcdef"
+                for character in self.audience_digest
+            )
+        ):
+            raise ValueError("package audience_digest must be lowercase SHA-256")
+        if type(self.policy_epoch) is not int or self.policy_epoch < 1:
+            raise ValueError("package policy_epoch must be a positive integer")
+        for field_name in (
+            "policy_snapshot_ref",
+            "run_ref",
+            "release_manifest_ref",
+            "retention_policy_ref",
+            "tokenizer_ref",
+            "package_schema_ref",
+        ):
+            value = getattr(self, field_name)
+            _require_nonblank_string(f"package {field_name}", value)
+            if value != value.strip() or any(
+                character.isspace() for character in value
+            ):
+                raise ValueError(f"package {field_name} must be an opaque ref")
         _require_closed_opaque_ref(
             "package decision_ref",
             self.decision_ref,
@@ -366,13 +399,21 @@ def context_package_digest_document(package: ContextPackage) -> dict[str, object
     }
     if package.coverage.reason is not None:
         coverage_document["reason"] = package.coverage.reason.value
-    return {
-        "organizationRef": package.organization_ref,
+    document: dict[str, object] = {
+        "packageId": package.package_id,
         "purpose": package.purpose,
+        "audienceDigest": package.audience_digest,
+        "policyEpoch": package.policy_epoch,
+        "policySnapshotRef": package.policy_snapshot_ref,
+        "runRef": package.run_ref,
+        "releaseManifestRef": package.release_manifest_ref,
+        "retentionPolicyRef": package.retention_policy_ref,
         "ttlSeconds": package.ttl_seconds,
         "asOf": _wire_datetime(package.as_of),
         "expiresAt": _wire_datetime(package.expires_at),
         "decisionRef": package.decision_ref,
+        "tokenizerRef": package.tokenizer_ref,
+        "packageSchemaRef": package.package_schema_ref,
         "blocks": [
             {
                 "blockId": f"block_{block.evidence_ref.removeprefix('ev_')}",
@@ -395,7 +436,14 @@ def context_package_digest_document(package: ContextPackage) -> dict[str, object
                 "decisionRef": item.lineage.decision_ref,
                 "policySnapshotRef": item.lineage.policy_snapshot_ref,
                 "policyEpoch": item.lineage.policy_epoch,
-                "sourceDecisionRef": item.lineage.source_acl_decision_ref,
+                "sourceAclEvidence": {
+                    "kind": "mirrored",
+                    "projectionRef": item.lineage.source_acl_decision_ref,
+                    "aclAsOf": _wire_datetime(item.lineage.as_of),
+                    "freshnessProfileRef": (
+                        "file-source-access-current-transaction-v1"
+                    ),
+                },
             }
             for item in package.evidence
         ],
@@ -408,6 +456,23 @@ def context_package_digest_document(package: ContextPackage) -> dict[str, object
         },
         "coverage": coverage_document,
     }
+    return complete_context_package_nullable_fields(document)
+
+
+def complete_context_package_nullable_fields(
+    document: dict[str, object],
+) -> dict[str, object]:
+    """Include the frozen inactive nullable fields in one canonical location."""
+
+    evidence = document.get("evidence")
+    if not isinstance(evidence, list):
+        raise TypeError("public ContextPackage Evidence must be an array")
+    for item in evidence:
+        if not isinstance(item, dict):
+            raise TypeError("public ContextPackage Evidence must contain objects")
+        item["citationOpenRef"] = None
+    document["continuation"] = None
+    return document
 
 
 def context_package_public_document(package: ContextPackage) -> dict[str, object]:

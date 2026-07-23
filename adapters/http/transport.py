@@ -51,12 +51,21 @@ class ResolveBodyLimitMiddleware:
         app: ASGIApp,
         *,
         profile: HttpTransportProfile,
-        resolve_path: str,
+        resolve_paths: frozenset[str],
         invalid_response: dict[str, str],
     ) -> None:
         self._app = app
         self._profile = profile
-        self._resolve_path = resolve_path
+        if (
+            type(resolve_paths) is not frozenset
+            or not resolve_paths
+            or any(
+                type(path) is not str or not path.startswith("/")
+                for path in resolve_paths
+            )
+        ):
+            raise ValueError("resolve paths must be a non-empty frozen path set")
+        self._resolve_paths = resolve_paths
         self._invalid_response = invalid_response
 
     async def __call__(
@@ -118,7 +127,7 @@ class ResolveBodyLimitMiddleware:
     def _is_resolve_request(self, scope: Scope) -> bool:
         return (
             scope.get("method") == "POST"
-            and _route_relative_path(scope) == self._resolve_path
+            and _route_relative_path(scope) in self._resolve_paths
         )
 
     async def _reject(self, scope: Scope, receive: Receive, send: Send) -> None:
@@ -162,7 +171,5 @@ def enforce_json_nesting(document: object, *, maximum_depth: int) -> None:
         else:
             continue
         pending.extend(
-            (child, depth + 1)
-            for child in children
-            if isinstance(child, dict | list)
+            (child, depth + 1) for child in children if isinstance(child, dict | list)
         )

@@ -210,13 +210,18 @@ def test_ci_runs_the_same_make_database_contract_as_local() -> None:
 
     assert "make db-up" in workflow
     assert "run: make check" in workflow
+    assert "fetch-depth: 0" in workflow
+    assert "OPENAPI_BASELINE_REF:" in workflow
+    assert "github.event.pull_request.base.sha" in workflow
+    assert "github.event.before" in workflow
     assert "if: always()" in workflow
     assert "make db-down" in workflow
     assert (
-        "check: build lint typecheck test catalog smoke integration security-gate"
-        in makefile
+        "check: build lint typecheck openapi-check test catalog smoke "
+        "integration security-gate" in makefile
     )
     assert "./scripts/database_harness.sh integration" in makefile
+    assert "--baseline-ref $(OPENAPI_BASELINE_REF)" in makefile
 
 
 def test_ci_runs_and_retains_the_single_m0_security_gate_contract() -> None:
@@ -229,8 +234,8 @@ def test_ci_runs_and_retains_the_single_m0_security_gate_contract() -> None:
         "--output-dir .context-engine/security-gate" in makefile
     )
     assert (
-        "check: build lint typecheck test catalog smoke integration security-gate"
-        in makefile.splitlines()
+        "check: build lint typecheck openapi-check test catalog smoke "
+        "integration security-gate" in makefile.splitlines()
     )
     assert "actions/upload-artifact@v4" in workflow
     assert ".context-engine/security-gate/raw-evidence.json" in workflow

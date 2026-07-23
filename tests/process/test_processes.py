@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import cast
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
+from uuid import UUID
 
 import pytest
 
@@ -18,6 +19,7 @@ from tests.process.conformance_app import (
     PROCESS_ORGANIZATION_REF,
     PROCESS_VALID_TOKEN,
 )
+from tests.support.releases import active_runtime_release
 
 ROOT = Path(__file__).parents[2]
 
@@ -32,9 +34,7 @@ def _wait_until_ready(process: subprocess.Popen[str], port: int) -> None:
             if process.poll() is not None or time.monotonic() >= deadline:
                 process.terminate()
                 output, _ = process.communicate(timeout=5)
-                raise AssertionError(
-                    f"API failed to become ready:\n{output}"
-                ) from None
+                raise AssertionError(f"API failed to become ready:\n{output}") from None
             time.sleep(0.05)
 
 
@@ -176,11 +176,12 @@ def test_http_acquire_smoke_returns_the_empty_package_contract() -> None:
     try:
         _wait_until_ready(process, port)
         request = Request(
-            f"http://127.0.0.1:{port}/v1/context:resolve",
+            f"http://127.0.0.1:{port}/v0/resolve",
             data=b'{"kind":"acquire","need":{"query":"process smoke"}}',
             headers={
                 "Authorization": f"Bearer {PROCESS_VALID_TOKEN}",
                 "Content-Type": "application/json",
+                "X-Context-Request-Id": "process-v0-smoke",
             },
             method="POST",
         )
@@ -191,8 +192,13 @@ def test_http_acquire_smoke_returns_the_empty_package_contract() -> None:
 
         assert payload["kind"] == "resolved"
         package = payload["package"]
-        assert package["organizationRef"] != PROCESS_ORGANIZATION_REF
+        assert package["packageId"].startswith("pkg_")
+        assert PROCESS_ORGANIZATION_REF not in json.dumps(payload)
         assert package["purpose"] == "context.answer"
+        release = active_runtime_release(UUID(PROCESS_ORGANIZATION_REF))
+        assert package["releaseManifestRef"] == release.manifest_ref
+        assert package["tokenizerRef"] == release.tokenizer_ref
+        assert package["packageSchemaRef"] == release.package_schema_ref
         assert package["blocks"] == []
         assert package["evidence"] == []
         assert package["gaps"] == []

@@ -71,6 +71,7 @@ from tests.support.context_run import (
     TEST_QUERY_DIGEST_KEYRING,
     recording_context_run_session,
 )
+from tests.support.releases import active_runtime_release
 
 AS_OF = datetime(2026, 7, 21, 10, 0, tzinfo=UTC)
 ORGANIZATION_ID = UUID("81e18bca-86a1-478a-937d-7675c6fe69b0")
@@ -114,6 +115,7 @@ def trusted_operands(
     epoch_scope = _open_policy_epoch_authority_scope()
     trusted_scope = _open_scope_authority_scope()
     try:
+
         class CurrentEpochPort:
             def read_current_epoch(self, organization_id: UUID) -> object:
                 assert organization_id == ORGANIZATION_ID
@@ -126,13 +128,11 @@ def trusted_operands(
                 port=CurrentEpochPort(),
             )
         )
-        organization_verification = (
-            _construct_existing_http_organization_verification(
-                organization_id=ORGANIZATION_ID,
-                request_id="unavailable-request",
-                authentication_binding_ref="unavailable-binding",
-                verified_at=AS_OF,
-            )
+        organization_verification = _construct_existing_http_organization_verification(
+            organization_id=ORGANIZATION_ID,
+            request_id="unavailable-request",
+            authentication_binding_ref="unavailable-binding",
+            verified_at=AS_OF,
         )
         membership_verification = _construct_current_membership_verification(
             authority_scope=membership_scope,
@@ -145,6 +145,7 @@ def trusted_operands(
             authentication_binding_ref="unavailable-binding",
             checked_at=AS_OF,
             policy_epoch_verification=epoch_verification,
+            active_runtime_release=active_runtime_release(ORGANIZATION_ID),
             context_run_persistence_session=context_run_persistence_session,
         )
         scope_identity = ScopeAuthorityIdentity(
@@ -418,8 +419,9 @@ def test_unavailable_request_rejects_forged_runtime_operands_before_minting_outc
     assert twin.calls == (0, 0, 0)
 
 
-def test_unavailable_request_runs_runtime_clock_provenance_and_policy_epoch_gate(
-) -> None:
+def test_unavailable_request_runs_runtime_clock_provenance_and_policy_epoch_gate() -> (
+    None
+):
     twin = ContentIoTwin()
     selected_runtime = runtime(twin)
     clock_calls = 0
@@ -464,12 +466,16 @@ def test_replacing_the_mandatory_capability_gate_is_rejected_before_io() -> None
 
 
 @pytest.mark.security_evidence(id="PROP-CITATION-AUTH-010", layer="property")
-def test_capability_declarations_are_closed_and_m0_does_not_false_green_carriers(
-) -> None:
+def test_capability_declarations_are_closed_and_m0_does_not_false_green_carriers() -> (
+    None
+):
     assert capability_module.__all__ == ["RuntimeCapability"]
-    assert RuntimeCapabilityDeclaration(
-        available=frozenset({RuntimeCapability.MATERIALIZED_ACQUIRE})
-    ) == M0_RUNTIME_CAPABILITY_DECLARATION
+    assert (
+        RuntimeCapabilityDeclaration(
+            available=frozenset({RuntimeCapability.MATERIALIZED_ACQUIRE})
+        )
+        == M0_RUNTIME_CAPABILITY_DECLARATION
+    )
     assert not {
         RuntimeCapability.CONTINUE,
         RuntimeCapability.OPEN_CITATION,

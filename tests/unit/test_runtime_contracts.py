@@ -78,7 +78,15 @@ AUTHORIZED_BLOCK = PackageBlock(
 
 def make_package(**changes: object) -> ContextPackage:
     values: dict[str, object] = {
-        "organization_ref": "orgpkg_00000000000000000000000000000001",
+        "package_id": "pkg_00000000000000000000000000000001",
+        "audience_digest": "a" * 64,
+        "policy_epoch": 1,
+        "policy_snapshot_ref": "policy-current",
+        "run_ref": "run-current",
+        "release_manifest_ref": "manifest-test-v0",
+        "retention_policy_ref": "package-digest-only-retention-v1",
+        "tokenizer_ref": "utf8-byte-budget-test-v0",
+        "package_schema_ref": "context-package-openapi-test-v0",
         "purpose": "direct_agent_context",
         "ttl_seconds": 300,
         "as_of": AS_OF,
@@ -300,13 +308,21 @@ def test_context_package_is_the_tenant_safe_evidence_free_deliverable() -> None:
     assert package.ttl_seconds == 300
     assert package.expires_at > package.as_of
     assert package.package_digest == (
-        "3e454e57a97eb4bb47bde1af0d6c7817b080630ecbc88275837329cbd2c4a4a5"
+        "0628cc729689b617aa77a6e4a6df0eadd398d85dbab1cccfde572b12c46da517"
     )
     assert not hasattr(package, "denied_count")
     assert not hasattr(package.coverage, "details")
     assert {field.name for field in fields(package)} == {
-        "organization_ref",
+        "package_id",
         "purpose",
+        "audience_digest",
+        "policy_epoch",
+        "policy_snapshot_ref",
+        "run_ref",
+        "release_manifest_ref",
+        "retention_policy_ref",
+        "tokenizer_ref",
+        "package_schema_ref",
         "ttl_seconds",
         "as_of",
         "expires_at",
@@ -320,7 +336,7 @@ def test_context_package_is_the_tenant_safe_evidence_free_deliverable() -> None:
     }
 
     with pytest.raises(FrozenInstanceError):
-        package.organization_ref = "other"  # type: ignore[misc]
+        package.package_id = "other"  # type: ignore[misc]
 
 
 def test_context_package_accepts_only_closed_exact_authorized_content() -> None:
@@ -408,10 +424,10 @@ def test_context_package_rejects_incomplete_or_misaccounted_content(
 @pytest.mark.parametrize(
     "changes",
     [
-        {"organization_ref": ""},
-        {"organization_ref": 42},
-        {"organization_ref": "81e18bca-86a1-478a-937d-7675c6fe69b0"},
-        {"organization_ref": "orgpkg_0000000000000000000000000000000A"},
+        {"package_id": ""},
+        {"package_id": 42},
+        {"package_id": "81e18bca-86a1-478a-937d-7675c6fe69b0"},
+        {"package_id": "pkg_0000000000000000000000000000000A"},
         {"purpose": " "},
         {"purpose": True},
         {"decision_ref": ""},

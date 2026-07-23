@@ -25,6 +25,7 @@ from adapters.http.authentication import (
 )
 from adapters.http.contracts import (
     AcquireWire,
+    ApplicationForbiddenWire,
     AuthenticationFailureWire,
     ChannelEgressGrantWire,
     CitationNotAvailableWire,
@@ -33,11 +34,13 @@ from adapters.http.contracts import (
     InvalidRequestWire,
     ModelEgressGrantWire,
     OpenCitationWire,
+    RateLimitedWire,
     RequestNotAvailableWire,
     ResolutionOutcomeWire,
     ResolvedWire,
     ResolveWire,
     ServiceUnavailableWire,
+    resolution_outcome_public_document,
 )
 from adapters.http.membership_authority import (
     MembershipAuthority,
@@ -47,6 +50,11 @@ from adapters.http.organization_authority import (
     OrganizationAuthority,
     OrganizationVerificationRejected,
     RejectingOrganizationAuthority,
+)
+from adapters.http.route_policy import (
+    AllowAuthenticatedResolveRoutePolicy,
+    ResolveRouteDecision,
+    ResolveRoutePolicy,
 )
 from adapters.http.scope_authority import (
     MissingTrustedScopeAuthority,
@@ -110,6 +118,7 @@ from engine.runtime.invocation import (
 )
 from engine.runtime.package_digest import QueryDigestKeyring
 from engine.runtime.policy_epoch import PolicyEpochAuthorityUnavailable
+from engine.runtime.release_lineage import ActiveReleaseUnavailable
 from engine.runtime.scope_authority import InvalidTrustedScopeSnapshot
 
 HEALTH_RESPONSE: Final = {
@@ -121,7 +130,12 @@ HEALTH_RESPONSE: Final = {
 AUTHENTICATION_FAILED_RESPONSE: Final = {"code": "authentication_failed"}
 INVALID_REQUEST_RESPONSE: Final = {"code": "invalid_request"}
 SERVICE_UNAVAILABLE_RESPONSE: Final = {"code": "service_unavailable"}
-RESOLVE_PATH: Final = "/v1/context:resolve"
+APPLICATION_FORBIDDEN_RESPONSE: Final = {"code": "application_forbidden"}
+RATE_LIMITED_RESPONSE: Final = {"code": "rate_limited"}
+PUBLIC_API_VERSION: Final = "0.0.0"
+PUBLIC_RESOLVE_PATH: Final = "/v0/resolve"
+LEGACY_RESOLVE_PATH: Final = "/v1/context:resolve"
+RESOLVE_PATHS: Final = frozenset({PUBLIC_RESOLVE_PATH, LEGACY_RESOLVE_PATH})
 
 
 class TransportAuthenticationFailed(Exception):
@@ -130,6 +144,14 @@ class TransportAuthenticationFailed(Exception):
 
 class TrustedAuthorityUnavailable(Exception):
     """A required trusted authority failed without exposing identity detail."""
+
+
+class ResolveApplicationForbidden(Exception):
+    """The authenticated application is not allowed to use this route."""
+
+
+class ResolveRateLimited(Exception):
+    """The authenticated application exceeded a route-only resource policy."""
 
 
 class InvalidRequestMediaType(Exception):
@@ -181,6 +203,7 @@ def create_app(
     organization_authority: OrganizationAuthority | None = None,
     membership_authority: MembershipAuthority | None = None,
     scope_authority: ScopeAuthority | None = None,
+    route_policy: ResolveRoutePolicy | None = None,
     runtime: Runtime | None = None,
     query_digest_keyring: QueryDigestKeyring | None = None,
     invocation_observer: Callable[[AuthenticatedInvocation], None] | None = None,
@@ -213,16 +236,17 @@ def create_app(
         membership_authority or RejectingMembershipAuthority()
     )
     selected_scope_authority = scope_authority or MissingTrustedScopeAuthority()
+    selected_route_policy = route_policy or AllowAuthenticatedResolveRoutePolicy()
     bearer = HTTPBearer(
         scheme_name="ContextEngineBearer",
         bearerFormat="opaque",
         auto_error=False,
     )
-    app = FastAPI(title="ContextEngine", version=BUILD_IDENTIFIER)
+    app = FastAPI(title="ContextEngine", version=PUBLIC_API_VERSION)
     app.add_middleware(
         ResolveBodyLimitMiddleware,
         profile=transport_profile,
-        resolve_path=RESOLVE_PATH,
+        resolve_paths=RESOLVE_PATHS,
         invalid_response=INVALID_REQUEST_RESPONSE,
     )
 
@@ -244,6 +268,22 @@ def create_app(
     ) -> JSONResponse:
         del request, error
         return JSONResponse(SERVICE_UNAVAILABLE_RESPONSE, status_code=503)
+
+    @app.exception_handler(ResolveApplicationForbidden)
+    async def application_forbidden(
+        request: Request,
+        error: ResolveApplicationForbidden,
+    ) -> JSONResponse:
+        del request, error
+        return JSONResponse(APPLICATION_FORBIDDEN_RESPONSE, status_code=403)
+
+    @app.exception_handler(ResolveRateLimited)
+    async def rate_limited(
+        request: Request,
+        error: ResolveRateLimited,
+    ) -> JSONResponse:
+        del request, error
+        return JSONResponse(RATE_LIMITED_RESPONSE, status_code=429)
 
     @app.exception_handler(InvalidRequestMediaType)
     @app.exception_handler(InvalidJsonTransport)
@@ -326,16 +366,47 @@ def create_app(
             raise TransportAuthenticationFailed
         return context
 
+    def require_public_request_id(
+        authentication: Annotated[
+            VerifiedAuthenticationContext,
+            Depends(verified_authentication),
+        ],
+        context_request_id: Annotated[
+            str,
+            Header(
+                alias="X-Context-Request-Id",
+                min_length=1,
+                max_length=transport_profile.max_correlation_id_characters,
+                pattern=r".*\S.*",
+            ),
+        ],
+    ) -> None:
+        """Require request-bound metadata on the frozen public carrier."""
+
+        del authentication, context_request_id
+
     @app.get("/health", include_in_schema=False)
     def health() -> dict[str, str]:
         return HEALTH_RESPONSE.copy()
 
     @app.post(
-        RESOLVE_PATH,
+        LEGACY_RESOLVE_PATH,
+        include_in_schema=False,
         status_code=200,
         response_model=ResolutionOutcomeWire,
         response_model_by_alias=True,
         dependencies=[Depends(require_closed_json_transport)],
+    )
+    @app.post(
+        PUBLIC_RESOLVE_PATH,
+        operation_id="resolveContextV0",
+        status_code=200,
+        response_model=ResolutionOutcomeWire,
+        response_model_by_alias=True,
+        dependencies=[
+            Depends(require_closed_json_transport),
+            Depends(require_public_request_id),
+        ],
         responses={
             400: {
                 "model": InvalidRequestWire,
@@ -354,9 +425,17 @@ def create_app(
                     }
                 },
             },
+            403: {
+                "model": ApplicationForbiddenWire,
+                "description": "The authenticated application is not allowed.",
+            },
             422: {
                 "model": InvalidRequestWire,
                 "description": "The closed request schema rejected the body.",
+            },
+            429: {
+                "model": RateLimitedWire,
+                "description": "The application exceeded the route resource policy.",
             },
             503: {
                 "model": ServiceUnavailableWire,
@@ -385,7 +464,7 @@ def create_app(
                 alias="X-Context-Delivery-Evidence-Ref",
                 min_length=1,
                 max_length=transport_profile.max_delivery_evidence_ref_characters,
-                pattern=r".*\S.*",
+                pattern=r"^\S+$",
             ),
         ] = None,
     ) -> JSONResponse:
@@ -394,6 +473,16 @@ def create_app(
         runtime_request = _runtime_request_from_wire(body)
         request_id = context_request_id or request_id_factory()
         received_at = clock()
+        try:
+            route_decision = selected_route_policy.decide(authentication)
+        except Exception:
+            raise TrustedAuthorityUnavailable from None
+        if route_decision is ResolveRouteDecision.FORBID:
+            raise ResolveApplicationForbidden
+        if route_decision is ResolveRouteDecision.RATE_LIMIT:
+            raise ResolveRateLimited
+        if route_decision is not ResolveRouteDecision.ALLOW:
+            raise TrustedAuthorityUnavailable
         private_binding = authentication.private_delivery_binding
         if delivery_evidence_ref is None:
             if private_binding is not None:
@@ -508,8 +597,7 @@ def create_app(
                             raise TransportAuthenticationFailed
                         redemption_session = (
                             current_membership_verification
-                            .delivery_evidence_redemption_session
-                        )
+                        ).delivery_evidence_redemption_session
                         if redemption_session is None:
                             raise TrustedAuthorityUnavailable
                         try:
@@ -590,11 +678,7 @@ def create_app(
                     if type(outcome) is Resolved and resolution_observer is not None:
                         resolution_observer(outcome)
                     return JSONResponse(
-                        response.model_dump(
-                            mode="json",
-                            by_alias=True,
-                            exclude_none=True,
-                        ),
+                        resolution_outcome_public_document(response),
                         status_code=200,
                         headers={
                             "Cache-Control": "no-store",
@@ -616,6 +700,8 @@ def create_app(
         except EgressGrantIssuanceUnavailable:
             raise TrustedAuthorityUnavailable from None
         except ScopeAuthorityUnavailable:
+            raise TrustedAuthorityUnavailable from None
+        except ActiveReleaseUnavailable:
             raise TrustedAuthorityUnavailable from None
         except InvalidTrustedScopeSnapshot:
             raise TrustedAuthorityUnavailable from None

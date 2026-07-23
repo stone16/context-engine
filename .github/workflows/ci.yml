@@ -11,6 +11,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: astral-sh/setup-uv@v6
         with:
           version: "0.8.22"
@@ -20,6 +22,8 @@ jobs:
       - run: make db-up
       - name: Run complete checks including the M0 security gate
         id: complete-checks
+        env:
+          OPENAPI_BASELINE_REF: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
         run: make check
       - name: Retain M0 security gate evidence
         if: always()

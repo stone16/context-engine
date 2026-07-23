@@ -32,6 +32,7 @@ from tests.support.context_run import (
     TEST_QUERY_DIGEST_KEYRING,
     recording_context_run_session,
 )
+from tests.support.releases import active_runtime_release
 
 PROCESS_VALID_TOKEN = "process-test-credential"
 PROCESS_ORGANIZATION_REF = "81e18bca-86a1-478a-937d-7675c6fe69b0"
@@ -100,6 +101,9 @@ class ProcessTestMembershipAuthority:
                     authentication_binding_ref=identity.authentication_binding_ref,
                     checked_at=identity.checked_at,
                     policy_epoch_verification=verification,
+                    active_runtime_release=active_runtime_release(
+                        identity.organization_id
+                    ),
                     context_run_persistence_session=persistence_session,
                 )
         finally:

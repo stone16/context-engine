@@ -68,6 +68,7 @@ from engine.runtime.scope_authority import (
     _construct_trusted_scope_snapshot,
     _open_scope_authority_scope,
 )
+from tests.support.releases import active_runtime_release
 
 ORGANIZATION_ID = UUID("81e18bca-86a1-478a-937d-7675c6fe69b0")
 OTHER_ORGANIZATION_ID = UUID("48f519e3-c9f1-4e45-af3a-ef48ca5b23f0")
@@ -77,7 +78,7 @@ ACCEPTED_AT = datetime(2026, 7, 22, 8, 0, tzinfo=UTC)
 FINALIZED_AT = ACCEPTED_AT + timedelta(milliseconds=20)
 EXPIRES_AT = FINALIZED_AT + timedelta(seconds=300)
 DECISION_REF = "dec_00000000000000000000000000000019"
-ORGANIZATION_REF = "orgpkg_00000000000000000000000000000019"
+ORGANIZATION_REF = "pkg_00000000000000000000000000000019"
 EVIDENCE_REF = "ev_" + "a" * 64
 QUERY_KEYRING = QueryDigestKeyring(active_version=3, keys={3: b"q" * 32})
 EFFECTIVE_BUDGET = PackageBudget(
@@ -131,6 +132,10 @@ def _trusted_invocation() -> Iterator[AuthenticatedInvocation]:
             authentication_binding_ref="binding-context-run-secret",
             checked_at=ACCEPTED_AT,
             policy_epoch_verification=epoch,
+            active_runtime_release=active_runtime_release(
+                ORGANIZATION_ID,
+                active_revision_refs=("revision-authorized",),
+            ),
         )
         scope_snapshot = _construct_trusted_scope_snapshot(
             authority_scope=scope_authority_scope,
@@ -184,7 +189,7 @@ def _trusted_invocation() -> Iterator[AuthenticatedInvocation]:
 def _provenance() -> DecisionProvenanceReceipt:
     return DecisionProvenanceReceipt(
         decision_ref=DECISION_REF,
-        package_organization_ref=ORGANIZATION_REF,
+        package_id=ORGANIZATION_REF,
         organization_id=ORGANIZATION_ID,
         user_id=USER_ID,
         membership_id=MEMBERSHIP_ID,
@@ -206,7 +211,15 @@ def _provenance() -> DecisionProvenanceReceipt:
 
 def _empty_package() -> ContextPackage:
     return ContextPackage(
-        organization_ref=ORGANIZATION_REF,
+        package_id=ORGANIZATION_REF,
+        audience_digest="a" * 64,
+        policy_epoch=7,
+        policy_snapshot_ref="policy_issue_19",
+        run_ref="run_issue_19",
+        release_manifest_ref=active_runtime_release(ORGANIZATION_ID).manifest_ref,
+        retention_policy_ref="package-digest-only-retention-v1",
+        tokenizer_ref=active_runtime_release(ORGANIZATION_ID).tokenizer_ref,
+        package_schema_ref=active_runtime_release(ORGANIZATION_ID).package_schema_ref,
         purpose="context.answer",
         ttl_seconds=300,
         as_of=FINALIZED_AT,
@@ -250,7 +263,15 @@ def _authorized_package() -> ContextPackage:
     )
     body = "safe authorized text"
     return ContextPackage(
-        organization_ref=ORGANIZATION_REF,
+        package_id=ORGANIZATION_REF,
+        audience_digest="a" * 64,
+        policy_epoch=7,
+        policy_snapshot_ref="policy_issue_19",
+        run_ref="run_issue_19",
+        release_manifest_ref=active_runtime_release(ORGANIZATION_ID).manifest_ref,
+        retention_policy_ref="package-digest-only-retention-v1",
+        tokenizer_ref=active_runtime_release(ORGANIZATION_ID).tokenizer_ref,
+        package_schema_ref=active_runtime_release(ORGANIZATION_ID).package_schema_ref,
         purpose="context.answer",
         ttl_seconds=300,
         as_of=FINALIZED_AT,
@@ -453,7 +474,7 @@ def test_projection_rejects_evidence_after_final_scope_veto() -> None:
         {"request_id": "request-other"},
         {"purpose": "context.other"},
         {"as_of": FINALIZED_AT + timedelta(microseconds=1)},
-        {"package_organization_ref": "orgpkg_" + "f" * 32},
+        {"package_id": "pkg_" + "f" * 32},
         {"decision_ref": "dec_" + "f" * 32},
         {"policy_epoch": 8},
         {"effective_scope_digest": "f" * 64},

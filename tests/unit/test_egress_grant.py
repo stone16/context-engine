@@ -43,7 +43,15 @@ NOW = datetime(2026, 7, 23, 8, 0, tzinfo=UTC)
 
 def _package(*, purpose: str = "answer") -> ContextPackage:
     return ContextPackage(
-        organization_ref="orgpkg_" + "1" * 32,
+        package_id="pkg_" + "1" * 32,
+        audience_digest="a" * 64,
+        policy_epoch=1,
+        policy_snapshot_ref="policy-test",
+        run_ref="run-test",
+        release_manifest_ref="manifest-test",
+        retention_policy_ref="package-digest-only-retention-v1",
+        tokenizer_ref="utf8-byte-budget-test",
+        package_schema_ref="context-package-openapi-v0",
         purpose=purpose,
         ttl_seconds=300,
         as_of=NOW,
@@ -482,10 +490,7 @@ def test_each_egress_binding_mutation_and_cross_kind_emits_zero_bytes_effects() 
         with pytest.raises(EgressGrantNotAvailable, match="not available"):
             channel_boundary.preflight(payload, channel_grant)
         assert (
-            sender.preflight_count
-            == sender.outbound_bytes
-            == sender.effect_count
-            == 0
+            sender.preflight_count == sender.outbound_bytes == sender.effect_count == 0
         )
 
     for wrong_gateway_profile in (
@@ -523,10 +528,7 @@ def test_each_egress_binding_mutation_and_cross_kind_emits_zero_bytes_effects() 
                 sender=sender,
             )
         assert (
-            sender.preflight_count
-            == sender.outbound_bytes
-            == sender.effect_count
-            == 0
+            sender.preflight_count == sender.outbound_bytes == sender.effect_count == 0
         )
 
     model_gateway = DeterministicModelGatewaySpy(_model_profile())

@@ -43,7 +43,7 @@ from tests.support.file_source_progress import clear_file_source_progress_projec
 
 pytestmark = pytest.mark.integration
 ROOT = Path(__file__).parents[2]
-_HEAD_REVISION = "20260723_0020"
+_HEAD_REVISION = "20260723_0021"
 HEAD_TABLES = [
     "active_release_manifest",
     "alembic_version",
@@ -1329,6 +1329,84 @@ def test_empty_content_downgrade_preserves_v2_context_run_history(
                     "DELETE FROM organization WHERE organization_id = :organization_id"
                 ),
                 {"organization_id": identity.organization_id},
+            )
+        engine.dispose()
+
+
+def test_openapi_v0_revision_refuses_downgrade_with_v3_context_run_history(
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    """The v0 digest profile cannot be made invalid by a schema rollback."""
+
+    alembic_configuration = Config(ROOT / "alembic.ini")
+    identity = LineageIdentity(
+        organization_id=uuid4(),
+        user_id=uuid4(),
+        membership_id=uuid4(),
+        run_ref="run_" + "b" * 32,
+        decision_ref="dec_" + "c" * 32,
+    )
+    engine = create_database_engine(migration_configuration)
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                text("INSERT INTO organization (organization_id) VALUES (:org)"),
+                {"org": identity.organization_id},
+            )
+            connection.execute(
+                text("INSERT INTO user_account (user_id) VALUES (:user_id)"),
+                {"user_id": identity.user_id},
+            )
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO membership (
+                        organization_id, membership_id, user_id, status,
+                        membership_version, valid_from
+                    ) VALUES (
+                        :org, :membership_id, :user_id, 'active', 1,
+                        statement_timestamp() - interval '1 day'
+                    )
+                    """
+                ),
+                {
+                    "org": identity.organization_id,
+                    "membership_id": identity.membership_id,
+                    "user_id": identity.user_id,
+                },
+            )
+            insert_context_run(connection, identity)
+            connection.execute(
+                text(
+                    "UPDATE context_run SET package_digest_profile = "
+                    "'context-package-canonical-json-v3' "
+                    "WHERE organization_id = :org"
+                ),
+                {"org": identity.organization_id},
+            )
+
+        with pytest.raises(SQLAlchemyError, match="v3 ContextRun lineage exists"):
+            command.downgrade(alembic_configuration, "20260723_0020")
+        assert _revision_rows(migration_configuration) == [_HEAD_REVISION]
+    finally:
+        if _revision_rows(migration_configuration) != [_HEAD_REVISION]:
+            command.upgrade(alembic_configuration, "head")
+        with engine.begin() as connection:
+            connection.execute(
+                text("DELETE FROM context_run WHERE organization_id = :org"),
+                {"org": identity.organization_id},
+            )
+            connection.execute(
+                text("DELETE FROM membership WHERE organization_id = :org"),
+                {"org": identity.organization_id},
+            )
+            connection.execute(
+                text("DELETE FROM user_account WHERE user_id = :user_id"),
+                {"user_id": identity.user_id},
+            )
+            connection.execute(
+                text("DELETE FROM organization WHERE organization_id = :org"),
+                {"org": identity.organization_id},
             )
         engine.dispose()
 

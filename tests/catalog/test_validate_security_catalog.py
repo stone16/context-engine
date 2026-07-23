@@ -27,6 +27,7 @@ from scripts.validate_security_catalog import (
     CANONICAL_FAIL_CLOSED_OUTCOMES,
     CANONICAL_FIELD_PROJECTION_ACTIVATION,
     CANONICAL_INVARIANT_IDS,
+    CANONICAL_OPENAPI_V0_ACTIVATION,
     CANONICAL_PRIVATE_DELIVERY_EVIDENCE_ACTIVATION,
     CANONICAL_REVOCATION_ACTIVATION,
     CANONICAL_TICKET_AUDIENCE_ACTIVATION,
@@ -129,6 +130,24 @@ def object_list_at(mapping: dict[str, object], *keys: str) -> list[dict[str, obj
     return cast(list[dict[str, object]], current)
 
 
+def test_active_evidence_surfaces_reference_existing_test_nodes() -> None:
+    """Canonical active evidence cannot drift to a renamed or deleted test."""
+
+    test_evidence = CANONICAL_OPENAPI_V0_ACTIVATION["testEvidence"]
+    assert isinstance(test_evidence, list)
+    for activation in test_evidence:
+        assert isinstance(activation, dict)
+        surface = activation["surface"]
+        assert isinstance(surface, str)
+        for reference in surface.split():
+            file_ref, separator, node_ref = reference.partition("::")
+            path = Path(__file__).parents[2] / file_ref
+            assert path.is_file(), reference
+            if separator:
+                source = path.read_text(encoding="utf-8")
+                assert f"def {node_ref}(" in source, reference
+
+
 def make_catalog() -> dict[str, object]:
     invariants = []
     for number, invariant_id in enumerate(CANONICAL_INVARIANT_IDS, start=1):
@@ -208,12 +227,20 @@ def make_catalog() -> dict[str, object]:
                 "ACCEPT-011",
             }:
                 package: dict[str, object] = {
-                    "organizationRef": "orgpkg_0000000000000000000000000000000a",
+                    "packageId": "pkg_0000000000000000000000000000000a",
                     "purpose": "context.answer",
-                    "ttlSeconds": 30,
+                    "audienceDigest": "a" * 64,
+                    "policyEpoch": 1,
+                    "policySnapshotRef": "policy-snapshot-a",
+                    "decisionRef": "dec_0000000000000000000000000000000a",
+                    "runRef": "run-authorized-a",
+                    "releaseManifestRef": "manifest-m0-empty-v0",
+                    "retentionPolicyRef": "package-digest-only-retention-v1",
                     "asOf": "2026-07-21T09:30:00Z",
                     "expiresAt": "2026-07-21T09:30:30Z",
-                    "decisionRef": "dec_0000000000000000000000000000000a",
+                    "ttlSeconds": 30,
+                    "tokenizerRef": "utf8-byte-budget-v1",
+                    "packageSchemaRef": "context-package-openapi-v0",
                     "blocks": [],
                     "evidence": [],
                     "gaps": [],
@@ -227,6 +254,7 @@ def make_catalog() -> dict[str, object]:
                         "costMicrounits": 0,
                         "elapsedMs": 0,
                     },
+                    "continuation": None,
                 }
                 body["package"] = package
                 package_or_error["coverageStatus"] = "empty"
@@ -259,7 +287,15 @@ def make_catalog() -> dict[str, object]:
                             "decisionRef": "dec_0000000000000000000000000000000a",
                             "policySnapshotRef": "policy-snapshot-a",
                             "policyEpoch": 1,
-                            "sourceDecisionRef": "source-decision-a",
+                            "sourceAclEvidence": {
+                                "kind": "mirrored",
+                                "projectionRef": "source-decision-a",
+                                "aclAsOf": "2026-07-21T09:30:00Z",
+                                "freshnessProfileRef": (
+                                    "file-source-access-current-transaction-v1"
+                                ),
+                            },
+                            "citationOpenRef": None,
                         }
                     ]
                     package["coverage"] = {"status": "sufficient"}
@@ -271,13 +307,13 @@ def make_catalog() -> dict[str, object]:
                     package_or_error["unauthorizedFieldCount"] = 0
                     package_or_error["unauthorizedEvidenceRefCount"] = 0
                     package["packageDigest"] = (
-                        "60891a2328498f53607c4bb67e0e17804c1e91debdbfb2489f67f681573ffcc7"
+                        "9dbfcc7aa6c6a05acd5d61122fc2b8d6a4741794ac2eff59a1bbbaae2e1c616f"
                     )
             if fixture_id in {"ACCEPT-005", "ACCEPT-009"}:
                 body["retryable"] = False
             if fixture_id == "ACCEPT-011":
                 package["packageDigest"] = (
-                    "27f6a284027ab9446aa577125727b33263f24c8f252b8cd4616bd17b8545185e"
+                    "94d68444d124f453eb6c62e0132ea8e90a3c4017230e8e7b3bfe138d1daa10d1"
                 )
                 external_response["headers"] = {
                     "Content-Type": "application/json",
@@ -293,8 +329,10 @@ def make_catalog() -> dict[str, object]:
                     "domainOutcome",
                 ]
                 operation["normalizationAllowlist"] = [
-                    "body.package.organizationRef",
+                    "body.package.packageId",
                     "body.package.decisionRef",
+                    "body.package.policySnapshotRef",
+                    "body.package.runRef",
                     "body.package.asOf",
                     "body.package.expiresAt",
                     "body.package.packageDigest",
@@ -516,6 +554,7 @@ def make_catalog() -> dict[str, object]:
             copy.deepcopy(CANONICAL_FIELD_PROJECTION_ACTIVATION),
             copy.deepcopy(CANONICAL_PRIVATE_DELIVERY_EVIDENCE_ACTIVATION),
             copy.deepcopy(CANONICAL_EGRESS_GRANT_ACTIVATION),
+            copy.deepcopy(CANONICAL_OPENAPI_V0_ACTIVATION),
         ],
         "invariants": invariants,
         "fixtures": fixtures,
@@ -586,8 +625,8 @@ def make_schema() -> dict[str, object]:
             },
             "activations": {
                 "type": "array",
-                "minItems": 8,
-                "maxItems": 8,
+                "minItems": 9,
+                "maxItems": 9,
                 "uniqueItems": True,
                 "prefixItems": [
                     {"const": copy.deepcopy(CANONICAL_REVOCATION_ACTIVATION)},
@@ -606,6 +645,7 @@ def make_schema() -> dict[str, object]:
                         )
                     },
                     {"const": copy.deepcopy(CANONICAL_EGRESS_GRANT_ACTIVATION)},
+                    {"const": copy.deepcopy(CANONICAL_OPENAPI_V0_ACTIVATION)},
                 ],
                 "items": False,
             },
@@ -1071,9 +1111,7 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
         self.assertEqual(activation, CANONICAL_FIELD_PROJECTION_ACTIVATION)
         self.assertEqual(activation["invariantRef"], "SCOPE-INTERSECTION-004")
         self.assertEqual(activation["policyEpochScope"], "organization-v0")
-        canonical_test_evidence = CANONICAL_FIELD_PROJECTION_ACTIVATION[
-            "testEvidence"
-        ]
+        canonical_test_evidence = CANONICAL_FIELD_PROJECTION_ACTIVATION["testEvidence"]
         assert isinstance(canonical_test_evidence, list)
         assert all(isinstance(evidence, dict) for evidence in canonical_test_evidence)
         self.assertEqual(
@@ -1662,8 +1700,8 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
 
         self.assertEqual(catalog["catalogVersion"], "1.3.0")
         self.assertEqual(
-            issue_refs[-8:],
-            ["#15", "#16", "#17", "#18", "#19", "#48", "#63", "#65"],
+            issue_refs[-9:],
+            ["#15", "#16", "#17", "#18", "#19", "#48", "#63", "#65", "#66"],
         )
         self.assertIn(
             "docs/decisions/0031-persist-authorized-context-run-lineage.md",
@@ -1779,7 +1817,7 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
         self.assertEqual(accept_011_package["blocks"], [])
         self.assertEqual(accept_011_package["evidence"], [])
 
-    def test_exact_package_examples_are_executable_v2_public_documents(self) -> None:
+    def test_exact_package_examples_are_executable_v3_public_documents(self) -> None:
         catalog = load_document(DEFAULT_CATALOG_PATH)
         fixtures = {
             fixture["id"]: fixture for fixture in object_list_at(catalog, "fixtures")
@@ -1800,8 +1838,13 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
                 "package",
             )
             public_package = ContextPackageWire.model_validate(package)
+            observed_package = public_package.model_dump(
+                mode="json", exclude_none=False
+            )
+            if observed_package["coverage"].get("reason") is None:
+                del observed_package["coverage"]["reason"]
             self.assertEqual(
-                public_package.model_dump(mode="json", exclude_none=True),
+                observed_package,
                 package,
             )
 
@@ -1885,7 +1928,7 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
         evidence["authorizationAsOf"] = "2026-07-21T09:31:00Z"
         evidence["decisionRef"] = "dec_0000000000000000000000000000000b"
         evidence["projectedFields"] = ["private_note"]
-        del evidence["sourceDecisionRef"]
+        del evidence["sourceAclEvidence"]
         object_at(accept_006, "expected", "packageOrError")[
             "unauthorizedEvidenceRefCount"
         ] = 1
@@ -2092,8 +2135,10 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
         self.assertEqual(
             accept_011["operation"]["normalizationAllowlist"],
             [
-                "body.package.organizationRef",
+                "body.package.packageId",
                 "body.package.decisionRef",
+                "body.package.policySnapshotRef",
+                "body.package.runRef",
                 "body.package.asOf",
                 "body.package.expiresAt",
                 "body.package.packageDigest",

@@ -22,6 +22,7 @@ from adapters.http.authentication import (
 from adapters.http.organization_authority import (
     OrganizationVerificationRejected,
 )
+from adapters.http.route_policy import ResolveRouteDecision
 from adapters.http.transport import HttpTransportProfile
 from engine.persistence.membership_context import (
     MembershipAuthorityUnavailable,
@@ -76,6 +77,7 @@ from tests.support.context_run import (
     TEST_QUERY_DIGEST_KEYRING,
     recording_context_run_session,
 )
+from tests.support.releases import active_runtime_release
 from tests.support.security_gate import record_security_oracles
 
 VALID_BODY = {
@@ -128,6 +130,20 @@ class DeterministicAuthenticator:
                 else None
             ),
         )
+
+
+class FixedRoutePolicy:
+    def __init__(self, decision: ResolveRouteDecision) -> None:
+        self.decision = decision
+        self.calls = 0
+
+    def decide(
+        self,
+        authentication: VerifiedAuthenticationContext,
+    ) -> ResolveRouteDecision:
+        assert type(authentication) is VerifiedAuthenticationContext
+        self.calls += 1
+        return self.decision
 
 
 class DeterministicMembershipAuthority:
@@ -187,6 +203,9 @@ class DeterministicMembershipAuthority:
                     authentication_binding_ref=identity.authentication_binding_ref,
                     checked_at=identity.checked_at,
                     policy_epoch_verification=policy_epoch_verification,
+                    active_runtime_release=active_runtime_release(
+                        identity.organization_id
+                    ),
                     context_run_persistence_session=persistence_session,
                     delivery_evidence_redemption_session=(
                         _construct_delivery_evidence_redemption_session(
@@ -731,7 +750,6 @@ def test_private_delivery_evidence_is_redeemed_before_runtime_content_work(
         "binding-from-auth",
         "chat:private:42",
         "chat:private:wrong",
-        valid_port.requests[0].audience_digest,
     )
     public_output = (
         valid.text
@@ -745,9 +763,7 @@ def test_private_delivery_evidence_is_redeemed_before_runtime_content_work(
     authenticated_context = DeterministicAuthenticator(
         private_destination_ref="chat:private:42"
     ).authenticate(VALID_TOKEN)
-    ordinary_trace = (
-        repr(authenticated_context) + repr(invocations) + repr(outcomes)
-    )
+    ordinary_trace = repr(authenticated_context) + repr(invocations) + repr(outcomes)
     ordinary_logs = "".join(record.getMessage() for record in caplog.records)
     for protected_value in protected_values:
         assert protected_value not in public_output
@@ -836,6 +852,7 @@ def test_valid_auth_constructs_exact_trusted_invocation_once() -> None:
 
 def test_valid_acquire_returns_canonical_tenant_safe_empty_package() -> None:
     client = trust_boundary_client(DeterministicAuthenticator(), InvocationSpy())
+    release = active_runtime_release(UUID(INTERNAL_ORGANIZATION_REF))
 
     response = client.post(
         "/v1/context:resolve",
@@ -856,29 +873,124 @@ def test_valid_acquire_returns_canonical_tenant_safe_empty_package() -> None:
     assert response.json() == {
         "kind": "resolved",
         "package": {
-            "organizationRef": response.json()["package"]["organizationRef"],
+            "packageId": response.json()["package"]["packageId"],
+            "packageDigest": response.json()["package"]["packageDigest"],
             "purpose": "context.answer",
-            "ttlSeconds": 300,
+            "audienceDigest": response.json()["package"]["audienceDigest"],
+            "policyEpoch": 7,
+            "policySnapshotRef": response.json()["package"]["policySnapshotRef"],
+            "decisionRef": response.json()["package"]["decisionRef"],
+            "runRef": response.json()["package"]["runRef"],
+            "releaseManifestRef": release.manifest_ref,
+            "retentionPolicyRef": "package-digest-only-retention-v1",
             "asOf": "2026-07-21T05:00:00Z",
             "expiresAt": "2026-07-21T05:05:00Z",
-            "decisionRef": response.json()["package"]["decisionRef"],
-            "packageDigest": response.json()["package"]["packageDigest"],
+            "ttlSeconds": 300,
+            "tokenizerRef": release.tokenizer_ref,
+            "packageSchemaRef": release.package_schema_ref,
             "blocks": [],
             "evidence": [],
             "gaps": [],
+            "coverage": {
+                "status": "empty",
+                "reason": "no_authorized_evidence",
+            },
             "budgetUsage": {
                 "tokens": 0,
                 "providerCalls": 0,
                 "costMicrounits": 0,
                 "elapsedMs": 0,
             },
-            "coverage": {
-                "status": "empty",
-                "reason": "no_authorized_evidence",
-            },
+            "continuation": None,
         },
+        "egressGrant": None,
     }
-    assert response.json()["package"]["organizationRef"] != (INTERNAL_ORGANIZATION_REF)
+    assert response.json()["package"]["packageId"] != INTERNAL_ORGANIZATION_REF
+
+
+@pytest.mark.parametrize(
+    ("decision", "status", "body"),
+    (
+        (
+            ResolveRouteDecision.FORBID,
+            403,
+            b'{"code":"application_forbidden"}',
+        ),
+        (ResolveRouteDecision.RATE_LIMIT, 429, b'{"code":"rate_limited"}'),
+    ),
+)
+def test_authenticated_route_policy_rejects_before_domain_work(
+    decision: ResolveRouteDecision,
+    status: int,
+    body: bytes,
+) -> None:
+    policy = FixedRoutePolicy(decision)
+    spy = InvocationSpy()
+    client = TestClient(
+        create_app(
+            authenticator=DeterministicAuthenticator(),
+            organization_authority=DeterministicOrganizationAuthority(),
+            membership_authority=DeterministicMembershipAuthority(),
+            route_policy=policy,
+            invocation_observer=spy.observe,
+            clock=lambda: RECEIVED_AT,
+        )
+    )
+
+    response = client.post(
+        "/v0/resolve",
+        headers={
+            "Authorization": f"Bearer {VALID_TOKEN}",
+            "X-Context-Request-Id": "route-policy-test",
+        },
+        json=VALID_BODY,
+    )
+
+    assert response.status_code == status
+    assert response.content == body
+    assert policy.calls == 1
+    assert spy.invocations == []
+
+
+def test_public_v0_and_hidden_v1_bridge_share_one_semantic_runtime_path() -> None:
+    v0_spy = InvocationSpy()
+    v1_spy = InvocationSpy()
+    v0 = trust_boundary_client(DeterministicAuthenticator(), v0_spy)
+    v1 = trust_boundary_client(DeterministicAuthenticator(), v1_spy)
+    headers = {
+        "Authorization": f"Bearer {VALID_TOKEN}",
+        "X-Context-Request-Id": "compatibility-request",
+    }
+
+    public = v0.post("/v0/resolve", headers=headers, json=VALID_BODY)
+    legacy = v1.post("/v1/context:resolve", headers=headers, json=VALID_BODY)
+
+    assert public.status_code == legacy.status_code == 200
+    public_body = public.json()
+    legacy_body = legacy.json()
+    for body in (public_body, legacy_body):
+        body["package"].pop("packageId")
+        body["package"].pop("packageDigest")
+        body["package"].pop("decisionRef")
+        body["package"].pop("policySnapshotRef")
+        body["package"].pop("runRef")
+    assert public_body == legacy_body
+    assert len(v0_spy.invocations) == len(v1_spy.invocations) == 1
+
+
+def test_public_v0_requires_request_id_after_authentication_before_runtime() -> None:
+    spy = InvocationSpy()
+    client = trust_boundary_client(DeterministicAuthenticator(), spy)
+
+    response = client.post(
+        "/v0/resolve",
+        headers={"Authorization": f"Bearer {VALID_TOKEN}"},
+        json=VALID_BODY,
+    )
+
+    assert response.status_code == 422
+    assert response.content == b'{"code":"invalid_request"}'
+    assert spy.invocations == []
 
 
 def test_valid_http_acquire_reaches_the_single_runtime_entry_exactly_once() -> None:
@@ -1206,8 +1318,11 @@ def test_budget_and_narrowing_wire_variants_are_strictly_closed(
     client = trust_boundary_client(DeterministicAuthenticator(), spy)
 
     response = client.post(
-        "/v1/context:resolve",
-        headers={"Authorization": f"Bearer {VALID_TOKEN}"},
+        "/v0/resolve",
+        headers={
+            "Authorization": f"Bearer {VALID_TOKEN}",
+            "X-Context-Request-Id": "public-v0-injection-matrix",
+        },
         json=body,
     )
 
@@ -1254,7 +1369,7 @@ def test_authentication_failures_are_generic_and_call_no_domain_seam(
         headers["Authorization"] = authorization
 
     response = client.post(
-        "/v1/context:resolve",
+        "/v0/resolve",
         headers=headers,
         json=VALID_BODY,
     )
@@ -1291,7 +1406,7 @@ def test_invalid_authenticator_output_is_a_generic_authentication_failure(
     )
 
     response = client.post(
-        "/v1/context:resolve",
+        "/v0/resolve",
         headers={"Authorization": f"Bearer {VALID_TOKEN}"},
         json=VALID_BODY,
     )
@@ -1377,8 +1492,11 @@ def test_trusted_field_injection_is_closed_before_domain_execution(
     target[field_name] = field_value
 
     response = client.post(
-        "/v1/context:resolve",
-        headers={"Authorization": f"Bearer {VALID_TOKEN}"},
+        "/v0/resolve",
+        headers={
+            "Authorization": f"Bearer {VALID_TOKEN}",
+            "X-Context-Request-Id": "public-v0-schema-matrix",
+        },
         json=body,
     )
 
@@ -1425,8 +1543,11 @@ def test_closed_acquire_shape_rejects_every_schema_violation(
     client = trust_boundary_client(DeterministicAuthenticator(), spy)
 
     response = client.post(
-        "/v1/context:resolve",
-        headers={"Authorization": f"Bearer {VALID_TOKEN}"},
+        "/v0/resolve",
+        headers={
+            "Authorization": f"Bearer {VALID_TOKEN}",
+            "X-Context-Request-Id": "public-v0-schema-matrix",
+        },
         json=body,
     )
 
@@ -1454,10 +1575,11 @@ def test_duplicate_json_keys_cannot_shadow_injected_or_unknown_fields(
     client = trust_boundary_client(DeterministicAuthenticator(), spy)
 
     response = client.post(
-        "/v1/context:resolve",
+        "/v0/resolve",
         headers={
             "Authorization": f"Bearer {VALID_TOKEN}",
             "Content-Type": "application/json",
+            "X-Context-Request-Id": "public-v0-duplicate-json",
         },
         content=raw_body,
     )
@@ -1480,10 +1602,11 @@ def test_non_standard_json_numbers_fail_at_the_transport_boundary(
     )
 
     response = client.post(
-        "/v1/context:resolve",
+        "/v0/resolve",
         headers={
             "Authorization": f"Bearer {VALID_TOKEN}",
             "Content-Type": "application/json",
+            "X-Context-Request-Id": "public-v0-non-finite-json",
         },
         content=raw_body,
     )
@@ -1497,15 +1620,18 @@ def test_non_standard_json_numbers_fail_at_the_transport_boundary(
 def test_invalid_json_and_media_type_use_generic_transport_error() -> None:
     spy = InvocationSpy()
     client = trust_boundary_client(DeterministicAuthenticator(), spy)
-    headers = {"Authorization": f"Bearer {VALID_TOKEN}"}
+    headers = {
+        "Authorization": f"Bearer {VALID_TOKEN}",
+        "X-Context-Request-Id": "public-v0-transport-matrix",
+    }
 
     malformed = client.post(
-        "/v1/context:resolve",
+        "/v0/resolve",
         headers={**headers, "Content-Type": "application/json"},
         content=b'{"kind":"acquire",',
     )
     wrong_media_type = client.post(
-        "/v1/context:resolve",
+        "/v0/resolve",
         headers={**headers, "Content-Type": "text/plain"},
         content=b'{"kind":"acquire","need":{"query":"probe"}}',
     )
@@ -1522,10 +1648,11 @@ def test_invalid_utf8_json_uses_the_documented_generic_transport_error() -> None
     client = trust_boundary_client(DeterministicAuthenticator(), spy)
 
     response = client.post(
-        "/v1/context:resolve",
+        "/v0/resolve",
         headers={
             "Authorization": f"Bearer {VALID_TOKEN}",
             "Content-Type": "application/json",
+            "X-Context-Request-Id": "public-v0-invalid-utf8",
         },
         content=b'{"kind":"acquire","need":{"query":"\xff"}}',
     )
@@ -1560,15 +1687,16 @@ def test_resolve_body_limit_is_enforced_before_authentication() -> None:
     headers = {
         "Authorization": f"Bearer {VALID_TOKEN}",
         "Content-Type": "application/json",
+        "X-Context-Request-Id": "public-v0-body-limit",
     }
 
     exact = exact_client.post(
-        "/v1/context:resolve",
+        "/v0/resolve",
         headers=headers,
         content=raw_body,
     )
     rejected = rejected_client.post(
-        "/v1/context:resolve",
+        "/v0/resolve",
         headers=headers,
         content=raw_body,
     )
@@ -1594,10 +1722,11 @@ def test_chunked_body_cannot_bypass_the_receive_limit() -> None:
     )
 
     response = client.post(
-        "/v1/context:resolve",
+        "/v0/resolve",
         headers={
             "Authorization": f"Bearer {VALID_TOKEN}",
             "Content-Type": "application/json",
+            "X-Context-Request-Id": "public-v0-chunked-limit",
         },
         content=iter(
             [
@@ -1864,20 +1993,23 @@ def test_transport_syntax_precedes_authentication_and_schema_follows_it() -> Non
     authenticator = DeterministicAuthenticator()
     spy = InvocationSpy()
     client = trust_boundary_client(authenticator, spy)
-    invalid_auth = {"Authorization": "Bearer invalid-credential"}
+    invalid_auth = {
+        "Authorization": "Bearer invalid-credential",
+        "X-Context-Request-Id": "public-v0-auth-order",
+    }
 
     wrong_media_type = client.post(
-        "/v1/context:resolve",
+        "/v0/resolve",
         headers={**invalid_auth, "Content-Type": "text/plain"},
         content=b"not-json",
     )
     malformed_json = client.post(
-        "/v1/context:resolve",
+        "/v0/resolve",
         headers={**invalid_auth, "Content-Type": "application/json"},
         content=b"{",
     )
     schema_injection = client.post(
-        "/v1/context:resolve",
+        "/v0/resolve",
         headers=invalid_auth,
         json={**VALID_BODY, "organizationId": "injected"},
     )
@@ -1889,6 +2021,29 @@ def test_transport_syntax_precedes_authentication_and_schema_follows_it() -> Non
     assert schema_injection.status_code == 401
     assert schema_injection.content == b'{"code":"authentication_failed"}'
     assert authenticator.calls == ["invalid-credential"]
+    assert spy.invocations == []
+
+
+@pytest.mark.parametrize("authorization", (None, "Bearer invalid-credential"))
+def test_public_v0_authentication_precedes_required_request_id(
+    authorization: str | None,
+) -> None:
+    authenticator = DeterministicAuthenticator()
+    spy = InvocationSpy()
+    client = trust_boundary_client(authenticator, spy)
+    headers = {}
+    if authorization is not None:
+        headers["Authorization"] = authorization
+
+    response = client.post(
+        "/v0/resolve",
+        headers=headers,
+        json=VALID_BODY,
+    )
+
+    assert response.status_code == 401
+    assert response.content == b'{"code":"authentication_failed"}'
+    assert response.headers["www-authenticate"] == "Bearer"
     assert spy.invocations == []
 
 
@@ -1927,228 +2082,34 @@ def test_injected_authenticator_runs_only_the_real_sealed_runtime() -> None:
 
 
 def test_openapi_body_is_closed_and_contains_no_trusted_fields() -> None:
-    client = trust_boundary_client(DeterministicAuthenticator(), InvocationSpy())
-    schema = client.get("/openapi.json").json()
-    operation = schema["paths"]["/v1/context:resolve"]["post"]
-
+    schema = create_app().openapi()
+    assert set(schema["paths"]) == {"/v0/resolve"}
+    operation = schema["paths"]["/v0/resolve"]["post"]
     assert operation["security"] == [{"ContextEngineBearer": []}]
-    assert schema["components"]["securitySchemes"]["ContextEngineBearer"] == {
-        "type": "http",
-        "scheme": "bearer",
-        "bearerFormat": "opaque",
-    }
-    correlation_parameter = next(
-        parameter
-        for parameter in operation["parameters"]
-        if parameter["name"] == "X-Context-Request-Id"
-    )
-    correlation_schema = correlation_parameter["schema"]["anyOf"][0]
-    assert correlation_schema["maxLength"] == 256
-
     request_schema = operation["requestBody"]["content"]["application/json"]["schema"]
     reachable = reachable_schemas(request_schema, schema["components"]["schemas"])
-    assert set(reachable) == {
-        "ResolveWire",
-        "AcquireWire",
-        "ContinueWire",
-        "OpenCitationWire",
-        "ContextNeedWire",
-        "PackageBudgetWire",
-        "RequestNarrowingWire",
-    }
-    assert reachable["AcquireWire"]["properties"].keys() == {
-        "kind",
-        "need",
-        "packageBudget",
-        "requestNarrowing",
-    }
-    assert reachable["ContinueWire"]["properties"].keys() == {
-        "kind",
-        "continuationToken",
-        "packageBudget",
-    }
-    assert reachable["OpenCitationWire"]["properties"].keys() == {
-        "kind",
-        "citationOpenRef",
-    }
-    assert reachable["ContextNeedWire"]["properties"].keys() == {"query"}
-    assert reachable["PackageBudgetWire"]["properties"].keys() == {
-        "maxTokens",
-        "maxProviderCalls",
-        "maxCostMicrounits",
-        "maxElapsedMs",
-    }
-    assert reachable["RequestNarrowingWire"]["properties"].keys() == {
-        "sourceRefs",
-        "resourceRefs",
-    }
-    narrowing_properties = reachable["RequestNarrowingWire"]["properties"]
-    for field_name in ("sourceRefs", "resourceRefs"):
-        narrowing_schema = narrowing_properties[field_name]["anyOf"][0]
-        assert narrowing_schema["maxItems"] == 64
-        assert narrowing_schema["items"]["maxLength"] == 256
-    assert all(
-        document["additionalProperties"] is False
-        for name, document in reachable.items()
-        if name != "ResolveWire"
-    )
-
     serialized_request_graph = repr(reachable).casefold()
     for forbidden in (
         "organization",
-        "tenant",
         "principal",
-        "user",
         "membership",
-        "agentversion",
         "purpose",
         "audience",
         "acl",
         "sql",
-        "placement",
         "bypass",
-        "authenticatedinvocation",
-        "trusteddeliverycontext",
-        "principalgrants",
-        "agentceiling",
-        "membershiprights",
-        "sourcenativeacl",
-        "resourceacl",
-        "purposepolicy",
-        "precomputedscope",
-        "effectivescope",
     ):
         assert forbidden not in serialized_request_graph
-
-    assert set(operation["responses"]) == {"200", "400", "401", "422", "503"}
-    assert response_schema_name(operation, 400) == "InvalidRequestWire"
-    assert response_schema_name(operation, 401) == "AuthenticationFailureWire"
-    assert response_schema_name(operation, 422) == "InvalidRequestWire"
-    assert response_schema_name(operation, 503) == "ServiceUnavailableWire"
-    assert response_schema_name(operation, 200) == "ResolutionOutcomeWire"
-    response_schema = operation["responses"]["200"]["content"]["application/json"][
-        "schema"
-    ]
-    response_models = reachable_schemas(
-        response_schema,
-        schema["components"]["schemas"],
-    )
-    assert set(response_models) == {
-        "ResolutionOutcomeWire",
-        "ResolvedWire",
-        "RequestNotAvailableWire",
-        "CitationNotAvailableWire",
-        "ContextPackageWire",
-        "BlockWire",
-        "EvidenceWire",
-        "BudgetUsageWire",
-        "CoverageWire",
-        "ModelEgressGrantWire",
-        "ChannelEgressGrantWire",
+    assert set(operation["responses"]) == {
+        "200",
+        "400",
+        "401",
+        "403",
+        "422",
+        "429",
+        "503",
     }
-    resolved_schema = response_models["ResolvedWire"]
-    assert set(resolved_schema["properties"]) == {
-        "kind",
-        "package",
-        "egressGrant",
-    }
-    assert response_models["ModelEgressGrantWire"]["properties"]["value"][
-        "pattern"
-    ] == "^egrm_[0-9a-f]{64}$"
-    assert response_models["ChannelEgressGrantWire"]["properties"]["value"][
-        "pattern"
-    ] == "^egrc_[0-9a-f]{64}$"
-    package_schema = response_models["ContextPackageWire"]
-    assert package_schema["additionalProperties"] is False
-    assert package_schema["required"] == [
-        "organizationRef",
-        "purpose",
-        "ttlSeconds",
-        "asOf",
-        "expiresAt",
-        "decisionRef",
-        "packageDigest",
-        "blocks",
-        "evidence",
-        "gaps",
-        "budgetUsage",
-        "coverage",
-    ]
-    assert package_schema["properties"]["blocks"]["items"] == {
-        "$ref": "#/components/schemas/BlockWire"
-    }
-    assert package_schema["properties"]["evidence"]["items"] == {
-        "$ref": "#/components/schemas/EvidenceWire"
-    }
-    assert package_schema["properties"]["gaps"]["maxItems"] == 0
-    assert package_schema["properties"]["organizationRef"]["pattern"] == (
-        "^orgpkg_[0-9a-f]{32}$"
-    )
-    assert package_schema["properties"]["decisionRef"]["pattern"] == (
-        "^dec_[0-9a-f]{32}$"
-    )
-    assert package_schema["properties"]["packageDigest"]["pattern"] == (
-        "^[0-9a-f]{64}$"
-    )
-    block_schema = response_models["BlockWire"]
-    assert block_schema["required"] == ["blockId", "text", "evidenceRefs"]
-    assert block_schema["properties"]["evidenceRefs"]["minItems"] == 1
-    assert block_schema["properties"]["evidenceRefs"]["maxItems"] == 1
-    evidence_schema = response_models["EvidenceWire"]
-    assert set(evidence_schema["properties"]) == {
-        "evidenceRef",
-        "sourceRef",
-        "resourceRef",
-        "revisionRef",
-        "fragmentRef",
-        "projectedFields",
-        "runRef",
-        "purpose",
-        "authorizationAsOf",
-        "decisionRef",
-        "policySnapshotRef",
-        "policyEpoch",
-        "sourceDecisionRef",
-    }
-    assert evidence_schema["properties"]["projectedFields"]["minItems"] == 1
-    assert evidence_schema["properties"]["projectedFields"]["maxItems"] == 64
-    assert all(
-        response_model["additionalProperties"] is False
-        for name, response_model in response_models.items()
-        if name != "ResolutionOutcomeWire"
-    )
-    serialized_response_graph = repr(response_models).casefold()
-    for forbidden in (
-        "effectivescope",
-        "scopedecision",
-        "scopetarget",
-        "targetcount",
-        "principalref",
-        "candidate",
-        "organizationid",
-        "denied",
-        "principalgrants",
-        "agentceiling",
-        "membershiprights",
-        "sourcenativeacl",
-        "resourceacl",
-        "purposepolicy",
-    ):
-        assert forbidden not in serialized_response_graph
     assert "HTTPValidationError" not in schema["components"]["schemas"]
-
-    for name, code in (
-        ("InvalidRequestWire", "invalid_request"),
-        ("AuthenticationFailureWire", "authentication_failed"),
-        ("ServiceUnavailableWire", "service_unavailable"),
-    ):
-        error_schema = schema["components"]["schemas"][name]
-        assert error_schema["additionalProperties"] is False
-        assert error_schema["required"] == ["code"]
-        assert error_schema["properties"]["code"]["const"] == code
-        serialized_error_schema = repr(error_schema).casefold()
-        assert "scope" not in serialized_error_schema
-        assert "digest" not in serialized_error_schema
 
 
 @pytest.mark.parametrize("header_value", ["", "   "])

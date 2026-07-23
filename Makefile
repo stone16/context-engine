@@ -1,4 +1,4 @@
-.PHONY: install build lint typecheck test catalog security-gate smoke db-up db-down db-reset integration check
+.PHONY: install build lint typecheck test catalog security-gate smoke db-up db-down db-reset integration openapi-generate openapi-check openapi-breaking-check check
 
 install:
 	uv sync --frozen
@@ -37,4 +37,13 @@ db-reset:
 integration:
 	./scripts/database_harness.sh integration
 
-check: build lint typecheck test catalog smoke integration security-gate
+openapi-generate:
+	uv run python scripts/freeze_openapi.py generate
+
+openapi-check:
+	uv run python scripts/freeze_openapi.py check $(if $(OPENAPI_BASELINE_REF),--baseline-ref $(OPENAPI_BASELINE_REF),)
+
+openapi-breaking-check:
+	uv run pytest -q tests/unit/test_openapi_v0_snapshot.py
+
+check: build lint typecheck openapi-check test catalog smoke integration security-gate
