@@ -1,13 +1,20 @@
 from __future__ import annotations
 
+from contextlib import nullcontext
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 import pytest
 
+import engine.persistence.delivery_evidence as persistence_delivery_evidence
+from engine.persistence.delivery_evidence import (
+    PostgreSQLDeliveryEvidenceIssuerPort,
+    PostgreSQLDeliveryEvidenceRetentionPort,
+)
 from engine.runtime.delivery import _construct_private_delivery_context
 from engine.runtime.delivery_evidence import (
     DELIVERY_EVIDENCE_RETENTION_CLASS,
+    DeliveryEvidenceAuthorityUnavailable,
     DeliveryEvidenceNotAvailable,
     DeliveryEvidenceProfile,
     PrivateDeliveryEvidenceIssue,
@@ -62,6 +69,11 @@ class RecordingRetentionPort:
         return 2
 
 
+class RoleGuardFailureEngine:
+    def begin(self) -> object:
+        return nullcontext(object())
+
+
 def test_private_evidence_issuer_returns_bearer_but_persists_only_digest() -> None:
     port = RecordingIssuerPort()
     issuer = PrivateDeliveryEvidenceIssuer(
@@ -113,6 +125,36 @@ def test_retention_deletes_only_expired_private_evidence_in_one_organization() -
 
     assert deleted == 2
     assert port.organization_ids == [ORGANIZATION_ID]
+
+
+def test_postgres_identity_role_guard_failures_are_opaque_authority_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def reject_identity_role(connection: object) -> None:
+        del connection
+        raise AssertionError("private role facts")
+
+    monkeypatch.setattr(
+        persistence_delivery_evidence,
+        "assert_identity_role",
+        reject_identity_role,
+    )
+    engine = RoleGuardFailureEngine()
+    issuer = PostgreSQLDeliveryEvidenceIssuerPort(engine)  # type: ignore[arg-type]
+    retention = PostgreSQLDeliveryEvidenceRetentionPort(engine)  # type: ignore[arg-type]
+
+    with pytest.raises(DeliveryEvidenceAuthorityUnavailable) as issuance_error:
+        issuer.issue_private(
+            request=_issue(),
+            evidence_digest=b"0" * 32,
+            audience_digest=private_delivery_audience_digest(_issue()),
+            logical_resolution_ref="logical-resolution",
+        )
+    with pytest.raises(DeliveryEvidenceAuthorityUnavailable) as retention_error:
+        retention.delete_expired_private(ORGANIZATION_ID)
+
+    assert "private role facts" not in str(issuance_error.value)
+    assert "private role facts" not in str(retention_error.value)
 
 
 @pytest.mark.security_evidence(id="PROP-DELIVERY-EVIDENCE-063", layer="property")

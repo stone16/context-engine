@@ -12,6 +12,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import BaseModel
 
+import adapters.http.app as http_app_module
 from adapters.http.app import create_app
 from adapters.http.authentication import (
     AuthenticationRejected,
@@ -526,6 +527,7 @@ class ResolutionSpy:
 @pytest.mark.security_evidence(id="HTTP-DELIVERY-EVIDENCE-063", layer="runtime")
 def test_private_delivery_evidence_is_redeemed_before_runtime_content_work(
     caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     valid_port = ExactPrivateDeliveryEvidencePort(
         evidence_digest=PRIVATE_EVIDENCE_DIGEST
@@ -626,6 +628,38 @@ def test_private_delivery_evidence_is_redeemed_before_runtime_content_work(
         },
         json=VALID_BODY,
     )
+    with monkeypatch.context() as invalid_construction:
+        invalid_construction.setattr(
+            http_app_module,
+            "private_delivery_audience_digest_for_binding",
+            lambda **values: (_ for _ in ()).throw(ValueError("private audience")),
+        )
+        invalid_trusted_binding = client.post(
+            "/v1/context:resolve",
+            headers={
+                "Authorization": f"Bearer {VALID_TOKEN}",
+                "X-Context-Request-Id": "private-request",
+                "X-Context-Delivery-Evidence-Ref": PRIVATE_EVIDENCE_REF,
+            },
+            json=VALID_BODY,
+        )
+    with monkeypatch.context() as invalid_session:
+        invalid_session.setattr(
+            http_app_module,
+            "redeem_private_delivery_evidence",
+            lambda session, request: (_ for _ in ()).throw(
+                ValueError("private authority session")
+            ),
+        )
+        invalid_authority_session = client.post(
+            "/v1/context:resolve",
+            headers={
+                "Authorization": f"Bearer {VALID_TOKEN}",
+                "X-Context-Request-Id": "private-request",
+                "X-Context-Delivery-Evidence-Ref": PRIVATE_EVIDENCE_REF,
+            },
+            json=VALID_BODY,
+        )
 
     assert valid.status_code == 200
     assert len(valid_port.requests) == 3
@@ -646,6 +680,10 @@ def test_private_delivery_evidence_is_redeemed_before_runtime_content_work(
     assert missing_binding.content == b'{"code":"authentication_failed"}'
     assert missing_evidence.status_code == 401
     assert missing_evidence.content == b'{"code":"authentication_failed"}'
+    assert invalid_trusted_binding.status_code == 401
+    assert invalid_trusted_binding.content == b'{"code":"authentication_failed"}'
+    assert invalid_authority_session.status_code == 503
+    assert invalid_authority_session.content == b'{"code":"service_unavailable"}'
     assert len(outcomes) == 1
     assert content_io.total_calls == calls_after_valid
     protected_values = (
@@ -667,6 +705,8 @@ def test_private_delivery_evidence_is_redeemed_before_runtime_content_work(
         + wrong_destination.text
         + missing_binding.text
         + missing_evidence.text
+        + invalid_trusted_binding.text
+        + invalid_authority_session.text
     )
     authenticated_context = DeterministicAuthenticator(
         private_destination_ref="chat:private:42"

@@ -74,7 +74,7 @@ class PostgreSQLDeliveryEvidenceIssuerPort:
                         "profile_ref": request.profile_ref,
                     },
                 ).scalar_one()
-        except SQLAlchemyError:
+        except (AssertionError, SQLAlchemyError):
             raise DeliveryEvidenceAuthorityUnavailable from None
         return accepted is True
 
@@ -97,7 +97,7 @@ class PostgreSQLDeliveryEvidenceRetentionPort:
                     ),
                     {"organization_id": organization_id},
                 ).scalar_one()
-        except SQLAlchemyError:
+        except (AssertionError, SQLAlchemyError):
             raise DeliveryEvidenceAuthorityUnavailable from None
         if type(deleted) is not int or deleted < 0:
             raise DeliveryEvidenceAuthorityUnavailable

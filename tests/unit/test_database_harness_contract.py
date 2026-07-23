@@ -144,6 +144,8 @@ def test_harness_provisions_post_init_roles_before_readiness() -> None:
     ) in configuration
     assert "ACCESS_POLICY_DEFINER_ROLE" in provisioner
     assert "IDENTITY_ROLE" in provisioner
+    assert "contract.identity_role" in provisioner
+    assert "contract.identity_password" in provisioner
     assert "DELIVERY_EVIDENCE_DEFINER_ROLE" in provisioner
     assert "WORKER_LEASE_DEFINER_ROLE" in provisioner
     assert "CONTEXT_RUN_READER_DEFINER_ROLE" in provisioner

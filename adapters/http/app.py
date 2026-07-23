@@ -506,56 +506,60 @@ def create_app(
                         if redemption_session is None:
                             raise TrustedAuthorityUnavailable
                         try:
+                            redemption_request = PrivateDeliveryEvidenceRedemption(
+                                evidence_ref=delivery_evidence_ref,
+                                evidence_digest=sha256(
+                                    delivery_evidence_ref.encode("utf-8")
+                                ).digest(),
+                                authenticated_service_ref=(
+                                    authentication.authenticated_application_ref
+                                ),
+                                authentication_binding_ref=(
+                                    authentication.authentication_binding_ref
+                                ),
+                                request_id=invocation.request_id,
+                                organization_id=(invocation.user_actor.organization_id),
+                                user_id=invocation.user_actor.user_id,
+                                membership_id=invocation.user_actor.membership_id,
+                                membership_version=(
+                                    invocation.user_actor.membership_version
+                                ),
+                                destination_ref=private_binding.destination_ref,
+                                consumer_ref=private_binding.consumer_ref,
+                                delivery_kind=private_binding.delivery_kind,
+                                audience_digest=(
+                                    private_delivery_audience_digest_for_binding(
+                                        organization_id=(
+                                            invocation.user_actor.organization_id
+                                        ),
+                                        membership_id=(
+                                            invocation.user_actor.membership_id
+                                        ),
+                                        membership_version=(
+                                            invocation.user_actor.membership_version
+                                        ),
+                                        destination_ref=(
+                                            private_binding.destination_ref
+                                        ),
+                                        consumer_ref=private_binding.consumer_ref,
+                                    )
+                                ),
+                                purpose=_purpose_for_wire(body),
+                                policy_epoch=invocation.policy_epoch,
+                                redeemed_at=invocation.received_at,
+                            )
+                        except (TypeError, ValueError):
+                            raise TransportAuthenticationFailed from None
+                        try:
                             redeemed = redeem_private_delivery_evidence(
                                 redemption_session,
-                                PrivateDeliveryEvidenceRedemption(
-                                    evidence_ref=delivery_evidence_ref,
-                                    evidence_digest=sha256(
-                                        delivery_evidence_ref.encode("utf-8")
-                                    ).digest(),
-                                    authenticated_service_ref=(
-                                        authentication.authenticated_application_ref
-                                    ),
-                                    authentication_binding_ref=(
-                                        authentication.authentication_binding_ref
-                                    ),
-                                    request_id=invocation.request_id,
-                                    organization_id=(
-                                        invocation.user_actor.organization_id
-                                    ),
-                                    user_id=invocation.user_actor.user_id,
-                                    membership_id=invocation.user_actor.membership_id,
-                                    membership_version=(
-                                        invocation.user_actor.membership_version
-                                    ),
-                                    destination_ref=private_binding.destination_ref,
-                                    consumer_ref=private_binding.consumer_ref,
-                                    delivery_kind=private_binding.delivery_kind,
-                                    audience_digest=(
-                                        private_delivery_audience_digest_for_binding(
-                                            organization_id=(
-                                                invocation.user_actor.organization_id
-                                            ),
-                                            membership_id=(
-                                                invocation.user_actor.membership_id
-                                            ),
-                                            membership_version=(
-                                                invocation.user_actor.membership_version
-                                            ),
-                                            destination_ref=(
-                                                private_binding.destination_ref
-                                            ),
-                                            consumer_ref=private_binding.consumer_ref,
-                                        )
-                                    ),
-                                    purpose=_purpose_for_wire(body),
-                                    policy_epoch=invocation.policy_epoch,
-                                    redeemed_at=invocation.received_at,
-                                ),
+                                redemption_request,
                             )
                         except DeliveryEvidenceNotAvailable:
                             raise TransportAuthenticationFailed from None
                         except DeliveryEvidenceAuthorityUnavailable:
+                            raise TrustedAuthorityUnavailable from None
+                        except (TypeError, ValueError):
                             raise TrustedAuthorityUnavailable from None
                         delivery_context = _construct_private_delivery_context(
                             purpose=redeemed.purpose,
