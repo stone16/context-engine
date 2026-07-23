@@ -76,4 +76,3 @@ class FileSourceOffboarding:
         )
         if self.cleanup_state is not FileSourceCleanupState.PENDING:
             raise ValueError("File source offboarding cleanup must start pending")
-

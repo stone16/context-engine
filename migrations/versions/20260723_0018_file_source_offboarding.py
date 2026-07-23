@@ -345,7 +345,7 @@ def upgrade() -> None:
     # Adding active-source truth to those FORCE-RLS policies closes every
     # issuer, redemption, recovery, staging, and activation function together.
     job_binding = (
-        "organization_id = NULLIF(current_setting(" 
+        "organization_id = NULLIF(current_setting("
         "'app.organization_id', true), '')::uuid "
         "AND job_id = NULLIF(current_setting('app.worker_job_id', true), '')::uuid "
         "AND workload = 'supply.file-import' "
