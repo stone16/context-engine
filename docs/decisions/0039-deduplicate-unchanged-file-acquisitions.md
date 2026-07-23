@@ -103,10 +103,10 @@ active pointer is created or changed. ACL changes remain their separate policy
 domain and are not inferred from content equality.
 
 Changed canonical content or compiler/configuration versions do not enter the
-no-op path. Replacement publication and worker crash recovery remain unavailable
-in this issue, so those attempts terminate generically without changing the
-active publication. A partial active artifact is likewise not a no-op. Schema
-downgrade refuses to discard any unchanged acquisition result.
+no-op path. This decision originally left replacement unavailable; ADR-0040 now
+owns its separate staged/atomic activation path. Worker crash recovery remains
+outside this decision. A partial active artifact is likewise not a no-op.
+Schema downgrade refuses to discard any unchanged acquisition result.
 
 ## Rationale
 
@@ -125,14 +125,13 @@ shared authorization object or retaining source text in the outcome.
   existing `CandidateRef -> AuthorizationKernel -> AuthorizedProjection` path.
 - One import job and one acquisition outcome remain per observation; these are
   audit/progress effects, not publication effects.
-- Changed-content replacement, failed-job reclaim, and directory/global
-  deduplication remain explicitly unavailable.
+- Changed-content replacement is refined by ADR-0040; failed-job reclaim and
+  directory/global deduplication remain explicitly unavailable.
 
 ## Revisit trigger
 
-Revisit before adding changed-content replacement, crash recovery after a
-non-no-op publication begins, directory/global deduplication, another canonical
-content carrier, or a compiler whose derived artifact is not deterministic from
-the declared identity inputs. Any replacement must preserve tenant isolation,
-database-linearized concurrency, immutable audit lineage, and the sealed Runtime
-authorization path.
+Revisit before adding crash recovery after a non-no-op publication begins,
+directory/global deduplication, another canonical content carrier, or a compiler
+whose derived artifact is not deterministic from the declared identity inputs.
+ADR-0040 defines replacement's tenant isolation, database-linearized
+concurrency, immutable audit lineage, and sealed Runtime authorization path.

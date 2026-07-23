@@ -1409,11 +1409,11 @@ def _assert_structural_file_import_returns_coherent_authorized_units_over_http(
             connection.execute(
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one()
-            == "20260724_0013"
+            == "20260723_0014"
         )
 
 
-def test_file_publication_requires_noop_aware_versioned_worker_entrypoints(
+def test_file_publication_requires_noop_and_replacement_aware_worker_entrypoints(
     migration_configuration: DatabaseConfiguration,
 ) -> None:
     migration_engine = create_database_engine(migration_configuration)
@@ -1438,7 +1438,10 @@ def test_file_publication_requires_noop_aware_versioned_worker_entrypoints(
                           'context_worker_publish_structural_file_import',
                           'context_worker_classify_file_import_internal',
                           'context_worker_publish_file_import_v2',
-                          'context_worker_publish_structural_file_import_v2'
+                          'context_worker_publish_structural_file_import_v2',
+                          'context_worker_stage_file_replacement',
+                          'context_worker_stage_structural_file_replacement',
+                          'context_worker_activate_file_replacement'
                       )
                     """
                     )
@@ -1470,7 +1473,10 @@ def test_file_publication_requires_noop_aware_versioned_worker_entrypoints(
                               'context_worker_publish_structural_file_import',
                               'context_worker_classify_file_import_internal',
                               'context_worker_publish_file_import_v2',
-                              'context_worker_publish_structural_file_import_v2'
+                              'context_worker_publish_structural_file_import_v2',
+                              'context_worker_stage_file_replacement',
+                              'context_worker_stage_structural_file_replacement',
+                              'context_worker_activate_file_replacement'
                           )
                         """
                     )
@@ -1490,7 +1496,9 @@ def test_file_publication_requires_noop_aware_versioned_worker_entrypoints(
                             'public.context_fragment',
                             'public.exact_phrase_candidate',
                             'public.file_resource_ingestion_guard',
-                            'public.file_acquisition_result'
+                            'public.file_acquisition_result',
+                            'public.file_revision_replacement_plan',
+                            'public.file_revision_supersession'
                         ]) AS table_name
                         """
                     )
@@ -1506,6 +1514,9 @@ def test_file_publication_requires_noop_aware_versioned_worker_entrypoints(
         "context_worker_classify_file_import_internal",
         "context_worker_publish_file_import_v2",
         "context_worker_publish_structural_file_import_v2",
+        "context_worker_stage_file_replacement",
+        "context_worker_stage_structural_file_replacement",
+        "context_worker_activate_file_replacement",
     }
     for function in security.values():
         assert function.owner == "context_engine_worker_lease_definer"
@@ -1555,8 +1566,38 @@ def test_file_publication_requires_noop_aware_versioned_worker_entrypoints(
             "context_engine_worker_lease_definer",
             "EXECUTE",
         ),
+        (
+            "context_worker_stage_file_replacement",
+            "context_engine_worker",
+            "EXECUTE",
+        ),
+        (
+            "context_worker_stage_file_replacement",
+            "context_engine_worker_lease_definer",
+            "EXECUTE",
+        ),
+        (
+            "context_worker_stage_structural_file_replacement",
+            "context_engine_worker",
+            "EXECUTE",
+        ),
+        (
+            "context_worker_stage_structural_file_replacement",
+            "context_engine_worker_lease_definer",
+            "EXECUTE",
+        ),
+        (
+            "context_worker_activate_file_replacement",
+            "context_engine_worker",
+            "EXECUTE",
+        ),
+        (
+            "context_worker_activate_file_replacement",
+            "context_engine_worker_lease_definer",
+            "EXECUTE",
+        ),
     }
-    assert worker_direct_dml == (False,) * 7
+    assert worker_direct_dml == (False,) * 9
 
 
 def test_structural_publisher_rejects_malformed_json_without_partial_effects(

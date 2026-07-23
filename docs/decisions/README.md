@@ -126,3 +126,4 @@ touched:
 - [0037 — First File publication](0037-publish-first-file-through-exact-worker-lease.md)
 - [0038 — Structural Markdown units](0038-compile-and-publish-structural-markdown.md)
 - [0039 — File acquisition no-op](0039-deduplicate-unchanged-file-acquisitions.md)
+- [0040 — Atomic File replacement](0040-stage-and-atomically-activate-file-replacements.md)

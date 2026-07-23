@@ -644,6 +644,20 @@ class PostgreSQLMembershipAuthority:
         ).one_or_none()
         if row is None or row.user_id != identity.user_id:
             raise MembershipNotCurrent
+        connection.execute(
+            text(
+                """
+                SELECT pg_catalog.pg_advisory_xact_lock_shared(
+                    pg_catalog.hashtextextended(
+                        'context-engine.file-publication:'
+                        || CAST(:organization_id AS text),
+                        0
+                    )
+                )
+                """
+            ),
+            {"organization_id": identity.organization_id},
+        )
 
         scope = _open_membership_authority_scope()
         projection_scope = _open_materialized_projection_scope()

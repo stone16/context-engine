@@ -246,7 +246,7 @@ def test_repeated_canonically_identical_file_import_is_an_auditable_noop(
 
     with pytest.raises(
         RuntimeError,
-        match="File no-op downgrade requires no unchanged results",
+        match="File (?:replacement|no-op) downgrade requires",
     ):
         command.downgrade(Config(ROOT / "alembic.ini"), "20260723_0012")
     with migration_engine.connect() as connection:
@@ -254,7 +254,7 @@ def test_repeated_canonically_identical_file_import_is_an_auditable_noop(
             connection.execute(
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one()
-            == "20260724_0013"
+            == "20260723_0014"
         )
 
 
@@ -449,7 +449,7 @@ def test_repeated_identical_structural_import_reuses_exact_active_artifact(
         ),
     ),
 )
-def test_changed_content_or_compiler_contract_never_takes_noop_path(
+def test_changed_content_or_compiler_contract_takes_replacement_not_noop_path(
     tmp_path: Path,
     migration_configuration: DatabaseConfiguration,
     guarded_control_engine: Engine,
@@ -476,22 +476,23 @@ def test_changed_content_or_compiler_contract_never_takes_noop_path(
         idempotency_key=f"changed-{config_version}",
     )
 
-    with pytest.raises(WorkNotAvailable):
-        _run_file_import(
-            scenario,
-            changed_prepared,
-            changed_token,
-            guarded_worker_engine,
-            config_version=config_version,
-        )
+    replacement = _run_file_import(
+        scenario,
+        changed_prepared,
+        changed_token,
+        guarded_worker_engine,
+        config_version=config_version,
+    )
 
     migration_engine = create_database_engine(migration_configuration)
     try:
         with migration_engine.connect() as connection:
-            assert _publication_effect_counts(
-                connection,
-                scenario.organization_id,
-            ) == (2, 2, 1, 1, 1, 1, 3, 1, 1, 1)
+            counts = _publication_effect_counts(
+                connection, scenario.organization_id
+            )
+            assert counts[:4] == (2, 2, 1, 2)
+            assert counts[5:7] == (2, 6)
+            assert counts[8:] == (1, 1)
             assert (
                 connection.execute(
                     text(
@@ -518,12 +519,16 @@ def test_changed_content_or_compiler_contract_never_takes_noop_path(
                         "job_id": changed_prepared.job_id,
                     },
                 ).scalar_one()
-                == "failed"
+                == "completed"
             )
     finally:
         migration_engine.dispose()
 
     assert first.outcome == "published"
+    assert replacement.outcome == "replaced"
+    assert replacement.effect_count == 1
+    assert replacement.reason_digest is None
+    assert replacement.candidate_ref.revision_ref != first.candidate_ref.revision_ref
 
 
 def test_identical_content_in_different_organizations_remains_independent(
