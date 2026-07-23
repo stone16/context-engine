@@ -357,9 +357,11 @@ class EgressGate:
             or provenance.decision_ref != package.decision_ref
             or provenance.purpose != package.purpose
             or provenance.purpose != delivery_context.purpose
-            or provenance.policy_epoch
-            != invocation.policy_epoch
-            != invocation.user_actor.policy_epoch
+            or not (
+                provenance.policy_epoch
+                == invocation.policy_epoch
+                == invocation.user_actor.policy_epoch
+            )
             or provenance.as_of != package.as_of
             or package.audience_digest
             != (

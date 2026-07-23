@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 from uuid import UUID
@@ -20,6 +21,8 @@ from engine.runtime.actor import (
 from engine.runtime.budget import PackageBudget, PackageBudgetRequest
 from engine.runtime.construction import (
     AuthorizationKernel,
+    DecisionProvenanceReceipt,
+    EgressGate,
     Runtime,
     required_kernel_dependencies,
 )
@@ -35,6 +38,7 @@ from engine.runtime.delivery import (
     _construct_private_delivery_context,
 )
 from engine.runtime.egress import (
+    INTERNAL_ONLY_EGRESS_PROFILE,
     ChannelEgressGrant,
     ChannelEgressProfile,
     EgressGrantIssuanceUnavailable,
@@ -240,6 +244,53 @@ def test_runtime_issues_one_model_grant_only_after_final_package_policy() -> Non
 
     assert type(outcome) is Resolved
     assert type(outcome.egress_grant) is ModelEgressGrant
+
+
+def test_final_egress_veto_rejects_package_epoch_that_disagrees_with_actor() -> None:
+    with trusted_operands() as (invocation, delivery):
+        outcome = runtime().resolve(
+            invocation,
+            delivery,
+            Acquire(need=ContextNeed(query="reject mismatched final epoch")),
+        )
+        assert type(outcome) is Resolved
+        package = replace(
+            outcome.package,
+            policy_epoch=invocation.policy_epoch + 1,
+        )
+        provenance = DecisionProvenanceReceipt(
+            decision_ref=package.decision_ref,
+            package_id=package.package_id,
+            organization_id=invocation.user_actor.organization_id,
+            user_id=invocation.user_actor.user_id,
+            membership_id=invocation.user_actor.membership_id,
+            membership_version=invocation.user_actor.membership_version,
+            principal_ref=invocation.principal_ref,
+            agent_version_ref=invocation.agent_version_ref,
+            authenticated_application_ref=invocation.authenticated_application_ref,
+            authentication_binding_ref=invocation.authentication_binding_ref,
+            effective_scope_digest=outcome.scope_decision.digest,
+            request_id=invocation.request_id,
+            purpose=package.purpose,
+            as_of=package.as_of,
+            run_ref=package.run_ref,
+            policy_snapshot_ref=package.policy_snapshot_ref,
+            policy_epoch=package.policy_epoch,
+            source_acl_decision_ref="sourceacl_final-egress-epoch-veto",
+        )
+
+        with pytest.raises(
+            EgressGrantIssuanceUnavailable,
+            match="final egress policy",
+        ):
+            EgressGate().finalize(
+                invocation=invocation,
+                delivery_context=delivery,
+                provenance=provenance,
+                package=package,
+                profile=INTERNAL_ONLY_EGRESS_PROFILE,
+                issued_at=package.as_of,
+            )
 
 
 def test_channel_grant_requires_exact_redeemed_private_destination_and_consumer(

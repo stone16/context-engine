@@ -3243,6 +3243,17 @@ def validate_catalog(
     _validate_schema(schema, catalog.get("catalogVersion"), collector)
     if isinstance(schema, Mapping):
         _validate_schema_instance(catalog, schema, schema, "catalog", collector)
+        definitions = schema.get("$defs")
+        if isinstance(definitions, Mapping):
+            activation_schema = definitions.get("activation")
+            for index, activation in enumerate(CANONICAL_ACTIVATIONS):
+                _validate_schema_instance(
+                    activation,
+                    activation_schema,
+                    schema,
+                    f"schema canonical activation[{index}]",
+                    collector,
+                )
     if collector.errors:
         raise CatalogValidationError(collector.errors)
 

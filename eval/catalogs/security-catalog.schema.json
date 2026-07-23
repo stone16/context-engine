@@ -586,7 +586,7 @@
     "pytestSurface": {
       "type": "string",
       "minLength": 1,
-      "pattern": "^(?!(?:[A-Za-z]:[/\\\\]|/|https?://|file://))(?!.*(?:^|/)\\.\\.(?:/|$))tests/(?:unit|integration)/[A-Za-z0-9._\\-/]+\\.py(?:::[A-Za-z_][A-Za-z0-9_]*)?(?: tests/(?:unit|integration)/[A-Za-z0-9._\\-/]+\\.py(?:::[A-Za-z_][A-Za-z0-9_]*)?)*$"
+      "pattern": "^(?!(?:[A-Za-z]:[/\\\\]|/|https?://|file://))(?!.*(?:^|/)\\.\\.(?:/|$))tests/(?:unit|integration|process)/[A-Za-z0-9._\\-/]+\\.py(?:::[A-Za-z_][A-Za-z0-9_]*)?(?: tests/(?:unit|integration|process)/[A-Za-z0-9._\\-/]+\\.py(?:::[A-Za-z_][A-Za-z0-9_]*)?)*$"
     },
     "authority": {
       "type": "object",
@@ -794,7 +794,11 @@
             "FILE-DELIVERY-EVIDENCE-063",
             "PROP-EGRESS-011",
             "PG-EGRESS-011",
-            "RUNTIME-EGRESS-011"
+            "RUNTIME-EGRESS-011",
+            "OPENAPI-CONTRACT-066",
+            "OPENAPI-BREAKING-066",
+            "HTTP-V0-066",
+            "PG-RUNTIME-RELEASE-066"
           ]
         },
         "surface": {
@@ -855,7 +859,8 @@
             "ContextRuntime.resolve(Acquire) authorized-only ContextRun | restricted delivered-empty DecisionAudit",
             "ACCEPT-002 ContextRuntime.resolve(Acquire) Membership field projection",
             "private authenticated HTTP Acquire DeliveryEvidenceRef",
-            "opaque one-shot model or channel EgressGrant with deterministic boundary spies"
+            "opaque one-shot model or channel EgressGrant with deterministic boundary spies",
+            "frozen public POST /v0/resolve OpenAPI contract"
           ]
         },
         "status": {
@@ -876,7 +881,8 @@
             "persist_context_run(ContextRunPersistenceSession, ContextRunRecord, DecisionAuditRecord | None) | PostgreSQLContextRunReader.find_by_decision_ref",
             "CandidateRef -> same-transaction active-lineage locator -> EffectiveScope -> current Membership/version field ceiling -> PostgreSQL/FORCE-RLS field reduction -> AuthorizationKernel -> AuthorizedProjection",
             "PrivateDeliveryEvidenceIssuer -> PostgreSQL identity function -> authenticated HTTP metadata -> current UserActor transaction redemption -> TrustedDeliveryContext -> sealed ContextRuntime.resolve(Acquire)",
-            "ContextPackage -> final EgressGate -> digest-only PostgreSQL grant -> AuthorizedModelInput | AuthorizedChannelPayload -> exact one-shot redemption -> ModelGateway | Sender preflight spy"
+            "ContextPackage -> final EgressGate -> digest-only PostgreSQL grant -> AuthorizedModelInput | AuthorizedChannelPayload -> exact one-shot redemption -> ModelGateway | Sender preflight spy",
+            "authenticated HTTP metadata -> closed ResolveWire -> current UserActor and active release observation -> sealed ContextRuntime.resolve -> closed ResolutionOutcome"
           ]
         },
         "testEvidence": {

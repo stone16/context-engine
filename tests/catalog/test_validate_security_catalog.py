@@ -22,6 +22,7 @@ from scripts.validate_security_catalog import (
     ACL_PROOF_CASE_IDS,
     AUDIENCE_ACTION_CASE_IDS,
     CANONICAL_ACTIVATION_ISSUE_LIST,
+    CANONICAL_ACTIVATIONS,
     CANONICAL_CONTEXT_RUN_ACTIVATION,
     CANONICAL_EGRESS_GRANT_ACTIVATION,
     CANONICAL_FAIL_CLOSED_OUTCOMES,
@@ -133,19 +134,28 @@ def object_list_at(mapping: dict[str, object], *keys: str) -> list[dict[str, obj
 def test_active_evidence_surfaces_reference_existing_test_nodes() -> None:
     """Canonical active evidence cannot drift to a renamed or deleted test."""
 
-    test_evidence = CANONICAL_OPENAPI_V0_ACTIVATION["testEvidence"]
-    assert isinstance(test_evidence, list)
-    for activation in test_evidence:
-        assert isinstance(activation, dict)
-        surface = activation["surface"]
-        assert isinstance(surface, str)
-        for reference in surface.split():
-            file_ref, separator, node_ref = reference.partition("::")
-            path = Path(__file__).parents[2] / file_ref
-            assert path.is_file(), reference
-            if separator:
-                source = path.read_text(encoding="utf-8")
-                assert f"def {node_ref}(" in source, reference
+    for activation in CANONICAL_ACTIVATIONS:
+        test_evidence = activation["testEvidence"]
+        assert isinstance(test_evidence, list)
+        for evidence in test_evidence:
+            assert isinstance(evidence, dict)
+            surface = evidence["surface"]
+            assert isinstance(surface, str)
+            for reference in surface.split():
+                file_ref, separator, node_ref = reference.partition("::")
+                path = Path(__file__).parents[2] / file_ref
+                assert path.is_file(), reference
+                if separator:
+                    source = path.read_text(encoding="utf-8")
+                    assert f"def {node_ref}(" in source, reference
+
+
+def test_reusable_schema_accepts_every_canonical_activation_value() -> None:
+    """Reusable activation definitions cannot lag canonical frozen records."""
+
+    catalog = load_document(DEFAULT_CATALOG_PATH)
+    schema = load_document(DEFAULT_SCHEMA_PATH)
+    validate_catalog(catalog, schema)
 
 
 def make_catalog() -> dict[str, object]:
@@ -1464,6 +1474,16 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
             "schema.invariants.items.properties.id.enum: must freeze the "
             "canonical ordered IDs",
             error.errors,
+        )
+
+    def test_malformed_schema_definitions_fail_with_catalog_error(self) -> None:
+        schema = load_document(DEFAULT_SCHEMA_PATH)
+        schema["$defs"] = "not-an-object"
+
+        self.assert_catalog_error(
+            load_document(DEFAULT_CATALOG_PATH),
+            "schema.$defs: must be an object",
+            schema,
         )
 
     def test_schema_hard_oracle_tuple_is_closed(self) -> None:
