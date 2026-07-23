@@ -14,7 +14,7 @@
   "properties": {
     "catalogVersion": {
       "type": "string",
-      "const": "1.1.0"
+      "const": "1.2.0"
     },
     "authority": {
       "$ref": "#/$defs/authority"
@@ -59,8 +59,8 @@
     },
     "activations": {
       "type": "array",
-      "minItems": 6,
-      "maxItems": 6,
+      "minItems": 7,
+      "maxItems": 7,
       "uniqueItems": true,
       "prefixItems": [
         {
@@ -168,6 +168,25 @@
             "deferredEvidence": ["production Provider-native field authorization", "File and Base source-field authorization", "typed or non-text field projection"],
             "futureCarriers": ["production ContextProvider native field projection", "File and Base ingestion field ACL", "Continue and OpenCitation field projection", "field-policy change independent of Membership version"],
             "notActive": ["general permission DSL", "caller-authored projection lists", "CandidateRef or index field authority", "Provider capability negotiation or source-native field ACL", "Supply publication and field classification", "ranking or relevance-model field authority", "Issue #20 gate or runner substitution"]
+          }
+        },
+        {
+          "const": {
+            "issueRef": "#63",
+            "invariantRef": "TRANSPORT-UNTRUSTED-008",
+            "carrier": "private authenticated HTTP Acquire DeliveryEvidenceRef",
+            "status": "active_fail_closed",
+            "policyEpochScope": "organization-v0",
+            "controlBoundary": "PrivateDeliveryEvidenceIssuer -> PostgreSQL identity function -> authenticated HTTP metadata -> current UserActor transaction redemption -> TrustedDeliveryContext -> sealed ContextRuntime.resolve(Acquire)",
+            "testEvidence": [
+              {"id": "PROP-DELIVERY-EVIDENCE-063", "surface": "tests/unit/test_delivery_evidence.py::test_delivery_evidence_values_redact_all_trusted_facts_from_repr", "oracle": "Versioned private issuance returns one opaque random reference while persisting only its SHA-256 digest and exact audience digest; issuance, redemption, and nominal TrustedDeliveryContext carriers redact bearer and raw trusted facts from normal representations."},
+              {"id": "PG-DELIVERY-EVIDENCE-063", "surface": "tests/integration/test_delivery_evidence_ref.py::test_identity_issues_digest_only_and_runtime_redeems_one_stable_private_request tests/integration/test_delivery_evidence_ref.py::test_private_evidence_one_field_mutations_are_equivalent_not_available tests/integration/test_delivery_evidence_ref.py::test_same_logical_request_cannot_be_rebound_to_another_private_audience tests/integration/test_delivery_evidence_ref.py::test_expired_private_evidence_cleanup_is_exactly_organization_scoped tests/integration/test_delivery_evidence_ref.py::test_identity_cannot_backdate_issuance_for_a_membership_not_current_now tests/integration/test_delivery_evidence_ref.py::test_delivery_evidence_table_and_functions_enforce_exact_role_split", "oracle": "Real PostgreSQL with FORCE RLS stores no bearer, accepts only the dedicated identity issuer for a database-current Membership, redeems only through Runtime for the exact service/request/Organization/asker/Membership version/destination/consumer/private kind/audience digest/purpose/epoch/lifetime, preserves one stable retry identity, rejects every one-field mutation and audience rebind, restricts expired cleanup to one Organization, blocks populated downgrade, and gives ordinary application roles zero table or cross-capability access."},
+              {"id": "HTTP-DELIVERY-EVIDENCE-063", "surface": "tests/unit/test_http_trust_boundary.py::test_private_delivery_evidence_is_redeemed_before_runtime_content_work", "oracle": "Authenticated HTTP metadata carries only the opaque reference; exact redemption constructs private TrustedDeliveryContext while forged or wrong authenticated-route destination evidence returns the same generic authentication failure before index, Provider, source-content, Package, model, or effect work, and response, ordinary authentication/invocation/outcome trace, and captured logs omit bearer, raw Organization/User/Membership/principal/agent/application/binding facts, destination, consumer, and audience digest."},
+              {"id": "FILE-DELIVERY-EVIDENCE-063", "surface": "tests/integration/test_file_import_tracer.py::test_registered_file_import_publishes_one_exact_authorized_http_package", "oracle": "The real File-backed authenticated HTTP Acquire redeems private evidence inside the current UserActor transaction and still proves CandidateRef through the sealed AuthorizationKernel to AuthorizedProjection; an identical retry returns authorized content under one stored logical redemption identity, and both private responses plus their ContextRuns omit the bearer and raw private delivery bindings."}
+            ],
+            "deferredEvidence": ["group AudienceSnapshot DeliveryEvidenceRef", "frozen OpenAPI and generated TypeScript SDK carrier", "production BotDelivery caller"],
+            "futureCarriers": ["public group DeliveryEvidenceRef", "OpenCitation delivery evidence", "generated TypeScript SDK", "private BotDelivery application"],
+            "notActive": ["group delivery", "AudienceSnapshot", "EgressGrant", "ModelGateway", "ActionPlane", "BotDelivery", "OpenAPI compatibility freeze", "generated SDK"]
           }
         }
       ],
@@ -372,7 +391,7 @@
       "additionalProperties": false,
       "required": ["id", "surface", "oracle"],
       "properties": {
-        "id": {"enum": ["PG-REVOCATION-006", "RUN-006", "CACHE-002", "RUN-UNAVAILABLE-016", "HTTP-UNAVAILABLE-016", "LEASE-SIGNING-017", "PG-WORKER-LEASE-NOOP-017", "WORKER-LEASE-REPLAY-007", "TICKET-AUDIENCE-018", "PG-TICKET-EPOCH-018", "DIGEST-019", "RUN-LINEAGE-019", "AUTHORIZED-RUN-019", "PG-TRACE-REDACTION-012", "PROP-FIELD-PROJECTION-048", "PG-FIELD-PROJECTION-048", "HTTP-ACCEPT-002-048"]},
+        "id": {"enum": ["PG-REVOCATION-006", "RUN-006", "CACHE-002", "RUN-UNAVAILABLE-016", "HTTP-UNAVAILABLE-016", "LEASE-SIGNING-017", "PG-WORKER-LEASE-NOOP-017", "WORKER-LEASE-REPLAY-007", "TICKET-AUDIENCE-018", "PG-TICKET-EPOCH-018", "DIGEST-019", "RUN-LINEAGE-019", "AUTHORIZED-RUN-019", "PG-TRACE-REDACTION-012", "PROP-FIELD-PROJECTION-048", "PG-FIELD-PROJECTION-048", "HTTP-ACCEPT-002-048", "PROP-DELIVERY-EVIDENCE-063", "PG-DELIVERY-EVIDENCE-063", "HTTP-DELIVERY-EVIDENCE-063", "FILE-DELIVERY-EVIDENCE-063"]},
         "surface": {"$ref": "#/$defs/pytestSurface"},
         "oracle": {"$ref": "#/$defs/nonEmptyString"}
       }
@@ -382,12 +401,12 @@
       "additionalProperties": false,
       "required": ["issueRef", "invariantRef", "carrier", "status", "policyEpochScope", "controlBoundary", "testEvidence", "deferredEvidence", "futureCarriers", "notActive"],
       "properties": {
-        "issueRef": {"enum": ["#15", "#16", "#17", "#18", "#19", "#48"]},
-        "invariantRef": {"enum": ["REVOCATION-006", "INDEX-NOT-AUTHORITY-005", "WORKER-LEASE-007", "ACTION-SEPARATION-014", "TRACE-REDACTION-012", "SCOPE-INTERSECTION-004"]},
-        "carrier": {"enum": ["ContextRuntime.resolve(Acquire)", "ContextRuntime.resolve(Continue | OpenCitation | server-owned unavailable Acquire plan)", "signed one-shot persistent no-op durable-job WorkerLease", "signed synthetic ContextAccessTicket Provider read | signed synthetic ActionTicket no-op channel action", "ContextRuntime.resolve(Acquire) authorized-only ContextRun | restricted delivered-empty DecisionAudit", "ACCEPT-002 ContextRuntime.resolve(Acquire) Membership field projection"]},
+        "issueRef": {"enum": ["#15", "#16", "#17", "#18", "#19", "#48", "#63"]},
+        "invariantRef": {"enum": ["REVOCATION-006", "INDEX-NOT-AUTHORITY-005", "WORKER-LEASE-007", "ACTION-SEPARATION-014", "TRACE-REDACTION-012", "SCOPE-INTERSECTION-004", "TRANSPORT-UNTRUSTED-008"]},
+        "carrier": {"enum": ["ContextRuntime.resolve(Acquire)", "ContextRuntime.resolve(Continue | OpenCitation | server-owned unavailable Acquire plan)", "signed one-shot persistent no-op durable-job WorkerLease", "signed synthetic ContextAccessTicket Provider read | signed synthetic ActionTicket no-op channel action", "ContextRuntime.resolve(Acquire) authorized-only ContextRun | restricted delivered-empty DecisionAudit", "ACCEPT-002 ContextRuntime.resolve(Acquire) Membership field projection", "private authenticated HTTP Acquire DeliveryEvidenceRef"]},
         "status": {"const": "active_fail_closed"},
         "policyEpochScope": {"enum": ["organization-v0", "not-bound-issue-17"]},
-        "controlBoundary": {"enum": ["PostgreSQLAccessPolicyControl.change_access(ResourceAccessRevocation)", "RuntimeCapabilityGate.require_available(RuntimeCapability)", "complete_persistent_noop_job(PostgreSQLWorkerLeaseAuthority, WorkerLeaseRedemption)", "ContextAccessTicketReadHandler.read | ActionTicketNoopHandler.perform", "persist_context_run(ContextRunPersistenceSession, ContextRunRecord, DecisionAuditRecord | None) | PostgreSQLContextRunReader.find_by_decision_ref", "CandidateRef -> same-transaction active-lineage locator -> EffectiveScope -> current Membership/version field ceiling -> PostgreSQL/FORCE-RLS field reduction -> AuthorizationKernel -> AuthorizedProjection"]},
+        "controlBoundary": {"enum": ["PostgreSQLAccessPolicyControl.change_access(ResourceAccessRevocation)", "RuntimeCapabilityGate.require_available(RuntimeCapability)", "complete_persistent_noop_job(PostgreSQLWorkerLeaseAuthority, WorkerLeaseRedemption)", "ContextAccessTicketReadHandler.read | ActionTicketNoopHandler.perform", "persist_context_run(ContextRunPersistenceSession, ContextRunRecord, DecisionAuditRecord | None) | PostgreSQLContextRunReader.find_by_decision_ref", "CandidateRef -> same-transaction active-lineage locator -> EffectiveScope -> current Membership/version field ceiling -> PostgreSQL/FORCE-RLS field reduction -> AuthorizationKernel -> AuthorizedProjection", "PrivateDeliveryEvidenceIssuer -> PostgreSQL identity function -> authenticated HTTP metadata -> current UserActor transaction redemption -> TrustedDeliveryContext -> sealed ContextRuntime.resolve(Acquire)"]},
         "testEvidence": {
           "type": "array",
           "minItems": 2,

@@ -32,7 +32,7 @@ DEFAULT_EXECUTION_REGISTRY_PATH = (
 DEFAULT_EXECUTION_REGISTRY_SCHEMA_PATH = (
     REPOSITORY_ROOT / "eval/catalogs/m0-security-evidence.schema.json"
 )
-SUPPORTED_CATALOG_VERSION = "1.1.0"
+SUPPORTED_CATALOG_VERSION = "1.2.0"
 SUPPORTED_EXECUTION_REGISTRY_VERSION = "1.0.0"
 EXPECTED_INVARIANT_COUNT = 15
 EXPECTED_FIXTURE_COUNT = 12
@@ -370,6 +370,8 @@ REQUIRED_RUNTIME_EVIDENCE: dict[str, tuple[str, ...]] = {
         "DELIV-002",
         "DELIV-003",
         "DELIV-004",
+        "HTTP-DELIVERY-EVIDENCE-063",
+        "FILE-DELIVERY-EVIDENCE-063",
     ),
     "EGRESS-011": ("EGR-003", "EGR-005", "EGR-006", "RUN-014"),
     "TRACE-REDACTION-012": ("HTTP-ACCEPT-002-048",),
@@ -384,6 +386,7 @@ REQUIRED_PROPERTY_EVIDENCE: dict[str, tuple[str, ...]] = {
         "TRACE-REDACTION-012",
     )
 }
+REQUIRED_PROPERTY_EVIDENCE["TRANSPORT-UNTRUSTED-008"] = ("PROP-DELIVERY-EVIDENCE-063",)
 
 REQUIRED_POSTGRES_EVIDENCE: dict[str, tuple[str, ...]] = {
     "SCOPE-INTERSECTION-004": ("PG-FIELD-PROJECTION-048",),
@@ -391,6 +394,7 @@ REQUIRED_POSTGRES_EVIDENCE: dict[str, tuple[str, ...]] = {
     "REVOCATION-006": ("PG-REVOCATION-006", "CACHE-002", "BLOB-002"),
     "TRACE-REDACTION-012": ("PG-FIELD-PROJECTION-048",),
 }
+REQUIRED_POSTGRES_EVIDENCE["TRANSPORT-UNTRUSTED-008"] = ("PG-DELIVERY-EVIDENCE-063",)
 
 ACCEPT_002_ACTIVE_CARRIER: dict[str, str] = {
     "statusAtM0": "available",
@@ -921,6 +925,127 @@ CANONICAL_FIELD_PROJECTION_ACTIVATION: dict[str, object] = {
     ],
 }
 
+CANONICAL_PRIVATE_DELIVERY_EVIDENCE_ACTIVATION: dict[str, object] = {
+    "issueRef": "#63",
+    "invariantRef": "TRANSPORT-UNTRUSTED-008",
+    "carrier": "private authenticated HTTP Acquire DeliveryEvidenceRef",
+    "status": "active_fail_closed",
+    "policyEpochScope": "organization-v0",
+    "controlBoundary": (
+        "PrivateDeliveryEvidenceIssuer -> PostgreSQL identity function -> "
+        "authenticated HTTP metadata -> current UserActor transaction "
+        "redemption -> TrustedDeliveryContext -> sealed "
+        "ContextRuntime.resolve(Acquire)"
+    ),
+    "testEvidence": [
+        {
+            "id": "PROP-DELIVERY-EVIDENCE-063",
+            "surface": (
+                "tests/unit/test_delivery_evidence.py::"
+                "test_delivery_evidence_values_redact_all_trusted_facts_from_repr"
+            ),
+            "oracle": (
+                "Versioned private issuance returns one opaque random reference "
+                "while persisting only its SHA-256 digest and exact audience "
+                "digest; issuance, redemption, and nominal "
+                "TrustedDeliveryContext carriers redact bearer and raw trusted "
+                "facts from normal representations."
+            ),
+        },
+        {
+            "id": "PG-DELIVERY-EVIDENCE-063",
+            "surface": (
+                "tests/integration/test_delivery_evidence_ref.py::"
+                "test_identity_issues_digest_only_and_runtime_redeems_one_stable_"
+                "private_request "
+                "tests/integration/test_delivery_evidence_ref.py::"
+                "test_private_evidence_one_field_mutations_are_equivalent_not_"
+                "available "
+                "tests/integration/test_delivery_evidence_ref.py::"
+                "test_same_logical_request_cannot_be_rebound_to_another_private_"
+                "audience "
+                "tests/integration/test_delivery_evidence_ref.py::"
+                "test_expired_private_evidence_cleanup_is_exactly_organization_"
+                "scoped "
+                "tests/integration/test_delivery_evidence_ref.py::"
+                "test_identity_cannot_backdate_issuance_for_a_membership_not_"
+                "current_now "
+                "tests/integration/test_delivery_evidence_ref.py::"
+                "test_delivery_evidence_table_and_functions_enforce_exact_role_split"
+            ),
+            "oracle": (
+                "Real PostgreSQL with FORCE RLS stores no bearer, accepts only the "
+                "dedicated identity issuer for a database-current Membership, "
+                "redeems only through Runtime for the exact service/request/"
+                "Organization/asker/Membership version/destination/consumer/"
+                "private kind/audience digest/purpose/epoch/lifetime, preserves "
+                "one stable retry identity, "
+                "rejects every one-field mutation and audience rebind, restricts "
+                "expired cleanup to one Organization, blocks populated downgrade, "
+                "and gives ordinary application roles zero table or cross-"
+                "capability access."
+            ),
+        },
+        {
+            "id": "HTTP-DELIVERY-EVIDENCE-063",
+            "surface": (
+                "tests/unit/test_http_trust_boundary.py::"
+                "test_private_delivery_evidence_is_redeemed_before_runtime_content_"
+                "work"
+            ),
+            "oracle": (
+                "Authenticated HTTP metadata carries only the opaque reference; "
+                "exact redemption constructs private TrustedDeliveryContext while "
+                "forged or wrong authenticated-route destination evidence returns "
+                "the same generic authentication failure before index, Provider, "
+                "source-content, Package, model, or effect work, and response, "
+                "ordinary authentication/invocation/outcome trace, and captured "
+                "logs omit bearer, raw Organization/User/Membership/principal/agent/"
+                "application/binding facts, destination, consumer, and audience "
+                "digest."
+            ),
+        },
+        {
+            "id": "FILE-DELIVERY-EVIDENCE-063",
+            "surface": (
+                "tests/integration/test_file_import_tracer.py::"
+                "test_registered_file_import_publishes_one_exact_authorized_http_"
+                "package"
+            ),
+            "oracle": (
+                "The real File-backed authenticated HTTP Acquire redeems private "
+                "evidence inside the current UserActor transaction and still proves "
+                "CandidateRef through the sealed AuthorizationKernel to "
+                "AuthorizedProjection; an identical retry returns authorized "
+                "content under one stored logical redemption identity, and both "
+                "private responses plus their ContextRuns omit the bearer and raw "
+                "private delivery bindings."
+            ),
+        },
+    ],
+    "deferredEvidence": [
+        "group AudienceSnapshot DeliveryEvidenceRef",
+        "frozen OpenAPI and generated TypeScript SDK carrier",
+        "production BotDelivery caller",
+    ],
+    "futureCarriers": [
+        "public group DeliveryEvidenceRef",
+        "OpenCitation delivery evidence",
+        "generated TypeScript SDK",
+        "private BotDelivery application",
+    ],
+    "notActive": [
+        "group delivery",
+        "AudienceSnapshot",
+        "EgressGrant",
+        "ModelGateway",
+        "ActionPlane",
+        "BotDelivery",
+        "OpenAPI compatibility freeze",
+        "generated SDK",
+    ],
+}
+
 CANONICAL_ACTIVATIONS: list[dict[str, object]] = [
     CANONICAL_REVOCATION_ACTIVATION,
     CANONICAL_UNAVAILABLE_CAPABILITY_ACTIVATION,
@@ -928,6 +1053,7 @@ CANONICAL_ACTIVATIONS: list[dict[str, object]] = [
     CANONICAL_TICKET_AUDIENCE_ACTIVATION,
     CANONICAL_CONTEXT_RUN_ACTIVATION,
     CANONICAL_FIELD_PROJECTION_ACTIVATION,
+    CANONICAL_PRIVATE_DELIVERY_EVIDENCE_ACTIVATION,
 ]
 CANONICAL_ACTIVATION_ISSUE_LIST = ", ".join(
     f"Issue {activation['issueRef']}" for activation in CANONICAL_ACTIVATIONS
@@ -3136,8 +3262,7 @@ def validate_execution_registry(
     if registry.get("registryVersion") != SUPPORTED_EXECUTION_REGISTRY_VERSION:
         collector.add(
             "registry.registryVersion",
-            "must be the supported version "
-            f"{SUPPORTED_EXECUTION_REGISTRY_VERSION!r}",
+            f"must be the supported version {SUPPORTED_EXECUTION_REGISTRY_VERSION!r}",
         )
 
     catalog_link = collector.require_mapping(
@@ -3221,9 +3346,10 @@ def validate_execution_registry(
         observed_adapters.append((adapter.get("oracleRef"), adapter.get("resultKey")))
         if adapter.get("assertion") != "equals":
             collector.add(f"{path}.assertion", "must be 'equals'")
-        if type(adapter.get("requiredValue")) is not int or adapter.get(
-            "requiredValue"
-        ) != 0:
+        if (
+            type(adapter.get("requiredValue")) is not int
+            or adapter.get("requiredValue") != 0
+        ):
             collector.add(f"{path}.requiredValue", "must be the numeric constant 0")
         observation = collector.require_mapping(
             adapter.get("observation"), f"{path}.observation"
@@ -3364,9 +3490,10 @@ def validate_execution_registry(
                 expected_layer=layer,
             )
     canonical_catalog_invariants = _catalog_ids(catalog, "invariants")
-    if tuple(invariant_refs) != CANONICAL_INVARIANT_IDS or tuple(
-        invariant_refs
-    ) != canonical_catalog_invariants:
+    if (
+        tuple(invariant_refs) != CANONICAL_INVARIANT_IDS
+        or tuple(invariant_refs) != canonical_catalog_invariants
+    ):
         collector.add(
             "registry.invariantMappings",
             "must map every canonical catalog invariant exactly once in "
@@ -3402,8 +3529,7 @@ def validate_execution_registry(
                 (
                     fixture
                     for fixture in catalog.get("fixtures", [])
-                    if isinstance(fixture, Mapping)
-                    and fixture.get("id") == fixture_ref
+                    if isinstance(fixture, Mapping) and fixture.get("id") == fixture_ref
                 ),
                 None,
             )
@@ -3456,9 +3582,10 @@ def validate_execution_registry(
                         f"must reference a fixture evidenceRef, got {evidence_ref!r}",
                     )
     canonical_catalog_fixtures = _catalog_ids(catalog, "fixtures")
-    if tuple(fixture_refs) != CANONICAL_FIXTURE_IDS or tuple(
-        fixture_refs
-    ) != canonical_catalog_fixtures:
+    if (
+        tuple(fixture_refs) != CANONICAL_FIXTURE_IDS
+        or tuple(fixture_refs) != canonical_catalog_fixtures
+    ):
         collector.add(
             "registry.fixtureMappings",
             "must map every canonical catalog fixture exactly once in canonical order",
@@ -3471,9 +3598,7 @@ def validate_execution_registry(
     if isinstance(schema, Mapping):
         if schema.get("$schema") != "https://json-schema.org/draft/2020-12/schema":
             collector.add("registrySchema.$schema", "must declare Draft 2020-12")
-        _validate_schema_instance(
-            registry, schema, schema, "registry", collector
-        )
+        _validate_schema_instance(registry, schema, schema, "registry", collector)
     else:
         collector.add("registrySchema", "must be an object")
 

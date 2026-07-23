@@ -3,6 +3,7 @@
 from collections.abc import Callable
 from contextlib import ExitStack
 from datetime import UTC, datetime
+from hashlib import sha256
 from json import loads
 from typing import Annotated, Final
 from uuid import UUID, uuid4
@@ -20,6 +21,7 @@ from adapters.http.authentication import (
     InvalidAuthenticationContext,
     RejectingAuthenticator,
     VerifiedAuthenticationContext,
+    VerifiedPrivateDeliveryBinding,
 )
 from adapters.http.contracts import (
     AcquireWire,
@@ -85,7 +87,17 @@ from engine.runtime.contracts import (
     Resolved,
     context_package_public_document,
 )
-from engine.runtime.delivery import _construct_direct_delivery_context
+from engine.runtime.delivery import (
+    _construct_direct_delivery_context,
+    _construct_private_delivery_context,
+)
+from engine.runtime.delivery_evidence import (
+    DeliveryEvidenceAuthorityUnavailable,
+    DeliveryEvidenceNotAvailable,
+    PrivateDeliveryEvidenceRedemption,
+    private_delivery_audience_digest_for_binding,
+    redeem_private_delivery_evidence,
+)
 from engine.runtime.invocation import (
     _construct_authenticated_http_invocation,
 )
@@ -261,7 +273,12 @@ def create_app(
     async def require_closed_json_transport(request: Request) -> None:
         content_type_values = request.headers.getlist("content-type")
         request_id_values = request.headers.getlist("x-context-request-id")
-        if len(content_type_values) != 1 or len(request_id_values) > 1:
+        evidence_ref_values = request.headers.getlist("x-context-delivery-evidence-ref")
+        if (
+            len(content_type_values) != 1
+            or len(request_id_values) > 1
+            or len(evidence_ref_values) > 1
+        ):
             raise InvalidRequestMediaType
         if request.scope.get("query_string", b""):
             raise InvalidClosedRequest
@@ -352,6 +369,15 @@ def create_app(
                 alias="X-Context-Request-Id",
                 min_length=1,
                 max_length=transport_profile.max_correlation_id_characters,
+                pattern=r".*\S.*",
+            ),
+        ] = None,
+        delivery_evidence_ref: Annotated[
+            str | None,
+            Header(
+                alias="X-Context-Delivery-Evidence-Ref",
+                min_length=1,
+                max_length=transport_profile.max_delivery_evidence_ref_characters,
                 pattern=r".*\S.*",
             ),
         ] = None,
@@ -450,16 +476,94 @@ def create_app(
                         raise TransportAuthenticationFailed from None
                     if invocation_observer is not None:
                         invocation_observer(invocation)
-                    delivery_context = _construct_direct_delivery_context(
-                        purpose=_purpose_for_wire(body),
-                        authenticated_application_ref=(
-                            authentication.authenticated_application_ref
-                        ),
-                        delivery_binding_ref=(
-                            authentication.authentication_binding_ref
-                        ),
-                        established_at=invocation.received_at,
-                    )
+                    if delivery_evidence_ref is None:
+                        delivery_context = _construct_direct_delivery_context(
+                            purpose=_purpose_for_wire(body),
+                            authenticated_application_ref=(
+                                authentication.authenticated_application_ref
+                            ),
+                            delivery_binding_ref=(
+                                authentication.authentication_binding_ref
+                            ),
+                            established_at=invocation.received_at,
+                        )
+                    else:
+                        if type(runtime_request) is not Acquire:
+                            raise TransportAuthenticationFailed
+                        private_binding = authentication.private_delivery_binding
+                        if type(private_binding) is not VerifiedPrivateDeliveryBinding:
+                            raise TransportAuthenticationFailed
+                        redemption_session = (
+                            current_membership_verification
+                            .delivery_evidence_redemption_session
+                        )
+                        if redemption_session is None:
+                            raise TrustedAuthorityUnavailable
+                        try:
+                            redeemed = redeem_private_delivery_evidence(
+                                redemption_session,
+                                PrivateDeliveryEvidenceRedemption(
+                                    evidence_ref=delivery_evidence_ref,
+                                    evidence_digest=sha256(
+                                        delivery_evidence_ref.encode("utf-8")
+                                    ).digest(),
+                                    authenticated_service_ref=(
+                                        authentication.authenticated_application_ref
+                                    ),
+                                    authentication_binding_ref=(
+                                        authentication.authentication_binding_ref
+                                    ),
+                                    request_id=invocation.request_id,
+                                    organization_id=(
+                                        invocation.user_actor.organization_id
+                                    ),
+                                    user_id=invocation.user_actor.user_id,
+                                    membership_id=invocation.user_actor.membership_id,
+                                    membership_version=(
+                                        invocation.user_actor.membership_version
+                                    ),
+                                    destination_ref=private_binding.destination_ref,
+                                    consumer_ref=private_binding.consumer_ref,
+                                    delivery_kind=private_binding.delivery_kind,
+                                    audience_digest=(
+                                        private_delivery_audience_digest_for_binding(
+                                            organization_id=(
+                                                invocation.user_actor.organization_id
+                                            ),
+                                            membership_id=(
+                                                invocation.user_actor.membership_id
+                                            ),
+                                            membership_version=(
+                                                invocation.user_actor.membership_version
+                                            ),
+                                            destination_ref=(
+                                                private_binding.destination_ref
+                                            ),
+                                            consumer_ref=private_binding.consumer_ref,
+                                        )
+                                    ),
+                                    purpose=_purpose_for_wire(body),
+                                    policy_epoch=invocation.policy_epoch,
+                                    redeemed_at=invocation.received_at,
+                                ),
+                            )
+                        except DeliveryEvidenceNotAvailable:
+                            raise TransportAuthenticationFailed from None
+                        except DeliveryEvidenceAuthorityUnavailable:
+                            raise TrustedAuthorityUnavailable from None
+                        delivery_context = _construct_private_delivery_context(
+                            purpose=redeemed.purpose,
+                            authenticated_application_ref=(
+                                redeemed.authenticated_service_ref
+                            ),
+                            delivery_binding_ref=(redeemed.authentication_binding_ref),
+                            established_at=invocation.received_at,
+                            destination_ref=redeemed.destination_ref,
+                            consumer_ref=redeemed.consumer_ref,
+                            audience_digest=redeemed.audience_digest,
+                            logical_resolution_ref=(redeemed.logical_resolution_ref),
+                            delivery_profile_ref=redeemed.profile_ref,
+                        )
                     outcome = selected_runtime.resolve(
                         invocation,
                         delivery_context,

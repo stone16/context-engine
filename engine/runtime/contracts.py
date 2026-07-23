@@ -7,7 +7,7 @@ from typing import Literal
 
 from engine.runtime.budget import PackageBudget, PackageBudgetRequest
 from engine.runtime.delivery import (
-    DirectDeliveryConstructionProvenance,
+    DeliveryConstructionProvenance,
     TrustedDeliveryContext,
     _construct_direct_delivery_context,
 )
@@ -28,7 +28,7 @@ __all__ = [
     "Coverage",
     "CoverageReason",
     "CoverageStatus",
-    "DirectDeliveryConstructionProvenance",
+    "DeliveryConstructionProvenance",
     "OpenCitation",
     "RequestNarrowing",
     "RequestNotAvailable",

@@ -10,6 +10,10 @@ from engine.runtime.context_run import (
     ContextRunPersistenceSession,
     _require_active_context_run_persistence_session,
 )
+from engine.runtime.delivery_evidence import (
+    DeliveryEvidenceRedemptionSession,
+    _require_active_delivery_evidence_redemption_session,
+)
 from engine.runtime.materialized import (
     MaterializedProjectionSession,
     _require_active_materialized_projection_session,
@@ -101,6 +105,9 @@ class CurrentMembershipVerification:
     context_run_persistence_session: ContextRunPersistenceSession | None = field(
         repr=False
     )
+    delivery_evidence_redemption_session: (
+        DeliveryEvidenceRedemptionSession | None
+    ) = field(repr=False)
     construction_provenance: MembershipVerificationProvenance
     _authority_scope: _MembershipAuthorityScope = field(repr=False)
 
@@ -128,6 +135,9 @@ def _construct_current_membership_verification(
     policy_epoch_verification: PolicyEpochVerification,
     materialized_projection_session: MaterializedProjectionSession | None = None,
     context_run_persistence_session: ContextRunPersistenceSession | None = None,
+    delivery_evidence_redemption_session: (
+        DeliveryEvidenceRedemptionSession | None
+    ) = None,
 ) -> CurrentMembershipVerification:
     """Construct proof after the trusted authority verifies the durable row."""
 
@@ -172,6 +182,10 @@ def _construct_current_membership_verification(
         _require_active_materialized_projection_session(materialized_projection_session)
     if context_run_persistence_session is not None:
         _require_active_context_run_persistence_session(context_run_persistence_session)
+    if delivery_evidence_redemption_session is not None:
+        _require_active_delivery_evidence_redemption_session(
+            delivery_evidence_redemption_session
+        )
     _require_active_policy_epoch_verification(policy_epoch_verification)
     if policy_epoch_verification.organization_id != organization_id:
         raise ValueError("current Membership Policy Epoch must stay in Organization")
@@ -211,6 +225,11 @@ def _construct_current_membership_verification(
     )
     object.__setattr__(
         verification,
+        "delivery_evidence_redemption_session",
+        delivery_evidence_redemption_session,
+    )
+    object.__setattr__(
+        verification,
         "construction_provenance",
         MembershipVerificationProvenance.TRUSTED_MEMBERSHIP_AUTHORITY,
     )
@@ -244,6 +263,10 @@ def _require_active_current_membership_verification(
         _require_active_context_run_persistence_session(
             verification.context_run_persistence_session
         )
+    if verification.delivery_evidence_redemption_session is not None:
+        _require_active_delivery_evidence_redemption_session(
+            verification.delivery_evidence_redemption_session
+        )
     _require_active_policy_epoch_verification(verification.policy_epoch_verification)
     if (
         verification.policy_epoch != verification.policy_epoch_verification.policy_epoch
@@ -275,6 +298,9 @@ class UserActor:
     context_run_persistence_session: ContextRunPersistenceSession | None = field(
         repr=False
     )
+    delivery_evidence_redemption_session: (
+        DeliveryEvidenceRedemptionSession | None
+    ) = field(repr=False)
     current_membership_verification: CurrentMembershipVerification = field(repr=False)
     construction_provenance: UserActorConstructionProvenance
 
@@ -319,6 +345,10 @@ def _construct_user_actor(
             "context_run_persistence_session",
             verification.context_run_persistence_session,
         ),
+        (
+            "delivery_evidence_redemption_session",
+            verification.delivery_evidence_redemption_session,
+        ),
         ("current_membership_verification", verification),
         (
             "construction_provenance",
@@ -356,5 +386,7 @@ def _require_active_user_actor(actor: UserActor) -> None:
         is not verification.materialized_projection_session
         or actor.context_run_persistence_session
         is not verification.context_run_persistence_session
+        or actor.delivery_evidence_redemption_session
+        is not verification.delivery_evidence_redemption_session
     ):
         raise ValueError("UserActor does not match its current Membership proof")

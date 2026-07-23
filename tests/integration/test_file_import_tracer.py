@@ -20,7 +20,10 @@ from sqlalchemy.exc import SQLAlchemyError
 from adapters.exact_phrase import PostgreSQLExactPhraseCandidateIndex
 from adapters.file_source import FileReadLimits, FileRootRegistry
 from adapters.http.app import create_app
-from adapters.http.authentication import VerifiedAuthenticationContext
+from adapters.http.authentication import (
+    VerifiedAuthenticationContext,
+    VerifiedPrivateDeliveryBinding,
+)
 from adapters.http.organization_authority import OrganizationVerificationRejected
 from adapters.http.scope_authority import ScopeAuthorityIdentity
 from adapters.parsers.markdown import compile_markdown
@@ -44,6 +47,7 @@ from engine.persistence import (
     FileImportLeaseRedemption,
     FileImportUnavailable,
     PostgreSQLControlStore,
+    PostgreSQLDeliveryEvidenceIssuerPort,
     PostgreSQLFileImportWorker,
     PostgreSQLMembershipAuthority,
     PostgreSQLWorkerLeaseIssuer,
@@ -58,6 +62,11 @@ from engine.runtime.construction import Runtime, required_kernel_dependencies
 from engine.runtime.content_io import exact_phrase_digest
 from engine.runtime.context_run import ContextRunOutcome
 from engine.runtime.contracts import Acquire, ContextNeed
+from engine.runtime.delivery_evidence import (
+    DeliveryEvidenceProfile,
+    PrivateDeliveryEvidenceIssue,
+    PrivateDeliveryEvidenceIssuer,
+)
 from engine.runtime.evidence import CandidateRef
 from engine.runtime.materialized import (
     MaterializedProjectionSession,
@@ -184,6 +193,10 @@ class _RuntimeAuthenticator:
             agent_version_ref="agent:file-tracer",
             authenticated_application_ref="application:file-tracer",
             authentication_binding_ref="binding:file-tracer",
+            private_delivery_binding=VerifiedPrivateDeliveryBinding(
+                destination_ref="private-chat:file-tracer",
+                consumer_ref="consumer:file-tracer",
+            ),
         )
 
 
@@ -761,9 +774,11 @@ def _scenario_effect_counts(
 
 
 @pytest.mark.security_evidence(id="PG-FILE-IMPORT-023", layer="postgres")
+@pytest.mark.security_evidence(id="FILE-DELIVERY-EVIDENCE-063", layer="runtime")
 def test_registered_file_import_publishes_one_exact_authorized_http_package(
     tmp_path: Path,
     migration_configuration: DatabaseConfiguration,
+    identity_configuration: DatabaseConfiguration,
     guarded_control_engine: Engine,
     guarded_worker_engine: Engine,
     guarded_runtime_engine: Engine,
@@ -1046,20 +1061,114 @@ def test_registered_file_import_publishes_one_exact_authorized_http_package(
     assert package["blocks"][0]["evidenceRefs"] == [
         package["evidence"][0]["evidenceRef"]
     ]
-    with exact_test_context_run_operator_read(
-        control_engine=guarded_control_engine,
-        operator_engine=guarded_operator_engine,
-        organization_id=organization_id,
-        decision_ref=package["decisionRef"],
-        request_id="file-import-context-run-read",
-        opaque_credential="file-import-operator-secret",
-        authorized_at=NOW,
-    ) as (reader, authorization):
-        run = reader.find_by_decision_ref(authorization, package["decisionRef"])
-    assert run is not None
-    assert run.outcome is ContextRunOutcome.DELIVERED_AUTHORIZED
-    assert run.authorized_evidence_refs == (package["evidence"][0]["evidenceRef"],)
-    assert run.decision_audit_category is None
+    identity_engine = create_database_engine(identity_configuration)
+    try:
+        evidence_ref = PrivateDeliveryEvidenceIssuer(
+            PostgreSQLDeliveryEvidenceIssuerPort(identity_engine),
+            profile=DeliveryEvidenceProfile(
+                profile_ref="private-delivery-evidence-v1",
+                maximum_ttl=timedelta(minutes=15),
+            ),
+            reference_factory=lambda: "der_"
+            + sha256(organization_id.bytes + b"file-http").hexdigest(),
+            resolution_ref_factory=lambda: "dlr_"
+            + sha256(organization_id.bytes + b"file-result").hexdigest()[:32],
+        ).issue_private(
+            PrivateDeliveryEvidenceIssue(
+                organization_id=organization_id,
+                user_id=user_id,
+                membership_id=membership_id,
+                membership_version=1,
+                authenticated_service_ref="application:file-tracer",
+                authentication_binding_ref="binding:file-tracer",
+                request_id="file-import-http",
+                destination_ref="private-chat:file-tracer",
+                consumer_ref="consumer:file-tracer",
+                purpose="context.answer",
+                policy_epoch=1,
+                issued_at=NOW - timedelta(minutes=1),
+                expires_at=NOW + timedelta(minutes=10),
+            )
+        )
+    finally:
+        identity_engine.dispose()
+    private_headers = {
+        "Authorization": "Bearer runtime-secret",
+        "X-Context-Delivery-Evidence-Ref": evidence_ref.evidence_ref,
+    }
+    try:
+        private_response = client.post(
+            "/v1/context:resolve",
+            headers=private_headers,
+            json={
+                "kind": "acquire",
+                "need": {"query": "ContextEngine delivers context."},
+            },
+        )
+        private_retry = client.post(
+            "/v1/context:resolve",
+            headers=private_headers,
+            json={
+                "kind": "acquire",
+                "need": {"query": "ContextEngine delivers context."},
+            },
+        )
+        with migration_engine.connect() as connection:
+            redemption = connection.execute(
+                text(
+                    "SELECT logical_resolution_ref, first_redeemed_at "
+                    "FROM delivery_evidence WHERE organization_id = :org"
+                ),
+                {"org": organization_id},
+            ).one()
+    finally:
+        with migration_engine.begin() as connection:
+            connection.execute(
+                text("DELETE FROM delivery_evidence WHERE organization_id = :org"),
+                {"org": organization_id},
+            )
+    assert private_response.status_code == private_retry.status_code == 200
+    assert private_response.json()["package"]["blocks"][0]["text"] == (
+        "ContextEngine delivers context."
+    )
+    assert private_retry.json()["package"]["blocks"][0]["text"] == (
+        "ContextEngine delivers context."
+    )
+    assert evidence_ref.evidence_ref not in private_response.text
+    assert evidence_ref.evidence_ref not in private_retry.text
+    assert redemption.logical_resolution_ref == evidence_ref.logical_resolution_ref
+    assert redemption.first_redeemed_at == NOW
+    private_packages = (
+        private_response.json()["package"],
+        private_retry.json()["package"],
+    )
+    for ordinal, private_package in enumerate(private_packages, start=1):
+        with exact_test_context_run_operator_read(
+            control_engine=guarded_control_engine,
+            operator_engine=guarded_operator_engine,
+            organization_id=organization_id,
+            decision_ref=private_package["decisionRef"],
+            request_id=f"file-import-private-context-run-read-{ordinal}",
+            opaque_credential="file-import-operator-secret",
+            authorized_at=NOW,
+        ) as (reader, authorization):
+            run = reader.find_by_decision_ref(
+                authorization,
+                private_package["decisionRef"],
+            )
+        assert run is not None
+        assert run.outcome is ContextRunOutcome.DELIVERED_AUTHORIZED
+        assert run.authorized_evidence_refs == (
+            private_package["evidence"][0]["evidenceRef"],
+        )
+        assert run.decision_audit_category is None
+        serialized_run = repr(run)
+        for protected_value in (
+            evidence_ref.evidence_ref,
+            "private-chat:file-tracer",
+            "consumer:file-tracer",
+        ):
+            assert protected_value not in serialized_run
 
     with PostgreSQLMembershipAuthority(
         guarded_runtime_engine
@@ -1424,7 +1533,7 @@ def _assert_structural_file_import_returns_coherent_authorized_units_over_http(
             connection.execute(
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one()
-            == "20260723_0018"
+            == "20260723_0019"
         )
 
 

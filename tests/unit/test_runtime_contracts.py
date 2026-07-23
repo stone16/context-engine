@@ -20,7 +20,7 @@ from engine.runtime.contracts import (
     context_package_public_document,
 )
 from engine.runtime.delivery import (
-    DirectDeliveryConstructionProvenance,
+    DeliveryConstructionProvenance,
     TrustedDeliveryContext,
     _construct_direct_delivery_context,
 )
@@ -214,7 +214,7 @@ def test_direct_delivery_context_is_nominal_and_server_constructed() -> None:
     assert context.established_at == AS_OF
     assert (
         context.construction_provenance
-        is DirectDeliveryConstructionProvenance.AUTHENTICATED_DIRECT_INGRESS
+        is DeliveryConstructionProvenance.AUTHENTICATED_DIRECT_INGRESS
     )
     with pytest.raises(FrozenInstanceError):
         context.purpose = "different"  # type: ignore[misc]

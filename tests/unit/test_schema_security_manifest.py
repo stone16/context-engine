@@ -32,7 +32,7 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
     document = manifest()
     tables = table_entries(document)
 
-    assert document["manifestVersion"] == "18.0.0"
+    assert document["manifestVersion"] == "19.0.0"
     assert set(tables) == {
         "active_release_manifest",
         "alembic_version",
@@ -44,6 +44,7 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
         "context_run_operator_read_ticket",
         "context_source",
         "decision_audit",
+        "delivery_evidence",
         "exact_phrase_candidate",
         "file_acquisition",
         "file_acquisition_result",
@@ -94,6 +95,7 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
         "tenant_owned"
     )
     assert tables["decision_audit"]["classification"] == "tenant_owned"
+    assert tables["delivery_evidence"]["classification"] == "tenant_owned"
     assert tables["service_principal"]["classification"] == "tenant_owned"
     assert tables["worker_noop_job"]["classification"] == "tenant_owned"
     assert tables["context_source"]["classification"] == "tenant_owned"
@@ -1176,6 +1178,7 @@ def test_membership_manifest_requires_exact_user_actor_and_read_only_runtime() -
         "context_engine_runtime": ["SELECT"],
         "context_engine_worker": [],
         "context_engine_worker_lease_definer": ["SELECT"],
+        "context_engine_delivery_evidence_definer": ["SELECT"],
     }
 
     rls = entry["rowLevelSecurity"]
@@ -1732,6 +1735,9 @@ def test_policy_epoch_manifest_seals_runtime_reads_and_control_mutation() -> Non
             "context_engine_worker": [],
         }
         if entry["name"] == "organization_policy_epoch":
+            expected_operations[
+                "context_engine_delivery_evidence_definer"
+            ] = ["SELECT"]
             expected_operations["context_engine_control"].append(
                 "EXECUTE context_control_tombstone_file_resource"
             )

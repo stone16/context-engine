@@ -21,7 +21,7 @@
       "const": {
         "path": "eval/catalogs/security-invariants.yaml",
         "schemaPath": "eval/catalogs/security-catalog.schema.json",
-        "catalogVersion": "1.1.0"
+        "catalogVersion": "1.2.0"
       }
     },
     "execution": {

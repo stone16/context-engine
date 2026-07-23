@@ -29,6 +29,14 @@ from engine.runtime.context_run import (
     _construct_context_run_persistence_session,
     _open_context_run_persistence_scope,
 )
+from engine.runtime.delivery_evidence import (
+    DeliveryEvidenceAuthorityUnavailable,
+    PrivateDeliveryEvidenceRedemption,
+    RedeemedPrivateDeliveryEvidence,
+    _close_delivery_evidence_redemption_scope,
+    _construct_delivery_evidence_redemption_session,
+    _open_delivery_evidence_redemption_scope,
+)
 from engine.runtime.evidence import CandidateRef
 from engine.runtime.materialized import (
     MaterializedFieldValue,
@@ -546,6 +554,80 @@ class _PostgreSQLContextRunPersistencePort:
         )
 
 
+class _PostgreSQLDeliveryEvidenceRedemptionPort:
+    """Exact private evidence redemption on the retained Runtime transaction."""
+
+    def __init__(self, connection: Connection) -> None:
+        self._connection = connection
+
+    def redeem_private(
+        self,
+        request: PrivateDeliveryEvidenceRedemption,
+    ) -> RedeemedPrivateDeliveryEvidence | None:
+        try:
+            row = (
+                self._connection.execute(
+                    text(
+                        """
+                    SELECT *
+                    FROM context_runtime_redeem_private_delivery_evidence(
+                        :evidence_digest, :authenticated_service_ref,
+                        :authentication_binding_ref, :request_id,
+                        :organization_id, :user_id, :membership_id,
+                        :membership_version, :destination_ref, :consumer_ref,
+                        :delivery_kind, :audience_digest, :purpose,
+                        :policy_epoch, :redeemed_at
+                    )
+                    """
+                    ),
+                    {
+                        "evidence_digest": request.evidence_digest,
+                        "authenticated_service_ref": request.authenticated_service_ref,
+                        "authentication_binding_ref": (
+                            request.authentication_binding_ref
+                        ),
+                        "request_id": request.request_id,
+                        "organization_id": request.organization_id,
+                        "user_id": request.user_id,
+                        "membership_id": request.membership_id,
+                        "membership_version": request.membership_version,
+                        "destination_ref": request.destination_ref,
+                        "consumer_ref": request.consumer_ref,
+                        "delivery_kind": request.delivery_kind,
+                        "audience_digest": request.audience_digest,
+                        "purpose": request.purpose,
+                        "policy_epoch": request.policy_epoch,
+                        "redeemed_at": request.redeemed_at,
+                    },
+                )
+                .mappings()
+                .one_or_none()
+            )
+        except SQLAlchemyError:
+            raise DeliveryEvidenceAuthorityUnavailable from None
+        if row is None:
+            return None
+        return RedeemedPrivateDeliveryEvidence(
+            organization_id=row["organization_id"],
+            user_id=row["user_id"],
+            membership_id=row["membership_id"],
+            membership_version=row["membership_version"],
+            authenticated_service_ref=row["authenticated_service_ref"],
+            authentication_binding_ref=row["authentication_binding_ref"],
+            request_id=row["request_id"],
+            destination_ref=row["destination_ref"],
+            consumer_ref=row["consumer_ref"],
+            delivery_kind=row["delivery_kind"],
+            purpose=row["purpose"],
+            audience_digest=row["audience_digest"],
+            policy_epoch=row["policy_epoch"],
+            issued_at=row["issued_at"],
+            expires_at=row["expires_at"],
+            logical_resolution_ref=row["logical_resolution_ref"],
+            profile_ref=row["profile_ref"],
+        )
+
+
 class PostgreSQLMembershipAuthority:
     """Open and retain the exact UserActor transaction through Runtime work."""
 
@@ -677,6 +759,7 @@ class PostgreSQLMembershipAuthority:
         projection_scope = _open_materialized_projection_scope()
         policy_epoch_scope = _open_policy_epoch_authority_scope()
         context_run_scope = _open_context_run_persistence_scope()
+        delivery_evidence_scope = _open_delivery_evidence_redemption_scope()
         try:
             projection_session = _construct_materialized_projection_session(
                 authority_scope=projection_scope,
@@ -707,8 +790,15 @@ class PostgreSQLMembershipAuthority:
                 authority_scope=scope,
                 materialized_projection_session=projection_session,
                 context_run_persistence_session=context_run_session,
+                delivery_evidence_redemption_session=(
+                    _construct_delivery_evidence_redemption_session(
+                        authority_scope=delivery_evidence_scope,
+                        port=_PostgreSQLDeliveryEvidenceRedemptionPort(connection),
+                    )
+                ),
             )
         finally:
+            _close_delivery_evidence_redemption_scope(delivery_evidence_scope)
             _close_context_run_persistence_scope(context_run_scope)
             _close_policy_epoch_authority_scope(policy_epoch_scope)
             _close_materialized_projection_scope(projection_scope)

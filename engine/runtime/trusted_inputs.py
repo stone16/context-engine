@@ -2,7 +2,7 @@
 
 from engine.runtime.actor import _require_active_user_actor
 from engine.runtime.delivery import (
-    DirectDeliveryConstructionProvenance,
+    DeliveryConstructionProvenance,
     TrustedDeliveryContext,
 )
 from engine.runtime.invocation import (
@@ -58,7 +58,10 @@ def _validate_trusted_invocation_and_delivery(
     if (
         type(delivery_context) is not TrustedDeliveryContext
         or delivery_context.construction_provenance
-        is not DirectDeliveryConstructionProvenance.AUTHENTICATED_DIRECT_INGRESS
+        not in {
+            DeliveryConstructionProvenance.AUTHENTICATED_DIRECT_INGRESS,
+            DeliveryConstructionProvenance.REDEEMED_PRIVATE_DELIVERY_EVIDENCE,
+        }
         or delivery_context.authenticated_application_ref
         != invocation.authenticated_application_ref
         or delivery_context.delivery_binding_ref

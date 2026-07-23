@@ -26,6 +26,7 @@ from scripts.validate_security_catalog import (
     CANONICAL_FAIL_CLOSED_OUTCOMES,
     CANONICAL_FIELD_PROJECTION_ACTIVATION,
     CANONICAL_INVARIANT_IDS,
+    CANONICAL_PRIVATE_DELIVERY_EVIDENCE_ACTIVATION,
     CANONICAL_REVOCATION_ACTIVATION,
     CANONICAL_TICKET_AUDIENCE_ACTIVATION,
     CANONICAL_UNAVAILABLE_CAPABILITY_ACTIVATION,
@@ -495,7 +496,7 @@ def make_catalog() -> dict[str, object]:
         )
 
     return {
-        "catalogVersion": "1.1.0",
+        "catalogVersion": "1.2.0",
         "authority": {
             "issueRefs": ["#5"],
             "documentRefs": ["docs/security/context-engine-threat-model.md"],
@@ -512,6 +513,7 @@ def make_catalog() -> dict[str, object]:
             copy.deepcopy(CANONICAL_TICKET_AUDIENCE_ACTIVATION),
             copy.deepcopy(CANONICAL_CONTEXT_RUN_ACTIVATION),
             copy.deepcopy(CANONICAL_FIELD_PROJECTION_ACTIVATION),
+            copy.deepcopy(CANONICAL_PRIVATE_DELIVERY_EVIDENCE_ACTIVATION),
         ],
         "invariants": invariants,
         "fixtures": fixtures,
@@ -559,7 +561,7 @@ def make_schema() -> dict[str, object]:
             "fixtures",
         ],
         "properties": {
-            "catalogVersion": {"const": "1.1.0"},
+            "catalogVersion": {"const": "1.2.0"},
             "authority": {"type": "object"},
             "hardOracles": {
                 "type": "array",
@@ -582,8 +584,8 @@ def make_schema() -> dict[str, object]:
             },
             "activations": {
                 "type": "array",
-                "minItems": 6,
-                "maxItems": 6,
+                "minItems": 7,
+                "maxItems": 7,
                 "uniqueItems": True,
                 "prefixItems": [
                     {"const": copy.deepcopy(CANONICAL_REVOCATION_ACTIVATION)},
@@ -596,6 +598,11 @@ def make_schema() -> dict[str, object]:
                     {"const": copy.deepcopy(CANONICAL_TICKET_AUDIENCE_ACTIVATION)},
                     {"const": copy.deepcopy(CANONICAL_CONTEXT_RUN_ACTIVATION)},
                     {"const": copy.deepcopy(CANONICAL_FIELD_PROJECTION_ACTIVATION)},
+                    {
+                        "const": copy.deepcopy(
+                            CANONICAL_PRIVATE_DELIVERY_EVIDENCE_ACTIVATION
+                        )
+                    },
                 ],
                 "items": False,
             },
@@ -856,7 +863,7 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
 
         self.assert_catalog_error(
             catalog,
-            "catalogVersion: must be the supported version '1.1.0'",
+            "catalogVersion: must be the supported version '1.2.0'",
             schema,
         )
 
@@ -1650,9 +1657,9 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
         assert isinstance(document_refs, list)
         assert isinstance(reconciliation, str)
 
-        self.assertEqual(catalog["catalogVersion"], "1.1.0")
+        self.assertEqual(catalog["catalogVersion"], "1.2.0")
         self.assertEqual(
-            issue_refs[-6:], ["#15", "#16", "#17", "#18", "#19", "#48"]
+            issue_refs[-7:], ["#15", "#16", "#17", "#18", "#19", "#48", "#63"]
         )
         self.assertIn(
             "docs/decisions/0031-persist-authorized-context-run-lineage.md",

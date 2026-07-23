@@ -1,5 +1,5 @@
 {
-  "manifestVersion": "18.0.0",
+  "manifestVersion": "19.0.0",
   "controlOperations": [
     {
       "name": "register_file_source",
@@ -382,13 +382,20 @@
             "command": "SELECT",
             "roles": ["context_engine_worker_lease_definer"],
             "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"
+          },
+          {
+            "name": "membership_delivery_evidence_definer_select",
+            "command": "SELECT",
+            "roles": ["context_engine_delivery_evidence_definer"],
+            "using": "true"
           }
         ]
       },
       "permittedOperations": {
         "context_engine_runtime": ["SELECT"],
         "context_engine_worker": [],
-        "context_engine_worker_lease_definer": ["SELECT"]
+        "context_engine_worker_lease_definer": ["SELECT"],
+        "context_engine_delivery_evidence_definer": ["SELECT"]
       },
       "partitions": [],
       "securityInvariantIds": [
@@ -402,6 +409,60 @@
         "DB-009",
         "DB-010"
       ]
+    },
+    {
+      "name": "delivery_evidence",
+      "classification": "tenant_owned",
+      "nonOwnerEvidence": {
+        "evidenceId": "PG-DELIVERY-EVIDENCE-063",
+        "selector": {"table": "delivery_evidence"}
+      },
+      "purpose": "Digest-only exact private delivery evidence with stable logical retry identity",
+      "organizationColumn": "organization_id",
+      "organizationInclusiveKeys": [
+        {"name": "pk_delivery_evidence", "kind": "primary_key", "columns": ["organization_id", "evidence_digest"]},
+        {"name": "uq_delivery_evidence_logical_request", "kind": "unique", "columns": ["organization_id", "authenticated_service_ref", "request_id"]},
+        {"name": "uq_delivery_evidence_logical_resolution", "kind": "unique", "columns": ["organization_id", "logical_resolution_ref"]}
+      ],
+      "capabilityUniqueKeys": [
+        {"name": "uq_delivery_evidence_digest_global", "kind": "unique", "columns": ["evidence_digest"], "rationale": "one bearer digest identifies at most one Organization-bound attestation locator"}
+      ],
+      "foreignKeys": [
+        {"name": "fk_delivery_evidence_organization", "columns": ["organization_id"], "references": {"table": "organization", "columns": ["organization_id"]}, "onDelete": "CASCADE"},
+        {"name": "fk_delivery_evidence_membership_version_same_organization", "columns": ["organization_id", "membership_id", "membership_version"], "references": {"table": "membership", "columns": ["organization_id", "membership_id", "membership_version"]}}
+      ],
+      "checkConstraints": [
+        {"name": "ck_delivery_evidence_digest_sha256", "expression": "octet_length(evidence_digest) = 32"},
+        {"name": "ck_delivery_evidence_digest_profile", "expression": "digest_profile = 'delivery-evidence-ref-sha256-v1'"},
+        {"name": "ck_delivery_evidence_private_kind", "expression": "delivery_kind = 'private'"},
+        {"name": "ck_delivery_evidence_profile", "expression": "profile_ref = 'private-delivery-evidence-v1'"},
+        {"name": "ck_delivery_evidence_positive_versions", "expression": "membership_version > 0 AND policy_epoch > 0"},
+        {"name": "ck_delivery_evidence_audience_digest", "expression": "audience_digest ~ '^[0-9a-f]{64}$'"},
+        {"name": "ck_delivery_evidence_timestamp_order", "expression": "expires_at > issued_at AND (first_redeemed_at IS NULL OR (first_redeemed_at >= issued_at AND first_redeemed_at < expires_at))"},
+        {"name": "ck_delivery_evidence_bindings_nonblank", "expression": "all exact service/request/destination/consumer/purpose/logical-resolution bindings are nonblank"}
+      ],
+      "rowLevelSecurity": {
+        "enabled": true,
+        "forced": true,
+        "policies": [
+          {"name": "delivery_evidence_migrator_administration", "command": "ALL", "roles": ["context_engine_migrator"], "using": "true", "withCheck": "true"},
+          {"name": "delivery_evidence_definer_all", "command": "ALL", "roles": ["context_engine_delivery_evidence_definer"], "using": "true", "withCheck": "true"}
+        ]
+      },
+      "functionOnlyMutation": {"databaseFunctions": ["context_identity_issue_private_delivery_evidence", "context_identity_delete_expired_private_delivery_evidence", "context_runtime_redeem_private_delivery_evidence"], "definerRole": "context_engine_delivery_evidence_definer", "directTableMutationAllowed": false},
+      "retention": {"class": "short_lived_digest_only", "bearerStored": false, "expirySource": "versioned private delivery profile", "cleanup": "context_identity_delete_expired_private_delivery_evidence deletes only database-expired private rows in one exact Organization"},
+      "permittedOperations": {
+        "context_engine_identity": ["EXECUTE context_identity_issue_private_delivery_evidence", "EXECUTE context_identity_delete_expired_private_delivery_evidence"],
+        "context_engine_runtime": ["EXECUTE context_runtime_redeem_private_delivery_evidence"],
+        "context_engine_delivery_evidence_definer": ["SELECT", "INSERT", "UPDATE", "DELETE"],
+        "context_engine_control": [],
+        "context_engine_worker": [],
+        "context_engine_learning": [],
+        "context_engine_security_operator": []
+      },
+      "partitions": [],
+      "securityInvariantIds": ["TENANT-OWNERSHIP-001", "TENANT-FK-002", "RLS-FAIL-CLOSED-003", "REVOCATION-006", "TRANSPORT-UNTRUSTED-008", "NON-ENUMERATION-009", "TRACE-REDACTION-012"],
+      "negativeTestIds": ["DB-001", "DB-002", "DB-004", "DB-008", "DB-009", "DB-010", "OBS-004", "OBS-005"]
     },
     {
       "name": "organization_record",
@@ -983,12 +1044,19 @@
             "roles": ["context_engine_access_policy_definer"],
             "using": "organization_policy_epoch.organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid",
             "withCheck": "organization_policy_epoch.organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"
+          },
+          {
+            "name": "organization_policy_epoch_delivery_evidence_definer_select",
+            "command": "SELECT",
+            "roles": ["context_engine_delivery_evidence_definer"],
+            "using": "true"
           }
         ]
       },
       "permittedOperations": {
         "context_engine_access_policy_definer": ["SELECT", "UPDATE"],
         "context_engine_control": ["EXECUTE change_resource_access", "EXECUTE context_control_tombstone_file_resource", "EXECUTE context_control_offboard_file_source"],
+        "context_engine_delivery_evidence_definer": ["SELECT"],
         "context_engine_runtime": ["SELECT"],
         "context_engine_worker": []
       },
