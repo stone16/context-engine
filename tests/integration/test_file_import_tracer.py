@@ -98,6 +98,10 @@ from engine.supply import (
 )
 from tests.support.context_run_operator import exact_test_context_run_operator_read
 from tests.support.file_source_progress import clear_file_source_progress_projection
+from tests.support.releases import (
+    clear_test_runtime_release,
+    ensure_test_runtime_release,
+)
 
 pytestmark = pytest.mark.integration
 NOW = datetime.now(UTC).replace(microsecond=0)
@@ -865,6 +869,8 @@ def test_registered_file_import_publishes_one_exact_authorized_http_package(
             },
         )
 
+    ensure_test_runtime_release(other_organization_id)
+
     authority = ControlOperatorAuthority(
         _ControlAuthenticator(organization_id),
         call_ttl=timedelta(minutes=5),
@@ -1019,6 +1025,10 @@ def test_registered_file_import_publishes_one_exact_authorized_http_package(
             prepared.source_ref,
         )
     )
+    ensure_test_runtime_release(
+        organization_id,
+        active_revision_refs=(published.candidate_ref.revision_ref,),
+    )
 
     runtime = Runtime(
         required_kernel_dependencies(),
@@ -1111,9 +1121,7 @@ def test_registered_file_import_publishes_one_exact_authorized_http_package(
                 private_delivery=True,
             ),
             organization_authority=_OrganizationAuthority(),
-            membership_authority=PostgreSQLMembershipAuthority(
-                guarded_runtime_engine
-            ),
+            membership_authority=PostgreSQLMembershipAuthority(guarded_runtime_engine),
             scope_authority=_ExactScopeAuthority(
                 published.candidate_ref.source_ref,
                 published.candidate_ref.resource_ref,
@@ -1440,6 +1448,10 @@ def _assert_structural_file_import_returns_coherent_authorized_units_over_http(
             "structure-table",
         )
     )
+    ensure_test_runtime_release(
+        scenario.organization_id,
+        active_revision_refs=(published.candidate_ref.revision_ref,),
+    )
     client = TestClient(
         create_app(
             authenticator=_RuntimeAuthenticator(
@@ -1549,6 +1561,16 @@ def _assert_structural_file_import_returns_coherent_authorized_units_over_http(
     assert "Handbook" not in denied.text
     assert "red-rocket" not in denied.text
 
+    with migration_engine.begin() as connection:
+        connection.execute(
+            text("DELETE FROM decision_audit WHERE organization_id = :organization_id"),
+            {"organization_id": scenario.organization_id},
+        )
+        connection.execute(
+            text("DELETE FROM context_run WHERE organization_id = :organization_id"),
+            {"organization_id": scenario.organization_id},
+        )
+    clear_test_runtime_release(scenario.organization_id)
     clear_file_source_progress_projection(migration_configuration)
     with pytest.raises(
         RuntimeError,
@@ -1560,7 +1582,7 @@ def _assert_structural_file_import_returns_coherent_authorized_units_over_http(
             connection.execute(
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one()
-            == "20260723_0020"
+            == "20260723_0021"
         )
 
 

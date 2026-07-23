@@ -36,6 +36,7 @@ from tests.integration.test_runtime_authorized_evidence_integration import (
     _seed_fixture,
 )
 from tests.support.context_run_operator import exact_test_context_run_operator_read
+from tests.support.releases import ensure_test_runtime_release
 
 pytestmark = pytest.mark.integration
 QUERY = "same policy epoch revocation probe"
@@ -152,6 +153,8 @@ def test_same_http_acquire_revokes_next_delivery_without_candidate_cleanup(
     )
     try:
         _seed_fixture(migration_engine, fixture)
+        ensure_test_runtime_release(fixture.org_a.organization_id)
+        ensure_test_runtime_release(fixture.org_b.organization_id)
         persistent_before = _persistent_content_snapshot(migration_engine, fixture)
         assert len(persistent_before) == 4
 
@@ -278,6 +281,7 @@ def test_mid_resolve_revoke_is_visible_despite_repeatable_read_engine_default(
     )
     try:
         _seed_fixture(migration_engine, fixture)
+        ensure_test_runtime_release(fixture.org_a.organization_id)
         persistent_before = _persistent_content_snapshot(migration_engine, fixture)
 
         with ThreadPoolExecutor(max_workers=1) as executor:

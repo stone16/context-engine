@@ -1,6 +1,6 @@
 ---
 name: adr-0026-normalize-no-authorized-evidence
-version: "1.1.0"
+version: "1.2.0"
 description: >
   Make denied, cross-Organization, and nonexistent Acquire candidates share one
   externally indistinguishable no-authorized-Evidence outcome.
@@ -50,12 +50,14 @@ The deterministic oracle compares status, body, the closed product headers, and
 the Runtime domain outcome. It may normalize only the pre-registered per-resolve
 values, in this order:
 
-1. `body.package.organizationRef`
+1. `body.package.packageId`
 2. `body.package.decisionRef`
-3. `body.package.asOf`
-4. `body.package.expiresAt`
-5. `body.package.packageDigest`
-6. `headers.X-Context-Request-Id`
+3. `body.package.policySnapshotRef`
+4. `body.package.runRef`
+5. `body.package.asOf`
+6. `body.package.expiresAt`
+7. `body.package.packageDigest`
+8. `headers.X-Context-Request-Id`
 
 The compared product headers are `Content-Type`, `Cache-Control`, and
 `X-Context-Request-Id`. Incidental framework or server headers are not part of
@@ -72,11 +74,13 @@ Candidate/Fragment/Resource content, identifier, name, score, reason, or count,
 remains absent from `Resolved` and HTTP, and cannot treat hostile Candidate
 metadata as an observed fact.
 
-`packageDigest` joins the normalization allowlist because every per-resolve
-Package contains fresh Organization and decision references, so the correct
-digest necessarily changes with them. The digest is still required and is
-verified against each exact unnormalized Package before comparison; adding it
-to this allowlist does not permit arbitrary body drift.
+ADR-0047 replaces the earlier Organization-derived outbound reference with an
+independent request-scoped `packageId` and adds current run and policy-snapshot
+lineage. Those four opaque per-resolve refs and the decision/timestamps vary
+without revealing why Evidence is absent. `packageDigest` necessarily changes
+with them. The digest is still required and is verified against each exact
+unnormalized Package before comparison; adding it to this allowlist does not
+permit arbitrary body drift.
 
 ## Rationale
 

@@ -1,0 +1,1217 @@
+{
+  "components": {
+    "schemas": {
+      "AcquireWire": {
+        "additionalProperties": false,
+        "description": "Closed untrusted Acquire variant.",
+        "properties": {
+          "kind": {
+            "const": "acquire",
+            "title": "Kind",
+            "type": "string"
+          },
+          "need": {
+            "$ref": "#/components/schemas/ContextNeedWire"
+          },
+          "packageBudget": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PackageBudgetWire"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "requestNarrowing": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RequestNarrowingWire"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "need"
+        ],
+        "title": "AcquireWire",
+        "type": "object"
+      },
+      "ApplicationForbiddenWire": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "const": "application_forbidden",
+            "title": "Code",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code"
+        ],
+        "title": "ApplicationForbiddenWire",
+        "type": "object"
+      },
+      "AuthenticationFailureWire": {
+        "additionalProperties": false,
+        "description": "Closed public response for every transport authentication rejection.",
+        "properties": {
+          "code": {
+            "const": "authentication_failed",
+            "title": "Code",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code"
+        ],
+        "title": "AuthenticationFailureWire",
+        "type": "object"
+      },
+      "BlockWire": {
+        "additionalProperties": false,
+        "description": "One authorized text block bound to exactly one public Evidence ref.",
+        "properties": {
+          "blockId": {
+            "pattern": "^block_[0-9a-f]{64}$",
+            "title": "Blockid",
+            "type": "string"
+          },
+          "evidenceRefs": {
+            "items": {
+              "pattern": "^ev_[0-9a-f]{64}$",
+              "type": "string"
+            },
+            "maxItems": 1,
+            "minItems": 1,
+            "title": "Evidencerefs",
+            "type": "array"
+          },
+          "text": {
+            "minLength": 1,
+            "pattern": ".*\\S.*",
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "blockId",
+          "text",
+          "evidenceRefs"
+        ],
+        "title": "BlockWire",
+        "type": "object"
+      },
+      "BudgetUsageWire": {
+        "additionalProperties": false,
+        "description": "Actual resources consumed by this Package.",
+        "properties": {
+          "costMicrounits": {
+            "minimum": 0.0,
+            "title": "Costmicrounits",
+            "type": "integer"
+          },
+          "elapsedMs": {
+            "minimum": 0.0,
+            "title": "Elapsedms",
+            "type": "integer"
+          },
+          "providerCalls": {
+            "minimum": 0.0,
+            "title": "Providercalls",
+            "type": "integer"
+          },
+          "tokens": {
+            "minimum": 0.0,
+            "title": "Tokens",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "tokens",
+          "providerCalls",
+          "costMicrounits",
+          "elapsedMs"
+        ],
+        "title": "BudgetUsageWire",
+        "type": "object"
+      },
+      "ChannelEgressGrantWire": {
+        "additionalProperties": false,
+        "description": "Opaque one-hop channel grant; it carries no write authority.",
+        "properties": {
+          "kind": {
+            "const": "channel",
+            "title": "Kind",
+            "type": "string"
+          },
+          "value": {
+            "pattern": "^egrc_[0-9a-f]{64}$",
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "value"
+        ],
+        "title": "ChannelEgressGrantWire",
+        "type": "object"
+      },
+      "CitationNotAvailableWire": {
+        "additionalProperties": false,
+        "description": "Caller-safe outcome for an unavailable citation open.",
+        "properties": {
+          "kind": {
+            "const": "citation_not_available",
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "title": "CitationNotAvailableWire",
+        "type": "object"
+      },
+      "ContextNeedWire": {
+        "additionalProperties": false,
+        "description": "Untrusted context need; it carries no identity or authority.",
+        "properties": {
+          "query": {
+            "minLength": 1,
+            "pattern": ".*\\S.*",
+            "title": "Query",
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "title": "ContextNeedWire",
+        "type": "object"
+      },
+      "ContextPackageWire": {
+        "additionalProperties": false,
+        "description": "Public package with an exact block/Evidence closure.",
+        "properties": {
+          "asOf": {
+            "format": "date-time",
+            "title": "Asof",
+            "type": "string"
+          },
+          "audienceDigest": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Audiencedigest",
+            "type": "string"
+          },
+          "blocks": {
+            "items": {
+              "$ref": "#/components/schemas/BlockWire"
+            },
+            "title": "Blocks",
+            "type": "array"
+          },
+          "budgetUsage": {
+            "$ref": "#/components/schemas/BudgetUsageWire"
+          },
+          "continuation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ContinuationOfferWire"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "coverage": {
+            "$ref": "#/components/schemas/CoverageWire"
+          },
+          "decisionRef": {
+            "pattern": "^dec_[0-9a-f]{32}$",
+            "title": "Decisionref",
+            "type": "string"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/EvidenceWire"
+            },
+            "title": "Evidence",
+            "type": "array"
+          },
+          "expiresAt": {
+            "format": "date-time",
+            "title": "Expiresat",
+            "type": "string"
+          },
+          "gaps": {
+            "items": {
+              "$ref": "#/components/schemas/GapWire"
+            },
+            "title": "Gaps",
+            "type": "array"
+          },
+          "packageDigest": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Packagedigest",
+            "type": "string"
+          },
+          "packageId": {
+            "pattern": "^pkg_[0-9a-f]{32}$",
+            "title": "Packageid",
+            "type": "string"
+          },
+          "packageSchemaRef": {
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "^\\S+$",
+            "title": "Packageschemaref",
+            "type": "string"
+          },
+          "policyEpoch": {
+            "maximum": 9.223372036854776e+18,
+            "minimum": 1.0,
+            "title": "Policyepoch",
+            "type": "integer"
+          },
+          "policySnapshotRef": {
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "^\\S+$",
+            "title": "Policysnapshotref",
+            "type": "string"
+          },
+          "purpose": {
+            "minLength": 1,
+            "pattern": ".*\\S.*",
+            "title": "Purpose",
+            "type": "string"
+          },
+          "releaseManifestRef": {
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "^\\S+$",
+            "title": "Releasemanifestref",
+            "type": "string"
+          },
+          "retentionPolicyRef": {
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "^\\S+$",
+            "title": "Retentionpolicyref",
+            "type": "string"
+          },
+          "runRef": {
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "^\\S+$",
+            "title": "Runref",
+            "type": "string"
+          },
+          "tokenizerRef": {
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "^\\S+$",
+            "title": "Tokenizerref",
+            "type": "string"
+          },
+          "ttlSeconds": {
+            "exclusiveMinimum": 0.0,
+            "title": "Ttlseconds",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "packageId",
+          "packageDigest",
+          "purpose",
+          "audienceDigest",
+          "policyEpoch",
+          "policySnapshotRef",
+          "decisionRef",
+          "runRef",
+          "releaseManifestRef",
+          "retentionPolicyRef",
+          "asOf",
+          "expiresAt",
+          "ttlSeconds",
+          "tokenizerRef",
+          "packageSchemaRef",
+          "blocks",
+          "evidence",
+          "gaps",
+          "coverage",
+          "budgetUsage",
+          "continuation"
+        ],
+        "title": "ContextPackageWire",
+        "type": "object"
+      },
+      "ContinuationOfferWire": {
+        "additionalProperties": false,
+        "properties": {
+          "continuationToken": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "pattern": "^\\S+$",
+            "title": "Continuationtoken",
+            "type": "string"
+          },
+          "remainingBudgetDigest": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Remainingbudgetdigest",
+            "type": "string"
+          }
+        },
+        "required": [
+          "continuationToken",
+          "remainingBudgetDigest"
+        ],
+        "title": "ContinuationOfferWire",
+        "type": "object"
+      },
+      "ContinueWire": {
+        "additionalProperties": false,
+        "description": "Closed known continuation variant; its carrier is unavailable at M0.",
+        "properties": {
+          "continuationToken": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "pattern": "^\\S+$",
+            "title": "Continuationtoken",
+            "type": "string"
+          },
+          "kind": {
+            "const": "continue",
+            "title": "Kind",
+            "type": "string"
+          },
+          "packageBudget": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PackageBudgetWire"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "continuationToken"
+        ],
+        "title": "ContinueWire",
+        "type": "object"
+      },
+      "CoverageWire": {
+        "additionalProperties": false,
+        "description": "Typed tenant-safe coverage for the selected package content.",
+        "properties": {
+          "reason": {
+            "anyOf": [
+              {
+                "enum": [
+                  "no_authorized_evidence",
+                  "source_unavailable",
+                  "stale_evidence",
+                  "budget_exhausted",
+                  "capability_unsupported"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "status": {
+            "enum": [
+              "empty",
+              "partial",
+              "sufficient"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "CoverageWire",
+        "type": "object"
+      },
+      "EvidenceWire": {
+        "additionalProperties": false,
+        "description": "Public request-scoped Evidence and its authorization lineage.",
+        "properties": {
+          "authorizationAsOf": {
+            "format": "date-time",
+            "title": "Authorizationasof",
+            "type": "string"
+          },
+          "citationOpenRef": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "minLength": 1,
+                "pattern": "^\\S+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Citationopenref"
+          },
+          "decisionRef": {
+            "pattern": "^dec_[0-9a-f]{32}$",
+            "title": "Decisionref",
+            "type": "string"
+          },
+          "evidenceRef": {
+            "pattern": "^ev_[0-9a-f]{64}$",
+            "title": "Evidenceref",
+            "type": "string"
+          },
+          "fragmentRef": {
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "^\\S+$",
+            "title": "Fragmentref",
+            "type": "string"
+          },
+          "policyEpoch": {
+            "maximum": 9.223372036854776e+18,
+            "minimum": 1.0,
+            "title": "Policyepoch",
+            "type": "integer"
+          },
+          "policySnapshotRef": {
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "^\\S+$",
+            "title": "Policysnapshotref",
+            "type": "string"
+          },
+          "projectedFields": {
+            "items": {
+              "pattern": "^[a-z][a-z0-9_]{0,63}$",
+              "type": "string"
+            },
+            "maxItems": 64,
+            "minItems": 1,
+            "title": "Projectedfields",
+            "type": "array"
+          },
+          "purpose": {
+            "minLength": 1,
+            "pattern": ".*\\S.*",
+            "title": "Purpose",
+            "type": "string"
+          },
+          "resourceRef": {
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "^\\S+$",
+            "title": "Resourceref",
+            "type": "string"
+          },
+          "revisionRef": {
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "^\\S+$",
+            "title": "Revisionref",
+            "type": "string"
+          },
+          "runRef": {
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "^\\S+$",
+            "title": "Runref",
+            "type": "string"
+          },
+          "sourceAclEvidence": {
+            "$ref": "#/components/schemas/SourceAclEvidenceWire"
+          },
+          "sourceRef": {
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "^\\S+$",
+            "title": "Sourceref",
+            "type": "string"
+          }
+        },
+        "required": [
+          "evidenceRef",
+          "sourceRef",
+          "resourceRef",
+          "revisionRef",
+          "fragmentRef",
+          "projectedFields",
+          "runRef",
+          "purpose",
+          "authorizationAsOf",
+          "decisionRef",
+          "policySnapshotRef",
+          "policyEpoch",
+          "sourceAclEvidence",
+          "citationOpenRef"
+        ],
+        "title": "EvidenceWire",
+        "type": "object"
+      },
+      "GapWire": {
+        "additionalProperties": false,
+        "properties": {
+          "category": {
+            "enum": [
+              "source_unavailable",
+              "stale_evidence",
+              "budget_exhausted",
+              "capability_unsupported"
+            ],
+            "title": "Category",
+            "type": "string"
+          },
+          "retryable": {
+            "title": "Retryable",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "category",
+          "retryable"
+        ],
+        "title": "GapWire",
+        "type": "object"
+      },
+      "InvalidRequestWire": {
+        "additionalProperties": false,
+        "description": "Closed public response for request syntax or schema rejection.",
+        "properties": {
+          "code": {
+            "const": "invalid_request",
+            "title": "Code",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code"
+        ],
+        "title": "InvalidRequestWire",
+        "type": "object"
+      },
+      "LiveSourceAclEvidenceWire": {
+        "additionalProperties": false,
+        "properties": {
+          "checkedAt": {
+            "format": "date-time",
+            "title": "Checkedat",
+            "type": "string"
+          },
+          "kind": {
+            "const": "live",
+            "title": "Kind",
+            "type": "string"
+          },
+          "sourceDecisionRef": {
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "^\\S+$",
+            "title": "Sourcedecisionref",
+            "type": "string"
+          },
+          "verificationProtocolRef": {
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "^\\S+$",
+            "title": "Verificationprotocolref",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "sourceDecisionRef",
+          "checkedAt",
+          "verificationProtocolRef"
+        ],
+        "title": "LiveSourceAclEvidenceWire",
+        "type": "object"
+      },
+      "MirroredSourceAclEvidenceWire": {
+        "additionalProperties": false,
+        "properties": {
+          "aclAsOf": {
+            "format": "date-time",
+            "title": "Aclasof",
+            "type": "string"
+          },
+          "freshnessProfileRef": {
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "^\\S+$",
+            "title": "Freshnessprofileref",
+            "type": "string"
+          },
+          "kind": {
+            "const": "mirrored",
+            "title": "Kind",
+            "type": "string"
+          },
+          "projectionRef": {
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "^\\S+$",
+            "title": "Projectionref",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "projectionRef",
+          "aclAsOf",
+          "freshnessProfileRef"
+        ],
+        "title": "MirroredSourceAclEvidenceWire",
+        "type": "object"
+      },
+      "ModelEgressGrantWire": {
+        "additionalProperties": false,
+        "description": "Opaque one-hop model grant; no trusted claim is exposed on the wire.",
+        "properties": {
+          "kind": {
+            "const": "model",
+            "title": "Kind",
+            "type": "string"
+          },
+          "value": {
+            "pattern": "^egrm_[0-9a-f]{64}$",
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "value"
+        ],
+        "title": "ModelEgressGrantWire",
+        "type": "object"
+      },
+      "OpenCitationWire": {
+        "additionalProperties": false,
+        "description": "Closed known citation variant; its locator carries no authority.",
+        "properties": {
+          "citationOpenRef": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "pattern": "^\\S+$",
+            "title": "Citationopenref",
+            "type": "string"
+          },
+          "kind": {
+            "const": "open_citation",
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "citationOpenRef"
+        ],
+        "title": "OpenCitationWire",
+        "type": "object"
+      },
+      "PackageBudgetWire": {
+        "additionalProperties": false,
+        "description": "Caller ceiling; every supplied dimension is a strict positive integer.",
+        "properties": {
+          "maxCostMicrounits": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Maxcostmicrounits"
+          },
+          "maxElapsedMs": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Maxelapsedms"
+          },
+          "maxProviderCalls": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Maxprovidercalls"
+          },
+          "maxTokens": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Maxtokens"
+          }
+        },
+        "title": "PackageBudgetWire",
+        "type": "object"
+      },
+      "RateLimitedWire": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "const": "rate_limited",
+            "title": "Code",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code"
+        ],
+        "title": "RateLimitedWire",
+        "type": "object"
+      },
+      "RequestNarrowingWire": {
+        "additionalProperties": false,
+        "description": "Untrusted source/resource filters that can only narrow future scope.",
+        "properties": {
+          "resourceRefs": {
+            "anyOf": [
+              {
+                "items": {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "pattern": ".*\\S.*",
+                  "type": "string"
+                },
+                "maxItems": 64,
+                "minItems": 1,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resourcerefs"
+          },
+          "sourceRefs": {
+            "anyOf": [
+              {
+                "items": {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "pattern": ".*\\S.*",
+                  "type": "string"
+                },
+                "maxItems": 64,
+                "minItems": 1,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sourcerefs"
+          }
+        },
+        "title": "RequestNarrowingWire",
+        "type": "object"
+      },
+      "RequestNotAvailableWire": {
+        "additionalProperties": false,
+        "description": "Caller-safe outcome for an unavailable known request.",
+        "properties": {
+          "kind": {
+            "const": "request_not_available",
+            "title": "Kind",
+            "type": "string"
+          },
+          "retryable": {
+            "const": false,
+            "title": "Retryable",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "kind",
+          "retryable"
+        ],
+        "title": "RequestNotAvailableWire",
+        "type": "object"
+      },
+      "ResolutionOutcomeWire": {
+        "discriminator": {
+          "mapping": {
+            "citation_not_available": "#/components/schemas/CitationNotAvailableWire",
+            "request_not_available": "#/components/schemas/RequestNotAvailableWire",
+            "resolved": "#/components/schemas/ResolvedWire"
+          },
+          "propertyName": "kind"
+        },
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/ResolvedWire"
+          },
+          {
+            "$ref": "#/components/schemas/RequestNotAvailableWire"
+          },
+          {
+            "$ref": "#/components/schemas/CitationNotAvailableWire"
+          }
+        ]
+      },
+      "ResolveWire": {
+        "discriminator": {
+          "mapping": {
+            "acquire": "#/components/schemas/AcquireWire",
+            "continue": "#/components/schemas/ContinueWire",
+            "open_citation": "#/components/schemas/OpenCitationWire"
+          },
+          "propertyName": "kind"
+        },
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/AcquireWire"
+          },
+          {
+            "$ref": "#/components/schemas/ContinueWire"
+          },
+          {
+            "$ref": "#/components/schemas/OpenCitationWire"
+          }
+        ]
+      },
+      "ResolvedWire": {
+        "additionalProperties": false,
+        "description": "Successful public resolution envelope.",
+        "properties": {
+          "egressGrant": {
+            "anyOf": [
+              {
+                "discriminator": {
+                  "mapping": {
+                    "channel": "#/components/schemas/ChannelEgressGrantWire",
+                    "model": "#/components/schemas/ModelEgressGrantWire"
+                  },
+                  "propertyName": "kind"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/ModelEgressGrantWire"
+                  },
+                  {
+                    "$ref": "#/components/schemas/ChannelEgressGrantWire"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Egressgrant"
+          },
+          "kind": {
+            "const": "resolved",
+            "title": "Kind",
+            "type": "string"
+          },
+          "package": {
+            "$ref": "#/components/schemas/ContextPackageWire"
+          }
+        },
+        "required": [
+          "kind",
+          "package",
+          "egressGrant"
+        ],
+        "title": "ResolvedWire",
+        "type": "object"
+      },
+      "ServiceUnavailableWire": {
+        "additionalProperties": false,
+        "description": "Closed response when a required trusted authority is unavailable.",
+        "properties": {
+          "code": {
+            "const": "service_unavailable",
+            "title": "Code",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code"
+        ],
+        "title": "ServiceUnavailableWire",
+        "type": "object"
+      },
+      "SourceAclEvidenceWire": {
+        "discriminator": {
+          "mapping": {
+            "live": "#/components/schemas/LiveSourceAclEvidenceWire",
+            "mirrored": "#/components/schemas/MirroredSourceAclEvidenceWire",
+            "weak": "#/components/schemas/WeakSourceAclEvidenceWire"
+          },
+          "propertyName": "kind"
+        },
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/LiveSourceAclEvidenceWire"
+          },
+          {
+            "$ref": "#/components/schemas/MirroredSourceAclEvidenceWire"
+          },
+          {
+            "$ref": "#/components/schemas/WeakSourceAclEvidenceWire"
+          }
+        ]
+      },
+      "WeakSourceAclEvidenceWire": {
+        "additionalProperties": false,
+        "properties": {
+          "boundedMembershipEvidenceRef": {
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "^\\S+$",
+            "title": "Boundedmembershipevidenceref",
+            "type": "string"
+          },
+          "checkedAt": {
+            "format": "date-time",
+            "title": "Checkedat",
+            "type": "string"
+          },
+          "declarationRef": {
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "^\\S+$",
+            "title": "Declarationref",
+            "type": "string"
+          },
+          "expiresAt": {
+            "format": "date-time",
+            "title": "Expiresat",
+            "type": "string"
+          },
+          "historySemanticsRef": {
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "^\\S+$",
+            "title": "Historysemanticsref",
+            "type": "string"
+          },
+          "kind": {
+            "const": "weak",
+            "title": "Kind",
+            "type": "string"
+          },
+          "membershipCompleteness": {
+            "const": "complete",
+            "title": "Membershipcompleteness",
+            "type": "string"
+          },
+          "sensitivityPolicyRef": {
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "^\\S+$",
+            "title": "Sensitivitypolicyref",
+            "type": "string"
+          },
+          "snapshotAsOf": {
+            "format": "date-time",
+            "title": "Snapshotasof",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "declarationRef",
+          "checkedAt",
+          "boundedMembershipEvidenceRef",
+          "snapshotAsOf",
+          "expiresAt",
+          "membershipCompleteness",
+          "sensitivityPolicyRef",
+          "historySemanticsRef"
+        ],
+        "title": "WeakSourceAclEvidenceWire",
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "ContextEngineBearer": {
+        "bearerFormat": "opaque",
+        "scheme": "bearer",
+        "type": "http"
+      }
+    }
+  },
+  "info": {
+    "title": "ContextEngine",
+    "version": "0.0.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/v0/resolve": {
+      "post": {
+        "description": "Map one authenticated closed request to the sealed Runtime entry.",
+        "operationId": "resolveContextV0",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Context-Request-Id",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 1,
+              "pattern": ".*\\S.*",
+              "title": "X-Context-Request-Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Context-Delivery-Evidence-Ref",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 4096,
+                  "minLength": 1,
+                  "pattern": "^\\S+$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Context-Delivery-Evidence-Ref"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResolveWire"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResolutionOutcomeWire"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidRequestWire"
+                }
+              }
+            },
+            "description": "The request transport syntax, media type, or active resource profile is invalid."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthenticationFailureWire"
+                }
+              }
+            },
+            "description": "Authentication failed.",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The required transport authentication scheme.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApplicationForbiddenWire"
+                }
+              }
+            },
+            "description": "The authenticated application is not allowed."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidRequestWire"
+                }
+              }
+            },
+            "description": "The closed request schema rejected the body."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitedWire"
+                }
+              }
+            },
+            "description": "The application exceeded the route resource policy."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceUnavailableWire"
+                }
+              }
+            },
+            "description": "A required trusted authority is unavailable."
+          }
+        },
+        "security": [
+          {
+            "ContextEngineBearer": []
+          }
+        ],
+        "summary": "Resolve Context"
+      }
+    }
+  }
+}

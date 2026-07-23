@@ -46,6 +46,10 @@ from engine.runtime.package_digest import (
     verify_context_package_digest,
 )
 from tests.support.context_run_operator import exact_test_context_run_operator_read
+from tests.support.releases import (
+    clear_test_runtime_release,
+    ensure_test_runtime_release,
+)
 
 pytestmark = pytest.mark.integration
 TOKEN = "seeded-existing-organization"
@@ -198,6 +202,7 @@ def test_seeded_existing_organization_reaches_http_empty_package(
                 },
             )
         assert cast(UUID, inserted) == organization_id
+        active_release = ensure_test_runtime_release(organization_id)
 
         spy = ContentIoSpy()
         runtime = Runtime(
@@ -227,14 +232,22 @@ def test_seeded_existing_organization_reaches_http_empty_package(
         )
 
         response = client.post(
-            "/v1/context:resolve",
-            headers={"Authorization": f"Bearer {TOKEN}"},
+            "/v0/resolve",
+            headers={
+                "Authorization": f"Bearer {TOKEN}",
+                "X-Context-Request-Id": "public-v0-real-pg-root",
+            },
             json={"kind": "acquire", "need": {"query": "real PG root"}},
         )
 
         assert response.status_code == 200
         package = response.json()["package"]
-        assert package["organizationRef"] != str(organization_id)
+        assert package["packageId"].startswith("pkg_")
+        assert str(organization_id) not in response.text
+        assert organization_id.hex not in response.text
+        assert package["releaseManifestRef"] == active_release.manifest_ref
+        assert package["tokenizerRef"] == active_release.tokenizer_ref
+        assert package["packageSchemaRef"] == active_release.package_schema_ref
         assert package["blocks"] == package["evidence"] == package["gaps"] == []
         assert package["coverage"] == {
             "status": "empty",
@@ -400,6 +413,7 @@ def test_seeded_existing_organization_reaches_http_empty_package(
                     {"setting_name": setting_name},
                 ).scalar_one_or_none() in {None, ""}
     finally:
+        clear_test_runtime_release(organization_id)
         with migration_engine.begin() as connection:
             connection.execute(
                 text(
@@ -436,6 +450,163 @@ def test_seeded_existing_organization_reaches_http_empty_package(
                     "DELETE FROM organization WHERE organization_id = :organization_id"
                 ),
                 {"organization_id": organization_id},
+            )
+        migration_engine.dispose()
+
+
+@pytest.mark.parametrize("release_state", ("missing", "unsupported_profile"))
+def test_public_v0_resolve_without_supported_active_release_fails_before_content(
+    migration_configuration: DatabaseConfiguration,
+    guarded_runtime_engine: Engine,
+    query_digest_keyring: QueryDigestKeyring,
+    release_state: str,
+) -> None:
+    """A current UserActor cannot receive a Package from absent/unknown lineage."""
+
+    organization_id = uuid4()
+    user_id = uuid4()
+    membership_id = uuid4()
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.begin() as connection:
+            connection.execute(
+                text("INSERT INTO organization (organization_id) VALUES (:org)"),
+                {"org": organization_id},
+            )
+            connection.execute(
+                text("INSERT INTO user_account (user_id) VALUES (:user_id)"),
+                {"user_id": user_id},
+            )
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO membership (
+                        organization_id, membership_id, user_id, status,
+                        membership_version, valid_from
+                    ) VALUES (
+                        :org, :membership_id, :user_id, 'active', 1, :valid_from
+                    )
+                    """
+                ),
+                {
+                    "org": organization_id,
+                    "membership_id": membership_id,
+                    "user_id": user_id,
+                    "valid_from": RECEIVED_AT - timedelta(days=1),
+                },
+            )
+        if release_state == "unsupported_profile":
+            with pytest.raises(ValueError, match="unsupported Runtime profile"):
+                ensure_test_runtime_release(
+                    organization_id,
+                    runtime_profile_ref="runtime-unsupported-integration-test",
+                )
+
+        spy = ContentIoSpy()
+        response = TestClient(
+            create_app(
+                authenticator=SeededAuthenticator(
+                    organization_id,
+                    user_id,
+                    membership_id,
+                ),
+                organization_authority=SeededOrganizationAuthority(organization_id),
+                membership_authority=PostgreSQLMembershipAuthority(
+                    guarded_runtime_engine
+                ),
+                runtime=Runtime(
+                    required_kernel_dependencies(),
+                    content_io=RuntimeContentIo(
+                        index=spy,
+                        provider=spy,
+                        source_content=spy,
+                    ),
+                    clock=lambda: RECEIVED_AT,
+                    query_digest_keyring=query_digest_keyring,
+                ),
+                clock=lambda: RECEIVED_AT,
+            )
+        ).post(
+            "/v0/resolve",
+            headers={
+                "Authorization": f"Bearer {TOKEN}",
+                "X-Context-Request-Id": "public-v0-missing-release",
+            },
+            json={"kind": "acquire", "need": {"query": "no active release"}},
+        )
+
+        assert response.status_code == 503
+        assert response.content == b'{"code":"service_unavailable"}'
+        assert spy.calls == 0
+        with migration_engine.connect() as connection:
+            assert (
+                connection.execute(
+                    text(
+                        "SELECT count(*) FROM context_run WHERE organization_id = :org"
+                    ),
+                    {"org": organization_id},
+                ).scalar_one()
+                == 0
+            )
+    finally:
+        clear_test_runtime_release(organization_id)
+        with migration_engine.begin() as connection:
+            connection.execute(
+                text("DELETE FROM membership WHERE organization_id = :org"),
+                {"org": organization_id},
+            )
+            connection.execute(
+                text("DELETE FROM user_account WHERE user_id = :user_id"),
+                {"user_id": user_id},
+            )
+            connection.execute(
+                text("DELETE FROM organization WHERE organization_id = :org"),
+                {"org": organization_id},
+            )
+        migration_engine.dispose()
+
+
+def test_runtime_release_rls_rejects_arbitrary_organization_guc_without_user_actor(
+    migration_configuration: DatabaseConfiguration,
+    guarded_runtime_engine: Engine,
+) -> None:
+    """Runtime credentials alone cannot enumerate another Organization release."""
+
+    organization_id = uuid4()
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.begin() as connection:
+            connection.execute(
+                text("INSERT INTO organization (organization_id) VALUES (:org)"),
+                {"org": organization_id},
+            )
+        ensure_test_runtime_release(organization_id)
+
+        with guarded_runtime_engine.begin() as connection:
+            connection.execute(
+                text("SELECT set_config('app.organization_id', :org, true)"),
+                {"org": str(organization_id)},
+            )
+            observed = {
+                table_name: connection.execute(
+                    text(f"SELECT count(*) FROM {table_name}")
+                ).scalar_one()
+                for table_name in (
+                    "active_release_manifest",
+                    "release_manifest",
+                )
+            }
+
+        assert observed == {
+            "active_release_manifest": 0,
+            "release_manifest": 0,
+        }
+    finally:
+        clear_test_runtime_release(organization_id)
+        with migration_engine.begin() as connection:
+            connection.execute(
+                text("DELETE FROM organization WHERE organization_id = :org"),
+                {"org": organization_id},
             )
         migration_engine.dispose()
 
@@ -544,6 +715,8 @@ def test_real_postgres_http_membership_matrix_is_generic_and_zero_io(
                 ],
             )
 
+        ensure_test_runtime_release(organization_a)
+
         spy = ContentIoSpy()
         runtime = Runtime(
             required_kernel_dependencies(),
@@ -579,8 +752,11 @@ def test_real_postgres_http_membership_matrix_is_generic_and_zero_io(
                 )
             )
             response = client.post(
-                "/v1/context:resolve",
-                headers={"Authorization": f"Bearer {TOKEN}"},
+                "/v0/resolve",
+                headers={
+                    "Authorization": f"Bearer {TOKEN}",
+                    "X-Context-Request-Id": f"public-v0-membership-{category}",
+                },
                 json={"kind": "acquire", "need": {"query": category}},
             )
             responses[category] = (response.status_code, response.content)
@@ -607,6 +783,7 @@ def test_real_postgres_http_membership_matrix_is_generic_and_zero_io(
                     {"setting_name": setting_name},
                 ).scalar_one_or_none() in {None, ""}
     finally:
+        clear_test_runtime_release(organization_a)
         with migration_engine.begin() as connection:
             connection.execute(
                 text(

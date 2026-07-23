@@ -37,6 +37,11 @@ from tests.unit.test_http_trust_boundary import (
     reachable_schemas,
 )
 
+PUBLIC_V0_HEADERS = {
+    "Authorization": f"Bearer {VALID_TOKEN}",
+    "X-Context-Request-Id": "unavailable-http-request",
+}
+
 
 class ProhibitedScopeAuthority:
     def __init__(self) -> None:
@@ -118,8 +123,8 @@ def test_unavailable_variants_skip_scope_authority_before_generic_outcome(
     )
 
     response = client.post(
-        "/v1/context:resolve",
-        headers={"Authorization": f"Bearer {VALID_TOKEN}"},
+        "/v0/resolve",
+        headers=PUBLIC_V0_HEADERS,
         json=body,
     )
 
@@ -141,8 +146,8 @@ def test_active_acquire_still_requires_the_configured_scope_authority() -> None:
     )
 
     response = client.post(
-        "/v1/context:resolve",
-        headers={"Authorization": f"Bearer {VALID_TOKEN}"},
+        "/v0/resolve",
+        headers=PUBLIC_V0_HEADERS,
         json=VALID_BODY,
     )
 
@@ -166,8 +171,8 @@ def test_accept_005_continue_is_generic_non_retryable_and_zero_io(
     client, content_io, runtime, invocations = client_for()
 
     response = client.post(
-        "/v1/context:resolve",
-        headers={"Authorization": f"Bearer {VALID_TOKEN}"},
+        "/v0/resolve",
+        headers=PUBLIC_V0_HEADERS,
         json={
             "kind": "continue",
             "continuationToken": token,
@@ -176,9 +181,7 @@ def test_accept_005_continue_is_generic_non_retryable_and_zero_io(
     )
 
     assert response.status_code == 200
-    assert response.content == (
-        b'{"kind":"request_not_available","retryable":false}'
-    )
+    assert response.content == (b'{"kind":"request_not_available","retryable":false}')
     assert response.headers["cache-control"] == "no-store"
     assert response.headers["x-context-request-id"] == "unavailable-http-request"
     assert token not in response.text
@@ -189,8 +192,7 @@ def test_accept_005_continue_is_generic_non_retryable_and_zero_io(
     unauthorized_evidence_count = int("evidence" in response_document)
     wrong_organization_effect_count = content_io.total_calls
     missing_context_fallback_count = int(
-        response_document
-        != {"kind": "request_not_available", "retryable": False}
+        response_document != {"kind": "request_not_available", "retryable": False}
     )
     assert unauthorized_evidence_count == 0
     assert wrong_organization_effect_count == 0
@@ -217,8 +219,8 @@ def test_accept_010_open_citation_is_generic_and_zero_io(
     client, content_io, runtime, invocations = client_for()
 
     response = client.post(
-        "/v1/context:resolve",
-        headers={"Authorization": f"Bearer {VALID_TOKEN}"},
+        "/v0/resolve",
+        headers=PUBLIC_V0_HEADERS,
         json={"kind": "open_citation", "citationOpenRef": locator},
     )
 
@@ -270,15 +272,13 @@ def test_accept_009_server_owned_unavailable_source_paths_are_generic_and_zero_i
     )
 
     response = client.post(
-        "/v1/context:resolve",
-        headers={"Authorization": f"Bearer {VALID_TOKEN}"},
+        "/v0/resolve",
+        headers=PUBLIC_V0_HEADERS,
         json=VALID_BODY,
     )
 
     assert response.status_code == 200
-    assert response.content == (
-        b'{"kind":"request_not_available","retryable":false}'
-    )
+    assert response.content == (b'{"kind":"request_not_available","retryable":false}')
     assert case_id not in response.text
     assert content_io.index_calls == 0
     assert content_io.provider_calls == 0
@@ -291,8 +291,7 @@ def test_accept_009_server_owned_unavailable_source_paths_are_generic_and_zero_i
         content_io.provider_calls + content_io.source_content_calls
     )
     missing_context_fallback_count = int(
-        response_document
-        != {"kind": "request_not_available", "retryable": False}
+        response_document != {"kind": "request_not_available", "retryable": False}
     )
     assert unauthorized_evidence_count == 0
     assert wrong_organization_effect_count == 0
@@ -332,8 +331,8 @@ def test_unknown_variants_and_caller_authored_capabilities_are_422_before_runtim
     client, content_io, runtime, invocations = client_for()
 
     response = client.post(
-        "/v1/context:resolve",
-        headers={"Authorization": f"Bearer {VALID_TOKEN}"},
+        "/v0/resolve",
+        headers=PUBLIC_V0_HEADERS,
         json=body,
     )
 
@@ -359,8 +358,8 @@ def test_query_parameters_are_rejected_as_closed_schema_violations(
     client, content_io, runtime, invocations = client_for()
 
     response = client.post(
-        f"/v1/context:resolve?{query}",
-        headers={"Authorization": f"Bearer {VALID_TOKEN}"},
+        f"/v0/resolve?{query}",
+        headers=PUBLIC_V0_HEADERS,
         json=VALID_BODY,
     )
 
@@ -375,8 +374,11 @@ def test_known_unavailable_variant_still_requires_transport_authentication() -> 
     client, content_io, runtime, invocations = client_for()
 
     response = client.post(
-        "/v1/context:resolve",
-        headers={"Authorization": "Bearer invalid"},
+        "/v0/resolve",
+        headers={
+            "Authorization": "Bearer invalid",
+            "X-Context-Request-Id": "unavailable-http-request",
+        },
         json={"kind": "continue", "continuationToken": "opaque-token"},
     )
 
@@ -392,8 +394,8 @@ def test_refusal_audit_retains_only_the_safe_internal_typed_category() -> None:
     opaque_value = "secret-opaque-capability-value"
 
     response = client.post(
-        "/v1/context:resolve",
-        headers={"Authorization": f"Bearer {VALID_TOKEN}"},
+        "/v0/resolve",
+        headers=PUBLIC_V0_HEADERS,
         json={"kind": "continue", "continuationToken": opaque_value},
     )
 
@@ -421,16 +423,14 @@ def test_opaque_wire_models_redact_capability_values_from_repr() -> None:
     assert opaque_locator not in repr(citation)
 
 
-def test_openapi_freezes_the_closed_three_variant_request_and_outcome_unions(
-) -> None:
+def test_openapi_freezes_the_closed_three_variant_request_and_outcome_unions() -> None:
     client, _, _, _ = client_for()
     schema = client.get("/openapi.json").json()
-    operation = schema["paths"]["/v1/context:resolve"]["post"]
+    assert set(schema["paths"]) == {"/v0/resolve"}
+    operation = schema["paths"]["/v0/resolve"]["post"]
     components = schema["components"]["schemas"]
 
-    request_schema = operation["requestBody"]["content"]["application/json"][
-        "schema"
-    ]
+    request_schema = operation["requestBody"]["content"]["application/json"]["schema"]
     request_union_name = request_schema["$ref"].rsplit("/", maxsplit=1)[-1]
     assert request_union_name == "ResolveWire"
     request_union_schema = components[request_union_name]
@@ -470,9 +470,9 @@ def test_openapi_freezes_the_closed_three_variant_request_and_outcome_unions(
     ):
         assert forbidden not in request_graph
 
-    response_schema = operation["responses"]["200"]["content"][
-        "application/json"
-    ]["schema"]
+    response_schema = operation["responses"]["200"]["content"]["application/json"][
+        "schema"
+    ]
     response_union_name = response_schema["$ref"].rsplit("/", maxsplit=1)[-1]
     assert response_union_name == "ResolutionOutcomeWire"
     assert components[response_union_name]["discriminator"]["propertyName"] == "kind"
@@ -511,8 +511,8 @@ def test_existing_http_acquire_remains_a_resolved_package() -> None:
     client, content_io, runtime, _ = client_for()
 
     response = client.post(
-        "/v1/context:resolve",
-        headers={"Authorization": f"Bearer {VALID_TOKEN}"},
+        "/v0/resolve",
+        headers=PUBLIC_V0_HEADERS,
         json=VALID_BODY,
     )
 

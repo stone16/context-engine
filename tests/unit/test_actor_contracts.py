@@ -36,6 +36,7 @@ from engine.runtime.policy_epoch import (
     _observe_current_policy_epoch,
     _open_policy_epoch_authority_scope,
 )
+from tests.support.releases import active_runtime_release
 
 CHECKED_AT = datetime(2026, 7, 21, 6, 0, tzinfo=UTC)
 ORGANIZATION_ID = UUID("81e18bca-86a1-478a-937d-7675c6fe69b0")
@@ -108,6 +109,7 @@ def current_membership_proof(
         policy_epoch_verification=(
             epoch_verification or policy_epoch_verification(organization_id)
         ),
+        active_runtime_release=active_runtime_release(organization_id),
     )
 
 
@@ -143,6 +145,7 @@ def test_current_membership_proof_is_nominal_frozen_and_scope_lived() -> None:
         authentication_binding_ref="binding-1",
         checked_at=CHECKED_AT,
         policy_epoch_verification=policy_epoch_verification(),
+        active_runtime_release=active_runtime_release(ORGANIZATION_ID),
     )
 
     _require_active_current_membership_verification(proof)
@@ -209,14 +212,15 @@ def test_current_membership_proof_rejects_forged_or_closed_authority_scope() -> 
         current_membership_proof(scope=closed_scope)
 
 
-def test_current_membership_proofs_from_distinct_authority_scopes_are_distinct(
-) -> None:
+def test_current_membership_proofs_from_distinct_authority_scopes_are_distinct() -> (
+    None
+):
     first_scope = _open_membership_authority_scope()
     second_scope = _open_membership_authority_scope()
 
-    assert current_membership_proof(
-        scope=first_scope
-    ) != current_membership_proof(scope=second_scope)
+    assert current_membership_proof(scope=first_scope) != current_membership_proof(
+        scope=second_scope
+    )
 
     _close_membership_authority_scope(first_scope)
     _close_membership_authority_scope(second_scope)
@@ -238,6 +242,7 @@ def test_user_actor_is_nominal_exact_and_keeps_principal_distinct_from_user() ->
         authentication_binding_ref="binding-1",
         checked_at=CHECKED_AT,
         policy_epoch_verification=policy_epoch_verification(),
+        active_runtime_release=active_runtime_release(ORGANIZATION_ID),
     )
     actor = _construct_user_actor(proof)
 
@@ -257,8 +262,9 @@ def test_user_actor_is_nominal_exact_and_keeps_principal_distinct_from_user() ->
         _require_active_user_actor(actor)
 
 
-def test_verified_authentication_requires_canonical_user_membership_and_version(
-) -> None:
+def test_verified_authentication_requires_canonical_user_membership_and_version() -> (
+    None
+):
     context = verified_authentication_context(
         user_ref=str(USER_ID).replace("-", "").upper(),
         membership_ref=str(MEMBERSHIP_ID).replace("-", "").upper(),

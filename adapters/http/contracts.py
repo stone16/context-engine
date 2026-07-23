@@ -10,7 +10,8 @@ from engine.runtime.contracts import (
     MAX_NARROWING_REF_LENGTH,
     MAX_NARROWING_REFS,
     MAX_OPAQUE_CAPABILITY_LENGTH,
-    ORGANIZATION_PACKAGE_REF_PATTERN,
+    PACKAGE_REF_PATTERN,
+    complete_context_package_nullable_fields,
 )
 from engine.runtime.evidence import (
     MAX_PROJECTED_FIELD_REF_LENGTH,
@@ -38,9 +39,9 @@ NonblankPurpose = Annotated[
     str,
     Field(strict=True, min_length=1, pattern=r".*\S.*"),
 ]
-OrganizationPackageOutputRef = Annotated[
+PackageOutputRef = Annotated[
     str,
-    Field(strict=True, pattern=ORGANIZATION_PACKAGE_REF_PATTERN),
+    Field(strict=True, pattern=PACKAGE_REF_PATTERN),
 ]
 DecisionOutputRef = Annotated[
     str,
@@ -186,9 +187,9 @@ class BudgetUsageWire(ClosedWireModel):
     """Actual resources consumed by this Package."""
 
     tokens: NonnegativeExactInteger
-    providerCalls: Literal[0]
-    costMicrounits: Literal[0]
-    elapsedMs: Literal[0]
+    providerCalls: NonnegativeExactInteger
+    costMicrounits: NonnegativeExactInteger
+    elapsedMs: NonnegativeExactInteger
 
 
 class BlockWire(ClosedWireModel):
@@ -210,6 +211,40 @@ class BlockWire(ClosedWireModel):
         return self
 
 
+class LiveSourceAclEvidenceWire(ClosedWireModel):
+    kind: Literal["live"]
+    sourceDecisionRef: OpaqueOutputRef
+    checkedAt: datetime
+    verificationProtocolRef: OpaqueOutputRef
+
+
+class MirroredSourceAclEvidenceWire(ClosedWireModel):
+    kind: Literal["mirrored"]
+    projectionRef: OpaqueOutputRef
+    aclAsOf: datetime
+    freshnessProfileRef: OpaqueOutputRef
+
+
+class WeakSourceAclEvidenceWire(ClosedWireModel):
+    kind: Literal["weak"]
+    declarationRef: OpaqueOutputRef
+    checkedAt: datetime
+    boundedMembershipEvidenceRef: OpaqueOutputRef
+    snapshotAsOf: datetime
+    expiresAt: datetime
+    membershipCompleteness: Literal["complete"]
+    sensitivityPolicyRef: OpaqueOutputRef
+    historySemanticsRef: OpaqueOutputRef
+
+
+type SourceAclEvidenceWire = Annotated[
+    LiveSourceAclEvidenceWire
+    | MirroredSourceAclEvidenceWire
+    | WeakSourceAclEvidenceWire,
+    Field(discriminator="kind"),
+]
+
+
 class EvidenceWire(ClosedWireModel):
     """Public request-scoped Evidence and its authorization lineage."""
 
@@ -228,7 +263,8 @@ class EvidenceWire(ClosedWireModel):
     decisionRef: DecisionOutputRef
     policySnapshotRef: OpaqueOutputRef
     policyEpoch: PositivePolicyEpoch
-    sourceDecisionRef: OpaqueOutputRef
+    sourceAclEvidence: SourceAclEvidenceWire
+    citationOpenRef: OpaqueOutputRef | None
 
     @model_validator(mode="after")
     def require_unique_projected_fields(self) -> Self:
@@ -242,36 +278,74 @@ class EvidenceWire(ClosedWireModel):
         return self
 
 
+class GapWire(ClosedWireModel):
+    category: Literal[
+        "source_unavailable",
+        "stale_evidence",
+        "budget_exhausted",
+        "capability_unsupported",
+    ]
+    retryable: bool = Field(strict=True)
+
+
 class CoverageWire(ClosedWireModel):
     """Typed tenant-safe coverage for the selected package content."""
 
-    status: Literal["empty", "sufficient"]
-    reason: Literal["no_authorized_evidence"] | None = None
+    status: Literal["empty", "partial", "sufficient"]
+    reason: (
+        Literal[
+            "no_authorized_evidence",
+            "source_unavailable",
+            "stale_evidence",
+            "budget_exhausted",
+            "capability_unsupported",
+        ]
+        | None
+    ) = None
 
     @model_validator(mode="after")
     def require_status_specific_reason(self) -> Self:
-        if self.status == "empty" and self.reason != "no_authorized_evidence":
+        if self.status == "empty" and self.reason is None:
             raise ValueError("empty coverage requires its tenant-safe reason")
         if self.status == "sufficient" and self.reason is not None:
-            raise ValueError("sufficient coverage cannot carry an empty reason")
+            raise ValueError("sufficient coverage cannot carry a gap reason")
+        if self.status == "partial" and self.reason in {
+            None,
+            "no_authorized_evidence",
+        }:
+            raise ValueError("partial coverage requires a non-empty gap reason")
         return self
+
+
+class ContinuationOfferWire(ClosedWireModel):
+    continuationToken: OpaqueCapabilityInput
+    remainingBudgetDigest: PackageDigestOutput
 
 
 class ContextPackageWire(ClosedWireModel):
     """Public package with an exact block/Evidence closure."""
 
-    organizationRef: OrganizationPackageOutputRef
+    packageId: PackageOutputRef
+    packageDigest: PackageDigestOutput
     purpose: NonblankPurpose
-    ttlSeconds: PositiveExactInteger
+    audienceDigest: PackageDigestOutput
+    policyEpoch: PositivePolicyEpoch
+    policySnapshotRef: OpaqueOutputRef
+    decisionRef: DecisionOutputRef
+    runRef: OpaqueOutputRef
+    releaseManifestRef: OpaqueOutputRef
+    retentionPolicyRef: OpaqueOutputRef
     asOf: datetime
     expiresAt: datetime
-    decisionRef: DecisionOutputRef
-    packageDigest: PackageDigestOutput
+    ttlSeconds: PositiveExactInteger
+    tokenizerRef: OpaqueOutputRef
+    packageSchemaRef: OpaqueOutputRef
     blocks: tuple[BlockWire, ...]
     evidence: tuple[EvidenceWire, ...]
-    gaps: tuple[()]
-    budgetUsage: BudgetUsageWire
+    gaps: tuple[GapWire, ...]
     coverage: CoverageWire
+    budgetUsage: BudgetUsageWire
+    continuation: ContinuationOfferWire | None
 
     @model_validator(mode="after")
     def require_exact_authorized_content_closure(self) -> Self:
@@ -301,6 +375,9 @@ class ContextPackageWire(ClosedWireModel):
                 item.purpose != self.purpose
                 or item.authorizationAsOf != self.asOf
                 or item.decisionRef != self.decisionRef
+                or item.policyEpoch != self.policyEpoch
+                or item.policySnapshotRef != self.policySnapshotRef
+                or item.runRef != self.runRef
             ):
                 raise ValueError(
                     "Evidence lineage must match its enclosing package decision"
@@ -311,6 +388,7 @@ class ContextPackageWire(ClosedWireModel):
             exclude={"packageDigest"},
             exclude_none=True,
         )
+        complete_context_package_nullable_fields(digest_document)
         if not verify_context_package_digest(
             digest_document,
             self.packageDigest,
@@ -341,7 +419,6 @@ class ResolvedWire(ClosedWireModel):
     kind: Literal["resolved"]
     package: ContextPackageWire
     egressGrant: ModelEgressGrantWire | ChannelEgressGrantWire | None = Field(
-        default=None,
         discriminator="kind",
         repr=False,
     )
@@ -382,3 +459,27 @@ class ServiceUnavailableWire(ClosedWireModel):
     """Closed response when a required trusted authority is unavailable."""
 
     code: Literal["service_unavailable"]
+
+
+class ApplicationForbiddenWire(ClosedWireModel):
+    code: Literal["application_forbidden"]
+
+
+class RateLimitedWire(ClosedWireModel):
+    code: Literal["rate_limited"]
+
+
+def resolution_outcome_public_document(
+    outcome: ResolutionOutcomeWire,
+) -> dict[str, object]:
+    """Serialize one closed outcome with every frozen required-nullable field."""
+
+    document = outcome.model_dump(mode="json", by_alias=True, exclude_none=True)
+    if type(outcome) is not ResolvedWire:
+        return document
+    document["egressGrant"] = document.get("egressGrant")
+    package = document.get("package")
+    if not isinstance(package, dict):
+        raise TypeError("resolved wire package must be an object")
+    complete_context_package_nullable_fields(package)
+    return document

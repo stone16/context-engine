@@ -183,9 +183,12 @@ def test_issue_24_structural_markdown_contract_is_versioned_and_function_only() 
         ],
     }
     structural_function = "EXECUTE context_worker_publish_structural_file_import_v2"
-    assert structural_function in entries["file_revision_snapshot"][
-        "permittedOperations"
-    ]["context_engine_worker"]
+    assert (
+        structural_function
+        in entries["file_revision_snapshot"]["permittedOperations"][
+            "context_engine_worker"
+        ]
+    )
     recovery_steps = {
         "EXECUTE context_worker_acquire_file_publication",
         "EXECUTE context_worker_prepare_file_publication",
@@ -285,9 +288,7 @@ def test_issue_26_file_replacement_contract_is_staged_and_function_only() -> Non
 
     assert operation["stageDatabaseFunctions"] == {
         "markdown-config-v1": "context_worker_stage_file_replacement",
-        "markdown-config-v2": (
-            "context_worker_stage_structural_file_replacement"
-        ),
+        "markdown-config-v2": ("context_worker_stage_structural_file_replacement"),
     }
     assert operation["activateDatabaseFunction"] == (
         "context_worker_activate_file_replacement"
@@ -315,13 +316,12 @@ def test_issue_26_file_replacement_contract_is_staged_and_function_only() -> Non
         assert stage_functions <= set(
             entries[table]["functionOnlyMutation"]["databaseFunctions"]
         )
-        assert {
-            f"EXECUTE {function}" for function in stage_functions
-        } <= set(entries[table]["permittedOperations"]["context_engine_worker"])
+        assert {f"EXECUTE {function}" for function in stage_functions} <= set(
+            entries[table]["permittedOperations"]["context_engine_worker"]
+        )
     assert operation["directTableMutationAllowed"] is False
     assert operation["retention"] == (
-        "superseded Revisions remain immutable and "
-        "retained_until_explicit_cleanup"
+        "superseded Revisions remain immutable and retained_until_explicit_cleanup"
     )
 
     plan = entries["file_revision_replacement_plan"]
@@ -372,9 +372,9 @@ def test_issue_27_file_recovery_contract_is_generation_fenced_and_auditable() ->
         "content_identity_digest",
         "publication_payload_digest",
     ]
-    assert "context_worker_issue_file_import_lease" not in operation[
-        "databaseFunctions"
-    ]
+    assert (
+        "context_worker_issue_file_import_lease" not in operation["databaseFunctions"]
+    )
     assert lease_issue["atomicWrites"] == [
         "file_import_job",
         "file_import_job_event",
@@ -407,9 +407,7 @@ def test_issue_27_file_recovery_contract_is_generation_fenced_and_auditable() ->
             assert database_function in causal
             assert (
                 f"EXECUTE {database_function}"
-                in entries[table_name]["permittedOperations"][
-                    "context_engine_worker"
-                ]
+                in entries[table_name]["permittedOperations"]["context_engine_worker"]
             )
 
 
@@ -512,12 +510,8 @@ def test_issue_30_file_source_offboarding_is_atomic_and_function_only() -> None:
         if value["name"] == "offboard_file_source"
     )
 
-    assert operation["databaseFunction"] == (
-        "context_control_offboard_file_source"
-    )
-    assert operation["definerRole"] == (
-        "context_engine_access_policy_definer"
-    )
+    assert operation["databaseFunction"] == ("context_control_offboard_file_source")
+    assert operation["definerRole"] == ("context_engine_access_policy_definer")
     assert operation["directTableMutationAllowed"] is False
     assert operation["idempotencyBinding"] == ["organization_id", "source_id"]
     assert operation["atomicWrites"] == [
@@ -554,17 +548,15 @@ def test_issue_30_file_source_offboarding_is_atomic_and_function_only() -> None:
         "physicalCleanupCompletion": "not active in Issue #30",
         "sourceContent": "none",
     }
-    assert entries["context_source"]["permittedOperations"][
-        "context_engine_runtime"
-    ] == []
+    assert (
+        entries["context_source"]["permittedOperations"]["context_engine_runtime"] == []
+    )
     resource_policy = next(
         policy
         for policy in entries["context_resource"]["rowLevelSecurity"]["policies"]
         if policy["name"] == "context_resource_current_user_actor"
     )
-    assert "context_runtime_file_source_lifecycle_allows" in (
-        resource_policy["using"]
-    )
+    assert "context_runtime_file_source_lifecycle_allows" in (resource_policy["using"])
     for policy in entries["file_import_job"]["rowLevelSecurity"]["policies"]:
         if policy["roles"] == ["context_engine_worker_lease_definer"] and (
             policy["command"] in {"SELECT", "UPDATE"}
@@ -773,6 +765,7 @@ def test_issue_19_lineage_manifest_is_closed_and_role_separated() -> None:
         "context-query-json-hmac-sha256-v1",
         "context-package-canonical-json-v1",
         "context-package-canonical-json-v2",
+        "context-package-canonical-json-v3",
         "digest_only",
         "delivered_authorized",
         "delivered_empty",
@@ -1752,12 +1745,8 @@ def test_policy_epoch_manifest_seals_runtime_reads_and_control_mutation() -> Non
             "context_engine_worker": [],
         }
         if entry["name"] == "organization_policy_epoch":
-            expected_operations[
-                "context_engine_delivery_evidence_definer"
-            ] = ["SELECT"]
-            expected_operations["context_engine_egress_grant_definer"] = [
-                "SELECT"
-            ]
+            expected_operations["context_engine_delivery_evidence_definer"] = ["SELECT"]
+            expected_operations["context_engine_egress_grant_definer"] = ["SELECT"]
             expected_operations["context_engine_control"].append(
                 "EXECUTE context_control_tombstone_file_resource"
             )
@@ -2142,9 +2131,44 @@ def test_release_force_rls_and_grants_match_the_promotion_boundary() -> None:
         assert definer_policy["using"] == definer_policy["withCheck"]
         assert "app.organization_id" in definer_policy["using"]
         assert entry["permittedOperations"]["context_engine_control"] == []
-        assert entry["permittedOperations"]["context_engine_runtime"] == []
+        assert entry["permittedOperations"]["context_engine_runtime"] == (
+            ["SELECT"]
+            if name in {"release_manifest", "active_release_manifest"}
+            else []
+        )
         assert entry["permittedOperations"]["context_engine_worker"] == []
         assert entry["permittedOperations"]["context_engine_security_operator"] == []
+        runtime_policies = [
+            policy
+            for policy in rls["policies"]
+            if policy["roles"] == ["context_engine_runtime"]
+        ]
+        if name in {"release_manifest", "active_release_manifest"}:
+            assert len(runtime_policies) == 1
+            runtime_policy = runtime_policies[0]
+            assert runtime_policy["name"] == f"{name}_runtime_select"
+            assert runtime_policy["command"] == "SELECT"
+            assert runtime_policy["roles"] == ["context_engine_runtime"]
+            using = runtime_policy["using"]
+            assert f"{name}.organization_id" in using
+            for required_boundary in (
+                "app.organization_id",
+                "app.actor_kind",
+                "app.user_id",
+                "app.membership_id",
+                "app.membership_version",
+                "app.principal_ref",
+                "app.request_id",
+                "app.authentication_binding_ref",
+                "app.checked_at",
+                "public.membership",
+                "status = 'active'",
+                "valid_from",
+                "valid_until",
+            ):
+                assert required_boundary in using
+        else:
+            assert runtime_policies == []
 
         if name in lineage_names:
             learning_policies = {

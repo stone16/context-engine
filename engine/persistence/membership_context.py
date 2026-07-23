@@ -65,6 +65,7 @@ from engine.runtime.policy_epoch import (
     _observe_current_policy_epoch,
     _open_policy_epoch_authority_scope,
 )
+from engine.runtime.release_lineage import ActiveRuntimeRelease
 
 
 class MembershipNotCurrent(Exception):
@@ -450,6 +451,75 @@ class _PostgreSQLMaterializedProjectionPort:
         )
 
 
+def _observe_active_runtime_release(
+    connection: Connection,
+    organization_id: UUID,
+) -> ActiveRuntimeRelease | None:
+    """Read the sole Learning-published active Runtime profile under FORCE RLS."""
+
+    row = connection.execute(
+        text(
+            """
+            SELECT
+                manifest.organization_id,
+                active.active_generation,
+                manifest.manifest_digest,
+                manifest.content_profile_ref,
+                manifest.content_schema_ref,
+                manifest.index_profile_ref,
+                manifest.index_schema_ref,
+                manifest.runtime_profile_ref,
+                manifest.runtime_profile_digest,
+                manifest.runtime_content_profile_digest,
+                manifest.runtime_index_profile_digest,
+                manifest.runtime_tokenizer_ref,
+                manifest.runtime_package_schema_ref,
+                manifest.curation_profile_ref,
+                manifest.curation_profile_digest,
+                manifest.curation_mode,
+                manifest.curation_snapshot_ref,
+                manifest.curation_evaluation_digest,
+                manifest.compatible_revision_refs,
+                manifest.active_revision_refs
+            FROM active_release_manifest AS active
+            JOIN release_manifest AS manifest
+              ON manifest.organization_id = active.organization_id
+             AND manifest.manifest_ref = active.manifest_ref
+             AND manifest.manifest_digest = active.manifest_digest
+            WHERE active.organization_id = :organization_id
+            """
+        ),
+        {"organization_id": organization_id},
+    ).one_or_none()
+    if row is None:
+        return None
+    try:
+        return ActiveRuntimeRelease(
+            organization_id=row.organization_id,
+            manifest_digest=row.manifest_digest,
+            active_generation=row.active_generation,
+            content_profile_ref=row.content_profile_ref,
+            content_schema_ref=row.content_schema_ref,
+            index_profile_ref=row.index_profile_ref,
+            index_schema_ref=row.index_schema_ref,
+            runtime_profile_ref=row.runtime_profile_ref,
+            runtime_profile_digest=row.runtime_profile_digest,
+            content_profile_digest=row.runtime_content_profile_digest,
+            index_profile_digest=row.runtime_index_profile_digest,
+            tokenizer_ref=row.runtime_tokenizer_ref,
+            package_schema_ref=row.runtime_package_schema_ref,
+            curation_profile_ref=row.curation_profile_ref,
+            curation_profile_digest=row.curation_profile_digest,
+            curation_mode=row.curation_mode,
+            curation_snapshot_ref=row.curation_snapshot_ref,
+            curation_evaluation_digest=row.curation_evaluation_digest,
+            compatible_revision_refs=tuple(row.compatible_revision_refs),
+            active_revision_refs=tuple(row.active_revision_refs),
+        )
+    except (TypeError, ValueError):
+        return None
+
+
 class _PostgreSQLPolicyEpochPort:
     """Current Organization epoch reads on the retained Membership transaction."""
 
@@ -816,6 +886,20 @@ class PostgreSQLMembershipAuthority:
             ),
             {"organization_id": identity.organization_id},
         )
+        connection.execute(
+            text(
+                """
+                SELECT pg_catalog.pg_advisory_xact_lock_shared(
+                    pg_catalog.hashtextextended(
+                        'context-engine.release:'
+                        || CAST(:organization_id AS text),
+                        0
+                    )
+                )
+                """
+            ),
+            {"organization_id": identity.organization_id},
+        )
 
         scope = _open_membership_authority_scope()
         projection_scope = _open_materialized_projection_scope()
@@ -864,6 +948,10 @@ class PostgreSQLMembershipAuthority:
                         authority_scope=egress_issuance_scope,
                         port=_PostgreSQLEgressGrantIssuancePort(connection),
                     )
+                ),
+                active_runtime_release=_observe_active_runtime_release(
+                    connection,
+                    identity.organization_id,
                 ),
             )
         finally:

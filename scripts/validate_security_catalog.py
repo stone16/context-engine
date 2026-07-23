@@ -254,7 +254,8 @@ PUBLIC_EVIDENCE_FIELDS: tuple[str, ...] = (
     "decisionRef",
     "policySnapshotRef",
     "policyEpoch",
-    "sourceDecisionRef",
+    "sourceAclEvidence",
+    "citationOpenRef",
 )
 
 TRANSPORT_CASE_IDS: tuple[str, ...] = (
@@ -1027,7 +1028,7 @@ CANONICAL_PRIVATE_DELIVERY_EVIDENCE_ACTIVATION: dict[str, object] = {
     ],
     "deferredEvidence": [
         "group AudienceSnapshot DeliveryEvidenceRef",
-        "frozen OpenAPI and generated TypeScript SDK carrier",
+        "generated TypeScript SDK carrier",
         "production BotDelivery caller",
     ],
     "futureCarriers": [
@@ -1042,7 +1043,6 @@ CANONICAL_PRIVATE_DELIVERY_EVIDENCE_ACTIVATION: dict[str, object] = {
         "production ModelGateway",
         "ActionPlane",
         "BotDelivery application",
-        "OpenAPI compatibility freeze",
         "generated SDK",
     ],
 }
@@ -1051,8 +1051,7 @@ CANONICAL_EGRESS_GRANT_ACTIVATION: dict[str, object] = {
     "issueRef": "#65",
     "invariantRef": "EGRESS-011",
     "carrier": (
-        "opaque one-shot model or channel EgressGrant with deterministic "
-        "boundary spies"
+        "opaque one-shot model or channel EgressGrant with deterministic boundary spies"
     ),
     "status": "active_fail_closed",
     "policyEpochScope": "organization-v0",
@@ -1128,6 +1127,102 @@ CANONICAL_EGRESS_GRANT_ACTIVATION: dict[str, object] = {
     ],
 }
 
+CANONICAL_OPENAPI_V0_ACTIVATION: dict[str, object] = {
+    "issueRef": "#66",
+    "invariantRef": "TRANSPORT-UNTRUSTED-008",
+    "carrier": "frozen public POST /v0/resolve OpenAPI contract",
+    "status": "active_fail_closed",
+    "policyEpochScope": "organization-v0",
+    "controlBoundary": (
+        "authenticated HTTP metadata -> closed ResolveWire -> current UserActor "
+        "and active release observation -> sealed ContextRuntime.resolve -> "
+        "closed ResolutionOutcome"
+    ),
+    "testEvidence": [
+        {
+            "id": "OPENAPI-CONTRACT-066",
+            "surface": "tests/unit/test_openapi_v0_contract.py",
+            "oracle": (
+                "The frozen document exposes exactly one public versioned "
+                "operation with a closed Acquire, Continue, or OpenCitation body, "
+                "closed outcome union, complete ContextPackage, bounded metadata "
+                "and payloads, generic failure statuses, and no raw trusted "
+                "identity or audience fields."
+            ),
+        },
+        {
+            "id": "OPENAPI-BREAKING-066",
+            "surface": "tests/unit/test_openapi_v0_snapshot.py",
+            "oracle": (
+                "The deterministic immutable snapshot and SHA-256 checksum gate "
+                "reject current drift, base-commit mutation, and overwrite, while "
+                "deliberate security, response, union, required-field, and type "
+                "mutations prove the recursive gate rejects contract changes."
+            ),
+        },
+        {
+            "id": "HTTP-V0-066",
+            "surface": (
+                "tests/unit/test_http_trust_boundary.py::"
+                "test_trusted_field_injection_is_closed_before_domain_execution "
+                "tests/unit/test_http_unavailable_capabilities.py::"
+                "test_accept_005_continue_is_generic_non_retryable_and_zero_io "
+                "tests/process/test_processes.py::"
+                "test_http_acquire_smoke_returns_the_empty_package_contract"
+            ),
+            "oracle": (
+                "Public v0 rejects trusted-field injection and returns generic "
+                "inactive-carrier outcomes before content work, while the process "
+                "returns the frozen empty-package contract; a separate focused "
+                "test proves the hidden v1 bridge shares the same sealed path."
+            ),
+        },
+        {
+            "id": "PG-RUNTIME-RELEASE-066",
+            "surface": (
+                "tests/integration/test_runtime_empty_package_integration.py::"
+                "test_seeded_existing_organization_reaches_http_empty_package "
+                "tests/integration/test_runtime_empty_package_integration.py::"
+                "test_public_v0_resolve_without_supported_active_release_"
+                "fails_before_content "
+                "tests/integration/test_runtime_authorized_evidence_integration.py::"
+                "test_real_postgres_http_delivers_only_exact_authorized_evidence_"
+                "bidirectionally"
+            ),
+            "oracle": (
+                "Real PostgreSQL proves the Package carries the exact Learning-"
+                "promoted active manifest, tokenizer, and package schema observed "
+                "under the current UserActor transaction with read-only Runtime "
+                "RLS, while a missing or unsupported release returns one generic "
+                "unavailable outcome before content I/O and without a ContextRun; "
+                "the public v0 seam also proves CandidateRef through the sealed "
+                "Kernel to exact AuthorizedProjection with real PostgreSQL."
+            ),
+        },
+    ],
+    "deferredEvidence": [
+        "generated TypeScript SDK conformance",
+        "production BotDelivery generated-SDK caller",
+        "Continue and OpenCitation redemption",
+    ],
+    "futureCarriers": [
+        "generated TypeScript SDK",
+        "MCP",
+        "BotDelivery application",
+        "Continue redemption",
+        "OpenCitation redemption",
+    ],
+    "notActive": [
+        "generated SDK consumer",
+        "MCP",
+        "BotDelivery application process",
+        "continuation issuance or redemption",
+        "citation persistence or redemption",
+        "group AudienceSnapshot",
+        "external effects",
+    ],
+}
+
 CANONICAL_ACTIVATIONS: list[dict[str, object]] = [
     CANONICAL_REVOCATION_ACTIVATION,
     CANONICAL_UNAVAILABLE_CAPABILITY_ACTIVATION,
@@ -1137,6 +1232,7 @@ CANONICAL_ACTIVATIONS: list[dict[str, object]] = [
     CANONICAL_FIELD_PROJECTION_ACTIVATION,
     CANONICAL_PRIVATE_DELIVERY_EVIDENCE_ACTIVATION,
     CANONICAL_EGRESS_GRANT_ACTIVATION,
+    CANONICAL_OPENAPI_V0_ACTIVATION,
 ]
 CANONICAL_ACTIVATION_ISSUE_LIST = ", ".join(
     f"Issue {activation['issueRef']}" for activation in CANONICAL_ACTIVATIONS
@@ -2237,8 +2333,10 @@ def _validate_fixture(
                 else None
             )
             canonical_allowlist = (
-                "body.package.organizationRef",
+                "body.package.packageId",
                 "body.package.decisionRef",
+                "body.package.policySnapshotRef",
+                "body.package.runRef",
                 "body.package.asOf",
                 "body.package.expiresAt",
                 "body.package.packageDigest",
@@ -2318,28 +2416,37 @@ def _validate_fixture(
                     "must preserve the canonical non-enumerating response headers",
                 )
             canonical_empty_package = {
-                "organizationRef": ("orgpkg_0000000000000000000000000000000a"),
+                "packageId": ("pkg_0000000000000000000000000000000a"),
+                "packageDigest": (
+                    "94d68444d124f453eb6c62e0132ea8e90a3c4017230e8e7b3bfe138d1daa10d1"
+                ),
                 "purpose": "context.answer",
-                "ttlSeconds": 30,
+                "audienceDigest": "a" * 64,
+                "policyEpoch": 1,
+                "policySnapshotRef": "policy-snapshot-a",
+                "decisionRef": "dec_0000000000000000000000000000000a",
+                "runRef": "run-authorized-a",
+                "releaseManifestRef": "manifest-m0-empty-v0",
+                "retentionPolicyRef": "package-digest-only-retention-v1",
                 "asOf": "2026-07-21T09:30:00Z",
                 "expiresAt": "2026-07-21T09:30:30Z",
-                "decisionRef": "dec_0000000000000000000000000000000a",
-                "packageDigest": (
-                    "27f6a284027ab9446aa577125727b33263f24c8f252b8cd4616bd17b8545185e"
-                ),
+                "ttlSeconds": 30,
+                "tokenizerRef": "utf8-byte-budget-v1",
+                "packageSchemaRef": "context-package-openapi-v0",
                 "blocks": [],
                 "evidence": [],
                 "gaps": [],
+                "coverage": {
+                    "status": "empty",
+                    "reason": "no_authorized_evidence",
+                },
                 "budgetUsage": {
                     "tokens": 0,
                     "providerCalls": 0,
                     "costMicrounits": 0,
                     "elapsedMs": 0,
                 },
-                "coverage": {
-                    "status": "empty",
-                    "reason": "no_authorized_evidence",
-                },
+                "continuation": None,
             }
             observed_package = (
                 response_body.get("package") if response_body is not None else None
@@ -3136,6 +3243,17 @@ def validate_catalog(
     _validate_schema(schema, catalog.get("catalogVersion"), collector)
     if isinstance(schema, Mapping):
         _validate_schema_instance(catalog, schema, schema, "catalog", collector)
+        definitions = schema.get("$defs")
+        if isinstance(definitions, Mapping):
+            activation_schema = definitions.get("activation")
+            for index, activation in enumerate(CANONICAL_ACTIVATIONS):
+                _validate_schema_instance(
+                    activation,
+                    activation_schema,
+                    schema,
+                    f"schema canonical activation[{index}]",
+                    collector,
+                )
     if collector.errors:
         raise CatalogValidationError(collector.errors)
 

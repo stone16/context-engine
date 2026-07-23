@@ -182,10 +182,19 @@ def _stable_empty_package(package: dict[str, Any]) -> dict[str, Any]:
     stable = dict(package)
     for field in (
         "asOf",
+        "audienceDigest",
         "decisionRef",
         "expiresAt",
-        "organizationRef",
         "packageDigest",
+        "packageId",
+        "packageSchemaRef",
+        "policyEpoch",
+        "policySnapshotRef",
+        "releaseManifestRef",
+        "retentionPolicyRef",
+        "runRef",
+        "tokenizerRef",
+        "continuation",
     ):
         stable.pop(field)
     return stable

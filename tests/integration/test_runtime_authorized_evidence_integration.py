@@ -44,6 +44,10 @@ from engine.runtime.scope_authority import (
     _open_scope_authority_scope,
 )
 from tests.support.context_run_operator import exact_test_context_run_operator_read
+from tests.support.releases import (
+    clear_test_runtime_release,
+    ensure_test_runtime_release,
+)
 from tests.support.security_gate import record_security_oracles
 
 pytestmark = pytest.mark.integration
@@ -495,6 +499,8 @@ def _persistent_content_snapshot(
 
 
 def _cleanup_fixture(engine: Engine, fixture: RuntimeEvidenceFixture) -> None:
+    clear_test_runtime_release(fixture.org_a.organization_id)
+    clear_test_runtime_release(fixture.org_b.organization_id)
     organizations = {
         "org_a_id": fixture.org_a.organization_id,
         "org_b_id": fixture.org_b.organization_id,
@@ -697,8 +703,11 @@ def _assert_exact_authorized_http_resolve(
     )
 
     response = client.post(
-        "/v1/context:resolve",
-        headers={"Authorization": f"Bearer {token}"},
+        "/v0/resolve",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "X-Context-Request-Id": request_id,
+        },
         json={"kind": "acquire", "need": {"query": "hostile rank"}},
     )
 
@@ -757,10 +766,11 @@ def _assert_exact_authorized_http_resolve(
     package_digest = package_document.pop("packageDigest")
     assert verify_context_package_digest(package_document, package_digest)
     assert "effects" not in package
-    assert package["organizationRef"] not in {
-        str(active.organization_id),
-        str(other.organization_id),
-    }
+    assert "organizationRef" not in package
+    assert package["packageId"].startswith("pkg_")
+    assert len(package["packageId"]) == 36
+    assert str(active.organization_id) not in response.text
+    assert str(other.organization_id) not in response.text
     assert package["purpose"] == "context.answer"
     assert package["asOf"] == RECEIVED_AT.isoformat().replace("+00:00", "Z")
     assert package["gaps"] == []
@@ -805,15 +815,22 @@ def _assert_exact_authorized_http_resolve(
         "decisionRef": package["decisionRef"],
         "policySnapshotRef": evidence["policySnapshotRef"],
         "policyEpoch": 1,
-        "sourceDecisionRef": evidence["sourceDecisionRef"],
+        "sourceAclEvidence": evidence["sourceAclEvidence"],
+        "citationOpenRef": None,
     }
     for lineage_ref in (
         evidence["runRef"],
         evidence["policySnapshotRef"],
-        evidence["sourceDecisionRef"],
+        evidence["sourceAclEvidence"]["projectionRef"],
     ):
         assert isinstance(lineage_ref, str)
         assert lineage_ref
+    assert evidence["sourceAclEvidence"] == {
+        "kind": "mirrored",
+        "projectionRef": evidence["sourceAclEvidence"]["projectionRef"],
+        "aclAsOf": package["asOf"],
+        "freshnessProfileRef": "file-source-access-current-transaction-v1",
+    }
 
     response_text = response.text
     forbidden_values = (
@@ -861,6 +878,8 @@ def test_real_postgres_http_delivers_only_exact_authorized_evidence_bidirectiona
     migration_engine = create_database_engine(migration_configuration)
     try:
         _seed_fixture(migration_engine, fixture)
+        ensure_test_runtime_release(fixture.org_a.organization_id)
+        ensure_test_runtime_release(fixture.org_b.organization_id)
         before = _persistent_content_snapshot(migration_engine, fixture)
         assert len(before) == 4
 

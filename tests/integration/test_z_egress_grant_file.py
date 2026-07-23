@@ -37,6 +37,10 @@ from tests.integration.test_file_import_tracer import (
     _run_file_import,
     _RuntimeAuthenticator,
 )
+from tests.support.releases import (
+    clear_test_runtime_release,
+    ensure_test_runtime_release,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -76,6 +80,10 @@ def test_file_http_package_redeems_exact_model_grant_before_gateway_bytes(
         scenario.prepared,
         scenario.token,
         guarded_worker_engine,
+    )
+    ensure_test_runtime_release(
+        scenario.organization_id,
+        active_revision_refs=(published.candidate_ref.revision_ref,),
     )
     migration_engine = create_database_engine(migration_configuration)
     egress_engine = create_database_engine(egress_configuration)
@@ -168,7 +176,16 @@ def test_file_http_package_redeems_exact_model_grant_before_gateway_bytes(
             boundary.transmit(authorized, outcome.egress_grant)
         assert gateway.request_count == 1
     finally:
+        clear_test_runtime_release(scenario.organization_id)
         with migration_engine.begin() as connection:
+            connection.execute(
+                text("DELETE FROM decision_audit WHERE organization_id = :org"),
+                {"org": scenario.organization_id},
+            )
+            connection.execute(
+                text("DELETE FROM context_run WHERE organization_id = :org"),
+                {"org": scenario.organization_id},
+            )
             connection.execute(
                 text("DELETE FROM egress_audit WHERE organization_id = :org"),
                 {"org": scenario.organization_id},

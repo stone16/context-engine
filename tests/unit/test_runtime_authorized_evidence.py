@@ -78,6 +78,7 @@ from tests.support.context_run import (
     RecordingContextRunPort,
     recording_context_run_session,
 )
+from tests.support.releases import active_runtime_release
 from tests.support.security_gate import record_security_oracles
 
 AS_OF = datetime(2026, 7, 21, 10, 0, tzinfo=UTC)
@@ -321,6 +322,20 @@ def trusted_operands(
                 authentication_binding_ref="binding-authorized-evidence",
                 checked_at=AS_OF,
                 policy_epoch_verification=policy_epoch_verification,
+                active_runtime_release=active_runtime_release(
+                    ORGANIZATION_ID,
+                    active_revision_refs=tuple(
+                        sorted(
+                            {
+                                AUTHORIZED.revision_ref,
+                                AUTHORIZED_SECOND.revision_ref,
+                                CROSS_ORGANIZATION.revision_ref,
+                                DENIED.revision_ref,
+                                MISSING.revision_ref,
+                            }
+                        )
+                    ),
+                ),
                 materialized_projection_session=projection_session,
                 context_run_persistence_session=persistence_session,
             )
@@ -439,8 +454,7 @@ def test_hostile_candidate_order_delivers_only_exact_authorized_evidence(
     ):
         assert forbidden not in rendered
     unauthorized_evidence_count = sum(
-        item.fragment_ref
-        in {DENIED.fragment_ref, CROSS_ORGANIZATION.fragment_ref}
+        item.fragment_ref in {DENIED.fragment_ref, CROSS_ORGANIZATION.fragment_ref}
         for item in package.evidence
     )
     wrong_organization_effect_count = sum(
@@ -901,7 +915,7 @@ def test_empty_decision_audit_is_generic_and_retains_no_denied_detail() -> None:
     receipt = DecisionAuditGate().record(
         DecisionProvenanceReceipt(
             decision_ref="dec_" + "a" * 32,
-            package_organization_ref="orgpkg_" + "b" * 32,
+            package_id="pkg_" + "b" * 32,
             organization_id=ORGANIZATION_ID,
             user_id=USER_ID,
             membership_id=MEMBERSHIP_ID,
@@ -1195,8 +1209,7 @@ def test_request_narrowing_filters_candidate_before_body_projection(
         AUTHORIZED.source_ref,
     )
     unauthorized_evidence_count = sum(
-        item.source_ref == excluded.source_ref
-        for item in outcome.package.evidence
+        item.source_ref == excluded.source_ref for item in outcome.package.evidence
     )
     wrong_organization_effect_count = 0
     missing_context_fallback_count = int(

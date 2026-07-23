@@ -40,6 +40,7 @@ from tests.integration.test_runtime_authorized_evidence_integration import (
     _seed_fixture,
 )
 from tests.support.context_run_operator import exact_test_context_run_operator_read
+from tests.support.releases import ensure_test_runtime_release
 from tests.support.security_gate import record_security_oracles
 
 pytestmark = pytest.mark.integration
@@ -51,8 +52,10 @@ QUERY = "same non-enumeration probe"
 TOKEN = "non-enumeration-integration-token"
 
 NORMALIZATION_ALLOWLIST = (
-    "body.package.organizationRef",
+    "body.package.packageId",
     "body.package.decisionRef",
+    "body.package.policySnapshotRef",
+    "body.package.runRef",
     "body.package.asOf",
     "body.package.expiresAt",
     "body.package.packageDigest",
@@ -273,12 +276,19 @@ def _assert_empty_non_enumerating_response(
     assert response.headers["content-type"] == "application/json"
     assert response.headers["cache-control"] == "no-store"
     document = response.json()
-    assert set(document) == {"kind", "package"}
+    assert set(document) == {"kind", "package", "egressGrant"}
     assert document["kind"] == "resolved"
+    assert document["egressGrant"] is None
 
     package = document["package"]
     assert set(package) == {
-        "organizationRef",
+        "packageId",
+        "audienceDigest",
+        "policyEpoch",
+        "policySnapshotRef",
+        "runRef",
+        "releaseManifestRef",
+        "retentionPolicyRef",
         "purpose",
         "ttlSeconds",
         "asOf",
@@ -290,6 +300,9 @@ def _assert_empty_non_enumerating_response(
         "gaps",
         "budgetUsage",
         "coverage",
+        "tokenizerRef",
+        "packageSchemaRef",
+        "continuation",
     }
     assert package["purpose"] == "context.answer"
     assert package["blocks"] == []
@@ -343,8 +356,10 @@ def _assert_empty_runtime_outcome(outcome: Resolved) -> None:
 def _normalized_domain_outcome(outcome: Resolved) -> bytes:
     document = cast(dict[str, object], asdict(outcome))
     package = cast(dict[str, object], document["package"])
-    package["organization_ref"] = "<normalized-per-run-value>"
+    package["package_id"] = "<normalized-per-run-value>"
     package["decision_ref"] = "<normalized-per-run-value>"
+    package["policy_snapshot_ref"] = "<normalized-per-run-value>"
+    package["run_ref"] = "<normalized-per-run-value>"
     package["package_digest"] = "<normalized-per-run-value>"
     package["as_of"] = "<normalized-per-run-value>"
     package["expires_at"] = "<normalized-per-run-value>"
@@ -440,6 +455,7 @@ def test_real_postgres_http_denied_and_missing_are_externally_equivalent(
     migration_engine = create_database_engine(migration_configuration)
     try:
         _seed_fixture(migration_engine, fixture)
+        ensure_test_runtime_release(active.organization_id)
         _assert_non_owner_force_rls(guarded_runtime_engine)
 
         responses = tuple(
@@ -475,8 +491,10 @@ def test_real_postgres_http_denied_and_missing_are_externally_equivalent(
         )
         assert raw_difference_paths <= set(NORMALIZATION_ALLOWLIST)
         assert raw_difference_paths == {
-            "body.package.organizationRef",
+            "body.package.packageId",
             "body.package.decisionRef",
+            "body.package.policySnapshotRef",
+            "body.package.runRef",
             "body.package.packageDigest",
             "headers.X-Context-Request-Id",
         }

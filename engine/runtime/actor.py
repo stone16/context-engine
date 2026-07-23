@@ -26,6 +26,7 @@ from engine.runtime.policy_epoch import (
     PolicyEpochVerification,
     _require_active_policy_epoch_verification,
 )
+from engine.runtime.release_lineage import ActiveRuntimeRelease
 
 MAX_MEMBERSHIP_VERSION: Final = (1 << 63) - 1
 
@@ -109,12 +110,11 @@ class CurrentMembershipVerification:
     context_run_persistence_session: ContextRunPersistenceSession | None = field(
         repr=False
     )
-    delivery_evidence_redemption_session: (
-        DeliveryEvidenceRedemptionSession | None
-    ) = field(repr=False)
-    egress_grant_issuance_session: EgressGrantIssuanceSession | None = field(
-        repr=False
+    delivery_evidence_redemption_session: DeliveryEvidenceRedemptionSession | None = (
+        field(repr=False)
     )
+    egress_grant_issuance_session: EgressGrantIssuanceSession | None = field(repr=False)
+    active_runtime_release: ActiveRuntimeRelease | None = field(repr=False)
     construction_provenance: MembershipVerificationProvenance
     _authority_scope: _MembershipAuthorityScope = field(repr=False)
 
@@ -146,6 +146,7 @@ def _construct_current_membership_verification(
         DeliveryEvidenceRedemptionSession | None
     ) = None,
     egress_grant_issuance_session: EgressGrantIssuanceSession | None = None,
+    active_runtime_release: ActiveRuntimeRelease | None = None,
 ) -> CurrentMembershipVerification:
     """Construct proof after the trusted authority verifies the durable row."""
 
@@ -195,9 +196,12 @@ def _construct_current_membership_verification(
             delivery_evidence_redemption_session
         )
     if egress_grant_issuance_session is not None:
-        _require_active_egress_grant_issuance_session(
-            egress_grant_issuance_session
-        )
+        _require_active_egress_grant_issuance_session(egress_grant_issuance_session)
+    if active_runtime_release is not None:
+        if type(active_runtime_release) is not ActiveRuntimeRelease:
+            raise TypeError("current Membership active release has the wrong type")
+        if active_runtime_release.organization_id != organization_id:
+            raise ValueError("current Membership active release crossed Organization")
     _require_active_policy_epoch_verification(policy_epoch_verification)
     if policy_epoch_verification.organization_id != organization_id:
         raise ValueError("current Membership Policy Epoch must stay in Organization")
@@ -244,6 +248,11 @@ def _construct_current_membership_verification(
         verification,
         "egress_grant_issuance_session",
         egress_grant_issuance_session,
+    )
+    object.__setattr__(
+        verification,
+        "active_runtime_release",
+        active_runtime_release,
     )
     object.__setattr__(
         verification,
@@ -319,12 +328,11 @@ class UserActor:
     context_run_persistence_session: ContextRunPersistenceSession | None = field(
         repr=False
     )
-    delivery_evidence_redemption_session: (
-        DeliveryEvidenceRedemptionSession | None
-    ) = field(repr=False)
-    egress_grant_issuance_session: EgressGrantIssuanceSession | None = field(
-        repr=False
+    delivery_evidence_redemption_session: DeliveryEvidenceRedemptionSession | None = (
+        field(repr=False)
     )
+    egress_grant_issuance_session: EgressGrantIssuanceSession | None = field(repr=False)
+    active_runtime_release: ActiveRuntimeRelease | None = field(repr=False)
     current_membership_verification: CurrentMembershipVerification = field(repr=False)
     construction_provenance: UserActorConstructionProvenance
 
@@ -377,6 +385,7 @@ def _construct_user_actor(
             "egress_grant_issuance_session",
             verification.egress_grant_issuance_session,
         ),
+        ("active_runtime_release", verification.active_runtime_release),
         ("current_membership_verification", verification),
         (
             "construction_provenance",
@@ -418,5 +427,6 @@ def _require_active_user_actor(actor: UserActor) -> None:
         is not verification.delivery_evidence_redemption_session
         or actor.egress_grant_issuance_session
         is not verification.egress_grant_issuance_session
+        or actor.active_runtime_release is not verification.active_runtime_release
     ):
         raise ValueError("UserActor does not match its current Membership proof")

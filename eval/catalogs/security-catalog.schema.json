@@ -27,31 +27,67 @@
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["name", "requiredValue", "veto"],
+          "required": [
+            "name",
+            "requiredValue",
+            "veto"
+          ],
           "properties": {
-            "name": {"const": "Unauthorized Evidence"},
-            "requiredValue": {"type": "integer", "const": 0},
-            "veto": {"type": "boolean", "const": true}
+            "name": {
+              "const": "Unauthorized Evidence"
+            },
+            "requiredValue": {
+              "type": "integer",
+              "const": 0
+            },
+            "veto": {
+              "type": "boolean",
+              "const": true
+            }
           }
         },
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["name", "requiredValue", "veto"],
+          "required": [
+            "name",
+            "requiredValue",
+            "veto"
+          ],
           "properties": {
-            "name": {"const": "wrong-Organization effect"},
-            "requiredValue": {"type": "integer", "const": 0},
-            "veto": {"type": "boolean", "const": true}
+            "name": {
+              "const": "wrong-Organization effect"
+            },
+            "requiredValue": {
+              "type": "integer",
+              "const": 0
+            },
+            "veto": {
+              "type": "boolean",
+              "const": true
+            }
           }
         },
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["name", "requiredValue", "veto"],
+          "required": [
+            "name",
+            "requiredValue",
+            "veto"
+          ],
           "properties": {
-            "name": {"const": "missing-context fallback"},
-            "requiredValue": {"type": "integer", "const": 0},
-            "veto": {"type": "boolean", "const": true}
+            "name": {
+              "const": "missing-context fallback"
+            },
+            "requiredValue": {
+              "type": "integer",
+              "const": 0
+            },
+            "veto": {
+              "type": "boolean",
+              "const": true
+            }
           }
         }
       ],
@@ -59,8 +95,8 @@
     },
     "activations": {
       "type": "array",
-      "minItems": 8,
-      "maxItems": 8,
+      "minItems": 9,
+      "maxItems": 9,
       "uniqueItems": true,
       "prefixItems": [
         {
@@ -72,13 +108,39 @@
             "policyEpochScope": "organization-v0",
             "controlBoundary": "PostgreSQLAccessPolicyControl.change_access(ResourceAccessRevocation)",
             "testEvidence": [
-              {"id": "PG-REVOCATION-006", "surface": "tests/integration/test_access_policy_revocation.py", "oracle": "The internal non-owner Control transaction atomically revokes exact same-Organization access and advances one monotonic Organization epoch; rollback and overflow expose neither half, concurrent successful changes lose no bump, and Org B remains unchanged."},
-              {"id": "RUN-006", "surface": "tests/integration/test_runtime_policy_epoch_integration.py", "oracle": "The same authenticated HTTP Acquire with the same query and unchanged CandidateIndex/Fragment returns authorized Evidence before revoke and zero Evidence on the first request after commit; Org B remains authorized and the persistent Fragment remains present."},
-              {"id": "CACHE-002", "surface": "tests/unit/test_runtime_authorized_evidence.py", "oracle": "An injected pre-revocation authorization decision or a mid-resolve epoch change fails the final current-epoch gate and delivers zero stale Evidence without relying on candidate or content removal."}
+              {
+                "id": "PG-REVOCATION-006",
+                "surface": "tests/integration/test_access_policy_revocation.py",
+                "oracle": "The internal non-owner Control transaction atomically revokes exact same-Organization access and advances one monotonic Organization epoch; rollback and overflow expose neither half, concurrent successful changes lose no bump, and Org B remains unchanged."
+              },
+              {
+                "id": "RUN-006",
+                "surface": "tests/integration/test_runtime_policy_epoch_integration.py",
+                "oracle": "The same authenticated HTTP Acquire with the same query and unchanged CandidateIndex/Fragment returns authorized Evidence before revoke and zero Evidence on the first request after commit; Org B remains authorized and the persistent Fragment remains present."
+              },
+              {
+                "id": "CACHE-002",
+                "surface": "tests/unit/test_runtime_authorized_evidence.py",
+                "oracle": "An injected pre-revocation authorization decision or a mid-resolve epoch change fails the final current-epoch gate and delivers zero stale Evidence without relying on candidate or content removal."
+              }
             ],
-            "deferredEvidence": ["BLOB-002"],
-            "futureCarriers": ["Continue", "OpenCitation", "Policy-Epoch-bound WorkerLease", "production ContextAccessTicket", "production ActionTicket"],
-            "notActive": ["DecisionAudit", "outbox", "cleanup", "Source/Resource Policy Epochs", "UI/external admin"]
+            "deferredEvidence": [
+              "BLOB-002"
+            ],
+            "futureCarriers": [
+              "Continue",
+              "OpenCitation",
+              "Policy-Epoch-bound WorkerLease",
+              "production ContextAccessTicket",
+              "production ActionTicket"
+            ],
+            "notActive": [
+              "DecisionAudit",
+              "outbox",
+              "cleanup",
+              "Source/Resource Policy Epochs",
+              "UI/external admin"
+            ]
           }
         },
         {
@@ -90,12 +152,33 @@
             "policyEpochScope": "organization-v0",
             "controlBoundary": "RuntimeCapabilityGate.require_available(RuntimeCapability)",
             "testEvidence": [
-              {"id": "RUN-UNAVAILABLE-016", "surface": "tests/unit/test_runtime_unavailable_capabilities.py", "oracle": "Table-driven Runtime cases prove unavailable Continue, OpenCitation, and server-owned Acquire plans traverse the content-free sealed Kernel preflight and stop before Provider, index, or source I/O; the restricted mandatory audit retains only UNSUPPORTED_CAPABILITY."},
-              {"id": "HTTP-UNAVAILABLE-016", "surface": "tests/unit/test_http_unavailable_capabilities.py", "oracle": "The closed HTTP and OpenAPI request union admits its declared variants, maps known unavailable capabilities to generic 200 domain outcomes before configured scope-authority or content I/O, rejects unknown fields and every query string with 422, and serializes no internal cause or protected detail."}
+              {
+                "id": "RUN-UNAVAILABLE-016",
+                "surface": "tests/unit/test_runtime_unavailable_capabilities.py",
+                "oracle": "Table-driven Runtime cases prove unavailable Continue, OpenCitation, and server-owned Acquire plans traverse the content-free sealed Kernel preflight and stop before Provider, index, or source I/O; the restricted mandatory audit retains only UNSUPPORTED_CAPABILITY."
+              },
+              {
+                "id": "HTTP-UNAVAILABLE-016",
+                "surface": "tests/unit/test_http_unavailable_capabilities.py",
+                "oracle": "The closed HTTP and OpenAPI request union admits its declared variants, maps known unavailable capabilities to generic 200 domain outcomes before configured scope-authority or content I/O, rejects unknown fields and every query string with 422, and serializes no internal cause or protected detail."
+              }
             ],
-            "deferredEvidence": ["real-continuation-redemption", "real-citation-redemption", "real-federated-source-native-authorization"],
-            "futureCarriers": ["Continue", "OpenCitation", "federated/source-native ContextProvider"],
-            "notActive": ["continuation issuance/redemption", "citation locator redemption", "federated Provider/source-native ACL I/O", "File publication"]
+            "deferredEvidence": [
+              "real-continuation-redemption",
+              "real-citation-redemption",
+              "real-federated-source-native-authorization"
+            ],
+            "futureCarriers": [
+              "Continue",
+              "OpenCitation",
+              "federated/source-native ContextProvider"
+            ],
+            "notActive": [
+              "continuation issuance/redemption",
+              "citation locator redemption",
+              "federated Provider/source-native ACL I/O",
+              "File publication"
+            ]
           }
         },
         {
@@ -107,13 +190,51 @@
             "policyEpochScope": "not-bound-issue-17",
             "controlBoundary": "complete_persistent_noop_job(PostgreSQLWorkerLeaseAuthority, WorkerLeaseRedemption)",
             "testEvidence": [
-              {"id": "LEASE-SIGNING-017", "surface": "tests/unit/test_worker_lease.py", "oracle": "Versioned domain-separated canonical HMAC-SHA256 signing with an explicit injected keyring accepts one exact no-op lease and generically rejects unknown versions, malformed tokens, tampering, expiry, claim mutation, and UserActor substitution without exposing claims or key material."},
-              {"id": "PG-WORKER-LEASE-NOOP-017", "surface": "tests/integration/test_worker_lease.py", "oracle": "The bounded registered ServicePrincipal receiver binding redeems one exact same-Organization persistent no-op job only through the database function's atomic current-row compare-and-set; the worker role has no table SELECT, and rollback, replay, mismatch, expiry, and concurrent losers create zero additional durable transitions and zero wrong-Organization effects. This does not claim the full canonical ServiceActor."},
-              {"id": "WORKER-LEASE-REPLAY-007", "surface": "tests/integration/test_worker_lease.py", "oracle": "The real worker application seam completes exactly one persistent no-op job with its server-minted lease; replay returns only generic work-not-available and leaves the completed durable state unchanged."}
+              {
+                "id": "LEASE-SIGNING-017",
+                "surface": "tests/unit/test_worker_lease.py",
+                "oracle": "Versioned domain-separated canonical HMAC-SHA256 signing with an explicit injected keyring accepts one exact no-op lease and generically rejects unknown versions, malformed tokens, tampering, expiry, claim mutation, and UserActor substitution without exposing claims or key material."
+              },
+              {
+                "id": "PG-WORKER-LEASE-NOOP-017",
+                "surface": "tests/integration/test_worker_lease.py",
+                "oracle": "The bounded registered ServicePrincipal receiver binding redeems one exact same-Organization persistent no-op job only through the database function's atomic current-row compare-and-set; the worker role has no table SELECT, and rollback, replay, mismatch, expiry, and concurrent losers create zero additional durable transitions and zero wrong-Organization effects. This does not claim the full canonical ServiceActor."
+              },
+              {
+                "id": "WORKER-LEASE-REPLAY-007",
+                "surface": "tests/integration/test_worker_lease.py",
+                "oracle": "The real worker application seam completes exactly one persistent no-op job with its server-minted lease; replay returns only generic work-not-available and leaves the completed durable state unchanged."
+              }
             ],
-            "deferredEvidence": ["PROP-WORKER-LEASE-007", "PG-WORKER-LEASE-007", "DB-011", "JOB-001", "JOB-005", "full ACCEPT-008 per-binding matrix"],
-            "futureCarriers": ["Source-bound acquisition", "Resource/Revision mutation", "Policy-Epoch/end-user-delivery-audience-bound WorkerLease", "idempotency/generation-bound business mutation", "outbox dispatch", "File publication"],
-            "notActive": ["Source", "Resource", "Revision", "Policy Epoch", "end-user delivery audience", "idempotency", "generation", "content-bearing mutation", "outbox", "File publication", "full ACCEPT-008 PASS"]
+            "deferredEvidence": [
+              "PROP-WORKER-LEASE-007",
+              "PG-WORKER-LEASE-007",
+              "DB-011",
+              "JOB-001",
+              "JOB-005",
+              "full ACCEPT-008 per-binding matrix"
+            ],
+            "futureCarriers": [
+              "Source-bound acquisition",
+              "Resource/Revision mutation",
+              "Policy-Epoch/end-user-delivery-audience-bound WorkerLease",
+              "idempotency/generation-bound business mutation",
+              "outbox dispatch",
+              "File publication"
+            ],
+            "notActive": [
+              "Source",
+              "Resource",
+              "Revision",
+              "Policy Epoch",
+              "end-user delivery audience",
+              "idempotency",
+              "generation",
+              "content-bearing mutation",
+              "outbox",
+              "File publication",
+              "full ACCEPT-008 PASS"
+            ]
           }
         },
         {
@@ -125,12 +246,36 @@
             "policyEpochScope": "organization-v0",
             "controlBoundary": "ContextAccessTicketReadHandler.read | ActionTicketNoopHandler.perform",
             "testEvidence": [
-              {"id": "TICKET-AUDIENCE-018", "surface": "tests/unit/test_ticket_audience_separation.py", "oracle": "Distinct nominal signed ContextAccessTicket and ActionTicket types use one explicit versioned keyring while separate signing domains and token types prevent cross-plane authority. They bind a validated AuthenticatedInvocation/TrustedDeliveryContext identity and purpose, trusted Organization, current Organization Policy Epoch, bounded expiry, operation, and provider-specific context-read or channel-specific im-send audiences. Their type-aware deserializers and structurally separate synthetic Provider-read and no-op channel handlers accept only the exact matching ticket; cross-plane, target, audience, identity, freshness, tamper, and malformed-token probes return one generic non-enumerating rejection with zero rejected synthetic calls. This is not production ContextProvider, Sender, or ActionPlane evidence."},
-              {"id": "PG-TICKET-EPOCH-018", "surface": "tests/integration/test_ticket_policy_epoch.py", "oracle": "The real PostgreSQL non-owner UserActor transaction exercises both ticket types before a trusted Control transaction commits an Organization epoch bump, then rejects both previously valid tickets before their separate synthetic read and action effect counters increment. This proves current Organization-v0 epoch binding, not durable ticket consumption or a real external effect."}
+              {
+                "id": "TICKET-AUDIENCE-018",
+                "surface": "tests/unit/test_ticket_audience_separation.py",
+                "oracle": "Distinct nominal signed ContextAccessTicket and ActionTicket types use one explicit versioned keyring while separate signing domains and token types prevent cross-plane authority. They bind a validated AuthenticatedInvocation/TrustedDeliveryContext identity and purpose, trusted Organization, current Organization Policy Epoch, bounded expiry, operation, and provider-specific context-read or channel-specific im-send audiences. Their type-aware deserializers and structurally separate synthetic Provider-read and no-op channel handlers accept only the exact matching ticket; cross-plane, target, audience, identity, freshness, tamper, and malformed-token probes return one generic non-enumerating rejection with zero rejected synthetic calls. This is not production ContextProvider, Sender, or ActionPlane evidence."
+              },
+              {
+                "id": "PG-TICKET-EPOCH-018",
+                "surface": "tests/integration/test_ticket_policy_epoch.py",
+                "oracle": "The real PostgreSQL non-owner UserActor transaction exercises both ticket types before a trusted Control transaction commits an Organization epoch bump, then rejects both previously valid tickets before their separate synthetic read and action effect counters increment. This proves current Organization-v0 epoch binding, not durable ticket consumption or a real external effect."
+              }
             ],
-            "deferredEvidence": ["PROP-ACTION-SEPARATION-014", "PG-ACTION-SEPARATION-014", "ACTION-001 through ACTION-009", "full ACCEPT-012 matrix"],
-            "futureCarriers": ["production ContextProvider read/projection", "ContextRuntime ticket integration", "BotDelivery", "M2 ActionPlane and real Sender"],
-            "notActive": ["full M2 ActionPlane.prepare/perform", "real Sender/external effect", "payload/destination/approval/idempotency", "durable one-shot/replay/reconciliation", "full ACCEPT-012 PASS"]
+            "deferredEvidence": [
+              "PROP-ACTION-SEPARATION-014",
+              "PG-ACTION-SEPARATION-014",
+              "ACTION-001 through ACTION-009",
+              "full ACCEPT-012 matrix"
+            ],
+            "futureCarriers": [
+              "production ContextProvider read/projection",
+              "ContextRuntime ticket integration",
+              "BotDelivery",
+              "M2 ActionPlane and real Sender"
+            ],
+            "notActive": [
+              "full M2 ActionPlane.prepare/perform",
+              "real Sender/external effect",
+              "payload/destination/approval/idempotency",
+              "durable one-shot/replay/reconciliation",
+              "full ACCEPT-012 PASS"
+            ]
           }
         },
         {
@@ -142,14 +287,45 @@
             "policyEpochScope": "organization-v0",
             "controlBoundary": "persist_context_run(ContextRunPersistenceSession, ContextRunRecord, DecisionAuditRecord | None) | PostgreSQLContextRunReader.find_by_decision_ref",
             "testEvidence": [
-              {"id": "DIGEST-019", "surface": "tests/unit/test_package_digest.py", "oracle": "The versioned Package profile hashes the exact active public JSON document without packageDigest using RFC 8785 JSON Canonicalization Scheme (JCS), including recursive UTF-16 code-unit property ordering and ECMAScript number serialization; it rejects non-finite numbers and ambiguous values and detects alteration. The separately domain-separated versioned HMAC binds the exact query to one Organization and retains no raw query or serializable key material."},
-              {"id": "RUN-LINEAGE-019", "surface": "tests/integration/test_runtime_empty_package_integration.py", "oracle": "A successful authenticated empty HTTP Acquire returns only after the retained current-UserActor transaction persists a same-Organization digest-only ContextRun and the restricted generic no_authorized_evidence DecisionAudit; raw query, Candidate, Resource, denial identifier, and count fields are absent."},
-              {"id": "AUTHORIZED-RUN-019", "surface": "tests/integration/test_runtime_authorized_evidence_integration.py", "oracle": "The public HTTP authorized Package decisionRef resolves through the explicit same-Organization operator seam to exactly one delivered_authorized ContextRun containing only authorized Evidence refs and its matching Package digest, with no denial audit row."},
-              {"id": "PG-TRACE-REDACTION-012", "surface": "tests/integration/test_context_run_schema.py", "oracle": "Real PostgreSQL FORCE RLS permits Runtime INSERT only for the exact current UserActor, gives security-operator and Control no direct table reads, and permits one exact safe ContextRun projection when Control issues a digest-only 60-second Organization-and-decision-bound ticket that security-operator deletes before projection; a committed read, arbitrary GUCs, wrong bindings, expiry, and revocation disclose no additional row, while direct-caller rollback is not claimed as durable exactly-once redemption and DecisionAudit remains seven redacted lineage/category columns."}
+              {
+                "id": "DIGEST-019",
+                "surface": "tests/unit/test_package_digest.py",
+                "oracle": "The versioned Package profile hashes the exact active public JSON document without packageDigest using RFC 8785 JSON Canonicalization Scheme (JCS), including recursive UTF-16 code-unit property ordering and ECMAScript number serialization; it rejects non-finite numbers and ambiguous values and detects alteration. The separately domain-separated versioned HMAC binds the exact query to one Organization and retains no raw query or serializable key material."
+              },
+              {
+                "id": "RUN-LINEAGE-019",
+                "surface": "tests/integration/test_runtime_empty_package_integration.py",
+                "oracle": "A successful authenticated empty HTTP Acquire returns only after the retained current-UserActor transaction persists a same-Organization digest-only ContextRun and the restricted generic no_authorized_evidence DecisionAudit; raw query, Candidate, Resource, denial identifier, and count fields are absent."
+              },
+              {
+                "id": "AUTHORIZED-RUN-019",
+                "surface": "tests/integration/test_runtime_authorized_evidence_integration.py",
+                "oracle": "The public HTTP authorized Package decisionRef resolves through the explicit same-Organization operator seam to exactly one delivered_authorized ContextRun containing only authorized Evidence refs and its matching Package digest, with no denial audit row."
+              },
+              {
+                "id": "PG-TRACE-REDACTION-012",
+                "surface": "tests/integration/test_context_run_schema.py",
+                "oracle": "Real PostgreSQL FORCE RLS permits Runtime INSERT only for the exact current UserActor, gives security-operator and Control no direct table reads, and permits one exact safe ContextRun projection when Control issues a digest-only 60-second Organization-and-decision-bound ticket that security-operator deletes before projection; a committed read, arbitrary GUCs, wrong bindings, expiry, and revocation disclose no additional row, while direct-caller rollback is not claimed as durable exactly-once redemption and DecisionAudit remains seven redacted lineage/category columns."
+              }
             ],
-            "deferredEvidence": ["PROP-TRACE-REDACTION-012 across every future observability carrier", "OBS-002 secret scanning beyond the activated query/key contracts", "OBS-003 production debug-endpoint authorization"],
-            "futureCarriers": ["Continue and OpenCitation ContextRun lineage", "full retrieval candidate/ranking traces", "authorized feedback and golden-set extraction", "explicitly approved full-Package retention"],
-            "notActive": ["raw query retention", "full ContextPackage body retention", "unauthenticated transport failures as ContextRuns", "cross-Organization analytics", "general logs/metrics/debug/evaluation/Learning redaction coverage"]
+            "deferredEvidence": [
+              "PROP-TRACE-REDACTION-012 across every future observability carrier",
+              "OBS-002 secret scanning beyond the activated query/key contracts",
+              "OBS-003 production debug-endpoint authorization"
+            ],
+            "futureCarriers": [
+              "Continue and OpenCitation ContextRun lineage",
+              "full retrieval candidate/ranking traces",
+              "authorized feedback and golden-set extraction",
+              "explicitly approved full-Package retention"
+            ],
+            "notActive": [
+              "raw query retention",
+              "full ContextPackage body retention",
+              "unauthenticated transport failures as ContextRuns",
+              "cross-Organization analytics",
+              "general logs/metrics/debug/evaluation/Learning redaction coverage"
+            ]
           }
         },
         {
@@ -161,13 +337,42 @@
             "policyEpochScope": "organization-v0",
             "controlBoundary": "CandidateRef -> same-transaction active-lineage locator -> EffectiveScope -> current Membership/version field ceiling -> PostgreSQL/FORCE-RLS field reduction -> AuthorizationKernel -> AuthorizedProjection",
             "testEvidence": [
-              {"id": "PROP-FIELD-PROJECTION-048", "surface": "tests/unit/test_membership_field_projection.py::test_generated_projection_narrowing_never_expands_or_leaks_denied_values tests/unit/test_membership_field_projection.py::test_missing_or_nonmatching_projection_ceiling_absorbs_content tests/unit/test_evidence_contracts.py::test_authorized_projection_and_evidence_bind_exact_projected_fields", "oracle": "The closed projection value admits only fields inside one trusted finite ceiling, renders their canonical order, absorbs missing or nonmatching ceilings, and binds the exact projected field tuple into AuthorizedProjection and Evidence integrity; no denied field name, value, or count becomes public evidence."},
-              {"id": "PG-FIELD-PROJECTION-048", "surface": "tests/integration/test_authorized_field_schema.py::test_runtime_field_rows_and_legacy_body_are_filtered_by_exact_right tests/integration/test_authorized_field_schema.py::test_revoked_resource_acl_filters_every_projection_row_and_right tests/integration/test_authorized_field_schema.py::test_cross_organization_field_authority_and_values_fail_closed tests/integration/test_authorized_field_schema.py::test_stale_or_forged_membership_context_exposes_zero_field_content tests/integration/test_authorized_field_schema.py::test_field_row_requires_a_fields_parent_and_exact_same_org_parents tests/integration/test_authorized_field_schema.py::test_field_authority_tables_have_force_rls_and_least_privilege_grants tests/integration/test_membership_field_projection_integration.py::test_concurrent_field_right_revoke_cannot_commit_before_delivery_transaction tests/integration/test_migrations.py::test_field_projection_downgrade_refuses_populated_content_atomically tests/integration/test_migrations.py::test_field_projection_downgrade_serializes_with_concurrent_fragment_insert", "oracle": "Real PostgreSQL under the non-owner Runtime role exposes status only to the limited current Membership/version and status plus private_note to the full one, exposes zero Fragment, right-name, or field bytes after Resource ACL revocation, serializes concurrent right mutation behind the delivery transaction, refuses populated schema downgrade before DDL, serializes its empty-schema decision with concurrent Fragment publication, exposes zero Fragment or field bytes for stale or forged Membership context, keeps legacy body as an explicit right, requires exact same-Organization parents, and enforces FORCE RLS with least-privilege grants."},
-              {"id": "HTTP-ACCEPT-002-048", "surface": "tests/integration/test_membership_field_projection_integration.py::test_accept_002_same_organization_memberships_receive_only_authorized_fields", "oracle": "The authenticated HTTP Acquire seam reuses one content-free CandidateRef for same-Organization limited and full Memberships; the limited Package contains only status=open while the full Package contains both authorized fields, and after the limited right is removed the next resolve returns generic empty coverage. The limited response, ContextRun, and DecisionAudit contain zero private_note or secret bytes and no denied names, identifiers, or counts."}
+              {
+                "id": "PROP-FIELD-PROJECTION-048",
+                "surface": "tests/unit/test_membership_field_projection.py::test_generated_projection_narrowing_never_expands_or_leaks_denied_values tests/unit/test_membership_field_projection.py::test_missing_or_nonmatching_projection_ceiling_absorbs_content tests/unit/test_evidence_contracts.py::test_authorized_projection_and_evidence_bind_exact_projected_fields",
+                "oracle": "The closed projection value admits only fields inside one trusted finite ceiling, renders their canonical order, absorbs missing or nonmatching ceilings, and binds the exact projected field tuple into AuthorizedProjection and Evidence integrity; no denied field name, value, or count becomes public evidence."
+              },
+              {
+                "id": "PG-FIELD-PROJECTION-048",
+                "surface": "tests/integration/test_authorized_field_schema.py::test_runtime_field_rows_and_legacy_body_are_filtered_by_exact_right tests/integration/test_authorized_field_schema.py::test_revoked_resource_acl_filters_every_projection_row_and_right tests/integration/test_authorized_field_schema.py::test_cross_organization_field_authority_and_values_fail_closed tests/integration/test_authorized_field_schema.py::test_stale_or_forged_membership_context_exposes_zero_field_content tests/integration/test_authorized_field_schema.py::test_field_row_requires_a_fields_parent_and_exact_same_org_parents tests/integration/test_authorized_field_schema.py::test_field_authority_tables_have_force_rls_and_least_privilege_grants tests/integration/test_membership_field_projection_integration.py::test_concurrent_field_right_revoke_cannot_commit_before_delivery_transaction tests/integration/test_migrations.py::test_field_projection_downgrade_refuses_populated_content_atomically tests/integration/test_migrations.py::test_field_projection_downgrade_serializes_with_concurrent_fragment_insert",
+                "oracle": "Real PostgreSQL under the non-owner Runtime role exposes status only to the limited current Membership/version and status plus private_note to the full one, exposes zero Fragment, right-name, or field bytes after Resource ACL revocation, serializes concurrent right mutation behind the delivery transaction, refuses populated schema downgrade before DDL, serializes its empty-schema decision with concurrent Fragment publication, exposes zero Fragment or field bytes for stale or forged Membership context, keeps legacy body as an explicit right, requires exact same-Organization parents, and enforces FORCE RLS with least-privilege grants."
+              },
+              {
+                "id": "HTTP-ACCEPT-002-048",
+                "surface": "tests/integration/test_membership_field_projection_integration.py::test_accept_002_same_organization_memberships_receive_only_authorized_fields",
+                "oracle": "The authenticated HTTP Acquire seam reuses one content-free CandidateRef for same-Organization limited and full Memberships; the limited Package contains only status=open while the full Package contains both authorized fields, and after the limited right is removed the next resolve returns generic empty coverage. The limited response, ContextRun, and DecisionAudit contain zero private_note or secret bytes and no denied names, identifiers, or counts."
+              }
             ],
-            "deferredEvidence": ["production Provider-native field authorization", "File and Base source-field authorization", "typed or non-text field projection"],
-            "futureCarriers": ["production ContextProvider native field projection", "File and Base ingestion field ACL", "Continue and OpenCitation field projection", "field-policy change independent of Membership version"],
-            "notActive": ["general permission DSL", "caller-authored projection lists", "CandidateRef or index field authority", "Provider capability negotiation or source-native field ACL", "Supply publication and field classification", "ranking or relevance-model field authority", "Issue #20 gate or runner substitution"]
+            "deferredEvidence": [
+              "production Provider-native field authorization",
+              "File and Base source-field authorization",
+              "typed or non-text field projection"
+            ],
+            "futureCarriers": [
+              "production ContextProvider native field projection",
+              "File and Base ingestion field ACL",
+              "Continue and OpenCitation field projection",
+              "field-policy change independent of Membership version"
+            ],
+            "notActive": [
+              "general permission DSL",
+              "caller-authored projection lists",
+              "CandidateRef or index field authority",
+              "Provider capability negotiation or source-native field ACL",
+              "Supply publication and field classification",
+              "ranking or relevance-model field authority",
+              "Issue #20 gate or runner substitution"
+            ]
           }
         },
         {
@@ -179,14 +384,46 @@
             "policyEpochScope": "organization-v0",
             "controlBoundary": "PrivateDeliveryEvidenceIssuer -> PostgreSQL identity function -> authenticated HTTP metadata -> current UserActor transaction redemption -> TrustedDeliveryContext -> sealed ContextRuntime.resolve(Acquire)",
             "testEvidence": [
-              {"id": "PROP-DELIVERY-EVIDENCE-063", "surface": "tests/unit/test_delivery_evidence.py::test_delivery_evidence_values_redact_all_trusted_facts_from_repr", "oracle": "Versioned private issuance returns one opaque random reference while persisting only its SHA-256 digest and exact audience digest; issuance, redemption, and nominal TrustedDeliveryContext carriers redact bearer and raw trusted facts from normal representations."},
-              {"id": "PG-DELIVERY-EVIDENCE-063", "surface": "tests/integration/test_delivery_evidence_ref.py::test_identity_issues_digest_only_and_runtime_redeems_one_stable_private_request tests/integration/test_delivery_evidence_ref.py::test_private_evidence_one_field_mutations_are_equivalent_not_available tests/integration/test_delivery_evidence_ref.py::test_same_logical_request_cannot_be_rebound_to_another_private_audience tests/integration/test_delivery_evidence_ref.py::test_expired_private_evidence_cleanup_is_exactly_organization_scoped tests/integration/test_delivery_evidence_ref.py::test_identity_cannot_backdate_issuance_for_a_membership_not_current_now tests/integration/test_delivery_evidence_ref.py::test_delivery_evidence_table_and_functions_enforce_exact_role_split", "oracle": "Real PostgreSQL with FORCE RLS stores no bearer, accepts only the dedicated identity issuer for a database-current Membership, redeems only through Runtime for the exact service/request/Organization/asker/Membership version/destination/consumer/private kind/audience digest/purpose/epoch/lifetime, preserves one stable retry identity, rejects every one-field mutation and audience rebind, restricts expired cleanup to one Organization, blocks populated downgrade, and gives ordinary application roles zero table or cross-capability access."},
-              {"id": "HTTP-DELIVERY-EVIDENCE-063", "surface": "tests/unit/test_http_trust_boundary.py::test_private_delivery_evidence_is_redeemed_before_runtime_content_work", "oracle": "Authenticated HTTP metadata carries only the opaque reference; exact redemption constructs private TrustedDeliveryContext, a private route binding without evidence and evidence without a nominal private route binding fail closed, while forged or wrong authenticated-route destination evidence returns the same generic authentication failure before Runtime resolution, index, Provider, source-content, Package, model, or effect work, and response, ordinary authentication/invocation/outcome trace, and captured logs omit bearer, raw Organization/User/Membership/principal/agent/application/binding facts, destination, consumer, and audience digest."},
-              {"id": "FILE-DELIVERY-EVIDENCE-063", "surface": "tests/integration/test_file_import_tracer.py::test_registered_file_import_publishes_one_exact_authorized_http_package", "oracle": "The real File-backed authenticated HTTP Acquire redeems private evidence inside the current UserActor transaction and still proves CandidateRef through the sealed AuthorizationKernel to AuthorizedProjection; an identical retry returns authorized content under one stored logical redemption identity, and both private responses plus their ContextRuns omit the bearer and raw private delivery bindings."}
+              {
+                "id": "PROP-DELIVERY-EVIDENCE-063",
+                "surface": "tests/unit/test_delivery_evidence.py::test_delivery_evidence_values_redact_all_trusted_facts_from_repr",
+                "oracle": "Versioned private issuance returns one opaque random reference while persisting only its SHA-256 digest and exact audience digest; issuance, redemption, and nominal TrustedDeliveryContext carriers redact bearer and raw trusted facts from normal representations."
+              },
+              {
+                "id": "PG-DELIVERY-EVIDENCE-063",
+                "surface": "tests/integration/test_delivery_evidence_ref.py::test_identity_issues_digest_only_and_runtime_redeems_one_stable_private_request tests/integration/test_delivery_evidence_ref.py::test_private_evidence_one_field_mutations_are_equivalent_not_available tests/integration/test_delivery_evidence_ref.py::test_same_logical_request_cannot_be_rebound_to_another_private_audience tests/integration/test_delivery_evidence_ref.py::test_expired_private_evidence_cleanup_is_exactly_organization_scoped tests/integration/test_delivery_evidence_ref.py::test_identity_cannot_backdate_issuance_for_a_membership_not_current_now tests/integration/test_delivery_evidence_ref.py::test_delivery_evidence_table_and_functions_enforce_exact_role_split",
+                "oracle": "Real PostgreSQL with FORCE RLS stores no bearer, accepts only the dedicated identity issuer for a database-current Membership, redeems only through Runtime for the exact service/request/Organization/asker/Membership version/destination/consumer/private kind/audience digest/purpose/epoch/lifetime, preserves one stable retry identity, rejects every one-field mutation and audience rebind, restricts expired cleanup to one Organization, blocks populated downgrade, and gives ordinary application roles zero table or cross-capability access."
+              },
+              {
+                "id": "HTTP-DELIVERY-EVIDENCE-063",
+                "surface": "tests/unit/test_http_trust_boundary.py::test_private_delivery_evidence_is_redeemed_before_runtime_content_work",
+                "oracle": "Authenticated HTTP metadata carries only the opaque reference; exact redemption constructs private TrustedDeliveryContext, a private route binding without evidence and evidence without a nominal private route binding fail closed, while forged or wrong authenticated-route destination evidence returns the same generic authentication failure before Runtime resolution, index, Provider, source-content, Package, model, or effect work, and response, ordinary authentication/invocation/outcome trace, and captured logs omit bearer, raw Organization/User/Membership/principal/agent/application/binding facts, destination, consumer, and audience digest."
+              },
+              {
+                "id": "FILE-DELIVERY-EVIDENCE-063",
+                "surface": "tests/integration/test_file_import_tracer.py::test_registered_file_import_publishes_one_exact_authorized_http_package",
+                "oracle": "The real File-backed authenticated HTTP Acquire redeems private evidence inside the current UserActor transaction and still proves CandidateRef through the sealed AuthorizationKernel to AuthorizedProjection; an identical retry returns authorized content under one stored logical redemption identity, and both private responses plus their ContextRuns omit the bearer and raw private delivery bindings."
+              }
             ],
-            "deferredEvidence": ["group AudienceSnapshot DeliveryEvidenceRef", "frozen OpenAPI and generated TypeScript SDK carrier", "production BotDelivery caller"],
-            "futureCarriers": ["public group DeliveryEvidenceRef", "OpenCitation delivery evidence", "generated TypeScript SDK", "private BotDelivery application"],
-            "notActive": ["group delivery", "AudienceSnapshot", "production ModelGateway", "ActionPlane", "BotDelivery application", "OpenAPI compatibility freeze", "generated SDK"]
+            "deferredEvidence": [
+              "group AudienceSnapshot DeliveryEvidenceRef",
+              "generated TypeScript SDK carrier",
+              "production BotDelivery caller"
+            ],
+            "futureCarriers": [
+              "public group DeliveryEvidenceRef",
+              "OpenCitation delivery evidence",
+              "generated TypeScript SDK",
+              "private BotDelivery application"
+            ],
+            "notActive": [
+              "group delivery",
+              "AudienceSnapshot",
+              "production ModelGateway",
+              "ActionPlane",
+              "BotDelivery application",
+              "generated SDK"
+            ]
           }
         },
         {
@@ -198,13 +435,94 @@
             "policyEpochScope": "organization-v0",
             "controlBoundary": "ContextPackage -> final EgressGate -> digest-only PostgreSQL grant -> AuthorizedModelInput | AuthorizedChannelPayload -> exact one-shot redemption -> ModelGateway | Sender preflight spy",
             "testEvidence": [
-              {"id": "PROP-EGRESS-011", "surface": "tests/unit/test_egress_grant.py::test_each_egress_binding_mutation_and_cross_kind_emits_zero_bytes_effects", "oracle": "Every common and hop-specific model or channel redemption binding mutation, plus cross-kind use, is non-enumerating and emits zero gateway bytes, Sender preflight bytes, or effects."},
-              {"id": "PG-EGRESS-011", "surface": "tests/integration/test_egress_grant.py::test_digest_only_grant_is_atomic_one_shot_and_audited", "oracle": "Real PostgreSQL under separate non-owner Runtime and egress roles stores only grant and payload digests, binds the exact Package, Organization, purpose, audience, Policy Epoch, hop, retention, sensitivity, issuer, consumer, provider/model or channel/destination, region, lifetime, and profile, consumes atomically once, and retains only restricted issued, consumed, or not-available audit categories."},
-              {"id": "RUNTIME-EGRESS-011", "surface": "tests/integration/test_z_egress_grant_file.py::test_file_http_package_redeems_exact_model_grant_before_gateway_bytes", "oracle": "A real File-backed authenticated HTTP Acquire proves CandidateRef through the sealed AuthorizationKernel to an audience-bound ContextPackage, returns one model grant only after final policy, and the independent egress role permits exactly one deterministic ModelGateway spy request; replay emits zero additional model bytes."}
+              {
+                "id": "PROP-EGRESS-011",
+                "surface": "tests/unit/test_egress_grant.py::test_each_egress_binding_mutation_and_cross_kind_emits_zero_bytes_effects",
+                "oracle": "Every common and hop-specific model or channel redemption binding mutation, plus cross-kind use, is non-enumerating and emits zero gateway bytes, Sender preflight bytes, or effects."
+              },
+              {
+                "id": "PG-EGRESS-011",
+                "surface": "tests/integration/test_egress_grant.py::test_digest_only_grant_is_atomic_one_shot_and_audited",
+                "oracle": "Real PostgreSQL under separate non-owner Runtime and egress roles stores only grant and payload digests, binds the exact Package, Organization, purpose, audience, Policy Epoch, hop, retention, sensitivity, issuer, consumer, provider/model or channel/destination, region, lifetime, and profile, consumes atomically once, and retains only restricted issued, consumed, or not-available audit categories."
+              },
+              {
+                "id": "RUNTIME-EGRESS-011",
+                "surface": "tests/integration/test_z_egress_grant_file.py::test_file_http_package_redeems_exact_model_grant_before_gateway_bytes",
+                "oracle": "A real File-backed authenticated HTTP Acquire proves CandidateRef through the sealed AuthorizationKernel to an audience-bound ContextPackage, returns one model grant only after final policy, and the independent egress role permits exactly one deterministic ModelGateway spy request; replay emits zero additional model bytes."
+              }
             ],
-            "deferredEvidence": ["production provider ModelGateway conformance", "production Sender and ActionPlane effect conformance", "group AudienceSnapshot send-time revalidation"],
-            "futureCarriers": ["production ModelGateway", "production Sender preflight", "ActionPlane prepare and perform", "group-public and asker-private delivery"],
-            "notActive": ["real model or provider network call", "real Sender or channel write", "ActionTicket or external effect", "group AudienceSnapshot", "BotDelivery application process", "generated SDK consumer"]
+            "deferredEvidence": [
+              "production provider ModelGateway conformance",
+              "production Sender and ActionPlane effect conformance",
+              "group AudienceSnapshot send-time revalidation"
+            ],
+            "futureCarriers": [
+              "production ModelGateway",
+              "production Sender preflight",
+              "ActionPlane prepare and perform",
+              "group-public and asker-private delivery"
+            ],
+            "notActive": [
+              "real model or provider network call",
+              "real Sender or channel write",
+              "ActionTicket or external effect",
+              "group AudienceSnapshot",
+              "BotDelivery application process",
+              "generated SDK consumer"
+            ]
+          }
+        },
+        {
+          "const": {
+            "issueRef": "#66",
+            "invariantRef": "TRANSPORT-UNTRUSTED-008",
+            "carrier": "frozen public POST /v0/resolve OpenAPI contract",
+            "status": "active_fail_closed",
+            "policyEpochScope": "organization-v0",
+            "controlBoundary": "authenticated HTTP metadata -> closed ResolveWire -> current UserActor and active release observation -> sealed ContextRuntime.resolve -> closed ResolutionOutcome",
+            "testEvidence": [
+              {
+                "id": "OPENAPI-CONTRACT-066",
+                "surface": "tests/unit/test_openapi_v0_contract.py",
+                "oracle": "The frozen document exposes exactly one public versioned operation with a closed Acquire, Continue, or OpenCitation body, closed outcome union, complete ContextPackage, bounded metadata and payloads, generic failure statuses, and no raw trusted identity or audience fields."
+              },
+              {
+                "id": "OPENAPI-BREAKING-066",
+                "surface": "tests/unit/test_openapi_v0_snapshot.py",
+                "oracle": "The deterministic immutable snapshot and SHA-256 checksum gate reject current drift, base-commit mutation, and overwrite, while deliberate security, response, union, required-field, and type mutations prove the recursive gate rejects contract changes."
+              },
+              {
+                "id": "HTTP-V0-066",
+                "surface": "tests/unit/test_http_trust_boundary.py::test_trusted_field_injection_is_closed_before_domain_execution tests/unit/test_http_unavailable_capabilities.py::test_accept_005_continue_is_generic_non_retryable_and_zero_io tests/process/test_processes.py::test_http_acquire_smoke_returns_the_empty_package_contract",
+                "oracle": "Public v0 rejects trusted-field injection and returns generic inactive-carrier outcomes before content work, while the process returns the frozen empty-package contract; a separate focused test proves the hidden v1 bridge shares the same sealed path."
+              },
+              {
+                "id": "PG-RUNTIME-RELEASE-066",
+                "surface": "tests/integration/test_runtime_empty_package_integration.py::test_seeded_existing_organization_reaches_http_empty_package tests/integration/test_runtime_empty_package_integration.py::test_public_v0_resolve_without_supported_active_release_fails_before_content tests/integration/test_runtime_authorized_evidence_integration.py::test_real_postgres_http_delivers_only_exact_authorized_evidence_bidirectionally",
+                "oracle": "Real PostgreSQL proves the Package carries the exact Learning-promoted active manifest, tokenizer, and package schema observed under the current UserActor transaction with read-only Runtime RLS, while a missing or unsupported release returns one generic unavailable outcome before content I/O and without a ContextRun; the public v0 seam also proves CandidateRef through the sealed Kernel to exact AuthorizedProjection with real PostgreSQL."
+              }
+            ],
+            "deferredEvidence": [
+              "generated TypeScript SDK conformance",
+              "production BotDelivery generated-SDK caller",
+              "Continue and OpenCitation redemption"
+            ],
+            "futureCarriers": [
+              "generated TypeScript SDK",
+              "MCP",
+              "BotDelivery application",
+              "Continue redemption",
+              "OpenCitation redemption"
+            ],
+            "notActive": [
+              "generated SDK consumer",
+              "MCP",
+              "BotDelivery application process",
+              "continuation issuance or redemption",
+              "citation persistence or redemption",
+              "group AudienceSnapshot",
+              "external effects"
+            ]
           }
         }
       ],
@@ -258,22 +576,26 @@
     "authorityRef": {
       "type": "string",
       "minLength": 1,
-      "pattern": "^(#[0-9]+|(?!(?:[A-Za-z]:[/\\\\]|/|https?://|file://))(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9._\\-/\u4e00-\u9fff]+(?:#[A-Za-z0-9._\\-/\u4e00-\u9fff]+)?)$"
+      "pattern": "^(#[0-9]+|(?!(?:[A-Za-z]:[/\\\\]|/|https?://|file://))(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9._\\-/一-鿿]+(?:#[A-Za-z0-9._\\-/一-鿿]+)?)$"
     },
     "documentRef": {
       "type": "string",
       "minLength": 1,
-      "pattern": "^(?!(?:[A-Za-z]:[/\\\\]|/|https?://|file://))(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9._\\-/\u4e00-\u9fff]+(?:#[A-Za-z0-9._\\-/]+)?$"
+      "pattern": "^(?!(?:[A-Za-z]:[/\\\\]|/|https?://|file://))(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9._\\-/一-鿿]+(?:#[A-Za-z0-9._\\-/]+)?$"
     },
     "pytestSurface": {
       "type": "string",
       "minLength": 1,
-      "pattern": "^(?!(?:[A-Za-z]:[/\\\\]|/|https?://|file://))(?!.*(?:^|/)\\.\\.(?:/|$))tests/(?:unit|integration)/[A-Za-z0-9._\\-/]+\\.py(?:::[A-Za-z_][A-Za-z0-9_]*)?(?: tests/(?:unit|integration)/[A-Za-z0-9._\\-/]+\\.py(?:::[A-Za-z_][A-Za-z0-9_]*)?)*$"
+      "pattern": "^(?!(?:[A-Za-z]:[/\\\\]|/|https?://|file://))(?!.*(?:^|/)\\.\\.(?:/|$))tests/(?:unit|integration|process)/[A-Za-z0-9._\\-/]+\\.py(?:::[A-Za-z_][A-Za-z0-9_]*)?(?: tests/(?:unit|integration|process)/[A-Za-z0-9._\\-/]+\\.py(?:::[A-Za-z_][A-Za-z0-9_]*)?)*$"
     },
     "authority": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["issueRefs", "documentRefs", "reconciliation"],
+      "required": [
+        "issueRefs",
+        "documentRefs",
+        "reconciliation"
+      ],
       "properties": {
         "issueRefs": {
           "type": "array",
@@ -359,96 +681,242 @@
     "applicability": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["mode", "applicableFrom", "rationale"],
+      "required": [
+        "mode",
+        "applicableFrom",
+        "rationale"
+      ],
       "properties": {
         "mode": {
           "type": "string",
-          "enum": ["required", "conditional", "not_applicable"]
+          "enum": [
+            "required",
+            "conditional",
+            "not_applicable"
+          ]
         },
         "applicableFrom": {
-          "type": ["string", "null"],
+          "type": [
+            "string",
+            "null"
+          ],
           "minLength": 1,
           "pattern": "\\S"
         },
         "rationale": {
-          "type": ["string", "null"],
+          "type": [
+            "string",
+            "null"
+          ],
           "minLength": 1,
           "pattern": "\\S"
         }
       },
       "if": {
         "properties": {
-          "mode": {"const": "not_applicable"}
+          "mode": {
+            "const": "not_applicable"
+          }
         },
-        "required": ["mode"]
+        "required": [
+          "mode"
+        ]
       },
       "then": {
         "properties": {
-          "applicableFrom": {"type": "null"},
-          "rationale": {"$ref": "#/$defs/nonEmptyString"}
+          "applicableFrom": {
+            "type": "null"
+          },
+          "rationale": {
+            "$ref": "#/$defs/nonEmptyString"
+          }
         }
       },
       "else": {
         "properties": {
-          "applicableFrom": {"$ref": "#/$defs/nonEmptyString"}
+          "applicableFrom": {
+            "$ref": "#/$defs/nonEmptyString"
+          }
         }
       }
     },
     "expectedEvidence": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["property", "postgres", "runtimeOrDelivery"],
+      "required": [
+        "property",
+        "postgres",
+        "runtimeOrDelivery"
+      ],
       "properties": {
-        "property": {"$ref": "#/$defs/stringArray"},
-        "postgres": {"$ref": "#/$defs/stringArray"},
-        "runtimeOrDelivery": {"$ref": "#/$defs/stringArray"}
+        "property": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "postgres": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "runtimeOrDelivery": {
+          "$ref": "#/$defs/stringArray"
+        }
       }
     },
     "activationTestEvidence": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "surface", "oracle"],
+      "required": [
+        "id",
+        "surface",
+        "oracle"
+      ],
       "properties": {
-        "id": {"enum": ["PG-REVOCATION-006", "RUN-006", "CACHE-002", "RUN-UNAVAILABLE-016", "HTTP-UNAVAILABLE-016", "LEASE-SIGNING-017", "PG-WORKER-LEASE-NOOP-017", "WORKER-LEASE-REPLAY-007", "TICKET-AUDIENCE-018", "PG-TICKET-EPOCH-018", "DIGEST-019", "RUN-LINEAGE-019", "AUTHORIZED-RUN-019", "PG-TRACE-REDACTION-012", "PROP-FIELD-PROJECTION-048", "PG-FIELD-PROJECTION-048", "HTTP-ACCEPT-002-048", "PROP-DELIVERY-EVIDENCE-063", "PG-DELIVERY-EVIDENCE-063", "HTTP-DELIVERY-EVIDENCE-063", "FILE-DELIVERY-EVIDENCE-063", "PROP-EGRESS-011", "PG-EGRESS-011", "RUNTIME-EGRESS-011"]},
-        "surface": {"$ref": "#/$defs/pytestSurface"},
-        "oracle": {"$ref": "#/$defs/nonEmptyString"}
+        "id": {
+          "enum": [
+            "PG-REVOCATION-006",
+            "RUN-006",
+            "CACHE-002",
+            "RUN-UNAVAILABLE-016",
+            "HTTP-UNAVAILABLE-016",
+            "LEASE-SIGNING-017",
+            "PG-WORKER-LEASE-NOOP-017",
+            "WORKER-LEASE-REPLAY-007",
+            "TICKET-AUDIENCE-018",
+            "PG-TICKET-EPOCH-018",
+            "DIGEST-019",
+            "RUN-LINEAGE-019",
+            "AUTHORIZED-RUN-019",
+            "PG-TRACE-REDACTION-012",
+            "PROP-FIELD-PROJECTION-048",
+            "PG-FIELD-PROJECTION-048",
+            "HTTP-ACCEPT-002-048",
+            "PROP-DELIVERY-EVIDENCE-063",
+            "PG-DELIVERY-EVIDENCE-063",
+            "HTTP-DELIVERY-EVIDENCE-063",
+            "FILE-DELIVERY-EVIDENCE-063",
+            "PROP-EGRESS-011",
+            "PG-EGRESS-011",
+            "RUNTIME-EGRESS-011",
+            "OPENAPI-CONTRACT-066",
+            "OPENAPI-BREAKING-066",
+            "HTTP-V0-066",
+            "PG-RUNTIME-RELEASE-066"
+          ]
+        },
+        "surface": {
+          "$ref": "#/$defs/pytestSurface"
+        },
+        "oracle": {
+          "$ref": "#/$defs/nonEmptyString"
+        }
       }
     },
     "activation": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["issueRef", "invariantRef", "carrier", "status", "policyEpochScope", "controlBoundary", "testEvidence", "deferredEvidence", "futureCarriers", "notActive"],
+      "required": [
+        "issueRef",
+        "invariantRef",
+        "carrier",
+        "status",
+        "policyEpochScope",
+        "controlBoundary",
+        "testEvidence",
+        "deferredEvidence",
+        "futureCarriers",
+        "notActive"
+      ],
       "properties": {
-        "issueRef": {"enum": ["#15", "#16", "#17", "#18", "#19", "#48", "#63", "#65"]},
-        "invariantRef": {"enum": ["REVOCATION-006", "INDEX-NOT-AUTHORITY-005", "WORKER-LEASE-007", "ACTION-SEPARATION-014", "TRACE-REDACTION-012", "SCOPE-INTERSECTION-004", "TRANSPORT-UNTRUSTED-008", "EGRESS-011"]},
-        "carrier": {"enum": ["ContextRuntime.resolve(Acquire)", "ContextRuntime.resolve(Continue | OpenCitation | server-owned unavailable Acquire plan)", "signed one-shot persistent no-op durable-job WorkerLease", "signed synthetic ContextAccessTicket Provider read | signed synthetic ActionTicket no-op channel action", "ContextRuntime.resolve(Acquire) authorized-only ContextRun | restricted delivered-empty DecisionAudit", "ACCEPT-002 ContextRuntime.resolve(Acquire) Membership field projection", "private authenticated HTTP Acquire DeliveryEvidenceRef", "opaque one-shot model or channel EgressGrant with deterministic boundary spies"]},
-        "status": {"const": "active_fail_closed"},
-        "policyEpochScope": {"enum": ["organization-v0", "not-bound-issue-17"]},
-        "controlBoundary": {"enum": ["PostgreSQLAccessPolicyControl.change_access(ResourceAccessRevocation)", "RuntimeCapabilityGate.require_available(RuntimeCapability)", "complete_persistent_noop_job(PostgreSQLWorkerLeaseAuthority, WorkerLeaseRedemption)", "ContextAccessTicketReadHandler.read | ActionTicketNoopHandler.perform", "persist_context_run(ContextRunPersistenceSession, ContextRunRecord, DecisionAuditRecord | None) | PostgreSQLContextRunReader.find_by_decision_ref", "CandidateRef -> same-transaction active-lineage locator -> EffectiveScope -> current Membership/version field ceiling -> PostgreSQL/FORCE-RLS field reduction -> AuthorizationKernel -> AuthorizedProjection", "PrivateDeliveryEvidenceIssuer -> PostgreSQL identity function -> authenticated HTTP metadata -> current UserActor transaction redemption -> TrustedDeliveryContext -> sealed ContextRuntime.resolve(Acquire)", "ContextPackage -> final EgressGate -> digest-only PostgreSQL grant -> AuthorizedModelInput | AuthorizedChannelPayload -> exact one-shot redemption -> ModelGateway | Sender preflight spy"]},
+        "issueRef": {
+          "enum": [
+            "#15",
+            "#16",
+            "#17",
+            "#18",
+            "#19",
+            "#48",
+            "#63",
+            "#65",
+            "#66"
+          ]
+        },
+        "invariantRef": {
+          "enum": [
+            "REVOCATION-006",
+            "INDEX-NOT-AUTHORITY-005",
+            "WORKER-LEASE-007",
+            "ACTION-SEPARATION-014",
+            "TRACE-REDACTION-012",
+            "SCOPE-INTERSECTION-004",
+            "TRANSPORT-UNTRUSTED-008",
+            "EGRESS-011"
+          ]
+        },
+        "carrier": {
+          "enum": [
+            "ContextRuntime.resolve(Acquire)",
+            "ContextRuntime.resolve(Continue | OpenCitation | server-owned unavailable Acquire plan)",
+            "signed one-shot persistent no-op durable-job WorkerLease",
+            "signed synthetic ContextAccessTicket Provider read | signed synthetic ActionTicket no-op channel action",
+            "ContextRuntime.resolve(Acquire) authorized-only ContextRun | restricted delivered-empty DecisionAudit",
+            "ACCEPT-002 ContextRuntime.resolve(Acquire) Membership field projection",
+            "private authenticated HTTP Acquire DeliveryEvidenceRef",
+            "opaque one-shot model or channel EgressGrant with deterministic boundary spies",
+            "frozen public POST /v0/resolve OpenAPI contract"
+          ]
+        },
+        "status": {
+          "const": "active_fail_closed"
+        },
+        "policyEpochScope": {
+          "enum": [
+            "organization-v0",
+            "not-bound-issue-17"
+          ]
+        },
+        "controlBoundary": {
+          "enum": [
+            "PostgreSQLAccessPolicyControl.change_access(ResourceAccessRevocation)",
+            "RuntimeCapabilityGate.require_available(RuntimeCapability)",
+            "complete_persistent_noop_job(PostgreSQLWorkerLeaseAuthority, WorkerLeaseRedemption)",
+            "ContextAccessTicketReadHandler.read | ActionTicketNoopHandler.perform",
+            "persist_context_run(ContextRunPersistenceSession, ContextRunRecord, DecisionAuditRecord | None) | PostgreSQLContextRunReader.find_by_decision_ref",
+            "CandidateRef -> same-transaction active-lineage locator -> EffectiveScope -> current Membership/version field ceiling -> PostgreSQL/FORCE-RLS field reduction -> AuthorizationKernel -> AuthorizedProjection",
+            "PrivateDeliveryEvidenceIssuer -> PostgreSQL identity function -> authenticated HTTP metadata -> current UserActor transaction redemption -> TrustedDeliveryContext -> sealed ContextRuntime.resolve(Acquire)",
+            "ContextPackage -> final EgressGate -> digest-only PostgreSQL grant -> AuthorizedModelInput | AuthorizedChannelPayload -> exact one-shot redemption -> ModelGateway | Sender preflight spy",
+            "authenticated HTTP metadata -> closed ResolveWire -> current UserActor and active release observation -> sealed ContextRuntime.resolve -> closed ResolutionOutcome"
+          ]
+        },
         "testEvidence": {
           "type": "array",
           "minItems": 2,
           "maxItems": 4,
           "uniqueItems": true,
-          "items": {"$ref": "#/$defs/activationTestEvidence"}
+          "items": {
+            "$ref": "#/$defs/activationTestEvidence"
+          }
         },
         "deferredEvidence": {
           "type": "array",
           "minItems": 1,
           "uniqueItems": true,
-          "items": {"$ref": "#/$defs/nonEmptyString"}
+          "items": {
+            "$ref": "#/$defs/nonEmptyString"
+          }
         },
         "futureCarriers": {
           "type": "array",
           "minItems": 3,
           "uniqueItems": true,
-          "items": {"$ref": "#/$defs/nonEmptyString"}
+          "items": {
+            "$ref": "#/$defs/nonEmptyString"
+          }
         },
         "notActive": {
           "type": "array",
           "minItems": 4,
           "uniqueItems": true,
-          "items": {"$ref": "#/$defs/nonEmptyString"}
+          "items": {
+            "$ref": "#/$defs/nonEmptyString"
+          }
         }
       }
     },
@@ -471,78 +939,126 @@
         "authorityRefs"
       ],
       "properties": {
-        "id": {"$ref": "#/$defs/invariantId"},
-        "title": {"$ref": "#/$defs/nonEmptyString"},
-        "purpose": {"$ref": "#/$defs/nonEmptyString"},
+        "id": {
+          "$ref": "#/$defs/invariantId"
+        },
+        "title": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "purpose": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
         "threatRefs": {
           "type": "array",
           "minItems": 1,
           "uniqueItems": true,
-          "items": {"$ref": "#/$defs/threatRef"}
+          "items": {
+            "$ref": "#/$defs/threatRef"
+          }
         },
         "protectedAssets": {
           "type": "array",
           "minItems": 1,
           "uniqueItems": true,
-          "items": {"$ref": "#/$defs/assetRef"}
+          "items": {
+            "$ref": "#/$defs/assetRef"
+          }
         },
-        "deterministicOracle": {"$ref": "#/$defs/nonEmptyString"},
+        "deterministicOracle": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
         "hardOracleRefs": {
           "type": "array",
           "minItems": 1,
           "uniqueItems": true,
-          "items": {"$ref": "#/$defs/hardOracleName"}
+          "items": {
+            "$ref": "#/$defs/hardOracleName"
+          }
         },
-        "applicability": {"$ref": "#/$defs/applicability"},
-        "capabilityRef": {"$ref": "#/$defs/nonEmptyString"},
+        "applicability": {
+          "$ref": "#/$defs/applicability"
+        },
+        "capabilityRef": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
         "requiredMilestones": {
           "type": "array",
           "minItems": 1,
           "uniqueItems": true,
-          "items": {"$ref": "#/$defs/milestone"}
+          "items": {
+            "$ref": "#/$defs/milestone"
+          }
         },
         "evidenceStatus": {
           "type": "string",
-          "enum": ["accepted", "future_case"]
+          "enum": [
+            "accepted",
+            "future_case"
+          ]
         },
-        "expectedEvidence": {"$ref": "#/$defs/expectedEvidence"},
+        "expectedEvidence": {
+          "$ref": "#/$defs/expectedEvidence"
+        },
         "authorityRefs": {
           "type": "array",
           "minItems": 1,
           "uniqueItems": true,
-          "items": {"$ref": "#/$defs/authorityRef"}
+          "items": {
+            "$ref": "#/$defs/authorityRef"
+          }
         }
       }
     },
     "carrier": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["statusAtM0", "m0Expectation", "upgradeTrigger"],
+      "required": [
+        "statusAtM0",
+        "m0Expectation",
+        "upgradeTrigger"
+      ],
       "properties": {
         "statusAtM0": {
           "type": "string",
-          "enum": ["available", "unavailable", "future"]
+          "enum": [
+            "available",
+            "unavailable",
+            "future"
+          ]
         },
         "m0Expectation": {
           "type": "string",
-          "enum": ["active_fail_closed", "fail_closed"]
+          "enum": [
+            "active_fail_closed",
+            "fail_closed"
+          ]
         },
-        "upgradeTrigger": {"$ref": "#/$defs/nonEmptyString"}
+        "upgradeTrigger": {
+          "$ref": "#/$defs/nonEmptyString"
+        }
       },
       "if": {
         "properties": {
-          "statusAtM0": {"const": "available"}
+          "statusAtM0": {
+            "const": "available"
+          }
         },
-        "required": ["statusAtM0"]
+        "required": [
+          "statusAtM0"
+        ]
       },
       "then": {
         "properties": {
-          "m0Expectation": {"const": "active_fail_closed"}
+          "m0Expectation": {
+            "const": "active_fail_closed"
+          }
         }
       },
       "else": {
         "properties": {
-          "m0Expectation": {"const": "fail_closed"}
+          "m0Expectation": {
+            "const": "fail_closed"
+          }
         }
       }
     },
@@ -551,133 +1067,285 @@
       "additionalProperties": false,
       "minProperties": 1,
       "properties": {
-        "actorKind": {"$ref": "#/$defs/nonEmptyString"},
-        "serviceActorRef": {"$ref": "#/$defs/nonEmptyString"},
-        "organizationRef": {"$ref": "#/$defs/nonEmptyString"},
-        "principalRef": {"$ref": "#/$defs/nonEmptyString"},
-        "agentRef": {"$ref": "#/$defs/nonEmptyString"},
-        "agentVersion": {"type": "integer", "minimum": 0},
-        "membershipVersion": {"type": "integer", "minimum": 0},
-        "currentPolicyEpoch": {"type": "integer", "minimum": 0},
-        "purpose": {"$ref": "#/$defs/nonEmptyString"},
-        "requiredAclMode": {"$ref": "#/$defs/nonEmptyString"},
-        "capabilityAudience": {"$ref": "#/$defs/nonEmptyString"},
-        "authenticationSource": {"$ref": "#/$defs/nonEmptyString"},
-        "durableJobRef": {"$ref": "#/$defs/nonEmptyString"},
-        "samplePlanRef": {"$ref": "#/$defs/nonEmptyString"},
-        "source": {"$ref": "#/$defs/nonEmptyString"},
+        "actorKind": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "serviceActorRef": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "organizationRef": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "principalRef": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "agentRef": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "agentVersion": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "membershipVersion": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "currentPolicyEpoch": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "purpose": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "requiredAclMode": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "capabilityAudience": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "authenticationSource": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "durableJobRef": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "samplePlanRef": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "source": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
         "invocations": {
           "type": "array",
           "minItems": 1,
-          "items": {"$ref": "#/$defs/invocationIdentity"}
+          "items": {
+            "$ref": "#/$defs/invocationIdentity"
+          }
         }
       }
     },
     "invocationIdentity": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["organizationRef", "principalRef", "purpose"],
+      "required": [
+        "organizationRef",
+        "principalRef",
+        "purpose"
+      ],
       "properties": {
-        "organizationRef": {"$ref": "#/$defs/nonEmptyString"},
-        "principalRef": {"$ref": "#/$defs/nonEmptyString"},
-        "purpose": {"$ref": "#/$defs/nonEmptyString"}
+        "organizationRef": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "principalRef": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "purpose": {
+          "$ref": "#/$defs/nonEmptyString"
+        }
       }
     },
     "setup": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["preconditions", "trustedIdentity"],
+      "required": [
+        "preconditions",
+        "trustedIdentity"
+      ],
       "properties": {
-        "preconditions": {"$ref": "#/$defs/stringArray"},
-        "trustedIdentity": {"$ref": "#/$defs/trustedIdentity"}
+        "preconditions": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "trustedIdentity": {
+          "$ref": "#/$defs/trustedIdentity"
+        }
       }
     },
     "adversarialMutation": {
       "type": "object",
       "additionalProperties": false,
       "minProperties": 2,
-      "required": ["kind"],
+      "required": [
+        "kind"
+      ],
       "properties": {
-        "kind": {"$ref": "#/$defs/nonEmptyString"},
-        "caseRef": {"$ref": "#/$defs/nonEmptyString"},
+        "kind": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "caseRef": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
         "attempts": {
           "type": "array",
           "minItems": 1,
-          "items": {"$ref": "#/$defs/probeAttempt"}
+          "items": {
+            "$ref": "#/$defs/probeAttempt"
+          }
         },
-        "candidateWasDiscoveredFor": {"$ref": "#/$defs/nonEmptyString"},
-        "candidateFields": {"$ref": "#/$defs/stringArray"},
-        "currentInvocation": {"$ref": "#/$defs/nonEmptyString"},
-        "requestedAgentSources": {"$ref": "#/$defs/stringArray"},
-        "signedAgentCeiling": {"$ref": "#/$defs/stringArray"},
-        "requestNarrowing": {"$ref": "#/$defs/requestNarrowing"},
-        "promptInjectedSourceRefs": {"$ref": "#/$defs/stringArray"},
-        "tokenPolicyEpoch": {"type": "integer", "minimum": 0},
-        "cachedResourceStillPresent": {"type": "boolean"},
-        "orderedCandidateRefs": {"$ref": "#/$defs/stringArray"},
+        "candidateWasDiscoveredFor": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "candidateFields": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "currentInvocation": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "requestedAgentSources": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "signedAgentCeiling": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "requestNarrowing": {
+          "$ref": "#/$defs/requestNarrowing"
+        },
+        "promptInjectedSourceRefs": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "tokenPolicyEpoch": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cachedResourceStillPresent": {
+          "type": "boolean"
+        },
+        "orderedCandidateRefs": {
+          "$ref": "#/$defs/stringArray"
+        },
         "candidateRankOrders": {
           "type": "array",
           "minItems": 1,
           "uniqueItems": true,
-          "items": {"$ref": "#/$defs/stringArray"}
+          "items": {
+            "$ref": "#/$defs/stringArray"
+          }
         },
         "candidatePayloadFields": {
           "type": "array",
           "uniqueItems": true,
-          "items": {"$ref": "#/$defs/nonEmptyString"}
+          "items": {
+            "$ref": "#/$defs/nonEmptyString"
+          }
         },
-        "bodyFields": {"$ref": "#/$defs/injectedBodyFields"},
-        "replayCount": {"type": "integer", "minimum": 1},
-        "mutatedClaim": {"$ref": "#/$defs/mutatedClaim"},
-        "retainedNonce": {"$ref": "#/$defs/nonEmptyString"},
+        "bodyFields": {
+          "$ref": "#/$defs/injectedBodyFields"
+        },
+        "replayCount": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "mutatedClaim": {
+          "$ref": "#/$defs/mutatedClaim"
+        },
+        "retainedNonce": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
         "parameterizedCases": {
           "type": "array",
           "minItems": 1,
           "uniqueItems": true,
-          "items": {"$ref": "#/$defs/parameterizedCase"}
+          "items": {
+            "$ref": "#/$defs/parameterizedCase"
+          }
         },
-        "requestedFallback": {"$ref": "#/$defs/nonEmptyString"},
-        "missingCapability": {"$ref": "#/$defs/nonEmptyString"},
-        "locator": {"$ref": "#/$defs/nonEmptyString"},
-        "originalPolicyEpoch": {"type": "integer", "minimum": 0},
-        "attemptedAlternateUse": {"$ref": "#/$defs/nonEmptyString"},
-        "probes": {"$ref": "#/$defs/stringArray"},
-        "order": {"$ref": "#/$defs/stringArray"},
-        "ticketKind": {"$ref": "#/$defs/nonEmptyString"},
-        "requestedEffect": {"$ref": "#/$defs/nonEmptyString"},
-        "destination": {"$ref": "#/$defs/nonEmptyString"},
-        "targetOrganization": {"$ref": "#/$defs/nonEmptyString"}
+        "requestedFallback": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "missingCapability": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "locator": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "originalPolicyEpoch": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "attemptedAlternateUse": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "probes": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "order": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "ticketKind": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "requestedEffect": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "destination": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "targetOrganization": {
+          "$ref": "#/$defs/nonEmptyString"
+        }
       }
     },
     "probeAttempt": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["invocation", "target"],
+      "required": [
+        "invocation",
+        "target"
+      ],
       "properties": {
-        "invocation": {"$ref": "#/$defs/nonEmptyString"},
-        "target": {"$ref": "#/$defs/nonEmptyString"}
+        "invocation": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "target": {
+          "$ref": "#/$defs/nonEmptyString"
+        }
       }
     },
     "requestNarrowing": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["sourceRefs"],
+      "required": [
+        "sourceRefs"
+      ],
       "properties": {
-        "sourceRefs": {"$ref": "#/$defs/stringArray"}
+        "sourceRefs": {
+          "$ref": "#/$defs/stringArray"
+        }
       }
     },
     "injectedBodyFields": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["organizationRef", "principalRef", "purpose", "audience", "acl", "rawSql", "bypassAuthorization"],
+      "required": [
+        "organizationRef",
+        "principalRef",
+        "purpose",
+        "audience",
+        "acl",
+        "rawSql",
+        "bypassAuthorization"
+      ],
       "properties": {
-        "organizationRef": {"$ref": "#/$defs/nonEmptyString"},
-        "principalRef": {"$ref": "#/$defs/nonEmptyString"},
-        "purpose": {"$ref": "#/$defs/nonEmptyString"},
-        "audience": {"$ref": "#/$defs/stringArray"},
-        "acl": {"$ref": "#/$defs/nonEmptyString"},
-        "rawSql": {"$ref": "#/$defs/nonEmptyString"},
-        "bypassAuthorization": {"type": "boolean"}
+        "organizationRef": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "principalRef": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "purpose": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "audience": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "acl": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "rawSql": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "bypassAuthorization": {
+          "type": "boolean"
+        }
       }
     },
     "mutatedClaim": {
@@ -685,77 +1353,189 @@
       "additionalProperties": false,
       "minProperties": 1,
       "properties": {
-        "organizationRef": {"$ref": "#/$defs/nonEmptyString"},
-        "jobRef": {"$ref": "#/$defs/nonEmptyString"},
-        "sourceRef": {"$ref": "#/$defs/nonEmptyString"},
-        "operation": {"$ref": "#/$defs/nonEmptyString"},
-        "generation": {"type": "integer", "minimum": 0},
-        "nonce": {"$ref": "#/$defs/nonEmptyString"}
+        "organizationRef": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "jobRef": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "sourceRef": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "operation": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "nonce": {
+          "$ref": "#/$defs/nonEmptyString"
+        }
       }
     },
     "parameterizedCase": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "mutation", "expectedStatus", "expectedOutcome", "expectedNewDurableEffects", "expectedWrongOrganizationEffects", "expectedContentWorkCalls"],
+      "required": [
+        "id",
+        "mutation",
+        "expectedStatus",
+        "expectedOutcome",
+        "expectedNewDurableEffects",
+        "expectedWrongOrganizationEffects",
+        "expectedContentWorkCalls"
+      ],
       "properties": {
-        "id": {"$ref": "#/$defs/nonEmptyString"},
-        "claim": {"$ref": "#/$defs/nonEmptyString"},
+        "id": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "claim": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
         "mutation": {
-          "type": ["string", "integer"],
+          "type": [
+            "string",
+            "integer"
+          ],
           "minLength": 1,
           "pattern": "\\S",
           "minimum": 0
         },
-        "expectedStatus": {"type": "integer", "minimum": 100, "maximum": 599},
-        "expectedOutcome": {"$ref": "#/$defs/nonEmptyString"},
-        "expectedNewDurableEffects": {"type": "integer", "const": 0},
-        "expectedWrongOrganizationEffects": {"type": "integer", "const": 0},
-        "expectedContentWorkCalls": {"type": "integer", "const": 0},
-        "activatedOracle": {"$ref": "#/$defs/nonEmptyString"}
+        "expectedStatus": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 599
+        },
+        "expectedOutcome": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "expectedNewDurableEffects": {
+          "type": "integer",
+          "const": 0
+        },
+        "expectedWrongOrganizationEffects": {
+          "type": "integer",
+          "const": 0
+        },
+        "expectedContentWorkCalls": {
+          "type": "integer",
+          "const": 0
+        },
+        "activatedOracle": {
+          "$ref": "#/$defs/nonEmptyString"
+        }
       }
     },
     "operation": {
       "type": "object",
       "additionalProperties": false,
       "minProperties": 2,
-      "required": ["interface", "request"],
+      "required": [
+        "interface",
+        "request"
+      ],
       "properties": {
-        "interface": {"$ref": "#/$defs/nonEmptyString"},
-        "request": {"$ref": "#/$defs/nonEmptyString"},
-        "count": {"type": "integer", "minimum": 1},
-        "observation": {"$ref": "#/$defs/nonEmptyString"},
-        "expectedAuthorizedProjection": {"$ref": "#/$defs/stringArray"},
-        "expectedEffectiveScope": {"$ref": "#/$defs/stringArray"},
-        "comparison": {"$ref": "#/$defs/nonEmptyString"},
-        "timing": {"$ref": "#/$defs/nonEmptyString"},
-        "requiredTypeFlow": {"$ref": "#/$defs/stringArray"},
-        "phase": {"$ref": "#/$defs/nonEmptyString"},
-        "durableComparison": {"$ref": "#/$defs/nonEmptyString"},
-        "comparisonFields": {"$ref": "#/$defs/stringArray"},
-        "normalizationAllowlist": {"$ref": "#/$defs/stringArray"}
+        "interface": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "request": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "observation": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "expectedAuthorizedProjection": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "expectedEffectiveScope": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "comparison": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "timing": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "requiredTypeFlow": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "phase": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "durableComparison": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "comparisonFields": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "normalizationAllowlist": {
+          "$ref": "#/$defs/stringArray"
+        }
       }
     },
     "externalResponse": {
       "type": "object",
       "additionalProperties": false,
       "minProperties": 2,
-      "required": ["status"],
+      "required": [
+        "status"
+      ],
       "properties": {
-        "status": {"type": "integer", "minimum": 100, "maximum": 599},
-        "code": {"$ref": "#/$defs/nonEmptyString"},
-        "body": {"$ref": "#/$defs/responseBody"},
-        "sameOutcomeSemanticsForBothAttempts": {"type": "boolean"},
-        "authorizedPayloadUtf8": {"$ref": "#/$defs/nonEmptyString"},
-        "authorizedPayloadBytes": {"type": "integer", "minimum": 0},
-        "privateFieldPresent": {"type": "boolean"},
-        "privateResourcePresent": {"type": "boolean"},
-        "source2Present": {"type": "boolean"},
-        "orgBContentPresent": {"type": "boolean"},
-        "fieldNamesEchoed": {"type": "boolean"},
-        "leaseClaimsEchoed": {"type": "boolean"},
-        "headers": {"$ref": "#/$defs/responseHeaders"},
-        "normalizedByteIdenticalAcrossProbes": {"type": "boolean", "const": true},
-        "timingEqualityClaimed": {"type": "boolean", "const": false}
+        "status": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 599
+        },
+        "code": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "body": {
+          "$ref": "#/$defs/responseBody"
+        },
+        "sameOutcomeSemanticsForBothAttempts": {
+          "type": "boolean"
+        },
+        "authorizedPayloadUtf8": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "authorizedPayloadBytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "privateFieldPresent": {
+          "type": "boolean"
+        },
+        "privateResourcePresent": {
+          "type": "boolean"
+        },
+        "source2Present": {
+          "type": "boolean"
+        },
+        "orgBContentPresent": {
+          "type": "boolean"
+        },
+        "fieldNamesEchoed": {
+          "type": "boolean"
+        },
+        "leaseClaimsEchoed": {
+          "type": "boolean"
+        },
+        "headers": {
+          "$ref": "#/$defs/responseHeaders"
+        },
+        "normalizedByteIdenticalAcrossProbes": {
+          "type": "boolean",
+          "const": true
+        },
+        "timingEqualityClaimed": {
+          "type": "boolean",
+          "const": false
+        }
       }
     },
     "responseBody": {
@@ -763,232 +1543,691 @@
       "additionalProperties": false,
       "minProperties": 1,
       "properties": {
-        "kind": {"$ref": "#/$defs/nonEmptyString"},
-        "gap": {"$ref": "#/$defs/nonEmptyString"},
-        "retryable": {"type": "boolean"},
-        "package": {"$ref": "#/$defs/contextPackage"}
+        "kind": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "gap": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "retryable": {
+          "type": "boolean"
+        },
+        "package": {
+          "$ref": "#/$defs/contextPackage"
+        }
       }
     },
     "contextPackage": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["organizationRef", "purpose", "ttlSeconds", "asOf", "expiresAt", "decisionRef", "packageDigest", "blocks", "evidence", "gaps", "budgetUsage", "coverage"],
+      "required": [
+        "packageId",
+        "packageDigest",
+        "purpose",
+        "audienceDigest",
+        "policyEpoch",
+        "policySnapshotRef",
+        "decisionRef",
+        "runRef",
+        "releaseManifestRef",
+        "retentionPolicyRef",
+        "asOf",
+        "expiresAt",
+        "ttlSeconds",
+        "tokenizerRef",
+        "packageSchemaRef",
+        "blocks",
+        "evidence",
+        "gaps",
+        "coverage",
+        "budgetUsage",
+        "continuation"
+      ],
       "properties": {
-        "organizationRef": {"$ref": "#/$defs/nonEmptyString"},
-        "purpose": {"$ref": "#/$defs/nonEmptyString"},
-        "ttlSeconds": {"type": "integer", "minimum": 1},
-        "asOf": {"$ref": "#/$defs/nonEmptyString"},
-        "expiresAt": {"$ref": "#/$defs/nonEmptyString"},
-        "decisionRef": {"$ref": "#/$defs/nonEmptyString"},
-        "packageDigest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "packageId": {
+          "type": "string",
+          "pattern": "^pkg_[0-9a-f]{32}$"
+        },
+        "packageDigest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "purpose": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "audienceDigest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "policyEpoch": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "policySnapshotRef": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "decisionRef": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "runRef": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "releaseManifestRef": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "retentionPolicyRef": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "asOf": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "expiresAt": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "ttlSeconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "tokenizerRef": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "packageSchemaRef": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
         "blocks": {
           "type": "array",
           "uniqueItems": true,
-          "items": {"$ref": "#/$defs/packageBlock"}
+          "items": {
+            "$ref": "#/$defs/packageBlock"
+          }
         },
         "evidence": {
           "type": "array",
           "uniqueItems": true,
-          "items": {"$ref": "#/$defs/packageEvidence"}
+          "items": {
+            "$ref": "#/$defs/packageEvidence"
+          }
         },
-        "gaps": {"type": "array", "maxItems": 0},
-        "budgetUsage": {"$ref": "#/$defs/budgetUsage"},
-        "coverage": {"$ref": "#/$defs/coverage"}
+        "gaps": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/packageGap"
+          }
+        },
+        "budgetUsage": {
+          "$ref": "#/$defs/budgetUsage"
+        },
+        "coverage": {
+          "$ref": "#/$defs/coverage"
+        },
+        "continuation": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "continuationToken",
+                "remainingBudgetDigest"
+              ],
+              "properties": {
+                "continuationToken": {
+                  "$ref": "#/$defs/nonEmptyString"
+                },
+                "remainingBudgetDigest": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                }
+              }
+            }
+          ]
+        }
       },
       "if": {
         "properties": {
           "coverage": {
-            "properties": {"status": {"const": "empty"}},
-            "required": ["status"]
+            "properties": {
+              "status": {
+                "const": "empty"
+              }
+            },
+            "required": [
+              "status"
+            ]
           }
         },
-        "required": ["coverage"]
+        "required": [
+          "coverage"
+        ]
       },
       "then": {
         "properties": {
-          "blocks": {"maxItems": 0},
-          "evidence": {"maxItems": 0},
-          "budgetUsage": {"$ref": "#/$defs/zeroBudgetUsage"}
+          "blocks": {
+            "maxItems": 0
+          },
+          "evidence": {
+            "maxItems": 0
+          },
+          "budgetUsage": {
+            "$ref": "#/$defs/zeroBudgetUsage"
+          }
         }
       },
       "else": {
         "properties": {
-          "blocks": {"minItems": 1},
-          "evidence": {"minItems": 1}
+          "blocks": {
+            "minItems": 1
+          },
+          "evidence": {
+            "minItems": 1
+          }
         }
       }
     },
     "packageBlock": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["blockId", "text", "evidenceRefs"],
+      "required": [
+        "blockId",
+        "text",
+        "evidenceRefs"
+      ],
       "properties": {
-        "blockId": {"$ref": "#/$defs/blockRef"},
-        "text": {"$ref": "#/$defs/nonEmptyString"},
+        "blockId": {
+          "$ref": "#/$defs/blockRef"
+        },
+        "text": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
         "evidenceRefs": {
           "type": "array",
           "minItems": 1,
           "maxItems": 1,
           "uniqueItems": true,
-          "items": {"$ref": "#/$defs/evidenceRef"}
+          "items": {
+            "$ref": "#/$defs/evidenceRef"
+          }
         }
       }
     },
     "packageEvidence": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["evidenceRef", "sourceRef", "resourceRef", "revisionRef", "fragmentRef", "projectedFields", "runRef", "purpose", "authorizationAsOf", "decisionRef", "policySnapshotRef", "policyEpoch", "sourceDecisionRef"],
+      "required": [
+        "evidenceRef",
+        "sourceRef",
+        "resourceRef",
+        "revisionRef",
+        "fragmentRef",
+        "projectedFields",
+        "runRef",
+        "purpose",
+        "authorizationAsOf",
+        "decisionRef",
+        "policySnapshotRef",
+        "policyEpoch",
+        "sourceAclEvidence",
+        "citationOpenRef"
+      ],
       "properties": {
-        "evidenceRef": {"$ref": "#/$defs/evidenceRef"},
-        "sourceRef": {"$ref": "#/$defs/nonEmptyString"},
-        "resourceRef": {"$ref": "#/$defs/nonEmptyString"},
-        "revisionRef": {"$ref": "#/$defs/nonEmptyString"},
-        "fragmentRef": {"$ref": "#/$defs/nonEmptyString"},
+        "evidenceRef": {
+          "$ref": "#/$defs/evidenceRef"
+        },
+        "sourceRef": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "resourceRef": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "revisionRef": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "fragmentRef": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
         "projectedFields": {
           "type": "array",
           "minItems": 1,
           "maxItems": 64,
           "uniqueItems": true,
-          "items": {"$ref": "#/$defs/projectedFieldRef"}
+          "items": {
+            "$ref": "#/$defs/projectedFieldRef"
+          }
         },
-        "runRef": {"$ref": "#/$defs/nonEmptyString"},
-        "purpose": {"$ref": "#/$defs/nonEmptyString"},
-        "authorizationAsOf": {"$ref": "#/$defs/nonEmptyString"},
-        "decisionRef": {"$ref": "#/$defs/nonEmptyString"},
-        "policySnapshotRef": {"$ref": "#/$defs/nonEmptyString"},
-        "policyEpoch": {"type": "integer", "minimum": 1},
-        "sourceDecisionRef": {"$ref": "#/$defs/nonEmptyString"}
+        "runRef": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "purpose": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "authorizationAsOf": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "decisionRef": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "policySnapshotRef": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "policyEpoch": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "sourceAclEvidence": {
+          "$ref": "#/$defs/sourceAclEvidence"
+        },
+        "citationOpenRef": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/nonEmptyString"
+            }
+          ]
+        }
+      }
+    },
+    "sourceAclEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "projectionRef",
+        "aclAsOf",
+        "freshnessProfileRef"
+      ],
+      "properties": {
+        "kind": {
+          "const": "mirrored"
+        },
+        "projectionRef": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "aclAsOf": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "freshnessProfileRef": {
+          "$ref": "#/$defs/nonEmptyString"
+        }
+      }
+    },
+    "packageGap": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "category",
+        "retryable"
+      ],
+      "properties": {
+        "category": {
+          "enum": [
+            "source_unavailable",
+            "stale_evidence",
+            "budget_exhausted",
+            "capability_unsupported"
+          ]
+        },
+        "retryable": {
+          "type": "boolean"
+        }
       }
     },
     "coverage": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["status"],
+      "required": [
+        "status"
+      ],
       "properties": {
-        "status": {"enum": ["empty", "sufficient"]},
-        "reason": {"const": "no_authorized_evidence"}
+        "status": {
+          "enum": [
+            "empty",
+            "partial",
+            "sufficient"
+          ]
+        },
+        "reason": {
+          "enum": [
+            "no_authorized_evidence",
+            "source_unavailable",
+            "stale_evidence",
+            "budget_exhausted",
+            "capability_unsupported"
+          ]
+        }
       },
       "if": {
-        "properties": {"status": {"const": "empty"}},
-        "required": ["status"]
+        "properties": {
+          "status": {
+            "const": "empty"
+          }
+        },
+        "required": [
+          "status"
+        ]
       },
-      "then": {"required": ["reason"]},
-      "else": {"properties": {"reason": false}}
+      "then": {
+        "required": [
+          "reason"
+        ]
+      },
+      "else": {
+        "properties": {
+          "reason": false
+        }
+      }
     },
     "budgetUsage": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["tokens", "providerCalls", "costMicrounits", "elapsedMs"],
+      "required": [
+        "tokens",
+        "providerCalls",
+        "costMicrounits",
+        "elapsedMs"
+      ],
       "properties": {
-        "tokens": {"type": "integer", "minimum": 0},
-        "providerCalls": {"type": "integer", "minimum": 0},
-        "costMicrounits": {"type": "integer", "minimum": 0},
-        "elapsedMs": {"type": "integer", "minimum": 0}
+        "tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "providerCalls": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "costMicrounits": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "elapsedMs": {
+          "type": "integer",
+          "minimum": 0
+        }
       }
     },
     "zeroBudgetUsage": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["tokens", "providerCalls", "costMicrounits", "elapsedMs"],
+      "required": [
+        "tokens",
+        "providerCalls",
+        "costMicrounits",
+        "elapsedMs"
+      ],
       "properties": {
-        "tokens": {"type": "integer", "const": 0},
-        "providerCalls": {"type": "integer", "const": 0},
-        "costMicrounits": {"type": "integer", "const": 0},
-        "elapsedMs": {"type": "integer", "const": 0}
+        "tokens": {
+          "type": "integer",
+          "const": 0
+        },
+        "providerCalls": {
+          "type": "integer",
+          "const": 0
+        },
+        "costMicrounits": {
+          "type": "integer",
+          "const": 0
+        },
+        "elapsedMs": {
+          "type": "integer",
+          "const": 0
+        }
       }
     },
     "responseHeaders": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["Content-Type", "Cache-Control", "X-Context-Request-Id"],
+      "required": [
+        "Content-Type",
+        "Cache-Control",
+        "X-Context-Request-Id"
+      ],
       "properties": {
-        "Content-Type": {"const": "application/json"},
-        "Cache-Control": {"const": "no-store"},
-        "X-Context-Request-Id": {"$ref": "#/$defs/nonEmptyString"}
+        "Content-Type": {
+          "const": "application/json"
+        },
+        "Cache-Control": {
+          "const": "no-store"
+        },
+        "X-Context-Request-Id": {
+          "$ref": "#/$defs/nonEmptyString"
+        }
       }
     },
     "packageOrError": {
       "type": "object",
       "additionalProperties": false,
       "minProperties": 2,
-      "required": ["kind"],
+      "required": [
+        "kind"
+      ],
       "properties": {
-        "kind": {"$ref": "#/$defs/nonEmptyString"},
-        "packageCount": {"type": "integer", "minimum": 0},
-        "crossOrganizationResourceDetailCount": {"type": "integer", "minimum": 0},
-        "coverageStatus": {"$ref": "#/$defs/nonEmptyString"},
-        "coverageReason": {"$ref": "#/$defs/nonEmptyString"},
-        "evidenceFields": {"$ref": "#/$defs/stringArray"},
-        "deniedFieldCountExposed": {"type": "boolean"},
-        "evidenceResourceRefs": {"$ref": "#/$defs/stringArray"},
-        "gap": {"$ref": "#/$defs/nonEmptyString"},
-        "sourceRefs": {"$ref": "#/$defs/stringArray"},
-        "expandedSourceCallCount": {"type": "integer", "minimum": 0},
-        "stalePackageReturned": {"type": "boolean"},
-        "revokedResourceDetailCount": {"type": "integer", "minimum": 0},
-        "evidenceRefs": {"$ref": "#/$defs/stringArray"},
-        "deniedCandidateCountExposed": {"type": "boolean"},
-        "blocksPerPackage": {"type": "integer", "minimum": 0},
-        "evidencePerPackage": {"type": "integer", "minimum": 0},
-        "unauthorizedFieldCount": {"type": "integer", "const": 0},
-        "unauthorizedEvidenceRefCount": {"type": "integer", "const": 0},
-        "contextPackageCreated": {"type": "boolean"},
-        "trustedContextConstructedFromBody": {"type": "boolean"},
-        "reasonVisibleToWorker": {"$ref": "#/$defs/nonEmptyString"},
-        "newReceiptCreated": {"type": "boolean"},
-        "aclModeUsed": {"type": ["string", "null"], "minLength": 1},
-        "weakFallbackCount": {"type": "integer", "minimum": 0},
-        "capabilityReportedAsPass": {"type": "boolean"},
-        "citationFieldsReturned": {"type": "integer", "minimum": 0},
-        "capabilityStatus": {"$ref": "#/$defs/nonEmptyString"},
-        "deniedCountExposed": {"type": "boolean", "const": false},
-        "existenceDetailCount": {"type": "integer", "const": 0},
-        "actionTicketCreated": {"type": "boolean"},
-        "contextTicketConsumed": {"type": "boolean"}
+        "kind": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "packageCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "crossOrganizationResourceDetailCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "coverageStatus": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "coverageReason": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "evidenceFields": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "deniedFieldCountExposed": {
+          "type": "boolean"
+        },
+        "evidenceResourceRefs": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "gap": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "sourceRefs": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "expandedSourceCallCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "stalePackageReturned": {
+          "type": "boolean"
+        },
+        "revokedResourceDetailCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "evidenceRefs": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "deniedCandidateCountExposed": {
+          "type": "boolean"
+        },
+        "blocksPerPackage": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "evidencePerPackage": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "unauthorizedFieldCount": {
+          "type": "integer",
+          "const": 0
+        },
+        "unauthorizedEvidenceRefCount": {
+          "type": "integer",
+          "const": 0
+        },
+        "contextPackageCreated": {
+          "type": "boolean"
+        },
+        "trustedContextConstructedFromBody": {
+          "type": "boolean"
+        },
+        "reasonVisibleToWorker": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "newReceiptCreated": {
+          "type": "boolean"
+        },
+        "aclModeUsed": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "weakFallbackCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "capabilityReportedAsPass": {
+          "type": "boolean"
+        },
+        "citationFieldsReturned": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "capabilityStatus": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "deniedCountExposed": {
+          "type": "boolean",
+          "const": false
+        },
+        "existenceDetailCount": {
+          "type": "integer",
+          "const": 0
+        },
+        "actionTicketCreated": {
+          "type": "boolean"
+        },
+        "contextTicketConsumed": {
+          "type": "boolean"
+        }
       }
     },
     "evidenceMetrics": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["unauthorizedEvidenceCount", "unauthorizedContentBytes", "missingContextFallbackCount", "outboundBytes"],
+      "required": [
+        "unauthorizedEvidenceCount",
+        "unauthorizedContentBytes",
+        "missingContextFallbackCount",
+        "outboundBytes"
+      ],
       "properties": {
-        "unauthorizedEvidenceCount": {"type": "integer", "minimum": 0, "const": 0},
-        "unauthorizedContentBytes": {"type": "integer", "minimum": 0, "const": 0},
-        "missingContextFallbackCount": {"type": "integer", "minimum": 0, "const": 0},
-        "outboundBytes": {"type": "integer", "minimum": 0}
+        "unauthorizedEvidenceCount": {
+          "type": "integer",
+          "minimum": 0,
+          "const": 0
+        },
+        "unauthorizedContentBytes": {
+          "type": "integer",
+          "minimum": 0,
+          "const": 0
+        },
+        "missingContextFallbackCount": {
+          "type": "integer",
+          "minimum": 0,
+          "const": 0
+        },
+        "outboundBytes": {
+          "type": "integer",
+          "minimum": 0
+        }
       }
     },
     "businessEffectMetrics": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["wrongOrganizationEffectCount", "mutationEffectCount", "totalEffectsAfterScenario"],
+      "required": [
+        "wrongOrganizationEffectCount",
+        "mutationEffectCount",
+        "totalEffectsAfterScenario"
+      ],
       "properties": {
-        "wrongOrganizationEffectCount": {"type": "integer", "minimum": 0, "const": 0},
-        "mutationEffectCount": {"type": "integer", "minimum": 0},
-        "totalEffectsAfterScenario": {"type": "integer", "minimum": 0}
+        "wrongOrganizationEffectCount": {
+          "type": "integer",
+          "minimum": 0,
+          "const": 0
+        },
+        "mutationEffectCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "totalEffectsAfterScenario": {
+          "type": "integer",
+          "minimum": 0
+        }
       }
     },
     "ioMetrics": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["providerCalls", "indexCalls", "modelCalls", "actionCalls"],
+      "required": [
+        "providerCalls",
+        "indexCalls",
+        "modelCalls",
+        "actionCalls"
+      ],
       "properties": {
-        "providerCalls": {"type": "integer", "minimum": 0},
-        "indexCalls": {"type": "integer", "minimum": 0},
-        "modelCalls": {"type": "integer", "minimum": 0},
-        "actionCalls": {"type": "integer", "minimum": 0}
+        "providerCalls": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "indexCalls": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "modelCalls": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "actionCalls": {
+          "type": "integer",
+          "minimum": 0
+        }
       }
     },
     "expected": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["externalResponse", "packageOrError", "evidence", "businessEffects", "io"],
+      "required": [
+        "externalResponse",
+        "packageOrError",
+        "evidence",
+        "businessEffects",
+        "io"
+      ],
       "properties": {
-        "externalResponse": {"$ref": "#/$defs/externalResponse"},
-        "packageOrError": {"$ref": "#/$defs/packageOrError"},
-        "evidence": {"$ref": "#/$defs/evidenceMetrics"},
-        "businessEffects": {"$ref": "#/$defs/businessEffectMetrics"},
-        "io": {"$ref": "#/$defs/ioMetrics"}
+        "externalResponse": {
+          "$ref": "#/$defs/externalResponse"
+        },
+        "packageOrError": {
+          "$ref": "#/$defs/packageOrError"
+        },
+        "evidence": {
+          "$ref": "#/$defs/evidenceMetrics"
+        },
+        "businessEffects": {
+          "$ref": "#/$defs/businessEffectMetrics"
+        },
+        "io": {
+          "$ref": "#/$defs/ioMetrics"
+        }
       }
     },
     "fixture": {
@@ -1007,28 +2246,49 @@
         "authorityRefs"
       ],
       "properties": {
-        "id": {"$ref": "#/$defs/fixtureId"},
-        "title": {"$ref": "#/$defs/nonEmptyString"},
+        "id": {
+          "$ref": "#/$defs/fixtureId"
+        },
+        "title": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
         "decisionStatus": {
           "type": "string",
-          "enum": ["accepted", "future_case"]
+          "enum": [
+            "accepted",
+            "future_case"
+          ]
         },
-        "carrier": {"$ref": "#/$defs/carrier"},
-        "setup": {"$ref": "#/$defs/setup"},
-        "adversarialMutation": {"$ref": "#/$defs/adversarialMutation"},
-        "operation": {"$ref": "#/$defs/operation"},
-        "expected": {"$ref": "#/$defs/expected"},
+        "carrier": {
+          "$ref": "#/$defs/carrier"
+        },
+        "setup": {
+          "$ref": "#/$defs/setup"
+        },
+        "adversarialMutation": {
+          "$ref": "#/$defs/adversarialMutation"
+        },
+        "operation": {
+          "$ref": "#/$defs/operation"
+        },
+        "expected": {
+          "$ref": "#/$defs/expected"
+        },
         "invariantRefs": {
           "type": "array",
           "minItems": 1,
           "uniqueItems": true,
-          "items": {"$ref": "#/$defs/invariantId"}
+          "items": {
+            "$ref": "#/$defs/invariantId"
+          }
         },
         "authorityRefs": {
           "type": "array",
           "minItems": 1,
           "uniqueItems": true,
-          "items": {"$ref": "#/$defs/authorityRef"}
+          "items": {
+            "$ref": "#/$defs/authorityRef"
+          }
         }
       },
       "allOf": [
@@ -1037,12 +2297,21 @@
             "properties": {
               "carrier": {
                 "properties": {
-                  "statusAtM0": {"enum": ["unavailable", "future"]}
+                  "statusAtM0": {
+                    "enum": [
+                      "unavailable",
+                      "future"
+                    ]
+                  }
                 },
-                "required": ["statusAtM0"]
+                "required": [
+                  "statusAtM0"
+                ]
               }
             },
-            "required": ["carrier"]
+            "required": [
+              "carrier"
+            ]
           },
           "then": {
             "properties": {
@@ -1050,10 +2319,18 @@
                 "properties": {
                   "io": {
                     "properties": {
-                      "providerCalls": {"const": 0},
-                      "indexCalls": {"const": 0},
-                      "modelCalls": {"const": 0},
-                      "actionCalls": {"const": 0}
+                      "providerCalls": {
+                        "const": 0
+                      },
+                      "indexCalls": {
+                        "const": 0
+                      },
+                      "modelCalls": {
+                        "const": 0
+                      },
+                      "actionCalls": {
+                        "const": 0
+                      }
                     }
                   }
                 }
@@ -1064,9 +2341,13 @@
         {
           "if": {
             "properties": {
-              "id": {"const": "ACCEPT-002"}
+              "id": {
+                "const": "ACCEPT-002"
+              }
             },
-            "required": ["id"]
+            "required": [
+              "id"
+            ]
           },
           "then": {
             "properties": {
@@ -1083,9 +2364,13 @@
         {
           "if": {
             "properties": {
-              "id": {"const": "ACCEPT-008"}
+              "id": {
+                "const": "ACCEPT-008"
+              }
             },
-            "required": ["id"]
+            "required": [
+              "id"
+            ]
           },
           "then": {
             "properties": {
@@ -1102,9 +2387,13 @@
         {
           "if": {
             "properties": {
-              "id": {"const": "ACCEPT-012"}
+              "id": {
+                "const": "ACCEPT-012"
+              }
             },
-            "required": ["id"]
+            "required": [
+              "id"
+            ]
           },
           "then": {
             "properties": {

@@ -27,6 +27,21 @@ from engine.runtime.materialized import (
     _require_active_materialized_projection_session,
 )
 from engine.runtime.policy_epoch import PolicyEpochAuthorityUnavailable
+from engine.runtime.release_lineage import (
+    CONTENT_PROFILE_DIGEST_V0,
+    CONTENT_PROFILE_REF_V0,
+    CONTENT_SCHEMA_REF_V0,
+    CURATION_PROFILE_DIGEST_V0,
+    CURATION_PROFILE_REF_V0,
+    INDEX_PROFILE_DIGEST_V0,
+    INDEX_PROFILE_REF_V0,
+    INDEX_SCHEMA_REF_V0,
+    PACKAGE_SCHEMA_REF_V0,
+    RUNTIME_PROFILE_DIGEST_V0,
+    RUNTIME_PROFILE_REF_V0,
+    RUNTIME_TOKENIZER_REF_V0,
+    public_release_manifest_ref,
+)
 
 CHECKED_AT = datetime(2026, 7, 21, 8, 0, tzinfo=UTC)
 
@@ -48,6 +63,30 @@ class _ScalarResult:
 class _MembershipRow:
     def __init__(self, user_id: UUID) -> None:
         self.user_id = user_id
+
+
+class _ActiveReleaseRow:
+    def __init__(self, organization_id: UUID) -> None:
+        self.organization_id = organization_id
+        self.active_generation = 1
+        self.manifest_digest = "a" * 64
+        self.content_profile_ref = CONTENT_PROFILE_REF_V0
+        self.content_schema_ref = CONTENT_SCHEMA_REF_V0
+        self.index_profile_ref = INDEX_PROFILE_REF_V0
+        self.index_schema_ref = INDEX_SCHEMA_REF_V0
+        self.runtime_profile_ref = RUNTIME_PROFILE_REF_V0
+        self.runtime_profile_digest = RUNTIME_PROFILE_DIGEST_V0
+        self.runtime_content_profile_digest = CONTENT_PROFILE_DIGEST_V0
+        self.runtime_index_profile_digest = INDEX_PROFILE_DIGEST_V0
+        self.runtime_tokenizer_ref = RUNTIME_TOKENIZER_REF_V0
+        self.runtime_package_schema_ref = PACKAGE_SCHEMA_REF_V0
+        self.curation_profile_ref = CURATION_PROFILE_REF_V0
+        self.curation_profile_digest = CURATION_PROFILE_DIGEST_V0
+        self.curation_mode = "curation_off"
+        self.curation_snapshot_ref = None
+        self.curation_evaluation_digest = None
+        self.compatible_revision_refs: list[str] = []
+        self.active_revision_refs: list[str] = []
 
 
 class _ProjectionRowsResult:
@@ -73,6 +112,19 @@ class _ProjectionConnection:
         if self.calls == 1:
             return _ProjectionRowsResult()
         return _ProjectionRowsResult((self._row,))
+
+
+class _ReleaseConnection:
+    def __init__(self, row: _ActiveReleaseRow) -> None:
+        self._row = row
+
+    def execute(
+        self,
+        statement: object,
+        parameters: dict[str, object] | None = None,
+    ) -> _ScalarResult:
+        del statement, parameters
+        return _ScalarResult(self._row)
 
 
 class _FakeConnection:
@@ -169,6 +221,11 @@ class _FakeConnection:
                     RuntimeError("secret backend epoch diagnostic"),
                 )
             return _ScalarResult(self._policy_epoch)
+        if "FROM active_release_manifest AS active" in sql:
+            assert parameters is not None
+            return _ScalarResult(
+                _ActiveReleaseRow(cast(UUID, parameters["organization_id"]))
+            )
         if self._fail_on_query:
             raise OperationalError("query", {}, RuntimeError("database unavailable"))
         return _ScalarResult(self._row)
@@ -304,6 +361,56 @@ def test_postgres_projection_absorbs_malformed_structured_field_values(
     assert connection.calls == 2
 
 
+@pytest.mark.parametrize(
+    ("field_name", "invalid_value"),
+    (
+        ("runtime_profile_ref", "unknown-runtime-profile"),
+        ("content_profile_ref", "unknown-content-profile"),
+        ("content_schema_ref", "unknown-content-schema"),
+        ("index_profile_ref", "unknown-index-profile"),
+        ("index_schema_ref", "unknown-index-schema"),
+        ("runtime_profile_digest", "b" * 64),
+        ("runtime_content_profile_digest", "c" * 64),
+        ("runtime_index_profile_digest", "d" * 64),
+        ("curation_profile_ref", "unknown-curation-profile"),
+        ("curation_profile_digest", "e" * 64),
+        ("curation_mode", "curation_on"),
+        ("curation_snapshot_ref", "unexpected-snapshot"),
+        ("compatible_revision_refs", ["revision-b", "revision-a"]),
+        ("runtime_tokenizer_ref", "unknown-tokenizer"),
+        ("runtime_package_schema_ref", "unknown-package-schema"),
+        ("manifest_digest", "A" * 64),
+        ("active_revision_refs", ["revision-b", "revision-a"]),
+    ),
+)
+def test_active_release_observation_fails_closed_for_unrecognized_lineage(
+    field_name: str,
+    invalid_value: object,
+) -> None:
+    organization_id = uuid4()
+    row = _ActiveReleaseRow(organization_id)
+    setattr(row, field_name, invalid_value)
+
+    observed = membership_context_module._observe_active_runtime_release(
+        cast(Connection, _ReleaseConnection(row)),
+        organization_id,
+    )
+
+    assert observed is None
+
+
+def test_public_release_ref_is_opaque_and_generation_bound() -> None:
+    manifest_digest = "a" * 64
+
+    first = public_release_manifest_ref(manifest_digest, 1)
+    rollback = public_release_manifest_ref(manifest_digest, 3)
+
+    assert first.startswith("rel_")
+    assert rollback.startswith("rel_")
+    assert first != rollback
+    assert manifest_digest not in first + rollback
+
+
 def test_current_membership_transaction_binds_every_actor_fact_before_lookup() -> None:
     expected = identity()
     fake_engine = _FakeEngine(_MembershipRow(expected.user_id))
@@ -340,8 +447,18 @@ def test_current_membership_transaction_binds_every_actor_fact_before_lookup() -
         for index, event in enumerate(fake_engine.events)
         if "context-engine.file-publication:" in event
     )
+    release_barrier_position = next(
+        index
+        for index, event in enumerate(fake_engine.events)
+        if "context-engine.release:" in event
+    )
     runtime_position = fake_engine.events.index("runtime-resolve")
-    assert lookup_position < publication_barrier_position < runtime_position
+    assert (
+        lookup_position
+        < publication_barrier_position
+        < release_barrier_position
+        < runtime_position
+    )
     assert fake_engine.events[-2:] == ["runtime-resolve", "commit"]
     assert fake_engine.settings == {
         "app.organization_id": str(expected.organization_id),
@@ -372,8 +489,7 @@ def test_missing_or_mismatched_membership_is_one_generic_denial(
 
     assert fake_engine.events[-1] == "rollback"
     assert all(
-        "context-engine.file-publication:" not in event
-        for event in fake_engine.events
+        "context-engine.file-publication:" not in event for event in fake_engine.events
     )
     assert rejection.value.audit_receipt == MembershipRejectionAuditReceipt(
         category=MembershipRejectionCategory.NOT_CURRENT,
@@ -447,9 +563,7 @@ def test_policy_epoch_database_fault_is_normalized_at_the_final_gate() -> None:
     with authority.current_user_actor(expected) as verification:
         fake_engine.connection.fail_policy_epoch_reads()
         with pytest.raises(PolicyEpochAuthorityUnavailable) as rejection:
-            PolicyEpochGate().is_current(
-                verification.policy_epoch_verification
-            )
+            PolicyEpochGate().is_current(verification.policy_epoch_verification)
 
     rendered = (str(rejection.value), repr(rejection.value))
     assert rendered == (
@@ -462,8 +576,7 @@ def test_policy_epoch_database_fault_is_normalized_at_the_final_gate() -> None:
     assert rejection.value.__suppress_context__ is True
 
 
-def test_initial_policy_epoch_database_fault_remains_membership_unavailable(
-) -> None:
+def test_initial_policy_epoch_database_fault_remains_membership_unavailable() -> None:
     expected = identity()
     fake_engine = _FakeEngine(_MembershipRow(expected.user_id))
     fake_engine.connection.fail_policy_epoch_reads()

@@ -28,13 +28,14 @@ from engine.runtime.content_io import (
     prohibited_empty_path_content_io,
 )
 from engine.runtime.context_run import (
+    PACKAGE_RETENTION_POLICY_REF,
     ContextRunPersistenceUnavailable,
     build_context_run_records,
     persist_context_run,
 )
 from engine.runtime.contracts import (
     DECISION_REF_PREFIX,
-    ORGANIZATION_PACKAGE_REF_PREFIX,
+    PACKAGE_REF_PREFIX,
     Acquire,
     BudgetUsage,
     CitationNotAvailable,
@@ -93,6 +94,7 @@ from engine.runtime.policy_epoch import (
     _policy_epoch_is_current,
     _require_active_policy_epoch_verification,
 )
+from engine.runtime.release_lineage import ActiveReleaseUnavailable
 from engine.runtime.scope import (
     OMITTED_REQUEST_NARROWING,
     EffectiveScope,
@@ -124,7 +126,7 @@ class DecisionProvenanceReceipt:
     """Server-owned request and policy lineage for one decision."""
 
     decision_ref: str
-    package_organization_ref: str
+    package_id: str
     organization_id: UUID = field(repr=False)
     user_id: UUID = field(repr=False)
     membership_id: UUID = field(repr=False)
@@ -284,12 +286,12 @@ class ProvenanceGate:
     ) -> DecisionProvenanceReceipt:
         _require_utc("Runtime clock", as_of)
         references = reference_issuer.issue()
-        organization_ref = references.package_organization_ref
+        package_id = references.package_id
         decision_ref = references.decision_ref
-        organization_ref = _require_closed_opaque_ref(
-            "organization reference",
-            organization_ref,
-            prefix=ORGANIZATION_PACKAGE_REF_PREFIX,
+        package_id = _require_closed_opaque_ref(
+            "package reference",
+            package_id,
+            prefix=PACKAGE_REF_PREFIX,
         )
         decision_ref = _require_closed_opaque_ref(
             "decision reference",
@@ -300,13 +302,13 @@ class ProvenanceGate:
             invocation.organization_verification.organization_id.hex
         )
         if (
-            trusted_organization_hex in organization_ref
+            trusted_organization_hex in package_id
             or trusted_organization_hex in decision_ref
         ):
             raise ValueError("server references must not embed trusted Organization")
         return DecisionProvenanceReceipt(
             decision_ref=decision_ref,
-            package_organization_ref=organization_ref,
+            package_id=package_id,
             organization_id=(invocation.organization_verification.organization_id),
             user_id=invocation.user_actor.user_id,
             membership_id=invocation.user_actor.membership_id,
@@ -348,18 +350,35 @@ class EgressGate:
             raise RuntimeConfigurationError("egress profile has the wrong nominal type")
         _require_active_user_actor(invocation.user_actor)
         if (
-            package.package_digest != context_package_digest(
-                context_package_digest_document(package)
-            )
+            package.package_digest
+            != context_package_digest(context_package_digest_document(package))
             or provenance.organization_id != invocation.user_actor.organization_id
-            or provenance.package_organization_ref != package.organization_ref
+            or provenance.package_id != package.package_id
             or provenance.decision_ref != package.decision_ref
             or provenance.purpose != package.purpose
             or provenance.purpose != delivery_context.purpose
-            or provenance.policy_epoch
-            != invocation.policy_epoch
-            != invocation.user_actor.policy_epoch
+            or not (
+                provenance.policy_epoch
+                == invocation.policy_epoch
+                == invocation.user_actor.policy_epoch
+            )
             or provenance.as_of != package.as_of
+            or package.audience_digest
+            != (
+                delivery_context.audience_digest
+                or direct_egress_audience_digest(
+                    organization_id=invocation.user_actor.organization_id,
+                    membership_id=invocation.user_actor.membership_id,
+                    membership_version=invocation.user_actor.membership_version,
+                    authenticated_application_ref=(
+                        delivery_context.authenticated_application_ref
+                    ),
+                    delivery_binding_ref=delivery_context.delivery_binding_ref,
+                )
+            )
+            or package.policy_epoch != provenance.policy_epoch
+            or package.policy_snapshot_ref != provenance.policy_snapshot_ref
+            or package.run_ref != provenance.run_ref
             or issued_at != package.as_of
             or package.expires_at <= issued_at
         ):
@@ -383,17 +402,7 @@ class EgressGate:
             raise EgressGrantIssuanceUnavailable(
                 "external egress requires durable one-shot issuance"
             )
-        audience_digest = delivery_context.audience_digest
-        if audience_digest is None:
-            audience_digest = direct_egress_audience_digest(
-                organization_id=invocation.user_actor.organization_id,
-                membership_id=invocation.user_actor.membership_id,
-                membership_version=invocation.user_actor.membership_version,
-                authenticated_application_ref=(
-                    delivery_context.authenticated_application_ref
-                ),
-                delivery_binding_ref=delivery_context.delivery_binding_ref,
-            )
+        audience_digest = package.audience_digest
         expires_at = min(
             package.expires_at,
             issued_at + profile.maximum_ttl,
@@ -799,9 +808,7 @@ class AuthorizationKernel:
                     kernel_scope=kernel_scope,
                     candidate_ref=candidate,
                     body=field_projection.rendered_body,
-                    projected_field_refs=(
-                        field_projection.projected_field_refs
-                    ),
+                    projected_field_refs=(field_projection.projected_field_refs),
                     lineage=EvidenceLineage(
                         run_ref=provenance_receipt.run_ref,
                         principal_ref=invocation.principal_ref,
@@ -863,7 +870,7 @@ def _require_utc(field_name: str, value: object) -> datetime:
 
 @dataclass(frozen=True, slots=True)
 class _IssuedReferences:
-    package_organization_ref: str
+    package_id: str
     decision_ref: str
     run_ref: str
     policy_snapshot_ref: str
@@ -889,7 +896,7 @@ class _OpaqueReferenceIssuer:
                     sha256,
                 ).hexdigest()[:32]
                 for label in (
-                    "organization",
+                    "package",
                     "decision",
                     "run",
                     "policy",
@@ -897,9 +904,7 @@ class _OpaqueReferenceIssuer:
                 )
             }
         return _IssuedReferences(
-            package_organization_ref=(
-                f"{ORGANIZATION_PACKAGE_REF_PREFIX}_{entropies['organization']}"
-            ),
+            package_id=(f"{PACKAGE_REF_PREFIX}_{entropies['package']}"),
             decision_ref=f"{DECISION_REF_PREFIX}_{entropies['decision']}",
             run_ref=f"run_{entropies['run']}",
             policy_snapshot_ref=f"policy_{entropies['policy']}",
@@ -1067,6 +1072,16 @@ class Runtime:
         assert isinstance(request, Acquire)
         acquire = request
 
+        active_release = invocation.user_actor.active_runtime_release
+        if active_release is None:
+            raise ActiveReleaseUnavailable(
+                "Acquire requires one Learning-published active release"
+            )
+        if active_release.organization_id != invocation.user_actor.organization_id:
+            raise ActiveReleaseUnavailable(
+                "active Runtime release crossed Organization"
+            )
+
         as_of = _require_utc("Runtime clock", self._clock())
         decision = self._kernel.authorize_acquire(
             invocation,
@@ -1085,10 +1100,29 @@ class Runtime:
         content = finalized.content
         audit_receipt = finalized.audit_receipt
         provenance = finalized.provenance_receipt
+        audience_digest = delivery_context.audience_digest
+        if audience_digest is None:
+            audience_digest = direct_egress_audience_digest(
+                organization_id=invocation.user_actor.organization_id,
+                membership_id=invocation.user_actor.membership_id,
+                membership_version=invocation.user_actor.membership_version,
+                authenticated_application_ref=(
+                    delivery_context.authenticated_application_ref
+                ),
+                delivery_binding_ref=delivery_context.delivery_binding_ref,
+            )
 
         package = ContextPackage(
-            organization_ref=provenance.package_organization_ref,
+            package_id=provenance.package_id,
             purpose=policy_receipt.purpose,
+            audience_digest=audience_digest,
+            policy_epoch=provenance.policy_epoch,
+            policy_snapshot_ref=provenance.policy_snapshot_ref,
+            run_ref=provenance.run_ref,
+            release_manifest_ref=active_release.manifest_ref,
+            retention_policy_ref=PACKAGE_RETENTION_POLICY_REF,
+            tokenizer_ref=active_release.tokenizer_ref,
+            package_schema_ref=active_release.package_schema_ref,
             ttl_seconds=self._package_ttl_seconds,
             as_of=provenance.as_of,
             expires_at=provenance.as_of + timedelta(seconds=self._package_ttl_seconds),

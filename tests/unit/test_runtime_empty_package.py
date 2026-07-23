@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 from uuid import UUID
@@ -20,6 +21,8 @@ from engine.runtime.actor import (
 from engine.runtime.budget import PackageBudget, PackageBudgetRequest
 from engine.runtime.construction import (
     AuthorizationKernel,
+    DecisionProvenanceReceipt,
+    EgressGate,
     Runtime,
     required_kernel_dependencies,
 )
@@ -35,6 +38,7 @@ from engine.runtime.delivery import (
     _construct_private_delivery_context,
 )
 from engine.runtime.egress import (
+    INTERNAL_ONLY_EGRESS_PROFILE,
     ChannelEgressGrant,
     ChannelEgressProfile,
     EgressGrantIssuanceUnavailable,
@@ -54,11 +58,13 @@ from engine.runtime.policy_epoch import (
     _observe_current_policy_epoch,
     _open_policy_epoch_authority_scope,
 )
+from engine.runtime.scope import ScopeSet, ScopeTarget
 from tests.support.context_run import (
     TEST_QUERY_DIGEST_KEYRING,
     recording_context_run_session,
 )
 from tests.support.egress import recording_egress_issuance_session
+from tests.support.releases import active_runtime_release
 
 AS_OF = datetime(2026, 7, 21, 5, 0, tzinfo=UTC)
 INTERNAL_ORGANIZATION_REF = "81e18bca-86a1-478a-937d-7675c6fe69b0"
@@ -100,9 +106,7 @@ class ContentIoSpy:
 def trusted_operands(
     *,
     egress_enabled: bool = False,
-) -> Iterator[
-    tuple[AuthenticatedInvocation, TrustedDeliveryContext]
-]:
+) -> Iterator[tuple[AuthenticatedInvocation, TrustedDeliveryContext]]:
     authority_scope = _open_membership_authority_scope()
     policy_epoch_scope = _open_policy_epoch_authority_scope()
 
@@ -125,9 +129,10 @@ def trusted_operands(
         verified_at=AS_OF,
     )
     try:
-        with recording_context_run_session() as (persistence_session, _), (
-            recording_egress_issuance_session()
-        ) as (egress_session, _):
+        with (
+            recording_context_run_session() as (persistence_session, _),
+            recording_egress_issuance_session() as (egress_session, _),
+        ):
             membership_verification = _construct_current_membership_verification(
                 authority_scope=authority_scope,
                 organization_id=UUID(INTERNAL_ORGANIZATION_REF),
@@ -139,6 +144,9 @@ def trusted_operands(
                 authentication_binding_ref="binding-internal",
                 checked_at=AS_OF,
                 policy_epoch_verification=policy_epoch_verification,
+                active_runtime_release=active_runtime_release(
+                    UUID(INTERNAL_ORGANIZATION_REF)
+                ),
                 context_run_persistence_session=persistence_session,
                 egress_grant_issuance_session=(
                     egress_session if egress_enabled else None
@@ -236,6 +244,53 @@ def test_runtime_issues_one_model_grant_only_after_final_package_policy() -> Non
 
     assert type(outcome) is Resolved
     assert type(outcome.egress_grant) is ModelEgressGrant
+
+
+def test_final_egress_veto_rejects_package_epoch_that_disagrees_with_actor() -> None:
+    with trusted_operands() as (invocation, delivery):
+        outcome = runtime().resolve(
+            invocation,
+            delivery,
+            Acquire(need=ContextNeed(query="reject mismatched final epoch")),
+        )
+        assert type(outcome) is Resolved
+        package = replace(
+            outcome.package,
+            policy_epoch=invocation.policy_epoch + 1,
+        )
+        provenance = DecisionProvenanceReceipt(
+            decision_ref=package.decision_ref,
+            package_id=package.package_id,
+            organization_id=invocation.user_actor.organization_id,
+            user_id=invocation.user_actor.user_id,
+            membership_id=invocation.user_actor.membership_id,
+            membership_version=invocation.user_actor.membership_version,
+            principal_ref=invocation.principal_ref,
+            agent_version_ref=invocation.agent_version_ref,
+            authenticated_application_ref=invocation.authenticated_application_ref,
+            authentication_binding_ref=invocation.authentication_binding_ref,
+            effective_scope_digest=outcome.scope_decision.digest,
+            request_id=invocation.request_id,
+            purpose=package.purpose,
+            as_of=package.as_of,
+            run_ref=package.run_ref,
+            policy_snapshot_ref=package.policy_snapshot_ref,
+            policy_epoch=package.policy_epoch,
+            source_acl_decision_ref="sourceacl_final-egress-epoch-veto",
+        )
+
+        with pytest.raises(
+            EgressGrantIssuanceUnavailable,
+            match="final egress policy",
+        ):
+            EgressGate().finalize(
+                invocation=invocation,
+                delivery_context=delivery,
+                provenance=provenance,
+                package=package,
+                profile=INTERNAL_ONLY_EGRESS_PROFILE,
+                issued_at=package.as_of,
+            )
 
 
 def test_channel_grant_requires_exact_redeemed_private_destination_and_consumer(
@@ -356,9 +411,9 @@ def test_resolve_returns_one_tenant_safe_empty_package() -> None:
 
     assert outcome.kind == "resolved"
     package = outcome.package
-    assert package.organization_ref.startswith("orgpkg_")
-    assert len(package.organization_ref) == len("orgpkg_") + 32
-    assert package.organization_ref != INTERNAL_ORGANIZATION_REF
+    assert package.package_id.startswith("pkg_")
+    assert len(package.package_id) == len("pkg_") + 32
+    assert package.package_id != INTERNAL_ORGANIZATION_REF
     assert package.purpose == "context.answer"
     assert package.ttl_seconds == 300
     assert package.as_of == AS_OF
@@ -385,6 +440,37 @@ def test_empty_path_performs_zero_index_provider_or_source_content_io() -> None:
             delivery,
             Acquire(need=ContextNeed(query="zero I/O probe")),
         )
+
+    assert spy.total_calls == 0
+
+
+def test_missing_active_release_stops_before_nonempty_scope_candidate_io() -> None:
+    spy = ContentIoSpy()
+    with trusted_operands() as (invocation, delivery):
+        target = ScopeTarget(
+            UUID(INTERNAL_ORGANIZATION_REF),
+            "source-release-preflight",
+            "resource-release-preflight",
+        )
+        scope = ScopeSet(frozenset({target}))
+        for operand_name in (
+            "organization_boundary",
+            "membership_rights",
+            "principal_grants",
+            "agent_ceiling",
+            "source_native_acl",
+            "resource_acl",
+            "purpose_policy",
+        ):
+            object.__setattr__(invocation.trusted_scope_snapshot, operand_name, scope)
+        object.__setattr__(invocation.user_actor, "active_runtime_release", None)
+
+        with pytest.raises(RuntimeError, match="active release"):
+            runtime(spy).resolve(
+                invocation,
+                delivery,
+                Acquire(need=ContextNeed(query="missing release before content")),
+            )
 
     assert spy.total_calls == 0
 
@@ -553,11 +639,11 @@ def test_runtime_issues_closed_fresh_server_refs_without_factory_injection() -> 
         first = first_outcome.package
         second = second_outcome.package
 
-    assert first.organization_ref != second.organization_ref
+    assert first.package_id != second.package_id
     assert first.decision_ref != second.decision_ref
-    assert UUID(INTERNAL_ORGANIZATION_REF).hex not in first.organization_ref
+    assert UUID(INTERNAL_ORGANIZATION_REF).hex not in first.package_id
     assert UUID(INTERNAL_ORGANIZATION_REF).hex not in first.decision_ref
-    assert "organization_ref_factory" not in Runtime.__init__.__annotations__
+    assert "package_id_factory" not in Runtime.__init__.__annotations__
     assert "decision_ref_factory" not in Runtime.__init__.__annotations__
 
 
