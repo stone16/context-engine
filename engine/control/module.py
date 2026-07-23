@@ -25,6 +25,7 @@ from engine.control.file_deletions import (
     TombstoneFileResource,
 )
 from engine.control.file_imports import PreparedFileImport, PrepareFileImport
+from engine.control.file_source_progress import FileSourceProgress
 
 
 class ControlStorePort(Protocol):
@@ -54,6 +55,12 @@ class ControlStorePort(Protocol):
         command: TombstoneFileResource,
     ) -> FileResourceTombstone: ...
 
+    def read_file_source_progress(
+        self,
+        call: TrustedControlCall,
+        source_ref: SourceRef,
+    ) -> FileSourceProgress: ...
+
 
 class ContextControl:
     """Own trusted File enrollment, read-back, and import preparation."""
@@ -71,6 +78,7 @@ class ContextControl:
             "prepare_file_import",
             "register_file_source",
             "read_source",
+            "read_file_source_progress",
             "tombstone_file_resource",
         ):
             if not callable(getattr(store, method_name, None)):
@@ -177,6 +185,41 @@ class ContextControl:
         except Exception:
             raise SourceControlUnavailable(
                 "File import preparation is unavailable"
+            ) from None
+
+    def read_file_source_progress(
+        self,
+        call: TrustedControlCall,
+        source_ref: SourceRef,
+    ) -> FileSourceProgress:
+        """Read separate durable acceptance and visibility progress signals."""
+
+        if type(source_ref) is not SourceRef:
+            raise TypeError("read_file_source_progress requires SourceRef")
+        try:
+            _validate_and_consume_control_call(
+                call,
+                authority=self._authority,
+                expected_operation=ControlOperation.READ_SOURCE_PROGRESS,
+                checked_at=self._clock(),
+            )
+            progress = self._store.read_file_source_progress(call, source_ref)
+            if (
+                type(progress) is not FileSourceProgress
+                or progress.organization_id != call.organization_id
+                or progress.source_ref != source_ref
+            ):
+                raise SourceControlUnavailable(
+                    "source store returned mismatched File progress"
+                )
+            return progress
+        except (ControlOperatorAuthenticationRejected, SourceNotAvailable):
+            raise SourceNotAvailable from None
+        except SourceControlUnavailable:
+            raise
+        except Exception:
+            raise SourceControlUnavailable(
+                "File Source progress read is unavailable"
             ) from None
 
     def tombstone_file_resource(

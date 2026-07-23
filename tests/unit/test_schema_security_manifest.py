@@ -32,7 +32,7 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
     document = manifest()
     tables = table_entries(document)
 
-    assert document["manifestVersion"] == "16.0.0"
+    assert document["manifestVersion"] == "17.0.0"
     assert set(tables) == {
         "active_release_manifest",
         "alembic_version",
@@ -52,6 +52,8 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
         "file_publication_recovery",
         "file_resource_cleanup_intent",
         "file_resource_ingestion_guard",
+        "file_source_acquisition_checkpoint",
+        "file_source_publish_watermark",
         "file_revision_snapshot",
         "file_revision_replacement_plan",
         "file_revision_supersession",
@@ -107,6 +109,8 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
         "file_revision_snapshot",
         "file_revision_replacement_plan",
         "file_revision_supersession",
+        "file_source_acquisition_checkpoint",
+        "file_source_publish_watermark",
         "revision_publication_event",
     ):
         assert tables[file_import_table]["classification"] == "tenant_owned"
@@ -200,6 +204,7 @@ def test_issue_25_file_noop_contract_is_tenant_scoped_and_function_only() -> Non
         "unchangedReasonCode": "active-content-identity-match",
         "sourceContentRetainedInOutcome": False,
     }
+    assert "file_source_publish_watermark" in operation["atomicWrites"]
     guard = entries["file_resource_ingestion_guard"]
     result = entries["file_acquisition_result"]
     assert guard["organizationInclusiveKeys"][0]["columns"] == [
@@ -280,6 +285,8 @@ def test_issue_26_file_replacement_contract_is_staged_and_function_only() -> Non
         "file_resource_ingestion_guard",
         "file_acquisition_result",
     ]
+    assert "file_source_publish_watermark" in operation["stageAtomicWrites"]
+    assert "file_source_publish_watermark" in operation["activationAtomicWrites"]
     stage_functions = {
         "context_worker_stage_file_replacement",
         "context_worker_stage_structural_file_replacement",
@@ -376,7 +383,8 @@ def test_issue_27_file_recovery_contract_is_generation_fenced_and_auditable() ->
             declared = function_only.get(
                 "databaseFunctions", [function_only.get("databaseFunction")]
             )
-            assert database_function in declared
+            causal = function_only.get("causalDatabaseFunctions", declared)
+            assert database_function in causal
             assert (
                 f"EXECUTE {database_function}"
                 in entries[table_name]["permittedOperations"][
@@ -415,6 +423,8 @@ def test_issue_28_file_tombstone_contract_is_atomic_and_function_only() -> None:
             "context_resource",
             "organization_policy_epoch",
             "file_resource_cleanup_intent",
+            "file_source_acquisition_checkpoint",
+            "file_source_publish_watermark",
         ],
     }
     cleanup = entries["file_resource_cleanup_intent"]
@@ -433,6 +443,17 @@ def test_issue_28_file_tombstone_contract_is_atomic_and_function_only() -> None:
             "name": "uq_file_resource_cleanup_intent_event",
             "kind": "unique",
             "columns": ["organization_id", "event_ref"],
+        },
+        {
+            "name": "uq_file_resource_cleanup_intent_progress_lineage",
+            "kind": "unique",
+            "columns": [
+                "organization_id",
+                "cleanup_intent_id",
+                "source_id",
+                "resource_ref",
+                "revision_id",
+            ],
         },
     ]
     assert cleanup["rowLevelSecurity"]["enabled"] is True

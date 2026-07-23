@@ -21,6 +21,7 @@ from engine.control import (
     ControlStorePort,
     FileResourceTombstone,
     FileRootRef,
+    FileSourceProgress,
     RegisterFileSource,
     SourceControlUnavailable,
     SourceManifest,
@@ -56,6 +57,7 @@ class _Authenticator:
                     ControlOperation.IMPORT_FILE,
                     ControlOperation.REGISTER_SOURCE,
                     ControlOperation.READ_SOURCE,
+                    ControlOperation.READ_SOURCE_PROGRESS,
                     ControlOperation.TOMBSTONE_FILE_RESOURCE,
                 }
             ),
@@ -105,6 +107,18 @@ class _Store(ControlStorePort):
             job_id=UUID("9de5b515-540b-4c9c-b1d3-f9b691dfbb7a"),
             source_ref=command.source_ref,
             service_principal_id=UUID("0f7bc78d-a76a-477c-b097-ce557b7844b9"),
+        )
+
+    def read_file_source_progress(
+        self, call: TrustedControlCall, source_ref: SourceRef
+    ) -> FileSourceProgress:
+        assert call.organization_id == ORGANIZATION_ID
+        assert call.operation is ControlOperation.READ_SOURCE_PROGRESS
+        return FileSourceProgress(
+            organization_id=ORGANIZATION_ID,
+            source_ref=source_ref,
+            acquisition_checkpoint=None,
+            publish_watermark=None,
         )
 
     def tombstone_file_resource(
