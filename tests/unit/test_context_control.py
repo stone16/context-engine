@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import fields
 from datetime import UTC, datetime, timedelta
-from typing import cast
+from types import SimpleNamespace
+from typing import Any, cast
 from uuid import UUID
 
 import pytest
+from sqlalchemy import Engine
 
+import engine.persistence.control_sources as control_sources_module
 from engine.control import (
     FILE_CAPABILITY_MANIFEST,
     CapabilityStatus,
@@ -18,6 +22,7 @@ from engine.control import (
     FileResourceTombstone,
     FileRootRef,
     RegisterFileSource,
+    SourceControlUnavailable,
     SourceManifest,
     SourceNotAvailable,
     SourceRef,
@@ -25,6 +30,7 @@ from engine.control import (
     TrustedControlCall,
     VerifiedControlOperatorIdentity,
 )
+from engine.persistence import PostgreSQLControlStore
 from engine.supply import (
     FileImportAudience,
     FileImportPath,
@@ -288,6 +294,68 @@ def test_authorized_operator_tombstones_one_exact_file_resource() -> None:
     assert result.event_ref == command.event_ref
     assert result.event_sequence == command.event_sequence
     assert result.policy_epoch == 2
+
+
+def test_postgres_tombstone_store_absorbs_malformed_result_types(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Result:
+        def one_or_none(self) -> SimpleNamespace:
+            return SimpleNamespace(
+                source_id="not-a-uuid",
+                resource_ref="resource:file:" + "a" * 64,
+                revision_id=UUID("77cc56d7-fc94-42db-987e-12c6910c5ea9"),
+                event_ref="manual-delete-17",
+                event_sequence=17,
+                policy_epoch=2,
+                cleanup_intent_id=UUID("d46d2310-b9fb-4058-8205-1198df75963b"),
+                tombstoned_at=NOW,
+            )
+
+    class _Connection:
+        def execute(
+            self,
+            statement: object,
+            parameters: dict[str, object] | None = None,
+        ) -> _Result:
+            del statement, parameters
+            return _Result()
+
+    class _Engine:
+        @contextmanager
+        def begin(self) -> Any:
+            yield _Connection()
+
+    store = PostgreSQLControlStore(
+        cast(Engine, _Engine()),
+        clock=lambda: NOW,
+    )
+    monkeypatch.setattr(
+        control_sources_module,
+        "assert_control_role",
+        lambda connection: None,
+    )
+    monkeypatch.setattr(
+        control_sources_module,
+        "_set_organization_context",
+        lambda connection, organization_id: None,
+    )
+    command = TombstoneFileResource(
+        source_ref=SourceRef(UUID("5d37f20a-6a2b-4534-8909-e0118bbc4b47")),
+        resource_ref="resource:file:" + "a" * 64,
+        event_ref="manual-delete-17",
+        event_sequence=17,
+    )
+    authority = _authority()
+    with (
+        authority.authorize(
+            opaque_credential="control-credential-a",
+            operation=ControlOperation.TOMBSTONE_FILE_RESOURCE,
+            request_id="malformed-database-tombstone",
+        ) as call,
+        pytest.raises(SourceControlUnavailable),
+    ):
+        store.tombstone_file_resource(call, command)
 
 
 def test_file_tombstone_command_cannot_supply_tenant_epoch_or_cleanup_identity() -> (

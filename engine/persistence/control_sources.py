@@ -377,7 +377,7 @@ class PostgreSQLControlStore:
                 )
         except SourceNotAvailable:
             raise
-        except (DBAPIError, SQLAlchemyError, AssertionError, ValueError):
+        except (DBAPIError, SQLAlchemyError, AssertionError, TypeError, ValueError):
             raise SourceControlUnavailable(
                 "File Resource tombstone database authority is unavailable"
             ) from None
