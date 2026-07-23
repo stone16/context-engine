@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
+from typing import cast
+from uuid import UUID
 
 import pytest
 from sqlalchemy import Engine, text
@@ -23,7 +25,9 @@ from engine.persistence import (
     FilePublicationBoundary,
     PostgreSQLControlStore,
     PostgreSQLWorkerLeaseIssuer,
+    create_database_engine,
 )
+from engine.runtime import QueryDigestKeyring
 from engine.supply import FileImportPath
 from tests.integration.test_file_import_tracer import (
     NOW,
@@ -39,7 +43,12 @@ from tests.integration.test_zz_file_publication_recovery import (
     _worker,
 )
 from tests.integration.test_zz_file_resource_tombstone import _tombstone
-from tests.integration.test_zz_file_revision_replacement import NEW_MARKDOWN
+from tests.integration.test_zz_file_revision_replacement import (
+    NEW_MARKDOWN,
+    OLD_MARKDOWN,
+    _resolve,
+    _scenario_user_id,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -66,6 +75,207 @@ def _read_progress(
         request_id=request_id,
     ) as call:
         return control.read_file_source_progress(call, scenario.source_ref)
+
+
+def _visibility_state(
+    configuration: DatabaseConfiguration,
+    scenario: _FileImportScenario,
+    *,
+    resource_ref: str,
+    job_id: UUID,
+) -> tuple[UUID, bool, str]:
+    database_engine = create_database_engine(configuration)
+    try:
+        with database_engine.connect() as connection:
+            row = connection.execute(
+                text(
+                    """
+                    SELECT resource.active_revision_id, resource.tombstoned,
+                           job.state
+                    FROM context_resource AS resource
+                    JOIN file_import_job AS job
+                      ON job.organization_id = resource.organization_id
+                    WHERE resource.organization_id = :organization_id
+                      AND resource.resource_ref = :resource_ref
+                      AND job.job_id = :job_id
+                    """
+                ),
+                {
+                    "organization_id": scenario.organization_id,
+                    "resource_ref": resource_ref,
+                    "job_id": job_id,
+                },
+            ).one()
+        return cast(tuple[UUID, bool, str], tuple(row))
+    finally:
+        database_engine.dispose()
+
+
+@pytest.mark.parametrize(
+    ("boundary", "interrupted_state"),
+    [
+        (FilePublicationBoundary.ACQUIRED, "running"),
+        (FilePublicationBoundary.PREPARED, "prepared"),
+        (FilePublicationBoundary.INDEXED, "ready"),
+    ],
+)
+def test_each_publication_barrier_keeps_watermark_and_runtime_on_old_visibility(
+    tmp_path: Path,
+    migration_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+    guarded_worker_engine: Engine,
+    guarded_runtime_engine: Engine,
+    query_digest_keyring: QueryDigestKeyring,
+    boundary: FilePublicationBoundary,
+    interrupted_state: str,
+) -> None:
+    scenario = _prepare_file_import_scenario(
+        tmp_path,
+        migration_configuration,
+        guarded_control_engine,
+        payload=OLD_MARKDOWN,
+        lease_ttl_seconds=2,
+    )
+    assert scenario.token is not None
+    initial = _run_file_import(
+        scenario,
+        scenario.prepared,
+        scenario.token,
+        guarded_worker_engine,
+        config_version="markdown-config-v2",
+    )
+    initial_revision = UUID(initial.candidate_ref.revision_ref)
+    user_id = _scenario_user_id(scenario, migration_configuration)
+
+    (scenario.root / "handbook.md").write_bytes(NEW_MARKDOWN)
+    changed, token = _prepare_repeat_file_import(
+        scenario,
+        guarded_control_engine,
+        idempotency_key=f"progress-barrier-{boundary.value}",
+        lease_ttl_seconds=2,
+    )
+    interrupted_scenario = replace(scenario, prepared=changed, token=token)
+    with pytest.raises(FileImportInterrupted):
+        _run(
+            _worker(
+                interrupted_scenario,
+                guarded_worker_engine,
+                config_version="markdown-config-v2",
+                interrupt_after=boundary,
+            ),
+            interrupted_scenario,
+            token,
+        )
+
+    paused = _read_progress(
+        scenario,
+        guarded_control_engine,
+        request_id=f"progress-barrier-paused-{boundary.value}",
+    )
+    assert paused.acquisition_checkpoint is not None
+    assert paused.publish_watermark is not None
+    assert paused.acquisition_checkpoint.sequence == 2
+    assert paused.acquisition_checkpoint.job_ref == changed.job_id
+    assert paused.publish_watermark.sequence == 1
+    assert _visibility_state(
+        migration_configuration,
+        scenario,
+        resource_ref=initial.candidate_ref.resource_ref,
+        job_id=changed.job_id,
+    ) == (initial_revision, False, interrupted_state)
+    old_package = _resolve(
+        scenario,
+        guarded_runtime_engine,
+        query_digest_keyring,
+        user_id=user_id,
+        query="OLD marker.",
+        request_id=f"progress-barrier-old-{boundary.value}",
+    )
+    hidden_new = _resolve(
+        scenario,
+        guarded_runtime_engine,
+        query_digest_keyring,
+        user_id=user_id,
+        query="NEW marker.",
+        request_id=f"progress-barrier-new-hidden-{boundary.value}",
+    )
+    assert [block["text"] for block in old_package["blocks"]] == [
+        "# Handbook\n\nOLD marker."
+    ]
+    assert hidden_new["blocks"] == []
+    assert hidden_new["evidence"] == []
+
+    _wait_for_expiry(migration_configuration)
+    recovered_token = PostgreSQLWorkerLeaseIssuer(
+        guarded_control_engine, scenario.codec
+    ).issue_file_import_lease(changed)
+    recovered = _run_file_import(
+        scenario,
+        changed,
+        recovered_token,
+        guarded_worker_engine,
+        config_version="markdown-config-v2",
+    )
+    recovered_revision = UUID(recovered.candidate_ref.revision_ref)
+    caught_up = _read_progress(
+        scenario,
+        guarded_control_engine,
+        request_id=f"progress-barrier-recovered-{boundary.value}",
+    )
+    assert caught_up.acquisition_checkpoint is not None
+    assert caught_up.publish_watermark is not None
+    assert caught_up.acquisition_checkpoint.sequence == 2
+    assert caught_up.publish_watermark.sequence == 2
+    assert _visibility_state(
+        migration_configuration,
+        scenario,
+        resource_ref=initial.candidate_ref.resource_ref,
+        job_id=changed.job_id,
+    ) == (recovered_revision, False, "completed")
+    visible_new = _resolve(
+        scenario,
+        guarded_runtime_engine,
+        query_digest_keyring,
+        user_id=user_id,
+        query="NEW marker.",
+        request_id=f"progress-barrier-new-visible-{boundary.value}",
+    )
+    assert [block["text"] for block in visible_new["blocks"]] == [
+        "# Handbook\n\nNEW marker."
+    ]
+
+    _tombstone(
+        scenario,
+        guarded_control_engine,
+        resource_ref=initial.candidate_ref.resource_ref,
+        event_ref=f"progress-barrier-delete-{boundary.value}",
+        event_sequence=3,
+    )
+    tombstoned = _read_progress(
+        scenario,
+        guarded_control_engine,
+        request_id=f"progress-barrier-tombstoned-{boundary.value}",
+    )
+    assert tombstoned.acquisition_checkpoint is not None
+    assert tombstoned.publish_watermark is not None
+    assert tombstoned.acquisition_checkpoint.sequence == 3
+    assert tombstoned.publish_watermark.sequence == 3
+    assert _visibility_state(
+        migration_configuration,
+        scenario,
+        resource_ref=initial.candidate_ref.resource_ref,
+        job_id=changed.job_id,
+    ) == (recovered_revision, True, "completed")
+    hidden_deleted = _resolve(
+        scenario,
+        guarded_runtime_engine,
+        query_digest_keyring,
+        user_id=user_id,
+        query="NEW marker.",
+        request_id=f"progress-barrier-deleted-hidden-{boundary.value}",
+    )
+    assert hidden_deleted["blocks"] == []
+    assert hidden_deleted["evidence"] == []
 
 
 def test_checkpoint_can_lead_watermark_and_recovery_closes_only_contiguous_gap(
@@ -239,11 +449,14 @@ def test_progress_lineage_denies_direct_nonowner_access_and_cross_org_reads(
         authority=authority,
         clock=lambda: NOW,
     )
-    with authority.authorize(
-        opaque_credential="control-secret",
-        operation=ControlOperation.READ_SOURCE_PROGRESS,
-        request_id="cross-organization-progress-read",
-    ) as call, pytest.raises(SourceNotAvailable):
+    with (
+        authority.authorize(
+            opaque_credential="control-secret",
+            operation=ControlOperation.READ_SOURCE_PROGRESS,
+            request_id="cross-organization-progress-read",
+        ) as call,
+        pytest.raises(SourceNotAvailable),
+    ):
         control.read_file_source_progress(call, protected.source_ref)
 
     statements = (

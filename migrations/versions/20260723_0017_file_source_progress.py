@@ -261,7 +261,7 @@ def _backfill_progress() -> None:
             SELECT acquisition.organization_id,
                    acquisition.source_id,
                    'file_import'::text AS change_kind,
-                   acquisition.acquisition_id AS carrier_id,
+                   job.job_id AS carrier_id,
                    acquisition.created_at AS accepted_at,
                    acquisition.acquisition_id,
                    job.job_id,
@@ -768,11 +768,42 @@ def _create_progress_triggers() -> None:
 
 
 def downgrade() -> None:
-    """Drop only progress derived from retained durable source lineage."""
+    """Remove only unused progress state; never renumber accepted changes."""
 
-    op.execute("DROP TRIGGER file_resource_cleanup_intent_source_progress ON file_resource_cleanup_intent")
-    op.execute("DROP TRIGGER file_acquisition_result_source_watermark ON file_acquisition_result")
-    op.execute("DROP TRIGGER revision_publication_event_source_watermark ON revision_publication_event")
+    op.execute(
+        "LOCK TABLE file_source_publish_watermark, "
+        "file_source_acquisition_checkpoint, file_import_job, "
+        "file_resource_cleanup_intent, revision_publication_event, "
+        "file_acquisition_result IN ACCESS EXCLUSIVE MODE"
+    )
+    has_progress = bool(
+        op.get_bind()
+        .execute(
+            sa.text(
+                "SELECT EXISTS ("
+                "SELECT 1 FROM file_source_acquisition_checkpoint "
+                "UNION ALL "
+                "SELECT 1 FROM file_source_publish_watermark"
+                ")"
+            )
+        )
+        .scalar_one()
+    )
+    if has_progress:
+        raise RuntimeError(
+            "File source progress downgrade requires empty progress streams; "
+            "use a forward fix to preserve monotonic ordering and opaque refs"
+        )
+
+    op.execute(
+        "DROP TRIGGER file_resource_cleanup_intent_source_progress ON file_resource_cleanup_intent"
+    )
+    op.execute(
+        "DROP TRIGGER file_acquisition_result_source_watermark ON file_acquisition_result"
+    )
+    op.execute(
+        "DROP TRIGGER revision_publication_event_source_watermark ON revision_publication_event"
+    )
     op.execute("DROP TRIGGER file_import_job_source_checkpoint ON file_import_job")
     op.execute(f"SET LOCAL ROLE {_DEFINER}")
     for function_name in (

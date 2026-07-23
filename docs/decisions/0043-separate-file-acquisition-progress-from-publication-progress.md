@@ -56,6 +56,24 @@ continues to report the standard provider cursor/checkpoint operations as
 unavailable: this issue activates operational progress for the manual File
 carrier, not provider `readChanges` acknowledgement.
 
+## Rationale
+
+Acceptance and visibility have different transaction boundaries and different
+failure meanings, so one mutable cursor cannot truthfully represent both. Two
+append-only streams retain the causal history needed to diagnose a pause,
+while exposing only the contiguous publication prefix prevents an
+out-of-order completion from overstating Runtime freshness. Database-owned
+ordering, deterministic opaque references, and exact durable-lineage foreign
+keys make each accepted ordering fact stable without promoting progress
+metadata into delivery authority. Existing durable lineage is ordered once
+during the initial upgrade; after any progress exists, downgrade is refused so
+concurrent online lock order can never be reconstructed differently.
+
+Keeping the operator read seam in ContextControl also preserves the existing
+ProviderPort contract: File progress can be observed now without pretending a
+provider-native change cursor has been acknowledged or making Runtime depend
+on an operational status surface.
+
 ## Consequences
 
 - An accepted change remains observable through compilation, indexing,
@@ -65,8 +83,9 @@ carrier, not provider `readChanges` acknowledgement.
 - Concurrent or out-of-order completion cannot skip an earlier gap; recovery
   closes the gap and deterministically catches the watermark up.
 - Both streams are append-only, forced-RLS tenant tables with no source content.
-  Downgrade may rebuild their deterministic projection from retained durable
-  acquisition/publication/tombstone lineage.
+  Downgrade is allowed only while both streams are empty; after any accepted
+  change, a forward fix is required so sequence numbers and opaque references
+  cannot be renumbered from historical timestamps.
 - Cross-source aggregation, UI, provider cursor formats, resync, and watermark-
   based authorization remain inactive.
 

@@ -609,6 +609,79 @@ def test_file_progress_revision_downgrades_and_reapplies_cleanly(
     )
 
 
+def test_file_progress_refuses_downgrade_after_an_accepted_change(
+    tmp_path: Path,
+    migration_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+    guarded_worker_engine: Engine,
+) -> None:
+    """Issue #29 never discards the database ordering behind opaque refs."""
+
+    scenario = _prepare_file_import_scenario(
+        tmp_path,
+        migration_configuration,
+        guarded_control_engine,
+    )
+    assert scenario.token is not None
+    _run_file_import(
+        scenario,
+        scenario.prepared,
+        scenario.token,
+        guarded_worker_engine,
+    )
+    migration_engine = create_database_engine(migration_configuration)
+
+    def progress_refs() -> tuple[str, str]:
+        with migration_engine.connect() as connection:
+            checkpoint_ref = connection.execute(
+                text(
+                    """
+                    SELECT checkpoint_ref
+                    FROM file_source_acquisition_checkpoint
+                    WHERE organization_id = :organization_id
+                      AND source_id = :source_id
+                    """
+                ),
+                {
+                    "organization_id": scenario.organization_id,
+                    "source_id": scenario.source_ref.value,
+                },
+            ).scalar_one()
+            watermark_ref = connection.execute(
+                text(
+                    """
+                    SELECT watermark_ref
+                    FROM file_source_publish_watermark
+                    WHERE organization_id = :organization_id
+                      AND source_id = :source_id
+                    """
+                ),
+                {
+                    "organization_id": scenario.organization_id,
+                    "source_id": scenario.source_ref.value,
+                },
+            ).scalar_one()
+        return str(checkpoint_ref), str(watermark_ref)
+
+    before = progress_refs()
+    alembic_configuration = Config(ROOT / "alembic.ini")
+    try:
+        with pytest.raises(
+            RuntimeError,
+            match="requires empty progress streams",
+        ):
+            command.downgrade(alembic_configuration, "20260723_0016")
+        assert _revision_rows(migration_configuration) == ["20260723_0017"]
+        assert progress_refs() == before
+    finally:
+        if _revision_rows(migration_configuration) != ["20260723_0017"]:
+            command.upgrade(alembic_configuration, "head")
+        migration_engine.dispose()
+        _delete_issue_27_upgrade_fixture(
+            migration_configuration, scenario.organization_id
+        )
+
+
 def test_file_tombstone_revision_refuses_downgrade_with_committed_intent(
     tmp_path: Path,
     migration_configuration: DatabaseConfiguration,
@@ -784,17 +857,20 @@ def test_recovery_upgrade_adopts_an_existing_ready_replacement(
         migration_engine = create_database_engine(migration_configuration)
         try:
             with migration_engine.connect() as connection:
-                assert connection.execute(
-                    text(
-                        "SELECT checkpoint FROM file_publication_recovery "
-                        "WHERE organization_id = :organization_id "
-                        "AND job_id = :job_id"
-                    ),
-                    {
-                        "organization_id": claims.organization_id,
-                        "job_id": claims.job_id,
-                    },
-                ).scalar_one() == "ready"
+                assert (
+                    connection.execute(
+                        text(
+                            "SELECT checkpoint FROM file_publication_recovery "
+                            "WHERE organization_id = :organization_id "
+                            "AND job_id = :job_id"
+                        ),
+                        {
+                            "organization_id": claims.organization_id,
+                            "job_id": claims.job_id,
+                        },
+                    ).scalar_one()
+                    == "ready"
+                )
         finally:
             migration_engine.dispose()
         while datetime.now(UTC) <= claims.expires_at:
