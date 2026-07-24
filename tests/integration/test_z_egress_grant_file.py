@@ -55,7 +55,6 @@ from engine.runtime.egress import (
 from engine.runtime.evidence import CandidateRef
 from engine.runtime.package_digest import QueryDigestKeyring
 from tests.integration.test_file_import_tracer import (
-    NOW,
     _ExactScopeAuthority,
     _FileImportScenario,
     _OrganizationAuthority,
@@ -625,6 +624,7 @@ def test_file_http_package_redeems_exact_model_grant_before_gateway_bytes(
 ) -> None:
     scenario, published, migration_engine = _published_file_scenario
     egress_engine = create_database_engine(egress_configuration)
+    request_now = datetime.now(UTC).replace(microsecond=0)
     try:
         with migration_engine.connect() as connection:
             user_id = connection.execute(
@@ -658,11 +658,11 @@ def test_file_http_package_redeems_exact_model_grant_before_gateway_bytes(
                     required_kernel_dependencies(),
                     candidate_index=PostgreSQLExactPhraseCandidateIndex(),
                     egress_profile=_file_model_profile(),
-                    clock=lambda: NOW,
+                    clock=lambda: request_now,
                     query_digest_keyring=query_digest_keyring,
                 ),
                 resolution_observer=observed.append,
-                clock=lambda: NOW,
+                clock=lambda: request_now,
                 request_id_factory=lambda: "file-egress-http",
             )
         ).post(
