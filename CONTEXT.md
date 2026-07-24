@@ -42,6 +42,8 @@ schema、Python type、threat fixture 或新的架构决策。
 | `ContextPackage` | Request-scoped, expiring online output | One Organization, ContextRun, Principal, purpose, and audience | Authorized output, not reusable authority |
 | `ContextAccessTicket` | Short-lived signed source-read capability | One Organization, identity chain, provider audience, purpose, epoch, and expiry | Authority only for its declared read audience |
 | `ActionTicket` | Short-lived signed one-effect capability | One Organization, identity chain, effect/audience/payload, epoch, and expiry | Authority only for its declared external effect |
+| `ActionReceipt` | Persistent immutable applied-effect lineage | One Organization, ActionTicket, delivery attempt, and provider attempt | Evidence of one applied effect; never reusable effect authority |
+| `ProviderAttemptRef` | Opaque durable external-attempt identity | One Organization, ActionTicket, and exact prepared effect | Reconciliation identity only; never retry authority |
 | `WorkerLease` | Short-lived signed one-shot work capability | One Organization, durable job, registered service workload, expiry, and nonce | Authority only for the matching job attempt |
 | `File acquisition outcome` | Persistent immutable completed-observation lineage | One Organization, ContextSource, acquisition, ContextResource, and active ContextRevision | None; deduplication evidence is not content or authority |
 | `File cleanup intent` | Persistent immutable pending-cleanup lineage | One Organization, ContextSource, tombstoned ContextResource, and retained ContextRevision | None; it neither authorizes reads nor performs cleanup |
@@ -323,9 +325,11 @@ A signed, short-lived, one-shot capability for exactly one external effect.
 - **Activation note:** Issue #18 proves a distinct signed
   Organization/channel-bound synthetic no-op. Issue #67 additionally activates
   private `ActionPlane.prepare`: exact payload/destination/audience/approval/
-  idempotency binding and durable digest-only issuance. Ticket consumption,
-  `perform`, Sender/IM delivery, stored receipts, replay after application, and
-  reconciliation remain `NOT_ACTIVE`.
+  idempotency binding and durable digest-only issuance. Issue #68 activates
+  private `ActionPlane.perform` through a deterministic Sender twin: one
+  provider-attempt identity, immutable receipt replay, and monotonic applied or
+  rejected reconciliation. Real Sender/IM delivery, group delivery,
+  compensation, and BotDelivery orchestration remain `NOT_ACTIVE`.
 - **Do not confuse with:** read ticket, EgressGrant, WorkerLease, credential, or
   proof that an effect succeeded.
 

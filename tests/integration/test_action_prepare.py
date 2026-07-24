@@ -77,6 +77,9 @@ def _issue_evidence(
     issued_at: datetime | None = None,
     expires_at: datetime | None = None,
 ) -> None:
+    authority_now = datetime.now(UTC) - timedelta(seconds=1)
+    effective_issued_at = issued_at or max(now, authority_now)
+    effective_expires_at = expires_at or effective_issued_at + timedelta(minutes=4)
     identity_engine = create_database_engine(identity_configuration)
     try:
         issuer = PrivateDeliveryEvidenceIssuer(
@@ -107,8 +110,8 @@ def _issue_evidence(
                 consumer_ref=CONSUMER_REF,
                 purpose=PURPOSE,
                 policy_epoch=1,
-                issued_at=issued_at or now,
-                expires_at=expires_at or now + timedelta(minutes=4),
+                issued_at=effective_issued_at,
+                expires_at=effective_expires_at,
             )
         )
         assert issued.evidence_ref == evidence_ref

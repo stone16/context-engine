@@ -2,6 +2,8 @@ export {
   ActionPlane,
   ActionTicketKeyring,
   CreatePlaceholderActionTicket,
+  createTrustedActionReconciliation,
+  DeterministicPrivateSenderTwin,
   FinalizeReplyActionTicket,
   PrivateActionPrepareProfile,
   SendPrivateFollowupActionTicket,
@@ -9,6 +11,9 @@ export {
 
 export type {
   ActionOperation,
+  ActionReconciliationDecisionOptions,
+  ActionExecutionOutcome,
+  ActionReceipt,
   ActionPreparationOutcome,
   ActionPrepareDatabase,
   ActionTicket,
@@ -16,5 +21,6 @@ export type {
   GenericDenied,
   PreparedAction,
   RetryableUnavailable,
+  TrustedActionReconciliation,
   TrustedEffectIntent,
 } from "./internal.js";

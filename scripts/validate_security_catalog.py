@@ -400,8 +400,10 @@ REQUIRED_POSTGRES_EVIDENCE: dict[str, tuple[str, ...]] = {
     "TRACE-REDACTION-012": ("PG-FIELD-PROJECTION-048",),
 }
 REQUIRED_POSTGRES_EVIDENCE["TRANSPORT-UNTRUSTED-008"] = ("PG-DELIVERY-EVIDENCE-063",)
+REQUIRED_POSTGRES_EVIDENCE["EGRESS-011"] = ("PG-ACTION-PERFORM-068",)
 REQUIRED_POSTGRES_EVIDENCE["ACTION-SEPARATION-014"] = (
     "PG-ACTION-PREPARE-067",
+    "PG-ACTION-PERFORM-068",
 )
 
 ACCEPT_002_ACTIVE_CARRIER: dict[str, str] = {
@@ -1356,6 +1358,67 @@ CANONICAL_ACTION_PREPARE_ACTIVATION: dict[str, object] = {
     ],
 }
 
+CANONICAL_ACTION_PERFORM_ACTIVATION: dict[str, object] = {
+    "issueRef": "#68",
+    "invariantRef": "ACTION-SEPARATION-014",
+    "carrier": (
+        "ActionPlane.perform private deterministic Sender-twin effect and "
+        "receipt reconciliation"
+    ),
+    "status": "active_fail_closed",
+    "policyEpochScope": "organization-v0",
+    "controlBoundary": (
+        "operation-specific ActionTicket plus exact canonical payload -> "
+        "least-privilege PostgreSQL begin/complete/reconcile state machine -> "
+        "deterministic private Sender twin"
+    ),
+    "testEvidence": [
+        {
+            "id": "PG-ACTION-PERFORM-068",
+            "surface": (
+                "tests/integration/test_action_perform.py::"
+                "test_private_perform_is_one_shot_replayable_and_reconcilable"
+            ),
+            "oracle": (
+                "A packaged TypeScript ActionPlane redeems each exact private "
+                "create, finalize, or follow-up ticket through dedicated "
+                "non-owner PostgreSQL functions immediately before calling the "
+                "deterministic Sender twin. An Organization/ActionTicket session "
+                "advisory lock fences cross-process reconciliation across Sender "
+                "and completion, releases after post-lock write failure, and is "
+                "released by verified PostgreSQL session loss. Exact replay "
+                "returns the immutable "
+                "digest-only stored receipt with no second call; wrong bindings "
+                "and stale authority have zero effects; bounded positive "
+                "Sender/reconciler clock skew is retained while excessive future "
+                "lineage remains reconcilable; ambiguous and crash "
+                "interleavings retain one original provider-attempt identity "
+                "until one monotonic applied or rejected reconciliation. Two "
+                "Organizations may reuse the same labels without sharing state."
+            ),
+        }
+    ],
+    "deferredEvidence": [
+        "production private Sender conformance and provider reconciliation",
+        "group AudienceSnapshot send-time revalidation",
+        "delete or redaction compensation",
+        "BotDelivery orchestration through the generated SDK",
+    ],
+    "futureCarriers": [
+        "production private Sender",
+        "group-public delivery",
+        "delete or redaction compensation",
+        "BotDelivery application",
+    ],
+    "notActive": [
+        "real provider or channel network effect",
+        "group AudienceSnapshot",
+        "delete or redaction compensation",
+        "production BotDelivery orchestration",
+        "full ACCEPT-012 pass",
+    ],
+}
+
 CANONICAL_ACTIVATIONS: list[dict[str, object]] = [
     CANONICAL_REVOCATION_ACTIVATION,
     CANONICAL_UNAVAILABLE_CAPABILITY_ACTIVATION,
@@ -1368,6 +1431,7 @@ CANONICAL_ACTIVATIONS: list[dict[str, object]] = [
     CANONICAL_OPENAPI_V0_ACTIVATION,
     CANONICAL_TYPESCRIPT_SDK_ACTIVATION,
     CANONICAL_ACTION_PREPARE_ACTIVATION,
+    CANONICAL_ACTION_PERFORM_ACTIVATION,
 ]
 CANONICAL_ACTIVATION_ISSUE_LIST = ", ".join(
     f"Issue {activation['issueRef']}" for activation in CANONICAL_ACTIVATIONS

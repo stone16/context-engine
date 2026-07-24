@@ -7,7 +7,7 @@ import subprocess
 import time
 from collections.abc import Iterator
 from contextlib import closing
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from pathlib import Path
 from threading import Thread
@@ -448,6 +448,11 @@ def test_packed_typescript_sdk_resolves_authorized_file_package_over_live_http(
                 },
             ).scalar_one()
 
+        consumer_root = tmp_path / "installed-sdk-consumer"
+        consumer_root.mkdir()
+        _pack_and_install_sdk(consumer_root)
+        request_now = datetime.now(UTC).replace(microsecond=0)
+
         evidence_ref = PrivateDeliveryEvidenceIssuer(
             PostgreSQLDeliveryEvidenceIssuerPort(identity_engine),
             profile=DeliveryEvidenceProfile(
@@ -471,8 +476,8 @@ def test_packed_typescript_sdk_resolves_authorized_file_package_over_live_http(
                 consumer_ref="consumer:file-tracer",
                 purpose="context.answer",
                 policy_epoch=1,
-                issued_at=NOW - timedelta(minutes=1),
-                expires_at=NOW + timedelta(minutes=10),
+                issued_at=request_now - timedelta(seconds=1),
+                expires_at=request_now + timedelta(minutes=10),
             )
         )
 
@@ -496,11 +501,11 @@ def test_packed_typescript_sdk_resolves_authorized_file_package_over_live_http(
                     required_kernel_dependencies(),
                     candidate_index=PostgreSQLExactPhraseCandidateIndex(),
                     egress_profile=_file_model_profile(),
-                    clock=lambda: NOW,
+                    clock=lambda: request_now,
                     query_digest_keyring=query_digest_keyring,
                 ),
                 resolution_observer=observed.append,
-                clock=lambda: NOW,
+                clock=lambda: request_now,
             )
         )
         port = _unused_port()
@@ -517,9 +522,6 @@ def test_packed_typescript_sdk_resolves_authorized_file_package_over_live_http(
         server_thread.start()
         _wait_for_tcp(port)
 
-        consumer_root = tmp_path / "installed-sdk-consumer"
-        consumer_root.mkdir()
-        _pack_and_install_sdk(consumer_root)
         result = _run_installed_live_consumer(
             consumer_root,
             base_url=f"http://127.0.0.1:{port}",

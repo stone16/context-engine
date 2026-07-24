@@ -21,6 +21,7 @@ from scripts.validate_security_catalog import (
     ACCEPT_012_UNAVAILABLE_CARRIER,
     ACL_PROOF_CASE_IDS,
     AUDIENCE_ACTION_CASE_IDS,
+    CANONICAL_ACTION_PERFORM_ACTIVATION,
     CANONICAL_ACTION_PREPARE_ACTIVATION,
     CANONICAL_ACTIVATION_ISSUE_LIST,
     CANONICAL_ACTIVATIONS,
@@ -569,6 +570,7 @@ def make_catalog() -> dict[str, object]:
             copy.deepcopy(CANONICAL_OPENAPI_V0_ACTIVATION),
             copy.deepcopy(CANONICAL_TYPESCRIPT_SDK_ACTIVATION),
             copy.deepcopy(CANONICAL_ACTION_PREPARE_ACTIVATION),
+            copy.deepcopy(CANONICAL_ACTION_PERFORM_ACTIVATION),
         ],
         "invariants": invariants,
         "fixtures": fixtures,
@@ -662,6 +664,7 @@ def make_schema() -> dict[str, object]:
                     {"const": copy.deepcopy(CANONICAL_OPENAPI_V0_ACTIVATION)},
                     {"const": copy.deepcopy(CANONICAL_TYPESCRIPT_SDK_ACTIVATION)},
                     {"const": copy.deepcopy(CANONICAL_ACTION_PREPARE_ACTIVATION)},
+                    {"const": copy.deepcopy(CANONICAL_ACTION_PERFORM_ACTIVATION)},
                 ],
                 "items": False,
             },
@@ -1333,6 +1336,44 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
             "future/NOT_ACTIVE boundaries",
         )
 
+    def test_issue_68_action_perform_activation_stops_before_real_sender(self) -> None:
+        catalog = make_catalog()
+        activation = object_list_at(catalog, "activations")[11]
+        egress = next(
+            invariant
+            for invariant in object_list_at(catalog, "invariants")
+            if invariant["id"] == "EGRESS-011"
+        )
+
+        self.assertEqual(activation, CANONICAL_ACTION_PERFORM_ACTIVATION)
+        self.assertEqual(activation["invariantRef"], "ACTION-SEPARATION-014")
+        self.assertEqual(
+            object_list_at(activation, "testEvidence")[0]["id"],
+            "PG-ACTION-PERFORM-068",
+        )
+        egress_postgres_evidence = object_at(egress, "expectedEvidence")["postgres"]
+        assert isinstance(egress_postgres_evidence, list)
+        self.assertIn("PG-ACTION-PERFORM-068", egress_postgres_evidence)
+        self.assertEqual(
+            REQUIRED_POSTGRES_EVIDENCE["EGRESS-011"],
+            ("PG-ACTION-PERFORM-068",),
+        )
+        future_carriers = activation["futureCarriers"]
+        not_active = activation["notActive"]
+        assert isinstance(future_carriers, list)
+        assert isinstance(not_active, list)
+        self.assertIn("production private Sender", future_carriers)
+        self.assertIn("real provider or channel network effect", not_active)
+        self.assertIn("full ACCEPT-012 pass", not_active)
+
+        activation["notActive"] = []
+        self.assert_catalog_error(
+            catalog,
+            "activations: must exactly preserve the canonical ordered "
+            f"{CANONICAL_ACTIVATION_ISSUE_LIST} activation records and their "
+            "future/NOT_ACTIVE boundaries",
+        )
+
     def test_schema_independently_freezes_full_accept_008_as_future(self) -> None:
         catalog = make_catalog()
         schema = load_document(DEFAULT_SCHEMA_PATH)
@@ -1755,7 +1796,7 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
 
         self.assertEqual(catalog["catalogVersion"], "1.3.0")
         self.assertEqual(
-            issue_refs[-11:],
+            issue_refs[-12:],
             [
                 "#15",
                 "#16",
@@ -1768,10 +1809,15 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
                 "#66",
                 "#64",
                 "#67",
+                "#68",
             ],
         )
         self.assertIn(
             "docs/decisions/0031-persist-authorized-context-run-lineage.md",
+            document_refs,
+        )
+        self.assertIn(
+            "docs/decisions/0050-perform-one-exact-private-effect.md",
             document_refs,
         )
         for boundary in (

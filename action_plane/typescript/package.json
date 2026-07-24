@@ -1,7 +1,7 @@
 {
   "name": "@context-engine/action-plane",
-  "version": "0.0.0-m2-prepare",
-  "description": "Trusted private ActionPlane prepare module",
+  "version": "0.0.0-m2-perform",
+  "description": "Trusted private ActionPlane prepare and perform module",
   "type": "module",
   "private": true,
   "license": "UNLICENSED",
@@ -27,15 +27,16 @@
     "typecheck": "tsc --project tsconfig.json --noEmit",
     "build": "npm run clean && tsc --project tsconfig.build.json",
     "test:runtime": "node --test test/action-plane.test.mjs",
-    "test": "npm run typecheck && npm run build && npm run test:runtime"
+    "test:package": "node scripts/test-package.mjs",
+    "test": "npm run typecheck && npm run build && npm run test:runtime && npm run test:package"
   },
   "dependencies": {
-    "canonicalize": "3.0.0",
-    "pg": "8.22.0"
+    "canonicalize": "3.0.0"
   },
   "devDependencies": {
     "@types/node": "22.10.2",
     "@types/pg": "8.20.0",
+    "pg": "8.22.0",
     "typescript": "5.9.3"
   }
 }

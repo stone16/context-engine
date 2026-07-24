@@ -8,6 +8,7 @@ from engine.persistence.access_policy import (
     ResourceAccessRevocation,
 )
 from engine.persistence.configuration import (
+    ACTION_EXECUTE_DEFINER_ROLE,
     ACTION_PREPARE_DEFINER_ROLE,
     ACTION_ROLE,
     DELIVERY_EVIDENCE_DEFINER_ROLE,
@@ -89,6 +90,7 @@ from engine.persistence.worker_jobs import (
 )
 
 __all__ = [
+    "ACTION_EXECUTE_DEFINER_ROLE",
     "DatabaseConfiguration",
     "ACTION_PREPARE_DEFINER_ROLE",
     "ACTION_ROLE",
