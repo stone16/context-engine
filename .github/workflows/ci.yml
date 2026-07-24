@@ -14,6 +14,11 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: sdk/typescript/.node-version
+          cache: npm
+          cache-dependency-path: sdk/typescript/package-lock.json
       - uses: astral-sh/setup-uv@v6
         with:
           version: "0.8.22"

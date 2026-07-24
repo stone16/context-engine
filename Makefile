@@ -1,7 +1,8 @@
-.PHONY: install build lint typecheck test catalog security-gate smoke db-up db-down db-reset integration openapi-generate openapi-check openapi-breaking-check check
+.PHONY: install build lint typecheck test catalog security-gate smoke db-up db-down db-reset integration openapi-generate openapi-check openapi-breaking-check sdk-generate sdk-check sdk-build sdk-test sdk-pack check
 
 install:
 	uv sync --frozen
+	npm --prefix sdk/typescript ci --ignore-scripts
 
 build:
 	uv build
@@ -46,4 +47,19 @@ openapi-check:
 openapi-breaking-check:
 	uv run pytest -q tests/unit/test_openapi_v0_snapshot.py
 
-check: build lint typecheck openapi-check test catalog smoke integration security-gate
+sdk-generate:
+	npm --prefix sdk/typescript run generate
+
+sdk-check:
+	npm --prefix sdk/typescript run check:generated
+
+sdk-build:
+	npm --prefix sdk/typescript run build
+
+sdk-test:
+	npm --prefix sdk/typescript test
+
+sdk-pack:
+	npm --prefix sdk/typescript run pack:artifact
+
+check: build lint typecheck openapi-check sdk-check sdk-build sdk-test sdk-pack test catalog smoke integration security-gate

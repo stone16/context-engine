@@ -32,6 +32,7 @@ from scripts.validate_security_catalog import (
     CANONICAL_PRIVATE_DELIVERY_EVIDENCE_ACTIVATION,
     CANONICAL_REVOCATION_ACTIVATION,
     CANONICAL_TICKET_AUDIENCE_ACTIVATION,
+    CANONICAL_TYPESCRIPT_SDK_ACTIVATION,
     CANONICAL_UNAVAILABLE_CAPABILITY_ACTIVATION,
     CANONICAL_WORKER_LEASE_ACTIVATION,
     DEFAULT_CATALOG_PATH,
@@ -565,6 +566,7 @@ def make_catalog() -> dict[str, object]:
             copy.deepcopy(CANONICAL_PRIVATE_DELIVERY_EVIDENCE_ACTIVATION),
             copy.deepcopy(CANONICAL_EGRESS_GRANT_ACTIVATION),
             copy.deepcopy(CANONICAL_OPENAPI_V0_ACTIVATION),
+            copy.deepcopy(CANONICAL_TYPESCRIPT_SDK_ACTIVATION),
         ],
         "invariants": invariants,
         "fixtures": fixtures,
@@ -635,8 +637,8 @@ def make_schema() -> dict[str, object]:
             },
             "activations": {
                 "type": "array",
-                "minItems": 9,
-                "maxItems": 9,
+                "minItems": len(CANONICAL_ACTIVATIONS),
+                "maxItems": len(CANONICAL_ACTIVATIONS),
                 "uniqueItems": True,
                 "prefixItems": [
                     {"const": copy.deepcopy(CANONICAL_REVOCATION_ACTIVATION)},
@@ -656,6 +658,7 @@ def make_schema() -> dict[str, object]:
                     },
                     {"const": copy.deepcopy(CANONICAL_EGRESS_GRANT_ACTIVATION)},
                     {"const": copy.deepcopy(CANONICAL_OPENAPI_V0_ACTIVATION)},
+                    {"const": copy.deepcopy(CANONICAL_TYPESCRIPT_SDK_ACTIVATION)},
                 ],
                 "items": False,
             },
@@ -1720,8 +1723,19 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
 
         self.assertEqual(catalog["catalogVersion"], "1.3.0")
         self.assertEqual(
-            issue_refs[-9:],
-            ["#15", "#16", "#17", "#18", "#19", "#48", "#63", "#65", "#66"],
+            issue_refs[-10:],
+            [
+                "#15",
+                "#16",
+                "#17",
+                "#18",
+                "#19",
+                "#48",
+                "#63",
+                "#65",
+                "#66",
+                "#64",
+            ],
         )
         self.assertIn(
             "docs/decisions/0031-persist-authorized-context-run-lineage.md",

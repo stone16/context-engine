@@ -26,6 +26,12 @@ dist/
 build/
 *.egg-info/
 
+# --- Generated TypeScript SDK working artifacts ---
+sdk/typescript/node_modules/
+sdk/typescript/dist/
+sdk/typescript/*.tgz
+sdk/typescript/*.tsbuildinfo
+
 # --- OS / editor ---
 .DS_Store
 .idea/
