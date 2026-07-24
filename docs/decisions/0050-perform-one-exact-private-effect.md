@@ -52,15 +52,29 @@ Retry observes that attempt and cannot call Sender or mint a replacement.
 Trusted reconciliation changes `in_flight` or `ambiguous` exactly once to
 applied or rejected; applied reconciliation creates the same receipt shape,
 while rejected reconciliation creates none. Exact terminal replay is stable,
-and a conflicting decision is rejected.
+and a conflicting decision is rejected. Applied-at lineage preserves the
+Sender/provider value. Completion and reconciliation admit at most five
+seconds of positive clock skew relative to database authority time; a value
+beyond that bound cannot create an applied receipt.
 
-For this issue's single co-resident process and deterministic twin, a
-module-private active-attempt fence covers the complete Sender-through-
-completion interval. Reconciliation is refused before database work while that
-exact Organization/provider attempt remains active. Process loss clears the
-fence and deliberately leaves the durable `in_flight` attempt reconcilable.
-This process-local fence is not sufficient authority for a future real or
-multi-process Sender; that carrier remains inactive and requires a new design.
+For this issue's deterministic twin, perform checks out one dedicated database
+session. The begin function obtains an Organization/ActionTicket PostgreSQL
+session advisory lock immediately before it commits `sender_required`; the
+ActionPlane retains that same connection through Sender and completion, then
+unlocks before returning the connection. Reconciliation resolves the original
+ticket and refuses while another session owns its Sender lock. A module-private
+active-attempt fence provides an additional same-process fast refusal. A known
+post-lock database write failure unlocks inside the authority function; an
+indeterminate begin-query failure discards the checked-out connection instead
+of returning it to the pool. Process loss closes the database connection,
+releases the session lock, and deliberately leaves the durable `in_flight`
+attempt reconcilable. A real Sender remains inactive and requires
+provider-specific idempotency and recovery evidence.
+
+The real PostgreSQL oracle closes the checked-out session after Sender and
+before completion, observes that an explicit unlock is no longer executable,
+then reconciles the original attempt from another connection. This distinguishes
+backend session-loss release from the ordinary explicit-unlock path.
 
 The application login owns no table privilege and can execute only prepare,
 begin, complete, and reconcile functions. A distinct NOLOGIN execution definer

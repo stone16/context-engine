@@ -238,7 +238,7 @@ def upgrade() -> None:
             name="ck_action_receipt_digests",
         ),
         sa.CheckConstraint(
-            "applied_at <= recorded_at AND "
+            "applied_at <= recorded_at + interval '5 seconds' AND "
             "retention_policy_ref = 'action-digest-audit-retention-v1' AND "
             "retain_until > recorded_at",
             name="ck_action_receipt_retention",
@@ -700,43 +700,93 @@ def upgrade() -> None:
                 RETURN;
             END IF;
 
-            INSERT INTO public.action_provider_attempt (
-                organization_id, provider_attempt_ref, ticket_ref,
-                delivery_attempt_ref, operation, destination_digest,
-                audience_digest, payload_digest, idempotency_digest, state,
-                started_at, retention_policy_ref, retain_until
-            ) VALUES (
-                requested_organization_id, proposed_provider_attempt_ref,
-                requested_ticket_ref, requested_delivery_attempt_ref,
-                requested_operation, requested_destination_digest,
-                requested_audience_digest, requested_payload_digest,
-                requested_idempotency_digest, 'in_flight', authority_now,
-                'action-digest-audit-retention-v1', authority_retain_until
-            );
-            UPDATE public.action_ticket AS target_ticket SET
-                state = 'in_flight',
-                ticket_bearer_digest = requested_ticket_bearer_digest
-            WHERE target_ticket.organization_id = requested_organization_id
-              AND target_ticket.ticket_ref = requested_ticket_ref;
-            INSERT INTO public.action_perform_audit (
-                organization_id, decision_digest, category, recorded_at,
-                retention_policy_ref, retain_until
-            ) VALUES (
-                requested_organization_id, decision_digest, 'sender_required',
-                authority_now, 'action-digest-audit-retention-v1',
-                authority_retain_until
-            );
+            IF NOT pg_catalog.pg_try_advisory_lock(pg_catalog.hashtextextended(
+                'action-ticket-sender-session:' ||
+                requested_organization_id::text || ':' ||
+                requested_ticket_ref, 0
+            )) THEN
+                INSERT INTO public.action_perform_audit (
+                    organization_id, decision_digest, category, recorded_at,
+                    retention_policy_ref, retain_until
+                ) VALUES (
+                    requested_organization_id, decision_digest, 'rejected',
+                    authority_now, 'action-digest-audit-retention-v1',
+                    authority_retain_until
+                );
+                RETURN QUERY SELECT 'rejected'::text, NULL::text, NULL::text,
+                    NULL::text, NULL::uuid, NULL::text, NULL::text, NULL::text,
+                    NULL::bytea, NULL::bytea, NULL::bytea, NULL::bytea,
+                    NULL::bytea, NULL::timestamptz;
+                RETURN;
+            END IF;
+
+            BEGIN
+                INSERT INTO public.action_provider_attempt (
+                    organization_id, provider_attempt_ref, ticket_ref,
+                    delivery_attempt_ref, operation, destination_digest,
+                    audience_digest, payload_digest, idempotency_digest, state,
+                    started_at, retention_policy_ref, retain_until
+                ) VALUES (
+                    requested_organization_id, proposed_provider_attempt_ref,
+                    requested_ticket_ref, requested_delivery_attempt_ref,
+                    requested_operation, requested_destination_digest,
+                    requested_audience_digest, requested_payload_digest,
+                    requested_idempotency_digest, 'in_flight', authority_now,
+                    'action-digest-audit-retention-v1', authority_retain_until
+                );
+                UPDATE public.action_ticket AS target_ticket SET
+                    state = 'in_flight',
+                    ticket_bearer_digest = requested_ticket_bearer_digest
+                WHERE target_ticket.organization_id = requested_organization_id
+                  AND target_ticket.ticket_ref = requested_ticket_ref;
+                INSERT INTO public.action_perform_audit (
+                    organization_id, decision_digest, category, recorded_at,
+                    retention_policy_ref, retain_until
+                ) VALUES (
+                    requested_organization_id, decision_digest, 'sender_required',
+                    authority_now, 'action-digest-audit-retention-v1',
+                    authority_retain_until
+                );
+            EXCEPTION
+                WHEN unique_violation OR serialization_failure OR deadlock_detected THEN
+                    IF NOT pg_catalog.pg_advisory_unlock(
+                        pg_catalog.hashtextextended(
+                            'action-ticket-sender-session:' ||
+                            requested_organization_id::text || ':' ||
+                            requested_ticket_ref, 0
+                        )
+                    ) THEN
+                        RAISE EXCEPTION 'could not release action Sender session lock'
+                            USING ERRCODE = 'internal_error';
+                    END IF;
+                    INSERT INTO public.action_perform_audit (
+                        organization_id, decision_digest, category, recorded_at,
+                        retention_policy_ref, retain_until
+                    ) VALUES (
+                        requested_organization_id, decision_digest, 'rejected',
+                        authority_now, 'action-digest-audit-retention-v1',
+                        authority_retain_until
+                    );
+                    RETURN QUERY SELECT 'rejected'::text, NULL::text, NULL::text,
+                        NULL::text, NULL::uuid, NULL::text, NULL::text, NULL::text,
+                        NULL::bytea, NULL::bytea, NULL::bytea, NULL::bytea,
+                        NULL::bytea, NULL::timestamptz;
+                    RETURN;
+                WHEN OTHERS THEN
+                    PERFORM pg_catalog.pg_advisory_unlock(
+                        pg_catalog.hashtextextended(
+                            'action-ticket-sender-session:' ||
+                            requested_organization_id::text || ':' ||
+                            requested_ticket_ref, 0
+                        )
+                    );
+                    RAISE;
+            END;
             RETURN QUERY SELECT 'sender_required'::text,
                 proposed_provider_attempt_ref, evidence_record.destination_ref,
                 NULL::text, NULL::uuid, NULL::text, NULL::text, NULL::text,
                 NULL::bytea, NULL::bytea, NULL::bytea, NULL::bytea,
                 NULL::bytea, NULL::timestamptz;
-        EXCEPTION
-            WHEN unique_violation OR serialization_failure OR deadlock_detected THEN
-                RETURN QUERY SELECT 'rejected'::text, NULL::text, NULL::text,
-                    NULL::text, NULL::uuid, NULL::text, NULL::text, NULL::text,
-                    NULL::bytea, NULL::bytea, NULL::bytea, NULL::bytea,
-                    NULL::bytea, NULL::timestamptz;
         END;
         $function$
         """
@@ -776,7 +826,8 @@ def upgrade() -> None:
                     proposed_receipt_ref !~ '^acr_[0-9a-f]{{32}}$'
                     OR octet_length(requested_provider_effect_digest) <> 32
                     OR requested_applied_at IS NULL
-                    OR requested_applied_at > authority_now
+                    OR requested_applied_at > authority_now +
+                        pg_catalog.make_interval(secs => 5)
                ))
                OR (requested_sender_outcome <> 'applied' AND (
                     requested_provider_effect_digest IS NOT NULL
@@ -1004,7 +1055,8 @@ def upgrade() -> None:
                     proposed_receipt_ref !~ '^acr_[0-9a-f]{{32}}$'
                     OR octet_length(requested_provider_effect_digest) <> 32
                     OR requested_applied_at IS NULL
-                    OR requested_applied_at > authority_now
+                    OR requested_applied_at > authority_now +
+                        pg_catalog.make_interval(secs => 5)
                ))
                OR (requested_disposition = 'rejected' AND (
                     requested_provider_effect_digest IS NOT NULL
@@ -1041,6 +1093,26 @@ def upgrade() -> None:
             authority_retain_until := authority_now + pg_catalog.make_interval(
                 secs => requested_retention_seconds
             );
+            IF NOT pg_catalog.pg_try_advisory_xact_lock(pg_catalog.hashtextextended(
+                'action-ticket-sender-session:' ||
+                requested_organization_id::text || ':' ||
+                provider_record.ticket_ref, 0
+            )) THEN
+                INSERT INTO public.action_perform_audit (
+                    organization_id, decision_digest, category, recorded_at,
+                    retention_policy_ref, retain_until
+                ) VALUES (
+                    requested_organization_id, requested_decision_digest, 'rejected',
+                    authority_now, requested_retention_policy_ref,
+                    authority_retain_until
+                );
+                RETURN QUERY SELECT 'rejected'::text,
+                    requested_provider_attempt_ref, NULL::text, NULL::text,
+                    NULL::uuid, NULL::text, NULL::text, NULL::text, NULL::bytea,
+                    NULL::bytea, NULL::bytea, NULL::bytea, NULL::bytea,
+                    NULL::timestamptz;
+                RETURN;
+            END IF;
             IF reconciliation_record.provider_attempt_ref IS NULL
                AND provider_record.state = 'in_flight'
             THEN

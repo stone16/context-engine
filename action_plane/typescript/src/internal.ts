@@ -697,6 +697,12 @@ interface DatabaseQueryResult {
 
 export interface ActionPrepareDatabase {
   query(config: { readonly text: string; readonly values: readonly unknown[] }): Promise<DatabaseQueryResult>;
+  connect?(): Promise<ActionDatabaseSession>;
+}
+
+interface ActionDatabaseSession {
+  query(config: { readonly text: string; readonly values: readonly unknown[] }): Promise<DatabaseQueryResult>;
+  release(discard?: boolean): void;
 }
 
 interface PrepareRequest {
@@ -1021,6 +1027,13 @@ function activeProviderAttemptKey(organizationId: string, providerAttemptRef: st
   return `${organizationId}\0${providerAttemptRef}`;
 }
 
+function actionTicketSenderSessionLockKey(
+  organizationId: string,
+  ticketRef: string,
+): string {
+  return `action-ticket-sender-session:${organizationId}:${ticketRef}`;
+}
+
 export function createTrustedActionReconciliation(
   options: ReconciliationDecisionOptions,
 ): TrustedActionReconciliation {
@@ -1077,6 +1090,9 @@ SELECT * FROM context_action_reconcile_private_effect(
   $1::uuid, $2::text, $3::text, $4::bytea, $5::timestamptz,
   $6::text, $7::bytea, $8::text, $9::bigint
 )`;
+
+const RELEASE_SENDER_SESSION_LOCK_SQL = `
+SELECT pg_advisory_unlock(hashtextextended($1::text, 0)) AS unlocked`;
 
 function databaseDigest(name: string, value: unknown): string {
   if (Buffer.isBuffer(value) && value.byteLength === 32) {
@@ -1325,11 +1341,33 @@ export class ActionPlane {
     if (!PROVIDER_ATTEMPT_PATTERN.test(proposedProviderAttemptRef)) {
       return { effectCount: 0, kind: "rejected", reasonCategory: "not_available" };
     }
-    let beginRow: Readonly<Record<string, unknown>> | undefined;
+    const connect = this.#database.connect;
+    if (typeof connect !== "function") {
+      return { effectCount: 0, kind: "rejected", reasonCategory: "not_available" };
+    }
+    const senderSessionLockKey = actionTicketSenderSessionLockKey(
+      claims.organizationId,
+      claims.ticketRef,
+    );
+    let session: ActionDatabaseSession | undefined;
     try {
-      beginRow = (await this.#database.query({
-        text: BEGIN_EFFECT_SQL,
-        values: [
+      session = await connect.call(this.#database);
+    } catch {
+      try {
+        session?.release(true);
+      } catch {
+        // A failed session is discarded best-effort before failing closed.
+      }
+      return { effectCount: 0, kind: "rejected", reasonCategory: "not_available" };
+    }
+    let discardSession = false;
+    let senderSessionLockHeld = false;
+    try {
+      let beginRow: Readonly<Record<string, unknown>> | undefined;
+      try {
+        beginRow = (await session.query({
+          text: BEGIN_EFFECT_SQL,
+          values: [
           claims.organizationId,
           claims.ticketRef,
           claims.deliveryAttemptRef,
@@ -1356,122 +1394,145 @@ export class ActionPlane {
           createHash("sha256").update(ACTION_TICKET_DOMAIN).update(ticket.serialize()).digest(),
           proposedProviderAttemptRef,
           this.#profile.retentionSeconds,
-        ],
-      })).rows[0];
-    } catch {
-      return { effectCount: 0, kind: "rejected", reasonCategory: "not_available" };
-    }
-    if (beginRow === undefined) {
-      return { effectCount: 0, kind: "rejected", reasonCategory: "not_available" };
-    }
-    if (beginRow.outcome === "already_applied") {
-      try {
-        return {
-          effectCount: 0,
-          kind: "already_applied",
-          receipt: actionReceiptFromRow(beginRow, claims),
-        };
-      } catch {
-        return { effectCount: 0, kind: "rejected", reasonCategory: "not_available" };
-      }
-    }
-    if (beginRow.outcome === "reconciliation_required") {
-      try {
-        const providerAttemptRef = requireRef(
-          "provider attempt",
-          beginRow.provider_attempt_ref,
-        );
-        if (!PROVIDER_ATTEMPT_PATTERN.test(providerAttemptRef)) {
-          throw new TypeError("provider attempt is malformed");
-        }
-        return { kind: "reconciliation_required", providerAttemptRef };
-      } catch {
-        return { effectCount: 0, kind: "rejected", reasonCategory: "not_available" };
-      }
-    }
-    if (beginRow.outcome === "provider_rejected") {
-      return { effectCount: 0, kind: "rejected", reasonCategory: "provider_rejected" };
-    }
-    if (beginRow.outcome === "rejected") {
-      return { effectCount: 0, kind: "rejected", reasonCategory: "not_available" };
-    }
-    if (beginRow.outcome !== "sender_required") {
-      return { effectCount: 0, kind: "rejected", reasonCategory: "not_available" };
-    }
-    let providerAttemptRef: string;
-    let destinationRef: string;
-    try {
-      providerAttemptRef = requireRef("provider attempt", beginRow.provider_attempt_ref);
-      destinationRef = requireRef("private destination", beginRow.destination_ref);
-      if (!PROVIDER_ATTEMPT_PATTERN.test(providerAttemptRef)) {
-        throw new TypeError("provider attempt is malformed");
-      }
-    } catch {
-      return { effectCount: 0, kind: "rejected", reasonCategory: "not_available" };
-    }
-    const activeAttemptKey = activeProviderAttemptKey(
-      claims.organizationId,
-      providerAttemptRef,
-    );
-    if (activeProviderAttempts.has(activeAttemptKey)) {
-      return { kind: "reconciliation_required", providerAttemptRef };
-    }
-    activeProviderAttempts.add(activeAttemptKey);
-    try {
-      let senderOutcome: SenderOutcome;
-      try {
-        senderOutcome = await this.#sender.send({
-          destinationRef,
-          operation: claims.operation,
-          payload: validatedPayload,
-          providerAttemptRef,
-          ticket,
-        });
-      } catch {
-        senderOutcome = { kind: "ambiguous" };
-      }
-      const proposedReceiptRef = this.#receiptRefFactory();
-      if (!RECEIPT_REF_PATTERN.test(proposedReceiptRef)) {
-        return { kind: "reconciliation_required", providerAttemptRef };
-      }
-      let completeRow: Readonly<Record<string, unknown>> | undefined;
-      try {
-        completeRow = (await this.#database.query({
-          text: COMPLETE_EFFECT_SQL,
-          values: [
-            claims.organizationId,
-            claims.ticketRef,
-            providerAttemptRef,
-            senderOutcome.kind,
-            senderOutcome.kind === "applied"
-              ? Buffer.from(senderOutcome.providerEffectDigest, "hex")
-              : null,
-            senderOutcome.kind === "applied" ? senderOutcome.appliedAt : null,
-            proposedReceiptRef,
-            this.#profile.retentionPolicyRef,
-            this.#profile.retentionSeconds,
           ],
         })).rows[0];
       } catch {
-        return { kind: "reconciliation_required", providerAttemptRef };
+        discardSession = true;
+        return { effectCount: 0, kind: "rejected", reasonCategory: "not_available" };
       }
-      if (completeRow?.outcome === "applied") {
+      if (beginRow === undefined) {
+        return { effectCount: 0, kind: "rejected", reasonCategory: "not_available" };
+      }
+      if (beginRow.outcome === "already_applied") {
         try {
           return {
-            effectCount: 1,
-            kind: "applied",
-            receipt: actionReceiptFromRow(completeRow, claims),
+            effectCount: 0,
+            kind: "already_applied",
+            receipt: actionReceiptFromRow(beginRow, claims),
           };
+        } catch {
+          return { effectCount: 0, kind: "rejected", reasonCategory: "not_available" };
+        }
+      }
+      if (beginRow.outcome === "reconciliation_required") {
+        try {
+          const providerAttemptRef = requireRef(
+            "provider attempt",
+            beginRow.provider_attempt_ref,
+          );
+          if (!PROVIDER_ATTEMPT_PATTERN.test(providerAttemptRef)) {
+            throw new TypeError("provider attempt is malformed");
+          }
+          return { kind: "reconciliation_required", providerAttemptRef };
+        } catch {
+          return { effectCount: 0, kind: "rejected", reasonCategory: "not_available" };
+        }
+      }
+      if (beginRow.outcome === "provider_rejected") {
+        return { effectCount: 0, kind: "rejected", reasonCategory: "provider_rejected" };
+      }
+      if (beginRow.outcome === "rejected") {
+        return { effectCount: 0, kind: "rejected", reasonCategory: "not_available" };
+      }
+      if (beginRow.outcome !== "sender_required") {
+        return { effectCount: 0, kind: "rejected", reasonCategory: "not_available" };
+      }
+      senderSessionLockHeld = true;
+      let providerAttemptRef: string;
+      let destinationRef: string;
+      try {
+        providerAttemptRef = requireRef("provider attempt", beginRow.provider_attempt_ref);
+        destinationRef = requireRef("private destination", beginRow.destination_ref);
+        if (
+          !PROVIDER_ATTEMPT_PATTERN.test(providerAttemptRef)
+          || providerAttemptRef !== proposedProviderAttemptRef
+        ) {
+          throw new TypeError("provider attempt is malformed");
+        }
+      } catch {
+        return { effectCount: 0, kind: "rejected", reasonCategory: "not_available" };
+      }
+      const activeAttemptKey = activeProviderAttemptKey(
+        claims.organizationId,
+        providerAttemptRef,
+      );
+      if (activeProviderAttempts.has(activeAttemptKey)) {
+        return { kind: "reconciliation_required", providerAttemptRef };
+      }
+      activeProviderAttempts.add(activeAttemptKey);
+      try {
+        let senderOutcome: SenderOutcome;
+        try {
+          senderOutcome = await this.#sender.send({
+            destinationRef,
+            operation: claims.operation,
+            payload: validatedPayload,
+            providerAttemptRef,
+            ticket,
+          });
+        } catch {
+          senderOutcome = { kind: "ambiguous" };
+        }
+        const proposedReceiptRef = this.#receiptRefFactory();
+        if (!RECEIPT_REF_PATTERN.test(proposedReceiptRef)) {
+          return { kind: "reconciliation_required", providerAttemptRef };
+        }
+        let completeRow: Readonly<Record<string, unknown>> | undefined;
+        try {
+          completeRow = (await session.query({
+            text: COMPLETE_EFFECT_SQL,
+            values: [
+              claims.organizationId,
+              claims.ticketRef,
+              providerAttemptRef,
+              senderOutcome.kind,
+              senderOutcome.kind === "applied"
+                ? Buffer.from(senderOutcome.providerEffectDigest, "hex")
+                : null,
+              senderOutcome.kind === "applied" ? senderOutcome.appliedAt : null,
+              proposedReceiptRef,
+              this.#profile.retentionPolicyRef,
+              this.#profile.retentionSeconds,
+            ],
+          })).rows[0];
         } catch {
           return { kind: "reconciliation_required", providerAttemptRef };
         }
+        if (completeRow?.outcome === "applied") {
+          try {
+            return {
+              effectCount: 1,
+              kind: "applied",
+              receipt: actionReceiptFromRow(completeRow, claims),
+            };
+          } catch {
+            return { kind: "reconciliation_required", providerAttemptRef };
+          }
+        }
+        if (completeRow?.outcome === "rejected") {
+          return { effectCount: 0, kind: "rejected", reasonCategory: "provider_rejected" };
+        }
+        return { kind: "reconciliation_required", providerAttemptRef };
+      } finally {
+        activeProviderAttempts.delete(activeAttemptKey);
       }
-      if (completeRow?.outcome === "rejected") {
-        return { effectCount: 0, kind: "rejected", reasonCategory: "provider_rejected" };
-      }
-      return { kind: "reconciliation_required", providerAttemptRef };
     } finally {
-      activeProviderAttempts.delete(activeAttemptKey);
+      if (senderSessionLockHeld && !discardSession) {
+        try {
+          const unlockRow = (await session.query({
+            text: RELEASE_SENDER_SESSION_LOCK_SQL,
+            values: [senderSessionLockKey],
+          })).rows[0];
+          discardSession = unlockRow?.unlocked !== true;
+        } catch {
+          discardSession = true;
+        }
+      }
+      try {
+        session.release(discardSession);
+      } catch {
+        // A failed release cannot change the already-classified effect outcome.
+      }
     }
   }
 

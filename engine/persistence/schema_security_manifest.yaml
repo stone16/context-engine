@@ -2854,7 +2854,7 @@
       "name": "action_provider_attempt",
       "classification": "tenant_owned",
       "nonOwnerEvidence": {"evidenceId": "PG-ACTION-PERFORM-068", "selector": {"table": "action_provider_attempt"}},
-      "purpose": "One immutable provider-attempt identity with monotonic execution state and digest-only effect lineage",
+      "purpose": "One immutable provider-attempt identity with monotonic execution state, digest-only effect lineage, and an Organization/ActionTicket session lock held across Sender and completion",
       "organizationColumn": "organization_id",
       "organizationInclusiveKeys": [
         {"name": "pk_action_provider_attempt", "kind": "primary_key", "columns": ["organization_id", "provider_attempt_ref"]},
@@ -2899,7 +2899,7 @@
       "checkConstraints": [
         {"name": "ck_action_receipt_ref", "expression": "receipt_ref is one bounded acr_ opaque reference"},
         {"name": "ck_action_receipt_digests", "expression": "destination, audience, payload, idempotency, and provider-effect values are 32-byte digests"},
-        {"name": "ck_action_receipt_retention", "expression": "applied_at is not after recorded_at and the exact retention profile outlives recording"}
+        {"name": "ck_action_receipt_retention", "expression": "applied_at is at most five seconds after recorded_at and the exact retention profile outlives recording"}
       ],
       "rowLevelSecurity": {"enabled": true, "forced": true, "policies": [
         {"name": "action_receipt_migrator_administration", "command": "ALL", "roles": ["context_engine_migrator"], "using": "true", "withCheck": "true"},

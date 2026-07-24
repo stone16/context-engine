@@ -48,6 +48,23 @@ const keyring = new ActionTicketKeyring({
   keys: new Map([[1, Buffer.alloc(32, 0x11)]]),
 });
 
+function sessionDatabase(query) {
+  return {
+    query,
+    async connect() {
+      return {
+        async query(config) {
+          if (config.text.includes("pg_advisory_unlock")) {
+            return { rows: [{ unlocked: true }] };
+          }
+          return query(config);
+        },
+        release() {},
+      };
+    },
+  };
+}
+
 test("RFC 8785 payload binding has an independent known digest", () => {
   assert.equal(
     actionPayloadDigest("create_placeholder", { text: "Working…" }),
@@ -57,8 +74,7 @@ test("RFC 8785 payload binding has an independent known digest", () => {
 
 test("prepare returns one signed create ticket and has no Sender seam", async () => {
   const observed = [];
-  const database = {
-    async query(query) {
+  const database = sessionDatabase(async (query) => {
       observed.push(query);
       return {
         rows: [
@@ -72,8 +88,7 @@ test("prepare returns one signed create ticket and has no Sender seam", async ()
           },
         ],
       };
-    },
-  };
+  });
   const plane = new ActionPlane({
     database,
     keyring,
@@ -122,8 +137,7 @@ test("perform invokes Sender once and exact replay returns the stored receipt", 
     receipt_ref: `acr_${"5".repeat(32)}`,
     ticket_ref: `act_${"6".repeat(32)}`,
   };
-  const database = {
-    async query(query) {
+  const database = sessionDatabase(async (query) => {
       if (query.text.includes("context_action_prepare_private_effect")) {
         return {
           rows: [{
@@ -152,10 +166,15 @@ test("perform invokes Sender once and exact replay returns the stored receipt", 
         return { rows: [{ outcome: "applied", ...receiptRow }] };
       }
       throw new Error("unexpected ActionPlane query");
-    },
-  };
+  });
   const sender = new DeterministicPrivateSenderTwin({ mode: "applied" });
-  const plane = new ActionPlane({ database, keyring, profile, sender });
+  const plane = new ActionPlane({
+    database,
+    keyring,
+    profile,
+    providerAttemptRefFactory: () => receiptRow.provider_attempt_ref,
+    sender,
+  });
   const trusted = createTrustedPrivateEffectAuthority(exactFacts);
   const payload = { text: "Working…" };
   const prepared = await plane.prepare(createPlaceholderEffectIntent(trusted, {
@@ -184,8 +203,7 @@ test("perform invokes Sender once and exact replay returns the stored receipt", 
 
 test("pre-Sender authority rejection is generic while terminal provider rejection is explicit", async () => {
   let beginOutcome = "rejected";
-  const database = {
-    async query(query) {
+  const database = sessionDatabase(async (query) => {
       if (query.text.includes("context_action_prepare_private_effect")) {
         return {
           rows: [{
@@ -202,8 +220,7 @@ test("pre-Sender authority rejection is generic while terminal provider rejectio
         return { rows: [{ outcome: beginOutcome }] };
       }
       throw new Error("rejected begin must not reach another database seam");
-    },
-  };
+  });
   const sender = new DeterministicPrivateSenderTwin({ mode: "applied" });
   const plane = new ActionPlane({ database, keyring, profile, sender });
   const payload = { text: "Reject before Sender" };
@@ -235,6 +252,58 @@ test("pre-Sender authority rejection is generic while terminal provider rejectio
   assert.equal(sender.callCount, 0);
 });
 
+test("begin query failure discards its dedicated session before Sender", async () => {
+  const releases = [];
+  const database = {
+    async connect() {
+      return {
+        async query(query) {
+          if (query.text.includes("context_action_begin_private_effect")) {
+            throw new Error("indeterminate post-lock begin failure");
+          }
+          throw new Error("begin failure reached an unexpected session query");
+        },
+        release(discard = false) {
+          releases.push(discard);
+        },
+      };
+    },
+    async query(query) {
+      assert.match(query.text, /context_action_prepare_private_effect/);
+      return { rows: [{
+        delivery_attempt_ref: `dla_${"f".repeat(32)}`,
+        expires_at: new Date("2099-07-24T08:01:00.000Z"),
+        idempotent: false,
+        issued_at: new Date("2099-07-24T08:00:00.000Z"),
+        outcome: "prepared",
+        ticket_ref: `act_${"e".repeat(32)}`,
+      }] };
+    },
+  };
+  const sender = new DeterministicPrivateSenderTwin({ mode: "applied" });
+  const plane = new ActionPlane({ database, keyring, profile, sender });
+  const payload = { text: "Fail begin after an unknown lock state" };
+  const prepared = await plane.prepare(createPlaceholderEffectIntent(
+    createTrustedPrivateEffectAuthority(exactFacts),
+    {
+      deliveryAttemptRef: `dla_${"f".repeat(32)}`,
+      idempotencyKey: "turn-68:discard-failed-begin",
+      payload,
+    },
+  ));
+  assert.equal(prepared.kind, "prepared");
+
+  const outcome = await plane.perform(payload, prepared.ticket);
+
+  assert.deepEqual(outcome, {
+    effectCount: 0,
+    kind: "rejected",
+    reasonCategory: "not_available",
+  });
+  assert.deepEqual(releases, [true]);
+  assert.equal(sender.callCount, 0);
+});
+
 test("reconciliation cannot race an in-process Sender call", async () => {
   let releaseSender;
   const gate = new Promise((resolve) => { releaseSender = resolve; });
@@ -254,8 +323,7 @@ test("reconciliation cannot race an in-process Sender call", async () => {
     receipt_ref: `acr_${"5".repeat(32)}`,
     ticket_ref: `act_${"6".repeat(32)}`,
   };
-  const database = {
-    async query(query) {
+  const database = sessionDatabase(async (query) => {
       if (query.text.includes("context_action_prepare_private_effect")) {
         return { rows: [{
           delivery_attempt_ref: receiptRow.delivery_attempt_ref,
@@ -283,8 +351,7 @@ test("reconciliation cannot race an in-process Sender call", async () => {
         reconcileQueries += 1;
       }
       throw new Error("unexpected action race query");
-    },
-  };
+  });
   const sender = new DeterministicPrivateSenderTwin({ gate, mode: "applied" });
   const plane = new ActionPlane({
     database,

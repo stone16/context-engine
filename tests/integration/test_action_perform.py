@@ -50,6 +50,7 @@ def _issue_evidence(
     now: datetime,
     evidence_ref: str,
 ) -> None:
+    issued_at = max(now, datetime.now(UTC) - timedelta(seconds=1))
     identity_engine = create_database_engine(identity_configuration)
     try:
         issuer = PrivateDeliveryEvidenceIssuer(
@@ -74,8 +75,8 @@ def _issue_evidence(
                 consumer_ref=CONSUMER_REF,
                 purpose=PURPOSE,
                 policy_epoch=1,
-                issued_at=now,
-                expires_at=now + timedelta(minutes=4),
+                issued_at=issued_at,
+                expires_at=issued_at + timedelta(minutes=4),
             )
         )
     finally:
@@ -349,6 +350,19 @@ def test_private_perform_is_one_shot_replayable_and_reconcilable(
             ambiguous = cast(dict[str, object], result["ambiguous"])
             assert result["senderCalls"] == 3
             assert result["senderEffects"] == 3
+            assert result["postLockFailure"] == {
+                "senderCalls": 0,
+                "unlocked": True,
+            }
+            assert result["farFutureAppliedAt"] == {
+                "outcome": "reconciliation_required",
+                "reconcile": "already_applied",
+                "senderCalls": 1,
+            }
+            bounded_skew = cast(dict[str, object], result["boundedPositiveSkew"])
+            assert bounded_skew["outcome"] == "applied"
+            assert bounded_skew["senderCalls"] == 1
+            assert cast(str, bounded_skew["appliedAt"]).endswith("Z")
             assert set(applied) == {
                 "create_placeholder",
                 "finalize_reply",
@@ -377,10 +391,12 @@ def test_private_perform_is_one_shot_replayable_and_reconcilable(
                 "senderEffects": 0,
             }
             assert result["crash"] == {
+                "closedSessions": 1,
                 "first": "reconciliation_required",
                 "reconcile": "already_applied",
                 "replay": "reconciliation_required",
                 "senderCalls": 1,
+                "unlockAfterConnectionLossAttempts": 1,
             }
             concurrent = cast(dict[str, object], result["concurrent"])
             outcomes = cast(list[str], concurrent["outcomes"])
@@ -392,6 +408,7 @@ def test_private_perform_is_one_shot_replayable_and_reconcilable(
             }
             assert concurrent["senderCalls"] == 1
             assert concurrent["senderEffects"] == 1
+            assert concurrent["prematureReconciliation"] == "rejected"
             assert result["stale"] == {
                 "outcome": "rejected",
                 "reasonCategory": "not_available",
@@ -426,7 +443,7 @@ def test_private_perform_is_one_shot_replayable_and_reconcilable(
                     )
                 ).one()
             )
-            assert counts == (16, 12, 6)
+            assert counts == (20, 16, 8)
             assert connection.execute(
                 text(
                     "SELECT count(*) FROM action_provider_attempt "
@@ -452,7 +469,7 @@ def test_private_perform_is_one_shot_replayable_and_reconcilable(
                 },
             ).all()
             assert len(per_organization) == 2
-            assert all(tuple(row[1:]) == (8, 6, 3) for row in per_organization)
+            assert all(tuple(row[1:]) == (10, 8, 4) for row in per_organization)
             audit_rows = connection.execute(
                 text(
                     "SELECT organization_id, decision_digest, category, "
@@ -460,7 +477,18 @@ def test_private_perform_is_one_shot_replayable_and_reconcilable(
                     "FROM action_perform_audit ORDER BY organization_id, audit_id"
                 )
             ).all()
-            assert len(audit_rows) == 84
+            observed_audit_categories = {
+                str(observed_organization_id): Counter(
+                    row.category
+                    for row in audit_rows
+                    if row.organization_id == observed_organization_id
+                )
+                for observed_organization_id in (
+                    organization_id,
+                    other_organization_id,
+                )
+            }
+            assert len(audit_rows) == 96, observed_audit_categories
             for expected_organization_id in (
                 organization_id,
                 other_organization_id,
@@ -470,14 +498,14 @@ def test_private_perform_is_one_shot_replayable_and_reconcilable(
                     for row in audit_rows
                     if row.organization_id == expected_organization_id
                 ]
-                assert len(organization_audits) == 42
+                assert len(organization_audits) == 48
                 assert Counter(row.category for row in organization_audits) == {
-                    "sender_required": 8,
-                    "applied": 4,
+                    "sender_required": 10,
+                    "applied": 5,
                     "already_applied": 5,
-                    "rejected": 17,
+                    "rejected": 19,
                     "reconciliation_required": 5,
-                    "reconciled_applied": 2,
+                    "reconciled_applied": 3,
                     "reconciled_rejected": 1,
                 }
                 assert all(

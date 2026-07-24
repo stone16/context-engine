@@ -10,6 +10,7 @@ import {
   createPrivateFollowupEffectIntent,
   createTrustedActionReconciliation,
   createTrustedPrivateEffectAuthority,
+  inspectPreparedActionTicket,
   privateAudienceDigestForBinding,
 } from "../dist/internal.js";
 import pg from "pg";
@@ -76,6 +77,17 @@ const pool = new pg.Pool({
   statement_timeout: 5_000,
 });
 const database = {
+  async connect() {
+    const client = await pool.connect();
+    return {
+      async query(query) {
+        return client.query(query);
+      },
+      release(discard = false) {
+        client.release(discard ? new Error("discard action effect session") : undefined);
+      },
+    };
+  },
   async query(query) {
     return pool.query(query);
   },
@@ -179,11 +191,145 @@ try {
     totalEffects += sender.effectCount;
     applied[operationCase.operation] = {
       first: first.kind,
+      providerAttemptRef: first.receipt.providerAttemptRef,
       replay: replay.kind,
       receiptRef: first.receipt.receiptRef,
       wrongPayload: wrong.kind,
       wrongPayloadReason: wrong.reasonCategory,
     };
+  }
+
+  const boundedSkewAppliedAt = new Date(Date.now() + 2_000);
+  const boundedSkewSender = new DeterministicPrivateSenderTwin({
+    clock: () => boundedSkewAppliedAt,
+    mode: "applied",
+  });
+  const boundedSkewPlane = plane(boundedSkewSender);
+  const boundedSkewPayload = { text: "Accept bounded positive Sender clock skew" };
+  const boundedSkewPrepared = await boundedSkewPlane.prepare(
+    createPrivateFollowupEffectIntent(trusted, {
+      deliveryAttemptRef: deliveryAttemptRef(),
+      idempotencyKey: "turn-68:bounded-positive-applied-at",
+      payload: boundedSkewPayload,
+    }),
+  );
+  if (boundedSkewPrepared.kind !== "prepared") {
+    throw new Error("bounded positive applied-at case did not prepare");
+  }
+  const boundedSkew = await boundedSkewPlane.perform(
+    boundedSkewPayload,
+    boundedSkewPrepared.ticket,
+  );
+  if (
+    boundedSkew.kind !== "applied"
+    || boundedSkew.receipt.appliedAt !== boundedSkewAppliedAt.toISOString()
+    || boundedSkewSender.callCount !== 1
+    || boundedSkewSender.effectCount !== 1
+  ) {
+    throw new Error("bounded positive Sender clock skew was not retained exactly");
+  }
+
+  const farFutureSender = new DeterministicPrivateSenderTwin({
+    clock: () => new Date("2099-07-24T08:00:00.000Z"),
+    mode: "applied",
+  });
+  const farFuturePlane = plane(farFutureSender);
+  const farFuturePayload = { text: "Reject excessive Sender clock skew" };
+  const farFuturePrepared = await farFuturePlane.prepare(
+    createPrivateFollowupEffectIntent(trusted, {
+      deliveryAttemptRef: deliveryAttemptRef(),
+      idempotencyKey: "turn-68:far-future-applied-at",
+      payload: farFuturePayload,
+    }),
+  );
+  if (farFuturePrepared.kind !== "prepared") {
+    throw new Error("far-future applied-at case did not prepare");
+  }
+  const farFuture = await farFuturePlane.perform(
+    farFuturePayload,
+    farFuturePrepared.ticket,
+  );
+  if (
+    farFuture.kind !== "reconciliation_required"
+    || farFutureSender.callCount !== 1
+    || farFutureSender.effectCount !== 1
+  ) {
+    throw new Error("excessive positive Sender clock skew created an applied receipt");
+  }
+  const farFutureReconciled = await farFuturePlane.reconcile(
+    createTrustedActionReconciliation({
+      appliedAt: new Date(),
+      disposition: "applied",
+      organizationId,
+      providerAttemptRef: farFuture.providerAttemptRef,
+      providerEffectDigest: "6".repeat(64),
+      reconciliationRef: "operator:far-future-applied-at-68",
+    }),
+  );
+  if (farFutureReconciled.kind !== "already_applied") {
+    throw new Error("far-future applied-at attempt did not reconcile as applied");
+  }
+
+  const collisionSender = new DeterministicPrivateSenderTwin({ mode: "applied" });
+  const collisionPlane = new ActionPlane({
+    database,
+    keyring,
+    profile,
+    providerAttemptRefFactory: () => applied.create_placeholder.providerAttemptRef,
+    receiptRefFactory: () =>
+      `acr_${(nextReceipt++).toString(16).padStart(32, "0")}`,
+    sender: collisionSender,
+    ticketRefFactory: () =>
+      `act_${(nextTicket++).toString(16).padStart(32, "0")}`,
+  });
+  const collisionPayload = { text: "Force a post-lock provider reference collision" };
+  const collisionPrepared = await collisionPlane.prepare(
+    createPrivateFollowupEffectIntent(trusted, {
+      deliveryAttemptRef: deliveryAttemptRef(),
+      idempotencyKey: "turn-68:post-lock-collision",
+      payload: collisionPayload,
+    }),
+  );
+  if (collisionPrepared.kind !== "prepared") {
+    throw new Error("post-lock collision case did not prepare");
+  }
+  const collisionClaims = inspectPreparedActionTicket(collisionPrepared.ticket, keyring);
+  const collisionLockKey =
+    `action-ticket-sender-session:${organizationId}:${collisionClaims.ticketRef}`;
+  const lockProbeSession = await database.connect();
+  let postLockFailureUnlocked = false;
+  let probeLockReleased = false;
+  try {
+    const collision = await collisionPlane.perform(
+      collisionPayload,
+      collisionPrepared.ticket,
+    );
+    if (
+      collision.kind !== "rejected"
+      || collision.effectCount !== 0
+      || collision.reasonCategory !== "not_available"
+      || collisionSender.callCount !== 0
+    ) {
+      throw new Error("post-lock provider reference collision reached Sender");
+    }
+    const probe = await lockProbeSession.query({
+      text: "SELECT pg_try_advisory_lock(hashtextextended($1::text, 0)) AS locked",
+      values: [collisionLockKey],
+    });
+    postLockFailureUnlocked = probe.rows[0]?.locked === true;
+    if (!postLockFailureUnlocked) {
+      throw new Error("post-lock begin failure leaked its Sender session lock");
+    }
+    const unlock = await lockProbeSession.query({
+      text: "SELECT pg_advisory_unlock(hashtextextended($1::text, 0)) AS unlocked",
+      values: [collisionLockKey],
+    });
+    if (unlock.rows[0]?.unlocked !== true) {
+      throw new Error("post-lock failure regression could not release its probe lock");
+    }
+    probeLockReleased = true;
+  } finally {
+    lockProbeSession.release(!probeLockReleased);
   }
 
   let releaseConcurrentSender;
@@ -221,6 +367,27 @@ try {
     throw new Error(
       `overlapping live perform did not observe in-flight state (${overlappingConcurrentPerform.kind})`,
     );
+  }
+  const concurrentProviderAttemptRef = overlappingConcurrentPerform.providerAttemptRef;
+  const prematureCrossProcessReconciliation = await database.query({
+    text: `SELECT * FROM context_action_reconcile_private_effect(
+      $1::uuid, $2::text, $3::text, $4::bytea, $5::timestamptz,
+      $6::text, $7::bytea, $8::text, $9::bigint
+    )`,
+    values: [
+      organizationId,
+      concurrentProviderAttemptRef,
+      "rejected",
+      null,
+      null,
+      `acr_${"f".repeat(32)}`,
+      Buffer.alloc(32, 0x68),
+      "action-digest-audit-retention-v1",
+      2_592_000,
+    ],
+  });
+  if (prematureCrossProcessReconciliation.rows[0]?.outcome !== "rejected") {
+    throw new Error("database allowed reconciliation while Sender session lock was held");
   }
   releaseConcurrentSender();
   const firstConcurrentResult = await firstConcurrentPerform;
@@ -266,7 +433,7 @@ try {
   ) {
     throw new Error("ambiguous retry minted or sent a second provider attempt");
   }
-  const appliedAt = new Date();
+  const appliedAt = new Date(Date.now() + 2_000);
   const reconciliation = createTrustedActionReconciliation({
     appliedAt,
     disposition: "applied",
@@ -290,6 +457,7 @@ try {
   if (
     reconciled.kind !== "already_applied"
     || reconciliationReplay.kind !== "already_applied"
+    || reconciled.receipt.appliedAt !== appliedAt.toISOString()
     || reconciledReplay.kind !== "already_applied"
     || conflicting.kind !== "rejected"
     || ambiguousSender.callCount !== 1
@@ -384,16 +552,49 @@ try {
     throw new Error("provider rejection did not become one terminal zero-effect result");
   }
 
+  let crashSessionOpened = false;
   let failCompletion = true;
+  let closedCrashSessions = 0;
+  let unlockAfterConnectionLossAttempts = 0;
   const crashDatabase = {
-    async query(query) {
-      if (
-        failCompletion
-        && query.text.includes("context_action_complete_private_effect")
-      ) {
-        failCompletion = false;
-        throw new Error("simulated process loss after Sender response");
+    async connect() {
+      if (crashSessionOpened) {
+        return database.connect();
       }
+      crashSessionOpened = true;
+      const client = new pg.Client({
+        application_name: "context-engine-action-perform-crash-session",
+        connectionString: databaseUrl,
+        statement_timeout: 5_000,
+      });
+      await client.connect();
+      let connectionClosed = false;
+      return {
+        async query(query) {
+          if (
+            failCompletion
+            && query.text.includes("context_action_complete_private_effect")
+          ) {
+            failCompletion = false;
+            await client.end();
+            connectionClosed = true;
+            closedCrashSessions += 1;
+            throw new Error("simulated connection loss after Sender response");
+          }
+          if (connectionClosed && query.text.includes("pg_advisory_unlock")) {
+            unlockAfterConnectionLossAttempts += 1;
+          }
+          return client.query(query);
+        },
+        release() {
+          if (!connectionClosed) {
+            connectionClosed = true;
+            void client.end();
+          }
+        },
+      };
+    },
+    async query(query) {
       return pool.query(query);
     },
   };
@@ -415,6 +616,8 @@ try {
     || crashReplay.kind !== "reconciliation_required"
     || crashed.providerAttemptRef !== crashReplay.providerAttemptRef
     || crashSender.callCount !== 1
+    || closedCrashSessions !== 1
+    || unlockAfterConnectionLossAttempts !== 1
   ) {
     throw new Error("post-Sender crash did not fence retry under the original attempt");
   }
@@ -448,13 +651,24 @@ try {
   for (const [name, mutate] of Object.entries(mutationSpecs)) {
     const sender = new DeterministicPrivateSenderTwin({ mode: "applied" });
     const hostileDatabase = {
+      async connect() {
+        const session = await database.connect();
+        return {
+          async query(query) {
+            if (!query.text.includes("context_action_begin_private_effect")) {
+              return session.query(query);
+            }
+            const values = [...query.values];
+            mutate(values);
+            return session.query({ ...query, values });
+          },
+          release(discard = false) {
+            session.release(discard);
+          },
+        };
+      },
       async query(query) {
-        if (!query.text.includes("context_action_begin_private_effect")) {
-          return pool.query(query);
-        }
-        const values = [...query.values];
-        mutate(values);
-        return pool.query({ ...query, values });
+        return pool.query(query);
       },
     };
     const actionPlane = plane(sender, hostileDatabase);
@@ -553,14 +767,22 @@ try {
       terminalReplay: reconciledReplay.kind,
     },
     applied,
+    boundedPositiveSkew: {
+      appliedAt: boundedSkew.receipt.appliedAt,
+      outcome: boundedSkew.kind,
+      senderCalls: boundedSkewSender.callCount,
+    },
     crash: {
+      closedSessions: closedCrashSessions,
       first: crashed.kind,
       reconcile: crashReconciled.kind,
       replay: crashReplay.kind,
       senderCalls: crashSender.callCount,
+      unlockAfterConnectionLossAttempts,
     },
     concurrent: {
       outcomes: concurrentKinds,
+      prematureReconciliation: prematureCrossProcessReconciliation.rows[0]?.outcome,
       senderCalls: concurrentSender.callCount,
       senderEffects: concurrentSender.effectCount,
     },
@@ -569,7 +791,16 @@ try {
       reasonCategory: expired.reasonCategory,
       senderCalls: expirySender.callCount,
     },
+    farFutureAppliedAt: {
+      outcome: farFuture.kind,
+      reconcile: farFutureReconciled.kind,
+      senderCalls: farFutureSender.callCount,
+    },
     mutationMatrix,
+    postLockFailure: {
+      senderCalls: collisionSender.callCount,
+      unlocked: postLockFailureUnlocked,
+    },
     rejected: {
       first: rejected.kind,
       firstReasonCategory: rejected.reasonCategory,
