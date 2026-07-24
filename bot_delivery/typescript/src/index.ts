@@ -349,7 +349,7 @@ interface ValidatedEvidence {
 interface ValidatedPackage {
   readonly canonicalPayload: Buffer;
   readonly evidence: readonly ValidatedEvidence[];
-  readonly package: ContextPackageWire;
+  readonly packageSnapshot: ContextPackageWire;
 }
 
 function requirePackage(
@@ -547,7 +547,7 @@ function requirePackage(
   return {
     canonicalPayload,
     evidence: Object.freeze(evidence),
-    package: value as ContextPackageWire,
+    packageSnapshot: JSON.parse(canonicalPayload.toString("utf8")) as ContextPackageWire,
   };
 }
 
@@ -657,7 +657,7 @@ export function prepareAuthorizedModelInput(
     .update(canonicalJson(envelope))
     .digest("hex");
   const providerRequest = Object.freeze({
-    context: Object.freeze(validated.package.blocks.map((block) => Object.freeze({
+    context: Object.freeze(validated.packageSnapshot.blocks.map((block) => Object.freeze({
       evidenceRefs: Object.freeze([...block.evidenceRefs]),
       text: block.text,
     }))),
@@ -670,7 +670,7 @@ export function prepareAuthorizedModelInput(
   return mintAuthorizedModelInput(Object.freeze({
     evidence: validated.evidence,
     grantDigest: createHash("sha256").update(grantValue.value).digest(),
-    package: validated.package,
+    package: validated.packageSnapshot,
     payloadDigest,
     profile,
     providerRequest,

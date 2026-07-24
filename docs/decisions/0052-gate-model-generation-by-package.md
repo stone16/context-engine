@@ -36,7 +36,9 @@ one versioned private model profile, and the trusted local time. It validates
 the exact frozen Package shape and digest, sufficient coverage, one-to-one
 Block/Evidence closure, Evidence lineage, audience, purpose, Policy Epoch,
 expiry, and input limits, then creates a nominal, redacted, non-serializing
-`AuthorizedModelInput`. Callers cannot construct or recover its private state.
+`AuthorizedModelInput` backed by a canonical independent Package snapshot.
+Callers cannot construct or recover its private state, and mutating the input
+wire object after preparation cannot change its authorization or provider bytes.
 Live, Mirrored, and Weak SourceAclEvidence are validated against the exact
 public OpenAPI union. Weak evidence additionally requires an ordered
 snapshot/check/package timeline, a proof not expired at preparation time, and

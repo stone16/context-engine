@@ -514,6 +514,48 @@ test("valid private Package and grant invoke the gateway once and return bounded
   );
 });
 
+test("AuthorizedModelInput snapshots its Package before caller mutation", async () => {
+  const authorizedPackage = contextPackage();
+  const mutablePackage = structuredClone(authorizedPackage);
+  const profile = privateModelGatewayProfileV1();
+  const input = prepareAuthorizedModelInput({
+    envelope: { instructions: "Use context.", question: "Question?" },
+    grant,
+    now,
+    package: mutablePackage,
+    profile,
+  });
+  const gateway = new DeterministicModelGatewayTwin({
+    citations: [authorizedPackage.evidence[0].evidenceRef],
+    costMicrounits: 1,
+    elapsedMs: 1,
+    profile,
+    text: "Authorized answer.",
+  });
+
+  mutablePackage.expiresAt = "not-a-timestamp";
+  mutablePackage.packageDigest = "0".repeat(64);
+  mutablePackage.purpose = "context.tampered";
+  mutablePackage.audienceDigest = "0".repeat(64);
+  mutablePackage.policyEpoch = 999;
+  mutablePackage.blocks[0].text = "post-prepare denied secret";
+  mutablePackage.evidence[0].citationOpenRef = `cor_${"9".repeat(64)}`;
+
+  const outcome = await configuredBoundary({
+    database: exactRedemptionDatabase(authorizedPackage),
+    gateway,
+    profile,
+  }).generate(input, grant);
+
+  assert.equal(outcome.kind, "generated");
+  assert.equal(gateway.callCount, 1);
+  assert.equal(JSON.stringify(gateway.requests).includes("post-prepare denied secret"), false);
+  assert.deepEqual(outcome.answer.citations, [{
+    citationOpenRef: authorizedPackage.evidence[0].citationOpenRef,
+    evidenceRef: authorizedPackage.evidence[0].evidenceRef,
+  }]);
+});
+
 test("provider request contains only declared question, instructions, and authorized Package blocks", async () => {
   const packageValue = contextPackage();
   const profile = privateModelGatewayProfileV1();
