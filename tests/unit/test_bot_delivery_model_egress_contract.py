@@ -37,6 +37,11 @@ def test_typescript_model_egress_is_closed_pinned_and_zero_byte_on_denial() -> N
     public_source = (BOT_DELIVERY_ROOT / "src/public.ts").read_text(encoding="utf-8")
     assert "ModelEgressDatabase" not in public_source
     assert "createModelGenerationBoundaryForTest" not in public_source
+    live_integration = (
+        ROOT / "tests/integration/test_z_egress_grant_file.py"
+    ).read_text(encoding="utf-8")
+    assert "local_production_dependencies" in live_integration
+    assert '"optionalDependencies": local_optional_dependencies' in live_integration
 
     for cwd, command in (
         (ROOT / "sdk/typescript", ["npm", "run", "build"]),

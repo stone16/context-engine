@@ -262,6 +262,26 @@ def _pack_and_install_sdk(consumer_root: Path) -> None:
     )
     bot_report = json.loads(bot_pack.stdout)
     bot_artifact_name = bot_report[0]["filename"]
+    bot_lock = json.loads(
+        (ROOT / "bot_delivery/typescript/package-lock.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    local_production_dependencies: dict[str, str] = {}
+    local_optional_dependencies: dict[str, str] = {}
+    for dependency_path, metadata in bot_lock["packages"].items():
+        if not dependency_path.startswith("node_modules/") or metadata.get("dev"):
+            continue
+        dependency_root = ROOT / "bot_delivery/typescript" / dependency_path
+        dependency_document = json.loads(
+            (dependency_root / "package.json").read_text(encoding="utf-8")
+        )
+        target = (
+            local_optional_dependencies
+            if metadata.get("optional")
+            else local_production_dependencies
+        )
+        target[dependency_document["name"]] = f"file:{dependency_root}"
     (consumer_root / "package.json").write_text(
         json.dumps(
             {
@@ -275,7 +295,9 @@ def _pack_and_install_sdk(consumer_root: Path) -> None:
                     "@context-engine/resolve-sdk": (
                         f"file:{artifact_root / artifact_name}"
                     ),
+                    **local_production_dependencies,
                 },
+                "optionalDependencies": local_optional_dependencies,
             }
         ),
         encoding="utf-8",
