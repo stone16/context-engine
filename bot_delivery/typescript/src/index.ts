@@ -6,7 +6,7 @@ import type {
 } from "@context-engine/resolve-sdk";
 import pg from "pg";
 
-import { canonicalJson } from "./canonical-json.js";
+import { canonicalJson, contextPackageDocumentDigest } from "./canonical-json.js";
 
 const { Pool } = pg;
 
@@ -503,7 +503,7 @@ function requirePackage(
   }
   const digestDocument = { ...packageRecord };
   delete digestDocument.packageDigest;
-  const computedDigest = createHash("sha256").update(canonicalJson(digestDocument)).digest("hex");
+  const computedDigest = contextPackageDocumentDigest(digestDocument);
   if (!safeEqual(packageDigest, computedDigest)) {
     throw new TypeError("Package digest does not match its complete document");
   }

@@ -17,7 +17,10 @@ import {
   privateModelGatewayProfileV1,
   prepareAuthorizedModelInput,
 } from "../dist/index.js";
-import { canonicalJsonDigest } from "../dist/canonical-json.js";
+import {
+  canonicalJsonDigest,
+  contextPackageDocumentDigest,
+} from "../dist/canonical-json.js";
 
 const packageDigest = (document) => createHash("sha256")
   .update(canonicalize(document))
@@ -184,7 +187,14 @@ test("TypeScript and Python share RFC 8785/I-JSON vectors", () => {
   ));
   assert.equal(fixture.profile, "rfc8785-ijson-cross-language-v1");
   for (const vector of fixture.valid) {
-    assert.equal(canonicalJsonDigest(vector.document), vector.sha256, vector.name);
+    assert.equal(contextPackageDocumentDigest(vector.document), vector.sha256, vector.name);
+  }
+  for (const vector of fixture.invalidPackageDocuments) {
+    assert.throws(
+      () => contextPackageDocumentDigest(vector.document),
+      /must not contain packageDigest/,
+      vector.name,
+    );
   }
   for (const vector of fixture.invalidJsonDocuments) {
     assert.throws(

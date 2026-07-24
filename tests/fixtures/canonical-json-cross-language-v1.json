@@ -43,5 +43,11 @@
   "invalidJsonDocuments": [
     { "name": "lone-high-surrogate", "json": "{\"value\":\"\\ud800\"}" },
     { "name": "lone-low-surrogate-key", "json": "{\"key\\udfff\":\"value\"}" }
+  ],
+  "invalidPackageDocuments": [
+    {
+      "name": "nested-package-digest",
+      "document": { "nested": { "packageDigest": "0000000000000000000000000000000000000000000000000000000000000000" } }
+    }
   ]
 }

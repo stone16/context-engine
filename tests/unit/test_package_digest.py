@@ -39,6 +39,9 @@ def test_python_and_typescript_share_rfc8785_ijson_vectors() -> None:
         document = json.loads(vector["json"])
         with pytest.raises(ValueError, match="Unicode scalar values"):
             canonicalize_context_package(document)
+    for vector in fixture["invalidPackageDocuments"]:
+        with pytest.raises(ValueError, match="packageDigest"):
+            canonicalize_context_package(vector["document"])
 
 
 def test_context_package_digest_has_a_fixed_canonical_unicode_vector() -> None:

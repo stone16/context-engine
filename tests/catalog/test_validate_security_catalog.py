@@ -1401,6 +1401,10 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
         self.assertIn("production provider ModelGateway", future_carriers)
         self.assertIn("real model or provider network call", not_active)
         self.assertIn("model-authored effect intent or ActionTicket", not_active)
+        self.assertEqual(
+            REQUIRED_RUNTIME_EVIDENCE["EGRESS-011"],
+            ("EGR-003", "EGR-005", "EGR-006", "RUN-014", "SDK-MODEL-EGRESS-070"),
+        )
 
     def test_schema_independently_freezes_full_accept_008_as_future(self) -> None:
         catalog = make_catalog()

@@ -61,7 +61,9 @@ Every digest-bearing TypeScript document is constrained to exact JSON values,
 finite IEEE 754 numbers, dense arrays, enumerable data properties, and Unicode
 scalar strings and keys before RFC 8785 encoding. One shared Python/TypeScript
 fixture fixes Unicode, UTF-16 property order, numeric edge, and lone-surrogate
-rejection behavior so the two digest authorities cannot silently diverge.
+rejection behavior so the two digest authorities cannot silently diverge. The
+wire-level `packageDigest` is excluded before hashing; any nested digest field
+is rejected in both runtimes rather than silently excluded.
 
 The module registers one exact versioned profile for the activated deterministic
 carrier and exposes only its zero-argument factory; callers cannot construct a

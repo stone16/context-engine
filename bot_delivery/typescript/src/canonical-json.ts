@@ -83,6 +83,26 @@ export function canonicalJson(value: unknown): Buffer {
   return Buffer.from(encoded, "utf8");
 }
 
+function rejectEmbeddedPackageDigest(value: unknown): void {
+  if (Array.isArray(value)) {
+    for (const item of value) rejectEmbeddedPackageDigest(item);
+    return;
+  }
+  if (typeof value !== "object" || value === null) return;
+  for (const key of Object.keys(value)) {
+    if (key === "packageDigest") {
+      throw new TypeError("Package digest document must not contain packageDigest");
+    }
+    rejectEmbeddedPackageDigest((value as Readonly<Record<string, unknown>>)[key]);
+  }
+}
+
+/** Digest one Package document whose wire-level digest field has been excluded. */
+export function contextPackageDocumentDigest(value: unknown): string {
+  rejectEmbeddedPackageDigest(value);
+  return createHash("sha256").update(canonicalJson(value)).digest("hex");
+}
+
 /** Internal conformance seam; package exports do not expose this module. */
 export function canonicalJsonDigest(value: unknown): string {
   return createHash("sha256").update(canonicalJson(value)).digest("hex");
