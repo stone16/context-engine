@@ -1247,7 +1247,7 @@ def upgrade() -> None:
                 IF requested_disposition = 'rejected' AND
                    reconciliation_record.decision_digest = requested_decision_digest
                 THEN
-                    RETURN QUERY SELECT 'rejected'::text,
+                    RETURN QUERY SELECT 'provider_rejected'::text,
                         requested_provider_attempt_ref, NULL::text, NULL::text,
                         NULL::uuid, NULL::text, NULL::text, NULL::text,
                         NULL::bytea, NULL::bytea, NULL::bytea, NULL::bytea,
@@ -1348,7 +1348,7 @@ def upgrade() -> None:
                     'reconciled_rejected', authority_now,
                     requested_retention_policy_ref, authority_retain_until
                 );
-                RETURN QUERY SELECT 'rejected'::text,
+                RETURN QUERY SELECT 'provider_rejected'::text,
                     requested_provider_attempt_ref, NULL::text, NULL::text,
                     NULL::uuid, NULL::text, NULL::text, NULL::text, NULL::bytea,
                     NULL::bytea, NULL::bytea, NULL::bytea, NULL::bytea,

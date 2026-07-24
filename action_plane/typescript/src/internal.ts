@@ -1604,7 +1604,9 @@ export class ActionPlane {
     return {
       effectCount: 0,
       kind: "rejected",
-      reasonCategory: row?.outcome === "rejected" ? "provider_rejected" : "not_available",
+      reasonCategory: row?.outcome === "provider_rejected"
+        ? "provider_rejected"
+        : "not_available",
     };
   }
 

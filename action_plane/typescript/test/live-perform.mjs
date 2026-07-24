@@ -519,6 +519,12 @@ try {
   const rejectedReconciliationReplay = await reconcileRejectedPlane.reconcile(
     rejectedReconciliation,
   );
+  if (
+    reconciledRejected.reasonCategory !== "provider_rejected"
+    || rejectedReconciliationReplay.reasonCategory !== "provider_rejected"
+  ) {
+    throw new Error("terminal rejected reconciliation lost its reason category");
+  }
   const reconciledRejectedReplay = await reconcileRejectedPlane.perform(
     reconcileRejectedPayload,
     reconcileRejectedPrepared.ticket,
@@ -538,6 +544,7 @@ try {
     || rejectedReconciliationReplay.kind !== "rejected"
     || reconciledRejectedReplay.kind !== "rejected"
     || rejectedConflict.kind !== "rejected"
+    || rejectedConflict.reasonCategory !== "not_available"
     || reconcileRejectedSender.callCount !== 1
   ) {
     throw new Error("rejected reconciliation is not monotonic and replay-safe");
@@ -834,9 +841,13 @@ try {
     },
     reconciledRejected: {
       conflict: rejectedConflict.kind,
+      conflictReasonCategory: rejectedConflict.reasonCategory,
       first: reconcileRejectedAmbiguous.kind,
       reconcile: reconciledRejected.kind,
+      reconcileReasonCategory: reconciledRejected.reasonCategory,
       reconciliationReplay: rejectedReconciliationReplay.kind,
+      reconciliationReplayReasonCategory:
+        rejectedReconciliationReplay.reasonCategory,
       replay: reconciledRejectedReplay.kind,
       senderCalls: reconcileRejectedSender.callCount,
     },

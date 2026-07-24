@@ -403,9 +403,12 @@ def test_private_perform_is_one_shot_replayable_and_reconcilable(
             assert ambiguous["senderCalls"] == 1
             assert result["reconciledRejected"] == {
                 "conflict": "rejected",
+                "conflictReasonCategory": "not_available",
                 "first": "reconciliation_required",
                 "reconcile": "rejected",
+                "reconcileReasonCategory": "provider_rejected",
                 "reconciliationReplay": "rejected",
+                "reconciliationReplayReasonCategory": "provider_rejected",
                 "replay": "rejected",
                 "senderCalls": 1,
             }
