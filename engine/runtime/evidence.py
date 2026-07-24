@@ -1,11 +1,17 @@
 """Nominal exact-authorization and request-scoped Evidence contracts."""
 
+from __future__ import annotations
+
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import StrEnum
 from hashlib import sha256
-from typing import Final, NoReturn
+from typing import TYPE_CHECKING, Final, NoReturn
 from uuid import UUID
+
+if TYPE_CHECKING:
+    from engine.runtime.contracts import CitationOpenRef
 
 __all__ = [
     "AuthorizedProjection",
@@ -37,8 +43,7 @@ def _require_opaque_ref(field_name: str, value: object) -> str:
         or any(character.isspace() for character in value)
     ):
         raise ValueError(
-            f"{field_name} must be a non-empty bounded opaque string without "
-            "whitespace"
+            f"{field_name} must be a non-empty bounded opaque string without whitespace"
         )
     return value
 
@@ -60,9 +65,7 @@ def _require_utc_as_of(value: object) -> datetime:
 
 
 def _require_evidence_ref(value: object) -> str:
-    expected_length = (
-        len(EVIDENCE_REF_PREFIX) + 1 + EVIDENCE_REF_ENTROPY_LENGTH
-    )
+    expected_length = len(EVIDENCE_REF_PREFIX) + 1 + EVIDENCE_REF_ENTROPY_LENGTH
     if (
         type(value) is not str
         or len(value) != expected_length
@@ -371,6 +374,7 @@ class Evidence:
     fragment_ref: str
     projected_field_refs: tuple[str, ...]
     lineage: EvidenceLineage
+    citation_open_ref: CitationOpenRef | None = field(default=None, repr=False)
     _integrity_digest: str = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -387,6 +391,11 @@ class Evidence:
             )
         if type(self.lineage) is not EvidenceLineage:
             raise TypeError("Evidence lineage must be EvidenceLineage")
+        if self.citation_open_ref is not None:
+            from engine.runtime.contracts import CitationOpenRef
+
+            if type(self.citation_open_ref) is not CitationOpenRef:
+                raise TypeError("Evidence citation_open_ref must be CitationOpenRef")
         validate_projected_field_refs(self.projected_field_refs)
         self.lineage.__post_init__()
         object.__setattr__(self, "_integrity_digest", _evidence_integrity_digest(self))
@@ -434,6 +443,11 @@ def _evidence_integrity_digest(evidence: Evidence) -> str:
         canonical += _encode_text(value)
     for field_ref in evidence.projected_field_refs:
         canonical += _encode_text(field_ref)
+    canonical += _encode_text(
+        evidence.citation_open_ref.value
+        if evidence.citation_open_ref is not None
+        else ""
+    )
     canonical += _lineage_canonical_bytes(evidence.lineage)
     return sha256(canonical).hexdigest()
 
@@ -538,6 +552,37 @@ def _construct_validated_package_content(
     object.__setattr__(content, "blocks", blocks)
     object.__setattr__(content, "evidence", evidence)
     return content
+
+
+def _attach_citation_open_refs(
+    content: PackageContent,
+    references: Mapping[str, CitationOpenRef],
+) -> PackageContent:
+    """Bind issued locators to already-authorized Evidence without reopening it."""
+
+    from engine.runtime.contracts import CitationOpenRef
+
+    if type(content) is not PackageContent or not isinstance(references, Mapping):
+        raise TypeError("citation attachment requires PackageContent and a mapping")
+    expected = {item.evidence_ref for item in content.evidence}
+    if set(references) != expected or any(
+        type(reference) is not CitationOpenRef for reference in references.values()
+    ):
+        raise ValueError("citation references must cover exact authorized Evidence")
+    evidence = tuple(
+        Evidence(
+            evidence_ref=item.evidence_ref,
+            source_ref=item.source_ref,
+            resource_ref=item.resource_ref,
+            revision_ref=item.revision_ref,
+            fragment_ref=item.fragment_ref,
+            projected_field_refs=item.projected_field_refs,
+            lineage=item.lineage,
+            citation_open_ref=references[item.evidence_ref],
+        )
+        for item in content.evidence
+    )
+    return _construct_validated_package_content(content.blocks, evidence)
 
 
 def _candidate_sort_key(candidate_ref: CandidateRef) -> tuple[object, ...]:

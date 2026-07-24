@@ -22,6 +22,15 @@ from engine.runtime.capabilities import (
     UnsupportedCapabilityAuditReceipt,
     _required_capability_for_request,
 )
+from engine.runtime.citation import (
+    CitationAuthorityUnavailable,
+    CitationLocatorNotAvailable,
+    CitationOpenIssue,
+    CitationOpenProfile,
+    CitationOpenRedemption,
+    issue_citation_open_ref,
+    redeem_citation_open_ref,
+)
 from engine.runtime.content_io import (
     CandidateIndex,
     RuntimeContentIo,
@@ -74,6 +83,7 @@ from engine.runtime.evidence import (
     CandidateRef,
     EvidenceLineage,
     PackageContent,
+    _attach_citation_open_refs,
     _candidate_sort_key,
     _close_authorization_kernel_scope,
     _construct_authorized_projection,
@@ -232,6 +242,32 @@ class PolicyGate:
             effective_scope=EffectiveScope(frozenset()),
         )
 
+    def validate_open_citation(
+        self,
+        invocation: AuthenticatedInvocation,
+        delivery_context: TrustedDeliveryContext,
+        request: OpenCitation,
+    ) -> PolicyReceipt:
+        """Compute current full trusted scope; the locator contributes no authority."""
+
+        if type(request) is not OpenCitation:
+            raise TypeError("Runtime request must be OpenCitation")
+        _validate_trusted_invocation_and_delivery(invocation, delivery_context)
+        effective_scope = (
+            compute_effective_scope(
+                _trusted_operands_from_snapshot(invocation.trusted_scope_snapshot),
+                OMITTED_REQUEST_NARROWING,
+            )
+            if invocation.trusted_scope_snapshot.policy_epoch == invocation.policy_epoch
+            else EffectiveScope(frozenset())
+        )
+        return PolicyReceipt(
+            request_id=invocation.request_id,
+            purpose=delivery_context.purpose,
+            policy_epoch=invocation.policy_epoch,
+            effective_scope=effective_scope,
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class PolicyEpochGate:
@@ -256,9 +292,11 @@ class PackageBudgetGate:
     def intersect(
         self,
         server_budget: PackageBudget,
-        request: Acquire | Continue,
+        request: Acquire | Continue | OpenCitation,
     ) -> PackageBudget:
-        return effective_package_budget(server_budget, request.package_budget)
+        if isinstance(request, Acquire | Continue):
+            return effective_package_budget(server_budget, request.package_budget)
+        return effective_package_budget(server_budget, None)
 
     def preflight(
         self,
@@ -610,6 +648,54 @@ class AuthorizationKernel:
             content=content,
         )
 
+    def authorize_open_citation(
+        self,
+        invocation: AuthenticatedInvocation,
+        delivery_context: TrustedDeliveryContext,
+        request: OpenCitation,
+        *,
+        candidate: CandidateRef | None,
+        server_budget: PackageBudget,
+        as_of: datetime,
+        reference_issuer: _OpaqueReferenceIssuer,
+        projection_session: MaterializedProjectionSession | None,
+    ) -> AuthorizationDecision:
+        """Reauthorize one content-free locator target through the exact Kernel."""
+
+        policy_receipt = self._policy.validate_open_citation(
+            invocation,
+            delivery_context,
+            request,
+        )
+        if not self._policy_epoch.is_current(
+            invocation.user_actor.policy_epoch_verification
+        ):
+            policy_receipt = replace(
+                policy_receipt,
+                effective_scope=EffectiveScope(frozenset()),
+            )
+        effective_budget = self._budget.intersect(server_budget, request)
+        provenance_receipt = self._provenance.issue(
+            invocation,
+            policy_receipt,
+            as_of=as_of,
+            reference_issuer=reference_issuer,
+        )
+        content = self._authorize_and_assemble(
+            invocation,
+            policy_receipt,
+            provenance_receipt,
+            effective_budget,
+            (candidate,) if candidate is not None else (),
+            projection_session,
+        )
+        return AuthorizationDecision(
+            effective_budget=effective_budget,
+            policy_receipt=policy_receipt,
+            provenance_receipt=provenance_receipt,
+            content=content,
+        )
+
     def preflight_unavailable_request(
         self,
         invocation: AuthenticatedInvocation,
@@ -766,7 +852,7 @@ class AuthorizationKernel:
         candidates: tuple[CandidateRef, ...],
         projection_session: MaterializedProjectionSession | None,
     ) -> PackageContent:
-        if not candidates:
+        if not candidates or not policy_receipt.effective_scope.targets:
             return construct_package_content(())
         if projection_session is None:
             raise RuntimeConfigurationError(
@@ -929,6 +1015,7 @@ class Runtime:
         clock: Callable[[], datetime] = _utc_now,
         query_digest_keyring: QueryDigestKeyring | None = None,
         egress_profile: EgressProfile = INTERNAL_ONLY_EGRESS_PROFILE,
+        citation_profile: CitationOpenProfile | None = None,
     ) -> None:
         validated = _validate_kernel_dependencies(dependencies)
         if type(package_ttl_seconds) is not int or package_ttl_seconds <= 0:
@@ -990,6 +1077,14 @@ class Runtime:
                 "egress_profile must be one closed server-owned profile"
             )
         self._egress_profile = egress_profile
+        if citation_profile is not None:
+            if type(citation_profile) is not CitationOpenProfile:
+                raise TypeError("citation_profile must be CitationOpenProfile or None")
+            if timedelta(seconds=package_ttl_seconds) > citation_profile.maximum_ttl:
+                raise RuntimeConfigurationError(
+                    "citation profile lifetime must cover the Package TTL"
+                )
+        self._citation_profile = citation_profile
         self._reference_issuer = _OpaqueReferenceIssuer()
 
     @overload
@@ -1014,7 +1109,7 @@ class Runtime:
         invocation: AuthenticatedInvocation,
         delivery_context: TrustedDeliveryContext,
         request: OpenCitation,
-    ) -> CitationNotAvailable: ...
+    ) -> Resolved | CitationNotAvailable: ...
 
     @overload
     def resolve(
@@ -1047,7 +1142,10 @@ class Runtime:
                 "mandatory AuthorizationKernel is missing or invalid"
             )
         try:
-            self._capability_gate.require_available(capability)
+            self._capability_gate.require_available(
+                capability,
+                citation_open_active=self._citation_profile is not None,
+            )
         except UnsupportedCapability:
             self._kernel.preflight_unavailable_request(
                 invocation,
@@ -1061,21 +1159,22 @@ class Runtime:
                 return CitationNotAvailable()
             return RequestNotAvailable()
 
-        if capability is not RuntimeCapability.MATERIALIZED_ACQUIRE:
+        if capability not in {
+            RuntimeCapability.MATERIALIZED_ACQUIRE,
+            RuntimeCapability.OPEN_CITATION,
+        }:
             raise RuntimeConfigurationError(
                 "available Acquire capability has no sealed implementation"
             )
-        if request_type is not Acquire:
+        if request_type not in {Acquire, OpenCitation}:
             raise RuntimeConfigurationError(
                 "available future Runtime carrier has no sealed implementation"
             )
-        assert isinstance(request, Acquire)
-        acquire = request
 
         active_release = invocation.user_actor.active_runtime_release
         if active_release is None:
             raise ActiveReleaseUnavailable(
-                "Acquire requires one Learning-published active release"
+                "Runtime delivery requires one Learning-published active release"
             )
         if active_release.organization_id != invocation.user_actor.organization_id:
             raise ActiveReleaseUnavailable(
@@ -1083,23 +1182,85 @@ class Runtime:
             )
 
         as_of = _require_utc("Runtime clock", self._clock())
-        decision = self._kernel.authorize_acquire(
-            invocation,
-            delivery_context,
-            acquire,
-            server_budget=self._server_budget,
-            as_of=as_of,
-            reference_issuer=self._reference_issuer,
-            candidate_index=(
-                self._content_io.index if self._candidate_discovery_enabled else None
-            ),
-            projection_session=(invocation.user_actor.materialized_projection_session),
-        )
+        if request_type is Acquire:
+            assert isinstance(request, Acquire)
+            decision = self._kernel.authorize_acquire(
+                invocation,
+                delivery_context,
+                request,
+                server_budget=self._server_budget,
+                as_of=as_of,
+                reference_issuer=self._reference_issuer,
+                candidate_index=(
+                    self._content_io.index
+                    if self._candidate_discovery_enabled
+                    else None
+                ),
+                projection_session=(
+                    invocation.user_actor.materialized_projection_session
+                ),
+            )
+        else:
+            assert isinstance(request, OpenCitation)
+            citation_session = invocation.user_actor.citation_open_session
+            if citation_session is None:
+                raise CitationAuthorityUnavailable("citation authority unavailable")
+            try:
+                target = redeem_citation_open_ref(
+                    citation_session,
+                    CitationOpenRedemption(
+                        citation_open_ref=request.citation_open_ref,
+                        organization_id=invocation.user_actor.organization_id,
+                        opened_at=as_of,
+                    ),
+                )
+            except CitationLocatorNotAvailable:
+                target = None
+            decision = self._kernel.authorize_open_citation(
+                invocation,
+                delivery_context,
+                request,
+                candidate=(target.candidate_ref if target is not None else None),
+                server_budget=self._server_budget,
+                as_of=as_of,
+                reference_issuer=self._reference_issuer,
+                projection_session=(
+                    invocation.user_actor.materialized_projection_session
+                ),
+            )
         finalized = self._kernel.finalize_for_delivery(invocation, decision)
         policy_receipt = finalized.policy_receipt
         content = finalized.content
         audit_receipt = finalized.audit_receipt
         provenance = finalized.provenance_receipt
+        if self._citation_profile is not None and content.evidence:
+            citation_session = invocation.user_actor.citation_open_session
+            if citation_session is None:
+                raise CitationAuthorityUnavailable("citation authority unavailable")
+            citation_references = {}
+            for item in content.evidence:
+                try:
+                    revision_id = UUID(item.revision_ref)
+                except ValueError:
+                    raise CitationAuthorityUnavailable(
+                        "citation authority unavailable"
+                    ) from None
+                citation_references[item.evidence_ref] = issue_citation_open_ref(
+                    citation_session,
+                    CitationOpenIssue(
+                        organization_id=invocation.user_actor.organization_id,
+                        package_ref=provenance.package_id,
+                        evidence_ref=item.evidence_ref,
+                        resource_ref=item.resource_ref,
+                        revision_id=revision_id,
+                        fragment_ref=item.fragment_ref,
+                        issued_at=provenance.as_of,
+                        expires_at=provenance.as_of
+                        + timedelta(seconds=self._package_ttl_seconds),
+                    ),
+                    profile=self._citation_profile,
+                )
+            content = _attach_citation_open_refs(content, citation_references)
         audience_digest = delivery_context.audience_digest
         if audience_digest is None:
             audience_digest = direct_egress_audience_digest(
@@ -1145,18 +1306,22 @@ class Runtime:
                 reason=audit_receipt.reason,
             ),
         )
-        egress_grant = self._kernel.finalize_egress(
-            invocation=invocation,
-            delivery_context=delivery_context,
-            provenance=provenance,
-            package=package,
-            profile=self._egress_profile,
-            issued_at=as_of,
+        egress_grant = (
+            self._kernel.finalize_egress(
+                invocation=invocation,
+                delivery_context=delivery_context,
+                provenance=provenance,
+                package=package,
+                profile=self._egress_profile,
+                issued_at=as_of,
+            )
+            if request_type is Acquire or package.evidence
+            else None
         )
         persistence_session = invocation.user_actor.context_run_persistence_session
         if persistence_session is None:
             raise ContextRunPersistenceUnavailable(
-                "Acquire requires durable ContextRun persistence"
+                "Runtime delivery requires durable ContextRun persistence"
             )
         if self._query_digest_keyring is None:
             raise ContextRunPersistenceUnavailable(
@@ -1164,7 +1329,7 @@ class Runtime:
             )
         run_record, decision_audit = build_context_run_records(
             invocation=invocation,
-            request=acquire,
+            request=request,
             provenance=provenance,
             package=package,
             final_effective_scope=policy_receipt.effective_scope,
@@ -1176,6 +1341,8 @@ class Runtime:
             run_record,
             decision_audit,
         )
+        if request_type is OpenCitation and not package.evidence:
+            return CitationNotAvailable()
         return Resolved(
             package=package,
             effective_budget=decision.effective_budget,
@@ -1201,7 +1368,10 @@ class Runtime:
         capability = self._required_capability(request)
         gate = RuntimeCapabilityGate()
         try:
-            gate.require_available(capability)
+            gate.require_available(
+                capability,
+                citation_open_active=self._citation_profile is not None,
+            )
         except UnsupportedCapability:
             return False
         return True

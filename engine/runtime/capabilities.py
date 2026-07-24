@@ -75,10 +75,20 @@ class RuntimeCapabilityGate:
 
     __slots__ = ()
 
-    def require_available(self, capability: RuntimeCapability) -> None:
+    def require_available(
+        self,
+        capability: RuntimeCapability,
+        *,
+        citation_open_active: bool = False,
+    ) -> None:
         if type(capability) is not RuntimeCapability:
             raise TypeError("capability must be RuntimeCapability")
-        if capability not in M0_RUNTIME_CAPABILITY_DECLARATION.available:
+        if type(citation_open_active) is not bool:
+            raise TypeError("citation_open_active must be bool")
+        available = M0_RUNTIME_CAPABILITY_DECLARATION.available
+        if citation_open_active:
+            available = available | frozenset({RuntimeCapability.OPEN_CITATION})
+        if capability not in available:
             raise UnsupportedCapability
 
 

@@ -405,6 +405,9 @@ REQUIRED_POSTGRES_EVIDENCE["ACTION-SEPARATION-014"] = (
     "PG-ACTION-PREPARE-067",
     "PG-ACTION-PERFORM-068",
 )
+REQUIRED_PROPERTY_EVIDENCE["CITATION-AUTH-010"] = ("PROP-CITATION-AUTH-010",)
+REQUIRED_POSTGRES_EVIDENCE["CITATION-AUTH-010"] = ("PG-CITATION-AUTH-010",)
+REQUIRED_RUNTIME_EVIDENCE["CITATION-AUTH-010"] = ("RUNTIME-CITATION-AUTH-010",)
 
 ACCEPT_002_ACTIVE_CARRIER: dict[str, str] = {
     "statusAtM0": "available",
@@ -438,12 +441,12 @@ ACCEPT_009_FUTURE_CARRIER: dict[str, str] = {
 }
 
 ACCEPT_010_FUTURE_CARRIER: dict[str, str] = {
-    "statusAtM0": "future",
-    "m0Expectation": "fail_closed",
+    "statusAtM0": "available",
+    "m0Expectation": "active_fail_closed",
     "upgradeTrigger": (
-        "The owning M2 OpenCitation implementation issue upgrades this "
-        "fixture only after current-opener authorization and distinct token "
-        "variants exist at the public HTTP seam."
+        "Issue #69 activates private/direct File citation opens through the "
+        "public HTTP and generated SDK seams; extend only when group/public "
+        "AudienceSnapshot and Continue carriers activate."
     ),
 }
 
@@ -543,8 +546,8 @@ CANONICAL_UNAVAILABLE_CAPABILITY_ACTIVATION: dict[str, object] = {
     "issueRef": "#16",
     "invariantRef": "INDEX-NOT-AUTHORITY-005",
     "carrier": (
-        "ContextRuntime.resolve(Continue | OpenCitation | server-owned "
-        "unavailable Acquire plan)"
+        "ContextRuntime.resolve(Continue | profile-disabled OpenCitation | "
+        "server-owned unavailable Acquire plan)"
     ),
     "status": "active_fail_closed",
     "policyEpochScope": "organization-v0",
@@ -555,7 +558,8 @@ CANONICAL_UNAVAILABLE_CAPABILITY_ACTIVATION: dict[str, object] = {
             "surface": "tests/unit/test_runtime_unavailable_capabilities.py",
             "oracle": (
                 "Table-driven Runtime cases prove unavailable Continue, "
-                "OpenCitation, and server-owned Acquire plans traverse the "
+                "profile-disabled OpenCitation, and server-owned Acquire plans "
+                "traverse the "
                 "content-free sealed Kernel preflight and stop before Provider, "
                 "index, or source I/O; the restricted mandatory audit retains "
                 "only UNSUPPORTED_CAPABILITY."
@@ -575,17 +579,16 @@ CANONICAL_UNAVAILABLE_CAPABILITY_ACTIVATION: dict[str, object] = {
     ],
     "deferredEvidence": [
         "real-continuation-redemption",
-        "real-citation-redemption",
         "real-federated-source-native-authorization",
     ],
     "futureCarriers": [
         "Continue",
-        "OpenCitation",
         "federated/source-native ContextProvider",
+        "group/public Runtime carrier",
     ],
     "notActive": [
         "continuation issuance/redemption",
-        "citation locator redemption",
+        "profile-enabled OpenCitation in this issue-16 activation",
         "federated Provider/source-native ACL I/O",
         "File publication",
     ],
@@ -812,7 +815,7 @@ CANONICAL_CONTEXT_RUN_ACTIVATION: dict[str, object] = {
         "OBS-003 production debug-endpoint authorization",
     ],
     "futureCarriers": [
-        "Continue and OpenCitation ContextRun lineage",
+        "Continue ContextRun lineage",
         "full retrieval candidate/ranking traces",
         "authorized feedback and golden-set extraction",
         "explicitly approved full-Package retention",
@@ -921,7 +924,7 @@ CANONICAL_FIELD_PROJECTION_ACTIVATION: dict[str, object] = {
     "futureCarriers": [
         "production ContextProvider native field projection",
         "File and Base ingestion field ACL",
-        "Continue and OpenCitation field projection",
+        "Continue field projection",
         "field-policy change independent of Membership version",
     ],
     "notActive": [
@@ -1037,13 +1040,11 @@ CANONICAL_PRIVATE_DELIVERY_EVIDENCE_ACTIVATION: dict[str, object] = {
     ],
     "deferredEvidence": [
         "group AudienceSnapshot DeliveryEvidenceRef",
-        "generated TypeScript SDK carrier",
         "production BotDelivery caller",
     ],
     "futureCarriers": [
         "public group DeliveryEvidenceRef",
-        "OpenCitation delivery evidence",
-        "generated TypeScript SDK",
+        "private group DeliveryEvidenceRef",
         "private BotDelivery application",
     ],
     "notActive": [
@@ -1052,7 +1053,6 @@ CANONICAL_PRIVATE_DELIVERY_EVIDENCE_ACTIVATION: dict[str, object] = {
         "production ModelGateway",
         "ActionPlane",
         "BotDelivery application",
-        "generated SDK",
     ],
 }
 
@@ -1132,7 +1132,6 @@ CANONICAL_EGRESS_GRANT_ACTIVATION: dict[str, object] = {
         "ActionTicket or external effect",
         "group AudienceSnapshot",
         "BotDelivery application process",
-        "generated SDK consumer",
     ],
 }
 
@@ -1210,23 +1209,18 @@ CANONICAL_OPENAPI_V0_ACTIVATION: dict[str, object] = {
         },
     ],
     "deferredEvidence": [
-        "generated TypeScript SDK conformance",
         "production BotDelivery generated-SDK caller",
-        "Continue and OpenCitation redemption",
+        "Continue redemption",
     ],
     "futureCarriers": [
-        "generated TypeScript SDK",
         "MCP",
         "BotDelivery application",
         "Continue redemption",
-        "OpenCitation redemption",
     ],
     "notActive": [
-        "generated SDK consumer",
         "MCP",
         "BotDelivery application process",
         "continuation issuance or redemption",
-        "citation persistence or redemption",
         "group AudienceSnapshot",
         "external effects",
     ],
@@ -1272,29 +1266,29 @@ CANONICAL_TYPESCRIPT_SDK_ACTIVATION: dict[str, object] = {
                 "PostgreSQL redemption and File acquisition prove CandidateRef "
                 "through the sealed AuthorizationKernel to AuthorizedProjection, "
                 "an audience-bound ContextPackage, and an opaque model egress "
-                "grant, while generated Continue and OpenCitation calls return "
-                "their generic inactive outcomes."
+                "grant. The generated OpenCitation call uses a second request-bound "
+                "DeliveryEvidenceRef to reauthorize the acquired opaque locator into "
+                "a distinct citation.open Package, fresh locator, and matching grant; "
+                "generated Continue remains a generic inactive outcome."
             ),
         },
     ],
     "deferredEvidence": [
         "signed package-registry publication provenance",
         "production BotDelivery generated-SDK caller",
-        "real Continue and OpenCitation issuance and redemption",
+        "real Continue issuance and redemption",
     ],
     "futureCarriers": [
         "published package-registry SDK",
         "BotDelivery application",
         "MCP",
         "Continue redemption",
-        "OpenCitation redemption",
     ],
     "notActive": [
         "external package publication",
         "production BotDelivery application process",
         "MCP",
         "continuation issuance or redemption",
-        "citation persistence or redemption",
         "group AudienceSnapshot",
         "external effects",
     ],
@@ -1419,6 +1413,80 @@ CANONICAL_ACTION_PERFORM_ACTIVATION: dict[str, object] = {
     ],
 }
 
+CANONICAL_CITATION_OPEN_ACTIVATION: dict[str, object] = {
+    "issueRef": "#69",
+    "invariantRef": "CITATION-AUTH-010",
+    "carrier": "private/direct File CitationOpenRef issuance and OpenCitation",
+    "status": "active_fail_closed",
+    "policyEpochScope": "organization-v0",
+    "controlBoundary": (
+        "digest-only locator -> current UserActor transaction -> CandidateRef -> "
+        "AuthorizationKernel -> AuthorizedProjection -> replacement ContextPackage"
+    ),
+    "testEvidence": [
+        {
+            "id": "PG-CITATION-AUTH-010",
+            "surface": "tests/integration/test_citation_open.py",
+            "oracle": (
+                "Real PostgreSQL stores only a SHA-256 locator digest plus prior "
+                "Package/Evidence and Fragment location lineage under FORCE RLS. "
+                "Runtime can issue/redeem only through dedicated definer functions; "
+                "the locator is multi-use, database-clock-expiring, cross-kind and "
+                "cross-Organization probes are generic, and ordinary roles have no "
+                "table access."
+            ),
+        },
+        {
+            "id": "RUNTIME-CITATION-AUTH-010",
+            "surface": (
+                "tests/integration/test_z_egress_grant_file.py::"
+                "test_file_http_citation_is_not_consumed_by_denied_reader"
+            ),
+            "oracle": (
+                "The public HTTP File carrier proves reader A receives an opaque "
+                "locator, reader B reauthorizes to the same generic unavailable "
+                "outcome without consuming or refreshing it, and reader A opens "
+                "again through the sealed Kernel to a new audience-bound Package."
+            ),
+        },
+        {
+            "id": "SDK-LIVE-FILE-064",
+            "surface": (
+                "tests/integration/test_z_egress_grant_file.py::"
+                "test_packed_typescript_sdk_resolves_authorized_file_package_over_live_http"
+            ),
+            "oracle": (
+                "A tarball installed into a temporary TypeScript consumer calls "
+                "a real local POST /v0/resolve server with only authentication, "
+                "request id, and opaque DeliveryEvidenceRef metadata; real "
+                "PostgreSQL redemption and File acquisition prove CandidateRef "
+                "through the sealed AuthorizationKernel to AuthorizedProjection, "
+                "an audience-bound ContextPackage, and an opaque model egress "
+                "grant. The generated OpenCitation call uses a second request-bound "
+                "DeliveryEvidenceRef to reauthorize the acquired opaque locator into "
+                "a distinct citation.open Package, fresh locator, and matching grant; "
+                "generated Continue remains a generic inactive outcome."
+            ),
+        },
+    ],
+    "deferredEvidence": [
+        "group/public AudienceSnapshot citation opening",
+        "Continue issuance or redemption",
+        "non-File provider citation lineage",
+    ],
+    "futureCarriers": [
+        "group-public citation delivery",
+        "Continue",
+        "non-File ContextProvider citations",
+    ],
+    "notActive": [
+        "group AudienceSnapshot",
+        "public-group citation package",
+        "Continue",
+        "raw source URL locator",
+    ],
+}
+
 CANONICAL_ACTIVATIONS: list[dict[str, object]] = [
     CANONICAL_REVOCATION_ACTIVATION,
     CANONICAL_UNAVAILABLE_CAPABILITY_ACTIVATION,
@@ -1432,6 +1500,7 @@ CANONICAL_ACTIVATIONS: list[dict[str, object]] = [
     CANONICAL_TYPESCRIPT_SDK_ACTIVATION,
     CANONICAL_ACTION_PREPARE_ACTIVATION,
     CANONICAL_ACTION_PERFORM_ACTIVATION,
+    CANONICAL_CITATION_OPEN_ACTIVATION,
 ]
 CANONICAL_ACTIVATION_ISSUE_LIST = ", ".join(
     f"Issue {activation['issueRef']}" for activation in CANONICAL_ACTIVATIONS

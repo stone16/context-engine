@@ -1,5 +1,5 @@
 {
-  "manifestVersion": "22.0.0",
+  "manifestVersion": "23.0.0",
   "controlOperations": [
     {
       "name": "register_file_source",
@@ -566,6 +566,14 @@
               "context_engine_action_execute_definer"
             ],
             "using": "true"
+          },
+          {
+            "name": "membership_citation_definer_select",
+            "command": "SELECT",
+            "roles": [
+              "context_engine_citation_definer"
+            ],
+            "using": "true"
           }
         ]
       },
@@ -588,6 +596,9 @@
         ],
         "context_engine_action_execute_definer": [
           "SELECT"
+        ],
+        "context_engine_citation_definer": [
+          "SELECT"
         ]
       },
       "partitions": [],
@@ -601,6 +612,195 @@
         "DB-004",
         "DB-009",
         "DB-010"
+      ]
+    },
+    {
+      "name": "citation_open_locator",
+      "classification": "tenant_owned",
+      "nonOwnerEvidence": {
+        "evidenceId": "PG-CITATION-AUTH-010",
+        "selector": {
+          "table": "citation_open_locator"
+        }
+      },
+      "purpose": "Digest-only multi-use citation locator lineage that carries no authorization decision",
+      "organizationColumn": "organization_id",
+      "organizationInclusiveKeys": [
+        {
+          "name": "pk_citation_open_locator",
+          "kind": "primary_key",
+          "columns": [
+            "organization_id",
+            "locator_digest"
+          ]
+        }
+      ],
+      "capabilityUniqueKeys": [
+        {
+          "name": "uq_citation_open_locator_digest_global",
+          "kind": "unique",
+          "columns": [
+            "locator_digest"
+          ],
+          "rationale": "one opaque locator digest names at most one Organization-bound prior Package/Evidence location"
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_citation_open_locator_organization",
+          "columns": [
+            "organization_id"
+          ],
+          "references": {
+            "table": "organization",
+            "columns": [
+              "organization_id"
+            ]
+          },
+          "onDelete": "RESTRICT"
+        },
+        {
+          "name": "fk_citation_open_locator_fragment_lineage",
+          "columns": [
+            "organization_id",
+            "resource_ref",
+            "revision_id",
+            "fragment_ref"
+          ],
+          "references": {
+            "table": "context_fragment",
+            "columns": [
+              "organization_id",
+              "resource_ref",
+              "revision_id",
+              "fragment_ref"
+            ]
+          },
+          "onDelete": "RESTRICT"
+        }
+      ],
+      "checkConstraints": [
+        {
+          "name": "ck_citation_open_locator_digest_sha256",
+          "expression": "octet_length(locator_digest) = 32"
+        },
+        {
+          "name": "ck_citation_open_locator_digest_profile",
+          "expression": "digest_profile = 'citation-open-ref-sha256-v1'"
+        },
+        {
+          "name": "ck_citation_open_locator_package_ref",
+          "expression": "package_ref ~ '^pkg_[0-9a-f]{32}$'"
+        },
+        {
+          "name": "ck_citation_open_locator_evidence_ref",
+          "expression": "evidence_ref ~ '^ev_[0-9a-f]{64}$'"
+        },
+        {
+          "name": "ck_citation_open_locator_fragment_refs_nonblank",
+          "expression": "btrim(resource_ref) <> '' AND btrim(fragment_ref) <> ''"
+        },
+        {
+          "name": "ck_citation_open_locator_profiles",
+          "expression": "profile_ref = 'private-citation-open-v1' AND retention_policy_ref = 'citation-locator-retention-v1'"
+        },
+        {
+          "name": "ck_citation_open_locator_time_windows",
+          "expression": "expires_at > issued_at AND expires_at <= issued_at + interval '10 minutes' AND retain_until = issued_at + interval '30 days'"
+        }
+      ],
+      "rowLevelSecurity": {
+        "enabled": true,
+        "forced": true,
+        "policies": [
+          {
+            "name": "citation_open_locator_migrator_administration",
+            "command": "ALL",
+            "roles": [
+              "context_engine_migrator"
+            ],
+            "using": "true",
+            "withCheck": "true"
+          },
+          {
+            "name": "citation_open_locator_definer_select",
+            "command": "SELECT",
+            "roles": [
+              "context_engine_citation_definer"
+            ],
+            "using": "true"
+          },
+          {
+            "name": "citation_open_locator_definer_insert",
+            "command": "INSERT",
+            "roles": [
+              "context_engine_citation_definer"
+            ],
+            "withCheck": "true"
+          },
+          {
+            "name": "citation_open_locator_definer_delete",
+            "command": "DELETE",
+            "roles": [
+              "context_engine_citation_definer"
+            ],
+            "using": "true"
+          }
+        ]
+      },
+      "functionOnlyMutation": {
+        "databaseFunctions": [
+          "context_runtime_issue_citation_open_ref",
+          "context_runtime_redeem_citation_open_ref",
+          "context_security_delete_expired_citation_open_lineage"
+        ],
+        "definerRole": "context_engine_citation_definer",
+        "directTableMutationAllowed": false
+      },
+      "retention": {
+        "class": "restricted_citation_locator_lineage",
+        "bearerStored": false,
+        "priorAuthorizationStored": false,
+        "expirySource": "private-citation-open-v1 with database clock enforcement",
+        "cleanup": "context_security_delete_expired_citation_open_lineage deletes only one exact Organization's digest-only rows after database-clock retain_until; schema downgrade refuses while rows remain"
+      },
+      "permittedOperations": {
+        "context_engine_runtime": [
+          "EXECUTE context_runtime_issue_citation_open_ref",
+          "EXECUTE context_runtime_redeem_citation_open_ref"
+        ],
+        "context_engine_citation_definer": [
+          "SELECT",
+          "INSERT",
+          "DELETE"
+        ],
+        "context_engine_control": [],
+        "context_engine_worker": [],
+        "context_engine_learning": [],
+        "context_engine_security_operator": [
+          "EXECUTE context_security_delete_expired_citation_open_lineage"
+        ]
+      },
+      "partitions": [],
+      "securityInvariantIds": [
+        "TENANT-OWNERSHIP-001",
+        "TENANT-FK-002",
+        "RLS-FAIL-CLOSED-003",
+        "REVOCATION-006",
+        "NON-ENUMERATION-009",
+        "TRACE-REDACTION-012"
+      ],
+      "negativeTestIds": [
+        "DB-001",
+        "DB-002",
+        "DB-004",
+        "DB-008",
+        "DB-009",
+        "DB-010",
+        "CITE-001",
+        "CITE-002",
+        "CITE-003",
+        "CITE-004"
       ]
     },
     {
@@ -1436,6 +1636,14 @@
             ],
             "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid",
             "withCheck": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"
+          },
+          {
+            "name": "context_resource_citation_definer_select",
+            "command": "SELECT",
+            "roles": [
+              "context_engine_citation_definer"
+            ],
+            "using": "true"
           }
         ]
       },
@@ -1470,6 +1678,9 @@
           "SELECT",
           "INSERT",
           "UPDATE"
+        ],
+        "context_engine_citation_definer": [
+          "SELECT"
         ]
       },
       "partitions": [],
@@ -3379,6 +3590,14 @@
               "context_engine_worker_lease_definer"
             ],
             "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"
+          },
+          {
+            "name": "context_fragment_citation_definer_select",
+            "command": "SELECT",
+            "roles": [
+              "context_engine_citation_definer"
+            ],
+            "using": "true"
           }
         ]
       },
@@ -3406,6 +3625,9 @@
         "context_engine_worker_lease_definer": [
           "SELECT",
           "INSERT"
+        ],
+        "context_engine_citation_definer": [
+          "SELECT"
         ]
       },
       "partitions": [],

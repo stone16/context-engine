@@ -18,6 +18,7 @@ from engine.persistence.configuration import (
     ACTION_EXECUTE_DEFINER_ROLE,
     ACTION_PREPARE_DEFINER_ROLE,
     ACTION_ROLE,
+    CITATION_DEFINER_ROLE,
     CONTEXT_RUN_READER_DEFINER_ROLE,
     CONTROL_ROLE,
     DELIVERY_EVIDENCE_DEFINER_ROLE,
@@ -60,6 +61,7 @@ class RoleProvisioningContract:
     context_run_reader_definer_role: str
     release_definer_role: str
     delivery_evidence_definer_role: str
+    citation_definer_role: str
     egress_grant_definer_role: str
     action_prepare_definer_role: str
     action_execute_definer_role: str
@@ -80,6 +82,7 @@ class RoleProvisioningContract:
             "context_run_reader_definer_role",
             "release_definer_role",
             "delivery_evidence_definer_role",
+            "citation_definer_role",
             "egress_grant_definer_role",
             "action_prepare_definer_role",
             "action_execute_definer_role",
@@ -100,11 +103,12 @@ class RoleProvisioningContract:
             self.context_run_reader_definer_role,
             self.release_definer_role,
             self.delivery_evidence_definer_role,
+            self.citation_definer_role,
             self.egress_grant_definer_role,
             self.action_prepare_definer_role,
             self.action_execute_definer_role,
         }
-        if len(security_roles) != 15:
+        if len(security_roles) != 16:
             raise ValueError("provisioned database roles must be distinct")
         if type(self.postgres_port) is not int or not 1 <= self.postgres_port <= 65535:
             raise ValueError("postgres_port must be a valid TCP port")
@@ -199,6 +203,7 @@ def _contract_from_environment(
         context_run_reader_definer_role=CONTEXT_RUN_READER_DEFINER_ROLE,
         release_definer_role=RELEASE_DEFINER_ROLE,
         delivery_evidence_definer_role=DELIVERY_EVIDENCE_DEFINER_ROLE,
+        citation_definer_role=CITATION_DEFINER_ROLE,
         egress_grant_definer_role=EGRESS_GRANT_DEFINER_ROLE,
         action_prepare_definer_role=ACTION_PREPARE_DEFINER_ROLE,
         action_execute_definer_role=ACTION_EXECUTE_DEFINER_ROLE,
@@ -318,6 +323,7 @@ def provision_security_roles(
     _create_role_if_missing(connection, contract.context_run_reader_definer_role)
     _create_role_if_missing(connection, contract.release_definer_role)
     _create_role_if_missing(connection, contract.delivery_evidence_definer_role)
+    _create_role_if_missing(connection, contract.citation_definer_role)
     _create_role_if_missing(connection, contract.egress_grant_definer_role)
     _create_role_if_missing(connection, contract.action_prepare_definer_role)
     _create_role_if_missing(connection, contract.action_execute_definer_role)
@@ -401,6 +407,12 @@ def provision_security_roles(
         sql.SQL(
             "ALTER ROLE {} WITH NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE "
             "NOINHERIT NOREPLICATION NOBYPASSRLS"
+        ).format(sql.Identifier(contract.citation_definer_role))
+    )
+    connection.execute(
+        sql.SQL(
+            "ALTER ROLE {} WITH NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE "
+            "NOINHERIT NOREPLICATION NOBYPASSRLS"
         ).format(sql.Identifier(contract.egress_grant_definer_role))
     )
     connection.execute(
@@ -451,6 +463,7 @@ def provision_security_roles(
     _revoke_roles_granted_to(connection, contract.context_run_reader_definer_role)
     _revoke_roles_granted_to(connection, contract.release_definer_role)
     _revoke_roles_granted_to(connection, contract.delivery_evidence_definer_role)
+    _revoke_roles_granted_to(connection, contract.citation_definer_role)
     _revoke_roles_granted_to(connection, contract.egress_grant_definer_role)
     _revoke_roles_granted_to(connection, contract.action_prepare_definer_role)
     _revoke_roles_granted_to(connection, contract.action_execute_definer_role)
@@ -465,6 +478,7 @@ def provision_security_roles(
     _revoke_members_of(connection, contract.context_run_reader_definer_role)
     _revoke_members_of(connection, contract.release_definer_role)
     _revoke_members_of(connection, contract.delivery_evidence_definer_role)
+    _revoke_members_of(connection, contract.citation_definer_role)
     _revoke_members_of(connection, contract.egress_grant_definer_role)
     _revoke_members_of(connection, contract.action_prepare_definer_role)
     _revoke_members_of(connection, contract.action_execute_definer_role)
@@ -512,6 +526,12 @@ def provision_security_roles(
     )
     connection.execute(
         sql.SQL("GRANT {} TO {} WITH ADMIN FALSE, INHERIT FALSE, SET TRUE").format(
+            sql.Identifier(contract.citation_definer_role),
+            sql.Identifier(contract.migrator_role),
+        )
+    )
+    connection.execute(
+        sql.SQL("GRANT {} TO {} WITH ADMIN FALSE, INHERIT FALSE, SET TRUE").format(
             sql.Identifier(contract.release_definer_role),
             sql.Identifier(contract.migrator_role),
         )
@@ -529,6 +549,7 @@ def provision_security_roles(
         contract.context_run_reader_definer_role,
         contract.release_definer_role,
         contract.delivery_evidence_definer_role,
+        contract.citation_definer_role,
         contract.egress_grant_definer_role,
         contract.action_prepare_definer_role,
         contract.action_execute_definer_role,

@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import fields, replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from itertools import permutations
 from typing import cast
 from uuid import UUID
@@ -16,6 +16,16 @@ from engine.runtime.actor import (
     _open_membership_authority_scope,
 )
 from engine.runtime.budget import PackageBudgetRequest
+from engine.runtime.citation import (
+    CitationOpenIssue,
+    CitationOpenProfile,
+    CitationOpenRedemption,
+    CitationOpenTarget,
+    CitationOpenTargetLineage,
+    _close_citation_authority_scope,
+    _construct_citation_open_session,
+    _open_citation_authority_scope,
+)
 from engine.runtime.construction import (
     DEFAULT_SERVER_PACKAGE_BUDGET,
     AuthorizationDecision,
@@ -29,8 +39,11 @@ from engine.runtime.construction import (
 from engine.runtime.content_io import CandidateIndex
 from engine.runtime.contracts import (
     Acquire,
+    CitationNotAvailable,
+    CitationOpenRef,
     ContextNeed,
     ContextPackage,
+    OpenCitation,
     RequestNarrowing,
     Resolved,
 )
@@ -212,6 +225,55 @@ class SequencedPolicyEpochPort:
         return self._epochs[0]
 
 
+class RecordingCitationPort:
+    def __init__(self) -> None:
+        self.issue_calls: list[tuple[CitationOpenIssue, bytes]] = []
+        self.redemption_calls: list[CitationOpenRedemption] = []
+
+    def issue(
+        self,
+        *,
+        request: CitationOpenIssue,
+        locator_digest: bytes,
+        digest_profile: str,
+        profile: CitationOpenProfile,
+        retain_until: datetime,
+    ) -> bool:
+        del digest_profile, profile, retain_until
+        self.issue_calls.append((request, locator_digest))
+        return True
+
+    def redeem(self, request: CitationOpenRedemption) -> CitationOpenTarget | None:
+        from hashlib import sha256
+
+        self.redemption_calls.append(request)
+        digest = sha256(request.citation_open_ref.value.encode("utf-8")).digest()
+        for issue, stored_digest in self.issue_calls:
+            if digest == stored_digest:
+                return CitationOpenTarget(
+                    candidate_ref=CandidateRef(
+                        organization_id=issue.organization_id,
+                        source_ref=AUTHORIZED.source_ref,
+                        resource_ref=issue.resource_ref,
+                        revision_ref=str(issue.revision_id),
+                        fragment_ref=issue.fragment_ref,
+                    ),
+                    lineage=CitationOpenTargetLineage(
+                        package_ref=issue.package_ref,
+                        evidence_ref=issue.evidence_ref,
+                    ),
+                )
+        return None
+
+
+CITATION_PROFILE = CitationOpenProfile(
+    profile_ref="private-citation-open-v1",
+    retention_policy_ref="citation-locator-retention-v1",
+    maximum_ttl=timedelta(minutes=10),
+    retention_period=timedelta(days=30),
+)
+
+
 class MismatchedLocatorPort(RecordingMaterializedPort):
     def locate(
         self,
@@ -279,6 +341,8 @@ def scope_for(*candidates: CandidateRef) -> ScopeSet:
 def trusted_operands(
     port: RecordingMaterializedPort,
     *,
+    purpose: str = "context.answer",
+    citation_port: RecordingCitationPort | None = None,
     policy_epoch_port: SequencedPolicyEpochPort | None = None,
     scope_policy_epoch: int | None = None,
     context_run_port: RecordingContextRunPort | None = None,
@@ -287,6 +351,7 @@ def trusted_operands(
     materialized_scope = _open_materialized_projection_scope()
     scope_authority_scope = _open_scope_authority_scope()
     policy_epoch_scope = _open_policy_epoch_authority_scope()
+    citation_scope = _open_citation_authority_scope()
     try:
         selected_epoch_port = policy_epoch_port or SequencedPolicyEpochPort(7)
         policy_epoch_verification = _observe_current_policy_epoch(
@@ -338,6 +403,14 @@ def trusted_operands(
                 ),
                 materialized_projection_session=projection_session,
                 context_run_persistence_session=persistence_session,
+                citation_open_session=(
+                    _construct_citation_open_session(
+                        authority_scope=citation_scope,
+                        port=citation_port,
+                    )
+                    if citation_port is not None
+                    else None
+                ),
             )
             scope_snapshot = _construct_trusted_scope_snapshot(
                 authority_scope=scope_authority_scope,
@@ -352,7 +425,7 @@ def trusted_operands(
                 ),
                 principal_ref="principal-authorized-evidence",
                 agent_version_ref="agent-version-authorized-evidence",
-                purpose="context.answer",
+                purpose=purpose,
                 request_id="request-authorized-evidence",
                 authentication_binding_ref="binding-authorized-evidence",
                 checked_at=AS_OF,
@@ -376,18 +449,19 @@ def trusted_operands(
                 agent_version_ref="agent-version-authorized-evidence",
                 authenticated_application_ref="application-authorized-evidence",
                 authentication_binding_ref="binding-authorized-evidence",
-                trusted_purpose="context.answer",
+                trusted_purpose=purpose,
                 received_at=AS_OF,
                 trusted_scope_snapshot=scope_snapshot,
             )
             delivery = _construct_direct_delivery_context(
-                purpose="context.answer",
+                purpose=purpose,
                 authenticated_application_ref="application-authorized-evidence",
                 delivery_binding_ref="binding-authorized-evidence",
                 established_at=AS_OF,
             )
             yield invocation, delivery
     finally:
+        _close_citation_authority_scope(citation_scope)
         _close_policy_epoch_authority_scope(policy_epoch_scope)
         _close_scope_authority_scope(scope_authority_scope)
         _close_materialized_projection_scope(materialized_scope)
@@ -475,6 +549,169 @@ def test_hostile_candidate_order_delivers_only_exact_authorized_evidence(
         wrong_organization_effect_count=wrong_organization_effect_count,
         missing_context_fallback_count=missing_context_fallback_count,
     )
+
+
+def test_citation_open_redeems_only_lineage_then_reauthorizes_exact_candidate() -> None:
+    index = HostileCandidateIndex((AUTHORIZED,))
+    materialized = RecordingMaterializedPort()
+    citation = RecordingCitationPort()
+    run_port = RecordingContextRunPort()
+    runtime = Runtime(
+        required_kernel_dependencies(),
+        candidate_index=cast(CandidateIndex, index),
+        clock=lambda: AS_OF,
+        query_digest_keyring=TEST_QUERY_DIGEST_KEYRING,
+        citation_profile=CITATION_PROFILE,
+    )
+
+    with trusted_operands(
+        materialized,
+        citation_port=citation,
+        context_run_port=run_port,
+    ) as (invocation, delivery):
+        acquired = runtime.resolve(
+            invocation,
+            delivery,
+            Acquire(need=ContextNeed(query="issue citation")),
+        )
+
+    assert type(acquired) is Resolved
+    citation_ref = acquired.package.evidence[0].citation_open_ref
+    assert type(citation_ref) is CitationOpenRef
+
+    with trusted_operands(
+        materialized,
+        purpose="citation.open",
+        citation_port=citation,
+        context_run_port=run_port,
+    ) as (invocation, delivery):
+        opened = runtime.resolve(
+            invocation,
+            delivery,
+            OpenCitation(citation_open_ref=citation_ref),
+        )
+
+    assert type(opened) is Resolved
+    assert opened.package.package_id != acquired.package.package_id
+    assert opened.package.purpose == "citation.open"
+    assert opened.package.blocks[0].body == "A-safe"
+    assert type(opened.package.evidence[0].citation_open_ref) is CitationOpenRef
+    assert opened.package.evidence[0].citation_open_ref != citation_ref
+    assert index.calls == 1
+    assert citation.redemption_calls[0].citation_open_ref == citation_ref
+    assert materialized.locator_calls == [AUTHORIZED, AUTHORIZED]
+    assert materialized.body_calls == [locator(AUTHORIZED), locator(AUTHORIZED)]
+    assert len(run_port.calls) == 2
+
+
+def test_citation_open_denial_is_generic_and_does_not_consume_locator() -> None:
+    index = HostileCandidateIndex((AUTHORIZED,))
+    materialized = RecordingMaterializedPort()
+    citation = RecordingCitationPort()
+    runtime = Runtime(
+        required_kernel_dependencies(),
+        candidate_index=cast(CandidateIndex, index),
+        clock=lambda: AS_OF,
+        query_digest_keyring=TEST_QUERY_DIGEST_KEYRING,
+        citation_profile=CITATION_PROFILE,
+    )
+
+    with trusted_operands(materialized, citation_port=citation) as (
+        invocation,
+        delivery,
+    ):
+        acquired = runtime.resolve(
+            invocation,
+            delivery,
+            Acquire(need=ContextNeed(query="issue reusable citation")),
+        )
+    assert type(acquired) is Resolved
+    citation_ref = acquired.package.evidence[0].citation_open_ref
+    assert type(citation_ref) is CitationOpenRef
+
+    with trusted_operands(
+        materialized,
+        purpose="citation.open",
+        citation_port=citation,
+    ) as (invocation, delivery):
+        for operand_name in (
+            "organization_boundary",
+            "membership_rights",
+            "principal_grants",
+            "agent_ceiling",
+            "source_native_acl",
+            "resource_acl",
+            "purpose_policy",
+        ):
+            object.__setattr__(
+                invocation.trusted_scope_snapshot,
+                operand_name,
+                ScopeSet(frozenset()),
+            )
+        denied = runtime.resolve(
+            invocation,
+            delivery,
+            OpenCitation(citation_open_ref=citation_ref),
+        )
+
+    with trusted_operands(
+        materialized,
+        purpose="citation.open",
+        citation_port=citation,
+    ) as (invocation, delivery):
+        reopened = runtime.resolve(
+            invocation,
+            delivery,
+            OpenCitation(citation_open_ref=citation_ref),
+        )
+
+    assert denied == CitationNotAvailable()
+    assert type(reopened) is Resolved
+    assert len(citation.redemption_calls) == 2
+
+
+def test_citation_open_stale_scope_epoch_is_generic_without_target_io() -> None:
+    index = HostileCandidateIndex((AUTHORIZED,))
+    materialized = RecordingMaterializedPort()
+    citation = RecordingCitationPort()
+    runtime = Runtime(
+        required_kernel_dependencies(),
+        candidate_index=cast(CandidateIndex, index),
+        clock=lambda: AS_OF,
+        query_digest_keyring=TEST_QUERY_DIGEST_KEYRING,
+        citation_profile=CITATION_PROFILE,
+    )
+    with trusted_operands(materialized, citation_port=citation) as (
+        invocation,
+        delivery,
+    ):
+        acquired = runtime.resolve(
+            invocation,
+            delivery,
+            Acquire(need=ContextNeed(query="issue stale-scope citation")),
+        )
+    assert type(acquired) is Resolved
+    citation_ref = acquired.package.evidence[0].citation_open_ref
+    assert type(citation_ref) is CitationOpenRef
+    locator_calls_before = tuple(materialized.locator_calls)
+    body_calls_before = tuple(materialized.body_calls)
+
+    with trusted_operands(
+        materialized,
+        purpose="citation.open",
+        citation_port=citation,
+        scope_policy_epoch=6,
+    ) as (invocation, delivery):
+        denied = runtime.resolve(
+            invocation,
+            delivery,
+            OpenCitation(citation_open_ref=citation_ref),
+        )
+
+    assert denied == CitationNotAvailable()
+    assert len(citation.redemption_calls) == 1
+    assert tuple(materialized.locator_calls) == locator_calls_before
+    assert tuple(materialized.body_calls) == body_calls_before
 
 
 def test_stale_scope_epoch_stops_before_candidate_or_body_io() -> None:

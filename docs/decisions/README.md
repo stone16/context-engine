@@ -48,6 +48,7 @@ kernel, capability separation, and publication visibility model.
 | Private delivery ingress | [0045 — Redeem private delivery evidence at ingress](0045-redeem-private-delivery-evidence-at-ingress.md) | One digest-only service/request/asker/audience/epoch-bound DeliveryEvidenceRef constructs private TrustedDeliveryContext inside the current UserActor transaction before content work | Raw trusted delivery facts on the wire, bearer persistence, application-role minting/table reads, alternate Runtime paths, or claiming later M2 carriers |
 | Public OpenAPI v0 | [0047 — Freeze OpenAPI v0 through one Runtime path](0047-freeze-openapi-v0-through-one-runtime-path.md) | One public `/v0/resolve` schema and a hidden provisional v1 bridge share the same sealed Runtime; Package release lineage is read-only from the Learning-published active manifest | Two authorization compositions, caller-authored release facts, Runtime publication/fallback, or in-place mutation of historical snapshots |
 | Generated TypeScript SDK | [0048 — Generate the TypeScript SDK behind a closed facade](0048-generate-typescript-sdk-behind-a-closed-facade.md) | OpenAPI v0 generates the semantic contract and internal fetch client; a package export map exposes only a metadata-safe facade and the contract checksum | Handwritten wire schemas, raw generated transport exports, arbitrary caller headers, floating generator/runtime versions, or claiming inactive capability redemption |
+| Citation open | [0051 — Reauthorize opaque citation opens](0051-reauthorize-opaque-citation-opens.md) | Digest-only multi-use locators recover only content-free target lineage; every open uses a current UserActor and the sealed Kernel to produce a replacement Package | Bearer authority, prior-decision reuse, source URLs, locator consumption on denial, or content before exact reauthorization |
 
 Each baseline ADR is `accepted` and contains Context, Decision, Rationale,
 Consequences, and Revisit trigger sections. A revisit trigger permits review; it
@@ -127,6 +128,7 @@ touched:
 - [0030 — Bound ticket audiences](0030-bound-ticket-audiences.md)
 - [0049 — Exact private ActionPlane prepare](0049-prepare-one-exact-private-effect.md)
 - [0050 — Exact private ActionPlane perform](0050-perform-one-exact-private-effect.md)
+- [0051 — Reauthorize opaque citation opens](0051-reauthorize-opaque-citation-opens.md)
 - [0031 — Authorized-only ContextRun lineage](0031-persist-authorized-context-run-lineage.md)
 - [0032 — Membership-bound materialized fields](0032-bind-materialized-fields-to-membership-projection-rights.md)
 - [0033 — Organization release promotion owner](0033-promote-organization-releases-through-one-learning-owner.md)

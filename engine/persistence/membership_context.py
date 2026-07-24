@@ -6,6 +6,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from hashlib import sha256
 from typing import Protocol
 from uuid import UUID
 
@@ -21,6 +22,18 @@ from engine.runtime.actor import (
     _close_membership_authority_scope,
     _construct_current_membership_verification,
     _open_membership_authority_scope,
+)
+from engine.runtime.citation import (
+    CITATION_OPEN_DIGEST_PROFILE,
+    CitationAuthorityUnavailable,
+    CitationOpenIssue,
+    CitationOpenProfile,
+    CitationOpenRedemption,
+    CitationOpenTarget,
+    CitationOpenTargetLineage,
+    _close_citation_authority_scope,
+    _construct_citation_open_session,
+    _open_citation_authority_scope,
 )
 from engine.runtime.context_run import (
     ContextRunRecord,
@@ -760,6 +773,96 @@ class _PostgreSQLEgressGrantIssuancePort:
         return accepted is True
 
 
+class _PostgreSQLCitationOpenPort:
+    """Function-only citation issue/redemption on the current actor connection."""
+
+    def __init__(self, connection: Connection) -> None:
+        self._connection = connection
+
+    def issue(
+        self,
+        *,
+        request: CitationOpenIssue,
+        locator_digest: bytes,
+        digest_profile: str,
+        profile: CitationOpenProfile,
+        retain_until: datetime,
+    ) -> bool:
+        if digest_profile != CITATION_OPEN_DIGEST_PROFILE:
+            return False
+        try:
+            result = self._connection.execute(
+                text(
+                    """
+                    SELECT context_runtime_issue_citation_open_ref(
+                        :organization_id, :locator_digest, :digest_profile,
+                        :package_ref, :evidence_ref, :resource_ref,
+                        :revision_id, :fragment_ref, :issued_at, :expires_at,
+                        :profile_ref, :retention_policy_ref, :retain_until
+                    )
+                    """
+                ),
+                {
+                    "organization_id": request.organization_id,
+                    "locator_digest": locator_digest,
+                    "digest_profile": digest_profile,
+                    "package_ref": request.package_ref,
+                    "evidence_ref": request.evidence_ref,
+                    "resource_ref": request.resource_ref,
+                    "revision_id": request.revision_id,
+                    "fragment_ref": request.fragment_ref,
+                    "issued_at": request.issued_at,
+                    "expires_at": request.expires_at,
+                    "profile_ref": profile.profile_ref,
+                    "retention_policy_ref": profile.retention_policy_ref,
+                    "retain_until": retain_until,
+                },
+            ).scalar_one()
+        except SQLAlchemyError:
+            raise CitationAuthorityUnavailable from None
+        return result is True
+
+    def redeem(self, request: CitationOpenRedemption) -> CitationOpenTarget | None:
+        try:
+            row = self._connection.execute(
+                text(
+                    """
+                    SELECT source_ref, resource_ref, revision_id, fragment_ref,
+                           package_ref, evidence_ref
+                    FROM context_runtime_redeem_citation_open_ref(
+                        :organization_id, :locator_digest, :digest_profile,
+                        :opened_at
+                    )
+                    """
+                ),
+                {
+                    "organization_id": request.organization_id,
+                    "locator_digest": sha256(
+                        request.citation_open_ref.value.encode("utf-8")
+                    ).digest(),
+                    "digest_profile": CITATION_OPEN_DIGEST_PROFILE,
+                    "opened_at": request.opened_at,
+                },
+            ).one_or_none()
+        except SQLAlchemyError:
+            raise CitationAuthorityUnavailable from None
+        if row is None:
+            return None
+        return CitationOpenTarget(
+            candidate_ref=CandidateRef(
+                organization_id=request.organization_id,
+                source_ref=row.source_ref,
+                resource_ref=row.resource_ref,
+                revision_ref=str(row.revision_id),
+                fragment_ref=row.fragment_ref,
+            ),
+            lineage=CitationOpenTargetLineage(
+                package_ref=row.package_ref,
+                evidence_ref=row.evidence_ref,
+            ),
+        )
+
+
 class PostgreSQLMembershipAuthority:
     """Open and retain the exact UserActor transaction through Runtime work."""
 
@@ -907,6 +1010,7 @@ class PostgreSQLMembershipAuthority:
         context_run_scope = _open_context_run_persistence_scope()
         delivery_evidence_scope = _open_delivery_evidence_redemption_scope()
         egress_issuance_scope = _open_egress_grant_issuance_scope()
+        citation_scope = _open_citation_authority_scope()
         try:
             projection_session = _construct_materialized_projection_session(
                 authority_scope=projection_scope,
@@ -949,12 +1053,17 @@ class PostgreSQLMembershipAuthority:
                         port=_PostgreSQLEgressGrantIssuancePort(connection),
                     )
                 ),
+                citation_open_session=_construct_citation_open_session(
+                    authority_scope=citation_scope,
+                    port=_PostgreSQLCitationOpenPort(connection),
+                ),
                 active_runtime_release=_observe_active_runtime_release(
                     connection,
                     identity.organization_id,
                 ),
             )
         finally:
+            _close_citation_authority_scope(citation_scope)
             _close_egress_grant_issuance_scope(egress_issuance_scope)
             _close_delivery_evidence_redemption_scope(delivery_evidence_scope)
             _close_context_run_persistence_scope(context_run_scope)

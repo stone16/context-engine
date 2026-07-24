@@ -7,10 +7,12 @@ from engine.persistence.access_policy import (
     PostgreSQLAccessPolicyControl,
     ResourceAccessRevocation,
 )
+from engine.persistence.citation import PostgreSQLCitationOpenRetentionPort
 from engine.persistence.configuration import (
     ACTION_EXECUTE_DEFINER_ROLE,
     ACTION_PREPARE_DEFINER_ROLE,
     ACTION_ROLE,
+    CITATION_DEFINER_ROLE,
     DELIVERY_EVIDENCE_DEFINER_ROLE,
     EGRESS_GRANT_DEFINER_ROLE,
     EGRESS_ROLE,
@@ -94,6 +96,7 @@ __all__ = [
     "DatabaseConfiguration",
     "ACTION_PREPARE_DEFINER_ROLE",
     "ACTION_ROLE",
+    "CITATION_DEFINER_ROLE",
     "AccessChangeRejected",
     "AccessPolicyControlUnavailable",
     "DatabaseConfigurationError",
@@ -121,6 +124,7 @@ __all__ = [
     "ContextRunView",
     "OperatorAuthorizationProvenance",
     "PostgreSQLContextRunReader",
+    "PostgreSQLCitationOpenRetentionPort",
     "PostgreSQLControlStore",
     "PostgreSQLDeliveryEvidenceIssuerPort",
     "PostgreSQLDeliveryEvidenceRetentionPort",

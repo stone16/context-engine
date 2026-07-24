@@ -32,7 +32,7 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
     document = manifest()
     tables = table_entries(document)
 
-    assert document["manifestVersion"] == "22.0.0"
+    assert document["manifestVersion"] == "23.0.0"
     assert set(tables) == {
         "active_release_manifest",
         "action_delivery_attempt",
@@ -43,6 +43,7 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
         "action_reconciliation",
         "action_ticket",
         "alembic_version",
+        "citation_open_locator",
         "context_fragment",
         "context_fragment_field",
         "context_resource",
@@ -89,6 +90,31 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
     assert tables["organization"]["classification"] == "global"
     assert tables["user_account"]["classification"] == "global"
     assert tables["membership"]["classification"] == "tenant_owned"
+    assert tables["citation_open_locator"]["classification"] == "tenant_owned"
+    citation = tables["citation_open_locator"]
+    assert citation["functionOnlyMutation"] == {
+        "databaseFunctions": [
+            "context_runtime_issue_citation_open_ref",
+            "context_runtime_redeem_citation_open_ref",
+            "context_security_delete_expired_citation_open_lineage",
+        ],
+        "definerRole": "context_engine_citation_definer",
+        "directTableMutationAllowed": False,
+    }
+    assert citation["permittedOperations"]["context_engine_runtime"] == [
+        "EXECUTE context_runtime_issue_citation_open_ref",
+        "EXECUTE context_runtime_redeem_citation_open_ref",
+    ]
+    assert citation["permittedOperations"]["context_engine_security_operator"] == [
+        "EXECUTE context_security_delete_expired_citation_open_lineage"
+    ]
+    assert citation["permittedOperations"]["context_engine_citation_definer"] == [
+        "SELECT",
+        "INSERT",
+        "DELETE",
+    ]
+    assert citation["retention"]["bearerStored"] is False
+    assert citation["retention"]["priorAuthorizationStored"] is False
     assert tables["organization_record"]["classification"] == "tenant_owned"
     assert tables["organization_policy_epoch"]["classification"] == "tenant_owned"
     assert tables["resource_access_policy"]["classification"] == "tenant_owned"
@@ -126,8 +152,7 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
         "context_engine_action_prepare_definer"
     ] == ["SELECT", "INSERT"]
     action_ticket_constraints = {
-        constraint["name"]
-        for constraint in tables["action_ticket"]["checkConstraints"]
+        constraint["name"] for constraint in tables["action_ticket"]["checkConstraints"]
     }
     assert "ck_action_ticket_bearer_digest" in action_ticket_constraints
     assert tables["action_ticket"]["retention"]["bearerStored"] is False
@@ -1245,6 +1270,7 @@ def test_membership_manifest_requires_exact_user_actor_and_read_only_runtime() -
         "context_engine_egress_grant_definer": ["SELECT"],
         "context_engine_action_prepare_definer": ["SELECT"],
         "context_engine_action_execute_definer": ["SELECT"],
+        "context_engine_citation_definer": ["SELECT"],
     }
 
     rls = entry["rowLevelSecurity"]
@@ -1503,6 +1529,8 @@ def test_content_manifest_preserves_lineage_visibility_and_immutability() -> Non
             expected_operations["context_engine_control"] = [
                 "EXECUTE context_control_tombstone_file_resource"
             ]
+        if entry["name"] in {"context_resource", "context_fragment"}:
+            expected_operations["context_engine_citation_definer"] = ["SELECT"]
         assert entry["permittedOperations"] == expected_operations
         rls = entry["rowLevelSecurity"]
         assert rls["enabled"] is True

@@ -1,5 +1,6 @@
 import {
   ContextEngineResolveClient,
+  type DeliveryBoundContextOptions,
   type DirectContextOptions,
   type ResolutionOutcomeWire,
   type ResolveWire,
@@ -21,6 +22,16 @@ const outcome: Promise<ResolutionOutcomeWire> = client.resolve({
   requestId: "sdk-package-contract",
 });
 void outcome;
+
+const citationDelivery: DeliveryBoundContextOptions = {
+  deliveryEvidenceRef: "deliv_citation_opaque",
+  request: {
+    citationOpenRef: "cor_opaque",
+    kind: "open_citation",
+  },
+  requestId: "sdk-citation-contract",
+};
+void citationDelivery;
 
 client.resolve({
   requestId: "forbidden-body-field",
@@ -49,7 +60,7 @@ client.resolve({
 });
 
 const forbiddenContinueEvidence: DirectContextOptions = {
-  // @ts-expect-error delivery evidence is currently valid only for Acquire
+  // @ts-expect-error delivery evidence is valid for Acquire/OpenCitation only
   deliveryEvidenceRef: "deliv_forbidden_for_continue",
   request: {
     continuationToken: "continuation_inactive",

@@ -21,6 +21,7 @@ from engine.persistence.configuration import (
     ACTION_EXECUTE_DEFINER_ROLE,
     ACTION_PREPARE_DEFINER_ROLE,
     ACTION_ROLE,
+    CITATION_DEFINER_ROLE,
     CONTEXT_RUN_READER_DEFINER_ROLE,
     CONTROL_ROLE,
     DELIVERY_EVIDENCE_DEFINER_ROLE,
@@ -182,6 +183,7 @@ def test_post_init_role_provisioning_repairs_a_legacy_volume_idempotently(
         context_run_reader_definer_role=CONTEXT_RUN_READER_DEFINER_ROLE,
         release_definer_role=RELEASE_DEFINER_ROLE,
         delivery_evidence_definer_role=DELIVERY_EVIDENCE_DEFINER_ROLE,
+        citation_definer_role=CITATION_DEFINER_ROLE,
         egress_grant_definer_role=EGRESS_GRANT_DEFINER_ROLE,
         action_prepare_definer_role=ACTION_PREPARE_DEFINER_ROLE,
         action_execute_definer_role=ACTION_EXECUTE_DEFINER_ROLE,
@@ -215,6 +217,7 @@ def test_post_init_role_provisioning_repairs_a_legacy_volume_idempotently(
                 WORKER_LEASE_DEFINER_ROLE,
                 CONTEXT_RUN_READER_DEFINER_ROLE,
                 DELIVERY_EVIDENCE_DEFINER_ROLE,
+                CITATION_DEFINER_ROLE,
                 EGRESS_GRANT_DEFINER_ROLE,
                 ACTION_PREPARE_DEFINER_ROLE,
                 ACTION_EXECUTE_DEFINER_ROLE,
@@ -234,7 +237,8 @@ def test_post_init_role_provisioning_repairs_a_legacy_volume_idempotently(
                 SELECT count(*)
                 FROM pg_roles
                 WHERE rolname IN (
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s
                 )
                 """,
                 (
@@ -252,6 +256,7 @@ def test_post_init_role_provisioning_repairs_a_legacy_volume_idempotently(
                     ACTION_ROLE,
                     ACTION_PREPARE_DEFINER_ROLE,
                     ACTION_EXECUTE_DEFINER_ROLE,
+                    CITATION_DEFINER_ROLE,
                 ),
             ).fetchone()
             assert missing_roles == (0,)
@@ -313,6 +318,26 @@ def test_post_init_role_provisioning_repairs_a_legacy_volume_idempotently(
                         FROM pg_auth_members AS reader_members
                         WHERE reader_members.roleid = reader_definer.oid
                     ),
+                    citation_definer.rolcanlogin,
+                    citation_definer.rolsuper,
+                    citation_definer.rolcreaterole,
+                    citation_definer.rolcreatedb,
+                    citation_definer.rolinherit,
+                    citation_definer.rolreplication,
+                    citation_definer.rolbypassrls,
+                    citation_membership.admin_option,
+                    citation_membership.inherit_option,
+                    citation_membership.set_option,
+                    NOT EXISTS (
+                        SELECT 1
+                        FROM pg_auth_members AS granted_to_citation
+                        WHERE granted_to_citation.member = citation_definer.oid
+                    ),
+                    (
+                        SELECT count(*)
+                        FROM pg_auth_members AS citation_members
+                        WHERE citation_members.roleid = citation_definer.oid
+                    ),
                     action_execute_definer.rolcanlogin,
                     action_execute_definer.rolsuper,
                     action_execute_definer.rolcreaterole,
@@ -340,6 +365,7 @@ def test_post_init_role_provisioning_repairs_a_legacy_volume_idempotently(
                 CROSS JOIN pg_roles AS definer
                 CROSS JOIN pg_roles AS worker_definer
                 CROSS JOIN pg_roles AS reader_definer
+                CROSS JOIN pg_roles AS citation_definer
                 CROSS JOIN pg_roles AS action_execute_definer
                 JOIN pg_auth_members AS access_membership
                   ON access_membership.roleid = definer.oid
@@ -351,6 +377,9 @@ def test_post_init_role_provisioning_repairs_a_legacy_volume_idempotently(
                 JOIN pg_auth_members AS reader_membership
                   ON reader_membership.roleid = reader_definer.oid
                  AND reader_membership.member = migrator.oid
+                JOIN pg_auth_members AS citation_membership
+                  ON citation_membership.roleid = citation_definer.oid
+                 AND citation_membership.member = migrator.oid
                 JOIN pg_auth_members AS action_execute_membership
                   ON action_execute_membership.roleid = action_execute_definer.oid
                  AND action_execute_membership.member = migrator.oid
@@ -359,6 +388,7 @@ def test_post_init_role_provisioning_repairs_a_legacy_volume_idempotently(
                   AND definer.rolname = %s
                   AND worker_definer.rolname = %s
                   AND reader_definer.rolname = %s
+                  AND citation_definer.rolname = %s
                   AND action_execute_definer.rolname = %s
                   AND migrator.rolname = %s
                 """,
@@ -368,6 +398,7 @@ def test_post_init_role_provisioning_repairs_a_legacy_volume_idempotently(
                     ACCESS_POLICY_DEFINER_ROLE,
                     WORKER_LEASE_DEFINER_ROLE,
                     CONTEXT_RUN_READER_DEFINER_ROLE,
+                    CITATION_DEFINER_ROLE,
                     ACTION_EXECUTE_DEFINER_ROLE,
                     MIGRATOR_ROLE,
                 ),
@@ -392,6 +423,18 @@ def test_post_init_role_provisioning_repairs_a_legacy_volume_idempotently(
                 False,
                 False,
                 True,
+                False,
+                False,
+                False,
+                False,
+                False,
+                False,
+                False,
+                False,
+                False,
+                True,
+                True,
+                1,
                 False,
                 False,
                 False,
@@ -1056,15 +1099,14 @@ def test_learning_and_release_definer_roles_have_exact_authority(
         False,
         True,
     )
-    assert memberships == [
-        (RELEASE_DEFINER_ROLE, MIGRATOR_ROLE, False, False, True)
-    ]
+    assert memberships == [(RELEASE_DEFINER_ROLE, MIGRATOR_ROLE, False, False, True)]
     assert not [row for row in owned_objects if row[0] == LEARNING_ROLE]
     assert promote_owner == RELEASE_DEFINER_ROLE
     assert any(
         owner == RELEASE_DEFINER_ROLE and catalog == "pg_proc"
         for owner, catalog, _object_id in owned_objects
     )
+
 
 def test_security_operator_role_guard_passes_operator_and_rejects_runtime(
     guarded_operator_engine: Engine,

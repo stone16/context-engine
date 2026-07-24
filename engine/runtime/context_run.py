@@ -13,6 +13,7 @@ from engine.runtime.contracts import (
     Acquire,
     ContextPackage,
     CoverageStatus,
+    OpenCitation,
     context_package_digest_document,
 )
 from engine.runtime.package_digest import (
@@ -36,7 +37,7 @@ class ContextRunPersistenceUnavailable(RuntimeError):
 
 
 class ContextRunOutcome(StrEnum):
-    """Tenant-safe terminal outcomes active for Acquire."""
+    """Tenant-safe terminal outcomes for active Runtime delivery carriers."""
 
     DELIVERED_AUTHORIZED = "delivered_authorized"
     DELIVERED_EMPTY = "delivered_empty"
@@ -76,7 +77,7 @@ def _require_utc(field_name: str, value: object) -> datetime:
 
 @dataclass(frozen=True, slots=True)
 class ContextRunRecord:
-    """Authorized-only final lineage for one successful Acquire delivery."""
+    """Authorized-only final lineage for one completed Runtime delivery."""
 
     organization_id: UUID = field(repr=False)
     run_ref: str
@@ -384,7 +385,7 @@ def persist_context_run(
 def build_context_run_records(
     *,
     invocation: object,
-    request: Acquire,
+    request: Acquire | OpenCitation,
     provenance: object,
     package: ContextPackage,
     final_effective_scope: EffectiveScope,
@@ -403,8 +404,8 @@ def build_context_run_records(
 
     if type(invocation) is not AuthenticatedInvocation:
         raise TypeError("ContextRun projection requires AuthenticatedInvocation")
-    if type(request) is not Acquire:
-        raise TypeError("ContextRun projection requires Acquire")
+    if type(request) not in {Acquire, OpenCitation}:
+        raise TypeError("ContextRun projection requires Acquire or OpenCitation")
     if type(package) is not ContextPackage:
         raise TypeError("ContextRun projection requires ContextPackage")
     active_release = invocation.user_actor.active_runtime_release
@@ -444,9 +445,11 @@ def build_context_run_records(
     decision_provenance = cast(DecisionProvenance, provenance)
     authorized_scope = compute_effective_scope(
         _trusted_operands_from_snapshot(invocation.trusted_scope_snapshot),
-        request.narrowing
-        if request.narrowing is not None
-        else OMITTED_REQUEST_NARROWING,
+        (
+            request.narrowing
+            if type(request) is Acquire and request.narrowing is not None
+            else OMITTED_REQUEST_NARROWING
+        ),
     )
     if invocation.trusted_scope_snapshot.policy_epoch != invocation.policy_epoch:
         authorized_scope = EffectiveScope(frozenset())
@@ -501,7 +504,7 @@ def build_context_run_records(
     query_receipt = query_digest(
         keyring,
         invocation.user_actor.organization_id,
-        request.need.query,
+        request.need.query if type(request) is Acquire else "citation.open",
     )
     outcome = (
         ContextRunOutcome.DELIVERED_AUTHORIZED

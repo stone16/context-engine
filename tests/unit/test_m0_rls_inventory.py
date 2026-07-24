@@ -22,6 +22,7 @@ TENANT_TABLES = {
     "action_receipt",
     "action_reconciliation",
     "action_ticket",
+    "citation_open_locator",
     "context_fragment",
     "context_fragment_field",
     "context_resource",
@@ -144,7 +145,7 @@ def test_manifest_declares_exact_live_table_denominator_and_rls_evidence() -> No
 
     assert global_tables == GLOBAL_TABLES
     assert tenant_tables == TENANT_TABLES
-    assert len(tables) == 50
+    assert len(tables) == 51
 
     for name in sorted(GLOBAL_TABLES):
         rationale = tables[name]["classificationRationale"]
@@ -167,8 +168,8 @@ def test_rls_auditor_requires_every_live_control_and_non_owner_evidence() -> Non
 
     assert report["passed"] is True
     assert report["coverage"] == {
-        "numerator": 47,
-        "denominator": 47,
+        "numerator": 48,
+        "denominator": 48,
         "percent": 100.0,
     }
     inventory = cast(dict[str, object], report["inventory"])
@@ -193,7 +194,7 @@ def test_rls_auditor_does_not_count_force_rls_or_evidence_gaps() -> None:
     assert report["passed"] is False
     assert report["coverage"] == {
         "numerator": 0,
-        "denominator": 47,
+        "denominator": 48,
         "percent": 0.0,
     }
     tenant_reports = cast(list[dict[str, Any]], report["tenantTables"])
