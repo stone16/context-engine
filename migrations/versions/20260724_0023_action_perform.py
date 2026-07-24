@@ -424,29 +424,48 @@ def upgrade() -> None:
             expected_source_context_digest bytea;
         BEGIN
             IF SESSION_USER <> '{_ACTION}'
+               OR requested_organization_id IS NULL
+               OR requested_ticket_ref IS NULL
                OR requested_ticket_ref !~ '^act_[0-9a-f]{{32}}$'
+               OR requested_delivery_attempt_ref IS NULL
                OR requested_delivery_attempt_ref !~ '^dla_[0-9a-f]{{32}}$'
+               OR proposed_provider_attempt_ref IS NULL
                OR proposed_provider_attempt_ref !~ '^pat_[0-9a-f]{{32}}$'
+               OR requested_operation IS NULL
                OR requested_operation NOT IN (
                     'create_placeholder', 'finalize_reply',
                     'send_private_followup'
                )
-               OR requested_profile_ref <> 'private-action-prepare-v1'
+               OR requested_ticket_audience IS NULL
+               OR requested_profile_ref IS DISTINCT FROM
+                    'private-action-prepare-v1'
+               OR requested_policy_epoch IS NULL
                OR requested_policy_epoch <= 0
+               OR requested_signing_key_version IS NULL
                OR requested_signing_key_version <= 0
+               OR requested_retention_seconds IS NULL
                OR requested_retention_seconds NOT BETWEEN 2 AND 31536000
+               OR requested_payload_digest IS NULL
                OR octet_length(requested_payload_digest) <> 32
+               OR requested_idempotency_digest IS NULL
                OR octet_length(requested_idempotency_digest) <> 32
+               OR requested_approval_digest IS NULL
                OR octet_length(requested_approval_digest) <> 32
+               OR requested_service_digest IS NULL
                OR octet_length(requested_service_digest) <> 32
+               OR requested_destination_digest IS NULL
                OR octet_length(requested_destination_digest) <> 32
+               OR requested_audience_digest IS NULL
                OR octet_length(requested_audience_digest) <> 32
+               OR requested_identity_digest IS NULL
                OR octet_length(requested_identity_digest) <> 32
+               OR requested_purpose_digest IS NULL
                OR octet_length(requested_purpose_digest) <> 32
                OR (requested_source_context_digest IS NOT NULL AND
                    octet_length(requested_source_context_digest) <> 32)
                OR requested_issued_at IS NULL
                OR requested_expires_at IS NULL
+               OR requested_ticket_bearer_digest IS NULL
                OR octet_length(requested_ticket_bearer_digest) <> 32
             THEN
                 RETURN QUERY SELECT 'rejected'::text, NULL::text, NULL::text,
@@ -505,28 +524,45 @@ def upgrade() -> None:
                     'sha256'
                 );
             END IF;
-            IF ticket_record.delivery_attempt_ref <> requested_delivery_attempt_ref
-               OR ticket_record.operation <> requested_operation
-               OR ticket_record.ticket_audience <> requested_ticket_audience
-               OR ticket_record.payload_digest <> requested_payload_digest
-               OR ticket_record.idempotency_digest <> requested_idempotency_digest
-               OR ticket_record.approval_digest <> requested_approval_digest
-               OR ticket_record.policy_epoch <> requested_policy_epoch
-               OR ticket_record.signing_key_version <> requested_signing_key_version
-               OR ticket_record.profile_ref <> requested_profile_ref
-               OR attempt_record.authenticated_service_digest <> requested_service_digest
-               OR attempt_record.destination_digest <> requested_destination_digest
-               OR attempt_record.audience_digest <> requested_audience_digest
-               OR attempt_record.identity_digest <> requested_identity_digest
-               OR attempt_record.purpose_digest <> requested_purpose_digest
+            IF ticket_record.delivery_attempt_ref IS DISTINCT FROM
+                    requested_delivery_attempt_ref
+               OR ticket_record.operation IS DISTINCT FROM requested_operation
+               OR ticket_record.ticket_audience IS DISTINCT FROM
+                    requested_ticket_audience
+               OR ticket_record.payload_digest IS DISTINCT FROM
+                    requested_payload_digest
+               OR ticket_record.idempotency_digest IS DISTINCT FROM
+                    requested_idempotency_digest
+               OR ticket_record.approval_digest IS DISTINCT FROM
+                    requested_approval_digest
+               OR ticket_record.policy_epoch IS DISTINCT FROM
+                    requested_policy_epoch
+               OR ticket_record.signing_key_version IS DISTINCT FROM
+                    requested_signing_key_version
+               OR ticket_record.profile_ref IS DISTINCT FROM requested_profile_ref
+               OR attempt_record.authenticated_service_digest IS DISTINCT FROM
+                    requested_service_digest
+               OR attempt_record.destination_digest IS DISTINCT FROM
+                    requested_destination_digest
+               OR attempt_record.audience_digest IS DISTINCT FROM
+                    requested_audience_digest
+               OR attempt_record.identity_digest IS DISTINCT FROM
+                    requested_identity_digest
+               OR attempt_record.purpose_digest IS DISTINCT FROM
+                    requested_purpose_digest
                OR expected_source_context_digest IS DISTINCT FROM
                     requested_source_context_digest
-               OR pg_catalog.date_trunc('milliseconds', ticket_record.issued_at)
-                    <> requested_issued_at
-               OR pg_catalog.date_trunc('milliseconds', ticket_record.expires_at)
-                    <> requested_expires_at
-               OR ticket_record.ticket_bearer_digest IS NOT NULL AND
-                    ticket_record.ticket_bearer_digest <> requested_ticket_bearer_digest
+               OR pg_catalog.date_trunc(
+                    'milliseconds', ticket_record.issued_at
+               ) IS DISTINCT FROM requested_issued_at
+               OR pg_catalog.date_trunc(
+                    'milliseconds', ticket_record.expires_at
+               ) IS DISTINCT FROM requested_expires_at
+               OR (
+                    ticket_record.ticket_bearer_digest IS NOT NULL AND
+                    ticket_record.ticket_bearer_digest IS DISTINCT FROM
+                        requested_ticket_bearer_digest
+               )
             THEN
                 INSERT INTO public.action_perform_audit (
                     organization_id, decision_digest, category, recorded_at,
@@ -817,13 +853,21 @@ def upgrade() -> None:
             decision_digest bytea;
         BEGIN
             IF SESSION_USER <> '{_ACTION}'
+               OR requested_organization_id IS NULL
+               OR requested_provider_attempt_ref IS NULL
                OR requested_provider_attempt_ref !~ '^pat_[0-9a-f]{{32}}$'
+               OR requested_ticket_ref IS NULL
                OR requested_ticket_ref !~ '^act_[0-9a-f]{{32}}$'
+               OR requested_sender_outcome IS NULL
                OR requested_sender_outcome NOT IN ('applied', 'ambiguous', 'rejected')
-               OR requested_retention_policy_ref <> 'action-digest-audit-retention-v1'
+               OR requested_retention_policy_ref IS DISTINCT FROM
+                    'action-digest-audit-retention-v1'
+               OR requested_retention_seconds IS NULL
                OR requested_retention_seconds NOT BETWEEN 2 AND 31536000
                OR (requested_sender_outcome = 'applied' AND (
-                    proposed_receipt_ref !~ '^acr_[0-9a-f]{{32}}$'
+                    proposed_receipt_ref IS NULL
+                    OR proposed_receipt_ref !~ '^acr_[0-9a-f]{{32}}$'
+                    OR requested_provider_effect_digest IS NULL
                     OR octet_length(requested_provider_effect_digest) <> 32
                     OR requested_applied_at IS NULL
                     OR requested_applied_at > authority_now +
@@ -1046,13 +1090,21 @@ def upgrade() -> None:
             receipt_record public.action_receipt%ROWTYPE;
         BEGIN
             IF SESSION_USER <> '{_ACTION}'
+               OR requested_organization_id IS NULL
+               OR requested_provider_attempt_ref IS NULL
                OR requested_provider_attempt_ref !~ '^pat_[0-9a-f]{{32}}$'
+               OR requested_disposition IS NULL
                OR requested_disposition NOT IN ('applied', 'rejected')
+               OR requested_decision_digest IS NULL
                OR octet_length(requested_decision_digest) <> 32
-               OR requested_retention_policy_ref <> 'action-digest-audit-retention-v1'
+               OR requested_retention_policy_ref IS DISTINCT FROM
+                    'action-digest-audit-retention-v1'
+               OR requested_retention_seconds IS NULL
                OR requested_retention_seconds NOT BETWEEN 2 AND 31536000
                OR (requested_disposition = 'applied' AND (
-                    proposed_receipt_ref !~ '^acr_[0-9a-f]{{32}}$'
+                    proposed_receipt_ref IS NULL
+                    OR proposed_receipt_ref !~ '^acr_[0-9a-f]{{32}}$'
+                    OR requested_provider_effect_digest IS NULL
                     OR octet_length(requested_provider_effect_digest) <> 32
                     OR requested_applied_at IS NULL
                     OR requested_applied_at > authority_now +
@@ -1141,10 +1193,10 @@ def upgrade() -> None:
                 RETURN;
             END IF;
             IF reconciliation_record.state = 'applied' THEN
-                IF requested_disposition <> 'applied'
-                   OR reconciliation_record.decision_digest <>
+                IF requested_disposition IS DISTINCT FROM 'applied'
+                   OR reconciliation_record.decision_digest IS DISTINCT FROM
                         requested_decision_digest
-                   OR provider_record.provider_effect_digest <>
+                   OR provider_record.provider_effect_digest IS DISTINCT FROM
                         requested_provider_effect_digest
                 THEN
                     INSERT INTO public.action_perform_audit (

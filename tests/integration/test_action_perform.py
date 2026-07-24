@@ -436,6 +436,7 @@ def test_private_perform_is_one_shot_replayable_and_reconcilable(
             assert concurrent["senderCalls"] == 1
             assert concurrent["senderEffects"] == 1
             assert concurrent["prematureReconciliation"] == "rejected"
+            assert result["nullDispositionReconciliation"] == "rejected"
             assert result["stale"] == {
                 "outcome": "rejected",
                 "reasonCategory": "not_available",
@@ -457,6 +458,7 @@ def test_private_perform_is_one_shot_replayable_and_reconcilable(
                 "organization": "rejected:not_available",
                 "payload": "rejected:not_available",
                 "service": "rejected:not_available",
+                "service_null": "rejected:not_available",
             }
 
         with migration_engine.connect() as connection:

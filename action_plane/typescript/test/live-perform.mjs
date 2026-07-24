@@ -433,6 +433,26 @@ try {
   ) {
     throw new Error("ambiguous retry minted or sent a second provider attempt");
   }
+  const nullDispositionReconciliation = await database.query({
+    text: `SELECT * FROM context_action_reconcile_private_effect(
+      $1::uuid, $2::text, $3::text, $4::bytea, $5::timestamptz,
+      $6::text, $7::bytea, $8::text, $9::bigint
+    )`,
+    values: [
+      organizationId,
+      ambiguous.providerAttemptRef,
+      null,
+      null,
+      null,
+      `acr_${"e".repeat(32)}`,
+      Buffer.alloc(32, 0x69),
+      "action-digest-audit-retention-v1",
+      2_592_000,
+    ],
+  });
+  if (nullDispositionReconciliation.rows[0]?.outcome !== "rejected") {
+    throw new Error("NULL reconciliation disposition did not fail closed");
+  }
   const appliedAt = new Date(Date.now() + 2_000);
   const reconciliation = createTrustedActionReconciliation({
     appliedAt,
@@ -647,6 +667,7 @@ try {
     },
     payload: (values) => { values[5] = Buffer.alloc(32, 0x35); },
     service: (values) => { values[11] = Buffer.alloc(32, 0x36); },
+    service_null: (values) => { values[11] = null; },
   };
   for (const [name, mutate] of Object.entries(mutationSpecs)) {
     const sender = new DeterministicPrivateSenderTwin({ mode: "applied" });
@@ -786,6 +807,8 @@ try {
       senderCalls: concurrentSender.callCount,
       senderEffects: concurrentSender.effectCount,
     },
+    nullDispositionReconciliation:
+      nullDispositionReconciliation.rows[0]?.outcome,
     expired: {
       outcome: expired.kind,
       reasonCategory: expired.reasonCategory,
