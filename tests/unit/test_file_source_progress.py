@@ -7,10 +7,12 @@ from uuid import UUID
 import pytest
 
 from engine.control import (
+    ActivateFileChangeFeed,
     ContextControl,
     ControlOperation,
     ControlOperatorAuthenticationRejected,
     ControlOperatorAuthority,
+    FileChangeScanHead,
     FileResourceTombstone,
     FileSourceAcquisitionCheckpoint,
     FileSourceChangeKind,
@@ -55,6 +57,11 @@ class _Authenticator:
 
 
 class _Store:
+    def activate_file_change_feed(
+        self, call: TrustedControlCall, command: ActivateFileChangeFeed
+    ) -> SourceManifest:
+        raise AssertionError("unexpected File change activation")
+
     def offboard_file_source(
         self, call: TrustedControlCall, command: OffboardFileSource
     ) -> FileSourceOffboarding:
@@ -154,6 +161,7 @@ def test_progress_contracts_keep_checkpoint_and_watermark_semantics_separate() -
         "source_ref",
         "acquisition_checkpoint",
         "publish_watermark",
+        "change_scan_head",
     ]
     assert FileSourceChangeKind.FILE_IMPORT.value == "file_import"
     assert FileSourceChangeKind.FILE_TOMBSTONE.value == "file_tombstone"
@@ -242,6 +250,116 @@ def test_equal_progress_sequences_require_exact_checkpoint_lineage() -> None:
                 watermark,
                 checkpoint_ref="facp_" + "c" * 64,
             ),
+        )
+
+
+def test_change_scan_head_requires_matching_durable_checkpoint_lineage() -> None:
+    checkpoint = FileSourceAcquisitionCheckpoint(
+        sequence=2,
+        checkpoint_ref="facp_" + "a" * 64,
+        change_kind=FileSourceChangeKind.FILE_CHANGE_PAGE,
+        acquisition_ref=None,
+        job_ref=None,
+        cleanup_intent_ref=None,
+        resource_ref=None,
+        revision_ref=None,
+        event_ref=None,
+        event_sequence=None,
+        accepted_at=NOW,
+        source_version_ref=REVISION_ID,
+        change_page_ref="b" * 64,
+    )
+    head = FileChangeScanHead(
+        source_version_ref=REVISION_ID,
+        scan_ref="c" * 64,
+        scan_epoch=UUID("903c6391-8d91-412d-a329-031a642c3359"),
+        page_limit=1,
+        page_ref="b" * 64,
+        checkpoint_ref=checkpoint.checkpoint_ref,
+        sequence=checkpoint.sequence,
+        complete=True,
+    )
+    progress = FileSourceProgress(
+        organization_id=ORGANIZATION_ID,
+        source_ref=SOURCE_REF,
+        acquisition_checkpoint=checkpoint,
+        publish_watermark=None,
+        change_scan_head=head,
+    )
+    assert progress.change_scan_head == head
+
+    with pytest.raises(ValueError, match="requires a checkpoint"):
+        FileSourceProgress(
+            organization_id=ORGANIZATION_ID,
+            source_ref=SOURCE_REF,
+            acquisition_checkpoint=None,
+            publish_watermark=None,
+            change_scan_head=head,
+        )
+    with pytest.raises(ValueError, match="exceeds its checkpoint"):
+        FileSourceProgress(
+            organization_id=ORGANIZATION_ID,
+            source_ref=SOURCE_REF,
+            acquisition_checkpoint=replace(checkpoint, sequence=1),
+            publish_watermark=None,
+            change_scan_head=head,
+        )
+    with pytest.raises(ValueError, match="head lineage is invalid"):
+        FileSourceProgress(
+            organization_id=ORGANIZATION_ID,
+            source_ref=SOURCE_REF,
+            acquisition_checkpoint=replace(
+                checkpoint,
+                checkpoint_ref="facp_" + "d" * 64,
+            ),
+            publish_watermark=None,
+            change_scan_head=head,
+        )
+    with pytest.raises(ValueError, match="head lineage is invalid"):
+        FileSourceProgress(
+            organization_id=ORGANIZATION_ID,
+            source_ref=SOURCE_REF,
+            acquisition_checkpoint=replace(
+                checkpoint,
+                change_page_ref="e" * 64,
+            ),
+            publish_watermark=None,
+            change_scan_head=head,
+        )
+
+
+def test_page_checkpoint_cannot_carry_publication_lineage_or_watermark() -> None:
+    with pytest.raises(ValueError, match="publication lineage"):
+        FileSourceAcquisitionCheckpoint(
+            sequence=1,
+            checkpoint_ref="facp_" + "a" * 64,
+            change_kind=FileSourceChangeKind.FILE_CHANGE_PAGE,
+            acquisition_ref=ACQUISITION_ID,
+            job_ref=None,
+            cleanup_intent_ref=None,
+            resource_ref=None,
+            revision_ref=None,
+            event_ref=None,
+            event_sequence=None,
+            accepted_at=NOW,
+            source_version_ref=REVISION_ID,
+            change_page_ref="b" * 64,
+        )
+    with pytest.raises(ValueError, match="cannot advance a publish watermark"):
+        FileSourcePublishWatermark(
+            sequence=1,
+            watermark_ref="fpwm_" + "b" * 64,
+            checkpoint_ref="facp_" + "a" * 64,
+            change_kind=FileSourceChangeKind.FILE_CHANGE_PAGE,
+            outcome=FileSourcePublishOutcome.PUBLISHED,
+            acquisition_ref=None,
+            job_ref=None,
+            cleanup_intent_ref=None,
+            resource_ref=RESOURCE_REF,
+            revision_ref=REVISION_ID,
+            event_ref=None,
+            event_sequence=None,
+            published_at=NOW,
         )
 
 

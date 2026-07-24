@@ -4,19 +4,28 @@ import json
 import os
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
+from functools import partial
 from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
+from alembic import command
+from alembic.config import Config
 from sqlalchemy import Engine, text
 from sqlalchemy.exc import DBAPIError
 
 from engine.control import (
     FILE_CAPABILITY_MANIFEST,
+    FILE_CHANGE_CAPABILITY_MANIFEST,
+    ActivateFileChangeFeed,
     ContextControl,
     ControlOperation,
     ControlOperatorAuthority,
+    FileImportAudience,
+    FileImportPath,
+    FileImportReceiver,
     FileRootRef,
+    PrepareFileImport,
     RegisterFileSource,
     SourceManifest,
     SourceNotAvailable,
@@ -46,7 +55,12 @@ class _Authenticator:
             authentication_binding_ref=f"binding:{self.organization_id}",
             authority_ref=f"source-admin:{self.organization_id}",
             allowed_operations=frozenset(
-                {ControlOperation.REGISTER_SOURCE, ControlOperation.READ_SOURCE}
+                {
+                    ControlOperation.ACTIVATE_FILE_CHANGE_FEED,
+                    ControlOperation.IMPORT_FILE,
+                    ControlOperation.REGISTER_SOURCE,
+                    ControlOperation.READ_SOURCE,
+                }
             ),
             valid_from=NOW - timedelta(minutes=1),
             expires_at=NOW + timedelta(hours=1),
@@ -69,6 +83,72 @@ def _control(engine: Engine, organization_id: UUID) -> tuple[
         ),
         authority,
     )
+
+
+def _delete_disposable_file_change_organization(
+    configuration: DatabaseConfiguration,
+    organization_id: UUID,
+    user_id: UUID,
+) -> None:
+    """Remove the activation test's dedicated Organization and lineage."""
+
+    engine = create_database_engine(configuration)
+    immutable_tables = (
+        (
+            "file_source_acquisition_checkpoint",
+            "file_source_acquisition_checkpoint_immutable",
+        ),
+        ("file_acquisition", "file_acquisition_immutable"),
+        ("source_version", "source_version_immutable"),
+    )
+    try:
+        with engine.begin() as connection:
+            for table, trigger in immutable_tables:
+                connection.execute(
+                    text(f"ALTER TABLE {table} DISABLE TRIGGER {trigger}")
+                )
+        try:
+            with engine.begin() as connection:
+                for table in (
+                    "file_source_acquisition_checkpoint",
+                    "file_import_job",
+                    "file_acquisition",
+                    "context_source",
+                    "source_version",
+                    "service_principal",
+                    "membership",
+                ):
+                    connection.execute(
+                        text(
+                            f"DELETE FROM {table} "  # noqa: S608 - fixed list
+                            "WHERE organization_id = :organization_id"
+                        ),
+                        {"organization_id": organization_id},
+                    )
+                connection.execute(
+                    text(
+                        "DELETE FROM user_account WHERE user_id = :user_id "
+                        "AND NOT EXISTS ("
+                        "SELECT 1 FROM membership "
+                        "WHERE membership.user_id = user_account.user_id)"
+                    ),
+                    {"user_id": user_id},
+                )
+                connection.execute(
+                    text(
+                        "DELETE FROM organization "
+                        "WHERE organization_id = :organization_id"
+                    ),
+                    {"organization_id": organization_id},
+                )
+        finally:
+            with engine.begin() as connection:
+                for table, trigger in reversed(immutable_tables):
+                    connection.execute(
+                        text(f"ALTER TABLE {table} ENABLE TRIGGER {trigger}")
+                    )
+    finally:
+        engine.dispose()
 
 
 def _register(
@@ -251,6 +331,187 @@ def test_control_registers_reads_and_idempotently_isolates_file_sources(
         "context_fragment": 0,
     }
     assert (source_count, version_count) == (1, 1)
+
+
+@pytest.mark.security_evidence(id="PG-FILE-CHANGE-ACTIVATE-081", layer="postgres")
+def test_control_atomically_activates_one_immutable_v3_file_source_version(
+    guarded_control_engine: Engine,
+    migration_configuration: DatabaseConfiguration,
+    request: pytest.FixtureRequest,
+) -> None:
+    organization_id, user_id, membership_id = uuid4(), uuid4(), uuid4()
+    request.addfinalizer(
+        partial(
+            _delete_disposable_file_change_organization,
+            migration_configuration,
+            organization_id,
+            user_id,
+        )
+    )
+    receiver = FileImportReceiver(uuid4())
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.begin() as connection:
+            connection.execute(
+                text("INSERT INTO organization (organization_id) VALUES (:org)"),
+                {"org": organization_id},
+            )
+            connection.execute(
+                text("INSERT INTO user_account (user_id) VALUES (:user)"),
+                {"user": user_id},
+            )
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO membership (
+                        organization_id, membership_id, user_id, status,
+                        membership_version, valid_from
+                    ) VALUES (:org, :membership, :user, 'active', 1, :now)
+                    """
+                ),
+                {
+                    "org": organization_id,
+                    "membership": membership_id,
+                    "user": user_id,
+                    "now": NOW - timedelta(days=1),
+                },
+            )
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO service_principal (
+                        organization_id, service_principal_id, workload,
+                        worker_audience, operation, enabled
+                    ) VALUES (:org, :receiver, 'supply.file-import',
+                        'context-engine-worker', 'file.import', true)
+                    """
+                ),
+                {"org": organization_id, "receiver": receiver.service_principal_id},
+            )
+    finally:
+        migration_engine.dispose()
+
+    authority = ControlOperatorAuthority(
+        _Authenticator(organization_id),
+        call_ttl=timedelta(minutes=5),
+        clock=lambda: NOW,
+    )
+    control = ContextControl(
+        store=PostgreSQLControlStore(
+            guarded_control_engine,
+            clock=lambda: NOW,
+            file_import_receiver=receiver,
+        ),
+        authority=authority,
+        clock=lambda: NOW,
+    )
+    source = _register(
+        control,
+        authority,
+        organization_id,
+        RegisterFileSource("Handbook", FileRootRef("handbook"), "v3-source"),
+        request_id="register-v3-source",
+    )
+    with authority.authorize(
+        opaque_credential=f"credential:{organization_id}",
+        operation=ControlOperation.IMPORT_FILE,
+        request_id="activate-v2-prerequisite",
+    ) as call:
+        control.prepare_file_import(
+            call,
+            PrepareFileImport(
+                source_ref=source.source_ref,
+                path=FileImportPath("handbook.md"),
+                audience=FileImportAudience(
+                    principal_ref="principal:file-reader",
+                    membership_id=membership_id,
+                    membership_version=1,
+                ),
+                idempotency_key="v2-prerequisite",
+            ),
+        )
+
+    def counts() -> tuple[int, int, int, int]:
+        engine = create_database_engine(migration_configuration)
+        try:
+            with engine.connect() as connection:
+                return tuple(
+                    connection.execute(
+                        text(
+                            """
+                            SELECT
+                              (SELECT count(*) FROM source_version
+                               WHERE organization_id = :org AND source_id = :source),
+                              (SELECT count(*) FROM file_import_job
+                               WHERE organization_id = :org AND source_id = :source),
+                              (SELECT count(*) FROM file_source_acquisition_checkpoint
+                               WHERE organization_id = :org AND source_id = :source),
+                              (SELECT count(*) FROM file_source_publish_watermark
+                               WHERE organization_id = :org AND source_id = :source)
+                            """
+                        ),
+                        {"org": organization_id, "source": source.source_ref.value},
+                    ).one()
+                )
+        finally:
+            engine.dispose()
+
+    before = counts()
+    with authority.authorize(
+        opaque_credential=f"credential:{organization_id}",
+        operation=ControlOperation.ACTIVATE_FILE_CHANGE_FEED,
+        request_id="activate-v3",
+    ) as call:
+        activated = control.activate_file_change_feed(
+            call, ActivateFileChangeFeed(source.source_ref)
+        )
+    with authority.authorize(
+        opaque_credential=f"credential:{organization_id}",
+        operation=ControlOperation.ACTIVATE_FILE_CHANGE_FEED,
+        request_id="activate-v3-replay",
+    ) as call:
+        replay = control.activate_file_change_feed(
+            call, ActivateFileChangeFeed(source.source_ref)
+        )
+
+    assert replay == activated
+    assert activated.active_version.capabilities is FILE_CHANGE_CAPABILITY_MANIFEST
+    assert activated.active_version.version_ref != source.active_version.version_ref
+    assert counts() == (before[0] + 1, before[1], before[2], before[3])
+
+    with authority.authorize(
+        opaque_credential=f"credential:{organization_id}",
+        operation=ControlOperation.IMPORT_FILE,
+        request_id="v3-manual-import-still-active",
+    ) as call:
+        control.prepare_file_import(
+            call,
+            PrepareFileImport(
+                source_ref=source.source_ref,
+                path=FileImportPath("after-activation.md"),
+                audience=FileImportAudience(
+                    principal_ref="principal:file-reader",
+                    membership_id=membership_id,
+                    membership_version=1,
+                ),
+                idempotency_key="v3-manual-import",
+            ),
+        )
+    assert counts() == (
+        before[0] + 1,
+        before[1] + 1,
+        before[2] + 1,
+        before[3],
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="no retained File acquisition lineage",
+    ):
+        command.downgrade(
+            Config(Path(__file__).parents[2] / "alembic.ini"),
+            "20260724_0027",
+        )
 
 
 def test_file_source_tables_fail_closed_for_non_owner_role_matrix(

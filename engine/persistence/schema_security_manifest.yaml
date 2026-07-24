@@ -1,5 +1,5 @@
 {
-  "manifestVersion": "25.0.0",
+  "manifestVersion": "26.0.0",
   "controlOperations": [
     {
       "name": "register_file_source",
@@ -13,6 +13,40 @@
       "atomicWrites": [
         "context_source",
         "source_version"
+      ]
+    },
+    {
+      "name": "activate_file_change_feed",
+      "databaseFunction": "context_control_activate_file_change_feed",
+      "role": "context_engine_control",
+      "definerRole": "context_engine_worker_lease_definer",
+      "directTableMutationAllowed": false,
+      "trustedOrganizationSource": "TrustedControlCall",
+      "databaseOwnedTime": true,
+      "idempotencyBinding": [
+        "organization_id",
+        "source_id"
+      ],
+      "atomicWrites": [
+        "source_version",
+        "context_source"
+      ]
+    },
+    {
+      "name": "accept_file_change_page",
+      "databaseFunction": "context_control_accept_file_change_page",
+      "role": "context_engine_control",
+      "definerRole": "context_engine_worker_lease_definer",
+      "directTableMutationAllowed": false,
+      "trustedOrganizationSource": "TrustedControlCall",
+      "databaseOwnedTime": true,
+      "organizationScopedIdempotency": true,
+      "durableJobCreationAllowed": false,
+      "runtimeAuthorityAllowed": false,
+      "atomicWrites": [
+        "file_source_change_page",
+        "file_source_change",
+        "file_source_acquisition_checkpoint"
       ]
     },
     {
@@ -81,10 +115,11 @@
         "organization_id",
         "source_id"
       ],
-      "watermarkRule": "highest contiguous acquisition sequence with a committed visibility outcome",
+      "watermarkRule": "highest accepted publication-bearing sequence with no earlier unresolved publication-bearing sequence; content-free provider pages never require a visibility outcome",
       "runtimeAuthorityAllowed": false,
       "reads": [
         "context_source",
+        "file_source_change_page",
         "file_source_acquisition_checkpoint",
         "file_source_publish_watermark"
       ]
@@ -1333,6 +1368,7 @@
         "context_engine_control": [
           "SELECT",
           "INSERT",
+          "EXECUTE context_control_activate_file_change_feed",
           "EXECUTE context_control_offboard_file_source"
         ],
         "context_engine_learning": [],
@@ -1416,7 +1452,7 @@
         },
         {
           "name": "ck_source_version_file_capabilities",
-          "expression": "capability_manifest IN ('{\"aclEvidenceMode\": \"mirrored\", \"authorizeAndProject\": \"unavailable\", \"batchLimits\": \"unavailable\", \"checkpoint\": \"unavailable\", \"checkpointSemantics\": \"unavailable\", \"contentKinds\": [\"markdown\"], \"consistencyGuarantees\": \"unavailable\", \"cursorSemantics\": \"unavailable\", \"declarationVersion\": \"file-capabilities-v1\", \"deletion\": \"unavailable\", \"describeCapabilities\": \"unavailable\", \"discover\": \"unavailable\", \"fileSourceAccess\": \"unavailable\", \"freshness\": \"unavailable\", \"ingestionJobs\": \"unavailable\", \"projectionFields\": [], \"readChanges\": \"unavailable\", \"resourceKinds\": [\"markdown_document\"], \"sourceMode\": \"materialized\"}'::jsonb, '{\"aclEvidenceMode\": \"mirrored\", \"authorizeAndProject\": \"unavailable\", \"batchLimits\": \"unavailable\", \"checkpoint\": \"unavailable\", \"checkpointSemantics\": \"unavailable\", \"contentKinds\": [\"markdown\"], \"consistencyGuarantees\": \"unavailable\", \"cursorSemantics\": \"unavailable\", \"declarationVersion\": \"file-capabilities-v2\", \"deletion\": \"unavailable\", \"describeCapabilities\": \"unavailable\", \"discover\": \"unavailable\", \"fileSourceAccess\": \"available\", \"freshness\": \"unavailable\", \"ingestionJobs\": \"available\", \"projectionFields\": [], \"readChanges\": \"unavailable\", \"resourceKinds\": [\"markdown_document\"], \"sourceMode\": \"materialized\"}'::jsonb)"
+          "expression": "materialized mirrored markdown only: exact file-capabilities-v1 and file-capabilities-v2 keep batchLimits/checkpoint/checkpointSemantics/cursorSemantics/describeCapabilities/readChanges unavailable; exact file-capabilities-v3 makes those dimensions available while consistencyGuarantees/freshness/discover/authorizeAndProject/deletion remain unavailable, resourceKinds = [markdown_document], projectionFields = [] and ingestionJobs/fileSourceAccess remain available"
         }
       ],
       "rowLevelSecurity": {
@@ -1494,7 +1530,8 @@
       "permittedOperations": {
         "context_engine_control": [
           "SELECT",
-          "INSERT"
+          "INSERT",
+          "EXECUTE context_control_activate_file_change_feed"
         ],
         "context_engine_learning": [],
         "context_engine_runtime": [],
@@ -7066,6 +7103,74 @@
       ]
     },
     {
+      "name": "file_source_change_page",
+      "classification": "tenant_owned",
+      "nonOwnerEvidence": {
+        "evidenceId": "PG-FILE-CHANGE-DENY-081",
+        "selector": {"table": "file_source_change_page"}
+      },
+      "purpose": "Immutable content-free provider page accepted under one active Organization/SourceVersion and scan epoch",
+      "organizationColumn": "organization_id",
+      "organizationInclusiveKeys": [
+        {"name": "pk_file_source_change_page", "kind": "primary_key", "columns": ["organization_id", "source_id", "page_ref"]},
+        {"name": "uq_file_source_change_page_ordinal", "kind": "unique", "columns": ["organization_id", "source_id", "source_version_id", "scan_epoch", "page_ordinal"]},
+        {"name": "uq_file_source_change_page_scan_ref", "kind": "unique", "columns": ["organization_id", "source_id", "source_version_id", "scan_ref", "page_ref"]},
+        {"name": "uq_file_source_change_page_version_ref", "kind": "unique", "columns": ["organization_id", "source_id", "source_version_id", "page_ref"]}
+      ],
+      "foreignKeys": [
+        {"name": "fk_file_source_change_page_source_version_exact", "columns": ["organization_id", "source_id", "source_version_id"], "references": {"table": "source_version", "columns": ["organization_id", "source_id", "version_id"]}}
+      ],
+      "checkConstraints": [
+        {"name": "ck_file_source_change_page_refs", "expression": "page_ref and scan_ref are lowercase SHA-256 digests"},
+        {"name": "ck_file_source_change_page_predecessor", "expression": "predecessor_page_ref is null or one lowercase SHA-256 digest"},
+        {"name": "ck_file_source_change_page_supersession", "expression": "superseded_scan_epoch is null or belongs only to an initial page and differs from scan_epoch"},
+        {"name": "ck_file_source_change_page_bounds", "expression": "page_ordinal is positive bigint, page_limit is between 1 and 100, and change_count is between 0 and page_limit"}
+      ],
+      "rowLevelSecurity": {"enabled": true, "forced": true, "policies": [
+        {"name": "file_source_change_page_migrator_administration", "command": "ALL", "roles": ["context_engine_migrator"], "using": "true", "withCheck": "true"},
+        {"name": "file_source_change_page_file_change_definer_select", "command": "SELECT", "roles": ["context_engine_worker_lease_definer"], "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"},
+        {"name": "file_source_change_page_file_change_definer_insert", "command": "INSERT", "roles": ["context_engine_worker_lease_definer"], "withCheck": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"}
+      ]},
+      "immutableRows": {"trigger": "file_source_change_page_immutable", "function": "context_content_reject_mutation", "events": ["UPDATE", "DELETE"], "sqlstate": "55000"},
+      "functionOnlyMutation": {"databaseFunctions": ["context_control_accept_file_change_page"], "definerRole": "context_engine_worker_lease_definer", "directTableMutationAllowed": false},
+      "permittedOperations": {"context_engine_control": ["EXECUTE context_control_accept_file_change_page"], "context_engine_runtime": [], "context_engine_worker": [], "context_engine_worker_lease_definer": ["SELECT", "INSERT"]},
+      "partitions": [],
+      "securityInvariantIds": ["TENANT-OWNERSHIP-001", "TENANT-FK-002", "RLS-FAIL-CLOSED-003", "WORKER-LEASE-007"],
+      "negativeTestIds": ["DB-001", "DB-004", "DB-008", "PG-FILE-CHANGE-PAGE-081", "PG-FILE-CHANGE-DENY-081"]
+    },
+    {
+      "name": "file_source_change",
+      "classification": "tenant_owned",
+      "nonOwnerEvidence": {
+        "evidenceId": "PG-FILE-CHANGE-DENY-081",
+        "selector": {"table": "file_source_change"}
+      },
+      "purpose": "Immutable content-free File change envelope belonging to one accepted provider page",
+      "organizationColumn": "organization_id",
+      "organizationInclusiveKeys": [
+        {"name": "pk_file_source_change", "kind": "primary_key", "columns": ["organization_id", "source_id", "page_ref", "change_ordinal"]}
+      ],
+      "foreignKeys": [
+        {"name": "fk_file_source_change_page_exact", "columns": ["organization_id", "source_id", "source_version_id", "scan_ref", "page_ref"], "references": {"table": "file_source_change_page", "columns": ["organization_id", "source_id", "source_version_id", "scan_ref", "page_ref"]}}
+      ],
+      "checkConstraints": [
+        {"name": "ck_file_source_change_kind_ordinal", "expression": "change_ordinal is between 1 and 100 and change_kind is upsert"},
+        {"name": "ck_file_source_change_markdown_path", "expression": "relative_path is one shallow Markdown filename"},
+        {"name": "ck_file_source_change_content_identity", "expression": "content_sha256 is lowercase SHA-256 and content_length is nonnegative"}
+      ],
+      "rowLevelSecurity": {"enabled": true, "forced": true, "policies": [
+        {"name": "file_source_change_migrator_administration", "command": "ALL", "roles": ["context_engine_migrator"], "using": "true", "withCheck": "true"},
+        {"name": "file_source_change_file_change_definer_select", "command": "SELECT", "roles": ["context_engine_worker_lease_definer"], "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"},
+        {"name": "file_source_change_file_change_definer_insert", "command": "INSERT", "roles": ["context_engine_worker_lease_definer"], "withCheck": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"}
+      ]},
+      "immutableRows": {"trigger": "file_source_change_immutable", "function": "context_content_reject_mutation", "events": ["UPDATE", "DELETE"], "sqlstate": "55000"},
+      "functionOnlyMutation": {"databaseFunctions": ["context_control_accept_file_change_page"], "definerRole": "context_engine_worker_lease_definer", "directTableMutationAllowed": false},
+      "permittedOperations": {"context_engine_control": ["EXECUTE context_control_accept_file_change_page"], "context_engine_runtime": [], "context_engine_worker": [], "context_engine_worker_lease_definer": ["SELECT", "INSERT"]},
+      "partitions": [],
+      "securityInvariantIds": ["TENANT-OWNERSHIP-001", "TENANT-FK-002", "RLS-FAIL-CLOSED-003", "WORKER-LEASE-007"],
+      "negativeTestIds": ["DB-001", "DB-004", "DB-008", "PG-FILE-CHANGE-PAGE-081", "PG-FILE-CHANGE-DENY-081"]
+    },
+    {
       "name": "file_source_acquisition_checkpoint",
       "classification": "tenant_owned",
       "nonOwnerEvidence": {
@@ -7074,7 +7179,7 @@
           "table": "file_source_acquisition_checkpoint"
         }
       },
-      "purpose": "Immutable Organization/Source sequence for each durably accepted File import or tombstone change",
+      "purpose": "Immutable Organization/Source sequence for each durably accepted File import, tombstone, or content-free provider page",
       "organizationColumn": "organization_id",
       "organizationInclusiveKeys": [
         {
@@ -7120,6 +7225,14 @@
             "organization_id",
             "cleanup_intent_id"
           ]
+        },
+        {
+          "name": "uq_file_source_acquisition_checkpoint_change_page",
+          "kind": "unique",
+          "columns": [
+            "organization_id",
+            "change_page_ref"
+          ]
         }
       ],
       "foreignKeys": [
@@ -7134,6 +7247,24 @@
             "columns": [
               "organization_id",
               "source_id"
+            ]
+          }
+        },
+        {
+          "name": "fk_file_source_acquisition_checkpoint_change_page_exact",
+          "columns": [
+            "organization_id",
+            "source_id",
+            "source_version_id",
+            "change_page_ref"
+          ],
+          "references": {
+            "table": "file_source_change_page",
+            "columns": [
+              "organization_id",
+              "source_id",
+              "source_version_id",
+              "page_ref"
             ]
           }
         },
@@ -7187,7 +7318,7 @@
         },
         {
           "name": "ck_file_source_acquisition_checkpoint_lineage",
-          "expression": "exactly one complete file_import or file_tombstone durable lineage is present"
+          "expression": "exactly one complete file_import, file_tombstone, or content-free file_change_page durable lineage is present"
         }
       ],
       "rowLevelSecurity": {
@@ -7233,11 +7364,13 @@
       "functionOnlyMutation": {
         "databaseFunctions": [
           "context_file_source_checkpoint_import_job",
-          "context_file_source_checkpoint_tombstone"
+          "context_file_source_checkpoint_tombstone",
+          "context_control_accept_file_change_page"
         ],
         "causalDatabaseFunctions": [
           "context_control_prepare_file_import",
-          "context_control_tombstone_file_resource"
+          "context_control_tombstone_file_resource",
+          "context_control_accept_file_change_page"
         ],
         "definerRole": "context_engine_worker_lease_definer",
         "directTableMutationAllowed": false
@@ -7245,6 +7378,7 @@
       "permittedOperations": {
         "context_engine_control": [
           "EXECUTE context_control_prepare_file_import",
+          "EXECUTE context_control_accept_file_change_page",
           "EXECUTE context_control_read_file_source_progress",
           "EXECUTE context_control_tombstone_file_resource"
         ],
@@ -7278,7 +7412,7 @@
           "table": "file_source_publish_watermark"
         }
       },
-      "purpose": "Immutable per-change visibility completion; the operator watermark is its highest contiguous acquisition sequence",
+      "purpose": "Immutable publication visibility completion; the operator watermark is the highest accepted publication-bearing sequence with no earlier unresolved publication-bearing sequence, while content-free provider pages require no visibility outcome",
       "organizationColumn": "organization_id",
       "organizationInclusiveKeys": [
         {

@@ -98,6 +98,7 @@ from engine.supply import (
 )
 from tests.support.context_run_operator import exact_test_context_run_operator_read
 from tests.support.file_source_progress import clear_file_source_progress_projection
+from tests.support.migrations import HEAD_REVISION
 from tests.support.releases import (
     clear_test_runtime_release,
     ensure_test_runtime_release,
@@ -1582,7 +1583,7 @@ def _assert_structural_file_import_returns_coherent_authorized_units_over_http(
             connection.execute(
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one()
-            == "20260724_0027"
+            == HEAD_REVISION
         )
 
 

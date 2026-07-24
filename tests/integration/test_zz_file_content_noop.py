@@ -39,6 +39,7 @@ from tests.integration.test_file_import_tracer import (
     _RuntimeAuthenticator,
 )
 from tests.support.file_source_progress import clear_file_source_progress_projection
+from tests.support.migrations import HEAD_REVISION
 from tests.support.releases import (
     clear_test_runtime_release,
     ensure_test_runtime_release,
@@ -278,7 +279,7 @@ def test_repeated_canonically_identical_file_import_is_an_auditable_noop(
             connection.execute(
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one()
-            == "20260724_0027"
+            == HEAD_REVISION
         )
 
 

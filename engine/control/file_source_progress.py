@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
+from typing import TYPE_CHECKING
 from uuid import UUID
 
 from engine.control.contracts import (
@@ -14,6 +15,9 @@ from engine.control.contracts import (
     _require_utc,
 )
 
+if TYPE_CHECKING:
+    from engine.control.file_change_pages import FileChangeScanHead
+
 _MAX_BIGINT = 9_223_372_036_854_775_807
 
 
@@ -21,6 +25,7 @@ class FileSourceChangeKind(StrEnum):
     """Closed durable change carriers that participate in File progress."""
 
     FILE_IMPORT = "file_import"
+    FILE_CHANGE_PAGE = "file_change_page"
     FILE_TOMBSTONE = "file_tombstone"
 
 
@@ -53,6 +58,16 @@ def _require_progress_ref(name: str, value: object, prefix: str) -> str:
     return token
 
 
+def _require_sha256_ref(name: str, value: object) -> str:
+    if (
+        type(value) is not str
+        or len(value) != 64
+        or any(character not in "0123456789abcdef" for character in value)
+    ):
+        raise ValueError(f"{name} is not a SHA-256 reference")
+    return value
+
+
 def _require_lineage(
     *,
     change_kind: FileSourceChangeKind,
@@ -64,6 +79,8 @@ def _require_lineage(
     event_ref: object,
     event_sequence: object,
     allow_unresolved_import_resource: bool,
+    source_version_ref: object = None,
+    change_page_ref: object = None,
 ) -> None:
     if type(change_kind) is not FileSourceChangeKind:
         raise TypeError("File Source progress change_kind is invalid")
@@ -72,18 +89,44 @@ def _require_lineage(
             raise TypeError("File import progress requires acquisition and job lineage")
         if any(
             value is not None
-            for value in (cleanup_intent_ref, event_ref, event_sequence)
+            for value in (
+                cleanup_intent_ref,
+                event_ref,
+                event_sequence,
+                source_version_ref,
+                change_page_ref,
+            )
         ):
             raise ValueError("File import progress cannot carry tombstone lineage")
         if allow_unresolved_import_resource and resource_ref is revision_ref is None:
             return
-    else:
+    elif change_kind is FileSourceChangeKind.FILE_TOMBSTONE:
         if type(cleanup_intent_ref) is not UUID:
             raise TypeError("File tombstone progress requires cleanup lineage")
         if acquisition_ref is not None or job_ref is not None:
             raise ValueError("File tombstone progress cannot carry import lineage")
         _require_token("File tombstone progress event_ref", event_ref)
         _require_sequence("File tombstone progress event_sequence", event_sequence)
+        if source_version_ref is not None or change_page_ref is not None:
+            raise ValueError("File tombstone progress cannot carry page lineage")
+    else:
+        if type(source_version_ref) is not UUID:
+            raise TypeError("File page progress requires SourceVersion lineage")
+        _require_sha256_ref("File page progress change_page_ref", change_page_ref)
+        if any(
+            value is not None
+            for value in (
+                acquisition_ref,
+                job_ref,
+                cleanup_intent_ref,
+                resource_ref,
+                revision_ref,
+                event_ref,
+                event_sequence,
+            )
+        ):
+            raise ValueError("File page progress cannot carry publication lineage")
+        return
     _require_resource_ref(resource_ref)
     if type(revision_ref) is not UUID:
         raise TypeError("File Source progress revision_ref must be UUID")
@@ -104,6 +147,8 @@ class FileSourceAcquisitionCheckpoint:
     event_ref: str | None = field(repr=False)
     event_sequence: int | None
     accepted_at: datetime
+    source_version_ref: UUID | None = field(default=None, repr=False)
+    change_page_ref: str | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         _require_sequence("File Source acquisition sequence", self.sequence)
@@ -119,6 +164,8 @@ class FileSourceAcquisitionCheckpoint:
             revision_ref=self.revision_ref,
             event_ref=self.event_ref,
             event_sequence=self.event_sequence,
+            source_version_ref=self.source_version_ref,
+            change_page_ref=self.change_page_ref,
             allow_unresolved_import_resource=True,
         )
         _require_utc("File Source acquisition accepted_at", self.accepted_at)
@@ -126,7 +173,7 @@ class FileSourceAcquisitionCheckpoint:
 
 @dataclass(frozen=True, slots=True)
 class FileSourcePublishWatermark:
-    """Latest contiguous accepted change fully reflected in Runtime visibility."""
+    """Latest resolved publication-bearing change reflected in Runtime visibility."""
 
     sequence: int
     watermark_ref: str = field(repr=False)
@@ -152,6 +199,8 @@ class FileSourcePublishWatermark:
         )
         if type(self.outcome) is not FileSourcePublishOutcome:
             raise TypeError("File Source publish outcome is invalid")
+        if self.change_kind is FileSourceChangeKind.FILE_CHANGE_PAGE:
+            raise ValueError("File change pages cannot advance a publish watermark")
         _require_lineage(
             change_kind=self.change_kind,
             acquisition_ref=self.acquisition_ref,
@@ -172,12 +221,13 @@ class FileSourcePublishWatermark:
 
 @dataclass(frozen=True, slots=True)
 class FileSourceProgress:
-    """Organization/Source-scoped read model for the two progress signals."""
+    """Organization/Source-scoped read model for durable progress signals."""
 
     organization_id: UUID = field(repr=False)
     source_ref: SourceRef
     acquisition_checkpoint: FileSourceAcquisitionCheckpoint | None
     publish_watermark: FileSourcePublishWatermark | None
+    change_scan_head: FileChangeScanHead | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         if type(self.organization_id) is not UUID:
@@ -192,6 +242,33 @@ class FileSourceProgress:
             self.publish_watermark
         ) is not FileSourcePublishWatermark:
             raise TypeError("File Source publish watermark is invalid")
+        if self.change_scan_head is not None:
+            from engine.control.file_change_pages import FileChangeScanHead
+
+            if type(self.change_scan_head) is not FileChangeScanHead:
+                raise TypeError("File Source change scan head is invalid")
+            if self.acquisition_checkpoint is None:
+                raise ValueError("File Source change head requires a checkpoint")
+            if (
+                self.change_scan_head.sequence
+                > self.acquisition_checkpoint.sequence
+            ):
+                raise ValueError("File Source change head exceeds its checkpoint")
+            if (
+                self.change_scan_head.sequence
+                == self.acquisition_checkpoint.sequence
+                and (
+                    self.change_scan_head.checkpoint_ref
+                    != self.acquisition_checkpoint.checkpoint_ref
+                    or self.acquisition_checkpoint.change_kind
+                    is not FileSourceChangeKind.FILE_CHANGE_PAGE
+                    or self.change_scan_head.source_version_ref
+                    != self.acquisition_checkpoint.source_version_ref
+                    or self.change_scan_head.page_ref
+                    != self.acquisition_checkpoint.change_page_ref
+                )
+            ):
+                raise ValueError("File Source change head lineage is invalid")
         if self.publish_watermark is not None and (
             self.acquisition_checkpoint is None
             or self.publish_watermark.sequence

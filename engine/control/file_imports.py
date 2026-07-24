@@ -44,6 +44,7 @@ class FileImportPath:
             or not value.casefold().endswith(".md")
             or len(value) > 255
             or any(ord(character) < 0x20 for character in value)
+            or any(0xD800 <= ord(character) <= 0xDFFF for character in value)
         ):
             raise ValueError("File import path must be one bounded Markdown filename")
 

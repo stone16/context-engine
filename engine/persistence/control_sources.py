@@ -9,12 +9,19 @@ from typing import Any, cast
 from uuid import UUID, uuid4
 
 import rfc8785
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from sqlalchemy import Engine, text
 from sqlalchemy.exc import DBAPIError, SQLAlchemyError
 
+from engine._opaque import encode_base64url
 from engine.control import (
     FILE_CAPABILITY_MANIFEST,
+    FILE_CHANGE_CAPABILITY_MANIFEST,
     FILE_IMPORT_CAPABILITY_MANIFEST,
+    AcceptedChangePage,
+    ActivateFileChangeFeed,
+    ChangeCursor,
+    FileChangeScanHead,
     FileResourceTombstone,
     FileRootRef,
     FileSourceAcquisitionCheckpoint,
@@ -32,7 +39,9 @@ from engine.control import (
     SourceRef,
     TombstoneFileResource,
     TrustedControlCall,
+    VerifiedChangePage,
 )
+from engine.control.file_change_pages import _accepted_cursor_payload
 from engine.persistence.role_guard import assert_control_role
 from engine.supply import (
     FileImportReceiver,
@@ -71,6 +80,9 @@ _KNOWN_CAPABILITY_DOCUMENTS = {
     FILE_CAPABILITY_MANIFEST.declaration_version: FILE_CAPABILITY_MANIFEST,
     FILE_IMPORT_CAPABILITY_MANIFEST.declaration_version: (
         FILE_IMPORT_CAPABILITY_MANIFEST
+    ),
+    FILE_CHANGE_CAPABILITY_MANIFEST.declaration_version: (
+        FILE_CHANGE_CAPABILITY_MANIFEST
     ),
 }
 
@@ -113,6 +125,7 @@ class PostgreSQLControlStore:
         clock: Callable[[], datetime],
         uuid_factory: Callable[[], UUID] = uuid4,
         file_import_receiver: FileImportReceiver | None = None,
+        file_change_checkpoint_signing_key: Ed25519PrivateKey | None = None,
     ) -> None:
         if not callable(clock) or not callable(uuid_factory):
             raise TypeError("PostgreSQLControlStore requires clock and UUID factory")
@@ -125,6 +138,13 @@ class PostgreSQLControlStore:
         ):
             raise TypeError("file_import_receiver must be FileImportReceiver")
         self._file_import_receiver = file_import_receiver
+        if file_change_checkpoint_signing_key is not None and not isinstance(
+            file_change_checkpoint_signing_key, Ed25519PrivateKey
+        ):
+            raise TypeError("File change checkpoint signing key is invalid")
+        self._file_change_checkpoint_signing_key = (
+            file_change_checkpoint_signing_key
+        )
 
     def register_file_source(
         self,
@@ -248,6 +268,175 @@ class PostgreSQLControlStore:
         except (DBAPIError, SQLAlchemyError, AssertionError):
             raise SourceControlUnavailable(
                 "File source read database authority is unavailable"
+            ) from None
+
+    def activate_file_change_feed(
+        self,
+        call: TrustedControlCall,
+        command: ActivateFileChangeFeed,
+    ) -> SourceManifest:
+        """Atomically advance one active File SourceVersion from v2 to v3."""
+
+        if (
+            type(call) is not TrustedControlCall
+            or type(command) is not ActivateFileChangeFeed
+        ):
+            raise SourceNotAvailable
+        activated_version_id = self._uuid_factory()
+        try:
+            with self._engine.begin() as connection:
+                assert_control_role(connection)
+                row = connection.execute(
+                    text(
+                        """
+                        SELECT activated_version_id
+                        FROM public.context_control_activate_file_change_feed(
+                            :organization_id, :source_id, :activated_version_id
+                        )
+                        """
+                    ),
+                    {
+                        "organization_id": call.organization_id,
+                        "source_id": command.source_ref.value,
+                        "activated_version_id": activated_version_id,
+                    },
+                ).one_or_none()
+                if row is None:
+                    raise SourceNotAvailable
+                source_row = connection.execute(
+                    text(
+                        _ACTIVE_SOURCE_SELECT
+                        + """
+                        WHERE source.organization_id = :organization_id
+                          AND source.source_id = :source_id
+                        """
+                    ),
+                    {
+                        "organization_id": call.organization_id,
+                        "source_id": command.source_ref.value,
+                    },
+                ).mappings().one_or_none()
+                if source_row is None or source_row["version_id"] != row[0]:
+                    raise SourceNotAvailable
+                manifest = self._manifest(
+                    cast(Mapping[str, object], source_row)
+                )
+                if (
+                    manifest.active_version.capabilities
+                    is not FILE_CHANGE_CAPABILITY_MANIFEST
+                ):
+                    raise SourceNotAvailable
+                return manifest
+        except SourceNotAvailable:
+            raise
+        except (DBAPIError, SQLAlchemyError, AssertionError, TypeError, ValueError):
+            raise SourceControlUnavailable(
+                "File change feed activation database authority is unavailable"
+            ) from None
+
+    def accept_file_change_page(
+        self,
+        call: TrustedControlCall,
+        page: VerifiedChangePage,
+    ) -> AcceptedChangePage:
+        """Persist one provider-verified page and its checkpoint atomically."""
+
+        if type(call) is not TrustedControlCall or type(page) is not VerifiedChangePage:
+            raise SourceNotAvailable
+        value = page.page
+        signing_key = self._file_change_checkpoint_signing_key
+        if signing_key is None:
+            raise SourceControlUnavailable(
+                "File change checkpoint signing authority is unavailable"
+            )
+        try:
+            changes_document = [
+                {
+                    "contentLength": change.content_length,
+                    "contentSha256": change.content_sha256,
+                    "kind": change.kind.value,
+                    "path": change.path.value,
+                }
+                for change in value.changes
+            ]
+            with self._engine.begin() as connection:
+                assert_control_role(connection)
+                row = connection.execute(
+                    text(
+                        """
+                        SELECT *
+                        FROM public.context_control_accept_file_change_page(
+                            :organization_id, :source_id, :source_version_id,
+                            :scan_ref, :scan_epoch, :page_limit, :page_ref,
+                            :predecessor_page_ref,
+                            :predecessor_checkpoint_ref, :predecessor_sequence,
+                            :superseded_scan_epoch,
+                            CAST(:changes AS jsonb), :complete
+                        )
+                        """
+                    ),
+                    {
+                        "organization_id": call.organization_id,
+                        "source_id": value.source_ref,
+                        "source_version_id": value.source_version_ref,
+                        "scan_ref": value.scan_ref,
+                        "scan_epoch": value.scan_epoch,
+                        "page_limit": value.page_limit,
+                        "page_ref": page.page_ref,
+                        "predecessor_page_ref": value.predecessor_page_ref,
+                        "predecessor_checkpoint_ref": (
+                            value.predecessor_checkpoint_ref
+                        ),
+                        "predecessor_sequence": value.predecessor_sequence,
+                        "superseded_scan_epoch": value.superseded_scan_epoch,
+                        "changes": rfc8785.dumps(
+                            cast(Any, changes_document)
+                        ).decode("utf-8"),
+                        "complete": value.complete,
+                    },
+                ).one_or_none()
+                if row is None:
+                    raise SourceNotAvailable
+            # Reaching this point proves the transaction context committed.
+            source_ref = SourceRef(row.source_id)
+            pending = value.next_cursor
+            next_cursor = None
+            if pending is not None:
+                payload = _accepted_cursor_payload(
+                    organization_id=call.organization_id,
+                    source_ref=source_ref,
+                    source_version_ref=row.source_version_id,
+                        scan_ref=value.scan_ref,
+                        scan_epoch=value.scan_epoch,
+                    page_ref=row.page_ref,
+                    checkpoint_ref=row.checkpoint_ref,
+                    sequence=row.sequence,
+                    pending_cursor=pending,
+                )
+                next_cursor = ChangeCursor(
+                    f"{encode_base64url(payload)}."
+                    f"{encode_base64url(signing_key.sign(payload))}"
+                )
+            return AcceptedChangePage(
+                source_ref=source_ref,
+                source_version_ref=row.source_version_id,
+                scan_ref=value.scan_ref,
+                scan_epoch=value.scan_epoch,
+                page_limit=row.page_limit,
+                superseded_scan_epoch=row.superseded_scan_epoch,
+                page_ref=row.page_ref,
+                checkpoint_ref=row.checkpoint_ref,
+                sequence=row.sequence,
+                change_count=row.change_count,
+                complete=row.complete,
+                next_cursor=next_cursor,
+                accepted_at=row.accepted_at,
+            )
+        except SourceNotAvailable:
+            raise
+        except (DBAPIError, SQLAlchemyError, AssertionError, TypeError, ValueError):
+            raise SourceControlUnavailable(
+                "File change page database authority is unavailable"
             ) from None
 
     def offboard_file_source(
@@ -435,6 +624,10 @@ class PostgreSQLControlStore:
                         event_ref=row["acquisition_event_ref"],
                         event_sequence=row["acquisition_event_sequence"],
                         accepted_at=row["acquisition_accepted_at"],
+                        source_version_ref=row[
+                            "acquisition_source_version_id"
+                        ],
+                        change_page_ref=row["acquisition_change_page_ref"],
                     )
                 )
                 watermark = (
@@ -463,6 +656,25 @@ class PostgreSQLControlStore:
                     source_ref=source_ref,
                     acquisition_checkpoint=checkpoint,
                     publish_watermark=watermark,
+                    change_scan_head=(
+                        None
+                        if row["change_scan_epoch"] is None
+                        else FileChangeScanHead(
+                            source_version_ref=row[
+                                "change_source_version_id"
+                            ],
+                            scan_ref=row["change_scan_ref"],
+                            scan_epoch=row["change_scan_epoch"],
+                            page_limit=row["change_page_limit"],
+                            superseded_scan_epoch=row[
+                                "change_superseded_scan_epoch"
+                            ],
+                            page_ref=row["change_page_ref"],
+                            checkpoint_ref=row["change_checkpoint_ref"],
+                            sequence=row["change_sequence"],
+                            complete=row["change_complete"],
+                        )
+                    ),
                 )
         except SourceNotAvailable:
             raise

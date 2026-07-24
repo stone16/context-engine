@@ -90,7 +90,7 @@
     },
     "evidence": {
       "type": "array",
-      "minItems": 27,
+      "minItems": 83,
       "uniqueItems": true,
       "items": {
         "$ref": "#/$defs/evidence"

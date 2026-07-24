@@ -30,7 +30,7 @@ def _manifest() -> dict[str, object]:
 def test_all_manifest_tenant_tables_pass_live_non_owner_rls_audit(
     guarded_runtime_engine: Engine,
 ) -> None:
-    """PG-RLS-ALL-TENANT-TABLES: the live denominator is exactly 50/50."""
+    """PG-RLS-ALL-TENANT-TABLES: the live denominator is exactly 52/52."""
 
     with guarded_runtime_engine.connect() as connection:
         report = audit_live_rls(
@@ -41,13 +41,13 @@ def test_all_manifest_tenant_tables_pass_live_non_owner_rls_audit(
 
     assert report["passed"] is True
     assert report["denominator"] == {
-        "allTables": 53,
-        "tenantOwned": 50,
+        "allTables": 55,
+        "tenantOwned": 52,
         "global": 3,
     }
     assert report["coverage"] == {
-        "numerator": 50,
-        "denominator": 50,
+        "numerator": 52,
+        "denominator": 52,
         "percent": 100.0,
     }
     assert report["failures"] == []
@@ -86,9 +86,9 @@ def test_no_force_row_level_security_mutation_fails_and_rolls_back(
 
                 assert mutated["passed"] is False
                 assert mutated["coverage"] == {
-                    "numerator": 49,
-                    "denominator": 50,
-                    "percent": 98.0,
+                    "numerator": 51,
+                    "denominator": 52,
+                    "percent": 98.08,
                 }
                 tenant_tables = cast(list[dict[str, Any]], mutated["tenantTables"])
                 organization_record = next(
@@ -111,8 +111,8 @@ def test_no_force_row_level_security_mutation_fails_and_rolls_back(
         )
     assert restored["passed"] is True
     assert restored["coverage"] == {
-        "numerator": 50,
-        "denominator": 50,
+        "numerator": 52,
+        "denominator": 52,
         "percent": 100.0,
     }
 

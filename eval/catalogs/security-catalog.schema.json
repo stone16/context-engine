@@ -95,8 +95,8 @@
     },
     "activations": {
       "type": "array",
-      "minItems": 15,
-      "maxItems": 15,
+      "minItems": 16,
+      "maxItems": 16,
       "uniqueItems": true,
       "prefixItems": [
         {
@@ -763,6 +763,52 @@
               "MCP"
             ]
           }
+        },
+        {
+          "const": {
+            "issueRef": "#81",
+            "invariantRef": "WORKER-LEASE-007",
+            "carrier": "deterministic shallow File readChanges and durable page acknowledgement",
+            "status": "active_fail_closed",
+            "policyEpochScope": "not-runtime-authority",
+            "controlBoundary": "FileChangeProvider PendingChangeCursor -> provider-authenticated ChangePage -> ContextControl whole-page PostgreSQL acceptance -> accepted ChangeCursor",
+            "testEvidence": [
+              {
+                "id": "PG-FILE-CHANGE-ACTIVATE-081",
+                "surface": "tests/integration/test_file_source_registration.py",
+                "oracle": "A real non-owner Control role atomically activates one immutable File v3 SourceVersion, replays the same active manifest without duplication, retains explicit manual import, and creates no change page, automatic job, checkpoint, or publish watermark during activation."
+              },
+              {
+                "id": "PG-FILE-CHANGE-PAGE-081",
+                "surface": "tests/integration/test_file_change_pages.py",
+                "oracle": "A real non-owner Control role accepts two deterministic content-free File pages only in predecessor order, appends one acquisition checkpoint per complete page transaction, returns identical replay receipts, and creates zero additional File import jobs or publish watermarks."
+              },
+              {
+                "id": "PG-FILE-CHANGE-DENY-081",
+                "surface": "tests/integration/test_file_change_pages.py",
+                "oracle": "Cross-Organization and disabled-source page acceptance are generic denials with zero durable page, change, job, Revision, candidate, or publication effect; a provider cursor proposed before Control acceptance cannot advance the database checkpoint."
+              }
+            ],
+            "deferredEvidence": [
+              "automatic publication scheduling from accepted change envelopes",
+              "executed deletion and tombstone observations",
+              "recursive discovery and full-resync operations"
+            ],
+            "futureCarriers": [
+              "automatic File change scheduling",
+              "deletion execution",
+              "recursive File discovery",
+              "full resync"
+            ],
+            "notActive": [
+              "provider discover",
+              "provider authorizeAndProject",
+              "provider deletion execution",
+              "recursive scan",
+              "filesystem watcher",
+              "Runtime authorization from provider checkpoint metadata"
+            ]
+          }
         }
       ],
       "items": false
@@ -1049,7 +1095,10 @@
             "PG-MODEL-EGRESS-070",
             "TS-PRIVATE-BOT-FLOW-071",
             "SDK-PRIVATE-BOT-FLOW-071",
-            "PG-PRIVATE-BOT-FLOW-071"
+            "PG-PRIVATE-BOT-FLOW-071",
+            "PG-FILE-CHANGE-ACTIVATE-081",
+            "PG-FILE-CHANGE-PAGE-081",
+            "PG-FILE-CHANGE-DENY-081"
           ]
         },
         "surface": {
@@ -1092,7 +1141,8 @@
             "#68",
             "#69",
             "#70",
-            "#71"
+            "#71",
+            "#81"
           ]
         },
         "invariantRef": {
@@ -1124,7 +1174,8 @@
             "private/direct File CitationOpenRef issuance and OpenCitation",
             "private Package-bound deterministic TypeScript ModelGateway",
             "ContextRuntime.resolve(Continue | profile-disabled OpenCitation | server-owned unavailable Acquire plan)",
-            "independent trusted TypeScript private File-backed Bot application"
+            "independent trusted TypeScript private File-backed Bot application",
+            "deterministic shallow File readChanges and durable page acknowledgement"
           ]
         },
         "status": {
@@ -1133,7 +1184,8 @@
         "policyEpochScope": {
           "enum": [
             "organization-v0",
-            "not-bound-issue-17"
+            "not-bound-issue-17",
+            "not-runtime-authority"
           ]
         },
         "controlBoundary": {
@@ -1152,7 +1204,8 @@
             "operation-specific ActionTicket plus exact canonical payload -> least-privilege PostgreSQL begin/complete/reconcile state machine -> deterministic private Sender twin",
             "digest-only locator -> current UserActor transaction -> CandidateRef -> AuthorizationKernel -> AuthorizedProjection -> replacement ContextPackage",
             "generated SDK ContextPackage plus opaque model EgressGrant -> nominal AuthorizedModelInput -> exact non-owner PostgreSQL redemption -> deterministic ModelGateway twin -> bounded answer and digest-only audit",
-            "verified private Feishu twin event -> opaque DeliveryEvidenceRef -> installed generated SDK over HTTP -> sealed Runtime File Package -> controlled ModelGateway -> co-resident ActionPlane prepare/perform -> digest-only DeliveryReceipt audit"
+            "verified private Feishu twin event -> opaque DeliveryEvidenceRef -> installed generated SDK over HTTP -> sealed Runtime File Package -> controlled ModelGateway -> co-resident ActionPlane prepare/perform -> digest-only DeliveryReceipt audit",
+            "FileChangeProvider PendingChangeCursor -> provider-authenticated ChangePage -> ContextControl whole-page PostgreSQL acceptance -> accepted ChangeCursor"
           ]
         },
         "testEvidence": {

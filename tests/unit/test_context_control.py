@@ -13,6 +13,8 @@ from sqlalchemy import Engine
 import engine.persistence.control_sources as control_sources_module
 from engine.control import (
     FILE_CAPABILITY_MANIFEST,
+    FILE_CHANGE_CAPABILITY_MANIFEST,
+    ActivateFileChangeFeed,
     CapabilityStatus,
     ContextControl,
     ControlOperation,
@@ -57,6 +59,7 @@ class _Authenticator:
             authority_ref="source-admin-a",
             allowed_operations=frozenset(
                 {
+                    ControlOperation.ACTIVATE_FILE_CHANGE_FEED,
                     ControlOperation.IMPORT_FILE,
                     ControlOperation.OFFBOARD_FILE_SOURCE,
                     ControlOperation.REGISTER_SOURCE,
@@ -97,6 +100,24 @@ class _Store(ControlStorePort):
         assert call.operation is ControlOperation.READ_SOURCE
         if self.manifest is None or source_ref != self.manifest.source_ref:
             raise SourceNotAvailable
+        return self.manifest
+
+    def activate_file_change_feed(
+        self, call: TrustedControlCall, command: ActivateFileChangeFeed
+    ) -> SourceManifest:
+        assert call.organization_id == ORGANIZATION_ID
+        assert call.operation is ControlOperation.ACTIVATE_FILE_CHANGE_FEED
+        assert self.manifest is not None
+        assert command.source_ref == self.manifest.source_ref
+        self.manifest = SourceManifest.registered_file(
+            source_ref=self.manifest.source_ref,
+            version_ref=UUID("06b98147-0849-43df-b9ff-278499447cff"),
+            display_name=self.manifest.display_name,
+            root_ref=self.manifest.active_version.root_ref,
+            created_at=self.manifest.created_at,
+            version_created_at=NOW,
+            capabilities=FILE_CHANGE_CAPABILITY_MANIFEST,
+        )
         return self.manifest
 
     def prepare_file_import(
@@ -303,6 +324,33 @@ def test_authorized_operator_prepares_one_credential_free_file_import() -> None:
     assert prepared.workload == "supply.file-import"
     assert prepared.operation == "file.import"
     assert "credential" not in repr(prepared).casefold()
+
+
+def test_authorized_operator_activates_one_immutable_file_change_version() -> None:
+    store = _Store()
+    authority = _authority()
+    control = ContextControl(store=store, authority=authority, clock=lambda: NOW)
+    with authority.authorize(
+        opaque_credential="control-credential-a",
+        operation=ControlOperation.REGISTER_SOURCE,
+        request_id="register-for-change-feed",
+    ) as call:
+        source = control.register_source(
+            call,
+            RegisterFileSource("Handbook", FileRootRef("handbook"), "change-feed"),
+        )
+    command = ActivateFileChangeFeed(source.source_ref)
+
+    with authority.authorize(
+        opaque_credential="control-credential-a",
+        operation=ControlOperation.ACTIVATE_FILE_CHANGE_FEED,
+        request_id="activate-change-feed",
+    ) as call:
+        activated = control.activate_file_change_feed(call, command)
+
+    assert activated.source_ref == source.source_ref
+    assert activated.active_version.version_ref != source.active_version.version_ref
+    assert activated.active_version.capabilities is FILE_CHANGE_CAPABILITY_MANIFEST
 
 
 def test_authorized_operator_tombstones_one_exact_file_resource() -> None:
