@@ -1,6 +1,8 @@
+import json
 import pickle
 from collections.abc import Mapping
 from dataclasses import fields
+from pathlib import Path
 from types import MappingProxyType
 from typing import cast
 from uuid import UUID
@@ -12,6 +14,7 @@ from engine.runtime.package_digest import (
     QUERY_DIGEST_PROFILE,
     QueryDigest,
     QueryDigestKeyring,
+    canonicalize_context_package,
     context_package_digest,
     query_digest,
     verify_context_package_digest,
@@ -19,6 +22,26 @@ from engine.runtime.package_digest import (
 
 ORGANIZATION_ID = UUID("12345678-1234-5678-90ab-cdef12345678")
 QUERY_KEY = bytes(range(32))
+CANONICAL_JSON_FIXTURE = (
+    Path(__file__).parents[1] / "fixtures/canonical-json-cross-language-v1.json"
+)
+
+
+def test_python_and_typescript_share_rfc8785_ijson_vectors() -> None:
+    fixture = json.loads(CANONICAL_JSON_FIXTURE.read_text(encoding="utf-8"))
+
+    assert fixture["profile"] == "rfc8785-ijson-cross-language-v1"
+    for vector in fixture["valid"]:
+        assert context_package_digest(vector["document"]) == vector["sha256"], vector[
+            "name"
+        ]
+    for vector in fixture["invalidJsonDocuments"]:
+        document = json.loads(vector["json"])
+        with pytest.raises(ValueError, match="Unicode scalar values"):
+            canonicalize_context_package(document)
+    for vector in fixture["invalidPackageDocuments"]:
+        with pytest.raises(ValueError, match="packageDigest"):
+            canonicalize_context_package(vector["document"])
 
 
 def test_context_package_digest_has_a_fixed_canonical_unicode_vector() -> None:

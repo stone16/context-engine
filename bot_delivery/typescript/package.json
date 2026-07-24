@@ -1,0 +1,46 @@
+{
+  "name": "@context-engine/bot-delivery",
+  "version": "0.0.0-m2-model-egress",
+  "description": "Trusted Package-bound BotDelivery model egress module",
+  "type": "module",
+  "private": true,
+  "license": "UNLICENSED",
+  "engines": {
+    "node": "22.12.0",
+    "npm": "10.9.0"
+  },
+  "packageManager": "npm@10.9.0",
+  "exports": {
+    ".": {
+      "types": "./dist/public.d.ts",
+      "import": "./dist/public.js"
+    }
+  },
+  "types": "./dist/public.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "THIRD_PARTY_NOTICES.md"
+  ],
+  "scripts": {
+    "clean": "node scripts/clean.mjs",
+    "typecheck": "tsc --project tsconfig.json --noEmit",
+    "build": "npm run clean && tsc --project tsconfig.build.json",
+    "test:runtime": "node --test test/model-egress.test.mjs",
+    "test:package": "node scripts/test-package.mjs",
+    "test": "npm run typecheck && npm run build && npm run test:runtime && npm run test:package"
+  },
+  "dependencies": {
+    "canonicalize": "3.0.0",
+    "pg": "8.22.0"
+  },
+  "peerDependencies": {
+    "@context-engine/resolve-sdk": "0.0.0-v0"
+  },
+  "devDependencies": {
+    "@context-engine/resolve-sdk": "file:../../sdk/typescript",
+    "@types/node": "22.10.2",
+    "@types/pg": "8.20.0",
+    "typescript": "5.9.3"
+  }
+}

@@ -31,6 +31,7 @@ from scripts.validate_security_catalog import (
     CANONICAL_FAIL_CLOSED_OUTCOMES,
     CANONICAL_FIELD_PROJECTION_ACTIVATION,
     CANONICAL_INVARIANT_IDS,
+    CANONICAL_MODEL_EGRESS_ACTIVATION,
     CANONICAL_OPENAPI_V0_ACTIVATION,
     CANONICAL_PRIVATE_DELIVERY_EVIDENCE_ACTIVATION,
     CANONICAL_REVOCATION_ACTIVATION,
@@ -573,6 +574,7 @@ def make_catalog() -> dict[str, object]:
             copy.deepcopy(CANONICAL_ACTION_PREPARE_ACTIVATION),
             copy.deepcopy(CANONICAL_ACTION_PERFORM_ACTIVATION),
             copy.deepcopy(CANONICAL_CITATION_OPEN_ACTIVATION),
+            copy.deepcopy(CANONICAL_MODEL_EGRESS_ACTIVATION),
         ],
         "invariants": invariants,
         "fixtures": fixtures,
@@ -668,6 +670,7 @@ def make_schema() -> dict[str, object]:
                     {"const": copy.deepcopy(CANONICAL_ACTION_PREPARE_ACTIVATION)},
                     {"const": copy.deepcopy(CANONICAL_ACTION_PERFORM_ACTIVATION)},
                     {"const": copy.deepcopy(CANONICAL_CITATION_OPEN_ACTIVATION)},
+                    {"const": copy.deepcopy(CANONICAL_MODEL_EGRESS_ACTIVATION)},
                 ],
                 "items": False,
             },
@@ -1359,7 +1362,7 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
         self.assertIn("PG-ACTION-PERFORM-068", egress_postgres_evidence)
         self.assertEqual(
             REQUIRED_POSTGRES_EVIDENCE["EGRESS-011"],
-            ("PG-ACTION-PERFORM-068",),
+            ("PG-ACTION-PERFORM-068", "PG-MODEL-EGRESS-070"),
         )
         future_carriers = activation["futureCarriers"]
         not_active = activation["notActive"]
@@ -1375,6 +1378,32 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
             "activations: must exactly preserve the canonical ordered "
             f"{CANONICAL_ACTIVATION_ISSUE_LIST} activation records and their "
             "future/NOT_ACTIVE boundaries",
+        )
+
+    def test_issue_70_model_egress_activation_stops_before_real_provider(self) -> None:
+        catalog = make_catalog()
+        activation = object_list_at(catalog, "activations")[13]
+
+        self.assertEqual(activation, CANONICAL_MODEL_EGRESS_ACTIVATION)
+        self.assertEqual(activation["invariantRef"], "EGRESS-011")
+        self.assertEqual(
+            [item["id"] for item in object_list_at(activation, "testEvidence")],
+            [
+                "TS-MODEL-EGRESS-070",
+                "SDK-MODEL-EGRESS-070",
+                "PG-MODEL-EGRESS-070",
+            ],
+        )
+        future_carriers = activation["futureCarriers"]
+        not_active = activation["notActive"]
+        assert isinstance(future_carriers, list)
+        assert isinstance(not_active, list)
+        self.assertIn("production provider ModelGateway", future_carriers)
+        self.assertIn("real model or provider network call", not_active)
+        self.assertIn("model-authored effect intent or ActionTicket", not_active)
+        self.assertEqual(
+            REQUIRED_RUNTIME_EVIDENCE["EGRESS-011"],
+            ("EGR-003", "EGR-005", "EGR-006", "RUN-014", "SDK-MODEL-EGRESS-070"),
         )
 
     def test_schema_independently_freezes_full_accept_008_as_future(self) -> None:
@@ -1799,7 +1828,7 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
 
         self.assertEqual(catalog["catalogVersion"], "1.3.0")
         self.assertEqual(
-            issue_refs[-13:],
+            issue_refs[-14:],
             [
                 "#15",
                 "#16",
@@ -1814,6 +1843,7 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
                 "#67",
                 "#68",
                 "#69",
+                "#70",
             ],
         )
         self.assertIn(
@@ -1826,6 +1856,10 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
         )
         self.assertIn(
             "docs/decisions/0051-reauthorize-opaque-citation-opens.md",
+            document_refs,
+        )
+        self.assertIn(
+            "docs/decisions/0052-gate-model-generation-by-package.md",
             document_refs,
         )
         for boundary in (

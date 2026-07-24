@@ -1,5 +1,5 @@
 {
-  "manifestVersion": "23.0.0",
+  "manifestVersion": "24.0.0",
   "controlOperations": [
     {
       "name": "register_file_source",
@@ -2920,6 +2920,177 @@
         "DB-010",
         "OBS-004",
         "OBS-005"
+      ]
+    },
+    {
+      "name": "model_egress_audit",
+      "classification": "tenant_owned",
+      "nonOwnerEvidence": {
+        "evidenceId": "PG-MODEL-EGRESS-070",
+        "selector": {
+          "table": "model_egress_audit"
+        }
+      },
+      "purpose": "Restricted digest-only generation outcome and usage lineage after one consumed model grant",
+      "organizationColumn": "organization_id",
+      "organizationInclusiveKeys": [
+        {
+          "name": "pk_model_egress_audit",
+          "kind": "primary_key",
+          "columns": [
+            "organization_id",
+            "audit_id"
+          ]
+        },
+        {
+          "name": "uq_model_egress_audit_exact_grant",
+          "kind": "unique",
+          "columns": [
+            "organization_id",
+            "grant_digest"
+          ]
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_model_egress_audit_exact_grant",
+          "columns": [
+            "organization_id",
+            "grant_digest"
+          ],
+          "references": {
+            "table": "egress_grant",
+            "columns": [
+              "organization_id",
+              "grant_digest"
+            ]
+          },
+          "onDelete": "RESTRICT"
+        }
+      ],
+      "checkConstraints": [
+        {
+          "name": "ck_model_egress_audit_sha256_digests",
+          "expression": "grant, Package, model payload, question, and optional answer payload lineage are 32-byte SHA-256 digests"
+        },
+        {
+          "name": "ck_model_egress_audit_outcome_category",
+          "expression": "outcome is generated, output_rejected, or provider_unavailable"
+        },
+        {
+          "name": "ck_model_egress_audit_usage",
+          "expression": "exactly one provider call and nonnegative cost, elapsed time, and output bytes"
+        },
+        {
+          "name": "ck_model_egress_audit_answer_digest",
+          "expression": "only a generated outcome carries an answer payload digest"
+        },
+        {
+          "name": "ck_model_egress_audit_profiles",
+          "expression": "gateway profile is nonblank and audit profile is model-generation-audit-v1"
+        },
+        {
+          "name": "ck_model_egress_audit_retention",
+          "expression": "retain_until is exactly 30 days after database-owned recorded_at"
+        }
+      ],
+      "rowLevelSecurity": {
+        "enabled": true,
+        "forced": true,
+        "policies": [
+          {
+            "name": "model_egress_audit_migrator_administration",
+            "command": "ALL",
+            "roles": [
+              "context_engine_migrator"
+            ],
+            "using": "true",
+            "withCheck": "true"
+          },
+          {
+            "name": "model_egress_audit_definer_select",
+            "command": "SELECT",
+            "roles": [
+              "context_engine_egress_grant_definer"
+            ],
+            "using": "true"
+          },
+          {
+            "name": "model_egress_audit_definer_insert",
+            "command": "INSERT",
+            "roles": [
+              "context_engine_egress_grant_definer"
+            ],
+            "withCheck": "true"
+          },
+          {
+            "name": "model_egress_audit_definer_delete",
+            "command": "DELETE",
+            "roles": [
+              "context_engine_egress_grant_definer"
+            ],
+            "using": "true"
+          }
+        ]
+      },
+      "functionOnlyMutation": {
+        "databaseFunctions": [
+          "context_egress_record_model_outcome",
+          "context_security_delete_expired_model_egress_audit"
+        ],
+        "definerRole": "context_engine_egress_grant_definer",
+        "directTableMutationAllowed": false
+      },
+      "retention": {
+        "class": "restricted_digest_audit_30_days_v1",
+        "databaseOwnedTime": true,
+        "bearerStored": false,
+        "rawPackageStored": false,
+        "rawQuestionStored": false,
+        "rawAnswerStored": false,
+        "deniedContentStored": false,
+        "cleanup": "context_security_delete_expired_model_egress_audit deletes only one exact Organization's rows after database-clock retain_until"
+      },
+      "permittedOperations": {
+        "context_engine_runtime": [],
+        "context_engine_egress": [
+          "EXECUTE context_egress_record_model_outcome"
+        ],
+        "context_engine_egress_grant_definer": [
+          "SELECT",
+          "INSERT",
+          "DELETE"
+        ],
+        "context_engine_control": [],
+        "context_engine_worker": [],
+        "context_engine_learning": [],
+        "context_engine_security_operator": [
+          "EXECUTE context_security_delete_expired_model_egress_audit"
+        ]
+      },
+      "partitions": [],
+      "securityInvariantIds": [
+        "TENANT-OWNERSHIP-001",
+        "TENANT-FK-002",
+        "RLS-FAIL-CLOSED-003",
+        "INDEX-NOT-AUTHORITY-005",
+        "EGRESS-011",
+        "NON-ENUMERATION-009",
+        "TRACE-REDACTION-012",
+        "ACTION-SEPARATION-014"
+      ],
+      "negativeTestIds": [
+        "EGR-001",
+        "EGR-004",
+        "DB-001",
+        "DB-002",
+        "DB-004",
+        "DB-008",
+        "DB-009",
+        "DB-010",
+        "OBS-004",
+        "OBS-005",
+        "PG-MODEL-EGRESS-070"
       ]
     },
     {

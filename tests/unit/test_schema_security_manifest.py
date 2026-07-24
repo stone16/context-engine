@@ -32,7 +32,7 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
     document = manifest()
     tables = table_entries(document)
 
-    assert document["manifestVersion"] == "23.0.0"
+    assert document["manifestVersion"] == "24.0.0"
     assert set(tables) == {
         "active_release_manifest",
         "action_delivery_attempt",
@@ -55,6 +55,7 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
         "delivery_evidence",
         "egress_audit",
         "egress_grant",
+        "model_egress_audit",
         "exact_phrase_candidate",
         "file_acquisition",
         "file_acquisition_result",
@@ -140,6 +141,23 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
     assert tables["action_perform_audit"]["classification"] == "tenant_owned"
     assert tables["egress_grant"]["classification"] == "tenant_owned"
     assert tables["egress_audit"]["classification"] == "tenant_owned"
+    assert tables["model_egress_audit"]["classification"] == "tenant_owned"
+    model_audit = tables["model_egress_audit"]
+    assert model_audit["functionOnlyMutation"] == {
+        "databaseFunctions": [
+            "context_egress_record_model_outcome",
+            "context_security_delete_expired_model_egress_audit",
+        ],
+        "definerRole": "context_engine_egress_grant_definer",
+        "directTableMutationAllowed": False,
+    }
+    assert model_audit["retention"]["bearerStored"] is False
+    assert model_audit["retention"]["rawPackageStored"] is False
+    assert model_audit["retention"]["rawQuestionStored"] is False
+    assert model_audit["retention"]["rawAnswerStored"] is False
+    assert model_audit["permittedOperations"]["context_engine_egress"] == [
+        "EXECUTE context_egress_record_model_outcome"
+    ]
     assert tables["service_principal"]["classification"] == "tenant_owned"
     assert tables["worker_noop_job"]["classification"] == "tenant_owned"
     assert tables["context_source"]["classification"] == "tenant_owned"

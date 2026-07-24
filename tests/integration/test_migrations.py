@@ -52,7 +52,7 @@ from tests.support.file_source_progress import clear_file_source_progress_projec
 
 pytestmark = pytest.mark.integration
 ROOT = Path(__file__).parents[2]
-_HEAD_REVISION = "20260724_0024"
+_HEAD_REVISION = "20260724_0025"
 HEAD_TABLES = [
     "action_delivery_attempt",
     "action_perform_audit",
@@ -91,6 +91,7 @@ HEAD_TABLES = [
     "file_source_publish_watermark",
     "membership",
     "membership_resource_field_right",
+    "model_egress_audit",
     "organization",
     "organization_policy_epoch",
     "organization_record",
@@ -905,6 +906,31 @@ def test_citation_open_revision_refuses_downgrade_with_retained_lineage(
             migration_configuration,
             scenario.organization_id,
         )
+
+
+def test_model_egress_revision_downgrades_only_while_audit_is_empty(
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    """Issue #70 schema is reversible only before retained audit exists."""
+
+    alembic_configuration = Config(ROOT / "alembic.ini")
+    engine = create_database_engine(migration_configuration)
+    try:
+        with engine.begin() as connection:
+            connection.execute(text("DELETE FROM model_egress_audit"))
+    finally:
+        engine.dispose()
+    try:
+        command.downgrade(alembic_configuration, "20260724_0024")
+        assert _revision_rows(migration_configuration) == ["20260724_0024"]
+        assert "model_egress_audit" not in _application_tables(
+            migration_configuration
+        )
+    finally:
+        command.upgrade(alembic_configuration, "head")
+
+    assert _revision_rows(migration_configuration) == [_HEAD_REVISION]
+    assert "model_egress_audit" in _application_tables(migration_configuration)
 
 
 def test_file_source_offboarding_refuses_downgrade_with_committed_intent(

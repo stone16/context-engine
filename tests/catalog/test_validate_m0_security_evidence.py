@@ -142,15 +142,29 @@ def test_m0_registry_uses_activated_egress_and_honest_learning_evidence() -> Non
         "tests/integration/test_z_egress_grant_file.py::"
         "test_file_http_package_redeems_exact_model_grant_before_gateway_bytes"
     )
+    assert evidence["TS-MODEL-EGRESS-070"] == (
+        "tests/unit/test_bot_delivery_model_egress_contract.py::"
+        "test_typescript_model_egress_is_closed_pinned_and_zero_byte_on_denial"
+    )
+    assert evidence["PG-MODEL-EGRESS-070"] == (
+        "tests/integration/test_z_egress_grant_file.py::"
+        "test_packed_typescript_sdk_resolves_authorized_file_package_over_live_http"
+    )
+    assert evidence["SDK-MODEL-EGRESS-070"] == evidence["PG-MODEL-EGRESS-070"]
     egress_mapping = next(
         mapping
         for mapping in registry["invariantMappings"]
         if mapping["invariantRef"] == "EGRESS-011"
     )
-    assert egress_mapping["evidenceRefs"]["postgres"] == [
-        "PG-EGRESS-011",
-        "PG-ACTION-PERFORM-068",
-    ]
+    assert egress_mapping["evidenceRefs"] == {
+        "property": ["PROP-EGRESS-011", "TS-MODEL-EGRESS-070"],
+        "postgres": [
+            "PG-EGRESS-011",
+            "PG-ACTION-PERFORM-068",
+            "PG-MODEL-EGRESS-070",
+        ],
+        "runtime": ["RUNTIME-EGRESS-011", "SDK-MODEL-EGRESS-070"],
+    }
     assert evidence["PROP-CROSS-ORG-LEARN-015"] == (
         "tests/unit/test_m0_learning_isolation.py::"
         "test_m0_learning_artifact_contract_has_no_cross_organization_carrier"

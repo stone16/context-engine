@@ -35,6 +35,10 @@ action_plane/typescript/node_modules/
 action_plane/typescript/dist/
 action_plane/typescript/*.tgz
 action_plane/typescript/*.tsbuildinfo
+bot_delivery/typescript/node_modules/
+bot_delivery/typescript/dist/
+bot_delivery/typescript/*.tgz
+bot_delivery/typescript/*.tsbuildinfo
 
 # --- OS / editor ---
 .DS_Store
