@@ -11,6 +11,7 @@ from sqlalchemy import Engine
 from engine.persistence import (
     DatabaseConfiguration,
     HarnessDatabaseConfigurations,
+    assert_action_role,
     assert_control_role,
     assert_runtime_role,
     assert_security_operator_role,
@@ -67,6 +68,28 @@ def egress_configuration(
     database_configurations: HarnessDatabaseConfigurations,
 ) -> DatabaseConfiguration:
     return database_configurations.egress
+
+
+@pytest.fixture(scope="session")
+def action_configuration(
+    database_configurations: HarnessDatabaseConfigurations,
+) -> DatabaseConfiguration:
+    return database_configurations.action
+
+
+@pytest.fixture(scope="session")
+def guarded_action_engine(
+    action_configuration: DatabaseConfiguration,
+) -> Iterator[Engine]:
+    """Expose only the verified non-owner ActionPlane database engine."""
+
+    engine = create_database_engine(action_configuration)
+    try:
+        with engine.connect() as connection:
+            assert_action_role(connection)
+        yield engine
+    finally:
+        engine.dispose()
 
 
 @pytest.fixture(scope="session")

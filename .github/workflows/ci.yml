@@ -18,7 +18,9 @@ jobs:
         with:
           node-version-file: sdk/typescript/.node-version
           cache: npm
-          cache-dependency-path: sdk/typescript/package-lock.json
+          cache-dependency-path: |
+            sdk/typescript/package-lock.json
+            action_plane/typescript/package-lock.json
       - uses: astral-sh/setup-uv@v6
         with:
           version: "0.8.22"

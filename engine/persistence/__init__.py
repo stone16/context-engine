@@ -8,6 +8,8 @@ from engine.persistence.access_policy import (
     ResourceAccessRevocation,
 )
 from engine.persistence.configuration import (
+    ACTION_PREPARE_DEFINER_ROLE,
+    ACTION_ROLE,
     DELIVERY_EVIDENCE_DEFINER_ROLE,
     EGRESS_GRANT_DEFINER_ROLE,
     EGRESS_ROLE,
@@ -58,6 +60,7 @@ from engine.persistence.membership_context import (
 )
 from engine.persistence.releases import PostgreSQLReleaseStore
 from engine.persistence.role_guard import (
+    assert_action_role,
     assert_control_role,
     assert_egress_role,
     assert_identity_role,
@@ -87,6 +90,8 @@ from engine.persistence.worker_jobs import (
 
 __all__ = [
     "DatabaseConfiguration",
+    "ACTION_PREPARE_DEFINER_ROLE",
+    "ACTION_ROLE",
     "AccessChangeRejected",
     "AccessPolicyControlUnavailable",
     "DatabaseConfigurationError",
@@ -142,6 +147,7 @@ __all__ = [
     "DEFAULT_WORKER_LEASE_TTL_SECONDS",
     "MAX_WORKER_LEASE_TTL_SECONDS",
     "assert_runtime_role",
+    "assert_action_role",
     "assert_learning_role",
     "assert_identity_role",
     "assert_egress_role",

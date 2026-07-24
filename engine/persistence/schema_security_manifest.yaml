@@ -1,5 +1,5 @@
 {
-  "manifestVersion": "20.0.0",
+  "manifestVersion": "21.0.0",
   "controlOperations": [
     {
       "name": "register_file_source",
@@ -550,6 +550,14 @@
               "context_engine_egress_grant_definer"
             ],
             "using": "true"
+          },
+          {
+            "name": "membership_action_prepare_definer_select",
+            "command": "SELECT",
+            "roles": [
+              "context_engine_action_prepare_definer"
+            ],
+            "using": "true"
           }
         ]
       },
@@ -565,6 +573,9 @@
           "SELECT"
         ],
         "context_engine_egress_grant_definer": [
+          "SELECT"
+        ],
+        "context_engine_action_prepare_definer": [
           "SELECT"
         ]
       },
@@ -715,6 +726,14 @@
             ],
             "using": "true",
             "withCheck": "true"
+          },
+          {
+            "name": "delivery_evidence_action_prepare_definer_select",
+            "command": "SELECT",
+            "roles": [
+              "context_engine_action_prepare_definer"
+            ],
+            "using": "true"
           }
         ]
       },
@@ -746,6 +765,9 @@
           "INSERT",
           "UPDATE",
           "DELETE"
+        ],
+        "context_engine_action_prepare_definer": [
+          "SELECT"
         ],
         "context_engine_control": [],
         "context_engine_worker": [],
@@ -1059,6 +1081,14 @@
             ],
             "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid",
             "withCheck": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"
+          },
+          {
+            "name": "context_source_action_prepare_definer_select",
+            "command": "SELECT",
+            "roles": [
+              "context_engine_action_prepare_definer"
+            ],
+            "using": "true"
           }
         ]
       },
@@ -1079,6 +1109,9 @@
         "context_engine_worker_lease_definer": [
           "SELECT",
           "UPDATE"
+        ],
+        "context_engine_action_prepare_definer": [
+          "SELECT"
         ]
       },
       "partitions": [],
@@ -1194,6 +1227,14 @@
               "context_engine_worker_lease_definer"
             ],
             "withCheck": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"
+          },
+          {
+            "name": "source_version_action_prepare_definer_select",
+            "command": "SELECT",
+            "roles": [
+              "context_engine_action_prepare_definer"
+            ],
+            "using": "true"
           }
         ]
       },
@@ -1218,6 +1259,9 @@
         "context_engine_worker_lease_definer": [
           "SELECT",
           "INSERT"
+        ],
+        "context_engine_action_prepare_definer": [
+          "SELECT"
         ]
       },
       "partitions": [],
@@ -1615,6 +1659,14 @@
               "context_engine_egress_grant_definer"
             ],
             "using": "true"
+          },
+          {
+            "name": "organization_policy_epoch_action_prepare_definer_select",
+            "command": "SELECT",
+            "roles": [
+              "context_engine_action_prepare_definer"
+            ],
+            "using": "true"
           }
         ]
       },
@@ -1632,6 +1684,9 @@
           "SELECT"
         ],
         "context_engine_egress_grant_definer": [
+          "SELECT"
+        ],
+        "context_engine_action_prepare_definer": [
           "SELECT"
         ],
         "context_engine_runtime": [
@@ -2600,6 +2655,140 @@
         "OBS-004",
         "OBS-005"
       ]
+    },
+    {
+      "name": "action_delivery_attempt",
+      "classification": "tenant_owned",
+      "nonOwnerEvidence": {
+        "evidenceId": "PG-ACTION-PREPARE-067",
+        "selector": {"table": "action_delivery_attempt"}
+      },
+      "purpose": "Digest-only private delivery identity shared by operation-specific ActionTickets",
+      "organizationColumn": "organization_id",
+      "organizationInclusiveKeys": [
+        {
+          "name": "pk_action_delivery_attempt",
+          "kind": "primary_key",
+          "columns": ["organization_id", "delivery_attempt_ref"]
+        }
+      ],
+      "capabilityUniqueKeys": [
+        {
+          "name": "uq_action_delivery_attempt_ref_global",
+          "kind": "unique",
+          "columns": ["delivery_attempt_ref"],
+          "rationale": "one opaque delivery-attempt reference identifies at most one Organization-owned identity chain"
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_action_delivery_attempt_organization",
+          "columns": ["organization_id"],
+          "references": {"table": "organization", "columns": ["organization_id"]},
+          "onDelete": "RESTRICT"
+        },
+        {
+          "name": "fk_action_delivery_attempt_membership_version",
+          "columns": ["organization_id", "membership_id", "membership_version"],
+          "references": {
+            "table": "membership",
+            "columns": ["organization_id", "membership_id", "membership_version"]
+          }
+        }
+      ],
+      "checkConstraints": [
+        {"name": "ck_action_delivery_attempt_ref", "expression": "delivery_attempt_ref is one bounded dla_ opaque reference"},
+        {"name": "ck_action_delivery_attempt_sha256_digests", "expression": "service, evidence, authentication, destination, consumer, purpose, audience, and identity bindings are 32-byte SHA-256 digests"},
+        {"name": "ck_action_delivery_attempt_positive_versions", "expression": "membership_version > 0 AND policy_epoch > 0"},
+        {"name": "ck_action_delivery_attempt_profiles", "expression": "prepare and retention profiles are exact active versions"},
+        {"name": "ck_action_delivery_attempt_retention_window", "expression": "retain_until > created_at"}
+      ],
+      "rowLevelSecurity": {
+        "enabled": true,
+        "forced": true,
+        "policies": [
+          {"name": "action_delivery_attempt_migrator_administration", "command": "ALL", "roles": ["context_engine_migrator"], "using": "true", "withCheck": "true"},
+          {"name": "action_delivery_attempt_action_prepare_definer_select", "command": "SELECT", "roles": ["context_engine_action_prepare_definer"], "using": "true"},
+          {"name": "action_delivery_attempt_action_prepare_definer_insert", "command": "INSERT", "roles": ["context_engine_action_prepare_definer"], "withCheck": "true"}
+        ]
+      },
+      "functionOnlyMutation": {
+        "databaseFunction": "context_action_prepare_private_effect",
+        "role": "context_engine_action",
+        "definerRole": "context_engine_action_prepare_definer",
+        "directTableMutationAllowed": false
+      },
+      "retention": {"class": "restricted_digest_audit", "bearerStored": false, "payloadStored": false, "policy": "action-digest-audit-retention-v1"},
+      "permittedOperations": {
+        "context_engine_action": ["EXECUTE context_action_prepare_private_effect"],
+        "context_engine_action_prepare_definer": ["SELECT", "INSERT"],
+        "context_engine_control": [], "context_engine_identity": [], "context_engine_egress": [], "context_engine_runtime": [], "context_engine_worker": [], "context_engine_learning": [], "context_engine_security_operator": []
+      },
+      "partitions": [],
+      "securityInvariantIds": ["TENANT-OWNERSHIP-001", "TENANT-FK-002", "RLS-FAIL-CLOSED-003", "REVOCATION-006", "NON-ENUMERATION-009", "TRACE-REDACTION-012", "ACTION-SEPARATION-014"],
+      "negativeTestIds": ["DB-001", "DB-002", "DB-004", "DB-008", "DB-009", "DB-010", "OBS-004", "OBS-005", "ACTION-001", "ACTION-004"]
+    },
+    {
+      "name": "action_ticket",
+      "classification": "tenant_owned",
+      "nonOwnerEvidence": {"evidenceId": "PG-ACTION-PREPARE-067", "selector": {"table": "action_ticket"}},
+      "purpose": "Operation-specific one-shot ActionTicket state with exact payload, audience, approval, epoch, expiry, source, and idempotency bindings",
+      "organizationColumn": "organization_id",
+      "organizationInclusiveKeys": [
+        {"name": "pk_action_ticket", "kind": "primary_key", "columns": ["organization_id", "ticket_ref"]},
+        {"name": "uq_action_ticket_prepare_idempotency", "kind": "unique", "columns": ["organization_id", "idempotency_digest"]}
+      ],
+      "capabilityUniqueKeys": [
+        {"name": "uq_action_ticket_ref_global", "kind": "unique", "columns": ["ticket_ref"], "rationale": "one opaque ticket reference identifies at most one Organization-owned effect authority"}
+      ],
+      "foreignKeys": [
+        {"name": "fk_action_ticket_delivery_attempt", "columns": ["organization_id", "delivery_attempt_ref"], "references": {"table": "action_delivery_attempt", "columns": ["organization_id", "delivery_attempt_ref"]}, "onDelete": "RESTRICT"},
+        {"name": "fk_action_ticket_source_version", "columns": ["organization_id", "source_id", "source_version_id"], "references": {"table": "source_version", "columns": ["organization_id", "source_id", "version_id"]}, "onDelete": "RESTRICT"}
+      ],
+      "checkConstraints": [
+        {"name": "ck_action_ticket_ref", "expression": "ticket_ref is one bounded act_ opaque reference"},
+        {"name": "ck_action_ticket_sha256_digests", "expression": "payload, idempotency, and approval bindings are 32-byte SHA-256 digests"},
+        {"name": "ck_action_ticket_operation_audience", "expression": "create_placeholder, finalize_reply, and send_private_followup each have one distinct closed ticket audience"},
+        {"name": "ck_action_ticket_source_context_pair", "expression": "source and source-version context are both absent or both present"},
+        {"name": "ck_action_ticket_profiles", "expression": "approval, prepare, state, and retention profiles are exact active versions"},
+        {"name": "ck_action_ticket_positive_versions", "expression": "policy_epoch and signing_key_version are positive"},
+        {"name": "ck_action_ticket_time_windows", "expression": "ticket lifetime is positive and at most five minutes with retained digest state after expiry"}
+      ],
+      "rowLevelSecurity": {"enabled": true, "forced": true, "policies": [
+        {"name": "action_ticket_migrator_administration", "command": "ALL", "roles": ["context_engine_migrator"], "using": "true", "withCheck": "true"},
+        {"name": "action_ticket_action_prepare_definer_select", "command": "SELECT", "roles": ["context_engine_action_prepare_definer"], "using": "true"},
+        {"name": "action_ticket_action_prepare_definer_insert", "command": "INSERT", "roles": ["context_engine_action_prepare_definer"], "withCheck": "true"}
+      ]},
+      "functionOnlyMutation": {"databaseFunction": "context_action_prepare_private_effect", "role": "context_engine_action", "definerRole": "context_engine_action_prepare_definer", "directTableMutationAllowed": false},
+      "retention": {"class": "restricted_digest_audit", "bearerStored": false, "payloadStored": false, "policy": "action-digest-audit-retention-v1"},
+      "permittedOperations": {"context_engine_action": ["EXECUTE context_action_prepare_private_effect"], "context_engine_action_prepare_definer": ["SELECT", "INSERT"], "context_engine_control": [], "context_engine_identity": [], "context_engine_egress": [], "context_engine_runtime": [], "context_engine_worker": [], "context_engine_learning": [], "context_engine_security_operator": []},
+      "partitions": [],
+      "securityInvariantIds": ["TENANT-OWNERSHIP-001", "TENANT-FK-002", "RLS-FAIL-CLOSED-003", "REVOCATION-006", "NON-ENUMERATION-009", "TRACE-REDACTION-012", "ACTION-SEPARATION-014"],
+      "negativeTestIds": ["DB-001", "DB-002", "DB-004", "DB-008", "DB-009", "DB-010", "OBS-004", "OBS-005", "ACTION-001", "ACTION-004"]
+    },
+    {
+      "name": "action_prepare_audit",
+      "classification": "tenant_owned",
+      "nonOwnerEvidence": {"evidenceId": "PG-ACTION-PREPARE-067", "selector": {"table": "action_prepare_audit"}},
+      "purpose": "Restricted digest-only ActionPlane preparation decisions without denied content",
+      "organizationColumn": "organization_id",
+      "organizationInclusiveKeys": [{"name": "pk_action_prepare_audit", "kind": "primary_key", "columns": ["organization_id", "audit_id"]}],
+      "foreignKeys": [{"name": "fk_action_prepare_audit_organization", "columns": ["organization_id"], "references": {"table": "organization", "columns": ["organization_id"]}, "onDelete": "RESTRICT"}],
+      "checkConstraints": [
+        {"name": "ck_action_prepare_audit_decision_digest", "expression": "decision_digest is 32-byte SHA-256"},
+        {"name": "ck_action_prepare_audit_category", "expression": "category is prepared, idempotent, generic_denied, or audience_changed"},
+        {"name": "ck_action_prepare_audit_retention", "expression": "retention profile is exact and retain_until is after recorded_at"}
+      ],
+      "rowLevelSecurity": {"enabled": true, "forced": true, "policies": [
+        {"name": "action_prepare_audit_migrator_administration", "command": "ALL", "roles": ["context_engine_migrator"], "using": "true", "withCheck": "true"},
+        {"name": "action_prepare_audit_action_prepare_definer_insert", "command": "INSERT", "roles": ["context_engine_action_prepare_definer"], "withCheck": "true"}
+      ]},
+      "functionOnlyMutation": {"databaseFunction": "context_action_prepare_private_effect", "role": "context_engine_action", "definerRole": "context_engine_action_prepare_definer", "directTableMutationAllowed": false},
+      "retention": {"class": "restricted_digest_audit", "bearerStored": false, "payloadStored": false, "deniedContentStored": false, "policy": "action-digest-audit-retention-v1"},
+      "permittedOperations": {"context_engine_action": ["EXECUTE context_action_prepare_private_effect"], "context_engine_action_prepare_definer": ["INSERT"], "context_engine_control": [], "context_engine_identity": [], "context_engine_egress": [], "context_engine_runtime": [], "context_engine_worker": [], "context_engine_learning": [], "context_engine_security_operator": []},
+      "partitions": [],
+      "securityInvariantIds": ["TENANT-OWNERSHIP-001", "TENANT-FK-002", "RLS-FAIL-CLOSED-003", "NON-ENUMERATION-009", "TRACE-REDACTION-012", "ACTION-SEPARATION-014"],
+      "negativeTestIds": ["DB-001", "DB-002", "DB-004", "DB-008", "DB-009", "DB-010", "OBS-004", "OBS-005", "ACTION-001", "ACTION-004"]
     },
     {
       "name": "service_principal",

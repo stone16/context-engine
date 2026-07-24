@@ -371,6 +371,51 @@ def test_partial_legacy_learning_identity_is_replaced_as_one_exact_triple(
     )
 
 
+def test_partial_legacy_action_identity_is_replaced_as_one_exact_triple(
+    tmp_path: Path,
+) -> None:
+    stub_directory = tmp_path / "bin"
+    stub_directory.mkdir()
+    _stub_harness_dependencies(stub_directory)
+    checkout = tmp_path / "checkout"
+    project, _ = _run_stubbed_harness(checkout, stub_directory)
+    environment_path = checkout / ".context-engine/database.env"
+    non_action = [
+        line
+        for line in environment_path.read_text(encoding="utf-8").splitlines()
+        if not line.startswith("CONTEXT_ENGINE_ACTION_")
+    ]
+    environment_path.write_text(
+        "\n".join(
+            [
+                *non_action,
+                "CONTEXT_ENGINE_ACTION_ROLE=context_engine_action",
+                "CONTEXT_ENGINE_ACTION_ROLE=duplicate_action_role",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    environment_path.chmod(0o600)
+
+    migrated_project, _ = _run_stubbed_harness(checkout, stub_directory)
+
+    lines = environment_path.read_text(encoding="utf-8").splitlines()
+    action_lines = [
+        line for line in lines if line.startswith("CONTEXT_ENGINE_ACTION_")
+    ]
+    migrated = dict(line.split("=", maxsplit=1) for line in lines)
+    assert migrated_project == project
+    assert len(action_lines) == 3
+    assert len({line.split("=", maxsplit=1)[0] for line in action_lines}) == 3
+    password = migrated["CONTEXT_ENGINE_ACTION_PASSWORD"]
+    assert migrated["CONTEXT_ENGINE_ACTION_DATABASE_URL"] == (
+        "postgresql+psycopg://context_engine_action:"
+        f"{password}@127.0.0.1:"
+        f"{migrated['CONTEXT_ENGINE_POSTGRES_PORT']}/context_engine"
+    )
+
+
 def test_concurrent_legacy_learning_migration_generates_one_password(
     tmp_path: Path,
 ) -> None:

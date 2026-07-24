@@ -15,6 +15,8 @@ from psycopg import sql
 
 from engine.persistence.configuration import (
     ACCESS_POLICY_DEFINER_ROLE,
+    ACTION_PREPARE_DEFINER_ROLE,
+    ACTION_ROLE,
     CONTEXT_RUN_READER_DEFINER_ROLE,
     CONTROL_ROLE,
     DELIVERY_EVIDENCE_DEFINER_ROLE,
@@ -46,6 +48,8 @@ class RoleProvisioningContract:
     identity_password: str
     egress_role: str
     egress_password: str
+    action_role: str
+    action_password: str
     learning_role: str
     learning_password: str
     security_operator_role: str
@@ -56,6 +60,7 @@ class RoleProvisioningContract:
     release_definer_role: str
     delivery_evidence_definer_role: str
     egress_grant_definer_role: str
+    action_prepare_definer_role: str
 
     def __post_init__(self) -> None:
         for field_name in (
@@ -65,6 +70,7 @@ class RoleProvisioningContract:
             "control_role",
             "identity_role",
             "egress_role",
+            "action_role",
             "learning_role",
             "security_operator_role",
             "definer_role",
@@ -73,6 +79,7 @@ class RoleProvisioningContract:
             "release_definer_role",
             "delivery_evidence_definer_role",
             "egress_grant_definer_role",
+            "action_prepare_definer_role",
         ):
             value = getattr(self, field_name)
             if type(value) is not str or not value or value.isspace():
@@ -82,6 +89,7 @@ class RoleProvisioningContract:
             self.control_role,
             self.identity_role,
             self.egress_role,
+            self.action_role,
             self.learning_role,
             self.security_operator_role,
             self.definer_role,
@@ -90,8 +98,9 @@ class RoleProvisioningContract:
             self.release_definer_role,
             self.delivery_evidence_definer_role,
             self.egress_grant_definer_role,
+            self.action_prepare_definer_role,
         }
-        if len(security_roles) != 12:
+        if len(security_roles) != 14:
             raise ValueError("provisioned database roles must be distinct")
         if type(self.postgres_port) is not int or not 1 <= self.postgres_port <= 65535:
             raise ValueError("postgres_port must be a valid TCP port")
@@ -100,6 +109,7 @@ class RoleProvisioningContract:
             "control_password",
             "identity_password",
             "egress_password",
+            "action_password",
             "learning_password",
             "security_operator_password",
         ):
@@ -123,6 +133,8 @@ def _contract_from_environment(
         "CONTEXT_ENGINE_IDENTITY_PASSWORD",
         "CONTEXT_ENGINE_EGRESS_ROLE",
         "CONTEXT_ENGINE_EGRESS_PASSWORD",
+        "CONTEXT_ENGINE_ACTION_ROLE",
+        "CONTEXT_ENGINE_ACTION_PASSWORD",
         "CONTEXT_ENGINE_LEARNING_ROLE",
         "CONTEXT_ENGINE_LEARNING_PASSWORD",
         "CONTEXT_ENGINE_SECURITY_OPERATOR_ROLE",
@@ -146,6 +158,8 @@ def _contract_from_environment(
         raise ValueError("database role provisioning has an invalid identity role")
     if environment["CONTEXT_ENGINE_EGRESS_ROLE"] != EGRESS_ROLE:
         raise ValueError("database role provisioning has an invalid egress role")
+    if environment["CONTEXT_ENGINE_ACTION_ROLE"] != ACTION_ROLE:
+        raise ValueError("database role provisioning has an invalid action role")
     if environment["CONTEXT_ENGINE_LEARNING_ROLE"] != LEARNING_ROLE:
         raise ValueError("database role provisioning has an invalid learning role")
     if environment["CONTEXT_ENGINE_SECURITY_OPERATOR_ROLE"] != OPERATOR_ROLE:
@@ -168,6 +182,8 @@ def _contract_from_environment(
         identity_password=environment["CONTEXT_ENGINE_IDENTITY_PASSWORD"],
         egress_role=environment["CONTEXT_ENGINE_EGRESS_ROLE"],
         egress_password=environment["CONTEXT_ENGINE_EGRESS_PASSWORD"],
+        action_role=environment["CONTEXT_ENGINE_ACTION_ROLE"],
+        action_password=environment["CONTEXT_ENGINE_ACTION_PASSWORD"],
         learning_role=environment["CONTEXT_ENGINE_LEARNING_ROLE"],
         learning_password=environment["CONTEXT_ENGINE_LEARNING_PASSWORD"],
         security_operator_role=environment["CONTEXT_ENGINE_SECURITY_OPERATOR_ROLE"],
@@ -180,6 +196,7 @@ def _contract_from_environment(
         release_definer_role=RELEASE_DEFINER_ROLE,
         delivery_evidence_definer_role=DELIVERY_EVIDENCE_DEFINER_ROLE,
         egress_grant_definer_role=EGRESS_GRANT_DEFINER_ROLE,
+        action_prepare_definer_role=ACTION_PREPARE_DEFINER_ROLE,
     )
 
 
@@ -288,6 +305,7 @@ def provision_security_roles(
     _create_role_if_missing(connection, contract.control_role)
     _create_role_if_missing(connection, contract.identity_role)
     _create_role_if_missing(connection, contract.egress_role)
+    _create_role_if_missing(connection, contract.action_role)
     _create_role_if_missing(connection, contract.learning_role)
     _create_role_if_missing(connection, contract.security_operator_role)
     _create_role_if_missing(connection, contract.definer_role)
@@ -296,6 +314,7 @@ def provision_security_roles(
     _create_role_if_missing(connection, contract.release_definer_role)
     _create_role_if_missing(connection, contract.delivery_evidence_definer_role)
     _create_role_if_missing(connection, contract.egress_grant_definer_role)
+    _create_role_if_missing(connection, contract.action_prepare_definer_role)
 
     connection.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA public")
     extension = connection.execute(
@@ -328,6 +347,15 @@ def provision_security_roles(
         ).format(
             sql.Identifier(contract.egress_role),
             sql.Literal(contract.egress_password),
+        )
+    )
+    connection.execute(
+        sql.SQL(
+            "ALTER ROLE {} WITH LOGIN PASSWORD {} NOSUPERUSER NOCREATEDB "
+            "NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS"
+        ).format(
+            sql.Identifier(contract.action_role),
+            sql.Literal(contract.action_password),
         )
     )
     connection.execute(
@@ -373,6 +401,12 @@ def provision_security_roles(
         sql.SQL(
             "ALTER ROLE {} WITH NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE "
             "NOINHERIT NOREPLICATION NOBYPASSRLS"
+        ).format(sql.Identifier(contract.action_prepare_definer_role))
+    )
+    connection.execute(
+        sql.SQL(
+            "ALTER ROLE {} WITH NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE "
+            "NOINHERIT NOREPLICATION NOBYPASSRLS"
         ).format(sql.Identifier(contract.definer_role))
     )
     connection.execute(
@@ -397,6 +431,7 @@ def provision_security_roles(
     _revoke_roles_granted_to(connection, contract.control_role)
     _revoke_roles_granted_to(connection, contract.identity_role)
     _revoke_roles_granted_to(connection, contract.egress_role)
+    _revoke_roles_granted_to(connection, contract.action_role)
     _revoke_roles_granted_to(connection, contract.learning_role)
     _revoke_roles_granted_to(connection, contract.security_operator_role)
     _revoke_roles_granted_to(connection, contract.definer_role)
@@ -405,9 +440,11 @@ def provision_security_roles(
     _revoke_roles_granted_to(connection, contract.release_definer_role)
     _revoke_roles_granted_to(connection, contract.delivery_evidence_definer_role)
     _revoke_roles_granted_to(connection, contract.egress_grant_definer_role)
+    _revoke_roles_granted_to(connection, contract.action_prepare_definer_role)
     _revoke_members_of(connection, contract.control_role)
     _revoke_members_of(connection, contract.identity_role)
     _revoke_members_of(connection, contract.egress_role)
+    _revoke_members_of(connection, contract.action_role)
     _revoke_members_of(connection, contract.learning_role)
     _revoke_members_of(connection, contract.security_operator_role)
     _revoke_members_of(connection, contract.definer_role)
@@ -416,6 +453,7 @@ def provision_security_roles(
     _revoke_members_of(connection, contract.release_definer_role)
     _revoke_members_of(connection, contract.delivery_evidence_definer_role)
     _revoke_members_of(connection, contract.egress_grant_definer_role)
+    _revoke_members_of(connection, contract.action_prepare_definer_role)
     connection.execute(
         sql.SQL("GRANT {} TO {} WITH ADMIN FALSE, INHERIT FALSE, SET TRUE").format(
             sql.Identifier(contract.definer_role),
@@ -425,6 +463,12 @@ def provision_security_roles(
     connection.execute(
         sql.SQL("GRANT {} TO {} WITH ADMIN FALSE, INHERIT FALSE, SET TRUE").format(
             sql.Identifier(contract.egress_grant_definer_role),
+            sql.Identifier(contract.migrator_role),
+        )
+    )
+    connection.execute(
+        sql.SQL("GRANT {} TO {} WITH ADMIN FALSE, INHERIT FALSE, SET TRUE").format(
+            sql.Identifier(contract.action_prepare_definer_role),
             sql.Identifier(contract.migrator_role),
         )
     )
@@ -457,6 +501,7 @@ def provision_security_roles(
         contract.control_role,
         contract.identity_role,
         contract.egress_role,
+        contract.action_role,
         contract.learning_role,
         contract.security_operator_role,
         contract.definer_role,
@@ -465,6 +510,7 @@ def provision_security_roles(
         contract.release_definer_role,
         contract.delivery_evidence_definer_role,
         contract.egress_grant_definer_role,
+        contract.action_prepare_definer_role,
     ):
         connection.execute(
             sql.SQL("REVOKE ALL PRIVILEGES ON DATABASE {} FROM {}").format(
@@ -492,6 +538,12 @@ def provision_security_roles(
         sql.SQL("GRANT CONNECT ON DATABASE {} TO {}").format(
             sql.Identifier(contract.database_name),
             sql.Identifier(contract.egress_role),
+        )
+    )
+    connection.execute(
+        sql.SQL("GRANT CONNECT ON DATABASE {} TO {}").format(
+            sql.Identifier(contract.database_name),
+            sql.Identifier(contract.action_role),
         )
     )
     connection.execute(

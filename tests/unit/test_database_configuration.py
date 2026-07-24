@@ -8,6 +8,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.pool import QueuePool
 
 from engine.persistence.configuration import (
+    ACTION_ROLE,
     CONTROL_ROLE,
     EGRESS_ROLE,
     IDENTITY_ROLE,
@@ -46,6 +47,10 @@ def database_environment() -> dict[str, str]:
             "postgresql+psycopg://context_engine_egress:egress-secret@"
             "127.0.0.1:5432/context_engine"
         ),
+        "CONTEXT_ENGINE_ACTION_DATABASE_URL": (
+            "postgresql+psycopg://context_engine_action:action-secret@"
+            "127.0.0.1:5432/context_engine"
+        ),
         "CONTEXT_ENGINE_WORKER_DATABASE_URL": (
             "postgresql+psycopg://context_engine_worker:worker-secret@"
             "127.0.0.1:5432/context_engine"
@@ -67,6 +72,7 @@ def database_environment() -> dict[str, str]:
         "CONTEXT_ENGINE_CONTROL_ROLE": CONTROL_ROLE,
         "CONTEXT_ENGINE_IDENTITY_ROLE": IDENTITY_ROLE,
         "CONTEXT_ENGINE_EGRESS_ROLE": EGRESS_ROLE,
+        "CONTEXT_ENGINE_ACTION_ROLE": ACTION_ROLE,
         "CONTEXT_ENGINE_WORKER_ROLE": WORKER_ROLE,
         "CONTEXT_ENGINE_LEARNING_ROLE": LEARNING_ROLE,
         "CONTEXT_ENGINE_SECURITY_OPERATOR_ROLE": OPERATOR_ROLE,
@@ -80,6 +86,7 @@ def database_environment() -> dict[str, str]:
         (DatabasePurpose.CONTROL_PLANE, "CONTEXT_ENGINE_CONTROL_DATABASE_URL"),
         (DatabasePurpose.TRUSTED_IDENTITY, "CONTEXT_ENGINE_IDENTITY_DATABASE_URL"),
         (DatabasePurpose.TRUSTED_EGRESS, "CONTEXT_ENGINE_EGRESS_DATABASE_URL"),
+        (DatabasePurpose.TRUSTED_ACTION, "CONTEXT_ENGINE_ACTION_DATABASE_URL"),
         (DatabasePurpose.API_RUNTIME, "CONTEXT_ENGINE_RUNTIME_DATABASE_URL"),
         (DatabasePurpose.SUPPLY_WORKER, "CONTEXT_ENGINE_WORKER_DATABASE_URL"),
         (DatabasePurpose.LEARNING, "CONTEXT_ENGINE_LEARNING_DATABASE_URL"),
@@ -122,6 +129,11 @@ def test_runtime_never_falls_back_to_migration_credentials() -> None:
         (
             DatabasePurpose.TRUSTED_IDENTITY,
             "CONTEXT_ENGINE_IDENTITY_DATABASE_URL",
+            MIGRATOR_ROLE,
+        ),
+        (
+            DatabasePurpose.TRUSTED_ACTION,
+            "CONTEXT_ENGINE_ACTION_DATABASE_URL",
             MIGRATOR_ROLE,
         ),
         (
@@ -213,6 +225,7 @@ def test_harness_contract_keeps_roles_distinct_and_test_uses_runtime() -> None:
     assert configurations.migration.expected_role == MIGRATOR_ROLE
     assert configurations.control.expected_role == CONTROL_ROLE
     assert configurations.egress.expected_role == EGRESS_ROLE
+    assert configurations.action.expected_role == ACTION_ROLE
     assert configurations.runtime.expected_role == RUNTIME_ROLE
     assert configurations.worker.expected_role == WORKER_ROLE
     assert configurations.learning.expected_role == LEARNING_ROLE

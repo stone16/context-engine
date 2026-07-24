@@ -31,6 +31,10 @@ sdk/typescript/node_modules/
 sdk/typescript/dist/
 sdk/typescript/*.tgz
 sdk/typescript/*.tsbuildinfo
+action_plane/typescript/node_modules/
+action_plane/typescript/dist/
+action_plane/typescript/*.tgz
+action_plane/typescript/*.tsbuildinfo
 
 # --- OS / editor ---
 .DS_Store

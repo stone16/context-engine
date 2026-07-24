@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from engine.persistence.configuration import (
+    ACTION_ROLE,
     CONTROL_ROLE,
     EGRESS_ROLE,
     IDENTITY_ROLE,
@@ -36,6 +37,10 @@ def _database_environment() -> dict[str, str]:
             "postgresql+psycopg://context_engine_egress:egress-secret@"
             "127.0.0.1:5432/context_engine"
         ),
+        "CONTEXT_ENGINE_ACTION_DATABASE_URL": (
+            "postgresql+psycopg://context_engine_action:action-secret@"
+            "127.0.0.1:5432/context_engine"
+        ),
         "CONTEXT_ENGINE_RUNTIME_DATABASE_URL": (
             "postgresql+psycopg://context_engine_runtime:runtime-secret@"
             "127.0.0.1:5432/context_engine"
@@ -60,6 +65,7 @@ def _database_environment() -> dict[str, str]:
         "CONTEXT_ENGINE_CONTROL_ROLE": CONTROL_ROLE,
         "CONTEXT_ENGINE_IDENTITY_ROLE": IDENTITY_ROLE,
         "CONTEXT_ENGINE_EGRESS_ROLE": EGRESS_ROLE,
+        "CONTEXT_ENGINE_ACTION_ROLE": ACTION_ROLE,
         "CONTEXT_ENGINE_RUNTIME_ROLE": RUNTIME_ROLE,
         "CONTEXT_ENGINE_WORKER_ROLE": WORKER_ROLE,
         "CONTEXT_ENGINE_LEARNING_ROLE": LEARNING_ROLE,
@@ -90,6 +96,8 @@ def test_harness_exposes_learning_as_a_distinct_login() -> None:
         configurations.migration.expected_role,
         configurations.control.expected_role,
         configurations.identity.expected_role,
+        configurations.egress.expected_role,
+        configurations.action.expected_role,
         configurations.runtime.expected_role,
         configurations.worker.expected_role,
         configurations.learning.expected_role,
@@ -98,6 +106,8 @@ def test_harness_exposes_learning_as_a_distinct_login() -> None:
         MIGRATOR_ROLE,
         CONTROL_ROLE,
         IDENTITY_ROLE,
+        EGRESS_ROLE,
+        ACTION_ROLE,
         RUNTIME_ROLE,
         WORKER_ROLE,
         LEARNING_ROLE,

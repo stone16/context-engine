@@ -320,11 +320,12 @@ A signed, short-lived, one-shot capability for exactly one external effect.
   handling belong to the owning design and ADRs.
 - **Invariant:** ContextAccessTicket and ActionTicket have different audiences
   and are never interchangeable; rejected use has business effect zero.
-- **Activation note:** Issue #18 proves only a distinct signed
-  Organization/channel-bound synthetic no-op and zero-effect rejection. It does
-  not activate the canonical durable one-shot lifecycle, ActionPlane
-  prepare/perform, Sender/IM delivery, payload/destination/approval/idempotency,
-  DeliveryAttempt, replay, stored receipt, or reconciliation semantics.
+- **Activation note:** Issue #18 proves a distinct signed
+  Organization/channel-bound synthetic no-op. Issue #67 additionally activates
+  private `ActionPlane.prepare`: exact payload/destination/audience/approval/
+  idempotency binding and durable digest-only issuance. Ticket consumption,
+  `perform`, Sender/IM delivery, stored receipts, replay after application, and
+  reconciliation remain `NOT_ACTIVE`.
 - **Do not confuse with:** read ticket, EgressGrant, WorkerLease, credential, or
   proof that an effect succeeded.
 
