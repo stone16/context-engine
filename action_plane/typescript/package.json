@@ -27,7 +27,8 @@
     "typecheck": "tsc --project tsconfig.json --noEmit",
     "build": "npm run clean && tsc --project tsconfig.build.json",
     "test:runtime": "node --test test/action-plane.test.mjs",
-    "test": "npm run typecheck && npm run build && npm run test:runtime"
+    "test:package": "node scripts/test-package.mjs",
+    "test": "npm run typecheck && npm run build && npm run test:runtime && npm run test:package"
   },
   "dependencies": {
     "canonicalize": "3.0.0",

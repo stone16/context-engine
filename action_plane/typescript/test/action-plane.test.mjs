@@ -5,6 +5,7 @@ import {
   ActionPlane,
   ActionTicketKeyring,
   CreatePlaceholderActionTicket,
+  createTrustedActionReconciliation,
   DeterministicPrivateSenderTwin,
   FinalizeReplyActionTicket,
   PrivateActionPrepareProfile,
@@ -12,7 +13,6 @@ import {
 import {
   actionPayloadDigest,
   createPlaceholderEffectIntent,
-  createTrustedActionReconciliation,
   createTrustedPrivateEffectAuthority,
   inspectPreparedActionTicket,
 } from "../dist/internal.js";

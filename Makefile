@@ -70,7 +70,8 @@ action-typecheck:
 action-build:
 	npm --prefix action_plane/typescript run build
 
-action-test:
+action-test: action-build
 	npm --prefix action_plane/typescript run test:runtime
+	npm --prefix action_plane/typescript run test:package
 
 check: build lint typecheck openapi-check sdk-check sdk-build sdk-test sdk-pack action-build action-test test catalog smoke integration security-gate

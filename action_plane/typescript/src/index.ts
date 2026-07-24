@@ -2,6 +2,7 @@ export {
   ActionPlane,
   ActionTicketKeyring,
   CreatePlaceholderActionTicket,
+  createTrustedActionReconciliation,
   DeterministicPrivateSenderTwin,
   FinalizeReplyActionTicket,
   PrivateActionPrepareProfile,
@@ -10,6 +11,7 @@ export {
 
 export type {
   ActionOperation,
+  ActionReconciliationDecisionOptions,
   ActionExecutionOutcome,
   ActionReceipt,
   ActionPreparationOutcome,

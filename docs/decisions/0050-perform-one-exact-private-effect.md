@@ -57,6 +57,15 @@ Sender/provider value. Completion and reconciliation admit at most five
 seconds of positive clock skew relative to database authority time; a value
 beyond that bound cannot create an applied receipt.
 
+The private ActionPlane package root exposes
+`createTrustedActionReconciliation` to its co-resident trusted operator path.
+The factory closes and validates disposition, Organization, original provider
+attempt, authority reference, applied-at, and provider-effect digest before
+adding nominal provenance that `ActionPlane.reconcile` requires. Plain objects
+remain invalid, the package has no exported internal subpath, and callers must
+not expose this factory through untrusted transport. The installed-package
+contract proves both the usable root factory and the sealed internal subpath.
+
 For this issue's deterministic twin, perform checks out one dedicated database
 session. The begin function obtains an Organization/ActionTicket PostgreSQL
 session advisory lock immediately before it commits `sender_required`; the

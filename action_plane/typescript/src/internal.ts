@@ -998,7 +998,7 @@ export type ActionExecutionOutcome =
   | ReconciliationRequired
   | RejectedAction;
 
-interface ReconciliationDecisionOptions {
+export interface ActionReconciliationDecisionOptions {
   readonly appliedAt?: Date;
   readonly disposition: "applied" | "rejected";
   readonly organizationId: string;
@@ -1035,7 +1035,7 @@ function actionTicketSenderSessionLockKey(
 }
 
 export function createTrustedActionReconciliation(
-  options: ReconciliationDecisionOptions,
+  options: ActionReconciliationDecisionOptions,
 ): TrustedActionReconciliation {
   const disposition = options.disposition;
   if (disposition !== "applied" && disposition !== "rejected") {

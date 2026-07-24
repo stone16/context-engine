@@ -19,9 +19,13 @@ The Sender-supplied applied-at value is retained with a bounded five-second
 positive clock-skew allowance; larger future values remain reconcilable and
 cannot create a receipt.
 Ambiguous outcomes retain the original provider-attempt identity until a
-trusted reconciliation records one monotonic terminal result. Real Sender
-network access, group delivery, and external effects remain inactive.
+trusted reconciliation records one monotonic terminal result. The private
+package root exports `createTrustedActionReconciliation` for that co-resident
+operator path; it validates and brands decisions, while plain objects and the
+package's `internal.js` subpath remain unavailable to consumers. This factory
+must not be exposed through untrusted transport. Real Sender network access,
+group delivery, and external effects remain inactive.
 
-Run `npm test` for the contract, type, and runtime checks. Real PostgreSQL
+Run `npm test` for the contract, installed-package, type, and runtime checks. Real PostgreSQL
 prepare/perform/RLS/idempotency/reconciliation evidence is exercised by the
 repository integration suite.
