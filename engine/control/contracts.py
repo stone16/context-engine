@@ -98,17 +98,11 @@ class FileCapabilityManifest:
     ingestion_jobs: CapabilityStatus = CapabilityStatus.UNAVAILABLE
 
     def __post_init__(self) -> None:
-        unavailable_statuses = (
-            self.cursor_semantics,
-            self.checkpoint_semantics,
-            self.batch_limits,
+        always_unavailable_statuses = (
             self.freshness,
             self.consistency_guarantees,
-            self.describe_capabilities,
-            self.read_changes,
             self.discover,
             self.authorize_and_project,
-            self.checkpoint,
             self.deletion,
         )
         if (
@@ -119,7 +113,7 @@ class FileCapabilityManifest:
             or self.projection_fields != ()
             or any(
                 status is not CapabilityStatus.UNAVAILABLE
-                for status in unavailable_statuses
+                for status in always_unavailable_statuses
             )
             or (
                 self.declaration_version == "file-capabilities-v1"
@@ -135,8 +129,45 @@ class FileCapabilityManifest:
                     or self.ingestion_jobs is not CapabilityStatus.AVAILABLE
                 )
             )
+            or (
+                self.declaration_version == "file-capabilities-v3"
+                and (
+                    any(
+                        status is not CapabilityStatus.AVAILABLE
+                        for status in (
+                            self.cursor_semantics,
+                            self.checkpoint_semantics,
+                            self.batch_limits,
+                            self.describe_capabilities,
+                            self.read_changes,
+                            self.checkpoint,
+                            self.file_source_access,
+                            self.ingestion_jobs,
+                        )
+                    )
+                )
+            )
+            or (
+                self.declaration_version
+                in {"file-capabilities-v1", "file-capabilities-v2"}
+                and any(
+                    status is not CapabilityStatus.UNAVAILABLE
+                    for status in (
+                        self.cursor_semantics,
+                        self.checkpoint_semantics,
+                        self.batch_limits,
+                        self.describe_capabilities,
+                        self.read_changes,
+                        self.checkpoint,
+                    )
+                )
+            )
             or self.declaration_version
-            not in {"file-capabilities-v1", "file-capabilities-v2"}
+            not in {
+                "file-capabilities-v1",
+                "file-capabilities-v2",
+                "file-capabilities-v3",
+            }
         ):
             raise ValueError("File capability manifest is not a recognized snapshot")
 
@@ -169,6 +200,17 @@ class FileCapabilityManifest:
 FILE_CAPABILITY_MANIFEST = FileCapabilityManifest()
 FILE_IMPORT_CAPABILITY_MANIFEST = FileCapabilityManifest(
     declaration_version="file-capabilities-v2",
+    file_source_access=CapabilityStatus.AVAILABLE,
+    ingestion_jobs=CapabilityStatus.AVAILABLE,
+)
+FILE_CHANGE_CAPABILITY_MANIFEST = FileCapabilityManifest(
+    declaration_version="file-capabilities-v3",
+    cursor_semantics=CapabilityStatus.AVAILABLE,
+    checkpoint_semantics=CapabilityStatus.AVAILABLE,
+    batch_limits=CapabilityStatus.AVAILABLE,
+    describe_capabilities=CapabilityStatus.AVAILABLE,
+    read_changes=CapabilityStatus.AVAILABLE,
+    checkpoint=CapabilityStatus.AVAILABLE,
     file_source_access=CapabilityStatus.AVAILABLE,
     ingestion_jobs=CapabilityStatus.AVAILABLE,
 )
@@ -224,6 +266,20 @@ class SourceRef:
     def __post_init__(self) -> None:
         if type(self.value) is not UUID:
             raise TypeError("SourceRef value must be UUID")
+
+
+@dataclass(frozen=True, slots=True)
+class ActivateFileChangeFeed:
+    """Trusted Control request that carries only one source locator."""
+
+    source_ref: SourceRef
+
+    def __post_init__(self) -> None:
+        if type(self.source_ref) is not SourceRef:
+            raise TypeError("File change feed source_ref must be SourceRef")
+
+    def __reduce__(self) -> NoReturn:
+        raise TypeError("File change feed activation is not serializable")
 
 
 @dataclass(frozen=True, slots=True)

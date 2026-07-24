@@ -1664,6 +1664,74 @@ CANONICAL_PRIVATE_BOT_DELIVERY_ACTIVATION: dict[str, object] = {
     ],
 }
 
+CANONICAL_FILE_CHANGE_FEED_ACTIVATION: dict[str, object] = {
+    "issueRef": "#81",
+    "invariantRef": "WORKER-LEASE-007",
+    "carrier": (
+        "deterministic shallow File readChanges and durable page acknowledgement"
+    ),
+    "status": "active_fail_closed",
+    "policyEpochScope": "not-runtime-authority",
+    "controlBoundary": (
+        "FileChangeProvider PendingChangeCursor -> provider-authenticated ChangePage "
+        "-> ContextControl whole-page PostgreSQL acceptance -> accepted ChangeCursor"
+    ),
+    "testEvidence": [
+        {
+            "id": "PG-FILE-CHANGE-ACTIVATE-081",
+            "surface": "tests/integration/test_file_source_registration.py",
+            "oracle": (
+                "A real non-owner Control role atomically activates one immutable "
+                "File v3 SourceVersion, replays the same active manifest without "
+                "duplication, retains explicit manual import, and creates no change "
+                "page, automatic job, checkpoint, or publish watermark during "
+                "activation."
+            ),
+        },
+        {
+            "id": "PG-FILE-CHANGE-PAGE-081",
+            "surface": "tests/integration/test_file_change_pages.py",
+            "oracle": (
+                "A real non-owner Control role accepts two deterministic content-free "
+                "File pages only in predecessor order, appends one acquisition "
+                "checkpoint "
+                "per complete page transaction, returns identical replay receipts, and "
+                "creates zero additional File import jobs or publish watermarks."
+            ),
+        },
+        {
+            "id": "PG-FILE-CHANGE-DENY-081",
+            "surface": "tests/integration/test_file_change_pages.py",
+            "oracle": (
+                "Cross-Organization and disabled-source page acceptance are generic "
+                "denials with zero durable page, change, job, Revision, candidate, or "
+                "publication effect; a provider cursor proposed before Control "
+                "acceptance cannot advance "
+                "the database checkpoint."
+            ),
+        },
+    ],
+    "deferredEvidence": [
+        "automatic publication scheduling from accepted change envelopes",
+        "executed deletion and tombstone observations",
+        "recursive discovery and full-resync operations",
+    ],
+    "futureCarriers": [
+        "automatic File change scheduling",
+        "deletion execution",
+        "recursive File discovery",
+        "full resync",
+    ],
+    "notActive": [
+        "provider discover",
+        "provider authorizeAndProject",
+        "provider deletion execution",
+        "recursive scan",
+        "filesystem watcher",
+        "Runtime authorization from provider checkpoint metadata",
+    ],
+}
+
 CANONICAL_ACTIVATIONS: list[dict[str, object]] = [
     CANONICAL_REVOCATION_ACTIVATION,
     CANONICAL_UNAVAILABLE_CAPABILITY_ACTIVATION,
@@ -1680,6 +1748,7 @@ CANONICAL_ACTIVATIONS: list[dict[str, object]] = [
     CANONICAL_CITATION_OPEN_ACTIVATION,
     CANONICAL_MODEL_EGRESS_ACTIVATION,
     CANONICAL_PRIVATE_BOT_DELIVERY_ACTIVATION,
+    CANONICAL_FILE_CHANGE_FEED_ACTIVATION,
 ]
 CANONICAL_ACTIVATION_ISSUE_LIST = ", ".join(
     f"Issue {activation['issueRef']}" for activation in CANONICAL_ACTIVATIONS

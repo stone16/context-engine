@@ -19,6 +19,8 @@ from engine.control.contracts import _require_bounded_text, _require_utc
 
 
 class ControlOperation(StrEnum):
+    ACCEPT_FILE_CHANGE_PAGE = "accept_file_change_page"
+    ACTIVATE_FILE_CHANGE_FEED = "activate_file_change_feed"
     IMPORT_FILE = "import_file"
     OFFBOARD_FILE_SOURCE = "offboard_file_source"
     REGISTER_SOURCE = "register_source"

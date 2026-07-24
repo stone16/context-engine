@@ -32,7 +32,7 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
     document = manifest()
     tables = table_entries(document)
 
-    assert document["manifestVersion"] == "25.0.0"
+    assert document["manifestVersion"] == "26.0.0"
     assert set(tables) == {
         "active_release_manifest",
         "action_delivery_attempt",
@@ -67,6 +67,8 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
         "file_resource_ingestion_guard",
         "file_source_acquisition_checkpoint",
         "file_source_cleanup_intent",
+        "file_source_change",
+        "file_source_change_page",
         "file_source_publish_watermark",
         "file_revision_snapshot",
         "file_revision_replacement_plan",
@@ -164,6 +166,8 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
     assert tables["worker_noop_job"]["classification"] == "tenant_owned"
     assert tables["context_source"]["classification"] == "tenant_owned"
     assert tables["source_version"]["classification"] == "tenant_owned"
+    assert tables["file_source_change_page"]["classification"] == "tenant_owned"
+    assert tables["file_source_change"]["classification"] == "tenant_owned"
 
     assert tables["action_delivery_attempt"]["permittedOperations"][
         "context_engine_action_prepare_definer"
@@ -720,32 +724,60 @@ def test_issue_21_file_source_manifest_is_closed_and_role_separated() -> None:
     assert "materialized" in capability_constraint["expression"]
     assert "markdown" in capability_constraint["expression"]
     assert "mirrored" in capability_constraint["expression"]
-    assert (
-        '"resourceKinds": ["markdown_document"]'
-        in (capability_constraint["expression"])
-    )
-    assert '"projectionFields": []' in capability_constraint["expression"]
+    assert "resourceKinds = [markdown_document]" in capability_constraint["expression"]
+    assert "projectionFields = []" in capability_constraint["expression"]
     for dimension in (
         "batchLimits",
         "checkpointSemantics",
         "consistencyGuarantees",
         "cursorSemantics",
         "freshness",
+        "describeCapabilities",
+        "readChanges",
     ):
-        assert f'"{dimension}": "unavailable"' in (capability_constraint["expression"])
+        assert dimension in capability_constraint["expression"]
+    for capability_version in (
+        "file-capabilities-v1",
+        "file-capabilities-v2",
+        "file-capabilities-v3",
+    ):
+        assert capability_version in capability_constraint["expression"]
+    assert "fileSourceAccess" in capability_constraint["expression"]
+    assert "ingestionJobs" in capability_constraint["expression"]
     assert (
-        '"describeCapabilities": "unavailable"' in (capability_constraint["expression"])
+        "exact file-capabilities-v1 and file-capabilities-v2 keep "
+        "batchLimits/checkpoint/checkpointSemantics/cursorSemantics/"
+        "describeCapabilities/readChanges unavailable"
+        in capability_constraint["expression"]
     )
     assert (
-        '"declarationVersion": "file-capabilities-v1"'
-        in (capability_constraint["expression"])
+        "exact file-capabilities-v3 makes those dimensions available"
+        in capability_constraint["expression"]
     )
-    assert (
-        '"declarationVersion": "file-capabilities-v2"'
-        in (capability_constraint["expression"])
+
+    page = entries["file_source_change_page"]
+    change = entries["file_source_change"]
+    checkpoint = entries["file_source_acquisition_checkpoint"]
+    for content_free_entry in (page, change):
+        assert content_free_entry["nonOwnerEvidence"]["evidenceId"] == (
+            "PG-FILE-CHANGE-DENY-081"
+        )
+        assert content_free_entry["permittedOperations"][
+            "context_engine_runtime"
+        ] == []
+    assert {
+        key["name"]: key["columns"]
+        for key in checkpoint["organizationInclusiveKeys"]
+    }["uq_file_source_acquisition_checkpoint_change_page"] == [
+        "organization_id",
+        "change_page_ref",
+    ]
+    progress_read = next(
+        operation
+        for operation in manifest()["controlOperations"]
+        if operation["name"] == "read_file_source_progress"
     )
-    assert '"fileSourceAccess": "available"' in (capability_constraint["expression"])
-    assert '"ingestionJobs": "available"' in (capability_constraint["expression"])
+    assert "file_source_change_page" in progress_read["reads"]
 
     assert source["permittedOperations"] == {
         "context_engine_access_policy_definer": [
@@ -755,6 +787,7 @@ def test_issue_21_file_source_manifest_is_closed_and_role_separated() -> None:
         "context_engine_control": [
             "SELECT",
             "INSERT",
+            "EXECUTE context_control_activate_file_change_feed",
             "EXECUTE context_control_offboard_file_source",
         ],
         "context_engine_learning": [],
@@ -766,7 +799,11 @@ def test_issue_21_file_source_manifest_is_closed_and_role_separated() -> None:
         "context_engine_action_execute_definer": ["SELECT"],
     }
     assert version["permittedOperations"] == {
-        "context_engine_control": ["SELECT", "INSERT"],
+        "context_engine_control": [
+            "SELECT",
+            "INSERT",
+            "EXECUTE context_control_activate_file_change_feed",
+        ],
         "context_engine_learning": [],
         "context_engine_runtime": [],
         "context_engine_security_operator": [],

@@ -49,10 +49,10 @@ from tests.integration.test_zz_file_resource_tombstone import _tombstone
 from tests.integration.test_zz_file_revision_replacement import NEW_MARKDOWN
 from tests.integration.test_zz_file_source_offboarding import _offboard
 from tests.support.file_source_progress import clear_file_source_progress_projection
+from tests.support.migrations import HEAD_REVISION
 
 pytestmark = pytest.mark.integration
 ROOT = Path(__file__).parents[2]
-_HEAD_REVISION = "20260724_0027"
 HEAD_TABLES = [
     "action_delivery_attempt",
     "action_perform_audit",
@@ -87,6 +87,8 @@ HEAD_TABLES = [
     "file_revision_snapshot",
     "file_revision_supersession",
     "file_source_acquisition_checkpoint",
+    "file_source_change",
+    "file_source_change_page",
     "file_source_cleanup_intent",
     "file_source_publish_watermark",
     "membership",
@@ -120,7 +122,7 @@ def isolated_migration_progress_projection(
     try:
         yield
     finally:
-        if _revision_rows(migration_configuration) == [_HEAD_REVISION]:
+        if _revision_rows(migration_configuration) == [HEAD_REVISION]:
             clear_file_source_progress_projection(migration_configuration)
 
 
@@ -132,6 +134,8 @@ def _delete_issue_27_upgrade_fixture(
 
     engine = create_database_engine(configuration)
     immutable_tables = (
+        ("file_source_change", "file_source_change_immutable"),
+        ("file_source_change_page", "file_source_change_page_immutable"),
         ("file_source_cleanup_intent", "file_source_cleanup_intent_immutable"),
         (
             "file_source_publish_watermark",
@@ -164,6 +168,8 @@ def _delete_issue_27_upgrade_fixture(
         try:
             with engine.begin() as connection:
                 for table in (
+                    "file_source_change",
+                    "file_source_change_page",
                     "file_source_publish_watermark",
                     "file_source_acquisition_checkpoint",
                     "file_resource_cleanup_intent",
@@ -260,7 +266,7 @@ def test_empty_baseline_remains_a_reversible_historical_revision(
         assert _application_tables(migration_configuration) == ["alembic_version"]
     finally:
         command.upgrade(alembic_configuration, "head")
-    assert _revision_rows(migration_configuration) == [_HEAD_REVISION]
+    assert _revision_rows(migration_configuration) == [HEAD_REVISION]
 
 
 def test_organization_isolation_revision_downgrades_and_reapplies_cleanly(
@@ -275,7 +281,7 @@ def test_organization_isolation_revision_downgrades_and_reapplies_cleanly(
     finally:
         command.upgrade(alembic_configuration, "head")
 
-    assert _revision_rows(migration_configuration) == [_HEAD_REVISION]
+    assert _revision_rows(migration_configuration) == [HEAD_REVISION]
     assert _application_tables(migration_configuration) == HEAD_TABLES
 
 
@@ -295,7 +301,7 @@ def test_membership_revision_downgrades_to_issue_8_and_reapplies_cleanly(
     finally:
         command.upgrade(alembic_configuration, "head")
 
-    assert _revision_rows(migration_configuration) == [_HEAD_REVISION]
+    assert _revision_rows(migration_configuration) == [HEAD_REVISION]
 
 
 def test_content_schema_revision_downgrades_to_membership_and_reapplies_cleanly(
@@ -316,7 +322,7 @@ def test_content_schema_revision_downgrades_to_membership_and_reapplies_cleanly(
     finally:
         command.upgrade(alembic_configuration, "head")
 
-    assert _revision_rows(migration_configuration) == [_HEAD_REVISION]
+    assert _revision_rows(migration_configuration) == [HEAD_REVISION]
     assert _application_tables(migration_configuration) == HEAD_TABLES
 
 
@@ -343,7 +349,7 @@ def test_policy_epoch_revision_downgrades_to_content_and_reapplies_cleanly(
     finally:
         command.upgrade(alembic_configuration, "head")
 
-    assert _revision_rows(migration_configuration) == [_HEAD_REVISION]
+    assert _revision_rows(migration_configuration) == [HEAD_REVISION]
     assert _application_tables(migration_configuration) == HEAD_TABLES
 
 
@@ -372,7 +378,7 @@ def test_worker_lease_revision_downgrades_to_policy_epoch_and_reapplies_cleanly(
     finally:
         command.upgrade(alembic_configuration, "head")
 
-    assert _revision_rows(migration_configuration) == [_HEAD_REVISION]
+    assert _revision_rows(migration_configuration) == [HEAD_REVISION]
     assert _application_tables(migration_configuration) == HEAD_TABLES
 
 
@@ -394,7 +400,7 @@ def test_decision_lineage_revision_downgrades_to_worker_lease_and_reapplies_clea
     finally:
         command.upgrade(alembic_configuration, "head")
 
-    assert _revision_rows(migration_configuration) == [_HEAD_REVISION]
+    assert _revision_rows(migration_configuration) == [HEAD_REVISION]
     assert _application_tables(migration_configuration) == HEAD_TABLES
 
 
@@ -432,7 +438,7 @@ def test_field_projection_revision_downgrades_to_decision_lineage_and_reapplies_
     finally:
         command.upgrade(alembic_configuration, "head")
 
-    assert _revision_rows(migration_configuration) == [_HEAD_REVISION]
+    assert _revision_rows(migration_configuration) == [HEAD_REVISION]
     assert "context_fragment_field" in _application_tables(migration_configuration)
     assert "membership_resource_field_right" in _application_tables(
         migration_configuration
@@ -455,7 +461,7 @@ def test_file_source_revision_downgrades_to_learning_release_and_reapplies_clean
     finally:
         command.upgrade(alembic_configuration, "head")
 
-    assert _revision_rows(migration_configuration) == [_HEAD_REVISION]
+    assert _revision_rows(migration_configuration) == [HEAD_REVISION]
     tables = _application_tables(migration_configuration)
     assert "context_source" in tables
     assert "source_version" in tables
@@ -506,7 +512,7 @@ def test_structural_markdown_revision_downgrades_and_reapplies_cleanly(
         command.upgrade(alembic_configuration, "head")
         engine.dispose()
 
-    assert _revision_rows(migration_configuration) == [_HEAD_REVISION]
+    assert _revision_rows(migration_configuration) == [HEAD_REVISION]
     engine = create_database_engine(migration_configuration)
     try:
         with engine.connect() as connection:
@@ -559,7 +565,7 @@ def test_file_noop_revision_downgrades_and_reapplies_cleanly(
     finally:
         command.upgrade(alembic_configuration, "head")
 
-    assert _revision_rows(migration_configuration) == [_HEAD_REVISION]
+    assert _revision_rows(migration_configuration) == [HEAD_REVISION]
     tables = _application_tables(migration_configuration)
     assert "file_acquisition_result" in tables
     assert "file_resource_ingestion_guard" in tables
@@ -580,7 +586,7 @@ def test_file_replacement_revision_downgrades_and_reapplies_cleanly(
     finally:
         command.upgrade(alembic_configuration, "head")
 
-    assert _revision_rows(migration_configuration) == [_HEAD_REVISION]
+    assert _revision_rows(migration_configuration) == [HEAD_REVISION]
     tables = _application_tables(migration_configuration)
     assert "file_revision_replacement_plan" in tables
     assert "file_revision_supersession" in tables
@@ -601,7 +607,7 @@ def test_file_recovery_revision_downgrades_and_reapplies_cleanly(
     finally:
         command.upgrade(alembic_configuration, "head")
 
-    assert _revision_rows(migration_configuration) == [_HEAD_REVISION]
+    assert _revision_rows(migration_configuration) == [HEAD_REVISION]
     tables = _application_tables(migration_configuration)
     assert "file_publication_recovery" in tables
     assert "file_import_job_event" in tables
@@ -622,7 +628,7 @@ def test_file_tombstone_revision_downgrades_and_reapplies_cleanly(
     finally:
         command.upgrade(alembic_configuration, "head")
 
-    assert _revision_rows(migration_configuration) == [_HEAD_REVISION]
+    assert _revision_rows(migration_configuration) == [HEAD_REVISION]
     assert "file_resource_cleanup_intent" in _application_tables(
         migration_configuration
     )
@@ -643,7 +649,7 @@ def test_file_progress_revision_downgrades_and_reapplies_cleanly(
     finally:
         command.upgrade(alembic_configuration, "head")
 
-    assert _revision_rows(migration_configuration) == [_HEAD_REVISION]
+    assert _revision_rows(migration_configuration) == [HEAD_REVISION]
     assert "file_source_acquisition_checkpoint" in _application_tables(
         migration_configuration
     )
@@ -727,7 +733,7 @@ def test_file_source_offboarding_revision_downgrades_and_reapplies_cleanly(
     finally:
         command.upgrade(alembic_configuration, "head")
 
-    assert _revision_rows(migration_configuration) == [_HEAD_REVISION]
+    assert _revision_rows(migration_configuration) == [HEAD_REVISION]
     assert "file_source_cleanup_intent" in _application_tables(migration_configuration)
     engine = create_database_engine(migration_configuration)
     try:
@@ -771,6 +777,137 @@ def test_file_source_offboarding_revision_downgrades_and_reapplies_cleanly(
         engine.dispose()
 
 
+def test_file_change_feed_revision_downgrades_and_reapplies_cleanly(
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    """Issue #81 removes only an empty provider page projection."""
+
+    alembic_configuration = Config(ROOT / "alembic.ini")
+    engine = create_database_engine(migration_configuration)
+    try:
+        with engine.connect() as connection:
+            v3_organizations = tuple(
+                connection.execute(
+                text(
+                    """
+                    SELECT DISTINCT version.organization_id
+                    FROM source_version AS version
+                    WHERE version.capability_manifest->>'declarationVersion' =
+                          'file-capabilities-v3'
+                    """
+                )
+                ).scalars()
+            )
+    finally:
+        engine.dispose()
+    for organization_id in v3_organizations:
+        _delete_issue_27_upgrade_fixture(
+            migration_configuration,
+            organization_id,
+        )
+    try:
+        command.downgrade(alembic_configuration, "20260724_0027")
+        tables = _application_tables(migration_configuration)
+        assert _revision_rows(migration_configuration) == ["20260724_0027"]
+        assert "file_source_change_page" not in tables
+        assert "file_source_change" not in tables
+        engine = create_database_engine(migration_configuration)
+        try:
+            with engine.connect() as connection:
+                checkpoint_columns = set(
+                    connection.execute(
+                        text(
+                            """
+                            SELECT column_name
+                            FROM information_schema.columns
+                            WHERE table_schema = 'public'
+                              AND table_name = 'file_source_acquisition_checkpoint'
+                            """
+                        )
+                    ).scalars()
+                )
+                function_count = connection.execute(
+                    text(
+                        """
+                        SELECT count(*)
+                        FROM pg_catalog.pg_proc AS procedure
+                        JOIN pg_catalog.pg_namespace AS namespace
+                          ON namespace.oid = procedure.pronamespace
+                        WHERE namespace.nspname = 'public'
+                          AND procedure.proname IN (
+                            'context_control_activate_file_change_feed',
+                            'context_control_accept_file_change_page'
+                          )
+                        """
+                    )
+                ).scalar_one()
+                public_progress_execute = connection.execute(
+                    text(
+                        """
+                        SELECT pg_catalog.has_function_privilege(
+                            'public',
+                            'public.context_control_read_file_source_progress('
+                            'uuid, uuid)',
+                            'EXECUTE'
+                        )
+                        """
+                    )
+                ).scalar_one()
+            assert "source_version_id" not in checkpoint_columns
+            assert "change_page_ref" not in checkpoint_columns
+            assert function_count == 0
+            assert public_progress_execute is False
+        finally:
+            engine.dispose()
+    finally:
+        command.upgrade(alembic_configuration, "head")
+
+    assert _revision_rows(migration_configuration) == [HEAD_REVISION]
+    tables = _application_tables(migration_configuration)
+    assert "file_source_change_page" in tables
+    assert "file_source_change" in tables
+    engine = create_database_engine(migration_configuration)
+    try:
+        with engine.connect() as connection:
+            checkpoint_page_key = tuple(
+                connection.execute(
+                    text(
+                        """
+                        SELECT attribute.attname
+                        FROM pg_catalog.pg_constraint AS constraint_row
+                        JOIN pg_catalog.pg_class AS table_class
+                          ON table_class.oid = constraint_row.conrelid
+                        JOIN LATERAL unnest(constraint_row.conkey)
+                          WITH ORDINALITY AS key(attnum, position) ON true
+                        JOIN pg_catalog.pg_attribute AS attribute
+                          ON attribute.attrelid = table_class.oid
+                         AND attribute.attnum = key.attnum
+                        WHERE table_class.relname =
+                              'file_source_acquisition_checkpoint'
+                          AND constraint_row.conname =
+                              'uq_file_source_acquisition_checkpoint_change_page'
+                        ORDER BY key.position
+                        """
+                    )
+                ).scalars()
+            )
+            public_progress_execute = connection.execute(
+                text(
+                    """
+                    SELECT pg_catalog.has_function_privilege(
+                        'public',
+                        'public.context_control_read_file_source_progress(uuid, uuid)',
+                        'EXECUTE'
+                    )
+                    """
+                )
+            ).scalar_one()
+        assert checkpoint_page_key == ("organization_id", "change_page_ref")
+        assert public_progress_execute is False
+    finally:
+        engine.dispose()
+
+
 def test_delivery_evidence_revision_downgrades_only_while_empty(
     migration_configuration: DatabaseConfiguration,
 ) -> None:
@@ -790,7 +927,7 @@ def test_delivery_evidence_revision_downgrades_only_while_empty(
     finally:
         command.upgrade(alembic_configuration, "head")
 
-    assert _revision_rows(migration_configuration) == [_HEAD_REVISION]
+    assert _revision_rows(migration_configuration) == [HEAD_REVISION]
     assert "delivery_evidence" in _application_tables(migration_configuration)
 
 
@@ -815,7 +952,7 @@ def test_citation_open_revision_downgrades_only_while_empty(
     finally:
         command.upgrade(alembic_configuration, "head")
 
-    assert _revision_rows(migration_configuration) == [_HEAD_REVISION]
+    assert _revision_rows(migration_configuration) == [HEAD_REVISION]
     assert "citation_open_locator" in _application_tables(migration_configuration)
 
 
@@ -887,7 +1024,7 @@ def test_citation_open_revision_refuses_downgrade_with_retained_lineage(
 
         with pytest.raises(SQLAlchemyError):
             command.downgrade(Config(ROOT / "alembic.ini"), "20260724_0023")
-        assert _revision_rows(migration_configuration) == [_HEAD_REVISION]
+        assert _revision_rows(migration_configuration) == [HEAD_REVISION]
         with engine.connect() as connection:
             assert connection.execute(
                 text(
@@ -930,7 +1067,7 @@ def test_model_egress_revision_downgrades_only_while_audit_is_empty(
     finally:
         command.upgrade(alembic_configuration, "head")
 
-    assert _revision_rows(migration_configuration) == [_HEAD_REVISION]
+    assert _revision_rows(migration_configuration) == [HEAD_REVISION]
     assert "model_egress_audit" in _application_tables(migration_configuration)
 
 
@@ -952,7 +1089,7 @@ def test_file_source_offboarding_refuses_downgrade_with_committed_intent(
     with pytest.raises(SQLAlchemyError):
         command.downgrade(alembic_configuration, "20260723_0017")
 
-    assert _revision_rows(migration_configuration) == [_HEAD_REVISION]
+    assert _revision_rows(migration_configuration) == [HEAD_REVISION]
     migration_engine = create_database_engine(migration_configuration)
     try:
         with migration_engine.connect() as connection:
@@ -1093,10 +1230,10 @@ def test_file_progress_refuses_downgrade_and_preserves_refs(
             match="requires empty progress streams",
         ):
             command.downgrade(alembic_configuration, "20260723_0016")
-        assert _revision_rows(migration_configuration) == [_HEAD_REVISION]
+        assert _revision_rows(migration_configuration) == [HEAD_REVISION]
         assert progress_refs() == before
     finally:
-        if _revision_rows(migration_configuration) != [_HEAD_REVISION]:
+        if _revision_rows(migration_configuration) != [HEAD_REVISION]:
             command.upgrade(alembic_configuration, "head")
         migration_engine.dispose()
         _delete_issue_27_upgrade_fixture(
@@ -1137,7 +1274,7 @@ def test_file_tombstone_revision_refuses_downgrade_with_committed_intent(
     with pytest.raises(SQLAlchemyError):
         command.downgrade(alembic_configuration, "20260723_0015")
 
-    assert _revision_rows(migration_configuration) == [_HEAD_REVISION]
+    assert _revision_rows(migration_configuration) == [HEAD_REVISION]
     migration_engine = create_database_engine(migration_configuration)
     try:
         with migration_engine.connect() as connection:
@@ -1539,9 +1676,9 @@ def test_openapi_v0_revision_refuses_downgrade_with_v3_context_run_history(
 
         with pytest.raises(SQLAlchemyError, match="v3 ContextRun lineage exists"):
             command.downgrade(alembic_configuration, "20260723_0020")
-        assert _revision_rows(migration_configuration) == [_HEAD_REVISION]
+        assert _revision_rows(migration_configuration) == [HEAD_REVISION]
     finally:
-        if _revision_rows(migration_configuration) != [_HEAD_REVISION]:
+        if _revision_rows(migration_configuration) != [HEAD_REVISION]:
             command.upgrade(alembic_configuration, "head")
         with engine.begin() as connection:
             connection.execute(
@@ -1673,7 +1810,7 @@ def test_field_projection_downgrade_refuses_populated_content_atomically(
         ):
             command.downgrade(alembic_configuration, "20260722_0007")
 
-        assert _revision_rows(migration_configuration) == [_HEAD_REVISION]
+        assert _revision_rows(migration_configuration) == [HEAD_REVISION]
         with engine.connect() as connection:
             assert (
                 connection.execute(
@@ -1739,7 +1876,7 @@ def test_field_projection_downgrade_refuses_populated_content_atomically(
                 ):
                     connection.execute(text(statement), parameters)
         except SQLAlchemyError:
-            if _revision_rows(migration_configuration) != [_HEAD_REVISION]:
+            if _revision_rows(migration_configuration) != [HEAD_REVISION]:
                 command.upgrade(alembic_configuration, "head")
             raise
         finally:
@@ -1893,7 +2030,7 @@ def test_field_projection_downgrade_serializes_with_concurrent_fragment_insert(
                 == "concurrent-private-body"
             )
     finally:
-        if _revision_rows(migration_configuration) != [_HEAD_REVISION]:
+        if _revision_rows(migration_configuration) != [HEAD_REVISION]:
             command.upgrade(alembic_configuration, "head")
         with engine.begin() as connection:
             connection.execute(

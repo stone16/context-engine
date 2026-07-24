@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import datetime
-from typing import Protocol
+from typing import Protocol, cast
 
 from engine.control.authority import (
     ControlOperation,
@@ -14,11 +14,18 @@ from engine.control.authority import (
     _validate_and_consume_control_call,
 )
 from engine.control.contracts import (
+    ActivateFileChangeFeed,
     RegisterFileSource,
     SourceControlUnavailable,
     SourceManifest,
     SourceNotAvailable,
     SourceRef,
+)
+from engine.control.file_change_pages import (
+    AcceptedChangePage,
+    ChangePage,
+    FileChangeControlProofs,
+    VerifiedChangePage,
 )
 from engine.control.file_deletions import (
     FileResourceTombstone,
@@ -39,6 +46,12 @@ class ControlStorePort(Protocol):
         self,
         call: TrustedControlCall,
         command: RegisterFileSource,
+    ) -> SourceManifest: ...
+
+    def activate_file_change_feed(
+        self,
+        call: TrustedControlCall,
+        command: ActivateFileChangeFeed,
     ) -> SourceManifest: ...
 
     def read_source(
@@ -72,10 +85,20 @@ class ControlStorePort(Protocol):
     ) -> FileSourceOffboarding: ...
 
 
+class FileChangePageStorePort(Protocol):
+    """Optional v3 persistence surface activated with File change proofs."""
+
+    def accept_file_change_page(
+        self,
+        call: TrustedControlCall,
+        page: VerifiedChangePage,
+    ) -> AcceptedChangePage: ...
+
+
 class ContextControl:
     """Own trusted File enrollment, read-back, and import preparation."""
 
-    __slots__ = ("_authority", "_clock", "_store")
+    __slots__ = ("_authority", "_clock", "_file_change_proofs", "_store")
 
     def __init__(
         self,
@@ -83,24 +106,123 @@ class ContextControl:
         store: ControlStorePort,
         authority: ControlOperatorAuthority,
         clock: Callable[[], datetime],
+        file_change_proofs: FileChangeControlProofs | None = None,
     ) -> None:
-        for method_name in (
+        required_methods = [
+            "activate_file_change_feed",
             "offboard_file_source",
             "prepare_file_import",
             "register_file_source",
             "read_source",
             "read_file_source_progress",
             "tombstone_file_resource",
-        ):
+        ]
+        if file_change_proofs is not None:
+            required_methods.append("accept_file_change_page")
+        for method_name in required_methods:
             if not callable(getattr(store, method_name, None)):
                 raise TypeError("ContextControl store is incomplete")
         if type(authority) is not ControlOperatorAuthority:
             raise TypeError("ContextControl requires ControlOperatorAuthority")
         if not callable(clock):
             raise TypeError("ContextControl clock must be callable")
+        if file_change_proofs is not None and type(
+            file_change_proofs
+        ) is not FileChangeControlProofs:
+            raise TypeError("ContextControl File change proofs are invalid")
         self._store = store
         self._authority = authority
         self._clock = clock
+        self._file_change_proofs = file_change_proofs
+
+    def accept_file_change_page(
+        self,
+        call: TrustedControlCall,
+        page: ChangePage,
+    ) -> AcceptedChangePage:
+        """Verify and durably accept a whole page before issuing continuation."""
+
+        if type(page) is not ChangePage:
+            raise TypeError("accept_file_change_page requires ChangePage")
+        try:
+            _validate_and_consume_control_call(
+                call,
+                authority=self._authority,
+                expected_operation=ControlOperation.ACCEPT_FILE_CHANGE_PAGE,
+                checked_at=self._clock(),
+            )
+            proofs = self._file_change_proofs
+            if proofs is None or page.organization_id != call.organization_id:
+                raise SourceNotAvailable
+            verified = proofs.verify_page(page)
+            if verified is None:
+                raise SourceNotAvailable
+            accepted = cast(
+                FileChangePageStorePort,
+                self._store,
+            ).accept_file_change_page(call, verified)
+            if (
+                type(accepted) is not AcceptedChangePage
+                or accepted.source_ref != SourceRef(page.source_ref)
+                or accepted.source_version_ref != page.source_version_ref
+                or accepted.scan_ref != page.scan_ref
+                or accepted.scan_epoch != page.scan_epoch
+                or accepted.page_limit != page.page_limit
+                or (
+                    page.predecessor_page_ref is None
+                    and accepted.superseded_scan_epoch
+                    != page.superseded_scan_epoch
+                )
+                or accepted.page_ref != verified.page_ref
+                or accepted.change_count != len(page.changes)
+                or accepted.complete is not page.complete
+            ):
+                raise SourceControlUnavailable(
+                    "source store returned mismatched File page acceptance"
+                )
+            return accepted
+        except (ControlOperatorAuthenticationRejected, SourceNotAvailable):
+            raise SourceNotAvailable from None
+        except SourceControlUnavailable:
+            raise
+        except Exception:
+            raise SourceControlUnavailable(
+                "File change page acceptance is unavailable"
+            ) from None
+
+    def activate_file_change_feed(
+        self,
+        call: TrustedControlCall,
+        command: ActivateFileChangeFeed,
+    ) -> SourceManifest:
+        """Activate only the server-owned immutable File change capability."""
+
+        if type(command) is not ActivateFileChangeFeed:
+            raise TypeError(
+                "activate_file_change_feed requires ActivateFileChangeFeed"
+            )
+        try:
+            _validate_and_consume_control_call(
+                call,
+                authority=self._authority,
+                expected_operation=ControlOperation.ACTIVATE_FILE_CHANGE_FEED,
+                checked_at=self._clock(),
+            )
+            manifest = self._store.activate_file_change_feed(call, command)
+            self._require_manifest(manifest)
+            if manifest.source_ref != command.source_ref:
+                raise SourceControlUnavailable(
+                    "source store returned a mismatched File change manifest"
+                )
+            return manifest
+        except (ControlOperatorAuthenticationRejected, SourceNotAvailable):
+            raise SourceNotAvailable from None
+        except SourceControlUnavailable:
+            raise
+        except Exception:
+            raise SourceControlUnavailable(
+                "File change feed activation is unavailable"
+            ) from None
 
     def offboard_file_source(
         self,
