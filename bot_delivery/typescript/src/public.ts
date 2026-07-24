@@ -9,6 +9,14 @@ export {
   prepareAuthorizedModelInput,
 } from "./index.js";
 
+export {
+  BotDelivery,
+  PrivateDeliveryAuditBoundary,
+  VerifiedCitationOpen,
+  VerifiedQuestionTurn,
+  createPrivateDeliveryAuditBoundary,
+} from "./private-delivery.js";
+
 export type {
   AnswerCitation,
   BoundedAnswerArtifact,
@@ -20,3 +28,17 @@ export type {
   ModelUsage,
   PrepareAuthorizedModelInputOptions,
 } from "./index.js";
+
+export type {
+  CitationNotAvailable,
+  CitationOpenOutcome,
+  CitationOpened,
+  DeliveryFinalStatus,
+  DeliveryNotAvailable,
+  DeliveryOutcome,
+  DeliveryReceipt,
+  DeliveryReconciliationRequired,
+  IdentityNotBound,
+  VerifyCitationOpenInput,
+  VerifyQuestionTurnInput,
+} from "./private-delivery.js";

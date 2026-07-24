@@ -18,7 +18,7 @@ from scripts.validate_security_catalog import (
     ACCEPT_008_FUTURE_CARRIER,
     ACCEPT_009_FUTURE_CARRIER,
     ACCEPT_010_FUTURE_CARRIER,
-    ACCEPT_012_UNAVAILABLE_CARRIER,
+    ACCEPT_012_ACTIVATED_CARRIER,
     ACL_PROOF_CASE_IDS,
     AUDIENCE_ACTION_CASE_IDS,
     CANONICAL_ACTION_PERFORM_ACTIVATION,
@@ -33,6 +33,7 @@ from scripts.validate_security_catalog import (
     CANONICAL_INVARIANT_IDS,
     CANONICAL_MODEL_EGRESS_ACTIVATION,
     CANONICAL_OPENAPI_V0_ACTIVATION,
+    CANONICAL_PRIVATE_BOT_DELIVERY_ACTIVATION,
     CANONICAL_PRIVATE_DELIVERY_EVIDENCE_ACTIVATION,
     CANONICAL_REVOCATION_ACTIVATION,
     CANONICAL_TICKET_AUDIENCE_ACTIVATION,
@@ -507,7 +508,7 @@ def make_catalog() -> dict[str, object]:
         elif fixture_id == "ACCEPT-010":
             carrier = copy.deepcopy(ACCEPT_010_FUTURE_CARRIER)
         elif fixture_id == "ACCEPT-012":
-            carrier = copy.deepcopy(ACCEPT_012_UNAVAILABLE_CARRIER)
+            carrier = copy.deepcopy(ACCEPT_012_ACTIVATED_CARRIER)
         fixtures.append(
             {
                 "id": fixture_id,
@@ -575,6 +576,7 @@ def make_catalog() -> dict[str, object]:
             copy.deepcopy(CANONICAL_ACTION_PERFORM_ACTIVATION),
             copy.deepcopy(CANONICAL_CITATION_OPEN_ACTIVATION),
             copy.deepcopy(CANONICAL_MODEL_EGRESS_ACTIVATION),
+            copy.deepcopy(CANONICAL_PRIVATE_BOT_DELIVERY_ACTIVATION),
         ],
         "invariants": invariants,
         "fixtures": fixtures,
@@ -671,6 +673,11 @@ def make_schema() -> dict[str, object]:
                     {"const": copy.deepcopy(CANONICAL_ACTION_PERFORM_ACTIVATION)},
                     {"const": copy.deepcopy(CANONICAL_CITATION_OPEN_ACTIVATION)},
                     {"const": copy.deepcopy(CANONICAL_MODEL_EGRESS_ACTIVATION)},
+                    {
+                        "const": copy.deepcopy(
+                            CANONICAL_PRIVATE_BOT_DELIVERY_ACTIVATION
+                        )
+                    },
                 ],
                 "items": False,
             },
@@ -884,7 +891,7 @@ def make_schema() -> dict[str, object]:
                             "properties": {
                                 "carrier": {
                                     "const": copy.deepcopy(
-                                        ACCEPT_012_UNAVAILABLE_CARRIER
+                                        ACCEPT_012_ACTIVATED_CARRIER
                                     )
                                 }
                             }
@@ -1057,7 +1064,7 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
             "future/NOT_ACTIVE boundaries",
         )
 
-    def test_issue_18_synthetic_tickets_do_not_false_green_full_accept_012(
+    def test_issue_71_activates_private_accept_012_without_rewriting_m0_history(
         self,
     ) -> None:
         catalog = make_catalog()
@@ -1067,22 +1074,29 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
             object_list_at(catalog, "activations")[3]["status"],
             "active_fail_closed",
         )
-        self.assertEqual(carrier, ACCEPT_012_UNAVAILABLE_CARRIER)
+        self.assertEqual(carrier, ACCEPT_012_ACTIVATED_CARRIER)
         self.assertEqual(carrier["statusAtM0"], "unavailable")
         self.assertEqual(carrier["m0Expectation"], "fail_closed")
+        upgrade_trigger = carrier["upgradeTrigger"]
+        assert isinstance(upgrade_trigger, str)
+        self.assertIn("Issue #71 activates", upgrade_trigger)
+        self.assertEqual(
+            object_list_at(catalog, "activations")[-1],
+            CANONICAL_PRIVATE_BOT_DELIVERY_ACTIVATION,
+        )
 
         carrier.update(
             {
                 "statusAtM0": "available",
                 "m0Expectation": "active_fail_closed",
-                "upgradeTrigger": "Issue #18 proves the full fixture.",
+                "upgradeTrigger": "Rewrite M0 history.",
             }
         )
         self.assert_catalog_error(
             catalog,
-            "fixtures[11].carrier: must preserve the full ACCEPT-012 fixture as "
-            "unavailable/fail_closed; Issue #18 activates only its independent "
-            "synthetic ticket-audience carrier",
+            "fixtures[11].carrier: must preserve ACCEPT-012's historical M0 "
+            "unavailable state and exact Issue #71 private deterministic-twin "
+            "activation boundary",
         )
 
     def test_issue_19_context_run_activation_is_bounded_and_frozen(self) -> None:
@@ -1362,7 +1376,11 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
         self.assertIn("PG-ACTION-PERFORM-068", egress_postgres_evidence)
         self.assertEqual(
             REQUIRED_POSTGRES_EVIDENCE["EGRESS-011"],
-            ("PG-ACTION-PERFORM-068", "PG-MODEL-EGRESS-070"),
+            (
+                "PG-ACTION-PERFORM-068",
+                "PG-MODEL-EGRESS-070",
+                "PG-PRIVATE-BOT-FLOW-071",
+            ),
         )
         future_carriers = activation["futureCarriers"]
         not_active = activation["notActive"]
@@ -1403,7 +1421,38 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
         self.assertIn("model-authored effect intent or ActionTicket", not_active)
         self.assertEqual(
             REQUIRED_RUNTIME_EVIDENCE["EGRESS-011"],
-            ("EGR-003", "EGR-005", "EGR-006", "RUN-014", "SDK-MODEL-EGRESS-070"),
+            (
+                "EGR-003",
+                "EGR-005",
+                "EGR-006",
+                "RUN-014",
+                "SDK-MODEL-EGRESS-070",
+                "SDK-PRIVATE-BOT-FLOW-071",
+            ),
+        )
+
+    def test_issue_71_private_bot_activation_stops_before_live_providers(self) -> None:
+        catalog = make_catalog()
+        activation = object_list_at(catalog, "activations")[-1]
+
+        self.assertEqual(activation, CANONICAL_PRIVATE_BOT_DELIVERY_ACTIVATION)
+        self.assertEqual(activation["invariantRef"], "ACTION-SEPARATION-014")
+        self.assertEqual(
+            [item["id"] for item in object_list_at(activation, "testEvidence")],
+            [
+                "TS-PRIVATE-BOT-FLOW-071",
+                "SDK-PRIVATE-BOT-FLOW-071",
+                "PG-PRIVATE-BOT-FLOW-071",
+            ],
+        )
+        future_carriers = activation["futureCarriers"]
+        not_active = activation["notActive"]
+        assert isinstance(future_carriers, list)
+        assert isinstance(not_active, list)
+        self.assertIn("live Feishu delivery", future_carriers)
+        self.assertIn(
+            "group AudienceSnapshot or public-group effects",
+            not_active,
         )
 
     def test_schema_independently_freezes_full_accept_008_as_future(self) -> None:
@@ -1434,7 +1483,7 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
             schema,
         )
 
-    def test_schema_independently_freezes_full_accept_012_as_unavailable(
+    def test_schema_independently_freezes_activated_accept_012_m0_history(
         self,
     ) -> None:
         catalog = make_catalog()
@@ -1454,7 +1503,7 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
         object_at(accept_012_rule, "then", "properties", "carrier")["const"] = {
             "statusAtM0": "available",
             "m0Expectation": "active_fail_closed",
-            "upgradeTrigger": "Issue #18 proves the full fixture.",
+            "upgradeTrigger": "Rewrite M0 history.",
         }
 
         self.assert_catalog_error(
@@ -1828,7 +1877,7 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
 
         self.assertEqual(catalog["catalogVersion"], "1.3.0")
         self.assertEqual(
-            issue_refs[-14:],
+            issue_refs[-15:],
             [
                 "#15",
                 "#16",
@@ -1844,6 +1893,7 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
                 "#68",
                 "#69",
                 "#70",
+                "#71",
             ],
         )
         self.assertIn(
@@ -1860,6 +1910,10 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
         )
         self.assertIn(
             "docs/decisions/0052-gate-model-generation-by-package.md",
+            document_refs,
+        )
+        self.assertIn(
+            "docs/decisions/0053-compose-one-private-bot-delivery.md",
             document_refs,
         )
         for boundary in (

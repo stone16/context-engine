@@ -328,8 +328,10 @@ A signed, short-lived, one-shot capability for exactly one external effect.
   idempotency binding and durable digest-only issuance. Issue #68 activates
   private `ActionPlane.perform` through a deterministic Sender twin: one
   provider-attempt identity, immutable receipt replay, and monotonic applied or
-  rejected reconciliation. Real Sender/IM delivery, group delivery,
-  compensation, and BotDelivery orchestration remain `NOT_ACTIVE`.
+  rejected reconciliation. Issue #71 activates the private File-backed
+  deterministic-twin BotDelivery flow with distinct placeholder and final
+  effects. Live Sender/IM delivery, group delivery, and compensation remain
+  `NOT_ACTIVE`.
 - **Do not confuse with:** read ticket, EgressGrant, WorkerLease, credential, or
   proof that an effect succeeded.
 

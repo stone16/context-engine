@@ -95,8 +95,8 @@
     },
     "activations": {
       "type": "array",
-      "minItems": 14,
-      "maxItems": 14,
+      "minItems": 15,
+      "maxItems": 15,
       "uniqueItems": true,
       "prefixItems": [
         {
@@ -717,6 +717,52 @@
               "external channel effect"
             ]
           }
+        },
+        {
+          "const": {
+            "issueRef": "#71",
+            "invariantRef": "ACTION-SEPARATION-014",
+            "carrier": "independent trusted TypeScript private File-backed Bot application",
+            "status": "active_fail_closed",
+            "policyEpochScope": "organization-v0",
+            "controlBoundary": "verified private Feishu twin event -> opaque DeliveryEvidenceRef -> installed generated SDK over HTTP -> sealed Runtime File Package -> controlled ModelGateway -> co-resident ActionPlane prepare/perform -> digest-only DeliveryReceipt audit",
+            "testEvidence": [
+              {
+                "id": "TS-PRIVATE-BOT-FLOW-071",
+                "surface": "tests/unit/test_bot_delivery_application_contract.py::test_private_bot_application_has_one_closed_process_and_import_boundary",
+                "oracle": "The private Bot package fixes one process entrypoint and closed package/import graph: Runtime access is available only through the installed generated SDK, ActionPlane is co-resident, and no engine, repository, migration, AuthorizationKernel, handwritten HTTP, trusted-context, or trusted-intent constructor crosses its public boundary."
+              },
+              {
+                "id": "SDK-PRIVATE-BOT-FLOW-071",
+                "surface": "tests/integration/test_z_egress_grant_file.py::test_installed_private_bot_completes_file_answer_effects_audit_and_citation",
+                "oracle": "An independently installed TypeScript consumer verifies exact private twin events, sends only opaque request-bound delivery evidence through the generated SDK to a real local HTTP API, receives File-backed Packages through CandidateRef, the sealed AuthorizationKernel and AuthorizedProjection, generates only from the matching Package/grant, and opens a citation through a fresh current private resolve. Delivery receipts contain digests and refs but no answer body or bearer."
+              },
+              {
+                "id": "PG-PRIVATE-BOT-FLOW-071",
+                "surface": "tests/integration/test_z_egress_grant_file.py::test_installed_private_bot_completes_file_answer_effects_audit_and_citation",
+                "oracle": "Real PostgreSQL non-owner roles prove two distinct placeholder and finalize/follow-up prepare/perform pairs linked only by one DeliveryAttemptRef per answer, function-only exact receipt and audit persistence, FORCE-RLS isolation, digest-only retention, and zero bearer or answer-body persistence. The activated private carrier composes the earlier exact mutation, replay, rejection, and ambiguity oracles without adding another effect path."
+              }
+            ],
+            "deferredEvidence": [
+              "live Feishu API and event-signature conformance",
+              "production model-provider and private Sender conformance",
+              "group/public AudienceSnapshot and dual-resolve delivery"
+            ],
+            "futureCarriers": [
+              "live Feishu delivery",
+              "production model provider and Sender",
+              "group-public and asker-private delivery",
+              "Continue"
+            ],
+            "notActive": [
+              "live Feishu network calls",
+              "real model or channel provider network calls",
+              "group AudienceSnapshot or public-group effects",
+              "compensation or delete",
+              "Continue",
+              "MCP"
+            ]
+          }
         }
       ],
       "items": false
@@ -1000,7 +1046,10 @@
             "RUNTIME-CITATION-AUTH-010",
             "TS-MODEL-EGRESS-070",
             "SDK-MODEL-EGRESS-070",
-            "PG-MODEL-EGRESS-070"
+            "PG-MODEL-EGRESS-070",
+            "TS-PRIVATE-BOT-FLOW-071",
+            "SDK-PRIVATE-BOT-FLOW-071",
+            "PG-PRIVATE-BOT-FLOW-071"
           ]
         },
         "surface": {
@@ -1042,7 +1091,8 @@
             "#67",
             "#68",
             "#69",
-            "#70"
+            "#70",
+            "#71"
           ]
         },
         "invariantRef": {
@@ -1073,7 +1123,8 @@
             "ActionPlane.perform private deterministic Sender-twin effect and receipt reconciliation",
             "private/direct File CitationOpenRef issuance and OpenCitation",
             "private Package-bound deterministic TypeScript ModelGateway",
-            "ContextRuntime.resolve(Continue | profile-disabled OpenCitation | server-owned unavailable Acquire plan)"
+            "ContextRuntime.resolve(Continue | profile-disabled OpenCitation | server-owned unavailable Acquire plan)",
+            "independent trusted TypeScript private File-backed Bot application"
           ]
         },
         "status": {
@@ -1100,7 +1151,8 @@
             "trusted co-resident intent -> closed TypeScript ActionPlane.prepare -> least-privilege PostgreSQL prepare function -> operation-specific audience-bound ActionTicket",
             "operation-specific ActionTicket plus exact canonical payload -> least-privilege PostgreSQL begin/complete/reconcile state machine -> deterministic private Sender twin",
             "digest-only locator -> current UserActor transaction -> CandidateRef -> AuthorizationKernel -> AuthorizedProjection -> replacement ContextPackage",
-            "generated SDK ContextPackage plus opaque model EgressGrant -> nominal AuthorizedModelInput -> exact non-owner PostgreSQL redemption -> deterministic ModelGateway twin -> bounded answer and digest-only audit"
+            "generated SDK ContextPackage plus opaque model EgressGrant -> nominal AuthorizedModelInput -> exact non-owner PostgreSQL redemption -> deterministic ModelGateway twin -> bounded answer and digest-only audit",
+            "verified private Feishu twin event -> opaque DeliveryEvidenceRef -> installed generated SDK over HTTP -> sealed Runtime File Package -> controlled ModelGateway -> co-resident ActionPlane prepare/perform -> digest-only DeliveryReceipt audit"
           ]
         },
         "testEvidence": {
@@ -2619,7 +2671,7 @@
                 "const": {
                   "statusAtM0": "unavailable",
                   "m0Expectation": "fail_closed",
-                  "upgradeTrigger": "Issue #18 independently activates only distinct signed synthetic ContextAccessTicket Provider-read and ActionTicket no-op channel-action carriers. The full ACCEPT-012 fixture upgrades only when the owning M2 ActionPlane issue proves prepare and perform against a real Sender with all durable effect bindings and reconciliation."
+                  "upgradeTrigger": "Issue #18 independently activates only distinct signed synthetic ContextAccessTicket Provider-read and ActionTicket no-op channel-action carriers. Issue #71 activates the complete private File-backed BotDelivery/ActionPlane deterministic-twin carrier; group/public AudienceSnapshot and live provider carriers remain NOT_ACTIVE."
                 }
               }
             }

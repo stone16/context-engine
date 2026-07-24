@@ -79,7 +79,7 @@ action-test: action-build
 bot-typecheck:
 	npm --prefix bot_delivery/typescript run typecheck
 
-bot-build: sdk-build
+bot-build: sdk-build action-build
 	npm --prefix bot_delivery/typescript run build
 
 bot-test: bot-build

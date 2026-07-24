@@ -1,5 +1,5 @@
 {
-  "manifestVersion": "24.0.0",
+  "manifestVersion": "25.0.0",
   "controlOperations": [
     {
       "name": "register_file_source",
@@ -978,6 +978,9 @@
         ],
         "context_engine_runtime": [
           "EXECUTE context_runtime_redeem_private_delivery_evidence"
+        ],
+        "context_engine_action": [
+          "EXECUTE context_action_bind_private_delivery_effect"
         ],
         "context_engine_delivery_evidence_definer": [
           "SELECT",
@@ -3201,9 +3204,9 @@
         {"name": "action_ticket_action_execute_definer_select", "command": "SELECT", "roles": ["context_engine_action_execute_definer"], "using": "true"},
         {"name": "action_ticket_action_execute_definer_update", "command": "UPDATE", "roles": ["context_engine_action_execute_definer"], "using": "true", "withCheck": "true"}
       ]},
-      "functionOnlyMutation": {"databaseFunctions": ["context_action_prepare_private_effect", "context_action_begin_private_effect", "context_action_complete_private_effect", "context_action_reconcile_private_effect"], "role": "context_engine_action", "definerRoles": ["context_engine_action_prepare_definer", "context_engine_action_execute_definer"], "directTableMutationAllowed": false},
+      "functionOnlyMutation": {"databaseFunctions": ["context_action_bind_private_delivery_effect", "context_action_prepare_private_effect", "context_action_begin_private_effect", "context_action_complete_private_effect", "context_action_reconcile_private_effect"], "role": "context_engine_action", "definerRoles": ["context_engine_action_prepare_definer", "context_engine_action_execute_definer"], "directTableMutationAllowed": false},
       "retention": {"class": "restricted_digest_audit", "bearerStored": false, "bearerDigestStored": true, "payloadStored": false, "policy": "action-digest-audit-retention-v1"},
-      "permittedOperations": {"context_engine_action": ["EXECUTE context_action_prepare_private_effect", "EXECUTE context_action_begin_private_effect", "EXECUTE context_action_complete_private_effect", "EXECUTE context_action_reconcile_private_effect"], "context_engine_action_prepare_definer": ["SELECT", "INSERT"], "context_engine_action_execute_definer": ["SELECT", "UPDATE"], "context_engine_control": [], "context_engine_identity": [], "context_engine_egress": [], "context_engine_runtime": [], "context_engine_worker": [], "context_engine_learning": [], "context_engine_security_operator": []},
+      "permittedOperations": {"context_engine_action": ["EXECUTE context_action_bind_private_delivery_effect", "EXECUTE context_action_prepare_private_effect", "EXECUTE context_action_begin_private_effect", "EXECUTE context_action_complete_private_effect", "EXECUTE context_action_reconcile_private_effect"], "context_engine_action_prepare_definer": ["SELECT", "INSERT"], "context_engine_action_execute_definer": ["SELECT", "UPDATE"], "context_engine_control": [], "context_engine_identity": [], "context_engine_egress": [], "context_engine_runtime": [], "context_engine_worker": [], "context_engine_learning": [], "context_engine_security_operator": []},
       "partitions": [],
       "securityInvariantIds": ["TENANT-OWNERSHIP-001", "TENANT-FK-002", "RLS-FAIL-CLOSED-003", "REVOCATION-006", "NON-ENUMERATION-009", "TRACE-REDACTION-012", "ACTION-SEPARATION-014"],
       "negativeTestIds": ["DB-001", "DB-002", "DB-004", "DB-008", "DB-009", "DB-010", "OBS-004", "OBS-005", "ACTION-001", "ACTION-004"]
@@ -3344,6 +3347,41 @@
       "partitions": [],
       "securityInvariantIds": ["TENANT-OWNERSHIP-001", "TENANT-FK-002", "RLS-FAIL-CLOSED-003", "NON-ENUMERATION-009", "EGRESS-011", "TRACE-REDACTION-012", "ACTION-SEPARATION-014"],
       "negativeTestIds": ["DB-001", "DB-002", "DB-004", "DB-008", "DB-009", "DB-010", "OBS-004", "OBS-005", "ACTION-004"]
+    },
+    {
+      "name": "private_delivery_audit",
+      "classification": "tenant_owned",
+      "nonOwnerEvidence": {"evidenceId": "PG-PRIVATE-BOT-FLOW-071", "selector": {"table": "private_delivery_audit"}},
+      "purpose": "Restricted BotDelivery receipt linking one Package digest and one DeliveryAttemptRef to exact placeholder and final ActionReceipts without message bodies or bearers",
+      "organizationColumn": "organization_id",
+      "organizationInclusiveKeys": [
+        {"name": "pk_private_delivery_audit", "kind": "primary_key", "columns": ["organization_id", "audit_ref"]},
+        {"name": "uq_private_delivery_audit_attempt", "kind": "unique", "columns": ["organization_id", "delivery_attempt_ref"]}
+      ],
+      "capabilityUniqueKeys": [{"name": "uq_private_delivery_audit_ref_global", "kind": "unique", "columns": ["audit_ref"], "rationale": "one restricted audit ref names at most one Organization-owned private delivery"}],
+      "foreignKeys": [
+        {"name": "fk_private_delivery_audit_attempt", "columns": ["organization_id", "delivery_attempt_ref"], "references": {"table": "action_delivery_attempt", "columns": ["organization_id", "delivery_attempt_ref"]}, "onDelete": "RESTRICT"},
+        {"name": "fk_private_delivery_audit_placeholder_receipt", "columns": ["organization_id", "placeholder_receipt_ref"], "references": {"table": "action_receipt", "columns": ["organization_id", "receipt_ref"]}, "onDelete": "RESTRICT"},
+        {"name": "fk_private_delivery_audit_final_receipt", "columns": ["organization_id", "final_receipt_ref"], "references": {"table": "action_receipt", "columns": ["organization_id", "receipt_ref"]}, "onDelete": "RESTRICT"}
+      ],
+      "checkConstraints": [
+        {"name": "ck_private_delivery_audit_refs", "expression": "audit and DeliveryAttempt refs use the exact opaque formats"},
+        {"name": "ck_private_delivery_audit_package_digest", "expression": "Package digest is exactly 32 bytes"},
+        {"name": "ck_private_delivery_audit_effects", "expression": "placeholder and final receipts are distinct and final status is finalized or private_followup"},
+        {"name": "ck_private_delivery_audit_retention", "expression": "audit profile and thirty-day retention are exact"}
+      ],
+      "rowLevelSecurity": {"enabled": true, "forced": true, "policies": [
+        {"name": "private_delivery_audit_migrator_administration", "command": "ALL", "roles": ["context_engine_migrator"], "using": "true", "withCheck": "true"},
+        {"name": "private_delivery_audit_action_execute_definer_select", "command": "SELECT", "roles": ["context_engine_action_execute_definer"], "using": "true"},
+        {"name": "private_delivery_audit_action_execute_definer_insert", "command": "INSERT", "roles": ["context_engine_action_execute_definer"], "withCheck": "true"},
+        {"name": "private_delivery_audit_action_execute_definer_delete", "command": "DELETE", "roles": ["context_engine_action_execute_definer"], "using": "true"}
+      ]},
+      "functionOnlyMutation": {"databaseFunctions": ["context_action_record_private_delivery_outcome", "context_security_delete_expired_private_delivery_audit"], "role": "context_engine_action", "definerRole": "context_engine_action_execute_definer", "directTableMutationAllowed": false},
+      "retention": {"class": "restricted_digest_audit", "bearerStored": false, "payloadStored": false, "answerStored": false, "rawPackageStored": false, "policy": "private-delivery-audit-v1"},
+      "permittedOperations": {"context_engine_action": ["EXECUTE context_action_record_private_delivery_outcome"], "context_engine_action_execute_definer": ["SELECT", "INSERT", "DELETE"], "context_engine_control": [], "context_engine_identity": [], "context_engine_egress": [], "context_engine_runtime": [], "context_engine_worker": [], "context_engine_learning": [], "context_engine_security_operator": ["EXECUTE context_security_delete_expired_private_delivery_audit"]},
+      "partitions": [],
+      "securityInvariantIds": ["TENANT-OWNERSHIP-001", "TENANT-FK-002", "RLS-FAIL-CLOSED-003", "TRANSPORT-UNTRUSTED-008", "CITATION-AUTH-010", "EGRESS-011", "TRACE-REDACTION-012", "ACTION-SEPARATION-014"],
+      "negativeTestIds": ["DB-001", "DB-002", "DB-004", "DB-008", "DB-009", "DB-010", "OBS-004", "OBS-005", "ACTION-001", "ACTION-004"]
     },
     {
       "name": "service_principal",

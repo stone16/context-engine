@@ -27,6 +27,19 @@ package's `internal.js` subpath remain unavailable to consumers. This factory
 must not be exposed through untrusted transport. Real Sender network access,
 group delivery, and external effects remain inactive.
 
+Issue #71 adds `preparePrivateDeliveryEffect` for the co-resident Bot
+application. Its only caller-supplied authority is an opaque
+`DeliveryEvidenceRef` plus expected request/destination bindings. A
+function-only PostgreSQL boundary derives Organization, Membership, user,
+audience, Policy Epoch, service, consumer, purpose, and authentication binding
+from current evidence before this package can construct a nominal intent. The
+derived Organization must also equal the process-owned Organization in the
+trusted prepare profile; cross-Organization evidence therefore stops before a
+ticket or effect attempt exists. The
+package root exports neither a plain trusted-facts factory nor a bridge that can
+skip that derivation. Every successful preparation still executes the same
+`ActionPlane.prepare` then `ActionPlane.perform` path.
+
 Run `npm test` for the contract, installed-package, type, and runtime checks. Real PostgreSQL
 prepare/perform/RLS/idempotency/reconciliation evidence is exercised by the
 repository integration suite.

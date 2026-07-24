@@ -361,6 +361,7 @@ interface ProfileOptions {
   readonly authenticatedServiceRef: string;
   readonly consumerRef: string;
   readonly maximumPayloadBytes: number;
+  readonly organizationId: string;
   readonly profileRef: string;
   readonly purpose: string;
   readonly retentionPolicyRef: string;
@@ -377,6 +378,7 @@ export class PrivateActionPrepareProfile {
       authenticatedServiceRef: requireRef("profile service", options.authenticatedServiceRef),
       consumerRef: requireRef("profile consumer", options.consumerRef),
       maximumPayloadBytes: requirePositiveInteger("maximum payload bytes", options.maximumPayloadBytes),
+      organizationId: requireUuid("profile Organization", options.organizationId),
       profileRef: requireRef("prepare profile", options.profileRef),
       purpose: requireRef("profile purpose", options.purpose),
       retentionPolicyRef: requireRef("retention policy", options.retentionPolicyRef),
@@ -742,6 +744,20 @@ interface PrepareAuthorityResult {
   readonly ticketRef?: string;
 }
 
+interface BoundPrivateDeliveryFacts extends TrustedPrivateEffectFacts {}
+
+interface BindPrivateDeliveryResult {
+  readonly facts?: BoundPrivateDeliveryFacts;
+  readonly kind: "bound" | "generic_denied" | "retryable_unavailable";
+}
+
+const BIND_PRIVATE_DELIVERY_SQL = `
+SELECT * FROM context_action_bind_private_delivery_effect(
+  digest($1::text, 'sha256'), digest($2::text, 'sha256'),
+  digest($3::text, 'sha256'), $4::text, digest($5::text, 'sha256'),
+  digest($6::text, 'sha256')
+)`;
+
 const PREPARE_SQL = `
 SELECT * FROM context_action_prepare_private_effect(
   $1::uuid, digest($2::text, 'sha256'), digest($3::text, 'sha256'),
@@ -762,6 +778,59 @@ class PostgresActionPrepareAuthority {
     }
     this.#database = database;
     Object.freeze(this);
+  }
+
+  async bindPrivateDelivery(request: {
+    readonly authenticatedServiceRef: string;
+    readonly consumerRef: string;
+    readonly deliveryEvidenceRef: string;
+    readonly destinationRef: string;
+    readonly purpose: string;
+    readonly requestId: string;
+  }): Promise<BindPrivateDeliveryResult> {
+    try {
+      const row = (await this.#database.query({
+        text: BIND_PRIVATE_DELIVERY_SQL,
+        values: [
+          request.deliveryEvidenceRef,
+          request.authenticatedServiceRef,
+          request.consumerRef,
+          request.requestId,
+          request.destinationRef,
+          request.purpose,
+        ],
+      })).rows[0];
+      if (row?.outcome === "generic_denied") return { kind: "generic_denied" };
+      if (row?.outcome !== "bound") return { kind: "retryable_unavailable" };
+      return {
+        facts: {
+          audienceDigest: databaseDigest("bound private audience", row.audience_digest),
+          authenticatedServiceRef: requireRef(
+            "bound authenticated service",
+            row.authenticated_service_ref,
+          ),
+          authenticationBindingRef: requireRef(
+            "bound authentication binding",
+            row.authentication_binding_ref,
+          ),
+          consumerRef: requireRef("bound consumer", row.consumer_ref),
+          deliveryEvidenceRef: request.deliveryEvidenceRef,
+          destinationRef: requireRef("bound private destination", row.destination_ref),
+          membershipId: requireUuid("bound Membership", row.membership_id),
+          membershipVersion: requirePositiveInteger(
+            "bound Membership version",
+            Number(row.membership_version),
+          ),
+          organizationId: requireUuid("bound Organization", row.organization_id),
+          policyEpoch: requirePositiveInteger("bound Policy Epoch", Number(row.policy_epoch)),
+          purpose: requireRef("bound purpose", row.purpose),
+          userId: requireUuid("bound User", row.user_id),
+        },
+        kind: "bound",
+      };
+    } catch {
+      return { kind: "retryable_unavailable" };
+    }
   }
 
   async prepare(request: PrepareRequest): Promise<PrepareAuthorityResult> {
@@ -998,6 +1067,16 @@ export type ActionExecutionOutcome =
   | ReconciliationRequired
   | RejectedAction;
 
+export interface PreparePrivateDeliveryEffectOptions {
+  readonly deliveryAttemptRef: string;
+  readonly deliveryEvidenceRef: string;
+  readonly destinationRef: string;
+  readonly idempotencyKey: string;
+  readonly operation: ActionOperation;
+  readonly payload: EffectPayload;
+  readonly requestId: string;
+}
+
 export interface ActionReconciliationDecisionOptions {
   readonly appliedAt?: Date;
   readonly disposition: "applied" | "rejected";
@@ -1199,6 +1278,68 @@ export class ActionPlane {
     this.#sender = options.sender as DeterministicPrivateSenderTwin | undefined;
     this.#ticketRefFactory = options.ticketRefFactory ?? (() => `act_${randomBytes(16).toString("hex")}`);
     Object.freeze(this);
+  }
+
+  async preparePrivateDeliveryEffect(
+    options: PreparePrivateDeliveryEffectOptions,
+  ): Promise<ActionPreparationOutcome> {
+    let record: Readonly<Record<string, unknown>>;
+    try {
+      record = requireExactKeys(
+        "private delivery effect",
+        options,
+        [
+          "deliveryAttemptRef",
+          "deliveryEvidenceRef",
+          "destinationRef",
+          "idempotencyKey",
+          "operation",
+          "payload",
+          "requestId",
+        ],
+      );
+      requireRef("DeliveryAttemptRef", record.deliveryAttemptRef);
+      requireRef("DeliveryEvidenceRef", record.deliveryEvidenceRef, 4096);
+      requireRef("private destination", record.destinationRef);
+      requireRef("action idempotency key", record.idempotencyKey, 128);
+      requireRef("resolve request", record.requestId);
+      if (typeof record.operation !== "string" || !(record.operation in OPERATION_CONTRACT)) {
+        return { effectCount: 0, kind: "generic_denied" };
+      }
+      validatePayload(record.operation as ActionOperation, record.payload as EffectPayload);
+    } catch {
+      return { effectCount: 0, kind: "generic_denied" };
+    }
+    const profile = this.#profile;
+    const bound = await this.#authority.bindPrivateDelivery({
+      authenticatedServiceRef: profile.authenticatedServiceRef,
+      consumerRef: profile.consumerRef,
+      deliveryEvidenceRef: record.deliveryEvidenceRef as string,
+      destinationRef: record.destinationRef as string,
+      purpose: profile.purpose,
+      requestId: record.requestId as string,
+    });
+    if (bound.kind !== "bound" || bound.facts === undefined) {
+      return {
+        effectCount: 0,
+        kind: bound.kind === "generic_denied"
+          ? "generic_denied"
+          : "retryable_unavailable",
+      };
+    }
+    if (bound.facts.organizationId !== profile.organizationId) {
+      return { effectCount: 0, kind: "generic_denied" };
+    }
+    const intent = createIntent(
+      createTrustedPrivateEffectAuthority(bound.facts),
+      record.operation as ActionOperation,
+      {
+        deliveryAttemptRef: record.deliveryAttemptRef as string,
+        idempotencyKey: record.idempotencyKey as string,
+        payload: record.payload as EffectPayload,
+      },
+    );
+    return this.prepare(intent);
   }
 
   async prepare(intent: TrustedEffectIntent): Promise<ActionPreparationOutcome> {

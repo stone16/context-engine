@@ -391,6 +391,7 @@ REQUIRED_PROPERTY_EVIDENCE: dict[str, tuple[str, ...]] = {
 REQUIRED_PROPERTY_EVIDENCE["TRANSPORT-UNTRUSTED-008"] = (
     "PROP-DELIVERY-EVIDENCE-063",
     "SDK-CONTRACT-064",
+    "TS-PRIVATE-BOT-FLOW-071",
 )
 
 REQUIRED_POSTGRES_EVIDENCE: dict[str, tuple[str, ...]] = {
@@ -399,20 +400,46 @@ REQUIRED_POSTGRES_EVIDENCE: dict[str, tuple[str, ...]] = {
     "REVOCATION-006": ("PG-REVOCATION-006", "CACHE-002", "BLOB-002"),
     "TRACE-REDACTION-012": ("PG-FIELD-PROJECTION-048",),
 }
-REQUIRED_POSTGRES_EVIDENCE["TRANSPORT-UNTRUSTED-008"] = ("PG-DELIVERY-EVIDENCE-063",)
-REQUIRED_PROPERTY_EVIDENCE["EGRESS-011"] = ("TS-MODEL-EGRESS-070",)
+REQUIRED_POSTGRES_EVIDENCE["TRANSPORT-UNTRUSTED-008"] = (
+    "PG-DELIVERY-EVIDENCE-063",
+    "PG-PRIVATE-BOT-FLOW-071",
+)
+REQUIRED_RUNTIME_EVIDENCE["TRANSPORT-UNTRUSTED-008"] += (
+    "SDK-PRIVATE-BOT-FLOW-071",
+)
+REQUIRED_PROPERTY_EVIDENCE["EGRESS-011"] = (
+    "TS-MODEL-EGRESS-070",
+    "TS-PRIVATE-BOT-FLOW-071",
+)
 REQUIRED_POSTGRES_EVIDENCE["EGRESS-011"] = (
     "PG-ACTION-PERFORM-068",
     "PG-MODEL-EGRESS-070",
+    "PG-PRIVATE-BOT-FLOW-071",
 )
-REQUIRED_RUNTIME_EVIDENCE["EGRESS-011"] += ("SDK-MODEL-EGRESS-070",)
+REQUIRED_RUNTIME_EVIDENCE["EGRESS-011"] += (
+    "SDK-MODEL-EGRESS-070",
+    "SDK-PRIVATE-BOT-FLOW-071",
+)
 REQUIRED_POSTGRES_EVIDENCE["ACTION-SEPARATION-014"] = (
     "PG-ACTION-PREPARE-067",
     "PG-ACTION-PERFORM-068",
+    "PG-PRIVATE-BOT-FLOW-071",
+)
+REQUIRED_PROPERTY_EVIDENCE["ACTION-SEPARATION-014"] = (
+    "TS-PRIVATE-BOT-FLOW-071",
+)
+REQUIRED_RUNTIME_EVIDENCE["ACTION-SEPARATION-014"] += (
+    "SDK-PRIVATE-BOT-FLOW-071",
 )
 REQUIRED_PROPERTY_EVIDENCE["CITATION-AUTH-010"] = ("PROP-CITATION-AUTH-010",)
-REQUIRED_POSTGRES_EVIDENCE["CITATION-AUTH-010"] = ("PG-CITATION-AUTH-010",)
-REQUIRED_RUNTIME_EVIDENCE["CITATION-AUTH-010"] = ("RUNTIME-CITATION-AUTH-010",)
+REQUIRED_POSTGRES_EVIDENCE["CITATION-AUTH-010"] = (
+    "PG-CITATION-AUTH-010",
+    "PG-PRIVATE-BOT-FLOW-071",
+)
+REQUIRED_RUNTIME_EVIDENCE["CITATION-AUTH-010"] = (
+    "RUNTIME-CITATION-AUTH-010",
+    "SDK-PRIVATE-BOT-FLOW-071",
+)
 
 ACCEPT_002_ACTIVE_CARRIER: dict[str, str] = {
     "statusAtM0": "available",
@@ -467,15 +494,15 @@ ACCEPT_008_FUTURE_CARRIER: dict[str, str] = {
     ),
 }
 
-ACCEPT_012_UNAVAILABLE_CARRIER: dict[str, str] = {
+ACCEPT_012_ACTIVATED_CARRIER: dict[str, str] = {
     "statusAtM0": "unavailable",
     "m0Expectation": "fail_closed",
     "upgradeTrigger": (
         "Issue #18 independently activates only distinct signed synthetic "
         "ContextAccessTicket Provider-read and ActionTicket no-op channel-action "
-        "carriers. The full ACCEPT-012 fixture upgrades only when the owning M2 "
-        "ActionPlane issue proves prepare and perform against a real Sender with "
-        "all durable effect bindings and reconciliation."
+        "carriers. Issue #71 activates the complete private File-backed "
+        "BotDelivery/ActionPlane deterministic-twin carrier; group/public "
+        "AudienceSnapshot and live provider carriers remain NOT_ACTIVE."
     ),
 }
 
@@ -484,7 +511,7 @@ CANONICAL_DEFERRED_FIXTURE_CARRIERS: dict[str, dict[str, str]] = {
     "ACCEPT-008": ACCEPT_008_FUTURE_CARRIER,
     "ACCEPT-009": ACCEPT_009_FUTURE_CARRIER,
     "ACCEPT-010": ACCEPT_010_FUTURE_CARRIER,
-    "ACCEPT-012": ACCEPT_012_UNAVAILABLE_CARRIER,
+    "ACCEPT-012": ACCEPT_012_ACTIVATED_CARRIER,
 }
 
 CANONICAL_REVOCATION_ACTIVATION: dict[str, object] = {
@@ -1554,6 +1581,89 @@ CANONICAL_MODEL_EGRESS_ACTIVATION: dict[str, object] = {
     ],
 }
 
+CANONICAL_PRIVATE_BOT_DELIVERY_ACTIVATION: dict[str, object] = {
+    "issueRef": "#71",
+    "invariantRef": "ACTION-SEPARATION-014",
+    "carrier": "independent trusted TypeScript private File-backed Bot application",
+    "status": "active_fail_closed",
+    "policyEpochScope": "organization-v0",
+    "controlBoundary": (
+        "verified private Feishu twin event -> opaque DeliveryEvidenceRef -> "
+        "installed generated SDK over HTTP -> sealed Runtime File Package -> "
+        "controlled ModelGateway -> co-resident ActionPlane prepare/perform -> "
+        "digest-only DeliveryReceipt audit"
+    ),
+    "testEvidence": [
+        {
+            "id": "TS-PRIVATE-BOT-FLOW-071",
+            "surface": (
+                "tests/unit/test_bot_delivery_application_contract.py::"
+                "test_private_bot_application_has_one_closed_process_and_import_boundary"
+            ),
+            "oracle": (
+                "The private Bot package fixes one process entrypoint and closed "
+                "package/import graph: Runtime access is available only through "
+                "the installed generated SDK, ActionPlane is co-resident, and no "
+                "engine, repository, migration, AuthorizationKernel, handwritten "
+                "HTTP, trusted-context, or trusted-intent constructor crosses its "
+                "public boundary."
+            ),
+        },
+        {
+            "id": "SDK-PRIVATE-BOT-FLOW-071",
+            "surface": (
+                "tests/integration/test_z_egress_grant_file.py::"
+                "test_installed_private_bot_completes_file_answer_effects_audit_and_citation"
+            ),
+            "oracle": (
+                "An independently installed TypeScript consumer verifies exact "
+                "private twin events, sends only opaque request-bound delivery "
+                "evidence through the generated SDK to a real local HTTP API, "
+                "receives File-backed Packages through CandidateRef, the sealed "
+                "AuthorizationKernel and AuthorizedProjection, generates only from "
+                "the matching Package/grant, and opens a citation through a fresh "
+                "current private resolve. Delivery receipts contain digests and "
+                "refs but no answer body or bearer."
+            ),
+        },
+        {
+            "id": "PG-PRIVATE-BOT-FLOW-071",
+            "surface": (
+                "tests/integration/test_z_egress_grant_file.py::"
+                "test_installed_private_bot_completes_file_answer_effects_audit_and_citation"
+            ),
+            "oracle": (
+                "Real PostgreSQL non-owner roles prove two distinct placeholder "
+                "and finalize/follow-up prepare/perform pairs linked only by one "
+                "DeliveryAttemptRef per answer, function-only exact receipt and "
+                "audit persistence, FORCE-RLS isolation, digest-only retention, "
+                "and zero bearer or answer-body persistence. The activated private "
+                "carrier composes the earlier exact mutation, replay, rejection, "
+                "and ambiguity oracles without adding another effect path."
+            ),
+        },
+    ],
+    "deferredEvidence": [
+        "live Feishu API and event-signature conformance",
+        "production model-provider and private Sender conformance",
+        "group/public AudienceSnapshot and dual-resolve delivery",
+    ],
+    "futureCarriers": [
+        "live Feishu delivery",
+        "production model provider and Sender",
+        "group-public and asker-private delivery",
+        "Continue",
+    ],
+    "notActive": [
+        "live Feishu network calls",
+        "real model or channel provider network calls",
+        "group AudienceSnapshot or public-group effects",
+        "compensation or delete",
+        "Continue",
+        "MCP",
+    ],
+}
+
 CANONICAL_ACTIVATIONS: list[dict[str, object]] = [
     CANONICAL_REVOCATION_ACTIVATION,
     CANONICAL_UNAVAILABLE_CAPABILITY_ACTIVATION,
@@ -1569,6 +1679,7 @@ CANONICAL_ACTIVATIONS: list[dict[str, object]] = [
     CANONICAL_ACTION_PERFORM_ACTIVATION,
     CANONICAL_CITATION_OPEN_ACTIVATION,
     CANONICAL_MODEL_EGRESS_ACTIVATION,
+    CANONICAL_PRIVATE_BOT_DELIVERY_ACTIVATION,
 ]
 CANONICAL_ACTIVATION_ISSUE_LIST = ", ".join(
     f"Issue {activation['issueRef']}" for activation in CANONICAL_ACTIVATIONS
@@ -2168,9 +2279,9 @@ def _validate_fixture(
                 )
             elif fixture_id == "ACCEPT-012":
                 message = (
-                    "must preserve the full ACCEPT-012 fixture as "
-                    "unavailable/fail_closed; Issue #18 activates only its "
-                    "independent synthetic ticket-audience carrier"
+                    "must preserve ACCEPT-012's historical M0 unavailable state "
+                    "and exact Issue #71 private deterministic-twin activation "
+                    "boundary"
                 )
             else:
                 message = (
@@ -3437,7 +3548,7 @@ def _validate_schema(
                 "future/fail_closed",
             ),
             "ACCEPT-012": (
-                ACCEPT_012_UNAVAILABLE_CARRIER,
+                ACCEPT_012_ACTIVATED_CARRIER,
                 "unavailable/fail_closed",
             ),
         }

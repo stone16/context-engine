@@ -77,6 +77,7 @@ const profileOptions = {
   authenticatedServiceRef: exactFacts.authenticatedServiceRef,
   consumerRef: exactFacts.consumerRef,
   maximumPayloadBytes: 4096,
+  organizationId: exactFacts.organizationId,
   profileRef: "private-action-prepare-v1",
   purpose: exactFacts.purpose,
   retentionPolicyRef: "action-digest-audit-retention-v1",

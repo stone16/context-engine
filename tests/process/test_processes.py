@@ -249,3 +249,111 @@ def test_worker_stays_alive_until_terminated_in_normal_mode() -> None:
         "version": BUILD_IDENTIFIER,
         "job_behavior": "NOT_ACTIVE",
     }
+
+
+def test_bot_completes_test_lifecycle_without_configuration() -> None:
+    completed = subprocess.run(
+        ["node", "bot_delivery/typescript/dist/main.js", "--test-mode"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert json.loads(completed.stdout) == {
+        "delivery": "private-file-twin",
+        "processTopology": "BotDelivery + ActionPlane",
+        "service": "context-engine-bot",
+        "status": "test-complete",
+    }
+    assert completed.stderr == ""
+
+
+def test_api_worker_and_bot_are_exactly_three_independent_processes() -> None:
+    port = _unused_port()
+    api = subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "uvicorn",
+            "tests.process.conformance_app:app",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(port),
+            "--log-level",
+            "warning",
+        ],
+        cwd=ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    worker = subprocess.Popen(
+        ["context-engine-worker"],
+        cwd=ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    bot = subprocess.Popen(
+        ["node", "bot_delivery/typescript/dist/main.js"],
+        cwd=ROOT,
+        env={
+            **os.environ,
+            "CONTEXT_ENGINE_BOT_ACTION_DATABASE_URL": (
+                "postgresql://context_engine_action:unused@127.0.0.1/context_engine"
+            ),
+            "CONTEXT_ENGINE_BOT_ACTION_SIGNING_KEY_HEX": "7" * 64,
+            "CONTEXT_ENGINE_BOT_MODEL_EGRESS_DATABASE_URL": (
+                "postgresql://context_engine_egress:unused@127.0.0.1/context_engine"
+            ),
+            "CONTEXT_ENGINE_BOT_ORGANIZATION_ID": (
+                "81e18bca-86a1-478a-937d-7675c6fe69b0"
+            ),
+            "CONTEXT_ENGINE_BOT_SDK_AUTHENTICATION": "process-private-bot",
+            "CONTEXT_ENGINE_BOT_SDK_BASE_URL": f"http://127.0.0.1:{port}",
+            "CONTEXT_ENGINE_BOT_TWIN_ANSWER": "Process twin answer.",
+            "CONTEXT_ENGINE_BOT_TWIN_BINDINGS_JSON": (
+                '{"citationOpens":[],"questionTurns":[]}'
+            ),
+        },
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        stdin=subprocess.PIPE,
+        text=True,
+    )
+    processes = (api, worker, bot)
+    try:
+        _wait_until_ready(api, port)
+        worker_ready = _wait_for_worker_readiness(worker)
+        bot_ready = _wait_for_worker_readiness(bot)
+
+        assert worker_ready["service"] == "context-engine-worker"
+        assert bot_ready == {
+            "delivery": "private-file-twin",
+            "processTopology": "BotDelivery + ActionPlane",
+            "service": "context-engine-bot",
+            "status": "ready",
+        }
+        assert len({process.pid for process in processes}) == 3
+        process_table = subprocess.run(
+            ["ps", "-axo", "pid=,ppid="],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.splitlines()
+        child_parent_ids = {
+            int(fields[1])
+            for line in process_table
+            if len(fields := line.split()) == 2
+        }
+        for process in processes:
+            assert process.poll() is None
+            assert process.pid not in child_parent_ids
+    finally:
+        for process in reversed(processes):
+            if process.poll() is None:
+                process.terminate()
+        for process in reversed(processes):
+            process.communicate(timeout=5)
