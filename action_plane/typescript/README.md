@@ -21,7 +21,8 @@ cannot create a receipt.
 Ambiguous outcomes retain the original provider-attempt identity until a
 trusted reconciliation records one monotonic terminal result. The private
 package root exports `createTrustedActionReconciliation` for that co-resident
-operator path; it validates and brands decisions, while plain objects and the
+recovery adapter; it validates and brands nominal decisions but grants no
+database authority, while plain objects and the
 package's `internal.js` subpath remain unavailable to consumers. This factory
 must not be exposed through untrusted transport. Real Sender network access,
 group delivery, and external effects remain inactive.

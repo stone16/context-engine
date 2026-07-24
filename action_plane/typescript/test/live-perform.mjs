@@ -73,7 +73,7 @@ const pool = new pg.Pool({
   application_name: "context-engine-action-perform-integration",
   connectionString: databaseUrl,
   connectionTimeoutMillis: 5_000,
-  max: 2,
+  max: 4,
   statement_timeout: 5_000,
 });
 const database = {
@@ -115,6 +115,43 @@ function plane(sender, actionDatabase = database, actionProfile = profile) {
     ticketRefFactory: () =>
       `act_${(nextTicket++).toString(16).padStart(32, "0")}`,
   });
+}
+
+async function waitForAdvisoryLockWait(lockKey) {
+  const probe = new pg.Client({
+    application_name: "context-engine-action-lock-wait-probe",
+    connectionString: databaseUrl,
+    connectionTimeoutMillis: 5_000,
+  });
+  await probe.connect();
+  try {
+    const deadline = Date.now() + 5_000;
+    while (Date.now() < deadline) {
+      const result = await probe.query({
+        text: `SELECT EXISTS (
+          SELECT 1 FROM pg_catalog.pg_locks AS held_lock
+          WHERE held_lock.locktype = 'advisory'
+            AND held_lock.classid = (
+              (pg_catalog.hashtextextended($1::text, 0) >> 32)
+              & 4294967295
+            )::pg_catalog.oid
+            AND held_lock.objid = (
+              pg_catalog.hashtextextended($1::text, 0) & 4294967295
+            )::pg_catalog.oid
+            AND held_lock.objsubid = 1
+            AND NOT held_lock.granted
+        ) AS waiting`,
+        values: [lockKey],
+      });
+      if (result.rows[0]?.waiting === true) {
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    throw new Error("perform did not reach the blocked authority lock");
+  } finally {
+    await probe.end();
+  }
 }
 
 const placeholderAttempt = deliveryAttemptRef();
@@ -352,6 +389,7 @@ try {
   if (concurrentPrepared.kind !== "prepared") {
     throw new Error("concurrent case did not prepare");
   }
+  const concurrentClaims = inspectPreparedActionTicket(concurrentPrepared.ticket, keyring);
   const firstConcurrentPerform = concurrentPlane.perform(
     concurrentPayload,
     concurrentPrepared.ticket,
@@ -369,6 +407,24 @@ try {
     );
   }
   const concurrentProviderAttemptRef = overlappingConcurrentPerform.providerAttemptRef;
+  const prematureCrossProcessCompletion = await database.query({
+    text: `SELECT * FROM context_action_complete_private_effect(
+      $1::uuid, $2::text, $3::text, $4::text, $5::bytea,
+      $6::timestamptz, $7::text, $8::text, $9::bigint, $10::bytea
+    )`,
+    values: [
+      organizationId,
+      concurrentClaims.ticketRef,
+      concurrentProviderAttemptRef,
+      "rejected",
+      null,
+      null,
+      `acr_${"d".repeat(32)}`,
+      "action-digest-audit-retention-v1",
+      2_592_000,
+      Buffer.alloc(32, 0x67),
+    ],
+  });
   const prematureCrossProcessReconciliation = await database.query({
     text: `SELECT * FROM context_action_reconcile_private_effect(
       $1::uuid, $2::text, $3::text, $4::bytea, $5::timestamptz,
@@ -386,9 +442,6 @@ try {
       2_592_000,
     ],
   });
-  if (prematureCrossProcessReconciliation.rows[0]?.outcome !== "rejected") {
-    throw new Error("database allowed reconciliation while Sender session lock was held");
-  }
   releaseConcurrentSender();
   const firstConcurrentResult = await firstConcurrentPerform;
   const concurrentKinds = [
@@ -396,12 +449,20 @@ try {
     overlappingConcurrentPerform.kind,
   ];
   if (
-    firstConcurrentResult.kind !== "applied"
+    prematureCrossProcessCompletion.rows[0]?.outcome !== "reconciliation_required"
+    || prematureCrossProcessReconciliation.rows[0]?.outcome !== "rejected"
+    || firstConcurrentResult.kind !== "applied"
     || firstConcurrentResult.effectCount !== 1
     || concurrentSender.callCount !== 1
     || concurrentSender.effectCount !== 1
   ) {
-    throw new Error("concurrent exact replay was not fenced to one Sender effect");
+    throw new Error(`concurrent exact replay was not fenced to one Sender effect: ${JSON.stringify({
+      firstConcurrentResult,
+      prematureCompletion: prematureCrossProcessCompletion.rows[0]?.outcome,
+      prematureReconciliation: prematureCrossProcessReconciliation.rows[0]?.outcome,
+      senderCalls: concurrentSender.callCount,
+      senderEffects: concurrentSender.effectCount,
+    })}`);
   }
 
   const ambiguousSender = new DeterministicPrivateSenderTwin({ mode: "ambiguous" });
@@ -743,8 +804,41 @@ try {
   if (expiryPrepared.kind !== "prepared") {
     throw new Error("expiry case did not prepare");
   }
-  await new Promise((resolve) => setTimeout(resolve, 1_100));
-  const expired = await expiryPlane.perform(expiryPayload, expiryPrepared.ticket);
+  const expiryClaims = inspectPreparedActionTicket(expiryPrepared.ticket, keyring);
+  const expiryLockKey =
+    `action-perform:${organizationId}:${expiryClaims.ticketRef}`;
+  const expiryBlocker = new pg.Client({
+    application_name: "context-engine-action-expiry-lock-blocker",
+    connectionString: databaseUrl,
+    connectionTimeoutMillis: 5_000,
+  });
+  await expiryBlocker.connect();
+  let expiryBlockerCommitted = false;
+  let expired;
+  try {
+    await expiryBlocker.query({ text: "BEGIN", values: [] });
+    await expiryBlocker.query({
+      text: "SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))",
+      values: [expiryLockKey],
+    });
+    const waitingExpiryPerform = expiryPlane.perform(
+      expiryPayload,
+      expiryPrepared.ticket,
+    );
+    await waitForAdvisoryLockWait(expiryLockKey);
+    await new Promise((resolve) => setTimeout(
+      resolve,
+      Math.max(0, new Date(expiryClaims.expiresAt).getTime() - Date.now() + 100),
+    ));
+    await expiryBlocker.query({ text: "COMMIT", values: [] });
+    expiryBlockerCommitted = true;
+    expired = await waitingExpiryPerform;
+  } finally {
+    if (!expiryBlockerCommitted) {
+      await expiryBlocker.query({ text: "ROLLBACK", values: [] });
+    }
+    await expiryBlocker.end();
+  }
   if (
     expired.kind !== "rejected"
     || expired.effectCount !== 0
@@ -810,6 +904,7 @@ try {
     },
     concurrent: {
       outcomes: concurrentKinds,
+      prematureCompletion: prematureCrossProcessCompletion.rows[0]?.outcome,
       prematureReconciliation: prematureCrossProcessReconciliation.rows[0]?.outcome,
       senderCalls: concurrentSender.callCount,
       senderEffects: concurrentSender.effectCount,

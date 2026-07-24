@@ -2854,7 +2854,7 @@
       "name": "action_provider_attempt",
       "classification": "tenant_owned",
       "nonOwnerEvidence": {"evidenceId": "PG-ACTION-PERFORM-068", "selector": {"table": "action_provider_attempt"}},
-      "purpose": "One immutable provider-attempt identity with monotonic execution state, digest-only effect lineage, and an Organization/ActionTicket session lock held across Sender and completion",
+      "purpose": "One immutable provider-attempt identity with monotonic execution state, digest-only effect lineage, and a digest-bound completion capability plus Organization/ActionTicket session lock held across Sender and completion",
       "organizationColumn": "organization_id",
       "organizationInclusiveKeys": [
         {"name": "pk_action_provider_attempt", "kind": "primary_key", "columns": ["organization_id", "provider_attempt_ref"]},
@@ -2867,7 +2867,7 @@
       ],
       "checkConstraints": [
         {"name": "ck_action_provider_attempt_ref", "expression": "provider_attempt_ref is one bounded pat_ opaque reference"},
-        {"name": "ck_action_provider_attempt_digests", "expression": "destination, audience, payload, idempotency, and optional provider-effect values are 32-byte digests"},
+        {"name": "ck_action_provider_attempt_digests", "expression": "destination, audience, payload, idempotency, completion capability, and optional provider-effect values are 32-byte digests"},
         {"name": "ck_action_provider_attempt_state", "expression": "in_flight and ambiguous are nonterminal; applied and rejected are monotonic terminal states"},
         {"name": "ck_action_provider_attempt_retention", "expression": "the exact action digest retention profile outlives attempt creation"}
       ],

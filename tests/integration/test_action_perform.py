@@ -137,7 +137,15 @@ def _run_live_perform(
     try:
         assert process.stdout is not None
         assert process.stdin is not None
-        ready = _read_process_line(process, timeout_seconds=10)
+        try:
+            ready = _read_process_line(process, timeout_seconds=20)
+        except subprocess.TimeoutExpired as error:
+            process.kill()
+            _, stderr = process.communicate(timeout=5)
+            raise AssertionError(
+                "live perform timed out before stale mutation: "
+                f"{stderr.decode(errors='replace')}"
+            ) from error
         if ready == b"":
             assert process.stderr is not None
             _, stderr = process.communicate(timeout=5)
@@ -232,10 +240,10 @@ def test_private_perform_is_one_shot_replayable_and_reconcilable(
                             "'context_action_begin_private_effect(uuid,text,text,"
                             "text,text,bytea,bytea,bytea,bigint,integer,text,bytea,"
                             "bytea,bytea,bytea,bytea,bytea,timestamptz,"
-                            "timestamptz,bytea,text,bigint)', 'EXECUTE'), "
+                            "timestamptz,bytea,text,bigint,bytea)', 'EXECUTE'), "
                             "has_function_privilege(:role, "
                             "'context_action_complete_private_effect(uuid,text,"
-                            "text,text,bytea,timestamptz,text,text,bigint)', "
+                            "text,text,bytea,timestamptz,text,text,bigint,bytea)', "
                             "'EXECUTE'), "
                             "has_function_privilege(:role, "
                             "'context_action_reconcile_private_effect(uuid,text,"
@@ -438,6 +446,7 @@ def test_private_perform_is_one_shot_replayable_and_reconcilable(
             }
             assert concurrent["senderCalls"] == 1
             assert concurrent["senderEffects"] == 1
+            assert concurrent["prematureCompletion"] == "reconciliation_required"
             assert concurrent["prematureReconciliation"] == "rejected"
             assert result["nullDispositionReconciliation"] == "rejected"
             assert result["stale"] == {
@@ -553,10 +562,15 @@ def test_private_perform_is_one_shot_replayable_and_reconcilable(
                         "SELECT organization_id, provider_attempt_ref, "
                         "ticket_ref, delivery_attempt_ref, operation, "
                         "destination_digest, audience_digest, payload_digest, "
-                        "idempotency_digest, state, provider_effect_digest "
+                        "idempotency_digest, completion_capability_digest, "
+                        "state, provider_effect_digest "
                         "FROM action_provider_attempt"
                     )
                 ).all()
+            )
+            assert all(
+                len(row.completion_capability_digest) == 32
+                for row in retained_rows
             )
             retained_rows.extend(
                 connection.execute(

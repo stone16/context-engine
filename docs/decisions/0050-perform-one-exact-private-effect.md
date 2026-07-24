@@ -58,13 +58,17 @@ seconds of positive clock skew relative to database authority time; a value
 beyond that bound cannot create an applied receipt.
 
 The private ActionPlane package root exposes
-`createTrustedActionReconciliation` to its co-resident trusted operator path.
+`createTrustedActionReconciliation` to its co-resident trusted recovery adapter.
 The factory closes and validates disposition, Organization, original provider
 attempt, authority reference, applied-at, and provider-effect digest before
 adding nominal provenance that `ActionPlane.reconcile` requires. Plain objects
 remain invalid, the package has no exported internal subpath, and callers must
-not expose this factory through untrusted transport. The installed-package
-contract proves both the usable root factory and the sealed internal subpath.
+not expose this factory through untrusted transport. This nominal constructor
+does not grant database authority: production reconciliation still requires an
+ActionPlane wired inside the trusted Bot process to its least-privilege action
+login, which already owns the function-only reconcile capability. The installed
+package contract proves both the usable root factory and the sealed internal
+subpath.
 
 For this issue's deterministic twin, perform checks out one dedicated database
 session. The begin function obtains an Organization/ActionTicket PostgreSQL
@@ -79,6 +83,14 @@ of returning it to the pool. Process loss closes the database connection,
 releases the session lock, and deliberately leaves the durable `in_flight`
 attempt reconcilable. A real Sender remains inactive and requires
 provider-specific idempotency and recovery evidence.
+
+The begin authority refreshes database time only after acquiring the blocking
+Organization/ActionTicket transaction lock, then performs every expiry and
+current-authority check. It also stores only the digest of a fresh per-perform
+completion capability. Completion requires both that exact capability and
+proof that its current PostgreSQL backend owns the Sender session lock. Another
+action-role session therefore cannot race or resume completion; after session
+loss, only reconciliation may close the original attempt.
 
 The real PostgreSQL oracle closes the checked-out session after Sender and
 before completion, observes that an explicit unlock is no longer executable,

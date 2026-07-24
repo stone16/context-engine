@@ -25,8 +25,8 @@ _BEGIN = "context_action_begin_private_effect"
 _COMPLETE = "context_action_complete_private_effect"
 _RECONCILE = "context_action_reconcile_private_effect"
 _RECEIPT_IMMUTABILITY = "context_action_reject_receipt_mutation"
-_BEGIN_SIGNATURE = "(uuid, text, text, text, text, bytea, bytea, bytea, bigint, integer, text, bytea, bytea, bytea, bytea, bytea, bytea, timestamptz, timestamptz, bytea, text, bigint)"
-_COMPLETE_SIGNATURE = "(uuid, text, text, text, bytea, timestamptz, text, text, bigint)"
+_BEGIN_SIGNATURE = "(uuid, text, text, text, text, bytea, bytea, bytea, bigint, integer, text, bytea, bytea, bytea, bytea, bytea, bytea, timestamptz, timestamptz, bytea, text, bigint, bytea)"
+_COMPLETE_SIGNATURE = "(uuid, text, text, text, bytea, timestamptz, text, text, bigint, bytea)"
 _RECONCILE_SIGNATURE = "(uuid, text, text, bytea, timestamptz, text, bytea, text, bigint)"
 _REFERENCE_TABLES = (
     "delivery_evidence",
@@ -126,6 +126,7 @@ def upgrade() -> None:
         sa.Column("audience_digest", postgresql.BYTEA(), nullable=False),
         sa.Column("payload_digest", postgresql.BYTEA(), nullable=False),
         sa.Column("idempotency_digest", postgresql.BYTEA(), nullable=False),
+        sa.Column("completion_capability_digest", postgresql.BYTEA(), nullable=False),
         sa.Column("state", sa.Text(), nullable=False),
         sa.Column("provider_effect_digest", postgresql.BYTEA(), nullable=True),
         sa.Column("started_at", sa.DateTime(timezone=True), nullable=False),
@@ -170,6 +171,7 @@ def upgrade() -> None:
             "octet_length(audience_digest) = 32 AND "
             "octet_length(payload_digest) = 32 AND "
             "octet_length(idempotency_digest) = 32 AND "
+            "octet_length(completion_capability_digest) = 32 AND "
             "(provider_effect_digest IS NULL OR "
             "octet_length(provider_effect_digest) = 32)",
             name="ck_action_provider_attempt_digests",
@@ -405,14 +407,15 @@ def upgrade() -> None:
             requested_expires_at timestamptz,
             requested_ticket_bearer_digest bytea,
             proposed_provider_attempt_ref text,
-            requested_retention_seconds bigint
+            requested_retention_seconds bigint,
+            requested_completion_capability_digest bytea
         ) RETURNS TABLE ({_return_columns()})
         LANGUAGE plpgsql SECURITY DEFINER
         SET search_path = pg_catalog, pg_temp
         SET row_security = on
         AS $function$
         DECLARE
-            authority_now timestamptz := pg_catalog.clock_timestamp();
+            authority_now timestamptz;
             authority_retain_until timestamptz;
             attempt_record public.action_delivery_attempt%ROWTYPE;
             ticket_record public.action_ticket%ROWTYPE;
@@ -467,6 +470,8 @@ def upgrade() -> None:
                OR requested_expires_at IS NULL
                OR requested_ticket_bearer_digest IS NULL
                OR octet_length(requested_ticket_bearer_digest) <> 32
+               OR requested_completion_capability_digest IS NULL
+               OR octet_length(requested_completion_capability_digest) <> 32
             THEN
                 RETURN QUERY SELECT 'rejected'::text, NULL::text, NULL::text,
                     NULL::text, NULL::uuid, NULL::text, NULL::text, NULL::text,
@@ -479,6 +484,7 @@ def upgrade() -> None:
                 'action-perform:' || requested_organization_id::text || ':' ||
                 requested_ticket_ref, 0
             ));
+            authority_now := pg_catalog.clock_timestamp();
             SELECT ticket.* INTO ticket_record
             FROM public.action_ticket AS ticket
             WHERE ticket.organization_id = requested_organization_id
@@ -760,14 +766,16 @@ def upgrade() -> None:
                 INSERT INTO public.action_provider_attempt (
                     organization_id, provider_attempt_ref, ticket_ref,
                     delivery_attempt_ref, operation, destination_digest,
-                    audience_digest, payload_digest, idempotency_digest, state,
-                    started_at, retention_policy_ref, retain_until
+                    audience_digest, payload_digest, idempotency_digest,
+                    completion_capability_digest, state, started_at,
+                    retention_policy_ref, retain_until
                 ) VALUES (
                     requested_organization_id, proposed_provider_attempt_ref,
                     requested_ticket_ref, requested_delivery_attempt_ref,
                     requested_operation, requested_destination_digest,
                     requested_audience_digest, requested_payload_digest,
-                    requested_idempotency_digest, 'in_flight', authority_now,
+                    requested_idempotency_digest,
+                    requested_completion_capability_digest, 'in_flight', authority_now,
                     'action-digest-audit-retention-v1', authority_retain_until
                 );
                 UPDATE public.action_ticket AS target_ticket SET
@@ -839,7 +847,8 @@ def upgrade() -> None:
             requested_applied_at timestamptz,
             proposed_receipt_ref text,
             requested_retention_policy_ref text,
-            requested_retention_seconds bigint
+            requested_retention_seconds bigint,
+            requested_completion_capability bytea
         ) RETURNS TABLE ({_return_columns()})
         LANGUAGE plpgsql SECURITY DEFINER
         SET search_path = pg_catalog, pg_temp
@@ -851,6 +860,7 @@ def upgrade() -> None:
             provider_record public.action_provider_attempt%ROWTYPE;
             receipt_record public.action_receipt%ROWTYPE;
             decision_digest bytea;
+            sender_session_lock_key bigint;
         BEGIN
             IF SESSION_USER <> '{_ACTION}'
                OR requested_organization_id IS NULL
@@ -864,6 +874,8 @@ def upgrade() -> None:
                     'action-digest-audit-retention-v1'
                OR requested_retention_seconds IS NULL
                OR requested_retention_seconds NOT BETWEEN 2 AND 31536000
+               OR requested_completion_capability IS NULL
+               OR octet_length(requested_completion_capability) <> 32
                OR (requested_sender_outcome = 'applied' AND (
                     proposed_receipt_ref IS NULL
                     OR proposed_receipt_ref !~ '^acr_[0-9a-f]{{32}}$'
@@ -895,6 +907,35 @@ def upgrade() -> None:
               AND provider.provider_attempt_ref = requested_provider_attempt_ref
               AND provider.ticket_ref = requested_ticket_ref;
             IF NOT FOUND THEN
+                RETURN QUERY SELECT 'reconciliation_required'::text,
+                    requested_provider_attempt_ref, NULL::text, NULL::text,
+                    NULL::uuid, NULL::text, NULL::text, NULL::text, NULL::bytea,
+                    NULL::bytea, NULL::bytea, NULL::bytea, NULL::bytea,
+                    NULL::timestamptz;
+                RETURN;
+            END IF;
+            sender_session_lock_key := pg_catalog.hashtextextended(
+                'action-ticket-sender-session:' ||
+                requested_organization_id::text || ':' || requested_ticket_ref,
+                0
+            );
+            IF provider_record.completion_capability_digest IS DISTINCT FROM
+                    public.digest(requested_completion_capability, 'sha256')
+               OR NOT EXISTS (
+                    SELECT 1 FROM pg_catalog.pg_locks AS sender_lock
+                    WHERE sender_lock.locktype = 'advisory'
+                      AND sender_lock.classid = (
+                          (sender_session_lock_key >> 32) & 4294967295
+                      )::pg_catalog.oid
+                      AND sender_lock.objid = (
+                          sender_session_lock_key & 4294967295
+                      )::pg_catalog.oid
+                      AND sender_lock.objsubid = 1
+                      AND sender_lock.pid = pg_catalog.pg_backend_pid()
+                      AND sender_lock.mode = 'ExclusiveLock'
+                      AND sender_lock.granted
+               )
+            THEN
                 RETURN QUERY SELECT 'reconciliation_required'::text,
                     requested_provider_attempt_ref, NULL::text, NULL::text,
                     NULL::uuid, NULL::text, NULL::text, NULL::text, NULL::bytea,

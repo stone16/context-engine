@@ -1076,13 +1076,13 @@ SELECT * FROM context_action_begin_private_effect(
   $6::bytea, $7::bytea, $8::bytea, $9::bigint, $10::integer,
   $11::text, $12::bytea, $13::bytea, $14::bytea, $15::bytea,
   $16::bytea, $17::bytea, $18::timestamptz, $19::timestamptz,
-  $20::bytea, $21::text, $22::bigint
+  $20::bytea, $21::text, $22::bigint, $23::bytea
 )`;
 
 const COMPLETE_EFFECT_SQL = `
 SELECT * FROM context_action_complete_private_effect(
   $1::uuid, $2::text, $3::text, $4::text, $5::bytea,
-  $6::timestamptz, $7::text, $8::text, $9::bigint
+  $6::timestamptz, $7::text, $8::text, $9::bigint, $10::bytea
 )`;
 
 const RECONCILE_EFFECT_SQL = `
@@ -1338,6 +1338,7 @@ export class ActionPlane {
       return { effectCount: 0, kind: "rejected", reasonCategory: "not_available" };
     }
     const proposedProviderAttemptRef = this.#providerAttemptRefFactory();
+    const completionCapability = randomBytes(32);
     if (!PROVIDER_ATTEMPT_PATTERN.test(proposedProviderAttemptRef)) {
       return { effectCount: 0, kind: "rejected", reasonCategory: "not_available" };
     }
@@ -1394,6 +1395,7 @@ export class ActionPlane {
           createHash("sha256").update(ACTION_TICKET_DOMAIN).update(ticket.serialize()).digest(),
           proposedProviderAttemptRef,
           this.#profile.retentionSeconds,
+          createHash("sha256").update(completionCapability).digest(),
           ],
         })).rows[0];
       } catch {
@@ -1493,6 +1495,7 @@ export class ActionPlane {
               proposedReceiptRef,
               this.#profile.retentionPolicyRef,
               this.#profile.retentionSeconds,
+              completionCapability,
             ],
           })).rows[0];
         } catch {
