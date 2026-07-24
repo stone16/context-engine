@@ -17,6 +17,7 @@ from engine.persistence import (
     load_harness_database_configurations,
 )
 from engine.persistence.role_guard import (
+    assert_action_role,
     assert_egress_role,
     assert_identity_role,
     assert_learning_role,
@@ -37,6 +38,7 @@ def wait_for_database(timeout_seconds: float) -> None:
                 configurations.control,
                 configurations.identity,
                 configurations.egress,
+                configurations.action,
                 configurations.runtime,
                 configurations.worker,
                 configurations.learning,
@@ -61,6 +63,8 @@ def wait_for_database(timeout_seconds: float) -> None:
                         assert_identity_role(connection)
                     if configuration.purpose is DatabasePurpose.TRUSTED_EGRESS:
                         assert_egress_role(connection)
+                    if configuration.purpose is DatabasePurpose.TRUSTED_ACTION:
+                        assert_action_role(connection)
             return
         except SQLAlchemyError as error:
             last_error = error
@@ -79,7 +83,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     arguments = parser.parse_args(argv)
     wait_for_database(arguments.timeout)
     purpose_names = (
-        "migration, control, identity, egress, runtime, worker, learning, "
+        "migration, control, identity, egress, action, runtime, worker, learning, "
         "security-operator, "
         "security-test"
     )

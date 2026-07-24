@@ -15,6 +15,9 @@ MANIFEST_PATH = ROOT / "engine/persistence/schema_security_manifest.yaml"
 GLOBAL_TABLES = {"alembic_version", "organization", "user_account"}
 TENANT_TABLES = {
     "active_release_manifest",
+    "action_delivery_attempt",
+    "action_prepare_audit",
+    "action_ticket",
     "context_fragment",
     "context_fragment_field",
     "context_resource",
@@ -137,7 +140,7 @@ def test_manifest_declares_exact_live_table_denominator_and_rls_evidence() -> No
 
     assert global_tables == GLOBAL_TABLES
     assert tenant_tables == TENANT_TABLES
-    assert len(tables) == 43
+    assert len(tables) == 46
 
     for name in sorted(GLOBAL_TABLES):
         rationale = tables[name]["classificationRationale"]
@@ -160,8 +163,8 @@ def test_rls_auditor_requires_every_live_control_and_non_owner_evidence() -> Non
 
     assert report["passed"] is True
     assert report["coverage"] == {
-        "numerator": 40,
-        "denominator": 40,
+        "numerator": 43,
+        "denominator": 43,
         "percent": 100.0,
     }
     inventory = cast(dict[str, object], report["inventory"])
@@ -186,7 +189,7 @@ def test_rls_auditor_does_not_count_force_rls_or_evidence_gaps() -> None:
     assert report["passed"] is False
     assert report["coverage"] == {
         "numerator": 0,
-        "denominator": 40,
+        "denominator": 43,
         "percent": 0.0,
     }
     tenant_reports = cast(list[dict[str, Any]], report["tenantTables"])

@@ -95,6 +95,7 @@
     {"id": "RUNTIME-TRACE-REDACTION-012", "layer": "runtime", "selector": "tests/unit/test_runtime_authorized_evidence.py::test_empty_decision_audit_is_generic_and_retains_no_denied_detail"},
     {"id": "PROP-ACTION-SEPARATION-014", "layer": "property", "selector": "tests/unit/test_ticket_audience_separation.py::test_public_ticket_types_and_server_side_issuers_are_structurally_distinct"},
     {"id": "PG-ACTION-SEPARATION-014", "layer": "postgres", "selector": "tests/integration/test_ticket_policy_epoch.py::test_committed_epoch_bump_rejects_both_previously_valid_ticket_types"},
+    {"id": "PG-ACTION-PREPARE-067", "layer": "postgres", "selector": "tests/integration/test_action_prepare.py::test_private_prepare_is_exact_idempotent_digest_only_and_restricted"},
     {"id": "RUNTIME-ACTION-SEPARATION-014", "layer": "runtime", "selector": "tests/unit/test_ticket_audience_separation.py::test_each_ticket_is_rejected_by_the_other_plane_and_deserializer"},
     {"id": "PROP-CROSS-ORG-LEARN-015", "layer": "property", "selector": "tests/unit/test_m0_learning_isolation.py::test_m0_learning_artifact_contract_has_no_cross_organization_carrier"},
     {"id": "PG-CROSS-ORG-LEARN-015", "layer": "postgres", "selector": "tests/integration/test_m0_unavailable_security_carriers.py::test_learning_persistence_is_organization_bound"},
@@ -128,7 +129,7 @@
     {"invariantRef": "CITATION-AUTH-010", "evidenceRefs": {"property": ["PROP-CITATION-AUTH-010"], "postgres": ["PG-CITATION-AUTH-010"], "runtime": ["RUNTIME-CITATION-AUTH-010"]}},
     {"invariantRef": "EGRESS-011", "evidenceRefs": {"property": ["PROP-EGRESS-011"], "postgres": ["PG-EGRESS-011"], "runtime": ["RUNTIME-EGRESS-011"]}},
     {"invariantRef": "TRACE-REDACTION-012", "evidenceRefs": {"property": ["PROP-TRACE-REDACTION-012"], "postgres": ["PG-TRACE-REDACTION-012"], "runtime": ["RUNTIME-TRACE-REDACTION-012"]}},
-    {"invariantRef": "ACTION-SEPARATION-014", "evidenceRefs": {"property": ["PROP-ACTION-SEPARATION-014"], "postgres": ["PG-ACTION-SEPARATION-014"], "runtime": ["RUNTIME-ACTION-SEPARATION-014"]}},
+    {"invariantRef": "ACTION-SEPARATION-014", "evidenceRefs": {"property": ["PROP-ACTION-SEPARATION-014"], "postgres": ["PG-ACTION-SEPARATION-014", "PG-ACTION-PREPARE-067"], "runtime": ["RUNTIME-ACTION-SEPARATION-014"]}},
     {"invariantRef": "CROSS-ORG-LEARN-015", "evidenceRefs": {"property": ["PROP-CROSS-ORG-LEARN-015"], "postgres": ["PG-CROSS-ORG-LEARN-015"], "runtime": ["RUNTIME-CROSS-ORG-LEARN-015"]}},
     {"invariantRef": "RELEASE-OWNER-019", "evidenceRefs": {"property": ["PROP-RELEASE-OWNER-019"], "postgres": ["PG-RELEASE-OWNER-019"], "runtime": ["RUNTIME-RELEASE-OWNER-019"]}}
   ],

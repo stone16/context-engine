@@ -19,6 +19,8 @@ def _provisioning_environment() -> dict[str, str]:
         "CONTEXT_ENGINE_IDENTITY_PASSWORD": "e" * 64,
         "CONTEXT_ENGINE_EGRESS_ROLE": "context_engine_egress",
         "CONTEXT_ENGINE_EGRESS_PASSWORD": "8" * 64,
+        "CONTEXT_ENGINE_ACTION_ROLE": "context_engine_action",
+        "CONTEXT_ENGINE_ACTION_PASSWORD": "9" * 64,
         "CONTEXT_ENGINE_LEARNING_ROLE": LEARNING_ROLE,
         "CONTEXT_ENGINE_LEARNING_PASSWORD": "c" * 64,
         "CONTEXT_ENGINE_SECURITY_OPERATOR_ROLE": "context_engine_security_operator",

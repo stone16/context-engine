@@ -32,9 +32,12 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
     document = manifest()
     tables = table_entries(document)
 
-    assert document["manifestVersion"] == "20.0.0"
+    assert document["manifestVersion"] == "21.0.0"
     assert set(tables) == {
         "active_release_manifest",
+        "action_delivery_attempt",
+        "action_prepare_audit",
+        "action_ticket",
         "alembic_version",
         "context_fragment",
         "context_fragment_field",
@@ -98,12 +101,25 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
     )
     assert tables["decision_audit"]["classification"] == "tenant_owned"
     assert tables["delivery_evidence"]["classification"] == "tenant_owned"
+    assert tables["action_delivery_attempt"]["classification"] == "tenant_owned"
+    assert tables["action_ticket"]["classification"] == "tenant_owned"
+    assert tables["action_prepare_audit"]["classification"] == "tenant_owned"
     assert tables["egress_grant"]["classification"] == "tenant_owned"
     assert tables["egress_audit"]["classification"] == "tenant_owned"
     assert tables["service_principal"]["classification"] == "tenant_owned"
     assert tables["worker_noop_job"]["classification"] == "tenant_owned"
     assert tables["context_source"]["classification"] == "tenant_owned"
     assert tables["source_version"]["classification"] == "tenant_owned"
+
+    assert tables["action_delivery_attempt"]["permittedOperations"][
+        "context_engine_action_prepare_definer"
+    ] == ["SELECT", "INSERT"]
+    assert tables["action_ticket"]["permittedOperations"][
+        "context_engine_action_prepare_definer"
+    ] == ["SELECT", "INSERT"]
+    assert tables["action_prepare_audit"]["permittedOperations"][
+        "context_engine_action_prepare_definer"
+    ] == ["INSERT"]
     for file_import_table in (
         "exact_phrase_candidate",
         "file_acquisition",
@@ -660,6 +676,7 @@ def test_issue_21_file_source_manifest_is_closed_and_role_separated() -> None:
         "context_engine_security_operator": [],
         "context_engine_worker": [],
         "context_engine_worker_lease_definer": ["SELECT", "UPDATE"],
+        "context_engine_action_prepare_definer": ["SELECT"],
     }
     assert version["permittedOperations"] == {
         "context_engine_control": ["SELECT", "INSERT"],
@@ -668,6 +685,7 @@ def test_issue_21_file_source_manifest_is_closed_and_role_separated() -> None:
         "context_engine_security_operator": [],
         "context_engine_worker": [],
         "context_engine_worker_lease_definer": ["SELECT", "INSERT"],
+        "context_engine_action_prepare_definer": ["SELECT"],
     }
     for entry in (source, version):
         assert entry["rowLevelSecurity"]["enabled"] is True
@@ -1189,6 +1207,7 @@ def test_membership_manifest_requires_exact_user_actor_and_read_only_runtime() -
         "context_engine_worker_lease_definer": ["SELECT"],
         "context_engine_delivery_evidence_definer": ["SELECT"],
         "context_engine_egress_grant_definer": ["SELECT"],
+        "context_engine_action_prepare_definer": ["SELECT"],
     }
 
     rls = entry["rowLevelSecurity"]
@@ -1747,6 +1766,7 @@ def test_policy_epoch_manifest_seals_runtime_reads_and_control_mutation() -> Non
         if entry["name"] == "organization_policy_epoch":
             expected_operations["context_engine_delivery_evidence_definer"] = ["SELECT"]
             expected_operations["context_engine_egress_grant_definer"] = ["SELECT"]
+            expected_operations["context_engine_action_prepare_definer"] = ["SELECT"]
             expected_operations["context_engine_control"].append(
                 "EXECUTE context_control_tombstone_file_resource"
             )

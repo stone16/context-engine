@@ -9,7 +9,7 @@ def test_m0_egress_carrier_is_unavailable_before_model_or_sender_bytes() -> None
     """The grant tracer activates without a real provider or effect process."""
 
     assert importlib.util.find_spec("bot_delivery") is not None
-    assert importlib.util.find_spec("action_plane") is None
+    assert importlib.util.find_spec("action_plane") is not None
     for public_name in (
         "ActionPlane",
         "ModelGateway",

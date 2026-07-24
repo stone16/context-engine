@@ -14,6 +14,8 @@ MIGRATOR_ROLE = "context_engine_migrator"
 CONTROL_ROLE = "context_engine_control"
 IDENTITY_ROLE = "context_engine_identity"
 EGRESS_ROLE = "context_engine_egress"
+ACTION_ROLE = "context_engine_action"
+ACTION_PREPARE_DEFINER_ROLE = "context_engine_action_prepare_definer"
 EGRESS_GRANT_DEFINER_ROLE = "context_engine_egress_grant_definer"
 DELIVERY_EVIDENCE_DEFINER_ROLE = "context_engine_delivery_evidence_definer"
 ACCESS_POLICY_DEFINER_ROLE = "context_engine_access_policy_definer"
@@ -33,6 +35,7 @@ class DatabasePurpose(Enum):
     CONTROL_PLANE = ("CONTEXT_ENGINE_CONTROL_DATABASE_URL", CONTROL_ROLE)
     TRUSTED_IDENTITY = ("CONTEXT_ENGINE_IDENTITY_DATABASE_URL", IDENTITY_ROLE)
     TRUSTED_EGRESS = ("CONTEXT_ENGINE_EGRESS_DATABASE_URL", EGRESS_ROLE)
+    TRUSTED_ACTION = ("CONTEXT_ENGINE_ACTION_DATABASE_URL", ACTION_ROLE)
     API_RUNTIME = ("CONTEXT_ENGINE_RUNTIME_DATABASE_URL", RUNTIME_ROLE)
     SUPPLY_WORKER = ("CONTEXT_ENGINE_WORKER_DATABASE_URL", WORKER_ROLE)
     LEARNING = ("CONTEXT_ENGINE_LEARNING_DATABASE_URL", LEARNING_ROLE)
@@ -56,6 +59,7 @@ ROLE_ENVIRONMENT_VARIABLES: dict[DatabasePurpose, str] = {
     DatabasePurpose.CONTROL_PLANE: "CONTEXT_ENGINE_CONTROL_ROLE",
     DatabasePurpose.TRUSTED_IDENTITY: "CONTEXT_ENGINE_IDENTITY_ROLE",
     DatabasePurpose.TRUSTED_EGRESS: "CONTEXT_ENGINE_EGRESS_ROLE",
+    DatabasePurpose.TRUSTED_ACTION: "CONTEXT_ENGINE_ACTION_ROLE",
     DatabasePurpose.API_RUNTIME: "CONTEXT_ENGINE_RUNTIME_ROLE",
     DatabasePurpose.SUPPLY_WORKER: "CONTEXT_ENGINE_WORKER_ROLE",
     DatabasePurpose.LEARNING: "CONTEXT_ENGINE_LEARNING_ROLE",
@@ -119,6 +123,7 @@ class HarnessDatabaseConfigurations:
     control: DatabaseConfiguration
     identity: DatabaseConfiguration
     egress: DatabaseConfiguration
+    action: DatabaseConfiguration
     runtime: DatabaseConfiguration
     worker: DatabaseConfiguration
     learning: DatabaseConfiguration
@@ -186,7 +191,7 @@ def load_database_configuration(
 def load_harness_database_configurations(
     environment: Mapping[str, str] | None = None,
 ) -> HarnessDatabaseConfigurations:
-    """Load and cross-check the seven explicit harness credential contracts."""
+    """Load and cross-check the explicit harness credential contracts."""
 
     source = os.environ if environment is None else environment
     configurations = HarnessDatabaseConfigurations(
@@ -194,6 +199,7 @@ def load_harness_database_configurations(
         control=load_database_configuration(DatabasePurpose.CONTROL_PLANE, source),
         identity=load_database_configuration(DatabasePurpose.TRUSTED_IDENTITY, source),
         egress=load_database_configuration(DatabasePurpose.TRUSTED_EGRESS, source),
+        action=load_database_configuration(DatabasePurpose.TRUSTED_ACTION, source),
         runtime=load_database_configuration(DatabasePurpose.API_RUNTIME, source),
         worker=load_database_configuration(DatabasePurpose.SUPPLY_WORKER, source),
         learning=load_database_configuration(DatabasePurpose.LEARNING, source),
@@ -207,15 +213,16 @@ def load_harness_database_configurations(
         configurations.control.expected_role,
         configurations.identity.expected_role,
         configurations.egress.expected_role,
+        configurations.action.expected_role,
         configurations.runtime.expected_role,
         configurations.worker.expected_role,
         configurations.learning.expected_role,
         configurations.operator.expected_role,
     }
-    if len(distinct_roles) != 8:
+    if len(distinct_roles) != 9:
         raise DatabaseConfigurationError(
-            "migration, control, identity, egress, runtime, worker, learning, and "
-            "security-operator "
+            "migration, control, identity, egress, action, runtime, worker, "
+            "learning, and security-operator "
             "database roles must be distinct"
         )
     if configurations.security_test.url != configurations.runtime.url:

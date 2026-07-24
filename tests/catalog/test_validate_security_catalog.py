@@ -21,6 +21,7 @@ from scripts.validate_security_catalog import (
     ACCEPT_012_UNAVAILABLE_CARRIER,
     ACL_PROOF_CASE_IDS,
     AUDIENCE_ACTION_CASE_IDS,
+    CANONICAL_ACTION_PREPARE_ACTIVATION,
     CANONICAL_ACTIVATION_ISSUE_LIST,
     CANONICAL_ACTIVATIONS,
     CANONICAL_CONTEXT_RUN_ACTIVATION,
@@ -567,6 +568,7 @@ def make_catalog() -> dict[str, object]:
             copy.deepcopy(CANONICAL_EGRESS_GRANT_ACTIVATION),
             copy.deepcopy(CANONICAL_OPENAPI_V0_ACTIVATION),
             copy.deepcopy(CANONICAL_TYPESCRIPT_SDK_ACTIVATION),
+            copy.deepcopy(CANONICAL_ACTION_PREPARE_ACTIVATION),
         ],
         "invariants": invariants,
         "fixtures": fixtures,
@@ -659,6 +661,7 @@ def make_schema() -> dict[str, object]:
                     {"const": copy.deepcopy(CANONICAL_EGRESS_GRANT_ACTIVATION)},
                     {"const": copy.deepcopy(CANONICAL_OPENAPI_V0_ACTIVATION)},
                     {"const": copy.deepcopy(CANONICAL_TYPESCRIPT_SDK_ACTIVATION)},
+                    {"const": copy.deepcopy(CANONICAL_ACTION_PREPARE_ACTIVATION)},
                 ],
                 "items": False,
             },
@@ -1301,6 +1304,35 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
             )
         )
 
+    def test_issue_67_action_prepare_activation_stops_before_effects(self) -> None:
+        catalog = make_catalog()
+        activation = object_list_at(catalog, "activations")[10]
+
+        self.assertEqual(activation, CANONICAL_ACTION_PREPARE_ACTIVATION)
+        self.assertEqual(activation["invariantRef"], "ACTION-SEPARATION-014")
+        self.assertEqual(
+            object_list_at(activation, "testEvidence")[0]["id"],
+            "PG-ACTION-PREPARE-067",
+        )
+        future_carriers = activation["futureCarriers"]
+        not_active = activation["notActive"]
+        assert isinstance(future_carriers, list)
+        assert isinstance(not_active, list)
+        self.assertIn("ActionPlane.perform", future_carriers)
+        self.assertIn(
+            "external channel write or business effect",
+            not_active,
+        )
+        self.assertIn("full ACCEPT-012 pass", not_active)
+
+        activation["notActive"] = []
+        self.assert_catalog_error(
+            catalog,
+            "activations: must exactly preserve the canonical ordered "
+            f"{CANONICAL_ACTIVATION_ISSUE_LIST} activation records and their "
+            "future/NOT_ACTIVE boundaries",
+        )
+
     def test_schema_independently_freezes_full_accept_008_as_future(self) -> None:
         catalog = make_catalog()
         schema = load_document(DEFAULT_SCHEMA_PATH)
@@ -1723,7 +1755,7 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
 
         self.assertEqual(catalog["catalogVersion"], "1.3.0")
         self.assertEqual(
-            issue_refs[-10:],
+            issue_refs[-11:],
             [
                 "#15",
                 "#16",
@@ -1735,6 +1767,7 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
                 "#65",
                 "#66",
                 "#64",
+                "#67",
             ],
         )
         self.assertIn(

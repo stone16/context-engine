@@ -400,6 +400,9 @@ REQUIRED_POSTGRES_EVIDENCE: dict[str, tuple[str, ...]] = {
     "TRACE-REDACTION-012": ("PG-FIELD-PROJECTION-048",),
 }
 REQUIRED_POSTGRES_EVIDENCE["TRANSPORT-UNTRUSTED-008"] = ("PG-DELIVERY-EVIDENCE-063",)
+REQUIRED_POSTGRES_EVIDENCE["ACTION-SEPARATION-014"] = (
+    "PG-ACTION-PREPARE-067",
+)
 
 ACCEPT_002_ACTIVE_CARRIER: dict[str, str] = {
     "statusAtM0": "available",
@@ -1295,6 +1298,64 @@ CANONICAL_TYPESCRIPT_SDK_ACTIVATION: dict[str, object] = {
     ],
 }
 
+CANONICAL_ACTION_PREPARE_ACTIVATION: dict[str, object] = {
+    "issueRef": "#67",
+    "invariantRef": "ACTION-SEPARATION-014",
+    "carrier": (
+        "ActionPlane.prepare private create-placeholder, finalize-reply, or "
+        "follow-up ticket"
+    ),
+    "status": "active_fail_closed",
+    "policyEpochScope": "organization-v0",
+    "controlBoundary": (
+        "trusted co-resident intent -> closed TypeScript ActionPlane.prepare -> "
+        "least-privilege PostgreSQL prepare function -> operation-specific "
+        "audience-bound ActionTicket"
+    ),
+    "testEvidence": [
+        {
+            "id": "PG-ACTION-PREPARE-067",
+            "surface": (
+                "tests/integration/test_action_prepare.py::"
+                "test_private_prepare_is_exact_idempotent_digest_only_and_restricted"
+            ),
+            "oracle": (
+                "A packaged TypeScript ActionPlane calling real PostgreSQL under "
+                "the dedicated non-owner action role prepares distinct signed "
+                "CreatePlaceholder, FinalizeReply, and PrivateFollowup tickets "
+                "only for one exact current private delivery authority; identical "
+                "retry returns the same durable ticket, while every one-field "
+                "binding mutation, approval mismatch, expired evidence, stale or "
+                "disabled source, and conflicting idempotency use returns only a "
+                "closed zero-effect outcome. FORCE-RLS storage retains digests "
+                "and restricted decision categories, and the caller has no direct "
+                "table access or Sender surface."
+            ),
+        }
+    ],
+    "deferredEvidence": [
+        "ActionPlane.perform one-shot ticket redemption",
+        "provider receipt and ambiguous-result reconciliation",
+        "production Sender conformance",
+        "group AudienceSnapshot revalidation",
+    ],
+    "futureCarriers": [
+        "ActionPlane.perform",
+        "Sender",
+        "BotDelivery application",
+        "group-public delivery",
+        "provider receipt reconciliation",
+    ],
+    "notActive": [
+        "external channel write or business effect",
+        "ActionTicket consumption",
+        "Sender or provider network call",
+        "Applied, AlreadyApplied, or ReconciliationRequired outcome",
+        "group AudienceSnapshot",
+        "full ACCEPT-012 pass",
+    ],
+}
+
 CANONICAL_ACTIVATIONS: list[dict[str, object]] = [
     CANONICAL_REVOCATION_ACTIVATION,
     CANONICAL_UNAVAILABLE_CAPABILITY_ACTIVATION,
@@ -1306,6 +1367,7 @@ CANONICAL_ACTIVATIONS: list[dict[str, object]] = [
     CANONICAL_EGRESS_GRANT_ACTIVATION,
     CANONICAL_OPENAPI_V0_ACTIVATION,
     CANONICAL_TYPESCRIPT_SDK_ACTIVATION,
+    CANONICAL_ACTION_PREPARE_ACTIVATION,
 ]
 CANONICAL_ACTIVATION_ISSUE_LIST = ", ".join(
     f"Issue {activation['issueRef']}" for activation in CANONICAL_ACTIVATIONS

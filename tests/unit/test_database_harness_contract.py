@@ -48,6 +48,8 @@ def test_compose_project_identity_is_generated_per_checkout() -> None:
         "migrator_role",
         "control_role",
         "identity_role",
+        "egress_role",
+        "action_role",
         "runtime_role",
         "worker_role",
         "learning_role",
@@ -83,6 +85,8 @@ def test_database_harness_generates_secret_state_and_never_sources_it() -> None:
     assert "CONTEXT_ENGINE_IDENTITY_DATABASE_URL" in script
     assert "CONTEXT_ENGINE_EGRESS_ROLE=context_engine_egress" in script
     assert "CONTEXT_ENGINE_EGRESS_DATABASE_URL" in script
+    assert "CONTEXT_ENGINE_ACTION_ROLE=context_engine_action" in script
+    assert "CONTEXT_ENGINE_ACTION_DATABASE_URL" in script
     assert (
         "CONTEXT_ENGINE_SECURITY_OPERATOR_ROLE=context_engine_security_operator"
         in script
@@ -100,6 +104,8 @@ def test_compose_passes_dedicated_operator_credentials_to_bootstrap() -> None:
     assert "CONTEXT_ENGINE_IDENTITY_PASSWORD" in compose
     assert "CONTEXT_ENGINE_EGRESS_ROLE" in compose
     assert "CONTEXT_ENGINE_EGRESS_PASSWORD" in compose
+    assert "CONTEXT_ENGINE_ACTION_ROLE" in compose
+    assert "CONTEXT_ENGINE_ACTION_PASSWORD" in compose
     assert "CONTEXT_ENGINE_SECURITY_OPERATOR_ROLE" in compose
     assert "CONTEXT_ENGINE_SECURITY_OPERATOR_PASSWORD" in compose
     assert "CONTEXT_ENGINE_LEARNING_ROLE" in compose
@@ -112,6 +118,7 @@ def test_readiness_probe_includes_dedicated_operator_configuration() -> None:
     assert "configurations.control" in wait_script
     assert "configurations.identity" in wait_script
     assert "configurations.egress" in wait_script
+    assert "configurations.action" in wait_script
     assert "configurations.learning" in wait_script
     assert "configurations.operator" in wait_script
     assert (
@@ -123,7 +130,7 @@ def test_readiness_probe_includes_dedicated_operator_configuration() -> None:
     )
     assert "                        assert_learning_role(connection)" in wait_script
     assert (
-        "migration, control, identity, egress, runtime, worker, learning, "
+        "migration, control, identity, egress, action, runtime, worker, learning, "
         in wait_script
     )
     assert '"security-operator, "' in wait_script
@@ -218,7 +225,8 @@ def test_ci_runs_the_same_make_database_contract_as_local() -> None:
     assert "make db-down" in workflow
     assert (
         "check: build lint typecheck openapi-check sdk-check sdk-build sdk-test "
-        "sdk-pack test catalog smoke integration security-gate" in makefile
+        "sdk-pack action-build action-test test catalog smoke integration "
+        "security-gate" in makefile
     )
     assert "./scripts/database_harness.sh integration" in makefile
     assert "--baseline-ref $(OPENAPI_BASELINE_REF)" in makefile
@@ -235,7 +243,8 @@ def test_ci_runs_and_retains_the_single_m0_security_gate_contract() -> None:
     )
     assert (
         "check: build lint typecheck openapi-check sdk-check sdk-build sdk-test "
-        "sdk-pack test catalog smoke integration security-gate"
+        "sdk-pack action-build action-test test catalog smoke integration "
+        "security-gate"
         in makefile.splitlines()
     )
     assert "actions/upload-artifact@v4" in workflow
