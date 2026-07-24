@@ -37,6 +37,7 @@ const profile = new PrivateActionPrepareProfile({
   authenticatedServiceRef: exactFacts.authenticatedServiceRef,
   consumerRef: exactFacts.consumerRef,
   maximumPayloadBytes: 4096,
+  organizationId: exactFacts.organizationId,
   profileRef: "private-action-prepare-v1",
   purpose: exactFacts.purpose,
   retentionPolicyRef: "action-digest-audit-retention-v1",
@@ -506,4 +507,180 @@ test("exported ticket nominal types cannot mint effect authority", () => {
     () => new CreatePlaceholderActionTicket("caller-authored"),
     /issuer-constructed/,
   );
+});
+
+test("private delivery effects derive authority in the database before distinct prepare/perform pairs", async () => {
+  let nextTicket = 40;
+  let nextProviderAttempt = 50;
+  let nextReceipt = 60;
+  const preparedOperations = [];
+  const begun = new Map();
+  const database = sessionDatabase(async (query) => {
+    if (query.text.includes("context_action_bind_private_delivery_effect")) {
+      return { rows: [{
+        audience_digest: Buffer.from(exactFacts.audienceDigest, "hex"),
+        authenticated_service_ref: exactFacts.authenticatedServiceRef,
+        authentication_binding_ref: exactFacts.authenticationBindingRef,
+        consumer_ref: exactFacts.consumerRef,
+        destination_ref: exactFacts.destinationRef,
+        membership_id: exactFacts.membershipId,
+        membership_version: exactFacts.membershipVersion,
+        organization_id: exactFacts.organizationId,
+        outcome: "bound",
+        policy_epoch: exactFacts.policyEpoch,
+        purpose: exactFacts.purpose,
+        user_id: exactFacts.userId,
+      }] };
+    }
+    if (query.text.includes("context_action_prepare_private_effect")) {
+      const operation = query.values[13];
+      preparedOperations.push({
+        attempt: query.values[19],
+        idempotencyDigest: Buffer.from(query.values[16]).toString("hex"),
+        operation,
+        payloadDigest: Buffer.from(query.values[15]).toString("hex"),
+      });
+      return { rows: [{
+        delivery_attempt_ref: query.values[19],
+        expires_at: new Date("2099-07-24T08:01:00.000Z"),
+        idempotent: false,
+        issued_at: new Date("2099-07-24T08:00:00.000Z"),
+        outcome: "prepared",
+        ticket_ref: `act_${(nextTicket++).toString(16).padStart(32, "0")}`,
+      }] };
+    }
+    if (query.text.includes("context_action_begin_private_effect")) {
+      const ticketRef = query.values[1];
+      const providerAttemptRef = query.values[20];
+      begun.set(ticketRef, {
+        audience_digest: query.values[13],
+        delivery_attempt_ref: query.values[2],
+        destination_digest: query.values[12],
+        idempotency_digest: query.values[6],
+        operation: query.values[3],
+        organization_id: query.values[0],
+        payload_digest: query.values[5],
+        provider_attempt_ref: providerAttemptRef,
+        ticket_ref: ticketRef,
+      });
+      return { rows: [{
+        destination_ref: exactFacts.destinationRef,
+        outcome: "sender_required",
+        provider_attempt_ref: providerAttemptRef,
+      }] };
+    }
+    if (query.text.includes("context_action_complete_private_effect")) {
+      const stored = begun.get(query.values[1]);
+      assert.notEqual(stored, undefined);
+      return { rows: [{
+        ...stored,
+        applied_at: query.values[5],
+        outcome: "applied",
+        provider_effect_digest: query.values[4],
+        receipt_ref: query.values[6],
+      }] };
+    }
+    throw new Error("unexpected private Bot bridge query");
+  });
+  const sender = new DeterministicPrivateSenderTwin({ mode: "applied" });
+  const plane = new ActionPlane({
+    database,
+    keyring,
+    profile,
+    providerAttemptRefFactory: () =>
+      `pat_${(nextProviderAttempt++).toString(16).padStart(32, "0")}`,
+    receiptRefFactory: () =>
+      `acr_${(nextReceipt++).toString(16).padStart(32, "0")}`,
+    sender,
+  });
+  const deliveryAttemptRef = `dla_${"9".repeat(32)}`;
+
+  const placeholderPrepared = await plane.preparePrivateDeliveryEffect({
+    deliveryAttemptRef,
+    deliveryEvidenceRef: exactFacts.deliveryEvidenceRef,
+    destinationRef: exactFacts.destinationRef,
+    idempotencyKey: "bot-turn:placeholder",
+    operation: "create_placeholder",
+    payload: { text: "Working…" },
+    requestId: "bot-answer-1",
+  });
+  assert.equal(placeholderPrepared.kind, "prepared");
+  const placeholder = await plane.perform(
+    { text: "Working…" },
+    placeholderPrepared.ticket,
+  );
+  const finalizedPrepared = await plane.preparePrivateDeliveryEffect({
+    deliveryAttemptRef,
+    deliveryEvidenceRef: exactFacts.deliveryEvidenceRef,
+    destinationRef: exactFacts.destinationRef,
+    idempotencyKey: "bot-turn:finalize",
+    operation: "finalize_reply",
+    payload: {
+      messageRef: placeholder.receipt.providerAttemptRef,
+      text: "Authorized answer",
+    },
+    requestId: "bot-answer-1",
+  });
+  assert.equal(finalizedPrepared.kind, "prepared");
+  const finalized = await plane.perform(
+    {
+      messageRef: placeholder.receipt.providerAttemptRef,
+      text: "Authorized answer",
+    },
+    finalizedPrepared.ticket,
+  );
+
+  assert.equal(placeholder.kind, "applied");
+  assert.equal(finalized.kind, "applied");
+  assert.equal(sender.effectCount, 2);
+  assert.deepEqual(preparedOperations.map((entry) => entry.operation), [
+    "create_placeholder",
+    "finalize_reply",
+  ]);
+  assert.equal(new Set(preparedOperations.map((entry) => entry.attempt)).size, 1);
+  assert.equal(new Set(preparedOperations.map((entry) => entry.idempotencyDigest)).size, 2);
+  assert.equal(new Set(preparedOperations.map((entry) => entry.payloadDigest)).size, 2);
+  assert.equal("ticket" in placeholder, false);
+  assert.equal("ticket" in finalized, false);
+
+  const publicApi = await import("../dist/index.js");
+  assert.equal("createTrustedPrivateEffectAuthority" in publicApi, false);
+  assert.equal("createPlaceholderEffectIntent" in publicApi, false);
+  assert.equal("createFinalizeReplyEffectIntent" in publicApi, false);
+  assert.equal("createPrivateBotActionBridge" in publicApi, false);
+  assert.equal("TrustedPrivateEffectFacts" in publicApi, false);
+});
+
+test("private delivery evidence from another Organization cannot mint an effect ticket", async () => {
+  let queryCount = 0;
+  const database = sessionDatabase(async (query) => {
+    queryCount += 1;
+    assert.match(query.text, /context_action_bind_private_delivery_effect/);
+    return { rows: [{
+      audience_digest: Buffer.from(exactFacts.audienceDigest, "hex"),
+      authenticated_service_ref: exactFacts.authenticatedServiceRef,
+      authentication_binding_ref: exactFacts.authenticationBindingRef,
+      consumer_ref: exactFacts.consumerRef,
+      destination_ref: exactFacts.destinationRef,
+      membership_id: exactFacts.membershipId,
+      membership_version: exactFacts.membershipVersion,
+      organization_id: "d50e9030-c75c-422a-af06-cd3d7463ad73",
+      outcome: "bound",
+      policy_epoch: exactFacts.policyEpoch,
+      purpose: exactFacts.purpose,
+      user_id: exactFacts.userId,
+    }] };
+  });
+  const plane = new ActionPlane({ database, keyring, profile });
+
+  assert.deepEqual(await plane.preparePrivateDeliveryEffect({
+    deliveryAttemptRef: `dla_${"7".repeat(32)}`,
+    deliveryEvidenceRef: exactFacts.deliveryEvidenceRef,
+    destinationRef: exactFacts.destinationRef,
+    idempotencyKey: "bot-turn:wrong-organization",
+    operation: "create_placeholder",
+    payload: { text: "Working…" },
+    requestId: "bot-answer-1",
+  }), { effectCount: 0, kind: "generic_denied" });
+  assert.equal(queryCount, 1);
 });

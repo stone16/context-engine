@@ -12,7 +12,7 @@ build:
 lint:
 	uv run ruff check .
 
-typecheck: sdk-build
+typecheck: sdk-build action-build
 	uv run mypy
 	npm --prefix action_plane/typescript run typecheck
 	npm --prefix bot_delivery/typescript run typecheck
@@ -79,7 +79,7 @@ action-test: action-build
 bot-typecheck:
 	npm --prefix bot_delivery/typescript run typecheck
 
-bot-build: sdk-build
+bot-build: sdk-build action-build
 	npm --prefix bot_delivery/typescript run build
 
 bot-test: bot-build

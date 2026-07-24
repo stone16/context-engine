@@ -122,6 +122,8 @@ await assert.rejects(
 const publicUrl = import.meta.resolve("@context-engine/bot-delivery");
 const fileUrlSibling = await import(new URL("./index.js", publicUrl));
 assert.equal("createModelGenerationBoundaryForTest" in fileUrlSibling, false);
+assert.equal("PrivateFeishuIdentityTwin" in fileUrlSibling, false);
+assert.equal("PrivateQuestionTurnFixture" in fileUrlSibling, false);
 assert.throws(
   () => new fileUrlSibling.ModelGenerationBoundary({
     close: async () => undefined,
@@ -132,3 +134,6 @@ assert.throws(
   }),
   /only be constructed by BotDelivery/,
 );
+const actionApi = await import("@context-engine/action-plane");
+assert.equal("createPrivateBotActionBridge" in actionApi, false);
+assert.equal("TrustedPrivateEffectFacts" in actionApi, false);

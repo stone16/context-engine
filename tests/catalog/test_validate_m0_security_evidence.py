@@ -151,19 +151,39 @@ def test_m0_registry_uses_activated_egress_and_honest_learning_evidence() -> Non
         "test_packed_typescript_sdk_resolves_authorized_file_package_over_live_http"
     )
     assert evidence["SDK-MODEL-EGRESS-070"] == evidence["PG-MODEL-EGRESS-070"]
+    assert evidence["TS-PRIVATE-BOT-FLOW-071"] == (
+        "tests/unit/test_bot_delivery_application_contract.py::"
+        "test_private_bot_application_has_one_closed_process_and_import_boundary"
+    )
+    assert evidence["PG-PRIVATE-BOT-FLOW-071"] == (
+        "tests/integration/test_z_egress_grant_file.py::"
+        "test_installed_private_bot_completes_file_answer_effects_audit_and_citation"
+    )
+    assert evidence["SDK-PRIVATE-BOT-FLOW-071"] == evidence[
+        "PG-PRIVATE-BOT-FLOW-071"
+    ]
     egress_mapping = next(
         mapping
         for mapping in registry["invariantMappings"]
         if mapping["invariantRef"] == "EGRESS-011"
     )
     assert egress_mapping["evidenceRefs"] == {
-        "property": ["PROP-EGRESS-011", "TS-MODEL-EGRESS-070"],
+        "property": [
+            "PROP-EGRESS-011",
+            "TS-MODEL-EGRESS-070",
+            "TS-PRIVATE-BOT-FLOW-071",
+        ],
         "postgres": [
             "PG-EGRESS-011",
             "PG-ACTION-PERFORM-068",
             "PG-MODEL-EGRESS-070",
+            "PG-PRIVATE-BOT-FLOW-071",
         ],
-        "runtime": ["RUNTIME-EGRESS-011", "SDK-MODEL-EGRESS-070"],
+        "runtime": [
+            "RUNTIME-EGRESS-011",
+            "SDK-MODEL-EGRESS-070",
+            "SDK-PRIVATE-BOT-FLOW-071",
+        ],
     }
     assert evidence["PROP-CROSS-ORG-LEARN-015"] == (
         "tests/unit/test_m0_learning_isolation.py::"

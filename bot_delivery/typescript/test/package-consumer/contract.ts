@@ -46,3 +46,5 @@ createPrivateModelGenerationBoundary({
 });
 // @ts-expect-error package consumers cannot import an internal implementation subpath
 await import("@context-engine/bot-delivery/internal.js");
+// @ts-expect-error identity twin construction belongs only to the Bot process composition root
+await import("@context-engine/bot-delivery/private-delivery.js");

@@ -19,8 +19,8 @@ export type {
   ActionTicket,
   AudienceChanged,
   GenericDenied,
+  PreparePrivateDeliveryEffectOptions,
   PreparedAction,
   RetryableUnavailable,
   TrustedActionReconciliation,
-  TrustedEffectIntent,
 } from "./internal.js";

@@ -104,6 +104,10 @@ uv run context-engine-worker --test-mode
 
 健康响应中的 `runtime_delivery: NOT_ACTIVE` 表示默认进程没有生产认证入口。worker
 输出中的 `job_behavior: NOT_ACTIVE` 特指默认 CLI 尚未配置生产签名密钥来源、queue/job
+loop；Issue #71 的 E2E 通过同一个 `context-engine-worker --run-file-job` 进程入口消费
+一个 exact signed FileImport WorkerLease。该入口要求显式 worker credential、已登记
+ServicePrincipal、logical File root 与 job binding，完成一个终态后退出，不引入第四个
+进程类型。
 loop 或真实 ingestion/publication handler；Issue #17 的 persistent no-op 应用 seam 与
 PostgreSQL authority 已激活并由 integration suite 调用。当前数据库测试证明 `compose.yaml` 固定的
 PostgreSQL/pgvector、
@@ -160,8 +164,13 @@ authority failure 和 committed epoch bump 均返回一个 non-enumerating unava
 rejected effect 为零。该 bounded proof 不激活 production Provider
 discovery/projection、source credential、Sender/IM、`ActionPlane.prepare`/`perform`、
 payload/destination/approval/idempotency、DeliveryAttempt、durable one-shot/replay/
-concurrency、stored receipt 或 reconciliation；完整 `ACCEPT-012` carrier 保持
-`NOT_ACTIVE`。
+concurrency、stored receipt 或 reconciliation；完整 `ACCEPT-012` carrier 在该
+Issue #18 激活中保持 `NOT_ACTIVE`。Issue #71 现已另行激活完整的私聊 File-backed
+deterministic-twin carrier：独立 TypeScript Bot 进程只经 installed generated SDK
+访问 Runtime，受控模型只消费一个当前 Package，placeholder 与 final/follow-up 分别
+通过 `ActionPlane.prepare` + `perform`，最终只保留 digest/ref 形式的
+`DeliveryReceipt` 与 restricted audit。Live Feishu、真实模型/Sender、群聊、补偿删除、
+Continue 与 MCP 仍为 `NOT_ACTIVE`。
 
 Issue #19 为当前 authenticated Acquire 激活最小 durable lineage：每个成功空包或
 exact-authorized Package 都在返回前，于保留的 current-`UserActor` 事务内提交一条

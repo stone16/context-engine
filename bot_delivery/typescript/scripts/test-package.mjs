@@ -7,6 +7,7 @@ import { spawnSync } from "node:child_process";
 import ts from "typescript";
 
 const packageRoot = resolve(import.meta.dirname, "..");
+const actionRoot = resolve(packageRoot, "../../action_plane/typescript");
 const sdkRoot = resolve(packageRoot, "../../sdk/typescript");
 const temporaryRoot = mkdtempSync(join(tmpdir(), "context-engine-bot-delivery-package-"));
 const builtins = new Set(builtinModules.flatMap((name) => [name, `node:${name}`]));
@@ -84,7 +85,7 @@ function assertPackedRuntimeImportsAreDeclared(installedPackageRoot, packedFiles
       `packed BotDelivery has undeclared runtime imports: ${[...undeclared].sort().join(", ")}`,
     );
   }
-  for (const required of ["canonicalize", "pg"]) {
+  for (const required of ["@context-engine/action-plane", "@context-engine/resolve-sdk", "canonicalize", "pg"]) {
     if (!observed.has(required)) {
       throw new Error(`packed runtime import audit did not observe ${required}`);
     }
@@ -98,6 +99,7 @@ function run(command, args, cwd) {
     env: {
       ...process.env,
       npm_config_cache: join(temporaryRoot, "npm-cache"),
+      npm_config_legacy_peer_deps: "true",
       npm_config_offline: "true",
     },
     timeout: 120_000,
@@ -126,6 +128,7 @@ function pack(packageDirectory) {
 
 try {
   const botArtifact = pack(packageRoot);
+  const actionArtifact = pack(actionRoot);
   const sdkArtifact = pack(sdkRoot);
   const consumerRoot = join(temporaryRoot, "consumer");
   cpSync(resolve(packageRoot, "test/package-consumer"), consumerRoot, { recursive: true });
@@ -144,6 +147,7 @@ try {
   }
   packageDocument.dependencies = {
     "@context-engine/bot-delivery": `file:${join(temporaryRoot, botArtifact.filename)}`,
+    "@context-engine/action-plane": `file:${join(temporaryRoot, actionArtifact.filename)}`,
     "@context-engine/resolve-sdk": `file:${join(temporaryRoot, sdkArtifact.filename)}`,
     ...localProductionDependencies,
   };

@@ -26,6 +26,7 @@ const plane = new ActionPlane({
     authenticatedServiceRef: "service:bot-delivery",
     consumerRef: "consumer:bot-delivery",
     maximumPayloadBytes: 4096,
+    organizationId,
     profileRef: "private-action-prepare-v1",
     purpose: "context.answer",
     retentionPolicyRef: "action-digest-audit-retention-v1",

@@ -27,6 +27,7 @@ def test_typescript_model_egress_is_closed_pinned_and_zero_byte_on_denial() -> N
     assert package["packageManager"] == "npm@10.9.0"
     assert package["dependencies"] == {"canonicalize": "3.0.0", "pg": "8.22.0"}
     assert package["peerDependencies"] == {
+        "@context-engine/action-plane": "0.0.0-m2-perform",
         "@context-engine/resolve-sdk": "0.0.0-v0"
     }
     assert lock["packages"][""]["dependencies"] == package["dependencies"]
@@ -57,6 +58,6 @@ def test_typescript_model_egress_is_closed_pinned_and_zero_byte_on_denial() -> N
             timeout=30,
         )
         assert completed.returncode == 0, completed.stdout + completed.stderr
-    assert "tests 11" in completed.stdout
-    assert "pass 11" in completed.stdout
+    assert "tests 17" in completed.stdout
+    assert "pass 17" in completed.stdout
     assert "fail 0" in completed.stdout

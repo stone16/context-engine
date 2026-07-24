@@ -32,7 +32,7 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
     document = manifest()
     tables = table_entries(document)
 
-    assert document["manifestVersion"] == "24.0.0"
+    assert document["manifestVersion"] == "25.0.0"
     assert set(tables) == {
         "active_release_manifest",
         "action_delivery_attempt",
@@ -56,6 +56,7 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
         "egress_audit",
         "egress_grant",
         "model_egress_audit",
+        "private_delivery_audit",
         "exact_phrase_candidate",
         "file_acquisition",
         "file_acquisition_result",
@@ -142,6 +143,7 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
     assert tables["egress_grant"]["classification"] == "tenant_owned"
     assert tables["egress_audit"]["classification"] == "tenant_owned"
     assert tables["model_egress_audit"]["classification"] == "tenant_owned"
+    assert tables["private_delivery_audit"]["classification"] == "tenant_owned"
     model_audit = tables["model_egress_audit"]
     assert model_audit["functionOnlyMutation"] == {
         "databaseFunctions": [
@@ -166,6 +168,13 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
     assert tables["action_delivery_attempt"]["permittedOperations"][
         "context_engine_action_prepare_definer"
     ] == ["SELECT", "INSERT"]
+    assert tables["delivery_evidence"]["permittedOperations"][
+        "context_engine_action"
+    ] == ["EXECUTE context_action_bind_private_delivery_effect"]
+    assert (
+        "context_action_bind_private_delivery_effect"
+        in tables["action_ticket"]["functionOnlyMutation"]["databaseFunctions"]
+    )
     assert tables["action_ticket"]["permittedOperations"][
         "context_engine_action_prepare_definer"
     ] == ["SELECT", "INSERT"]

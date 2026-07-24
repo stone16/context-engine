@@ -52,7 +52,7 @@ from tests.support.file_source_progress import clear_file_source_progress_projec
 
 pytestmark = pytest.mark.integration
 ROOT = Path(__file__).parents[2]
-_HEAD_REVISION = "20260724_0025"
+_HEAD_REVISION = "20260724_0027"
 HEAD_TABLES = [
     "action_delivery_attempt",
     "action_perform_audit",
@@ -95,6 +95,7 @@ HEAD_TABLES = [
     "organization",
     "organization_policy_epoch",
     "organization_record",
+    "private_delivery_audit",
     "release_candidate",
     "release_evaluation",
     "release_manifest",
