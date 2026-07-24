@@ -1,7 +1,7 @@
 {
   "name": "@context-engine/action-plane",
-  "version": "0.0.0-m2-prepare",
-  "description": "Trusted private ActionPlane prepare module",
+  "version": "0.0.0-m2-perform",
+  "description": "Trusted private ActionPlane prepare and perform module",
   "type": "module",
   "private": true,
   "license": "UNLICENSED",

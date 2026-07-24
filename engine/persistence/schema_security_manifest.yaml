@@ -1,5 +1,5 @@
 {
-  "manifestVersion": "21.0.0",
+  "manifestVersion": "22.0.0",
   "controlOperations": [
     {
       "name": "register_file_source",
@@ -558,6 +558,14 @@
               "context_engine_action_prepare_definer"
             ],
             "using": "true"
+          },
+          {
+            "name": "membership_action_execute_definer_select",
+            "command": "SELECT",
+            "roles": [
+              "context_engine_action_execute_definer"
+            ],
+            "using": "true"
           }
         ]
       },
@@ -576,6 +584,9 @@
           "SELECT"
         ],
         "context_engine_action_prepare_definer": [
+          "SELECT"
+        ],
+        "context_engine_action_execute_definer": [
           "SELECT"
         ]
       },
@@ -734,6 +745,14 @@
               "context_engine_action_prepare_definer"
             ],
             "using": "true"
+          },
+          {
+            "name": "delivery_evidence_action_execute_definer_select",
+            "command": "SELECT",
+            "roles": [
+              "context_engine_action_execute_definer"
+            ],
+            "using": "true"
           }
         ]
       },
@@ -767,6 +786,9 @@
           "DELETE"
         ],
         "context_engine_action_prepare_definer": [
+          "SELECT"
+        ],
+        "context_engine_action_execute_definer": [
           "SELECT"
         ],
         "context_engine_control": [],
@@ -1089,6 +1111,14 @@
               "context_engine_action_prepare_definer"
             ],
             "using": "true"
+          },
+          {
+            "name": "context_source_action_execute_definer_select",
+            "command": "SELECT",
+            "roles": [
+              "context_engine_action_execute_definer"
+            ],
+            "using": "true"
           }
         ]
       },
@@ -1111,6 +1141,9 @@
           "UPDATE"
         ],
         "context_engine_action_prepare_definer": [
+          "SELECT"
+        ],
+        "context_engine_action_execute_definer": [
           "SELECT"
         ]
       },
@@ -1235,6 +1268,14 @@
               "context_engine_action_prepare_definer"
             ],
             "using": "true"
+          },
+          {
+            "name": "source_version_action_execute_definer_select",
+            "command": "SELECT",
+            "roles": [
+              "context_engine_action_execute_definer"
+            ],
+            "using": "true"
           }
         ]
       },
@@ -1261,6 +1302,9 @@
           "INSERT"
         ],
         "context_engine_action_prepare_definer": [
+          "SELECT"
+        ],
+        "context_engine_action_execute_definer": [
           "SELECT"
         ]
       },
@@ -1667,6 +1711,14 @@
               "context_engine_action_prepare_definer"
             ],
             "using": "true"
+          },
+          {
+            "name": "organization_policy_epoch_action_execute_definer_select",
+            "command": "SELECT",
+            "roles": [
+              "context_engine_action_execute_definer"
+            ],
+            "using": "true"
           }
         ]
       },
@@ -1687,6 +1739,9 @@
           "SELECT"
         ],
         "context_engine_action_prepare_definer": [
+          "SELECT"
+        ],
+        "context_engine_action_execute_definer": [
           "SELECT"
         ],
         "context_engine_runtime": [
@@ -2709,7 +2764,8 @@
         "policies": [
           {"name": "action_delivery_attempt_migrator_administration", "command": "ALL", "roles": ["context_engine_migrator"], "using": "true", "withCheck": "true"},
           {"name": "action_delivery_attempt_action_prepare_definer_select", "command": "SELECT", "roles": ["context_engine_action_prepare_definer"], "using": "true"},
-          {"name": "action_delivery_attempt_action_prepare_definer_insert", "command": "INSERT", "roles": ["context_engine_action_prepare_definer"], "withCheck": "true"}
+          {"name": "action_delivery_attempt_action_prepare_definer_insert", "command": "INSERT", "roles": ["context_engine_action_prepare_definer"], "withCheck": "true"},
+          {"name": "action_delivery_attempt_action_execute_definer_select", "command": "SELECT", "roles": ["context_engine_action_execute_definer"], "using": "true"}
         ]
       },
       "functionOnlyMutation": {
@@ -2722,17 +2778,18 @@
       "permittedOperations": {
         "context_engine_action": ["EXECUTE context_action_prepare_private_effect"],
         "context_engine_action_prepare_definer": ["SELECT", "INSERT"],
+        "context_engine_action_execute_definer": ["SELECT"],
         "context_engine_control": [], "context_engine_identity": [], "context_engine_egress": [], "context_engine_runtime": [], "context_engine_worker": [], "context_engine_learning": [], "context_engine_security_operator": []
       },
       "partitions": [],
-      "securityInvariantIds": ["TENANT-OWNERSHIP-001", "TENANT-FK-002", "RLS-FAIL-CLOSED-003", "REVOCATION-006", "NON-ENUMERATION-009", "TRACE-REDACTION-012", "ACTION-SEPARATION-014"],
+      "securityInvariantIds": ["TENANT-OWNERSHIP-001", "TENANT-FK-002", "RLS-FAIL-CLOSED-003", "REVOCATION-006", "NON-ENUMERATION-009", "EGRESS-011", "TRACE-REDACTION-012", "ACTION-SEPARATION-014"],
       "negativeTestIds": ["DB-001", "DB-002", "DB-004", "DB-008", "DB-009", "DB-010", "OBS-004", "OBS-005", "ACTION-001", "ACTION-004"]
     },
     {
       "name": "action_ticket",
       "classification": "tenant_owned",
       "nonOwnerEvidence": {"evidenceId": "PG-ACTION-PREPARE-067", "selector": {"table": "action_ticket"}},
-      "purpose": "Operation-specific one-shot ActionTicket state with exact payload, audience, approval, epoch, expiry, source, and idempotency bindings",
+      "purpose": "Operation-specific one-shot ActionTicket state with exact payload, audience, approval, epoch, expiry, source, idempotency, and digest-only bearer bindings",
       "organizationColumn": "organization_id",
       "organizationInclusiveKeys": [
         {"name": "pk_action_ticket", "kind": "primary_key", "columns": ["organization_id", "ticket_ref"]},
@@ -2751,17 +2808,20 @@
         {"name": "ck_action_ticket_operation_audience", "expression": "create_placeholder, finalize_reply, and send_private_followup each have one distinct closed ticket audience"},
         {"name": "ck_action_ticket_source_context_pair", "expression": "source and source-version context are both absent or both present"},
         {"name": "ck_action_ticket_profiles", "expression": "approval, prepare, state, and retention profiles are exact active versions"},
+        {"name": "ck_action_ticket_bearer_digest", "expression": "the optional consumed ActionTicket bearer binding is exactly one 32-byte digest"},
         {"name": "ck_action_ticket_positive_versions", "expression": "policy_epoch and signing_key_version are positive"},
         {"name": "ck_action_ticket_time_windows", "expression": "ticket lifetime is positive and at most five minutes with retained digest state after expiry"}
       ],
       "rowLevelSecurity": {"enabled": true, "forced": true, "policies": [
         {"name": "action_ticket_migrator_administration", "command": "ALL", "roles": ["context_engine_migrator"], "using": "true", "withCheck": "true"},
         {"name": "action_ticket_action_prepare_definer_select", "command": "SELECT", "roles": ["context_engine_action_prepare_definer"], "using": "true"},
-        {"name": "action_ticket_action_prepare_definer_insert", "command": "INSERT", "roles": ["context_engine_action_prepare_definer"], "withCheck": "true"}
+        {"name": "action_ticket_action_prepare_definer_insert", "command": "INSERT", "roles": ["context_engine_action_prepare_definer"], "withCheck": "true"},
+        {"name": "action_ticket_action_execute_definer_select", "command": "SELECT", "roles": ["context_engine_action_execute_definer"], "using": "true"},
+        {"name": "action_ticket_action_execute_definer_update", "command": "UPDATE", "roles": ["context_engine_action_execute_definer"], "using": "true", "withCheck": "true"}
       ]},
-      "functionOnlyMutation": {"databaseFunction": "context_action_prepare_private_effect", "role": "context_engine_action", "definerRole": "context_engine_action_prepare_definer", "directTableMutationAllowed": false},
-      "retention": {"class": "restricted_digest_audit", "bearerStored": false, "payloadStored": false, "policy": "action-digest-audit-retention-v1"},
-      "permittedOperations": {"context_engine_action": ["EXECUTE context_action_prepare_private_effect"], "context_engine_action_prepare_definer": ["SELECT", "INSERT"], "context_engine_control": [], "context_engine_identity": [], "context_engine_egress": [], "context_engine_runtime": [], "context_engine_worker": [], "context_engine_learning": [], "context_engine_security_operator": []},
+      "functionOnlyMutation": {"databaseFunctions": ["context_action_prepare_private_effect", "context_action_begin_private_effect", "context_action_complete_private_effect", "context_action_reconcile_private_effect"], "role": "context_engine_action", "definerRoles": ["context_engine_action_prepare_definer", "context_engine_action_execute_definer"], "directTableMutationAllowed": false},
+      "retention": {"class": "restricted_digest_audit", "bearerStored": false, "bearerDigestStored": true, "payloadStored": false, "policy": "action-digest-audit-retention-v1"},
+      "permittedOperations": {"context_engine_action": ["EXECUTE context_action_prepare_private_effect", "EXECUTE context_action_begin_private_effect", "EXECUTE context_action_complete_private_effect", "EXECUTE context_action_reconcile_private_effect"], "context_engine_action_prepare_definer": ["SELECT", "INSERT"], "context_engine_action_execute_definer": ["SELECT", "UPDATE"], "context_engine_control": [], "context_engine_identity": [], "context_engine_egress": [], "context_engine_runtime": [], "context_engine_worker": [], "context_engine_learning": [], "context_engine_security_operator": []},
       "partitions": [],
       "securityInvariantIds": ["TENANT-OWNERSHIP-001", "TENANT-FK-002", "RLS-FAIL-CLOSED-003", "REVOCATION-006", "NON-ENUMERATION-009", "TRACE-REDACTION-012", "ACTION-SEPARATION-014"],
       "negativeTestIds": ["DB-001", "DB-002", "DB-004", "DB-008", "DB-009", "DB-010", "OBS-004", "OBS-005", "ACTION-001", "ACTION-004"]
@@ -2787,8 +2847,121 @@
       "retention": {"class": "restricted_digest_audit", "bearerStored": false, "payloadStored": false, "deniedContentStored": false, "policy": "action-digest-audit-retention-v1"},
       "permittedOperations": {"context_engine_action": ["EXECUTE context_action_prepare_private_effect"], "context_engine_action_prepare_definer": ["INSERT"], "context_engine_control": [], "context_engine_identity": [], "context_engine_egress": [], "context_engine_runtime": [], "context_engine_worker": [], "context_engine_learning": [], "context_engine_security_operator": []},
       "partitions": [],
-      "securityInvariantIds": ["TENANT-OWNERSHIP-001", "TENANT-FK-002", "RLS-FAIL-CLOSED-003", "NON-ENUMERATION-009", "TRACE-REDACTION-012", "ACTION-SEPARATION-014"],
+      "securityInvariantIds": ["TENANT-OWNERSHIP-001", "TENANT-FK-002", "RLS-FAIL-CLOSED-003", "NON-ENUMERATION-009", "EGRESS-011", "TRACE-REDACTION-012", "ACTION-SEPARATION-014"],
       "negativeTestIds": ["DB-001", "DB-002", "DB-004", "DB-008", "DB-009", "DB-010", "OBS-004", "OBS-005", "ACTION-001", "ACTION-004"]
+    },
+    {
+      "name": "action_provider_attempt",
+      "classification": "tenant_owned",
+      "nonOwnerEvidence": {"evidenceId": "PG-ACTION-PERFORM-068", "selector": {"table": "action_provider_attempt"}},
+      "purpose": "One immutable provider-attempt identity with monotonic execution state and digest-only effect lineage",
+      "organizationColumn": "organization_id",
+      "organizationInclusiveKeys": [
+        {"name": "pk_action_provider_attempt", "kind": "primary_key", "columns": ["organization_id", "provider_attempt_ref"]},
+        {"name": "uq_action_provider_attempt_ticket", "kind": "unique", "columns": ["organization_id", "ticket_ref"]}
+      ],
+      "capabilityUniqueKeys": [{"name": "uq_action_provider_attempt_ref_global", "kind": "unique", "columns": ["provider_attempt_ref"], "rationale": "one opaque provider-attempt reference belongs to exactly one Organization and ActionTicket"}],
+      "foreignKeys": [
+        {"name": "fk_action_provider_attempt_ticket", "columns": ["organization_id", "ticket_ref"], "references": {"table": "action_ticket", "columns": ["organization_id", "ticket_ref"]}, "onDelete": "RESTRICT"},
+        {"name": "fk_action_provider_attempt_delivery_attempt", "columns": ["organization_id", "delivery_attempt_ref"], "references": {"table": "action_delivery_attempt", "columns": ["organization_id", "delivery_attempt_ref"]}, "onDelete": "RESTRICT"}
+      ],
+      "checkConstraints": [
+        {"name": "ck_action_provider_attempt_ref", "expression": "provider_attempt_ref is one bounded pat_ opaque reference"},
+        {"name": "ck_action_provider_attempt_digests", "expression": "destination, audience, payload, idempotency, and optional provider-effect values are 32-byte digests"},
+        {"name": "ck_action_provider_attempt_state", "expression": "in_flight and ambiguous are nonterminal; applied and rejected are monotonic terminal states"},
+        {"name": "ck_action_provider_attempt_retention", "expression": "the exact action digest retention profile outlives attempt creation"}
+      ],
+      "rowLevelSecurity": {"enabled": true, "forced": true, "policies": [
+        {"name": "action_provider_attempt_migrator_administration", "command": "ALL", "roles": ["context_engine_migrator"], "using": "true", "withCheck": "true"},
+        {"name": "action_provider_attempt_action_execute_definer_select", "command": "SELECT", "roles": ["context_engine_action_execute_definer"], "using": "true"},
+        {"name": "action_provider_attempt_action_execute_definer_insert", "command": "INSERT", "roles": ["context_engine_action_execute_definer"], "withCheck": "true"},
+        {"name": "action_provider_attempt_action_execute_definer_update", "command": "UPDATE", "roles": ["context_engine_action_execute_definer"], "using": "true", "withCheck": "true"}
+      ]},
+      "functionOnlyMutation": {"databaseFunctions": ["context_action_begin_private_effect", "context_action_complete_private_effect", "context_action_reconcile_private_effect"], "role": "context_engine_action", "definerRole": "context_engine_action_execute_definer", "directTableMutationAllowed": false},
+      "retention": {"class": "restricted_digest_audit", "bearerStored": false, "payloadStored": false, "policy": "action-digest-audit-retention-v1"},
+      "permittedOperations": {"context_engine_action": ["EXECUTE context_action_begin_private_effect", "EXECUTE context_action_complete_private_effect", "EXECUTE context_action_reconcile_private_effect"], "context_engine_action_execute_definer": ["SELECT", "INSERT", "UPDATE"], "context_engine_control": [], "context_engine_identity": [], "context_engine_egress": [], "context_engine_runtime": [], "context_engine_worker": [], "context_engine_learning": [], "context_engine_security_operator": []},
+      "partitions": [],
+      "securityInvariantIds": ["TENANT-OWNERSHIP-001", "TENANT-FK-002", "RLS-FAIL-CLOSED-003", "REVOCATION-006", "NON-ENUMERATION-009", "EGRESS-011", "TRACE-REDACTION-012", "ACTION-SEPARATION-014"],
+      "negativeTestIds": ["DB-001", "DB-002", "DB-004", "DB-008", "DB-009", "DB-010", "OBS-004", "OBS-005", "ACTION-001", "ACTION-004", "ACTION-005"]
+    },
+    {
+      "name": "action_receipt",
+      "classification": "tenant_owned",
+      "nonOwnerEvidence": {"evidenceId": "PG-ACTION-PERFORM-068", "selector": {"table": "action_receipt"}},
+      "purpose": "Immutable stored receipt replay for one applied provider attempt without payload or bearer retention",
+      "organizationColumn": "organization_id",
+      "organizationInclusiveKeys": [
+        {"name": "pk_action_receipt", "kind": "primary_key", "columns": ["organization_id", "receipt_ref"]},
+        {"name": "uq_action_receipt_provider_attempt", "kind": "unique", "columns": ["organization_id", "provider_attempt_ref"]}
+      ],
+      "capabilityUniqueKeys": [{"name": "uq_action_receipt_ref_global", "kind": "unique", "columns": ["receipt_ref"], "rationale": "one opaque receipt reference names one Organization-owned applied effect"}],
+      "foreignKeys": [{"name": "fk_action_receipt_provider_attempt", "columns": ["organization_id", "provider_attempt_ref"], "references": {"table": "action_provider_attempt", "columns": ["organization_id", "provider_attempt_ref"]}, "onDelete": "RESTRICT"}],
+      "checkConstraints": [
+        {"name": "ck_action_receipt_ref", "expression": "receipt_ref is one bounded acr_ opaque reference"},
+        {"name": "ck_action_receipt_digests", "expression": "destination, audience, payload, idempotency, and provider-effect values are 32-byte digests"},
+        {"name": "ck_action_receipt_retention", "expression": "applied_at is not after recorded_at and the exact retention profile outlives recording"}
+      ],
+      "rowLevelSecurity": {"enabled": true, "forced": true, "policies": [
+        {"name": "action_receipt_migrator_administration", "command": "ALL", "roles": ["context_engine_migrator"], "using": "true", "withCheck": "true"},
+        {"name": "action_receipt_action_execute_definer_select", "command": "SELECT", "roles": ["context_engine_action_execute_definer"], "using": "true"},
+        {"name": "action_receipt_action_execute_definer_insert", "command": "INSERT", "roles": ["context_engine_action_execute_definer"], "withCheck": "true"}
+      ]},
+      "functionOnlyMutation": {"databaseFunctions": ["context_action_complete_private_effect", "context_action_reconcile_private_effect"], "role": "context_engine_action", "definerRole": "context_engine_action_execute_definer", "directTableMutationAllowed": false},
+      "retention": {"class": "restricted_digest_audit", "bearerStored": false, "payloadStored": false, "immutable": true, "policy": "action-digest-audit-retention-v1"},
+      "permittedOperations": {"context_engine_action": ["EXECUTE context_action_complete_private_effect", "EXECUTE context_action_reconcile_private_effect"], "context_engine_action_execute_definer": ["SELECT", "INSERT"], "context_engine_control": [], "context_engine_identity": [], "context_engine_egress": [], "context_engine_runtime": [], "context_engine_worker": [], "context_engine_learning": [], "context_engine_security_operator": []},
+      "partitions": [],
+      "securityInvariantIds": ["TENANT-OWNERSHIP-001", "TENANT-FK-002", "RLS-FAIL-CLOSED-003", "NON-ENUMERATION-009", "EGRESS-011", "TRACE-REDACTION-012", "ACTION-SEPARATION-014"],
+      "negativeTestIds": ["DB-001", "DB-002", "DB-004", "DB-008", "DB-009", "DB-010", "OBS-004", "OBS-005", "ACTION-004"]
+    },
+    {
+      "name": "action_reconciliation",
+      "classification": "tenant_owned",
+      "nonOwnerEvidence": {"evidenceId": "PG-ACTION-PERFORM-068", "selector": {"table": "action_reconciliation"}},
+      "purpose": "Monotonic pending-to-terminal reconciliation under the original provider-attempt identity",
+      "organizationColumn": "organization_id",
+      "organizationInclusiveKeys": [{"name": "pk_action_reconciliation", "kind": "primary_key", "columns": ["organization_id", "provider_attempt_ref"]}],
+      "foreignKeys": [{"name": "fk_action_reconciliation_provider_attempt", "columns": ["organization_id", "provider_attempt_ref"], "references": {"table": "action_provider_attempt", "columns": ["organization_id", "provider_attempt_ref"]}, "onDelete": "RESTRICT"}],
+      "checkConstraints": [
+        {"name": "ck_action_reconciliation_state", "expression": "pending has no terminal decision; applied and rejected have one digest and time"},
+        {"name": "ck_action_reconciliation_digest", "expression": "the optional decision digest is exactly 32 bytes"},
+        {"name": "ck_action_reconciliation_retention", "expression": "the exact retention profile outlives creation"}
+      ],
+      "rowLevelSecurity": {"enabled": true, "forced": true, "policies": [
+        {"name": "action_reconciliation_migrator_administration", "command": "ALL", "roles": ["context_engine_migrator"], "using": "true", "withCheck": "true"},
+        {"name": "action_reconciliation_action_execute_definer_select", "command": "SELECT", "roles": ["context_engine_action_execute_definer"], "using": "true"},
+        {"name": "action_reconciliation_action_execute_definer_insert", "command": "INSERT", "roles": ["context_engine_action_execute_definer"], "withCheck": "true"},
+        {"name": "action_reconciliation_action_execute_definer_update", "command": "UPDATE", "roles": ["context_engine_action_execute_definer"], "using": "true", "withCheck": "true"}
+      ]},
+      "functionOnlyMutation": {"databaseFunction": "context_action_reconcile_private_effect", "role": "context_engine_action", "definerRole": "context_engine_action_execute_definer", "directTableMutationAllowed": false},
+      "retention": {"class": "restricted_digest_audit", "bearerStored": false, "payloadStored": false, "policy": "action-digest-audit-retention-v1"},
+      "permittedOperations": {"context_engine_action": ["EXECUTE context_action_reconcile_private_effect"], "context_engine_action_execute_definer": ["SELECT", "INSERT", "UPDATE"], "context_engine_control": [], "context_engine_identity": [], "context_engine_egress": [], "context_engine_runtime": [], "context_engine_worker": [], "context_engine_learning": [], "context_engine_security_operator": []},
+      "partitions": [],
+      "securityInvariantIds": ["TENANT-OWNERSHIP-001", "TENANT-FK-002", "RLS-FAIL-CLOSED-003", "NON-ENUMERATION-009", "EGRESS-011", "TRACE-REDACTION-012", "ACTION-SEPARATION-014"],
+      "negativeTestIds": ["DB-001", "DB-002", "DB-004", "DB-008", "DB-009", "DB-010", "OBS-004", "OBS-005", "ACTION-005"]
+    },
+    {
+      "name": "action_perform_audit",
+      "classification": "tenant_owned",
+      "nonOwnerEvidence": {"evidenceId": "PG-ACTION-PERFORM-068", "selector": {"table": "action_perform_audit"}},
+      "purpose": "Restricted digest-only perform and reconciliation decisions without payload or denied detail",
+      "organizationColumn": "organization_id",
+      "organizationInclusiveKeys": [{"name": "pk_action_perform_audit", "kind": "primary_key", "columns": ["organization_id", "audit_id"]}],
+      "foreignKeys": [{"name": "fk_action_perform_audit_organization", "columns": ["organization_id"], "references": {"table": "organization", "columns": ["organization_id"]}, "onDelete": "RESTRICT"}],
+      "checkConstraints": [
+        {"name": "ck_action_perform_audit_decision_digest", "expression": "decision_digest is 32-byte SHA-256"},
+        {"name": "ck_action_perform_audit_category", "expression": "category is one closed perform or reconciliation decision"},
+        {"name": "ck_action_perform_audit_retention", "expression": "the exact retention profile outlives recording"}
+      ],
+      "rowLevelSecurity": {"enabled": true, "forced": true, "policies": [
+        {"name": "action_perform_audit_migrator_administration", "command": "ALL", "roles": ["context_engine_migrator"], "using": "true", "withCheck": "true"},
+        {"name": "action_perform_audit_action_execute_definer_insert", "command": "INSERT", "roles": ["context_engine_action_execute_definer"], "withCheck": "true"}
+      ]},
+      "functionOnlyMutation": {"databaseFunctions": ["context_action_begin_private_effect", "context_action_complete_private_effect", "context_action_reconcile_private_effect"], "role": "context_engine_action", "definerRole": "context_engine_action_execute_definer", "directTableMutationAllowed": false},
+      "retention": {"class": "restricted_digest_audit", "bearerStored": false, "payloadStored": false, "deniedContentStored": false, "policy": "action-digest-audit-retention-v1"},
+      "permittedOperations": {"context_engine_action": ["EXECUTE context_action_begin_private_effect", "EXECUTE context_action_complete_private_effect", "EXECUTE context_action_reconcile_private_effect"], "context_engine_action_execute_definer": ["INSERT"], "context_engine_control": [], "context_engine_identity": [], "context_engine_egress": [], "context_engine_runtime": [], "context_engine_worker": [], "context_engine_learning": [], "context_engine_security_operator": []},
+      "partitions": [],
+      "securityInvariantIds": ["TENANT-OWNERSHIP-001", "TENANT-FK-002", "RLS-FAIL-CLOSED-003", "NON-ENUMERATION-009", "EGRESS-011", "TRACE-REDACTION-012", "ACTION-SEPARATION-014"],
+      "negativeTestIds": ["DB-001", "DB-002", "DB-004", "DB-008", "DB-009", "DB-010", "OBS-004", "OBS-005", "ACTION-004"]
     },
     {
       "name": "service_principal",

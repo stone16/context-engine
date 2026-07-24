@@ -18,6 +18,7 @@ from engine.persistence import (
 )
 from engine.persistence.configuration import (
     ACCESS_POLICY_DEFINER_ROLE,
+    ACTION_EXECUTE_DEFINER_ROLE,
     ACTION_PREPARE_DEFINER_ROLE,
     ACTION_ROLE,
     CONTEXT_RUN_READER_DEFINER_ROLE,
@@ -183,6 +184,7 @@ def test_post_init_role_provisioning_repairs_a_legacy_volume_idempotently(
         delivery_evidence_definer_role=DELIVERY_EVIDENCE_DEFINER_ROLE,
         egress_grant_definer_role=EGRESS_GRANT_DEFINER_ROLE,
         action_prepare_definer_role=ACTION_PREPARE_DEFINER_ROLE,
+        action_execute_definer_role=ACTION_EXECUTE_DEFINER_ROLE,
     )
     alembic_configuration = Config(ROOT / "alembic.ini")
     try:
@@ -215,6 +217,7 @@ def test_post_init_role_provisioning_repairs_a_legacy_volume_idempotently(
                 DELIVERY_EVIDENCE_DEFINER_ROLE,
                 EGRESS_GRANT_DEFINER_ROLE,
                 ACTION_PREPARE_DEFINER_ROLE,
+                ACTION_EXECUTE_DEFINER_ROLE,
                 RELEASE_DEFINER_ROLE,
                 CONTROL_ROLE,
                 IDENTITY_ROLE,
@@ -231,7 +234,7 @@ def test_post_init_role_provisioning_repairs_a_legacy_volume_idempotently(
                 SELECT count(*)
                 FROM pg_roles
                 WHERE rolname IN (
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                 )
                 """,
                 (
@@ -248,6 +251,7 @@ def test_post_init_role_provisioning_repairs_a_legacy_volume_idempotently(
                     EGRESS_GRANT_DEFINER_ROLE,
                     ACTION_ROLE,
                     ACTION_PREPARE_DEFINER_ROLE,
+                    ACTION_EXECUTE_DEFINER_ROLE,
                 ),
             ).fetchone()
             assert missing_roles == (0,)

@@ -278,7 +278,7 @@ def test_repeated_canonically_identical_file_import_is_an_auditable_noop(
             connection.execute(
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one()
-            == "20260723_0022"
+            == "20260724_0023"
         )
 
 

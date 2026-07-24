@@ -1,14 +1,17 @@
 # ContextEngine ActionPlane
 
-This private TypeScript module owns the trusted `ActionPlane.prepare` boundary
-for one private delivery effect. It accepts only module-created
-`TrustedEffectIntent` values, revalidates exact authority through the dedicated
-PostgreSQL action login, and returns a closed zero-effect outcome or one
-operation-specific `ActionTicket`.
+This private TypeScript module owns the trusted `ActionPlane.prepare` and
+`ActionPlane.perform` boundaries for one private delivery effect. Prepare
+accepts only module-created `TrustedEffectIntent` values and returns one
+operation-specific `ActionTicket`. Perform redeems that exact ticket and
+canonical payload through a dedicated PostgreSQL action login before invoking
+the deterministic private Sender twin at most once.
 
-`perform`, Sender/provider access, group delivery, and external effects are not
-part of this package revision and remain inactive.
+Applied effects retain a digest-only immutable receipt for zero-effect replay.
+Ambiguous outcomes retain the original provider-attempt identity until a
+trusted reconciliation records one monotonic terminal result. Real Sender
+network access, group delivery, and external effects remain inactive.
 
 Run `npm test` for the contract, type, and runtime checks. Real PostgreSQL
-prepare/RLS/idempotency evidence is exercised by the repository integration
-suite.
+prepare/perform/RLS/idempotency/reconciliation evidence is exercised by the
+repository integration suite.

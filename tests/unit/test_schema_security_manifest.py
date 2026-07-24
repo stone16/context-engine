@@ -32,11 +32,15 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
     document = manifest()
     tables = table_entries(document)
 
-    assert document["manifestVersion"] == "21.0.0"
+    assert document["manifestVersion"] == "22.0.0"
     assert set(tables) == {
         "active_release_manifest",
         "action_delivery_attempt",
+        "action_perform_audit",
         "action_prepare_audit",
+        "action_provider_attempt",
+        "action_receipt",
+        "action_reconciliation",
         "action_ticket",
         "alembic_version",
         "context_fragment",
@@ -104,6 +108,10 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
     assert tables["action_delivery_attempt"]["classification"] == "tenant_owned"
     assert tables["action_ticket"]["classification"] == "tenant_owned"
     assert tables["action_prepare_audit"]["classification"] == "tenant_owned"
+    assert tables["action_provider_attempt"]["classification"] == "tenant_owned"
+    assert tables["action_receipt"]["classification"] == "tenant_owned"
+    assert tables["action_reconciliation"]["classification"] == "tenant_owned"
+    assert tables["action_perform_audit"]["classification"] == "tenant_owned"
     assert tables["egress_grant"]["classification"] == "tenant_owned"
     assert tables["egress_audit"]["classification"] == "tenant_owned"
     assert tables["service_principal"]["classification"] == "tenant_owned"
@@ -117,9 +125,35 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
     assert tables["action_ticket"]["permittedOperations"][
         "context_engine_action_prepare_definer"
     ] == ["SELECT", "INSERT"]
+    action_ticket_constraints = {
+        constraint["name"]
+        for constraint in tables["action_ticket"]["checkConstraints"]
+    }
+    assert "ck_action_ticket_bearer_digest" in action_ticket_constraints
+    assert tables["action_ticket"]["retention"]["bearerStored"] is False
+    assert tables["action_ticket"]["retention"]["bearerDigestStored"] is True
     assert tables["action_prepare_audit"]["permittedOperations"][
         "context_engine_action_prepare_definer"
     ] == ["INSERT"]
+    assert tables["action_provider_attempt"]["permittedOperations"][
+        "context_engine_action_execute_definer"
+    ] == ["SELECT", "INSERT", "UPDATE"]
+    assert tables["action_receipt"]["permittedOperations"][
+        "context_engine_action_execute_definer"
+    ] == ["SELECT", "INSERT"]
+    assert tables["action_reconciliation"]["permittedOperations"][
+        "context_engine_action_execute_definer"
+    ] == ["SELECT", "INSERT", "UPDATE"]
+    assert tables["action_perform_audit"]["permittedOperations"][
+        "context_engine_action_execute_definer"
+    ] == ["INSERT"]
+    for action_perform_table in (
+        "action_provider_attempt",
+        "action_receipt",
+        "action_reconciliation",
+        "action_perform_audit",
+    ):
+        assert "EGRESS-011" in tables[action_perform_table]["securityInvariantIds"]
     for file_import_table in (
         "exact_phrase_candidate",
         "file_acquisition",
@@ -677,6 +711,7 @@ def test_issue_21_file_source_manifest_is_closed_and_role_separated() -> None:
         "context_engine_worker": [],
         "context_engine_worker_lease_definer": ["SELECT", "UPDATE"],
         "context_engine_action_prepare_definer": ["SELECT"],
+        "context_engine_action_execute_definer": ["SELECT"],
     }
     assert version["permittedOperations"] == {
         "context_engine_control": ["SELECT", "INSERT"],
@@ -686,6 +721,7 @@ def test_issue_21_file_source_manifest_is_closed_and_role_separated() -> None:
         "context_engine_worker": [],
         "context_engine_worker_lease_definer": ["SELECT", "INSERT"],
         "context_engine_action_prepare_definer": ["SELECT"],
+        "context_engine_action_execute_definer": ["SELECT"],
     }
     for entry in (source, version):
         assert entry["rowLevelSecurity"]["enabled"] is True
@@ -1208,6 +1244,7 @@ def test_membership_manifest_requires_exact_user_actor_and_read_only_runtime() -
         "context_engine_delivery_evidence_definer": ["SELECT"],
         "context_engine_egress_grant_definer": ["SELECT"],
         "context_engine_action_prepare_definer": ["SELECT"],
+        "context_engine_action_execute_definer": ["SELECT"],
     }
 
     rls = entry["rowLevelSecurity"]
@@ -1767,6 +1804,7 @@ def test_policy_epoch_manifest_seals_runtime_reads_and_control_mutation() -> Non
             expected_operations["context_engine_delivery_evidence_definer"] = ["SELECT"]
             expected_operations["context_engine_egress_grant_definer"] = ["SELECT"]
             expected_operations["context_engine_action_prepare_definer"] = ["SELECT"]
+            expected_operations["context_engine_action_execute_definer"] = ["SELECT"]
             expected_operations["context_engine_control"].append(
                 "EXECUTE context_control_tombstone_file_resource"
             )

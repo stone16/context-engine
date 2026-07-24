@@ -30,7 +30,33 @@ const SHA256_HEX = /^[0-9a-f]{64}$/;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const DELIVERY_ATTEMPT_PATTERN = /^dla_[0-9a-f]{32}$/;
 const TICKET_REF_PATTERN = /^act_[0-9a-f]{32}$/;
+const PROVIDER_ATTEMPT_PATTERN = /^pat_[0-9a-f]{32}$/;
+const RECEIPT_REF_PATTERN = /^acr_[0-9a-f]{32}$/;
 const ticketConstructionAuthority = Object.freeze({});
+const trustedTickets = new WeakSet<object>();
+const ACTION_TICKET_HEADER_KEYS = ["alg", "domain", "keyVersion", "typ"] as const;
+const ACTION_TICKET_CLAIM_KEYS = [
+  "approvalTier",
+  "audience",
+  "audienceDigest",
+  "deliveryAttemptRef",
+  "destinationDigest",
+  "expiresAt",
+  "idempotencyDigest",
+  "identityDigest",
+  "issuedAt",
+  "operation",
+  "organizationId",
+  "payloadDigest",
+  "policyEpoch",
+  "profileRef",
+  "purposeDigest",
+  "serviceDigest",
+  "signingKeyVersion",
+  "sourceContextDigest",
+  "ticketRef",
+  "type",
+] as const;
 
 const OPERATION_CONTRACT = {
   create_placeholder: {
@@ -86,6 +112,33 @@ function requireDate(name: string, value: unknown): Date {
     throw new TypeError(`${name} must be a valid Date`);
   }
   return value;
+}
+
+function requireCanonicalDateString(name: string, value: unknown): string {
+  if (typeof value !== "string") {
+    throw new TypeError(`${name} must be one canonical timestamp`);
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime()) || parsed.toISOString() !== value) {
+    throw new TypeError(`${name} must be one canonical timestamp`);
+  }
+  return value;
+}
+
+function requireExactKeys(
+  name: string,
+  value: unknown,
+  expected: readonly string[],
+): Readonly<Record<string, unknown>> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new TypeError(`${name} must be one closed object`);
+  }
+  const observed = Object.keys(value).sort();
+  const required = [...expected].sort();
+  if (observed.length !== required.length || observed.some((key, index) => key !== required[index])) {
+    throw new TypeError(`${name} has an invalid field set`);
+  }
+  return value as Readonly<Record<string, unknown>>;
 }
 
 function canonicalJson(value: JsonValue | Record<string, unknown>): Buffer {
@@ -388,6 +441,8 @@ abstract class RedactedTicket {
 
   protected constructor(serialized: string) {
     this.#serialized = serialized;
+    trustedTickets.add(this);
+    Object.freeze(this);
   }
 
   serialize(): string {
@@ -501,7 +556,7 @@ function mintTicket(claims: TicketClaims, keyring: ActionTicketKeyring): ActionT
 }
 
 function parseTicket(ticket: ActionTicket, keyring: ActionTicketKeyring): TicketClaims {
-  if (!(ticket instanceof RedactedTicket)) {
+  if (!(ticket instanceof RedactedTicket) || !trustedTickets.has(ticket)) {
     throw new TypeError("ActionTicket has invalid nominal type");
   }
   const segments = ticket.serialize().split(".");
@@ -512,11 +567,29 @@ function parseTicket(ticket: ActionTicket, keyring: ActionTicketKeyring): Ticket
   if (encodedHeader === undefined || encodedClaims === undefined || encodedSignature === undefined) {
     throw new TypeError("ActionTicket is malformed");
   }
-  const header = JSON.parse(Buffer.from(encodedHeader, "base64url").toString("utf8")) as {
-    keyVersion?: unknown;
-    typ?: unknown;
-  };
+  if (
+    !/^[A-Za-z0-9_-]+$/u.test(encodedHeader)
+    || !/^[A-Za-z0-9_-]+$/u.test(encodedClaims)
+    || !/^[A-Za-z0-9_-]{43}$/u.test(encodedSignature)
+  ) {
+    throw new TypeError("ActionTicket encoding is not canonical base64url");
+  }
+  const parsedHeader: unknown = JSON.parse(
+    Buffer.from(encodedHeader, "base64url").toString("utf8"),
+  );
+  const header = requireExactKeys(
+    "ActionTicket header",
+    parsedHeader,
+    ACTION_TICKET_HEADER_KEYS,
+  );
   const version = requirePositiveInteger("ticket key version", header.keyVersion);
+  if (
+    header.alg !== "HS256"
+    || header.domain !== ACTION_TICKET_DOMAIN.toString("utf8").replace(/\0$/u, "")
+    || base64url(canonicalJson(header)) !== encodedHeader
+  ) {
+    throw new TypeError("ActionTicket header binding is invalid");
+  }
   const state = keyringState(keyring);
   const key = state.keys.get(version);
   if (key === undefined) {
@@ -527,18 +600,86 @@ function parseTicket(ticket: ActionTicket, keyring: ActionTicketKeyring): Ticket
     .update(`${encodedHeader}.${encodedClaims}`, "ascii")
     .digest();
   const observed = Buffer.from(encodedSignature, "base64url");
-  if (observed.byteLength !== expected.byteLength || !timingSafeEqual(observed, expected)) {
+  if (
+    base64url(observed) !== encodedSignature
+    || observed.byteLength !== expected.byteLength
+    || !timingSafeEqual(observed, expected)
+  ) {
     throw new TypeError("ActionTicket is not available");
   }
-  const claims = JSON.parse(Buffer.from(encodedClaims, "base64url").toString("utf8")) as TicketClaims;
-  const operationContract = OPERATION_CONTRACT[claims.operation];
+  const parsedClaims: unknown = JSON.parse(
+    Buffer.from(encodedClaims, "base64url").toString("utf8"),
+  );
+  const rawClaims = requireExactKeys(
+    "ActionTicket claims",
+    parsedClaims,
+    ACTION_TICKET_CLAIM_KEYS,
+  );
+  if (base64url(canonicalJson(rawClaims)) !== encodedClaims) {
+    throw new TypeError("ActionTicket claims are not canonical");
+  }
+  const operation = rawClaims.operation;
+  if (typeof operation !== "string" || !(operation in OPERATION_CONTRACT)) {
+    throw new TypeError("ActionTicket operation binding is invalid");
+  }
+  const operationContract = OPERATION_CONTRACT[operation as ActionOperation];
+  const issuedAt = requireCanonicalDateString("ticket issued-at", rawClaims.issuedAt);
+  const expiresAt = requireCanonicalDateString("ticket expiry", rawClaims.expiresAt);
+  const sourceContextDigest = rawClaims.sourceContextDigest === null
+    ? null
+    : requireSha256("ticket source-context digest", rawClaims.sourceContextDigest);
+  const claims: TicketClaims = Object.freeze({
+    approvalTier: requireRef("ticket approval tier", rawClaims.approvalTier),
+    audience: requireRef("ticket audience", rawClaims.audience),
+    audienceDigest: requireSha256("ticket audience digest", rawClaims.audienceDigest),
+    deliveryAttemptRef: requireRef("ticket DeliveryAttemptRef", rawClaims.deliveryAttemptRef),
+    destinationDigest: requireSha256(
+      "ticket destination digest",
+      rawClaims.destinationDigest,
+    ),
+    expiresAt,
+    idempotencyDigest: requireSha256(
+      "ticket idempotency digest",
+      rawClaims.idempotencyDigest,
+    ),
+    identityDigest: requireSha256("ticket identity digest", rawClaims.identityDigest),
+    issuedAt,
+    operation: operation as ActionOperation,
+    organizationId: requireUuid("ticket Organization", rawClaims.organizationId),
+    payloadDigest: requireSha256("ticket payload digest", rawClaims.payloadDigest),
+    policyEpoch: requirePositiveInteger("ticket Policy Epoch", rawClaims.policyEpoch),
+    profileRef: requireRef("ticket profile", rawClaims.profileRef),
+    purposeDigest: requireSha256("ticket purpose digest", rawClaims.purposeDigest),
+    serviceDigest: requireSha256("ticket service digest", rawClaims.serviceDigest),
+    signingKeyVersion: requirePositiveInteger(
+      "ticket signing key version",
+      rawClaims.signingKeyVersion,
+    ),
+    sourceContextDigest,
+    ticketRef: requireRef("ActionTicket ref", rawClaims.ticketRef),
+    type: requireRef("ticket type", rawClaims.type),
+  });
   if (
-    operationContract === undefined
-    || claims.type !== operationContract.type
+    claims.type !== operationContract.type
     || header.typ !== operationContract.type
     || claims.audience !== operationContract.audience
+    || claims.signingKeyVersion !== version
+    || !DELIVERY_ATTEMPT_PATTERN.test(claims.deliveryAttemptRef)
+    || !TICKET_REF_PATTERN.test(claims.ticketRef)
+    || new Date(claims.expiresAt) <= new Date(claims.issuedAt)
   ) {
     throw new TypeError("ActionTicket operation binding is invalid");
+  }
+  const nominallyMatches = (
+    (claims.operation === "create_placeholder" && ticket instanceof CreatePlaceholderActionTicket)
+    || (claims.operation === "finalize_reply" && ticket instanceof FinalizeReplyActionTicket)
+    || (
+      claims.operation === "send_private_followup"
+      && ticket instanceof SendPrivateFollowupActionTicket
+    )
+  );
+  if (!nominallyMatches) {
+    throw new TypeError("ActionTicket nominal operation binding is invalid");
   }
   return claims;
 }
@@ -710,13 +851,310 @@ interface ActionPlaneOptions {
   readonly database: ActionPrepareDatabase;
   readonly keyring: ActionTicketKeyring;
   readonly profile: PrivateActionPrepareProfile;
+  readonly providerAttemptRefFactory?: () => string;
+  readonly receiptRefFactory?: () => string;
+  readonly sender?: DeterministicPrivateSenderTwin;
   readonly ticketRefFactory?: () => string;
+}
+
+interface SenderEffect {
+  readonly destinationRef: string;
+  readonly operation: ActionOperation;
+  readonly payload: EffectPayload;
+  readonly providerAttemptRef: string;
+  readonly ticket: ActionTicket;
+}
+
+interface SenderApplied {
+  readonly appliedAt: Date;
+  readonly kind: "applied";
+  readonly providerEffectDigest: string;
+}
+
+interface SenderAmbiguous {
+  readonly kind: "ambiguous";
+}
+
+interface SenderRejected {
+  readonly kind: "rejected";
+}
+
+type SenderOutcome = SenderAmbiguous | SenderApplied | SenderRejected;
+
+export interface PrivateSender {
+  send(effect: SenderEffect): Promise<SenderOutcome>;
+}
+
+interface DeterministicPrivateSenderOptions {
+  readonly clock?: () => Date;
+  readonly gate?: Promise<void>;
+  readonly mode: "ambiguous" | "applied" | "rejected";
+}
+
+const trustedPrivateSenderTwins = new WeakSet<object>();
+
+export class DeterministicPrivateSenderTwin implements PrivateSender {
+  readonly #clock: () => Date;
+  readonly #gate: Promise<void> | undefined;
+  readonly #mode: "ambiguous" | "applied" | "rejected";
+  #callCount = 0;
+  #effectCount = 0;
+
+  constructor(options: DeterministicPrivateSenderOptions) {
+    if (!(["ambiguous", "applied", "rejected"] as const).includes(options.mode)) {
+      throw new TypeError("Sender twin mode is outside the closed union");
+    }
+    if (
+      options.gate !== undefined
+      && Object.getPrototypeOf(options.gate) !== Promise.prototype
+    ) {
+      throw new TypeError("Sender twin gate must be one native Promise");
+    }
+    this.#clock = options.clock ?? (() => new Date());
+    this.#gate = options.gate;
+    this.#mode = options.mode;
+    trustedPrivateSenderTwins.add(this);
+    Object.freeze(this);
+  }
+
+  get callCount(): number {
+    return this.#callCount;
+  }
+
+  get effectCount(): number {
+    return this.#effectCount;
+  }
+
+  async send(effect: SenderEffect): Promise<SenderOutcome> {
+    this.#callCount += 1;
+    await this.#gate;
+    if (this.#mode === "rejected") {
+      return { kind: "rejected" };
+    }
+    this.#effectCount += 1;
+    if (this.#mode === "ambiguous") {
+      return { kind: "ambiguous" };
+    }
+    const appliedAt = requireDate("Sender applied-at", this.#clock());
+    const providerEffectDigest = sha256Hex(
+      `${ACTION_BINDING_DOMAIN}provider-effect\0`,
+      effect.providerAttemptRef,
+      effect.operation,
+      actionPayloadDigest(effect.operation, effect.payload),
+    );
+    return { appliedAt, kind: "applied", providerEffectDigest };
+  }
+}
+
+Object.freeze(DeterministicPrivateSenderTwin.prototype);
+
+export interface ActionReceipt {
+  readonly appliedAt: string;
+  readonly audienceDigest: string;
+  readonly deliveryAttemptRef: string;
+  readonly destinationDigest: string;
+  readonly idempotencyDigest: string;
+  readonly operation: ActionOperation;
+  readonly organizationId: string;
+  readonly payloadDigest: string;
+  readonly providerAttemptRef: string;
+  readonly providerEffectDigest: string;
+  readonly receiptRef: string;
+  readonly ticketRef: string;
+}
+
+export interface AppliedAction {
+  readonly effectCount: 1;
+  readonly kind: "applied";
+  readonly receipt: ActionReceipt;
+}
+
+export interface AlreadyAppliedAction {
+  readonly effectCount: 0;
+  readonly kind: "already_applied";
+  readonly receipt: ActionReceipt;
+}
+
+export interface RejectedAction {
+  readonly effectCount: 0;
+  readonly kind: "rejected";
+  readonly reasonCategory: "not_available" | "provider_rejected";
+}
+
+export interface ReconciliationRequired {
+  readonly kind: "reconciliation_required";
+  readonly providerAttemptRef: string;
+}
+
+export type ActionExecutionOutcome =
+  | AlreadyAppliedAction
+  | AppliedAction
+  | ReconciliationRequired
+  | RejectedAction;
+
+interface ReconciliationDecisionOptions {
+  readonly appliedAt?: Date;
+  readonly disposition: "applied" | "rejected";
+  readonly organizationId: string;
+  readonly providerAttemptRef: string;
+  readonly providerEffectDigest?: string;
+  readonly reconciliationRef: string;
+}
+
+export interface TrustedActionReconciliation {
+  readonly trustedActionReconciliationBrand: unique symbol;
+}
+
+interface ActionReconciliationDecision {
+  readonly appliedAt: Date | undefined;
+  readonly disposition: "applied" | "rejected";
+  readonly organizationId: string;
+  readonly providerAttemptRef: string;
+  readonly providerEffectDigest: string | undefined;
+  readonly reconciliationRef: string;
+}
+
+const trustedReconciliations = new WeakSet<object>();
+const activeProviderAttempts = new Set<string>();
+
+function activeProviderAttemptKey(organizationId: string, providerAttemptRef: string): string {
+  return `${organizationId}\0${providerAttemptRef}`;
+}
+
+export function createTrustedActionReconciliation(
+  options: ReconciliationDecisionOptions,
+): TrustedActionReconciliation {
+  const disposition = options.disposition;
+  if (disposition !== "applied" && disposition !== "rejected") {
+    throw new TypeError("reconciliation disposition is outside the closed union");
+  }
+  const providerAttemptRef = requireRef(
+    "reconciliation provider attempt",
+    options.providerAttemptRef,
+  );
+  if (!PROVIDER_ATTEMPT_PATTERN.test(providerAttemptRef)) {
+    throw new TypeError("reconciliation provider attempt is malformed");
+  }
+  const decision: ActionReconciliationDecision = Object.freeze({
+    appliedAt: disposition === "applied"
+      ? requireDate("reconciliation applied-at", options.appliedAt)
+      : undefined,
+    disposition,
+    organizationId: requireUuid("reconciliation Organization", options.organizationId),
+    providerAttemptRef,
+    providerEffectDigest: disposition === "applied"
+      ? requireSha256("reconciliation provider effect digest", options.providerEffectDigest)
+      : undefined,
+    reconciliationRef: requireRef("reconciliation authority", options.reconciliationRef),
+  });
+  if (
+    disposition === "rejected"
+    && (options.appliedAt !== undefined || options.providerEffectDigest !== undefined)
+  ) {
+    throw new TypeError("rejected reconciliation cannot claim an applied effect");
+  }
+  trustedReconciliations.add(decision);
+  return decision as unknown as TrustedActionReconciliation;
+}
+
+const BEGIN_EFFECT_SQL = `
+SELECT * FROM context_action_begin_private_effect(
+  $1::uuid, $2::text, $3::text, $4::text, $5::text,
+  $6::bytea, $7::bytea, $8::bytea, $9::bigint, $10::integer,
+  $11::text, $12::bytea, $13::bytea, $14::bytea, $15::bytea,
+  $16::bytea, $17::bytea, $18::timestamptz, $19::timestamptz,
+  $20::bytea, $21::text, $22::bigint
+)`;
+
+const COMPLETE_EFFECT_SQL = `
+SELECT * FROM context_action_complete_private_effect(
+  $1::uuid, $2::text, $3::text, $4::text, $5::bytea,
+  $6::timestamptz, $7::text, $8::text, $9::bigint
+)`;
+
+const RECONCILE_EFFECT_SQL = `
+SELECT * FROM context_action_reconcile_private_effect(
+  $1::uuid, $2::text, $3::text, $4::bytea, $5::timestamptz,
+  $6::text, $7::bytea, $8::text, $9::bigint
+)`;
+
+function databaseDigest(name: string, value: unknown): string {
+  if (Buffer.isBuffer(value) && value.byteLength === 32) {
+    return value.toString("hex");
+  }
+  return requireSha256(name, value);
+}
+
+type ReceiptExpectation = Partial<Pick<
+  TicketClaims,
+  | "audienceDigest"
+  | "deliveryAttemptRef"
+  | "destinationDigest"
+  | "idempotencyDigest"
+  | "operation"
+  | "organizationId"
+  | "payloadDigest"
+  | "ticketRef"
+>>;
+
+function actionReceiptFromRow(
+  row: Readonly<Record<string, unknown>>,
+  expected: ReceiptExpectation,
+): ActionReceipt {
+  const operation = row.operation;
+  if (typeof operation !== "string" || !(operation in OPERATION_CONTRACT)) {
+    throw new TypeError("stored ActionReceipt has an invalid operation");
+  }
+  const receipt: ActionReceipt = Object.freeze({
+    appliedAt: requireDate("receipt applied-at", row.applied_at).toISOString(),
+    audienceDigest: databaseDigest("receipt audience digest", row.audience_digest),
+    deliveryAttemptRef: requireRef("receipt DeliveryAttemptRef", row.delivery_attempt_ref),
+    destinationDigest: databaseDigest("receipt destination digest", row.destination_digest),
+    idempotencyDigest: databaseDigest("receipt idempotency digest", row.idempotency_digest),
+    operation: operation as ActionOperation,
+    organizationId: requireUuid("receipt Organization", row.organization_id),
+    payloadDigest: databaseDigest("receipt payload digest", row.payload_digest),
+    providerAttemptRef: requireRef("receipt provider attempt", row.provider_attempt_ref),
+    providerEffectDigest: databaseDigest(
+      "receipt provider effect digest",
+      row.provider_effect_digest,
+    ),
+    receiptRef: requireRef("ActionReceipt ref", row.receipt_ref),
+    ticketRef: requireRef("receipt ActionTicket ref", row.ticket_ref),
+  });
+  if (
+    !PROVIDER_ATTEMPT_PATTERN.test(receipt.providerAttemptRef)
+    || !RECEIPT_REF_PATTERN.test(receipt.receiptRef)
+    || !TICKET_REF_PATTERN.test(receipt.ticketRef)
+    || !DELIVERY_ATTEMPT_PATTERN.test(receipt.deliveryAttemptRef)
+    || (expected.organizationId !== undefined
+      && receipt.organizationId !== expected.organizationId)
+    || (expected.deliveryAttemptRef !== undefined
+      && receipt.deliveryAttemptRef !== expected.deliveryAttemptRef)
+    || (expected.ticketRef !== undefined && receipt.ticketRef !== expected.ticketRef)
+    || (expected.operation !== undefined && receipt.operation !== expected.operation)
+    || (expected.destinationDigest !== undefined
+      && receipt.destinationDigest !== expected.destinationDigest)
+    || (expected.audienceDigest !== undefined
+      && receipt.audienceDigest !== expected.audienceDigest)
+    || (expected.payloadDigest !== undefined
+      && receipt.payloadDigest !== expected.payloadDigest)
+    || (expected.idempotencyDigest !== undefined
+      && receipt.idempotencyDigest !== expected.idempotencyDigest)
+  ) {
+    throw new TypeError("stored ActionReceipt does not match the exact ticket");
+  }
+  return receipt;
 }
 
 export class ActionPlane {
   readonly #authority: PostgresActionPrepareAuthority;
+  readonly #database: ActionPrepareDatabase;
   readonly #keyring: ActionTicketKeyring;
   readonly #profile: Readonly<ProfileOptions>;
+  readonly #providerAttemptRefFactory: () => string;
+  readonly #receiptRefFactory: () => string;
+  readonly #sender: DeterministicPrivateSenderTwin | undefined;
   readonly #ticketRefFactory: () => string;
 
   constructor(options: ActionPlaneOptions) {
@@ -725,9 +1163,24 @@ export class ActionPlane {
     if (profile === undefined) {
       throw new TypeError("ActionPlane requires a trusted prepare profile");
     }
+    this.#database = options.database;
     this.#authority = new PostgresActionPrepareAuthority(options.database);
     this.#keyring = options.keyring;
     this.#profile = profile;
+    this.#providerAttemptRefFactory = options.providerAttemptRefFactory
+      ?? (() => `pat_${randomBytes(16).toString("hex")}`);
+    this.#receiptRefFactory = options.receiptRefFactory
+      ?? (() => `acr_${randomBytes(16).toString("hex")}`);
+    if (
+      options.sender !== undefined
+      && (
+        !trustedPrivateSenderTwins.has(options.sender)
+        || Object.getPrototypeOf(options.sender) !== DeterministicPrivateSenderTwin.prototype
+      )
+    ) {
+      throw new TypeError("Issue #68 permits only the deterministic private Sender twin");
+    }
+    this.#sender = options.sender as DeterministicPrivateSenderTwin | undefined;
     this.#ticketRefFactory = options.ticketRefFactory ?? (() => `act_${randomBytes(16).toString("hex")}`);
     Object.freeze(this);
   }
@@ -814,7 +1267,7 @@ export class ActionPlane {
       audience: operationContract.audience,
       audienceDigest: authority.audienceDigest,
       deliveryAttemptRef: result.deliveryAttemptRef,
-      destinationDigest: sha256Hex(`${ACTION_BINDING_DOMAIN}destination\0`, authority.destinationRef),
+      destinationDigest: createHash("sha256").update(authority.destinationRef, "utf8").digest("hex"),
       expiresAt: result.expiresAt.toISOString(),
       idempotencyDigest,
       identityDigest: authority.identityDigest,
@@ -824,8 +1277,10 @@ export class ActionPlane {
       payloadDigest: trusted.payloadDigest,
       policyEpoch: authority.policyEpoch,
       profileRef: profile.profileRef,
-      purposeDigest: sha256Hex(`${ACTION_BINDING_DOMAIN}purpose\0`, authority.purpose),
-      serviceDigest: sha256Hex(`${ACTION_BINDING_DOMAIN}service\0`, authority.authenticatedServiceRef),
+      purposeDigest: createHash("sha256").update(authority.purpose, "utf8").digest("hex"),
+      serviceDigest: createHash("sha256")
+        .update(authority.authenticatedServiceRef, "utf8")
+        .digest("hex"),
       signingKeyVersion: signing.activeVersion,
       sourceContextDigest: trusted.sourceContext === undefined
         ? null
@@ -846,6 +1301,252 @@ export class ActionPlane {
       ticket: mintTicket(claims, this.#keyring),
     };
   }
+
+  async perform(payload: EffectPayload, ticket: ActionTicket): Promise<ActionExecutionOutcome> {
+    let claims: TicketClaims;
+    let validatedPayload: EffectPayload;
+    try {
+      claims = parseTicket(ticket, this.#keyring);
+      validatedPayload = validatePayload(claims.operation, payload);
+      if (
+        actionPayloadDigest(claims.operation, validatedPayload) !== claims.payloadDigest
+        || claims.profileRef !== this.#profile.profileRef
+        || claims.approvalTier !== this.#profile.approvalTier
+      ) {
+        return { effectCount: 0, kind: "rejected", reasonCategory: "not_available" };
+      }
+    } catch {
+      return { effectCount: 0, kind: "rejected", reasonCategory: "not_available" };
+    }
+    if (this.#sender === undefined) {
+      return { effectCount: 0, kind: "rejected", reasonCategory: "not_available" };
+    }
+    const proposedProviderAttemptRef = this.#providerAttemptRefFactory();
+    if (!PROVIDER_ATTEMPT_PATTERN.test(proposedProviderAttemptRef)) {
+      return { effectCount: 0, kind: "rejected", reasonCategory: "not_available" };
+    }
+    let beginRow: Readonly<Record<string, unknown>> | undefined;
+    try {
+      beginRow = (await this.#database.query({
+        text: BEGIN_EFFECT_SQL,
+        values: [
+          claims.organizationId,
+          claims.ticketRef,
+          claims.deliveryAttemptRef,
+          claims.operation,
+          claims.audience,
+          Buffer.from(claims.payloadDigest, "hex"),
+          Buffer.from(claims.idempotencyDigest, "hex"),
+          Buffer.from(claims.approvalTier.length === 0
+            ? ""
+            : sha256Hex(`${ACTION_BINDING_DOMAIN}approval\0`, claims.approvalTier), "hex"),
+          claims.policyEpoch,
+          claims.signingKeyVersion,
+          claims.profileRef,
+          Buffer.from(claims.serviceDigest, "hex"),
+          Buffer.from(claims.destinationDigest, "hex"),
+          Buffer.from(claims.audienceDigest, "hex"),
+          Buffer.from(claims.identityDigest, "hex"),
+          Buffer.from(claims.purposeDigest, "hex"),
+          claims.sourceContextDigest === null
+            ? null
+            : Buffer.from(claims.sourceContextDigest, "hex"),
+          new Date(claims.issuedAt),
+          new Date(claims.expiresAt),
+          createHash("sha256").update(ACTION_TICKET_DOMAIN).update(ticket.serialize()).digest(),
+          proposedProviderAttemptRef,
+          this.#profile.retentionSeconds,
+        ],
+      })).rows[0];
+    } catch {
+      return { effectCount: 0, kind: "rejected", reasonCategory: "not_available" };
+    }
+    if (beginRow === undefined) {
+      return { effectCount: 0, kind: "rejected", reasonCategory: "not_available" };
+    }
+    if (beginRow.outcome === "already_applied") {
+      try {
+        return {
+          effectCount: 0,
+          kind: "already_applied",
+          receipt: actionReceiptFromRow(beginRow, claims),
+        };
+      } catch {
+        return { effectCount: 0, kind: "rejected", reasonCategory: "not_available" };
+      }
+    }
+    if (beginRow.outcome === "reconciliation_required") {
+      try {
+        const providerAttemptRef = requireRef(
+          "provider attempt",
+          beginRow.provider_attempt_ref,
+        );
+        if (!PROVIDER_ATTEMPT_PATTERN.test(providerAttemptRef)) {
+          throw new TypeError("provider attempt is malformed");
+        }
+        return { kind: "reconciliation_required", providerAttemptRef };
+      } catch {
+        return { effectCount: 0, kind: "rejected", reasonCategory: "not_available" };
+      }
+    }
+    if (beginRow.outcome === "provider_rejected") {
+      return { effectCount: 0, kind: "rejected", reasonCategory: "provider_rejected" };
+    }
+    if (beginRow.outcome === "rejected") {
+      return { effectCount: 0, kind: "rejected", reasonCategory: "not_available" };
+    }
+    if (beginRow.outcome !== "sender_required") {
+      return { effectCount: 0, kind: "rejected", reasonCategory: "not_available" };
+    }
+    let providerAttemptRef: string;
+    let destinationRef: string;
+    try {
+      providerAttemptRef = requireRef("provider attempt", beginRow.provider_attempt_ref);
+      destinationRef = requireRef("private destination", beginRow.destination_ref);
+      if (!PROVIDER_ATTEMPT_PATTERN.test(providerAttemptRef)) {
+        throw new TypeError("provider attempt is malformed");
+      }
+    } catch {
+      return { effectCount: 0, kind: "rejected", reasonCategory: "not_available" };
+    }
+    const activeAttemptKey = activeProviderAttemptKey(
+      claims.organizationId,
+      providerAttemptRef,
+    );
+    if (activeProviderAttempts.has(activeAttemptKey)) {
+      return { kind: "reconciliation_required", providerAttemptRef };
+    }
+    activeProviderAttempts.add(activeAttemptKey);
+    try {
+      let senderOutcome: SenderOutcome;
+      try {
+        senderOutcome = await this.#sender.send({
+          destinationRef,
+          operation: claims.operation,
+          payload: validatedPayload,
+          providerAttemptRef,
+          ticket,
+        });
+      } catch {
+        senderOutcome = { kind: "ambiguous" };
+      }
+      const proposedReceiptRef = this.#receiptRefFactory();
+      if (!RECEIPT_REF_PATTERN.test(proposedReceiptRef)) {
+        return { kind: "reconciliation_required", providerAttemptRef };
+      }
+      let completeRow: Readonly<Record<string, unknown>> | undefined;
+      try {
+        completeRow = (await this.#database.query({
+          text: COMPLETE_EFFECT_SQL,
+          values: [
+            claims.organizationId,
+            claims.ticketRef,
+            providerAttemptRef,
+            senderOutcome.kind,
+            senderOutcome.kind === "applied"
+              ? Buffer.from(senderOutcome.providerEffectDigest, "hex")
+              : null,
+            senderOutcome.kind === "applied" ? senderOutcome.appliedAt : null,
+            proposedReceiptRef,
+            this.#profile.retentionPolicyRef,
+            this.#profile.retentionSeconds,
+          ],
+        })).rows[0];
+      } catch {
+        return { kind: "reconciliation_required", providerAttemptRef };
+      }
+      if (completeRow?.outcome === "applied") {
+        try {
+          return {
+            effectCount: 1,
+            kind: "applied",
+            receipt: actionReceiptFromRow(completeRow, claims),
+          };
+        } catch {
+          return { kind: "reconciliation_required", providerAttemptRef };
+        }
+      }
+      if (completeRow?.outcome === "rejected") {
+        return { effectCount: 0, kind: "rejected", reasonCategory: "provider_rejected" };
+      }
+      return { kind: "reconciliation_required", providerAttemptRef };
+    } finally {
+      activeProviderAttempts.delete(activeAttemptKey);
+    }
+  }
+
+  async reconcile(
+    decision: TrustedActionReconciliation,
+  ): Promise<AlreadyAppliedAction | RejectedAction> {
+    if (
+      typeof decision !== "object"
+      || decision === null
+      || !trustedReconciliations.has(decision)
+    ) {
+      throw new TypeError("ActionPlane.reconcile requires trusted reconciliation authority");
+    }
+    const trusted = decision as unknown as ActionReconciliationDecision;
+    if (
+      activeProviderAttempts.has(
+        activeProviderAttemptKey(trusted.organizationId, trusted.providerAttemptRef),
+      )
+    ) {
+      return { effectCount: 0, kind: "rejected", reasonCategory: "not_available" };
+    }
+    const decisionDigest = sha256Hex(
+      `${ACTION_BINDING_DOMAIN}reconciliation\0`,
+      trusted.organizationId,
+      trusted.providerAttemptRef,
+      trusted.disposition,
+      trusted.reconciliationRef,
+      trusted.providerEffectDigest ?? "",
+      trusted.appliedAt?.toISOString() ?? "",
+    );
+    const proposedReceiptRef = this.#receiptRefFactory();
+    if (!RECEIPT_REF_PATTERN.test(proposedReceiptRef)) {
+      return { effectCount: 0, kind: "rejected", reasonCategory: "not_available" };
+    }
+    let row: Readonly<Record<string, unknown>> | undefined;
+    try {
+      row = (await this.#database.query({
+        text: RECONCILE_EFFECT_SQL,
+        values: [
+          trusted.organizationId,
+          trusted.providerAttemptRef,
+          trusted.disposition,
+          trusted.providerEffectDigest === undefined
+            ? null
+            : Buffer.from(trusted.providerEffectDigest, "hex"),
+          trusted.appliedAt ?? null,
+          proposedReceiptRef,
+          Buffer.from(decisionDigest, "hex"),
+          this.#profile.retentionPolicyRef,
+          this.#profile.retentionSeconds,
+        ],
+      })).rows[0];
+    } catch {
+      return { effectCount: 0, kind: "rejected", reasonCategory: "not_available" };
+    }
+    if (row?.outcome === "already_applied") {
+      try {
+        return {
+          effectCount: 0,
+          kind: "already_applied",
+          receipt: actionReceiptFromRow(row, {
+            organizationId: trusted.organizationId,
+          }),
+        };
+      } catch {
+        return { effectCount: 0, kind: "rejected", reasonCategory: "not_available" };
+      }
+    }
+    return {
+      effectCount: 0,
+      kind: "rejected",
+      reasonCategory: row?.outcome === "rejected" ? "provider_rejected" : "not_available",
+    };
+  }
+
 }
 
 export const actionDigestProfiles = Object.freeze({

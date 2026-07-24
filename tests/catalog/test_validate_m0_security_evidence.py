@@ -143,6 +143,15 @@ def test_m0_registry_uses_activated_egress_and_honest_learning_evidence() -> Non
         "tests/integration/test_z_egress_grant_file.py::"
         "test_file_http_package_redeems_exact_model_grant_before_gateway_bytes"
     )
+    egress_mapping = next(
+        mapping
+        for mapping in registry["invariantMappings"]
+        if mapping["invariantRef"] == "EGRESS-011"
+    )
+    assert egress_mapping["evidenceRefs"]["postgres"] == [
+        "PG-EGRESS-011",
+        "PG-ACTION-PERFORM-068",
+    ]
     assert evidence["PROP-CROSS-ORG-LEARN-015"] == (
         "tests/unit/test_m0_learning_isolation.py::"
         "test_m0_learning_artifact_contract_has_no_cross_organization_carrier"
