@@ -1012,7 +1012,6 @@
         "carrier": {
           "enum": [
             "ContextRuntime.resolve(Acquire)",
-            "ContextRuntime.resolve(Continue | OpenCitation | server-owned unavailable Acquire plan)",
             "signed one-shot persistent no-op durable-job WorkerLease",
             "signed synthetic ContextAccessTicket Provider read | signed synthetic ActionTicket no-op channel action",
             "ContextRuntime.resolve(Acquire) authorized-only ContextRun | restricted delivered-empty DecisionAudit",

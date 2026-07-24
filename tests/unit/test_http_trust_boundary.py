@@ -377,6 +377,7 @@ class MismatchedCitationDeliveryEvidencePort(ExactPrivateDeliveryEvidencePort):
     ) -> RedeemedPrivateDeliveryEvidence | None:
         redeemed = super().redeem_private(request)
         assert redeemed is not None
+        redeemed = replace(redeemed, purpose="citation.open")
         if self.mismatch == "purpose":
             return replace(redeemed, purpose="context.answer")
         if self.mismatch == "destination":

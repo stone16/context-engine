@@ -1226,6 +1226,27 @@ CANONICAL_OPENAPI_V0_ACTIVATION: dict[str, object] = {
     ],
 }
 
+SDK_LIVE_FILE_064_TEST_EVIDENCE: dict[str, object] = {
+    "id": "SDK-LIVE-FILE-064",
+    "surface": (
+        "tests/integration/test_z_egress_grant_file.py::"
+        "test_packed_typescript_sdk_resolves_authorized_file_package_over_live_http"
+    ),
+    "oracle": (
+        "A tarball installed into a temporary TypeScript consumer calls "
+        "a real local POST /v0/resolve server with only authentication, "
+        "request id, and opaque DeliveryEvidenceRef metadata; real "
+        "PostgreSQL redemption and File acquisition prove CandidateRef "
+        "through the sealed AuthorizationKernel to AuthorizedProjection, "
+        "an audience-bound ContextPackage, and an opaque model egress "
+        "grant. The generated OpenCitation call uses a second request-bound "
+        "DeliveryEvidenceRef to reauthorize the acquired opaque locator into "
+        "a distinct citation.open Package, fresh locator, and matching grant; "
+        "generated Continue remains a generic inactive outcome."
+    ),
+}
+
+
 CANONICAL_TYPESCRIPT_SDK_ACTIVATION: dict[str, object] = {
     "issueRef": "#64",
     "invariantRef": "TRANSPORT-UNTRUSTED-008",
@@ -1252,26 +1273,7 @@ CANONICAL_TYPESCRIPT_SDK_ACTIVATION: dict[str, object] = {
                 "checksum and the generated tree retains a SHA-256 digest."
             ),
         },
-        {
-            "id": "SDK-LIVE-FILE-064",
-            "surface": (
-                "tests/integration/test_z_egress_grant_file.py::"
-                "test_packed_typescript_sdk_resolves_authorized_file_package_"
-                "over_live_http"
-            ),
-            "oracle": (
-                "A tarball installed into a temporary TypeScript consumer calls "
-                "a real local POST /v0/resolve server with only authentication, "
-                "request id, and opaque DeliveryEvidenceRef metadata; real "
-                "PostgreSQL redemption and File acquisition prove CandidateRef "
-                "through the sealed AuthorizationKernel to AuthorizedProjection, "
-                "an audience-bound ContextPackage, and an opaque model egress "
-                "grant. The generated OpenCitation call uses a second request-bound "
-                "DeliveryEvidenceRef to reauthorize the acquired opaque locator into "
-                "a distinct citation.open Package, fresh locator, and matching grant; "
-                "generated Continue remains a generic inactive outcome."
-            ),
-        },
+        SDK_LIVE_FILE_064_TEST_EVIDENCE,
     ],
     "deferredEvidence": [
         "signed package-registry publication provenance",
@@ -1449,25 +1451,7 @@ CANONICAL_CITATION_OPEN_ACTIVATION: dict[str, object] = {
                 "again through the sealed Kernel to a new audience-bound Package."
             ),
         },
-        {
-            "id": "SDK-LIVE-FILE-064",
-            "surface": (
-                "tests/integration/test_z_egress_grant_file.py::"
-                "test_packed_typescript_sdk_resolves_authorized_file_package_over_live_http"
-            ),
-            "oracle": (
-                "A tarball installed into a temporary TypeScript consumer calls "
-                "a real local POST /v0/resolve server with only authentication, "
-                "request id, and opaque DeliveryEvidenceRef metadata; real "
-                "PostgreSQL redemption and File acquisition prove CandidateRef "
-                "through the sealed AuthorizationKernel to AuthorizedProjection, "
-                "an audience-bound ContextPackage, and an opaque model egress "
-                "grant. The generated OpenCitation call uses a second request-bound "
-                "DeliveryEvidenceRef to reauthorize the acquired opaque locator into "
-                "a distinct citation.open Package, fresh locator, and matching grant; "
-                "generated Continue remains a generic inactive outcome."
-            ),
-        },
+        SDK_LIVE_FILE_064_TEST_EVIDENCE,
     ],
     "deferredEvidence": [
         "group/public AudienceSnapshot citation opening",
