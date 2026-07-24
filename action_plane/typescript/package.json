@@ -31,12 +31,12 @@
     "test": "npm run typecheck && npm run build && npm run test:runtime && npm run test:package"
   },
   "dependencies": {
-    "canonicalize": "3.0.0",
-    "pg": "8.22.0"
+    "canonicalize": "3.0.0"
   },
   "devDependencies": {
     "@types/node": "22.10.2",
     "@types/pg": "8.20.0",
+    "pg": "8.22.0",
     "typescript": "5.9.3"
   }
 }
