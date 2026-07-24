@@ -1,0 +1,47 @@
+{
+  "profile": "rfc8785-ijson-cross-language-v1",
+  "valid": [
+    {
+      "name": "canonical-unicode",
+      "document": {
+        "usage": { "tokens": 7 },
+        "purpose": "support",
+        "enabled": true,
+        "coverage": { "status": "sufficient", "reason": null },
+        "blocks": [{ "ordinal": 1, "body": "你好, 🌍" }]
+      },
+      "sha256": "630ba3a578634388e9d107f318a9ba7e2f7c2b9313f8c1bd9034e9325797aa43"
+    },
+    {
+      "name": "utf16-property-order",
+      "document": {
+        "€": "Euro Sign",
+        "\r": "Carriage Return",
+        "דּ": "Hebrew Letter Dalet With Dagesh",
+        "1": "One",
+        "😀": "Emoji: Grinning Face",
+        "": "Control",
+        "ö": "Latin Small Letter O With Diaeresis"
+      },
+      "sha256": "5e321556d22018a9656991a9e94f77ec175fa193e52a2429d312f8419ec8b08c"
+    },
+    {
+      "name": "number-serialization",
+      "document": {
+        "numbers": [333333333.33333329, 1e30, 4.50, 2e-3, 1e-27, -0.0]
+      },
+      "sha256": "5c34ad2f0b62822dda6a8fbcb5ad901f69fba1c84571ee09063f63266f06fc58"
+    },
+    {
+      "name": "exact-large-binary64-integers",
+      "document": {
+        "numbers": [9007199254740992, 295147905179352825856]
+      },
+      "sha256": "ce19560fd6d09c1841c89fe99d741d7176b969eeb8d405a75ff75888d2958aaa"
+    }
+  ],
+  "invalidJsonDocuments": [
+    { "name": "lone-high-surrogate", "json": "{\"value\":\"\\ud800\"}" },
+    { "name": "lone-low-surrogate-key", "json": "{\"key\\udfff\":\"value\"}" }
+  ]
+}

@@ -1,9 +1,10 @@
-.PHONY: install build lint typecheck test catalog security-gate smoke db-up db-down db-reset integration openapi-generate openapi-check openapi-breaking-check sdk-generate sdk-check sdk-build sdk-test sdk-pack action-typecheck action-build action-test check
+.PHONY: install build lint typecheck test catalog security-gate smoke db-up db-down db-reset integration openapi-generate openapi-check openapi-breaking-check sdk-generate sdk-check sdk-build sdk-test sdk-pack action-typecheck action-build action-test bot-typecheck bot-build bot-test check
 
 install:
 	uv sync --frozen
 	npm --prefix sdk/typescript ci --ignore-scripts
 	npm --prefix action_plane/typescript ci --ignore-scripts
+	npm --prefix bot_delivery/typescript ci --ignore-scripts
 
 build:
 	uv build
@@ -11,9 +12,10 @@ build:
 lint:
 	uv run ruff check .
 
-typecheck:
+typecheck: sdk-build
 	uv run mypy
 	npm --prefix action_plane/typescript run typecheck
+	npm --prefix bot_delivery/typescript run typecheck
 
 test:
 	uv run pytest -q tests/unit
@@ -74,4 +76,14 @@ action-test: action-build
 	npm --prefix action_plane/typescript run test:runtime
 	npm --prefix action_plane/typescript run test:package
 
-check: build lint typecheck openapi-check sdk-check sdk-build sdk-test sdk-pack action-build action-test test catalog smoke integration security-gate
+bot-typecheck:
+	npm --prefix bot_delivery/typescript run typecheck
+
+bot-build: sdk-build
+	npm --prefix bot_delivery/typescript run build
+
+bot-test: bot-build
+	npm --prefix bot_delivery/typescript run test:runtime
+	npm --prefix bot_delivery/typescript run test:package
+
+check: build lint typecheck openapi-check sdk-check sdk-build sdk-test sdk-pack action-build action-test bot-build bot-test test catalog smoke integration security-gate

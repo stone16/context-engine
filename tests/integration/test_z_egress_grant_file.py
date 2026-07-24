@@ -244,6 +244,24 @@ def _pack_and_install_sdk(consumer_root: Path) -> None:
     )
     report = json.loads(pack.stdout)
     artifact_name = report[0]["filename"]
+    for script in ("typecheck", "build", "test:runtime"):
+        _run_sdk_process(
+            ["npm", "--prefix", "bot_delivery/typescript", "run", script],
+            cwd=ROOT,
+        )
+    bot_pack = _run_sdk_process(
+        [
+            "npm",
+            "pack",
+            "--json",
+            "--ignore-scripts",
+            "--pack-destination",
+            str(artifact_root),
+        ],
+        cwd=ROOT / "bot_delivery/typescript",
+    )
+    bot_report = json.loads(bot_pack.stdout)
+    bot_artifact_name = bot_report[0]["filename"]
     (consumer_root / "package.json").write_text(
         json.dumps(
             {
@@ -251,9 +269,12 @@ def _pack_and_install_sdk(consumer_root: Path) -> None:
                 "private": True,
                 "type": "module",
                 "dependencies": {
+                    "@context-engine/bot-delivery": (
+                        f"file:{artifact_root / bot_artifact_name}"
+                    ),
                     "@context-engine/resolve-sdk": (
                         f"file:{artifact_root / artifact_name}"
-                    )
+                    ),
                 },
             }
         ),
@@ -274,6 +295,8 @@ def _run_installed_live_consumer(
     base_url: str,
     delivery_evidence_ref: str,
     citation_delivery_evidence_ref: str,
+    egress_database_url: str,
+    organization_id: UUID,
 ) -> dict[str, object]:
     result = _run_sdk_process(
         ["node", "live-consumer.mjs"],
@@ -288,6 +311,8 @@ def _run_installed_live_consumer(
             "CONTEXT_ENGINE_SDK_REQUEST_ID": "file-egress-sdk-http",
             "CONTEXT_ENGINE_SDK_TEST_AUTHENTICATION": "runtime-secret",
             "CONTEXT_ENGINE_SDK_TEST_DIRECT_AUTHENTICATION": ("runtime-direct-secret"),
+            "CONTEXT_ENGINE_MODEL_EGRESS_DATABASE_URL": egress_database_url,
+            "CONTEXT_ENGINE_MODEL_EGRESS_ORGANIZATION_ID": str(organization_id),
         },
     )
     document = json.loads(result.stdout)
@@ -369,6 +394,7 @@ def _published_file_scenario(
                     "citation_open_locator",
                     "decision_audit",
                     "context_run",
+                    "model_egress_audit",
                     "egress_audit",
                     "egress_grant",
                     "delivery_evidence",
@@ -786,15 +812,25 @@ def test_file_http_citation_reauthorizes_unavailable_target(
 
 
 @pytest.mark.security_evidence(id="SDK-LIVE-FILE-064", layer="runtime")
+@pytest.mark.security_evidence(id="SDK-MODEL-EGRESS-070", layer="runtime")
+@pytest.mark.security_evidence(id="PG-MODEL-EGRESS-070", layer="postgres")
 def test_packed_typescript_sdk_resolves_authorized_file_package_over_live_http(
     _published_file_scenario: tuple[_FileImportScenario, PublishedFileImport, Engine],
     tmp_path: Path,
+    action_configuration: DatabaseConfiguration,
+    control_configuration: DatabaseConfiguration,
     identity_configuration: DatabaseConfiguration,
+    egress_configuration: DatabaseConfiguration,
+    learning_configuration: DatabaseConfiguration,
+    operator_configuration: DatabaseConfiguration,
+    runtime_configuration: DatabaseConfiguration,
+    worker_configuration: DatabaseConfiguration,
     guarded_runtime_engine: Engine,
     query_digest_keyring: QueryDigestKeyring,
 ) -> None:
     scenario, published, migration_engine = _published_file_scenario
     identity_engine = create_database_engine(identity_configuration)
+    operator_engine = create_database_engine(operator_configuration)
     server: Server | None = None
     server_thread: Thread | None = None
     try:
@@ -810,6 +846,63 @@ def test_packed_typescript_sdk_resolves_authorized_file_package_over_live_http(
                     "membership_id": scenario.membership_id,
                 },
             ).scalar_one()
+            application_roles = (
+                action_configuration.expected_role,
+                control_configuration.expected_role,
+                identity_configuration.expected_role,
+                egress_configuration.expected_role,
+                learning_configuration.expected_role,
+                operator_configuration.expected_role,
+                runtime_configuration.expected_role,
+                worker_configuration.expected_role,
+            )
+            privileges = {
+                role: tuple(
+                    connection.execute(
+                        text(
+                            "SELECT "
+                            "has_table_privilege(:role, 'model_egress_audit', "
+                            "'SELECT'), "
+                            "has_table_privilege(:role, 'model_egress_audit', "
+                            "'INSERT'), "
+                            "has_table_privilege(:role, 'model_egress_audit', "
+                            "'UPDATE'), "
+                            "has_table_privilege(:role, 'model_egress_audit', "
+                            "'DELETE'), "
+                            "has_function_privilege(:role, "
+                            "'context_egress_record_model_outcome(uuid,bytea,"
+                            "bytea,bytea,bytea,bytea,text,bigint,bigint,bigint,"
+                            "bigint,text,bigint,text)', 'EXECUTE'), "
+                            "has_function_privilege(:role, "
+                            "'context_security_delete_expired_model_egress_audit("
+                            "uuid)', 'EXECUTE')"
+                        ),
+                        {"role": role},
+                    ).one()
+                )
+                for role in application_roles
+            }
+            assert privileges[egress_configuration.expected_role] == (
+                False,
+                False,
+                False,
+                False,
+                True,
+                False,
+            )
+            assert privileges[operator_configuration.expected_role] == (
+                False,
+                False,
+                False,
+                False,
+                False,
+                True,
+            )
+            for role in set(application_roles) - {
+                egress_configuration.expected_role,
+                operator_configuration.expected_role,
+            }:
+                assert privileges[role] == (False,) * 6
 
         consumer_root = tmp_path / "installed-sdk-consumer"
         consumer_root.mkdir()
@@ -921,6 +1014,10 @@ def test_packed_typescript_sdk_resolves_authorized_file_package_over_live_http(
             base_url=f"http://127.0.0.1:{port}",
             delivery_evidence_ref=evidence_ref.evidence_ref,
             citation_delivery_evidence_ref=(citation_evidence_ref.evidence_ref),
+            egress_database_url=egress_configuration.url.set(
+                drivername="postgresql"
+            ).render_as_string(hide_password=False),
+            organization_id=scenario.organization_id,
         )
 
         acquire = result["acquire"]
@@ -943,6 +1040,35 @@ def test_packed_typescript_sdk_resolves_authorized_file_package_over_live_http(
         assert isinstance(grant["value"], str)
         assert grant["value"]
         assert evidence_ref.evidence_ref not in json.dumps(result)
+        generation = result["generation"]
+        assert isinstance(generation, dict)
+        assert generation["kind"] == "generated"
+        assert generation["answer"]["text"] == (
+            "ContextEngine delivers authorized Package context."
+        )
+        assert generation["answer"]["citations"] == [
+            {
+                "citationOpenRef": evidence[0]["citationOpenRef"],
+                "evidenceRef": evidence[0]["evidenceRef"],
+            }
+        ]
+        assert result["generationReplay"] == {"kind": "generation_not_available"}
+        gateway = result["gateway"]
+        assert isinstance(gateway, dict)
+        assert gateway["callCount"] == 1
+        assert gateway["outboundBytes"] > 0
+        assert gateway["requests"] == [
+            {
+                "context": [
+                    {
+                        "evidenceRefs": [evidence[0]["evidenceRef"]],
+                        "text": "ContextEngine delivers context.",
+                    }
+                ],
+                "instructions": "Answer only from the supplied Package.",
+                "question": "What does ContextEngine deliver?",
+            }
+        ]
         assert result["continuation"] == {
             "kind": "request_not_available",
             "retryable": False,
@@ -986,6 +1112,63 @@ def test_packed_typescript_sdk_resolves_authorized_file_package_over_live_http(
         )
         assert len(observed) == 2
         assert observed[0].package.decision_ref == package["decisionRef"]
+        with migration_engine.begin() as connection:
+            audit = connection.execute(
+                text(
+                    "SELECT grant_digest, package_digest, payload_digest, "
+                    "question_digest, answer_payload_digest, outcome_category, "
+                    "provider_calls, cost_microunits, elapsed_ms, output_bytes, "
+                    "profile_ref, audit_profile_ref, recorded_at, retain_until "
+                    "FROM model_egress_audit WHERE organization_id = :org"
+                ),
+                {"org": scenario.organization_id},
+            ).one()
+            assert audit.outcome_category == "generated"
+            assert audit.provider_calls == 1
+            assert audit.cost_microunits == 7
+            assert audit.elapsed_ms == 5
+            assert audit.output_bytes == len(
+                b"ContextEngine delivers authorized Package context."
+            )
+            assert audit.profile_ref == _file_model_profile().profile_ref
+            assert audit.audit_profile_ref == "model-generation-audit-v1"
+            assert audit.retain_until - audit.recorded_at == timedelta(days=30)
+            assert all(
+                len(bytes(digest)) == 32
+                for digest in (
+                    audit.grant_digest,
+                    audit.package_digest,
+                    audit.payload_digest,
+                    audit.question_digest,
+                    audit.answer_payload_digest,
+                )
+            )
+            serialized_audit = repr(audit)
+            assert grant["value"] not in serialized_audit
+            assert generation["answer"]["text"] not in serialized_audit
+            assert blocks[0]["text"] not in serialized_audit
+            connection.execute(
+                text(
+                    "UPDATE model_egress_audit SET "
+                    "recorded_at = recorded_at - interval '31 days', "
+                    "retain_until = retain_until - interval '31 days' "
+                    "WHERE organization_id = :org"
+                ),
+                {"org": scenario.organization_id},
+            )
+        with operator_engine.begin() as connection:
+            assert connection.execute(
+                text(
+                    "SELECT context_security_delete_expired_model_egress_audit(:org)"
+                ),
+                {"org": uuid4()},
+            ).scalar_one() == 0
+            assert connection.execute(
+                text(
+                    "SELECT context_security_delete_expired_model_egress_audit(:org)"
+                ),
+                {"org": scenario.organization_id},
+            ).scalar_one() == 1
     finally:
         if server is not None:
             server.should_exit = True
@@ -993,3 +1176,4 @@ def test_packed_typescript_sdk_resolves_authorized_file_package_over_live_http(
             server_thread.join(timeout=10)
             assert not server_thread.is_alive()
         identity_engine.dispose()
+        operator_engine.dispose()

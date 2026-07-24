@@ -28,6 +28,7 @@ NON_OWNER_EVIDENCE_BY_TABLE: Mapping[str, str] = {
     "delivery_evidence": "PG-DELIVERY-EVIDENCE-063",
     "egress_grant": "PG-EGRESS-011",
     "egress_audit": "PG-EGRESS-011",
+    "model_egress_audit": "PG-MODEL-EGRESS-070",
     "membership": "PG-SCOPE-INTERSECTION-004",
     "organization_record": "PG-TENANT-FK-002",
     "context_resource": "PG-INDEX-NOT-AUTHORITY-005",

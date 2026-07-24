@@ -400,7 +400,12 @@ REQUIRED_POSTGRES_EVIDENCE: dict[str, tuple[str, ...]] = {
     "TRACE-REDACTION-012": ("PG-FIELD-PROJECTION-048",),
 }
 REQUIRED_POSTGRES_EVIDENCE["TRANSPORT-UNTRUSTED-008"] = ("PG-DELIVERY-EVIDENCE-063",)
-REQUIRED_POSTGRES_EVIDENCE["EGRESS-011"] = ("PG-ACTION-PERFORM-068",)
+REQUIRED_PROPERTY_EVIDENCE["EGRESS-011"] = ("TS-MODEL-EGRESS-070",)
+REQUIRED_POSTGRES_EVIDENCE["EGRESS-011"] = (
+    "PG-ACTION-PERFORM-068",
+    "PG-MODEL-EGRESS-070",
+)
+REQUIRED_RUNTIME_EVIDENCE["EGRESS-011"] = ("SDK-MODEL-EGRESS-070",)
 REQUIRED_POSTGRES_EVIDENCE["ACTION-SEPARATION-014"] = (
     "PG-ACTION-PREPARE-067",
     "PG-ACTION-PERFORM-068",
@@ -1471,6 +1476,84 @@ CANONICAL_CITATION_OPEN_ACTIVATION: dict[str, object] = {
     ],
 }
 
+CANONICAL_MODEL_EGRESS_ACTIVATION: dict[str, object] = {
+    "issueRef": "#70",
+    "invariantRef": "EGRESS-011",
+    "carrier": "private Package-bound deterministic TypeScript ModelGateway",
+    "status": "active_fail_closed",
+    "policyEpochScope": "organization-v0",
+    "controlBoundary": (
+        "generated SDK ContextPackage plus opaque model EgressGrant -> nominal "
+        "AuthorizedModelInput -> exact non-owner PostgreSQL redemption -> "
+        "deterministic ModelGateway twin -> bounded answer and digest-only audit"
+    ),
+    "testEvidence": [
+        {
+            "id": "TS-MODEL-EGRESS-070",
+            "surface": (
+                "tests/unit/test_bot_delivery_model_egress_contract.py::"
+                "test_typescript_model_egress_is_closed_pinned_and_zero_byte_on_denial"
+            ),
+            "oracle": (
+                "The private installed TypeScript package exposes only its closed "
+                "root, accepts one complete current SDK Package and one model grant "
+                "through nominal AuthorizedModelInput, sends only authorized blocks "
+                "and declared question/instructions to the exact deterministic twin, "
+                "and proves every binding mutation, replay, stale input, forged input, "
+                "invalid citation, and cost/time/output limit emits zero unauthorized "
+                "provider bytes or one generic unavailable result."
+            ),
+        },
+        {
+            "id": "SDK-MODEL-EGRESS-070",
+            "surface": (
+                "tests/integration/test_z_egress_grant_file.py::"
+                "test_packed_typescript_sdk_resolves_authorized_file_package_over_live_http"
+            ),
+            "oracle": (
+                "An installed generated SDK obtains one authorized File Package and "
+                "model grant from a real local HTTP API, then the installed "
+                "BotDelivery package invokes the deterministic twin exactly once and "
+                "returns a bounded answer whose citation is a subset of that Package; "
+                "grant replay emits zero additional bytes."
+            ),
+        },
+        {
+            "id": "PG-MODEL-EGRESS-070",
+            "surface": (
+                "tests/integration/test_z_egress_grant_file.py::"
+                "test_packed_typescript_sdk_resolves_authorized_file_package_over_live_http"
+            ),
+            "oracle": (
+                "The dedicated non-owner egress login redeems the exact Organization, "
+                "Package, payload, audience, purpose, epoch, provider, model, region, "
+                "retention, sensitivity, issuer, consumer, and profile bindings. "
+                "FORCE-RLS audit stores only digests, bounded usage, outcome category, "
+                "and lineage, and exact-Organization operator cleanup observes the "
+                "fixed database-clock retention window."
+            ),
+        },
+    ],
+    "deferredEvidence": [
+        "production provider ModelGateway conformance",
+        "streaming and cancellation semantics",
+        "group-public and asker-private answer orchestration",
+    ],
+    "futureCarriers": [
+        "production provider ModelGateway",
+        "streaming generation",
+        "group-public answer generation",
+        "complete BotDelivery orchestration",
+    ],
+    "notActive": [
+        "real model or provider network call",
+        "streaming tokens",
+        "group AudienceSnapshot",
+        "model-authored effect intent or ActionTicket",
+        "external channel effect",
+    ],
+}
+
 CANONICAL_ACTIVATIONS: list[dict[str, object]] = [
     CANONICAL_REVOCATION_ACTIVATION,
     CANONICAL_UNAVAILABLE_CAPABILITY_ACTIVATION,
@@ -1485,6 +1568,7 @@ CANONICAL_ACTIVATIONS: list[dict[str, object]] = [
     CANONICAL_ACTION_PREPARE_ACTIVATION,
     CANONICAL_ACTION_PERFORM_ACTIVATION,
     CANONICAL_CITATION_OPEN_ACTIVATION,
+    CANONICAL_MODEL_EGRESS_ACTIVATION,
 ]
 CANONICAL_ACTIVATION_ISSUE_LIST = ", ".join(
     f"Issue {activation['issueRef']}" for activation in CANONICAL_ACTIVATIONS
