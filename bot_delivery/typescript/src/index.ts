@@ -443,21 +443,53 @@ function requirePackage(
       requireRef("mirrored source ACL projection", sourceAclRecord.projectionRef);
     } else if (sourceAclRecord.kind === "live") {
       requireExactKeys("live source ACL", sourceAcl, [
-        "aclAsOf", "providerDecisionRef", "providerRef", "providerVersionRef", "kind",
+        "checkedAt", "kind", "sourceDecisionRef", "verificationProtocolRef",
       ]);
-      requireCanonicalTimestamp("live source ACL asOf", sourceAclRecord.aclAsOf);
-      requireRef("live source ACL provider decision", sourceAclRecord.providerDecisionRef);
-      requireRef("live source ACL provider", sourceAclRecord.providerRef);
-      requireRef("live source ACL provider version", sourceAclRecord.providerVersionRef);
+      requireCanonicalTimestamp("live source ACL checkedAt", sourceAclRecord.checkedAt);
+      requireRef("live source ACL source decision", sourceAclRecord.sourceDecisionRef);
+      requireRef("live source ACL verification protocol", sourceAclRecord.verificationProtocolRef);
     } else if (sourceAclRecord.kind === "weak") {
       requireExactKeys("weak source ACL", sourceAcl, [
-        "aclAsOf", "kind", "reason", "sourceRef",
+        "boundedMembershipEvidenceRef",
+        "checkedAt",
+        "declarationRef",
+        "expiresAt",
+        "historySemanticsRef",
+        "kind",
+        "membershipCompleteness",
+        "sensitivityPolicyRef",
+        "snapshotAsOf",
       ]);
-      requireCanonicalTimestamp("weak source ACL asOf", sourceAclRecord.aclAsOf);
-      requireRef("weak source ACL reason", sourceAclRecord.reason);
-      if (sourceAclRecord.sourceRef !== record.sourceRef) {
-        throw new TypeError("weak source ACL source must match Evidence");
+      const weakCheckedAt = requireCanonicalTimestamp(
+        "weak source ACL checkedAt",
+        sourceAclRecord.checkedAt,
+      );
+      const weakSnapshotAsOf = requireCanonicalTimestamp(
+        "weak source ACL snapshotAsOf",
+        sourceAclRecord.snapshotAsOf,
+      );
+      const weakExpiresAt = requireCanonicalTimestamp(
+        "weak source ACL expiresAt",
+        sourceAclRecord.expiresAt,
+      );
+      if (
+        weakSnapshotAsOf > weakCheckedAt
+        || weakCheckedAt > asOf
+        || currentMicroseconds >= weakExpiresAt
+        || expiresAt > weakExpiresAt
+      ) {
+        throw new TypeError("weak source ACL proof must cover the current Package");
       }
+      requireRef("weak source ACL declaration", sourceAclRecord.declarationRef);
+      requireRef(
+        "weak source ACL bounded membership Evidence",
+        sourceAclRecord.boundedMembershipEvidenceRef,
+      );
+      if (sourceAclRecord.membershipCompleteness !== "complete") {
+        throw new TypeError("weak source ACL membership must be complete");
+      }
+      requireRef("weak source ACL sensitivity policy", sourceAclRecord.sensitivityPolicyRef);
+      requireRef("weak source ACL history semantics", sourceAclRecord.historySemanticsRef);
     } else {
       throw new TypeError("Evidence source ACL kind is outside the closed union");
     }

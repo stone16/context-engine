@@ -61,7 +61,37 @@ Pool.prototype.query = async function query(config) {
   return database.query(config);
 };
 
-function evidence(index) {
+function sourceAclEvidence(index, kind) {
+  if (kind === "live") {
+    return {
+      checkedAt: packageAsOf,
+      kind,
+      sourceDecisionRef: `source-decision:${index}`,
+      verificationProtocolRef: "same-operation-projection-v1",
+    };
+  }
+  if (kind === "weak") {
+    return {
+      boundedMembershipEvidenceRef: `bounded-membership:${index}`,
+      checkedAt: packageAsOf,
+      declarationRef: `weak-source-declaration:${index}`,
+      expiresAt: packageExpiresAt,
+      historySemanticsRef: "current-members-only-v1",
+      kind,
+      membershipCompleteness: "complete",
+      sensitivityPolicyRef: "weak-source-sensitivity-v1",
+      snapshotAsOf: packageAsOf,
+    };
+  }
+  return {
+    aclAsOf: packageAsOf,
+    freshnessProfileRef: "file-source-access-current-transaction-v1",
+    kind: "mirrored",
+    projectionRef: `source-acl:${index}`,
+  };
+}
+
+function evidence(index, aclKind = "mirrored") {
   const suffix = String(index).repeat(64);
   return {
     authorizationAsOf: packageAsOf,
@@ -76,19 +106,14 @@ function evidence(index) {
     resourceRef: "resource:handbook",
     revisionRef: "revision:handbook:v1",
     runRef: "run:private-answer",
-    sourceAclEvidence: {
-      aclAsOf: packageAsOf,
-      freshnessProfileRef: "file-source-access-current-transaction-v1",
-      kind: "mirrored",
-      projectionRef: `source-acl:${index}`,
-    },
+    sourceAclEvidence: sourceAclEvidence(index, aclKind),
     sourceRef: "source:handbook",
   };
 }
 
-function contextPackage() {
-  const first = evidence(1);
-  const second = evidence(2);
+function contextPackage(aclKind = "mirrored") {
+  const first = evidence(1, aclKind);
+  const second = evidence(2, aclKind);
   const document = {
     asOf: packageAsOf,
     audienceDigest: "a".repeat(64),
@@ -348,6 +373,56 @@ test("AuthorizedModelInput is nominal, redacted, and bound to one complete curre
     }),
     /only be constructed by BotDelivery/,
   );
+});
+
+test("all public SourceAclEvidence variants can become authorized model input", () => {
+  const profile = privateModelGatewayProfileV1();
+  for (const kind of ["live", "mirrored", "weak"]) {
+    const input = prepareAuthorizedModelInput({
+      envelope: { instructions: "Use this.", question: "Question?" },
+      grant,
+      now,
+      package: contextPackage(kind),
+      profile,
+    });
+    assert.equal(input instanceof AuthorizedModelInput, true, kind);
+  }
+});
+
+test("malformed public SourceAclEvidence variants fail closed", () => {
+  const profile = privateModelGatewayProfileV1();
+  const base = {
+    envelope: { instructions: "Use this.", question: "Question?" },
+    grant,
+    now,
+    profile,
+  };
+  for (const [kind, mutation] of [
+    ["live", { verificationProtocolRef: "" }],
+    ["mirrored", { aclAsOf: "not-a-timestamp" }],
+    ["weak", { membershipCompleteness: "partial" }],
+    ["weak", { sourceRef: "source:unexpected" }],
+    ["weak", { expiresAt: new Date(now.getTime() - 1_000).toISOString().replace(".000Z", "Z") }],
+    ["weak", { expiresAt: new Date(now.getTime() + 60_000).toISOString().replace(".000Z", "Z") }],
+    ["weak", { snapshotAsOf: new Date(now.getTime() + 1_000).toISOString().replace(".000Z", "Z") }],
+  ]) {
+    const packageValue = contextPackage(kind);
+    const { packageDigest: ignored, ...document } = packageValue;
+    assert.equal(typeof ignored, "string");
+    document.evidence = document.evidence.map((item, index) => (
+      index === 0
+        ? { ...item, sourceAclEvidence: { ...item.sourceAclEvidence, ...mutation } }
+        : item
+    ));
+    assert.throws(
+      () => prepareAuthorizedModelInput({
+        ...base,
+        package: { ...document, packageDigest: packageDigest(document) },
+      }),
+      /source ACL/,
+      `${kind}: ${JSON.stringify(mutation)}`,
+    );
+  }
 });
 
 test("only the exact deterministic ModelGateway twin can own provider bytes", () => {

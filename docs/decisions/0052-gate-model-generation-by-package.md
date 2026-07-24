@@ -37,6 +37,11 @@ the exact frozen Package shape and digest, sufficient coverage, one-to-one
 Block/Evidence closure, Evidence lineage, audience, purpose, Policy Epoch,
 expiry, and input limits, then creates a nominal, redacted, non-serializing
 `AuthorizedModelInput`. Callers cannot construct or recover its private state.
+Live, Mirrored, and Weak SourceAclEvidence are validated against the exact
+public OpenAPI union. Weak evidence additionally requires an ordered
+snapshot/check/package timeline, a proof not expired at preparation time, and
+a proof expiry no earlier than Package expiry; malformed or shorter-lived
+proofs cannot cross the model boundary.
 
 The boundary has no public constructor or database injection interface. The
 sealed `createPrivateModelGenerationBoundary` factory creates and owns its
