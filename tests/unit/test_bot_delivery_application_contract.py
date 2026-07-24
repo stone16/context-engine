@@ -58,6 +58,9 @@ def test_private_bot_application_has_one_closed_process_and_import_boundary() ->
     assert "PostgreSQLFileImportWorker" in worker
     assert "FileImportLeaseRedemption" in worker
 
+    makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+    assert "typecheck: sdk-build action-build" in makefile
+
 
 def test_public_bot_contract_does_not_export_trusted_fact_or_intent_factories() -> None:
     public_source = (BOT_ROOT / "src/public.ts").read_text(encoding="utf-8")
