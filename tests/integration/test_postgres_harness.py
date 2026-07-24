@@ -258,6 +258,13 @@ def test_post_init_role_provisioning_repairs_a_legacy_volume_idempotently(
 
             provision_security_roles(bootstrap_connection, contract)
             bootstrap_connection.commit()
+            bootstrap_connection.execute(
+                f"GRANT {CONTROL_ROLE} TO {ACTION_EXECUTE_DEFINER_ROLE}"
+            )
+            bootstrap_connection.execute(
+                f"GRANT {ACTION_EXECUTE_DEFINER_ROLE} TO {ACTION_ROLE}"
+            )
+            bootstrap_connection.commit()
             provision_security_roles(bootstrap_connection, contract)
             bootstrap_connection.commit()
             facts = bootstrap_connection.execute(
@@ -305,12 +312,35 @@ def test_post_init_role_provisioning_repairs_a_legacy_volume_idempotently(
                         SELECT count(*)
                         FROM pg_auth_members AS reader_members
                         WHERE reader_members.roleid = reader_definer.oid
+                    ),
+                    action_execute_definer.rolcanlogin,
+                    action_execute_definer.rolsuper,
+                    action_execute_definer.rolcreaterole,
+                    action_execute_definer.rolcreatedb,
+                    action_execute_definer.rolinherit,
+                    action_execute_definer.rolreplication,
+                    action_execute_definer.rolbypassrls,
+                    action_execute_membership.admin_option,
+                    action_execute_membership.inherit_option,
+                    action_execute_membership.set_option,
+                    NOT EXISTS (
+                        SELECT 1
+                        FROM pg_auth_members AS granted_to_action_execute
+                        WHERE granted_to_action_execute.member =
+                              action_execute_definer.oid
+                    ),
+                    (
+                        SELECT count(*)
+                        FROM pg_auth_members AS action_execute_members
+                        WHERE action_execute_members.roleid =
+                              action_execute_definer.oid
                     )
                 FROM pg_roles AS control
                 CROSS JOIN pg_roles AS operator
                 CROSS JOIN pg_roles AS definer
                 CROSS JOIN pg_roles AS worker_definer
                 CROSS JOIN pg_roles AS reader_definer
+                CROSS JOIN pg_roles AS action_execute_definer
                 JOIN pg_auth_members AS access_membership
                   ON access_membership.roleid = definer.oid
                 JOIN pg_roles AS migrator
@@ -321,11 +351,15 @@ def test_post_init_role_provisioning_repairs_a_legacy_volume_idempotently(
                 JOIN pg_auth_members AS reader_membership
                   ON reader_membership.roleid = reader_definer.oid
                  AND reader_membership.member = migrator.oid
+                JOIN pg_auth_members AS action_execute_membership
+                  ON action_execute_membership.roleid = action_execute_definer.oid
+                 AND action_execute_membership.member = migrator.oid
                 WHERE control.rolname = %s
                   AND operator.rolname = %s
                   AND definer.rolname = %s
                   AND worker_definer.rolname = %s
                   AND reader_definer.rolname = %s
+                  AND action_execute_definer.rolname = %s
                   AND migrator.rolname = %s
                 """,
                 (
@@ -334,6 +368,7 @@ def test_post_init_role_provisioning_repairs_a_legacy_volume_idempotently(
                     ACCESS_POLICY_DEFINER_ROLE,
                     WORKER_LEASE_DEFINER_ROLE,
                     CONTEXT_RUN_READER_DEFINER_ROLE,
+                    ACTION_EXECUTE_DEFINER_ROLE,
                     MIGRATOR_ROLE,
                 ),
             ).fetchone()
@@ -357,6 +392,18 @@ def test_post_init_role_provisioning_repairs_a_legacy_volume_idempotently(
                 False,
                 False,
                 True,
+                False,
+                False,
+                False,
+                False,
+                False,
+                False,
+                False,
+                False,
+                False,
+                True,
+                True,
+                1,
                 False,
                 False,
                 False,

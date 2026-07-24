@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 import os
+import select
 import subprocess
 from collections import Counter
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from time import monotonic
 from typing import Any, cast
 from uuid import UUID, uuid4
 
@@ -33,6 +35,27 @@ CONSUMER_REF = "consumer:private-bot"
 PURPOSE = "context.answer"
 EVIDENCE_REF = "der_" + "5" * 64
 OTHER_EVIDENCE_REF = "der_" + "6" * 64
+
+
+def _read_process_line(
+    process: subprocess.Popen[bytes], *, timeout_seconds: float
+) -> bytes:
+    assert process.stdout is not None
+    deadline = monotonic() + timeout_seconds
+    line = bytearray()
+    descriptor = process.stdout.fileno()
+    while b"\n" not in line:
+        remaining = deadline - monotonic()
+        if remaining <= 0:
+            raise subprocess.TimeoutExpired(process.args, timeout_seconds)
+        readable, _, _ = select.select([descriptor], [], [], remaining)
+        if not readable:
+            raise subprocess.TimeoutExpired(process.args, timeout_seconds)
+        chunk = os.read(descriptor, 4096)
+        if not chunk:
+            break
+        line.extend(chunk)
+    return bytes(line)
 
 
 def _node_database_url(configuration: DatabaseConfiguration) -> str:
@@ -110,52 +133,56 @@ def _run_live_perform(
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        text=True,
     )
-    assert process.stdout is not None
-    assert process.stdin is not None
-    ready = process.stdout.readline()
-    if ready == "":
-        assert process.stderr is not None
-        stderr = process.stderr.read()
-        process.wait(timeout=5)
-        raise AssertionError(
-            f"live perform exited before stale mutation: {stderr}"
+    try:
+        assert process.stdout is not None
+        assert process.stdin is not None
+        ready = _read_process_line(process, timeout_seconds=10)
+        if ready == b"":
+            assert process.stderr is not None
+            _, stderr = process.communicate(timeout=5)
+            raise AssertionError(
+                "live perform exited before stale mutation: "
+                f"{stderr.decode(errors='replace')}"
+            )
+        assert ready == (
+            b"READY_FOR_EPOCH_CHANGE\n"
+            if stale_mutation == "epoch"
+            else b"READY_FOR_MEMBERSHIP_CHANGE\n"
         )
-    assert ready == (
-        "READY_FOR_EPOCH_CHANGE\n"
-        if stale_mutation == "epoch"
-        else "READY_FOR_MEMBERSHIP_CHANGE\n"
-    )
-    with migration_engine.begin() as connection:
-        if stale_mutation == "epoch":
-            connection.execute(
-                text(
-                    "UPDATE organization_policy_epoch SET policy_epoch = 2 "
-                    "WHERE organization_id = "
-                    ":organization_id AND policy_epoch = 1"
-                ),
-                {"organization_id": organization_id},
-            )
-        else:
-            connection.execute(
-                text(
-                    "UPDATE membership SET status = 'revoked', "
-                    "valid_until = clock_timestamp() WHERE organization_id = "
-                    ":organization_id AND membership_id = :membership_id"
-                ),
-                {
-                    "membership_id": membership_id,
-                    "organization_id": organization_id,
-                },
-            )
-    process.stdin.write("continue\n")
-    process.stdin.flush()
-    stdout, stderr = process.communicate(timeout=30)
-    assert process.returncode == 0, stderr
-    result = json.loads(stdout)
-    assert isinstance(result, dict)
-    return cast(dict[str, object], result)
+        with migration_engine.begin() as connection:
+            if stale_mutation == "epoch":
+                connection.execute(
+                    text(
+                        "UPDATE organization_policy_epoch SET policy_epoch = 2 "
+                        "WHERE organization_id = "
+                        ":organization_id AND policy_epoch = 1"
+                    ),
+                    {"organization_id": organization_id},
+                )
+            else:
+                connection.execute(
+                    text(
+                        "UPDATE membership SET status = 'revoked', "
+                        "valid_until = clock_timestamp() WHERE organization_id = "
+                        ":organization_id AND membership_id = :membership_id"
+                    ),
+                    {
+                        "membership_id": membership_id,
+                        "organization_id": organization_id,
+                    },
+                )
+        process.stdin.write(b"continue\n")
+        process.stdin.flush()
+        stdout, stderr = process.communicate(timeout=30)
+        assert process.returncode == 0, stderr.decode(errors="replace")
+        result = json.loads(stdout)
+        assert isinstance(result, dict)
+        return cast(dict[str, object], result)
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)
 
 
 @pytest.mark.security_evidence(id="PG-ACTION-PERFORM-068", layer="postgres")

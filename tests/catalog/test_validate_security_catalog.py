@@ -1796,7 +1796,7 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
 
         self.assertEqual(catalog["catalogVersion"], "1.3.0")
         self.assertEqual(
-            issue_refs[-11:],
+            issue_refs[-12:],
             [
                 "#15",
                 "#16",
@@ -1809,10 +1809,15 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
                 "#66",
                 "#64",
                 "#67",
+                "#68",
             ],
         )
         self.assertIn(
             "docs/decisions/0031-persist-authorized-context-run-lineage.md",
+            document_refs,
+        )
+        self.assertIn(
+            "docs/decisions/0050-perform-one-exact-private-effect.md",
             document_refs,
         )
         for boundary in (
