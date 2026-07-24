@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, contextmanager
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 from uuid import UUID
@@ -364,6 +364,25 @@ class ExactPrivateDeliveryEvidencePort:
             logical_resolution_ref="delivery-resolution:private-request",
             profile_ref="private-delivery-test-v1",
         )
+
+
+class MismatchedCitationDeliveryEvidencePort(ExactPrivateDeliveryEvidencePort):
+    def __init__(self, mismatch: str) -> None:
+        super().__init__(evidence_digest=PRIVATE_EVIDENCE_DIGEST)
+        self.mismatch = mismatch
+
+    def redeem_private(
+        self,
+        request: PrivateDeliveryEvidenceRedemption,
+    ) -> RedeemedPrivateDeliveryEvidence | None:
+        redeemed = super().redeem_private(request)
+        assert redeemed is not None
+        redeemed = replace(redeemed, purpose="citation.open")
+        if self.mismatch == "purpose":
+            return replace(redeemed, purpose="context.answer")
+        if self.mismatch == "destination":
+            return replace(redeemed, destination_ref="chat:private:wrong")
+        return replace(redeemed, audience_digest="f" * 64)
 
 
 class DeterministicOrganizationAuthority:
@@ -808,6 +827,155 @@ def test_delivery_evidence_is_rejected_for_inactive_non_acquire_carriers() -> No
     assert response.status_code == 401
     assert response.content == b'{"code":"authentication_failed"}'
     assert port.requests == []
+    assert content_io.total_calls == 0
+
+
+@pytest.mark.parametrize("mismatch", ("purpose", "destination", "audience"))
+def test_open_citation_private_binding_mismatch_is_generic_before_content_io(
+    mismatch: str,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    port = MismatchedCitationDeliveryEvidencePort(mismatch)
+    content_io = DownstreamContentIoSpy()
+    client = TestClient(
+        create_app(
+            authenticator=DeterministicAuthenticator(
+                private_destination_ref="chat:private:42"
+            ),
+            organization_authority=DeterministicOrganizationAuthority(),
+            membership_authority=DeterministicMembershipAuthority(port),
+            runtime=Runtime(
+                required_kernel_dependencies(),
+                content_io=RuntimeContentIo(
+                    index=content_io,
+                    provider=content_io,
+                    source_content=content_io,
+                ),
+                query_digest_keyring=TEST_QUERY_DIGEST_KEYRING,
+                clock=lambda: RECEIVED_AT,
+            ),
+            clock=lambda: RECEIVED_AT,
+        )
+    )
+
+    response = client.post(
+        "/v0/resolve",
+        headers={
+            "Authorization": f"Bearer {VALID_TOKEN}",
+            "X-Context-Request-Id": "private-request",
+            "X-Context-Delivery-Evidence-Ref": PRIVATE_EVIDENCE_REF,
+        },
+        json={
+            "kind": "open_citation",
+            "citationOpenRef": "cor_" + "a" * 64,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.content == b'{"kind":"citation_not_available"}'
+    assert len(port.requests) == 1
+    assert port.requests[0].purpose == "citation.open"
+    assert content_io.total_calls == 0
+    assert PRIVATE_EVIDENCE_REF not in response.text
+    assert PRIVATE_EVIDENCE_REF not in "".join(
+        record.getMessage() for record in caplog.records
+    )
+
+
+@pytest.mark.parametrize("rejection", ("organization", "membership"))
+def test_authenticated_open_citation_wrong_tenant_actor_is_generic(
+    rejection: str,
+) -> None:
+    content_io = DownstreamContentIoSpy()
+    client = TestClient(
+        create_app(
+            authenticator=DeterministicAuthenticator(),
+            organization_authority=(
+                RejectingTestOrganizationAuthority()
+                if rejection == "organization"
+                else DeterministicOrganizationAuthority()
+            ),
+            membership_authority=(
+                RejectingTestMembershipAuthority()
+                if rejection == "membership"
+                else DeterministicMembershipAuthority()
+            ),
+            runtime=Runtime(
+                required_kernel_dependencies(),
+                content_io=RuntimeContentIo(
+                    index=content_io,
+                    provider=content_io,
+                    source_content=content_io,
+                ),
+                query_digest_keyring=TEST_QUERY_DIGEST_KEYRING,
+                clock=lambda: RECEIVED_AT,
+            ),
+            clock=lambda: RECEIVED_AT,
+        )
+    )
+
+    response = client.post(
+        "/v0/resolve",
+        headers={
+            "Authorization": f"Bearer {VALID_TOKEN}",
+            "X-Context-Request-Id": f"citation-wrong-{rejection}",
+        },
+        json={
+            "kind": "open_citation",
+            "citationOpenRef": "cor_" + "b" * 64,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.content == b'{"kind":"citation_not_available"}'
+    assert content_io.total_calls == 0
+
+
+@pytest.mark.parametrize("private_evidence_present", (False, True))
+def test_open_citation_missing_private_transport_half_is_generic(
+    private_evidence_present: bool,
+) -> None:
+    content_io = DownstreamContentIoSpy()
+    client = TestClient(
+        create_app(
+            authenticator=DeterministicAuthenticator(
+                private_destination_ref=(
+                    None if private_evidence_present else "chat:private:42"
+                )
+            ),
+            organization_authority=DeterministicOrganizationAuthority(),
+            membership_authority=DeterministicMembershipAuthority(),
+            runtime=Runtime(
+                required_kernel_dependencies(),
+                content_io=RuntimeContentIo(
+                    index=content_io,
+                    provider=content_io,
+                    source_content=content_io,
+                ),
+                query_digest_keyring=TEST_QUERY_DIGEST_KEYRING,
+                clock=lambda: RECEIVED_AT,
+            ),
+            clock=lambda: RECEIVED_AT,
+        )
+    )
+    headers = {
+        "Authorization": f"Bearer {VALID_TOKEN}",
+        "X-Context-Request-Id": "citation-private-half",
+    }
+    if private_evidence_present:
+        headers["X-Context-Delivery-Evidence-Ref"] = PRIVATE_EVIDENCE_REF
+
+    response = client.post(
+        "/v0/resolve",
+        headers=headers,
+        json={
+            "kind": "open_citation",
+            "citationOpenRef": "cor_" + "c" * 64,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.content == b'{"kind":"citation_not_available"}'
     assert content_io.total_calls == 0
 
 

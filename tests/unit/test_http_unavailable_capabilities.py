@@ -206,8 +206,6 @@ def test_accept_005_continue_is_generic_non_retryable_and_zero_io(
     )
 
 
-@pytest.mark.security_evidence(id="RUNTIME-CITATION-AUTH-010", layer="runtime")
-@pytest.mark.security_evidence(id="FIXTURE-ACCEPT-010", layer="runtime")
 @pytest.mark.parametrize(
     "locator",
     ("citation-revoked", "citation-missing", "continuation-shaped-value"),

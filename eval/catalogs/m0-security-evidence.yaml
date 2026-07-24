@@ -84,9 +84,9 @@
     {"id": "PROP-NON-ENUMERATION-009", "layer": "property", "selector": "tests/unit/test_runtime_authorized_evidence.py::test_denied_cross_organization_and_missing_candidates_share_one_runtime_outcome"},
     {"id": "PG-NON-ENUMERATION-009", "layer": "postgres", "selector": "tests/integration/test_runtime_non_enumeration_integration.py::test_real_postgres_http_denied_and_missing_are_externally_equivalent"},
     {"id": "RUNTIME-NON-ENUMERATION-009", "layer": "runtime", "selector": "tests/unit/test_runtime_authorized_evidence.py::test_runtime_canonical_empty_package_is_equal_for_every_internal_branch"},
-    {"id": "PROP-CITATION-AUTH-010", "layer": "property", "selector": "tests/unit/test_runtime_unavailable_capabilities.py::test_capability_declarations_are_closed_and_m0_does_not_false_green_carriers"},
-    {"id": "PG-CITATION-AUTH-010", "layer": "postgres", "selector": "tests/integration/test_m0_unavailable_security_carriers.py::test_unavailable_citation_and_real_provider_carriers_fail_closed"},
-    {"id": "RUNTIME-CITATION-AUTH-010", "layer": "runtime", "selector": "tests/unit/test_http_unavailable_capabilities.py::test_accept_010_open_citation_is_generic_and_zero_io"},
+    {"id": "PROP-CITATION-AUTH-010", "layer": "property", "selector": "tests/unit/test_citation_open.py::test_cross_kind_and_forged_locator_are_generic_not_available"},
+    {"id": "PG-CITATION-AUTH-010", "layer": "postgres", "selector": "tests/integration/test_citation_open.py::test_citation_locator_is_digest_only_multi_use_and_function_only"},
+    {"id": "RUNTIME-CITATION-AUTH-010", "layer": "runtime", "selector": "tests/integration/test_z_egress_grant_file.py::test_file_http_citation_is_not_consumed_by_denied_reader"},
     {"id": "PROP-EGRESS-011", "layer": "property", "selector": "tests/unit/test_egress_grant.py::test_each_egress_binding_mutation_and_cross_kind_emits_zero_bytes_effects"},
     {"id": "PG-EGRESS-011", "layer": "postgres", "selector": "tests/integration/test_egress_grant.py::test_digest_only_grant_is_atomic_one_shot_and_audited"},
     {"id": "RUNTIME-EGRESS-011", "layer": "runtime", "selector": "tests/integration/test_z_egress_grant_file.py::test_file_http_package_redeems_exact_model_grant_before_gateway_bytes"},
@@ -113,7 +113,7 @@
     {"id": "FIXTURE-ACCEPT-007", "layer": "runtime", "selector": "tests/unit/test_http_trust_boundary.py::test_trusted_field_injection_is_closed_before_domain_execution"},
     {"id": "FIXTURE-ACCEPT-008", "layer": "runtime", "selector": "tests/integration/test_worker_lease.py::test_valid_lease_completes_once_through_worker_application_and_replay_is_zero"},
     {"id": "FIXTURE-ACCEPT-009", "layer": "runtime", "selector": "tests/unit/test_http_unavailable_capabilities.py::test_accept_009_server_owned_unavailable_source_paths_are_generic_and_zero_io"},
-    {"id": "FIXTURE-ACCEPT-010", "layer": "runtime", "selector": "tests/unit/test_http_unavailable_capabilities.py::test_accept_010_open_citation_is_generic_and_zero_io"},
+    {"id": "FIXTURE-ACCEPT-010", "layer": "runtime", "selector": "tests/integration/test_z_egress_grant_file.py::test_file_http_citation_is_not_consumed_by_denied_reader"},
     {"id": "FIXTURE-ACCEPT-011", "layer": "runtime", "selector": "tests/integration/test_runtime_non_enumeration_integration.py::test_real_postgres_http_denied_and_missing_are_externally_equivalent"},
     {"id": "FIXTURE-ACCEPT-012", "layer": "runtime", "selector": "tests/unit/test_ticket_audience_separation.py::test_accept_012_context_read_ticket_cannot_create_an_action_effect"}
   ],
@@ -144,7 +144,7 @@
     {"fixtureRef": "ACCEPT-007", "carrierStatusAtM0": "available", "m0Expectation": "active_fail_closed", "evidenceRefs": ["FIXTURE-ACCEPT-007"], "hardOracleEvidenceRefs": {"unauthorizedEvidenceCount": ["FIXTURE-ACCEPT-007"], "wrongOrganizationEffectCount": ["FIXTURE-ACCEPT-007"], "missingContextFallbackCount": ["FIXTURE-ACCEPT-007"]}},
     {"fixtureRef": "ACCEPT-008", "carrierStatusAtM0": "future", "m0Expectation": "fail_closed", "evidenceRefs": ["FIXTURE-ACCEPT-008"], "hardOracleEvidenceRefs": {"unauthorizedEvidenceCount": ["FIXTURE-ACCEPT-008"], "wrongOrganizationEffectCount": ["FIXTURE-ACCEPT-008"], "missingContextFallbackCount": ["FIXTURE-ACCEPT-008"]}},
     {"fixtureRef": "ACCEPT-009", "carrierStatusAtM0": "future", "m0Expectation": "fail_closed", "evidenceRefs": ["FIXTURE-ACCEPT-009"], "hardOracleEvidenceRefs": {"unauthorizedEvidenceCount": ["FIXTURE-ACCEPT-009"], "wrongOrganizationEffectCount": ["FIXTURE-ACCEPT-009"], "missingContextFallbackCount": ["FIXTURE-ACCEPT-009"]}},
-    {"fixtureRef": "ACCEPT-010", "carrierStatusAtM0": "future", "m0Expectation": "fail_closed", "evidenceRefs": ["FIXTURE-ACCEPT-010"], "hardOracleEvidenceRefs": {"unauthorizedEvidenceCount": ["FIXTURE-ACCEPT-010"], "wrongOrganizationEffectCount": ["FIXTURE-ACCEPT-010"], "missingContextFallbackCount": ["FIXTURE-ACCEPT-010"]}},
+    {"fixtureRef": "ACCEPT-010", "carrierStatusAtM0": "available", "m0Expectation": "active_fail_closed", "evidenceRefs": ["FIXTURE-ACCEPT-010"], "hardOracleEvidenceRefs": {"unauthorizedEvidenceCount": ["FIXTURE-ACCEPT-010"], "wrongOrganizationEffectCount": ["FIXTURE-ACCEPT-010"], "missingContextFallbackCount": ["FIXTURE-ACCEPT-010"]}},
     {"fixtureRef": "ACCEPT-011", "carrierStatusAtM0": "available", "m0Expectation": "active_fail_closed", "evidenceRefs": ["FIXTURE-ACCEPT-011"], "hardOracleEvidenceRefs": {"unauthorizedEvidenceCount": ["FIXTURE-ACCEPT-011"], "wrongOrganizationEffectCount": ["FIXTURE-ACCEPT-011"], "missingContextFallbackCount": ["FIXTURE-ACCEPT-011"]}},
     {"fixtureRef": "ACCEPT-012", "carrierStatusAtM0": "unavailable", "m0Expectation": "fail_closed", "evidenceRefs": ["FIXTURE-ACCEPT-012"], "hardOracleEvidenceRefs": {"unauthorizedEvidenceCount": ["FIXTURE-ACCEPT-012"], "wrongOrganizationEffectCount": ["FIXTURE-ACCEPT-012"], "missingContextFallbackCount": ["FIXTURE-ACCEPT-012"]}}
   ]

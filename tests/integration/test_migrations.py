@@ -4,7 +4,7 @@ import json
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from time import monotonic, sleep
 from uuid import UUID, uuid4
@@ -20,6 +20,15 @@ from engine.persistence import (
     DatabaseConfiguration,
     PostgreSQLWorkerLeaseIssuer,
     create_database_engine,
+)
+from engine.persistence.membership_context import (
+    MembershipIdentity,
+    PostgreSQLMembershipAuthority,
+)
+from engine.runtime.citation import (
+    CitationOpenIssue,
+    CitationOpenProfile,
+    issue_citation_open_ref,
 )
 from engine.supply import (
     MarkdownCompilerConfig,
@@ -43,7 +52,7 @@ from tests.support.file_source_progress import clear_file_source_progress_projec
 
 pytestmark = pytest.mark.integration
 ROOT = Path(__file__).parents[2]
-_HEAD_REVISION = "20260724_0023"
+_HEAD_REVISION = "20260724_0024"
 HEAD_TABLES = [
     "action_delivery_attempt",
     "action_perform_audit",
@@ -54,6 +63,7 @@ HEAD_TABLES = [
     "action_ticket",
     "active_release_manifest",
     "alembic_version",
+    "citation_open_locator",
     "context_fragment",
     "context_fragment_field",
     "context_resource",
@@ -716,9 +726,7 @@ def test_file_source_offboarding_revision_downgrades_and_reapplies_cleanly(
         command.upgrade(alembic_configuration, "head")
 
     assert _revision_rows(migration_configuration) == [_HEAD_REVISION]
-    assert "file_source_cleanup_intent" in _application_tables(
-        migration_configuration
-    )
+    assert "file_source_cleanup_intent" in _application_tables(migration_configuration)
     engine = create_database_engine(migration_configuration)
     try:
         with engine.connect() as connection:
@@ -756,10 +764,7 @@ def test_file_source_offboarding_revision_downgrades_and_reapplies_cleanly(
                 )
             ).all()
         assert len(privileges) == 2
-        assert all(
-            tuple(row)[1:] == (False, False, False, False)
-            for row in privileges
-        )
+        assert all(tuple(row)[1:] == (False, False, False, False) for row in privileges)
     finally:
         engine.dispose()
 
@@ -779,14 +784,127 @@ def test_delivery_evidence_revision_downgrades_only_while_empty(
     try:
         command.downgrade(alembic_configuration, "20260723_0018")
         assert _revision_rows(migration_configuration) == ["20260723_0018"]
-        assert "delivery_evidence" not in _application_tables(
+        assert "delivery_evidence" not in _application_tables(migration_configuration)
+    finally:
+        command.upgrade(alembic_configuration, "head")
+
+    assert _revision_rows(migration_configuration) == [_HEAD_REVISION]
+    assert "delivery_evidence" in _application_tables(migration_configuration)
+
+
+def test_citation_open_revision_downgrades_only_while_empty(
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    """Issue #69 carrier can be removed only before locator lineage exists."""
+
+    alembic_configuration = Config(ROOT / "alembic.ini")
+    engine = create_database_engine(migration_configuration)
+    try:
+        with engine.begin() as connection:
+            connection.execute(text("DELETE FROM citation_open_locator"))
+    finally:
+        engine.dispose()
+    try:
+        command.downgrade(alembic_configuration, "20260724_0023")
+        assert _revision_rows(migration_configuration) == ["20260724_0023"]
+        assert "citation_open_locator" not in _application_tables(
             migration_configuration
         )
     finally:
         command.upgrade(alembic_configuration, "head")
 
     assert _revision_rows(migration_configuration) == [_HEAD_REVISION]
-    assert "delivery_evidence" in _application_tables(migration_configuration)
+    assert "citation_open_locator" in _application_tables(migration_configuration)
+
+
+def test_citation_open_revision_refuses_downgrade_with_retained_lineage(
+    tmp_path: Path,
+    migration_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+    guarded_worker_engine: Engine,
+    guarded_runtime_engine: Engine,
+) -> None:
+    """Issue #69 rollback retains digest lineage until profile cleanup."""
+
+    scenario = _prepare_file_import_scenario(
+        tmp_path,
+        migration_configuration,
+        guarded_control_engine,
+    )
+    assert scenario.token is not None
+    published = _run_file_import(
+        scenario,
+        scenario.prepared,
+        scenario.token,
+        guarded_worker_engine,
+    )
+    engine = create_database_engine(migration_configuration)
+    try:
+        with engine.connect() as connection:
+            user_id = connection.execute(
+                text(
+                    "SELECT user_id FROM membership WHERE organization_id = :org "
+                    "AND membership_id = :membership"
+                ),
+                {"org": scenario.organization_id, "membership": scenario.membership_id},
+            ).scalar_one()
+        now = datetime.now(UTC)
+        authority = PostgreSQLMembershipAuthority(guarded_runtime_engine)
+        with authority.current_user_actor(
+            MembershipIdentity(
+                organization_id=scenario.organization_id,
+                user_id=user_id,
+                membership_id=scenario.membership_id,
+                membership_version=1,
+                principal_ref="principal:file-tracer",
+                request_id="migration-citation-lineage",
+                authentication_binding_ref="binding:file-tracer",
+                checked_at=now,
+            )
+        ) as verification:
+            assert verification.citation_open_session is not None
+            issue_citation_open_ref(
+                verification.citation_open_session,
+                CitationOpenIssue(
+                    organization_id=scenario.organization_id,
+                    package_ref="pkg_" + "a" * 32,
+                    evidence_ref="ev_" + "b" * 64,
+                    resource_ref=published.candidate_ref.resource_ref,
+                    revision_id=UUID(published.candidate_ref.revision_ref),
+                    fragment_ref=published.candidate_ref.fragment_ref,
+                    issued_at=now,
+                    expires_at=now + timedelta(minutes=5),
+                ),
+                profile=CitationOpenProfile(
+                    profile_ref="private-citation-open-v1",
+                    retention_policy_ref="citation-locator-retention-v1",
+                    maximum_ttl=timedelta(minutes=10),
+                    retention_period=timedelta(days=30),
+                ),
+            )
+
+        with pytest.raises(SQLAlchemyError):
+            command.downgrade(Config(ROOT / "alembic.ini"), "20260724_0023")
+        assert _revision_rows(migration_configuration) == [_HEAD_REVISION]
+        with engine.connect() as connection:
+            assert connection.execute(
+                text(
+                    "SELECT count(*) FROM citation_open_locator "
+                    "WHERE organization_id = :org"
+                ),
+                {"org": scenario.organization_id},
+            ).scalar_one() == 1
+    finally:
+        with engine.begin() as connection:
+            connection.execute(
+                text("DELETE FROM citation_open_locator WHERE organization_id = :org"),
+                {"org": scenario.organization_id},
+            )
+        engine.dispose()
+        _delete_issue_27_upgrade_fixture(
+            migration_configuration,
+            scenario.organization_id,
+        )
 
 
 def test_file_source_offboarding_refuses_downgrade_with_committed_intent(

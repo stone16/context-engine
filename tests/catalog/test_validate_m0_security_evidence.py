@@ -126,11 +126,10 @@ def test_m0_registry_uses_activated_egress_and_honest_learning_evidence() -> Non
     registry, _, _ = _documents()
     evidence = {entry["id"]: entry["selector"] for entry in registry["evidence"]}
 
-    unavailable_carrier = (
-        "tests/integration/test_m0_unavailable_security_carriers.py::"
-        "test_unavailable_citation_and_real_provider_carriers_fail_closed"
+    assert evidence["PG-CITATION-AUTH-010"] == (
+        "tests/integration/test_citation_open.py::"
+        "test_citation_locator_is_digest_only_multi_use_and_function_only"
     )
-    assert evidence["PG-CITATION-AUTH-010"] == unavailable_carrier
     assert evidence["PROP-EGRESS-011"] == (
         "tests/unit/test_egress_grant.py::"
         "test_each_egress_binding_mutation_and_cross_kind_emits_zero_bytes_effects"
@@ -188,9 +187,7 @@ def test_registry_requires_every_invariant_evidence_layer() -> None:
     error = _validation_error(broken)
 
     assert any(
-        message.startswith(
-            "registry.invariantMappings[0].evidenceRefs.postgres: "
-        )
+        message.startswith("registry.invariantMappings[0].evidenceRefs.postgres: ")
         for message in error.errors
     )
 
@@ -242,9 +239,7 @@ def test_registry_rejects_wrong_layer_unknown_refs_and_empty_selectors() -> None
     )
 
     unknown_ref = copy.deepcopy(registry)
-    unknown_ref["fixtureMappings"][0]["evidenceRefs"] = [
-        "UNKNOWN-EVIDENCE-020"
-    ]
+    unknown_ref["fixtureMappings"][0]["evidenceRefs"] = ["UNKNOWN-EVIDENCE-020"]
     assert any(
         "unknown evidence ref 'UNKNOWN-EVIDENCE-020'" in message
         for message in _validation_error(unknown_ref).errors
@@ -279,7 +274,8 @@ def test_registry_hard_oracle_adapters_match_catalog_vetoes() -> None:
         "missingContextFallbackCount",
     ]
     assert all(
-        adapter["observation"] == {
+        adapter["observation"]
+        == {
             "source": "pytest-user-property",
             "reducer": "sum",
         }
@@ -308,12 +304,12 @@ def test_registry_selector_paths_and_functions_exist() -> None:
             "marker IDs differ from registry IDs",
         ),
         (
-            '@pytest.mark.security_evidence('
+            "@pytest.mark.security_evidence("
             'id="PROP-TENANT-OWNERSHIP-001", layer="runtime")\n',
             "marker layer",
         ),
         (
-            '@pytest.mark.security_evidence('
+            "@pytest.mark.security_evidence("
             '"PROP-TENANT-OWNERSHIP-001", layer="property")\n',
             "must use exact id= and layer= string arguments",
         ),
@@ -326,11 +322,7 @@ def test_registry_rejects_missing_wrong_or_malformed_evidence_markers(
 ) -> None:
     registry, schema, catalog, repository = _temporary_marker_repository(
         tmp_path,
-        test_source=(
-            f"{marker}"
-            "def test_registered() -> None:\n"
-            "    pass\n\n"
-        ),
+        test_source=(f"{marker}def test_registered() -> None:\n    pass\n\n"),
     )
 
     with pytest.raises(CatalogValidationError) as raised:

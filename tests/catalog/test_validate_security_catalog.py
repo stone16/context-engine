@@ -25,6 +25,7 @@ from scripts.validate_security_catalog import (
     CANONICAL_ACTION_PREPARE_ACTIVATION,
     CANONICAL_ACTIVATION_ISSUE_LIST,
     CANONICAL_ACTIVATIONS,
+    CANONICAL_CITATION_OPEN_ACTIVATION,
     CANONICAL_CONTEXT_RUN_ACTIVATION,
     CANONICAL_EGRESS_GRANT_ACTIVATION,
     CANONICAL_FAIL_CLOSED_OUTCOMES,
@@ -571,6 +572,7 @@ def make_catalog() -> dict[str, object]:
             copy.deepcopy(CANONICAL_TYPESCRIPT_SDK_ACTIVATION),
             copy.deepcopy(CANONICAL_ACTION_PREPARE_ACTIVATION),
             copy.deepcopy(CANONICAL_ACTION_PERFORM_ACTIVATION),
+            copy.deepcopy(CANONICAL_CITATION_OPEN_ACTIVATION),
         ],
         "invariants": invariants,
         "fixtures": fixtures,
@@ -665,6 +667,7 @@ def make_schema() -> dict[str, object]:
                     {"const": copy.deepcopy(CANONICAL_TYPESCRIPT_SDK_ACTIVATION)},
                     {"const": copy.deepcopy(CANONICAL_ACTION_PREPARE_ACTIVATION)},
                     {"const": copy.deepcopy(CANONICAL_ACTION_PERFORM_ACTIVATION)},
+                    {"const": copy.deepcopy(CANONICAL_CITATION_OPEN_ACTIVATION)},
                 ],
                 "items": False,
             },
@@ -1796,7 +1799,7 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
 
         self.assertEqual(catalog["catalogVersion"], "1.3.0")
         self.assertEqual(
-            issue_refs[-12:],
+            issue_refs[-13:],
             [
                 "#15",
                 "#16",
@@ -1810,6 +1813,7 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
                 "#64",
                 "#67",
                 "#68",
+                "#69",
             ],
         )
         self.assertIn(
@@ -1818,6 +1822,10 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
         )
         self.assertIn(
             "docs/decisions/0050-perform-one-exact-private-effect.md",
+            document_refs,
+        )
+        self.assertIn(
+            "docs/decisions/0051-reauthorize-opaque-citation-opens.md",
             document_refs,
         )
         for boundary in (

@@ -15,6 +15,7 @@ from engine.persistence import DatabaseConfiguration, create_database_engine
 from engine.persistence.configuration import (
     ACTION_EXECUTE_DEFINER_ROLE,
     ACTION_PREPARE_DEFINER_ROLE,
+    CITATION_DEFINER_ROLE,
     DELIVERY_EVIDENCE_DEFINER_ROLE,
     EGRESS_GRANT_DEFINER_ROLE,
     RUNTIME_ROLE,
@@ -466,12 +467,13 @@ def test_runtime_worker_and_public_grants_are_least_privilege(
                         FROM information_schema.table_privileges
                         WHERE table_schema = 'public'
                           AND table_name IN ('user_account', 'membership')
-                          AND grantee IN (
-                              'PUBLIC', :runtime_role, :worker_role,
-                              :delivery_evidence_definer_role,
-                              :egress_grant_definer_role,
-                              :action_prepare_definer_role,
-                              :action_execute_definer_role
+                              AND grantee IN (
+                                  'PUBLIC', :runtime_role, :worker_role,
+                                  :delivery_evidence_definer_role,
+                                  :egress_grant_definer_role,
+                                  :action_prepare_definer_role,
+                                  :action_execute_definer_role,
+                                  :citation_definer_role
                           )
                         """
                     ),
@@ -484,6 +486,7 @@ def test_runtime_worker_and_public_grants_are_least_privilege(
                         "egress_grant_definer_role": EGRESS_GRANT_DEFINER_ROLE,
                         "action_prepare_definer_role": ACTION_PREPARE_DEFINER_ROLE,
                         "action_execute_definer_role": ACTION_EXECUTE_DEFINER_ROLE,
+                        "citation_definer_role": CITATION_DEFINER_ROLE,
                     },
                 )
             }
@@ -535,6 +538,7 @@ def test_runtime_worker_and_public_grants_are_least_privilege(
             (EGRESS_GRANT_DEFINER_ROLE, "membership", "SELECT"),
             (ACTION_PREPARE_DEFINER_ROLE, "membership", "SELECT"),
             (ACTION_EXECUTE_DEFINER_ROLE, "membership", "SELECT"),
+            (CITATION_DEFINER_ROLE, "membership", "SELECT"),
         }
         assert security == (True, True)
         assert set(policies) == {
@@ -544,6 +548,7 @@ def test_runtime_worker_and_public_grants_are_least_privilege(
             "membership_action_prepare_definer_select",
             "membership_action_execute_definer_select",
             "membership_file_import_definer_select",
+            "membership_citation_definer_select",
             "membership_migrator_administration",
         }
         runtime_policy = policies["membership_current_user_actor"]

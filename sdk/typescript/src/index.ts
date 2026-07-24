@@ -51,12 +51,20 @@ export interface AcquireContextOptions extends ResolveContextOptionsBase {
   readonly request: Extract<ResolveWire, { kind: "acquire" }>;
 }
 
-export interface DirectContextOptions extends ResolveContextOptionsBase {
-  readonly deliveryEvidenceRef?: never;
-  readonly request: Exclude<ResolveWire, { kind: "acquire" }>;
+export interface DeliveryBoundContextOptions extends ResolveContextOptionsBase {
+  readonly deliveryEvidenceRef?: string;
+  readonly request: Extract<ResolveWire, { kind: "open_citation" }>;
 }
 
-export type ResolveContextOptions = AcquireContextOptions | DirectContextOptions;
+export interface DirectContextOptions extends ResolveContextOptionsBase {
+  readonly deliveryEvidenceRef?: never;
+  readonly request: Extract<ResolveWire, { kind: "continue" }>;
+}
+
+export type ResolveContextOptions =
+  | AcquireContextOptions
+  | DeliveryBoundContextOptions
+  | DirectContextOptions;
 
 export class ContextEngineHttpError extends Error {
   readonly body: ResolveContextV0Error;

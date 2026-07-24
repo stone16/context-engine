@@ -5,13 +5,13 @@ import os
 import socket
 import subprocess
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import closing
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from pathlib import Path
 from threading import Thread
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -29,12 +29,15 @@ from bot_delivery.egress import (
 )
 from engine.persistence import (
     DatabaseConfiguration,
+    PostgreSQLAccessPolicyControl,
     PostgreSQLDeliveryEvidenceIssuerPort,
     PostgreSQLEgressGrantRedemptionAuthority,
     PostgreSQLMembershipAuthority,
     PublishedFileImport,
+    ResourceAccessRevocation,
     create_database_engine,
 )
+from engine.runtime.citation import CitationOpenProfile
 from engine.runtime.construction import Runtime, required_kernel_dependencies
 from engine.runtime.contracts import Resolved
 from engine.runtime.delivery_evidence import (
@@ -58,10 +61,13 @@ from tests.integration.test_file_import_tracer import (
     _run_file_import,
     _RuntimeAuthenticator,
 )
+from tests.integration.test_zz_file_resource_tombstone import _tombstone
+from tests.integration.test_zz_file_source_offboarding import _offboard
 from tests.support.releases import (
     clear_test_runtime_release,
     ensure_test_runtime_release,
 )
+from tests.support.security_gate import record_security_oracles
 
 pytestmark = pytest.mark.integration
 ROOT = Path(__file__).parents[2]
@@ -101,13 +107,14 @@ def _assert_sdk_transport_headers(
     *,
     authentication: bytes,
     delivery_evidence_ref: bytes | None,
+    request_id: bytes = b"file-egress-sdk-http",
 ) -> None:
     observed: dict[bytes, list[bytes]] = {}
     for name, value in headers:
         observed.setdefault(name.lower(), []).append(value)
 
     expected_context_headers = {
-        b"x-context-request-id": [b"file-egress-sdk-http"],
+        b"x-context-request-id": [request_id],
     }
     if delivery_evidence_ref is not None:
         expected_context_headers[b"x-context-delivery-evidence-ref"] = [
@@ -120,9 +127,7 @@ def _assert_sdk_transport_headers(
         if name.startswith(b"x-context-")
     } == expected_context_headers
     assert set(observed) <= (
-        SDK_STANDARD_HTTP_HEADERS
-        | {b"authorization"}
-        | set(expected_context_headers)
+        SDK_STANDARD_HTTP_HEADERS | {b"authorization"} | set(expected_context_headers)
     )
 
 
@@ -147,6 +152,30 @@ class _SdkRuntimeAuthenticator:
             token=opaque_credential,
             private_delivery=opaque_credential == "runtime-secret",
         ).authenticate(opaque_credential)
+
+
+class _TwoReaderAuthenticator:
+    def __init__(
+        self,
+        identities: dict[str, tuple[UUID, UUID, UUID]],
+        *,
+        principal_refs: dict[str, str] | None = None,
+    ) -> None:
+        self.identities = identities
+        self.principal_refs = principal_refs or {}
+
+    def authenticate(self, opaque_credential: str) -> VerifiedAuthenticationContext:
+        organization_id, user_id, membership_id = self.identities[opaque_credential]
+        context = _RuntimeAuthenticator(
+            organization_id,
+            user_id,
+            membership_id,
+            token=opaque_credential,
+        ).authenticate(opaque_credential)
+        principal_ref = self.principal_refs.get(opaque_credential)
+        if principal_ref is not None:
+            object.__setattr__(context, "principal_ref", principal_ref)
+        return context
 
 
 def _unused_port() -> int:
@@ -244,6 +273,7 @@ def _run_installed_live_consumer(
     *,
     base_url: str,
     delivery_evidence_ref: str,
+    citation_delivery_evidence_ref: str,
 ) -> dict[str, object]:
     result = _run_sdk_process(
         ["node", "live-consumer.mjs"],
@@ -252,11 +282,12 @@ def _run_installed_live_consumer(
             **os.environ,
             "CONTEXT_ENGINE_SDK_BASE_URL": base_url,
             "CONTEXT_ENGINE_SDK_DELIVERY_EVIDENCE_REF": delivery_evidence_ref,
+            "CONTEXT_ENGINE_SDK_CITATION_DELIVERY_EVIDENCE_REF": (
+                citation_delivery_evidence_ref
+            ),
             "CONTEXT_ENGINE_SDK_REQUEST_ID": "file-egress-sdk-http",
             "CONTEXT_ENGINE_SDK_TEST_AUTHENTICATION": "runtime-secret",
-            "CONTEXT_ENGINE_SDK_TEST_DIRECT_AUTHENTICATION": (
-                "runtime-direct-secret"
-            ),
+            "CONTEXT_ENGINE_SDK_TEST_DIRECT_AUTHENTICATION": ("runtime-direct-secret"),
         },
     )
     document = json.loads(result.stdout)
@@ -275,6 +306,15 @@ def _file_model_profile() -> ModelEgressProfile:
         model_ref="deterministic-model-spy",
         region_ref="local-test-region",
         maximum_ttl=timedelta(minutes=1),
+    )
+
+
+def _file_citation_profile() -> CitationOpenProfile:
+    return CitationOpenProfile(
+        profile_ref="private-citation-open-v1",
+        retention_policy_ref="citation-locator-retention-v1",
+        maximum_ttl=timedelta(minutes=10),
+        retention_period=timedelta(days=30),
     )
 
 
@@ -306,18 +346,47 @@ def _published_file_scenario(
         yield scenario, published, migration_engine
     finally:
         clear_test_runtime_release(scenario.organization_id)
+        cleanup_triggers = (
+            (
+                "file_source_publish_watermark",
+                "file_source_publish_watermark_immutable",
+            ),
+            (
+                "file_source_acquisition_checkpoint",
+                "file_source_acquisition_checkpoint_immutable",
+            ),
+            ("file_resource_cleanup_intent", "file_resource_cleanup_intent_immutable"),
+            ("file_source_cleanup_intent", "file_source_cleanup_intent_immutable"),
+        )
         with migration_engine.begin() as connection:
-            for table in (
-                "decision_audit",
-                "context_run",
-                "egress_audit",
-                "egress_grant",
-                "delivery_evidence",
-            ):
+            for table, trigger in cleanup_triggers:
                 connection.execute(
-                    text(f"DELETE FROM {table} WHERE organization_id = :org"),
-                    {"org": scenario.organization_id},
+                    text(f"ALTER TABLE {table} DISABLE TRIGGER {trigger}")
                 )
+        try:
+            with migration_engine.begin() as connection:
+                for table in (
+                    "citation_open_locator",
+                    "decision_audit",
+                    "context_run",
+                    "egress_audit",
+                    "egress_grant",
+                    "delivery_evidence",
+                    "file_source_publish_watermark",
+                    "file_source_acquisition_checkpoint",
+                    "file_resource_cleanup_intent",
+                    "file_source_cleanup_intent",
+                ):
+                    connection.execute(
+                        text(f"DELETE FROM {table} WHERE organization_id = :org"),
+                        {"org": scenario.organization_id},
+                    )
+        finally:
+            with migration_engine.begin() as connection:
+                for table, trigger in reversed(cleanup_triggers):
+                    connection.execute(
+                        text(f"ALTER TABLE {table} ENABLE TRIGGER {trigger}")
+                    )
         migration_engine.dispose()
 
 
@@ -422,6 +491,300 @@ def test_file_http_package_redeems_exact_model_grant_before_gateway_bytes(
         egress_engine.dispose()
 
 
+@pytest.mark.security_evidence(id="RUNTIME-CITATION-AUTH-010", layer="runtime")
+@pytest.mark.security_evidence(id="FIXTURE-ACCEPT-010", layer="runtime")
+@pytest.mark.parametrize("denied_principal", (False, True))
+def test_file_http_citation_is_not_consumed_by_denied_reader(
+    denied_principal: bool,
+    _published_file_scenario: tuple[_FileImportScenario, PublishedFileImport, Engine],
+    guarded_runtime_engine: Engine,
+    query_digest_keyring: QueryDigestKeyring,
+    caplog: pytest.LogCaptureFixture,
+    record_property: Callable[[str, object], None],
+) -> None:
+    scenario, published, migration_engine = _published_file_scenario
+    denied_user_id = uuid4()
+    denied_membership_id = uuid4()
+    request_now = datetime.now(UTC)
+    with migration_engine.begin() as connection:
+        authorized_user_id = connection.execute(
+            text(
+                "SELECT user_id FROM membership "
+                "WHERE organization_id = :organization_id "
+                "AND membership_id = :membership_id"
+            ),
+            {
+                "organization_id": scenario.organization_id,
+                "membership_id": scenario.membership_id,
+            },
+        ).scalar_one()
+        connection.execute(
+            text("INSERT INTO user_account (user_id) VALUES (:user_id)"),
+            {"user_id": denied_user_id},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO membership (organization_id, membership_id, user_id, "
+                "status, membership_version, valid_from) VALUES "
+                "(:org, :membership, :user_id, 'active', 1, :valid_from)"
+            ),
+            {
+                "org": scenario.organization_id,
+                "membership": denied_membership_id,
+                "user_id": denied_user_id,
+                "valid_from": request_now - timedelta(days=1),
+            },
+        )
+
+    observed: list[Resolved] = []
+    client = TestClient(
+        create_app(
+            authenticator=_TwoReaderAuthenticator(
+                {
+                    "reader-a": (
+                        scenario.organization_id,
+                        authorized_user_id,
+                        scenario.membership_id,
+                    ),
+                    "reader-b": (
+                        scenario.organization_id,
+                        denied_user_id,
+                        denied_membership_id,
+                    ),
+                },
+                principal_refs=(
+                    {"reader-b": "principal:file-denied-reader"}
+                    if denied_principal
+                    else None
+                ),
+            ),
+            organization_authority=_OrganizationAuthority(),
+            membership_authority=PostgreSQLMembershipAuthority(guarded_runtime_engine),
+            scope_authority=_ExactScopeAuthority(
+                published.candidate_ref.source_ref,
+                published.candidate_ref.resource_ref,
+            ),
+            runtime=Runtime(
+                required_kernel_dependencies(),
+                candidate_index=PostgreSQLExactPhraseCandidateIndex(),
+                egress_profile=_file_model_profile(),
+                citation_profile=_file_citation_profile(),
+                clock=lambda: request_now,
+                query_digest_keyring=query_digest_keyring,
+            ),
+            resolution_observer=observed.append,
+            clock=lambda: request_now,
+        )
+    )
+
+    acquired = client.post(
+        "/v0/resolve",
+        headers={
+            "Authorization": "Bearer reader-a",
+            "X-Context-Request-Id": "citation-reader-a-acquire",
+        },
+        json={
+            "kind": "acquire",
+            "need": {"query": "ContextEngine delivers context."},
+        },
+    )
+    assert acquired.status_code == 200
+    citation_ref = acquired.json()["package"]["evidence"][0]["citationOpenRef"]
+    assert isinstance(citation_ref, str) and citation_ref.startswith("cor_")
+
+    with migration_engine.connect() as connection:
+        before = connection.execute(
+            text(
+                "SELECT expires_at, retain_until FROM citation_open_locator "
+                "WHERE organization_id = :org AND locator_digest = :digest"
+            ),
+            {
+                "org": scenario.organization_id,
+                "digest": sha256(citation_ref.encode()).digest(),
+            },
+        ).one()
+
+    denied = client.post(
+        "/v0/resolve",
+        headers={
+            "Authorization": "Bearer reader-b",
+            "X-Context-Request-Id": "citation-reader-b-denied",
+        },
+        json={"kind": "open_citation", "citationOpenRef": citation_ref},
+    )
+    assert denied.status_code == 200
+    assert denied.json() == {"kind": "citation_not_available"}
+
+    with migration_engine.connect() as connection:
+        after = connection.execute(
+            text(
+                "SELECT expires_at, retain_until FROM citation_open_locator "
+                "WHERE organization_id = :org AND locator_digest = :digest"
+            ),
+            {
+                "org": scenario.organization_id,
+                "digest": sha256(citation_ref.encode()).digest(),
+            },
+        ).one()
+    assert after == before
+
+    reopened = client.post(
+        "/v0/resolve",
+        headers={
+            "Authorization": "Bearer reader-a",
+            "X-Context-Request-Id": "citation-reader-a-reopen",
+        },
+        json={"kind": "open_citation", "citationOpenRef": citation_ref},
+    )
+    assert reopened.status_code == 200
+    assert reopened.json()["kind"] == "resolved"
+    assert reopened.json()["package"]["blocks"][0]["text"] == (
+        "ContextEngine delivers context."
+    )
+    assert citation_ref not in json.dumps(reopened.json())
+    assert citation_ref not in repr(observed)
+    assert citation_ref not in "".join(
+        record.getMessage() for record in caplog.records
+    )
+    assert "sourceUrl" not in json.dumps(reopened.json())
+    assert len(observed) == 2
+    with migration_engine.connect() as connection:
+        denied_run = connection.execute(
+            text(
+                "SELECT run_ref, decision_ref, outcome, purpose, "
+                "authorized_evidence_refs, query_digest FROM context_run "
+                "WHERE organization_id = :org AND request_id = :request_id"
+            ),
+            {
+                "org": scenario.organization_id,
+                "request_id": "citation-reader-b-denied",
+            },
+        ).one()
+        denied_audit = connection.execute(
+            text(
+                "SELECT category FROM decision_audit "
+                "WHERE organization_id = :org AND run_ref = :run_ref "
+                "AND decision_ref = :decision_ref"
+            ),
+            {
+                "org": scenario.organization_id,
+                "run_ref": denied_run.run_ref,
+                "decision_ref": denied_run.decision_ref,
+            },
+        ).scalar_one()
+    assert denied_run.outcome == "delivered_empty"
+    assert denied_run.purpose == "citation.open"
+    assert denied_run.authorized_evidence_refs == []
+    assert denied_run.query_digest != sha256(citation_ref.encode()).hexdigest()
+    assert denied_audit == "no_authorized_evidence"
+    record_security_oracles(
+        record_property,
+        fixture_ref="ACCEPT-010",
+        unauthorized_evidence_count=len(
+            denied.json().get("package", {}).get("evidence", [])
+        ),
+        wrong_organization_effect_count=0,
+        missing_context_fallback_count=0,
+    )
+
+
+@pytest.mark.parametrize("target_state", ["revoked", "source_offboarded", "tombstoned"])
+def test_file_http_citation_reauthorizes_unavailable_target(
+    target_state: str,
+    _published_file_scenario: tuple[_FileImportScenario, PublishedFileImport, Engine],
+    guarded_runtime_engine: Engine,
+    guarded_control_engine: Engine,
+    query_digest_keyring: QueryDigestKeyring,
+) -> None:
+    scenario, published, migration_engine = _published_file_scenario
+    request_now = datetime.now(UTC)
+    with migration_engine.connect() as connection:
+        user_id = connection.execute(
+            text(
+                "SELECT user_id FROM membership "
+                "WHERE organization_id = :org AND membership_id = :membership"
+            ),
+            {"org": scenario.organization_id, "membership": scenario.membership_id},
+        ).scalar_one()
+    client = TestClient(
+        create_app(
+            authenticator=_RuntimeAuthenticator(
+                scenario.organization_id, user_id, scenario.membership_id
+            ),
+            organization_authority=_OrganizationAuthority(),
+            membership_authority=PostgreSQLMembershipAuthority(
+                guarded_runtime_engine
+            ),
+            scope_authority=_ExactScopeAuthority(
+                published.candidate_ref.source_ref,
+                published.candidate_ref.resource_ref,
+            ),
+            runtime=Runtime(
+                required_kernel_dependencies(),
+                candidate_index=PostgreSQLExactPhraseCandidateIndex(),
+                egress_profile=_file_model_profile(),
+                citation_profile=_file_citation_profile(),
+                clock=lambda: request_now,
+                query_digest_keyring=query_digest_keyring,
+            ),
+            clock=lambda: request_now,
+        )
+    )
+    acquired = client.post(
+        "/v0/resolve",
+        headers={
+            "Authorization": "Bearer runtime-secret",
+            "X-Context-Request-Id": f"citation-{target_state}-acquire",
+        },
+        json={"kind": "acquire", "need": {"query": "ContextEngine delivers context."}},
+    )
+    citation_ref = acquired.json()["package"]["evidence"][0]["citationOpenRef"]
+
+    if target_state == "revoked":
+        PostgreSQLAccessPolicyControl(guarded_control_engine).change_access(
+            ResourceAccessRevocation(
+                organization_id=scenario.organization_id,
+                resource_ref=published.candidate_ref.resource_ref,
+                principal_ref="principal:file-reader",
+                expected_access_version=1,
+            )
+        )
+    elif target_state == "tombstoned":
+        _tombstone(
+            scenario,
+            guarded_control_engine,
+            resource_ref=published.candidate_ref.resource_ref,
+            event_ref=f"citation-{target_state}",
+            event_sequence=2,
+        )
+    else:
+        _offboard(scenario, guarded_control_engine)
+
+    opened = client.post(
+        "/v0/resolve",
+        headers={
+            "Authorization": "Bearer runtime-secret",
+            "X-Context-Request-Id": f"citation-{target_state}-open",
+        },
+        json={"kind": "open_citation", "citationOpenRef": citation_ref},
+    )
+
+    assert opened.status_code == 200
+    assert opened.content == b'{"kind":"citation_not_available"}'
+    with migration_engine.connect() as connection:
+        retained = connection.execute(
+            text(
+                "SELECT count(*) FROM citation_open_locator "
+                "WHERE organization_id = :org AND locator_digest = :digest"
+            ),
+            {
+                "org": scenario.organization_id,
+                "digest": sha256(citation_ref.encode()).digest(),
+            },
+        ).scalar_one()
+    assert retained == 1
+
+
 @pytest.mark.security_evidence(id="SDK-LIVE-FILE-064", layer="runtime")
 def test_packed_typescript_sdk_resolves_authorized_file_package_over_live_http(
     _published_file_scenario: tuple[_FileImportScenario, PublishedFileImport, Engine],
@@ -453,7 +816,7 @@ def test_packed_typescript_sdk_resolves_authorized_file_package_over_live_http(
         _pack_and_install_sdk(consumer_root)
         request_now = datetime.now(UTC).replace(microsecond=0)
 
-        evidence_ref = PrivateDeliveryEvidenceIssuer(
+        evidence_issuer = PrivateDeliveryEvidenceIssuer(
             PostgreSQLDeliveryEvidenceIssuerPort(identity_engine),
             profile=DeliveryEvidenceProfile(
                 profile_ref="private-delivery-evidence-v1",
@@ -463,7 +826,8 @@ def test_packed_typescript_sdk_resolves_authorized_file_package_over_live_http(
             + sha256(scenario.organization_id.bytes + b"sdk-http").hexdigest(),
             resolution_ref_factory=lambda: "dlr_"
             + sha256(scenario.organization_id.bytes + b"sdk-result").hexdigest()[:32],
-        ).issue_private(
+        )
+        evidence_ref = evidence_issuer.issue_private(
             PrivateDeliveryEvidenceIssue(
                 organization_id=scenario.organization_id,
                 user_id=user_id,
@@ -475,6 +839,35 @@ def test_packed_typescript_sdk_resolves_authorized_file_package_over_live_http(
                 destination_ref="private-chat:file-tracer",
                 consumer_ref="consumer:file-tracer",
                 purpose="context.answer",
+                policy_epoch=1,
+                issued_at=request_now - timedelta(seconds=1),
+                expires_at=request_now + timedelta(minutes=10),
+            )
+        )
+        citation_evidence_ref = PrivateDeliveryEvidenceIssuer(
+            PostgreSQLDeliveryEvidenceIssuerPort(identity_engine),
+            profile=DeliveryEvidenceProfile(
+                profile_ref="private-delivery-evidence-v1",
+                maximum_ttl=timedelta(minutes=15),
+            ),
+            reference_factory=lambda: "der_"
+            + sha256(scenario.organization_id.bytes + b"sdk-citation-http").hexdigest(),
+            resolution_ref_factory=lambda: "dlr_"
+            + sha256(
+                scenario.organization_id.bytes + b"sdk-citation-result"
+            ).hexdigest()[:32],
+        ).issue_private(
+            PrivateDeliveryEvidenceIssue(
+                organization_id=scenario.organization_id,
+                user_id=user_id,
+                membership_id=scenario.membership_id,
+                membership_version=1,
+                authenticated_service_ref="application:file-tracer",
+                authentication_binding_ref="binding:file-tracer",
+                request_id="file-egress-sdk-http-citation",
+                destination_ref="private-chat:file-tracer",
+                consumer_ref="consumer:file-tracer",
+                purpose="citation.open",
                 policy_epoch=1,
                 issued_at=request_now - timedelta(seconds=1),
                 expires_at=request_now + timedelta(minutes=10),
@@ -501,6 +894,7 @@ def test_packed_typescript_sdk_resolves_authorized_file_package_over_live_http(
                     required_kernel_dependencies(),
                     candidate_index=PostgreSQLExactPhraseCandidateIndex(),
                     egress_profile=_file_model_profile(),
+                    citation_profile=_file_citation_profile(),
                     clock=lambda: request_now,
                     query_digest_keyring=query_digest_keyring,
                 ),
@@ -526,6 +920,7 @@ def test_packed_typescript_sdk_resolves_authorized_file_package_over_live_http(
             consumer_root,
             base_url=f"http://127.0.0.1:{port}",
             delivery_evidence_ref=evidence_ref.evidence_ref,
+            citation_delivery_evidence_ref=(citation_evidence_ref.evidence_ref),
         )
 
         acquire = result["acquire"]
@@ -552,20 +947,44 @@ def test_packed_typescript_sdk_resolves_authorized_file_package_over_live_http(
             "kind": "request_not_available",
             "retryable": False,
         }
-        assert result["citation"] == {"kind": "citation_not_available"}
+        citation = result["citation"]
+        assert isinstance(citation, dict)
+        assert citation["kind"] == "resolved"
+        citation_package = citation["package"]
+        assert isinstance(citation_package, dict)
+        assert citation_package["purpose"] == "citation.open"
+        assert citation_package["packageId"] != package["packageId"]
+        assert citation_package["blocks"][0]["text"] == (
+            "ContextEngine delivers context."
+        )
+        assert (
+            citation_package["evidence"][0]["citationOpenRef"]
+            != (evidence[0]["citationOpenRef"])
+        )
+        citation_grant = citation["egressGrant"]
+        assert isinstance(citation_grant, dict)
+        assert citation_grant["kind"] == "model"
+        assert isinstance(citation_grant["value"], str)
+        assert citation_grant["value"]
+        assert citation_grant["value"] != grant["value"]
         assert len(transport_observer.requests) == 3
         _assert_sdk_transport_headers(
             transport_observer.requests[0],
             authentication=b"Bearer runtime-secret",
             delivery_evidence_ref=evidence_ref.evidence_ref.encode("ascii"),
         )
-        for direct_request_headers in transport_observer.requests[1:]:
-            _assert_sdk_transport_headers(
-                direct_request_headers,
-                authentication=b"Bearer runtime-direct-secret",
-                delivery_evidence_ref=None,
-            )
-        assert len(observed) == 1
+        _assert_sdk_transport_headers(
+            transport_observer.requests[1],
+            authentication=b"Bearer runtime-direct-secret",
+            delivery_evidence_ref=None,
+        )
+        _assert_sdk_transport_headers(
+            transport_observer.requests[2],
+            authentication=b"Bearer runtime-secret",
+            delivery_evidence_ref=(citation_evidence_ref.evidence_ref.encode("ascii")),
+            request_id=b"file-egress-sdk-http-citation",
+        )
+        assert len(observed) == 2
         assert observed[0].package.decision_ref == package["decisionRef"]
     finally:
         if server is not None:

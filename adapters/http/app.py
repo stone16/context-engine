@@ -88,6 +88,10 @@ from engine.runtime import (
 )
 from engine.runtime.actor import MembershipRejectionAuditReceipt
 from engine.runtime.budget import PackageBudgetRequest
+from engine.runtime.citation import (
+    PRIVATE_FILE_CITATION_OPEN_PROFILE,
+    CitationAuthorityUnavailable,
+)
 from engine.runtime.construction import required_kernel_dependencies
 from engine.runtime.context_run import ContextRunPersistenceUnavailable
 from engine.runtime.contracts import (
@@ -221,6 +225,7 @@ def create_app(
         required_kernel_dependencies(),
         clock=clock,
         query_digest_keyring=query_digest_keyring,
+        citation_profile=PRIVATE_FILE_CITATION_OPEN_PROFILE,
     )
     if runtime is not None and query_digest_keyring is not None:
         raise TypeError(
@@ -486,11 +491,15 @@ def create_app(
         private_binding = authentication.private_delivery_binding
         if delivery_evidence_ref is None:
             if private_binding is not None:
+                if type(runtime_request) is OpenCitation:
+                    return _citation_not_available_response(request_id)
                 raise TransportAuthenticationFailed
         elif (
-            type(runtime_request) is not Acquire
+            type(runtime_request) not in {Acquire, OpenCitation}
             or type(private_binding) is not VerifiedPrivateDeliveryBinding
         ):
+            if type(runtime_request) is OpenCitation:
+                return _citation_not_available_response(request_id)
             raise TransportAuthenticationFailed
         try:
             organization_verification = selected_organization_authority.verify_existing(
@@ -509,6 +518,8 @@ def create_app(
                 checked_at=received_at,
             )
         except (OrganizationVerificationRejected, TypeError, ValueError):
+            if type(runtime_request) is OpenCitation:
+                return _citation_not_available_response(request_id)
             raise TransportAuthenticationFailed from None
         try:
             with selected_membership_authority.current_user_actor(
@@ -651,6 +662,10 @@ def create_app(
                                 redemption_request,
                             )
                         except DeliveryEvidenceNotAvailable:
+                            if type(runtime_request) is OpenCitation:
+                                return _citation_not_available_response(
+                                    invocation.request_id
+                                )
                             raise TransportAuthenticationFailed from None
                         except DeliveryEvidenceAuthorityUnavailable:
                             raise TrustedAuthorityUnavailable from None
@@ -690,6 +705,8 @@ def create_app(
                 raise TrustedAuthorityUnavailable from None
             if membership_rejection_observer is not None:
                 membership_rejection_observer(error.audit_receipt)
+            if type(runtime_request) is OpenCitation:
+                return _citation_not_available_response(request_id)
             raise TransportAuthenticationFailed from None
         except MembershipAuthorityUnavailable:
             raise TrustedAuthorityUnavailable from None
@@ -699,6 +716,8 @@ def create_app(
             raise TrustedAuthorityUnavailable from None
         except EgressGrantIssuanceUnavailable:
             raise TrustedAuthorityUnavailable from None
+        except CitationAuthorityUnavailable:
+            raise TrustedAuthorityUnavailable from None
         except ScopeAuthorityUnavailable:
             raise TrustedAuthorityUnavailable from None
         except ActiveReleaseUnavailable:
@@ -707,6 +726,19 @@ def create_app(
             raise TrustedAuthorityUnavailable from None
 
     return app
+
+
+def _citation_not_available_response(request_id: str) -> JSONResponse:
+    """Return the one non-enumerating result after transport authentication."""
+
+    return JSONResponse(
+        {"kind": "citation_not_available"},
+        status_code=200,
+        headers={
+            "Cache-Control": "no-store",
+            "X-Context-Request-Id": request_id,
+        },
+    )
 
 
 def _package_budget_from_wire(

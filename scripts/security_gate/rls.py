@@ -23,6 +23,7 @@ NON_OWNER_EVIDENCE_BY_TABLE: Mapping[str, str] = {
     "action_receipt": "PG-ACTION-PERFORM-068",
     "action_reconciliation": "PG-ACTION-PERFORM-068",
     "action_ticket": "PG-ACTION-PREPARE-067",
+    "citation_open_locator": "PG-CITATION-AUTH-010",
     "context_source": "PG-FILE-SOURCE-RLS-021",
     "delivery_evidence": "PG-DELIVERY-EVIDENCE-063",
     "egress_grant": "PG-EGRESS-011",

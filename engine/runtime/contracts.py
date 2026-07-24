@@ -430,6 +430,11 @@ def context_package_digest_document(package: ContextPackage) -> dict[str, object
                 "revisionRef": item.revision_ref,
                 "fragmentRef": item.fragment_ref,
                 "projectedFields": list(item.projected_field_refs),
+                "citationOpenRef": (
+                    item.citation_open_ref.value
+                    if item.citation_open_ref is not None
+                    else None
+                ),
                 "runRef": item.lineage.run_ref,
                 "purpose": item.lineage.purpose,
                 "authorizationAsOf": _wire_datetime(item.lineage.as_of),
@@ -470,7 +475,7 @@ def complete_context_package_nullable_fields(
     for item in evidence:
         if not isinstance(item, dict):
             raise TypeError("public ContextPackage Evidence must contain objects")
-        item["citationOpenRef"] = None
+        item.setdefault("citationOpenRef", None)
     document["continuation"] = None
     return document
 

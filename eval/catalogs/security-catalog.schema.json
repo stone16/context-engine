@@ -95,8 +95,8 @@
     },
     "activations": {
       "type": "array",
-      "minItems": 12,
-      "maxItems": 12,
+      "minItems": 13,
+      "maxItems": 13,
       "uniqueItems": true,
       "prefixItems": [
         {
@@ -147,7 +147,7 @@
           "const": {
             "issueRef": "#16",
             "invariantRef": "INDEX-NOT-AUTHORITY-005",
-            "carrier": "ContextRuntime.resolve(Continue | OpenCitation | server-owned unavailable Acquire plan)",
+            "carrier": "ContextRuntime.resolve(Continue | profile-disabled OpenCitation | server-owned unavailable Acquire plan)",
             "status": "active_fail_closed",
             "policyEpochScope": "organization-v0",
             "controlBoundary": "RuntimeCapabilityGate.require_available(RuntimeCapability)",
@@ -155,7 +155,7 @@
               {
                 "id": "RUN-UNAVAILABLE-016",
                 "surface": "tests/unit/test_runtime_unavailable_capabilities.py",
-                "oracle": "Table-driven Runtime cases prove unavailable Continue, OpenCitation, and server-owned Acquire plans traverse the content-free sealed Kernel preflight and stop before Provider, index, or source I/O; the restricted mandatory audit retains only UNSUPPORTED_CAPABILITY."
+                "oracle": "Table-driven Runtime cases prove unavailable Continue, profile-disabled OpenCitation, and server-owned Acquire plans traverse the content-free sealed Kernel preflight and stop before Provider, index, or source I/O; the restricted mandatory audit retains only UNSUPPORTED_CAPABILITY."
               },
               {
                 "id": "HTTP-UNAVAILABLE-016",
@@ -165,17 +165,16 @@
             ],
             "deferredEvidence": [
               "real-continuation-redemption",
-              "real-citation-redemption",
               "real-federated-source-native-authorization"
             ],
             "futureCarriers": [
               "Continue",
-              "OpenCitation",
-              "federated/source-native ContextProvider"
+              "federated/source-native ContextProvider",
+              "group/public Runtime carrier"
             ],
             "notActive": [
               "continuation issuance/redemption",
-              "citation locator redemption",
+              "profile-enabled OpenCitation in this issue-16 activation",
               "federated Provider/source-native ACL I/O",
               "File publication"
             ]
@@ -314,7 +313,7 @@
               "OBS-003 production debug-endpoint authorization"
             ],
             "futureCarriers": [
-              "Continue and OpenCitation ContextRun lineage",
+              "Continue ContextRun lineage",
               "full retrieval candidate/ranking traces",
               "authorized feedback and golden-set extraction",
               "explicitly approved full-Package retention"
@@ -361,7 +360,7 @@
             "futureCarriers": [
               "production ContextProvider native field projection",
               "File and Base ingestion field ACL",
-              "Continue and OpenCitation field projection",
+              "Continue field projection",
               "field-policy change independent of Membership version"
             ],
             "notActive": [
@@ -407,13 +406,11 @@
             ],
             "deferredEvidence": [
               "group AudienceSnapshot DeliveryEvidenceRef",
-              "generated TypeScript SDK carrier",
               "production BotDelivery caller"
             ],
             "futureCarriers": [
               "public group DeliveryEvidenceRef",
-              "OpenCitation delivery evidence",
-              "generated TypeScript SDK",
+              "private group DeliveryEvidenceRef",
               "private BotDelivery application"
             ],
             "notActive": [
@@ -421,8 +418,7 @@
               "AudienceSnapshot",
               "production ModelGateway",
               "ActionPlane",
-              "BotDelivery application",
-              "generated SDK"
+              "BotDelivery application"
             ]
           }
         },
@@ -467,8 +463,7 @@
               "real Sender or channel write",
               "ActionTicket or external effect",
               "group AudienceSnapshot",
-              "BotDelivery application process",
-              "generated SDK consumer"
+              "BotDelivery application process"
             ]
           }
         },
@@ -503,23 +498,18 @@
               }
             ],
             "deferredEvidence": [
-              "generated TypeScript SDK conformance",
               "production BotDelivery generated-SDK caller",
-              "Continue and OpenCitation redemption"
+              "Continue redemption"
             ],
             "futureCarriers": [
-              "generated TypeScript SDK",
               "MCP",
               "BotDelivery application",
-              "Continue redemption",
-              "OpenCitation redemption"
+              "Continue redemption"
             ],
             "notActive": [
-              "generated SDK consumer",
               "MCP",
               "BotDelivery application process",
               "continuation issuance or redemption",
-              "citation persistence or redemption",
               "group AudienceSnapshot",
               "external effects"
             ]
@@ -542,27 +532,25 @@
               {
                 "id": "SDK-LIVE-FILE-064",
                 "surface": "tests/integration/test_z_egress_grant_file.py::test_packed_typescript_sdk_resolves_authorized_file_package_over_live_http",
-                "oracle": "A tarball installed into a temporary TypeScript consumer calls a real local POST /v0/resolve server with only authentication, request id, and opaque DeliveryEvidenceRef metadata; real PostgreSQL redemption and File acquisition prove CandidateRef through the sealed AuthorizationKernel to AuthorizedProjection, an audience-bound ContextPackage, and an opaque model egress grant, while generated Continue and OpenCitation calls return their generic inactive outcomes."
+                "oracle": "A tarball installed into a temporary TypeScript consumer calls a real local POST /v0/resolve server with only authentication, request id, and opaque DeliveryEvidenceRef metadata; real PostgreSQL redemption and File acquisition prove CandidateRef through the sealed AuthorizationKernel to AuthorizedProjection, an audience-bound ContextPackage, and an opaque model egress grant. The generated OpenCitation call uses a second request-bound DeliveryEvidenceRef to reauthorize the acquired opaque locator into a distinct citation.open Package, fresh locator, and matching grant; generated Continue remains a generic inactive outcome."
               }
             ],
             "deferredEvidence": [
               "signed package-registry publication provenance",
               "production BotDelivery generated-SDK caller",
-              "real Continue and OpenCitation issuance and redemption"
+              "real Continue issuance and redemption"
             ],
             "futureCarriers": [
               "published package-registry SDK",
               "BotDelivery application",
               "MCP",
-              "Continue redemption",
-              "OpenCitation redemption"
+              "Continue redemption"
             ],
             "notActive": [
               "external package publication",
               "production BotDelivery application process",
               "MCP",
               "continuation issuance or redemption",
-              "citation persistence or redemption",
               "group AudienceSnapshot",
               "external effects"
             ]
@@ -639,6 +627,49 @@
               "delete or redaction compensation",
               "production BotDelivery orchestration",
               "full ACCEPT-012 pass"
+            ]
+          }
+        },
+        {
+          "const": {
+            "issueRef": "#69",
+            "invariantRef": "CITATION-AUTH-010",
+            "carrier": "private/direct File CitationOpenRef issuance and OpenCitation",
+            "status": "active_fail_closed",
+            "policyEpochScope": "organization-v0",
+            "controlBoundary": "digest-only locator -> current UserActor transaction -> CandidateRef -> AuthorizationKernel -> AuthorizedProjection -> replacement ContextPackage",
+            "testEvidence": [
+              {
+                "id": "PG-CITATION-AUTH-010",
+                "surface": "tests/integration/test_citation_open.py",
+                "oracle": "Real PostgreSQL stores only a SHA-256 locator digest plus prior Package/Evidence and Fragment location lineage under FORCE RLS. Runtime can issue/redeem only through dedicated definer functions; the locator is multi-use, database-clock-expiring, cross-kind and cross-Organization probes are generic, and ordinary roles have no table access."
+              },
+              {
+                "id": "RUNTIME-CITATION-AUTH-010",
+                "surface": "tests/integration/test_z_egress_grant_file.py::test_file_http_citation_is_not_consumed_by_denied_reader",
+                "oracle": "The public HTTP File carrier proves reader A receives an opaque locator, reader B reauthorizes to the same generic unavailable outcome without consuming or refreshing it, and reader A opens again through the sealed Kernel to a new audience-bound Package."
+              },
+              {
+                "id": "SDK-LIVE-FILE-064",
+                "surface": "tests/integration/test_z_egress_grant_file.py::test_packed_typescript_sdk_resolves_authorized_file_package_over_live_http",
+                "oracle": "A tarball installed into a temporary TypeScript consumer calls a real local POST /v0/resolve server with only authentication, request id, and opaque DeliveryEvidenceRef metadata; real PostgreSQL redemption and File acquisition prove CandidateRef through the sealed AuthorizationKernel to AuthorizedProjection, an audience-bound ContextPackage, and an opaque model egress grant. The generated OpenCitation call uses a second request-bound DeliveryEvidenceRef to reauthorize the acquired opaque locator into a distinct citation.open Package, fresh locator, and matching grant; generated Continue remains a generic inactive outcome."
+              }
+            ],
+            "deferredEvidence": [
+              "group/public AudienceSnapshot citation opening",
+              "Continue issuance or redemption",
+              "non-File provider citation lineage"
+            ],
+            "futureCarriers": [
+              "group-public citation delivery",
+              "Continue",
+              "non-File ContextProvider citations"
+            ],
+            "notActive": [
+              "group AudienceSnapshot",
+              "public-group citation package",
+              "Continue",
+              "raw source URL locator"
             ]
           }
         }
@@ -919,7 +950,9 @@
             "SDK-CONTRACT-064",
             "SDK-LIVE-FILE-064",
             "PG-ACTION-PREPARE-067",
-            "PG-ACTION-PERFORM-068"
+            "PG-ACTION-PERFORM-068",
+            "PG-CITATION-AUTH-010",
+            "RUNTIME-CITATION-AUTH-010"
           ]
         },
         "surface": {
@@ -959,7 +992,8 @@
             "#66",
             "#64",
             "#67",
-            "#68"
+            "#68",
+            "#69"
           ]
         },
         "invariantRef": {
@@ -971,13 +1005,13 @@
             "TRACE-REDACTION-012",
             "SCOPE-INTERSECTION-004",
             "TRANSPORT-UNTRUSTED-008",
-            "EGRESS-011"
+            "EGRESS-011",
+            "CITATION-AUTH-010"
           ]
         },
         "carrier": {
           "enum": [
             "ContextRuntime.resolve(Acquire)",
-            "ContextRuntime.resolve(Continue | OpenCitation | server-owned unavailable Acquire plan)",
             "signed one-shot persistent no-op durable-job WorkerLease",
             "signed synthetic ContextAccessTicket Provider read | signed synthetic ActionTicket no-op channel action",
             "ContextRuntime.resolve(Acquire) authorized-only ContextRun | restricted delivered-empty DecisionAudit",
@@ -987,7 +1021,9 @@
             "frozen public POST /v0/resolve OpenAPI contract",
             "packaged generated TypeScript POST /v0/resolve client",
             "ActionPlane.prepare private create-placeholder, finalize-reply, or follow-up ticket",
-            "ActionPlane.perform private deterministic Sender-twin effect and receipt reconciliation"
+            "ActionPlane.perform private deterministic Sender-twin effect and receipt reconciliation",
+            "private/direct File CitationOpenRef issuance and OpenCitation",
+            "ContextRuntime.resolve(Continue | profile-disabled OpenCitation | server-owned unavailable Acquire plan)"
           ]
         },
         "status": {
@@ -1012,7 +1048,8 @@
             "authenticated HTTP metadata -> closed ResolveWire -> current UserActor and active release observation -> sealed ContextRuntime.resolve -> closed ResolutionOutcome",
             "immutable OpenAPI v0 -> pinned generator -> generated semantic types and internal fetch client -> closed package exports and metadata-safe facade -> authenticated HTTP ingress -> sealed ContextRuntime.resolve",
             "trusted co-resident intent -> closed TypeScript ActionPlane.prepare -> least-privilege PostgreSQL prepare function -> operation-specific audience-bound ActionTicket",
-            "operation-specific ActionTicket plus exact canonical payload -> least-privilege PostgreSQL begin/complete/reconcile state machine -> deterministic private Sender twin"
+            "operation-specific ActionTicket plus exact canonical payload -> least-privilege PostgreSQL begin/complete/reconcile state machine -> deterministic private Sender twin",
+            "digest-only locator -> current UserActor transaction -> CandidateRef -> AuthorizationKernel -> AuthorizedProjection -> replacement ContextPackage"
           ]
         },
         "testEvidence": {

@@ -3,6 +3,7 @@ import { ContextEngineResolveClient } from "@context-engine/resolve-sdk";
 const requiredEnvironment = [
   "CONTEXT_ENGINE_SDK_BASE_URL",
   "CONTEXT_ENGINE_SDK_DELIVERY_EVIDENCE_REF",
+  "CONTEXT_ENGINE_SDK_CITATION_DELIVERY_EVIDENCE_REF",
   "CONTEXT_ENGINE_SDK_REQUEST_ID",
   "CONTEXT_ENGINE_SDK_TEST_AUTHENTICATION",
   "CONTEXT_ENGINE_SDK_TEST_DIRECT_AUTHENTICATION",
@@ -40,12 +41,13 @@ const continuation = await directClient.resolve({
   },
   requestId: process.env.CONTEXT_ENGINE_SDK_REQUEST_ID,
 });
-const citation = await directClient.resolve({
+const citation = await client.resolve({
+  deliveryEvidenceRef: process.env.CONTEXT_ENGINE_SDK_CITATION_DELIVERY_EVIDENCE_REF,
   request: {
-    citationOpenRef: "citation_sdk_live_inactive",
+    citationOpenRef: acquire.package.evidence[0].citationOpenRef,
     kind: "open_citation",
   },
-  requestId: process.env.CONTEXT_ENGINE_SDK_REQUEST_ID,
+  requestId: `${process.env.CONTEXT_ENGINE_SDK_REQUEST_ID}-citation`,
 });
 
 process.stdout.write(`${JSON.stringify({ acquire, citation, continuation })}\n`);
