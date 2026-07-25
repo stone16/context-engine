@@ -329,13 +329,19 @@ class PostgreSQLFileImportWorker:
                 ).one_or_none()
                 if row is None or row.source_ref != claims.source_ref:
                     raise _rejection(token)
+                expected_content_sha256 = row._mapping.get(
+                    "expected_content_sha256"
+                )
+                expected_content_length = row._mapping.get(
+                    "expected_content_length"
+                )
                 return _RedeemedFileImport(
                     source_ref=SourceRef(UUID(row.source_ref)),
                     root_ref=FileRootRef(row.root_ref),
                     path=FileImportPath(row.relative_path),
                     acquisition_id=row.acquisition_id,
-                    expected_content_sha256=row.expected_content_sha256,
-                    expected_content_length=row.expected_content_length,
+                    expected_content_sha256=expected_content_sha256,
+                    expected_content_length=expected_content_length,
                 )
         except WorkNotAvailable:
             raise

@@ -910,11 +910,19 @@ def test_file_change_feed_revision_downgrades_and_reapplies_cleanly(
 
 
 def test_file_change_scheduling_revision_downgrades_and_reapplies_cleanly(
+    tmp_path: Path,
     migration_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+    guarded_worker_engine: Engine,
 ) -> None:
-    """Issue #83 removes only empty accepted-change acquisition bindings."""
+    """Issue #83 rollback preserves the existing manual File import path."""
 
     alembic_configuration = Config(ROOT / "alembic.ini")
+    scenario = _prepare_file_import_scenario(
+        tmp_path,
+        migration_configuration,
+        guarded_control_engine,
+    )
     try:
         command.downgrade(alembic_configuration, "20260725_0028")
         assert _revision_rows(migration_configuration) == ["20260725_0028"]
@@ -955,6 +963,14 @@ def test_file_change_scheduling_revision_downgrades_and_reapplies_cleanly(
             assert scheduling_functions == 0
         finally:
             engine.dispose()
+        assert scenario.token is not None
+        published = _run_file_import(
+            scenario,
+            scenario.prepared,
+            scenario.token,
+            guarded_worker_engine,
+        )
+        assert published.outcome == "published"
     finally:
         command.upgrade(alembic_configuration, "head")
 
@@ -995,6 +1011,10 @@ def test_file_change_scheduling_revision_downgrades_and_reapplies_cleanly(
         assert public_execute is False
     finally:
         engine.dispose()
+        _delete_issue_27_upgrade_fixture(
+            migration_configuration,
+            scenario.organization_id,
+        )
 
 
 def test_delivery_evidence_revision_downgrades_only_while_empty(
