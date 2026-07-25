@@ -95,8 +95,8 @@
     },
     "activations": {
       "type": "array",
-      "minItems": 20,
-      "maxItems": 20,
+      "minItems": 21,
+      "maxItems": 21,
       "uniqueItems": true,
       "prefixItems": [
         {
@@ -989,6 +989,48 @@
               "Runtime authorization from File page or checkpoint metadata"
             ]
           }
+        },
+        {
+          "const": {
+            "issueRef": "#91",
+            "invariantRef": "WORKER-LEASE-007",
+            "carrier": "autonomous first-attempt dispatch of explicit scheduled File upserts",
+            "status": "active_fail_closed",
+            "policyEpochScope": "not-runtime-authority",
+            "controlBoundary": "function-only scheduler login -> current page/acquisition/audience/receiver eligibility -> deterministic SKIP LOCKED selector -> database-timed generation-one lease -> existing WorkerLease and File worker",
+            "testEvidence": [
+              {
+                "id": "PG-FILE-DISPATCH-091",
+                "surface": "tests/integration/test_file_dispatch.py::test_scheduler_claims_only_current_page_scheduled_upsert",
+                "oracle": "The non-owner scheduler cannot read job tables and can claim only one current page-scheduled upsert through the exact function; the next claim is typed content-free no-work and revoked audience authority remains unclaimed."
+              },
+              {
+                "id": "PG-FILE-DISPATCH-CONCURRENCY-091",
+                "surface": "tests/integration/test_file_dispatch.py::test_concurrent_dispatchers_never_claim_the_same_job",
+                "oracle": "Two concurrent scheduler-role authorities claim the two oldest eligible jobs exactly once through FOR UPDATE SKIP LOCKED; no job identity is returned twice."
+              },
+              {
+                "id": "PROC-FILE-DISPATCH-091",
+                "surface": "tests/integration/test_file_dispatch.py::test_independent_worker_process_dispatches_and_publishes_one_job",
+                "oracle": "The independent worker runs a configured dispatch cycle with no caller Organization, Source, job, or token, completes the existing publication path, and emits only the closed content-free dispatched result."
+              }
+            ],
+            "deferredEvidence": [
+              "expired-lease reclaim, automatic retry/backoff, dead-letter handling, and operator remediation",
+              "provider polling, automatic page acceptance, and automatic delete ordering"
+            ],
+            "futureCarriers": [
+              "retry and dead-letter owner",
+              "provider polling and full resync",
+              "explicit mixed-change ordering policy"
+            ],
+            "notActive": [
+              "scheduler tenant, Source, job, audience, path, lease-time, or generation choice",
+              "manual import or delete execution",
+              "automatic retry or reclaim",
+              "Runtime authorization from Supply scheduling or lease state"
+            ]
+          }
         }
       ],
       "items": false
@@ -1290,7 +1332,10 @@
             "HTTP-FILE-DELETE-INVISIBLE-087",
             "PG-FILE-MIXED-UPSERT-SCHEDULE-089",
             "PG-FILE-MIXED-UPSERT-REPLAY-089",
-            "HTTP-FILE-MIXED-UPSERT-NO-DELETE-089"
+            "HTTP-FILE-MIXED-UPSERT-NO-DELETE-089",
+            "PG-FILE-DISPATCH-091",
+            "PG-FILE-DISPATCH-CONCURRENCY-091",
+            "PROC-FILE-DISPATCH-091"
           ]
         },
         "surface": {
@@ -1338,7 +1383,8 @@
             "#83",
             "#85",
             "#87",
-            "#89"
+            "#89",
+            "#91"
           ]
         },
         "invariantRef": {
@@ -1375,7 +1421,8 @@
             "explicit accepted File page scheduling through existing import jobs",
             "bounded durable File deletion observations without execution",
             "explicit current File delete execution through sole tombstone authority",
-            "explicit current mixed File page upsert-projection scheduling"
+            "explicit current mixed File page upsert-projection scheduling",
+            "autonomous first-attempt dispatch of explicit scheduled File upserts"
           ]
         },
         "status": {
@@ -1410,7 +1457,8 @@
             "accepted File page -> trusted ContextControl explicit FileImportAudience -> exact file_acquisition/file_import_job lineage -> existing WorkerLease -> current accepted scan-epoch redemption fence -> pre-compiler raw observation verification -> atomic current-epoch publication fence",
             "latest complete same-SourceVersion v4 baseline -> stable shallow File snapshot -> provider-authenticated upsert/delete ChangePage -> exact baseline-bound ContextControl PostgreSQL acceptance",
             "exact trusted Source/SourceVersion/page/ordinal locator -> current complete v4 scan revalidation -> server-derived Resource/event lineage -> existing tombstone authority -> immutable exact execution binding",
-            "complete current v4 upsert/delete page validation -> trusted ContextControl explicit FileImportAudience -> nonempty original-ordinal upsert projection -> exact existing acquisition/import-job lineage -> existing WorkerLease and current-scan publication fences"
+            "complete current v4 upsert/delete page validation -> trusted ContextControl explicit FileImportAudience -> nonempty original-ordinal upsert projection -> exact existing acquisition/import-job lineage -> existing WorkerLease and current-scan publication fences",
+            "function-only scheduler login -> current page/acquisition/audience/receiver eligibility -> deterministic SKIP LOCKED selector -> database-timed generation-one lease -> existing WorkerLease and File worker"
           ]
         },
         "testEvidence": {

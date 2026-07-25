@@ -32,7 +32,7 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
     document = manifest()
     tables = table_entries(document)
 
-    assert document["manifestVersion"] == "30.0.0"
+    assert document["manifestVersion"] == "31.0.0"
     assert set(tables) == {
         "active_release_manifest",
         "action_delivery_attempt",
@@ -911,8 +911,12 @@ def test_issue_21_file_source_manifest_is_closed_and_role_separated() -> None:
         "context_engine_security_operator": [],
         "context_engine_worker": [],
         "context_engine_worker_lease_definer": ["SELECT", "UPDATE"],
-        "context_engine_action_prepare_definer": ["SELECT"],
-        "context_engine_action_execute_definer": ["SELECT"],
+            "context_engine_action_prepare_definer": ["SELECT"],
+            "context_engine_action_execute_definer": ["SELECT"],
+            "context_engine_file_dispatch_definer": [
+                "SELECT",
+                "UPDATE lifecycle_state, active_version_id",
+            ],
     }
     assert version["permittedOperations"] == {
         "context_engine_control": [
@@ -1318,6 +1322,7 @@ def test_worker_lease_manifest_requires_exact_receiver_and_job() -> None:
         "context_engine_runtime": [],
         "context_engine_worker": [],
         "context_engine_worker_lease_definer": ["SELECT"],
+        "context_engine_file_dispatch_definer": ["SELECT", "UPDATE enabled"],
     }
     assert job["permittedOperations"] == {
         "context_engine_control": ["EXECUTE issue_noop_worker_lease"],
@@ -1452,6 +1457,10 @@ def test_membership_manifest_requires_exact_user_actor_and_read_only_runtime() -
         "context_engine_action_prepare_definer": ["SELECT"],
         "context_engine_action_execute_definer": ["SELECT"],
         "context_engine_citation_definer": ["SELECT"],
+        "context_engine_file_dispatch_definer": [
+            "SELECT",
+            "UPDATE status, valid_from, valid_until",
+        ],
     }
 
     rls = entry["rowLevelSecurity"]

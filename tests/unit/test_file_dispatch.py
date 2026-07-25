@@ -1,0 +1,224 @@
+from __future__ import annotations
+
+import json
+from dataclasses import asdict
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from threading import Event
+from typing import cast
+from uuid import uuid4
+
+import pytest
+from sqlalchemy import Engine
+from sqlalchemy.exc import SQLAlchemyError
+
+from applications.worker import (
+    FileDispatchCycleResult,
+    _file_dispatch_roots,
+    dispatch_file_imports_until_stopped,
+    dispatch_one_file_import,
+)
+from engine.control import FileImportPath, FileRootRef, SourceRef
+from engine.persistence.worker_jobs import (
+    FileDispatchLease,
+    FileDispatchNoWork,
+    PostgreSQLFileDispatchAuthority,
+)
+from engine.supply import (
+    WorkerLeaseCodec,
+    WorkerLeaseKeyring,
+    WorkerLeaseRejectionAuditReceipt,
+    WorkerLeaseToken,
+    WorkNotAvailable,
+)
+
+
+def test_dispatch_no_work_is_a_closed_content_free_outcome() -> None:
+    outcome = FileDispatchNoWork()
+
+    assert asdict(outcome) == {"status": "no_work"}
+    assert repr(outcome) == "FileDispatchNoWork(status='no_work')"
+
+
+def test_dispatch_lease_redacts_every_routing_and_capability_value() -> None:
+    claimed_at = datetime(2026, 7, 25, 10, tzinfo=UTC)
+    claim = FileDispatchLease(
+        token=WorkerLeaseToken("lease-token"),
+        organization_id=uuid4(),
+        job_id=uuid4(),
+        source_ref=SourceRef(uuid4()),
+        service_principal_id=uuid4(),
+        lease_generation=1,
+        issued_at=claimed_at,
+        expires_at=claimed_at + timedelta(minutes=5),
+    )
+
+    rendered = repr(claim)
+    assert rendered == "FileDispatchLease(lease_generation=1)"
+    assert "lease-token" not in rendered
+    assert "organization_id" not in rendered
+    assert "source_ref" not in rendered
+    assert claim.redemption.expected_job_id == claim.job_id
+    assert claim.redemption.expected_source_ref == claim.source_ref
+
+
+@pytest.mark.parametrize("generation", [0, 2])
+def test_first_attempt_dispatch_rejects_any_other_generation(generation: int) -> None:
+    claimed_at = datetime(2026, 7, 25, 10, tzinfo=UTC)
+
+    with pytest.raises(ValueError, match="generation one"):
+        FileDispatchLease(
+            token=WorkerLeaseToken("lease-token"),
+            organization_id=uuid4(),
+            job_id=uuid4(),
+            source_ref=SourceRef(uuid4()),
+            service_principal_id=uuid4(),
+            lease_generation=generation,
+            issued_at=claimed_at,
+            expires_at=claimed_at + timedelta(minutes=5),
+        )
+
+
+class _NoWorkAuthority:
+    def claim(self) -> FileDispatchNoWork:
+        return FileDispatchNoWork()
+
+
+class _ForbiddenWorkerFactory:
+    def __call__(self, _receiver: object) -> object:
+        raise AssertionError("no-work must not construct a worker")
+
+
+def test_dispatch_cycle_stops_on_content_free_no_work() -> None:
+    result = dispatch_one_file_import(
+        _NoWorkAuthority(),
+        _ForbiddenWorkerFactory(),  # type: ignore[arg-type]
+    )
+
+    assert asdict(result) == {"outcome": "no_work", "status": "complete"}
+
+
+class _OneClaimAuthority:
+    def __init__(self, claim: FileDispatchLease) -> None:
+        self._claim = claim
+
+    def claim(self) -> FileDispatchLease:
+        return self._claim
+
+
+class _RefusingWorker:
+    def run(self, _redemption: object) -> object:
+        raise WorkNotAvailable(WorkerLeaseRejectionAuditReceipt(lease_digest="a" * 64))
+
+
+class _RefusingWorkerFactory:
+    def __call__(self, _receiver: object) -> _RefusingWorker:
+        return _RefusingWorker()
+
+
+def test_dispatch_cycle_reports_job_refusal_without_routing_content() -> None:
+    claimed_at = datetime(2026, 7, 25, 10, tzinfo=UTC)
+    claim = FileDispatchLease(
+        token=WorkerLeaseToken("lease-token"),
+        organization_id=uuid4(),
+        job_id=uuid4(),
+        source_ref=SourceRef(uuid4()),
+        service_principal_id=uuid4(),
+        lease_generation=1,
+        issued_at=claimed_at,
+        expires_at=claimed_at + timedelta(minutes=5),
+    )
+
+    result = dispatch_one_file_import(
+        _OneClaimAuthority(claim),
+        _RefusingWorkerFactory(),  # type: ignore[arg-type]
+    )
+
+    assert asdict(result) == {"outcome": "refused", "status": "complete"}
+
+
+class _StoppingNoWorkAuthority:
+    def __init__(self, stop_event: Event) -> None:
+        self.stop_event = stop_event
+        self.claim_count = 0
+
+    def claim(self) -> FileDispatchNoWork:
+        self.claim_count += 1
+        self.stop_event.set()
+        return FileDispatchNoWork()
+
+
+def test_long_running_dispatch_loop_honors_shutdown_after_no_work() -> None:
+    stop_event = Event()
+    authority = _StoppingNoWorkAuthority(stop_event)
+    observed: list[FileDispatchCycleResult] = []
+
+    dispatch_file_imports_until_stopped(
+        authority,
+        _ForbiddenWorkerFactory(),  # type: ignore[arg-type]
+        stop_event,
+        observed.append,
+    )
+
+    assert authority.claim_count == 1
+    assert [asdict(result) for result in observed] == [
+        {"outcome": "no_work", "status": "complete"}
+    ]
+
+
+def test_dispatch_loads_every_server_owned_file_root(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    first, second = tmp_path / "first", tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    (first / "first.md").write_bytes(b"first")
+    (second / "second.md").write_bytes(b"second")
+    monkeypatch.setenv(
+        "CONTEXT_ENGINE_WORKER_FILE_ROOTS_JSON",
+        json.dumps({"first": str(first), "second": str(second)}),
+    )
+
+    with _file_dispatch_roots() as roots:
+        assert roots.read(FileRootRef("first"), FileImportPath("first.md")) == b"first"
+        assert (
+            roots.read(FileRootRef("second"), FileImportPath("second.md")) == b"second"
+        )
+
+
+@pytest.mark.parametrize("document", ["[]", "{}", '{"root": 1}', "not-json"])
+def test_dispatch_rejects_invalid_server_root_registry(
+    monkeypatch: pytest.MonkeyPatch,
+    document: str,
+) -> None:
+    monkeypatch.setenv("CONTEXT_ENGINE_WORKER_FILE_ROOTS_JSON", document)
+
+    with pytest.raises(ValueError, match="configuration is not available"):
+        _file_dispatch_roots()
+
+
+class _FailingEngine:
+    def begin(self) -> None:
+        raise SQLAlchemyError("nonce=" + (b"n" * 32).hex())
+
+
+def test_dispatch_database_failure_does_not_retain_generated_nonce(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    nonce = b"n" * 32
+    monkeypatch.setattr(
+        "engine.persistence.worker_jobs.generate_worker_lease_nonce",
+        lambda: nonce,
+    )
+    authority = PostgreSQLFileDispatchAuthority(
+        cast(Engine, _FailingEngine()),
+        WorkerLeaseCodec(WorkerLeaseKeyring(active_version=1, keys={1: b"k" * 32})),
+        configured_root_refs=("configured-root",),
+    )
+
+    with pytest.raises(RuntimeError) as failed:
+        authority.claim()
+
+    rendered = (str(failed.value), repr(failed.value))
+    assert all(nonce.hex() not in value for value in rendered)

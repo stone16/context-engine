@@ -189,7 +189,7 @@
         "selector": {
           "type": "string",
           "minLength": 1,
-          "pattern": "^tests/(?:unit|integration)/test_[A-Za-z0-9_]+\\.py::test_[A-Za-z0-9_]+$"
+          "pattern": "^tests/(?:unit|integration|process)/test_[A-Za-z0-9_]+\\.py::test_[A-Za-z0-9_]+$"
         }
       }
     },

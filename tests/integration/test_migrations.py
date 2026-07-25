@@ -1139,6 +1139,61 @@ def test_mixed_file_upsert_scheduling_revision_downgrades_and_reapplies_empty(
         engine.dispose()
 
 
+def test_file_dispatch_revision_downgrades_and_reapplies_empty(
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    """Issue #91 removes only its unclaimed scheduler capability cleanly."""
+
+    alembic_configuration = Config(ROOT / "alembic.ini")
+    try:
+        command.downgrade(alembic_configuration, "20260725_0032")
+        assert _revision_rows(migration_configuration) == ["20260725_0032"]
+        engine = create_database_engine(migration_configuration)
+        try:
+            with engine.connect() as connection:
+                assert (
+                    connection.execute(
+                        text(
+                            "SELECT to_regprocedure("
+                            "'public.context_scheduler_claim_file_import("
+                            "bigint,bytea,text[])'"
+                            ") IS NULL"
+                        )
+                    ).scalar_one()
+                    is True
+                )
+                privileges = connection.execute(
+                    text(
+                        "SELECT "
+                        "has_table_privilege('context_engine_file_dispatch_definer', "
+                        "'file_import_job', 'SELECT'), "
+                        "has_column_privilege('context_engine_file_dispatch_definer', "
+                        "'file_import_job', 'state', 'UPDATE'), "
+                        "has_table_privilege('context_engine_file_dispatch_definer', "
+                        "'membership', 'SELECT')"
+                    )
+                ).one()
+                assert tuple(privileges) == (False, False, False)
+                assert (
+                    connection.execute(
+                        text(
+                            "SELECT NOT EXISTS ("
+                            "SELECT 1 FROM information_schema.columns "
+                            "WHERE table_schema = 'public' "
+                            "AND table_name = 'file_import_job' "
+                            "AND column_name = 'dispatch_claimed')"
+                        )
+                    ).scalar_one()
+                    is True
+                )
+        finally:
+            engine.dispose()
+    finally:
+        command.upgrade(alembic_configuration, "head")
+
+    assert _revision_rows(migration_configuration) == [HEAD_REVISION]
+
+
 def test_mixed_file_upsert_downgrade_waits_for_in_flight_scheduler(
     tmp_path: Path,
     migration_configuration: DatabaseConfiguration,

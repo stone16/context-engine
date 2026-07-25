@@ -6,14 +6,18 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Final, Literal
+from typing import TYPE_CHECKING, Final, Literal
 from uuid import UUID
 
 from sqlalchemy import Connection, Engine, text
 from sqlalchemy.exc import SQLAlchemyError
 
-from engine.control import PreparedFileImport
-from engine.persistence.role_guard import assert_control_role, assert_worker_role
+from engine.control import PreparedFileImport, SourceRef
+from engine.persistence.role_guard import (
+    assert_control_role,
+    assert_scheduler_role,
+    assert_worker_role,
+)
 from engine.supply.jobs import (
     FILE_IMPORT_WORKER_LEASE_OPERATION,
     WORKER_LEASE_ACTOR_KIND,
@@ -30,8 +34,13 @@ from engine.supply.jobs import (
     worker_lease_digest,
 )
 
+if TYPE_CHECKING:
+    from engine.persistence.file_imports import FileImportLeaseRedemption
+
 DEFAULT_WORKER_LEASE_TTL_SECONDS: Final = 300
 MAX_WORKER_LEASE_TTL_SECONDS: Final = 3600
+
+
 def _utc_now() -> datetime:
     return datetime.now(UTC).replace(microsecond=0)
 
@@ -144,6 +153,167 @@ class WorkerLeaseIssueNotAvailable(Exception):
 
 class WorkerLeaseAuthorityUnavailable(RuntimeError):
     """A trusted lease database authority could not complete safely."""
+
+
+@dataclass(frozen=True, slots=True)
+class FileDispatchNoWork:
+    """Closed, content-free result when no first-attempt File job is eligible."""
+
+    status: Literal["no_work"] = field(default="no_work", init=False)
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class FileDispatchLease:
+    """Scheduler-minted exact first-attempt lease and internal routing facts."""
+
+    token: WorkerLeaseToken = field(repr=False)
+    organization_id: UUID = field(repr=False)
+    job_id: UUID = field(repr=False)
+    source_ref: SourceRef = field(repr=False)
+    service_principal_id: UUID = field(repr=False)
+    lease_generation: int
+    issued_at: datetime = field(repr=False)
+    expires_at: datetime = field(repr=False)
+
+    def __post_init__(self) -> None:
+        if type(self.token) is not WorkerLeaseToken:
+            raise TypeError("File dispatch requires a WorkerLeaseToken")
+        _require_uuid("organization_id", self.organization_id)
+        _require_uuid("job_id", self.job_id)
+        if type(self.source_ref) is not SourceRef:
+            raise TypeError("File dispatch source must be SourceRef")
+        _require_uuid("service_principal_id", self.service_principal_id)
+        if self.lease_generation != 1:
+            raise ValueError("first-attempt File dispatch requires generation one")
+        issued_at = _require_utc("issued_at", self.issued_at)
+        expires_at = _require_utc("expires_at", self.expires_at)
+        if expires_at <= issued_at:
+            raise ValueError("File dispatch expiry must follow issuance")
+
+    @property
+    def redemption(self) -> FileImportLeaseRedemption:
+        """Construct the existing untrusted worker carrier only on demand."""
+
+        from engine.persistence.file_imports import FileImportLeaseRedemption
+
+        return FileImportLeaseRedemption(
+            token=self.token,
+            expected_organization_id=self.organization_id,
+            expected_job_id=self.job_id,
+            expected_source_ref=self.source_ref,
+        )
+
+    def __repr__(self) -> str:
+        return f"FileDispatchLease(lease_generation={self.lease_generation})"
+
+
+FileDispatchClaim = FileDispatchLease | FileDispatchNoWork
+
+
+class PostgreSQLFileDispatchAuthority:
+    """Claim the oldest eligible scheduled File import without tenant input."""
+
+    __slots__ = ("_codec", "_configured_root_refs", "_scheduler_engine")
+
+    def __init__(
+        self,
+        scheduler_engine: Engine,
+        codec: WorkerLeaseCodec,
+        *,
+        configured_root_refs: tuple[str, ...],
+    ) -> None:
+        if type(codec) is not WorkerLeaseCodec:
+            raise TypeError("File dispatch authority requires WorkerLeaseCodec")
+        self._scheduler_engine = scheduler_engine
+        self._codec = codec
+        if (
+            type(configured_root_refs) is not tuple
+            or not configured_root_refs
+            or len(set(configured_root_refs)) != len(configured_root_refs)
+        ):
+            raise ValueError("File dispatch requires distinct configured roots")
+        for root_ref in configured_root_refs:
+            _require_identifier("configured_root_ref", root_ref, maximum_length=128)
+        self._configured_root_refs = configured_root_refs
+
+    def claim(self) -> FileDispatchClaim:
+        """Atomically fence one first attempt, then mint its exact existing token."""
+
+        nonce = generate_worker_lease_nonce()
+        try:
+            with self._scheduler_engine.begin() as connection:
+                self._require_scheduler_role(connection)
+                row = connection.execute(
+                    text(
+                        """
+                        SELECT organization_id, job_id, source_id,
+                               service_principal_id, lease_generation,
+                               issued_at, expires_at
+                        FROM public.context_scheduler_claim_file_import(
+                            :signing_key_version, :nonce, :configured_root_refs
+                        )
+                        """
+                    ),
+                    {
+                        "signing_key_version": (
+                            self._codec.active_signing_key_version
+                        ),
+                        "nonce": nonce,
+                        "configured_root_refs": list(self._configured_root_refs),
+                    },
+                ).one_or_none()
+            if row is None:
+                return FileDispatchNoWork()
+            issued_at = _require_utc("issued_at", row.issued_at)
+            expires_at = _require_utc("expires_at", row.expires_at)
+            organization_id = _require_uuid(
+                "organization_id", row.organization_id
+            )
+            job_id = _require_uuid("job_id", row.job_id)
+            service_principal_id = _require_uuid(
+                "service_principal_id", row.service_principal_id
+            )
+            source_ref = SourceRef(_require_uuid("source_id", row.source_id))
+            lease_generation = row.lease_generation
+            claims = WorkerLeaseClaims(
+                signing_key_version=self._codec.active_signing_key_version,
+                organization_id=organization_id,
+                job_id=job_id,
+                service_principal_id=service_principal_id,
+                workload="supply.file-import",
+                worker_audience="context-engine-worker",
+                issued_at=issued_at,
+                expires_at=expires_at,
+                nonce=nonce,
+                operation=FILE_IMPORT_WORKER_LEASE_OPERATION,
+                source_ref=str(source_ref.value),
+                lease_generation=lease_generation,
+            )
+            return FileDispatchLease(
+                token=self._codec.mint(claims),
+                organization_id=organization_id,
+                job_id=job_id,
+                source_ref=source_ref,
+                service_principal_id=service_principal_id,
+                lease_generation=lease_generation,
+                issued_at=issued_at,
+                expires_at=expires_at,
+            )
+        except WorkerLeaseAuthorityUnavailable:
+            raise
+        except SQLAlchemyError:
+            raise WorkerLeaseAuthorityUnavailable(
+                "File dispatch claim database work failed"
+            ) from None
+
+    @staticmethod
+    def _require_scheduler_role(connection: Connection) -> None:
+        try:
+            assert_scheduler_role(connection)
+        except AssertionError as error:
+            raise WorkerLeaseAuthorityUnavailable(
+                "File dispatch authority is not the dedicated scheduler role"
+            ) from error
 
 
 def _rejection(token: WorkerLeaseToken) -> WorkNotAvailable:

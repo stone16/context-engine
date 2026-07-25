@@ -2011,6 +2011,76 @@ CANONICAL_FILE_MIXED_UPSERT_SCHEDULING_ACTIVATION: dict[str, object] = {
     ],
 }
 
+CANONICAL_FILE_DISPATCH_ACTIVATION: dict[str, object] = {
+    "issueRef": "#91",
+    "invariantRef": "WORKER-LEASE-007",
+    "carrier": "autonomous first-attempt dispatch of explicit scheduled File upserts",
+    "status": "active_fail_closed",
+    "policyEpochScope": "not-runtime-authority",
+    "controlBoundary": (
+        "function-only scheduler login -> current page/acquisition/audience/receiver "
+        "eligibility -> deterministic SKIP LOCKED selector -> database-timed "
+        "generation-one lease -> existing WorkerLease and File worker"
+    ),
+    "testEvidence": [
+        {
+            "id": "PG-FILE-DISPATCH-091",
+            "surface": (
+                "tests/integration/test_file_dispatch.py::"
+                "test_scheduler_claims_only_current_page_scheduled_upsert"
+            ),
+            "oracle": (
+                "The non-owner scheduler cannot read job tables and can claim only "
+                "one current page-scheduled upsert through the exact function; the "
+                "next claim is typed content-free no-work and revoked audience "
+                "authority remains unclaimed."
+            ),
+        },
+        {
+            "id": "PG-FILE-DISPATCH-CONCURRENCY-091",
+            "surface": (
+                "tests/integration/test_file_dispatch.py::"
+                "test_concurrent_dispatchers_never_claim_the_same_job"
+            ),
+            "oracle": (
+                "Two concurrent scheduler-role authorities claim the two oldest "
+                "eligible jobs exactly once through FOR UPDATE SKIP LOCKED; no job "
+                "identity is returned twice."
+            ),
+        },
+        {
+            "id": "PROC-FILE-DISPATCH-091",
+            "surface": (
+                "tests/integration/test_file_dispatch.py::"
+                "test_independent_worker_process_dispatches_and_publishes_one_job"
+            ),
+            "oracle": (
+                "The independent worker runs a configured dispatch cycle with no "
+                "caller Organization, Source, job, or token, completes the existing "
+                "publication path, and emits only the closed content-free "
+                "dispatched result."
+            ),
+        },
+    ],
+    "deferredEvidence": [
+        "expired-lease reclaim, automatic retry/backoff, dead-letter handling, "
+        "and operator remediation",
+        "provider polling, automatic page acceptance, and automatic delete ordering",
+    ],
+    "futureCarriers": [
+        "retry and dead-letter owner",
+        "provider polling and full resync",
+        "explicit mixed-change ordering policy",
+    ],
+    "notActive": [
+        "scheduler tenant, Source, job, audience, path, lease-time, or "
+        "generation choice",
+        "manual import or delete execution",
+        "automatic retry or reclaim",
+        "Runtime authorization from Supply scheduling or lease state",
+    ],
+}
+
 CANONICAL_ACTIVATIONS: list[dict[str, object]] = [
     CANONICAL_REVOCATION_ACTIVATION,
     CANONICAL_UNAVAILABLE_CAPABILITY_ACTIVATION,
@@ -2032,6 +2102,7 @@ CANONICAL_ACTIVATIONS: list[dict[str, object]] = [
     CANONICAL_FILE_DELETE_OBSERVATION_ACTIVATION,
     CANONICAL_FILE_DELETE_EXECUTION_ACTIVATION,
     CANONICAL_FILE_MIXED_UPSERT_SCHEDULING_ACTIVATION,
+    CANONICAL_FILE_DISPATCH_ACTIVATION,
 ]
 CANONICAL_ACTIVATION_ISSUE_LIST = ", ".join(
     f"Issue {activation['issueRef']}" for activation in CANONICAL_ACTIVATIONS

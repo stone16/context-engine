@@ -256,6 +256,15 @@ ContextEngine 的安全协议依据自身需求与威胁模型独立设计，零
 - [D0 Baseline Candidate](./DESIGN-BASELINE.md)：当前候选状态与尚未关闭的
   evidence gates。
 
+独立 Supply worker 的确定性单周期 File dispatch 使用
+`context-engine-worker --dispatch-file-once`。生产长运行入口是
+`context-engine-worker --dispatch-files`；它以服务端固定的一秒间隔轮询无工作结果，
+并在 `SIGTERM` / `SIGINT` 时结束。两种入口都只读取 role-specific scheduler、
+worker URL、WorkerLease signing key 和服务端 JSON root registry
+(`CONTEXT_ENGINE_WORKER_FILE_ROOTS_JSON`)；调用方不得提供
+Organization、Source、job 或 token。输出仅包含 `dispatched` / `no_work` / `refused`；Provider
+polling、过期 lease reclaim、retry/dead-letter 与 delete execution 仍未激活。
+
 当前除固定 commit 的四仓静态证据与仓库内设计拆解外，已有
 [`compose.yaml`](./compose.yaml) 固定的真实 PostgreSQL + pgvector 基础 harness，
 以及首个 Organization-owned 代表表的 RLS 动态证据。

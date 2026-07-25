@@ -59,6 +59,14 @@ def test_security_gate_database_contract_includes_the_action_role() -> None:
     } <= _ALLOWED_DATABASE_ENVIRONMENT_KEYS
 
 
+def test_security_gate_database_contract_includes_the_scheduler_role() -> None:
+    assert {
+        "CONTEXT_ENGINE_SCHEDULER_ROLE",
+        "CONTEXT_ENGINE_SCHEDULER_PASSWORD",
+        "CONTEXT_ENGINE_SCHEDULER_DATABASE_URL",
+    } <= _ALLOWED_DATABASE_ENVIRONMENT_KEYS
+
+
 def complete_provenance(*, commit: str = "a" * 40) -> dict[str, object]:
     digest = "b" * 64
     return {

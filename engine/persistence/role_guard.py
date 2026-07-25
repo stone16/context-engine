@@ -13,6 +13,7 @@ from engine.persistence.configuration import (
     MIGRATOR_ROLE,
     OPERATOR_ROLE,
     RUNTIME_ROLE,
+    SCHEDULER_ROLE,
     WORKER_ROLE,
 )
 
@@ -136,6 +137,13 @@ def assert_worker_role(connection: Connection) -> None:
     """Require the dedicated least-privilege Supply worker login."""
 
     _assert_non_owner_role(connection, WORKER_ROLE)
+
+
+def assert_scheduler_role(connection: Connection) -> None:
+    """Require the dedicated content-free File scheduler login."""
+
+    _assert_non_owner_role(connection, SCHEDULER_ROLE)
+    _assert_no_owned_objects_or_role_members(connection)
 
 
 def _assert_no_owned_objects_or_role_members(connection: Connection) -> None:

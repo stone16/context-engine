@@ -22,9 +22,11 @@ DELIVERY_EVIDENCE_DEFINER_ROLE = "context_engine_delivery_evidence_definer"
 CITATION_DEFINER_ROLE = "context_engine_citation_definer"
 ACCESS_POLICY_DEFINER_ROLE = "context_engine_access_policy_definer"
 WORKER_LEASE_DEFINER_ROLE = "context_engine_worker_lease_definer"
+FILE_DISPATCH_DEFINER_ROLE = "context_engine_file_dispatch_definer"
 CONTEXT_RUN_READER_DEFINER_ROLE = "context_engine_context_run_reader_definer"
 RUNTIME_ROLE = "context_engine_runtime"
 WORKER_ROLE = "context_engine_worker"
+SCHEDULER_ROLE = "context_engine_scheduler"
 LEARNING_ROLE = "context_engine_learning"
 OPERATOR_ROLE = "context_engine_security_operator"
 RELEASE_DEFINER_ROLE = "context_engine_release_definer"
@@ -40,6 +42,10 @@ class DatabasePurpose(Enum):
     TRUSTED_ACTION = ("CONTEXT_ENGINE_ACTION_DATABASE_URL", ACTION_ROLE)
     API_RUNTIME = ("CONTEXT_ENGINE_RUNTIME_DATABASE_URL", RUNTIME_ROLE)
     SUPPLY_WORKER = ("CONTEXT_ENGINE_WORKER_DATABASE_URL", WORKER_ROLE)
+    SUPPLY_SCHEDULER = (
+        "CONTEXT_ENGINE_SCHEDULER_DATABASE_URL",
+        SCHEDULER_ROLE,
+    )
     LEARNING = ("CONTEXT_ENGINE_LEARNING_DATABASE_URL", LEARNING_ROLE)
     SECURITY_OPERATOR = (
         "CONTEXT_ENGINE_SECURITY_OPERATOR_DATABASE_URL",
@@ -64,6 +70,7 @@ ROLE_ENVIRONMENT_VARIABLES: dict[DatabasePurpose, str] = {
     DatabasePurpose.TRUSTED_ACTION: "CONTEXT_ENGINE_ACTION_ROLE",
     DatabasePurpose.API_RUNTIME: "CONTEXT_ENGINE_RUNTIME_ROLE",
     DatabasePurpose.SUPPLY_WORKER: "CONTEXT_ENGINE_WORKER_ROLE",
+    DatabasePurpose.SUPPLY_SCHEDULER: "CONTEXT_ENGINE_SCHEDULER_ROLE",
     DatabasePurpose.LEARNING: "CONTEXT_ENGINE_LEARNING_ROLE",
     DatabasePurpose.SECURITY_OPERATOR: "CONTEXT_ENGINE_SECURITY_OPERATOR_ROLE",
     DatabasePurpose.SECURITY_TEST: "CONTEXT_ENGINE_RUNTIME_ROLE",
@@ -128,6 +135,7 @@ class HarnessDatabaseConfigurations:
     action: DatabaseConfiguration
     runtime: DatabaseConfiguration
     worker: DatabaseConfiguration
+    scheduler: DatabaseConfiguration
     learning: DatabaseConfiguration
     operator: DatabaseConfiguration
     security_test: DatabaseConfiguration
@@ -204,6 +212,9 @@ def load_harness_database_configurations(
         action=load_database_configuration(DatabasePurpose.TRUSTED_ACTION, source),
         runtime=load_database_configuration(DatabasePurpose.API_RUNTIME, source),
         worker=load_database_configuration(DatabasePurpose.SUPPLY_WORKER, source),
+        scheduler=load_database_configuration(
+            DatabasePurpose.SUPPLY_SCHEDULER, source
+        ),
         learning=load_database_configuration(DatabasePurpose.LEARNING, source),
         operator=load_database_configuration(DatabasePurpose.SECURITY_OPERATOR, source),
         security_test=load_database_configuration(
@@ -218,13 +229,14 @@ def load_harness_database_configurations(
         configurations.action.expected_role,
         configurations.runtime.expected_role,
         configurations.worker.expected_role,
+        configurations.scheduler.expected_role,
         configurations.learning.expected_role,
         configurations.operator.expected_role,
     }
-    if len(distinct_roles) != 9:
+    if len(distinct_roles) != 10:
         raise DatabaseConfigurationError(
             "migration, control, identity, egress, action, runtime, worker, "
-            "learning, and security-operator "
+            "scheduler, learning, and security-operator "
             "database roles must be distinct"
         )
     if configurations.security_test.url != configurations.runtime.url:

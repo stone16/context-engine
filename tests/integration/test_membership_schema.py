@@ -18,6 +18,7 @@ from engine.persistence.configuration import (
     CITATION_DEFINER_ROLE,
     DELIVERY_EVIDENCE_DEFINER_ROLE,
     EGRESS_GRANT_DEFINER_ROLE,
+    FILE_DISPATCH_DEFINER_ROLE,
     RUNTIME_ROLE,
     WORKER_LEASE_DEFINER_ROLE,
     WORKER_ROLE,
@@ -473,7 +474,8 @@ def test_runtime_worker_and_public_grants_are_least_privilege(
                                   :egress_grant_definer_role,
                                   :action_prepare_definer_role,
                                   :action_execute_definer_role,
-                                  :citation_definer_role
+                                  :citation_definer_role,
+                                  :file_dispatch_definer_role
                           )
                         """
                     ),
@@ -487,9 +489,21 @@ def test_runtime_worker_and_public_grants_are_least_privilege(
                         "action_prepare_definer_role": ACTION_PREPARE_DEFINER_ROLE,
                         "action_execute_definer_role": ACTION_EXECUTE_DEFINER_ROLE,
                         "citation_definer_role": CITATION_DEFINER_ROLE,
+                        "file_dispatch_definer_role": FILE_DISPATCH_DEFINER_ROLE,
                     },
                 )
             }
+            dispatch_update_columns = set(
+                connection.execute(
+                    text(
+                        "SELECT column_name FROM information_schema.column_privileges "
+                        "WHERE table_schema = 'public' AND table_name = 'membership' "
+                        "AND grantee = :file_dispatch_definer_role "
+                        "AND privilege_type = 'UPDATE'"
+                    ),
+                    {"file_dispatch_definer_role": FILE_DISPATCH_DEFINER_ROLE},
+                ).scalars()
+            )
             security = tuple(
                 connection.execute(
                     text(
@@ -539,7 +553,9 @@ def test_runtime_worker_and_public_grants_are_least_privilege(
             (ACTION_PREPARE_DEFINER_ROLE, "membership", "SELECT"),
             (ACTION_EXECUTE_DEFINER_ROLE, "membership", "SELECT"),
             (CITATION_DEFINER_ROLE, "membership", "SELECT"),
+            (FILE_DISPATCH_DEFINER_ROLE, "membership", "SELECT"),
         }
+        assert dispatch_update_columns == {"status", "valid_from", "valid_until"}
         assert security == (True, True)
         assert set(policies) == {
             "membership_current_user_actor",
@@ -548,6 +564,8 @@ def test_runtime_worker_and_public_grants_are_least_privilege(
             "membership_action_prepare_definer_select",
             "membership_action_execute_definer_select",
             "membership_file_import_definer_select",
+            "membership_file_dispatch_definer_select",
+            "membership_file_dispatch_definer_update",
             "membership_citation_definer_select",
             "membership_migrator_administration",
         }
@@ -585,6 +603,21 @@ def test_runtime_worker_and_public_grants_are_least_privilege(
         assert file_import_policy[3] is not None
         assert file_import_policy[4] is None
         assert "app.organization_id" in str(file_import_policy[3]).lower()
+
+        assert policies["membership_file_dispatch_definer_select"] == (
+            "PERMISSIVE",
+            (FILE_DISPATCH_DEFINER_ROLE,),
+            "SELECT",
+            "true",
+            None,
+        )
+        assert policies["membership_file_dispatch_definer_update"] == (
+            "PERMISSIVE",
+            (FILE_DISPATCH_DEFINER_ROLE,),
+            "UPDATE",
+            "true",
+            "true",
+        )
 
         delivery_evidence_policy = policies[
             "membership_delivery_evidence_definer_select"
