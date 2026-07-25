@@ -21,6 +21,7 @@ from engine._opaque import decode_base64url, encode_base64url
 from engine.control import (
     FILE_CHANGE_CAPABILITY_MANIFEST,
     FILE_DELETE_OBSERVATION_CAPABILITY_MANIFEST,
+    MAX_FILE_CHANGE_BASELINE_SIZE,
     CapabilityStatus,
     ChangeCursor,
     ChangeLimit,
@@ -378,6 +379,8 @@ class FileChangeProvider:
         except RuntimeError:
             return ProviderRetryableUnavailable(timedelta(seconds=1))
         changes, baseline_ref = self._changes(source, observed)
+        if len(changes) > MAX_FILE_CHANGE_BASELINE_SIZE:
+            return ProviderGenericDenied()
         scan_ref = self._scan_ref(source, changes, baseline_ref)
         requested_limit = limit
         if (

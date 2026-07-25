@@ -32,6 +32,7 @@ from engine.control.contracts import (
     SourceVersion,
 )
 from engine.control.file_change_pages import (
+    MAX_FILE_CHANGE_BASELINE_SIZE,
     MAX_FILE_CHANGE_PAGE_SIZE,
     AcceptedChangePage,
     ChangeCursor,
@@ -85,6 +86,7 @@ from engine.control.file_source_progress import (
 from engine.control.module import ContextControl, ControlStorePort
 
 __all__ = [
+    "MAX_FILE_CHANGE_BASELINE_SIZE",
     "MAX_FILE_CHANGE_PAGE_SIZE",
     "AcceptedChangePage",
     "ActivateFileChangeFeed",

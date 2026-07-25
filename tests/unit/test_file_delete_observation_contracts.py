@@ -12,6 +12,7 @@ from adapters.file_source import FileChangeProvider, FileReadLimits, FileRootReg
 from engine.control import (
     FILE_CHANGE_CAPABILITY_MANIFEST,
     FILE_DELETE_OBSERVATION_CAPABILITY_MANIFEST,
+    MAX_FILE_CHANGE_BASELINE_SIZE,
     CapabilityStatus,
     ChangeLimit,
     FileCapabilityManifest,
@@ -24,6 +25,7 @@ from engine.control import (
     FileImportPath,
     FileRootRef,
     InitialScan,
+    ProviderGenericDenied,
     ProviderOk,
     SourceChange,
     SourceManifest,
@@ -298,6 +300,55 @@ def test_v4_without_complete_baseline_never_invents_delete(
     assert outcome.value.changes == ()
     assert outcome.value.baseline_ref is None
     assert outcome.value.complete is True
+
+
+def test_oversized_mixed_diff_is_denied_before_first_page(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "registered-root"
+    root.mkdir()
+    provider = _provider(root)
+    baseline = FileChangeBaseline(
+        reference=FileChangeBaselineRef(
+            source_version_ref=SOURCE_VERSION_ID,
+            scan_ref="1" * 64,
+            scan_epoch=SCAN_EPOCH,
+            page_ref="2" * 64,
+            checkpoint_ref="facp_" + "3" * 64,
+            sequence=9,
+        ),
+        entries=tuple(
+            FileChangeBaselineEntry(
+                kind=FileChangeKind.UPSERT,
+                path=FileImportPath(f"{index:05d}.md"),
+                content_sha256="4" * 64,
+                content_length=1,
+            )
+            for index in range(MAX_FILE_CHANGE_BASELINE_SIZE)
+        ),
+    )
+    observed = tuple(
+        (
+            FileImportPath(f"{index:05d}.md"),
+            b"A",
+        )
+        for index in range(1, MAX_FILE_CHANGE_BASELINE_SIZE)
+    ) + ((FileImportPath("new.md"), b"N"),)
+    monkeypatch.setattr(
+        FileRootRegistry,
+        "_observe_markdown_files",
+        lambda _registry, _root_ref: observed,
+    )
+    source = FileChangeSource(
+        organization_id=ORGANIZATION_ID,
+        source_version=_manifest(delete_observations=True).active_version,
+        complete_baseline=baseline,
+    )
+
+    outcome = provider.read_changes(source, InitialScan(), ChangeLimit(1))
+
+    assert type(outcome) is ProviderGenericDenied
 
 
 def test_completed_delete_scan_replays_its_original_parent_baseline(

@@ -24,14 +24,18 @@ from adapters.file_source import FileChangeProvider, FileReadLimits, FileRootReg
 from adapters.http.app import create_app
 from adapters.parsers.markdown import compile_markdown as compile_markdown_original
 from engine.control import (
+    MAX_FILE_CHANGE_BASELINE_SIZE,
     ActivateFileChangeFeed,
     ActivateFileDeleteObservations,
     ChangeLimit,
     ContextControl,
     ControlOperation,
     ControlOperatorAuthority,
+    FileChangeBaseline,
+    FileChangeBaselineEntry,
     FileChangeBaselineRef,
     FileChangeControlProofs,
+    FileChangeKind,
     FileChangeProviderProofs,
     FileChangeSource,
     FileImportAudience,
@@ -864,6 +868,125 @@ def test_progress_and_complete_baseline_share_one_statement_snapshot(
         accepted_first.page_ref
     )
     assert accepted_changed.sequence > observed.acquisition_checkpoint.sequence
+
+
+def test_oversized_delete_diff_is_denied_before_durable_progress(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    guarded_control_engine: Engine,
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    """The provider refuses an unfinishable scan before its first durable page."""
+
+    root = tmp_path / "root"
+    root.mkdir()
+    provider_proofs, control_proofs = _proofs()
+    organization_id = uuid4()
+    control, authority, source = _seed_file_change_source(
+        guarded_control_engine=guarded_control_engine,
+        migration_configuration=migration_configuration,
+        organization_id=organization_id,
+        receiver=FileImportReceiver(uuid4()),
+        root_ref=FileRootRef("oversized-delete-diff-root"),
+        control_proofs=control_proofs,
+    )
+    source = _activate_delete_observations(
+        control,
+        authority,
+        organization_id,
+        source,
+    )
+    baseline = FileChangeBaseline(
+        reference=FileChangeBaselineRef(
+            source_version_ref=source.source_version.version_ref,
+            scan_ref="1" * 64,
+            scan_epoch=uuid4(),
+            page_ref="2" * 64,
+            checkpoint_ref="facp_" + "3" * 64,
+            sequence=1,
+        ),
+        entries=tuple(
+            FileChangeBaselineEntry(
+                kind=FileChangeKind.UPSERT,
+                path=FileImportPath(f"{index:05d}.md"),
+                content_sha256="4" * 64,
+                content_length=1,
+            )
+            for index in range(MAX_FILE_CHANGE_BASELINE_SIZE)
+        ),
+    )
+    source = FileChangeSource(
+        organization_id,
+        source.source_version,
+        complete_baseline=baseline,
+    )
+    observed = tuple(
+        (FileImportPath(f"{index:05d}.md"), b"A")
+        for index in range(1, MAX_FILE_CHANGE_BASELINE_SIZE)
+    ) + ((FileImportPath("new.md"), b"N"),)
+    monkeypatch.setattr(
+        FileRootRegistry,
+        "_observe_markdown_files",
+        lambda _registry, _root_ref: observed,
+    )
+    provider = FileChangeProvider(
+        FileRootRegistry(
+            {source.source_version.root_ref: root},
+            limits=FileReadLimits(max_file_bytes=1_024),
+        ),
+        proofs=provider_proofs,
+    )
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.connect() as connection:
+            before = tuple(
+                connection.execute(
+                    text(
+                        """
+                        SELECT
+                          (SELECT count(*) FROM file_source_change_page
+                           WHERE organization_id = :organization_id),
+                          (SELECT count(*) FROM file_source_change
+                           WHERE organization_id = :organization_id),
+                          (SELECT count(*) FROM file_source_delete_observation_page
+                           WHERE organization_id = :organization_id),
+                          (SELECT count(*) FROM file_source_acquisition_checkpoint
+                           WHERE organization_id = :organization_id)
+                        """
+                    ),
+                    {"organization_id": organization_id},
+                ).one()
+            )
+    finally:
+        migration_engine.dispose()
+
+    outcome = provider.read_changes(source, InitialScan(), ChangeLimit(1))
+
+    assert type(outcome) is ProviderGenericDenied
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.connect() as connection:
+            after = tuple(
+                connection.execute(
+                    text(
+                        """
+                        SELECT
+                          (SELECT count(*) FROM file_source_change_page
+                           WHERE organization_id = :organization_id),
+                          (SELECT count(*) FROM file_source_change
+                           WHERE organization_id = :organization_id),
+                          (SELECT count(*) FROM file_source_delete_observation_page
+                           WHERE organization_id = :organization_id),
+                          (SELECT count(*) FROM file_source_acquisition_checkpoint
+                           WHERE organization_id = :organization_id)
+                        """
+                    ),
+                    {"organization_id": organization_id},
+                ).one()
+            )
+    finally:
+        migration_engine.dispose()
+    assert after == before
 
 
 @pytest.mark.security_evidence(id="PG-FILE-DELETE-DETECT-085", layer="postgres")

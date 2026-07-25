@@ -41,8 +41,10 @@ so an incomplete or concurrently committed scan never tears or replaces the
 baseline paired with that progress observation.
 
 `FileChangeProvider.read_changes` takes one stable shallow Markdown snapshot,
-builds the whole canonical diff before pagination, and binds the exact baseline
-reference into the scan digest and every page proof. Current paths are
+builds and bounds the whole canonical diff before emitting its first page, and
+binds the exact baseline reference into the scan digest and every page proof.
+An oversized mixed diff is denied before any resumable or durable progress.
+Current paths are
 `upsert`; a prior baseline `upsert` absent from the snapshot is `delete` with
 only the prior path, raw digest, and length. With no complete baseline, no
 delete can be emitted. Exact unchanged state replays the original scan and its
