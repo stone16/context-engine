@@ -1,5 +1,5 @@
 {
-  "manifestVersion": "29.0.0",
+  "manifestVersion": "30.0.0",
   "controlOperations": [
     {
       "name": "register_file_source",
@@ -95,6 +95,15 @@
       "organizationScopedIdempotency": true,
       "filesystemAccessAllowed": false,
       "durableJobCreationAllowed": true,
+      "completePageValidation": true,
+      "migrationFence": {
+        "sharedAdvisoryLock": "context-engine.file-change-scheduling-migration-fence",
+        "definerOnlyGenerationRead": "alembic_version SELECT revoked by 0032 downgrade"
+      },
+      "scheduledChangeKinds": [
+        "upsert"
+      ],
+      "deleteExecutionAllowed": false,
       "acceptedObservationBinding": [
         "organization_id",
         "source_id",
@@ -529,6 +538,14 @@
       "classification": "global",
       "classificationRationale": "Migration metadata has no tenant-owned domain state.",
       "purpose": "Alembic migration metadata",
+      "permittedOperations": {
+        "context_engine_runtime": [],
+        "context_engine_worker": [],
+        "context_engine_control": [],
+        "context_engine_worker_lease_definer": [
+          "SELECT scheduler generation capability"
+        ]
+      },
       "partitions": []
     },
     {
@@ -5210,7 +5227,10 @@
         "WORKER-LEASE-007",
         "PG-FILE-CHANGE-SCHEDULE-083",
         "PG-FILE-CHANGE-SCHEDULE-DENY-083",
-        "PG-FILE-CHANGE-SUPERSESSION-083"
+        "PG-FILE-CHANGE-SUPERSESSION-083",
+        "PG-FILE-MIXED-UPSERT-SCHEDULE-089",
+        "PG-FILE-MIXED-UPSERT-REPLAY-089",
+        "HTTP-FILE-MIXED-UPSERT-NO-DELETE-089"
       ]
     },
     {

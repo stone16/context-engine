@@ -40,8 +40,10 @@ from engine.control import (
     FileChangeControlProofs,
     FileChangeProviderProofs,
     FileChangeSource,
+    FileImportAudience,
     InitialScan,
     ProviderOk,
+    ScheduleFileChangePage,
 )
 from engine.persistence import (
     DatabaseConfiguration,
@@ -281,24 +283,6 @@ def _pack_and_install_sdk(consumer_root: Path) -> None:
     artifact_name = report[0]["filename"]
     for script in ("typecheck", "build", "test:runtime"):
         _run_sdk_process(
-            ["npm", "--prefix", "bot_delivery/typescript", "run", script],
-            cwd=ROOT,
-        )
-    bot_pack = _run_sdk_process(
-        [
-            "npm",
-            "pack",
-            "--json",
-            "--ignore-scripts",
-            "--pack-destination",
-            str(artifact_root),
-        ],
-        cwd=ROOT / "bot_delivery/typescript",
-    )
-    bot_report = json.loads(bot_pack.stdout)
-    bot_artifact_name = bot_report[0]["filename"]
-    for script in ("typecheck", "build", "test:runtime"):
-        _run_sdk_process(
             ["npm", "--prefix", "action_plane/typescript", "run", script],
             cwd=ROOT,
         )
@@ -315,6 +299,24 @@ def _pack_and_install_sdk(consumer_root: Path) -> None:
     )
     action_report = json.loads(action_pack.stdout)
     action_artifact_name = action_report[0]["filename"]
+    for script in ("typecheck", "build", "test:runtime"):
+        _run_sdk_process(
+            ["npm", "--prefix", "bot_delivery/typescript", "run", script],
+            cwd=ROOT,
+        )
+    bot_pack = _run_sdk_process(
+        [
+            "npm",
+            "pack",
+            "--json",
+            "--ignore-scripts",
+            "--pack-destination",
+            str(artifact_root),
+        ],
+        cwd=ROOT / "bot_delivery/typescript",
+    )
+    bot_report = json.loads(bot_pack.stdout)
+    bot_artifact_name = bot_report[0]["filename"]
     bot_lock = json.loads(
         (ROOT / "bot_delivery/typescript/package-lock.json").read_text(
             encoding="utf-8"
@@ -768,6 +770,7 @@ def _published_file_scenario(
             ),
             ("file_resource_cleanup_intent", "file_resource_cleanup_intent_immutable"),
             ("file_source_cleanup_intent", "file_source_cleanup_intent_immutable"),
+            ("file_acquisition", "file_acquisition_immutable"),
         )
         with migration_engine.begin() as connection:
             for table, trigger in cleanup_triggers:
@@ -795,14 +798,31 @@ def _published_file_scenario(
                     "file_delete_observation_execution",
                     "file_source_publish_watermark",
                     "file_source_acquisition_checkpoint",
+                    "file_import_job",
+                    "file_acquisition",
                     "file_source_delete_observation_page",
                     "file_source_change",
                     "file_source_change_page",
                     "file_resource_cleanup_intent",
                     "file_source_cleanup_intent",
                 ):
+                    scheduled_only = (
+                        " AND acquisition_id IN ("
+                        "SELECT acquisition_id FROM file_acquisition "
+                        "WHERE organization_id = :org "
+                        "AND change_page_ref IS NOT NULL)"
+                        if table == "file_import_job"
+                        else (
+                            " AND change_page_ref IS NOT NULL"
+                            if table == "file_acquisition"
+                            else ""
+                        )
+                    )
                     connection.execute(
-                        text(f"DELETE FROM {table} WHERE organization_id = :org"),
+                        text(
+                            f"DELETE FROM {table} "  # noqa: S608
+                            f"WHERE organization_id = :org{scheduled_only}"
+                        ),
                         {"org": scenario.organization_id},
                     )
         finally:
@@ -1208,6 +1228,239 @@ def test_file_http_citation_reauthorizes_unavailable_target(
             },
         ).scalar_one()
     assert retained == 1
+
+
+@pytest.mark.security_evidence(
+    id="HTTP-FILE-MIXED-UPSERT-NO-DELETE-089",
+    layer="runtime",
+)
+def test_mixed_file_upsert_scheduling_has_zero_delete_effect_over_generated_sdk(
+    _published_file_scenario: tuple[_FileImportScenario, PublishedFileImport, Engine],
+    guarded_runtime_engine: Engine,
+    guarded_control_engine: Engine,
+    query_digest_keyring: QueryDigestKeyring,
+    tmp_path: Path,
+) -> None:
+    scenario, published, migration_engine = _published_file_scenario
+    request_now = datetime.now(UTC).replace(microsecond=0)
+    with migration_engine.connect() as connection:
+        user_id = connection.execute(
+            text(
+                "SELECT user_id FROM membership "
+                "WHERE organization_id = :org AND membership_id = :membership"
+            ),
+            {"org": scenario.organization_id, "membership": scenario.membership_id},
+        ).scalar_one()
+        before = tuple(
+            connection.execute(
+                text(
+                    """
+                    SELECT
+                      (SELECT policy_epoch FROM organization_policy_epoch
+                       WHERE organization_id = :org),
+                      (SELECT count(*) FROM file_resource_cleanup_intent
+                       WHERE organization_id = :org),
+                      (SELECT count(*) FROM file_delete_observation_execution
+                       WHERE organization_id = :org),
+                      (SELECT count(*) FROM context_resource
+                       WHERE organization_id = :org AND tombstoned IS TRUE),
+                      (SELECT count(*) FROM file_acquisition
+                       WHERE organization_id = :org),
+                      (SELECT count(*) FROM file_import_job
+                       WHERE organization_id = :org)
+                    """
+                ),
+                {"org": scenario.organization_id},
+            ).one()
+        )
+    provider_key = Ed25519PrivateKey.from_private_bytes(bytes(range(32)))
+    checkpoint_key = Ed25519PrivateKey.from_private_bytes(bytes(range(32, 64)))
+    authority = ControlOperatorAuthority(
+        _ControlAuthenticator(scenario.organization_id),
+        call_ttl=timedelta(minutes=5),
+        clock=lambda: NOW,
+    )
+    control = ContextControl(
+        store=PostgreSQLControlStore(
+            guarded_control_engine,
+            clock=lambda: NOW,
+            file_import_receiver=scenario.receiver,
+            file_change_checkpoint_signing_key=checkpoint_key,
+        ),
+        authority=authority,
+        clock=lambda: NOW,
+        file_change_proofs=FileChangeControlProofs(
+            provider_verification_key=provider_key.public_key()
+        ),
+    )
+    with authority.authorize(
+        opaque_credential="control-secret",
+        operation=ControlOperation.ACTIVATE_FILE_CHANGE_FEED,
+        request_id="mixed-sdk-activate-v3",
+    ) as call:
+        control.activate_file_change_feed(
+            call,
+            ActivateFileChangeFeed(scenario.source_ref),
+        )
+    with authority.authorize(
+        opaque_credential="control-secret",
+        operation=ControlOperation.ACTIVATE_FILE_DELETE_OBSERVATIONS,
+        request_id="mixed-sdk-activate-v4",
+    ) as call:
+        v4 = control.activate_file_delete_observations(
+            call,
+            ActivateFileDeleteObservations(scenario.source_ref),
+        )
+    provider = FileChangeProvider(
+        FileRootRegistry(
+            {scenario.root_ref: scenario.root},
+            limits=FileReadLimits(max_file_bytes=1_024 * 1_024),
+        ),
+        proofs=FileChangeProviderProofs(
+            provider_signing_key=provider_key,
+            checkpoint_verification_key=checkpoint_key.public_key(),
+        ),
+    )
+    source = FileChangeSource(scenario.organization_id, v4.active_version)
+    baseline_page = provider.read_changes(source, InitialScan(), ChangeLimit(2))
+    assert type(baseline_page) is ProviderOk
+    with authority.authorize(
+        opaque_credential="control-secret",
+        operation=ControlOperation.ACCEPT_FILE_CHANGE_PAGE,
+        request_id="mixed-sdk-accept-baseline",
+    ) as call:
+        control.accept_file_change_page(call, baseline_page.value)
+    with authority.authorize(
+        opaque_credential="control-secret",
+        operation=ControlOperation.READ_SOURCE_PROGRESS,
+        request_id="mixed-sdk-read-baseline",
+    ) as call:
+        progress = control.read_file_source_progress(call, scenario.source_ref)
+    assert progress.complete_change_baseline is not None
+    (scenario.root / "addition.md").write_bytes(b"# Addition\n\nScheduled only.\n")
+    (scenario.root / "handbook.md").unlink()
+    mixed_page = provider.read_changes(
+        FileChangeSource(
+            scenario.organization_id,
+            v4.active_version,
+            scan_head=progress.change_scan_head,
+            complete_baseline=progress.complete_change_baseline,
+        ),
+        InitialScan(),
+        ChangeLimit(2),
+    )
+    assert type(mixed_page) is ProviderOk
+    assert [
+        (change.path.value, change.kind.value)
+        for change in mixed_page.value.changes
+    ] == [("addition.md", "upsert"), ("handbook.md", "delete")]
+    with authority.authorize(
+        opaque_credential="control-secret",
+        operation=ControlOperation.ACCEPT_FILE_CHANGE_PAGE,
+        request_id="mixed-sdk-accept-current",
+    ) as call:
+        accepted = control.accept_file_change_page(call, mixed_page.value)
+    with authority.authorize(
+        opaque_credential="control-secret",
+        operation=ControlOperation.SCHEDULE_FILE_CHANGE_PAGE,
+        request_id="mixed-sdk-schedule-upsert",
+    ) as call:
+        scheduled = control.schedule_file_change_page(
+            call,
+            ScheduleFileChangePage(
+                accepted.source_ref,
+                accepted.source_version_ref,
+                accepted.page_ref,
+                FileImportAudience(
+                    "principal:file-reader",
+                    scenario.membership_id,
+                    1,
+                ),
+            ),
+        )
+    assert [
+        (change.ordinal, change.path.value) for change in scheduled.changes
+    ] == [(1, "addition.md")]
+
+    application = create_app(
+        authenticator=_RuntimeAuthenticator(
+            scenario.organization_id,
+            user_id,
+            scenario.membership_id,
+        ),
+        organization_authority=_OrganizationAuthority(),
+        membership_authority=PostgreSQLMembershipAuthority(guarded_runtime_engine),
+        scope_authority=_ExactScopeAuthority(
+            published.candidate_ref.source_ref,
+            published.candidate_ref.resource_ref,
+        ),
+        runtime=Runtime(
+            required_kernel_dependencies(),
+            candidate_index=PostgreSQLExactPhraseCandidateIndex(),
+            egress_profile=_file_model_profile(),
+            citation_profile=_file_citation_profile(),
+            clock=lambda: request_now,
+            query_digest_keyring=query_digest_keyring,
+        ),
+        clock=lambda: request_now,
+    )
+    consumer_root = tmp_path / "mixed-installed-sdk-consumer"
+    consumer_root.mkdir()
+    _pack_and_install_resolve_sdk(consumer_root)
+    port = _unused_port()
+    server = Server(
+        Config(
+            application,
+            host="127.0.0.1",
+            port=port,
+            log_level="warning",
+            lifespan="off",
+        )
+    )
+    server_thread = Thread(target=server.run, daemon=True)
+    server_thread.start()
+    try:
+        _wait_for_tcp(port)
+        sdk_result = _run_installed_empty_consumer(
+            consumer_root,
+            base_url=f"http://127.0.0.1:{port}",
+        )
+    finally:
+        server.should_exit = True
+        server_thread.join(timeout=10)
+        assert not server_thread.is_alive()
+    assert sdk_result["kind"] == "resolved"
+    package = sdk_result["package"]
+    assert isinstance(package, dict)
+    assert package["blocks"][0]["text"] == "ContextEngine delivers context."
+    assert package["evidence"][0]["revisionRef"] == (
+        published.candidate_ref.revision_ref
+    )
+    with migration_engine.connect() as connection:
+        after = tuple(
+            connection.execute(
+                text(
+                    """
+                    SELECT
+                      (SELECT policy_epoch FROM organization_policy_epoch
+                       WHERE organization_id = :org),
+                      (SELECT count(*) FROM file_resource_cleanup_intent
+                       WHERE organization_id = :org),
+                      (SELECT count(*) FROM file_delete_observation_execution
+                       WHERE organization_id = :org),
+                      (SELECT count(*) FROM context_resource
+                       WHERE organization_id = :org AND tombstoned IS TRUE),
+                      (SELECT count(*) FROM file_acquisition
+                       WHERE organization_id = :org),
+                      (SELECT count(*) FROM file_import_job
+                       WHERE organization_id = :org)
+                    """
+                ),
+                {"org": scenario.organization_id},
+            ).one()
+        )
+    assert after[:4] == before[:4]
+    assert after[4:] == (before[4] + 1, before[5] + 1)
 
 
 @pytest.mark.security_evidence(id="HTTP-FILE-DELETE-INVISIBLE-087", layer="runtime")

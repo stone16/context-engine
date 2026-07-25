@@ -1153,6 +1153,459 @@ def test_control_executes_a_nonterminal_current_delete_observation(
 
 
 
+def test_control_refuses_a_current_nonterminal_mixed_file_page(
+    tmp_path: Path,
+    guarded_control_engine: Engine,
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    for path in ("a.md", "b.md", "c.md"):
+        (root / path).write_bytes(f"# {path}\n\nOriginal.\n".encode())
+    provider_proofs, control_proofs = _proofs()
+    organization_id = uuid4()
+    control, authority, source = _seed_file_change_source(
+        guarded_control_engine=guarded_control_engine,
+        migration_configuration=migration_configuration,
+        organization_id=organization_id,
+        receiver=FileImportReceiver(uuid4()),
+        root_ref=FileRootRef("nonterminal-mixed-schedule-root"),
+        control_proofs=control_proofs,
+    )
+    source = _activate_delete_observations(
+        control,
+        authority,
+        organization_id,
+        source,
+    )
+    provider = FileChangeProvider(
+        FileRootRegistry(
+            {source.source_version.root_ref: root},
+            limits=FileReadLimits(max_file_bytes=1_024),
+        ),
+        proofs=provider_proofs,
+    )
+    baseline = provider.read_changes(source, InitialScan(), ChangeLimit(3))
+    assert type(baseline) is ProviderOk
+    with _authorize(
+        authority,
+        organization_id,
+        ControlOperation.ACCEPT_FILE_CHANGE_PAGE,
+        "accept-nonterminal-mixed-baseline",
+    ) as call:
+        accepted_baseline = control.accept_file_change_page(call, baseline.value)
+    with _authorize(
+        authority,
+        organization_id,
+        ControlOperation.READ_SOURCE_PROGRESS,
+        "read-nonterminal-mixed-baseline",
+    ) as call:
+        progress = control.read_file_source_progress(
+            call,
+            accepted_baseline.source_ref,
+        )
+    assert progress.complete_change_baseline is not None
+    (root / "a.md").write_bytes(b"# A\n\nChanged.\n")
+    (root / "b.md").unlink()
+    (root / "c.md").write_bytes(b"# C\n\nChanged.\n")
+    page = provider.read_changes(
+        FileChangeSource(
+            organization_id,
+            source.source_version,
+            scan_head=progress.change_scan_head,
+            complete_baseline=progress.complete_change_baseline,
+        ),
+        InitialScan(),
+        ChangeLimit(2),
+    )
+    assert type(page) is ProviderOk
+    assert page.value.next_cursor is not None
+    assert [change.kind.value for change in page.value.changes] == [
+        "upsert",
+        "delete",
+    ]
+    with _authorize(
+        authority,
+        organization_id,
+        ControlOperation.ACCEPT_FILE_CHANGE_PAGE,
+        "accept-current-nonterminal-mixed-page",
+    ) as call:
+        accepted = control.accept_file_change_page(call, page.value)
+    assert accepted.complete is False
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.connect() as connection:
+            membership_id = connection.execute(
+                text(
+                    "SELECT membership_id FROM membership "
+                    "WHERE organization_id = :organization_id"
+                ),
+                {"organization_id": organization_id},
+            ).scalar_one()
+    finally:
+        migration_engine.dispose()
+    with (
+        _authorize(
+            authority,
+            organization_id,
+            ControlOperation.SCHEDULE_FILE_CHANGE_PAGE,
+            "reject-current-nonterminal-mixed-page",
+        ) as call,
+        pytest.raises(SourceNotAvailable),
+    ):
+        control.schedule_file_change_page(
+            call,
+            ScheduleFileChangePage(
+                accepted.source_ref,
+                accepted.source_version_ref,
+                accepted.page_ref,
+                FileImportAudience(
+                    "principal:file-reader",
+                    membership_id,
+                    1,
+                ),
+            ),
+        )
+
+
+@pytest.mark.security_evidence(
+    id="PG-FILE-MIXED-UPSERT-SCHEDULE-089",
+    layer="postgres",
+)
+@pytest.mark.security_evidence(
+    id="PG-FILE-MIXED-UPSERT-REPLAY-089",
+    layer="postgres",
+)
+def test_control_schedules_only_the_upserts_from_a_current_mixed_file_page(
+    tmp_path: Path,
+    guarded_control_engine: Engine,
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    original = {
+        "a.md": b"# A\n\nOriginal alpha.\n",
+        "b.md": b"# B\n\nOriginal beta.\n",
+        "c.md": b"# C\n\nOriginal gamma.\n",
+    }
+    for path, content in original.items():
+        (root / path).write_bytes(content)
+    provider_proofs, control_proofs = _proofs()
+    organization_id = uuid4()
+    receiver = FileImportReceiver(uuid4())
+    control, authority, source = _seed_file_change_source(
+        guarded_control_engine=guarded_control_engine,
+        migration_configuration=migration_configuration,
+        organization_id=organization_id,
+        receiver=receiver,
+        root_ref=FileRootRef("mixed-upsert-schedule-root"),
+        control_proofs=control_proofs,
+    )
+    source = _activate_delete_observations(
+        control,
+        authority,
+        organization_id,
+        source,
+    )
+    provider = FileChangeProvider(
+        FileRootRegistry(
+            {source.source_version.root_ref: root},
+            limits=FileReadLimits(max_file_bytes=1_024),
+        ),
+        proofs=provider_proofs,
+    )
+
+    initial = provider.read_changes(source, InitialScan(), ChangeLimit(3))
+    assert type(initial) is ProviderOk
+    with _authorize(
+        authority,
+        organization_id,
+        ControlOperation.ACCEPT_FILE_CHANGE_PAGE,
+        "accept-mixed-schedule-baseline",
+    ) as call:
+        accepted_initial = control.accept_file_change_page(call, initial.value)
+    assert accepted_initial.complete is True
+    with _authorize(
+        authority,
+        organization_id,
+        ControlOperation.READ_SOURCE_PROGRESS,
+        "read-mixed-schedule-baseline",
+    ) as call:
+        progress = control.read_file_source_progress(
+            call,
+            accepted_initial.source_ref,
+        )
+    assert progress.complete_change_baseline is not None
+
+    changed_a = b"# A\n\nChanged alpha.\n"
+    changed_c = b"# C\n\nChanged gamma.\n"
+    (root / "a.md").write_bytes(changed_a)
+    (root / "b.md").unlink()
+    (root / "c.md").write_bytes(changed_c)
+    changed_source = FileChangeSource(
+        organization_id,
+        source.source_version,
+        scan_head=progress.change_scan_head,
+        complete_baseline=progress.complete_change_baseline,
+    )
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.connect() as connection:
+            membership_id = connection.execute(
+                text(
+                    "SELECT membership_id FROM membership "
+                    "WHERE organization_id = :organization_id"
+                ),
+                {"organization_id": organization_id},
+            ).scalar_one()
+    finally:
+        migration_engine.dispose()
+    mixed = provider.read_changes(
+        changed_source,
+        InitialScan(),
+        ChangeLimit(3),
+    )
+    assert type(mixed) is ProviderOk
+    assert [
+        (change.path.value, change.kind.value)
+        for change in mixed.value.changes
+    ] == [("a.md", "upsert"), ("b.md", "delete"), ("c.md", "upsert")]
+    with _authorize(
+        authority,
+        organization_id,
+        ControlOperation.ACCEPT_FILE_CHANGE_PAGE,
+        "accept-current-mixed-page",
+    ) as call:
+        accepted_mixed = control.accept_file_change_page(call, mixed.value)
+    assert accepted_mixed.complete is True
+
+    schedule = ScheduleFileChangePage(
+        accepted_mixed.source_ref,
+        accepted_mixed.source_version_ref,
+        accepted_mixed.page_ref,
+        FileImportAudience("principal:file-reader", membership_id, 1),
+    )
+    partial_acquisition_id = uuid4()
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.begin() as connection:
+            first_upsert = connection.execute(
+                text(
+                    """
+                    SELECT change_ordinal, relative_path, content_sha256,
+                           content_length
+                    FROM file_source_change
+                    WHERE organization_id = :organization_id
+                      AND source_id = :source_id
+                      AND source_version_id = :source_version_id
+                      AND page_ref = :page_ref
+                      AND change_kind = 'upsert'
+                    ORDER BY change_ordinal
+                    LIMIT 1
+                    """
+                ),
+                {
+                    "organization_id": organization_id,
+                    "source_id": accepted_mixed.source_ref.value,
+                    "source_version_id": accepted_mixed.source_version_ref,
+                    "page_ref": accepted_mixed.page_ref,
+                },
+            ).one()
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO file_acquisition (
+                        organization_id, acquisition_id, source_id,
+                        source_version_id, relative_path,
+                        audience_principal_ref, audience_membership_id,
+                        audience_membership_version, idempotency_key,
+                        request_digest, created_at, change_page_ref,
+                        change_ordinal, expected_content_sha256,
+                        expected_content_length
+                    ) VALUES (
+                        :organization_id, :acquisition_id, :source_id,
+                        :source_version_id, :relative_path,
+                        'principal:file-reader', :membership_id, 1,
+                        'injected-mixed-partial-lineage', :request_digest,
+                        statement_timestamp(), :page_ref, :change_ordinal,
+                        :content_sha256, :content_length
+                    )
+                    """
+                ),
+                {
+                    "organization_id": organization_id,
+                    "acquisition_id": partial_acquisition_id,
+                    "source_id": accepted_mixed.source_ref.value,
+                    "source_version_id": accepted_mixed.source_version_ref,
+                    "relative_path": first_upsert.relative_path,
+                    "membership_id": membership_id,
+                    "request_digest": "d" * 64,
+                    "page_ref": accepted_mixed.page_ref,
+                    "change_ordinal": first_upsert.change_ordinal,
+                    "content_sha256": first_upsert.content_sha256,
+                    "content_length": first_upsert.content_length,
+                },
+            )
+    finally:
+        migration_engine.dispose()
+    with (
+        _authorize(
+            authority,
+            organization_id,
+            ControlOperation.SCHEDULE_FILE_CHANGE_PAGE,
+            "reject-partial-current-mixed-upserts",
+        ) as call,
+        pytest.raises(SourceNotAvailable),
+    ):
+        control.schedule_file_change_page(call, schedule)
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.begin() as connection:
+            assert connection.execute(
+                text(
+                    "SELECT count(*) FROM file_acquisition "
+                    "WHERE organization_id = :organization_id "
+                    "AND source_id = :source_id AND change_page_ref = :page_ref"
+                ),
+                {
+                    "organization_id": organization_id,
+                    "source_id": accepted_mixed.source_ref.value,
+                    "page_ref": accepted_mixed.page_ref,
+                },
+            ).scalar_one() == 1
+            connection.execute(
+                text(
+                    "ALTER TABLE file_acquisition DISABLE TRIGGER "
+                    "file_acquisition_immutable"
+                )
+            )
+            connection.execute(
+                text(
+                    "DELETE FROM file_acquisition "
+                    "WHERE organization_id = :organization_id "
+                    "AND acquisition_id = :acquisition_id"
+                ),
+                {
+                    "organization_id": organization_id,
+                    "acquisition_id": partial_acquisition_id,
+                },
+            )
+            connection.execute(
+                text(
+                    "ALTER TABLE file_acquisition ENABLE TRIGGER "
+                    "file_acquisition_immutable"
+                )
+            )
+    finally:
+        migration_engine.dispose()
+    with _authorize(
+        authority,
+        organization_id,
+        ControlOperation.SCHEDULE_FILE_CHANGE_PAGE,
+        "schedule-current-mixed-upserts",
+    ) as call:
+        scheduled = control.schedule_file_change_page(call, schedule)
+    with _authorize(
+        authority,
+        organization_id,
+        ControlOperation.SCHEDULE_FILE_CHANGE_PAGE,
+        "replay-current-mixed-upserts",
+    ) as call:
+        replayed = control.schedule_file_change_page(call, schedule)
+
+    assert replayed == scheduled
+    assert [
+        (change.ordinal, change.path.value)
+        for change in scheduled.changes
+    ] == [(1, "a.md"), (3, "c.md")]
+    assert [change.content_length for change in scheduled.changes] == [
+        len(changed_a),
+        len(changed_c),
+    ]
+    with (
+        _authorize(
+            authority,
+            organization_id,
+            ControlOperation.SCHEDULE_FILE_CHANGE_PAGE,
+            "reject-changed-audience-current-mixed-upserts",
+        ) as call,
+        pytest.raises(SourceNotAvailable),
+    ):
+        control.schedule_file_change_page(
+            call,
+            replace(
+                schedule,
+                audience=FileImportAudience(
+                    "principal:changed-reader",
+                    membership_id,
+                    1,
+                ),
+            ),
+        )
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.connect() as connection:
+            lineages = connection.execute(
+                text(
+                    """
+                    SELECT acquisition.change_ordinal,
+                           acquisition.relative_path,
+                           change.change_kind,
+                           job.job_id
+                    FROM file_acquisition AS acquisition
+                    JOIN file_source_change AS change
+                      ON change.organization_id = acquisition.organization_id
+                     AND change.source_id = acquisition.source_id
+                     AND change.source_version_id = acquisition.source_version_id
+                     AND change.page_ref = acquisition.change_page_ref
+                     AND change.change_ordinal = acquisition.change_ordinal
+                     AND change.relative_path = acquisition.relative_path
+                     AND change.content_sha256 = acquisition.expected_content_sha256
+                     AND change.content_length = acquisition.expected_content_length
+                    JOIN file_import_job AS job
+                      ON job.organization_id = acquisition.organization_id
+                     AND job.acquisition_id = acquisition.acquisition_id
+                    WHERE acquisition.organization_id = :organization_id
+                      AND acquisition.source_id = :source_id
+                      AND acquisition.change_page_ref = :page_ref
+                    ORDER BY acquisition.change_ordinal
+                    """
+                ),
+                {
+                    "organization_id": organization_id,
+                    "source_id": accepted_mixed.source_ref.value,
+                    "page_ref": accepted_mixed.page_ref,
+                },
+            ).all()
+    finally:
+        migration_engine.dispose()
+    assert [
+        (row.change_ordinal, row.relative_path, row.change_kind, row.job_id)
+        for row in lineages
+    ] == [
+        (
+            change.ordinal,
+            change.path.value,
+            "upsert",
+            change.prepared_import.job_id,
+        )
+        for change in scheduled.changes
+    ]
+    with pytest.raises(
+        RuntimeError,
+        match="mixed File upsert scheduling downgrade requires no retained",
+    ):
+        command.downgrade(Config(ROOT / "alembic.ini"), "20260725_0031")
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.connect() as connection:
+            assert connection.execute(
+                text("SELECT version_num FROM alembic_version")
+            ).scalar_one() == HEAD_REVISION
+    finally:
+        migration_engine.dispose()
+
+
 @pytest.mark.security_evidence(id="PG-FILE-DELETE-PAGE-085", layer="postgres")
 @pytest.mark.security_evidence(id="PG-FILE-DELETE-NO-EFFECT-085", layer="postgres")
 def test_control_accepts_delete_observations_without_visibility_effect(

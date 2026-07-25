@@ -4,6 +4,8 @@ from dataclasses import fields
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
+import pytest
+
 from engine.control import (
     ContextControl,
     ControlOperation,
@@ -24,6 +26,7 @@ SOURCE_ID = UUID("99261811-3186-45fd-904e-152d28388d3d")
 SOURCE_VERSION_ID = UUID("d9b37181-0605-4f4e-9ee0-cdef4894012b")
 MEMBERSHIP_ID = UUID("5074e7a4-58b4-441e-a6c9-39fb4a579a3d")
 JOB_ID = UUID("ce0a82df-c33f-42eb-a868-0a4062f95065")
+SECOND_JOB_ID = UUID("8d91b7ac-090f-4413-b4aa-11f8964efcbb")
 RECEIVER_ID = UUID("3847ae02-8a57-4fd1-9587-99c5e2bcf785")
 PAGE_REF = "a" * 64
 NOW = datetime(2026, 7, 25, 10, 0, tzinfo=UTC)
@@ -132,3 +135,46 @@ def test_authorized_operator_schedules_one_page_without_supplying_tenant_or_jobs
     assert tuple(change.ordinal for change in scheduled.changes) == (1,)
     assert scheduled.changes[0].prepared_import.job_id == JOB_ID
     assert "principal:file-reader" not in repr(scheduled)
+
+
+def _scheduled_change(ordinal: int, job_id: UUID) -> ScheduledFileChange:
+    return ScheduledFileChange(
+        ordinal=ordinal,
+        path=FileImportPath(f"page-{ordinal}.md"),
+        content_sha256=f"{ordinal:02x}" * 32,
+        content_length=ordinal,
+        prepared_import=PreparedFileImport(
+            organization_id=ORGANIZATION_ID,
+            job_id=job_id,
+            source_ref=SourceRef(SOURCE_ID),
+            service_principal_id=RECEIVER_ID,
+        ),
+    )
+
+
+def test_scheduled_mixed_page_preserves_strictly_increasing_gapped_ordinals() -> None:
+    first = _scheduled_change(1, JOB_ID)
+    third = _scheduled_change(3, SECOND_JOB_ID)
+
+    scheduled = ScheduledFileChangePage(
+        organization_id=ORGANIZATION_ID,
+        source_ref=SourceRef(SOURCE_ID),
+        source_version_ref=SOURCE_VERSION_ID,
+        page_ref=PAGE_REF,
+        changes=(first, third),
+    )
+
+    assert tuple(change.ordinal for change in scheduled.changes) == (1, 3)
+    assert len(_scheduled_change(100, SECOND_JOB_ID).content_sha256) == 64
+    for invalid in ((third, first), (first, first)):
+        with pytest.raises(
+            ValueError,
+            match="strictly increasing",
+        ):
+            ScheduledFileChangePage(
+                organization_id=ORGANIZATION_ID,
+                source_ref=SourceRef(SOURCE_ID),
+                source_version_ref=SOURCE_VERSION_ID,
+                page_ref=PAGE_REF,
+                changes=invalid,
+            )

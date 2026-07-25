@@ -95,8 +95,8 @@
     },
     "activations": {
       "type": "array",
-      "minItems": 19,
-      "maxItems": 19,
+      "minItems": 20,
+      "maxItems": 20,
       "uniqueItems": true,
       "prefixItems": [
         {
@@ -944,6 +944,51 @@
               "physical cleanup or restore"
             ]
           }
+        },
+        {
+          "const": {
+            "issueRef": "#89",
+            "invariantRef": "WORKER-LEASE-007",
+            "carrier": "explicit current mixed File page upsert-projection scheduling",
+            "status": "active_fail_closed",
+            "policyEpochScope": "not-runtime-authority",
+            "controlBoundary": "complete current v4 upsert/delete page validation -> trusted ContextControl explicit FileImportAudience -> nonempty original-ordinal upsert projection -> exact existing acquisition/import-job lineage -> existing WorkerLease and current-scan publication fences",
+            "testEvidence": [
+              {
+                "id": "PG-FILE-MIXED-UPSERT-SCHEDULE-089",
+                "surface": "tests/integration/test_file_change_pages.py::test_control_schedules_only_the_upserts_from_a_current_mixed_file_page",
+                "oracle": "The non-owner Control role validates one complete current v4 page ordered upsert/delete/upsert, atomically creates jobs only for original ordinals 1 and 3, and binds each to its exact immutable observation while a partial projection creates zero additional jobs."
+              },
+              {
+                "id": "PG-FILE-MIXED-UPSERT-REPLAY-089",
+                "surface": "tests/integration/test_file_change_pages.py::test_control_schedules_only_the_upserts_from_a_current_mixed_file_page",
+                "oracle": "Exact replay returns the same gapped ordered existing jobs; changed audience and retained partial lineage return generic unavailable, and downgrade refuses retained mixed-page acquisition history."
+              },
+              {
+                "id": "HTTP-FILE-MIXED-UPSERT-NO-DELETE-089",
+                "surface": "tests/integration/test_z_egress_grant_file.py::test_mixed_file_upsert_scheduling_has_zero_delete_effect_over_generated_sdk",
+                "oracle": "After mixed-page scheduling, an installed generated SDK still resolves the previously published deleted-path Evidence through CandidateRef, AuthorizationKernel, and AuthorizedProjection; Policy Epoch, tombstone, cleanup, and delete-execution counts stay unchanged."
+              }
+            ],
+            "deferredEvidence": [
+              "autonomous File change polling and scheduling",
+              "automatic ordering between upsert publication and delete execution",
+              "batch deletion, retry, reclaim, dead-letter, and full-resync operations"
+            ],
+            "futureCarriers": [
+              "autonomous File change scheduler",
+              "explicit mixed-change ordering policy",
+              "retry and dead-letter handling",
+              "full resync"
+            ],
+            "notActive": [
+              "scheduler delete or tombstone authority",
+              "implicit or inherited FileImportAudience",
+              "automatic upsert/delete ordering",
+              "filesystem watcher",
+              "Runtime authorization from File page or checkpoint metadata"
+            ]
+          }
         }
       ],
       "items": false
@@ -1242,7 +1287,10 @@
             "PG-FILE-DELETE-NO-EFFECT-085",
             "PG-FILE-DELETE-EXECUTE-087",
             "PG-FILE-DELETE-REPLAY-087",
-            "HTTP-FILE-DELETE-INVISIBLE-087"
+            "HTTP-FILE-DELETE-INVISIBLE-087",
+            "PG-FILE-MIXED-UPSERT-SCHEDULE-089",
+            "PG-FILE-MIXED-UPSERT-REPLAY-089",
+            "HTTP-FILE-MIXED-UPSERT-NO-DELETE-089"
           ]
         },
         "surface": {
@@ -1289,7 +1337,8 @@
             "#81",
             "#83",
             "#85",
-            "#87"
+            "#87",
+            "#89"
           ]
         },
         "invariantRef": {
@@ -1325,7 +1374,8 @@
             "deterministic shallow File readChanges and durable page acknowledgement",
             "explicit accepted File page scheduling through existing import jobs",
             "bounded durable File deletion observations without execution",
-            "explicit current File delete execution through sole tombstone authority"
+            "explicit current File delete execution through sole tombstone authority",
+            "explicit current mixed File page upsert-projection scheduling"
           ]
         },
         "status": {
@@ -1359,7 +1409,8 @@
             "FileChangeProvider PendingChangeCursor -> provider-authenticated ChangePage -> ContextControl whole-page PostgreSQL acceptance -> accepted ChangeCursor",
             "accepted File page -> trusted ContextControl explicit FileImportAudience -> exact file_acquisition/file_import_job lineage -> existing WorkerLease -> current accepted scan-epoch redemption fence -> pre-compiler raw observation verification -> atomic current-epoch publication fence",
             "latest complete same-SourceVersion v4 baseline -> stable shallow File snapshot -> provider-authenticated upsert/delete ChangePage -> exact baseline-bound ContextControl PostgreSQL acceptance",
-            "exact trusted Source/SourceVersion/page/ordinal locator -> current complete v4 scan revalidation -> server-derived Resource/event lineage -> existing tombstone authority -> immutable exact execution binding"
+            "exact trusted Source/SourceVersion/page/ordinal locator -> current complete v4 scan revalidation -> server-derived Resource/event lineage -> existing tombstone authority -> immutable exact execution binding",
+            "complete current v4 upsert/delete page validation -> trusted ContextControl explicit FileImportAudience -> nonempty original-ordinal upsert projection -> exact existing acquisition/import-job lineage -> existing WorkerLease and current-scan publication fences"
           ]
         },
         "testEvidence": {
