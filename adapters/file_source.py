@@ -495,8 +495,17 @@ class FileChangeProvider:
                 if entry.kind is FileChangeKind.DELETE
             }
             if current == active and deleted.isdisjoint(current):
-                # Reuse the prior scan's comparison input so a no-op replay
-                # retains the exact scan_ref instead of advancing its lineage.
+                # Reuse the prior comparison input only while the complete
+                # baseline is also the durable head. An incomplete newer head
+                # must be superseded by a scan bound to this complete baseline.
+                comparison_baseline_ref = (
+                    baseline.reference.comparison_baseline_ref
+                    if FileChangeProvider._baseline_is_current_head(
+                        source,
+                        baseline.reference,
+                    )
+                    else baseline.reference
+                )
                 return (
                     tuple(
                         _ObservedChange(
@@ -507,7 +516,7 @@ class FileChangeProvider:
                         )
                         for entry in baseline.entries
                     ),
-                    baseline.reference.comparison_baseline_ref,
+                    comparison_baseline_ref,
                 )
         changes = [
             _ObservedChange(
@@ -532,6 +541,33 @@ class FileChangeProvider:
             )
         changes.sort(key=lambda item: item.path.value.encode("utf-8"))
         return tuple(changes), None if baseline is None else baseline.reference
+
+    @staticmethod
+    def _baseline_is_current_head(
+        source: FileChangeSource,
+        baseline_ref: FileChangeBaselineRef,
+    ) -> bool:
+        head = source.scan_head
+        return (
+            head is not None
+            and head.complete
+            and (
+                head.source_version_ref,
+                head.scan_ref,
+                head.scan_epoch,
+                head.page_ref,
+                head.checkpoint_ref,
+                head.sequence,
+            )
+            == (
+                baseline_ref.source_version_ref,
+                baseline_ref.scan_ref,
+                baseline_ref.scan_epoch,
+                baseline_ref.page_ref,
+                baseline_ref.checkpoint_ref,
+                baseline_ref.sequence,
+            )
+        )
 
     @staticmethod
     def _scan_ref(

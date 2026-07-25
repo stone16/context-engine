@@ -48,7 +48,11 @@ Current paths are
 `upsert`; a prior baseline `upsert` absent from the snapshot is `delete` with
 only the prior path, raw digest, and length. With no complete baseline, no
 delete can be emitted. Exact unchanged state replays the original scan and its
-original comparison baseline.
+original comparison baseline only while that complete scan is also the durable
+head. If a newer incomplete scan is the durable head, unchanged state starts a
+new scan bound to the latest complete baseline and explicitly supersedes the
+incomplete epoch; it never resurrects the older scan identity across that ABA
+transition.
 
 One v4 SECURITY DEFINER acceptance function requires the referenced baseline to
 be the latest complete page for the same active SourceVersion. Every delete

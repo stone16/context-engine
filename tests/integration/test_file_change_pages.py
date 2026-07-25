@@ -870,6 +870,138 @@ def test_progress_and_complete_baseline_share_one_statement_snapshot(
     assert accepted_changed.sequence > observed.acquisition_checkpoint.sequence
 
 
+def test_unchanged_files_recover_after_an_incomplete_superseding_scan(
+    tmp_path: Path,
+    guarded_control_engine: Engine,
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "a.md").write_bytes(b"A")
+    (root / "b.md").write_bytes(b"B")
+    provider_proofs, control_proofs = _proofs()
+    organization_id = uuid4()
+    control, authority, source = _seed_file_change_source(
+        guarded_control_engine=guarded_control_engine,
+        migration_configuration=migration_configuration,
+        organization_id=organization_id,
+        receiver=FileImportReceiver(uuid4()),
+        root_ref=FileRootRef("incomplete-superseding-scan-root"),
+        control_proofs=control_proofs,
+    )
+    source = _activate_delete_observations(
+        control,
+        authority,
+        organization_id,
+        source,
+    )
+    provider = FileChangeProvider(
+        FileRootRegistry(
+            {source.source_version.root_ref: root},
+            limits=FileReadLimits(max_file_bytes=1_024),
+        ),
+        proofs=provider_proofs,
+    )
+
+    initial = provider.read_changes(source, InitialScan(), ChangeLimit(2))
+    assert type(initial) is ProviderOk
+    with _authorize(
+        authority,
+        organization_id,
+        ControlOperation.ACCEPT_FILE_CHANGE_PAGE,
+        "accept-recovery-baseline",
+    ) as call:
+        accepted_initial = control.accept_file_change_page(call, initial.value)
+    with _authorize(
+        authority,
+        organization_id,
+        ControlOperation.READ_SOURCE_PROGRESS,
+        "read-recovery-baseline",
+    ) as call:
+        baseline_progress = control.read_file_source_progress(
+            call,
+            accepted_initial.source_ref,
+        )
+    baseline = baseline_progress.complete_change_baseline
+    assert baseline is not None
+
+    (root / "a.md").write_bytes(b"A2")
+    changed = provider.read_changes(
+        FileChangeSource(
+            organization_id,
+            source.source_version,
+            scan_head=baseline_progress.change_scan_head,
+            complete_baseline=baseline,
+        ),
+        InitialScan(),
+        ChangeLimit(1),
+    )
+    assert type(changed) is ProviderOk
+    assert changed.value.complete is False
+    with _authorize(
+        authority,
+        organization_id,
+        ControlOperation.ACCEPT_FILE_CHANGE_PAGE,
+        "accept-incomplete-superseding-scan",
+    ) as call:
+        accepted_changed = control.accept_file_change_page(call, changed.value)
+    assert accepted_changed.complete is False
+
+    (root / "a.md").write_bytes(b"A")
+    with _authorize(
+        authority,
+        organization_id,
+        ControlOperation.READ_SOURCE_PROGRESS,
+        "read-incomplete-superseding-scan",
+    ) as call:
+        incomplete_progress = control.read_file_source_progress(
+            call,
+            accepted_changed.source_ref,
+        )
+    assert incomplete_progress.change_scan_head == accepted_changed.scan_head
+    assert incomplete_progress.complete_change_baseline == baseline
+    recovered = provider.read_changes(
+        FileChangeSource(
+            organization_id,
+            source.source_version,
+            scan_head=incomplete_progress.change_scan_head,
+            complete_baseline=incomplete_progress.complete_change_baseline,
+        ),
+        InitialScan(),
+        ChangeLimit(2),
+    )
+    assert type(recovered) is ProviderOk
+    assert recovered.value.baseline_ref == baseline.reference
+    assert recovered.value.superseded_scan_epoch == accepted_changed.scan_epoch
+    assert recovered.value.complete is True
+    with _authorize(
+        authority,
+        organization_id,
+        ControlOperation.ACCEPT_FILE_CHANGE_PAGE,
+        "accept-recovered-scan",
+    ) as call:
+        accepted_recovered = control.accept_file_change_page(call, recovered.value)
+    assert accepted_recovered.complete is True
+    assert accepted_recovered.scan_epoch != accepted_initial.scan_epoch
+    assert accepted_recovered.scan_epoch != accepted_changed.scan_epoch
+    with _authorize(
+        authority,
+        organization_id,
+        ControlOperation.READ_SOURCE_PROGRESS,
+        "read-recovered-scan",
+    ) as call:
+        recovered_progress = control.read_file_source_progress(
+            call,
+            accepted_recovered.source_ref,
+        )
+    assert recovered_progress.change_scan_head == accepted_recovered.scan_head
+    assert recovered_progress.complete_change_baseline is not None
+    assert (
+        recovered_progress.complete_change_baseline.reference.scan_epoch
+        == accepted_recovered.scan_epoch
+    )
+
+
 def test_oversized_delete_diff_is_denied_before_durable_progress(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

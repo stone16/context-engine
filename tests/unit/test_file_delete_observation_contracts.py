@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import UTC, datetime
+from hashlib import sha256
 from pathlib import Path
 from uuid import UUID
 
@@ -21,6 +22,7 @@ from engine.control import (
     FileChangeBaselineRef,
     FileChangeKind,
     FileChangeProviderProofs,
+    FileChangeScanHead,
     FileChangeSource,
     FileImportPath,
     FileRootRef,
@@ -413,6 +415,16 @@ def test_completed_delete_scan_replays_its_original_parent_baseline(
     replay_source = FileChangeSource(
         organization_id=ORGANIZATION_ID,
         source_version=source.source_version,
+        scan_head=FileChangeScanHead(
+            source_version_ref=SOURCE_VERSION_ID,
+            scan_ref=completed.reference.scan_ref,
+            scan_epoch=completed.reference.scan_epoch,
+            page_limit=2,
+            page_ref=completed.reference.page_ref,
+            checkpoint_ref=completed.reference.checkpoint_ref,
+            sequence=completed.reference.sequence,
+            complete=True,
+        ),
         complete_baseline=completed,
     )
 
@@ -422,3 +434,46 @@ def test_completed_delete_scan_replays_its_original_parent_baseline(
     assert replay.value.changes == first.value.changes
     assert replay.value.scan_ref == first.value.scan_ref
     assert replay.value.baseline_ref == first.value.baseline_ref
+
+
+def test_unchanged_files_rebase_after_an_incomplete_superseding_scan(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "registered-root"
+    root.mkdir()
+    (root / "handbook.md").write_bytes(b"handbook-data")
+    provider = _provider(root)
+    baseline = replace(
+        _baseline(),
+        entries=(
+            replace(
+                _baseline_entry(),
+                content_sha256=sha256(b"handbook-data").hexdigest(),
+                content_length=len(b"handbook-data"),
+            ),
+        ),
+    )
+    incomplete_epoch = UUID("52f47dce-5188-4133-b604-c28cb0604c88")
+    source = FileChangeSource(
+        organization_id=ORGANIZATION_ID,
+        source_version=_manifest(delete_observations=True).active_version,
+        scan_head=FileChangeScanHead(
+            source_version_ref=SOURCE_VERSION_ID,
+            scan_ref="8" * 64,
+            scan_epoch=incomplete_epoch,
+            page_limit=1,
+            page_ref="9" * 64,
+            checkpoint_ref="facp_" + "0" * 64,
+            sequence=8,
+            complete=False,
+            superseded_scan_epoch=baseline.reference.scan_epoch,
+        ),
+        complete_baseline=baseline,
+    )
+
+    outcome = provider.read_changes(source, InitialScan(), ChangeLimit(1))
+
+    assert type(outcome) is ProviderOk
+    assert outcome.value.baseline_ref == baseline.reference
+    assert outcome.value.superseded_scan_epoch == incomplete_epoch
+    assert outcome.value.scan_ref != baseline.reference.scan_ref
