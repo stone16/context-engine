@@ -32,7 +32,7 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
     document = manifest()
     tables = table_entries(document)
 
-    assert document["manifestVersion"] == "29.0.0"
+    assert document["manifestVersion"] == "30.0.0"
     assert set(tables) == {
         "active_release_manifest",
         "action_delivery_attempt",
@@ -93,6 +93,14 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
         "worker_noop_job",
     }
     assert tables["alembic_version"]["classification"] == "global"
+    assert tables["alembic_version"]["permittedOperations"] == {
+        "context_engine_runtime": [],
+        "context_engine_worker": [],
+        "context_engine_control": [],
+        "context_engine_worker_lease_definer": [
+            "SELECT scheduler generation capability"
+        ],
+    }
     assert tables["organization"]["classification"] == "global"
     assert tables["user_account"]["classification"] == "global"
     assert tables["membership"]["classification"] == "tenant_owned"
@@ -832,6 +840,17 @@ def test_issue_21_file_source_manifest_is_closed_and_role_separated() -> None:
         "file_source_acquisition_checkpoint",
     ]
     assert schedule["filesystemAccessAllowed"] is False
+    assert schedule["completePageValidation"] is True
+    assert schedule["migrationFence"] == {
+        "sharedAdvisoryLock": (
+            "context-engine.file-change-scheduling-migration-fence"
+        ),
+        "definerOnlyGenerationRead": (
+            "alembic_version SELECT revoked by 0032 downgrade"
+        ),
+    }
+    assert schedule["scheduledChangeKinds"] == ["upsert"]
+    assert schedule["deleteExecutionAllowed"] is False
     redeem = next(
         operation
         for operation in manifest()["controlOperations"]

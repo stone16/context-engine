@@ -1939,6 +1939,78 @@ CANONICAL_FILE_DELETE_EXECUTION_ACTIVATION: dict[str, object] = {
     ],
 }
 
+CANONICAL_FILE_MIXED_UPSERT_SCHEDULING_ACTIVATION: dict[str, object] = {
+    "issueRef": "#89",
+    "invariantRef": "WORKER-LEASE-007",
+    "carrier": "explicit current mixed File page upsert-projection scheduling",
+    "status": "active_fail_closed",
+    "policyEpochScope": "not-runtime-authority",
+    "controlBoundary": (
+        "complete current v4 upsert/delete page validation -> trusted "
+        "ContextControl explicit FileImportAudience -> nonempty original-ordinal "
+        "upsert projection -> exact existing acquisition/import-job lineage -> "
+        "existing WorkerLease and current-scan publication fences"
+    ),
+    "testEvidence": [
+        {
+            "id": "PG-FILE-MIXED-UPSERT-SCHEDULE-089",
+            "surface": (
+                "tests/integration/test_file_change_pages.py::"
+                "test_control_schedules_only_the_upserts_from_a_current_mixed_file_page"
+            ),
+            "oracle": (
+                "The non-owner Control role validates one complete current v4 page "
+                "ordered upsert/delete/upsert, atomically creates jobs only for "
+                "original ordinals 1 and 3, and binds each to its exact immutable "
+                "observation while a partial projection creates zero additional jobs."
+            ),
+        },
+        {
+            "id": "PG-FILE-MIXED-UPSERT-REPLAY-089",
+            "surface": (
+                "tests/integration/test_file_change_pages.py::"
+                "test_control_schedules_only_the_upserts_from_a_current_mixed_file_page"
+            ),
+            "oracle": (
+                "Exact replay returns the same gapped ordered existing jobs; changed "
+                "audience and retained partial lineage return generic unavailable, "
+                "and downgrade refuses retained mixed-page acquisition history."
+            ),
+        },
+        {
+            "id": "HTTP-FILE-MIXED-UPSERT-NO-DELETE-089",
+            "surface": (
+                "tests/integration/test_z_egress_grant_file.py::"
+                "test_mixed_file_upsert_scheduling_has_zero_delete_effect_over_generated_sdk"
+            ),
+            "oracle": (
+                "After mixed-page scheduling, an installed generated SDK still "
+                "resolves the previously published deleted-path Evidence through "
+                "CandidateRef, AuthorizationKernel, and AuthorizedProjection; Policy "
+                "Epoch, tombstone, cleanup, and delete-execution counts stay unchanged."
+            ),
+        },
+    ],
+    "deferredEvidence": [
+        "autonomous File change polling and scheduling",
+        "automatic ordering between upsert publication and delete execution",
+        "batch deletion, retry, reclaim, dead-letter, and full-resync operations",
+    ],
+    "futureCarriers": [
+        "autonomous File change scheduler",
+        "explicit mixed-change ordering policy",
+        "retry and dead-letter handling",
+        "full resync",
+    ],
+    "notActive": [
+        "scheduler delete or tombstone authority",
+        "implicit or inherited FileImportAudience",
+        "automatic upsert/delete ordering",
+        "filesystem watcher",
+        "Runtime authorization from File page or checkpoint metadata",
+    ],
+}
+
 CANONICAL_ACTIVATIONS: list[dict[str, object]] = [
     CANONICAL_REVOCATION_ACTIVATION,
     CANONICAL_UNAVAILABLE_CAPABILITY_ACTIVATION,
@@ -1959,6 +2031,7 @@ CANONICAL_ACTIVATIONS: list[dict[str, object]] = [
     CANONICAL_FILE_CHANGE_SCHEDULING_ACTIVATION,
     CANONICAL_FILE_DELETE_OBSERVATION_ACTIVATION,
     CANONICAL_FILE_DELETE_EXECUTION_ACTIVATION,
+    CANONICAL_FILE_MIXED_UPSERT_SCHEDULING_ACTIVATION,
 ]
 CANONICAL_ACTIVATION_ISSUE_LIST = ", ".join(
     f"Issue {activation['issueRef']}" for activation in CANONICAL_ACTIVATIONS

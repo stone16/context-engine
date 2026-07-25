@@ -514,6 +514,21 @@
       "id": "HTTP-FILE-DELETE-INVISIBLE-087",
       "layer": "runtime",
       "selector": "tests/integration/test_z_egress_grant_file.py::test_file_delete_execution_is_immediately_invisible_over_generated_sdk"
+    },
+    {
+      "id": "PG-FILE-MIXED-UPSERT-SCHEDULE-089",
+      "layer": "postgres",
+      "selector": "tests/integration/test_file_change_pages.py::test_control_schedules_only_the_upserts_from_a_current_mixed_file_page"
+    },
+    {
+      "id": "PG-FILE-MIXED-UPSERT-REPLAY-089",
+      "layer": "postgres",
+      "selector": "tests/integration/test_file_change_pages.py::test_control_schedules_only_the_upserts_from_a_current_mixed_file_page"
+    },
+    {
+      "id": "HTTP-FILE-MIXED-UPSERT-NO-DELETE-089",
+      "layer": "runtime",
+      "selector": "tests/integration/test_z_egress_grant_file.py::test_mixed_file_upsert_scheduling_has_zero_delete_effect_over_generated_sdk"
     }
   ],
   "invariantMappings": [
@@ -652,10 +667,13 @@
           "PG-FILE-CHANGE-SUPERSESSION-083",
           "PG-FILE-DELETE-DETECT-085",
           "PG-FILE-DELETE-PAGE-085",
-          "PG-FILE-DELETE-NO-EFFECT-085"
+          "PG-FILE-DELETE-NO-EFFECT-085",
+          "PG-FILE-MIXED-UPSERT-SCHEDULE-089",
+          "PG-FILE-MIXED-UPSERT-REPLAY-089"
         ],
         "runtime": [
-          "RUNTIME-WORKER-LEASE-007"
+          "RUNTIME-WORKER-LEASE-007",
+          "HTTP-FILE-MIXED-UPSERT-NO-DELETE-089"
         ]
       }
     },
