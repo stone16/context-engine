@@ -476,22 +476,34 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    """Remove scheduling only when no acquisition retains accepted lineage."""
+    """Remove scheduling only when retained acquisitions fit the prior schema."""
 
-    retained = (
+    op.execute("LOCK TABLE public.file_acquisition IN ACCESS EXCLUSIVE MODE")
+    blocker = (
         op.get_bind()
         .execute(
             sa.text(
-                "SELECT EXISTS (SELECT 1 FROM file_acquisition "
-                "WHERE change_page_ref IS NOT NULL)"
+                "SELECT CASE "
+                "WHEN EXISTS (SELECT 1 FROM file_acquisition "
+                "WHERE change_page_ref IS NOT NULL) "
+                "THEN 'accepted_lineage' "
+                "WHEN EXISTS (SELECT 1 FROM file_acquisition "
+                "WHERE relative_path ~ '^\\.[mM][dD]$') "
+                "THEN 'newer_manual_path' "
+                "END"
             )
         )
         .scalar_one()
     )
-    if retained:
+    if blocker == "accepted_lineage":
         raise RuntimeError(
             "File change scheduling downgrade requires no retained "
             "accepted-change acquisition lineage; use a forward fix"
+        )
+    if blocker == "newer_manual_path":
+        raise RuntimeError(
+            "File change scheduling downgrade requires no newer manual "
+            "File import paths; use a forward fix"
         )
     _replace_redeem_function(include_observation=False)
     op.execute(f"SET LOCAL ROLE {_DEFINER}")

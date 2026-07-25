@@ -71,6 +71,13 @@ that fenced state remains inactive and must be introduced by a later issue.
 - Automatic polling, filesystem watching, deletion execution, retry/reclaim,
   dead-letter handling, and full resync remain inactive.
 - Downgrade is refused while any acquisition retains accepted-change lineage.
+- Downgrade also refuses any retained manual acquisition whose path is valid in
+  this revision but invalid under the preceding schema. The current boundary is
+  the case-insensitive exact basename `.md`; refusal preserves the acquisition
+  and requires a forward fix instead of deleting or rewriting an existing job.
+- Downgrade serializes all `file_acquisition` writers before one database
+  snapshot evaluates both rollback blockers, closing check-to-DDL races for
+  accepted lineage and newly valid manual paths.
 
 ## Revisit trigger
 

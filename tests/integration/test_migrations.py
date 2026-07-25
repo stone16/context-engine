@@ -16,6 +16,7 @@ from sqlalchemy import Engine, text
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from adapters.parsers.markdown import compile_markdown
+from engine.control import FileImportPath
 from engine.persistence import (
     DatabaseConfiguration,
     PostgreSQLWorkerLeaseIssuer,
@@ -167,6 +168,15 @@ def _delete_issue_27_upgrade_fixture(
                 )
         try:
             with engine.begin() as connection:
+                user_ids = tuple(
+                    connection.execute(
+                        text(
+                            "SELECT user_id FROM membership "
+                            "WHERE organization_id = :org"
+                        ),
+                        {"org": organization_id},
+                    ).scalars()
+                )
                 for table in (
                     "file_source_publish_watermark",
                     "file_source_acquisition_checkpoint",
@@ -199,13 +209,16 @@ def _delete_issue_27_upgrade_fixture(
                         text(f"DELETE FROM {table} WHERE organization_id = :org"),
                         {"org": organization_id},
                     )
-                connection.execute(
-                    text(
-                        "DELETE FROM user_account WHERE NOT EXISTS ("
-                        "SELECT 1 FROM membership "
-                        "WHERE membership.user_id = user_account.user_id)"
+                for user_id in user_ids:
+                    connection.execute(
+                        text(
+                            "DELETE FROM user_account "
+                            "WHERE user_id = :user_id AND NOT EXISTS ("
+                            "SELECT 1 FROM membership "
+                            "WHERE membership.user_id = user_account.user_id)"
+                        ),
+                        {"user_id": user_id},
                     )
-                )
                 connection.execute(
                     text("DELETE FROM organization WHERE organization_id = :org"),
                     {"org": organization_id},
@@ -1011,6 +1024,169 @@ def test_file_change_scheduling_revision_downgrades_and_reapplies_cleanly(
         assert public_execute is False
     finally:
         engine.dispose()
+        _delete_issue_27_upgrade_fixture(
+            migration_configuration,
+            scenario.organization_id,
+        )
+
+
+def test_file_change_scheduling_revision_refuses_downgrade_with_new_manual_path(
+    tmp_path: Path,
+    migration_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+) -> None:
+    """Issue #83 rollback cannot strand a newly valid manual File import."""
+
+    alembic_configuration = Config(ROOT / "alembic.ini")
+    scenario = _prepare_file_import_scenario(
+        tmp_path,
+        migration_configuration,
+        guarded_control_engine,
+    )
+    (scenario.root / ".md").write_bytes(b"# Dotfile\n")
+    _prepare_repeat_file_import(
+        scenario,
+        guarded_control_engine,
+        idempotency_key="newly-valid-dotfile",
+        path=FileImportPath(".md"),
+    )
+    try:
+        with pytest.raises(
+            RuntimeError,
+            match="newer manual File import paths",
+        ):
+            command.downgrade(alembic_configuration, "20260725_0028")
+        assert _revision_rows(migration_configuration) == [HEAD_REVISION]
+        engine = create_database_engine(migration_configuration)
+        try:
+            with engine.connect() as connection:
+                retained_path = connection.execute(
+                    text(
+                        "SELECT relative_path FROM file_acquisition "
+                        "WHERE organization_id = :org AND relative_path = '.md'"
+                    ),
+                    {"org": scenario.organization_id},
+                ).scalar_one()
+            assert retained_path == ".md"
+        finally:
+            engine.dispose()
+    finally:
+        command.upgrade(alembic_configuration, "head")
+        _delete_issue_27_upgrade_fixture(
+            migration_configuration,
+            scenario.organization_id,
+        )
+
+
+def test_file_change_scheduling_downgrade_serializes_with_manual_import(
+    tmp_path: Path,
+    migration_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+) -> None:
+    """The manual-path compatibility check cannot race an in-flight import."""
+
+    alembic_configuration = Config(ROOT / "alembic.ini")
+    scenario = _prepare_file_import_scenario(
+        tmp_path,
+        migration_configuration,
+        guarded_control_engine,
+        issue_lease=False,
+    )
+    acquisition_id = uuid4()
+    engine = create_database_engine(migration_configuration)
+    try:
+        with engine.connect() as writer:
+            writer_transaction = writer.begin()
+            try:
+                writer.execute(
+                    text(
+                        """
+                        INSERT INTO file_acquisition (
+                            organization_id, acquisition_id, source_id,
+                            source_version_id, relative_path,
+                            audience_principal_ref, audience_membership_id,
+                            audience_membership_version, idempotency_key,
+                            request_digest, created_at
+                        )
+                        SELECT organization_id, :acquisition_id, source_id,
+                               source_version_id, '.md',
+                               audience_principal_ref, audience_membership_id,
+                               audience_membership_version,
+                               'concurrent-new-manual-path',
+                               :request_digest, :created_at
+                        FROM file_acquisition
+                        WHERE organization_id = :organization_id
+                        LIMIT 1
+                        """
+                    ),
+                    {
+                        "organization_id": scenario.organization_id,
+                        "acquisition_id": acquisition_id,
+                        "request_digest": "a" * 64,
+                        "created_at": datetime.now(UTC),
+                    },
+                )
+                with ThreadPoolExecutor(max_workers=1) as executor:
+                    pending_downgrade = executor.submit(
+                        command.downgrade,
+                        alembic_configuration,
+                        "20260725_0028",
+                    )
+                    downgrade_waiting = False
+                    try:
+                        with engine.connect() as observer:
+                            deadline = monotonic() + 10
+                            while monotonic() < deadline:
+                                downgrade_waiting = observer.execute(
+                                    text(
+                                        """
+                                        SELECT EXISTS (
+                                            SELECT 1
+                                            FROM pg_locks
+                                            WHERE database = (
+                                                SELECT oid
+                                                FROM pg_database
+                                                WHERE datname = current_database()
+                                            )
+                                              AND relation = (
+                                                  'public.file_acquisition'::regclass
+                                              )
+                                              AND mode = 'AccessExclusiveLock'
+                                              AND granted IS FALSE
+                                        )
+                                        """
+                                    )
+                                ).scalar_one()
+                                if downgrade_waiting:
+                                    break
+                                sleep(0.01)
+                    finally:
+                        if writer_transaction.is_active:
+                            writer_transaction.commit()
+                    assert downgrade_waiting
+                    with pytest.raises(
+                        RuntimeError,
+                        match="newer manual File import paths",
+                    ):
+                        pending_downgrade.result(timeout=10)
+            finally:
+                if writer_transaction.is_active:
+                    writer_transaction.rollback()
+
+        assert _revision_rows(migration_configuration) == [HEAD_REVISION]
+        with engine.connect() as connection:
+            retained_path = connection.execute(
+                text(
+                    "SELECT relative_path FROM file_acquisition "
+                    "WHERE organization_id = :org AND acquisition_id = :acquisition"
+                ),
+                {"org": scenario.organization_id, "acquisition": acquisition_id},
+            ).scalar_one()
+        assert retained_path == ".md"
+    finally:
+        engine.dispose()
+        if _revision_rows(migration_configuration) != [HEAD_REVISION]:
+            command.upgrade(alembic_configuration, "head")
         _delete_issue_27_upgrade_fixture(
             migration_configuration,
             scenario.organization_id,
