@@ -58,6 +58,15 @@ the latest accepted scan epoch. A partial retained projection is generic
 unavailable rather than completed or repaired, preserving all-or-none caller
 semantics and making inconsistent lineage an operator-visible failure.
 
+## Rationale
+
+Whole-page refusal is safe but strands valid upserts, while rewriting or
+splitting an accepted page would invalidate its provider proof and durable
+lineage. Projecting only upserts after complete-page validation reuses one
+explicit audience, queue, WorkerLease protocol, and publication path without
+granting scheduling any delete authority. Strict all-or-none replay prevents a
+partially retained projection from being mistaken for a completed schedule.
+
 ## Consequences
 
 - One accepted page remains the immutable observation and checkpoint unit.

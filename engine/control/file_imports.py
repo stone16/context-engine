@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from itertools import pairwise
 from typing import NoReturn
 from uuid import UUID
 
@@ -188,7 +189,7 @@ class ScheduledFileChangePage:
         ordinals = tuple(change.ordinal for change in self.changes)
         if any(
             current >= following
-            for current, following in zip(ordinals, ordinals[1:], strict=False)
+            for current, following in pairwise(ordinals)
         ):
             raise ValueError(
                 "scheduled File page changes must be strictly increasing"

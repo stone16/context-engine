@@ -1263,6 +1263,7 @@ def test_mixed_file_upsert_downgrade_waits_for_in_flight_scheduler(
     alembic_configuration = Config(ROOT / "alembic.ini")
     source_lock_key = "context-engine.file-source-progress:"
     source_lock_key += f"{scenario.organization_id}:{scenario.source_ref.value}"
+    migration_fence_key = "context-engine.file-change-scheduling-migration-fence"
     try:
         with engine.connect() as blocker:
             blocker_transaction = blocker.begin()
@@ -1295,11 +1296,20 @@ def test_mixed_file_upsert_downgrade_waits_for_in_flight_scheduler(
                                             WHERE waiting.locktype = 'advisory'
                                               AND waiting.mode = 'ExclusiveLock'
                                               AND waiting.granted IS FALSE
+                                              AND waiting.classid = (
+                                                (hashtextextended(:lock_key, 0)
+                                                  >> 32) & 4294967295
+                                              )::oid
+                                              AND waiting.objid = (
+                                                hashtextextended(:lock_key, 0)
+                                                  & 4294967295
+                                              )::oid
                                               AND held.mode = 'ExclusiveLock'
                                               AND held.granted IS TRUE
                                         )
                                         """
-                                    )
+                                    ),
+                                    {"lock_key": source_lock_key},
                                 ).scalar_one()
                                 if scheduler_waiting:
                                     break
@@ -1328,11 +1338,20 @@ def test_mixed_file_upsert_downgrade_waits_for_in_flight_scheduler(
                                             WHERE waiting.locktype = 'advisory'
                                               AND waiting.mode = 'ExclusiveLock'
                                               AND waiting.granted IS FALSE
+                                              AND waiting.classid = (
+                                                (hashtextextended(:lock_key, 0)
+                                                  >> 32) & 4294967295
+                                              )::oid
+                                              AND waiting.objid = (
+                                                hashtextextended(:lock_key, 0)
+                                                  & 4294967295
+                                              )::oid
                                               AND held.mode = 'ShareLock'
                                               AND held.granted IS TRUE
                                         )
                                         """
-                                    )
+                                    ),
+                                    {"lock_key": migration_fence_key},
                                 ).scalar_one()
                                 if downgrade_waiting:
                                     break
@@ -1485,6 +1504,7 @@ def test_in_flight_old_scheduler_fails_closed_when_downgrade_wins_fence(
 
     engine = create_database_engine(migration_configuration)
     alembic_configuration = Config(ROOT / "alembic.ini")
+    migration_fence_key = "context-engine.file-change-scheduling-migration-fence"
     try:
         with engine.connect() as blocker:
             blocker_transaction = blocker.begin()
@@ -1513,6 +1533,14 @@ def test_in_flight_old_scheduler_fails_closed_when_downgrade_wins_fence(
                                             WHERE advisory.locktype = 'advisory'
                                               AND advisory.mode = 'ExclusiveLock'
                                               AND advisory.granted IS TRUE
+                                              AND advisory.classid = (
+                                                (hashtextextended(:lock_key, 0)
+                                                  >> 32) & 4294967295
+                                              )::oid
+                                              AND advisory.objid = (
+                                                hashtextextended(:lock_key, 0)
+                                                  & 4294967295
+                                              )::oid
                                               AND relation_lock.relation =
                                                 'public.context_source'::regclass
                                               AND relation_lock.mode =
@@ -1520,7 +1548,8 @@ def test_in_flight_old_scheduler_fails_closed_when_downgrade_wins_fence(
                                               AND relation_lock.granted IS FALSE
                                         )
                                         """
-                                    )
+                                    ),
+                                    {"lock_key": migration_fence_key},
                                 ).scalar_one()
                                 if downgrade_holds_fence:
                                     break
@@ -1541,14 +1570,23 @@ def test_in_flight_old_scheduler_fails_closed_when_downgrade_wins_fence(
                                              AND held.classid = waiting.classid
                                              AND held.objid = waiting.objid
                                              AND held.objsubid = waiting.objsubid
-                                            WHERE waiting.locktype = 'advisory'
-                                              AND waiting.mode = 'ShareLock'
-                                              AND waiting.granted IS FALSE
-                                              AND held.mode = 'ExclusiveLock'
-                                              AND held.granted IS TRUE
-                                        )
-                                        """
+                                        WHERE waiting.locktype = 'advisory'
+                                          AND waiting.mode = 'ShareLock'
+                                          AND waiting.granted IS FALSE
+                                          AND waiting.classid = (
+                                            (hashtextextended(:lock_key, 0)
+                                              >> 32) & 4294967295
+                                          )::oid
+                                          AND waiting.objid = (
+                                            hashtextextended(:lock_key, 0)
+                                              & 4294967295
+                                          )::oid
+                                          AND held.mode = 'ExclusiveLock'
+                                          AND held.granted IS TRUE
                                     )
+                                    """
+                                ),
+                                {"lock_key": migration_fence_key},
                                 ).scalar_one()
                                 if scheduler_waiting:
                                     break

@@ -141,7 +141,7 @@ def _scheduled_change(ordinal: int, job_id: UUID) -> ScheduledFileChange:
     return ScheduledFileChange(
         ordinal=ordinal,
         path=FileImportPath(f"page-{ordinal}.md"),
-        content_sha256=f"{ordinal:x}" * 64,
+        content_sha256=f"{ordinal:02x}" * 32,
         content_length=ordinal,
         prepared_import=PreparedFileImport(
             organization_id=ORGANIZATION_ID,
@@ -165,6 +165,7 @@ def test_scheduled_mixed_page_preserves_strictly_increasing_gapped_ordinals() ->
     )
 
     assert tuple(change.ordinal for change in scheduled.changes) == (1, 3)
+    assert len(_scheduled_change(100, SECOND_JOB_ID).content_sha256) == 64
     for invalid in ((third, first), (first, first)):
         with pytest.raises(
             ValueError,
