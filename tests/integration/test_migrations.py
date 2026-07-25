@@ -12,13 +12,29 @@ from uuid import UUID, uuid4
 import pytest
 from alembic import command
 from alembic.config import Config
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from sqlalchemy import Engine, text
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
+from adapters.file_source import FileChangeProvider, FileReadLimits, FileRootRegistry
 from adapters.parsers.markdown import compile_markdown
-from engine.control import FileImportPath
+from engine.control import (
+    ActivateFileChangeFeed,
+    ActivateFileDeleteObservations,
+    ChangeLimit,
+    ContextControl,
+    ControlOperation,
+    ControlOperatorAuthority,
+    FileChangeControlProofs,
+    FileChangeProviderProofs,
+    FileChangeSource,
+    FileImportPath,
+    InitialScan,
+    ProviderOk,
+)
 from engine.persistence import (
     DatabaseConfiguration,
+    PostgreSQLControlStore,
     PostgreSQLWorkerLeaseIssuer,
     create_database_engine,
 )
@@ -41,6 +57,8 @@ from tests.integration.test_context_run_schema import (
     insert_context_run,
 )
 from tests.integration.test_file_import_tracer import (
+    NOW,
+    _ControlAuthenticator,
     _prepare_file_import_scenario,
     _prepare_repeat_file_import,
     _run_file_import,
@@ -91,6 +109,7 @@ HEAD_TABLES = [
     "file_source_change",
     "file_source_change_page",
     "file_source_cleanup_intent",
+    "file_source_delete_observation_page",
     "file_source_publish_watermark",
     "membership",
     "membership_resource_field_right",
@@ -135,6 +154,7 @@ def _delete_issue_27_upgrade_fixture(
 
     engine = create_database_engine(configuration)
     immutable_tables = (
+        ("file_source_delete_observation_page", None),
         ("file_source_change", "file_source_change_immutable"),
         ("file_source_change_page", "file_source_change_page_immutable"),
         ("file_source_cleanup_intent", "file_source_cleanup_intent_immutable"),
@@ -163,9 +183,10 @@ def _delete_issue_27_upgrade_fixture(
     try:
         with engine.begin() as connection:
             for table, trigger in immutable_tables:
-                connection.execute(
-                    text(f"ALTER TABLE {table} DISABLE TRIGGER {trigger}")
-                )
+                if trigger is not None:
+                    connection.execute(
+                        text(f"ALTER TABLE {table} DISABLE TRIGGER {trigger}")
+                    )
         try:
             with engine.begin() as connection:
                 user_ids = tuple(
@@ -178,6 +199,8 @@ def _delete_issue_27_upgrade_fixture(
                     ).scalars()
                 )
                 for table in (
+                    "action_ticket",
+                    "action_delivery_attempt",
                     "file_source_publish_watermark",
                     "file_source_acquisition_checkpoint",
                     "file_resource_cleanup_intent",
@@ -198,6 +221,7 @@ def _delete_issue_27_upgrade_fixture(
                     "file_import_job",
                     "file_source_cleanup_intent",
                     "file_acquisition",
+                    "file_source_delete_observation_page",
                     "file_source_change",
                     "file_source_change_page",
                     "context_source",
@@ -226,9 +250,10 @@ def _delete_issue_27_upgrade_fixture(
         finally:
             with engine.begin() as connection:
                 for table, trigger in reversed(immutable_tables):
-                    connection.execute(
-                        text(f"ALTER TABLE {table} ENABLE TRIGGER {trigger}")
-                    )
+                    if trigger is not None:
+                        connection.execute(
+                            text(f"ALTER TABLE {table} ENABLE TRIGGER {trigger}")
+                        )
     finally:
         engine.dispose()
 
@@ -920,6 +945,298 @@ def test_file_change_feed_revision_downgrades_and_reapplies_cleanly(
         assert public_progress_execute is False
     finally:
         engine.dispose()
+
+
+def test_file_delete_observation_revision_refuses_accepted_baseline_downgrade(
+    tmp_path: Path,
+    migration_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+) -> None:
+    """Issue #85 never deletes an accepted v4 baseline during rollback."""
+
+    scenario = _prepare_file_import_scenario(
+        tmp_path,
+        migration_configuration,
+        guarded_control_engine,
+        issue_lease=False,
+    )
+    provider_key = Ed25519PrivateKey.from_private_bytes(bytes(range(32)))
+    checkpoint_key = Ed25519PrivateKey.from_private_bytes(bytes(range(32, 64)))
+    authority = ControlOperatorAuthority(
+        _ControlAuthenticator(scenario.organization_id),
+        call_ttl=timedelta(minutes=5),
+        clock=lambda: NOW,
+    )
+    control = ContextControl(
+        store=PostgreSQLControlStore(
+            guarded_control_engine,
+            clock=lambda: NOW,
+            file_import_receiver=scenario.receiver,
+            file_change_checkpoint_signing_key=checkpoint_key,
+        ),
+        authority=authority,
+        clock=lambda: NOW,
+        file_change_proofs=FileChangeControlProofs(
+            provider_verification_key=provider_key.public_key()
+        ),
+    )
+    with authority.authorize(
+        opaque_credential="control-secret",
+        operation=ControlOperation.ACTIVATE_FILE_CHANGE_FEED,
+        request_id="migration-v4-activate-v3",
+    ) as call:
+        control.activate_file_change_feed(
+            call,
+            ActivateFileChangeFeed(scenario.source_ref),
+        )
+    with authority.authorize(
+        opaque_credential="control-secret",
+        operation=ControlOperation.ACTIVATE_FILE_DELETE_OBSERVATIONS,
+        request_id="migration-v4-activate",
+    ) as call:
+        v4 = control.activate_file_delete_observations(
+            call,
+            ActivateFileDeleteObservations(scenario.source_ref),
+        )
+    page = FileChangeProvider(
+        FileRootRegistry(
+            {scenario.root_ref: scenario.root},
+            limits=FileReadLimits(max_file_bytes=1_024 * 1_024),
+        ),
+        proofs=FileChangeProviderProofs(
+            provider_signing_key=provider_key,
+            checkpoint_verification_key=checkpoint_key.public_key(),
+        ),
+    ).read_changes(
+        FileChangeSource(scenario.organization_id, v4.active_version),
+        InitialScan(),
+        ChangeLimit(1),
+    )
+    assert type(page) is ProviderOk
+    with authority.authorize(
+        opaque_credential="control-secret",
+        operation=ControlOperation.ACCEPT_FILE_CHANGE_PAGE,
+        request_id="migration-v4-accept-baseline",
+    ) as call:
+        accepted = control.accept_file_change_page(call, page.value)
+
+    alembic_configuration = Config(ROOT / "alembic.ini")
+    with pytest.raises(
+        RuntimeError,
+        match="requires no accepted v4 page",
+    ):
+        command.downgrade(alembic_configuration, "20260725_0029")
+    assert _revision_rows(migration_configuration) == [HEAD_REVISION]
+    engine = create_database_engine(migration_configuration)
+    try:
+        with engine.connect() as connection:
+            retained = connection.execute(
+                text(
+                    """
+                    SELECT page.page_ref, binding.baseline_page_ref,
+                           checkpoint.checkpoint_ref
+                    FROM file_source_delete_observation_page AS binding
+                    JOIN file_source_change_page AS page
+                      ON page.organization_id = binding.organization_id
+                     AND page.source_id = binding.source_id
+                     AND page.source_version_id = binding.source_version_id
+                     AND page.page_ref = binding.page_ref
+                    JOIN file_source_acquisition_checkpoint AS checkpoint
+                      ON checkpoint.organization_id = page.organization_id
+                     AND checkpoint.source_id = page.source_id
+                     AND checkpoint.source_version_id = page.source_version_id
+                     AND checkpoint.change_page_ref = page.page_ref
+                    WHERE page.organization_id = :organization_id
+                      AND page.source_id = :source_id
+                    """
+                ),
+                {
+                    "organization_id": scenario.organization_id,
+                    "source_id": scenario.source_ref.value,
+                },
+            ).one()
+        assert tuple(retained) == (
+            accepted.page_ref,
+            None,
+            accepted.checkpoint_ref,
+        )
+    finally:
+        engine.dispose()
+        _delete_issue_27_upgrade_fixture(
+            migration_configuration,
+            scenario.organization_id,
+        )
+
+
+def test_file_delete_observation_revision_refuses_retained_action_ticket(
+    tmp_path: Path,
+    migration_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+) -> None:
+    """Issue #85 rollback refuses v4 ActionTicket lineage before mutation."""
+
+    scenario = _prepare_file_import_scenario(
+        tmp_path,
+        migration_configuration,
+        guarded_control_engine,
+        issue_lease=False,
+    )
+    authority = ControlOperatorAuthority(
+        _ControlAuthenticator(scenario.organization_id),
+        call_ttl=timedelta(minutes=5),
+        clock=lambda: NOW,
+    )
+    control = ContextControl(
+        store=PostgreSQLControlStore(
+            guarded_control_engine,
+            clock=lambda: NOW,
+        ),
+        authority=authority,
+        clock=lambda: NOW,
+    )
+    with authority.authorize(
+        opaque_credential="control-secret",
+        operation=ControlOperation.ACTIVATE_FILE_CHANGE_FEED,
+        request_id="migration-v4-ticket-activate-v3",
+    ) as call:
+        control.activate_file_change_feed(
+            call,
+            ActivateFileChangeFeed(scenario.source_ref),
+        )
+    with authority.authorize(
+        opaque_credential="control-secret",
+        operation=ControlOperation.ACTIVATE_FILE_DELETE_OBSERVATIONS,
+        request_id="migration-v4-ticket-activate",
+    ) as call:
+        v4 = control.activate_file_delete_observations(
+            call,
+            ActivateFileDeleteObservations(scenario.source_ref),
+        )
+
+    engine = create_database_engine(migration_configuration)
+    try:
+        with engine.begin() as connection:
+            identity = connection.execute(
+                text(
+                    """
+                    SELECT membership.user_id, epoch.policy_epoch
+                    FROM membership
+                    JOIN organization_policy_epoch AS epoch
+                      ON epoch.organization_id = membership.organization_id
+                    WHERE membership.organization_id = :organization_id
+                      AND membership.membership_id = :membership_id
+                    """
+                ),
+                {
+                    "organization_id": scenario.organization_id,
+                    "membership_id": scenario.membership_id,
+                },
+            ).one()
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO action_delivery_attempt (
+                        organization_id, delivery_attempt_ref,
+                        authenticated_service_digest, delivery_evidence_digest,
+                        authentication_binding_digest, user_id, membership_id,
+                        membership_version, destination_digest, consumer_digest,
+                        purpose_digest, audience_digest, identity_digest,
+                        policy_epoch, profile_ref, retention_policy_ref,
+                        created_at, retain_until
+                    ) VALUES (
+                        :organization_id, :attempt_ref,
+                        :digest, :digest, :digest, :user_id, :membership_id,
+                        1, :digest, :digest, :digest, :digest, :digest,
+                        :policy_epoch, 'private-action-prepare-v1',
+                        'action-digest-audit-retention-v1', :created_at,
+                        :retain_until
+                    )
+                    """
+                ),
+                {
+                    "organization_id": scenario.organization_id,
+                    "attempt_ref": "dla_" + "8" * 32,
+                    "digest": b"\x08" * 32,
+                    "user_id": identity.user_id,
+                    "membership_id": scenario.membership_id,
+                    "policy_epoch": identity.policy_epoch,
+                    "created_at": NOW,
+                    "retain_until": NOW + timedelta(days=1),
+                },
+            )
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO action_ticket (
+                        organization_id, ticket_ref, delivery_attempt_ref,
+                        operation, ticket_audience, payload_digest,
+                        idempotency_digest, approval_digest, approval_tier,
+                        source_id, source_version_id, policy_epoch,
+                        signing_key_version, profile_ref, state, issued_at,
+                        expires_at, retention_policy_ref, retain_until
+                    ) VALUES (
+                        :organization_id, :ticket_ref, :attempt_ref,
+                        'create_placeholder',
+                        'private-effect:create-placeholder', :payload_digest,
+                        :idempotency_digest, :approval_digest,
+                        'preapproved_private_delivery_v1', :source_id,
+                        :source_version_id, :policy_epoch, 1,
+                        'private-action-prepare-v1', 'prepared', :issued_at,
+                        :expires_at, 'action-digest-audit-retention-v1',
+                        :retain_until
+                    )
+                    """
+                ),
+                {
+                    "organization_id": scenario.organization_id,
+                    "ticket_ref": "act_" + "8" * 32,
+                    "attempt_ref": "dla_" + "8" * 32,
+                    "payload_digest": b"\x01" * 32,
+                    "idempotency_digest": b"\x02" * 32,
+                    "approval_digest": b"\x03" * 32,
+                    "source_id": scenario.source_ref.value,
+                    "source_version_id": v4.active_version.version_ref,
+                    "policy_epoch": identity.policy_epoch,
+                    "issued_at": NOW,
+                    "expires_at": NOW + timedelta(minutes=1),
+                    "retain_until": NOW + timedelta(days=1),
+                },
+            )
+
+        with pytest.raises(
+            RuntimeError,
+            match="requires no v4 ActionTicket lineage",
+        ):
+            command.downgrade(Config(ROOT / "alembic.ini"), "20260725_0029")
+        assert _revision_rows(migration_configuration) == [HEAD_REVISION]
+        with engine.connect() as connection:
+            retained = connection.execute(
+                text(
+                    """
+                    SELECT source.active_version_id, ticket.source_version_id
+                    FROM context_source AS source
+                    JOIN action_ticket AS ticket
+                      ON ticket.organization_id = source.organization_id
+                     AND ticket.source_id = source.source_id
+                    WHERE source.organization_id = :organization_id
+                      AND source.source_id = :source_id
+                    """
+                ),
+                {
+                    "organization_id": scenario.organization_id,
+                    "source_id": scenario.source_ref.value,
+                },
+            ).one()
+        assert tuple(retained) == (
+            v4.active_version.version_ref,
+            v4.active_version.version_ref,
+        )
+    finally:
+        engine.dispose()
+        _delete_issue_27_upgrade_fixture(
+            migration_configuration,
+            scenario.organization_id,
+        )
 
 
 def test_file_change_scheduling_revision_downgrades_and_reapplies_cleanly(

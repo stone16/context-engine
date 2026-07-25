@@ -14,12 +14,14 @@ from threading import Thread
 from uuid import UUID, uuid4
 
 import pytest
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi.testclient import TestClient
 from sqlalchemy import Engine, text
 from starlette.types import ASGIApp, Receive, Scope, Send
 from uvicorn import Config, Server
 
 from adapters.exact_phrase import PostgreSQLExactPhraseCandidateIndex
+from adapters.file_source import FileChangeProvider, FileReadLimits, FileRootRegistry
 from adapters.http.app import create_app
 from adapters.http.authentication import VerifiedAuthenticationContext
 from bot_delivery.egress import (
@@ -27,9 +29,23 @@ from bot_delivery.egress import (
     ModelEgressBoundary,
     prepare_authorized_model_input,
 )
+from engine.control import (
+    ActivateFileChangeFeed,
+    ActivateFileDeleteObservations,
+    ChangeLimit,
+    ContextControl,
+    ControlOperation,
+    ControlOperatorAuthority,
+    FileChangeControlProofs,
+    FileChangeProviderProofs,
+    FileChangeSource,
+    InitialScan,
+    ProviderOk,
+)
 from engine.persistence import (
     DatabaseConfiguration,
     PostgreSQLAccessPolicyControl,
+    PostgreSQLControlStore,
     PostgreSQLDeliveryEvidenceIssuerPort,
     PostgreSQLEgressGrantRedemptionAuthority,
     PostgreSQLMembershipAuthority,
@@ -55,6 +71,8 @@ from engine.runtime.egress import (
 from engine.runtime.evidence import CandidateRef
 from engine.runtime.package_digest import QueryDigestKeyring
 from tests.integration.test_file_import_tracer import (
+    NOW,
+    _ControlAuthenticator,
     _ExactScopeAuthority,
     _FileImportScenario,
     _OrganizationAuthority,
@@ -478,6 +496,96 @@ def _file_citation_profile() -> CitationOpenProfile:
     )
 
 
+def _accept_published_path_delete_observation(
+    scenario: _FileImportScenario,
+    guarded_control_engine: Engine,
+) -> None:
+    provider_key = Ed25519PrivateKey.from_private_bytes(bytes(range(32)))
+    checkpoint_key = Ed25519PrivateKey.from_private_bytes(bytes(range(32, 64)))
+    authority = ControlOperatorAuthority(
+        _ControlAuthenticator(scenario.organization_id),
+        call_ttl=timedelta(minutes=5),
+        clock=lambda: NOW,
+    )
+    control = ContextControl(
+        store=PostgreSQLControlStore(
+            guarded_control_engine,
+            clock=lambda: NOW,
+            file_import_receiver=scenario.receiver,
+            file_change_checkpoint_signing_key=checkpoint_key,
+        ),
+        authority=authority,
+        clock=lambda: NOW,
+        file_change_proofs=FileChangeControlProofs(
+            provider_verification_key=provider_key.public_key()
+        ),
+    )
+    with authority.authorize(
+        opaque_credential="control-secret",
+        operation=ControlOperation.ACTIVATE_FILE_CHANGE_FEED,
+        request_id="sdk-zero-effect-activate-v3",
+    ) as call:
+        v3 = control.activate_file_change_feed(
+            call,
+            ActivateFileChangeFeed(scenario.source_ref),
+        )
+    with authority.authorize(
+        opaque_credential="control-secret",
+        operation=ControlOperation.ACTIVATE_FILE_DELETE_OBSERVATIONS,
+        request_id="sdk-zero-effect-activate-v4",
+    ) as call:
+        v4 = control.activate_file_delete_observations(
+            call,
+            ActivateFileDeleteObservations(scenario.source_ref),
+        )
+    assert v4.active_version.version_ref != v3.active_version.version_ref
+    provider = FileChangeProvider(
+        FileRootRegistry(
+            {scenario.root_ref: scenario.root},
+            limits=FileReadLimits(max_file_bytes=1_024 * 1_024),
+        ),
+        proofs=FileChangeProviderProofs(
+            provider_signing_key=provider_key,
+            checkpoint_verification_key=checkpoint_key.public_key(),
+        ),
+    )
+    source = FileChangeSource(scenario.organization_id, v4.active_version)
+    initial_page = provider.read_changes(source, InitialScan(), ChangeLimit(1))
+    assert type(initial_page) is ProviderOk
+    with authority.authorize(
+        opaque_credential="control-secret",
+        operation=ControlOperation.ACCEPT_FILE_CHANGE_PAGE,
+        request_id="sdk-zero-effect-accept-baseline",
+    ) as call:
+        control.accept_file_change_page(call, initial_page.value)
+    with authority.authorize(
+        opaque_credential="control-secret",
+        operation=ControlOperation.READ_SOURCE_PROGRESS,
+        request_id="sdk-zero-effect-read-baseline",
+    ) as call:
+        progress = control.read_file_source_progress(call, scenario.source_ref)
+    assert progress.complete_change_baseline is not None
+    (scenario.root / "handbook.md").unlink()
+    delete_page = provider.read_changes(
+        FileChangeSource(
+            scenario.organization_id,
+            v4.active_version,
+            scan_head=progress.change_scan_head,
+            complete_baseline=progress.complete_change_baseline,
+        ),
+        InitialScan(),
+        ChangeLimit(1),
+    )
+    assert type(delete_page) is ProviderOk
+    assert [change.kind.value for change in delete_page.value.changes] == ["delete"]
+    with authority.authorize(
+        opaque_credential="control-secret",
+        operation=ControlOperation.ACCEPT_FILE_CHANGE_PAGE,
+        request_id="sdk-zero-effect-accept-delete",
+    ) as call:
+        control.accept_file_change_page(call, delete_page.value)
+
+
 @pytest.fixture
 def _published_file_scenario(
     tmp_path: Path,
@@ -563,6 +671,8 @@ def _published_file_scenario(
         clear_test_runtime_release(scenario.organization_id)
         cleanup_triggers = (
             ("action_receipt", "action_receipt_reject_mutation"),
+            ("file_source_change", "file_source_change_immutable"),
+            ("file_source_change_page", "file_source_change_page_immutable"),
             (
                 "file_source_publish_watermark",
                 "file_source_publish_watermark_immutable",
@@ -599,6 +709,9 @@ def _published_file_scenario(
                     "delivery_evidence",
                     "file_source_publish_watermark",
                     "file_source_acquisition_checkpoint",
+                    "file_source_delete_observation_page",
+                    "file_source_change",
+                    "file_source_change_page",
                     "file_resource_cleanup_intent",
                     "file_source_cleanup_intent",
                 ):
@@ -1025,6 +1138,7 @@ def test_packed_typescript_sdk_resolves_authorized_file_package_over_live_http(
     operator_configuration: DatabaseConfiguration,
     runtime_configuration: DatabaseConfiguration,
     worker_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
     guarded_runtime_engine: Engine,
     query_digest_keyring: QueryDigestKeyring,
 ) -> None:
@@ -1107,6 +1221,34 @@ def test_packed_typescript_sdk_resolves_authorized_file_package_over_live_http(
         consumer_root = tmp_path / "installed-sdk-consumer"
         consumer_root.mkdir()
         _pack_and_install_sdk(consumer_root)
+        _accept_published_path_delete_observation(
+            scenario,
+            guarded_control_engine,
+        )
+        with migration_engine.connect() as connection:
+            zero_effect = connection.execute(
+                text(
+                    """
+                    SELECT resource.tombstoned, epoch.policy_epoch,
+                           (SELECT count(*) FROM file_resource_cleanup_intent
+                            WHERE organization_id = :organization_id),
+                           (SELECT count(*) FROM file_source_publish_watermark
+                            WHERE organization_id = :organization_id
+                              AND source_id = :source_id)
+                    FROM context_resource AS resource
+                    JOIN organization_policy_epoch AS epoch
+                      ON epoch.organization_id = resource.organization_id
+                    WHERE resource.organization_id = :organization_id
+                      AND resource.resource_ref = :resource_ref
+                    """
+                ),
+                {
+                    "organization_id": scenario.organization_id,
+                    "source_id": scenario.source_ref.value,
+                    "resource_ref": published.candidate_ref.resource_ref,
+                },
+            ).one()
+        assert tuple(zero_effect) == (False, 1, 0, 1)
         request_now = datetime.now(UTC).replace(microsecond=0)
 
         evidence_issuer = PrivateDeliveryEvidenceIssuer(

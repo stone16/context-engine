@@ -12,7 +12,12 @@ from engine.control import (
     ControlOperation,
     ControlOperatorAuthenticationRejected,
     ControlOperatorAuthority,
+    FileChangeBaseline,
+    FileChangeBaselineEntry,
+    FileChangeBaselineRef,
+    FileChangeKind,
     FileChangeScanHead,
+    FileImportPath,
     FileResourceTombstone,
     FileSourceAcquisitionCheckpoint,
     FileSourceChangeKind,
@@ -169,6 +174,7 @@ def test_progress_contracts_keep_checkpoint_and_watermark_semantics_separate() -
         "acquisition_checkpoint",
         "publish_watermark",
         "change_scan_head",
+        "complete_change_baseline",
     ]
     assert FileSourceChangeKind.FILE_IMPORT.value == "file_import"
     assert FileSourceChangeKind.FILE_TOMBSTONE.value == "file_tombstone"
@@ -332,6 +338,88 @@ def test_change_scan_head_requires_matching_durable_checkpoint_lineage() -> None
             ),
             publish_watermark=None,
             change_scan_head=head,
+        )
+
+
+def test_complete_change_baseline_is_distinct_from_an_incomplete_head() -> None:
+    checkpoint = FileSourceAcquisitionCheckpoint(
+        sequence=3,
+        checkpoint_ref="facp_" + "1" * 64,
+        change_kind=FileSourceChangeKind.FILE_CHANGE_PAGE,
+        acquisition_ref=None,
+        job_ref=None,
+        cleanup_intent_ref=None,
+        resource_ref=None,
+        revision_ref=None,
+        event_ref=None,
+        event_sequence=None,
+        accepted_at=NOW,
+        source_version_ref=REVISION_ID,
+        change_page_ref="2" * 64,
+    )
+    complete_reference = FileChangeBaselineRef(
+        source_version_ref=REVISION_ID,
+        scan_ref="3" * 64,
+        scan_epoch=UUID("a8dc4a16-c0e4-4c4c-8a95-208c4d2acd23"),
+        page_ref="4" * 64,
+        checkpoint_ref="facp_" + "5" * 64,
+        sequence=2,
+    )
+    baseline = FileChangeBaseline(
+        reference=complete_reference,
+        entries=(
+            FileChangeBaselineEntry(
+                kind=FileChangeKind.UPSERT,
+                path=FileImportPath("a.md"),
+                content_sha256="6" * 64,
+                content_length=1,
+            ),
+        ),
+    )
+    incomplete_head = FileChangeScanHead(
+        source_version_ref=REVISION_ID,
+        scan_ref="7" * 64,
+        scan_epoch=UUID("c4d7d954-b5fb-4785-a93a-b6278860c434"),
+        page_limit=1,
+        page_ref=checkpoint.change_page_ref or "",
+        checkpoint_ref=checkpoint.checkpoint_ref,
+        sequence=checkpoint.sequence,
+        complete=False,
+        superseded_scan_epoch=complete_reference.scan_epoch,
+    )
+
+    progress = FileSourceProgress(
+        organization_id=ORGANIZATION_ID,
+        source_ref=SOURCE_REF,
+        acquisition_checkpoint=checkpoint,
+        publish_watermark=None,
+        change_scan_head=incomplete_head,
+        complete_change_baseline=baseline,
+    )
+
+    assert progress.change_scan_head == incomplete_head
+    assert progress.complete_change_baseline == baseline
+
+    with pytest.raises(ValueError, match="baseline exceeds"):
+        replace(
+            progress,
+            complete_change_baseline=FileChangeBaseline(
+                reference=replace(complete_reference, sequence=4),
+                entries=baseline.entries,
+            ),
+        )
+    with pytest.raises(ValueError, match="another SourceVersion"):
+        replace(
+            progress,
+            complete_change_baseline=FileChangeBaseline(
+                reference=replace(
+                    complete_reference,
+                    source_version_ref=UUID(
+                        "3ea05cf1-29d9-46c8-a082-0798dc46cdfd"
+                    ),
+                ),
+                entries=baseline.entries,
+            ),
         )
 
 

@@ -50,6 +50,13 @@ def clear_file_source_progress_projection(
             connection.execute(text("DELETE FROM file_source_publish_watermark"))
             connection.execute(text("DELETE FROM file_source_acquisition_checkpoint"))
             if change_tables_exist:
+                delete_observation_table_exists = connection.execute(
+                    text(
+                        "SELECT to_regclass("
+                        "'public.file_source_delete_observation_page'"
+                        ") IS NOT NULL"
+                    )
+                ).scalar_one()
                 connection.execute(
                     text(
                         "ALTER TABLE file_source_change "
@@ -84,6 +91,10 @@ def clear_file_source_progress_projection(
                     ).scalar_one()
                 )
                 if not scheduled_acquisitions_exist:
+                    if delete_observation_table_exists:
+                        connection.execute(
+                            text("DELETE FROM file_source_delete_observation_page")
+                        )
                     connection.execute(text("DELETE FROM file_source_change"))
                     connection.execute(text("DELETE FROM file_source_change_page"))
                 connection.execute(

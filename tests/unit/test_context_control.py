@@ -14,7 +14,9 @@ import engine.persistence.control_sources as control_sources_module
 from engine.control import (
     FILE_CAPABILITY_MANIFEST,
     FILE_CHANGE_CAPABILITY_MANIFEST,
+    FILE_DELETE_OBSERVATION_CAPABILITY_MANIFEST,
     ActivateFileChangeFeed,
+    ActivateFileDeleteObservations,
     CapabilityStatus,
     ContextControl,
     ControlOperation,
@@ -62,6 +64,7 @@ class _Authenticator:
             allowed_operations=frozenset(
                 {
                     ControlOperation.ACTIVATE_FILE_CHANGE_FEED,
+                    ControlOperation.ACTIVATE_FILE_DELETE_OBSERVATIONS,
                     ControlOperation.IMPORT_FILE,
                     ControlOperation.OFFBOARD_FILE_SOURCE,
                     ControlOperation.REGISTER_SOURCE,
@@ -117,6 +120,26 @@ class _Store(ControlStorePort):
             created_at=self.manifest.created_at,
             version_created_at=NOW,
             capabilities=FILE_CHANGE_CAPABILITY_MANIFEST,
+        )
+        return self.manifest
+
+    def activate_file_delete_observations(
+        self,
+        call: TrustedControlCall,
+        command: ActivateFileDeleteObservations,
+    ) -> SourceManifest:
+        assert call.organization_id == ORGANIZATION_ID
+        assert call.operation is ControlOperation.ACTIVATE_FILE_DELETE_OBSERVATIONS
+        assert self.manifest is not None
+        assert command.source_ref == self.manifest.source_ref
+        self.manifest = SourceManifest.registered_file(
+            source_ref=self.manifest.source_ref,
+            version_ref=UUID("e99cf82b-d537-46b6-b1fa-a0b43236b6f0"),
+            display_name=self.manifest.display_name,
+            root_ref=self.manifest.active_version.root_ref,
+            created_at=self.manifest.created_at,
+            version_created_at=NOW,
+            capabilities=FILE_DELETE_OBSERVATION_CAPABILITY_MANIFEST,
         )
         return self.manifest
 
@@ -356,6 +379,52 @@ def test_authorized_operator_activates_one_immutable_file_change_version() -> No
     assert activated.source_ref == source.source_ref
     assert activated.active_version.version_ref != source.active_version.version_ref
     assert activated.active_version.capabilities is FILE_CHANGE_CAPABILITY_MANIFEST
+
+
+def test_authorized_operator_explicitly_activates_delete_observations() -> None:
+    store = _Store()
+    authority = _authority()
+    control = ContextControl(store=store, authority=authority, clock=lambda: NOW)
+    with authority.authorize(
+        opaque_credential="control-credential-a",
+        operation=ControlOperation.REGISTER_SOURCE,
+        request_id="register-for-delete-observations",
+    ) as call:
+        source = control.register_source(
+            call,
+            RegisterFileSource(
+                "Handbook",
+                FileRootRef("handbook"),
+                "delete-observations",
+            ),
+        )
+    with authority.authorize(
+        opaque_credential="control-credential-a",
+        operation=ControlOperation.ACTIVATE_FILE_CHANGE_FEED,
+        request_id="activate-v3-before-delete-observations",
+    ) as call:
+        change_source = control.activate_file_change_feed(
+            call,
+            ActivateFileChangeFeed(source.source_ref),
+        )
+
+    with authority.authorize(
+        opaque_credential="control-credential-a",
+        operation=ControlOperation.ACTIVATE_FILE_DELETE_OBSERVATIONS,
+        request_id="activate-delete-observations",
+    ) as call:
+        activated = control.activate_file_delete_observations(
+            call,
+            ActivateFileDeleteObservations(source.source_ref),
+        )
+
+    assert activated.active_version.version_ref != (
+        change_source.active_version.version_ref
+    )
+    assert (
+        activated.active_version.capabilities
+        is FILE_DELETE_OBSERVATION_CAPABILITY_MANIFEST
+    )
 
 
 def test_authorized_operator_tombstones_one_exact_file_resource() -> None:

@@ -45,6 +45,7 @@ NON_OWNER_EVIDENCE_BY_TABLE: Mapping[str, str] = {
     "file_source_cleanup_intent": "PG-FILE-SOURCE-OFFBOARD-030",
     "file_source_change": "PG-FILE-CHANGE-DENY-081",
     "file_source_change_page": "PG-FILE-CHANGE-DENY-081",
+    "file_source_delete_observation_page": "PG-FILE-DELETE-PAGE-085",
     "file_source_acquisition_checkpoint": "PG-FILE-PROGRESS-029",
     "file_source_publish_watermark": "PG-FILE-PROGRESS-029",
     "file_resource_ingestion_guard": "PG-FILE-IMPORT-023",

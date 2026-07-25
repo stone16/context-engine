@@ -8,6 +8,7 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from time import monotonic, sleep
+from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
@@ -24,10 +25,12 @@ from adapters.http.app import create_app
 from adapters.parsers.markdown import compile_markdown as compile_markdown_original
 from engine.control import (
     ActivateFileChangeFeed,
+    ActivateFileDeleteObservations,
     ChangeLimit,
     ContextControl,
     ControlOperation,
     ControlOperatorAuthority,
+    FileChangeBaselineRef,
     FileChangeControlProofs,
     FileChangeProviderProofs,
     FileChangeSource,
@@ -120,6 +123,7 @@ def _delete_scenarios(
 
     engine = create_database_engine(configuration)
     immutable_tables = (
+        ("file_source_delete_observation_page", None),
         ("file_source_change", "file_source_change_immutable"),
         ("file_source_change_page", "file_source_change_page_immutable"),
         ("file_source_cleanup_intent", "file_source_cleanup_intent_immutable"),
@@ -154,9 +158,10 @@ def _delete_scenarios(
     try:
         with engine.begin() as connection:
             for table, trigger in immutable_tables:
-                connection.execute(
-                    text(f"ALTER TABLE {table} DISABLE TRIGGER {trigger}")
-                )
+                if trigger is not None:
+                    connection.execute(
+                        text(f"ALTER TABLE {table} DISABLE TRIGGER {trigger}")
+                    )
         try:
             with engine.begin() as connection:
                 for organization_id, user_id in scenarios:
@@ -181,6 +186,7 @@ def _delete_scenarios(
                         "file_resource_cleanup_intent",
                         "file_source_cleanup_intent",
                         "file_acquisition",
+                        "file_source_delete_observation_page",
                         "file_source_change",
                         "file_source_change_page",
                         "context_source",
@@ -214,9 +220,10 @@ def _delete_scenarios(
         finally:
             with engine.begin() as connection:
                 for table, trigger in reversed(immutable_tables):
-                    connection.execute(
-                        text(f"ALTER TABLE {table} ENABLE TRIGGER {trigger}")
-                    )
+                    if trigger is not None:
+                        connection.execute(
+                            text(f"ALTER TABLE {table} ENABLE TRIGGER {trigger}")
+                        )
     finally:
         engine.dispose()
 
@@ -237,9 +244,11 @@ class _Authenticator:
                 {
                     ControlOperation.ACCEPT_FILE_CHANGE_PAGE,
                     ControlOperation.ACTIVATE_FILE_CHANGE_FEED,
+                    ControlOperation.ACTIVATE_FILE_DELETE_OBSERVATIONS,
                     ControlOperation.IMPORT_FILE,
                     ControlOperation.OFFBOARD_FILE_SOURCE,
                     ControlOperation.REGISTER_SOURCE,
+                    ControlOperation.READ_SOURCE,
                     ControlOperation.READ_SOURCE_PROGRESS,
                     ControlOperation.SCHEDULE_FILE_CHANGE_PAGE,
                 }
@@ -379,6 +388,537 @@ def _seed_file_change_source(
         authority,
         FileChangeSource(organization_id, activated.active_version),
     )
+
+
+def _activate_delete_observations(
+    control: ContextControl,
+    authority: ControlOperatorAuthority,
+    organization_id: UUID,
+    source: FileChangeSource,
+) -> FileChangeSource:
+    with _authorize(
+        authority,
+        organization_id,
+        ControlOperation.ACTIVATE_FILE_DELETE_OBSERVATIONS,
+        "activate-v4-delete-observations",
+    ) as call:
+        activated = control.activate_file_delete_observations(
+            call,
+            ActivateFileDeleteObservations(
+                source.source_version.source_ref,
+            ),
+        )
+    return FileChangeSource(organization_id, activated.active_version)
+
+
+def _delete_observation_effect_snapshot(
+    connection: Any,
+    organization_id: UUID,
+) -> tuple[object, ...]:
+    """Read every durable surface that delete-page acceptance must not affect."""
+
+    row = connection.execute(
+        text(
+            """
+            SELECT
+              (SELECT count(*) FROM file_acquisition
+               WHERE organization_id = :organization_id),
+              (SELECT count(*) FROM file_import_job
+               WHERE organization_id = :organization_id),
+              (SELECT policy_epoch FROM organization_policy_epoch
+               WHERE organization_id = :organization_id),
+              (SELECT count(*) FROM file_resource_cleanup_intent
+               WHERE organization_id = :organization_id),
+              (SELECT count(*) FROM file_source_cleanup_intent
+               WHERE organization_id = :organization_id),
+              (SELECT count(*) FROM file_source_publish_watermark
+               WHERE organization_id = :organization_id),
+              (SELECT count(*) FROM context_revision
+               WHERE organization_id = :organization_id),
+              (SELECT count(*) FROM exact_phrase_candidate
+               WHERE organization_id = :organization_id),
+              (SELECT count(*) FROM context_run
+               WHERE organization_id = :organization_id),
+              (SELECT count(*) FROM context_resource
+               WHERE organization_id = :organization_id
+                 AND tombstoned IS TRUE)
+            """
+        ),
+        {"organization_id": organization_id},
+    ).one()
+    return tuple(row)
+
+
+@pytest.mark.security_evidence(id="PG-FILE-DELETE-PAGE-085", layer="postgres")
+@pytest.mark.security_evidence(id="PG-FILE-DELETE-NO-EFFECT-085", layer="postgres")
+def test_control_accepts_delete_observations_without_visibility_effect(
+    tmp_path: Path,
+    guarded_control_engine: Engine,
+    guarded_runtime_engine: Engine,
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "a.md").write_bytes(b"A")
+    (root / "b.md").write_bytes(b"B")
+    provider_proofs, control_proofs = _proofs()
+    organization_id = uuid4()
+    receiver = FileImportReceiver(uuid4())
+    control, authority, source = _seed_file_change_source(
+        guarded_control_engine=guarded_control_engine,
+        migration_configuration=migration_configuration,
+        organization_id=organization_id,
+        receiver=receiver,
+        root_ref=FileRootRef("delete-observation-root"),
+        control_proofs=control_proofs,
+    )
+    source = _activate_delete_observations(
+        control,
+        authority,
+        organization_id,
+        source,
+    )
+    provider = FileChangeProvider(
+        FileRootRegistry(
+            {source.source_version.root_ref: root},
+            limits=FileReadLimits(max_file_bytes=1_024),
+        ),
+        proofs=provider_proofs,
+    )
+
+    first = provider.read_changes(source, InitialScan(), ChangeLimit(2))
+    assert type(first) is ProviderOk
+    assert first.value.baseline_ref is None
+    with _authorize(
+        authority,
+        organization_id,
+        ControlOperation.ACCEPT_FILE_CHANGE_PAGE,
+        "accept-v4-baseline",
+    ) as call:
+        accepted_first = control.accept_file_change_page(call, first.value)
+    with _authorize(
+        authority,
+        organization_id,
+        ControlOperation.READ_SOURCE_PROGRESS,
+        "read-v4-baseline",
+    ) as call:
+        baseline_progress = control.read_file_source_progress(
+            call,
+            accepted_first.source_ref,
+        )
+    assert baseline_progress.complete_change_baseline is not None
+    assert [
+        entry.path.value
+        for entry in baseline_progress.complete_change_baseline.entries
+    ] == ["a.md", "b.md"]
+
+    (root / "a.md").write_bytes(b"A2")
+    (root / "b.md").unlink()
+    source = FileChangeSource(
+        organization_id=organization_id,
+        source_version=source.source_version,
+        scan_head=baseline_progress.change_scan_head,
+        complete_baseline=baseline_progress.complete_change_baseline,
+    )
+    changed = provider.read_changes(source, InitialScan(), ChangeLimit(2))
+    assert type(changed) is ProviderOk
+    assert [
+        (change.path.value, change.kind.value)
+        for change in changed.value.changes
+    ] == [("a.md", "upsert"), ("b.md", "delete")]
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.connect() as connection:
+            membership_id = connection.execute(
+                text(
+                    "SELECT membership_id FROM membership "
+                    "WHERE organization_id = :organization_id"
+                ),
+                {"organization_id": organization_id},
+            ).scalar_one()
+            before = _delete_observation_effect_snapshot(
+                connection,
+                organization_id,
+            )
+    finally:
+        migration_engine.dispose()
+    with _authorize(
+        authority,
+        organization_id,
+        ControlOperation.ACCEPT_FILE_CHANGE_PAGE,
+        "accept-v4-delete",
+    ) as call:
+        accepted_delete = control.accept_file_change_page(call, changed.value)
+    with _authorize(
+        authority,
+        organization_id,
+        ControlOperation.ACCEPT_FILE_CHANGE_PAGE,
+        "replay-v4-delete",
+    ) as call:
+        assert control.accept_file_change_page(call, changed.value) == accepted_delete
+
+    with (
+        _authorize(
+            authority,
+            organization_id,
+            ControlOperation.SCHEDULE_FILE_CHANGE_PAGE,
+            "reject-delete-page-scheduling",
+        ) as call,
+        pytest.raises(SourceNotAvailable),
+    ):
+        control.schedule_file_change_page(
+            call,
+            ScheduleFileChangePage(
+                accepted_delete.source_ref,
+                accepted_delete.source_version_ref,
+                accepted_delete.page_ref,
+                FileImportAudience(
+                    "principal:file-reader",
+                    membership_id,
+                    1,
+                ),
+            ),
+        )
+
+    with _authorize(
+        authority,
+        organization_id,
+        ControlOperation.READ_SOURCE_PROGRESS,
+        "read-complete-delete-baseline",
+    ) as call:
+        final_progress = control.read_file_source_progress(
+            call,
+            accepted_delete.source_ref,
+        )
+    assert final_progress.complete_change_baseline is not None
+    assert [
+        (entry.path.value, entry.kind.value)
+        for entry in final_progress.complete_change_baseline.entries
+    ] == [("a.md", "upsert"), ("b.md", "delete")]
+
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.connect() as connection:
+            after = _delete_observation_effect_snapshot(
+                connection,
+                organization_id,
+            )
+    finally:
+        migration_engine.dispose()
+    assert after == before
+
+    for nonowner_engine in (guarded_control_engine, guarded_runtime_engine):
+        with (
+            nonowner_engine.connect() as connection,
+            pytest.raises(DBAPIError),
+        ):
+            connection.execute(
+                text("SELECT count(*) FROM file_source_delete_observation_page")
+            ).scalar_one()
+    other_organization = uuid4()
+    with guarded_control_engine.begin() as connection:
+        connection.execute(
+            text("SELECT set_config('app.organization_id', :org, true)"),
+            {"org": str(other_organization)},
+        )
+        cross_organization_rows = connection.execute(
+            text(
+                "SELECT * FROM "
+                "context_control_read_complete_file_change_baseline(:org, :source)"
+            ),
+            {
+                "org": other_organization,
+                "source": source.source_version.source_ref.value,
+            },
+        ).all()
+    assert cross_organization_rows == []
+
+    cross_organization_authority = ControlOperatorAuthority(
+        _Authenticator(other_organization),
+        call_ttl=timedelta(minutes=5),
+        clock=lambda: NOW,
+    )
+    cross_organization_control = ContextControl(
+        store=PostgreSQLControlStore(
+            guarded_control_engine,
+            clock=lambda: NOW,
+            file_import_receiver=receiver,
+            file_change_checkpoint_signing_key=CHECKPOINT_KEY,
+        ),
+        authority=cross_organization_authority,
+        clock=lambda: NOW,
+        file_change_proofs=control_proofs,
+    )
+    cross_unsigned = replace(
+        changed.value,
+        organization_id=other_organization,
+        changes=tuple(
+            replace(change, organization_id=other_organization)
+            for change in changed.value.changes
+        ),
+        provider_proof="A" * 86,
+    )
+    cross_page = replace(
+        cross_unsigned,
+        provider_proof=provider_proofs._seal_page(cross_unsigned),
+    )
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.connect() as connection:
+            cross_before = tuple(
+                connection.execute(
+                    text(
+                        """
+                        SELECT
+                          (SELECT count(*) FROM file_source_change_page),
+                          (SELECT count(*) FROM file_source_change),
+                          (SELECT count(*) FROM file_source_delete_observation_page),
+                          (SELECT count(*) FROM file_source_acquisition_checkpoint)
+                        """
+                    )
+                ).one()
+            )
+    finally:
+        migration_engine.dispose()
+    with (
+        _authorize(
+            cross_organization_authority,
+            other_organization,
+            ControlOperation.ACCEPT_FILE_CHANGE_PAGE,
+            "reject-cross-organization-delete-page",
+        ) as call,
+        pytest.raises(SourceNotAvailable),
+    ):
+        cross_organization_control.accept_file_change_page(call, cross_page)
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.connect() as connection:
+            cross_after = tuple(
+                connection.execute(
+                    text(
+                        """
+                        SELECT
+                          (SELECT count(*) FROM file_source_change_page),
+                          (SELECT count(*) FROM file_source_change),
+                          (SELECT count(*) FROM file_source_delete_observation_page),
+                          (SELECT count(*) FROM file_source_acquisition_checkpoint)
+                        """
+                    )
+                ).one()
+            )
+    finally:
+        migration_engine.dispose()
+    assert cross_after == cross_before
+
+
+@pytest.mark.security_evidence(id="PG-FILE-DELETE-DETECT-085", layer="postgres")
+def test_delete_observation_refuses_forged_incomplete_and_stale_baselines(
+    tmp_path: Path,
+    guarded_control_engine: Engine,
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "a.md").write_bytes(b"A")
+    (root / "b.md").write_bytes(b"B")
+    provider_proofs, control_proofs = _proofs()
+    organization_id = uuid4()
+    control, authority, source = _seed_file_change_source(
+        guarded_control_engine=guarded_control_engine,
+        migration_configuration=migration_configuration,
+        organization_id=organization_id,
+        receiver=FileImportReceiver(uuid4()),
+        root_ref=FileRootRef("delete-baseline-refusal-root"),
+        control_proofs=control_proofs,
+    )
+    source = _activate_delete_observations(
+        control,
+        authority,
+        organization_id,
+        source,
+    )
+    provider = FileChangeProvider(
+        FileRootRegistry(
+            {source.source_version.root_ref: root},
+            limits=FileReadLimits(max_file_bytes=1_024),
+        ),
+        proofs=provider_proofs,
+    )
+    baseline_page = provider.read_changes(source, InitialScan(), ChangeLimit(2))
+    assert type(baseline_page) is ProviderOk
+    with _authorize(
+        authority,
+        organization_id,
+        ControlOperation.ACCEPT_FILE_CHANGE_PAGE,
+        "accept-complete-baseline",
+    ) as call:
+        control.accept_file_change_page(call, baseline_page.value)
+    with _authorize(
+        authority,
+        organization_id,
+        ControlOperation.READ_SOURCE_PROGRESS,
+        "read-complete-baseline-for-refusals",
+    ) as call:
+        baseline_progress = control.read_file_source_progress(
+            call,
+            source.source_version.source_ref,
+        )
+    baseline = baseline_progress.complete_change_baseline
+    assert baseline is not None
+
+    (root / "b.md").unlink()
+    baseline_source = FileChangeSource(
+        organization_id,
+        source.source_version,
+        scan_head=baseline_progress.change_scan_head,
+        complete_baseline=baseline,
+    )
+    changed = provider.read_changes(
+        baseline_source,
+        InitialScan(),
+        ChangeLimit(1),
+    )
+    assert type(changed) is ProviderOk
+    assert changed.value.complete is False
+    assert changed.value.changes[0].kind.value == "upsert"
+    full_changed = provider.read_changes(
+        baseline_source,
+        InitialScan(),
+        ChangeLimit(2),
+    )
+    assert type(full_changed) is ProviderOk
+    delete_change = full_changed.value.changes[1]
+    assert delete_change.kind.value == "delete"
+    forged_unsigned = replace(
+        full_changed.value,
+        changes=(
+            full_changed.value.changes[0],
+            replace(delete_change, content_sha256="0" * 64),
+        ),
+        provider_proof="A" * 86,
+    )
+    forged = replace(
+        forged_unsigned,
+        provider_proof=provider_proofs._seal_page(forged_unsigned),
+    )
+    with (
+        _authorize(
+            authority,
+            organization_id,
+            ControlOperation.ACCEPT_FILE_CHANGE_PAGE,
+            "reject-forged-delete-lineage",
+        ) as call,
+        pytest.raises(SourceNotAvailable),
+    ):
+        control.accept_file_change_page(call, forged)
+
+    with _authorize(
+        authority,
+        organization_id,
+        ControlOperation.ACCEPT_FILE_CHANGE_PAGE,
+        "accept-incomplete-delete-scan-head",
+    ) as call:
+        accepted_incomplete = control.accept_file_change_page(call, changed.value)
+    assert accepted_incomplete.complete is False
+    assert accepted_incomplete.next_cursor is not None
+    incomplete_reference = FileChangeBaselineRef(
+        source_version_ref=accepted_incomplete.source_version_ref,
+        scan_ref=accepted_incomplete.scan_ref,
+        scan_epoch=accepted_incomplete.scan_epoch,
+        page_ref=accepted_incomplete.page_ref,
+        checkpoint_ref=accepted_incomplete.checkpoint_ref,
+        sequence=accepted_incomplete.sequence,
+        comparison_baseline_ref=baseline.reference,
+    )
+    incomplete_baseline = replace(baseline, reference=incomplete_reference)
+    incomplete_baseline_page = provider.read_changes(
+        FileChangeSource(
+            organization_id,
+            source.source_version,
+            scan_head=accepted_incomplete.scan_head,
+            complete_baseline=incomplete_baseline,
+        ),
+        InitialScan(),
+        ChangeLimit(2),
+    )
+    assert type(incomplete_baseline_page) is ProviderOk
+    with (
+        _authorize(
+            authority,
+            organization_id,
+            ControlOperation.ACCEPT_FILE_CHANGE_PAGE,
+            "reject-incomplete-delete-baseline",
+        ) as call,
+        pytest.raises(SourceNotAvailable),
+    ):
+        control.accept_file_change_page(call, incomplete_baseline_page.value)
+
+    accepted_source = FileChangeSource(
+        organization_id,
+        source.source_version,
+        scan_head=accepted_incomplete.scan_head,
+        complete_baseline=baseline,
+    )
+    final_page = provider.read_changes(
+        accepted_source,
+        accepted_incomplete.next_cursor,
+        ChangeLimit(1),
+    )
+    assert type(final_page) is ProviderOk
+    with _authorize(
+        authority,
+        organization_id,
+        ControlOperation.ACCEPT_FILE_CHANGE_PAGE,
+        "complete-delete-scan",
+    ) as call:
+        accepted_complete = control.accept_file_change_page(call, final_page.value)
+    assert accepted_complete.complete is True
+
+    (root / "a.md").write_bytes(b"A2")
+    stale_page = provider.read_changes(
+        FileChangeSource(
+            organization_id,
+            source.source_version,
+            scan_head=accepted_complete.scan_head,
+            complete_baseline=baseline,
+        ),
+        InitialScan(),
+        ChangeLimit(2),
+    )
+    assert type(stale_page) is ProviderOk
+    with (
+        _authorize(
+            authority,
+            organization_id,
+            ControlOperation.ACCEPT_FILE_CHANGE_PAGE,
+            "reject-stale-delete-baseline",
+        ) as call,
+        pytest.raises(SourceNotAvailable),
+    ):
+        control.accept_file_change_page(call, stale_page.value)
+
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.connect() as connection:
+            counts = connection.execute(
+                text(
+                    """
+                    SELECT
+                      (SELECT count(*) FROM file_source_change_page
+                       WHERE organization_id = :organization_id),
+                      (SELECT count(*) FROM file_source_change
+                       WHERE organization_id = :organization_id),
+                      (SELECT count(*) FROM file_source_delete_observation_page
+                       WHERE organization_id = :organization_id),
+                      (SELECT count(*) FROM file_import_job
+                       WHERE organization_id = :organization_id)
+                    """
+                ),
+                {"organization_id": organization_id},
+            ).one()
+    finally:
+        migration_engine.dispose()
+    assert tuple(counts) == (3, 4, 3, 1)
 
 
 @pytest.mark.security_evidence(id="PG-FILE-CHANGE-SCHEDULE-083", layer="postgres")

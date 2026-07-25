@@ -32,6 +32,7 @@ from scripts.validate_security_catalog import (
     CANONICAL_FIELD_PROJECTION_ACTIVATION,
     CANONICAL_FILE_CHANGE_FEED_ACTIVATION,
     CANONICAL_FILE_CHANGE_SCHEDULING_ACTIVATION,
+    CANONICAL_FILE_DELETE_OBSERVATION_ACTIVATION,
     CANONICAL_INVARIANT_IDS,
     CANONICAL_MODEL_EGRESS_ACTIVATION,
     CANONICAL_OPENAPI_V0_ACTIVATION,
@@ -581,6 +582,7 @@ def make_catalog() -> dict[str, object]:
             copy.deepcopy(CANONICAL_PRIVATE_BOT_DELIVERY_ACTIVATION),
             copy.deepcopy(CANONICAL_FILE_CHANGE_FEED_ACTIVATION),
             copy.deepcopy(CANONICAL_FILE_CHANGE_SCHEDULING_ACTIVATION),
+            copy.deepcopy(CANONICAL_FILE_DELETE_OBSERVATION_ACTIVATION),
         ],
         "invariants": invariants,
         "fixtures": fixtures,
@@ -682,6 +684,11 @@ def make_schema() -> dict[str, object]:
                     {
                         "const": copy.deepcopy(
                             CANONICAL_FILE_CHANGE_SCHEDULING_ACTIVATION
+                        )
+                    },
+                    {
+                        "const": copy.deepcopy(
+                            CANONICAL_FILE_DELETE_OBSERVATION_ACTIVATION
                         )
                     },
                 ],
@@ -1085,7 +1092,7 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
         assert isinstance(upgrade_trigger, str)
         self.assertIn("Issue #71 activates", upgrade_trigger)
         self.assertEqual(
-            object_list_at(catalog, "activations")[-3],
+            object_list_at(catalog, "activations")[-4],
             CANONICAL_PRIVATE_BOT_DELIVERY_ACTIVATION,
         )
 
@@ -1437,7 +1444,7 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
 
     def test_issue_71_private_bot_activation_stops_before_live_providers(self) -> None:
         catalog = make_catalog()
-        activation = object_list_at(catalog, "activations")[-3]
+        activation = object_list_at(catalog, "activations")[-4]
 
         self.assertEqual(activation, CANONICAL_PRIVATE_BOT_DELIVERY_ACTIVATION)
         self.assertEqual(activation["invariantRef"], "ACTION-SEPARATION-014")
@@ -1461,7 +1468,7 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
 
     def test_issue_81_file_change_activation_stops_before_scheduling(self) -> None:
         catalog = make_catalog()
-        activation = object_list_at(catalog, "activations")[-2]
+        activation = object_list_at(catalog, "activations")[-3]
 
         self.assertEqual(activation, CANONICAL_FILE_CHANGE_FEED_ACTIVATION)
         self.assertEqual(activation["invariantRef"], "WORKER-LEASE-007")
@@ -1482,7 +1489,7 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
 
     def test_issue_83_file_change_scheduling_stays_explicit(self) -> None:
         catalog = make_catalog()
-        activation = object_list_at(catalog, "activations")[-1]
+        activation = object_list_at(catalog, "activations")[-2]
 
         self.assertEqual(
             activation,
@@ -1501,6 +1508,30 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
         assert isinstance(not_active, list)
         self.assertIn("implicit or inherited FileImportAudience", not_active)
         self.assertIn("automatic retry or reclaim", not_active)
+
+    def test_issue_85_file_delete_observation_has_no_execution_authority(self) -> None:
+        catalog = make_catalog()
+        activation = object_list_at(catalog, "activations")[-1]
+
+        self.assertEqual(
+            activation,
+            CANONICAL_FILE_DELETE_OBSERVATION_ACTIVATION,
+        )
+        self.assertEqual(
+            [item["id"] for item in object_list_at(activation, "testEvidence")],
+            [
+                "PG-FILE-DELETE-DETECT-085",
+                "PG-FILE-DELETE-PAGE-085",
+                "PG-FILE-DELETE-NO-EFFECT-085",
+            ],
+        )
+        not_active = activation["notActive"]
+        assert isinstance(not_active, list)
+        self.assertIn("delete observation as tombstone authority", not_active)
+        self.assertIn(
+            "Runtime authorization from baseline or delete metadata",
+            not_active,
+        )
 
     def test_schema_independently_freezes_full_accept_008_as_future(self) -> None:
         catalog = make_catalog()
@@ -1924,7 +1955,7 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
 
         self.assertEqual(catalog["catalogVersion"], "1.3.0")
         self.assertEqual(
-            issue_refs[-17:],
+            issue_refs[-18:],
             [
                 "#15",
                 "#16",
@@ -1943,6 +1974,7 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
                 "#71",
                 "#81",
                 "#83",
+                "#85",
             ],
         )
         self.assertIn(
@@ -1975,6 +2007,10 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
         )
         self.assertIn(
             "Issue #83 activates only explicit accepted File page scheduling",
+            reconciliation,
+        )
+        self.assertIn(
+            "Issue #85 activates bounded File delete observations only",
             reconciliation,
         )
         self.assertIn(

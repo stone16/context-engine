@@ -50,6 +50,8 @@ schema、Python type、threat fixture 或新的架构决策。
 | `File source cleanup intent` | Persistent immutable pending-cleanup lineage | One Organization, disabled ContextSource, and its exact active SourceVersion at offboarding | None; it neither authorizes reads nor performs cleanup |
 | `acquisition checkpoint` | Persistent monotonic acquisition progress | One Organization and ContextSource | None |
 | `publish watermark` | Persistent monotonic visibility progress | One Organization and ContextSource | None |
+| `File change baseline` | Persistent bounded projection of one complete accepted File scan | One Organization, ContextSource, and exact SourceVersion | Observation lineage only; never tombstone or Runtime authority |
+| `File delete observation` | Persistent content-free vanished-path evidence | One Organization, ContextSource, SourceVersion, scan, and prior baseline upsert | None; deletion execution remains separate |
 
 Reviewer classification: `ContextRevision` and `ContextFragment` are persistent;
 `Evidence` is request-scoped. None of the three is an authorization authority.
@@ -481,6 +483,37 @@ accepted. 中文：acquisition checkpoint 只表示变化已 durable 接收，�
   failed; it is progress metadata, never authorization.
 - **Do not confuse with:** publish watermark, active ContextRevision, worker
   acknowledgement, or Policy Epoch. `acquisition cursor` maps here.
+
+### `File change baseline`
+
+The bounded content-free projection of the latest complete accepted v4 File
+scan for one exact active SourceVersion. 中文：File change baseline 只记录完整 scan
+的 path、change kind、digest、length 与 checkpoint lineage，用于下一次稳定浅层
+diff，不保存正文。
+
+- **Owner/scope:** one Organization, ContextSource, and immutable
+  SourceVersion; an incomplete or older-version scan cannot replace it.
+- **Lifecycle:** advances only when a v4 scan's terminal page commits; the
+  current scan head may advance independently while incomplete.
+- **Invariant:** baseline input is Control-projected, bounded, canonical, and
+  content-free. It neither authorizes Runtime delivery nor executes deletion.
+- **Do not confuse with:** acquisition checkpoint, publish watermark,
+  ContextRevision snapshot, caller manifest, or source ACL evidence.
+
+### `File delete observation`
+
+The content-free statement that a path present as an exact prior baseline
+upsert is absent from the current stable shallow File snapshot. 中文：File delete
+observation 是消失路径的 acquisition evidence，不是 Resource tombstone 指令。
+
+- **Owner/scope:** one Organization, ContextSource, exact SourceVersion, scan,
+  and exact complete comparison baseline.
+- **Lifecycle:** immutable inside an accepted change page; exact replay returns
+  the same observation.
+- **Invariant:** retains only prior path, raw digest, and byte length. Acceptance
+  changes no tombstone, Policy Epoch, cleanup intent, or Runtime visibility.
+- **Do not confuse with:** tombstone, physical cleanup, ActionPlane delete,
+  failed file read, or scheduler authority.
 
 ### `publish watermark`
 
