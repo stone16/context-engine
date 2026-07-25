@@ -26,6 +26,7 @@ class ControlOperation(StrEnum):
     REGISTER_SOURCE = "register_source"
     READ_SOURCE = "read_source"
     READ_SOURCE_PROGRESS = "read_source_progress"
+    SCHEDULE_FILE_CHANGE_PAGE = "schedule_file_change_page"
     TOMBSTONE_FILE_RESOURCE = "tombstone_file_resource"
 
 

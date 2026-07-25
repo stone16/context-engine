@@ -168,6 +168,8 @@ class _RedeemedFileImport:
     root_ref: FileRootRef
     path: FileImportPath
     acquisition_id: UUID
+    expected_content_sha256: str | None
+    expected_content_length: int | None
 
 
 def _rejection(token: WorkerLeaseToken) -> WorkNotAvailable:
@@ -256,15 +258,32 @@ class PostgreSQLFileImportWorker:
         redeemed = self._redeem(redemption.token, claims)
         try:
             source = self._roots.read(redeemed.root_ref, redeemed.path)
+            if redeemed.expected_content_sha256 is not None and (
+                len(source) != redeemed.expected_content_length
+                or sha256(source).hexdigest() != redeemed.expected_content_sha256
+            ):
+                raise LookupError("accepted File observation changed")
             outcome = compile_markdown(source, self._config)
         except LookupError:
-            self._fail(redemption.token, claims)
+            if redeemed.expected_content_sha256 is None:
+                self._fail(redemption.token, claims)
+            else:
+                with suppress(FileImportUnavailable, WorkNotAvailable):
+                    self._fail(redemption.token, claims)
             raise FileImportUnavailable("File import is unavailable") from None
         if type(outcome) is CompilationFailure:
-            self._fail(redemption.token, claims)
+            if redeemed.expected_content_sha256 is None:
+                self._fail(redemption.token, claims)
+            else:
+                with suppress(FileImportUnavailable, WorkNotAvailable):
+                    self._fail(redemption.token, claims)
             raise FileImportUnavailable("File import is unavailable")
         if type(outcome) is not ParsedDocument:  # pragma: no cover - closed union
-            self._fail(redemption.token, claims)
+            if redeemed.expected_content_sha256 is None:
+                self._fail(redemption.token, claims)
+            else:
+                with suppress(FileImportUnavailable, WorkNotAvailable):
+                    self._fail(redemption.token, claims)
             raise FileImportUnavailable("File import is unavailable")
         try:
             return self._publish(redemption.token, claims, redeemed, outcome)
@@ -310,11 +329,19 @@ class PostgreSQLFileImportWorker:
                 ).one_or_none()
                 if row is None or row.source_ref != claims.source_ref:
                     raise _rejection(token)
+                expected_content_sha256 = row._mapping.get(
+                    "expected_content_sha256"
+                )
+                expected_content_length = row._mapping.get(
+                    "expected_content_length"
+                )
                 return _RedeemedFileImport(
                     source_ref=SourceRef(UUID(row.source_ref)),
                     root_ref=FileRootRef(row.root_ref),
                     path=FileImportPath(row.relative_path),
                     acquisition_id=row.acquisition_id,
+                    expected_content_sha256=expected_content_sha256,
+                    expected_content_length=expected_content_length,
                 )
         except WorkNotAvailable:
             raise

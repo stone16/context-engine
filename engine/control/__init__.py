@@ -61,6 +61,9 @@ from engine.control.file_imports import (
     FileImportReceiver,
     PreparedFileImport,
     PrepareFileImport,
+    ScheduledFileChange,
+    ScheduledFileChangePage,
+    ScheduleFileChangePage,
 )
 from engine.control.file_source_offboarding import (
     FileSourceCleanupState,
@@ -119,6 +122,9 @@ __all__ = [
     "PendingChangeCursor",
     "PrepareFileImport",
     "PreparedFileImport",
+    "ScheduleFileChangePage",
+    "ScheduledFileChange",
+    "ScheduledFileChangePage",
     "ProviderGenericDenied",
     "ProviderInvalidCheckpoint",
     "ProviderOk",

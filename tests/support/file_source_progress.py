@@ -62,8 +62,30 @@ def clear_file_source_progress_projection(
                         "DISABLE TRIGGER file_source_change_page_immutable"
                     )
                 )
-                connection.execute(text("DELETE FROM file_source_change"))
-                connection.execute(text("DELETE FROM file_source_change_page"))
+                scheduling_columns_exist = connection.execute(
+                    text(
+                        """
+                        SELECT EXISTS (
+                            SELECT 1 FROM information_schema.columns
+                            WHERE table_schema = 'public'
+                              AND table_name = 'file_acquisition'
+                              AND column_name = 'change_page_ref'
+                        )
+                        """
+                    )
+                ).scalar_one()
+                scheduled_acquisitions_exist = (
+                    scheduling_columns_exist
+                    and connection.execute(
+                        text(
+                            "SELECT EXISTS (SELECT 1 FROM file_acquisition "
+                            "WHERE change_page_ref IS NOT NULL)"
+                        )
+                    ).scalar_one()
+                )
+                if not scheduled_acquisitions_exist:
+                    connection.execute(text("DELETE FROM file_source_change"))
+                    connection.execute(text("DELETE FROM file_source_change_page"))
                 connection.execute(
                     text(
                         "ALTER TABLE file_source_change_page "

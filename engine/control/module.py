@@ -31,7 +31,12 @@ from engine.control.file_deletions import (
     FileResourceTombstone,
     TombstoneFileResource,
 )
-from engine.control.file_imports import PreparedFileImport, PrepareFileImport
+from engine.control.file_imports import (
+    PreparedFileImport,
+    PrepareFileImport,
+    ScheduledFileChangePage,
+    ScheduleFileChangePage,
+)
 from engine.control.file_source_offboarding import (
     FileSourceOffboarding,
     OffboardFileSource,
@@ -65,6 +70,12 @@ class ControlStorePort(Protocol):
         call: TrustedControlCall,
         command: PrepareFileImport,
     ) -> PreparedFileImport: ...
+
+    def schedule_file_change_page(
+        self,
+        call: TrustedControlCall,
+        command: ScheduleFileChangePage,
+    ) -> ScheduledFileChangePage: ...
 
     def tombstone_file_resource(
         self,
@@ -118,7 +129,9 @@ class ContextControl:
             "tombstone_file_resource",
         ]
         if file_change_proofs is not None:
-            required_methods.append("accept_file_change_page")
+            required_methods.extend(
+                ("accept_file_change_page", "schedule_file_change_page")
+            )
         for method_name in required_methods:
             if not callable(getattr(store, method_name, None)):
                 raise TypeError("ContextControl store is incomplete")
@@ -388,6 +401,45 @@ class ContextControl:
         except Exception:
             raise SourceControlUnavailable(
                 "File Source progress read is unavailable"
+            ) from None
+
+    def schedule_file_change_page(
+        self,
+        call: TrustedControlCall,
+        command: ScheduleFileChangePage,
+    ) -> ScheduledFileChangePage:
+        """Schedule one complete accepted page under explicit Control authority."""
+
+        if type(command) is not ScheduleFileChangePage:
+            raise TypeError(
+                "schedule_file_change_page requires ScheduleFileChangePage"
+            )
+        try:
+            _validate_and_consume_control_call(
+                call,
+                authority=self._authority,
+                expected_operation=ControlOperation.SCHEDULE_FILE_CHANGE_PAGE,
+                checked_at=self._clock(),
+            )
+            scheduled = self._store.schedule_file_change_page(call, command)
+            if (
+                type(scheduled) is not ScheduledFileChangePage
+                or scheduled.organization_id != call.organization_id
+                or scheduled.source_ref != command.source_ref
+                or scheduled.source_version_ref != command.source_version_ref
+                or scheduled.page_ref != command.page_ref
+            ):
+                raise SourceControlUnavailable(
+                    "source store returned a mismatched scheduled File page"
+                )
+            return scheduled
+        except (ControlOperatorAuthenticationRejected, SourceNotAvailable):
+            raise SourceNotAvailable from None
+        except SourceControlUnavailable:
+            raise
+        except Exception:
+            raise SourceControlUnavailable(
+                "File change page scheduling is unavailable"
             ) from None
 
     def tombstone_file_resource(

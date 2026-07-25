@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import NoReturn
 from uuid import UUID
 
-from engine.control.contracts import SourceRef
+from engine.control.contracts import SourceRef, _require_sha256
 
 FILE_IMPORT_WORKLOAD = "supply.file-import"
 FILE_IMPORT_WORKER_AUDIENCE = "context-engine-worker"
@@ -91,6 +91,28 @@ class PrepareFileImport:
 
 
 @dataclass(frozen=True, slots=True)
+class ScheduleFileChangePage:
+    """Explicitly schedule one accepted File page for an exact audience."""
+
+    source_ref: SourceRef
+    source_version_ref: UUID = field(repr=False)
+    page_ref: str = field(repr=False)
+    audience: FileImportAudience = field(repr=False)
+
+    def __post_init__(self) -> None:
+        if type(self.source_ref) is not SourceRef:
+            raise TypeError("scheduled File page source_ref must be SourceRef")
+        if type(self.source_version_ref) is not UUID:
+            raise TypeError("scheduled File page source version must be UUID")
+        _require_sha256("scheduled File page reference", self.page_ref)
+        if type(self.audience) is not FileImportAudience:
+            raise TypeError("scheduled File page audience must be FileImportAudience")
+
+    def __reduce__(self) -> NoReturn:
+        raise TypeError("File change page scheduling command is not serializable")
+
+
+@dataclass(frozen=True, slots=True)
 class PreparedFileImport:
     """Content-free exact-job locator returned by trusted ContextControl."""
 
@@ -115,6 +137,64 @@ class PreparedFileImport:
             raise TypeError("Prepared File import source_ref must be SourceRef")
         if type(self.service_principal_id) is not UUID:
             raise TypeError("Prepared File import service principal must be UUID")
+
+
+@dataclass(frozen=True, slots=True)
+class ScheduledFileChange:
+    """One accepted change bound to its existing prepared import job."""
+
+    ordinal: int
+    path: FileImportPath
+    content_sha256: str = field(repr=False)
+    content_length: int
+    prepared_import: PreparedFileImport
+
+    def __post_init__(self) -> None:
+        if type(self.ordinal) is not int or not 1 <= self.ordinal <= 100:
+            raise ValueError("scheduled File change ordinal is invalid")
+        if type(self.path) is not FileImportPath:
+            raise TypeError("scheduled File change path must be FileImportPath")
+        _require_sha256("scheduled File change content identity", self.content_sha256)
+        if type(self.content_length) is not int or self.content_length < 0:
+            raise ValueError("scheduled File change content length is invalid")
+        if type(self.prepared_import) is not PreparedFileImport:
+            raise TypeError("scheduled File change requires PreparedFileImport")
+
+
+@dataclass(frozen=True, slots=True)
+class ScheduledFileChangePage:
+    """Complete ordered job set created from one accepted File page."""
+
+    organization_id: UUID = field(repr=False)
+    source_ref: SourceRef = field(repr=False)
+    source_version_ref: UUID = field(repr=False)
+    page_ref: str = field(repr=False)
+    changes: tuple[ScheduledFileChange, ...]
+
+    def __post_init__(self) -> None:
+        if type(self.organization_id) is not UUID:
+            raise TypeError("scheduled File page organization must be UUID")
+        if type(self.source_ref) is not SourceRef:
+            raise TypeError("scheduled File page source must be SourceRef")
+        if type(self.source_version_ref) is not UUID:
+            raise TypeError("scheduled File page source version must be UUID")
+        _require_sha256("scheduled File page reference", self.page_ref)
+        if (
+            type(self.changes) is not tuple
+            or not self.changes
+            or any(type(change) is not ScheduledFileChange for change in self.changes)
+        ):
+            raise TypeError("scheduled File page requires a nonempty change tuple")
+        if tuple(change.ordinal for change in self.changes) != tuple(
+            range(1, len(self.changes) + 1)
+        ):
+            raise ValueError("scheduled File page changes must be contiguous")
+        if any(
+            change.prepared_import.organization_id != self.organization_id
+            or change.prepared_import.source_ref != self.source_ref
+            for change in self.changes
+        ):
+            raise ValueError("scheduled File page contains a foreign import")
 
 
 @dataclass(frozen=True, slots=True)

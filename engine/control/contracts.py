@@ -46,6 +46,16 @@ def _require_utc(field_name: str, value: object) -> datetime:
     return value
 
 
+def _require_sha256(field_name: str, value: object) -> str:
+    if (
+        type(value) is not str
+        or len(value) != 64
+        or any(character not in "0123456789abcdef" for character in value)
+    ):
+        raise ValueError(f"{field_name} must be lowercase SHA-256")
+    return value
+
+
 class SourceKind(StrEnum):
     FILE = "file"
 

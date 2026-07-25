@@ -404,9 +404,7 @@ REQUIRED_POSTGRES_EVIDENCE["TRANSPORT-UNTRUSTED-008"] = (
     "PG-DELIVERY-EVIDENCE-063",
     "PG-PRIVATE-BOT-FLOW-071",
 )
-REQUIRED_RUNTIME_EVIDENCE["TRANSPORT-UNTRUSTED-008"] += (
-    "SDK-PRIVATE-BOT-FLOW-071",
-)
+REQUIRED_RUNTIME_EVIDENCE["TRANSPORT-UNTRUSTED-008"] += ("SDK-PRIVATE-BOT-FLOW-071",)
 REQUIRED_PROPERTY_EVIDENCE["EGRESS-011"] = (
     "TS-MODEL-EGRESS-070",
     "TS-PRIVATE-BOT-FLOW-071",
@@ -425,12 +423,8 @@ REQUIRED_POSTGRES_EVIDENCE["ACTION-SEPARATION-014"] = (
     "PG-ACTION-PERFORM-068",
     "PG-PRIVATE-BOT-FLOW-071",
 )
-REQUIRED_PROPERTY_EVIDENCE["ACTION-SEPARATION-014"] = (
-    "TS-PRIVATE-BOT-FLOW-071",
-)
-REQUIRED_RUNTIME_EVIDENCE["ACTION-SEPARATION-014"] += (
-    "SDK-PRIVATE-BOT-FLOW-071",
-)
+REQUIRED_PROPERTY_EVIDENCE["ACTION-SEPARATION-014"] = ("TS-PRIVATE-BOT-FLOW-071",)
+REQUIRED_RUNTIME_EVIDENCE["ACTION-SEPARATION-014"] += ("SDK-PRIVATE-BOT-FLOW-071",)
 REQUIRED_PROPERTY_EVIDENCE["CITATION-AUTH-010"] = ("PROP-CITATION-AUTH-010",)
 REQUIRED_POSTGRES_EVIDENCE["CITATION-AUTH-010"] = (
     "PG-CITATION-AUTH-010",
@@ -1732,6 +1726,73 @@ CANONICAL_FILE_CHANGE_FEED_ACTIVATION: dict[str, object] = {
     ],
 }
 
+CANONICAL_FILE_CHANGE_SCHEDULING_ACTIVATION: dict[str, object] = {
+    "issueRef": "#83",
+    "invariantRef": "WORKER-LEASE-007",
+    "carrier": "explicit accepted File page scheduling through existing import jobs",
+    "status": "active_fail_closed",
+    "policyEpochScope": "not-runtime-authority",
+    "controlBoundary": (
+        "accepted File page -> trusted ContextControl explicit FileImportAudience "
+        "-> exact file_acquisition/file_import_job lineage -> existing WorkerLease "
+        "-> current accepted scan-epoch redemption fence -> pre-compiler raw "
+        "observation verification -> atomic current-epoch publication fence"
+    ),
+    "testEvidence": [
+        {
+            "id": "PG-FILE-CHANGE-SCHEDULE-083",
+            "surface": "tests/integration/test_file_change_pages.py",
+            "oracle": (
+                "A real non-owner Control role schedules every upsert from one "
+                "accepted page in one transaction, exactly replays the same ordered "
+                "existing File import jobs, binds immutable path and raw-byte "
+                "observation lineage, and makes post-acceptance byte drift fail "
+                "before compilation with zero Revision, candidate, or watermark."
+            ),
+        },
+        {
+            "id": "PG-FILE-CHANGE-SCHEDULE-DENY-083",
+            "surface": "tests/integration/test_file_change_pages.py",
+            "oracle": (
+                "Changed audience, disabled receiver, stale Membership, and disabled "
+                "Source scheduling attempts return generic not-available while "
+                "retaining exactly the original whole page job set and creating zero "
+                "additional acquisitions or jobs."
+            ),
+        },
+        {
+            "id": "PG-FILE-CHANGE-SUPERSESSION-083",
+            "surface": "tests/integration/test_file_change_pages.py",
+            "oracle": (
+                "A real non-owner Worker path rejects a queued superseded-scan job "
+                "before any filesystem read, rejects scheduling a previously "
+                "unscheduled superseded page without new lineage, preserves exact "
+                "replay of an already scheduled page, and atomically rolls back "
+                "active Resource, active publication event, and watermark when a "
+                "newer scan is accepted during compilation."
+            ),
+        },
+    ],
+    "deferredEvidence": [
+        "autonomous File change polling and scheduling",
+        "executed deletion and tombstone observations",
+        "retry, reclaim, dead-letter, and full-resync operations",
+    ],
+    "futureCarriers": [
+        "autonomous File change scheduler",
+        "deletion execution",
+        "retry and dead-letter handling",
+        "full resync",
+    ],
+    "notActive": [
+        "implicit or inherited FileImportAudience",
+        "provider deletion execution",
+        "filesystem watcher",
+        "automatic retry or reclaim",
+        "Runtime authorization from provider checkpoint metadata",
+    ],
+}
+
 CANONICAL_ACTIVATIONS: list[dict[str, object]] = [
     CANONICAL_REVOCATION_ACTIVATION,
     CANONICAL_UNAVAILABLE_CAPABILITY_ACTIVATION,
@@ -1749,6 +1810,7 @@ CANONICAL_ACTIVATIONS: list[dict[str, object]] = [
     CANONICAL_MODEL_EGRESS_ACTIVATION,
     CANONICAL_PRIVATE_BOT_DELIVERY_ACTIVATION,
     CANONICAL_FILE_CHANGE_FEED_ACTIVATION,
+    CANONICAL_FILE_CHANGE_SCHEDULING_ACTIVATION,
 ]
 CANONICAL_ACTIVATION_ISSUE_LIST = ", ".join(
     f"Issue {activation['issueRef']}" for activation in CANONICAL_ACTIVATIONS
