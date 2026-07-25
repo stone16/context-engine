@@ -32,7 +32,7 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
     document = manifest()
     tables = table_entries(document)
 
-    assert document["manifestVersion"] == "26.0.0"
+    assert document["manifestVersion"] == "27.0.0"
     assert set(tables) == {
         "active_release_manifest",
         "action_delivery_attempt",
@@ -778,6 +778,32 @@ def test_issue_21_file_source_manifest_is_closed_and_role_separated() -> None:
         if operation["name"] == "read_file_source_progress"
     )
     assert "file_source_change_page" in progress_read["reads"]
+    schedule = next(
+        operation
+        for operation in manifest()["controlOperations"]
+        if operation["name"] == "schedule_file_change_page"
+    )
+    assert schedule["atomicWrites"] == [
+        "file_acquisition",
+        "file_import_job",
+        "file_source_acquisition_checkpoint",
+    ]
+    assert schedule["filesystemAccessAllowed"] is False
+    assert {
+        key["name"]: key["columns"]
+        for key in entries["file_acquisition"]["organizationInclusiveKeys"]
+    }["uq_file_acquisition_change_observation"] == [
+        "organization_id",
+        "source_id",
+        "change_page_ref",
+        "change_ordinal",
+    ]
+    observation_fk = next(
+        key
+        for key in entries["file_acquisition"]["foreignKeys"]
+        if key["name"] == "fk_file_acquisition_change_observation_exact"
+    )
+    assert observation_fk["references"]["table"] == "file_source_change"
 
     assert source["permittedOperations"] == {
         "context_engine_access_policy_definer": [

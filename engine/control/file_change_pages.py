@@ -18,7 +18,12 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
 )
 
 from engine._opaque import decode_base64url, encode_base64url
-from engine.control.contracts import SourceRef, SourceVersion, _require_utc
+from engine.control.contracts import (
+    SourceRef,
+    SourceVersion,
+    _require_sha256,
+    _require_utc,
+)
 from engine.control.file_imports import FileImportPath
 
 MAX_FILE_CHANGE_PAGE_SIZE = 100
@@ -108,9 +113,10 @@ class FileChangeScanHead:
             raise ValueError("File change scan head sequence is invalid")
         if type(self.complete) is not bool:
             raise TypeError("File change scan head complete must be bool")
-        if self.superseded_scan_epoch is not None and type(
-            self.superseded_scan_epoch
-        ) is not UUID:
+        if (
+            self.superseded_scan_epoch is not None
+            and type(self.superseded_scan_epoch) is not UUID
+        ):
             raise TypeError("superseded File scan epoch must be UUID or None")
 
 
@@ -127,9 +133,10 @@ class FileChangeSource:
             raise TypeError("File change source organization_id must be UUID")
         if type(self.source_version) is not SourceVersion:
             raise TypeError("File change source requires SourceVersion")
-        if self.scan_head is not None and type(
-            self.scan_head
-        ) is not FileChangeScanHead:
+        if (
+            self.scan_head is not None
+            and type(self.scan_head) is not FileChangeScanHead
+        ):
             raise TypeError("File change source scan head is invalid")
 
 
@@ -137,16 +144,6 @@ class FileChangeKind(StrEnum):
     """Closed change kinds activated by the shallow File scan."""
 
     UPSERT = "upsert"
-
-
-def _require_sha256(name: str, value: object) -> str:
-    if (
-        type(value) is not str
-        or len(value) != 64
-        or any(character not in "0123456789abcdef" for character in value)
-    ):
-        raise ValueError(f"{name} must be lowercase SHA-256")
-    return value
 
 
 @dataclass(frozen=True, slots=True)
@@ -230,17 +227,21 @@ class ChangePage:
             or not 1 <= self.predecessor_sequence <= 2**63 - 1
         ):
             raise ValueError("ChangePage predecessor_sequence is invalid")
-        if len(
-            {
-                self.predecessor_page_ref is None,
-                self.predecessor_checkpoint_ref is None,
-                self.predecessor_sequence is None,
-            }
-        ) != 1:
+        if (
+            len(
+                {
+                    self.predecessor_page_ref is None,
+                    self.predecessor_checkpoint_ref is None,
+                    self.predecessor_sequence is None,
+                }
+            )
+            != 1
+        ):
             raise ValueError("ChangePage predecessor checkpoint binding is incomplete")
-        if self.superseded_scan_epoch is not None and type(
-            self.superseded_scan_epoch
-        ) is not UUID:
+        if (
+            self.superseded_scan_epoch is not None
+            and type(self.superseded_scan_epoch) is not UUID
+        ):
             raise TypeError("ChangePage superseded_scan_epoch must be UUID or None")
         if (
             self.predecessor_page_ref is not None
@@ -300,9 +301,7 @@ def _page_document(page: ChangePage) -> dict[str, object]:
         ],
         "complete": page.complete,
         "domain": _PAGE_DOMAIN,
-        "nextCursor": (
-            None if page.next_cursor is None else page.next_cursor.value
-        ),
+        "nextCursor": (None if page.next_cursor is None else page.next_cursor.value),
         "organizationId": str(page.organization_id),
         "pageLimit": page.page_limit,
         "predecessorCheckpointRef": page.predecessor_checkpoint_ref,
@@ -430,9 +429,10 @@ class AcceptedChangePage:
             or not 1 <= self.page_limit <= MAX_FILE_CHANGE_PAGE_SIZE
         ):
             raise ValueError("accepted page page_limit is invalid")
-        if self.superseded_scan_epoch is not None and type(
-            self.superseded_scan_epoch
-        ) is not UUID:
+        if (
+            self.superseded_scan_epoch is not None
+            and type(self.superseded_scan_epoch) is not UUID
+        ):
             raise TypeError("accepted page superseded scan epoch is invalid")
         if self.next_cursor is not None and type(self.next_cursor) is not ChangeCursor:
             raise TypeError("accepted page next_cursor must be ChangeCursor or None")
@@ -534,9 +534,7 @@ class FileChangeProviderProofs:
     def _seal_page(self, page: ChangePage) -> str:
         return encode_base64url(self._provider_signing_key.sign(_page_payload(page)))
 
-    def _unwrap_cursor(
-        self, cursor: ChangeCursor
-    ) -> _AcceptedCursorClaims | None:
+    def _unwrap_cursor(self, cursor: ChangeCursor) -> _AcceptedCursorClaims | None:
         try:
             encoded_payload, encoded_signature = cursor.value.split(".")
             payload = decode_base64url(encoded_payload)

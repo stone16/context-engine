@@ -22,6 +22,7 @@ from engine.control import (
     ActivateFileChangeFeed,
     ChangeCursor,
     FileChangeScanHead,
+    FileImportPath,
     FileResourceTombstone,
     FileRootRef,
     FileSourceAcquisitionCheckpoint,
@@ -33,6 +34,9 @@ from engine.control import (
     FileSourcePublishWatermark,
     OffboardFileSource,
     RegisterFileSource,
+    ScheduledFileChange,
+    ScheduledFileChangePage,
+    ScheduleFileChangePage,
     SourceControlUnavailable,
     SourceManifest,
     SourceNotAvailable,
@@ -574,6 +578,86 @@ class PostgreSQLControlStore:
         except (DBAPIError, SQLAlchemyError, AssertionError):
             raise SourceControlUnavailable(
                 "File import Control database authority is unavailable"
+            ) from None
+
+    def schedule_file_change_page(
+        self,
+        call: TrustedControlCall,
+        command: ScheduleFileChangePage,
+    ) -> ScheduledFileChangePage:
+        """Atomically bind one accepted page to existing File import jobs."""
+
+        receiver = self._file_import_receiver
+        if (
+            type(call) is not TrustedControlCall
+            or type(command) is not ScheduleFileChangePage
+            or receiver is None
+        ):
+            raise SourceNotAvailable
+        try:
+            with self._engine.begin() as connection:
+                assert_control_role(connection)
+                rows = connection.execute(
+                    text(
+                        """
+                        SELECT *
+                        FROM public.context_control_schedule_file_change_page(
+                            :organization_id, :source_id, :source_version_id,
+                            :page_ref, :audience_principal_ref,
+                            :audience_membership_id,
+                            :audience_membership_version,
+                            :service_principal_id
+                        )
+                        """
+                    ),
+                    {
+                        "organization_id": call.organization_id,
+                        "source_id": command.source_ref.value,
+                        "source_version_id": command.source_version_ref,
+                        "page_ref": command.page_ref,
+                        "audience_principal_ref": command.audience.principal_ref,
+                        "audience_membership_id": command.audience.membership_id,
+                        "audience_membership_version": (
+                            command.audience.membership_version
+                        ),
+                        "service_principal_id": receiver.service_principal_id,
+                    },
+                ).all()
+                if not rows:
+                    raise SourceNotAvailable
+                changes = tuple(
+                    ScheduledFileChange(
+                        ordinal=row.change_ordinal,
+                        path=FileImportPath(row.relative_path),
+                        content_sha256=row.content_sha256,
+                        content_length=row.content_length,
+                        prepared_import=PreparedFileImport(
+                            organization_id=call.organization_id,
+                            job_id=row.job_id,
+                            source_ref=command.source_ref,
+                            service_principal_id=row.service_principal_id,
+                        ),
+                    )
+                    for row in rows
+                )
+                return ScheduledFileChangePage(
+                    organization_id=call.organization_id,
+                    source_ref=command.source_ref,
+                    source_version_ref=command.source_version_ref,
+                    page_ref=command.page_ref,
+                    changes=changes,
+                )
+        except SourceNotAvailable:
+            raise
+        except (
+            DBAPIError,
+            SQLAlchemyError,
+            AssertionError,
+            TypeError,
+            ValueError,
+        ):
+            raise SourceControlUnavailable(
+                "File change scheduling database authority is unavailable"
             ) from None
 
     def read_file_source_progress(

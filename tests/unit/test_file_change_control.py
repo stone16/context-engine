@@ -24,6 +24,8 @@ from engine.control import (
     OffboardFileSource,
     PendingChangeCursor,
     RegisterFileSource,
+    ScheduledFileChangePage,
+    ScheduleFileChangePage,
     SourceChange,
     SourceManifest,
     SourceNotAvailable,
@@ -105,6 +107,11 @@ class _Store:
     def read_file_source_progress(
         self, call: TrustedControlCall, source_ref: SourceRef
     ) -> FileSourceProgress:
+        raise AssertionError("unexpected Control operation")
+
+    def schedule_file_change_page(
+        self, call: TrustedControlCall, command: ScheduleFileChangePage
+    ) -> ScheduledFileChangePage:
         raise AssertionError("unexpected Control operation")
 
     def read_source(

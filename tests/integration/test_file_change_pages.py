@@ -12,10 +12,13 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from fastapi.testclient import TestClient
 from sqlalchemy import Engine, text
 from sqlalchemy.exc import DBAPIError
 
+from adapters.exact_phrase import PostgreSQLExactPhraseCandidateIndex
 from adapters.file_source import FileChangeProvider, FileReadLimits, FileRootRegistry
+from adapters.http.app import create_app
 from engine.control import (
     ActivateFileChangeFeed,
     ChangeLimit,
@@ -37,16 +40,39 @@ from engine.control import (
     ProviderInvalidCheckpoint,
     ProviderOk,
     RegisterFileSource,
+    ScheduleFileChangePage,
     SourceNotAvailable,
+    SourceRef,
     TrustedControlCall,
     VerifiedControlOperatorIdentity,
 )
 from engine.persistence import (
     DatabaseConfiguration,
+    FileImportLeaseRedemption,
+    FileImportUnavailable,
     PostgreSQLControlStore,
+    PostgreSQLFileImportWorker,
+    PostgreSQLMembershipAuthority,
+    PostgreSQLWorkerLeaseIssuer,
     create_database_engine,
 )
+from engine.runtime.construction import Runtime, required_kernel_dependencies
+from engine.runtime.package_digest import QueryDigestKeyring
+from engine.supply import (
+    MarkdownCompilerConfig,
+    WorkerLeaseCodec,
+    WorkerLeaseKeyring,
+)
+from tests.integration.test_file_import_tracer import (
+    _ExactScopeAuthority,
+    _OrganizationAuthority,
+    _RuntimeAuthenticator,
+)
 from tests.support.migrations import HEAD_REVISION
+from tests.support.releases import (
+    clear_test_runtime_release,
+    ensure_test_runtime_release,
+)
 
 pytestmark = pytest.mark.integration
 ROOT = Path(__file__).parents[2]
@@ -130,10 +156,8 @@ def _delete_scenarios(
             with engine.begin() as connection:
                 for organization_id, user_id in scenarios:
                     for table in (
-                        "file_source_acquisition_checkpoint",
                         "file_source_publish_watermark",
-                        "file_source_change",
-                        "file_source_change_page",
+                        "file_source_acquisition_checkpoint",
                         "file_import_job_event",
                         "file_publication_recovery",
                         "file_revision_supersession",
@@ -152,6 +176,8 @@ def _delete_scenarios(
                         "file_resource_cleanup_intent",
                         "file_source_cleanup_intent",
                         "file_acquisition",
+                        "file_source_change",
+                        "file_source_change_page",
                         "context_source",
                         "source_version",
                         "organization_policy_epoch",
@@ -210,6 +236,7 @@ class _Authenticator:
                     ControlOperation.OFFBOARD_FILE_SOURCE,
                     ControlOperation.REGISTER_SOURCE,
                     ControlOperation.READ_SOURCE_PROGRESS,
+                    ControlOperation.SCHEDULE_FILE_CHANGE_PAGE,
                 }
             ),
             valid_from=NOW - timedelta(minutes=1),
@@ -347,6 +374,1401 @@ def _seed_file_change_source(
         authority,
         FileChangeSource(organization_id, activated.active_version),
     )
+
+
+@pytest.mark.security_evidence(id="PG-FILE-CHANGE-SCHEDULE-083", layer="postgres")
+def test_control_atomically_schedules_exact_accepted_file_upserts(
+    tmp_path: Path,
+    guarded_control_engine: Engine,
+    guarded_worker_engine: Engine,
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    original_a = b"# A\n\nOriginal paragraph.\n"
+    original_b = b"# B\n\nSecond paragraph.\n"
+    (root / "a.md").write_bytes(original_a)
+    (root / "b.md").write_bytes(original_b)
+    provider_proofs, control_proofs = _proofs()
+    organization_id = uuid4()
+    receiver = FileImportReceiver(uuid4())
+    control, authority, source = _seed_file_change_source(
+        guarded_control_engine=guarded_control_engine,
+        migration_configuration=migration_configuration,
+        organization_id=organization_id,
+        receiver=receiver,
+        root_ref=FileRootRef("scheduled-change-root"),
+        control_proofs=control_proofs,
+    )
+    provider = FileChangeProvider(
+        FileRootRegistry(
+            {source.source_version.root_ref: root},
+            limits=FileReadLimits(max_file_bytes=1_024),
+        ),
+        proofs=provider_proofs,
+    )
+    page = provider.read_changes(source, InitialScan(), ChangeLimit(2))
+    assert type(page) is ProviderOk
+    with _authorize(
+        authority,
+        organization_id,
+        ControlOperation.ACCEPT_FILE_CHANGE_PAGE,
+        "accept-scheduled-page",
+    ) as call:
+        accepted = control.accept_file_change_page(call, page.value)
+
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.connect() as connection:
+            membership_id = connection.execute(
+                text(
+                    "SELECT membership_id FROM membership "
+                    "WHERE organization_id = :organization_id"
+                ),
+                {"organization_id": organization_id},
+            ).scalar_one()
+    finally:
+        migration_engine.dispose()
+    command_to_schedule = ScheduleFileChangePage(
+        source_ref=accepted.source_ref,
+        source_version_ref=accepted.source_version_ref,
+        page_ref=accepted.page_ref,
+        audience=FileImportAudience(
+            principal_ref="principal:file-reader",
+            membership_id=membership_id,
+            membership_version=1,
+        ),
+    )
+    with guarded_control_engine.connect() as connection:
+        interrupted = connection.begin()
+        provisional = connection.execute(
+            text(
+                """
+                SELECT *
+                FROM public.context_control_schedule_file_change_page(
+                    :organization_id, :source_id, :source_version_id,
+                    :page_ref, :audience_principal_ref,
+                    :audience_membership_id, :audience_membership_version,
+                    :service_principal_id
+                )
+                """
+            ),
+            {
+                "organization_id": organization_id,
+                "source_id": accepted.source_ref.value,
+                "source_version_id": accepted.source_version_ref,
+                "page_ref": accepted.page_ref,
+                "audience_principal_ref": command_to_schedule.audience.principal_ref,
+                "audience_membership_id": command_to_schedule.audience.membership_id,
+                "audience_membership_version": (
+                    command_to_schedule.audience.membership_version
+                ),
+                "service_principal_id": receiver.service_principal_id,
+            },
+        ).all()
+        assert len(provisional) == 2
+        interrupted.rollback()
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.connect() as connection:
+            rolled_back_counts = connection.execute(
+                text(
+                    """
+                    SELECT
+                      (SELECT count(*) FROM file_acquisition
+                       WHERE organization_id = :organization_id
+                         AND change_page_ref = :page_ref),
+                      (SELECT count(*) FROM file_import_job
+                       WHERE organization_id = :organization_id
+                         AND source_id = :source_id),
+                      (SELECT count(*) FROM file_source_acquisition_checkpoint
+                       WHERE organization_id = :organization_id
+                         AND source_id = :source_id),
+                      (SELECT count(*) FROM file_source_publish_watermark
+                       WHERE organization_id = :organization_id
+                         AND source_id = :source_id)
+                    """
+                ),
+                {
+                    "organization_id": organization_id,
+                    "source_id": accepted.source_ref.value,
+                    "page_ref": accepted.page_ref,
+                },
+            ).one()
+    finally:
+        migration_engine.dispose()
+    assert tuple(rolled_back_counts) == (0, 1, 2, 0)
+
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.connect() as connection:
+            stale_version_id = connection.execute(
+                text(
+                    """
+                    SELECT version_id
+                    FROM source_version
+                    WHERE organization_id = :organization_id
+                      AND source_id = :source_id
+                      AND version_id <> :active_version_id
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    """
+                ),
+                {
+                    "organization_id": organization_id,
+                    "source_id": accepted.source_ref.value,
+                    "active_version_id": accepted.source_version_ref,
+                },
+            ).scalar_one()
+    finally:
+        migration_engine.dispose()
+    with (
+        _authorize(
+            authority,
+            organization_id,
+            ControlOperation.SCHEDULE_FILE_CHANGE_PAGE,
+            "schedule-stale-version",
+        ) as call,
+        pytest.raises(SourceNotAvailable),
+    ):
+        control.schedule_file_change_page(
+            call,
+            replace(command_to_schedule, source_version_ref=stale_version_id),
+        )
+
+    foreign_organization_id = uuid4()
+    foreign_control, foreign_authority, _foreign_source = _seed_file_change_source(
+        guarded_control_engine=guarded_control_engine,
+        migration_configuration=migration_configuration,
+        organization_id=foreign_organization_id,
+        receiver=FileImportReceiver(uuid4()),
+        root_ref=FileRootRef("foreign-schedule-root"),
+        control_proofs=control_proofs,
+    )
+    with (
+        _authorize(
+            foreign_authority,
+            foreign_organization_id,
+            ControlOperation.SCHEDULE_FILE_CHANGE_PAGE,
+            "schedule-cross-organization",
+        ) as call,
+        pytest.raises(SourceNotAvailable),
+    ):
+        foreign_control.schedule_file_change_page(call, command_to_schedule)
+
+    with (
+        _authorize(
+            authority,
+            organization_id,
+            ControlOperation.SCHEDULE_FILE_CHANGE_PAGE,
+            "schedule-foreign-source",
+        ) as call,
+        pytest.raises(SourceNotAvailable),
+    ):
+        control.schedule_file_change_page(
+            call,
+            replace(command_to_schedule, source_ref=SourceRef(uuid4())),
+        )
+
+    with _authorize(
+        authority,
+        organization_id,
+        ControlOperation.SCHEDULE_FILE_CHANGE_PAGE,
+        "schedule-accepted-page",
+    ) as call:
+        scheduled = control.schedule_file_change_page(call, command_to_schedule)
+    with _authorize(
+        authority,
+        organization_id,
+        ControlOperation.SCHEDULE_FILE_CHANGE_PAGE,
+        "replay-accepted-page",
+    ) as call:
+        replayed = control.schedule_file_change_page(call, command_to_schedule)
+
+    assert scheduled == replayed
+    assert [change.path.value for change in scheduled.changes] == ["a.md", "b.md"]
+    assert [change.content_length for change in scheduled.changes] == [
+        len(original_a),
+        len(original_b),
+    ]
+    assert len({change.prepared_import.job_id for change in scheduled.changes}) == 2
+
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.connect() as connection:
+            lineage = connection.execute(
+                text(
+                    """
+                    SELECT acquisition.change_ordinal,
+                           acquisition.relative_path,
+                           acquisition.expected_content_sha256,
+                           acquisition.expected_content_length,
+                           job.job_id, job.service_principal_id
+                    FROM file_acquisition AS acquisition
+                    JOIN file_import_job AS job
+                      ON job.organization_id = acquisition.organization_id
+                     AND job.acquisition_id = acquisition.acquisition_id
+                    WHERE acquisition.organization_id = :organization_id
+                      AND acquisition.source_id = :source_id
+                      AND acquisition.change_page_ref = :page_ref
+                    ORDER BY acquisition.change_ordinal
+                    """
+                ),
+                {
+                    "organization_id": organization_id,
+                    "source_id": accepted.source_ref.value,
+                    "page_ref": accepted.page_ref,
+                },
+            ).all()
+            scheduled_progress = connection.execute(
+                text(
+                    """
+                    SELECT
+                      (SELECT count(*) FROM file_source_acquisition_checkpoint
+                       WHERE organization_id = :organization_id
+                         AND source_id = :source_id),
+                      (SELECT count(*) FROM file_source_publish_watermark
+                       WHERE organization_id = :organization_id
+                         AND source_id = :source_id)
+                    """
+                ),
+                {
+                    "organization_id": organization_id,
+                    "source_id": accepted.source_ref.value,
+                },
+            ).one()
+            schedule_definition = connection.execute(
+                text(
+                    "SELECT pg_get_functiondef("
+                    "'public.context_control_schedule_file_change_page("
+                    "uuid,uuid,uuid,text,text,uuid,bigint,uuid)'::regprocedure)"
+                )
+            ).scalar_one()
+    finally:
+        migration_engine.dispose()
+    assert [tuple(row) for row in lineage] == [
+        (
+            change.ordinal,
+            change.path.value,
+            change.content_sha256,
+            change.content_length,
+            change.prepared_import.job_id,
+            receiver.service_principal_id,
+        )
+        for change in scheduled.changes
+    ]
+    assert tuple(scheduled_progress) == (4, 0)
+    assert "context-engine.file-source-progress:" in schedule_definition
+    assert schedule_definition.index("pg_advisory_xact_lock") < (
+        schedule_definition.index("FOR UPDATE OF source")
+    )
+
+    codec = WorkerLeaseCodec(
+        WorkerLeaseKeyring(active_version=1, keys={1: bytes(range(64, 96))})
+    )
+    first_import = scheduled.changes[0].prepared_import
+    first_token = PostgreSQLWorkerLeaseIssuer(
+        guarded_control_engine,
+        codec,
+        lease_ttl_seconds=300,
+    ).issue_file_import_lease(first_import)
+    (root / "a.md").write_bytes(b"# A\n\nChanged after acceptance.\n")
+    with (
+        FileRootRegistry(
+            {source.source_version.root_ref: root},
+            limits=FileReadLimits(max_file_bytes=1_024),
+        ) as worker_roots,
+        pytest.raises(FileImportUnavailable),
+    ):
+        PostgreSQLFileImportWorker(
+            guarded_worker_engine,
+            codec,
+            receiver,
+            worker_roots,
+            MarkdownCompilerConfig("markdown-config-v1"),
+            clock=lambda: datetime.now(UTC).replace(microsecond=0),
+        ).run(
+            FileImportLeaseRedemption(
+                first_token,
+                organization_id,
+                first_import.job_id,
+                accepted.source_ref,
+            )
+        )
+
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.connect() as connection:
+            failed_effects = connection.execute(
+                text(
+                    """
+                    SELECT job.state,
+                           (SELECT count(*) FROM context_revision
+                            WHERE organization_id = :organization_id),
+                           (SELECT count(*) FROM exact_phrase_candidate
+                            WHERE organization_id = :organization_id),
+                           (SELECT count(*) FROM resource_access_policy
+                            WHERE organization_id = :organization_id),
+                           (SELECT count(*)
+                            FROM file_source_acquisition_checkpoint
+                            WHERE organization_id = :organization_id
+                              AND source_id = :source_id),
+                           (SELECT count(*) FROM file_source_publish_watermark
+                            WHERE organization_id = :organization_id
+                              AND source_id = :source_id)
+                    FROM file_import_job AS job
+                    WHERE job.organization_id = :organization_id
+                      AND job.job_id = :job_id
+                    """
+                ),
+                {
+                    "organization_id": organization_id,
+                    "source_id": accepted.source_ref.value,
+                    "job_id": first_import.job_id,
+                },
+            ).one()
+    finally:
+        migration_engine.dispose()
+    assert tuple(failed_effects) == ("failed", 0, 0, 0, 4, 0)
+
+    second_import = scheduled.changes[1].prepared_import
+    second_token = PostgreSQLWorkerLeaseIssuer(
+        guarded_control_engine,
+        codec,
+        lease_ttl_seconds=300,
+    ).issue_file_import_lease(second_import)
+    with FileRootRegistry(
+        {source.source_version.root_ref: root},
+        limits=FileReadLimits(max_file_bytes=1_024),
+    ) as worker_roots:
+        published = PostgreSQLFileImportWorker(
+            guarded_worker_engine,
+            codec,
+            receiver,
+            worker_roots,
+            MarkdownCompilerConfig("markdown-config-v1"),
+            clock=lambda: datetime.now(UTC).replace(microsecond=0),
+        ).run(
+            FileImportLeaseRedemption(
+                second_token,
+                organization_id,
+                second_import.job_id,
+                accepted.source_ref,
+            )
+        )
+    assert published.outcome == "published"
+    assert published.candidate_refs
+
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.connect() as connection:
+            successful_effects = connection.execute(
+                text(
+                    """
+                    SELECT
+                      (SELECT count(*) FROM context_revision
+                       WHERE organization_id = :organization_id),
+                      (SELECT count(*) FROM exact_phrase_candidate
+                       WHERE organization_id = :organization_id),
+                      (SELECT count(*) FROM file_source_publish_watermark
+                       WHERE organization_id = :organization_id
+                         AND source_id = :source_id)
+                    """
+                ),
+                {
+                    "organization_id": organization_id,
+                    "source_id": accepted.source_ref.value,
+                },
+            ).one()
+    finally:
+        migration_engine.dispose()
+    assert successful_effects[0] == 1
+    assert successful_effects[1] > 0
+    assert successful_effects[2] == 1
+
+    with pytest.raises(
+        RuntimeError,
+        match="requires no retained accepted-change acquisition lineage",
+    ):
+        command.downgrade(Config(ROOT / "alembic.ini"), "20260725_0028")
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.connect() as connection:
+            assert (
+                connection.execute(
+                    text("SELECT version_num FROM alembic_version")
+                ).scalar_one()
+                == HEAD_REVISION
+            )
+    finally:
+        migration_engine.dispose()
+
+
+def test_scheduled_file_missing_after_acceptance_fails_before_publication(
+    tmp_path: Path,
+    guarded_control_engine: Engine,
+    guarded_worker_engine: Engine,
+    migration_configuration: DatabaseConfiguration,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    path = root / "vanishing.md"
+    path.write_bytes(b"# Present at acceptance\n")
+    provider_proofs, control_proofs = _proofs()
+    organization_id = uuid4()
+    receiver = FileImportReceiver(uuid4())
+    control, authority, source = _seed_file_change_source(
+        guarded_control_engine=guarded_control_engine,
+        migration_configuration=migration_configuration,
+        organization_id=organization_id,
+        receiver=receiver,
+        root_ref=FileRootRef("scheduled-missing-root"),
+        control_proofs=control_proofs,
+    )
+    provider = FileChangeProvider(
+        FileRootRegistry(
+            {source.source_version.root_ref: root},
+            limits=FileReadLimits(max_file_bytes=1_024),
+        ),
+        proofs=provider_proofs,
+    )
+    page = provider.read_changes(source, InitialScan(), ChangeLimit(1))
+    assert type(page) is ProviderOk
+    with _authorize(
+        authority,
+        organization_id,
+        ControlOperation.ACCEPT_FILE_CHANGE_PAGE,
+        "accept-vanishing-page",
+    ) as call:
+        accepted = control.accept_file_change_page(call, page.value)
+
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.connect() as connection:
+            membership_id = connection.execute(
+                text(
+                    "SELECT membership_id FROM membership "
+                    "WHERE organization_id = :organization_id"
+                ),
+                {"organization_id": organization_id},
+            ).scalar_one()
+    finally:
+        migration_engine.dispose()
+    with _authorize(
+        authority,
+        organization_id,
+        ControlOperation.SCHEDULE_FILE_CHANGE_PAGE,
+        "schedule-vanishing-page",
+    ) as call:
+        scheduled = control.schedule_file_change_page(
+            call,
+            ScheduleFileChangePage(
+                accepted.source_ref,
+                accepted.source_version_ref,
+                accepted.page_ref,
+                FileImportAudience("principal:file-reader", membership_id, 1),
+            ),
+        )
+
+    prepared = scheduled.changes[0].prepared_import
+    codec = WorkerLeaseCodec(
+        WorkerLeaseKeyring(active_version=1, keys={1: bytes(range(64, 96))})
+    )
+    token = PostgreSQLWorkerLeaseIssuer(
+        guarded_control_engine,
+        codec,
+        lease_ttl_seconds=300,
+    ).issue_file_import_lease(prepared)
+    original_read = FileRootRegistry.read
+
+    def read_after_receiver_revocation(
+        registry: FileRootRegistry,
+        root_ref: FileRootRef,
+        relative_path: FileImportPath,
+    ) -> bytes:
+        migration_engine = create_database_engine(migration_configuration)
+        try:
+            with migration_engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "UPDATE service_principal SET enabled = false "
+                        "WHERE organization_id = :organization_id "
+                        "AND service_principal_id = :receiver_id"
+                    ),
+                    {
+                        "organization_id": organization_id,
+                        "receiver_id": receiver.service_principal_id,
+                    },
+                )
+        finally:
+            migration_engine.dispose()
+        return original_read(registry, root_ref, relative_path)
+
+    monkeypatch.setattr(FileRootRegistry, "read", read_after_receiver_revocation)
+    path.unlink()
+    with (
+        FileRootRegistry(
+            {source.source_version.root_ref: root},
+            limits=FileReadLimits(max_file_bytes=1_024),
+        ) as worker_roots,
+        pytest.raises(FileImportUnavailable),
+    ):
+        PostgreSQLFileImportWorker(
+            guarded_worker_engine,
+            codec,
+            receiver,
+            worker_roots,
+            MarkdownCompilerConfig("markdown-config-v1"),
+            clock=lambda: datetime.now(UTC).replace(microsecond=0),
+        ).run(
+            FileImportLeaseRedemption(
+                token,
+                organization_id,
+                prepared.job_id,
+                accepted.source_ref,
+            )
+        )
+
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.connect() as connection:
+            effects = connection.execute(
+                text(
+                    """
+                    SELECT job.state,
+                           (SELECT count(*) FROM context_revision
+                            WHERE organization_id = :organization_id),
+                           (SELECT count(*) FROM exact_phrase_candidate
+                            WHERE organization_id = :organization_id),
+                           (SELECT count(*) FROM resource_access_policy
+                            WHERE organization_id = :organization_id),
+                           (SELECT count(*) FROM file_source_publish_watermark
+                            WHERE organization_id = :organization_id
+                              AND source_id = :source_id)
+                    FROM file_import_job AS job
+                    WHERE job.organization_id = :organization_id
+                      AND job.job_id = :job_id
+                    """
+                ),
+                {
+                    "organization_id": organization_id,
+                    "source_id": accepted.source_ref.value,
+                    "job_id": prepared.job_id,
+                },
+            ).one()
+    finally:
+        migration_engine.dispose()
+    assert tuple(effects) == ("running", 0, 0, 0, 0)
+
+
+def test_file_change_scheduling_rolls_back_an_injected_mid_page_conflict(
+    tmp_path: Path,
+    guarded_control_engine: Engine,
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "a.md").write_bytes(b"A")
+    (root / "b.md").write_bytes(b"B")
+    provider_proofs, control_proofs = _proofs()
+    organization_id = uuid4()
+    receiver = FileImportReceiver(uuid4())
+    control, authority, source = _seed_file_change_source(
+        guarded_control_engine=guarded_control_engine,
+        migration_configuration=migration_configuration,
+        organization_id=organization_id,
+        receiver=receiver,
+        root_ref=FileRootRef("schedule-conflict-root"),
+        control_proofs=control_proofs,
+    )
+    provider = FileChangeProvider(
+        FileRootRegistry(
+            {source.source_version.root_ref: root},
+            limits=FileReadLimits(max_file_bytes=1_024),
+        ),
+        proofs=provider_proofs,
+    )
+    page = provider.read_changes(source, InitialScan(), ChangeLimit(2))
+    assert type(page) is ProviderOk
+    with _authorize(
+        authority,
+        organization_id,
+        ControlOperation.ACCEPT_FILE_CHANGE_PAGE,
+        "accept-conflict-page",
+    ) as call:
+        accepted = control.accept_file_change_page(call, page.value)
+
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.connect() as connection:
+            membership_id = connection.execute(
+                text(
+                    "SELECT membership_id FROM membership "
+                    "WHERE organization_id = :organization_id"
+                ),
+                {"organization_id": organization_id},
+            ).scalar_one()
+    finally:
+        migration_engine.dispose()
+    audience = FileImportAudience("principal:file-reader", membership_id, 1)
+    with _authorize(
+        authority,
+        organization_id,
+        ControlOperation.IMPORT_FILE,
+        "prepare-scheduling-conflict",
+    ) as call:
+        conflicting_import = control.prepare_file_import(
+            call,
+            PrepareFileImport(
+                accepted.source_ref,
+                FileImportPath("collision.md"),
+                audience,
+                f"change:{accepted.page_ref}:2",
+            ),
+        )
+
+    with (
+        _authorize(
+            authority,
+            organization_id,
+            ControlOperation.SCHEDULE_FILE_CHANGE_PAGE,
+            "schedule-mid-page-conflict",
+        ) as call,
+        pytest.raises(SourceNotAvailable),
+    ):
+        control.schedule_file_change_page(
+            call,
+            ScheduleFileChangePage(
+                accepted.source_ref,
+                accepted.source_version_ref,
+                accepted.page_ref,
+                audience,
+            ),
+        )
+
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.connect() as connection:
+            effects = connection.execute(
+                text(
+                    """
+                    SELECT
+                      (SELECT count(*) FROM file_acquisition
+                       WHERE organization_id = :organization_id
+                         AND source_id = :source_id
+                         AND change_page_ref = :page_ref),
+                      (SELECT count(*) FROM file_import_job
+                       WHERE organization_id = :organization_id
+                         AND source_id = :source_id),
+                      (SELECT count(*) FROM file_source_acquisition_checkpoint
+                       WHERE organization_id = :organization_id
+                         AND source_id = :source_id),
+                      (SELECT count(*) FROM file_source_publish_watermark
+                       WHERE organization_id = :organization_id
+                         AND source_id = :source_id)
+                    """
+                ),
+                {
+                    "organization_id": organization_id,
+                    "source_id": accepted.source_ref.value,
+                    "page_ref": accepted.page_ref,
+                },
+            ).one()
+    finally:
+        migration_engine.dispose()
+    assert conflicting_import.job_id
+    assert tuple(effects) == (0, 2, 3, 0)
+
+
+def test_scheduled_pages_reuse_unchanged_and_replaced_publication_paths(
+    tmp_path: Path,
+    guarded_control_engine: Engine,
+    guarded_worker_engine: Engine,
+    guarded_runtime_engine: Engine,
+    migration_configuration: DatabaseConfiguration,
+    query_digest_keyring: QueryDigestKeyring,
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    path = root / "handbook.md"
+    initial_bytes = b"# Handbook\n\nStable paragraph.\n"
+    path.write_bytes(initial_bytes)
+    provider_proofs, control_proofs = _proofs()
+    organization_id = uuid4()
+    receiver = FileImportReceiver(uuid4())
+    control, authority, current_source = _seed_file_change_source(
+        guarded_control_engine=guarded_control_engine,
+        migration_configuration=migration_configuration,
+        organization_id=organization_id,
+        receiver=receiver,
+        root_ref=FileRootRef("scheduled-outcomes-root"),
+        control_proofs=control_proofs,
+    )
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.connect() as connection:
+            membership_id, user_id = connection.execute(
+                text(
+                    "SELECT membership_id, user_id FROM membership "
+                    "WHERE organization_id = :organization_id"
+                ),
+                {"organization_id": organization_id},
+            ).one()
+    finally:
+        migration_engine.dispose()
+    audience = FileImportAudience("principal:file-reader", membership_id, 1)
+    codec = WorkerLeaseCodec(
+        WorkerLeaseKeyring(active_version=1, keys={1: bytes(range(64, 96))})
+    )
+
+    outcomes = []
+    job_ids = []
+    candidate_sets = []
+    for iteration, payload in enumerate(
+        (
+            initial_bytes,
+            b"\xef\xbb\xbf# Handbook\r\n\r\nStable paragraph.\r\n",
+            b"# Handbook\n\nChanged paragraph.\n",
+        ),
+        start=1,
+    ):
+        path.write_bytes(payload)
+        provider = FileChangeProvider(
+            FileRootRegistry(
+                {current_source.source_version.root_ref: root},
+                limits=FileReadLimits(max_file_bytes=1_024),
+            ),
+            proofs=provider_proofs,
+        )
+        page = provider.read_changes(current_source, InitialScan(), ChangeLimit(1))
+        assert type(page) is ProviderOk
+        with _authorize(
+            authority,
+            organization_id,
+            ControlOperation.ACCEPT_FILE_CHANGE_PAGE,
+            f"accept-outcome-page-{iteration}",
+        ) as call:
+            accepted = control.accept_file_change_page(call, page.value)
+        with _authorize(
+            authority,
+            organization_id,
+            ControlOperation.SCHEDULE_FILE_CHANGE_PAGE,
+            f"schedule-outcome-page-{iteration}",
+        ) as call:
+            scheduled = control.schedule_file_change_page(
+                call,
+                ScheduleFileChangePage(
+                    accepted.source_ref,
+                    accepted.source_version_ref,
+                    accepted.page_ref,
+                    audience,
+                ),
+            )
+        prepared = scheduled.changes[0].prepared_import
+        token = PostgreSQLWorkerLeaseIssuer(
+            guarded_control_engine,
+            codec,
+            lease_ttl_seconds=300,
+        ).issue_file_import_lease(prepared)
+        with FileRootRegistry(
+            {current_source.source_version.root_ref: root},
+            limits=FileReadLimits(max_file_bytes=1_024),
+        ) as worker_roots:
+            result = PostgreSQLFileImportWorker(
+                guarded_worker_engine,
+                codec,
+                receiver,
+                worker_roots,
+                MarkdownCompilerConfig("markdown-config-v1"),
+                clock=lambda: datetime.now(UTC).replace(microsecond=0),
+            ).run(
+                FileImportLeaseRedemption(
+                    token,
+                    organization_id,
+                    prepared.job_id,
+                    accepted.source_ref,
+                )
+            )
+        outcomes.append(result.outcome)
+        job_ids.append(prepared.job_id)
+        candidate_sets.append(result.candidate_refs)
+        current_source = replace(current_source, scan_head=accepted.scan_head)
+
+    assert outcomes == ["published", "unchanged", "replaced"]
+    assert len(set(job_ids)) == 3
+    assert candidate_sets[1] == candidate_sets[0]
+    assert candidate_sets[2] != candidate_sets[1]
+
+    active_candidate = candidate_sets[2][0]
+    ensure_test_runtime_release(
+        organization_id,
+        active_revision_refs=(active_candidate.revision_ref,),
+    )
+    try:
+        response = TestClient(
+            create_app(
+                authenticator=_RuntimeAuthenticator(
+                    organization_id,
+                    user_id,
+                    membership_id,
+                ),
+                organization_authority=_OrganizationAuthority(),
+                membership_authority=PostgreSQLMembershipAuthority(
+                    guarded_runtime_engine
+                ),
+                scope_authority=_ExactScopeAuthority(
+                    active_candidate.source_ref,
+                    active_candidate.resource_ref,
+                ),
+                runtime=Runtime(
+                    required_kernel_dependencies(),
+                    candidate_index=PostgreSQLExactPhraseCandidateIndex(),
+                    clock=lambda: NOW,
+                    query_digest_keyring=query_digest_keyring,
+                ),
+                clock=lambda: NOW,
+                request_id_factory=lambda: "scheduled-file-v0-resolve",
+            )
+        ).post(
+            "/v0/resolve",
+            headers={
+                "Authorization": "Bearer runtime-secret",
+                "X-Context-Request-Id": "scheduled-file-v0-resolve",
+            },
+            json={
+                "kind": "acquire",
+                "need": {"query": "Changed paragraph."},
+            },
+        )
+        assert response.status_code == 200
+        package = response.json()["package"]
+        assert package["blocks"][0]["text"] == "Changed paragraph."
+        assert package["evidence"][0]["revisionRef"] == (active_candidate.revision_ref)
+    finally:
+        clear_test_runtime_release(organization_id)
+
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.connect() as connection:
+            effects = connection.execute(
+                text(
+                    """
+                    SELECT
+                      (SELECT count(*) FROM context_revision
+                       WHERE organization_id = :organization_id),
+                      (SELECT count(*) FROM file_acquisition_result
+                       WHERE organization_id = :organization_id),
+                      (SELECT count(*) FROM file_source_publish_watermark
+                       WHERE organization_id = :organization_id
+                         AND source_id = :source_id)
+                    """
+                ),
+                {
+                    "organization_id": organization_id,
+                    "source_id": current_source.source_version.source_ref.value,
+                },
+            ).one()
+    finally:
+        migration_engine.dispose()
+    assert tuple(effects) == (2, 1, 3)
+
+
+def test_file_change_scheduling_refuses_incomplete_accepted_lineage(
+    tmp_path: Path,
+    guarded_control_engine: Engine,
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "a.md").write_bytes(b"A")
+    (root / "b.md").write_bytes(b"B")
+    provider_proofs, control_proofs = _proofs()
+    organization_id = uuid4()
+    receiver = FileImportReceiver(uuid4())
+    control, authority, source = _seed_file_change_source(
+        guarded_control_engine=guarded_control_engine,
+        migration_configuration=migration_configuration,
+        organization_id=organization_id,
+        receiver=receiver,
+        root_ref=FileRootRef("schedule-partial-root"),
+        control_proofs=control_proofs,
+    )
+    provider = FileChangeProvider(
+        FileRootRegistry(
+            {source.source_version.root_ref: root},
+            limits=FileReadLimits(max_file_bytes=1_024),
+        ),
+        proofs=provider_proofs,
+    )
+    page = provider.read_changes(source, InitialScan(), ChangeLimit(2))
+    assert type(page) is ProviderOk
+    with _authorize(
+        authority,
+        organization_id,
+        ControlOperation.ACCEPT_FILE_CHANGE_PAGE,
+        "accept-partial-page",
+    ) as call:
+        accepted = control.accept_file_change_page(call, page.value)
+
+    partial_acquisition_id = uuid4()
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.begin() as connection:
+            membership_id = connection.execute(
+                text(
+                    "SELECT membership_id FROM membership "
+                    "WHERE organization_id = :organization_id"
+                ),
+                {"organization_id": organization_id},
+            ).scalar_one()
+            first_change = connection.execute(
+                text(
+                    """
+                    SELECT change_ordinal, relative_path, content_sha256,
+                           content_length
+                    FROM file_source_change
+                    WHERE organization_id = :organization_id
+                      AND source_id = :source_id
+                      AND page_ref = :page_ref
+                    ORDER BY change_ordinal
+                    LIMIT 1
+                    """
+                ),
+                {
+                    "organization_id": organization_id,
+                    "source_id": accepted.source_ref.value,
+                    "page_ref": accepted.page_ref,
+                },
+            ).one()
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO file_acquisition (
+                        organization_id, acquisition_id, source_id,
+                        source_version_id, relative_path,
+                        audience_principal_ref, audience_membership_id,
+                        audience_membership_version, idempotency_key,
+                        request_digest, created_at, change_page_ref,
+                        change_ordinal, expected_content_sha256,
+                        expected_content_length
+                    ) VALUES (
+                        :organization_id, :acquisition_id, :source_id,
+                        :source_version_id, :relative_path,
+                        'principal:file-reader', :membership_id, 1,
+                        'injected-partial-lineage', :request_digest,
+                        statement_timestamp(), :page_ref, :change_ordinal,
+                        :content_sha256, :content_length
+                    )
+                    """
+                ),
+                {
+                    "organization_id": organization_id,
+                    "acquisition_id": partial_acquisition_id,
+                    "source_id": accepted.source_ref.value,
+                    "source_version_id": accepted.source_version_ref,
+                    "relative_path": first_change.relative_path,
+                    "membership_id": membership_id,
+                    "request_digest": "d" * 64,
+                    "page_ref": accepted.page_ref,
+                    "change_ordinal": first_change.change_ordinal,
+                    "content_sha256": first_change.content_sha256,
+                    "content_length": first_change.content_length,
+                },
+            )
+    finally:
+        migration_engine.dispose()
+
+    command_to_schedule = ScheduleFileChangePage(
+        accepted.source_ref,
+        accepted.source_version_ref,
+        accepted.page_ref,
+        FileImportAudience("principal:file-reader", membership_id, 1),
+    )
+    with (
+        _authorize(
+            authority,
+            organization_id,
+            ControlOperation.SCHEDULE_FILE_CHANGE_PAGE,
+            "schedule-partial-page",
+        ) as call,
+        pytest.raises(SourceNotAvailable),
+    ):
+        control.schedule_file_change_page(call, command_to_schedule)
+
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.connect() as connection:
+            effects = connection.execute(
+                text(
+                    """
+                    SELECT
+                      (SELECT count(*) FROM file_acquisition
+                       WHERE organization_id = :organization_id
+                         AND change_page_ref = :page_ref),
+                      (SELECT count(*) FROM file_import_job
+                       WHERE organization_id = :organization_id
+                         AND source_id = :source_id)
+                    """
+                ),
+                {
+                    "organization_id": organization_id,
+                    "source_id": accepted.source_ref.value,
+                    "page_ref": accepted.page_ref,
+                },
+            ).one()
+    finally:
+        migration_engine.dispose()
+    assert tuple(effects) == (1, 1)
+
+
+def test_file_change_scheduling_refuses_missing_generated_job_identity(
+    tmp_path: Path,
+    guarded_control_engine: Engine,
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "a.md").write_bytes(b"A")
+    (root / "b.md").write_bytes(b"B")
+    provider_proofs, control_proofs = _proofs()
+    organization_id = uuid4()
+    receiver = FileImportReceiver(uuid4())
+    control, authority, source = _seed_file_change_source(
+        guarded_control_engine=guarded_control_engine,
+        migration_configuration=migration_configuration,
+        organization_id=organization_id,
+        receiver=receiver,
+        root_ref=FileRootRef("schedule-missing-job-root"),
+        control_proofs=control_proofs,
+    )
+    provider = FileChangeProvider(
+        FileRootRegistry(
+            {source.source_version.root_ref: root},
+            limits=FileReadLimits(max_file_bytes=1_024),
+        ),
+        proofs=provider_proofs,
+    )
+    page = provider.read_changes(source, InitialScan(), ChangeLimit(2))
+    assert type(page) is ProviderOk
+    with _authorize(
+        authority,
+        organization_id,
+        ControlOperation.ACCEPT_FILE_CHANGE_PAGE,
+        "accept-missing-job-page",
+    ) as call:
+        accepted = control.accept_file_change_page(call, page.value)
+
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.connect() as connection:
+            membership_id = connection.execute(
+                text(
+                    "SELECT membership_id FROM membership "
+                    "WHERE organization_id = :organization_id"
+                ),
+                {"organization_id": organization_id},
+            ).scalar_one()
+    finally:
+        migration_engine.dispose()
+    command_to_schedule = ScheduleFileChangePage(
+        accepted.source_ref,
+        accepted.source_version_ref,
+        accepted.page_ref,
+        FileImportAudience("principal:file-reader", membership_id, 1),
+    )
+    with _authorize(
+        authority,
+        organization_id,
+        ControlOperation.SCHEDULE_FILE_CHANGE_PAGE,
+        "schedule-before-missing-job",
+    ) as call:
+        scheduled = control.schedule_file_change_page(call, command_to_schedule)
+    missing_job_id = scheduled.changes[1].prepared_import.job_id
+
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.begin() as connection:
+            connection.execute(
+                text(
+                    "ALTER TABLE file_source_acquisition_checkpoint DISABLE "
+                    "TRIGGER file_source_acquisition_checkpoint_immutable"
+                )
+            )
+        try:
+            with migration_engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "DELETE FROM file_source_acquisition_checkpoint "
+                        "WHERE organization_id = :organization_id "
+                        "AND job_id = :job_id"
+                    ),
+                    {
+                        "organization_id": organization_id,
+                        "job_id": missing_job_id,
+                    },
+                )
+                connection.execute(
+                    text(
+                        "DELETE FROM file_import_job "
+                        "WHERE organization_id = :organization_id "
+                        "AND job_id = :job_id"
+                    ),
+                    {
+                        "organization_id": organization_id,
+                        "job_id": missing_job_id,
+                    },
+                )
+        finally:
+            with migration_engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "ALTER TABLE file_source_acquisition_checkpoint ENABLE "
+                        "TRIGGER file_source_acquisition_checkpoint_immutable"
+                    )
+                )
+    finally:
+        migration_engine.dispose()
+
+    with (
+        _authorize(
+            authority,
+            organization_id,
+            ControlOperation.SCHEDULE_FILE_CHANGE_PAGE,
+            "replay-missing-job",
+        ) as call,
+        pytest.raises(SourceNotAvailable),
+    ):
+        control.schedule_file_change_page(call, command_to_schedule)
+
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.connect() as connection:
+            effects = connection.execute(
+                text(
+                    """
+                    SELECT
+                      (SELECT count(*) FROM file_acquisition
+                       WHERE organization_id = :organization_id
+                         AND change_page_ref = :page_ref),
+                      (SELECT count(*) FROM file_import_job AS job
+                       JOIN file_acquisition AS acquisition
+                         ON acquisition.organization_id = job.organization_id
+                        AND acquisition.acquisition_id = job.acquisition_id
+                       WHERE acquisition.organization_id = :organization_id
+                         AND acquisition.change_page_ref = :page_ref)
+                    """
+                ),
+                {
+                    "organization_id": organization_id,
+                    "page_ref": accepted.page_ref,
+                },
+            ).one()
+    finally:
+        migration_engine.dispose()
+    assert tuple(effects) == (2, 1)
+
+
+@pytest.mark.security_evidence(
+    id="PG-FILE-CHANGE-SCHEDULE-DENY-083",
+    layer="postgres",
+)
+def test_file_change_scheduling_refuses_changed_or_stale_authority_atomically(
+    tmp_path: Path,
+    guarded_control_engine: Engine,
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "a.md").write_bytes(b"# A\n\nOriginal paragraph.\n")
+    (root / "b.md").write_bytes(b"# B\n\nSecond paragraph.\n")
+    provider_proofs, control_proofs = _proofs()
+    organization_id = uuid4()
+    receiver = FileImportReceiver(uuid4())
+    control, authority, source = _seed_file_change_source(
+        guarded_control_engine=guarded_control_engine,
+        migration_configuration=migration_configuration,
+        organization_id=organization_id,
+        receiver=receiver,
+        root_ref=FileRootRef("schedule-deny-root"),
+        control_proofs=control_proofs,
+    )
+    provider = FileChangeProvider(
+        FileRootRegistry(
+            {source.source_version.root_ref: root},
+            limits=FileReadLimits(max_file_bytes=1_024),
+        ),
+        proofs=provider_proofs,
+    )
+    page = provider.read_changes(source, InitialScan(), ChangeLimit(2))
+    assert type(page) is ProviderOk
+    with _authorize(
+        authority,
+        organization_id,
+        ControlOperation.ACCEPT_FILE_CHANGE_PAGE,
+        "accept-deny-page",
+    ) as call:
+        accepted = control.accept_file_change_page(call, page.value)
+
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.connect() as connection:
+            membership_id = connection.execute(
+                text(
+                    "SELECT membership_id FROM membership "
+                    "WHERE organization_id = :organization_id"
+                ),
+                {"organization_id": organization_id},
+            ).scalar_one()
+    finally:
+        migration_engine.dispose()
+    command_to_schedule = ScheduleFileChangePage(
+        accepted.source_ref,
+        accepted.source_version_ref,
+        accepted.page_ref,
+        FileImportAudience(
+            "principal:file-reader",
+            membership_id,
+            1,
+        ),
+    )
+    with _authorize(
+        authority,
+        organization_id,
+        ControlOperation.SCHEDULE_FILE_CHANGE_PAGE,
+        "schedule-deny-baseline",
+    ) as call:
+        scheduled = control.schedule_file_change_page(call, command_to_schedule)
+
+    changed_audience = replace(
+        command_to_schedule,
+        audience=FileImportAudience("principal:changed", membership_id, 1),
+    )
+    with (
+        _authorize(
+            authority,
+            organization_id,
+            ControlOperation.SCHEDULE_FILE_CHANGE_PAGE,
+            "schedule-changed-audience",
+        ) as call,
+        pytest.raises(SourceNotAvailable),
+    ):
+        control.schedule_file_change_page(call, changed_audience)
+
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.begin() as connection:
+            connection.execute(
+                text(
+                    "UPDATE service_principal SET enabled = false "
+                    "WHERE organization_id = :organization_id "
+                    "AND service_principal_id = :receiver_id"
+                ),
+                {
+                    "organization_id": organization_id,
+                    "receiver_id": receiver.service_principal_id,
+                },
+            )
+    finally:
+        migration_engine.dispose()
+    with (
+        _authorize(
+            authority,
+            organization_id,
+            ControlOperation.SCHEDULE_FILE_CHANGE_PAGE,
+            "schedule-disabled-receiver",
+        ) as call,
+        pytest.raises(SourceNotAvailable),
+    ):
+        control.schedule_file_change_page(call, command_to_schedule)
+
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.begin() as connection:
+            connection.execute(
+                text(
+                    "UPDATE service_principal SET enabled = true "
+                    "WHERE organization_id = :organization_id "
+                    "AND service_principal_id = :receiver_id"
+                ),
+                {
+                    "organization_id": organization_id,
+                    "receiver_id": receiver.service_principal_id,
+                },
+            )
+            connection.execute(
+                text(
+                    "UPDATE membership SET status = 'revoked' "
+                    "WHERE organization_id = :organization_id "
+                    "AND membership_id = :membership_id"
+                ),
+                {
+                    "organization_id": organization_id,
+                    "membership_id": membership_id,
+                },
+            )
+    finally:
+        migration_engine.dispose()
+    with (
+        _authorize(
+            authority,
+            organization_id,
+            ControlOperation.SCHEDULE_FILE_CHANGE_PAGE,
+            "schedule-stale-membership",
+        ) as call,
+        pytest.raises(SourceNotAvailable),
+    ):
+        control.schedule_file_change_page(call, command_to_schedule)
+
+    with _authorize(
+        authority,
+        organization_id,
+        ControlOperation.OFFBOARD_FILE_SOURCE,
+        "offboard-before-schedule-replay",
+    ) as call:
+        control.offboard_file_source(
+            call,
+            OffboardFileSource(accepted.source_ref),
+        )
+    with (
+        _authorize(
+            authority,
+            organization_id,
+            ControlOperation.SCHEDULE_FILE_CHANGE_PAGE,
+            "schedule-disabled-source",
+        ) as call,
+        pytest.raises(SourceNotAvailable),
+    ):
+        control.schedule_file_change_page(call, command_to_schedule)
+
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.connect() as connection:
+            counts = connection.execute(
+                text(
+                    """
+                    SELECT
+                      (SELECT count(*) FROM file_acquisition
+                       WHERE organization_id = :organization_id
+                         AND source_id = :source_id
+                         AND change_page_ref = :page_ref),
+                      (SELECT count(*) FROM file_import_job
+                       WHERE organization_id = :organization_id
+                         AND job_id = ANY(CAST(:job_ids AS uuid[])))
+                    """
+                ),
+                {
+                    "organization_id": organization_id,
+                    "source_id": accepted.source_ref.value,
+                    "page_ref": accepted.page_ref,
+                    "job_ids": [
+                        change.prepared_import.job_id for change in scheduled.changes
+                    ],
+                },
+            ).one()
+    finally:
+        migration_engine.dispose()
+    assert tuple(counts) == (2, 2)
 
 
 @pytest.mark.security_evidence(id="PG-FILE-CHANGE-PAGE-081", layer="postgres")
@@ -599,9 +2021,7 @@ def test_control_atomically_accepts_ordered_file_pages_and_rejects_regression(
         accepted_changed_second_before_aba = control.accept_file_change_page(
             call, changed_second_before_aba.value
         )
-    source = replace(
-        source, scan_head=accepted_changed_second_before_aba.scan_head
-    )
+    source = replace(source, scan_head=accepted_changed_second_before_aba.scan_head)
     assert accepted_changed_second_before_aba.complete is True
 
     (root / "a.md").write_bytes(b"A")
@@ -625,9 +2045,7 @@ def test_control_atomically_accepts_ordered_file_pages_and_rejects_regression(
             call, changed_first_after_aba.value
         )
     assert accepted_changed_first_after_aba == accepted_changed_first
-    source = replace(
-        source, scan_head=accepted_changed_first_after_aba.scan_head
-    )
+    source = replace(source, scan_head=accepted_changed_first_after_aba.scan_head)
     assert accepted_changed_first_after_aba.next_cursor is not None
     changed_second = provider.read_changes(
         source,
@@ -923,9 +2341,7 @@ def test_file_page_acceptance_fails_closed_after_disable_and_cross_organization(
         ControlOperation.ACCEPT_FILE_CHANGE_PAGE,
         "accept-current-version-page",
     ) as call:
-        accepted_current = control_a.accept_file_change_page(
-            call, current_page.value
-        )
+        accepted_current = control_a.accept_file_change_page(call, current_page.value)
     assert accepted_current.source_version_ref == replacement_version_id
     with _authorize(
         authority_a,
@@ -1006,11 +2422,12 @@ def test_file_change_page_accepts_the_minimal_public_markdown_filename(
     (root / ".md").write_bytes(b"minimal")
     provider_proofs, control_proofs = _proofs()
     organization_id = uuid4()
+    receiver = FileImportReceiver(uuid4())
     control, authority, source = _seed_file_change_source(
         guarded_control_engine=guarded_control_engine,
         migration_configuration=migration_configuration,
         organization_id=organization_id,
-        receiver=FileImportReceiver(uuid4()),
+        receiver=receiver,
         root_ref=FileRootRef("minimal-markdown-root"),
         control_proofs=control_proofs,
     )
@@ -1035,9 +2452,45 @@ def test_file_change_page_accepts_the_minimal_public_markdown_filename(
 
     assert accepted.complete is True
 
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.connect() as connection:
+            membership_id = connection.execute(
+                text(
+                    "SELECT membership_id FROM membership "
+                    "WHERE organization_id = :organization_id"
+                ),
+                {"organization_id": organization_id},
+            ).scalar_one()
+    finally:
+        migration_engine.dispose()
+    with _authorize(
+        authority,
+        organization_id,
+        ControlOperation.SCHEDULE_FILE_CHANGE_PAGE,
+        "schedule-minimal-markdown-name",
+    ) as call:
+        scheduled = control.schedule_file_change_page(
+            call,
+            ScheduleFileChangePage(
+                source_ref=accepted.source_ref,
+                source_version_ref=accepted.source_version_ref,
+                page_ref=accepted.page_ref,
+                audience=FileImportAudience(
+                    principal_ref="principal:file-reader",
+                    membership_id=membership_id,
+                    membership_version=1,
+                ),
+            ),
+        )
+    assert [change.path.value for change in scheduled.changes] == [".md"]
+    assert scheduled.changes[0].prepared_import.service_principal_id == (
+        receiver.service_principal_id
+    )
+
     with pytest.raises(
         RuntimeError,
-        match="requires no retained accepted page stream",
+        match="requires no retained",
     ):
         command.downgrade(Config(ROOT / "alembic.ini"), "20260724_0027")
     migration_engine = create_database_engine(migration_configuration)

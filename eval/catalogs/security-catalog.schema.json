@@ -95,8 +95,8 @@
     },
     "activations": {
       "type": "array",
-      "minItems": 16,
-      "maxItems": 16,
+      "minItems": 17,
+      "maxItems": 17,
       "uniqueItems": true,
       "prefixItems": [
         {
@@ -809,6 +809,46 @@
               "Runtime authorization from provider checkpoint metadata"
             ]
           }
+        },
+        {
+          "const": {
+            "issueRef": "#83",
+            "invariantRef": "WORKER-LEASE-007",
+            "carrier": "explicit accepted File page scheduling through existing import jobs",
+            "status": "active_fail_closed",
+            "policyEpochScope": "not-runtime-authority",
+            "controlBoundary": "accepted File page -> trusted ContextControl explicit FileImportAudience -> exact file_acquisition/file_import_job lineage -> existing WorkerLease -> pre-compiler raw observation verification",
+            "testEvidence": [
+              {
+                "id": "PG-FILE-CHANGE-SCHEDULE-083",
+                "surface": "tests/integration/test_file_change_pages.py",
+                "oracle": "A real non-owner Control role schedules every upsert from one accepted page in one transaction, exactly replays the same ordered existing File import jobs, binds immutable path and raw-byte observation lineage, and makes post-acceptance byte drift fail before compilation with zero Revision, candidate, or watermark."
+              },
+              {
+                "id": "PG-FILE-CHANGE-SCHEDULE-DENY-083",
+                "surface": "tests/integration/test_file_change_pages.py",
+                "oracle": "Changed audience and disabled receiver scheduling attempts return generic not-available while retaining exactly the original whole page job set and creating zero additional acquisitions or jobs."
+              }
+            ],
+            "deferredEvidence": [
+              "autonomous File change polling and scheduling",
+              "executed deletion and tombstone observations",
+              "retry, reclaim, dead-letter, and full-resync operations"
+            ],
+            "futureCarriers": [
+              "autonomous File change scheduler",
+              "deletion execution",
+              "retry and dead-letter handling",
+              "full resync"
+            ],
+            "notActive": [
+              "implicit or inherited FileImportAudience",
+              "provider deletion execution",
+              "filesystem watcher",
+              "automatic retry or reclaim",
+              "Runtime authorization from provider checkpoint metadata"
+            ]
+          }
         }
       ],
       "items": false
@@ -1098,7 +1138,9 @@
             "PG-PRIVATE-BOT-FLOW-071",
             "PG-FILE-CHANGE-ACTIVATE-081",
             "PG-FILE-CHANGE-PAGE-081",
-            "PG-FILE-CHANGE-DENY-081"
+            "PG-FILE-CHANGE-DENY-081",
+            "PG-FILE-CHANGE-SCHEDULE-083",
+            "PG-FILE-CHANGE-SCHEDULE-DENY-083"
           ]
         },
         "surface": {
@@ -1142,7 +1184,8 @@
             "#69",
             "#70",
             "#71",
-            "#81"
+            "#81",
+            "#83"
           ]
         },
         "invariantRef": {
@@ -1175,7 +1218,8 @@
             "private Package-bound deterministic TypeScript ModelGateway",
             "ContextRuntime.resolve(Continue | profile-disabled OpenCitation | server-owned unavailable Acquire plan)",
             "independent trusted TypeScript private File-backed Bot application",
-            "deterministic shallow File readChanges and durable page acknowledgement"
+            "deterministic shallow File readChanges and durable page acknowledgement",
+            "explicit accepted File page scheduling through existing import jobs"
           ]
         },
         "status": {
@@ -1205,7 +1249,8 @@
             "digest-only locator -> current UserActor transaction -> CandidateRef -> AuthorizationKernel -> AuthorizedProjection -> replacement ContextPackage",
             "generated SDK ContextPackage plus opaque model EgressGrant -> nominal AuthorizedModelInput -> exact non-owner PostgreSQL redemption -> deterministic ModelGateway twin -> bounded answer and digest-only audit",
             "verified private Feishu twin event -> opaque DeliveryEvidenceRef -> installed generated SDK over HTTP -> sealed Runtime File Package -> controlled ModelGateway -> co-resident ActionPlane prepare/perform -> digest-only DeliveryReceipt audit",
-            "FileChangeProvider PendingChangeCursor -> provider-authenticated ChangePage -> ContextControl whole-page PostgreSQL acceptance -> accepted ChangeCursor"
+            "FileChangeProvider PendingChangeCursor -> provider-authenticated ChangePage -> ContextControl whole-page PostgreSQL acceptance -> accepted ChangeCursor",
+            "accepted File page -> trusted ContextControl explicit FileImportAudience -> exact file_acquisition/file_import_job lineage -> existing WorkerLease -> pre-compiler raw observation verification"
           ]
         },
         "testEvidence": {

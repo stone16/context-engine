@@ -22,6 +22,8 @@ from engine.control import (
     FileSourcePublishWatermark,
     OffboardFileSource,
     RegisterFileSource,
+    ScheduledFileChangePage,
+    ScheduleFileChangePage,
     SourceManifest,
     SourceNotAvailable,
     SourceRef,
@@ -81,6 +83,11 @@ class _Store:
         self, call: TrustedControlCall, command: PrepareFileImport
     ) -> PreparedFileImport:
         raise AssertionError("unexpected import")
+
+    def schedule_file_change_page(
+        self, call: TrustedControlCall, command: ScheduleFileChangePage
+    ) -> ScheduledFileChangePage:
+        raise AssertionError("unexpected File change scheduling")
 
     def tombstone_file_resource(
         self, call: TrustedControlCall, command: TombstoneFileResource
@@ -368,11 +375,14 @@ def test_progress_read_is_operation_bound_and_mismatch_fails_closed() -> None:
         _Authenticator(), call_ttl=timedelta(minutes=5), clock=lambda: NOW
     )
     control = ContextControl(store=_Store(), authority=authority, clock=lambda: NOW)
-    with authority.authorize(
-        opaque_credential="progress-reader",
-        operation=ControlOperation.READ_SOURCE_PROGRESS,
-        request_id="read-source-progress-mismatch",
-    ) as call, pytest.raises(SourceNotAvailable):
+    with (
+        authority.authorize(
+            opaque_credential="progress-reader",
+            operation=ControlOperation.READ_SOURCE_PROGRESS,
+            request_id="read-source-progress-mismatch",
+        ) as call,
+        pytest.raises(SourceNotAvailable),
+    ):
         control.read_file_source_progress(
             call,
             SourceRef(UUID("0cd79e42-04b3-4146-929e-72c316171c99")),

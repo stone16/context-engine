@@ -1732,6 +1732,59 @@ CANONICAL_FILE_CHANGE_FEED_ACTIVATION: dict[str, object] = {
     ],
 }
 
+CANONICAL_FILE_CHANGE_SCHEDULING_ACTIVATION: dict[str, object] = {
+    "issueRef": "#83",
+    "invariantRef": "WORKER-LEASE-007",
+    "carrier": "explicit accepted File page scheduling through existing import jobs",
+    "status": "active_fail_closed",
+    "policyEpochScope": "not-runtime-authority",
+    "controlBoundary": (
+        "accepted File page -> trusted ContextControl explicit FileImportAudience "
+        "-> exact file_acquisition/file_import_job lineage -> existing WorkerLease "
+        "-> pre-compiler raw observation verification"
+    ),
+    "testEvidence": [
+        {
+            "id": "PG-FILE-CHANGE-SCHEDULE-083",
+            "surface": "tests/integration/test_file_change_pages.py",
+            "oracle": (
+                "A real non-owner Control role schedules every upsert from one "
+                "accepted page in one transaction, exactly replays the same ordered "
+                "existing File import jobs, binds immutable path and raw-byte "
+                "observation lineage, and makes post-acceptance byte drift fail "
+                "before compilation with zero Revision, candidate, or watermark."
+            ),
+        },
+        {
+            "id": "PG-FILE-CHANGE-SCHEDULE-DENY-083",
+            "surface": "tests/integration/test_file_change_pages.py",
+            "oracle": (
+                "Changed audience and disabled receiver scheduling attempts return "
+                "generic not-available while retaining exactly the original whole "
+                "page job set and creating zero additional acquisitions or jobs."
+            ),
+        },
+    ],
+    "deferredEvidence": [
+        "autonomous File change polling and scheduling",
+        "executed deletion and tombstone observations",
+        "retry, reclaim, dead-letter, and full-resync operations",
+    ],
+    "futureCarriers": [
+        "autonomous File change scheduler",
+        "deletion execution",
+        "retry and dead-letter handling",
+        "full resync",
+    ],
+    "notActive": [
+        "implicit or inherited FileImportAudience",
+        "provider deletion execution",
+        "filesystem watcher",
+        "automatic retry or reclaim",
+        "Runtime authorization from provider checkpoint metadata",
+    ],
+}
+
 CANONICAL_ACTIVATIONS: list[dict[str, object]] = [
     CANONICAL_REVOCATION_ACTIVATION,
     CANONICAL_UNAVAILABLE_CAPABILITY_ACTIVATION,
@@ -1749,6 +1802,7 @@ CANONICAL_ACTIVATIONS: list[dict[str, object]] = [
     CANONICAL_MODEL_EGRESS_ACTIVATION,
     CANONICAL_PRIVATE_BOT_DELIVERY_ACTIVATION,
     CANONICAL_FILE_CHANGE_FEED_ACTIVATION,
+    CANONICAL_FILE_CHANGE_SCHEDULING_ACTIVATION,
 ]
 CANONICAL_ACTIVATION_ISSUE_LIST = ", ".join(
     f"Issue {activation['issueRef']}" for activation in CANONICAL_ACTIVATIONS

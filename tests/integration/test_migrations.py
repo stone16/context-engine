@@ -168,8 +168,6 @@ def _delete_issue_27_upgrade_fixture(
         try:
             with engine.begin() as connection:
                 for table in (
-                    "file_source_change",
-                    "file_source_change_page",
                     "file_source_publish_watermark",
                     "file_source_acquisition_checkpoint",
                     "file_resource_cleanup_intent",
@@ -190,6 +188,8 @@ def _delete_issue_27_upgrade_fixture(
                     "file_import_job",
                     "file_source_cleanup_intent",
                     "file_acquisition",
+                    "file_source_change",
+                    "file_source_change_page",
                     "context_source",
                     "source_version",
                     "service_principal",
@@ -788,18 +788,19 @@ def test_file_change_feed_revision_downgrades_and_reapplies_cleanly(
         with engine.connect() as connection:
             v3_organizations = tuple(
                 connection.execute(
-                text(
-                    """
-                    SELECT DISTINCT version.organization_id
-                    FROM source_version AS version
-                    WHERE version.capability_manifest->>'declarationVersion' =
-                          'file-capabilities-v3'
-                    """
-                )
+                    text(
+                        """
+                        SELECT DISTINCT version.organization_id
+                        FROM source_version AS version
+                        WHERE version.capability_manifest->>'declarationVersion' =
+                              'file-capabilities-v3'
+                        """
+                    )
                 ).scalars()
             )
     finally:
         engine.dispose()
+
     for organization_id in v3_organizations:
         _delete_issue_27_upgrade_fixture(
             migration_configuration,
@@ -904,6 +905,94 @@ def test_file_change_feed_revision_downgrades_and_reapplies_cleanly(
             ).scalar_one()
         assert checkpoint_page_key == ("organization_id", "change_page_ref")
         assert public_progress_execute is False
+    finally:
+        engine.dispose()
+
+
+def test_file_change_scheduling_revision_downgrades_and_reapplies_cleanly(
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    """Issue #83 removes only empty accepted-change acquisition bindings."""
+
+    alembic_configuration = Config(ROOT / "alembic.ini")
+    try:
+        command.downgrade(alembic_configuration, "20260725_0028")
+        assert _revision_rows(migration_configuration) == ["20260725_0028"]
+        engine = create_database_engine(migration_configuration)
+        try:
+            with engine.connect() as connection:
+                acquisition_columns = set(
+                    connection.execute(
+                        text(
+                            """
+                            SELECT column_name
+                            FROM information_schema.columns
+                            WHERE table_schema = 'public'
+                              AND table_name = 'file_acquisition'
+                            """
+                        )
+                    ).scalars()
+                )
+                scheduling_functions = connection.execute(
+                    text(
+                        """
+                        SELECT count(*)
+                        FROM pg_catalog.pg_proc AS procedure
+                        JOIN pg_catalog.pg_namespace AS namespace
+                          ON namespace.oid = procedure.pronamespace
+                        WHERE namespace.nspname = 'public'
+                          AND procedure.proname =
+                              'context_control_schedule_file_change_page'
+                        """
+                    )
+                ).scalar_one()
+            assert {
+                "change_page_ref",
+                "change_ordinal",
+                "expected_content_sha256",
+                "expected_content_length",
+            }.isdisjoint(acquisition_columns)
+            assert scheduling_functions == 0
+        finally:
+            engine.dispose()
+    finally:
+        command.upgrade(alembic_configuration, "head")
+
+    assert _revision_rows(migration_configuration) == [HEAD_REVISION]
+    engine = create_database_engine(migration_configuration)
+    try:
+        with engine.connect() as connection:
+            acquisition_columns = set(
+                connection.execute(
+                    text(
+                        """
+                        SELECT column_name
+                        FROM information_schema.columns
+                        WHERE table_schema = 'public'
+                          AND table_name = 'file_acquisition'
+                        """
+                    )
+                ).scalars()
+            )
+            public_execute = connection.execute(
+                text(
+                    """
+                    SELECT pg_catalog.has_function_privilege(
+                        'public',
+                        'public.context_control_schedule_file_change_page('
+                        'uuid, uuid, uuid, text, text, uuid, bigint, uuid)',
+                        'EXECUTE'
+                    )
+                    """
+                )
+            ).scalar_one()
+        assert {
+            "change_page_ref",
+            "change_ordinal",
+            "expected_content_sha256",
+            "expected_content_length",
+        } <= acquisition_columns
+        assert public_execute is False
     finally:
         engine.dispose()
 
@@ -1026,13 +1115,16 @@ def test_citation_open_revision_refuses_downgrade_with_retained_lineage(
             command.downgrade(Config(ROOT / "alembic.ini"), "20260724_0023")
         assert _revision_rows(migration_configuration) == [HEAD_REVISION]
         with engine.connect() as connection:
-            assert connection.execute(
-                text(
-                    "SELECT count(*) FROM citation_open_locator "
-                    "WHERE organization_id = :org"
-                ),
-                {"org": scenario.organization_id},
-            ).scalar_one() == 1
+            assert (
+                connection.execute(
+                    text(
+                        "SELECT count(*) FROM citation_open_locator "
+                        "WHERE organization_id = :org"
+                    ),
+                    {"org": scenario.organization_id},
+                ).scalar_one()
+                == 1
+            )
     finally:
         with engine.begin() as connection:
             connection.execute(
@@ -1061,9 +1153,7 @@ def test_model_egress_revision_downgrades_only_while_audit_is_empty(
     try:
         command.downgrade(alembic_configuration, "20260724_0024")
         assert _revision_rows(migration_configuration) == ["20260724_0024"]
-        assert "model_egress_audit" not in _application_tables(
-            migration_configuration
-        )
+        assert "model_egress_audit" not in _application_tables(migration_configuration)
     finally:
         command.upgrade(alembic_configuration, "head")
 

@@ -28,6 +28,8 @@ from engine.control import (
     FileSourceProgress,
     OffboardFileSource,
     RegisterFileSource,
+    ScheduledFileChangePage,
+    ScheduleFileChangePage,
     SourceControlUnavailable,
     SourceManifest,
     SourceNotAvailable,
@@ -83,9 +85,7 @@ class _Store(ControlStorePort):
         assert call.organization_id == ORGANIZATION_ID
         assert call.operation is ControlOperation.REGISTER_SOURCE
         self.manifest = SourceManifest.issue_21_file(
-            source_ref=SourceRef(
-                UUID("5d37f20a-6a2b-4534-8909-e0118bbc4b47")
-            ),
+            source_ref=SourceRef(UUID("5d37f20a-6a2b-4534-8909-e0118bbc4b47")),
             version_ref=UUID("54ae2c20-02a1-44e7-98bf-4034841fb7ac"),
             display_name=command.display_name,
             root_ref=command.root_ref,
@@ -133,6 +133,11 @@ class _Store(ControlStorePort):
             source_ref=command.source_ref,
             service_principal_id=UUID("0f7bc78d-a76a-477c-b097-ce557b7844b9"),
         )
+
+    def schedule_file_change_page(
+        self, call: TrustedControlCall, command: ScheduleFileChangePage
+    ) -> ScheduledFileChangePage:
+        raise AssertionError("unexpected File change scheduling")
 
     def read_file_source_progress(
         self, call: TrustedControlCall, source_ref: SourceRef
@@ -519,11 +524,14 @@ def test_source_ref_and_forged_or_wrong_operation_calls_never_authorize_control(
             cast(TrustedControlCall, SourceRef(ORGANIZATION_ID)), command
         )
 
-    with authority.authorize(
-        opaque_credential="control-credential-a",
-        operation=ControlOperation.READ_SOURCE,
-        request_id="wrong-operation-request",
-    ) as read_call, pytest.raises(SourceNotAvailable):
+    with (
+        authority.authorize(
+            opaque_credential="control-credential-a",
+            operation=ControlOperation.READ_SOURCE,
+            request_id="wrong-operation-request",
+        ) as read_call,
+        pytest.raises(SourceNotAvailable),
+    ):
         control.register_source(read_call, command)
 
     with authority.authorize(
@@ -555,9 +563,7 @@ def test_trusted_control_call_rejects_claim_tampering(
     store = _Store()
     authority = _authority()
     control = ContextControl(store=store, authority=authority, clock=lambda: NOW)
-    command = RegisterFileSource(
-        "Handbook", FileRootRef("handbook"), "handbook-v1"
-    )
+    command = RegisterFileSource("Handbook", FileRootRef("handbook"), "handbook-v1")
 
     with authority.authorize(
         opaque_credential="control-credential-a",
