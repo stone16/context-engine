@@ -991,6 +991,21 @@ def test_file_delete_observation_revision_owns_atomic_read_volatility(
         "context_control_read_file_source_progress": "s",
     }
 
+    engine = create_database_engine(migration_configuration)
+    try:
+        with engine.connect() as connection:
+            trigger_definition = connection.execute(
+                text(
+                    "SELECT pg_catalog.pg_get_functiondef("
+                    "'public.context_file_change_require_capability_binding()'"
+                    "::regprocedure)"
+                )
+            ).scalar_one()
+        assert "set_config" not in trigger_definition
+        assert "File page tenant context is not trusted" in trigger_definition
+    finally:
+        engine.dispose()
+
 
 def test_file_delete_observation_revision_refuses_accepted_baseline_downgrade(
     tmp_path: Path,

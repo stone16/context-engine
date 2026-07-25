@@ -452,15 +452,17 @@ class PostgreSQLControlStore:
                         ),
                     }
                 )
+                delete_observations = (
+                    value.capability_version
+                    == FILE_DELETE_OBSERVATION_CAPABILITY_MANIFEST.declaration_version
+                )
                 function_name = (
                     "context_control_accept_file_delete_observation_page"
-                    if value.capability_version == "file-capabilities-v4"
+                    if delete_observations
                     else "context_control_accept_file_change_page"
                 )
                 baseline_argument = (
-                    ", CAST(:baseline AS jsonb)"
-                    if value.capability_version == "file-capabilities-v4"
-                    else ""
+                    ", CAST(:baseline AS jsonb)" if delete_observations else ""
                 )
                 row = connection.execute(
                     text(
@@ -945,6 +947,7 @@ class PostgreSQLControlStore:
                     ),
                 )
             )
+        entries.sort(key=lambda entry: entry.path.value.encode("utf-8"))
         return FileChangeBaseline(reference=reference, entries=tuple(entries))
 
     def tombstone_file_resource(

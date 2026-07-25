@@ -427,6 +427,67 @@ def test_authorized_operator_explicitly_activates_delete_observations() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    "wrong_operation",
+    [
+        ControlOperation.ACTIVATE_FILE_CHANGE_FEED,
+        ControlOperation.IMPORT_FILE,
+        ControlOperation.OFFBOARD_FILE_SOURCE,
+        ControlOperation.REGISTER_SOURCE,
+        ControlOperation.READ_SOURCE,
+        ControlOperation.READ_SOURCE_PROGRESS,
+        ControlOperation.TOMBSTONE_FILE_RESOURCE,
+    ],
+)
+def test_delete_observation_activation_rejects_every_wrong_authority_before_store(
+    wrong_operation: ControlOperation,
+) -> None:
+    store = _Store()
+    store.manifest = SourceManifest.registered_file(
+        source_ref=SourceRef(UUID("5d37f20a-6a2b-4534-8909-e0118bbc4b47")),
+        version_ref=UUID("06b98147-0849-43df-b9ff-278499447cff"),
+        display_name="Handbook",
+        root_ref=FileRootRef("handbook"),
+        created_at=NOW,
+        capabilities=FILE_CHANGE_CAPABILITY_MANIFEST,
+    )
+    original = store.manifest
+    authority = _authority()
+    control = ContextControl(store=store, authority=authority, clock=lambda: NOW)
+
+    with (
+        authority.authorize(
+            opaque_credential="control-credential-a",
+            operation=wrong_operation,
+            request_id=f"reject-delete-observations-{wrong_operation.value}",
+        ) as call,
+        pytest.raises(SourceNotAvailable),
+    ):
+        control.activate_file_delete_observations(
+            call,
+            ActivateFileDeleteObservations(original.source_ref),
+        )
+
+    assert store.manifest is original
+
+
+def test_control_requires_delete_observation_activation_store_at_construction() -> (
+    None
+):
+    class _IncompleteStore:
+        def __getattr__(self, name: str) -> object:
+            if name == "activate_file_delete_observations":
+                raise AttributeError(name)
+            return lambda *args: None
+
+    with pytest.raises(TypeError, match="store is incomplete"):
+        ContextControl(
+            store=cast(ControlStorePort, _IncompleteStore()),
+            authority=_authority(),
+            clock=lambda: NOW,
+        )
+
+
 def test_authorized_operator_tombstones_one_exact_file_resource() -> None:
     store = _Store()
     authority = _authority()

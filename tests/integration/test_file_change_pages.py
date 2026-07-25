@@ -9,7 +9,6 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Event
 from time import monotonic, sleep
-from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
@@ -17,7 +16,7 @@ from alembic import command
 from alembic.config import Config
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi.testclient import TestClient
-from sqlalchemy import Engine, event, text
+from sqlalchemy import Connection, Engine, event, text
 from sqlalchemy.exc import DBAPIError
 
 from adapters.exact_phrase import PostgreSQLExactPhraseCandidateIndex
@@ -414,7 +413,7 @@ def _activate_delete_observations(
 
 
 def _delete_observation_effect_snapshot(
-    connection: Any,
+    connection: Connection,
     organization_id: UUID,
 ) -> tuple[object, ...]:
     """Read every durable surface that delete-page acceptance must not affect."""

@@ -37,6 +37,7 @@ from engine.control import (
 )
 from engine.control.file_deletions import TombstoneFileResource
 from engine.control.file_imports import PrepareFileImport
+from engine.persistence import PostgreSQLControlStore
 from engine.supply import PreparedFileImport
 
 ORGANIZATION_ID = UUID("f0381079-a64d-4984-977e-cd1654c049ed")
@@ -68,6 +69,9 @@ class _Store:
         self, call: TrustedControlCall, command: ActivateFileChangeFeed
     ) -> SourceManifest:
         raise AssertionError("unexpected File change activation")
+
+    def activate_file_delete_observations(self, *args: object) -> SourceManifest:
+        raise AssertionError("unexpected File delete observation activation")
 
     def offboard_file_source(
         self, call: TrustedControlCall, command: OffboardFileSource
@@ -421,6 +425,33 @@ def test_complete_change_baseline_is_distinct_from_an_incomplete_head() -> None:
                 entries=baseline.entries,
             ),
         )
+
+
+def test_database_baseline_projection_restores_global_canonical_path_order() -> None:
+    common: dict[str, object] = {
+        "baseline_source_version_id": REVISION_ID,
+        "baseline_scan_ref": "3" * 64,
+        "baseline_scan_epoch": UUID("a8dc4a16-c0e4-4c4c-8a95-208c4d2acd23"),
+        "baseline_page_ref": "4" * 64,
+        "baseline_checkpoint_ref": "facp_" + "5" * 64,
+        "baseline_sequence": 2,
+        "baseline_parent_scan_epoch": None,
+    }
+    rows = tuple(
+        {
+            **common,
+            "baseline_entry_kind": "upsert",
+            "baseline_entry_path": path,
+            "baseline_entry_content_sha256": digest * 64,
+            "baseline_entry_content_length": 1,
+        }
+        for path, digest in (("z.md", "7"), ("a.md", "6"))
+    )
+
+    baseline = PostgreSQLControlStore._complete_change_baseline(rows)
+
+    assert baseline is not None
+    assert [entry.path.value for entry in baseline.entries] == ["a.md", "z.md"]
 
 
 def test_page_checkpoint_cannot_carry_publication_lineage_or_watermark() -> None:

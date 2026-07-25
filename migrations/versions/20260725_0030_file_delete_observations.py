@@ -234,9 +234,12 @@ def _create_capability_trigger() -> None:
             selected_capabilities jsonb;
             has_v4_binding boolean;
         BEGIN
-            PERFORM pg_catalog.set_config(
-                'app.organization_id', NEW.organization_id::text, true
-            );
+            IF NULLIF(current_setting('app.organization_id', true), '')::uuid
+                 IS DISTINCT FROM NEW.organization_id
+            THEN
+                RAISE EXCEPTION USING ERRCODE = '55000',
+                    MESSAGE = 'File page tenant context is not trusted';
+            END IF;
             SELECT version.capability_manifest
             INTO selected_capabilities
             FROM public.source_version AS version

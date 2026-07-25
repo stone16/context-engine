@@ -177,6 +177,7 @@ class FileCapabilityManifest:
                         self.describe_capabilities,
                         self.read_changes,
                         self.checkpoint,
+                        self.delete_observations,
                     )
                 )
             )

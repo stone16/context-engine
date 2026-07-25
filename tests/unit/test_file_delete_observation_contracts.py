@@ -12,7 +12,9 @@ from adapters.file_source import FileChangeProvider, FileReadLimits, FileRootReg
 from engine.control import (
     FILE_CHANGE_CAPABILITY_MANIFEST,
     FILE_DELETE_OBSERVATION_CAPABILITY_MANIFEST,
+    CapabilityStatus,
     ChangeLimit,
+    FileCapabilityManifest,
     FileChangeBaseline,
     FileChangeBaselineEntry,
     FileChangeBaselineRef,
@@ -101,6 +103,35 @@ def test_v4_declares_delete_observation_without_deletion_execution() -> None:
     assert document["discover"] == "unavailable"
     assert document["authorizeAndProject"] == "unavailable"
     assert "deleteObservations" not in FILE_CHANGE_CAPABILITY_MANIFEST.document()
+
+
+@pytest.mark.parametrize(
+    ("declaration_version", "file_access", "ingestion_jobs"),
+    [
+        (
+            "file-capabilities-v1",
+            CapabilityStatus.UNAVAILABLE,
+            CapabilityStatus.UNAVAILABLE,
+        ),
+        (
+            "file-capabilities-v2",
+            CapabilityStatus.AVAILABLE,
+            CapabilityStatus.AVAILABLE,
+        ),
+    ],
+)
+def test_pre_v4_manifests_cannot_claim_delete_observations(
+    declaration_version: str,
+    file_access: CapabilityStatus,
+    ingestion_jobs: CapabilityStatus,
+) -> None:
+    with pytest.raises(ValueError, match="recognized snapshot"):
+        FileCapabilityManifest(
+            declaration_version=declaration_version,
+            file_source_access=file_access,
+            ingestion_jobs=ingestion_jobs,
+            delete_observations=CapabilityStatus.AVAILABLE,
+        )
 
 
 def test_complete_baseline_is_bounded_canonical_and_source_version_bound() -> None:

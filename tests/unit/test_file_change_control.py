@@ -94,6 +94,9 @@ class _Store:
     ) -> SourceManifest:
         raise AssertionError("unexpected Control operation")
 
+    def activate_file_delete_observations(self, *args: object) -> SourceManifest:
+        raise AssertionError("unexpected Control operation")
+
     def offboard_file_source(
         self, call: TrustedControlCall, command: OffboardFileSource
     ) -> FileSourceOffboarding:

@@ -169,6 +169,18 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
     assert tables["source_version"]["classification"] == "tenant_owned"
     assert tables["file_source_change_page"]["classification"] == "tenant_owned"
     assert tables["file_source_change"]["classification"] == "tenant_owned"
+    delete_binding = tables["file_source_delete_observation_page"]
+    assert delete_binding["classification"] == "tenant_owned"
+    assert delete_binding["nonOwnerEvidence"]["evidenceId"] == (
+        "PG-FILE-DELETE-PAGE-085"
+    )
+    assert delete_binding["rowLevelSecurity"]["enabled"] is True
+    assert delete_binding["rowLevelSecurity"]["forced"] is True
+    assert delete_binding["permittedOperations"]["context_engine_runtime"] == []
+    assert delete_binding["permittedOperations"]["context_engine_worker"] == []
+    assert delete_binding["permittedOperations"][
+        "context_engine_worker_lease_definer"
+    ] == ["SELECT", "INSERT", "DELETE"]
 
     assert tables["action_delivery_attempt"]["permittedOperations"][
         "context_engine_action_prepare_definer"

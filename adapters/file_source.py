@@ -492,6 +492,8 @@ class FileChangeProvider:
                 if entry.kind is FileChangeKind.DELETE
             }
             if current == active and deleted.isdisjoint(current):
+                # Reuse the prior scan's comparison input so a no-op replay
+                # retains the exact scan_ref instead of advancing its lineage.
                 return (
                     tuple(
                         _ObservedChange(

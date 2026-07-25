@@ -49,6 +49,7 @@ class _Store:
     def __getattr__(self, name: str) -> object:
         if name in {
             "activate_file_change_feed",
+            "activate_file_delete_observations",
             "offboard_file_source",
             "prepare_file_import",
             "register_file_source",

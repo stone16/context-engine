@@ -54,7 +54,9 @@ must exactly match a prior baseline `upsert(path, digest, length)`. It rejects
 missing, incomplete, stale, cross-Organization, forged, out-of-order, or
 over-limit lineage before a page/checkpoint commit. Accepted v4 pages bind their
 baseline in a tenant-owned FORCE-RLS table; page, change, binding, and
-checkpoint commit atomically. Exact replay is identical.
+checkpoint commit atomically. Its insert guard consumes the trusted transaction
+tenant GUC and requires an exact Organization match; row data can neither mint
+nor rewrite tenant context. Exact replay is identical.
 
 A page containing any delete is ineligible for
 `schedule_file_change_page`. Page acceptance creates no acquisition, import

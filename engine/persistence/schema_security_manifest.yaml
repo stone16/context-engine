@@ -7234,7 +7234,7 @@
         {"name": "pk_file_source_delete_observation_page", "kind": "primary_key", "columns": ["organization_id", "source_id", "source_version_id", "page_ref"]}
       ],
       "foreignKeys": [
-        {"name": "fk_file_source_delete_observation_page_exact", "columns": ["organization_id", "source_id", "source_version_id", "page_ref"], "references": {"table": "file_source_change_page", "columns": ["organization_id", "source_id", "source_version_id", "page_ref"]}},
+        {"name": "fk_file_source_delete_observation_page_exact", "columns": ["organization_id", "source_id", "source_version_id", "page_ref"], "references": {"table": "file_source_change_page", "columns": ["organization_id", "source_id", "source_version_id", "page_ref"]}, "deferrable": true, "initially": "DEFERRED"},
         {"name": "fk_file_source_delete_observation_baseline_exact", "columns": ["organization_id", "source_id", "source_version_id", "baseline_page_ref"], "references": {"table": "file_source_change_page", "columns": ["organization_id", "source_id", "source_version_id", "page_ref"]}}
       ],
       "checkConstraints": [

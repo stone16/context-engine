@@ -60,6 +60,12 @@ class ControlStorePort(Protocol):
         command: ActivateFileChangeFeed,
     ) -> SourceManifest: ...
 
+    def activate_file_delete_observations(
+        self,
+        call: TrustedControlCall,
+        command: ActivateFileDeleteObservations,
+    ) -> SourceManifest: ...
+
     def read_source(
         self,
         call: TrustedControlCall,
@@ -107,16 +113,6 @@ class FileChangePageStorePort(Protocol):
     ) -> AcceptedChangePage: ...
 
 
-class FileDeleteObservationStorePort(Protocol):
-    """Optional v4 capability activation persistence surface."""
-
-    def activate_file_delete_observations(
-        self,
-        call: TrustedControlCall,
-        command: ActivateFileDeleteObservations,
-    ) -> SourceManifest: ...
-
-
 class ContextControl:
     """Own trusted File enrollment, read-back, and import preparation."""
 
@@ -132,6 +128,7 @@ class ContextControl:
     ) -> None:
         required_methods = [
             "activate_file_change_feed",
+            "activate_file_delete_observations",
             "offboard_file_source",
             "prepare_file_import",
             "register_file_source",
@@ -269,10 +266,7 @@ class ContextControl:
                 ),
                 checked_at=self._clock(),
             )
-            manifest = cast(
-                FileDeleteObservationStorePort,
-                self._store,
-            ).activate_file_delete_observations(
+            manifest = self._store.activate_file_delete_observations(
                 call,
                 command,
             )
