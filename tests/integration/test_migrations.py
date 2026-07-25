@@ -947,6 +947,51 @@ def test_file_change_feed_revision_downgrades_and_reapplies_cleanly(
         engine.dispose()
 
 
+def test_file_delete_observation_revision_owns_atomic_read_volatility(
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    """Issue #85 installs and reverses the one-snapshot read contract."""
+
+    alembic_configuration = Config(ROOT / "alembic.ini")
+
+    def read_volatility() -> dict[str, str]:
+        engine = create_database_engine(migration_configuration)
+        try:
+            with engine.connect() as connection:
+                rows = connection.execute(
+                    text(
+                        """
+                        SELECT procedure.proname, procedure.provolatile::text
+                        FROM pg_catalog.pg_proc AS procedure
+                        JOIN pg_catalog.pg_namespace AS namespace
+                          ON namespace.oid = procedure.pronamespace
+                        WHERE namespace.nspname = 'public'
+                          AND procedure.proname IN (
+                            'context_control_read_file_source_progress',
+                            'context_control_read_complete_file_change_baseline'
+                          )
+                        """
+                    )
+                ).all()
+                return {str(row[0]): str(row[1]) for row in rows}
+        finally:
+            engine.dispose()
+
+    try:
+        command.downgrade(alembic_configuration, "20260725_0029")
+        assert read_volatility() == {
+            "context_control_read_file_source_progress": "v",
+        }
+    finally:
+        command.upgrade(alembic_configuration, "head")
+
+    assert _revision_rows(migration_configuration) == [HEAD_REVISION]
+    assert read_volatility() == {
+        "context_control_read_complete_file_change_baseline": "s",
+        "context_control_read_file_source_progress": "s",
+    }
+
+
 def test_file_delete_observation_revision_refuses_accepted_baseline_downgrade(
     tmp_path: Path,
     migration_configuration: DatabaseConfiguration,

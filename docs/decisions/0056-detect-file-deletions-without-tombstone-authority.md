@@ -33,8 +33,12 @@ unavailable.
 the latest complete accepted v4 scan for the exact active Organization,
 ContextSource, and SourceVersion. It returns the terminal page/checkpoint
 identity, its one-level comparison parent, and canonical change envelopes. The
-current scan head remains separate, so an incomplete scan never replaces the
-latest complete baseline.
+progress row and complete baseline are read through two explicitly `STABLE`
+database functions in one PostgreSQL statement snapshot. The migration owns
+both volatility declarations and restores the predecessor progress function's
+`VOLATILE` declaration on downgrade. The current scan head remains separate,
+so an incomplete or concurrently committed scan never tears or replaces the
+baseline paired with that progress observation.
 
 `FileChangeProvider.read_changes` takes one stable shallow Markdown snapshot,
 builds the whole canonical diff before pagination, and binds the exact baseline

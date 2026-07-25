@@ -37,6 +37,8 @@ _ACCEPT_V4_SIGNATURE = (
 )
 _BASELINE = "context_control_read_complete_file_change_baseline"
 _BASELINE_SIGNATURE = "(uuid, uuid)"
+_PROGRESS = "context_control_read_file_source_progress"
+_PROGRESS_SIGNATURE = "(uuid, uuid)"
 _CAPABILITY_TRIGGER = "context_file_change_require_capability_binding"
 _MAX_BASELINE_ENTRIES = 10_000
 
@@ -214,6 +216,7 @@ def upgrade() -> None:
     _create_internal_accept_function()
     _create_v4_accept_function()
     _create_baseline_read_function()
+    _set_progress_read_volatility(stable=True)
 
 
 def _create_capability_trigger() -> None:
@@ -680,7 +683,7 @@ def _create_baseline_read_function() -> None:
             baseline_entry_content_sha256 text,
             baseline_entry_content_length bigint
         )
-        LANGUAGE plpgsql SECURITY DEFINER
+        LANGUAGE plpgsql STABLE SECURITY DEFINER
         SET search_path = pg_catalog, pg_temp
         SET row_security = on
         AS $function$
@@ -769,6 +772,15 @@ def _create_baseline_read_function() -> None:
     op.execute(f"GRANT EXECUTE ON FUNCTION public.{_BASELINE}{_BASELINE_SIGNATURE} TO {_CONTROL}")
     op.execute("RESET ROLE")
     op.execute(f"REVOKE CREATE ON SCHEMA public FROM {_DEFINER}")
+
+
+def _set_progress_read_volatility(*, stable: bool) -> None:
+    volatility = "STABLE" if stable else "VOLATILE"
+    op.execute(f"SET LOCAL ROLE {_DEFINER}")
+    op.execute(
+        f"ALTER FUNCTION public.{_PROGRESS}{_PROGRESS_SIGNATURE} {volatility}"
+    )
+    op.execute("RESET ROLE")
 
 
 def downgrade() -> None:
@@ -881,6 +893,7 @@ def downgrade() -> None:
     _extend_existing_file_paths(include_v4=False)
     op.execute(f"DROP TRIGGER {_CHANGE}_capability_binding ON {_CHANGE}")
     op.execute(f"DROP TRIGGER {_PAGE}_capability_binding ON {_PAGE}")
+    _set_progress_read_volatility(stable=False)
     op.execute(f"SET LOCAL ROLE {_DEFINER}")
     op.execute(f"DROP FUNCTION public.{_BASELINE}{_BASELINE_SIGNATURE}")
     op.execute(f"DROP FUNCTION public.{_ACCEPT_V4}{_ACCEPT_V4_SIGNATURE}")

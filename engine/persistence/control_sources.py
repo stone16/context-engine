@@ -778,35 +778,32 @@ class PostgreSQLControlStore:
             with self._engine.begin() as connection:
                 assert_control_role(connection)
                 _set_organization_context(connection, call.organization_id)
-                row = connection.execute(
-                    text(
-                        """
-                        SELECT *
-                        FROM public.context_control_read_file_source_progress(
-                            :organization_id, :source_id
-                        )
-                        """
-                    ),
-                    {
-                        "organization_id": call.organization_id,
-                        "source_id": source_ref.value,
-                    },
-                ).mappings().one_or_none()
-                if row is None:
-                    raise SourceNotAvailable
-                baseline_rows = tuple(
-                    cast(Mapping[str, object], baseline_row)
-                    for baseline_row in connection.execute(
+                snapshot_rows = tuple(
+                    connection.execute(
                         text(
-                            "SELECT * FROM public."
-                            "context_control_read_complete_file_change_baseline("
-                            ":organization_id, :source_id)"
+                            """
+                            SELECT progress.*, baseline.*
+                            FROM public.context_control_read_file_source_progress(
+                                :organization_id, :source_id
+                            ) AS progress
+                            LEFT JOIN LATERAL public.
+                                context_control_read_complete_file_change_baseline(
+                                    :organization_id, :source_id
+                                ) AS baseline ON true
+                            """
                         ),
                         {
                             "organization_id": call.organization_id,
                             "source_id": source_ref.value,
                         },
                     ).mappings()
+                )
+                if not snapshot_rows:
+                    raise SourceNotAvailable
+                row = snapshot_rows[0]
+                baseline_rows = tuple(
+                    cast(Mapping[str, object], snapshot_row)
+                    for snapshot_row in snapshot_rows
                 )
                 checkpoint = (
                     None

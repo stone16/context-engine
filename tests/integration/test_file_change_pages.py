@@ -7,6 +7,7 @@ from contextlib import AbstractContextManager
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from threading import Event
 from time import monotonic, sleep
 from typing import Any
 from uuid import UUID, uuid4
@@ -16,7 +17,7 @@ from alembic import command
 from alembic.config import Config
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi.testclient import TestClient
-from sqlalchemy import Engine, text
+from sqlalchemy import Engine, event, text
 from sqlalchemy.exc import DBAPIError
 
 from adapters.exact_phrase import PostgreSQLExactPhraseCandidateIndex
@@ -40,6 +41,7 @@ from engine.control import (
     FileRootRef,
     FileSourceChangeKind,
     FileSourceOffboarding,
+    FileSourceProgress,
     InitialScan,
     OffboardFileSource,
     PrepareFileImport,
@@ -709,6 +711,160 @@ def test_control_accepts_delete_observations_without_visibility_effect(
     finally:
         migration_engine.dispose()
     assert cross_after == cross_before
+
+
+def test_progress_and_complete_baseline_share_one_statement_snapshot(
+    tmp_path: Path,
+    guarded_control_engine: Engine,
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    """A concurrent complete-page commit cannot tear the progress projection."""
+
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "a.md").write_bytes(b"A")
+    (root / "b.md").write_bytes(b"B")
+    provider_proofs, control_proofs = _proofs()
+    organization_id = uuid4()
+    receiver = FileImportReceiver(uuid4())
+    control, authority, source = _seed_file_change_source(
+        guarded_control_engine=guarded_control_engine,
+        migration_configuration=migration_configuration,
+        organization_id=organization_id,
+        receiver=receiver,
+        root_ref=FileRootRef("delete-progress-snapshot-root"),
+        control_proofs=control_proofs,
+    )
+    source = _activate_delete_observations(
+        control,
+        authority,
+        organization_id,
+        source,
+    )
+    provider = FileChangeProvider(
+        FileRootRegistry(
+            {source.source_version.root_ref: root},
+            limits=FileReadLimits(max_file_bytes=1_024),
+        ),
+        proofs=provider_proofs,
+    )
+    first = provider.read_changes(source, InitialScan(), ChangeLimit(2))
+    assert type(first) is ProviderOk
+    with _authorize(
+        authority,
+        organization_id,
+        ControlOperation.ACCEPT_FILE_CHANGE_PAGE,
+        "accept-snapshot-baseline",
+    ) as call:
+        accepted_first = control.accept_file_change_page(call, first.value)
+    with _authorize(
+        authority,
+        organization_id,
+        ControlOperation.READ_SOURCE_PROGRESS,
+        "read-snapshot-baseline",
+    ) as call:
+        initial_progress = control.read_file_source_progress(
+            call,
+            accepted_first.source_ref,
+        )
+    assert initial_progress.complete_change_baseline is not None
+
+    (root / "b.md").unlink()
+    changed = provider.read_changes(
+        FileChangeSource(
+            organization_id,
+            source.source_version,
+            scan_head=initial_progress.change_scan_head,
+            complete_baseline=initial_progress.complete_change_baseline,
+        ),
+        InitialScan(),
+        ChangeLimit(2),
+    )
+    assert type(changed) is ProviderOk
+
+    reader_authority = ControlOperatorAuthority(
+        _Authenticator(organization_id),
+        call_ttl=timedelta(minutes=5),
+        clock=lambda: NOW,
+    )
+    reader_control = ContextControl(
+        store=PostgreSQLControlStore(
+            guarded_control_engine,
+            clock=lambda: NOW,
+            file_import_receiver=receiver,
+            file_change_checkpoint_signing_key=CHECKPOINT_KEY,
+        ),
+        authority=reader_authority,
+        clock=lambda: NOW,
+        file_change_proofs=control_proofs,
+    )
+    snapshot_read = Event()
+    release_reader = Event()
+
+    def hold_after_progress_statement(
+        _connection: object,
+        _cursor: object,
+        statement: str,
+        _parameters: object,
+        _context: object,
+        _executemany: bool,
+    ) -> None:
+        if (
+            "context_control_read_file_source_progress" in statement
+            and not snapshot_read.is_set()
+        ):
+            snapshot_read.set()
+            if not release_reader.wait(timeout=10):
+                raise RuntimeError("concurrent progress reader was not released")
+
+    def read_during_commit() -> FileSourceProgress:
+        with _authorize(
+            reader_authority,
+            organization_id,
+            ControlOperation.READ_SOURCE_PROGRESS,
+            "read-during-complete-page-commit",
+        ) as call:
+            return reader_control.read_file_source_progress(
+                call,
+                accepted_first.source_ref,
+            )
+
+    event.listen(
+        guarded_control_engine,
+        "after_cursor_execute",
+        hold_after_progress_statement,
+    )
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            pending_read = pool.submit(read_during_commit)
+            assert snapshot_read.wait(timeout=10)
+            with _authorize(
+                authority,
+                organization_id,
+                ControlOperation.ACCEPT_FILE_CHANGE_PAGE,
+                "accept-while-progress-snapshot-is-open",
+            ) as call:
+                accepted_changed = control.accept_file_change_page(
+                    call,
+                    changed.value,
+                )
+            release_reader.set()
+            observed = pending_read.result(timeout=10)
+    finally:
+        release_reader.set()
+        event.remove(
+            guarded_control_engine,
+            "after_cursor_execute",
+            hold_after_progress_statement,
+        )
+
+    assert observed.acquisition_checkpoint is not None
+    assert observed.complete_change_baseline is not None
+    assert observed.acquisition_checkpoint.sequence == accepted_first.sequence
+    assert observed.complete_change_baseline.reference.page_ref == (
+        accepted_first.page_ref
+    )
+    assert accepted_changed.sequence > observed.acquisition_checkpoint.sequence
 
 
 @pytest.mark.security_evidence(id="PG-FILE-DELETE-DETECT-085", layer="postgres")
