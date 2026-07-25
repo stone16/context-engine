@@ -167,6 +167,7 @@ class _ControlAuthenticator:
                     ControlOperation.ACTIVATE_FILE_DELETE_OBSERVATIONS,
                     ControlOperation.ACCEPT_FILE_CHANGE_PAGE,
                     ControlOperation.IMPORT_FILE,
+                    ControlOperation.EXECUTE_FILE_DELETE_OBSERVATION,
                     ControlOperation.OFFBOARD_FILE_SOURCE,
                     ControlOperation.TOMBSTONE_FILE_RESOURCE,
                 }

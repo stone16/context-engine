@@ -8,10 +8,37 @@ from datetime import datetime
 from typing import NoReturn
 from uuid import UUID
 
-from engine.control.contracts import SourceRef, _require_token, _require_utc
+from engine.control.contracts import (
+    SourceRef,
+    _require_sha256,
+    _require_token,
+    _require_utc,
+)
 
 MAX_FILE_DELETE_EVENT_SEQUENCE = 2**63 - 1
 _FILE_RESOURCE_REF = re.compile(r"resource:file:[0-9a-f]{64}\Z")
+
+
+@dataclass(frozen=True, slots=True)
+class ExecuteFileDeleteObservation:
+    """Trusted locator for one exact accepted File delete observation."""
+
+    source_ref: SourceRef
+    source_version_ref: UUID = field(repr=False)
+    page_ref: str = field(repr=False)
+    change_ordinal: int
+
+    def __post_init__(self) -> None:
+        if type(self.source_ref) is not SourceRef:
+            raise TypeError("File delete execution source_ref must be SourceRef")
+        if type(self.source_version_ref) is not UUID:
+            raise TypeError("File delete execution SourceVersion must be UUID")
+        _require_sha256("File delete execution page_ref", self.page_ref)
+        if type(self.change_ordinal) is not int or not 1 <= self.change_ordinal <= 100:
+            raise ValueError("File delete execution ordinal is invalid")
+
+    def __reduce__(self) -> NoReturn:
+        raise TypeError("File delete execution command is not serializable")
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,3 +111,33 @@ class FileResourceTombstone:
         if type(self.cleanup_intent_ref) is not UUID:
             raise TypeError("File tombstone cleanup_intent_ref must be UUID")
         _require_utc("File tombstone tombstoned_at", self.tombstoned_at)
+
+
+@dataclass(frozen=True, slots=True)
+class ExecutedFileDeleteObservation:
+    """Database-authored binding from one observation to one tombstone."""
+
+    organization_id: UUID = field(repr=False)
+    source_ref: SourceRef
+    source_version_ref: UUID = field(repr=False)
+    page_ref: str = field(repr=False)
+    change_ordinal: int
+    tombstone: FileResourceTombstone = field(repr=False)
+
+    def __post_init__(self) -> None:
+        if type(self.organization_id) is not UUID:
+            raise TypeError("executed File delete organization must be UUID")
+        if type(self.source_ref) is not SourceRef:
+            raise TypeError("executed File delete source_ref must be SourceRef")
+        if type(self.source_version_ref) is not UUID:
+            raise TypeError("executed File delete SourceVersion must be UUID")
+        _require_sha256("executed File delete page_ref", self.page_ref)
+        if type(self.change_ordinal) is not int or not 1 <= self.change_ordinal <= 100:
+            raise ValueError("executed File delete ordinal is invalid")
+        if type(self.tombstone) is not FileResourceTombstone:
+            raise TypeError("executed File delete requires a tombstone")
+        if (
+            self.tombstone.organization_id != self.organization_id
+            or self.tombstone.source_ref != self.source_ref
+        ):
+            raise ValueError("executed File delete tombstone ownership is invalid")

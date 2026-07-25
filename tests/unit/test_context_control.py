@@ -23,6 +23,8 @@ from engine.control import (
     ControlOperatorAuthenticationRejected,
     ControlOperatorAuthority,
     ControlStorePort,
+    ExecutedFileDeleteObservation,
+    ExecuteFileDeleteObservation,
     FileResourceTombstone,
     FileRootRef,
     FileSourceCleanupState,
@@ -207,6 +209,13 @@ class _Store(ControlStorePort):
             cleanup_intent_ref=UUID("d46d2310-b9fb-4058-8205-1198df75963b"),
             tombstoned_at=NOW,
         )
+
+    def execute_file_delete_observation(
+        self,
+        call: TrustedControlCall,
+        command: ExecuteFileDeleteObservation,
+    ) -> ExecutedFileDeleteObservation:
+        raise AssertionError("unexpected File delete execution")
 
 
 def _authority() -> ControlOperatorAuthority:

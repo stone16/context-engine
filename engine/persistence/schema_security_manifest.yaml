@@ -1,5 +1,5 @@
 {
-  "manifestVersion": "28.0.0",
+  "manifestVersion": "29.0.0",
   "controlOperations": [
     {
       "name": "register_file_source",
@@ -143,6 +143,41 @@
         "file_resource_cleanup_intent",
         "file_source_acquisition_checkpoint",
         "file_source_publish_watermark"
+      ]
+    },
+    {
+      "name": "execute_file_delete_observation",
+      "databaseFunction": "context_control_execute_file_delete_observation",
+      "role": "context_engine_control",
+      "definerRole": "context_engine_worker_lease_definer",
+      "effectFunction": "context_control_tombstone_file_resource",
+      "effectDefinerRole": "context_engine_access_policy_definer",
+      "directTableMutationAllowed": false,
+      "trustedOrganizationSource": "TrustedControlCall",
+      "databaseOwnedTime": true,
+      "callerLocator": [
+        "source_id",
+        "source_version_id",
+        "page_ref",
+        "change_ordinal"
+      ],
+      "serverDerived": [
+        "relative_path",
+        "resource_ref",
+        "event_ref",
+        "event_sequence",
+        "cleanup_intent_id",
+        "policy_epoch",
+        "tombstoned_at"
+      ],
+      "runtimeVisibilityBarrier": "Organization publication lock followed by per-Source progress lock; both held through exact revalidation, sole tombstone authority, and execution binding",
+      "atomicWrites": [
+        "context_resource",
+        "organization_policy_epoch",
+        "file_resource_cleanup_intent",
+        "file_source_acquisition_checkpoint",
+        "file_source_publish_watermark",
+        "file_delete_observation_execution"
       ]
     },
     {
@@ -7251,6 +7286,40 @@
       "partitions": [],
       "securityInvariantIds": ["TENANT-OWNERSHIP-001", "TENANT-FK-002", "RLS-FAIL-CLOSED-003", "WORKER-LEASE-007"],
       "negativeTestIds": ["DB-001", "DB-004", "DB-008", "PG-FILE-DELETE-PAGE-085", "PG-FILE-DELETE-NO-EFFECT-085"]
+    },
+    {
+      "name": "file_delete_observation_execution",
+      "classification": "tenant_owned",
+      "nonOwnerEvidence": {
+        "evidenceId": "PG-FILE-DELETE-EXECUTE-087",
+        "selector": {"table": "file_delete_observation_execution"}
+      },
+      "purpose": "Immutable binding from one exact current accepted File delete observation to the sole tombstone cleanup effect; never Runtime authorization input",
+      "organizationColumn": "organization_id",
+      "organizationInclusiveKeys": [
+        {"name": "pk_file_delete_observation_execution", "kind": "primary_key", "columns": ["organization_id", "source_id", "source_version_id", "page_ref", "change_ordinal"]}
+      ],
+      "foreignKeys": [
+        {"name": "fk_file_delete_observation_execution_exact_change", "columns": ["organization_id", "source_id", "source_version_id", "page_ref", "change_ordinal", "relative_path", "content_sha256", "content_length"], "references": {"table": "file_source_change", "columns": ["organization_id", "source_id", "source_version_id", "page_ref", "change_ordinal", "relative_path", "content_sha256", "content_length"]}},
+        {"name": "fk_file_delete_observation_execution_exact_cleanup", "columns": ["organization_id", "cleanup_intent_id", "source_id", "resource_ref", "revision_id"], "references": {"table": "file_resource_cleanup_intent", "columns": ["organization_id", "cleanup_intent_id", "source_id", "resource_ref", "revision_id"]}}
+      ],
+      "checkConstraints": [
+        {"name": "ck_file_delete_observation_execution_locator", "expression": "page_ref is lowercase SHA-256 and change_ordinal is 1..100"},
+        {"name": "ck_file_delete_observation_execution_observation", "expression": "one canonical shallow Markdown path with SHA-256 and nonnegative byte length"},
+        {"name": "ck_file_delete_observation_execution_effect", "expression": "valid File Resource/event references and positive signed-64 event sequence/Policy Epoch"}
+      ],
+      "rowLevelSecurity": {"enabled": true, "forced": true, "policies": [
+        {"name": "file_delete_observation_execution_migrator_administration", "command": "ALL", "roles": ["context_engine_migrator"], "using": "true", "withCheck": "true"},
+        {"name": "file_delete_observation_execution_definer_select", "command": "SELECT", "roles": ["context_engine_worker_lease_definer"], "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"},
+        {"name": "file_delete_observation_execution_definer_insert", "command": "INSERT", "roles": ["context_engine_worker_lease_definer"], "withCheck": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"}
+      ]},
+      "immutableRows": {"trigger": "file_delete_observation_execution_immutable", "function": "context_content_reject_mutation", "events": ["UPDATE", "DELETE"], "sqlstate": "55000"},
+      "functionOnlyMutation": {"databaseFunction": "context_control_execute_file_delete_observation", "role": "context_engine_control", "definerRole": "context_engine_worker_lease_definer", "directTableMutationAllowed": false},
+      "permittedOperations": {"context_engine_control": ["EXECUTE context_control_execute_file_delete_observation"], "context_engine_runtime": [], "context_engine_worker": [], "context_engine_worker_lease_definer": ["SELECT", "INSERT", "EXECUTE context_control_tombstone_file_resource"]},
+      "retention": {"state": "immutable", "sourceContent": "none", "runtimeAuthorityAllowed": false},
+      "partitions": [],
+      "securityInvariantIds": ["TENANT-OWNERSHIP-001", "TENANT-FK-002", "RLS-FAIL-CLOSED-003", "INDEX-NOT-AUTHORITY-005", "REVOCATION-006"],
+      "negativeTestIds": ["DB-001", "DB-004", "DB-008", "PG-FILE-DELETE-EXECUTE-087", "PG-FILE-DELETE-REPLAY-087", "HTTP-FILE-DELETE-INVISIBLE-087"]
     },
     {
       "name": "file_source_change_page",
