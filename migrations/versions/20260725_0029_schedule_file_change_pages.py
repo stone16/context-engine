@@ -170,6 +170,7 @@ def upgrade() -> None:
         DECLARE
             trusted_now timestamptz;
             selected_change_count smallint;
+            selected_scan_epoch uuid;
             stored_change_count integer;
             existing_acquisition_count integer;
             current_change record;
@@ -215,8 +216,8 @@ def upgrade() -> None:
               AND version.capability_manifest = '{_V3}'::jsonb
             FOR UPDATE OF source;
             IF NOT FOUND THEN RETURN; END IF;
-            SELECT page.change_count
-            INTO selected_change_count
+            SELECT page.change_count, page.scan_epoch
+            INTO selected_change_count, selected_scan_epoch
             FROM public.file_source_change_page AS page
             WHERE page.organization_id = requested_organization_id
               AND page.source_id = requested_source_id
@@ -289,6 +290,20 @@ def upgrade() -> None:
             THEN RETURN; END IF;
 
             IF existing_acquisition_count = 0 THEN
+                IF selected_scan_epoch IS DISTINCT FROM (
+                    SELECT current_page.scan_epoch
+                    FROM public.file_source_acquisition_checkpoint AS checkpoint
+                    JOIN public.file_source_change_page AS current_page
+                      ON current_page.organization_id = checkpoint.organization_id
+                     AND current_page.source_id = checkpoint.source_id
+                     AND current_page.source_version_id = checkpoint.source_version_id
+                     AND current_page.page_ref = checkpoint.change_page_ref
+                    WHERE checkpoint.organization_id = requested_organization_id
+                      AND checkpoint.source_id = requested_source_id
+                      AND checkpoint.change_kind = 'file_change_page'
+                    ORDER BY checkpoint.sequence DESC
+                    LIMIT 1
+                ) THEN RETURN; END IF;
                 BEGIN
                     FOR current_change IN
                         SELECT change.change_ordinal, change.relative_path,

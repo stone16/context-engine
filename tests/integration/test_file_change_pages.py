@@ -1081,6 +1081,156 @@ def test_file_change_scheduling_rolls_back_an_injected_mid_page_conflict(
     assert tuple(effects) == (0, 2, 3, 0)
 
 
+def test_file_change_scheduling_allows_current_epoch_pages_and_refuses_superseded_scan(
+    tmp_path: Path,
+    guarded_control_engine: Engine,
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "a.md").write_bytes(b"A")
+    (root / "b.md").write_bytes(b"B")
+    provider_proofs, control_proofs = _proofs()
+    organization_id = uuid4()
+    receiver = FileImportReceiver(uuid4())
+    control, authority, source = _seed_file_change_source(
+        guarded_control_engine=guarded_control_engine,
+        migration_configuration=migration_configuration,
+        organization_id=organization_id,
+        receiver=receiver,
+        root_ref=FileRootRef("schedule-current-scan-root"),
+        control_proofs=control_proofs,
+    )
+    provider = FileChangeProvider(
+        FileRootRegistry(
+            {source.source_version.root_ref: root},
+            limits=FileReadLimits(max_file_bytes=1_024),
+        ),
+        proofs=provider_proofs,
+    )
+    first = provider.read_changes(source, InitialScan(), ChangeLimit(1))
+    assert type(first) is ProviderOk
+    with _authorize(
+        authority,
+        organization_id,
+        ControlOperation.ACCEPT_FILE_CHANGE_PAGE,
+        "accept-current-epoch-first",
+    ) as call:
+        accepted_first = control.accept_file_change_page(call, first.value)
+    assert accepted_first.next_cursor is not None
+    source = replace(source, scan_head=accepted_first.scan_head)
+    second = provider.read_changes(
+        source,
+        accepted_first.next_cursor,
+        ChangeLimit(1),
+    )
+    assert type(second) is ProviderOk
+    with _authorize(
+        authority,
+        organization_id,
+        ControlOperation.ACCEPT_FILE_CHANGE_PAGE,
+        "accept-current-epoch-second",
+    ) as call:
+        accepted_second = control.accept_file_change_page(call, second.value)
+
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.connect() as connection:
+            membership_id = connection.execute(
+                text(
+                    "SELECT membership_id FROM membership "
+                    "WHERE organization_id = :organization_id"
+                ),
+                {"organization_id": organization_id},
+            ).scalar_one()
+    finally:
+        migration_engine.dispose()
+    audience = FileImportAudience("principal:file-reader", membership_id, 1)
+    with _authorize(
+        authority,
+        organization_id,
+        ControlOperation.SCHEDULE_FILE_CHANGE_PAGE,
+        "schedule-earlier-current-epoch-page",
+    ) as call:
+        scheduled_first = control.schedule_file_change_page(
+            call,
+            ScheduleFileChangePage(
+                accepted_first.source_ref,
+                accepted_first.source_version_ref,
+                accepted_first.page_ref,
+                audience,
+            ),
+        )
+    assert len(scheduled_first.changes) == 1
+
+    source = replace(source, scan_head=accepted_second.scan_head)
+    (root / "a.md").write_bytes(b"new A")
+    newer = provider.read_changes(source, InitialScan(), ChangeLimit(2))
+    assert type(newer) is ProviderOk
+    with _authorize(
+        authority,
+        organization_id,
+        ControlOperation.ACCEPT_FILE_CHANGE_PAGE,
+        "accept-superseding-epoch",
+    ) as call:
+        accepted_newer = control.accept_file_change_page(call, newer.value)
+    assert accepted_newer.scan_epoch != accepted_second.scan_epoch
+
+    with (
+        _authorize(
+            authority,
+            organization_id,
+            ControlOperation.SCHEDULE_FILE_CHANGE_PAGE,
+            "refuse-superseded-epoch-page",
+        ) as call,
+        pytest.raises(SourceNotAvailable),
+    ):
+        control.schedule_file_change_page(
+            call,
+            ScheduleFileChangePage(
+                accepted_second.source_ref,
+                accepted_second.source_version_ref,
+                accepted_second.page_ref,
+                audience,
+            ),
+        )
+
+    with _authorize(
+        authority,
+        organization_id,
+        ControlOperation.SCHEDULE_FILE_CHANGE_PAGE,
+        "replay-scheduled-superseded-epoch-page",
+    ) as call:
+        replayed_first = control.schedule_file_change_page(
+            call,
+            ScheduleFileChangePage(
+                accepted_first.source_ref,
+                accepted_first.source_version_ref,
+                accepted_first.page_ref,
+                audience,
+            ),
+        )
+    assert replayed_first == scheduled_first
+
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.connect() as connection:
+            superseded_effects = connection.execute(
+                text(
+                    "SELECT count(*) FROM file_acquisition "
+                    "WHERE organization_id = :organization_id "
+                    "AND change_page_ref = :page_ref"
+                ),
+                {
+                    "organization_id": organization_id,
+                    "page_ref": accepted_second.page_ref,
+                },
+            ).scalar_one()
+    finally:
+        migration_engine.dispose()
+    assert superseded_effects == 0
+
+
 def test_scheduled_pages_reuse_unchanged_and_replaced_publication_paths(
     tmp_path: Path,
     guarded_control_engine: Engine,

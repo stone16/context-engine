@@ -34,8 +34,10 @@ continues to create no job and never infers an audience.
 One SECURITY DEFINER transaction acquires the existing per-Source progress
 advisory lock before the active Source row lock, matching page acceptance and
 checkpoint-trigger lock order. It validates the current Membership/version and
-exact enabled File import receiver, checks a nonempty contiguous stored `upsert`
-set, and creates one existing `file_acquisition` plus one existing
+exact enabled File import receiver, requires the page to belong to the current
+accepted scan epoch before creating its first lineage, checks a nonempty
+contiguous stored `upsert` set, and creates one existing `file_acquisition` plus
+one existing
 `file_import_job` per change. Exact replay returns the same ordered jobs. Any
 partial lineage or changed audience returns no rows and creates no new jobs.
 
