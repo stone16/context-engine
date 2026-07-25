@@ -1296,6 +1296,12 @@ def test_mixed_file_upsert_downgrade_waits_for_in_flight_scheduler(
                                             WHERE waiting.locktype = 'advisory'
                                               AND waiting.mode = 'ExclusiveLock'
                                               AND waiting.granted IS FALSE
+                                              AND waiting.database = (
+                                                SELECT database.oid
+                                                FROM pg_database AS database
+                                                WHERE database.datname =
+                                                  current_database()
+                                              )
                                               AND waiting.classid = (
                                                 (hashtextextended(:lock_key, 0)
                                                   >> 32) & 4294967295
@@ -1304,6 +1310,7 @@ def test_mixed_file_upsert_downgrade_waits_for_in_flight_scheduler(
                                                 hashtextextended(:lock_key, 0)
                                                   & 4294967295
                                               )::oid
+                                              AND waiting.objsubid = 1
                                               AND held.mode = 'ExclusiveLock'
                                               AND held.granted IS TRUE
                                         )
@@ -1338,6 +1345,12 @@ def test_mixed_file_upsert_downgrade_waits_for_in_flight_scheduler(
                                             WHERE waiting.locktype = 'advisory'
                                               AND waiting.mode = 'ExclusiveLock'
                                               AND waiting.granted IS FALSE
+                                              AND waiting.database = (
+                                                SELECT database.oid
+                                                FROM pg_database AS database
+                                                WHERE database.datname =
+                                                  current_database()
+                                              )
                                               AND waiting.classid = (
                                                 (hashtextextended(:lock_key, 0)
                                                   >> 32) & 4294967295
@@ -1346,6 +1359,7 @@ def test_mixed_file_upsert_downgrade_waits_for_in_flight_scheduler(
                                                 hashtextextended(:lock_key, 0)
                                                   & 4294967295
                                               )::oid
+                                              AND waiting.objsubid = 1
                                               AND held.mode = 'ShareLock'
                                               AND held.granted IS TRUE
                                         )
@@ -1530,9 +1544,17 @@ def test_in_flight_old_scheduler_fails_closed_when_downgrade_wins_fence(
                                             FROM pg_locks AS advisory
                                             JOIN pg_locks AS relation_lock
                                               ON relation_lock.pid = advisory.pid
+                                             AND relation_lock.database =
+                                                 advisory.database
                                             WHERE advisory.locktype = 'advisory'
                                               AND advisory.mode = 'ExclusiveLock'
                                               AND advisory.granted IS TRUE
+                                              AND advisory.database = (
+                                                SELECT database.oid
+                                                FROM pg_database AS database
+                                                WHERE database.datname =
+                                                  current_database()
+                                              )
                                               AND advisory.classid = (
                                                 (hashtextextended(:lock_key, 0)
                                                   >> 32) & 4294967295
@@ -1541,6 +1563,7 @@ def test_in_flight_old_scheduler_fails_closed_when_downgrade_wins_fence(
                                                 hashtextextended(:lock_key, 0)
                                                   & 4294967295
                                               )::oid
+                                              AND advisory.objsubid = 1
                                               AND relation_lock.relation =
                                                 'public.context_source'::regclass
                                               AND relation_lock.mode =
@@ -1573,6 +1596,12 @@ def test_in_flight_old_scheduler_fails_closed_when_downgrade_wins_fence(
                                         WHERE waiting.locktype = 'advisory'
                                           AND waiting.mode = 'ShareLock'
                                           AND waiting.granted IS FALSE
+                                          AND waiting.database = (
+                                            SELECT database.oid
+                                            FROM pg_database AS database
+                                            WHERE database.datname =
+                                              current_database()
+                                          )
                                           AND waiting.classid = (
                                             (hashtextextended(:lock_key, 0)
                                               >> 32) & 4294967295
@@ -1581,6 +1610,7 @@ def test_in_flight_old_scheduler_fails_closed_when_downgrade_wins_fence(
                                             hashtextextended(:lock_key, 0)
                                               & 4294967295
                                           )::oid
+                                          AND waiting.objsubid = 1
                                           AND held.mode = 'ExclusiveLock'
                                           AND held.granted IS TRUE
                                     )
