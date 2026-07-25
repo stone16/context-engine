@@ -1983,7 +1983,7 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
 
         self.assertEqual(catalog["catalogVersion"], "1.3.0")
         self.assertEqual(
-            issue_refs[-18:],
+            issue_refs[-19:],
             [
                 "#15",
                 "#16",
@@ -2003,6 +2003,7 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
                 "#81",
                 "#83",
                 "#85",
+                "#87",
             ],
         )
         self.assertIn(
@@ -2040,6 +2041,10 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
         self.assertIn(
             "Issue #85 activates bounded File delete observations only",
             reconciliation,
+        )
+        self.assertIn(
+            "docs/decisions/0057-execute-current-file-deletes-through-tombstone-authority.md",
+            document_refs,
         )
         self.assertIn(
             "docs/decisions/0053-compose-one-private-bot-delivery.md",

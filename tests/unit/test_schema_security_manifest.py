@@ -187,11 +187,28 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
     assert delete_execution["nonOwnerEvidence"]["evidenceId"] == (
         "PG-FILE-DELETE-EXECUTE-087"
     )
-    assert delete_execution["rowLevelSecurity"] == {
-        "enabled": True,
-        "forced": True,
-        "policies": delete_execution["rowLevelSecurity"]["policies"],
-    }
+    assert delete_execution["rowLevelSecurity"]["enabled"] is True
+    assert delete_execution["rowLevelSecurity"]["forced"] is True
+    assert [
+        (policy["name"], policy["command"], policy["roles"])
+        for policy in delete_execution["rowLevelSecurity"]["policies"]
+    ] == [
+        (
+            "file_delete_observation_execution_migrator_administration",
+            "ALL",
+            ["context_engine_migrator"],
+        ),
+        (
+            "file_delete_observation_execution_definer_select",
+            "SELECT",
+            ["context_engine_worker_lease_definer"],
+        ),
+        (
+            "file_delete_observation_execution_definer_insert",
+            "INSERT",
+            ["context_engine_worker_lease_definer"],
+        ),
+    ]
     assert delete_execution["permittedOperations"]["context_engine_runtime"] == []
     assert delete_execution["permittedOperations"]["context_engine_worker"] == []
 

@@ -358,27 +358,33 @@ def upgrade() -> None:
                 'hex'
             );
 
-            SELECT * INTO effect
-            FROM public.{_TOMBSTONE}(
-                requested_organization_id,
-                requested_source_id,
-                selected_resource_ref,
-                selected_event_ref,
-                selected_checkpoint_sequence,
-                requested_cleanup_intent_id
-            );
-            IF NOT FOUND THEN RETURN; END IF;
-            IF effect.source_id <> requested_source_id
-               OR effect.resource_ref <> selected_resource_ref
-               OR effect.event_ref <> selected_event_ref
-               OR effect.event_sequence <> selected_checkpoint_sequence
-               OR effect.cleanup_intent_id <> requested_cleanup_intent_id
-            THEN
-                -- A prior independent tombstone is a normal unavailable result,
-                -- not authority for a new observation binding. The nested
-                -- authority made no new effect in this replay case.
+            BEGIN
+                SELECT * INTO effect
+                FROM public.{_TOMBSTONE}(
+                    requested_organization_id,
+                    requested_source_id,
+                    selected_resource_ref,
+                    selected_event_ref,
+                    selected_checkpoint_sequence,
+                    requested_cleanup_intent_id
+                );
+                IF NOT FOUND THEN RETURN; END IF;
+                IF effect.source_id <> requested_source_id
+                   OR effect.resource_ref <> selected_resource_ref
+                   OR effect.event_ref <> selected_event_ref
+                   OR effect.event_sequence <> selected_checkpoint_sequence
+                   OR effect.cleanup_intent_id <> requested_cleanup_intent_id
+                THEN
+                    -- Abort this subtransaction so a mismatched nested effect
+                    -- can never survive even when a direct caller commits.
+                    RAISE EXCEPTION USING ERRCODE = 'CE001',
+                        MESSAGE = 'File delete execution effect mismatch';
+                END IF;
+            EXCEPTION WHEN SQLSTATE 'CE001' THEN
+                -- A prior independent tombstone remains externally unavailable.
+                -- Entering this handler has already rolled back the nested call.
                 RETURN;
-            END IF;
+            END;
 
             INSERT INTO public.{_TABLE} (
                 organization_id, source_id, source_version_id,

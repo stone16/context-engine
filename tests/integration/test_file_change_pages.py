@@ -1554,6 +1554,49 @@ def test_control_accepts_delete_observations_without_visibility_effect(
     finally:
         migration_engine.dispose()
 
+    # The database function itself must roll back the nested tombstone when its
+    # effect does not match this observation, even when a direct caller commits.
+    direct_cleanup_intent_id = uuid4()
+    with guarded_control_engine.begin() as connection:
+        connection.execute(
+            text(
+                "SELECT pg_catalog.set_config("
+                "'app.organization_id', :organization_id, true)"
+            ),
+            {"organization_id": str(organization_id)},
+        )
+        assert (
+            connection.execute(
+                text(
+                    """
+                    SELECT *
+                    FROM public.context_control_execute_file_delete_observation(
+                        :organization_id, :source_id, :source_version_id,
+                        :page_ref, :change_ordinal, :cleanup_intent_id
+                    )
+                    """
+                ),
+                {
+                    "organization_id": organization_id,
+                    "source_id": mismatched_replay.source_ref.value,
+                    "source_version_id": mismatched_replay.source_version_ref,
+                    "page_ref": mismatched_replay.page_ref,
+                    "change_ordinal": mismatched_replay.change_ordinal,
+                    "cleanup_intent_id": direct_cleanup_intent_id,
+                },
+            ).one_or_none()
+            is None
+        )
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.connect() as connection:
+            assert (
+                _file_delete_execution_effect_snapshot(connection, organization_id)
+                == before_mismatched_replay
+            )
+    finally:
+        migration_engine.dispose()
+
     with _authorize(
         authority,
         organization_id,
