@@ -2043,6 +2043,18 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
             reconciliation,
         )
         self.assertIn(
+            "Issue #87 later activates only exact trusted current File delete "
+            "execution",
+            reconciliation,
+        )
+        self.assertIn(
+            "Autonomous or batch deletion execution, Provider deletion authority, "
+            "physical cleanup, restore/recreate, retry/reclaim/dead-letter, full "
+            "resync, and Runtime authority from observation or execution metadata "
+            "remain NOT_ACTIVE",
+            reconciliation,
+        )
+        self.assertIn(
             "docs/decisions/0057-execute-current-file-deletes-through-tombstone-authority.md",
             document_refs,
         )
