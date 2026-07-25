@@ -19,6 +19,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
 
 from engine._opaque import decode_base64url, encode_base64url
 from engine.control.contracts import (
+    FILE_DELETE_OBSERVATION_CAPABILITY_MANIFEST,
     SourceRef,
     SourceVersion,
     _require_sha256,
@@ -27,6 +28,7 @@ from engine.control.contracts import (
 from engine.control.file_imports import FileImportPath
 
 MAX_FILE_CHANGE_PAGE_SIZE = 100
+MAX_FILE_CHANGE_BASELINE_SIZE = 10_000
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,12 +123,95 @@ class FileChangeScanHead:
 
 
 @dataclass(frozen=True, slots=True)
+class FileChangeBaselineRef:
+    """Exact terminal page of the latest fully accepted File scan."""
+
+    source_version_ref: UUID = field(repr=False)
+    scan_ref: str = field(repr=False)
+    scan_epoch: UUID = field(repr=False)
+    page_ref: str = field(repr=False)
+    checkpoint_ref: str = field(repr=False)
+    sequence: int
+    comparison_baseline_ref: FileChangeBaselineRef | None = field(
+        default=None,
+        repr=False,
+    )
+
+    def __post_init__(self) -> None:
+        if type(self.source_version_ref) is not UUID:
+            raise TypeError("File change baseline SourceVersion must be UUID")
+        _require_sha256("File change baseline scan_ref", self.scan_ref)
+        if type(self.scan_epoch) is not UUID:
+            raise TypeError("File change baseline scan epoch must be UUID")
+        _require_sha256("File change baseline page_ref", self.page_ref)
+        _require_checkpoint_ref(self.checkpoint_ref)
+        if type(self.sequence) is not int or not 1 <= self.sequence <= 2**63 - 1:
+            raise ValueError("File change baseline sequence is invalid")
+        if self.comparison_baseline_ref is not None:
+            if type(self.comparison_baseline_ref) is not FileChangeBaselineRef:
+                raise TypeError("File change comparison baseline is invalid")
+            if (
+                self.comparison_baseline_ref.source_version_ref
+                != self.source_version_ref
+                or self.comparison_baseline_ref.sequence >= self.sequence
+            ):
+                raise ValueError("File change comparison baseline lineage is invalid")
+            if self.comparison_baseline_ref.comparison_baseline_ref is not None:
+                raise ValueError("File change baseline lineage must be one level")
+
+
+@dataclass(frozen=True, slots=True)
+class FileChangeBaselineEntry:
+    """Content-free identity of one path in a complete accepted scan."""
+
+    kind: FileChangeKind
+    path: FileImportPath = field(repr=False)
+    content_sha256: str = field(repr=False)
+    content_length: int
+
+    def __post_init__(self) -> None:
+        if type(self.kind) is not FileChangeKind:
+            raise TypeError("File change baseline kind is invalid")
+        if type(self.path) is not FileImportPath:
+            raise TypeError("File change baseline path must be FileImportPath")
+        _require_sha256(
+            "File change baseline content identity", self.content_sha256
+        )
+        if type(self.content_length) is not int or self.content_length < 0:
+            raise ValueError("File change baseline content length is invalid")
+
+
+@dataclass(frozen=True, slots=True)
+class FileChangeBaseline:
+    """Server-bounded current-path projection from one complete scan."""
+
+    reference: FileChangeBaselineRef = field(repr=False)
+    entries: tuple[FileChangeBaselineEntry, ...] = field(repr=False)
+
+    def __post_init__(self) -> None:
+        if type(self.reference) is not FileChangeBaselineRef:
+            raise TypeError("File change baseline reference is invalid")
+        if (
+            type(self.entries) is not tuple
+            or len(self.entries) > MAX_FILE_CHANGE_BASELINE_SIZE
+            or any(type(entry) is not FileChangeBaselineEntry for entry in self.entries)
+        ):
+            raise TypeError("File change baseline entries must be bounded")
+        paths = tuple(entry.path.value for entry in self.entries)
+        if paths != tuple(sorted(paths, key=lambda value: value.encode("utf-8"))):
+            raise ValueError("File change baseline paths require canonical order")
+        if len(paths) != len(set(paths)):
+            raise ValueError("File change baseline paths must be unique")
+
+
+@dataclass(frozen=True, slots=True)
 class FileChangeSource:
     """Trusted active SourceVersion and current durable scan head."""
 
     organization_id: UUID = field(repr=False)
     source_version: SourceVersion
     scan_head: FileChangeScanHead | None = field(default=None, repr=False)
+    complete_baseline: FileChangeBaseline | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         if type(self.organization_id) is not UUID:
@@ -138,12 +223,28 @@ class FileChangeSource:
             and type(self.scan_head) is not FileChangeScanHead
         ):
             raise TypeError("File change source scan head is invalid")
+        if self.complete_baseline is not None:
+            if type(self.complete_baseline) is not FileChangeBaseline:
+                raise TypeError("File change source complete baseline is invalid")
+            if (
+                self.source_version.capabilities
+                is not FILE_DELETE_OBSERVATION_CAPABILITY_MANIFEST
+            ):
+                raise ValueError("File delete observation capability is not active")
+            if (
+                self.complete_baseline.reference.source_version_ref
+                != self.source_version.version_ref
+            ):
+                raise ValueError(
+                    "File change baseline does not belong to SourceVersion"
+                )
 
 
 class FileChangeKind(StrEnum):
     """Closed change kinds activated by the shallow File scan."""
 
     UPSERT = "upsert"
+    DELETE = "delete"
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,7 +257,7 @@ class SourceChange:
     scan_ref: str = field(repr=False)
     kind: FileChangeKind
     path: FileImportPath
-    content_sha256: str
+    content_sha256: str = field(repr=False)
     content_length: int
 
     def __post_init__(self) -> None:
@@ -170,7 +271,7 @@ class SourceChange:
         ):
             raise TypeError("SourceChange ownership references must be UUID")
         _require_sha256("SourceChange scan_ref", self.scan_ref)
-        if self.kind is not FileChangeKind.UPSERT:
+        if type(self.kind) is not FileChangeKind:
             raise ValueError("SourceChange kind is not active")
         if type(self.path) is not FileImportPath:
             raise TypeError("SourceChange path must be FileImportPath")
@@ -197,6 +298,8 @@ class ChangePage:
     next_cursor: PendingChangeCursor | None = field(repr=False)
     complete: bool
     provider_proof: str = field(repr=False)
+    baseline_ref: FileChangeBaselineRef | None = field(default=None, repr=False)
+    capability_version: str = "file-capabilities-v3"
 
     def __post_init__(self) -> None:
         if any(
@@ -208,6 +311,11 @@ class ChangePage:
             )
         ):
             raise TypeError("ChangePage ownership references must be UUID")
+        if self.capability_version not in {
+            "file-capabilities-v3",
+            "file-capabilities-v4",
+        }:
+            raise ValueError("ChangePage capability version is invalid")
         _require_sha256("ChangePage scan_ref", self.scan_ref)
         if type(self.scan_epoch) is not UUID:
             raise TypeError("ChangePage scan_epoch must be UUID")
@@ -248,6 +356,16 @@ class ChangePage:
             and self.superseded_scan_epoch is not None
         ):
             raise ValueError("a continuation cannot supersede another scan")
+        if self.baseline_ref is not None:
+            if type(self.baseline_ref) is not FileChangeBaselineRef:
+                raise TypeError("ChangePage baseline_ref is invalid")
+            if self.baseline_ref.source_version_ref != self.source_version_ref:
+                raise ValueError("ChangePage baseline belongs to another SourceVersion")
+        if self.capability_version == "file-capabilities-v3" and (
+            self.baseline_ref is not None
+            or any(change.kind is not FileChangeKind.UPSERT for change in self.changes)
+        ):
+            raise ValueError("v3 ChangePage cannot carry delete observations")
         if (
             type(self.changes) is not tuple
             or len(self.changes) > self.page_limit
@@ -289,7 +407,7 @@ _CHECKPOINT_CURSOR_DOMAIN = "context-engine.accepted-file-change-cursor.v1"
 
 
 def _page_document(page: ChangePage) -> dict[str, object]:
-    return {
+    document = {
         "changes": [
             {
                 "contentLength": change.content_length,
@@ -317,6 +435,24 @@ def _page_document(page: ChangePage) -> dict[str, object]:
         "sourceId": str(page.source_ref),
         "sourceVersionId": str(page.source_version_ref),
         "version": 1,
+    }
+    if page.baseline_ref is not None:
+        document["baseline"] = _baseline_reference_document(page.baseline_ref)
+    if page.capability_version == "file-capabilities-v4":
+        document["declarationVersion"] = page.capability_version
+    return document
+
+
+def _baseline_reference_document(
+    reference: FileChangeBaselineRef,
+) -> dict[str, object]:
+    return {
+        "checkpointRef": reference.checkpoint_ref,
+        "pageRef": reference.page_ref,
+        "scanEpoch": str(reference.scan_epoch),
+        "scanRef": reference.scan_ref,
+        "sequence": reference.sequence,
+        "sourceVersionId": str(reference.source_version_ref),
     }
 
 

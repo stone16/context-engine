@@ -16,7 +16,7 @@ from engine.control.contracts import (
 )
 
 if TYPE_CHECKING:
-    from engine.control.file_change_pages import FileChangeScanHead
+    from engine.control.file_change_pages import FileChangeBaseline, FileChangeScanHead
 
 _MAX_BIGINT = 9_223_372_036_854_775_807
 
@@ -228,6 +228,10 @@ class FileSourceProgress:
     acquisition_checkpoint: FileSourceAcquisitionCheckpoint | None
     publish_watermark: FileSourcePublishWatermark | None
     change_scan_head: FileChangeScanHead | None = field(default=None, repr=False)
+    complete_change_baseline: FileChangeBaseline | None = field(
+        default=None,
+        repr=False,
+    )
 
     def __post_init__(self) -> None:
         if type(self.organization_id) is not UUID:
@@ -269,6 +273,24 @@ class FileSourceProgress:
                 )
             ):
                 raise ValueError("File Source change head lineage is invalid")
+        if self.complete_change_baseline is not None:
+            from engine.control.file_change_pages import FileChangeBaseline
+
+            if type(self.complete_change_baseline) is not FileChangeBaseline:
+                raise TypeError("File Source complete change baseline is invalid")
+            if self.acquisition_checkpoint is None:
+                raise ValueError("File Source complete baseline requires a checkpoint")
+            baseline_ref = self.complete_change_baseline.reference
+            if baseline_ref.sequence > self.acquisition_checkpoint.sequence:
+                raise ValueError("File Source complete baseline exceeds its checkpoint")
+            if (
+                self.change_scan_head is not None
+                and baseline_ref.source_version_ref
+                != self.change_scan_head.source_version_ref
+            ):
+                raise ValueError(
+                    "File Source complete baseline belongs to another SourceVersion"
+                )
         if self.publish_watermark is not None and (
             self.acquisition_checkpoint is None
             or self.publish_watermark.sequence

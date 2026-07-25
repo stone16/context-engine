@@ -107,7 +107,7 @@ An inactive capability is `NOT_ACTIVE`; it is never reported as `PASS`.
 | `TM-05` | Live or Mirrored ACL failure silently downgrades to Weak or public access. | `Live | Mirrored | Weak` is a closed SourcePolicy choice; missing, stale, incomplete, changed, or failed strong evidence denies. |
 | `TM-06` | Revoked access survives through an old epoch, cache, continuation, citation, or source snapshot. | New controlled operations validate current policy/source evidence; stale capabilities and cached decisions yield no Evidence. |
 | `TM-07` | A worker impersonates a user or reuses authority across jobs, sources, generations, or Organizations. | Least-privilege ServiceActor plus signed exact-job WorkerLease checked against current durable state; mutation/replay changes no durable state. |
-| `TM-08` | Crash or retry exposes mixed Revisions, skipped changes, duplicate effects, or an unapproved release. | Transactional outbox, dual watermarks, immutable versions, atomic active pointers, idempotency, and fault-point tests. |
+| `TM-08` | Crash or retry exposes mixed Revisions, skipped changes, duplicate effects, or an unapproved release. | Transactional outbox, dual watermarks, immutable versions, atomic active pointers, idempotency, and fault-point tests. File delete observations additionally require the exact latest complete same-SourceVersion baseline and have zero tombstone or visibility effect. |
 | `TM-09` | Index or cache filtering is treated as authorization. | Index/cache outputs remain content-free candidates; deliberate cross-Organization hits are removed by Kernel before content work. |
 | `TM-10` | Authenticated BotDelivery forges trusted delivery facts or replays another resolve's evidence. | Opaque `DeliveryEvidenceRef` is service/request/org/asker/destination/purpose/audience/expiry-bound and redeemed once at ingress. |
 | `TM-11` | Group content is authorized only for the asker, an incomplete member set, or a stale audience. | Kernel computes the complete audience intersection; public and asker-private paths use separate resolves; unknown or stale audience means public bytes equal zero. |
@@ -129,6 +129,9 @@ An inactive capability is `NOT_ACTIVE`; it is never reported as `PASS`.
   disabled for sensitive content.
 - Host file ownership or mode bits do not implicitly authorize FileProvider
   content. File access uses an explicit, active, versioned `FileSourceAccess`.
+- A File delete observation is acquisition evidence only. It cannot tombstone a
+  Resource, advance Policy Epoch, create cleanup intent, or alter Runtime
+  visibility; deletion execution must use its separately revalidated authority.
 - Cross-Organization learning is not a V1 capability. No schema or executable
   path is created for it without a new opt-in/privacy ADR and raw reference
   oracle.

@@ -12,8 +12,10 @@ from engine.control.authority import (
 from engine.control.contracts import (
     FILE_CAPABILITY_MANIFEST,
     FILE_CHANGE_CAPABILITY_MANIFEST,
+    FILE_DELETE_OBSERVATION_CAPABILITY_MANIFEST,
     FILE_IMPORT_CAPABILITY_MANIFEST,
     ActivateFileChangeFeed,
+    ActivateFileDeleteObservations,
     CapabilityStatus,
     FileCapabilityManifest,
     FileRootRef,
@@ -30,11 +32,15 @@ from engine.control.contracts import (
     SourceVersion,
 )
 from engine.control.file_change_pages import (
+    MAX_FILE_CHANGE_BASELINE_SIZE,
     MAX_FILE_CHANGE_PAGE_SIZE,
     AcceptedChangePage,
     ChangeCursor,
     ChangeLimit,
     ChangePage,
+    FileChangeBaseline,
+    FileChangeBaselineEntry,
+    FileChangeBaselineRef,
     FileChangeControlProofs,
     FileChangeKind,
     FileChangeProviderOutcome,
@@ -80,11 +86,14 @@ from engine.control.file_source_progress import (
 from engine.control.module import ContextControl, ControlStorePort
 
 __all__ = [
+    "MAX_FILE_CHANGE_BASELINE_SIZE",
     "MAX_FILE_CHANGE_PAGE_SIZE",
     "AcceptedChangePage",
     "ActivateFileChangeFeed",
+    "ActivateFileDeleteObservations",
     "FILE_CAPABILITY_MANIFEST",
     "FILE_CHANGE_CAPABILITY_MANIFEST",
+    "FILE_DELETE_OBSERVATION_CAPABILITY_MANIFEST",
     "FILE_IMPORT_CAPABILITY_MANIFEST",
     "CapabilityStatus",
     "ChangeCursor",
@@ -102,6 +111,9 @@ __all__ = [
     "FileChangeKind",
     "FileChangeProviderOutcome",
     "FileChangeProviderProofs",
+    "FileChangeBaseline",
+    "FileChangeBaselineEntry",
+    "FileChangeBaselineRef",
     "FileChangeScanHead",
     "FileChangeSource",
     "FileImportAudience",

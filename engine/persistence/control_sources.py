@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 from typing import Any, cast
 from uuid import UUID, uuid4
@@ -17,10 +17,16 @@ from engine._opaque import encode_base64url
 from engine.control import (
     FILE_CAPABILITY_MANIFEST,
     FILE_CHANGE_CAPABILITY_MANIFEST,
+    FILE_DELETE_OBSERVATION_CAPABILITY_MANIFEST,
     FILE_IMPORT_CAPABILITY_MANIFEST,
     AcceptedChangePage,
     ActivateFileChangeFeed,
+    ActivateFileDeleteObservations,
     ChangeCursor,
+    FileChangeBaseline,
+    FileChangeBaselineEntry,
+    FileChangeBaselineRef,
+    FileChangeKind,
     FileChangeScanHead,
     FileImportPath,
     FileResourceTombstone,
@@ -87,6 +93,9 @@ _KNOWN_CAPABILITY_DOCUMENTS = {
     ),
     FILE_CHANGE_CAPABILITY_MANIFEST.declaration_version: (
         FILE_CHANGE_CAPABILITY_MANIFEST
+    ),
+    FILE_DELETE_OBSERVATION_CAPABILITY_MANIFEST.declaration_version: (
+        FILE_DELETE_OBSERVATION_CAPABILITY_MANIFEST
     ),
 }
 
@@ -338,6 +347,70 @@ class PostgreSQLControlStore:
                 "File change feed activation database authority is unavailable"
             ) from None
 
+    def activate_file_delete_observations(
+        self,
+        call: TrustedControlCall,
+        command: ActivateFileDeleteObservations,
+    ) -> SourceManifest:
+        """Atomically advance one active File SourceVersion from v3 to v4."""
+
+        if (
+            type(call) is not TrustedControlCall
+            or type(command) is not ActivateFileDeleteObservations
+        ):
+            raise SourceNotAvailable
+        activated_version_id = self._uuid_factory()
+        try:
+            with self._engine.begin() as connection:
+                assert_control_role(connection)
+                row = connection.execute(
+                    text(
+                        """
+                        SELECT activated_version_id
+                        FROM public.context_control_activate_file_delete_observations(
+                            :organization_id, :source_id, :activated_version_id
+                        )
+                        """
+                    ),
+                    {
+                        "organization_id": call.organization_id,
+                        "source_id": command.source_ref.value,
+                        "activated_version_id": activated_version_id,
+                    },
+                ).one_or_none()
+                if row is None:
+                    raise SourceNotAvailable
+                source_row = connection.execute(
+                    text(
+                        _ACTIVE_SOURCE_SELECT
+                        + """
+                        WHERE source.organization_id = :organization_id
+                          AND source.source_id = :source_id
+                        """
+                    ),
+                    {
+                        "organization_id": call.organization_id,
+                        "source_id": command.source_ref.value,
+                    },
+                ).mappings().one_or_none()
+                if source_row is None or source_row["version_id"] != row[0]:
+                    raise SourceNotAvailable
+                manifest = self._manifest(
+                    cast(Mapping[str, object], source_row)
+                )
+                if (
+                    manifest.active_version.capabilities
+                    is not FILE_DELETE_OBSERVATION_CAPABILITY_MANIFEST
+                ):
+                    raise SourceNotAvailable
+                return manifest
+        except SourceNotAvailable:
+            raise
+        except (DBAPIError, SQLAlchemyError, AssertionError, TypeError, ValueError):
+            raise SourceControlUnavailable(
+                "File delete observation activation database authority is unavailable"
+            ) from None
+
     def accept_file_change_page(
         self,
         call: TrustedControlCall,
@@ -365,17 +438,44 @@ class PostgreSQLControlStore:
             ]
             with self._engine.begin() as connection:
                 assert_control_role(connection)
+                baseline_document = (
+                    None
+                    if value.baseline_ref is None
+                    else {
+                        "checkpointRef": value.baseline_ref.checkpoint_ref,
+                        "pageRef": value.baseline_ref.page_ref,
+                        "scanEpoch": str(value.baseline_ref.scan_epoch),
+                        "scanRef": value.baseline_ref.scan_ref,
+                        "sequence": value.baseline_ref.sequence,
+                        "sourceVersionId": str(
+                            value.baseline_ref.source_version_ref
+                        ),
+                    }
+                )
+                delete_observations = (
+                    value.capability_version
+                    == FILE_DELETE_OBSERVATION_CAPABILITY_MANIFEST.declaration_version
+                )
+                function_name = (
+                    "context_control_accept_file_delete_observation_page"
+                    if delete_observations
+                    else "context_control_accept_file_change_page"
+                )
+                baseline_argument = (
+                    ", CAST(:baseline AS jsonb)" if delete_observations else ""
+                )
                 row = connection.execute(
                     text(
-                        """
+                        f"""
                         SELECT *
-                        FROM public.context_control_accept_file_change_page(
+                        FROM public.{function_name}(
                             :organization_id, :source_id, :source_version_id,
                             :scan_ref, :scan_epoch, :page_limit, :page_ref,
                             :predecessor_page_ref,
                             :predecessor_checkpoint_ref, :predecessor_sequence,
                             :superseded_scan_epoch,
                             CAST(:changes AS jsonb), :complete
+                            {baseline_argument}
                         )
                         """
                     ),
@@ -397,6 +497,13 @@ class PostgreSQLControlStore:
                             cast(Any, changes_document)
                         ).decode("utf-8"),
                         "complete": value.complete,
+                        "baseline": (
+                            None
+                            if baseline_document is None
+                            else rfc8785.dumps(
+                                cast(Any, baseline_document)
+                            ).decode("utf-8")
+                        ),
                     },
                 ).one_or_none()
                 if row is None:
@@ -410,8 +517,8 @@ class PostgreSQLControlStore:
                     organization_id=call.organization_id,
                     source_ref=source_ref,
                     source_version_ref=row.source_version_id,
-                        scan_ref=value.scan_ref,
-                        scan_epoch=value.scan_epoch,
+                    scan_ref=value.scan_ref,
+                    scan_epoch=value.scan_epoch,
                     page_ref=row.page_ref,
                     checkpoint_ref=row.checkpoint_ref,
                     sequence=row.sequence,
@@ -673,22 +780,33 @@ class PostgreSQLControlStore:
             with self._engine.begin() as connection:
                 assert_control_role(connection)
                 _set_organization_context(connection, call.organization_id)
-                row = connection.execute(
-                    text(
-                        """
-                        SELECT *
-                        FROM public.context_control_read_file_source_progress(
-                            :organization_id, :source_id
-                        )
-                        """
-                    ),
-                    {
-                        "organization_id": call.organization_id,
-                        "source_id": source_ref.value,
-                    },
-                ).mappings().one_or_none()
-                if row is None:
+                snapshot_rows = tuple(
+                    connection.execute(
+                        text(
+                            """
+                            SELECT progress.*, baseline.*
+                            FROM public.context_control_read_file_source_progress(
+                                :organization_id, :source_id
+                            ) AS progress
+                            LEFT JOIN LATERAL public.
+                                context_control_read_complete_file_change_baseline(
+                                    :organization_id, :source_id
+                                ) AS baseline ON true
+                            """
+                        ),
+                        {
+                            "organization_id": call.organization_id,
+                            "source_id": source_ref.value,
+                        },
+                    ).mappings()
+                )
+                if not snapshot_rows:
                     raise SourceNotAvailable
+                row = snapshot_rows[0]
+                baseline_rows = tuple(
+                    cast(Mapping[str, object], snapshot_row)
+                    for snapshot_row in snapshot_rows
+                )
                 checkpoint = (
                     None
                     if row["acquisition_sequence"] is None
@@ -759,6 +877,9 @@ class PostgreSQLControlStore:
                             complete=row["change_complete"],
                         )
                     ),
+                    complete_change_baseline=self._complete_change_baseline(
+                        baseline_rows,
+                    ),
                 )
         except SourceNotAvailable:
             raise
@@ -772,6 +893,62 @@ class PostgreSQLControlStore:
             raise SourceControlUnavailable(
                 "File Source progress database authority is unavailable"
             ) from None
+
+    @staticmethod
+    def _complete_change_baseline(
+        rows: Sequence[Mapping[str, object]],
+    ) -> FileChangeBaseline | None:
+        if not rows or rows[0].get("baseline_scan_epoch") is None:
+            return None
+        row = rows[0]
+        comparison_reference = (
+            None
+            if row.get("baseline_parent_scan_epoch") is None
+            else FileChangeBaselineRef(
+                source_version_ref=cast(UUID, row["baseline_source_version_id"]),
+                scan_ref=cast(str, row["baseline_parent_scan_ref"]),
+                scan_epoch=cast(UUID, row["baseline_parent_scan_epoch"]),
+                page_ref=cast(str, row["baseline_parent_page_ref"]),
+                checkpoint_ref=cast(
+                    str,
+                    row["baseline_parent_checkpoint_ref"],
+                ),
+                sequence=cast(int, row["baseline_parent_sequence"]),
+            )
+        )
+        reference = FileChangeBaselineRef(
+            source_version_ref=cast(UUID, row["baseline_source_version_id"]),
+            scan_ref=cast(str, row["baseline_scan_ref"]),
+            scan_epoch=cast(UUID, row["baseline_scan_epoch"]),
+            page_ref=cast(str, row["baseline_page_ref"]),
+            checkpoint_ref=cast(str, row["baseline_checkpoint_ref"]),
+            sequence=cast(int, row["baseline_sequence"]),
+            comparison_baseline_ref=comparison_reference,
+        )
+        entries: list[FileChangeBaselineEntry] = []
+        for value in rows:
+            if value.get("baseline_entry_kind") is None:
+                continue
+            entries.append(
+                FileChangeBaselineEntry(
+                    kind=FileChangeKind(
+                        cast(str, value["baseline_entry_kind"])
+                    ),
+                    path=FileImportPath(
+                        cast(str, value["baseline_entry_path"])
+                    ),
+                    content_sha256=cast(
+                        str,
+                        value["baseline_entry_content_sha256"],
+                    ),
+                    content_length=cast(
+                        int,
+                        value["baseline_entry_content_length"],
+                    ),
+                )
+            )
+        entries.sort(key=lambda entry: entry.path.value.encode("utf-8"))
+        return FileChangeBaseline(reference=reference, entries=tuple(entries))
 
     def tombstone_file_resource(
         self,

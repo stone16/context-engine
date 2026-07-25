@@ -20,10 +20,13 @@ import rfc8785
 from engine._opaque import decode_base64url, encode_base64url
 from engine.control import (
     FILE_CHANGE_CAPABILITY_MANIFEST,
+    FILE_DELETE_OBSERVATION_CAPABILITY_MANIFEST,
+    MAX_FILE_CHANGE_BASELINE_SIZE,
     CapabilityStatus,
     ChangeCursor,
     ChangeLimit,
     ChangePage,
+    FileChangeBaselineRef,
     FileChangeKind,
     FileChangeProviderOutcome,
     FileChangeProviderProofs,
@@ -302,6 +305,14 @@ class _ObservedFile:
     content_length: int
 
 
+@dataclass(frozen=True, slots=True)
+class _ObservedChange:
+    kind: FileChangeKind
+    path: FileImportPath
+    content_sha256: str
+    content_length: int
+
+
 class FileChangeProvider:
     """Deterministic shallow File `readChanges` Provider implementation."""
 
@@ -344,7 +355,11 @@ class FileChangeProvider:
             return ProviderGenericDenied()
         capabilities = source.source_version.capabilities
         if (
-            capabilities != FILE_CHANGE_CAPABILITY_MANIFEST
+            capabilities
+            not in {
+                FILE_CHANGE_CAPABILITY_MANIFEST,
+                FILE_DELETE_OBSERVATION_CAPABILITY_MANIFEST,
+            }
             or capabilities.read_changes is not CapabilityStatus.AVAILABLE
         ):
             return ProviderUnsupported("readChanges")
@@ -363,7 +378,10 @@ class FileChangeProvider:
             return ProviderGenericDenied()
         except RuntimeError:
             return ProviderRetryableUnavailable(timedelta(seconds=1))
-        scan_ref = self._scan_ref(source, observed)
+        changes, baseline_ref = self._changes(source, observed)
+        if len(changes) > MAX_FILE_CHANGE_BASELINE_SIZE:
+            return ProviderGenericDenied()
+        scan_ref = self._scan_ref(source, changes, baseline_ref)
         requested_limit = limit
         if (
             type(cursor) is InitialScan
@@ -399,7 +417,7 @@ class FileChangeProvider:
                 scan_ref=scan_ref,
                 scan_epoch=scan_epoch,
                 limit=requested_limit,
-                observed_count=len(observed),
+                observed_count=len(changes),
             ):
                 return ProviderInvalidCheckpoint()
             offset = cast(int, claims["offset"])
@@ -407,9 +425,9 @@ class FileChangeProvider:
             predecessor_checkpoint_ref = accepted.checkpoint_ref
             predecessor_sequence = accepted.sequence
             superseded_scan_epoch = None
-        selected = observed[offset : offset + requested_limit.value]
+        selected = changes[offset : offset + requested_limit.value]
         next_offset = offset + len(selected)
-        complete = next_offset == len(observed)
+        complete = next_offset == len(changes)
         next_cursor = (
             None
             if complete
@@ -432,13 +450,14 @@ class FileChangeProvider:
             predecessor_checkpoint_ref=predecessor_checkpoint_ref,
             predecessor_sequence=predecessor_sequence,
             superseded_scan_epoch=superseded_scan_epoch,
+            baseline_ref=baseline_ref,
             changes=tuple(
                 SourceChange(
                     organization_id=source.organization_id,
                     source_ref=source.source_version.source_ref.value,
                     source_version_ref=source.source_version.version_ref,
                     scan_ref=scan_ref,
-                    kind=FileChangeKind.UPSERT,
+                    kind=item.kind,
                     path=item.path,
                     content_sha256=item.content_sha256,
                     content_length=item.content_length,
@@ -448,17 +467,115 @@ class FileChangeProvider:
             next_cursor=next_cursor,
             complete=complete,
             provider_proof="A" * 86,
+            capability_version=capabilities.declaration_version,
         )
         return ProviderOk(
             replace(unsigned, provider_proof=self._proofs._seal_page(unsigned))
         )
 
     @staticmethod
-    def _scan_ref(
+    def _changes(
         source: FileChangeSource,
         observed: tuple[_ObservedFile, ...],
+    ) -> tuple[tuple[_ObservedChange, ...], FileChangeBaselineRef | None]:
+        baseline = source.complete_baseline
+        current = {
+            item.path: (item.content_sha256, item.content_length)
+            for item in observed
+        }
+        if baseline is not None:
+            active = {
+                entry.path: (entry.content_sha256, entry.content_length)
+                for entry in baseline.entries
+                if entry.kind is FileChangeKind.UPSERT
+            }
+            deleted = {
+                entry.path
+                for entry in baseline.entries
+                if entry.kind is FileChangeKind.DELETE
+            }
+            if current == active and deleted.isdisjoint(current):
+                # Reuse the prior comparison input only while the complete
+                # baseline is also the durable head. An incomplete newer head
+                # must be superseded by a scan bound to this complete baseline.
+                comparison_baseline_ref = (
+                    baseline.reference.comparison_baseline_ref
+                    if FileChangeProvider._baseline_is_current_head(
+                        source,
+                        baseline.reference,
+                    )
+                    else baseline.reference
+                )
+                return (
+                    tuple(
+                        _ObservedChange(
+                            kind=entry.kind,
+                            path=entry.path,
+                            content_sha256=entry.content_sha256,
+                            content_length=entry.content_length,
+                        )
+                        for entry in baseline.entries
+                    ),
+                    comparison_baseline_ref,
+                )
+        changes = [
+            _ObservedChange(
+                kind=FileChangeKind.UPSERT,
+                path=item.path,
+                content_sha256=item.content_sha256,
+                content_length=item.content_length,
+            )
+            for item in observed
+        ]
+        if baseline is not None:
+            changes.extend(
+                _ObservedChange(
+                    kind=FileChangeKind.DELETE,
+                    path=entry.path,
+                    content_sha256=entry.content_sha256,
+                    content_length=entry.content_length,
+                )
+                for entry in baseline.entries
+                if entry.kind is FileChangeKind.UPSERT
+                and entry.path not in current
+            )
+        changes.sort(key=lambda item: item.path.value.encode("utf-8"))
+        return tuple(changes), None if baseline is None else baseline.reference
+
+    @staticmethod
+    def _baseline_is_current_head(
+        source: FileChangeSource,
+        baseline_ref: FileChangeBaselineRef,
+    ) -> bool:
+        head = source.scan_head
+        return (
+            head is not None
+            and head.complete
+            and (
+                head.source_version_ref,
+                head.scan_ref,
+                head.scan_epoch,
+                head.page_ref,
+                head.checkpoint_ref,
+                head.sequence,
+            )
+            == (
+                baseline_ref.source_version_ref,
+                baseline_ref.scan_ref,
+                baseline_ref.scan_epoch,
+                baseline_ref.page_ref,
+                baseline_ref.checkpoint_ref,
+                baseline_ref.sequence,
+            )
+        )
+
+    @staticmethod
+    def _scan_ref(
+        source: FileChangeSource,
+        observed: tuple[_ObservedChange, ...],
+        baseline_ref: FileChangeBaselineRef | None,
     ) -> str:
-        document = {
+        document: dict[str, object] = {
             "organizationId": str(source.organization_id),
             "sourceId": str(source.source_version.source_ref.value),
             "sourceVersionId": str(source.source_version.version_ref),
@@ -466,11 +583,33 @@ class FileChangeProvider:
                 {
                     "contentLength": item.content_length,
                     "contentSha256": item.content_sha256,
+                    **(
+                        {"kind": item.kind.value}
+                        if source.source_version.capabilities
+                        is FILE_DELETE_OBSERVATION_CAPABILITY_MANIFEST
+                        else {}
+                    ),
                     "path": item.path.value,
                 }
                 for item in observed
             ],
         }
+        if (
+            source.source_version.capabilities
+            is FILE_DELETE_OBSERVATION_CAPABILITY_MANIFEST
+        ):
+            document["baseline"] = (
+                None
+                if baseline_ref is None
+                else {
+                    "checkpointRef": baseline_ref.checkpoint_ref,
+                    "pageRef": baseline_ref.page_ref,
+                    "scanEpoch": str(baseline_ref.scan_epoch),
+                    "scanRef": baseline_ref.scan_ref,
+                    "sequence": baseline_ref.sequence,
+                    "sourceVersionId": str(baseline_ref.source_version_ref),
+                }
+            )
         return hashlib.sha256(
             _SCAN_DOMAIN + rfc8785.dumps(cast(Any, document))
         ).hexdigest()

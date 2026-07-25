@@ -103,6 +103,7 @@ class FileCapabilityManifest:
     discover: CapabilityStatus = CapabilityStatus.UNAVAILABLE
     authorize_and_project: CapabilityStatus = CapabilityStatus.UNAVAILABLE
     checkpoint: CapabilityStatus = CapabilityStatus.UNAVAILABLE
+    delete_observations: CapabilityStatus = CapabilityStatus.UNAVAILABLE
     deletion: CapabilityStatus = CapabilityStatus.UNAVAILABLE
     file_source_access: CapabilityStatus = CapabilityStatus.UNAVAILABLE
     ingestion_jobs: CapabilityStatus = CapabilityStatus.UNAVAILABLE
@@ -140,7 +141,8 @@ class FileCapabilityManifest:
                 )
             )
             or (
-                self.declaration_version == "file-capabilities-v3"
+                self.declaration_version
+                in {"file-capabilities-v3", "file-capabilities-v4"}
                 and (
                     any(
                         status is not CapabilityStatus.AVAILABLE
@@ -154,6 +156,12 @@ class FileCapabilityManifest:
                             self.file_source_access,
                             self.ingestion_jobs,
                         )
+                    )
+                    or self.delete_observations
+                    is not (
+                        CapabilityStatus.AVAILABLE
+                        if self.declaration_version == "file-capabilities-v4"
+                        else CapabilityStatus.UNAVAILABLE
                     )
                 )
             )
@@ -169,6 +177,7 @@ class FileCapabilityManifest:
                         self.describe_capabilities,
                         self.read_changes,
                         self.checkpoint,
+                        self.delete_observations,
                     )
                 )
             )
@@ -177,6 +186,7 @@ class FileCapabilityManifest:
                 "file-capabilities-v1",
                 "file-capabilities-v2",
                 "file-capabilities-v3",
+                "file-capabilities-v4",
             }
         ):
             raise ValueError("File capability manifest is not a recognized snapshot")
@@ -184,7 +194,7 @@ class FileCapabilityManifest:
     def document(self) -> dict[str, object]:
         """Return the exact persisted/public declaration without activation claims."""
 
-        return {
+        document: dict[str, object] = {
             "aclEvidenceMode": self.acl_evidence_mode.value,
             "authorizeAndProject": self.authorize_and_project.value,
             "batchLimits": self.batch_limits.value,
@@ -205,6 +215,9 @@ class FileCapabilityManifest:
             "resourceKinds": [value.value for value in self.resource_kinds],
             "sourceMode": self.source_mode.value,
         }
+        if self.declaration_version == "file-capabilities-v4":
+            document["deleteObservations"] = self.delete_observations.value
+        return document
 
 
 FILE_CAPABILITY_MANIFEST = FileCapabilityManifest()
@@ -221,6 +234,18 @@ FILE_CHANGE_CAPABILITY_MANIFEST = FileCapabilityManifest(
     describe_capabilities=CapabilityStatus.AVAILABLE,
     read_changes=CapabilityStatus.AVAILABLE,
     checkpoint=CapabilityStatus.AVAILABLE,
+    file_source_access=CapabilityStatus.AVAILABLE,
+    ingestion_jobs=CapabilityStatus.AVAILABLE,
+)
+FILE_DELETE_OBSERVATION_CAPABILITY_MANIFEST = FileCapabilityManifest(
+    declaration_version="file-capabilities-v4",
+    cursor_semantics=CapabilityStatus.AVAILABLE,
+    checkpoint_semantics=CapabilityStatus.AVAILABLE,
+    batch_limits=CapabilityStatus.AVAILABLE,
+    describe_capabilities=CapabilityStatus.AVAILABLE,
+    read_changes=CapabilityStatus.AVAILABLE,
+    checkpoint=CapabilityStatus.AVAILABLE,
+    delete_observations=CapabilityStatus.AVAILABLE,
     file_source_access=CapabilityStatus.AVAILABLE,
     ingestion_jobs=CapabilityStatus.AVAILABLE,
 )
@@ -290,6 +315,20 @@ class ActivateFileChangeFeed:
 
     def __reduce__(self) -> NoReturn:
         raise TypeError("File change feed activation is not serializable")
+
+
+@dataclass(frozen=True, slots=True)
+class ActivateFileDeleteObservations:
+    """Trusted Control request for the explicit v3 to v4 capability step."""
+
+    source_ref: SourceRef
+
+    def __post_init__(self) -> None:
+        if type(self.source_ref) is not SourceRef:
+            raise TypeError("File delete observation source_ref must be SourceRef")
+
+    def __reduce__(self) -> NoReturn:
+        raise TypeError("File delete observation activation is not serializable")
 
 
 @dataclass(frozen=True, slots=True)

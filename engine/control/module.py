@@ -15,6 +15,7 @@ from engine.control.authority import (
 )
 from engine.control.contracts import (
     ActivateFileChangeFeed,
+    ActivateFileDeleteObservations,
     RegisterFileSource,
     SourceControlUnavailable,
     SourceManifest,
@@ -57,6 +58,12 @@ class ControlStorePort(Protocol):
         self,
         call: TrustedControlCall,
         command: ActivateFileChangeFeed,
+    ) -> SourceManifest: ...
+
+    def activate_file_delete_observations(
+        self,
+        call: TrustedControlCall,
+        command: ActivateFileDeleteObservations,
     ) -> SourceManifest: ...
 
     def read_source(
@@ -121,6 +128,7 @@ class ContextControl:
     ) -> None:
         required_methods = [
             "activate_file_change_feed",
+            "activate_file_delete_observations",
             "offboard_file_source",
             "prepare_file_import",
             "register_file_source",
@@ -235,6 +243,46 @@ class ContextControl:
         except Exception:
             raise SourceControlUnavailable(
                 "File change feed activation is unavailable"
+            ) from None
+
+    def activate_file_delete_observations(
+        self,
+        call: TrustedControlCall,
+        command: ActivateFileDeleteObservations,
+    ) -> SourceManifest:
+        """Explicitly advance a v3 File source to delete observations."""
+
+        if type(command) is not ActivateFileDeleteObservations:
+            raise TypeError(
+                "activate_file_delete_observations requires "
+                "ActivateFileDeleteObservations"
+            )
+        try:
+            _validate_and_consume_control_call(
+                call,
+                authority=self._authority,
+                expected_operation=(
+                    ControlOperation.ACTIVATE_FILE_DELETE_OBSERVATIONS
+                ),
+                checked_at=self._clock(),
+            )
+            manifest = self._store.activate_file_delete_observations(
+                call,
+                command,
+            )
+            self._require_manifest(manifest)
+            if manifest.source_ref != command.source_ref:
+                raise SourceControlUnavailable(
+                    "source store returned a mismatched delete observation manifest"
+                )
+            return manifest
+        except (ControlOperatorAuthenticationRejected, SourceNotAvailable):
+            raise SourceNotAvailable from None
+        except SourceControlUnavailable:
+            raise
+        except Exception:
+            raise SourceControlUnavailable(
+                "File delete observation activation is unavailable"
             ) from None
 
     def offboard_file_source(

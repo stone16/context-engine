@@ -1793,6 +1793,78 @@ CANONICAL_FILE_CHANGE_SCHEDULING_ACTIVATION: dict[str, object] = {
     ],
 }
 
+CANONICAL_FILE_DELETE_OBSERVATION_ACTIVATION: dict[str, object] = {
+    "issueRef": "#85",
+    "invariantRef": "WORKER-LEASE-007",
+    "carrier": "bounded durable File deletion observations without execution",
+    "status": "active_fail_closed",
+    "policyEpochScope": "not-runtime-authority",
+    "controlBoundary": (
+        "latest complete same-SourceVersion v4 baseline -> stable shallow File "
+        "snapshot -> provider-authenticated upsert/delete ChangePage -> exact "
+        "baseline-bound ContextControl PostgreSQL acceptance"
+    ),
+    "testEvidence": [
+        {
+            "id": "PG-FILE-DELETE-DETECT-085",
+            "surface": (
+                "tests/integration/test_file_change_pages.py::"
+                "test_delete_observation_refuses_forged_incomplete_and_stale_baselines"
+            ),
+            "oracle": (
+                "A stable shallow v4 scan emits delete only for a prior exact "
+                "upsert path absent from the current snapshot; forged digest, "
+                "incomplete baseline, and stale complete baseline attempts return "
+                "generic not-available and create zero extra durable rows."
+            ),
+        },
+        {
+            "id": "PG-FILE-DELETE-PAGE-085",
+            "surface": (
+                "tests/integration/test_file_change_pages.py::"
+                "test_control_accepts_delete_observations_without_visibility_effect"
+            ),
+            "oracle": (
+                "The real non-owner Control role accepts and exactly replays one "
+                "canonical mixed upsert/delete page, projects only the latest "
+                "complete same-version bounded baseline, denies direct table access, "
+                "and returns no cross-Organization baseline rows under FORCE RLS."
+            ),
+        },
+        {
+            "id": "PG-FILE-DELETE-NO-EFFECT-085",
+            "surface": (
+                "tests/integration/test_file_change_pages.py::"
+                "test_control_accepts_delete_observations_without_visibility_effect"
+            ),
+            "oracle": (
+                "Accepting or replaying a delete observation cannot enter the upsert "
+                "scheduler and changes no acquisition, import job, Policy Epoch, "
+                "cleanup intent, or publish watermark; the installed generated SDK "
+                "live-HTTP regression separately retains the published Package."
+            ),
+        },
+    ],
+    "deferredEvidence": [
+        "deletion execution through tombstone authority",
+        "autonomous File change polling and scheduling",
+        "retry, reclaim, dead-letter, and full-resync operations",
+    ],
+    "futureCarriers": [
+        "baseline-revalidated deletion execution",
+        "autonomous File change scheduler",
+        "retry and dead-letter handling",
+        "full resync",
+    ],
+    "notActive": [
+        "delete observation as tombstone authority",
+        "implicit or inherited FileImportAudience",
+        "filesystem watcher",
+        "recursive scan",
+        "Runtime authorization from baseline or delete metadata",
+    ],
+}
+
 CANONICAL_ACTIVATIONS: list[dict[str, object]] = [
     CANONICAL_REVOCATION_ACTIVATION,
     CANONICAL_UNAVAILABLE_CAPABILITY_ACTIVATION,
@@ -1811,6 +1883,7 @@ CANONICAL_ACTIVATIONS: list[dict[str, object]] = [
     CANONICAL_PRIVATE_BOT_DELIVERY_ACTIVATION,
     CANONICAL_FILE_CHANGE_FEED_ACTIVATION,
     CANONICAL_FILE_CHANGE_SCHEDULING_ACTIVATION,
+    CANONICAL_FILE_DELETE_OBSERVATION_ACTIVATION,
 ]
 CANONICAL_ACTIVATION_ISSUE_LIST = ", ".join(
     f"Issue {activation['issueRef']}" for activation in CANONICAL_ACTIVATIONS

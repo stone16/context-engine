@@ -32,7 +32,7 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
     document = manifest()
     tables = table_entries(document)
 
-    assert document["manifestVersion"] == "27.0.0"
+    assert document["manifestVersion"] == "28.0.0"
     assert set(tables) == {
         "active_release_manifest",
         "action_delivery_attempt",
@@ -69,6 +69,7 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
         "file_source_cleanup_intent",
         "file_source_change",
         "file_source_change_page",
+        "file_source_delete_observation_page",
         "file_source_publish_watermark",
         "file_revision_snapshot",
         "file_revision_replacement_plan",
@@ -168,6 +169,18 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
     assert tables["source_version"]["classification"] == "tenant_owned"
     assert tables["file_source_change_page"]["classification"] == "tenant_owned"
     assert tables["file_source_change"]["classification"] == "tenant_owned"
+    delete_binding = tables["file_source_delete_observation_page"]
+    assert delete_binding["classification"] == "tenant_owned"
+    assert delete_binding["nonOwnerEvidence"]["evidenceId"] == (
+        "PG-FILE-DELETE-PAGE-085"
+    )
+    assert delete_binding["rowLevelSecurity"]["enabled"] is True
+    assert delete_binding["rowLevelSecurity"]["forced"] is True
+    assert delete_binding["permittedOperations"]["context_engine_runtime"] == []
+    assert delete_binding["permittedOperations"]["context_engine_worker"] == []
+    assert delete_binding["permittedOperations"][
+        "context_engine_worker_lease_definer"
+    ] == ["SELECT", "INSERT", "DELETE"]
 
     assert tables["action_delivery_attempt"]["permittedOperations"][
         "context_engine_action_prepare_definer"
@@ -740,6 +753,7 @@ def test_issue_21_file_source_manifest_is_closed_and_role_separated() -> None:
         "file-capabilities-v1",
         "file-capabilities-v2",
         "file-capabilities-v3",
+        "file-capabilities-v4",
     ):
         assert capability_version in capability_constraint["expression"]
     assert "fileSourceAccess" in capability_constraint["expression"]
@@ -754,6 +768,7 @@ def test_issue_21_file_source_manifest_is_closed_and_role_separated() -> None:
         "exact file-capabilities-v3 makes those dimensions available"
         in capability_constraint["expression"]
     )
+    assert "deleteObservations available" in capability_constraint["expression"]
 
     page = entries["file_source_change_page"]
     change = entries["file_source_change"]
@@ -775,6 +790,7 @@ def test_issue_21_file_source_manifest_is_closed_and_role_separated() -> None:
         if operation["name"] == "read_file_source_progress"
     )
     assert "file_source_change_page" in progress_read["reads"]
+    assert "file_source_delete_observation_page" in progress_read["reads"]
     schedule = next(
         operation
         for operation in manifest()["controlOperations"]
@@ -838,6 +854,7 @@ def test_issue_21_file_source_manifest_is_closed_and_role_separated() -> None:
             "SELECT",
             "INSERT",
             "EXECUTE context_control_activate_file_change_feed",
+            "EXECUTE context_control_activate_file_delete_observations",
             "EXECUTE context_control_offboard_file_source",
         ],
         "context_engine_learning": [],
@@ -853,6 +870,7 @@ def test_issue_21_file_source_manifest_is_closed_and_role_separated() -> None:
             "SELECT",
             "INSERT",
             "EXECUTE context_control_activate_file_change_feed",
+            "EXECUTE context_control_activate_file_delete_observations",
         ],
         "context_engine_learning": [],
         "context_engine_runtime": [],
