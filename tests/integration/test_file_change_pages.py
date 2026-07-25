@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import AbstractContextManager
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from time import monotonic, sleep
 from uuid import UUID, uuid4
 
 import pytest
@@ -19,6 +21,7 @@ from sqlalchemy.exc import DBAPIError
 from adapters.exact_phrase import PostgreSQLExactPhraseCandidateIndex
 from adapters.file_source import FileChangeProvider, FileReadLimits, FileRootRegistry
 from adapters.http.app import create_app
+from adapters.parsers.markdown import compile_markdown as compile_markdown_original
 from engine.control import (
     ActivateFileChangeFeed,
     ChangeLimit,
@@ -33,6 +36,7 @@ from engine.control import (
     FileImportReceiver,
     FileRootRef,
     FileSourceChangeKind,
+    FileSourceOffboarding,
     InitialScan,
     OffboardFileSource,
     PrepareFileImport,
@@ -62,6 +66,7 @@ from engine.supply import (
     MarkdownCompilerConfig,
     WorkerLeaseCodec,
     WorkerLeaseKeyring,
+    WorkNotAvailable,
 )
 from tests.integration.test_file_import_tracer import (
     _ExactScopeAuthority,
@@ -1081,10 +1086,16 @@ def test_file_change_scheduling_rolls_back_an_injected_mid_page_conflict(
     assert tuple(effects) == (0, 2, 3, 0)
 
 
+@pytest.mark.security_evidence(
+    id="PG-FILE-CHANGE-SUPERSESSION-083",
+    layer="postgres",
+)
 def test_file_change_scheduling_allows_current_epoch_pages_and_refuses_superseded_scan(
     tmp_path: Path,
     guarded_control_engine: Engine,
+    guarded_worker_engine: Engine,
     migration_configuration: DatabaseConfiguration,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     root = tmp_path / "root"
     root.mkdir()
@@ -1164,7 +1175,7 @@ def test_file_change_scheduling_allows_current_epoch_pages_and_refuses_supersede
     assert len(scheduled_first.changes) == 1
 
     source = replace(source, scan_head=accepted_second.scan_head)
-    (root / "a.md").write_bytes(b"new A")
+    (root / "a.md").write_bytes(b"# A\n\nNew A.\n")
     newer = provider.read_changes(source, InitialScan(), ChangeLimit(2))
     assert type(newer) is ProviderOk
     with _authorize(
@@ -1212,23 +1223,586 @@ def test_file_change_scheduling_allows_current_epoch_pages_and_refuses_supersede
         )
     assert replayed_first == scheduled_first
 
+    codec = WorkerLeaseCodec(
+        WorkerLeaseKeyring(active_version=1, keys={1: bytes(range(64, 96))})
+    )
+    first_import = scheduled_first.changes[0].prepared_import
+    first_token = PostgreSQLWorkerLeaseIssuer(
+        guarded_control_engine,
+        codec,
+        lease_ttl_seconds=300,
+    ).issue_file_import_lease(first_import)
+    (root / "a.md").write_bytes(b"A")
+    original_read = FileRootRegistry.read
+    content_read_count = 0
+
+    def track_content_read(
+        registry: FileRootRegistry,
+        root_ref: FileRootRef,
+        relative_path: FileImportPath,
+    ) -> bytes:
+        nonlocal content_read_count
+        content_read_count += 1
+        return original_read(registry, root_ref, relative_path)
+
+    monkeypatch.setattr(FileRootRegistry, "read", track_content_read)
+    with (
+        FileRootRegistry(
+            {source.source_version.root_ref: root},
+            limits=FileReadLimits(max_file_bytes=1_024),
+        ) as worker_roots,
+        pytest.raises(FileImportUnavailable),
+    ):
+        PostgreSQLFileImportWorker(
+            guarded_worker_engine,
+            codec,
+            receiver,
+            worker_roots,
+            MarkdownCompilerConfig("markdown-config-v1"),
+            clock=lambda: datetime.now(UTC).replace(microsecond=0),
+        ).run(
+            FileImportLeaseRedemption(
+                first_token,
+                organization_id,
+                first_import.job_id,
+                accepted_first.source_ref,
+            )
+        )
+    assert content_read_count == 0
+
+    (root / "a.md").write_bytes(b"# A\n\nNew A.\n")
+    with _authorize(
+        authority,
+        organization_id,
+        ControlOperation.SCHEDULE_FILE_CHANGE_PAGE,
+        "schedule-current-superseding-page",
+    ) as call:
+        scheduled_newer = control.schedule_file_change_page(
+            call,
+            ScheduleFileChangePage(
+                accepted_newer.source_ref,
+                accepted_newer.source_version_ref,
+                accepted_newer.page_ref,
+                audience,
+            ),
+        )
+    current_import = next(
+        change.prepared_import
+        for change in scheduled_newer.changes
+        if change.path == FileImportPath("a.md")
+    )
+    current_token = PostgreSQLWorkerLeaseIssuer(
+        guarded_control_engine,
+        codec,
+        lease_ttl_seconds=300,
+    ).issue_file_import_lease(current_import)
+    accepted_during_compile = []
+
+    def supersede_during_compile(
+        source_bytes: bytes,
+        config: MarkdownCompilerConfig,
+    ) -> object:
+        (root / "a.md").write_bytes(b"# A\n\nNewest A.\n")
+        current_source = replace(source, scan_head=accepted_newer.scan_head)
+        latest = provider.read_changes(
+            current_source,
+            InitialScan(),
+            ChangeLimit(2),
+        )
+        assert type(latest) is ProviderOk
+        with _authorize(
+            authority,
+            organization_id,
+            ControlOperation.ACCEPT_FILE_CHANGE_PAGE,
+            "accept-supersession-during-compile",
+        ) as call:
+            accepted_during_compile.append(
+                control.accept_file_change_page(call, latest.value)
+            )
+        return compile_markdown_original(source_bytes, config)
+
+    monkeypatch.setattr(
+        "engine.persistence.file_imports.compile_markdown",
+        supersede_during_compile,
+    )
+    content_read_count = 0
+    with (
+        FileRootRegistry(
+            {source.source_version.root_ref: root},
+            limits=FileReadLimits(max_file_bytes=1_024),
+        ) as worker_roots,
+        pytest.raises(FileImportUnavailable) as publication_failure,
+    ):
+        PostgreSQLFileImportWorker(
+            guarded_worker_engine,
+            codec,
+            receiver,
+            worker_roots,
+            MarkdownCompilerConfig("markdown-config-v1"),
+            clock=lambda: datetime.now(UTC).replace(microsecond=0),
+        ).run(
+            FileImportLeaseRedemption(
+                current_token,
+                organization_id,
+                current_import.job_id,
+                accepted_newer.source_ref,
+            )
+        )
+    assert str(publication_failure.value) == "File publication is unavailable"
+    assert content_read_count == 1
+    assert len(accepted_during_compile) == 1
+    assert accepted_during_compile[0].scan_epoch != accepted_newer.scan_epoch
+
     migration_engine = create_database_engine(migration_configuration)
     try:
         with migration_engine.connect() as connection:
             superseded_effects = connection.execute(
                 text(
-                    "SELECT count(*) FROM file_acquisition "
-                    "WHERE organization_id = :organization_id "
-                    "AND change_page_ref = :page_ref"
+                    """
+                    SELECT
+                      (SELECT count(*) FROM file_acquisition
+                       WHERE organization_id = :organization_id
+                         AND change_page_ref = :page_ref),
+                      (SELECT count(*) FROM context_resource
+                       WHERE organization_id = :organization_id
+                         AND active_revision_id IS NOT NULL),
+                      (SELECT count(*) FROM revision_publication_event
+                       WHERE organization_id = :organization_id
+                         AND state = 'active'),
+                      (SELECT count(*) FROM file_source_publish_watermark
+                       WHERE organization_id = :organization_id
+                         AND source_id = :source_id)
+                    """
                 ),
                 {
                     "organization_id": organization_id,
+                    "source_id": accepted_second.source_ref.value,
                     "page_ref": accepted_second.page_ref,
                 },
-            ).scalar_one()
+            ).one()
     finally:
         migration_engine.dispose()
-    assert superseded_effects == 0
+    assert tuple(superseded_effects) == (0, 0, 0, 0)
+
+
+def test_scheduled_redeem_waits_for_progress_before_offboard_job_fence(
+    tmp_path: Path,
+    guarded_control_engine: Engine,
+    guarded_worker_engine: Engine,
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "a.md").write_bytes(b"# A\n\nScheduled.\n")
+    (root / "manual.md").write_bytes(b"# Manual\n\nUnscheduled.\n")
+    provider_proofs, control_proofs = _proofs()
+    organization_id = uuid4()
+    receiver = FileImportReceiver(uuid4())
+    control, authority, source = _seed_file_change_source(
+        guarded_control_engine=guarded_control_engine,
+        migration_configuration=migration_configuration,
+        organization_id=organization_id,
+        receiver=receiver,
+        root_ref=FileRootRef("scheduled-lock-order-root"),
+        control_proofs=control_proofs,
+    )
+    provider = FileChangeProvider(
+        FileRootRegistry(
+            {source.source_version.root_ref: root},
+            limits=FileReadLimits(max_file_bytes=1_024),
+        ),
+        proofs=provider_proofs,
+    )
+    page = provider.read_changes(source, InitialScan(), ChangeLimit(1))
+    assert type(page) is ProviderOk
+    with _authorize(
+        authority,
+        organization_id,
+        ControlOperation.ACCEPT_FILE_CHANGE_PAGE,
+        "accept-lock-order-page",
+    ) as call:
+        accepted = control.accept_file_change_page(call, page.value)
+
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.connect() as connection:
+            membership_id = connection.execute(
+                text(
+                    "SELECT membership_id FROM membership "
+                    "WHERE organization_id = :organization_id"
+                ),
+                {"organization_id": organization_id},
+            ).scalar_one()
+        with _authorize(
+            authority,
+            organization_id,
+            ControlOperation.SCHEDULE_FILE_CHANGE_PAGE,
+            "schedule-lock-order-page",
+        ) as call:
+            scheduled = control.schedule_file_change_page(
+                call,
+                ScheduleFileChangePage(
+                    accepted.source_ref,
+                    accepted.source_version_ref,
+                    accepted.page_ref,
+                    FileImportAudience(
+                        "principal:file-reader",
+                        membership_id,
+                        1,
+                    ),
+                ),
+            )
+        prepared = scheduled.changes[0].prepared_import
+        codec = WorkerLeaseCodec(
+            WorkerLeaseKeyring(active_version=1, keys={1: bytes(range(64, 96))})
+        )
+        token = PostgreSQLWorkerLeaseIssuer(
+            guarded_control_engine,
+            codec,
+            lease_ttl_seconds=300,
+        ).issue_file_import_lease(prepared)
+        with _authorize(
+            authority,
+            organization_id,
+            ControlOperation.IMPORT_FILE,
+            "prepare-manual-lock-order-import",
+        ) as call:
+            manual = control.prepare_file_import(
+                call,
+                PrepareFileImport(
+                    accepted.source_ref,
+                    FileImportPath("manual.md"),
+                    FileImportAudience(
+                        "principal:file-reader",
+                        membership_id,
+                        1,
+                    ),
+                    "manual-lock-order-import",
+                ),
+            )
+        manual_token = PostgreSQLWorkerLeaseIssuer(
+            guarded_control_engine,
+            codec,
+            lease_ttl_seconds=300,
+        ).issue_file_import_lease(manual)
+
+        with (
+            FileRootRegistry(
+                {source.source_version.root_ref: root},
+                limits=FileReadLimits(max_file_bytes=1_024),
+            ) as worker_roots,
+            migration_engine.connect() as progress_connection,
+        ):
+            progress_transaction = progress_connection.begin()
+            # Page acceptance uses this exact progress arbitration. Holding it here
+            # lets production redemption and offboarding exercise their relative
+            # lock order without adding a test-only hook to either operation.
+            progress_connection.execute(
+                text(
+                    """
+                    SELECT pg_catalog.pg_advisory_xact_lock(
+                        pg_catalog.hashtextextended(
+                            'context-engine.file-source-progress:'
+                            || CAST(:organization_id AS text) || ':'
+                            || CAST(:source_id AS text), 0
+                        )
+                    )
+                    """
+                ),
+                {
+                    "organization_id": organization_id,
+                    "source_id": accepted.source_ref.value,
+                },
+            )
+            worker = PostgreSQLFileImportWorker(
+                guarded_worker_engine,
+                codec,
+                receiver,
+                worker_roots,
+                MarkdownCompilerConfig("markdown-config-v1"),
+                clock=lambda: datetime.now(UTC).replace(microsecond=0),
+            )
+
+            def redeem() -> object:
+                return worker.run(
+                    FileImportLeaseRedemption(
+                        token,
+                        organization_id,
+                        prepared.job_id,
+                        accepted.source_ref,
+                    )
+                )
+
+            def offboard() -> FileSourceOffboarding:
+                with _authorize(
+                    authority,
+                    organization_id,
+                    ControlOperation.OFFBOARD_FILE_SOURCE,
+                    "offboard-during-scheduled-redemption",
+                ) as call:
+                    return control.offboard_file_source(
+                        call,
+                        OffboardFileSource(accepted.source_ref),
+                    )
+
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                manual_redemption = executor.submit(
+                    worker.run,
+                    FileImportLeaseRedemption(
+                        manual_token,
+                        organization_id,
+                        manual.job_id,
+                        accepted.source_ref,
+                    ),
+                )
+                assert manual_redemption.result(timeout=5).effect_count == 1
+                redemption = executor.submit(redeem)
+                deadline = monotonic() + 10
+                redemption_waiting = False
+                while monotonic() < deadline:
+                    with migration_engine.connect() as observer:
+                        redemption_waiting = bool(
+                            observer.execute(
+                                text(
+                                    """
+                                    SELECT EXISTS (
+                                        SELECT 1
+                                        FROM pg_catalog.pg_stat_activity AS activity
+                                        JOIN pg_catalog.pg_locks AS held_lock
+                                          ON held_lock.pid = activity.pid
+                                        WHERE activity.usename =
+                                              'context_engine_worker'
+                                          AND held_lock.locktype = 'advisory'
+                                          AND held_lock.granted IS FALSE
+                                    )
+                                    """
+                                )
+                            ).scalar_one()
+                        )
+                    if redemption_waiting:
+                        break
+                    sleep(0.01)
+                if not redemption_waiting:
+                    progress_transaction.rollback()
+                    redemption.result(timeout=5)
+                    pytest.fail("scheduled redemption did not wait for progress")
+
+                offboarding = executor.submit(offboard)
+                try:
+                    offboarded = offboarding.result(timeout=5)
+                finally:
+                    if progress_transaction.is_active:
+                        progress_transaction.rollback()
+                assert offboarded.cancelled_job_count >= 1
+                with pytest.raises((FileImportUnavailable, WorkNotAvailable)):
+                    redemption.result(timeout=5)
+    finally:
+        migration_engine.dispose()
+
+
+def test_scheduled_redeem_rechecks_expiry_after_waiting_for_progress(
+    tmp_path: Path,
+    guarded_control_engine: Engine,
+    guarded_worker_engine: Engine,
+    migration_configuration: DatabaseConfiguration,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "a.md").write_bytes(b"# A\n\nExpires while waiting.\n")
+    provider_proofs, control_proofs = _proofs()
+    organization_id = uuid4()
+    receiver = FileImportReceiver(uuid4())
+    control, authority, source = _seed_file_change_source(
+        guarded_control_engine=guarded_control_engine,
+        migration_configuration=migration_configuration,
+        organization_id=organization_id,
+        receiver=receiver,
+        root_ref=FileRootRef("scheduled-expiry-fence-root"),
+        control_proofs=control_proofs,
+    )
+    provider = FileChangeProvider(
+        FileRootRegistry(
+            {source.source_version.root_ref: root},
+            limits=FileReadLimits(max_file_bytes=1_024),
+        ),
+        proofs=provider_proofs,
+    )
+    page = provider.read_changes(source, InitialScan(), ChangeLimit(1))
+    assert type(page) is ProviderOk
+    with _authorize(
+        authority,
+        organization_id,
+        ControlOperation.ACCEPT_FILE_CHANGE_PAGE,
+        "accept-expiring-scheduled-page",
+    ) as call:
+        accepted = control.accept_file_change_page(call, page.value)
+
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.connect() as connection:
+            membership_id = connection.execute(
+                text(
+                    "SELECT membership_id FROM membership "
+                    "WHERE organization_id = :organization_id"
+                ),
+                {"organization_id": organization_id},
+            ).scalar_one()
+        with _authorize(
+            authority,
+            organization_id,
+            ControlOperation.SCHEDULE_FILE_CHANGE_PAGE,
+            "schedule-expiring-page",
+        ) as call:
+            prepared = (
+                control.schedule_file_change_page(
+                    call,
+                    ScheduleFileChangePage(
+                        accepted.source_ref,
+                        accepted.source_version_ref,
+                        accepted.page_ref,
+                        FileImportAudience(
+                            "principal:file-reader",
+                            membership_id,
+                            1,
+                        ),
+                    ),
+                )
+                .changes[0]
+                .prepared_import
+            )
+        codec = WorkerLeaseCodec(
+            WorkerLeaseKeyring(active_version=1, keys={1: bytes(range(64, 96))})
+        )
+        token = PostgreSQLWorkerLeaseIssuer(
+            guarded_control_engine,
+            codec,
+            lease_ttl_seconds=2,
+        ).issue_file_import_lease(prepared)
+        content_read_count = 0
+        original_read = FileRootRegistry.read
+
+        def track_content_read(
+            registry: FileRootRegistry,
+            root_ref: FileRootRef,
+            relative_path: FileImportPath,
+        ) -> bytes:
+            nonlocal content_read_count
+            content_read_count += 1
+            return original_read(registry, root_ref, relative_path)
+
+        monkeypatch.setattr(FileRootRegistry, "read", track_content_read)
+        with (
+            FileRootRegistry(
+                {source.source_version.root_ref: root},
+                limits=FileReadLimits(max_file_bytes=1_024),
+            ) as worker_roots,
+            migration_engine.connect() as progress_connection,
+        ):
+            progress_transaction = progress_connection.begin()
+            progress_connection.execute(
+                text(
+                    """
+                    SELECT pg_catalog.pg_advisory_xact_lock(
+                        pg_catalog.hashtextextended(
+                            'context-engine.file-source-progress:'
+                            || CAST(:organization_id AS text) || ':'
+                            || CAST(:source_id AS text), 0
+                        )
+                    )
+                    """
+                ),
+                {
+                    "organization_id": organization_id,
+                    "source_id": accepted.source_ref.value,
+                },
+            )
+            worker = PostgreSQLFileImportWorker(
+                guarded_worker_engine,
+                codec,
+                receiver,
+                worker_roots,
+                MarkdownCompilerConfig("markdown-config-v1"),
+                clock=lambda: datetime.now(UTC).replace(microsecond=0),
+            )
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                redemption = executor.submit(
+                    worker.run,
+                    FileImportLeaseRedemption(
+                        token,
+                        organization_id,
+                        prepared.job_id,
+                        accepted.source_ref,
+                    ),
+                )
+                deadline = monotonic() + 10
+                waiting = False
+                while monotonic() < deadline:
+                    waiting = bool(
+                        progress_connection.execute(
+                            text(
+                                """
+                                SELECT EXISTS (
+                                    SELECT 1
+                                    FROM pg_catalog.pg_stat_activity AS activity
+                                    JOIN pg_catalog.pg_locks AS held_lock
+                                      ON held_lock.pid = activity.pid
+                                    WHERE activity.usename = 'context_engine_worker'
+                                      AND held_lock.locktype = 'advisory'
+                                      AND held_lock.granted IS FALSE
+                                )
+                                """
+                            )
+                        ).scalar_one()
+                    )
+                    if waiting:
+                        break
+                    sleep(0.01)
+                if not waiting:
+                    progress_transaction.rollback()
+                    redemption.result(timeout=5)
+                    pytest.fail("scheduled redemption did not wait for progress")
+                progress_connection.execute(
+                    text(
+                        """
+                        SELECT pg_catalog.pg_sleep(
+                            GREATEST(
+                                EXTRACT(EPOCH FROM (
+                                    lease_expires_at
+                                    - pg_catalog.clock_timestamp()
+                                )) + 0.05,
+                                0
+                            )::double precision
+                        )
+                        FROM public.file_import_job
+                        WHERE organization_id = :organization_id
+                          AND job_id = :job_id
+                        """
+                    ),
+                    {
+                        "organization_id": organization_id,
+                        "job_id": prepared.job_id,
+                    },
+                ).scalar_one()
+                progress_transaction.rollback()
+                with pytest.raises(WorkNotAvailable):
+                    redemption.result(timeout=5)
+
+        with migration_engine.connect() as connection:
+            state = connection.execute(
+                text(
+                    "SELECT state, lease_redeemed_at FROM file_import_job "
+                    "WHERE organization_id = :organization_id AND job_id = :job_id"
+                ),
+                {
+                    "organization_id": organization_id,
+                    "job_id": prepared.job_id,
+                },
+            ).one()
+        assert tuple(state) == ("leased", None)
+        assert content_read_count == 0
+    finally:
+        migration_engine.dispose()
 
 
 def test_scheduled_pages_reuse_unchanged_and_replaced_publication_paths(

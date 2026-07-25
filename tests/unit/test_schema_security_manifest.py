@@ -762,12 +762,9 @@ def test_issue_21_file_source_manifest_is_closed_and_role_separated() -> None:
         assert content_free_entry["nonOwnerEvidence"]["evidenceId"] == (
             "PG-FILE-CHANGE-DENY-081"
         )
-        assert content_free_entry["permittedOperations"][
-            "context_engine_runtime"
-        ] == []
+        assert content_free_entry["permittedOperations"]["context_engine_runtime"] == []
     assert {
-        key["name"]: key["columns"]
-        for key in checkpoint["organizationInclusiveKeys"]
+        key["name"]: key["columns"] for key in checkpoint["organizationInclusiveKeys"]
     }["uq_file_source_acquisition_checkpoint_change_page"] == [
         "organization_id",
         "change_page_ref",
@@ -789,6 +786,30 @@ def test_issue_21_file_source_manifest_is_closed_and_role_separated() -> None:
         "file_source_acquisition_checkpoint",
     ]
     assert schedule["filesystemAccessAllowed"] is False
+    redeem = next(
+        operation
+        for operation in manifest()["controlOperations"]
+        if operation["name"] == "redeem_file_import_lease"
+    )
+    assert (
+        "before a scheduled lease enters running"
+        in (redeem["scheduledObservationEpochFence"])
+    )
+    publish = next(
+        operation
+        for operation in manifest()["controlOperations"]
+        if operation["name"] == "publish_file_import"
+    )
+    assert "roll back together" in (publish["scheduledObservationPublicationFence"])
+    watermark_fence = entries["file_source_publish_watermark"][
+        "scheduledObservationEpochFence"
+    ]
+    assert watermark_fence["trigger"] == (
+        "file_source_publish_watermark_current_scheduled_epoch"
+    )
+    assert watermark_fence["function"] == (
+        "context_file_source_fence_scheduled_publication_epoch"
+    )
     assert {
         key["name"]: key["columns"]
         for key in entries["file_acquisition"]["organizationInclusiveKeys"]

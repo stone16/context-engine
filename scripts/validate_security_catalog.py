@@ -404,9 +404,7 @@ REQUIRED_POSTGRES_EVIDENCE["TRANSPORT-UNTRUSTED-008"] = (
     "PG-DELIVERY-EVIDENCE-063",
     "PG-PRIVATE-BOT-FLOW-071",
 )
-REQUIRED_RUNTIME_EVIDENCE["TRANSPORT-UNTRUSTED-008"] += (
-    "SDK-PRIVATE-BOT-FLOW-071",
-)
+REQUIRED_RUNTIME_EVIDENCE["TRANSPORT-UNTRUSTED-008"] += ("SDK-PRIVATE-BOT-FLOW-071",)
 REQUIRED_PROPERTY_EVIDENCE["EGRESS-011"] = (
     "TS-MODEL-EGRESS-070",
     "TS-PRIVATE-BOT-FLOW-071",
@@ -425,12 +423,8 @@ REQUIRED_POSTGRES_EVIDENCE["ACTION-SEPARATION-014"] = (
     "PG-ACTION-PERFORM-068",
     "PG-PRIVATE-BOT-FLOW-071",
 )
-REQUIRED_PROPERTY_EVIDENCE["ACTION-SEPARATION-014"] = (
-    "TS-PRIVATE-BOT-FLOW-071",
-)
-REQUIRED_RUNTIME_EVIDENCE["ACTION-SEPARATION-014"] += (
-    "SDK-PRIVATE-BOT-FLOW-071",
-)
+REQUIRED_PROPERTY_EVIDENCE["ACTION-SEPARATION-014"] = ("TS-PRIVATE-BOT-FLOW-071",)
+REQUIRED_RUNTIME_EVIDENCE["ACTION-SEPARATION-014"] += ("SDK-PRIVATE-BOT-FLOW-071",)
 REQUIRED_PROPERTY_EVIDENCE["CITATION-AUTH-010"] = ("PROP-CITATION-AUTH-010",)
 REQUIRED_POSTGRES_EVIDENCE["CITATION-AUTH-010"] = (
     "PG-CITATION-AUTH-010",
@@ -1741,7 +1735,8 @@ CANONICAL_FILE_CHANGE_SCHEDULING_ACTIVATION: dict[str, object] = {
     "controlBoundary": (
         "accepted File page -> trusted ContextControl explicit FileImportAudience "
         "-> exact file_acquisition/file_import_job lineage -> existing WorkerLease "
-        "-> pre-compiler raw observation verification"
+        "-> current accepted scan-epoch redemption fence -> pre-compiler raw "
+        "observation verification -> atomic current-epoch publication fence"
     ),
     "testEvidence": [
         {
@@ -1759,9 +1754,22 @@ CANONICAL_FILE_CHANGE_SCHEDULING_ACTIVATION: dict[str, object] = {
             "id": "PG-FILE-CHANGE-SCHEDULE-DENY-083",
             "surface": "tests/integration/test_file_change_pages.py",
             "oracle": (
-                "Changed audience and disabled receiver scheduling attempts return "
-                "generic not-available while retaining exactly the original whole "
-                "page job set and creating zero additional acquisitions or jobs."
+                "Changed audience, disabled receiver, stale Membership, and disabled "
+                "Source scheduling attempts return generic not-available while "
+                "retaining exactly the original whole page job set and creating zero "
+                "additional acquisitions or jobs."
+            ),
+        },
+        {
+            "id": "PG-FILE-CHANGE-SUPERSESSION-083",
+            "surface": "tests/integration/test_file_change_pages.py",
+            "oracle": (
+                "A real non-owner Worker path rejects a queued superseded-scan job "
+                "before any filesystem read, rejects scheduling a previously "
+                "unscheduled superseded page without new lineage, preserves exact "
+                "replay of an already scheduled page, and atomically rolls back "
+                "active Resource, active publication event, and watermark when a "
+                "newer scan is accepted during compilation."
             ),
         },
     ],

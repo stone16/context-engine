@@ -48,12 +48,29 @@ rewrites. Manual imports retain null observation fields and their existing
 behavior.
 
 Lease issuance and redemption still use only `file.import`. Redemption exposes
-the optional expected raw identity to the worker. After its stable no-follow
-read and before Markdown compilation, the worker compares byte length and
-SHA-256. A missing or changed file closes the redeemed job as failed when its
-exact WorkerLease authority remains current, with no Revision, candidate,
+the optional expected raw identity to the worker. A non-locking read of immutable
+acquisition lineage first distinguishes manual from scheduled work. Before a
+scheduled lease can lock its job row or enter `running`, redemption takes the
+same per-Source progress lock and requires its accepted page's scan epoch to
+remain the latest accepted scan epoch. This preserves the progress-before-Source
+and publication-before-Source-before-job ordering used by page acceptance and
+offboarding; manual imports acquire no progress lock and retain their prior lock
+path. After waiting for the progress fence, redemption refreshes trusted
+database time and revalidates expiry before touching the job row. An expired or
+superseded job therefore reads no content. After a successful stable
+no-follow read and before Markdown compilation, the worker compares byte length
+and SHA-256. A missing or changed file closes the redeemed job as failed when
+its exact WorkerLease authority remains current, with no Revision, candidate,
 policy, or publication watermark. A later scan may observe the new state; this
 job never substitutes it for the accepted observation.
+
+Supersession can still race after redemption. Every successful import outcome
+therefore crosses a second database fence in the transaction that appends its
+publish watermark. That fence takes the same progress lock and rechecks the
+scheduled page epoch. If the epoch changed during read, compilation, or staged
+publication, PostgreSQL rolls back the active pointer/result, active event, and
+watermark together. Manual imports and tombstones retain their existing
+behavior.
 
 The failure marker remains subject to the existing exact current WorkerLease
 authority. If the receiver is revoked after redemption, revocation vetoes even
@@ -66,6 +83,8 @@ that fenced state remains inactive and must be introduced by a later issue.
 - Explicit scheduling reuses the current queue, WorkerLease, publication, and
   acquisition-progress protocols.
 - Scheduling a page is all-or-none and exact replay is idempotent.
+- Superseded scheduled jobs are retained for audit/replay but can neither read
+  content nor commit a visible publication.
 - Provider checkpoints and worker identity remain non-authoritative for Runtime
   delivery.
 - Automatic polling, filesystem watching, deletion execution, retry/reclaim,

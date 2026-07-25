@@ -236,6 +236,7 @@
         "workerAudience": "context-engine-worker",
         "operation": "file.import"
       },
+      "scheduledObservationEpochFence": "immutable acquisition lineage is read without a row lock; scheduled work then takes the per-Source progress advisory lock, refreshes trusted database time, and revalidates lease expiry plus the latest accepted File scan epoch before locking its job row and before a scheduled lease enters running or reads content; manual imports retain their prior lock path",
       "atomicWrites": [
         "file_import_job"
       ]
@@ -250,6 +251,7 @@
       "definerRole": "context_engine_worker_lease_definer",
       "directTableMutationAllowed": false,
       "rawNonceComparedAsSha256": true,
+      "scheduledObservationPublicationFence": "every scheduled import watermark transaction holds the per-Source progress advisory lock and requires its accepted page scan epoch to remain current, so stale active-pointer, event, result and watermark writes roll back together",
       "contentIdentity": {
         "domain": "context-engine.file-content-identity.v1",
         "dimensions": [
@@ -5133,7 +5135,8 @@
         "JOB-001",
         "WORKER-LEASE-007",
         "PG-FILE-CHANGE-SCHEDULE-083",
-        "PG-FILE-CHANGE-SCHEDULE-DENY-083"
+        "PG-FILE-CHANGE-SCHEDULE-DENY-083",
+        "PG-FILE-CHANGE-SUPERSESSION-083"
       ]
     },
     {
@@ -5691,7 +5694,8 @@
         "JOB-001",
         "JOB-005",
         "WORKER-LEASE-007",
-        "PG-FILE-SOURCE-OFFBOARD-030"
+        "PG-FILE-SOURCE-OFFBOARD-030",
+        "PG-FILE-CHANGE-SUPERSESSION-083"
       ]
     },
     {
@@ -7480,7 +7484,8 @@
         "DB-001",
         "DB-004",
         "DB-008",
-        "PG-FILE-PROGRESS-029"
+        "PG-FILE-PROGRESS-029",
+        "PG-FILE-CHANGE-SUPERSESSION-083"
       ]
     },
     {
@@ -7609,6 +7614,13 @@
         ],
         "sqlstate": "55000"
       },
+      "scheduledObservationEpochFence": {
+        "trigger": "file_source_publish_watermark_current_scheduled_epoch",
+        "function": "context_file_source_fence_scheduled_publication_epoch",
+        "lock": "context-engine.file-source-progress Organization and Source advisory transaction lock",
+        "scope": "scheduled file_import only; manual imports and tombstones retain existing behavior",
+        "sqlstate": "55000"
+      },
       "functionOnlyMutation": {
         "databaseFunctions": [
           "context_file_source_append_publish_watermark",
@@ -7617,6 +7629,7 @@
           "context_file_source_checkpoint_tombstone"
         ],
         "causalDatabaseFunctions": [
+          "context_file_source_fence_scheduled_publication_epoch",
           "context_worker_publish_file_import_v2",
           "context_worker_publish_structural_file_import_v2",
           "context_worker_stage_file_replacement",

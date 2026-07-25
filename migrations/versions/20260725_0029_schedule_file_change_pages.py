@@ -27,6 +27,8 @@ _OPERATION = "file.import"
 _WORKER = "context_engine_worker"
 _REDEEM = "context_worker_redeem_file_import"
 _REDEEM_SIGNATURE = "(uuid, uuid, uuid, text, bigint, bigint, bytea, timestamp with time zone, timestamp with time zone)"
+_PUBLICATION_FENCE = "context_file_source_fence_scheduled_publication_epoch"
+_PUBLICATION_FENCE_TRIGGER = "file_source_publish_watermark_current_scheduled_epoch"
 _V3 = """{"aclEvidenceMode":"mirrored","authorizeAndProject":"unavailable","batchLimits":"available","checkpoint":"available","checkpointSemantics":"available","consistencyGuarantees":"unavailable","contentKinds":["markdown"],"cursorSemantics":"available","declarationVersion":"file-capabilities-v3","deletion":"unavailable","describeCapabilities":"available","discover":"unavailable","fileSourceAccess":"available","freshness":"unavailable","ingestionJobs":"available","projectionFields":[],"readChanges":"available","resourceKinds":["markdown_document"],"sourceMode":"materialized"}"""
 _REQUEST_DIGEST_EXPRESSION = """
 pg_catalog.encode(
@@ -473,6 +475,7 @@ def upgrade() -> None:
     )
     op.execute("RESET ROLE")
     _replace_redeem_function(include_observation=True)
+    _create_publication_epoch_fence()
 
 
 def downgrade() -> None:
@@ -505,6 +508,7 @@ def downgrade() -> None:
             "File change scheduling downgrade requires no newer manual "
             "File import paths; use a forward fix"
         )
+    _drop_publication_epoch_fence()
     _replace_redeem_function(include_observation=False)
     op.execute(f"SET LOCAL ROLE {_DEFINER}")
     op.execute(f"DROP FUNCTION public.{_FUNCTION}{_SIGNATURE}")
@@ -556,6 +560,103 @@ def _replace_redeem_function(*, include_observation: bool) -> None:
         if include_observation
         else ""
     )
+    observation_declaration = (
+        "selected_change_page_ref text;" if include_observation else ""
+    )
+    current_epoch_guard = (
+        """
+            SELECT acquisition.change_page_ref
+            INTO selected_change_page_ref
+            FROM public.file_import_job AS selected_job
+            JOIN public.file_acquisition AS acquisition
+              ON acquisition.organization_id = selected_job.organization_id
+             AND acquisition.acquisition_id = selected_job.acquisition_id
+            WHERE selected_job.organization_id = requested_organization_id
+              AND selected_job.job_id = requested_job_id
+              AND selected_job.service_principal_id =
+                  requested_service_principal_id
+              AND selected_job.source_id::text = requested_source_ref
+              AND selected_job.state = 'leased'
+              AND selected_job.lease_generation = requested_lease_generation
+              AND selected_job.signing_key_version =
+                  requested_signing_key_version
+              AND selected_job.lease_nonce_digest =
+                  public.digest(requested_nonce, 'sha256')
+              AND selected_job.lease_issued_at = requested_issued_at
+              AND selected_job.lease_expires_at = requested_expires_at
+              AND redeemed_at >= selected_job.lease_issued_at
+              AND redeemed_at < selected_job.lease_expires_at
+              AND EXISTS (
+                  SELECT 1 FROM public.service_principal AS principal
+                  WHERE principal.organization_id =
+                        selected_job.organization_id
+                    AND principal.service_principal_id =
+                        selected_job.service_principal_id
+                    AND principal.workload = selected_job.workload
+                    AND principal.worker_audience =
+                        selected_job.worker_audience
+                    AND principal.operation = selected_job.operation
+                    AND principal.enabled IS TRUE
+              );
+            IF selected_change_page_ref IS NOT NULL THEN
+                PERFORM pg_catalog.pg_advisory_xact_lock(
+                    pg_catalog.hashtextextended(
+                        'context-engine.file-source-progress:'
+                        || requested_organization_id::text || ':'
+                        || requested_source_ref, 0
+                    )
+                );
+                redeemed_at := pg_catalog.clock_timestamp();
+                IF NOT EXISTS (
+                      SELECT 1
+                      FROM public.file_import_job AS selected_job
+                      JOIN public.file_acquisition AS acquisition
+                        ON acquisition.organization_id =
+                           selected_job.organization_id
+                       AND acquisition.acquisition_id =
+                           selected_job.acquisition_id
+                      JOIN public.file_source_change_page AS accepted_page
+                        ON accepted_page.organization_id =
+                           acquisition.organization_id
+                       AND accepted_page.source_id = acquisition.source_id
+                       AND accepted_page.source_version_id =
+                           acquisition.source_version_id
+                       AND accepted_page.page_ref = acquisition.change_page_ref
+                      WHERE selected_job.organization_id =
+                            requested_organization_id
+                        AND selected_job.job_id = requested_job_id
+                        AND selected_job.source_id::text = requested_source_ref
+                        AND acquisition.change_page_ref =
+                            selected_change_page_ref
+                        AND accepted_page.scan_epoch = (
+                            SELECT current_page.scan_epoch
+                            FROM public.file_source_acquisition_checkpoint
+                                 AS checkpoint
+                            JOIN public.file_source_change_page AS current_page
+                              ON current_page.organization_id =
+                                 checkpoint.organization_id
+                             AND current_page.source_id = checkpoint.source_id
+                             AND current_page.source_version_id =
+                                 checkpoint.source_version_id
+                             AND current_page.page_ref =
+                                 checkpoint.change_page_ref
+                            WHERE checkpoint.organization_id =
+                                  acquisition.organization_id
+                              AND checkpoint.source_id = acquisition.source_id
+                              AND checkpoint.change_kind = 'file_change_page'
+                            ORDER BY checkpoint.sequence DESC
+                            LIMIT 1
+                        )
+                  )
+                THEN
+                    RAISE EXCEPTION USING ERRCODE = '55000',
+                        MESSAGE = 'scheduled File redemption scan epoch changed';
+                END IF;
+            END IF;
+        """
+        if include_observation
+        else ""
+    )
     op.execute(f"GRANT CREATE ON SCHEMA public TO {_DEFINER}")
     op.execute(f"SET LOCAL ROLE {_DEFINER}")
     op.execute(f"DROP FUNCTION public.{_REDEEM}{_REDEEM_SIGNATURE}")
@@ -577,7 +678,9 @@ def _replace_redeem_function(*, include_observation: bool) -> None:
         LANGUAGE plpgsql SECURITY DEFINER
         SET search_path = pg_catalog, pg_temp SET row_security = on
         AS $function$
-        DECLARE redeemed_at timestamptz;
+        DECLARE
+            redeemed_at timestamptz;
+            {observation_declaration}
         BEGIN
             IF SESSION_USER <> '{_WORKER}' THEN RETURN; END IF;
             PERFORM pg_catalog.set_config(
@@ -587,6 +690,7 @@ def _replace_redeem_function(*, include_observation: bool) -> None:
                 'app.worker_job_id', requested_job_id::text, true
             );
             redeemed_at := pg_catalog.statement_timestamp();
+            {current_epoch_guard}
             UPDATE public.file_import_job AS job
             SET state = COALESCE(job.recovery_from_state, 'running'),
                 recovery_from_state = NULL,
@@ -611,7 +715,7 @@ def _replace_redeem_function(*, include_observation: bool) -> None:
                     AND principal.worker_audience = job.worker_audience
                     AND principal.operation = job.operation
                     AND principal.enabled IS TRUE
-              );
+            );
             IF NOT FOUND THEN RETURN; END IF;
             RETURN QUERY
             SELECT job.source_id::text, version.root_ref,
@@ -646,3 +750,124 @@ def _replace_redeem_function(*, include_observation: bool) -> None:
     )
     op.execute("RESET ROLE")
     op.execute(f"REVOKE CREATE ON SCHEMA public FROM {_DEFINER}")
+
+
+def _create_publication_epoch_fence() -> None:
+    """Fence scheduled visibility in the same transaction as its watermark."""
+
+    op.execute(f"GRANT CREATE ON SCHEMA public TO {_DEFINER}")
+    op.execute(f"SET LOCAL ROLE {_DEFINER}")
+    op.execute(
+        f"""
+        CREATE FUNCTION public.{_PUBLICATION_FENCE}()
+        RETURNS trigger
+        LANGUAGE plpgsql SECURITY DEFINER
+        SET search_path = pg_catalog, pg_temp SET row_security = on
+        AS $function$
+        DECLARE
+            selected_acquisition_id uuid;
+            selected_change_page_ref text;
+            selected_scan_epoch uuid;
+            current_scan_epoch uuid;
+        BEGIN
+            IF NEW.change_kind <> 'file_import' THEN RETURN NEW; END IF;
+            PERFORM pg_catalog.set_config(
+                'app.organization_id', NEW.organization_id::text, true
+            );
+            SELECT acquisition.acquisition_id,
+                   acquisition.change_page_ref
+            INTO selected_acquisition_id,
+                 selected_change_page_ref
+            FROM public.file_source_acquisition_checkpoint AS checkpoint
+            JOIN public.file_acquisition AS acquisition
+              ON acquisition.organization_id = checkpoint.organization_id
+             AND acquisition.acquisition_id = checkpoint.acquisition_id
+            WHERE checkpoint.organization_id = NEW.organization_id
+              AND checkpoint.source_id = NEW.source_id
+              AND checkpoint.sequence = NEW.sequence
+              AND checkpoint.checkpoint_ref = NEW.checkpoint_ref
+              AND checkpoint.change_kind = NEW.change_kind;
+            IF selected_acquisition_id IS NULL THEN
+                RAISE EXCEPTION USING ERRCODE = '55000',
+                    MESSAGE = 'File publication lineage is unavailable';
+            END IF;
+            IF selected_change_page_ref IS NULL THEN RETURN NEW; END IF;
+            PERFORM pg_catalog.pg_advisory_xact_lock(
+                pg_catalog.hashtextextended(
+                    'context-engine.file-source-progress:'
+                    || NEW.organization_id::text || ':'
+                    || NEW.source_id::text, 0
+                )
+            );
+            SELECT acquisition.acquisition_id,
+                   acquisition.change_page_ref,
+                   accepted_page.scan_epoch
+            INTO selected_acquisition_id,
+                 selected_change_page_ref,
+                 selected_scan_epoch
+            FROM public.file_source_acquisition_checkpoint AS checkpoint
+            JOIN public.file_acquisition AS acquisition
+              ON acquisition.organization_id = checkpoint.organization_id
+             AND acquisition.acquisition_id = checkpoint.acquisition_id
+            LEFT JOIN public.file_source_change_page AS accepted_page
+              ON accepted_page.organization_id = acquisition.organization_id
+             AND accepted_page.source_id = acquisition.source_id
+             AND accepted_page.source_version_id = acquisition.source_version_id
+             AND accepted_page.page_ref = acquisition.change_page_ref
+            WHERE checkpoint.organization_id = NEW.organization_id
+              AND checkpoint.source_id = NEW.source_id
+              AND checkpoint.sequence = NEW.sequence
+              AND checkpoint.checkpoint_ref = NEW.checkpoint_ref
+              AND checkpoint.change_kind = NEW.change_kind;
+            IF selected_acquisition_id IS NULL
+               OR selected_change_page_ref IS NULL
+            THEN
+                RAISE EXCEPTION USING ERRCODE = '55000',
+                    MESSAGE = 'scheduled File publication lineage changed';
+            END IF;
+            SELECT current_page.scan_epoch
+            INTO current_scan_epoch
+            FROM public.file_source_acquisition_checkpoint AS checkpoint
+            JOIN public.file_source_change_page AS current_page
+              ON current_page.organization_id = checkpoint.organization_id
+             AND current_page.source_id = checkpoint.source_id
+             AND current_page.source_version_id = checkpoint.source_version_id
+             AND current_page.page_ref = checkpoint.change_page_ref
+            WHERE checkpoint.organization_id = NEW.organization_id
+              AND checkpoint.source_id = NEW.source_id
+              AND checkpoint.change_kind = 'file_change_page'
+            ORDER BY checkpoint.sequence DESC
+            LIMIT 1;
+            IF selected_scan_epoch IS NULL
+               OR selected_scan_epoch IS DISTINCT FROM current_scan_epoch
+            THEN
+                RAISE EXCEPTION USING ERRCODE = '55000',
+                    MESSAGE = 'scheduled File publication scan epoch changed';
+            END IF;
+            RETURN NEW;
+        END;
+        $function$
+        """
+    )
+    op.execute("RESET ROLE")
+    op.execute(
+        f"""
+        CREATE TRIGGER {_PUBLICATION_FENCE_TRIGGER}
+        BEFORE INSERT ON public.file_source_publish_watermark
+        FOR EACH ROW EXECUTE FUNCTION public.{_PUBLICATION_FENCE}()
+        """
+    )
+    op.execute(f"SET LOCAL ROLE {_DEFINER}")
+    op.execute(f"REVOKE ALL ON FUNCTION public.{_PUBLICATION_FENCE}() FROM PUBLIC")
+    op.execute("RESET ROLE")
+    op.execute(f"REVOKE CREATE ON SCHEMA public FROM {_DEFINER}")
+
+
+def _drop_publication_epoch_fence() -> None:
+    op.execute(
+        f"DROP TRIGGER {_PUBLICATION_FENCE_TRIGGER} "
+        "ON public.file_source_publish_watermark"
+    )
+    op.execute(f"SET LOCAL ROLE {_DEFINER}")
+    op.execute(f"DROP FUNCTION public.{_PUBLICATION_FENCE}()")
+    op.execute("RESET ROLE")

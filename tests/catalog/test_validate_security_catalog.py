@@ -677,16 +677,8 @@ def make_schema() -> dict[str, object]:
                     {"const": copy.deepcopy(CANONICAL_ACTION_PERFORM_ACTIVATION)},
                     {"const": copy.deepcopy(CANONICAL_CITATION_OPEN_ACTIVATION)},
                     {"const": copy.deepcopy(CANONICAL_MODEL_EGRESS_ACTIVATION)},
-                    {
-                        "const": copy.deepcopy(
-                            CANONICAL_PRIVATE_BOT_DELIVERY_ACTIVATION
-                        )
-                    },
-                    {
-                        "const": copy.deepcopy(
-                            CANONICAL_FILE_CHANGE_FEED_ACTIVATION
-                        )
-                    },
+                    {"const": copy.deepcopy(CANONICAL_PRIVATE_BOT_DELIVERY_ACTIVATION)},
+                    {"const": copy.deepcopy(CANONICAL_FILE_CHANGE_FEED_ACTIVATION)},
                     {
                         "const": copy.deepcopy(
                             CANONICAL_FILE_CHANGE_SCHEDULING_ACTIVATION
@@ -904,9 +896,7 @@ def make_schema() -> dict[str, object]:
                         "then": {
                             "properties": {
                                 "carrier": {
-                                    "const": copy.deepcopy(
-                                        ACCEPT_012_ACTIVATED_CARRIER
-                                    )
+                                    "const": copy.deepcopy(ACCEPT_012_ACTIVATED_CARRIER)
                                 }
                             }
                         },
@@ -1504,6 +1494,7 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
             [
                 "PG-FILE-CHANGE-SCHEDULE-083",
                 "PG-FILE-CHANGE-SCHEDULE-DENY-083",
+                "PG-FILE-CHANGE-SUPERSESSION-083",
             ],
         )
         not_active = activation["notActive"]

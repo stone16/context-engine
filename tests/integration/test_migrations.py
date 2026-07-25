@@ -937,8 +937,58 @@ def test_file_change_scheduling_revision_downgrades_and_reapplies_cleanly(
         guarded_control_engine,
     )
     try:
-        command.downgrade(alembic_configuration, "20260725_0028")
-        assert _revision_rows(migration_configuration) == ["20260725_0028"]
+        try:
+            command.downgrade(alembic_configuration, "20260725_0028")
+            assert _revision_rows(migration_configuration) == ["20260725_0028"]
+            engine = create_database_engine(migration_configuration)
+            try:
+                with engine.connect() as connection:
+                    acquisition_columns = set(
+                        connection.execute(
+                            text(
+                                """
+                                SELECT column_name
+                                FROM information_schema.columns
+                                WHERE table_schema = 'public'
+                                  AND table_name = 'file_acquisition'
+                                """
+                            )
+                        ).scalars()
+                    )
+                    scheduling_functions = connection.execute(
+                        text(
+                            """
+                            SELECT count(*)
+                            FROM pg_catalog.pg_proc AS procedure
+                            JOIN pg_catalog.pg_namespace AS namespace
+                              ON namespace.oid = procedure.pronamespace
+                            WHERE namespace.nspname = 'public'
+                              AND procedure.proname =
+                                  'context_control_schedule_file_change_page'
+                            """
+                        )
+                    ).scalar_one()
+                assert {
+                    "change_page_ref",
+                    "change_ordinal",
+                    "expected_content_sha256",
+                    "expected_content_length",
+                }.isdisjoint(acquisition_columns)
+                assert scheduling_functions == 0
+            finally:
+                engine.dispose()
+            assert scenario.token is not None
+            published = _run_file_import(
+                scenario,
+                scenario.prepared,
+                scenario.token,
+                guarded_worker_engine,
+            )
+            assert published.outcome == "published"
+        finally:
+            command.upgrade(alembic_configuration, "head")
+
+        assert _revision_rows(migration_configuration) == [HEAD_REVISION]
         engine = create_database_engine(migration_configuration)
         try:
             with engine.connect() as connection:
@@ -954,16 +1004,32 @@ def test_file_change_scheduling_revision_downgrades_and_reapplies_cleanly(
                         )
                     ).scalars()
                 )
-                scheduling_functions = connection.execute(
+                public_execute = connection.execute(
+                    text(
+                        """
+                        SELECT pg_catalog.has_function_privilege(
+                            'public',
+                            'public.context_control_schedule_file_change_page('
+                            'uuid, uuid, uuid, text, text, uuid, bigint, uuid)',
+                            'EXECUTE'
+                        )
+                        """
+                    )
+                ).scalar_one()
+                epoch_fence = connection.execute(
                     text(
                         """
                         SELECT count(*)
-                        FROM pg_catalog.pg_proc AS procedure
-                        JOIN pg_catalog.pg_namespace AS namespace
-                          ON namespace.oid = procedure.pronamespace
-                        WHERE namespace.nspname = 'public'
+                        FROM pg_catalog.pg_trigger AS trigger
+                        JOIN pg_catalog.pg_proc AS procedure
+                          ON procedure.oid = trigger.tgfoid
+                        WHERE trigger.tgrelid =
+                              'file_source_publish_watermark'::regclass
+                          AND trigger.tgname =
+                              'file_source_publish_watermark_current_scheduled_epoch'
                           AND procedure.proname =
-                              'context_control_schedule_file_change_page'
+                              'context_file_source_fence_scheduled_publication_epoch'
+                          AND trigger.tgenabled = 'O'
                         """
                     )
                 ).scalar_one()
@@ -972,58 +1038,12 @@ def test_file_change_scheduling_revision_downgrades_and_reapplies_cleanly(
                 "change_ordinal",
                 "expected_content_sha256",
                 "expected_content_length",
-            }.isdisjoint(acquisition_columns)
-            assert scheduling_functions == 0
+            } <= acquisition_columns
+            assert public_execute is False
+            assert epoch_fence == 1
         finally:
             engine.dispose()
-        assert scenario.token is not None
-        published = _run_file_import(
-            scenario,
-            scenario.prepared,
-            scenario.token,
-            guarded_worker_engine,
-        )
-        assert published.outcome == "published"
     finally:
-        command.upgrade(alembic_configuration, "head")
-
-    assert _revision_rows(migration_configuration) == [HEAD_REVISION]
-    engine = create_database_engine(migration_configuration)
-    try:
-        with engine.connect() as connection:
-            acquisition_columns = set(
-                connection.execute(
-                    text(
-                        """
-                        SELECT column_name
-                        FROM information_schema.columns
-                        WHERE table_schema = 'public'
-                          AND table_name = 'file_acquisition'
-                        """
-                    )
-                ).scalars()
-            )
-            public_execute = connection.execute(
-                text(
-                    """
-                    SELECT pg_catalog.has_function_privilege(
-                        'public',
-                        'public.context_control_schedule_file_change_page('
-                        'uuid, uuid, uuid, text, text, uuid, bigint, uuid)',
-                        'EXECUTE'
-                    )
-                    """
-                )
-            ).scalar_one()
-        assert {
-            "change_page_ref",
-            "change_ordinal",
-            "expected_content_sha256",
-            "expected_content_length",
-        } <= acquisition_columns
-        assert public_execute is False
-    finally:
-        engine.dispose()
         _delete_issue_27_upgrade_fixture(
             migration_configuration,
             scenario.organization_id,

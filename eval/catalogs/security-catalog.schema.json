@@ -817,7 +817,7 @@
             "carrier": "explicit accepted File page scheduling through existing import jobs",
             "status": "active_fail_closed",
             "policyEpochScope": "not-runtime-authority",
-            "controlBoundary": "accepted File page -> trusted ContextControl explicit FileImportAudience -> exact file_acquisition/file_import_job lineage -> existing WorkerLease -> pre-compiler raw observation verification",
+            "controlBoundary": "accepted File page -> trusted ContextControl explicit FileImportAudience -> exact file_acquisition/file_import_job lineage -> existing WorkerLease -> current accepted scan-epoch redemption fence -> pre-compiler raw observation verification -> atomic current-epoch publication fence",
             "testEvidence": [
               {
                 "id": "PG-FILE-CHANGE-SCHEDULE-083",
@@ -827,7 +827,12 @@
               {
                 "id": "PG-FILE-CHANGE-SCHEDULE-DENY-083",
                 "surface": "tests/integration/test_file_change_pages.py",
-                "oracle": "Changed audience and disabled receiver scheduling attempts return generic not-available while retaining exactly the original whole page job set and creating zero additional acquisitions or jobs."
+                "oracle": "Changed audience, disabled receiver, stale Membership, and disabled Source scheduling attempts return generic not-available while retaining exactly the original whole page job set and creating zero additional acquisitions or jobs."
+              },
+              {
+                "id": "PG-FILE-CHANGE-SUPERSESSION-083",
+                "surface": "tests/integration/test_file_change_pages.py",
+                "oracle": "A real non-owner Worker path rejects a queued superseded-scan job before any filesystem read, rejects scheduling a previously unscheduled superseded page without new lineage, preserves exact replay of an already scheduled page, and atomically rolls back active Resource, active publication event, and watermark when a newer scan is accepted during compilation."
               }
             ],
             "deferredEvidence": [
@@ -1140,7 +1145,8 @@
             "PG-FILE-CHANGE-PAGE-081",
             "PG-FILE-CHANGE-DENY-081",
             "PG-FILE-CHANGE-SCHEDULE-083",
-            "PG-FILE-CHANGE-SCHEDULE-DENY-083"
+            "PG-FILE-CHANGE-SCHEDULE-DENY-083",
+            "PG-FILE-CHANGE-SUPERSESSION-083"
           ]
         },
         "surface": {
@@ -1250,7 +1256,7 @@
             "generated SDK ContextPackage plus opaque model EgressGrant -> nominal AuthorizedModelInput -> exact non-owner PostgreSQL redemption -> deterministic ModelGateway twin -> bounded answer and digest-only audit",
             "verified private Feishu twin event -> opaque DeliveryEvidenceRef -> installed generated SDK over HTTP -> sealed Runtime File Package -> controlled ModelGateway -> co-resident ActionPlane prepare/perform -> digest-only DeliveryReceipt audit",
             "FileChangeProvider PendingChangeCursor -> provider-authenticated ChangePage -> ContextControl whole-page PostgreSQL acceptance -> accepted ChangeCursor",
-            "accepted File page -> trusted ContextControl explicit FileImportAudience -> exact file_acquisition/file_import_job lineage -> existing WorkerLease -> pre-compiler raw observation verification"
+            "accepted File page -> trusted ContextControl explicit FileImportAudience -> exact file_acquisition/file_import_job lineage -> existing WorkerLease -> current accepted scan-epoch redemption fence -> pre-compiler raw observation verification -> atomic current-epoch publication fence"
           ]
         },
         "testEvidence": {
