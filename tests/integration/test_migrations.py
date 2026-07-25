@@ -97,6 +97,7 @@ HEAD_TABLES = [
     "exact_phrase_candidate",
     "file_acquisition",
     "file_acquisition_result",
+    "file_delete_observation_execution",
     "file_import_job",
     "file_import_job_event",
     "file_publication_recovery",
@@ -154,6 +155,10 @@ def _delete_issue_27_upgrade_fixture(
 
     engine = create_database_engine(configuration)
     immutable_tables = (
+        (
+            "file_delete_observation_execution",
+            "file_delete_observation_execution_immutable",
+        ),
         ("file_source_delete_observation_page", None),
         ("file_source_change", "file_source_change_immutable"),
         ("file_source_change_page", "file_source_change_page_immutable"),
@@ -201,6 +206,7 @@ def _delete_issue_27_upgrade_fixture(
                 for table in (
                     "action_ticket",
                     "action_delivery_attempt",
+                    "file_delete_observation_execution",
                     "file_source_publish_watermark",
                     "file_source_acquisition_checkpoint",
                     "file_resource_cleanup_intent",
@@ -1003,6 +1009,61 @@ def test_file_delete_observation_revision_owns_atomic_read_volatility(
             ).scalar_one()
         assert "set_config" not in trigger_definition
         assert "File page tenant context is not trusted" in trigger_definition
+    finally:
+        engine.dispose()
+
+
+def test_file_delete_execution_revision_downgrades_only_while_empty(
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    """Issue #87 removes only unused execution machinery."""
+
+    alembic_configuration = Config(ROOT / "alembic.ini")
+    engine = create_database_engine(migration_configuration)
+    try:
+        with engine.connect() as connection:
+            assert connection.execute(
+                text("SELECT count(*) FROM file_delete_observation_execution")
+            ).scalar_one() == 0
+    finally:
+        engine.dispose()
+    try:
+        command.downgrade(alembic_configuration, "20260725_0030")
+        assert _revision_rows(migration_configuration) == ["20260725_0030"]
+        assert "file_delete_observation_execution" not in _application_tables(
+            migration_configuration
+        )
+        engine = create_database_engine(migration_configuration)
+        try:
+            with engine.connect() as connection:
+                assert connection.execute(
+                    text(
+                        "SELECT has_function_privilege("
+                        "'context_engine_worker_lease_definer', "
+                        "'context_control_tombstone_file_resource("
+                        "uuid,uuid,text,text,bigint,uuid)', 'EXECUTE')"
+                    )
+                ).scalar_one() is False
+        finally:
+            engine.dispose()
+    finally:
+        command.upgrade(alembic_configuration, "head")
+
+    assert _revision_rows(migration_configuration) == [HEAD_REVISION]
+    assert "file_delete_observation_execution" in _application_tables(
+        migration_configuration
+    )
+    engine = create_database_engine(migration_configuration)
+    try:
+        with engine.connect() as connection:
+            assert connection.execute(
+                text(
+                    "SELECT has_function_privilege("
+                    "'context_engine_worker_lease_definer', "
+                    "'context_control_tombstone_file_resource("
+                    "uuid,uuid,text,text,bigint,uuid)', 'EXECUTE')"
+                )
+            ).scalar_one() is True
     finally:
         engine.dispose()
 

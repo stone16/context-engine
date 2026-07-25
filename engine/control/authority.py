@@ -22,6 +22,7 @@ class ControlOperation(StrEnum):
     ACCEPT_FILE_CHANGE_PAGE = "accept_file_change_page"
     ACTIVATE_FILE_CHANGE_FEED = "activate_file_change_feed"
     ACTIVATE_FILE_DELETE_OBSERVATIONS = "activate_file_delete_observations"
+    EXECUTE_FILE_DELETE_OBSERVATION = "execute_file_delete_observation"
     IMPORT_FILE = "import_file"
     OFFBOARD_FILE_SOURCE = "offboard_file_source"
     REGISTER_SOURCE = "register_source"

@@ -95,8 +95,8 @@
     },
     "activations": {
       "type": "array",
-      "minItems": 18,
-      "maxItems": 18,
+      "minItems": 19,
+      "maxItems": 19,
       "uniqueItems": true,
       "prefixItems": [
         {
@@ -899,6 +899,51 @@
               "Runtime authorization from baseline or delete metadata"
             ]
           }
+        },
+        {
+          "const": {
+            "issueRef": "#87",
+            "invariantRef": "REVOCATION-006",
+            "carrier": "explicit current File delete execution through sole tombstone authority",
+            "status": "active_fail_closed",
+            "policyEpochScope": "organization-next-request",
+            "controlBoundary": "exact trusted Source/SourceVersion/page/ordinal locator -> current complete v4 scan revalidation -> server-derived Resource/event lineage -> existing tombstone authority -> immutable exact execution binding",
+            "testEvidence": [
+              {
+                "id": "PG-FILE-DELETE-EXECUTE-087",
+                "surface": "tests/integration/test_file_change_pages.py::test_control_executes_a_nonterminal_current_delete_observation",
+                "oracle": "The non-owner Control role executes a delete on a nonterminal page only after its scan has the current complete terminal head, derives effect identity from durable state, and atomically commits one tombstone, Policy Epoch advance, cleanup intent, and exact binding; a concurrent superseding scan wins the progress fence with zero partial mutation."
+              },
+              {
+                "id": "PG-FILE-DELETE-REPLAY-087",
+                "surface": "tests/integration/test_file_change_pages.py::test_control_executes_a_nonterminal_current_delete_observation",
+                "oracle": "Injected binding failure rolls the tombstone and epoch back, while exact replay returns the original database-authored result without a second cleanup intent, binding, or visibility effect."
+              },
+              {
+                "id": "HTTP-FILE-DELETE-INVISIBLE-087",
+                "surface": "tests/integration/test_z_egress_grant_file.py::test_file_delete_execution_is_immediately_invisible_over_generated_sdk",
+                "oracle": "After execution, an installed generated SDK calling the live HTTP sealed Runtime receives zero blocks and Evidence while the stale Revision, Fragment, snapshot, and candidate remain physically present."
+              }
+            ],
+            "deferredEvidence": [
+              "autonomous or batch File deletion execution",
+              "retry, reclaim, dead-letter, and full-resync operations",
+              "physical cleanup completion and restore"
+            ],
+            "futureCarriers": [
+              "autonomous File change scheduler",
+              "retry and dead-letter handling",
+              "physical cleanup consumer",
+              "restore or recreate workflow"
+            ],
+            "notActive": [
+              "provider deletion authority",
+              "caller-supplied path, ResourceRef, event, epoch, cleanup, or audience",
+              "implicit or batch delete execution",
+              "Runtime authorization from observation or execution metadata",
+              "physical cleanup or restore"
+            ]
+          }
         }
       ],
       "items": false
@@ -1194,7 +1239,10 @@
             "PG-FILE-CHANGE-SUPERSESSION-083",
             "PG-FILE-DELETE-DETECT-085",
             "PG-FILE-DELETE-PAGE-085",
-            "PG-FILE-DELETE-NO-EFFECT-085"
+            "PG-FILE-DELETE-NO-EFFECT-085",
+            "PG-FILE-DELETE-EXECUTE-087",
+            "PG-FILE-DELETE-REPLAY-087",
+            "HTTP-FILE-DELETE-INVISIBLE-087"
           ]
         },
         "surface": {
@@ -1240,7 +1288,8 @@
             "#71",
             "#81",
             "#83",
-            "#85"
+            "#85",
+            "#87"
           ]
         },
         "invariantRef": {
@@ -1275,7 +1324,8 @@
             "independent trusted TypeScript private File-backed Bot application",
             "deterministic shallow File readChanges and durable page acknowledgement",
             "explicit accepted File page scheduling through existing import jobs",
-            "bounded durable File deletion observations without execution"
+            "bounded durable File deletion observations without execution",
+            "explicit current File delete execution through sole tombstone authority"
           ]
         },
         "status": {
@@ -1285,7 +1335,8 @@
           "enum": [
             "organization-v0",
             "not-bound-issue-17",
-            "not-runtime-authority"
+            "not-runtime-authority",
+            "organization-next-request"
           ]
         },
         "controlBoundary": {
@@ -1307,7 +1358,8 @@
             "verified private Feishu twin event -> opaque DeliveryEvidenceRef -> installed generated SDK over HTTP -> sealed Runtime File Package -> controlled ModelGateway -> co-resident ActionPlane prepare/perform -> digest-only DeliveryReceipt audit",
             "FileChangeProvider PendingChangeCursor -> provider-authenticated ChangePage -> ContextControl whole-page PostgreSQL acceptance -> accepted ChangeCursor",
             "accepted File page -> trusted ContextControl explicit FileImportAudience -> exact file_acquisition/file_import_job lineage -> existing WorkerLease -> current accepted scan-epoch redemption fence -> pre-compiler raw observation verification -> atomic current-epoch publication fence",
-            "latest complete same-SourceVersion v4 baseline -> stable shallow File snapshot -> provider-authenticated upsert/delete ChangePage -> exact baseline-bound ContextControl PostgreSQL acceptance"
+            "latest complete same-SourceVersion v4 baseline -> stable shallow File snapshot -> provider-authenticated upsert/delete ChangePage -> exact baseline-bound ContextControl PostgreSQL acceptance",
+            "exact trusted Source/SourceVersion/page/ordinal locator -> current complete v4 scan revalidation -> server-derived Resource/event lineage -> existing tombstone authority -> immutable exact execution binding"
           ]
         },
         "testEvidence": {

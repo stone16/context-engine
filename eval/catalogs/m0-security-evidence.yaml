@@ -499,6 +499,21 @@
       "id": "PG-FILE-DELETE-NO-EFFECT-085",
       "layer": "postgres",
       "selector": "tests/integration/test_file_change_pages.py::test_control_accepts_delete_observations_without_visibility_effect"
+    },
+    {
+      "id": "PG-FILE-DELETE-EXECUTE-087",
+      "layer": "postgres",
+      "selector": "tests/integration/test_file_change_pages.py::test_control_executes_a_nonterminal_current_delete_observation"
+    },
+    {
+      "id": "PG-FILE-DELETE-REPLAY-087",
+      "layer": "postgres",
+      "selector": "tests/integration/test_file_change_pages.py::test_control_executes_a_nonterminal_current_delete_observation"
+    },
+    {
+      "id": "HTTP-FILE-DELETE-INVISIBLE-087",
+      "layer": "runtime",
+      "selector": "tests/integration/test_z_egress_grant_file.py::test_file_delete_execution_is_immediately_invisible_over_generated_sdk"
     }
   ],
   "invariantMappings": [
@@ -516,7 +531,8 @@
           "PG-FILE-RECOVERY-027",
           "PG-FILE-TOMBSTONE-028",
           "PG-FILE-PROGRESS-029",
-          "PG-FILE-SOURCE-OFFBOARD-030"
+          "PG-FILE-SOURCE-OFFBOARD-030",
+          "PG-FILE-DELETE-EXECUTE-087"
         ],
         "runtime": [
           "RUNTIME-TENANT-OWNERSHIP-001"
@@ -605,10 +621,13 @@
         "postgres": [
           "PG-REVOCATION-006",
           "PG-FILE-TOMBSTONE-028",
-          "PG-FILE-SOURCE-OFFBOARD-030"
+          "PG-FILE-SOURCE-OFFBOARD-030",
+          "PG-FILE-DELETE-EXECUTE-087",
+          "PG-FILE-DELETE-REPLAY-087"
         ],
         "runtime": [
-          "RUNTIME-REVOCATION-006"
+          "RUNTIME-REVOCATION-006",
+          "HTTP-FILE-DELETE-INVISIBLE-087"
         ]
       }
     },

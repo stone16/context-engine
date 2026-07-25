@@ -36,6 +36,7 @@ NON_OWNER_EVIDENCE_BY_TABLE: Mapping[str, str] = {
     "context_revision": "PG-INDEX-NOT-AUTHORITY-005",
     "context_fragment": "PG-INDEX-NOT-AUTHORITY-005",
     "exact_phrase_candidate": "PG-FILE-IMPORT-023",
+    "file_delete_observation_execution": "PG-FILE-DELETE-EXECUTE-087",
     "file_acquisition": "PG-FILE-IMPORT-023",
     "file_acquisition_result": "PG-FILE-IMPORT-023",
     "file_import_job": "PG-FILE-IMPORT-023",

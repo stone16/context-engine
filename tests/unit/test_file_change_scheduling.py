@@ -50,6 +50,7 @@ class _Store:
         if name in {
             "activate_file_change_feed",
             "activate_file_delete_observations",
+            "execute_file_delete_observation",
             "offboard_file_source",
             "prepare_file_import",
             "register_file_source",

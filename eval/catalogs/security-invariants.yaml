@@ -833,6 +833,49 @@
         "recursive scan",
         "Runtime authorization from baseline or delete metadata"
       ]
+    },
+    {
+      "issueRef": "#87",
+      "invariantRef": "REVOCATION-006",
+      "carrier": "explicit current File delete execution through sole tombstone authority",
+      "status": "active_fail_closed",
+      "policyEpochScope": "organization-next-request",
+      "controlBoundary": "exact trusted Source/SourceVersion/page/ordinal locator -> current complete v4 scan revalidation -> server-derived Resource/event lineage -> existing tombstone authority -> immutable exact execution binding",
+      "testEvidence": [
+        {
+          "id": "PG-FILE-DELETE-EXECUTE-087",
+          "surface": "tests/integration/test_file_change_pages.py::test_control_executes_a_nonterminal_current_delete_observation",
+          "oracle": "The non-owner Control role executes a delete on a nonterminal page only after its scan has the current complete terminal head, derives effect identity from durable state, and atomically commits one tombstone, Policy Epoch advance, cleanup intent, and exact binding; a concurrent superseding scan wins the progress fence with zero partial mutation."
+        },
+        {
+          "id": "PG-FILE-DELETE-REPLAY-087",
+          "surface": "tests/integration/test_file_change_pages.py::test_control_executes_a_nonterminal_current_delete_observation",
+          "oracle": "Injected binding failure rolls the tombstone and epoch back, while exact replay returns the original database-authored result without a second cleanup intent, binding, or visibility effect."
+        },
+        {
+          "id": "HTTP-FILE-DELETE-INVISIBLE-087",
+          "surface": "tests/integration/test_z_egress_grant_file.py::test_file_delete_execution_is_immediately_invisible_over_generated_sdk",
+          "oracle": "After execution, an installed generated SDK calling the live HTTP sealed Runtime receives zero blocks and Evidence while the stale Revision, Fragment, snapshot, and candidate remain physically present."
+        }
+      ],
+      "deferredEvidence": [
+        "autonomous or batch File deletion execution",
+        "retry, reclaim, dead-letter, and full-resync operations",
+        "physical cleanup completion and restore"
+      ],
+      "futureCarriers": [
+        "autonomous File change scheduler",
+        "retry and dead-letter handling",
+        "physical cleanup consumer",
+        "restore or recreate workflow"
+      ],
+      "notActive": [
+        "provider deletion authority",
+        "caller-supplied path, ResourceRef, event, epoch, cleanup, or audience",
+        "implicit or batch delete execution",
+        "Runtime authorization from observation or execution metadata",
+        "physical cleanup or restore"
+      ]
     }
   ],
   "invariants": [

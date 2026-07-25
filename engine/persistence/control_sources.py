@@ -23,6 +23,8 @@ from engine.control import (
     ActivateFileChangeFeed,
     ActivateFileDeleteObservations,
     ChangeCursor,
+    ExecutedFileDeleteObservation,
+    ExecuteFileDeleteObservation,
     FileChangeBaseline,
     FileChangeBaselineEntry,
     FileChangeBaselineRef,
@@ -1004,6 +1006,70 @@ class PostgreSQLControlStore:
         except (DBAPIError, SQLAlchemyError, AssertionError, TypeError, ValueError):
             raise SourceControlUnavailable(
                 "File Resource tombstone database authority is unavailable"
+            ) from None
+
+    def execute_file_delete_observation(
+        self,
+        call: TrustedControlCall,
+        command: ExecuteFileDeleteObservation,
+    ) -> ExecutedFileDeleteObservation:
+        """Atomically bind one current delete observation to its tombstone."""
+
+        if (
+            type(call) is not TrustedControlCall
+            or type(command) is not ExecuteFileDeleteObservation
+        ):
+            raise SourceNotAvailable
+        cleanup_intent_id = self._uuid_factory()
+        try:
+            with self._engine.begin() as connection:
+                assert_control_role(connection)
+                _set_organization_context(connection, call.organization_id)
+                row = connection.execute(
+                    text(
+                        """
+                        SELECT *
+                        FROM public.context_control_execute_file_delete_observation(
+                            :organization_id, :source_id, :source_version_id,
+                            :page_ref, :change_ordinal, :cleanup_intent_id
+                        )
+                        """
+                    ),
+                    {
+                        "organization_id": call.organization_id,
+                        "source_id": command.source_ref.value,
+                        "source_version_id": command.source_version_ref,
+                        "page_ref": command.page_ref,
+                        "change_ordinal": command.change_ordinal,
+                        "cleanup_intent_id": cleanup_intent_id,
+                    },
+                ).one_or_none()
+                if row is None:
+                    raise SourceNotAvailable
+                tombstone = FileResourceTombstone(
+                    organization_id=call.organization_id,
+                    source_ref=SourceRef(row.source_id),
+                    resource_ref=row.resource_ref,
+                    revision_ref=row.revision_id,
+                    event_ref=row.event_ref,
+                    event_sequence=row.event_sequence,
+                    policy_epoch=row.policy_epoch,
+                    cleanup_intent_ref=row.cleanup_intent_id,
+                    tombstoned_at=row.tombstoned_at,
+                )
+                return ExecutedFileDeleteObservation(
+                    organization_id=call.organization_id,
+                    source_ref=SourceRef(row.source_id),
+                    source_version_ref=row.source_version_id,
+                    page_ref=row.page_ref,
+                    change_ordinal=row.change_ordinal,
+                    tombstone=tombstone,
+                )
+        except SourceNotAvailable:
+            raise
+        except (DBAPIError, SQLAlchemyError, AssertionError, TypeError, ValueError):
+            raise SourceControlUnavailable(
+                "File delete observation database authority is unavailable"
             ) from None
 
     @staticmethod
