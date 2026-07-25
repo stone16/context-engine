@@ -810,6 +810,9 @@ def test_issue_21_file_source_manifest_is_closed_and_role_separated() -> None:
     assert watermark_fence["function"] == (
         "context_file_source_fence_scheduled_publication_epoch"
     )
+    assert watermark_fence["negativeTestIds"] == [
+        "PG-FILE-CHANGE-SUPERSESSION-083"
+    ]
     assert {
         key["name"]: key["columns"]
         for key in entries["file_acquisition"]["organizationInclusiveKeys"]

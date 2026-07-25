@@ -7619,6 +7619,7 @@
         "function": "context_file_source_fence_scheduled_publication_epoch",
         "lock": "context-engine.file-source-progress Organization and Source advisory transaction lock",
         "scope": "scheduled file_import only; manual imports and tombstones retain existing behavior",
+        "negativeTestIds": ["PG-FILE-CHANGE-SUPERSESSION-083"],
         "sqlstate": "55000"
       },
       "functionOnlyMutation": {
