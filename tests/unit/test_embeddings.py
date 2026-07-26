@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import json
-from typing import cast
+from email.message import Message
+from importlib import import_module
+from io import BytesIO
+from typing import Any, cast
+from urllib.error import HTTPError
 from urllib.request import Request
 
 import pytest
@@ -10,7 +14,9 @@ from adapters.embeddings import (
     DeterministicEmbeddingTwin,
     ExternalEmbeddingConfiguration,
     ExternalEmbeddingProvider,
+    _RejectRedirectHandler,
 )
+from engine.persistence.file_imports import _EMBEDDING_PREPARE_REGPROCEDURE
 from engine.supply import (
     CONTEXT_FRAGMENT_EMBEDDING_DIMENSION,
     EmbeddingProfile,
@@ -103,6 +109,26 @@ def test_external_provider_replaces_transport_details_with_generic_failure() -> 
     assert failure.value.__cause__ is None
 
 
+def test_external_transport_rejects_redirect_before_reusing_request_headers() -> None:
+    request = Request(
+        "https://embedding.invalid/v1/embeddings",
+        headers={"Authorization": "Bearer credential-value"},
+    )
+
+    with pytest.raises(HTTPError) as rejected:
+        _RejectRedirectHandler().redirect_request(
+            request,
+            BytesIO(),
+            307,
+            "redirect",
+            Message(),
+            "https://redirect.invalid/collect",
+        )
+
+    assert rejected.value.url == request.full_url
+    assert "redirect.invalid" not in str(rejected.value)
+
+
 @pytest.mark.parametrize(
     ("endpoint", "model", "api_key"),
     [
@@ -136,3 +162,28 @@ def test_embedding_validation_refuses_unstorable_or_zero_vectors(
             ((value,),),
             EmbeddingProfile(1),
         )
+
+
+@pytest.mark.parametrize(
+    "vectors",
+    [
+        cast(Any, (None,)),
+        cast(Any, ((10**10_000,),)),
+    ],
+)
+def test_embedding_validation_normalizes_malformed_provider_containers(
+    vectors: Any,
+) -> None:
+    with pytest.raises(EmbeddingProviderUnavailable):
+        validate_embedding_batch(("content",), vectors, EmbeddingProfile(1))
+
+
+def test_worker_schema_probe_matches_the_embedding_migration_signature() -> None:
+    migration = import_module(
+        "migrations.versions.20260726_0036_fragment_embeddings"
+    )
+
+    assert (
+        "public.context_worker_prepare_file_publication"
+        f"{migration._NEW_PREPARE_SIGNATURE}"
+    ) == _EMBEDDING_PREPARE_REGPROCEDURE

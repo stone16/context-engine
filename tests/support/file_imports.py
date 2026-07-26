@@ -417,7 +417,7 @@ def delete_file_import_scenario(
                 ):
                     connection.execute(
                         text(
-                            f"DELETE FROM {table} "
+                            f"DELETE FROM {table} "  # noqa: S608
                             "WHERE organization_id = :organization_id"
                         ),
                         {"organization_id": organization_id},

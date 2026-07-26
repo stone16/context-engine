@@ -42,26 +42,35 @@ def validate_embedding_batch(
 ) -> tuple[EmbeddingVector, ...]:
     """Validate one provider response before any vector crosses persistence."""
 
-    if (
-        type(inputs) is not tuple
-        or not inputs
-        or any(type(value) is not str or not value for value in inputs)
-        or len(vectors) != len(inputs)
-    ):
-        raise EmbeddingProviderUnavailable("Embedding provider is unavailable")
-    validated: list[EmbeddingVector] = []
-    for raw_vector in vectors:
-        if len(raw_vector) != profile.dimension:
+    try:
+        if (
+            type(inputs) is not tuple
+            or not inputs
+            or any(type(value) is not str or not value for value in inputs)
+            or len(vectors) != len(inputs)
+        ):
             raise EmbeddingProviderUnavailable("Embedding provider is unavailable")
-        vector: list[float] = []
-        for raw_value in raw_vector:
-            if type(raw_value) not in {int, float}:
+        validated: list[EmbeddingVector] = []
+        for raw_vector in vectors:
+            if len(raw_vector) != profile.dimension:
                 raise EmbeddingProviderUnavailable("Embedding provider is unavailable")
-            value = float(cast(int | float, raw_value))
-            if not isfinite(value) or abs(value) > 1.0e30:
+            vector: list[float] = []
+            for raw_value in raw_vector:
+                if type(raw_value) not in {int, float}:
+                    raise EmbeddingProviderUnavailable(
+                        "Embedding provider is unavailable"
+                    )
+                value = float(cast(int | float, raw_value))
+                if not isfinite(value) or abs(value) > 1.0e30:
+                    raise EmbeddingProviderUnavailable(
+                        "Embedding provider is unavailable"
+                    )
+                vector.append(value)
+            if not any(value != 0.0 for value in vector):
                 raise EmbeddingProviderUnavailable("Embedding provider is unavailable")
-            vector.append(value)
-        if not any(value != 0.0 for value in vector):
-            raise EmbeddingProviderUnavailable("Embedding provider is unavailable")
-        validated.append(tuple(vector))
-    return tuple(validated)
+            validated.append(tuple(vector))
+        return tuple(validated)
+    except (TypeError, ValueError, OverflowError):
+        raise EmbeddingProviderUnavailable(
+            "Embedding provider is unavailable"
+        ) from None

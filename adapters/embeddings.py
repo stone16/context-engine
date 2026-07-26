@@ -8,9 +8,10 @@ from contextlib import closing
 from dataclasses import dataclass, field
 from hashlib import shake_256
 from math import sqrt
-from typing import BinaryIO, cast
+from typing import IO, BinaryIO, cast
+from urllib.error import HTTPError
 from urllib.parse import urlsplit
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from engine.supply.embeddings import (
     CONTEXT_FRAGMENT_EMBEDDING_DIMENSION,
@@ -23,6 +24,28 @@ from engine.supply.embeddings import (
 _MAX_EXTERNAL_RESPONSE_BYTES = 64 * 1024 * 1024
 _DEFAULT_TIMEOUT_SECONDS = 30.0
 EmbeddingTransport = Callable[[Request, float, int], bytes]
+
+
+class _RejectRedirectHandler(HTTPRedirectHandler):
+    """Keep the configured endpoint as the only bearer-credential recipient."""
+
+    def redirect_request(
+        self,
+        request: Request,
+        fp: IO[bytes],
+        code: int,
+        message: str,
+        headers: object,
+        new_url: str,
+    ) -> Request:
+        del message, new_url
+        raise HTTPError(
+            request.full_url,
+            code,
+            "Embedding redirect is unavailable",
+            headers,  # type: ignore[arg-type]
+            fp,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,7 +85,13 @@ class ExternalEmbeddingConfiguration:
 
 def _default_transport(request: Request, timeout: float, maximum_bytes: int) -> bytes:
     with closing(
-        cast(BinaryIO, urlopen(request, timeout=timeout))  # noqa: S310
+        cast(
+            BinaryIO,
+            build_opener(_RejectRedirectHandler()).open(  # noqa: S310
+                request,
+                timeout=timeout,
+            ),
+        )
     ) as response:
         payload = response.read(maximum_bytes + 1)
     if len(payload) > maximum_bytes:
