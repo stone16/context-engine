@@ -290,11 +290,19 @@ authority that validates current Membership inside a single PostgreSQL
 transaction and issues a lifetime-bound `UserActor` proof. That transaction is
 held open until the sealed Runtime and ContextPackage construction complete.
 
-A valid `Acquire` under the default composition returns `200 resolved` with an
-evidence-free ContextPackage. An explicit synthetic conformance composition can
-pass a content-free `CandidateRef` through the RLS locator, exact
-`EffectiveScope`, body projection, and sealed `AuthorizationKernel` in that same
-transaction, returning exactly one authorized Evidence block.
+**No `200` is reachable from the production default.** `create_app()` selects
+`RejectingAuthenticator`, `RejectingOrganizationAuthority`, and
+`RejectingMembershipAuthority` whenever no authorities are injected, so every
+credential is rejected before an `Acquire` can reach a successful response. Do
+not try to reproduce the results below against a default-built application —
+they exist only under an explicitly injected composition.
+
+Within that injected conformance composition there are two variants:
+
+| Variant | Result |
+|---|---|
+| No candidate injection | A valid `Acquire` returns `200 resolved` with an evidence-free ContextPackage |
+| Explicit synthetic candidate injection | A content-free `CandidateRef` passes through the RLS locator, exact `EffectiveScope`, body projection, and the sealed `AuthorizationKernel` in that same transaction, returning exactly one authorized Evidence block |
 
 Invalid Membership returns a generic 401; an unavailable database authority
 returns a generic 503. **Neither calls any content system.**
