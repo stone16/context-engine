@@ -315,4 +315,5 @@ Issue 与 PRD 追踪于
 
 ## 许可证
 
-[Apache License 2.0](./LICENSE)——包含明确的专利授权条款。
+Copyright 2026 stone16。基于 [Apache License 2.0](./LICENSE) 授权——包含明确的
+专利授权条款。归属声明见 [NOTICE](./NOTICE)。

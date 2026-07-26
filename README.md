@@ -338,4 +338,6 @@ Issues and PRDs are tracked in
 
 ## License
 
-[Apache License 2.0](./LICENSE) — includes an explicit patent grant.
+Copyright 2026 stone16. Licensed under the
+[Apache License 2.0](./LICENSE) — which includes an explicit patent grant.
+Attribution notices are in [NOTICE](./NOTICE).

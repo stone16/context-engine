@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Permission-aware context delivery engine"
 readme = "README.md"
 license = "Apache-2.0"
-license-files = ["LICENSE"]
+license-files = ["LICENSE", "NOTICE"]
 requires-python = ">=3.13,<3.14"
 dependencies = [
   "alembic>=1.16,<1.17",
