@@ -32,7 +32,7 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
     document = manifest()
     tables = table_entries(document)
 
-    assert document["manifestVersion"] == "33.0.0"
+    assert document["manifestVersion"] == "34.0.0"
     assert set(tables) == {
         "active_release_manifest",
         "action_delivery_attempt",
@@ -135,6 +135,14 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
     assert tables["context_resource"]["classification"] == "tenant_owned"
     assert tables["context_revision"]["classification"] == "tenant_owned"
     assert tables["context_fragment"]["classification"] == "tenant_owned"
+    assert tables["context_fragment"]["embeddingStorage"] == {
+        "column": "embedding",
+        "type": "vector(384)",
+        "newPublicationRequired": True,
+        "historicalNullableUntilReimport": True,
+        "annIndex": "ix_context_fragment_embedding_hnsw",
+        "authorizationAuthority": False,
+    }
     assert tables["context_fragment_field"]["classification"] == "tenant_owned"
     assert tables["membership_resource_field_right"]["classification"] == (
         "tenant_owned"

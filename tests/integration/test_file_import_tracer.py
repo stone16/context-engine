@@ -16,6 +16,7 @@ from sqlalchemy import Engine, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import SQLAlchemyError
 
+from adapters.embeddings import DeterministicEmbeddingTwin
 from adapters.exact_phrase import PostgreSQLExactPhraseCandidateIndex
 from adapters.file_source import FileReadLimits, FileRootRegistry
 from adapters.http.app import create_app
@@ -713,6 +714,7 @@ def test_registered_file_import_publishes_one_exact_authorized_http_package(
             limits=FileReadLimits(max_file_bytes=1024),
         ),
         MarkdownCompilerConfig("markdown-config-v1"),
+        embedding_provider=DeterministicEmbeddingTwin(),
         clock=lambda: datetime.now(UTC).replace(microsecond=0),
     ).run(
         FileImportLeaseRedemption(
@@ -1030,6 +1032,7 @@ def _assert_structural_file_import_returns_coherent_authorized_units_over_http(
             limits=FileReadLimits(max_file_bytes=4096),
         ),
         MarkdownCompilerConfig("markdown-config-v2"),
+        embedding_provider=DeterministicEmbeddingTwin(),
         clock=lambda: datetime.now(UTC).replace(microsecond=0),
     ).run(
         FileImportLeaseRedemption(
@@ -1654,6 +1657,7 @@ def test_missing_file_after_redemption_records_terminal_zero_effect_failure(
             limits=FileReadLimits(max_file_bytes=1024),
         ),
         MarkdownCompilerConfig("markdown-config-v1"),
+        embedding_provider=DeterministicEmbeddingTwin(),
         clock=lambda: datetime.now(UTC).replace(microsecond=0),
     )
     with pytest.raises(FileImportUnavailable):
@@ -2095,6 +2099,7 @@ def test_invalid_markdown_records_terminal_failure_without_content_effects(
             limits=FileReadLimits(max_file_bytes=1024),
         ),
         MarkdownCompilerConfig("markdown-config-v1"),
+        embedding_provider=DeterministicEmbeddingTwin(),
         clock=lambda: datetime.now(UTC).replace(microsecond=0),
     )
 

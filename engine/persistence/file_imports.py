@@ -26,8 +26,12 @@ from engine.control import (
 from engine.persistence.role_guard import assert_worker_role
 from engine.runtime.evidence import CandidateRef
 from engine.supply import (
+    CONTEXT_FRAGMENT_EMBEDDING_DIMENSION,
     FILE_IMPORT_WORKER_LEASE_OPERATION,
     CompilationFailure,
+    EmbeddingProfile,
+    EmbeddingProvider,
+    EmbeddingProviderUnavailable,
     MarkdownCompilerConfig,
     ParsedDocument,
     WorkerLeaseClaims,
@@ -36,12 +40,18 @@ from engine.supply import (
     WorkerLeaseToken,
     WorkNotAvailable,
     canonicalize_parsed_document,
+    validate_embedding_batch,
     worker_lease_digest,
 )
 from engine.supply.jobs import _require_utc
 
 _CONCURRENT_PUBLICATION_WAIT_SECONDS = 5.0
 _CONCURRENT_PUBLICATION_POLL_SECONDS = 0.01
+_EMBEDDING_PREPARE_REGPROCEDURE = (
+    "public.context_worker_prepare_file_publication"
+    "(uuid,uuid,uuid,text,text,uuid,text,jsonb,jsonb,jsonb,bigint,bigint,bytea,"
+    "timestamp with time zone,timestamp with time zone)"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,7 +159,7 @@ class FileImportRefused(FileImportUnavailable):
 
 
 class FilePublicationBoundary(StrEnum):
-    """The three explicit post-commit fault-injection boundaries."""
+    """The three explicit durable publication recovery boundaries."""
 
     ACQUIRED = "acquired"
     PREPARED = "prepared"
@@ -157,7 +167,7 @@ class FilePublicationBoundary(StrEnum):
 
 
 class FileImportInterrupted(RuntimeError):
-    """Deterministic test interruption recorded after a durable boundary."""
+    """Content-free resumable interruption recorded at a durable boundary."""
 
     def __init__(self, boundary: FilePublicationBoundary) -> None:
         if type(boundary) is not FilePublicationBoundary:
@@ -199,6 +209,8 @@ class PostgreSQLFileImportWorker:
         "_codec",
         "_config",
         "_engine",
+        "_embedding_profile",
+        "_embedding_provider",
         "_identity",
         "_interrupt_after",
         "_roots",
@@ -213,6 +225,7 @@ class PostgreSQLFileImportWorker:
         roots: FileRootRegistry,
         config: MarkdownCompilerConfig,
         *,
+        embedding_provider: EmbeddingProvider,
         clock: Callable[[], object],
         uuid_factory: Callable[[], UUID] = uuid4,
         interrupt_after: FilePublicationBoundary | None = None,
@@ -225,6 +238,16 @@ class PostgreSQLFileImportWorker:
             raise TypeError("File import worker requires FileRootRegistry")
         if type(config) is not MarkdownCompilerConfig:
             raise TypeError("File import worker requires MarkdownCompilerConfig")
+        try:
+            embedding_profile = embedding_provider.profile
+        except (AttributeError, TypeError, ValueError):
+            raise TypeError(
+                "File import worker requires an embedding provider"
+            ) from None
+        if type(embedding_profile) is not EmbeddingProfile:
+            raise TypeError("File import worker requires an embedding provider")
+        if embedding_profile.dimension != CONTEXT_FRAGMENT_EMBEDDING_DIMENSION:
+            raise ValueError("Embedding provider dimension does not match storage")
         if not callable(clock) or not callable(uuid_factory):
             raise TypeError("File import worker requires clock and UUID factory")
         if (
@@ -237,6 +260,8 @@ class PostgreSQLFileImportWorker:
         self._identity = identity
         self._roots = roots
         self._config = config
+        self._embedding_profile = embedding_profile
+        self._embedding_provider = embedding_provider
         self._clock = clock
         self._uuid_factory = uuid_factory
         self._interrupt_after = interrupt_after
@@ -302,12 +327,19 @@ class PostgreSQLFileImportWorker:
                 row = connection.execute(
                     text(
                         """
-                        SELECT * FROM public.context_worker_redeem_file_import(
+                        SELECT redeemed.source_ref, redeemed.root_ref,
+                               redeemed.relative_path,
+                               redeemed.acquisition_id,
+                               to_jsonb(redeemed)->>'expected_content_sha256'
+                                   AS expected_content_sha256,
+                               (to_jsonb(redeemed)->>'expected_content_length')
+                                   ::bigint AS expected_content_length
+                        FROM public.context_worker_redeem_file_import(
                             :organization_id, :job_id, :service_principal_id,
                             :source_ref, :lease_generation,
                             :signing_key_version, :nonce,
                             :issued_at, :expires_at
-                        )
+                        ) AS redeemed
                         """
                     ),
                     {
@@ -324,12 +356,8 @@ class PostgreSQLFileImportWorker:
                 ).one_or_none()
                 if row is None or row.source_ref != claims.source_ref:
                     raise _rejection(token)
-                expected_content_sha256 = row._mapping.get(
-                    "expected_content_sha256"
-                )
-                expected_content_length = row._mapping.get(
-                    "expected_content_length"
-                )
+                expected_content_sha256 = row._mapping.get("expected_content_sha256")
+                expected_content_length = row._mapping.get("expected_content_length")
                 return _RedeemedFileImport(
                     source_ref=SourceRef(UUID(row.source_ref)),
                     root_ref=FileRootRef(row.root_ref),
@@ -427,19 +455,8 @@ class PostgreSQLFileImportWorker:
                     self._interrupt_if_requested(
                         token, claims, FilePublicationBoundary.ACQUIRED
                     )
-                    prepared = self._execute_one(
-                        """
-                        SELECT * FROM public.context_worker_prepare_file_publication(
-                            :organization_id, :job_id, :service_principal_id,
-                            :source_ref, :resource_ref, :revision_id,
-                            :canonical_text,
-                            CAST(:compilation_document AS jsonb),
-                            CAST(:artifact_document AS jsonb),
-                            :lease_generation, :signing_key_version, :nonce,
-                            :issued_at, :expires_at
-                        )
-                        """,
-                        parameters,
+                    prepared = self._prepare_publication(
+                        token, claims, document, parameters
                     )
                     if prepared is None or prepared.checkpoint != "prepared":
                         raise _rejection(token)
@@ -515,6 +532,60 @@ class PostgreSQLFileImportWorker:
             effect_count=row.effect_count,
         )
 
+    def _prepare_publication(
+        self,
+        token: WorkerLeaseToken,
+        claims: WorkerLeaseClaims,
+        document: ParsedDocument,
+        parameters: dict[str, object],
+    ) -> Row[tuple[object, ...]] | None:
+        if self._embedding_storage_active():
+            parameters["embedding_document"] = self._embedding_document(
+                token,
+                claims,
+                document,
+            )
+            return self._execute_one(
+                """
+                SELECT * FROM public.context_worker_prepare_file_publication(
+                    :organization_id, :job_id, :service_principal_id,
+                    :source_ref, :resource_ref, :revision_id,
+                    :canonical_text,
+                    CAST(:compilation_document AS jsonb),
+                    CAST(:artifact_document AS jsonb),
+                    CAST(:embedding_document AS jsonb),
+                    :lease_generation, :signing_key_version, :nonce,
+                    :issued_at, :expires_at
+                )
+                """,
+                parameters,
+            )
+        return self._execute_one(
+            """
+            SELECT * FROM public.context_worker_prepare_file_publication(
+                :organization_id, :job_id, :service_principal_id,
+                :source_ref, :resource_ref, :revision_id,
+                :canonical_text,
+                CAST(:compilation_document AS jsonb),
+                CAST(:artifact_document AS jsonb),
+                :lease_generation, :signing_key_version, :nonce,
+                :issued_at, :expires_at
+            )
+            """,
+            parameters,
+        )
+
+    def _embedding_storage_active(self) -> bool:
+        with self._engine.begin() as connection:
+            assert_worker_role(connection)
+            available = connection.execute(
+                text(
+                    "SELECT pg_catalog.to_regprocedure(:signature) IS NOT NULL"
+                ),
+                {"signature": _EMBEDDING_PREPARE_REGPROCEDURE},
+            ).scalar_one()
+        return available is True
+
     def _await_concurrent_publication(
         self,
         token: WorkerLeaseToken,
@@ -563,6 +634,47 @@ class PostgreSQLFileImportWorker:
     ) -> None:
         if self._interrupt_after is not boundary:
             return
+        self._record_interruption(token, claims, boundary)
+        raise FileImportInterrupted(boundary)
+
+    def _embedding_document(
+        self,
+        token: WorkerLeaseToken,
+        claims: WorkerLeaseClaims,
+        document: ParsedDocument,
+    ) -> str:
+        inputs = tuple(fragment.contextual_text for fragment in document.fragments)
+        try:
+            vectors = validate_embedding_batch(
+                inputs,
+                self._embedding_provider.embed(inputs),
+                self._embedding_profile,
+            )
+        except EmbeddingProviderUnavailable:
+            self._record_interruption(
+                token,
+                claims,
+                FilePublicationBoundary.ACQUIRED,
+            )
+            raise FileImportInterrupted(FilePublicationBoundary.ACQUIRED) from None
+        return json.dumps(
+            [
+                {
+                    "embedding": list(vector),
+                    "fragmentRef": fragment.fragment_ref,
+                }
+                for fragment, vector in zip(document.fragments, vectors, strict=True)
+            ],
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+
+    def _record_interruption(
+        self,
+        token: WorkerLeaseToken,
+        claims: WorkerLeaseClaims,
+        boundary: FilePublicationBoundary,
+    ) -> None:
         with self._engine.begin() as connection:
             assert_worker_role(connection)
             recorded = connection.execute(
@@ -590,7 +702,6 @@ class PostgreSQLFileImportWorker:
             ).scalar_one()
             if recorded is not True:
                 raise _rejection(token)
-        raise FileImportInterrupted(boundary)
 
     def _fail(
         self,

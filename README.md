@@ -145,7 +145,12 @@ All dispatch modes read **only** a role-specific scheduler, worker URL,
 WorkerLease signing key, the server-side JSON root registry
 (`CONTEXT_ENGINE_WORKER_FILE_ROOTS_JSON`), and an optional bounded per-file byte
 ceiling (`CONTEXT_ENGINE_WORKER_MAX_FILE_BYTES`, default 1 MiB, accepted only
-within 1–64 MiB). Markdown files are discovered recursively. **A caller may not
+within 1–64 MiB). They also require an explicit embedding provider mode and the
+schema-pinned dimension (`CONTEXT_ENGINE_WORKER_EMBEDDING_PROVIDER` and
+`CONTEXT_ENGINE_WORKER_EMBEDDING_DIMENSION`). CI uses the network-free `twin`
+mode. Real deployments select `external` and supply endpoint, model, and API key
+only through the corresponding `CONTEXT_ENGINE_WORKER_EMBEDDING_*` environment
+variables. Markdown files are discovered recursively. **A caller may not
 supply Organization, Source, job, or token** — that is the point of the boundary.
 Output is limited to `dispatched` / `no_work` / `refused`.
 

@@ -1,5 +1,5 @@
 {
-  "manifestVersion": "33.0.0",
+  "manifestVersion": "34.0.0",
   "controlOperations": [
     {
       "name": "register_file_source",
@@ -3933,7 +3933,15 @@
           "table": "context_fragment"
         }
       },
-      "purpose": "Immutable active-Revision logical Markdown unit with same-Fragment heading ancestry; persistent rows are never Evidence",
+      "purpose": "Immutable active-Revision logical Markdown unit with same-Fragment heading ancestry and one Supply-produced fixed-dimension vector; persistent rows are never Evidence",
+      "embeddingStorage": {
+        "column": "embedding",
+        "type": "vector(384)",
+        "newPublicationRequired": true,
+        "historicalNullableUntilReimport": true,
+        "annIndex": "ix_context_fragment_embedding_hnsw",
+        "authorizationAuthority": false
+      },
       "organizationColumn": "organization_id",
       "organizationInclusiveKeys": [
         {

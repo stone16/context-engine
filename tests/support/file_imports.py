@@ -15,6 +15,7 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import Engine, text
 
+from adapters.embeddings import DeterministicEmbeddingTwin
 from adapters.file_source import FileReadLimits, FileRootRegistry
 from engine.control import (
     ContextControl,
@@ -337,6 +338,7 @@ def run_file_import(
             limits=FileReadLimits(max_file_bytes=4096),
         ),
         MarkdownCompilerConfig(config_version),
+        embedding_provider=DeterministicEmbeddingTwin(),
         clock=lambda: datetime.now(UTC).replace(microsecond=0),
     ).run(
         FileImportLeaseRedemption(
@@ -346,6 +348,105 @@ def run_file_import(
             prepared.source_ref,
         )
     )
+
+
+def delete_file_import_scenario(
+    configuration: DatabaseConfiguration,
+    organization_id: UUID,
+) -> None:
+    """Remove one disposable File scenario without touching sibling tenants."""
+
+    engine = create_database_engine(configuration)
+    immutable_tables = (
+        ("file_source_publish_watermark", "file_source_publish_watermark_immutable"),
+        (
+            "file_source_acquisition_checkpoint",
+            "file_source_acquisition_checkpoint_immutable",
+        ),
+        ("file_import_job_event", "file_import_job_event_immutable"),
+        ("file_revision_replacement_plan", "file_revision_replacement_plan_immutable"),
+        ("exact_phrase_candidate", "exact_phrase_candidate_immutable"),
+        ("revision_publication_event", "revision_publication_event_immutable"),
+        ("context_fragment", "context_fragment_reject_mutation"),
+        ("file_revision_snapshot", "file_revision_snapshot_immutable"),
+        ("context_revision", "context_revision_reject_mutation"),
+        ("file_acquisition_result", "file_acquisition_result_immutable"),
+        ("file_resource_ingestion_guard", "file_resource_ingestion_guard_immutable"),
+        ("file_acquisition", "file_acquisition_immutable"),
+        ("source_version", "source_version_immutable"),
+    )
+    try:
+        with engine.begin() as connection:
+            for table, trigger in immutable_tables:
+                connection.execute(
+                    text(f"ALTER TABLE {table} DISABLE TRIGGER {trigger}")
+                )
+        try:
+            with engine.begin() as connection:
+                user_ids = tuple(
+                    connection.execute(
+                        text(
+                            "SELECT user_id FROM membership "
+                            "WHERE organization_id = :organization_id"
+                        ),
+                        {"organization_id": organization_id},
+                    ).scalars()
+                )
+                for table in (
+                    "file_source_publish_watermark",
+                    "file_source_acquisition_checkpoint",
+                    "file_import_job_event",
+                    "file_publication_recovery",
+                    "file_revision_replacement_plan",
+                    "file_acquisition_result",
+                    "exact_phrase_candidate",
+                    "revision_publication_event",
+                    "membership_resource_field_right",
+                    "resource_access_policy",
+                    "context_fragment",
+                    "file_revision_snapshot",
+                    "context_revision",
+                    "context_resource",
+                    "file_resource_ingestion_guard",
+                    "file_import_job",
+                    "file_acquisition",
+                    "context_source",
+                    "source_version",
+                    "service_principal",
+                    "membership",
+                ):
+                    connection.execute(
+                        text(
+                            f"DELETE FROM {table} "
+                            "WHERE organization_id = :organization_id"
+                        ),
+                        {"organization_id": organization_id},
+                    )
+                for user_id in user_ids:
+                    connection.execute(
+                        text(
+                            "DELETE FROM user_account "
+                            "WHERE user_id = :user_id AND NOT EXISTS ("
+                            "SELECT 1 FROM membership "
+                            "WHERE membership.user_id = user_account.user_id)"
+                        ),
+                        {"user_id": user_id},
+                    )
+                connection.execute(
+                    text(
+                        "DELETE FROM organization "
+                        "WHERE organization_id = :organization_id"
+                    ),
+                    {"organization_id": organization_id},
+                )
+        finally:
+            with engine.begin() as connection:
+                for table, trigger in reversed(immutable_tables):
+                    connection.execute(
+                        text(f"ALTER TABLE {table} ENABLE TRIGGER {trigger}")
+                    )
+    finally:
+        engine.dispose()
 
 
 def redeem_file_import_direct(
