@@ -46,6 +46,7 @@ generate_environment() {
     local action_password
     local runtime_password
     local worker_password
+    local scheduler_password
     local learning_password
     local security_operator_password
     local postgres_port
@@ -58,6 +59,7 @@ generate_environment() {
     action_password="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
     runtime_password="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
     worker_password="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+    scheduler_password="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
     learning_password="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
     security_operator_password="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
     postgres_port="$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')"
@@ -89,6 +91,8 @@ generate_environment() {
         printf 'CONTEXT_ENGINE_RUNTIME_PASSWORD=%s\n' "$runtime_password"
         printf 'CONTEXT_ENGINE_WORKER_ROLE=context_engine_worker\n'
         printf 'CONTEXT_ENGINE_WORKER_PASSWORD=%s\n' "$worker_password"
+        printf 'CONTEXT_ENGINE_SCHEDULER_ROLE=context_engine_scheduler\n'
+        printf 'CONTEXT_ENGINE_SCHEDULER_PASSWORD=%s\n' "$scheduler_password"
         printf 'CONTEXT_ENGINE_LEARNING_ROLE=context_engine_learning\n'
         printf 'CONTEXT_ENGINE_LEARNING_PASSWORD=%s\n' "$learning_password"
         printf 'CONTEXT_ENGINE_SECURITY_OPERATOR_ROLE=context_engine_security_operator\n'
@@ -108,6 +112,8 @@ generate_environment() {
           "$runtime_password" "$postgres_port"
         printf 'CONTEXT_ENGINE_WORKER_DATABASE_URL=postgresql+psycopg://context_engine_worker:%s@127.0.0.1:%s/context_engine\n' \
           "$worker_password" "$postgres_port"
+        printf 'CONTEXT_ENGINE_SCHEDULER_DATABASE_URL=postgresql+psycopg://context_engine_scheduler:%s@127.0.0.1:%s/context_engine\n' \
+          "$scheduler_password" "$postgres_port"
         printf 'CONTEXT_ENGINE_LEARNING_DATABASE_URL=postgresql+psycopg://context_engine_learning:%s@127.0.0.1:%s/context_engine\n' \
           "$learning_password" "$postgres_port"
         printf 'CONTEXT_ENGINE_SECURITY_OPERATOR_DATABASE_URL=postgresql+psycopg://context_engine_security_operator:%s@127.0.0.1:%s/context_engine\n' \
@@ -154,9 +160,40 @@ migrate_legacy_environment() {
   (migrate_legacy_identity_identity)
   (migrate_legacy_egress_identity)
   (migrate_legacy_action_identity)
+  (migrate_legacy_scheduler_identity)
   (migrate_legacy_learning_identity)
   (migrate_legacy_security_operator_identity)
   rmdir "$ENV_MIGRATION_LOCK"
+  trap - EXIT
+}
+
+migrate_legacy_scheduler_identity() {
+  if grep -q '^CONTEXT_ENGINE_SCHEDULER_ROLE=' "$ENV_FILE"; then
+    return
+  fi
+  local postgres_port
+  postgres_port="$(sed -n 's/^CONTEXT_ENGINE_POSTGRES_PORT=//p' "$ENV_FILE")"
+  if [[ ! "$postgres_port" =~ ^[0-9]+$ ]]; then
+    printf 'legacy database environment has no valid PostgreSQL port\n' >&2
+    exit 1
+  fi
+  local scheduler_password
+  scheduler_password="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+  local migration_file
+  migration_file="$(mktemp "$STATE_DIR/database.env.scheduler.XXXXXX")"
+  trap 'rm -f "$migration_file"' EXIT
+  (
+    umask 077
+    while IFS= read -r environment_line || [[ -n "$environment_line" ]]; do
+      printf '%s\n' "$environment_line"
+    done <"$ENV_FILE"
+    printf 'CONTEXT_ENGINE_SCHEDULER_ROLE=context_engine_scheduler\n'
+    printf 'CONTEXT_ENGINE_SCHEDULER_PASSWORD=%s\n' "$scheduler_password"
+    printf 'CONTEXT_ENGINE_SCHEDULER_DATABASE_URL=postgresql+psycopg://context_engine_scheduler:%s@127.0.0.1:%s/context_engine\n' \
+      "$scheduler_password" "$postgres_port"
+  ) >"$migration_file"
+  chmod 600 "$migration_file"
+  mv "$migration_file" "$ENV_FILE"
   trap - EXIT
 }
 
@@ -444,7 +481,7 @@ load_environment() {
   local variable_name
   local variable_value
   local loaded_variable_names=' '
-  local allowed_variables=' POSTGRES_DB POSTGRES_USER POSTGRES_PASSWORD CONTEXT_ENGINE_POSTGRES_PORT CONTEXT_ENGINE_COMPOSE_PROJECT CONTEXT_ENGINE_MIGRATOR_ROLE CONTEXT_ENGINE_MIGRATOR_PASSWORD CONTEXT_ENGINE_CONTROL_ROLE CONTEXT_ENGINE_CONTROL_PASSWORD CONTEXT_ENGINE_IDENTITY_ROLE CONTEXT_ENGINE_IDENTITY_PASSWORD CONTEXT_ENGINE_EGRESS_ROLE CONTEXT_ENGINE_EGRESS_PASSWORD CONTEXT_ENGINE_ACTION_ROLE CONTEXT_ENGINE_ACTION_PASSWORD CONTEXT_ENGINE_RUNTIME_ROLE CONTEXT_ENGINE_RUNTIME_PASSWORD CONTEXT_ENGINE_WORKER_ROLE CONTEXT_ENGINE_WORKER_PASSWORD CONTEXT_ENGINE_LEARNING_ROLE CONTEXT_ENGINE_LEARNING_PASSWORD CONTEXT_ENGINE_SECURITY_OPERATOR_ROLE CONTEXT_ENGINE_SECURITY_OPERATOR_PASSWORD CONTEXT_ENGINE_MIGRATION_DATABASE_URL CONTEXT_ENGINE_CONTROL_DATABASE_URL CONTEXT_ENGINE_IDENTITY_DATABASE_URL CONTEXT_ENGINE_EGRESS_DATABASE_URL CONTEXT_ENGINE_ACTION_DATABASE_URL CONTEXT_ENGINE_RUNTIME_DATABASE_URL CONTEXT_ENGINE_WORKER_DATABASE_URL CONTEXT_ENGINE_LEARNING_DATABASE_URL CONTEXT_ENGINE_SECURITY_OPERATOR_DATABASE_URL CONTEXT_ENGINE_TEST_DATABASE_URL '
+  local allowed_variables=' POSTGRES_DB POSTGRES_USER POSTGRES_PASSWORD CONTEXT_ENGINE_POSTGRES_PORT CONTEXT_ENGINE_COMPOSE_PROJECT CONTEXT_ENGINE_MIGRATOR_ROLE CONTEXT_ENGINE_MIGRATOR_PASSWORD CONTEXT_ENGINE_CONTROL_ROLE CONTEXT_ENGINE_CONTROL_PASSWORD CONTEXT_ENGINE_IDENTITY_ROLE CONTEXT_ENGINE_IDENTITY_PASSWORD CONTEXT_ENGINE_EGRESS_ROLE CONTEXT_ENGINE_EGRESS_PASSWORD CONTEXT_ENGINE_ACTION_ROLE CONTEXT_ENGINE_ACTION_PASSWORD CONTEXT_ENGINE_RUNTIME_ROLE CONTEXT_ENGINE_RUNTIME_PASSWORD CONTEXT_ENGINE_WORKER_ROLE CONTEXT_ENGINE_WORKER_PASSWORD CONTEXT_ENGINE_SCHEDULER_ROLE CONTEXT_ENGINE_SCHEDULER_PASSWORD CONTEXT_ENGINE_LEARNING_ROLE CONTEXT_ENGINE_LEARNING_PASSWORD CONTEXT_ENGINE_SECURITY_OPERATOR_ROLE CONTEXT_ENGINE_SECURITY_OPERATOR_PASSWORD CONTEXT_ENGINE_MIGRATION_DATABASE_URL CONTEXT_ENGINE_CONTROL_DATABASE_URL CONTEXT_ENGINE_IDENTITY_DATABASE_URL CONTEXT_ENGINE_EGRESS_DATABASE_URL CONTEXT_ENGINE_ACTION_DATABASE_URL CONTEXT_ENGINE_RUNTIME_DATABASE_URL CONTEXT_ENGINE_WORKER_DATABASE_URL CONTEXT_ENGINE_SCHEDULER_DATABASE_URL CONTEXT_ENGINE_LEARNING_DATABASE_URL CONTEXT_ENGINE_SECURITY_OPERATOR_DATABASE_URL CONTEXT_ENGINE_TEST_DATABASE_URL '
 
   while IFS='=' read -r variable_name variable_value; do
     if [[ -z "$variable_name" || "$allowed_variables" != *" $variable_name "* ]]; then
@@ -479,6 +516,7 @@ load_environment() {
         "$CONTEXT_ENGINE_ACTION_ROLE" != 'context_engine_action' || \
         "$CONTEXT_ENGINE_RUNTIME_ROLE" != 'context_engine_runtime' || \
         "$CONTEXT_ENGINE_WORKER_ROLE" != 'context_engine_worker' || \
+        "$CONTEXT_ENGINE_SCHEDULER_ROLE" != 'context_engine_scheduler' || \
         "$CONTEXT_ENGINE_LEARNING_ROLE" != 'context_engine_learning' || \
         "$CONTEXT_ENGINE_SECURITY_OPERATOR_ROLE" != \
           'context_engine_security_operator' || \
@@ -492,6 +530,7 @@ load_environment() {
         ! "$CONTEXT_ENGINE_ACTION_PASSWORD" =~ ^[0-9a-f]{64}$ || \
         ! "$CONTEXT_ENGINE_RUNTIME_PASSWORD" =~ ^[0-9a-f]{64}$ || \
         ! "$CONTEXT_ENGINE_WORKER_PASSWORD" =~ ^[0-9a-f]{64}$ || \
+        ! "$CONTEXT_ENGINE_SCHEDULER_PASSWORD" =~ ^[0-9a-f]{64}$ || \
         ! "$CONTEXT_ENGINE_LEARNING_PASSWORD" =~ ^[0-9a-f]{64}$ || \
         ! "$CONTEXT_ENGINE_SECURITY_OPERATOR_PASSWORD" =~ ^[0-9a-f]{64}$ ]]; then
     printf 'database environment failed its generated-value contract\n' >&2
@@ -514,6 +553,8 @@ load_environment() {
           "postgresql+psycopg://context_engine_runtime:$CONTEXT_ENGINE_RUNTIME_PASSWORD@$database_endpoint" || \
         "$CONTEXT_ENGINE_WORKER_DATABASE_URL" != \
           "postgresql+psycopg://context_engine_worker:$CONTEXT_ENGINE_WORKER_PASSWORD@$database_endpoint" || \
+        "$CONTEXT_ENGINE_SCHEDULER_DATABASE_URL" != \
+          "postgresql+psycopg://context_engine_scheduler:$CONTEXT_ENGINE_SCHEDULER_PASSWORD@$database_endpoint" || \
         "$CONTEXT_ENGINE_LEARNING_DATABASE_URL" != \
           "postgresql+psycopg://context_engine_learning:$CONTEXT_ENGINE_LEARNING_PASSWORD@$database_endpoint" || \
         "$CONTEXT_ENGINE_SECURITY_OPERATOR_DATABASE_URL" != \

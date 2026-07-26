@@ -1,5 +1,5 @@
 ---
-name: adr-0060-split-process-ceremony-along-the-kernel-seam-boundary
+name: adr-0064-split-process-ceremony-along-the-kernel-seam-boundary
 version: "1.0.0"
 description: >
   Keep full evidence ceremony for changes that touch sealed authorization
@@ -7,7 +7,7 @@ description: >
   architecture's existing kernel-versus-seam boundary as the lane test.
 ---
 
-# 0060. Split process ceremony along the kernel-seam boundary
+# 0064. Split process ceremony along the kernel-seam boundary
 
 - Status: accepted
 - Date: 2026-07-26
@@ -22,7 +22,7 @@ evidence of unusual quality, including mutation tests of the security gate
 itself. Applied uniformly, the same ceremony makes seam-side product work —
 retrieval quality, ingestion breadth, parsing, evaluation — slow far beyond
 its risk, and it is the direct cause of artifacts like a 4,096-byte
-production file ceiling. ADR-0058 requires product-lane velocity that uniform
+production file ceiling. ADR-0062 requires product-lane velocity that uniform
 ceremony cannot supply. The architecture already draws the needed line:
 ADR-0012 seals the authorization pipeline, and the code enforces it with
 type-identity checks, while retrieval, parsing, and provider surfaces are
@@ -74,10 +74,10 @@ relaxation quietly erodes the security posture and never gets re-tightened.
 
 ## Consequences
 
-- Slice A (ADR-0058) runs mostly in the product lane; its kernel-lane
+- Slice A (ADR-0062) runs mostly in the product lane; its kernel-lane
   components — the first content-bearing delivery carrier activation in the
   served composition and the dogfood authentication composition — carry full
-  ceremony, the latter under ADR-0059.
+  ceremony, the latter under ADR-0063.
 - Seam-side iteration speed increases without any new authorization risk
   class; hostile-input conformance suites at the seams remain in force.
 - Some product-lane decisions will be recorded only in issues and tests;

@@ -32,7 +32,7 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
     document = manifest()
     tables = table_entries(document)
 
-    assert document["manifestVersion"] == "28.0.0"
+    assert document["manifestVersion"] == "32.0.0"
     assert set(tables) == {
         "active_release_manifest",
         "action_delivery_attempt",
@@ -58,6 +58,7 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
         "model_egress_audit",
         "private_delivery_audit",
         "exact_phrase_candidate",
+        "file_delete_observation_execution",
         "file_acquisition",
         "file_acquisition_result",
         "file_import_job",
@@ -92,6 +93,14 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
         "worker_noop_job",
     }
     assert tables["alembic_version"]["classification"] == "global"
+    assert tables["alembic_version"]["permittedOperations"] == {
+        "context_engine_runtime": [],
+        "context_engine_worker": [],
+        "context_engine_control": [],
+        "context_engine_worker_lease_definer": [
+            "SELECT scheduler generation capability"
+        ],
+    }
     assert tables["organization"]["classification"] == "global"
     assert tables["user_account"]["classification"] == "global"
     assert tables["membership"]["classification"] == "tenant_owned"
@@ -181,6 +190,35 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
     assert delete_binding["permittedOperations"][
         "context_engine_worker_lease_definer"
     ] == ["SELECT", "INSERT", "DELETE"]
+    delete_execution = tables["file_delete_observation_execution"]
+    assert delete_execution["classification"] == "tenant_owned"
+    assert delete_execution["nonOwnerEvidence"]["evidenceId"] == (
+        "PG-FILE-DELETE-EXECUTE-087"
+    )
+    assert delete_execution["rowLevelSecurity"]["enabled"] is True
+    assert delete_execution["rowLevelSecurity"]["forced"] is True
+    assert [
+        (policy["name"], policy["command"], policy["roles"])
+        for policy in delete_execution["rowLevelSecurity"]["policies"]
+    ] == [
+        (
+            "file_delete_observation_execution_migrator_administration",
+            "ALL",
+            ["context_engine_migrator"],
+        ),
+        (
+            "file_delete_observation_execution_definer_select",
+            "SELECT",
+            ["context_engine_worker_lease_definer"],
+        ),
+        (
+            "file_delete_observation_execution_definer_insert",
+            "INSERT",
+            ["context_engine_worker_lease_definer"],
+        ),
+    ]
+    assert delete_execution["permittedOperations"]["context_engine_runtime"] == []
+    assert delete_execution["permittedOperations"]["context_engine_worker"] == []
 
     assert tables["action_delivery_attempt"]["permittedOperations"][
         "context_engine_action_prepare_definer"
@@ -507,6 +545,10 @@ def test_issue_27_file_recovery_contract_is_generation_fenced_and_auditable() ->
         assert entry["functionOnlyMutation"]["directTableMutationAllowed"] is False
         assert entry["permittedOperations"]["context_engine_runtime"] == []
     assert history["immutableRows"]["events"] == ["UPDATE", "DELETE"]
+    assert history["functionOnlyMutation"]["definerRoles"] == [
+        "context_engine_worker_lease_definer",
+        "context_engine_file_dispatch_definer",
+    ]
     assert checkpoint["retention"]["sourceContent"] == "none"
 
     boundary_functions = {
@@ -802,6 +844,17 @@ def test_issue_21_file_source_manifest_is_closed_and_role_separated() -> None:
         "file_source_acquisition_checkpoint",
     ]
     assert schedule["filesystemAccessAllowed"] is False
+    assert schedule["completePageValidation"] is True
+    assert schedule["migrationFence"] == {
+        "sharedAdvisoryLock": (
+            "context-engine.file-change-scheduling-migration-fence"
+        ),
+        "definerOnlyGenerationRead": (
+            "alembic_version SELECT revoked by 0032 downgrade"
+        ),
+    }
+    assert schedule["scheduledChangeKinds"] == ["upsert"]
+    assert schedule["deleteExecutionAllowed"] is False
     redeem = next(
         operation
         for operation in manifest()["controlOperations"]
@@ -862,8 +915,12 @@ def test_issue_21_file_source_manifest_is_closed_and_role_separated() -> None:
         "context_engine_security_operator": [],
         "context_engine_worker": [],
         "context_engine_worker_lease_definer": ["SELECT", "UPDATE"],
-        "context_engine_action_prepare_definer": ["SELECT"],
-        "context_engine_action_execute_definer": ["SELECT"],
+            "context_engine_action_prepare_definer": ["SELECT"],
+            "context_engine_action_execute_definer": ["SELECT"],
+            "context_engine_file_dispatch_definer": [
+                "SELECT",
+                "UPDATE lifecycle_state, active_version_id",
+            ],
     }
     assert version["permittedOperations"] == {
         "context_engine_control": [
@@ -879,6 +936,7 @@ def test_issue_21_file_source_manifest_is_closed_and_role_separated() -> None:
         "context_engine_worker_lease_definer": ["SELECT", "INSERT"],
         "context_engine_action_prepare_definer": ["SELECT"],
         "context_engine_action_execute_definer": ["SELECT"],
+        "context_engine_file_dispatch_definer": ["SELECT"],
     }
     for entry in (source, version):
         assert entry["rowLevelSecurity"]["enabled"] is True
@@ -1269,6 +1327,7 @@ def test_worker_lease_manifest_requires_exact_receiver_and_job() -> None:
         "context_engine_runtime": [],
         "context_engine_worker": [],
         "context_engine_worker_lease_definer": ["SELECT"],
+        "context_engine_file_dispatch_definer": ["SELECT", "UPDATE enabled"],
     }
     assert job["permittedOperations"] == {
         "context_engine_control": ["EXECUTE issue_noop_worker_lease"],
@@ -1403,6 +1462,10 @@ def test_membership_manifest_requires_exact_user_actor_and_read_only_runtime() -
         "context_engine_action_prepare_definer": ["SELECT"],
         "context_engine_action_execute_definer": ["SELECT"],
         "context_engine_citation_definer": ["SELECT"],
+        "context_engine_file_dispatch_definer": [
+            "SELECT",
+            "UPDATE status, valid_from, valid_until",
+        ],
     }
 
     rls = entry["rowLevelSecurity"]

@@ -1,5 +1,5 @@
 ---
-name: adr-0057-commit-to-the-complete-context-layer-thesis
+name: adr-0061-commit-to-the-complete-context-layer-thesis
 version: "1.0.0"
 description: >
   Fix the product thesis as one complete context layer with two context
@@ -7,7 +7,7 @@ description: >
   boundary instead of forcing it into snapshot publication semantics.
 ---
 
-# 0057. Commit to the complete context layer thesis
+# 0061. Commit to the complete context layer thesis
 
 - Status: accepted
 - Date: 2026-07-26
@@ -77,7 +77,7 @@ the thesis and the model.
   knowledge-snapshot family only; structured-family terms are added when that
   family is designed.
 - The roadmap's connector-only sequencing is no longer a complete statement of
-  intent; ordering is governed by ADR-0058.
+  intent; ordering is governed by ADR-0062.
 - The structured acquisition family requires at least: a source registration
   shape, an acquisition-time authorization contract, freshness semantics, and
   an explicit glossary extension of `Evidence` and ContextPackage composition
@@ -88,5 +88,5 @@ the thesis and the model.
 ## Revisit trigger
 
 Design the structured acquisition family before implementing its first
-carrier. The trigger is the first real dogfood workload under ADR-0058 that
+carrier. The trigger is the first real dogfood workload under ADR-0062 that
 needs request-time structured data; reopen this boundary then, not before.

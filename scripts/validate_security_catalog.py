@@ -1865,6 +1865,299 @@ CANONICAL_FILE_DELETE_OBSERVATION_ACTIVATION: dict[str, object] = {
     ],
 }
 
+CANONICAL_FILE_DELETE_EXECUTION_ACTIVATION: dict[str, object] = {
+    "issueRef": "#87",
+    "invariantRef": "REVOCATION-006",
+    "carrier": (
+        "explicit current File delete execution through sole tombstone authority"
+    ),
+    "status": "active_fail_closed",
+    "policyEpochScope": "organization-next-request",
+    "controlBoundary": (
+        "exact trusted Source/SourceVersion/page/ordinal locator -> current complete "
+        "v4 scan revalidation -> server-derived Resource/event lineage -> existing "
+        "tombstone authority -> immutable exact execution binding"
+    ),
+    "testEvidence": [
+        {
+            "id": "PG-FILE-DELETE-EXECUTE-087",
+            "surface": (
+                "tests/integration/test_file_change_pages.py::"
+                "test_control_executes_a_nonterminal_current_delete_observation"
+            ),
+            "oracle": (
+                "The non-owner Control role executes a delete on a nonterminal page "
+                "only after its scan has the current complete terminal head, derives "
+                "effect identity from durable state, and atomically commits one "
+                "tombstone, Policy Epoch advance, cleanup intent, and exact binding; "
+                "a concurrent superseding scan wins the progress fence with zero "
+                "partial mutation."
+            ),
+        },
+        {
+            "id": "PG-FILE-DELETE-REPLAY-087",
+            "surface": (
+                "tests/integration/test_file_change_pages.py::"
+                "test_control_executes_a_nonterminal_current_delete_observation"
+            ),
+            "oracle": (
+                "Injected binding failure rolls the tombstone and epoch back, while "
+                "exact replay returns the original database-authored result without "
+                "a second cleanup intent, binding, or visibility effect."
+            ),
+        },
+        {
+            "id": "HTTP-FILE-DELETE-INVISIBLE-087",
+            "surface": (
+                "tests/integration/test_z_egress_grant_file.py::"
+                "test_file_delete_execution_is_immediately_invisible_over_generated_sdk"
+            ),
+            "oracle": (
+                "After execution, an installed generated SDK calling the live HTTP "
+                "sealed Runtime receives zero blocks and Evidence while the stale "
+                "Revision, Fragment, snapshot, and candidate remain physically present."
+            ),
+        },
+    ],
+    "deferredEvidence": [
+        "autonomous or batch File deletion execution",
+        "retry, reclaim, dead-letter, and full-resync operations",
+        "physical cleanup completion and restore",
+    ],
+    "futureCarriers": [
+        "autonomous File change scheduler",
+        "retry and dead-letter handling",
+        "physical cleanup consumer",
+        "restore or recreate workflow",
+    ],
+    "notActive": [
+        "provider deletion authority",
+        "caller-supplied path, ResourceRef, event, epoch, cleanup, or audience",
+        "implicit or batch delete execution",
+        "Runtime authorization from observation or execution metadata",
+        "physical cleanup or restore",
+    ],
+}
+
+CANONICAL_FILE_MIXED_UPSERT_SCHEDULING_ACTIVATION: dict[str, object] = {
+    "issueRef": "#89",
+    "invariantRef": "WORKER-LEASE-007",
+    "carrier": "explicit current mixed File page upsert-projection scheduling",
+    "status": "active_fail_closed",
+    "policyEpochScope": "not-runtime-authority",
+    "controlBoundary": (
+        "complete current v4 upsert/delete page validation -> trusted "
+        "ContextControl explicit FileImportAudience -> nonempty original-ordinal "
+        "upsert projection -> exact existing acquisition/import-job lineage -> "
+        "existing WorkerLease and current-scan publication fences"
+    ),
+    "testEvidence": [
+        {
+            "id": "PG-FILE-MIXED-UPSERT-SCHEDULE-089",
+            "surface": (
+                "tests/integration/test_file_change_pages.py::"
+                "test_control_schedules_only_the_upserts_from_a_current_mixed_file_page"
+            ),
+            "oracle": (
+                "The non-owner Control role validates one complete current v4 page "
+                "ordered upsert/delete/upsert, atomically creates jobs only for "
+                "original ordinals 1 and 3, and binds each to its exact immutable "
+                "observation while a partial projection creates zero additional jobs."
+            ),
+        },
+        {
+            "id": "PG-FILE-MIXED-UPSERT-REPLAY-089",
+            "surface": (
+                "tests/integration/test_file_change_pages.py::"
+                "test_control_schedules_only_the_upserts_from_a_current_mixed_file_page"
+            ),
+            "oracle": (
+                "Exact replay returns the same gapped ordered existing jobs; changed "
+                "audience and retained partial lineage return generic unavailable, "
+                "and downgrade refuses retained mixed-page acquisition history."
+            ),
+        },
+        {
+            "id": "HTTP-FILE-MIXED-UPSERT-NO-DELETE-089",
+            "surface": (
+                "tests/integration/test_z_egress_grant_file.py::"
+                "test_mixed_file_upsert_scheduling_has_zero_delete_effect_over_generated_sdk"
+            ),
+            "oracle": (
+                "After mixed-page scheduling, an installed generated SDK still "
+                "resolves the previously published deleted-path Evidence through "
+                "CandidateRef, AuthorizationKernel, and AuthorizedProjection; Policy "
+                "Epoch, tombstone, cleanup, and delete-execution counts stay unchanged."
+            ),
+        },
+    ],
+    "deferredEvidence": [
+        "autonomous File change polling and scheduling",
+        "automatic ordering between upsert publication and delete execution",
+        "batch deletion, retry, reclaim, dead-letter, and full-resync operations",
+    ],
+    "futureCarriers": [
+        "autonomous File change scheduler",
+        "explicit mixed-change ordering policy",
+        "retry and dead-letter handling",
+        "full resync",
+    ],
+    "notActive": [
+        "scheduler delete or tombstone authority",
+        "implicit or inherited FileImportAudience",
+        "automatic upsert/delete ordering",
+        "filesystem watcher",
+        "Runtime authorization from File page or checkpoint metadata",
+    ],
+}
+
+CANONICAL_FILE_DISPATCH_ACTIVATION: dict[str, object] = {
+    "issueRef": "#91",
+    "invariantRef": "WORKER-LEASE-007",
+    "carrier": "autonomous first-attempt dispatch of explicit scheduled File upserts",
+    "status": "active_fail_closed",
+    "policyEpochScope": "not-runtime-authority",
+    "controlBoundary": (
+        "function-only scheduler login -> current page/acquisition/audience/receiver "
+        "eligibility -> deterministic SKIP LOCKED selector -> database-timed "
+        "generation-one lease -> existing WorkerLease and File worker"
+    ),
+    "testEvidence": [
+        {
+            "id": "PG-FILE-DISPATCH-091",
+            "surface": (
+                "tests/integration/test_file_dispatch.py::"
+                "test_scheduler_claims_only_current_page_scheduled_upsert"
+            ),
+            "oracle": (
+                "The non-owner scheduler cannot read job tables and can claim only "
+                "one current page-scheduled upsert through the exact function; the "
+                "next claim is typed content-free no-work and revoked audience "
+                "authority remains unclaimed."
+            ),
+        },
+        {
+            "id": "PG-FILE-DISPATCH-CONCURRENCY-091",
+            "surface": (
+                "tests/integration/test_file_dispatch.py::"
+                "test_concurrent_dispatchers_never_claim_the_same_job"
+            ),
+            "oracle": (
+                "Two concurrent scheduler-role authorities claim the two oldest "
+                "eligible jobs exactly once through FOR UPDATE SKIP LOCKED; no job "
+                "identity is returned twice."
+            ),
+        },
+        {
+            "id": "PROC-FILE-DISPATCH-091",
+            "surface": (
+                "tests/integration/test_file_dispatch.py::"
+                "test_independent_worker_process_dispatches_and_publishes_one_job"
+            ),
+            "oracle": (
+                "The independent worker runs a configured dispatch cycle with no "
+                "caller Organization, Source, job, or token, completes the existing "
+                "publication path, and emits only the closed content-free "
+                "dispatched result."
+            ),
+        },
+    ],
+    "deferredEvidence": [
+        "expired-lease reclaim, automatic retry/backoff, dead-letter handling, "
+        "and operator remediation",
+        "provider polling, automatic page acceptance, and automatic delete ordering",
+    ],
+    "futureCarriers": [
+        "retry and dead-letter owner",
+        "provider polling and full resync",
+        "explicit mixed-change ordering policy",
+    ],
+    "notActive": [
+        "scheduler tenant, Source, job, audience, path, lease-time, or "
+        "generation choice",
+        "manual import or delete execution",
+        "automatic retry or reclaim",
+        "Runtime authorization from Supply scheduling or lease state",
+    ],
+}
+
+CANONICAL_FILE_RECLAIM_ACTIVATION: dict[str, object] = {
+    "issueRef": "#93",
+    "invariantRef": "WORKER-LEASE-007",
+    "carrier": "bounded autonomous reclaim of expired scheduled File upserts",
+    "status": "active_fail_closed",
+    "policyEpochScope": "not-runtime-authority",
+    "controlBoundary": (
+        "function-only scheduler login -> expired lease plus database-owned "
+        "exponential backoff -> current page/acquisition/audience/receiver "
+        "revalidation -> deterministic recovery-first SKIP LOCKED selector -> exact "
+        "next-generation WorkerLease -> existing durable-boundary File worker resume"
+    ),
+    "testEvidence": [
+        {
+            "id": "PG-FILE-RECLAIM-093",
+            "surface": (
+                "tests/integration/test_file_dispatch.py::"
+                "test_scheduler_reclaims_one_expired_dispatch_after_database_backoff "
+                "tests/integration/test_file_dispatch.py::"
+                "test_scheduler_does_not_reclaim_after_automatic_generation_budget "
+                "tests/integration/test_file_dispatch.py::"
+                "test_scheduler_reclaim_revalidates_current_membership_without_mutation"
+            ),
+            "oracle": (
+                "The non-owner scheduler reclaims only after database expiry plus "
+                "generation-derived backoff, atomically advances to the exact next "
+                "generation with one digest-only event, returns content-free no-work "
+                "before eligibility, after the generation-four budget, or after "
+                "current Membership authority is revoked, and mutates nothing on "
+                "refusal."
+            ),
+        },
+        {
+            "id": "PG-FILE-RECLAIM-CONCURRENCY-093",
+            "surface": (
+                "tests/integration/test_file_dispatch.py::"
+                "test_concurrent_schedulers_reclaim_one_expired_generation_once"
+            ),
+            "oracle": (
+                "Two scheduler-role authorities competing for one expired generation "
+                "yield exactly one next-generation lease and one immutable reclaim "
+                "event; the loser receives content-free no-work."
+            ),
+        },
+        {
+            "id": "PROC-FILE-RECLAIM-093",
+            "surface": (
+                "tests/integration/test_file_dispatch.py::"
+                "test_scheduler_recovers_interrupted_publication_and_stales_old_lease"
+            ),
+            "oracle": (
+                "Across acquired, prepared, and indexed durable boundaries, the "
+                "scheduler and existing File worker resume with one higher-generation "
+                "lease, the replaced lease has zero effect, and exactly one active "
+                "Revision/publication effect remains."
+            ),
+        },
+    ],
+    "deferredEvidence": [
+        "dead-letter state, exhaustion transition, operator remediation, requeue, "
+        "and retry observability",
+        "provider polling, automatic page acceptance, full resync, and automatic "
+        "delete ordering",
+    ],
+    "futureCarriers": [
+        "dead-letter and operator remediation owner",
+        "provider polling and full resync",
+        "explicit mixed-change ordering policy",
+    ],
+    "notActive": [
+        "scheduler tenant, Source, job, attempt, timing, backoff, or generation choice",
+        "terminal failure retry, dead-letter transition, or operator requeue",
+        "manual import or delete recovery",
+        "Runtime authorization from Supply retry or lease state",
+    ],
+}
+
 CANONICAL_ACTIVATIONS: list[dict[str, object]] = [
     CANONICAL_REVOCATION_ACTIVATION,
     CANONICAL_UNAVAILABLE_CAPABILITY_ACTIVATION,
@@ -1884,6 +2177,10 @@ CANONICAL_ACTIVATIONS: list[dict[str, object]] = [
     CANONICAL_FILE_CHANGE_FEED_ACTIVATION,
     CANONICAL_FILE_CHANGE_SCHEDULING_ACTIVATION,
     CANONICAL_FILE_DELETE_OBSERVATION_ACTIVATION,
+    CANONICAL_FILE_DELETE_EXECUTION_ACTIVATION,
+    CANONICAL_FILE_MIXED_UPSERT_SCHEDULING_ACTIVATION,
+    CANONICAL_FILE_DISPATCH_ACTIVATION,
+    CANONICAL_FILE_RECLAIM_ACTIVATION,
 ]
 CANONICAL_ACTIVATION_ISSUE_LIST = ", ".join(
     f"Issue {activation['issueRef']}" for activation in CANONICAL_ACTIVATIONS

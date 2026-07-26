@@ -13,7 +13,7 @@ schema、Python type、threat fixture 或新的架构决策。
 当前词汇表覆盖 knowledge-snapshot family（知识快照内容族：快照发布为
 不可变 ContextRevision/ContextFragment lineage 的来源）。structured
 acquisition family（结构化获取族：请求时从数据库/API 获取的 context）按
-[ADR-0057](docs/decisions/0057-commit-to-the-complete-context-layer-thesis.md)
+[ADR-0061](docs/decisions/0061-commit-to-the-complete-context-layer-thesis.md)
 deferred-by-design：其 canonical 术语在该族设计时加入；本词汇表的快照
 lifecycle 术语，以及建立在 ContextFragment 之上的 request-scoped 定义
 （如 `Evidence` 与 `ContextPackage` 的 Evidence 组成），都不得未经显式

@@ -1,7 +1,7 @@
 ---
 title: 2026-07-26 Repo State Review and Course Correction
 date: 2026-07-26
-status: review record; decision boundaries owned by ADR-0057..ADR-0060
+status: review record; decision boundaries owned by ADR-0061..ADR-0064
 ---
 
 # 2026-07-26 仓库状态评审与航向修正
@@ -9,7 +9,7 @@ status: review record; decision boundaries owned by ADR-0057..ADR-0060
 > 评审基线:工作树 `4471ee7`。方法:三路并行代码勘探(engine 核心 /
 > tests 与安全门 / delivery 与 adapters/SDK),关键断言经维护者会话逐条
 > 亲验后采信。所有代码事实均附 file:line 出处。本文档记录评审结论与
-> 修正决策;边界本身由 ADR-0057 至 ADR-0060 固定。
+> 修正决策;边界本身由 ADR-0061 至 ADR-0064 固定。
 
 ## 一句话结论
 
@@ -92,7 +92,7 @@ status: review record; decision boundaries owned by ADR-0057..ADR-0060
   `docs/research/2026-07-19-four-public-repositories-evidence.md`)呈镜像:
   证据基线显示它们集体薄弱的授权/撤销/租户隔离恰是本仓已建成者;它们各自
   擅长的摄取与检索广度恰是本仓未建者。此镜像可成为差异化,但必须出自
-  自觉选择——本次评审即为该选择补办手续(ADR-0057)。
+  自觉选择——本次评审即为该选择补办手续(ADR-0061)。
 - **质量门倒挂:** 安全门达变异测试级,而 `eval/` 无 golden set,release
   report 中 Reliability/Quality/Budget 均 `not-evaluated`
   (`scripts/security_gate/report.py:606`)。检索质量当前零测量。
@@ -111,48 +111,49 @@ status: review record; decision boundaries owned by ADR-0057..ADR-0060
 - **一个装不下的族:** 结构化 DB/API 活数据与
   `ContextResource -> ContextRevision -> ContextFragment` 的不可变快照发布
   语义冲突——无 Revision、无 tombstone、授权须下推至源。硬塞会腐蚀模型
-  (裁决:ADR-0057)。
+  (裁决:ADR-0061)。
 
 ## 修正决策(grilling 收敛结果)
 
 | # | 问题 | 裁决 | 固定于 |
 |---|---|---|---|
-| 1 | 仓库定位 | 完整 context 层:知识快照族 + 结构化获取族两族一约;结构化族 deferred-by-design,禁止伪装成 Revision 语义接入 | ADR-0057 |
-| 2 | 牵引负载 | 维护者本人的真实工作负载 dogfood 牵引全部排期;禁止广度优先建"完整层" | ADR-0058 |
-| 3 | 第一切片 | Slice A(下节);向量先行,混合检索为同 seam 的后置升级,由 golden set 失效证据触发 | ADR-0058 |
-| 4 | 认证入口 | 显式配置的 dogfood 认证组合;默认组合维持 reject-all;仅简化"你是谁",不触碰授权链 | ADR-0059 |
-| 5 | 流程重量 | 双车道:kernel 车道全仪式,product 车道轻流程;车道线 = 既有 sealed-vs-seam 线 | ADR-0060 |
+| 1 | 仓库定位 | 完整 context 层:知识快照族 + 结构化获取族两族一约;结构化族 deferred-by-design,禁止伪装成 Revision 语义接入 | ADR-0061 |
+| 2 | 牵引负载 | 维护者本人的真实工作负载 dogfood 牵引全部排期;禁止广度优先建"完整层" | ADR-0062 |
+| 3 | 第一切片 | Slice A(下节);向量先行,混合检索为同 seam 的后置升级,由 golden set 失效证据触发 | ADR-0062 |
+| 4 | 认证入口 | 显式配置的 dogfood 认证组合;默认组合维持 reject-all;仅简化"你是谁",不触碰授权链 | ADR-0063 |
+| 5 | 流程重量 | 双车道:kernel 车道全仪式,product 车道轻流程;车道线 = 既有 sealed-vs-seam 线 | ADR-0064 |
 
 ## Slice A——第一次通电
 
-目标:被服务的生产进程在显式配置的 dogfood 认证组合(ADR-0059)下,对
+目标:被服务的生产进程在显式配置的 dogfood 认证组合(ADR-0063)下,对
 维护者的真实 Markdown 语料交付真实 Evidence,并被一个真实 caller 消费。
-模块级默认组合按 ADR-0059 维持 reject-all 不变。
+模块级默认组合按 ADR-0063 维持 reject-all 不变。
 
 | # | 内容 | 车道 |
 |---|---|---|
 | 1 | File provider 扩容:递归目录、文件上限改为可配置(约 1MB),仍仅 `.md` | product |
 | 2 | pgvector 单路检索:Supply 侧新增 embedding seam,Fragment 入库计算向量;query 向量近邻产出 CandidateRef;授权层零改动 | product |
-| 3 | 生产组合通电:candidate_index 接入被服务的 Runtime 组合(首次内容载体激活);dogfood 认证组合按 ADR-0059 边界实现 | kernel(载体激活与认证组合均全仪式,见 ADR-0060) |
+| 3 | 生产组合通电:candidate_index 接入被服务的 Runtime 组合(首次内容载体激活);dogfood 认证组合按 ADR-0063 边界实现 | kernel(载体激活与认证组合均全仪式,见 ADR-0064) |
 | 4 | 真实 caller:维护者工具经生成 SDK 或 HTTP 调 `resolve`,替代一个真实的手工翻找场景 | product |
 | 5 | Golden set v0:自真实查询积累最初 20–50 条,为 Quality 门装上第一块电表 | product |
 
 **显式不入切片:** Continue(维持 NOT_ACTIVE)与 OpenCitation 的任何新
 carrier(ADR-0051 已激活的私有 File-backed carrier 维持不变)、结构化
-获取族实现(仅按 ADR-0057 设计沉淀)、深度清洗/PDF、FTS+RRF 混合融合、
+获取族实现(仅按 ADR-0061 设计沉淀)、深度清洗/PDF、FTS+RRF 混合融合、
 第二 connector。
 
 ## 标准调整清单(按优先级)
 
 1. **执行 Slice A**(上节)——所有其他调整都以第一次通电为前提。
 2. **PLAN.md 与实现设计的修订过**:以两族论题与 dogfood 牵引重述 M3 之后
-   的排期(ADR-0057/0058 为权威;修订完成前,旧 roadmap 文本在此二 ADR
+   的排期(ADR-0061/0058 为权威;修订完成前,旧 roadmap 文本在此二 ADR
    之下阅读)。同批将 AGENTS.md Definition of Done 的 ADR 条目对齐
-   ADR-0060 双车道规则(AGENTS.md 修订须走 doc-steward 工作流)。
-3. **README 状态台账外移**:"当前状态"段已约两百行激活细则,新读者无法
-   得知引擎是什么。台账移至独立 STATUS 文档,README 留一句话状态 + 链接。
+   ADR-0064 双车道规则(AGENTS.md 修订须走 doc-steward 工作流)。
+3. **README 状态台账外移**:已由 #97 完成——`STATUS.md` 承接 capability
+   ledger,README 重写并链接之。保留此条仅作记录;后续激活记账继续写入
+   `STATUS.md`。
 4. **结构化获取族设计**:当 dogfood 出现第一个真实 DB/API 需求时启动
-   (ADR-0057 revisit trigger),先术语与 ADR,后代码。
+   (ADR-0061 revisit trigger),先术语与 ADR,后代码。
 5. **第二 provider 前的 seam 提炼**:接入任何第二源前,将
    SourceKind/capability manifest/parser 注入点提炼为真实接口;在此之前
    不做投机抽象。
@@ -161,6 +162,6 @@ carrier(ADR-0051 已激活的私有 File-backed carrier 维持不变)、结构�
 
 ## 本文档的地位
 
-本文档是评审记录与执行参考,不是边界权威。边界权威是 ADR-0057 至
-ADR-0060 与既有 accepted ADR;术语权威是 `CONTEXT.md`;冲突时以权威
+本文档是评审记录与执行参考,不是边界权威。边界权威是 ADR-0061 至
+ADR-0064 与既有 accepted ADR;术语权威是 `CONTEXT.md`;冲突时以权威
 文档为准。

@@ -1,5 +1,5 @@
 ---
-name: adr-0058-pull-development-through-dogfood-workloads
+name: adr-0062-pull-development-through-dogfood-workloads
 version: "1.0.0"
 description: >
   Order the roadmap by the maintainer's own real workloads instead of a fixed
@@ -7,11 +7,11 @@ description: >
   an observed need rather than built breadth-first.
 ---
 
-# 0058. Pull development through dogfood workloads
+# 0062. Pull development through dogfood workloads
 
 - Status: accepted
 - Date: 2026-07-26
-- Refines: ADR-0016, ADR-0057
+- Refines: ADR-0016, ADR-0061
 
 ## Context
 
@@ -37,7 +37,7 @@ questions. Roadmap ordering is pulled by these workloads:
    end to end.
 2. The first vertical slice ("Slice A", recorded in the 2026-07-26 review
    document) makes the served composition — under the explicitly configured
-   dogfood authentication composition of ADR-0059, while the module-level
+   dogfood authentication composition of ADR-0063, while the module-level
    default composition remains reject-all — deliver real Evidence for the
    maintainer's Markdown corpus: File provider widening, one real vector
    candidate index behind the existing candidate-index seam, one real caller
@@ -57,7 +57,7 @@ Completeness without a pulling workload has no falsifier; it optimizes area
 instead of usefulness, which is the failure mode this decision is designed to
 avoid. The maintainer's own workloads are the only immediately available,
 zero-coordination feedback source, and they naturally span both context
-families of ADR-0057. Dogfood pull decides ordering only; it does not weaken
+families of ADR-0061. Dogfood pull decides ordering only; it does not weaken
 any multi-tenant invariant — single-tenant dogfood traffic still runs the
 full sealed AuthorizationKernel, FORCE RLS, and Policy Epoch path.
 

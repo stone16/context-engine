@@ -32,7 +32,11 @@ from scripts.validate_security_catalog import (
     CANONICAL_FIELD_PROJECTION_ACTIVATION,
     CANONICAL_FILE_CHANGE_FEED_ACTIVATION,
     CANONICAL_FILE_CHANGE_SCHEDULING_ACTIVATION,
+    CANONICAL_FILE_DELETE_EXECUTION_ACTIVATION,
     CANONICAL_FILE_DELETE_OBSERVATION_ACTIVATION,
+    CANONICAL_FILE_DISPATCH_ACTIVATION,
+    CANONICAL_FILE_MIXED_UPSERT_SCHEDULING_ACTIVATION,
+    CANONICAL_FILE_RECLAIM_ACTIVATION,
     CANONICAL_INVARIANT_IDS,
     CANONICAL_MODEL_EGRESS_ACTIVATION,
     CANONICAL_OPENAPI_V0_ACTIVATION,
@@ -583,6 +587,10 @@ def make_catalog() -> dict[str, object]:
             copy.deepcopy(CANONICAL_FILE_CHANGE_FEED_ACTIVATION),
             copy.deepcopy(CANONICAL_FILE_CHANGE_SCHEDULING_ACTIVATION),
             copy.deepcopy(CANONICAL_FILE_DELETE_OBSERVATION_ACTIVATION),
+            copy.deepcopy(CANONICAL_FILE_DELETE_EXECUTION_ACTIVATION),
+            copy.deepcopy(CANONICAL_FILE_MIXED_UPSERT_SCHEDULING_ACTIVATION),
+            copy.deepcopy(CANONICAL_FILE_DISPATCH_ACTIVATION),
+            copy.deepcopy(CANONICAL_FILE_RECLAIM_ACTIVATION),
         ],
         "invariants": invariants,
         "fixtures": fixtures,
@@ -691,6 +699,18 @@ def make_schema() -> dict[str, object]:
                             CANONICAL_FILE_DELETE_OBSERVATION_ACTIVATION
                         )
                     },
+                    {
+                        "const": copy.deepcopy(
+                            CANONICAL_FILE_DELETE_EXECUTION_ACTIVATION
+                        )
+                    },
+                    {
+                        "const": copy.deepcopy(
+                            CANONICAL_FILE_MIXED_UPSERT_SCHEDULING_ACTIVATION
+                        )
+                    },
+                    {"const": copy.deepcopy(CANONICAL_FILE_DISPATCH_ACTIVATION)},
+                    {"const": copy.deepcopy(CANONICAL_FILE_RECLAIM_ACTIVATION)},
                 ],
                 "items": False,
             },
@@ -1092,7 +1112,7 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
         assert isinstance(upgrade_trigger, str)
         self.assertIn("Issue #71 activates", upgrade_trigger)
         self.assertEqual(
-            object_list_at(catalog, "activations")[-4],
+            object_list_at(catalog, "activations")[-8],
             CANONICAL_PRIVATE_BOT_DELIVERY_ACTIVATION,
         )
 
@@ -1338,6 +1358,55 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
             )
         )
 
+    def test_issue_93_file_reclaim_activation_is_independently_frozen(self) -> None:
+        catalog = load_document(DEFAULT_CATALOG_PATH)
+        schema = load_document(DEFAULT_SCHEMA_PATH)
+        activation = next(
+            item
+            for item in object_list_at(catalog, "activations")
+            if item["issueRef"] == "#93"
+        )
+        schema_activations = object_at(schema, "properties", "activations")
+        prefix_items = schema_activations["prefixItems"]
+        assert isinstance(prefix_items, list)
+        schema_activation = object_at(
+            cast(dict[str, object], prefix_items[-1]), "const"
+        )
+
+        expected_boundary = (
+            "function-only scheduler login -> expired lease plus database-owned "
+            "exponential backoff -> current page/acquisition/audience/receiver "
+            "revalidation -> deterministic recovery-first SKIP LOCKED selector -> "
+            "exact next-generation WorkerLease -> existing durable-boundary File "
+            "worker resume"
+        )
+        expected_evidence_ids = [
+            "PG-FILE-RECLAIM-093",
+            "PG-FILE-RECLAIM-CONCURRENCY-093",
+            "PROC-FILE-RECLAIM-093",
+        ]
+        expected_deferred = [
+            "dead-letter state, exhaustion transition, operator remediation, "
+            "requeue, and retry observability",
+            "provider polling, automatic page acceptance, full resync, and "
+            "automatic delete ordering",
+        ]
+        expected_not_active = [
+            "scheduler tenant, Source, job, attempt, timing, backoff, or generation "
+            "choice",
+            "terminal failure retry, dead-letter transition, or operator requeue",
+            "manual import or delete recovery",
+            "Runtime authorization from Supply retry or lease state",
+        ]
+        for record in (activation, schema_activation):
+            self.assertEqual(record["controlBoundary"], expected_boundary)
+            self.assertEqual(
+                [item["id"] for item in object_list_at(record, "testEvidence")],
+                expected_evidence_ids,
+            )
+            self.assertEqual(record["deferredEvidence"], expected_deferred)
+            self.assertEqual(record["notActive"], expected_not_active)
+
     def test_issue_67_action_prepare_activation_stops_before_effects(self) -> None:
         catalog = make_catalog()
         activation = object_list_at(catalog, "activations")[10]
@@ -1444,7 +1513,7 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
 
     def test_issue_71_private_bot_activation_stops_before_live_providers(self) -> None:
         catalog = make_catalog()
-        activation = object_list_at(catalog, "activations")[-4]
+        activation = object_list_at(catalog, "activations")[-8]
 
         self.assertEqual(activation, CANONICAL_PRIVATE_BOT_DELIVERY_ACTIVATION)
         self.assertEqual(activation["invariantRef"], "ACTION-SEPARATION-014")
@@ -1468,7 +1537,7 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
 
     def test_issue_81_file_change_activation_stops_before_scheduling(self) -> None:
         catalog = make_catalog()
-        activation = object_list_at(catalog, "activations")[-3]
+        activation = object_list_at(catalog, "activations")[-7]
 
         self.assertEqual(activation, CANONICAL_FILE_CHANGE_FEED_ACTIVATION)
         self.assertEqual(activation["invariantRef"], "WORKER-LEASE-007")
@@ -1489,7 +1558,7 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
 
     def test_issue_83_file_change_scheduling_stays_explicit(self) -> None:
         catalog = make_catalog()
-        activation = object_list_at(catalog, "activations")[-2]
+        activation = object_list_at(catalog, "activations")[-6]
 
         self.assertEqual(
             activation,
@@ -1511,7 +1580,7 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
 
     def test_issue_85_file_delete_observation_has_no_execution_authority(self) -> None:
         catalog = make_catalog()
-        activation = object_list_at(catalog, "activations")[-1]
+        activation = object_list_at(catalog, "activations")[-5]
 
         self.assertEqual(
             activation,
@@ -1532,6 +1601,48 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
             "Runtime authorization from baseline or delete metadata",
             not_active,
         )
+
+    def test_issue_87_executes_only_current_exact_file_deletes(self) -> None:
+        catalog = make_catalog()
+        activation = object_list_at(catalog, "activations")[-4]
+
+        self.assertEqual(
+            activation,
+            CANONICAL_FILE_DELETE_EXECUTION_ACTIVATION,
+        )
+        self.assertEqual(
+            [item["id"] for item in object_list_at(activation, "testEvidence")],
+            [
+                "PG-FILE-DELETE-EXECUTE-087",
+                "PG-FILE-DELETE-REPLAY-087",
+                "HTTP-FILE-DELETE-INVISIBLE-087",
+            ],
+        )
+        not_active = activation["notActive"]
+        assert isinstance(not_active, list)
+        self.assertIn("provider deletion authority", not_active)
+        self.assertIn("physical cleanup or restore", not_active)
+
+    def test_issue_89_schedules_only_the_mixed_page_upsert_projection(self) -> None:
+        catalog = make_catalog()
+        activation = object_list_at(catalog, "activations")[-3]
+
+        self.assertEqual(
+            activation,
+            CANONICAL_FILE_MIXED_UPSERT_SCHEDULING_ACTIVATION,
+        )
+        self.assertEqual(
+            [item["id"] for item in object_list_at(activation, "testEvidence")],
+            [
+                "PG-FILE-MIXED-UPSERT-SCHEDULE-089",
+                "PG-FILE-MIXED-UPSERT-REPLAY-089",
+                "HTTP-FILE-MIXED-UPSERT-NO-DELETE-089",
+            ],
+        )
+        not_active = activation["notActive"]
+        assert isinstance(not_active, list)
+        self.assertIn("scheduler delete or tombstone authority", not_active)
+        self.assertIn("automatic upsert/delete ordering", not_active)
 
     def test_schema_independently_freezes_full_accept_008_as_future(self) -> None:
         catalog = make_catalog()
@@ -1955,7 +2066,7 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
 
         self.assertEqual(catalog["catalogVersion"], "1.3.0")
         self.assertEqual(
-            issue_refs[-18:],
+            issue_refs[-22:],
             [
                 "#15",
                 "#16",
@@ -1975,6 +2086,10 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
                 "#81",
                 "#83",
                 "#85",
+                "#87",
+                "#89",
+                "#91",
+                "#93",
             ],
         )
         self.assertIn(
@@ -2012,6 +2127,32 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
         self.assertIn(
             "Issue #85 activates bounded File delete observations only",
             reconciliation,
+        )
+        self.assertIn(
+            "Issue #87 later activates only exact trusted current File delete "
+            "execution",
+            reconciliation,
+        )
+        self.assertIn(
+            "Issue #89 later activates only the exact upsert projection of one "
+            "current mixed v4 page",
+            reconciliation,
+        )
+        self.assertIn(
+            "Autonomous scheduling, automatic upsert/delete ordering, batch deletion "
+            "execution, Provider deletion authority, physical cleanup, "
+            "restore/recreate, retry/reclaim/dead-letter, full resync, and Runtime "
+            "authority from "
+            "observation, page, checkpoint, or execution metadata remain NOT_ACTIVE",
+            reconciliation,
+        )
+        self.assertIn(
+            "docs/decisions/0057-execute-current-file-deletes-through-tombstone-authority.md",
+            document_refs,
+        )
+        self.assertIn(
+            "docs/decisions/0058-schedule-only-upserts-from-mixed-file-pages.md",
+            document_refs,
         )
         self.assertIn(
             "docs/decisions/0053-compose-one-private-bot-delivery.md",

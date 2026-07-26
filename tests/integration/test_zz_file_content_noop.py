@@ -27,16 +27,26 @@ from engine.runtime.package_digest import QueryDigestKeyring
 from engine.supply import WorkNotAvailable
 from tests.integration.test_file_import_tracer import (
     MARKDOWN_FIXTURES,
-    NOW,
     ROOT,
     _ExactScopeAuthority,
-    _FileImportScenario,
     _OrganizationAuthority,
-    _prepare_file_import_scenario,
-    _prepare_repeat_file_import,
     _publication_effect_counts,
-    _run_file_import,
     _RuntimeAuthenticator,
+)
+from tests.support.file_imports import (
+    NOW,
+)
+from tests.support.file_imports import (
+    FileImportScenario as _FileImportScenario,
+)
+from tests.support.file_imports import (
+    prepare_file_import_scenario as _prepare_file_import_scenario,
+)
+from tests.support.file_imports import (
+    prepare_repeat_file_import as _prepare_repeat_file_import,
+)
+from tests.support.file_imports import (
+    run_file_import as _run_file_import,
 )
 from tests.support.file_source_progress import clear_file_source_progress_projection
 from tests.support.migrations import HEAD_REVISION

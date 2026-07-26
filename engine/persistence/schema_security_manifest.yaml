@@ -1,5 +1,5 @@
 {
-  "manifestVersion": "28.0.0",
+  "manifestVersion": "32.0.0",
   "controlOperations": [
     {
       "name": "register_file_source",
@@ -39,7 +39,7 @@
       "definerRole": "context_engine_worker_lease_definer",
       "directTableMutationAllowed": false,
       "trustedOrganizationSource": "TrustedControlCall",
-      "databaseOwnedTime": true,
+      "databaseOwnedTime": "clock_timestamp refreshed after every progress-lock wait",
       "idempotencyBinding": [
         "organization_id",
         "source_id"
@@ -95,6 +95,15 @@
       "organizationScopedIdempotency": true,
       "filesystemAccessAllowed": false,
       "durableJobCreationAllowed": true,
+      "completePageValidation": true,
+      "migrationFence": {
+        "sharedAdvisoryLock": "context-engine.file-change-scheduling-migration-fence",
+        "definerOnlyGenerationRead": "alembic_version SELECT revoked by 0032 downgrade"
+      },
+      "scheduledChangeKinds": [
+        "upsert"
+      ],
+      "deleteExecutionAllowed": false,
       "acceptedObservationBinding": [
         "organization_id",
         "source_id",
@@ -143,6 +152,41 @@
         "file_resource_cleanup_intent",
         "file_source_acquisition_checkpoint",
         "file_source_publish_watermark"
+      ]
+    },
+    {
+      "name": "execute_file_delete_observation",
+      "databaseFunction": "context_control_execute_file_delete_observation",
+      "role": "context_engine_control",
+      "definerRole": "context_engine_worker_lease_definer",
+      "effectFunction": "context_control_tombstone_file_resource",
+      "effectDefinerRole": "context_engine_access_policy_definer",
+      "directTableMutationAllowed": false,
+      "trustedOrganizationSource": "TrustedControlCall",
+      "databaseOwnedTime": true,
+      "callerLocator": [
+        "source_id",
+        "source_version_id",
+        "page_ref",
+        "change_ordinal"
+      ],
+      "serverDerived": [
+        "relative_path",
+        "resource_ref",
+        "event_ref",
+        "event_sequence",
+        "cleanup_intent_id",
+        "policy_epoch",
+        "tombstoned_at"
+      ],
+      "runtimeVisibilityBarrier": "Organization publication lock followed by per-Source progress lock; both held through exact revalidation, sole tombstone authority, and execution binding",
+      "atomicWrites": [
+        "context_resource",
+        "organization_policy_epoch",
+        "file_resource_cleanup_intent",
+        "file_source_acquisition_checkpoint",
+        "file_source_publish_watermark",
+        "file_delete_observation_execution"
       ]
     },
     {
@@ -254,6 +298,36 @@
         "running",
         "prepared",
         "ready"
+      ],
+      "atomicWrites": [
+        "file_import_job",
+        "file_import_job_event"
+      ]
+    },
+    {
+      "name": "claim_scheduled_file_import",
+      "databaseFunction": "context_scheduler_claim_file_import",
+      "role": "context_engine_scheduler",
+      "definerRole": "context_engine_file_dispatch_definer",
+      "directTableMutationAllowed": false,
+      "callerSelectedRoutingDimensions": [],
+      "serverCapabilityInput": "all-or-nothing configured logical File root assertion applied only after globally oldest eligible selection and again during final post-lock revalidation; an omitted root yields no-work and cannot redirect selection",
+      "databaseOwnedTime": "full-precision clock_timestamp authority check refreshed after every progress-lock wait; protocol lease timestamps and immediate worker verification use the PostgreSQL clock normalized to whole seconds",
+      "fixedTtlSeconds": 300,
+      "automaticReclaimPolicy": {
+        "maximumReclaims": 3,
+        "maximumLeaseGeneration": 4,
+        "baseBackoffSeconds": 30,
+        "backoff": "30 * 2^(current lease generation - 1), measured after database-issued lease expiry",
+        "eligibleStates": ["leased", "running", "prepared", "ready"],
+        "exhaustedBehavior": "content-free no-work; later dead-letter/operator owner remains NOT_ACTIVE"
+      },
+      "selection": "eligible expired recovery attempts are selected before first attempts; recovery orders by database-owned retry eligibility then original acceptance lineage and exact tenant/job tie-breakers, while first attempts retain the Issue #91 global order; both paths hold the per-Source progress advisory lock, refresh the statement snapshot, revalidate latest accepted scan epoch, and use FOR UPDATE SKIP LOCKED authority-row fencing before leasing",
+      "currentAuthority": [
+        "active exact SourceVersion",
+        "latest accepted scan epoch",
+        "active exact Membership/version",
+        "enabled exact File import ServicePrincipal"
       ],
       "atomicWrites": [
         "file_import_job",
@@ -494,6 +568,14 @@
       "classification": "global",
       "classificationRationale": "Migration metadata has no tenant-owned domain state.",
       "purpose": "Alembic migration metadata",
+      "permittedOperations": {
+        "context_engine_runtime": [],
+        "context_engine_worker": [],
+        "context_engine_control": [],
+        "context_engine_worker_lease_definer": [
+          "SELECT scheduler generation capability"
+        ]
+      },
       "partitions": []
     },
     {
@@ -676,6 +758,19 @@
               "context_engine_citation_definer"
             ],
             "using": "true"
+          },
+          {
+            "name": "membership_file_dispatch_definer_select",
+            "command": "SELECT",
+            "roles": ["context_engine_file_dispatch_definer"],
+            "using": "true"
+          },
+          {
+            "name": "membership_file_dispatch_definer_update",
+            "command": "UPDATE",
+            "roles": ["context_engine_file_dispatch_definer"],
+            "using": "true",
+            "withCheck": "true"
           }
         ]
       },
@@ -701,6 +796,10 @@
         ],
         "context_engine_citation_definer": [
           "SELECT"
+        ],
+        "context_engine_file_dispatch_definer": [
+          "SELECT",
+          "UPDATE status, valid_from, valid_until"
         ]
       },
       "partitions": [],
@@ -1424,6 +1523,19 @@
               "context_engine_action_execute_definer"
             ],
             "using": "true"
+          },
+          {
+            "name": "context_source_file_dispatch_definer_select",
+            "command": "SELECT",
+            "roles": ["context_engine_file_dispatch_definer"],
+            "using": "true"
+          },
+          {
+            "name": "context_source_file_dispatch_definer_update",
+            "command": "UPDATE",
+            "roles": ["context_engine_file_dispatch_definer"],
+            "using": "true",
+            "withCheck": "true"
           }
         ]
       },
@@ -1452,6 +1564,10 @@
         ],
         "context_engine_action_execute_definer": [
           "SELECT"
+        ],
+        "context_engine_file_dispatch_definer": [
+          "SELECT",
+          "UPDATE lifecycle_state, active_version_id"
         ]
       },
       "partitions": [],
@@ -1583,6 +1699,12 @@
               "context_engine_action_execute_definer"
             ],
             "using": "true"
+          },
+          {
+            "name": "source_version_file_dispatch_definer_select",
+            "command": "SELECT",
+            "roles": ["context_engine_file_dispatch_definer"],
+            "using": "true"
           }
         ]
       },
@@ -1614,6 +1736,9 @@
           "SELECT"
         ],
         "context_engine_action_execute_definer": [
+          "SELECT"
+        ],
+        "context_engine_file_dispatch_definer": [
           "SELECT"
         ]
       },
@@ -3590,6 +3715,19 @@
               "context_engine_worker_lease_definer"
             ],
             "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid AND workload = 'supply.file-import' AND worker_audience = 'context-engine-worker' AND operation = 'file.import' AND enabled IS TRUE"
+          },
+          {
+            "name": "service_principal_file_dispatch_definer_select",
+            "command": "SELECT",
+            "roles": ["context_engine_file_dispatch_definer"],
+            "using": "true"
+          },
+          {
+            "name": "service_principal_file_dispatch_definer_update",
+            "command": "UPDATE",
+            "roles": ["context_engine_file_dispatch_definer"],
+            "using": "true",
+            "withCheck": "true"
           }
         ]
       },
@@ -3598,6 +3736,10 @@
         "context_engine_worker": [],
         "context_engine_worker_lease_definer": [
           "SELECT"
+        ],
+        "context_engine_file_dispatch_definer": [
+          "SELECT",
+          "UPDATE enabled"
         ]
       },
       "partitions": [],
@@ -5127,6 +5269,12 @@
               "context_engine_worker_lease_definer"
             ],
             "withCheck": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"
+          },
+          {
+            "name": "file_acquisition_file_dispatch_definer_select",
+            "command": "SELECT",
+            "roles": ["context_engine_file_dispatch_definer"],
+            "using": "true"
           }
         ]
       },
@@ -5175,7 +5323,10 @@
         "WORKER-LEASE-007",
         "PG-FILE-CHANGE-SCHEDULE-083",
         "PG-FILE-CHANGE-SCHEDULE-DENY-083",
-        "PG-FILE-CHANGE-SUPERSESSION-083"
+        "PG-FILE-CHANGE-SUPERSESSION-083",
+        "PG-FILE-MIXED-UPSERT-SCHEDULE-089",
+        "PG-FILE-MIXED-UPSERT-REPLAY-089",
+        "HTTP-FILE-MIXED-UPSERT-NO-DELETE-089"
       ]
     },
     {
@@ -5659,6 +5810,23 @@
             ],
             "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid",
             "withCheck": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"
+          },
+          {
+            "name": "file_import_job_file_dispatch_definer_select",
+            "command": "SELECT",
+            "roles": [
+              "context_engine_file_dispatch_definer"
+            ],
+            "using": "true"
+          },
+          {
+            "name": "file_import_job_file_dispatch_definer_update",
+            "command": "UPDATE",
+            "roles": [
+              "context_engine_file_dispatch_definer"
+            ],
+            "using": "true",
+            "withCheck": "true"
           }
         ]
       },
@@ -5680,10 +5848,13 @@
           "context_worker_index_file_publication",
           "context_worker_activate_recoverable_file_publication",
           "context_worker_record_file_import_interruption"
+          ,"context_scheduler_claim_file_import"
+          ,"context_scheduler_claim_first_file_import"
         ],
         "definerRoles": [
           "context_engine_worker_lease_definer",
           "context_engine_access_policy_definer"
+          ,"context_engine_file_dispatch_definer"
         ],
         "directTableMutationAllowed": false
       },
@@ -5699,6 +5870,9 @@
           "EXECUTE context_worker_issue_file_import_lease"
         ],
         "context_engine_runtime": [],
+        "context_engine_scheduler": [
+          "EXECUTE context_scheduler_claim_file_import"
+        ],
         "context_engine_worker": [
           "EXECUTE context_worker_redeem_file_import",
           "EXECUTE context_worker_fail_file_import",
@@ -5717,6 +5891,10 @@
           "SELECT",
           "INSERT",
           "UPDATE"
+        ],
+        "context_engine_file_dispatch_definer": [
+          "SELECT",
+          "UPDATE state, signing_key_version, lease_nonce_digest, lease_issued_at, lease_expires_at, lease_generation, dispatch_claimed, recovery_from_state, lease_redeemed_at"
         ]
       },
       "partitions": [],
@@ -5735,6 +5913,10 @@
         "WORKER-LEASE-007",
         "PG-FILE-SOURCE-OFFBOARD-030",
         "PG-FILE-CHANGE-SUPERSESSION-083"
+        ,"PG-FILE-DISPATCH-091"
+        ,"PG-FILE-DISPATCH-CONCURRENCY-091"
+        ,"PG-FILE-RECLAIM-093"
+        ,"PG-FILE-RECLAIM-CONCURRENCY-093"
       ]
     },
     {
@@ -6001,6 +6183,22 @@
               "context_engine_worker_lease_definer"
             ],
             "withCheck": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"
+          },
+          {
+            "name": "file_import_job_event_file_dispatch_definer_select",
+            "command": "SELECT",
+            "roles": [
+              "context_engine_file_dispatch_definer"
+            ],
+            "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"
+          },
+          {
+            "name": "file_import_job_event_file_dispatch_definer_insert",
+            "command": "INSERT",
+            "roles": [
+              "context_engine_file_dispatch_definer"
+            ],
+            "withCheck": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"
           }
         ]
       },
@@ -6021,8 +6219,12 @@
           "context_worker_index_file_publication",
           "context_worker_activate_recoverable_file_publication",
           "context_worker_record_file_import_interruption"
+          ,"context_scheduler_claim_file_import"
         ],
-        "definerRole": "context_engine_worker_lease_definer",
+        "definerRoles": [
+          "context_engine_worker_lease_definer",
+          "context_engine_file_dispatch_definer"
+        ],
         "directTableMutationAllowed": false
       },
       "permittedOperations": {
@@ -6038,6 +6240,10 @@
           "EXECUTE context_worker_record_file_import_interruption"
         ],
         "context_engine_worker_lease_definer": [
+          "SELECT",
+          "INSERT"
+        ],
+        "context_engine_file_dispatch_definer": [
           "SELECT",
           "INSERT"
         ]
@@ -6058,7 +6264,9 @@
         "DB-001",
         "DB-004",
         "DB-008",
-        "PG-FILE-RECOVERY-027"
+        "PG-FILE-RECOVERY-027",
+        "PG-FILE-RECLAIM-093",
+        "PG-FILE-RECLAIM-CONCURRENCY-093"
       ]
     },
     {
@@ -7253,6 +7461,40 @@
       "negativeTestIds": ["DB-001", "DB-004", "DB-008", "PG-FILE-DELETE-PAGE-085", "PG-FILE-DELETE-NO-EFFECT-085"]
     },
     {
+      "name": "file_delete_observation_execution",
+      "classification": "tenant_owned",
+      "nonOwnerEvidence": {
+        "evidenceId": "PG-FILE-DELETE-EXECUTE-087",
+        "selector": {"table": "file_delete_observation_execution"}
+      },
+      "purpose": "Immutable binding from one exact current accepted File delete observation to the sole tombstone cleanup effect; never Runtime authorization input",
+      "organizationColumn": "organization_id",
+      "organizationInclusiveKeys": [
+        {"name": "pk_file_delete_observation_execution", "kind": "primary_key", "columns": ["organization_id", "source_id", "source_version_id", "page_ref", "change_ordinal"]}
+      ],
+      "foreignKeys": [
+        {"name": "fk_file_delete_observation_execution_exact_change", "columns": ["organization_id", "source_id", "source_version_id", "page_ref", "change_ordinal", "relative_path", "content_sha256", "content_length"], "references": {"table": "file_source_change", "columns": ["organization_id", "source_id", "source_version_id", "page_ref", "change_ordinal", "relative_path", "content_sha256", "content_length"]}},
+        {"name": "fk_file_delete_observation_execution_exact_cleanup", "columns": ["organization_id", "cleanup_intent_id", "source_id", "resource_ref", "revision_id"], "references": {"table": "file_resource_cleanup_intent", "columns": ["organization_id", "cleanup_intent_id", "source_id", "resource_ref", "revision_id"]}}
+      ],
+      "checkConstraints": [
+        {"name": "ck_file_delete_observation_execution_locator", "expression": "page_ref is lowercase SHA-256 and change_ordinal is 1..100"},
+        {"name": "ck_file_delete_observation_execution_observation", "expression": "one canonical shallow Markdown path with SHA-256 and nonnegative byte length"},
+        {"name": "ck_file_delete_observation_execution_effect", "expression": "valid File Resource/event references and positive signed-64 event sequence/Policy Epoch"}
+      ],
+      "rowLevelSecurity": {"enabled": true, "forced": true, "policies": [
+        {"name": "file_delete_observation_execution_migrator_administration", "command": "ALL", "roles": ["context_engine_migrator"], "using": "true", "withCheck": "true"},
+        {"name": "file_delete_observation_execution_definer_select", "command": "SELECT", "roles": ["context_engine_worker_lease_definer"], "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"},
+        {"name": "file_delete_observation_execution_definer_insert", "command": "INSERT", "roles": ["context_engine_worker_lease_definer"], "withCheck": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"}
+      ]},
+      "immutableRows": {"trigger": "file_delete_observation_execution_immutable", "function": "context_content_reject_mutation", "events": ["UPDATE", "DELETE"], "sqlstate": "55000"},
+      "functionOnlyMutation": {"databaseFunction": "context_control_execute_file_delete_observation", "role": "context_engine_control", "definerRole": "context_engine_worker_lease_definer", "directTableMutationAllowed": false},
+      "permittedOperations": {"context_engine_control": ["EXECUTE context_control_execute_file_delete_observation"], "context_engine_runtime": [], "context_engine_worker": [], "context_engine_worker_lease_definer": ["SELECT", "INSERT", "EXECUTE context_control_tombstone_file_resource"]},
+      "retention": {"state": "immutable", "sourceContent": "none", "runtimeAuthorityAllowed": false},
+      "partitions": [],
+      "securityInvariantIds": ["TENANT-OWNERSHIP-001", "TENANT-FK-002", "RLS-FAIL-CLOSED-003", "INDEX-NOT-AUTHORITY-005", "REVOCATION-006"],
+      "negativeTestIds": ["DB-001", "DB-004", "DB-008", "PG-FILE-DELETE-EXECUTE-087", "PG-FILE-DELETE-REPLAY-087", "HTTP-FILE-DELETE-INVISIBLE-087"]
+    },
+    {
       "name": "file_source_change_page",
       "classification": "tenant_owned",
       "nonOwnerEvidence": {
@@ -7279,7 +7521,8 @@
       "rowLevelSecurity": {"enabled": true, "forced": true, "policies": [
         {"name": "file_source_change_page_migrator_administration", "command": "ALL", "roles": ["context_engine_migrator"], "using": "true", "withCheck": "true"},
         {"name": "file_source_change_page_file_change_definer_select", "command": "SELECT", "roles": ["context_engine_worker_lease_definer"], "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"},
-        {"name": "file_source_change_page_file_change_definer_insert", "command": "INSERT", "roles": ["context_engine_worker_lease_definer"], "withCheck": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"}
+        {"name": "file_source_change_page_file_change_definer_insert", "command": "INSERT", "roles": ["context_engine_worker_lease_definer"], "withCheck": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"},
+        {"name": "file_source_change_page_file_dispatch_definer_select", "command": "SELECT", "roles": ["context_engine_file_dispatch_definer"], "using": "true"}
       ]},
       "immutableRows": {"trigger": "file_source_change_page_immutable", "function": "context_content_reject_mutation", "events": ["UPDATE", "DELETE"], "sqlstate": "55000"},
       "functionOnlyMutation": {"databaseFunctions": ["context_control_accept_file_change_page", "context_control_accept_file_delete_observation_page"], "definerRole": "context_engine_worker_lease_definer", "directTableMutationAllowed": false},
@@ -7312,7 +7555,8 @@
       "rowLevelSecurity": {"enabled": true, "forced": true, "policies": [
         {"name": "file_source_change_migrator_administration", "command": "ALL", "roles": ["context_engine_migrator"], "using": "true", "withCheck": "true"},
         {"name": "file_source_change_file_change_definer_select", "command": "SELECT", "roles": ["context_engine_worker_lease_definer"], "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"},
-        {"name": "file_source_change_file_change_definer_insert", "command": "INSERT", "roles": ["context_engine_worker_lease_definer"], "withCheck": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"}
+        {"name": "file_source_change_file_change_definer_insert", "command": "INSERT", "roles": ["context_engine_worker_lease_definer"], "withCheck": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"},
+        {"name": "file_source_change_file_dispatch_definer_select", "command": "SELECT", "roles": ["context_engine_file_dispatch_definer"], "using": "true"}
       ]},
       "immutableRows": {"trigger": "file_source_change_immutable", "function": "context_content_reject_mutation", "events": ["UPDATE", "DELETE"], "sqlstate": "55000"},
       "functionOnlyMutation": {"databaseFunctions": ["context_control_accept_file_change_page", "context_control_accept_file_delete_observation_page"], "definerRole": "context_engine_worker_lease_definer", "directTableMutationAllowed": false},
@@ -7500,6 +7744,12 @@
               "context_engine_worker_lease_definer"
             ],
             "withCheck": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"
+          },
+          {
+            "name": "file_source_acquisition_checkpoint_file_dispatch_definer_select",
+            "command": "SELECT",
+            "roles": ["context_engine_file_dispatch_definer"],
+            "using": "true"
           }
         ]
       },

@@ -15,6 +15,8 @@ from engine.control import (
     ContextControl,
     ControlOperation,
     ControlOperatorAuthority,
+    ExecutedFileDeleteObservation,
+    ExecuteFileDeleteObservation,
     FileChangeControlProofs,
     FileChangeKind,
     FileChangeProviderProofs,
@@ -130,6 +132,13 @@ class _Store:
     def tombstone_file_resource(
         self, call: TrustedControlCall, command: TombstoneFileResource
     ) -> FileResourceTombstone:
+        raise AssertionError("unexpected Control operation")
+
+    def execute_file_delete_observation(
+        self,
+        call: TrustedControlCall,
+        command: ExecuteFileDeleteObservation,
+    ) -> ExecutedFileDeleteObservation:
         raise AssertionError("unexpected Control operation")
 
 

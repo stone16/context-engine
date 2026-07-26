@@ -1,5 +1,5 @@
 ---
-name: adr-0059-admit-an-explicit-dogfood-authentication-composition
+name: adr-0063-admit-an-explicit-dogfood-authentication-composition
 version: "1.0.0"
 description: >
   Allow one explicitly configured local trust composition that maps a
@@ -8,7 +8,7 @@ description: >
   remains untouched.
 ---
 
-# 0059. Admit an explicit dogfood authentication composition
+# 0063. Admit an explicit dogfood authentication composition
 
 - Status: accepted
 - Date: 2026-07-26
@@ -17,7 +17,7 @@ description: >
 ## Context
 
 The default application composition rejects every credential, and the only
-compositions that resolve non-empty results are test compositions. ADR-0058
+compositions that resolve non-empty results are test compositions. ADR-0062
 requires a real caller: the maintainer's own tooling must reach
 `ContextRuntime.resolve` and receive real Evidence. Building production
 authentication (external identity provider, account and admin workflows) for
@@ -54,7 +54,7 @@ dogfood secret into a multi-user or production credential scheme.
 
 ## Rationale
 
-Dogfood pull (ADR-0058) fails without a legitimate caller, and the two honest
+Dogfood pull (ADR-0062) fails without a legitimate caller, and the two honest
 alternatives are both worse: full production authentication now front-loads
 cost with no second user, while test-composition reuse in a served process
 would blur the one boundary the repository most loudly guarantees. A single
@@ -67,7 +67,7 @@ changes who can knock on the door without changing what any caller may see.
   authorized ContextPackages to the maintainer's tooling.
 - README and gate prose must state the dogfood composition's existence and
   its opt-in boundary so reject-all claims stay accurate.
-- This change touches the kernel lane of ADR-0060: it ships with full
+- This change touches the kernel lane of ADR-0064: it ships with full
   ceremony — catalog activation evidence that the default composition still
   rejects all credentials and that the dogfood path enforces Membership,
   RLS, and Policy Epoch checks.

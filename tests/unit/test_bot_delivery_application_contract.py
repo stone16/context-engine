@@ -79,3 +79,11 @@ def test_public_bot_contract_does_not_export_trusted_fact_or_intent_factories() 
     ).read_text(encoding="utf-8")
     assert "createPrivateBotActionBridge" not in action_public_source
     assert "TrustedPrivateEffectFacts" not in action_public_source
+
+
+def test_unit_lane_builds_the_local_typescript_dependency_graph() -> None:
+    makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+    target_lines = set(makefile.splitlines())
+
+    assert "test: bot-build" in target_lines
+    assert "bot-build: sdk-build action-build" in target_lines

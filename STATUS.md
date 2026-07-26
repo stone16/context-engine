@@ -1,0 +1,358 @@
+# Capability Status Ledger
+
+This file records **what ContextEngine has actually proven, and what it has
+not**. It exists because "a demo ran" and "the authorization path is
+implemented" are very different claims, and conflating them in a security
+product is how trust gets destroyed.
+
+[← Back to README](./README.md) · [Roadmap and milestones](./PLAN.md) ·
+[ADR index](./docs/decisions/README.md)
+
+## How to read this file
+
+| Label | Meaning |
+|---|---|
+| **Active** | An executable, registered proof exists and runs in CI. The claim is bounded to exactly what that proof covers — never generalized. |
+| **`NOT_ACTIVE`** | Deliberately not implemented or not proven yet. The running service reports this in its own responses (`/health`, worker output) rather than silently stubbing it. |
+
+Two rules govern every entry:
+
+1. **A bounded proof never grows into a general claim.** Where a proof uses a
+   synthetic fixture, a deterministic authority, or an injected test
+   composition, that is stated. It does not imply the production carrier works.
+2. **The ADRs are authoritative.** This file is a navigational summary. When
+   this file and an ADR disagree, the ADR wins — and this file is the bug.
+
+## Global invariants
+
+These hold across every activation below and are release vetoes, not scores:
+
+- Unauthorized Evidence leaked = **0**
+- Wrong-Organization effect = **0**
+- Missing tenant context = **fail closed, always**
+
+Every release reports `PASS / FAIL / NOT_ACTIVE / NOT_APPLICABLE` against a
+versioned catalog, with capability coverage listed separately, so an inactive
+capability can never be reported as a passing one.
+
+## Currently `NOT_ACTIVE`
+
+The default application **rejects every credential and performs zero content
+I/O**. The following are known, designed, and deliberately not active:
+
+| Capability | Note |
+|---|---|
+| Production authentication (OAuth / JWT) | Module-level default application is reject-all across all three production authorities (authentication, Organization, Membership) |
+| Durable Principal / Agent grants | Scope authority returns seven missing trusted operands by default, so no deliverable scope can be produced |
+| Real Source / Resource ACLs | Only synthetic conformance fixtures exist |
+| General content retrieval | No production candidate path |
+| `Continue` / `OpenCitation` carriers | The M0 *refusal* path is active; real issuance and redemption are not |
+| Federated discovery, source-native authorization | Deterministic refusal only |
+| Live Feishu / Slack / Google Docs connectors | See [PLAN.md](./PLAN.md) milestones M4 / M6 / M7 |
+| Group-chat delivery, compensating deletes | M5 |
+| MCP ingress | Held `NOT_ACTIVE` until a real caller exists |
+| Worker dead-letter transition / operator requeue | ADR-0060 adds bounded reclaim only; generation four is left untouched after expiry |
+| Provider polling, delete execution beyond ADR-0057 | See the File Provider ADRs for exact boundaries |
+| Streaming delivery | Explicit V1 non-goal — placeholder + edit instead |
+| Answer generation inside the engine | Permanent non-goal — generation always lives above the engine boundary |
+
+## Activation ledger
+
+Each accepted ADR below activated a bounded, separately proven capability.
+Follow the ADR for its exact evidence boundary.
+
+### Security foundation and the sealed Runtime
+
+| ADR | Activates |
+|---|---|
+| [0030](./docs/decisions/0030-bound-ticket-audiences.md) | Bound the first ticket audiences to synthetic effects |
+| [0031](./docs/decisions/0031-persist-authorized-context-run-lineage.md) | Persist authorized-only ContextRun lineage before delivery |
+| [0032](./docs/decisions/0032-bind-materialized-fields-to-membership-projection-rights.md) | Bind materialized fields to current Membership projection rights |
+| [0033](./docs/decisions/0033-promote-organization-releases-through-one-learning-owner.md) | Promote Organization releases through one Learning owner |
+| [0034](./docs/decisions/0034-execute-the-m0-security-veto-from-registered-evidence.md) | Execute the M0 security veto from registered evidence |
+
+### File Provider (Provider #1) — Supply loop
+
+| ADR | Activates |
+|---|---|
+| [0035](./docs/decisions/0035-register-file-sources-through-context-control.md) | Register File sources through one trusted ContextControl transaction |
+| [0036](./docs/decisions/0036-compile-narrow-markdown-deterministically.md) | Compile the first Markdown shape from canonical bytes |
+| [0037](./docs/decisions/0037-publish-first-file-through-exact-worker-lease.md) | Publish the first File through an exact WorkerLease |
+| [0038](./docs/decisions/0038-compile-and-publish-structural-markdown.md) | Compile and publish structural Markdown units |
+| [0039](./docs/decisions/0039-deduplicate-unchanged-file-acquisitions.md) | Deduplicate unchanged File acquisitions before publication |
+| [0040](./docs/decisions/0040-stage-and-atomically-activate-file-replacements.md) | Stage and atomically activate File replacements |
+| [0041](./docs/decisions/0041-recover-file-publication-by-durable-boundary.md) | Recover File publication by durable boundary |
+| [0042](./docs/decisions/0042-tombstone-file-resources-before-cleanup.md) | Tombstone File Resources before cleanup |
+| [0043](./docs/decisions/0043-separate-file-acquisition-progress-from-publication-progress.md) | Separate File acquisition progress from publication progress |
+| [0044](./docs/decisions/0044-disable-file-sources-before-cleanup.md) | Disable File sources before cleanup |
+| [0054](./docs/decisions/0054-acknowledge-file-change-pages-before-cursor-advance.md) | Acknowledge File change pages before cursor advance |
+| [0055](./docs/decisions/0055-schedule-accepted-file-observations-explicitly.md) | Schedule accepted File observations explicitly |
+| [0056](./docs/decisions/0056-detect-file-deletions-without-tombstone-authority.md) | Detect File deletions without tombstone authority |
+| [0057](./docs/decisions/0057-execute-current-file-deletes-through-tombstone-authority.md) | Execute current File deletes through tombstone authority |
+| [0058](./docs/decisions/0058-schedule-only-upserts-from-mixed-file-pages.md) | Schedule only upserts from mixed File pages |
+| [0059](./docs/decisions/0059-dispatch-scheduled-file-imports-through-exact-leases.md) | Dispatch scheduled File imports through exact leases |
+| [0060](./docs/decisions/0060-reclaim-expired-file-imports-with-bounded-retries.md) | Reclaim expired File imports with bounded retries |
+
+### Wire contract, SDK, and trusted delivery
+
+| ADR | Activates |
+|---|---|
+| [0045](./docs/decisions/0045-redeem-private-delivery-evidence-at-ingress.md) | Redeem private delivery evidence at ingress |
+| [0046](./docs/decisions/0046-bind-egress-to-one-exact-package-hop.md) | Bind egress to one exact Package hop |
+| [0047](./docs/decisions/0047-freeze-openapi-v0-through-one-runtime-path.md) | Freeze OpenAPI v0 through one sealed Runtime path |
+| [0048](./docs/decisions/0048-generate-typescript-sdk-behind-a-closed-facade.md) | Generate the TypeScript SDK behind a closed facade |
+| [0049](./docs/decisions/0049-prepare-one-exact-private-effect.md) | Prepare one exact private effect before Sender |
+| [0050](./docs/decisions/0050-perform-one-exact-private-effect.md) | Perform one exact private effect under one provider attempt |
+| [0051](./docs/decisions/0051-reauthorize-opaque-citation-opens.md) | Reauthorize every opaque citation open |
+| [0052](./docs/decisions/0052-gate-model-generation-by-package.md) | Gate model generation by one authorized Package |
+| [0053](./docs/decisions/0053-compose-one-private-bot-delivery.md) | Compose one private File-backed Bot delivery |
+
+The complete, current list of accepted decisions — including everything before
+ADR-0030 — is the [ADR index](./docs/decisions/README.md).
+
+## Boundary notes
+
+These record the exact scope of the foundational M0 proofs, including what each
+one explicitly does **not** claim.
+
+### Database and tenant isolation
+
+The database harness proves the `compose.yaml`-pinned PostgreSQL 17 + pgvector
+topology, role isolation, migrations, and connection-pool cleanup, plus a
+transaction-scoped tenant context built from Organization + current
+Membership-backed `UserActor` + `organization_record`, with composite ownership
+and FORCE RLS.
+
+It does **not** claim durable Principal/Agent grants, real ACLs,
+production-grade content authorization, or production ContextPackage delivery.
+
+### Issue #12 — fail-closed EffectiveScope
+
+An injected conformance composition proves the current Membership gate and a
+synthetic `EffectiveScope` on a fail-closed, monotonically non-expanding path.
+
+### Issue #13 — hostile candidate index
+
+A synthetic exact-authorized Evidence path proves that a hostile
+`CandidateIndex` can deliver exactly one synthetic authorized Evidence block,
+and only by passing through FORCE RLS in the same PostgreSQL transaction, an
+exact `EffectiveScope`, and the sealed `AuthorizationKernel`.
+
+### Issue #14 — convergent empty packages
+
+A paired Runtime/HTTP gate proves that cross-Organization, same-Organization
+denied, and nonexistent-Candidate probes all converge on the same tenant-safe
+empty Package.
+
+HTTP status, closed product headers, Package body, and Runtime domain outcome
+are identical after normalizing only server-authored per-resolve refs and
+timestamps plus the `packageDigest` necessarily derived from them; each
+un-normalized Package still verifies its own digest first.
+
+**This gate does not measure or claim timing equivalence.**
+
+### Issue #15 — V0 Policy Epoch
+
+An internal, least-privilege, non-owner Control transaction atomically revokes
+seeded access and advances the Organization-level V0 Policy Epoch. A sealed
+`Acquire` re-checks the current epoch before delivery, so an identical query,
+`CandidateRef`, and persisted Fragment return zero Evidence on the first
+post-revocation request, with Organization B unaffected.
+
+This test capability is **not** a production grant or admin workflow. Policy
+Epoch V0 does not activate UI or external admin, access-mutation
+`DecisionAudit`, outbox, cleanup, or real `Continue` / `OpenCitation`.
+
+### Issue #16 — closed capability gate
+
+The public Runtime wire is fixed to the closed `Acquire | Continue |
+OpenCitation` union. A server-owned `RuntimeCapabilityGate` activates the M0
+rejection path: known-but-uncarried `Continue`, `OpenCitation`, federated
+discovery, and source-native authorization each return a generic domain-level
+`request_not_available` or `citation_not_available` **before any
+Provider/index/source-content I/O**. Unknown variants or caller-declared
+capability remain a generic 422.
+
+This proves deterministic refusal only. It does not mean continuation,
+citation, federated or source-native Providers, or File publication are
+implemented. The restricted in-process audit retains only the
+`UNSUPPORTED_CAPABILITY` category.
+
+### Issue #17 — WorkerLease (persistent no-op sub-carrier)
+
+Adds Organization-owned `service_principal` and `worker_noop_job` tables plus a
+canonical HMAC-SHA256 WorkerLease with an explicit versioned keyring.
+
+The Control issuer signs leases using database transaction time and a
+server-owned bounded TTL. If a prior lease has expired by database time, a new
+time and nonce allow atomic takeover — recovering the "transaction committed
+but token never delivered" crash window, after which the old token has zero
+effect. The worker seam must verify signature, Organization, job, and validity
+against its own configured registered ServicePrincipal identity and clock
+*before* opening a database transaction. The durable receiver is fixed to
+`supply.noop` + `context-engine-worker` + `noop.complete` and accepts no
+caller override.
+
+The worker holds no direct `SELECT` on the two tenant tables and no `UPDATE` on
+the job. A dedicated non-login definer function is the only durable read/write
+boundary, performing one conditional update under FORCE RLS keyed on database
+current time, key version, nonce digest, and issued-at/expiry. A valid lease's
+effect count can only go from 0 to 1; wrong-org/job/audience, tampering,
+expiry, disabled ServicePrincipal, replay, and concurrent losers all keep zero
+additional effect.
+
+This bounded proof excludes Source/Resource/Revision, Policy Epoch, end-user
+delivery audience, idempotency/generation, outbox, and the production worker
+loop. It does **not** publish or claim a complete canonical `ServiceActor` —
+its source, allowed-set, and Policy Epoch do not exist yet — and keeps the full
+`ACCEPT-008` fixture at `future/fail_closed`.
+
+### Issue #18 — separated ticket planes (ADR-0030)
+
+Adds canonical HMAC-SHA256 `ContextAccessTicket` and `ActionTicket` protocols.
+Both use the same validated `AuthenticatedInvocation` / `TrustedDeliveryContext`
+identity chain and explicit versioned key configuration, but differ in every
+other dimension:
+
+| | Read protocol | Action protocol |
+|---|---|---|
+| Domain | `context-engine.context-access-ticket` | `context-engine.action-ticket` |
+| Signed prefix | `CE-ContextAccessTicket` | `CE-ActionTicket` |
+| Fixed operation | `synthetic.provider.read` | `synthetic.channel.noop` |
+| Derived audience | `context-read:<provider>` | `im-send:<channel>` |
+
+Issuer and handler are bound by trusted configuration to one
+Organization/target. Agent and purpose accept no bare strings, and tokens
+expose no public value constructor. Two independent deserializers validate
+signature, domain/type, fixed operation, and schema before constructing a
+nominal type; the handler then checks full identity, purpose, bounded expiry,
+nonce, and key version, and re-checks the Organization V0 Policy Epoch last,
+before two independent synthetic effects.
+
+Cross-plane deserialize/pass using the same key, wrong target/Organization,
+identity or audience mismatch, tampering, overlong or expired lifetime,
+authority failure, and a committed epoch bump all return one non-enumerating
+unavailable result with **zero** rejected effect.
+
+This bounded proof does not activate production Provider discovery or
+projection, source credentials, Sender/IM, `ActionPlane.prepare`/`perform`,
+payload/destination/approval/idempotency, `DeliveryAttempt`, durable
+one-shot/replay/concurrency, stored receipts, or reconciliation. The full
+`ACCEPT-012` carrier remains `NOT_ACTIVE` under this activation.
+
+### Issue #19 — authorized-only ContextRun lineage (ADR-0031)
+
+Every successful empty or exact-authorized Package now commits, before
+returning and inside the retained current-`UserActor` transaction, one
+same-Organization, final, authorized-only `ContextRun`. Its public
+`decisionRef` resolves only through a dedicated non-owner security operator,
+an exact Organization, and an explicit trusted authorization seam.
+
+An empty package additionally writes a restricted `DecisionAudit` containing
+only Organization/run/decision, PolicySnapshot/epoch, the
+`no_authorized_evidence` category, and time. It stores **no** raw query, and no
+denied Candidate/Fragment/Resource body, ID, name, reason, or count.
+
+Queries are retained only as an Organization-bound, versioned HMAC-SHA256
+digest. Packages expose and persist a verifiable versioned canonical SHA-256
+digest, with retention mode fixed to `digest_only` — full Packages are not
+retained. Unauthenticated or injection failures are not a ContextRun.
+
+This bounded `TRACE-REDACTION-012` activation does not extend to logs, metrics,
+debug, evaluation, or Learning; nor to `Continue` / `OpenCitation`, feedback,
+full retrieval traces, or production operator identity. The default
+application's production authentication remains reject-all.
+
+### Issue #71 — private File-backed delivery twin
+
+Activates a complete private-chat, File-backed, deterministic-twin carrier: an
+independent TypeScript Bot process reaches the Runtime **only** through the
+installed generated SDK; the controlled model consumes exactly one current
+Package; placeholder and final/follow-up messages each go through
+`ActionPlane.prepare` + `perform`; and only digest/ref-form `DeliveryReceipt`
+plus a restricted audit are retained.
+
+A bounded File import job runs through the same `context-engine-worker
+--run-file-job` process entry point, consuming one exact signed FileImport
+WorkerLease. It requires an explicit worker credential, a registered
+ServicePrincipal, a logical File root, and a job binding; it exits after one
+terminal state and introduces no fourth process type.
+
+Live Feishu, real models and Senders, group chat, compensating deletes,
+`Continue`, and MCP all remain `NOT_ACTIVE`.
+
+### HTTP exact-authorized Evidence tracer
+
+The conformance composition for the resolve route can inject an authenticator
+that maps an opaque credential to verified transport facts, a trusted authority
+that issues request-bound nominal proof for a registered Organization, and an
+authority that validates current Membership inside a single PostgreSQL
+transaction and issues a lifetime-bound `UserActor` proof. That transaction is
+held open until the sealed Runtime and ContextPackage construction complete.
+
+**No `200` is reachable from the production default.** `create_app()` selects
+`RejectingAuthenticator`, `RejectingOrganizationAuthority`, and
+`RejectingMembershipAuthority` whenever no authorities are injected, so every
+credential is rejected before an `Acquire` can reach a successful response. Do
+not try to reproduce the results below against a default-built application —
+they exist only under an explicitly injected composition.
+
+Within that injected conformance composition there are two variants:
+
+| Variant | Result |
+|---|---|
+| No candidate injection | A valid `Acquire` returns `200 resolved` with an evidence-free ContextPackage |
+| Explicit synthetic candidate injection | A content-free `CandidateRef` passes through the RLS locator, exact `EffectiveScope`, body projection, and the sealed `AuthorizationKernel` in that same transaction, returning exactly one authorized Evidence block |
+
+Invalid Membership returns a generic 401; an unavailable database authority
+returns a generic 503. **Neither calls any content system.**
+
+**Request shape.** The body is a closed `kind` union. `Acquire` permits
+`need.query`, an optional bounded `packageBudget`, and optional
+`requestNarrowing`. `Continue` permits an opaque `continuationToken` and an
+optionally smaller `packageBudget`. `OpenCitation` permits only an opaque
+`citationOpenRef`. All ref/token lengths and collection sizes are limited by the
+active profile. Unknown fields at every level, duplicate JSON keys, and
+duplicate singleton security/transport headers all fail closed; pre-auth body
+bytes and JSON nesting are limited by the versioned profile in
+[`adapters/http/transport.py`](./adapters/http/transport.py).
+
+**Response shape.** Malformed JSON or media type, authentication failure, and
+closed-schema failure use the generic 400, 401, and 422 responses recorded in
+OpenAPI, and never echo tenant, Principal, Membership, or injected fields.
+Purpose comes only from server-side route policy. The returned
+`organizationRef` is a freshly generated package-scoped opaque reference and
+cannot be used as trusted tenant input on a later request. An empty package has
+empty blocks, evidence, and gaps, with coverage `no_authorized_evidence`, and
+makes zero Provider/index/source-content calls.
+
+The content tracer holds zero body bytes, zero Evidence refs, and zero external
+effects for denied same-Organization and cross-Organization candidates, while
+maintaining a one-to-one Evidence reference closure and full lineage for
+authorized blocks.
+
+**Deterministic authorities and the real-PostgreSQL seeded composition belong to
+the test composition only.** Production OAuth/JWT, durable Principal/Agent grant
+authority, real Source/Resource ACLs, general retrieval, and continuation are
+not part of this activated tracer.
+
+## Evidence and reporting
+
+`make security-gate` discovers and executes only registered M0 security
+evidence, cross-checks the live PostgreSQL RLS inventory, and writes
+machine-readable raw evidence plus an independent release-gate report into the
+git-ignored `.context-engine/security-gate/` directory. CI retains both as build
+artifacts.
+
+Security is an independent veto gate. Reliability, Quality, and Budget are not
+yet in M0 scope and are explicitly recorded as `not-evaluated`, so the report
+emits only an `m0SecurityDecision` — a passing security gate is never reported
+as an overall release or promotion PASS.
+
+Beyond the pinned-commit evidence for the four public reference repositories and
+the in-repository design breakdown, the dynamic evidence that exists today is
+the `compose.yaml`-pinned PostgreSQL + pgvector harness and RLS evidence for the
+first Organization-owned representative table. Dynamic evidence for the complete
+domain schema, ActorContext, filtered ANN, and Feishu capability is still
+outstanding — which is why this evidence slice is not described as a complete
+product authorization capability.

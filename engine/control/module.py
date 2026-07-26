@@ -29,6 +29,8 @@ from engine.control.file_change_pages import (
     VerifiedChangePage,
 )
 from engine.control.file_deletions import (
+    ExecutedFileDeleteObservation,
+    ExecuteFileDeleteObservation,
     FileResourceTombstone,
     TombstoneFileResource,
 )
@@ -90,6 +92,12 @@ class ControlStorePort(Protocol):
         command: TombstoneFileResource,
     ) -> FileResourceTombstone: ...
 
+    def execute_file_delete_observation(
+        self,
+        call: TrustedControlCall,
+        command: ExecuteFileDeleteObservation,
+    ) -> ExecutedFileDeleteObservation: ...
+
     def read_file_source_progress(
         self,
         call: TrustedControlCall,
@@ -129,6 +137,7 @@ class ContextControl:
         required_methods = [
             "activate_file_change_feed",
             "activate_file_delete_observations",
+            "execute_file_delete_observation",
             "offboard_file_source",
             "prepare_file_import",
             "register_file_source",
@@ -527,6 +536,46 @@ class ContextControl:
         except Exception:
             raise SourceControlUnavailable(
                 "File Resource tombstone is unavailable"
+            ) from None
+
+    def execute_file_delete_observation(
+        self,
+        call: TrustedControlCall,
+        command: ExecuteFileDeleteObservation,
+    ) -> ExecutedFileDeleteObservation:
+        """Execute one current accepted delete through tombstone authority."""
+
+        if type(command) is not ExecuteFileDeleteObservation:
+            raise TypeError(
+                "execute_file_delete_observation requires ExecuteFileDeleteObservation"
+            )
+        try:
+            _validate_and_consume_control_call(
+                call,
+                authority=self._authority,
+                expected_operation=(ControlOperation.EXECUTE_FILE_DELETE_OBSERVATION),
+                checked_at=self._clock(),
+            )
+            result = self._store.execute_file_delete_observation(call, command)
+            if (
+                type(result) is not ExecutedFileDeleteObservation
+                or result.organization_id != call.organization_id
+                or result.source_ref != command.source_ref
+                or result.source_version_ref != command.source_version_ref
+                or result.page_ref != command.page_ref
+                or result.change_ordinal != command.change_ordinal
+            ):
+                raise SourceControlUnavailable(
+                    "source store returned a mismatched File delete execution"
+                )
+            return result
+        except (ControlOperatorAuthenticationRejected, SourceNotAvailable):
+            raise SourceNotAvailable from None
+        except SourceControlUnavailable:
+            raise
+        except Exception:
+            raise SourceControlUnavailable(
+                "File delete observation execution is unavailable"
             ) from None
 
     @staticmethod

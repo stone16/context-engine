@@ -17,7 +17,7 @@ typecheck: sdk-build action-build
 	npm --prefix action_plane/typescript run typecheck
 	npm --prefix bot_delivery/typescript run typecheck
 
-test:
+test: bot-build
 	uv run pytest -q tests/unit
 
 catalog:

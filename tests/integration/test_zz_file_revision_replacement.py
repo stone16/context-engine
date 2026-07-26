@@ -37,15 +37,27 @@ from engine.supply import (
     canonicalize_parsed_document,
 )
 from tests.integration.test_file_import_tracer import (
-    NOW,
     _ExactScopeAuthority,
-    _FileImportScenario,
     _OrganizationAuthority,
-    _prepare_file_import_scenario,
-    _prepare_repeat_file_import,
-    _redeem_direct,
-    _run_file_import,
     _RuntimeAuthenticator,
+)
+from tests.support.file_imports import (
+    NOW,
+)
+from tests.support.file_imports import (
+    FileImportScenario as _FileImportScenario,
+)
+from tests.support.file_imports import (
+    prepare_file_import_scenario as _prepare_file_import_scenario,
+)
+from tests.support.file_imports import (
+    prepare_repeat_file_import as _prepare_repeat_file_import,
+)
+from tests.support.file_imports import (
+    redeem_file_import_direct as _redeem_direct,
+)
+from tests.support.file_imports import (
+    run_file_import as _run_file_import,
 )
 from tests.support.releases import ensure_test_runtime_release
 

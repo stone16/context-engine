@@ -3,9 +3,9 @@
 > **Status**: D0 design closure (pre-M0) · **Updated**: 2026-07-18
 >
 > **2026-07-26 航向修正**:定位固定为"完整 context 层"两内容族
-> ([ADR-0057](docs/decisions/0057-commit-to-the-complete-context-layer-thesis.md)),
+> ([ADR-0061](docs/decisions/0061-commit-to-the-complete-context-layer-thesis.md)),
 > 排期改由维护者 dogfood 负载牵引
-> ([ADR-0058](docs/decisions/0058-pull-development-through-dogfood-workloads.md))。
+> ([ADR-0062](docs/decisions/0062-pull-development-through-dogfood-workloads.md))。
 > 本文的 roadmap 与排期文本(含 M3 内剩余检索排期与固定 connector 排期)
 > 在上述 ADR 之下阅读,待修订过重述;评审与 Slice A 见
 > [2026-07-26 评审](docs/design/2026-07-26-repo-state-review-and-course-correction.md)。

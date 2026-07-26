@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import AbstractContextManager
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from hashlib import sha256
 from pathlib import Path
 from threading import Event
 from time import monotonic, sleep
@@ -17,7 +18,7 @@ from alembic.config import Config
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi.testclient import TestClient
 from sqlalchemy import Connection, Engine, event, text
-from sqlalchemy.exc import DBAPIError
+from sqlalchemy.exc import DBAPIError, SQLAlchemyError
 
 from adapters.exact_phrase import PostgreSQLExactPhraseCandidateIndex
 from adapters.file_source import FileChangeProvider, FileReadLimits, FileRootRegistry
@@ -31,6 +32,7 @@ from engine.control import (
     ContextControl,
     ControlOperation,
     ControlOperatorAuthority,
+    ExecuteFileDeleteObservation,
     FileChangeBaseline,
     FileChangeBaselineEntry,
     FileChangeBaselineRef,
@@ -53,8 +55,10 @@ from engine.control import (
     ProviderOk,
     RegisterFileSource,
     ScheduleFileChangePage,
+    SourceControlUnavailable,
     SourceNotAvailable,
     SourceRef,
+    TombstoneFileResource,
     TrustedControlCall,
     VerifiedControlOperatorIdentity,
 )
@@ -128,6 +132,10 @@ def _delete_scenarios(
 
     engine = create_database_engine(configuration)
     immutable_tables = (
+        (
+            "file_delete_observation_execution",
+            "file_delete_observation_execution_immutable",
+        ),
         ("file_source_delete_observation_page", None),
         ("file_source_change", "file_source_change_immutable"),
         ("file_source_change_page", "file_source_change_page_immutable"),
@@ -171,6 +179,7 @@ def _delete_scenarios(
             with engine.begin() as connection:
                 for organization_id, user_id in scenarios:
                     for table in (
+                        "file_delete_observation_execution",
                         "file_source_publish_watermark",
                         "file_source_acquisition_checkpoint",
                         "file_import_job_event",
@@ -184,12 +193,12 @@ def _delete_scenarios(
                         "resource_access_policy",
                         "context_fragment",
                         "file_revision_snapshot",
+                        "file_resource_cleanup_intent",
+                        "file_import_job",
+                        "file_source_cleanup_intent",
                         "context_revision",
                         "context_resource",
                         "file_resource_ingestion_guard",
-                        "file_import_job",
-                        "file_resource_cleanup_intent",
-                        "file_source_cleanup_intent",
                         "file_acquisition",
                         "file_source_delete_observation_page",
                         "file_source_change",
@@ -251,11 +260,13 @@ class _Authenticator:
                     ControlOperation.ACTIVATE_FILE_CHANGE_FEED,
                     ControlOperation.ACTIVATE_FILE_DELETE_OBSERVATIONS,
                     ControlOperation.IMPORT_FILE,
+                    ControlOperation.EXECUTE_FILE_DELETE_OBSERVATION,
                     ControlOperation.OFFBOARD_FILE_SOURCE,
                     ControlOperation.REGISTER_SOURCE,
                     ControlOperation.READ_SOURCE,
                     ControlOperation.READ_SOURCE_PROGRESS,
                     ControlOperation.SCHEDULE_FILE_CHANGE_PAGE,
+                    ControlOperation.TOMBSTONE_FILE_RESOURCE,
                 }
             ),
             valid_from=NOW - timedelta(minutes=1),
@@ -454,18 +465,1161 @@ def _delete_observation_effect_snapshot(
     return tuple(row)
 
 
+def _file_delete_execution_effect_snapshot(
+    connection: Connection,
+    organization_id: UUID,
+) -> tuple[object, ...]:
+    row = connection.execute(
+        text(
+            """
+            SELECT
+              (SELECT policy_epoch FROM organization_policy_epoch
+               WHERE organization_id = :organization_id),
+              (SELECT count(*) FROM file_resource_cleanup_intent
+               WHERE organization_id = :organization_id),
+              (SELECT count(*) FROM file_delete_observation_execution
+               WHERE organization_id = :organization_id),
+              (SELECT count(*) FROM context_resource
+               WHERE organization_id = :organization_id
+                 AND tombstoned IS TRUE),
+              (SELECT count(*) FROM context_revision
+               WHERE organization_id = :organization_id),
+              (SELECT count(*) FROM exact_phrase_candidate
+               WHERE organization_id = :organization_id),
+              (SELECT count(*) FROM file_source_publish_watermark
+               WHERE organization_id = :organization_id)
+            """
+        ),
+        {"organization_id": organization_id},
+    ).one()
+    return tuple(row)
+
+
+@pytest.mark.security_evidence(id="PG-FILE-DELETE-EXECUTE-087", layer="postgres")
+@pytest.mark.security_evidence(id="PG-FILE-DELETE-REPLAY-087", layer="postgres")
+def test_control_executes_a_nonterminal_current_delete_observation(
+    tmp_path: Path,
+    guarded_control_engine: Engine,
+    guarded_worker_engine: Engine,
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "a.md").write_bytes(b"# A\n\nDelete this paragraph.\n")
+    (root / "b.md").write_bytes(b"# B\n\nRetain this paragraph.\n")
+    provider_proofs, control_proofs = _proofs()
+    organization_id = uuid4()
+    receiver = FileImportReceiver(uuid4())
+    control, authority, source = _seed_file_change_source(
+        guarded_control_engine=guarded_control_engine,
+        migration_configuration=migration_configuration,
+        organization_id=organization_id,
+        receiver=receiver,
+        root_ref=FileRootRef("delete-execution-root"),
+        control_proofs=control_proofs,
+    )
+    stale_source_version_ref = source.source_version.version_ref
+    source = _activate_delete_observations(
+        control,
+        authority,
+        organization_id,
+        source,
+    )
+    provider = FileChangeProvider(
+        FileRootRegistry(
+            {source.source_version.root_ref: root},
+            limits=FileReadLimits(max_file_bytes=1_024),
+        ),
+        proofs=provider_proofs,
+    )
+
+    initial_first = provider.read_changes(source, InitialScan(), ChangeLimit(1))
+    assert type(initial_first) is ProviderOk
+    with _authorize(
+        authority,
+        organization_id,
+        ControlOperation.ACCEPT_FILE_CHANGE_PAGE,
+        "accept-delete-execution-baseline-first",
+    ) as call:
+        accepted_initial_first = control.accept_file_change_page(
+            call,
+            initial_first.value,
+        )
+    assert accepted_initial_first.next_cursor is not None
+    source = replace(source, scan_head=accepted_initial_first.scan_head)
+    initial_second = provider.read_changes(
+        source,
+        accepted_initial_first.next_cursor,
+        ChangeLimit(1),
+    )
+    assert type(initial_second) is ProviderOk
+    with _authorize(
+        authority,
+        organization_id,
+        ControlOperation.ACCEPT_FILE_CHANGE_PAGE,
+        "accept-delete-execution-baseline-second",
+    ) as call:
+        accepted_initial_second = control.accept_file_change_page(
+            call,
+            initial_second.value,
+        )
+    assert accepted_initial_second.complete is True
+
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.connect() as connection:
+            membership_id = connection.execute(
+                text(
+                    "SELECT membership_id FROM membership "
+                    "WHERE organization_id = :organization_id"
+                ),
+                {"organization_id": organization_id},
+            ).scalar_one()
+    finally:
+        migration_engine.dispose()
+    scheduled_pages = []
+    for request_id, accepted_page in (
+        ("schedule-delete-execution-resource-a", accepted_initial_first),
+        ("schedule-delete-execution-resource-b", accepted_initial_second),
+    ):
+        with _authorize(
+            authority,
+            organization_id,
+            ControlOperation.SCHEDULE_FILE_CHANGE_PAGE,
+            request_id,
+        ) as call:
+            scheduled_pages.append(
+                control.schedule_file_change_page(
+                    call,
+                    ScheduleFileChangePage(
+                        accepted_page.source_ref,
+                        accepted_page.source_version_ref,
+                        accepted_page.page_ref,
+                        FileImportAudience("principal:file-reader", membership_id, 1),
+                    ),
+                )
+            )
+    prepared_imports = [page.changes[0].prepared_import for page in scheduled_pages]
+    codec = WorkerLeaseCodec(
+        WorkerLeaseKeyring(active_version=1, keys={1: bytes(range(64, 96))})
+    )
+    lease_issuer = PostgreSQLWorkerLeaseIssuer(
+        guarded_control_engine,
+        codec,
+        lease_ttl_seconds=300,
+    )
+    tokens = [
+        lease_issuer.issue_file_import_lease(prepared)
+        for prepared in prepared_imports
+    ]
+    with FileRootRegistry(
+        {source.source_version.root_ref: root},
+        limits=FileReadLimits(max_file_bytes=1_024),
+    ) as worker_roots:
+        worker = PostgreSQLFileImportWorker(
+            guarded_worker_engine,
+            codec,
+            receiver,
+            worker_roots,
+            MarkdownCompilerConfig("markdown-config-v1"),
+            clock=lambda: datetime.now(UTC).replace(microsecond=0),
+        )
+        publications = [
+            worker.run(
+                FileImportLeaseRedemption(
+                    token,
+                    organization_id,
+                    prepared.job_id,
+                    accepted_initial_first.source_ref,
+                )
+            )
+            for token, prepared in zip(tokens, prepared_imports, strict=True)
+        ]
+    assert [publication.outcome for publication in publications] == [
+        "published",
+        "published",
+    ]
+    published, published_b = publications
+
+    with _authorize(
+        authority,
+        organization_id,
+        ControlOperation.READ_SOURCE_PROGRESS,
+        "read-delete-execution-baseline",
+    ) as call:
+        progress = control.read_file_source_progress(
+            call,
+            accepted_initial_second.source_ref,
+        )
+    assert progress.complete_change_baseline is not None
+    (root / "a.md").unlink()
+    (root / "b.md").unlink()
+    changed_source = FileChangeSource(
+        organization_id,
+        source.source_version,
+        scan_head=progress.change_scan_head,
+        complete_baseline=progress.complete_change_baseline,
+    )
+    delete_first = provider.read_changes(
+        changed_source,
+        InitialScan(),
+        ChangeLimit(1),
+    )
+    assert type(delete_first) is ProviderOk
+    assert delete_first.value.changes[0].kind is FileChangeKind.DELETE
+    with _authorize(
+        authority,
+        organization_id,
+        ControlOperation.ACCEPT_FILE_CHANGE_PAGE,
+        "accept-delete-execution-first",
+    ) as call:
+        accepted_delete_first = control.accept_file_change_page(
+            call,
+            delete_first.value,
+        )
+    assert accepted_delete_first.complete is False
+    assert accepted_delete_first.next_cursor is not None
+    upsert_command = ExecuteFileDeleteObservation(
+        accepted_initial_first.source_ref,
+        accepted_initial_first.source_version_ref,
+        accepted_initial_first.page_ref,
+        1,
+    )
+    incomplete_command = ExecuteFileDeleteObservation(
+        accepted_delete_first.source_ref,
+        accepted_delete_first.source_version_ref,
+        accepted_delete_first.page_ref,
+        1,
+    )
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.connect() as connection:
+            before_refusals = _file_delete_execution_effect_snapshot(
+                connection,
+                organization_id,
+            )
+        for request_id, refused_command in (
+            ("execute-upsert-observation", upsert_command),
+            ("execute-incomplete-delete-observation", incomplete_command),
+        ):
+            with (
+                _authorize(
+                    authority,
+                    organization_id,
+                    ControlOperation.EXECUTE_FILE_DELETE_OBSERVATION,
+                    request_id,
+                ) as call,
+                pytest.raises(SourceNotAvailable),
+            ):
+                control.execute_file_delete_observation(call, refused_command)
+        with migration_engine.connect() as connection:
+            assert (
+                _file_delete_execution_effect_snapshot(
+                    connection,
+                    organization_id,
+                )
+                == before_refusals
+            )
+    finally:
+        migration_engine.dispose()
+    changed_source = replace(
+        changed_source,
+        scan_head=accepted_delete_first.scan_head,
+    )
+    delete_second = provider.read_changes(
+        changed_source,
+        accepted_delete_first.next_cursor,
+        ChangeLimit(1),
+    )
+    assert type(delete_second) is ProviderOk
+    assert delete_second.value.changes[0].kind is FileChangeKind.DELETE
+    with _authorize(
+        authority,
+        organization_id,
+        ControlOperation.ACCEPT_FILE_CHANGE_PAGE,
+        "accept-delete-execution-second",
+    ) as call:
+        accepted_delete_second = control.accept_file_change_page(
+            call,
+            delete_second.value,
+        )
+    assert accepted_delete_second.complete is True
+
+    execution_command = ExecuteFileDeleteObservation(
+        accepted_delete_first.source_ref,
+        accepted_delete_first.source_version_ref,
+        accepted_delete_first.page_ref,
+        1,
+    )
+    invalid_locators = (
+        (
+            "execute-missing-delete-page",
+            replace(execution_command, page_ref="f" * 64),
+        ),
+        (
+            "execute-stale-delete-version",
+            replace(
+                execution_command,
+                source_version_ref=stale_source_version_ref,
+            ),
+        ),
+        (
+            "execute-forged-delete-source",
+            replace(execution_command, source_ref=SourceRef(uuid4())),
+        ),
+    )
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.connect() as connection:
+            before_invalid_locators = _file_delete_execution_effect_snapshot(
+                connection,
+                organization_id,
+            )
+        for request_id, invalid_command in invalid_locators:
+            with (
+                _authorize(
+                    authority,
+                    organization_id,
+                    ControlOperation.EXECUTE_FILE_DELETE_OBSERVATION,
+                    request_id,
+                ) as call,
+                pytest.raises(SourceNotAvailable),
+            ):
+                control.execute_file_delete_observation(call, invalid_command)
+        with migration_engine.connect() as connection:
+            assert (
+                _file_delete_execution_effect_snapshot(connection, organization_id)
+                == before_invalid_locators
+            )
+    finally:
+        migration_engine.dispose()
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.begin() as connection:
+            connection.execute(
+                text(
+                    """
+                    CREATE FUNCTION public.context_test_reject_file_delete_execution()
+                    RETURNS trigger LANGUAGE plpgsql AS $function$
+                    BEGIN
+                        RAISE EXCEPTION USING ERRCODE = '55000',
+                            MESSAGE = 'injected File delete binding refusal';
+                    END;
+                    $function$;
+                    CREATE TRIGGER context_test_reject_file_delete_execution
+                    BEFORE INSERT ON file_delete_observation_execution
+                    FOR EACH ROW EXECUTE FUNCTION
+                        public.context_test_reject_file_delete_execution()
+                    """
+                )
+            )
+        with (
+            _authorize(
+                authority,
+                organization_id,
+                ControlOperation.EXECUTE_FILE_DELETE_OBSERVATION,
+                "execute-delete-observation-rollback",
+            ) as call,
+            pytest.raises(SourceControlUnavailable),
+        ):
+            control.execute_file_delete_observation(call, execution_command)
+        with migration_engine.connect() as connection:
+            rolled_back = connection.execute(
+                text(
+                    """
+                    SELECT resource.tombstoned,
+                           (SELECT count(*) FROM file_resource_cleanup_intent
+                            WHERE organization_id = :organization_id),
+                           (SELECT count(*)
+                            FROM file_delete_observation_execution
+                            WHERE organization_id = :organization_id),
+                           (SELECT policy_epoch FROM organization_policy_epoch
+                            WHERE organization_id = :organization_id)
+                    FROM context_resource AS resource
+                    WHERE resource.organization_id = :organization_id
+                      AND resource.resource_ref = :resource_ref
+                    """
+                ),
+                {
+                    "organization_id": organization_id,
+                    "resource_ref": published.candidate_ref.resource_ref,
+                },
+            ).one()
+        assert tuple(rolled_back) == (False, 0, 0, 1)
+    finally:
+        with migration_engine.begin() as connection:
+            connection.execute(
+                text(
+                    """
+                    DROP TRIGGER IF EXISTS context_test_reject_file_delete_execution
+                        ON file_delete_observation_execution;
+                    DROP FUNCTION IF EXISTS
+                        public.context_test_reject_file_delete_execution()
+                    """
+                )
+            )
+        migration_engine.dispose()
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.begin() as connection:
+            connection.execute(
+                text(
+                    """
+                    CREATE FUNCTION public.context_test_mismatch_file_delete_effect()
+                    RETURNS trigger LANGUAGE plpgsql AS $function$
+                    BEGIN
+                        NEW.event_ref := 'fault_' || NEW.event_ref;
+                        RETURN NEW;
+                    END;
+                    $function$;
+                    CREATE TRIGGER context_test_mismatch_file_delete_effect
+                    BEFORE INSERT ON file_resource_cleanup_intent
+                    FOR EACH ROW EXECUTE FUNCTION
+                        public.context_test_mismatch_file_delete_effect()
+                    """
+                )
+            )
+        with migration_engine.connect() as connection:
+            before_mismatched_effect = _file_delete_execution_effect_snapshot(
+                connection,
+                organization_id,
+            )
+        direct_cleanup_intent_id = uuid4()
+        with guarded_control_engine.begin() as connection:
+            connection.execute(
+                text(
+                    "SELECT pg_catalog.set_config("
+                    "'app.organization_id', :organization_id, true)"
+                ),
+                {"organization_id": str(organization_id)},
+            )
+            assert (
+                connection.execute(
+                    text(
+                        """
+                        SELECT *
+                        FROM public.context_control_execute_file_delete_observation(
+                            :organization_id, :source_id, :source_version_id,
+                            :page_ref, :change_ordinal, :cleanup_intent_id
+                        )
+                        """
+                    ),
+                    {
+                        "organization_id": organization_id,
+                        "source_id": execution_command.source_ref.value,
+                        "source_version_id": execution_command.source_version_ref,
+                        "page_ref": execution_command.page_ref,
+                        "change_ordinal": execution_command.change_ordinal,
+                        "cleanup_intent_id": direct_cleanup_intent_id,
+                    },
+                ).one_or_none()
+                is None
+            )
+        with migration_engine.connect() as connection:
+            assert (
+                _file_delete_execution_effect_snapshot(connection, organization_id)
+                == before_mismatched_effect
+            )
+    finally:
+        with migration_engine.begin() as connection:
+            connection.execute(
+                text(
+                    """
+                    DROP TRIGGER IF EXISTS context_test_mismatch_file_delete_effect
+                        ON file_resource_cleanup_intent;
+                    DROP FUNCTION IF EXISTS
+                        public.context_test_mismatch_file_delete_effect()
+                    """
+                )
+            )
+        migration_engine.dispose()
+    with _authorize(
+        authority,
+        organization_id,
+        ControlOperation.EXECUTE_FILE_DELETE_OBSERVATION,
+        "execute-current-delete-observation",
+    ) as call:
+        executed = control.execute_file_delete_observation(call, execution_command)
+    with _authorize(
+        authority,
+        organization_id,
+        ControlOperation.EXECUTE_FILE_DELETE_OBSERVATION,
+        "replay-current-delete-observation",
+    ) as call:
+        replayed = control.execute_file_delete_observation(call, execution_command)
+
+    assert replayed == executed
+    assert executed.tombstone.resource_ref == published.candidate_ref.resource_ref
+    expected_event_ref = "fdo_" + sha256(
+        b"context-engine.file-delete-observation-event.v1\x00"
+        + organization_id.bytes
+        + execution_command.source_ref.value.bytes
+        + execution_command.source_version_ref.bytes
+        + bytes.fromhex(execution_command.page_ref)
+        + execution_command.change_ordinal.to_bytes(2, "big", signed=True)
+    ).hexdigest()
+    assert executed.tombstone.event_ref == expected_event_ref
+    assert executed.tombstone.event_sequence == accepted_delete_first.sequence
+    assert executed.tombstone.policy_epoch == 2
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.connect() as connection:
+            effects = connection.execute(
+                text(
+                    """
+                    SELECT resource.tombstoned,
+                           (SELECT count(*) FROM file_resource_cleanup_intent
+                            WHERE organization_id = :organization_id),
+                           (SELECT count(*)
+                            FROM file_delete_observation_execution
+                            WHERE organization_id = :organization_id),
+                           (SELECT policy_epoch FROM organization_policy_epoch
+                            WHERE organization_id = :organization_id)
+                    FROM context_resource AS resource
+                    WHERE resource.organization_id = :organization_id
+                      AND resource.resource_ref = :resource_ref
+                    """
+                ),
+                {
+                    "organization_id": organization_id,
+                    "resource_ref": executed.tombstone.resource_ref,
+                },
+            ).one()
+    finally:
+        migration_engine.dispose()
+    assert tuple(effects) == (True, 1, 1, 2)
+
+    second_execution_command = ExecuteFileDeleteObservation(
+        accepted_delete_second.source_ref,
+        accepted_delete_second.source_version_ref,
+        accepted_delete_second.page_ref,
+        1,
+    )
+    with _authorize(
+        authority,
+        organization_id,
+        ControlOperation.READ_SOURCE_PROGRESS,
+        "read-delete-baseline-before-supersession",
+    ) as call:
+        delete_progress = control.read_file_source_progress(
+            call,
+            accepted_delete_second.source_ref,
+        )
+    assert delete_progress.complete_change_baseline is not None
+    (root / "b.md").write_bytes(b"# B\n\nRecreated after delete observation.\n")
+    next_scan = provider.read_changes(
+        FileChangeSource(
+            organization_id,
+            source.source_version,
+            scan_head=delete_progress.change_scan_head,
+            complete_baseline=delete_progress.complete_change_baseline,
+        ),
+        InitialScan(),
+        ChangeLimit(2),
+    )
+    assert type(next_scan) is ProviderOk
+    assert next_scan.value.complete is True
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.connect() as publication_connection:
+            publication_transaction = publication_connection.begin()
+            publication_connection.execute(
+                text(
+                    """
+                    SELECT pg_catalog.pg_advisory_xact_lock(
+                        pg_catalog.hashtextextended(
+                            'context-engine.file-publication:'
+                            || CAST(:organization_id AS text), 0
+                        )
+                    )
+                    """
+                ),
+                {"organization_id": organization_id},
+            )
+
+            def execute_second_delete() -> object:
+                with _authorize(
+                    authority,
+                    organization_id,
+                    ControlOperation.EXECUTE_FILE_DELETE_OBSERVATION,
+                    "execute-delete-during-superseding-scan",
+                ) as call:
+                    return control.execute_file_delete_observation(
+                        call,
+                        second_execution_command,
+                    )
+
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                pending_execution = executor.submit(execute_second_delete)
+                try:
+                    deadline = monotonic() + 10
+                    waiting = False
+                    while monotonic() < deadline:
+                        with migration_engine.connect() as observer:
+                            waiting = bool(
+                                observer.execute(
+                                    text(
+                                        """
+                                        SELECT EXISTS (
+                                            SELECT 1
+                                            FROM pg_catalog.pg_stat_activity AS activity
+                                            JOIN pg_catalog.pg_locks AS held_lock
+                                              ON held_lock.pid = activity.pid
+                                            WHERE activity.usename =
+                                                  'context_engine_control'
+                                              AND held_lock.locktype = 'advisory'
+                                              AND held_lock.granted IS FALSE
+                                        )
+                                        """
+                                    )
+                                ).scalar_one()
+                            )
+                        if waiting:
+                            break
+                        sleep(0.01)
+                    if not waiting:
+                        pytest.fail(
+                            "File delete execution did not wait for publication"
+                        )
+
+                    with _authorize(
+                        authority,
+                        organization_id,
+                        ControlOperation.ACCEPT_FILE_CHANGE_PAGE,
+                        "accept-concurrent-superseding-delete-scan",
+                    ) as call:
+                        accepted_newer = control.accept_file_change_page(
+                            call,
+                            next_scan.value,
+                        )
+                    assert accepted_newer.complete is True
+                finally:
+                    if publication_transaction.is_active:
+                        publication_transaction.rollback()
+                with pytest.raises(SourceNotAvailable):
+                    pending_execution.result(timeout=5)
+    finally:
+        migration_engine.dispose()
+
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.connect() as connection:
+            superseded_effects = connection.execute(
+                text(
+                    """
+                    SELECT resource.tombstoned,
+                           (SELECT count(*) FROM file_resource_cleanup_intent
+                            WHERE organization_id = :organization_id),
+                           (SELECT count(*)
+                            FROM file_delete_observation_execution
+                            WHERE organization_id = :organization_id),
+                           (SELECT policy_epoch FROM organization_policy_epoch
+                            WHERE organization_id = :organization_id)
+                    FROM context_resource AS resource
+                    WHERE resource.organization_id = :organization_id
+                      AND resource.resource_ref = :resource_ref
+                    """
+                ),
+                {
+                    "organization_id": organization_id,
+                    "resource_ref": published_b.candidate_ref.resource_ref,
+                },
+            ).one()
+    finally:
+        migration_engine.dispose()
+    assert tuple(superseded_effects) == (False, 1, 1, 2)
+
+    with _authorize(
+        authority,
+        organization_id,
+        ControlOperation.EXECUTE_FILE_DELETE_OBSERVATION,
+        "replay-delete-after-newer-scan",
+    ) as call:
+        assert (
+            control.execute_file_delete_observation(call, execution_command)
+            == executed
+        )
+
+    with pytest.raises(SQLAlchemyError, match="cannot downgrade with File delete"):
+        command.downgrade(Config(ROOT / "alembic.ini"), "20260725_0030")
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.connect() as connection:
+            assert connection.execute(
+                text("SELECT version_num FROM alembic_version")
+            ).scalar_one() == HEAD_REVISION
+    finally:
+        migration_engine.dispose()
+
+
+
+def test_control_refuses_a_current_nonterminal_mixed_file_page(
+    tmp_path: Path,
+    guarded_control_engine: Engine,
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    for path in ("a.md", "b.md", "c.md"):
+        (root / path).write_bytes(f"# {path}\n\nOriginal.\n".encode())
+    provider_proofs, control_proofs = _proofs()
+    organization_id = uuid4()
+    control, authority, source = _seed_file_change_source(
+        guarded_control_engine=guarded_control_engine,
+        migration_configuration=migration_configuration,
+        organization_id=organization_id,
+        receiver=FileImportReceiver(uuid4()),
+        root_ref=FileRootRef("nonterminal-mixed-schedule-root"),
+        control_proofs=control_proofs,
+    )
+    source = _activate_delete_observations(
+        control,
+        authority,
+        organization_id,
+        source,
+    )
+    provider = FileChangeProvider(
+        FileRootRegistry(
+            {source.source_version.root_ref: root},
+            limits=FileReadLimits(max_file_bytes=1_024),
+        ),
+        proofs=provider_proofs,
+    )
+    baseline = provider.read_changes(source, InitialScan(), ChangeLimit(3))
+    assert type(baseline) is ProviderOk
+    with _authorize(
+        authority,
+        organization_id,
+        ControlOperation.ACCEPT_FILE_CHANGE_PAGE,
+        "accept-nonterminal-mixed-baseline",
+    ) as call:
+        accepted_baseline = control.accept_file_change_page(call, baseline.value)
+    with _authorize(
+        authority,
+        organization_id,
+        ControlOperation.READ_SOURCE_PROGRESS,
+        "read-nonterminal-mixed-baseline",
+    ) as call:
+        progress = control.read_file_source_progress(
+            call,
+            accepted_baseline.source_ref,
+        )
+    assert progress.complete_change_baseline is not None
+    (root / "a.md").write_bytes(b"# A\n\nChanged.\n")
+    (root / "b.md").unlink()
+    (root / "c.md").write_bytes(b"# C\n\nChanged.\n")
+    page = provider.read_changes(
+        FileChangeSource(
+            organization_id,
+            source.source_version,
+            scan_head=progress.change_scan_head,
+            complete_baseline=progress.complete_change_baseline,
+        ),
+        InitialScan(),
+        ChangeLimit(2),
+    )
+    assert type(page) is ProviderOk
+    assert page.value.next_cursor is not None
+    assert [change.kind.value for change in page.value.changes] == [
+        "upsert",
+        "delete",
+    ]
+    with _authorize(
+        authority,
+        organization_id,
+        ControlOperation.ACCEPT_FILE_CHANGE_PAGE,
+        "accept-current-nonterminal-mixed-page",
+    ) as call:
+        accepted = control.accept_file_change_page(call, page.value)
+    assert accepted.complete is False
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.connect() as connection:
+            membership_id = connection.execute(
+                text(
+                    "SELECT membership_id FROM membership "
+                    "WHERE organization_id = :organization_id"
+                ),
+                {"organization_id": organization_id},
+            ).scalar_one()
+    finally:
+        migration_engine.dispose()
+    with (
+        _authorize(
+            authority,
+            organization_id,
+            ControlOperation.SCHEDULE_FILE_CHANGE_PAGE,
+            "reject-current-nonterminal-mixed-page",
+        ) as call,
+        pytest.raises(SourceNotAvailable),
+    ):
+        control.schedule_file_change_page(
+            call,
+            ScheduleFileChangePage(
+                accepted.source_ref,
+                accepted.source_version_ref,
+                accepted.page_ref,
+                FileImportAudience(
+                    "principal:file-reader",
+                    membership_id,
+                    1,
+                ),
+            ),
+        )
+
+
+@pytest.mark.security_evidence(
+    id="PG-FILE-MIXED-UPSERT-SCHEDULE-089",
+    layer="postgres",
+)
+@pytest.mark.security_evidence(
+    id="PG-FILE-MIXED-UPSERT-REPLAY-089",
+    layer="postgres",
+)
+def test_control_schedules_only_the_upserts_from_a_current_mixed_file_page(
+    tmp_path: Path,
+    guarded_control_engine: Engine,
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    original = {
+        "a.md": b"# A\n\nOriginal alpha.\n",
+        "b.md": b"# B\n\nOriginal beta.\n",
+        "c.md": b"# C\n\nOriginal gamma.\n",
+    }
+    for path, content in original.items():
+        (root / path).write_bytes(content)
+    provider_proofs, control_proofs = _proofs()
+    organization_id = uuid4()
+    receiver = FileImportReceiver(uuid4())
+    control, authority, source = _seed_file_change_source(
+        guarded_control_engine=guarded_control_engine,
+        migration_configuration=migration_configuration,
+        organization_id=organization_id,
+        receiver=receiver,
+        root_ref=FileRootRef("mixed-upsert-schedule-root"),
+        control_proofs=control_proofs,
+    )
+    source = _activate_delete_observations(
+        control,
+        authority,
+        organization_id,
+        source,
+    )
+    provider = FileChangeProvider(
+        FileRootRegistry(
+            {source.source_version.root_ref: root},
+            limits=FileReadLimits(max_file_bytes=1_024),
+        ),
+        proofs=provider_proofs,
+    )
+
+    initial = provider.read_changes(source, InitialScan(), ChangeLimit(3))
+    assert type(initial) is ProviderOk
+    with _authorize(
+        authority,
+        organization_id,
+        ControlOperation.ACCEPT_FILE_CHANGE_PAGE,
+        "accept-mixed-schedule-baseline",
+    ) as call:
+        accepted_initial = control.accept_file_change_page(call, initial.value)
+    assert accepted_initial.complete is True
+    with _authorize(
+        authority,
+        organization_id,
+        ControlOperation.READ_SOURCE_PROGRESS,
+        "read-mixed-schedule-baseline",
+    ) as call:
+        progress = control.read_file_source_progress(
+            call,
+            accepted_initial.source_ref,
+        )
+    assert progress.complete_change_baseline is not None
+
+    changed_a = b"# A\n\nChanged alpha.\n"
+    changed_c = b"# C\n\nChanged gamma.\n"
+    (root / "a.md").write_bytes(changed_a)
+    (root / "b.md").unlink()
+    (root / "c.md").write_bytes(changed_c)
+    changed_source = FileChangeSource(
+        organization_id,
+        source.source_version,
+        scan_head=progress.change_scan_head,
+        complete_baseline=progress.complete_change_baseline,
+    )
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.connect() as connection:
+            membership_id = connection.execute(
+                text(
+                    "SELECT membership_id FROM membership "
+                    "WHERE organization_id = :organization_id"
+                ),
+                {"organization_id": organization_id},
+            ).scalar_one()
+    finally:
+        migration_engine.dispose()
+    mixed = provider.read_changes(
+        changed_source,
+        InitialScan(),
+        ChangeLimit(3),
+    )
+    assert type(mixed) is ProviderOk
+    assert [
+        (change.path.value, change.kind.value)
+        for change in mixed.value.changes
+    ] == [("a.md", "upsert"), ("b.md", "delete"), ("c.md", "upsert")]
+    with _authorize(
+        authority,
+        organization_id,
+        ControlOperation.ACCEPT_FILE_CHANGE_PAGE,
+        "accept-current-mixed-page",
+    ) as call:
+        accepted_mixed = control.accept_file_change_page(call, mixed.value)
+    assert accepted_mixed.complete is True
+
+    schedule = ScheduleFileChangePage(
+        accepted_mixed.source_ref,
+        accepted_mixed.source_version_ref,
+        accepted_mixed.page_ref,
+        FileImportAudience("principal:file-reader", membership_id, 1),
+    )
+    partial_acquisition_id = uuid4()
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.begin() as connection:
+            first_upsert = connection.execute(
+                text(
+                    """
+                    SELECT change_ordinal, relative_path, content_sha256,
+                           content_length
+                    FROM file_source_change
+                    WHERE organization_id = :organization_id
+                      AND source_id = :source_id
+                      AND source_version_id = :source_version_id
+                      AND page_ref = :page_ref
+                      AND change_kind = 'upsert'
+                    ORDER BY change_ordinal
+                    LIMIT 1
+                    """
+                ),
+                {
+                    "organization_id": organization_id,
+                    "source_id": accepted_mixed.source_ref.value,
+                    "source_version_id": accepted_mixed.source_version_ref,
+                    "page_ref": accepted_mixed.page_ref,
+                },
+            ).one()
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO file_acquisition (
+                        organization_id, acquisition_id, source_id,
+                        source_version_id, relative_path,
+                        audience_principal_ref, audience_membership_id,
+                        audience_membership_version, idempotency_key,
+                        request_digest, created_at, change_page_ref,
+                        change_ordinal, expected_content_sha256,
+                        expected_content_length
+                    ) VALUES (
+                        :organization_id, :acquisition_id, :source_id,
+                        :source_version_id, :relative_path,
+                        'principal:file-reader', :membership_id, 1,
+                        'injected-mixed-partial-lineage', :request_digest,
+                        statement_timestamp(), :page_ref, :change_ordinal,
+                        :content_sha256, :content_length
+                    )
+                    """
+                ),
+                {
+                    "organization_id": organization_id,
+                    "acquisition_id": partial_acquisition_id,
+                    "source_id": accepted_mixed.source_ref.value,
+                    "source_version_id": accepted_mixed.source_version_ref,
+                    "relative_path": first_upsert.relative_path,
+                    "membership_id": membership_id,
+                    "request_digest": "d" * 64,
+                    "page_ref": accepted_mixed.page_ref,
+                    "change_ordinal": first_upsert.change_ordinal,
+                    "content_sha256": first_upsert.content_sha256,
+                    "content_length": first_upsert.content_length,
+                },
+            )
+    finally:
+        migration_engine.dispose()
+    with (
+        _authorize(
+            authority,
+            organization_id,
+            ControlOperation.SCHEDULE_FILE_CHANGE_PAGE,
+            "reject-partial-current-mixed-upserts",
+        ) as call,
+        pytest.raises(SourceNotAvailable),
+    ):
+        control.schedule_file_change_page(call, schedule)
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.begin() as connection:
+            assert connection.execute(
+                text(
+                    "SELECT count(*) FROM file_acquisition "
+                    "WHERE organization_id = :organization_id "
+                    "AND source_id = :source_id AND change_page_ref = :page_ref"
+                ),
+                {
+                    "organization_id": organization_id,
+                    "source_id": accepted_mixed.source_ref.value,
+                    "page_ref": accepted_mixed.page_ref,
+                },
+            ).scalar_one() == 1
+            connection.execute(
+                text(
+                    "ALTER TABLE file_acquisition DISABLE TRIGGER "
+                    "file_acquisition_immutable"
+                )
+            )
+            connection.execute(
+                text(
+                    "DELETE FROM file_acquisition "
+                    "WHERE organization_id = :organization_id "
+                    "AND acquisition_id = :acquisition_id"
+                ),
+                {
+                    "organization_id": organization_id,
+                    "acquisition_id": partial_acquisition_id,
+                },
+            )
+            connection.execute(
+                text(
+                    "ALTER TABLE file_acquisition ENABLE TRIGGER "
+                    "file_acquisition_immutable"
+                )
+            )
+    finally:
+        migration_engine.dispose()
+    with _authorize(
+        authority,
+        organization_id,
+        ControlOperation.SCHEDULE_FILE_CHANGE_PAGE,
+        "schedule-current-mixed-upserts",
+    ) as call:
+        scheduled = control.schedule_file_change_page(call, schedule)
+    with _authorize(
+        authority,
+        organization_id,
+        ControlOperation.SCHEDULE_FILE_CHANGE_PAGE,
+        "replay-current-mixed-upserts",
+    ) as call:
+        replayed = control.schedule_file_change_page(call, schedule)
+
+    assert replayed == scheduled
+    assert [
+        (change.ordinal, change.path.value)
+        for change in scheduled.changes
+    ] == [(1, "a.md"), (3, "c.md")]
+    assert [change.content_length for change in scheduled.changes] == [
+        len(changed_a),
+        len(changed_c),
+    ]
+    with (
+        _authorize(
+            authority,
+            organization_id,
+            ControlOperation.SCHEDULE_FILE_CHANGE_PAGE,
+            "reject-changed-audience-current-mixed-upserts",
+        ) as call,
+        pytest.raises(SourceNotAvailable),
+    ):
+        control.schedule_file_change_page(
+            call,
+            replace(
+                schedule,
+                audience=FileImportAudience(
+                    "principal:changed-reader",
+                    membership_id,
+                    1,
+                ),
+            ),
+        )
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.connect() as connection:
+            lineages = connection.execute(
+                text(
+                    """
+                    SELECT acquisition.change_ordinal,
+                           acquisition.relative_path,
+                           change.change_kind,
+                           job.job_id
+                    FROM file_acquisition AS acquisition
+                    JOIN file_source_change AS change
+                      ON change.organization_id = acquisition.organization_id
+                     AND change.source_id = acquisition.source_id
+                     AND change.source_version_id = acquisition.source_version_id
+                     AND change.page_ref = acquisition.change_page_ref
+                     AND change.change_ordinal = acquisition.change_ordinal
+                     AND change.relative_path = acquisition.relative_path
+                     AND change.content_sha256 = acquisition.expected_content_sha256
+                     AND change.content_length = acquisition.expected_content_length
+                    JOIN file_import_job AS job
+                      ON job.organization_id = acquisition.organization_id
+                     AND job.acquisition_id = acquisition.acquisition_id
+                    WHERE acquisition.organization_id = :organization_id
+                      AND acquisition.source_id = :source_id
+                      AND acquisition.change_page_ref = :page_ref
+                    ORDER BY acquisition.change_ordinal
+                    """
+                ),
+                {
+                    "organization_id": organization_id,
+                    "source_id": accepted_mixed.source_ref.value,
+                    "page_ref": accepted_mixed.page_ref,
+                },
+            ).all()
+    finally:
+        migration_engine.dispose()
+    assert [
+        (row.change_ordinal, row.relative_path, row.change_kind, row.job_id)
+        for row in lineages
+    ] == [
+        (
+            change.ordinal,
+            change.path.value,
+            "upsert",
+            change.prepared_import.job_id,
+        )
+        for change in scheduled.changes
+    ]
+    with pytest.raises(
+        RuntimeError,
+        match="mixed File upsert scheduling downgrade requires no retained",
+    ):
+        command.downgrade(Config(ROOT / "alembic.ini"), "20260725_0031")
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.connect() as connection:
+            assert connection.execute(
+                text("SELECT version_num FROM alembic_version")
+            ).scalar_one() == HEAD_REVISION
+    finally:
+        migration_engine.dispose()
+
+
 @pytest.mark.security_evidence(id="PG-FILE-DELETE-PAGE-085", layer="postgres")
 @pytest.mark.security_evidence(id="PG-FILE-DELETE-NO-EFFECT-085", layer="postgres")
 def test_control_accepts_delete_observations_without_visibility_effect(
     tmp_path: Path,
     guarded_control_engine: Engine,
     guarded_runtime_engine: Engine,
+    guarded_worker_engine: Engine,
     migration_configuration: DatabaseConfiguration,
 ) -> None:
     root = tmp_path / "root"
     root.mkdir()
-    (root / "a.md").write_bytes(b"A")
-    (root / "b.md").write_bytes(b"B")
+    (root / "a.md").write_bytes(b"# A\n\nAlpha paragraph.\n")
+    (root / "b.md").write_bytes(b"# B\n\nBeta paragraph.\n")
+    (root / "c.md").write_bytes(b"# C\n\nGamma paragraph.\n")
     provider_proofs, control_proofs = _proofs()
     organization_id = uuid4()
     receiver = FileImportReceiver(uuid4())
@@ -491,7 +1645,7 @@ def test_control_accepts_delete_observations_without_visibility_effect(
         proofs=provider_proofs,
     )
 
-    first = provider.read_changes(source, InitialScan(), ChangeLimit(2))
+    first = provider.read_changes(source, InitialScan(), ChangeLimit(3))
     assert type(first) is ProviderOk
     assert first.value.baseline_ref is None
     with _authorize(
@@ -515,22 +1669,8 @@ def test_control_accepts_delete_observations_without_visibility_effect(
     assert [
         entry.path.value
         for entry in baseline_progress.complete_change_baseline.entries
-    ] == ["a.md", "b.md"]
+    ] == ["a.md", "b.md", "c.md"]
 
-    (root / "a.md").write_bytes(b"A2")
-    (root / "b.md").unlink()
-    source = FileChangeSource(
-        organization_id=organization_id,
-        source_version=source.source_version,
-        scan_head=baseline_progress.change_scan_head,
-        complete_baseline=baseline_progress.complete_change_baseline,
-    )
-    changed = provider.read_changes(source, InitialScan(), ChangeLimit(2))
-    assert type(changed) is ProviderOk
-    assert [
-        (change.path.value, change.kind.value)
-        for change in changed.value.changes
-    ] == [("a.md", "upsert"), ("b.md", "delete")]
     migration_engine = create_database_engine(migration_configuration)
     try:
         with migration_engine.connect() as connection:
@@ -541,6 +1681,84 @@ def test_control_accepts_delete_observations_without_visibility_effect(
                 ),
                 {"organization_id": organization_id},
             ).scalar_one()
+    finally:
+        migration_engine.dispose()
+    prepared_imports = []
+    for path in ("b.md", "c.md"):
+        with _authorize(
+            authority,
+            organization_id,
+            ControlOperation.IMPORT_FILE,
+            f"prepare-published-delete-{path}",
+        ) as call:
+            prepared_imports.append(
+                control.prepare_file_import(
+                    call,
+                    PrepareFileImport(
+                        accepted_first.source_ref,
+                        FileImportPath(path),
+                        FileImportAudience("principal:file-reader", membership_id, 1),
+                        f"published-delete-{path}",
+                    ),
+                )
+            )
+    codec = WorkerLeaseCodec(
+        WorkerLeaseKeyring(active_version=1, keys={1: bytes(range(64, 96))})
+    )
+    issuer = PostgreSQLWorkerLeaseIssuer(
+        guarded_control_engine,
+        codec,
+        lease_ttl_seconds=300,
+    )
+    tokens = [issuer.issue_file_import_lease(item) for item in prepared_imports]
+    with FileRootRegistry(
+        {source.source_version.root_ref: root},
+        limits=FileReadLimits(max_file_bytes=1_024),
+    ) as worker_roots:
+        worker = PostgreSQLFileImportWorker(
+            guarded_worker_engine,
+            codec,
+            receiver,
+            worker_roots,
+            MarkdownCompilerConfig("markdown-config-v1"),
+            clock=lambda: datetime.now(UTC).replace(microsecond=0),
+        )
+        published_deletes = {
+            path: worker.run(
+                FileImportLeaseRedemption(
+                    token,
+                    organization_id,
+                    prepared.job_id,
+                    accepted_first.source_ref,
+                )
+            )
+            for path, token, prepared in zip(
+                ("b.md", "c.md"),
+                tokens,
+                prepared_imports,
+                strict=True,
+            )
+        }
+    assert all(item.outcome == "published" for item in published_deletes.values())
+
+    (root / "a.md").unlink()
+    (root / "b.md").unlink()
+    (root / "c.md").unlink()
+    source = FileChangeSource(
+        organization_id=organization_id,
+        source_version=source.source_version,
+        scan_head=baseline_progress.change_scan_head,
+        complete_baseline=baseline_progress.complete_change_baseline,
+    )
+    changed = provider.read_changes(source, InitialScan(), ChangeLimit(3))
+    assert type(changed) is ProviderOk
+    assert [
+        (change.path.value, change.kind.value)
+        for change in changed.value.changes
+    ] == [("a.md", "delete"), ("b.md", "delete"), ("c.md", "delete")]
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.connect() as connection:
             before = _delete_observation_effect_snapshot(
                 connection,
                 organization_id,
@@ -561,6 +1779,37 @@ def test_control_accepts_delete_observations_without_visibility_effect(
         "replay-v4-delete",
     ) as call:
         assert control.accept_file_change_page(call, changed.value) == accepted_delete
+
+    unpublished_delete = ExecuteFileDeleteObservation(
+        accepted_delete.source_ref,
+        accepted_delete.source_version_ref,
+        accepted_delete.page_ref,
+        1,
+    )
+    published_delete = replace(unpublished_delete, change_ordinal=2)
+    mismatched_replay = replace(unpublished_delete, change_ordinal=3)
+    with (
+        _authorize(
+            authority,
+            organization_id,
+            ControlOperation.EXECUTE_FILE_DELETE_OBSERVATION,
+            "reject-unpublished-delete-observation",
+        ) as call,
+        pytest.raises(SourceNotAvailable),
+    ):
+        control.execute_file_delete_observation(call, unpublished_delete)
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.connect() as connection:
+            assert connection.execute(
+                text(
+                    "SELECT count(*) FROM file_delete_observation_execution "
+                    "WHERE organization_id = :organization_id"
+                ),
+                {"organization_id": organization_id},
+            ).scalar_one() == 0
+    finally:
+        migration_engine.dispose()
 
     with (
         _authorize(
@@ -599,7 +1848,7 @@ def test_control_accepts_delete_observations_without_visibility_effect(
     assert [
         (entry.path.value, entry.kind.value)
         for entry in final_progress.complete_change_baseline.entries
-    ] == [("a.md", "upsert"), ("b.md", "delete")]
+    ] == [("a.md", "delete"), ("b.md", "delete"), ("c.md", "delete")]
 
     migration_engine = create_database_engine(migration_configuration)
     try:
@@ -612,14 +1861,53 @@ def test_control_accepts_delete_observations_without_visibility_effect(
         migration_engine.dispose()
     assert after == before
 
-    for nonowner_engine in (guarded_control_engine, guarded_runtime_engine):
-        with (
-            nonowner_engine.connect() as connection,
-            pytest.raises(DBAPIError),
+    for nonowner_engine in (
+        guarded_control_engine,
+        guarded_runtime_engine,
+        guarded_worker_engine,
+    ):
+        for table in (
+            "file_source_delete_observation_page",
+            "file_delete_observation_execution",
         ):
-            connection.execute(
-                text("SELECT count(*) FROM file_source_delete_observation_page")
-            ).scalar_one()
+            with (
+                nonowner_engine.connect() as connection,
+                pytest.raises(DBAPIError),
+            ):
+                connection.execute(
+                    text(f"SELECT count(*) FROM {table}")  # noqa: S608
+                ).scalar_one()
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.connect() as connection:
+            privileges = connection.execute(
+                text(
+                    """
+                    SELECT
+                      has_function_privilege(
+                        'context_engine_control',
+                        'context_control_execute_file_delete_observation('
+                        'uuid,uuid,uuid,text,smallint,uuid)',
+                        'EXECUTE'
+                      ),
+                      has_function_privilege(
+                        'context_engine_runtime',
+                        'context_control_execute_file_delete_observation('
+                        'uuid,uuid,uuid,text,smallint,uuid)',
+                        'EXECUTE'
+                      ),
+                      has_function_privilege(
+                        'context_engine_worker',
+                        'context_control_execute_file_delete_observation('
+                        'uuid,uuid,uuid,text,smallint,uuid)',
+                        'EXECUTE'
+                      )
+                    """
+                )
+            ).one()
+    finally:
+        migration_engine.dispose()
+    assert tuple(privileges) == (True, False, False)
     other_organization = uuid4()
     with guarded_control_engine.begin() as connection:
         connection.execute(
@@ -654,6 +1942,37 @@ def test_control_accepts_delete_observations_without_visibility_effect(
         clock=lambda: NOW,
         file_change_proofs=control_proofs,
     )
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.connect() as connection:
+            before_cross_execution = _file_delete_execution_effect_snapshot(
+                connection,
+                organization_id,
+            )
+    finally:
+        migration_engine.dispose()
+    with (
+        _authorize(
+            cross_organization_authority,
+            other_organization,
+            ControlOperation.EXECUTE_FILE_DELETE_OBSERVATION,
+            "reject-cross-organization-delete-execution",
+        ) as call,
+        pytest.raises(SourceNotAvailable),
+    ):
+        cross_organization_control.execute_file_delete_observation(
+            call,
+            published_delete,
+        )
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.connect() as connection:
+            assert (
+                _file_delete_execution_effect_snapshot(connection, organization_id)
+                == before_cross_execution
+            )
+    finally:
+        migration_engine.dispose()
     cross_unsigned = replace(
         changed.value,
         organization_id=other_organization,
@@ -714,6 +2033,92 @@ def test_control_accepts_delete_observations_without_visibility_effect(
     finally:
         migration_engine.dispose()
     assert cross_after == cross_before
+
+    with _authorize(
+        authority,
+        organization_id,
+        ControlOperation.TOMBSTONE_FILE_RESOURCE,
+        "manual-tombstone-before-observation-execution",
+    ) as call:
+        manual_tombstone = control.tombstone_file_resource(
+            call,
+            TombstoneFileResource(
+                accepted_delete.source_ref,
+                published_deletes["c.md"].candidate_ref.resource_ref,
+                "manual-delete-before-observation-execution",
+                accepted_delete.sequence,
+            ),
+        )
+    assert manual_tombstone.resource_ref == (
+        published_deletes["c.md"].candidate_ref.resource_ref
+    )
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.connect() as connection:
+            before_mismatched_replay = _file_delete_execution_effect_snapshot(
+                connection,
+                organization_id,
+            )
+    finally:
+        migration_engine.dispose()
+    with (
+        _authorize(
+            authority,
+            organization_id,
+            ControlOperation.EXECUTE_FILE_DELETE_OBSERVATION,
+            "reject-manually-tombstoned-observation-execution",
+        ) as call,
+        pytest.raises(SourceNotAvailable),
+    ):
+        control.execute_file_delete_observation(call, mismatched_replay)
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.connect() as connection:
+            assert (
+                _file_delete_execution_effect_snapshot(connection, organization_id)
+                == before_mismatched_replay
+            )
+    finally:
+        migration_engine.dispose()
+
+    with _authorize(
+        authority,
+        organization_id,
+        ControlOperation.OFFBOARD_FILE_SOURCE,
+        "disable-before-delete-execution",
+    ) as call:
+        control.offboard_file_source(
+            call,
+            OffboardFileSource(accepted_delete.source_ref),
+        )
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.connect() as connection:
+            before_disabled_execution = _file_delete_execution_effect_snapshot(
+                connection,
+                organization_id,
+            )
+    finally:
+        migration_engine.dispose()
+    with (
+        _authorize(
+            authority,
+            organization_id,
+            ControlOperation.EXECUTE_FILE_DELETE_OBSERVATION,
+            "reject-disabled-delete-execution",
+        ) as call,
+        pytest.raises(SourceNotAvailable),
+    ):
+        control.execute_file_delete_observation(call, published_delete)
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.connect() as connection:
+            assert (
+                _file_delete_execution_effect_snapshot(connection, organization_id)
+                == before_disabled_execution
+            )
+    finally:
+        migration_engine.dispose()
 
 
 def test_progress_and_complete_baseline_share_one_statement_snapshot(

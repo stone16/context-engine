@@ -28,9 +28,13 @@ from engine.control import (
     FileChangeControlProofs,
     FileChangeProviderProofs,
     FileChangeSource,
+    FileImportAudience,
     FileImportPath,
     InitialScan,
     ProviderOk,
+    ScheduledFileChangePage,
+    ScheduleFileChangePage,
+    SourceNotAvailable,
 )
 from engine.persistence import (
     DatabaseConfiguration,
@@ -56,17 +60,27 @@ from tests.integration.test_context_run_schema import (
     LineageIdentity,
     insert_context_run,
 )
-from tests.integration.test_file_import_tracer import (
-    NOW,
-    _ControlAuthenticator,
-    _prepare_file_import_scenario,
-    _prepare_repeat_file_import,
-    _run_file_import,
-    _scenario_claims,
-)
 from tests.integration.test_zz_file_resource_tombstone import _tombstone
 from tests.integration.test_zz_file_revision_replacement import NEW_MARKDOWN
 from tests.integration.test_zz_file_source_offboarding import _offboard
+from tests.support.file_imports import (
+    NOW,
+)
+from tests.support.file_imports import (
+    ControlAuthenticator as _ControlAuthenticator,
+)
+from tests.support.file_imports import (
+    prepare_file_import_scenario as _prepare_file_import_scenario,
+)
+from tests.support.file_imports import (
+    prepare_repeat_file_import as _prepare_repeat_file_import,
+)
+from tests.support.file_imports import (
+    run_file_import as _run_file_import,
+)
+from tests.support.file_imports import (
+    scenario_claims as _scenario_claims,
+)
 from tests.support.file_source_progress import clear_file_source_progress_projection
 from tests.support.migrations import HEAD_REVISION
 
@@ -97,6 +111,7 @@ HEAD_TABLES = [
     "exact_phrase_candidate",
     "file_acquisition",
     "file_acquisition_result",
+    "file_delete_observation_execution",
     "file_import_job",
     "file_import_job_event",
     "file_publication_recovery",
@@ -154,6 +169,10 @@ def _delete_issue_27_upgrade_fixture(
 
     engine = create_database_engine(configuration)
     immutable_tables = (
+        (
+            "file_delete_observation_execution",
+            "file_delete_observation_execution_immutable",
+        ),
         ("file_source_delete_observation_page", None),
         ("file_source_change", "file_source_change_immutable"),
         ("file_source_change_page", "file_source_change_page_immutable"),
@@ -201,6 +220,7 @@ def _delete_issue_27_upgrade_fixture(
                 for table in (
                     "action_ticket",
                     "action_delivery_attempt",
+                    "file_delete_observation_execution",
                     "file_source_publish_watermark",
                     "file_source_acquisition_checkpoint",
                     "file_resource_cleanup_intent",
@@ -1005,6 +1025,801 @@ def test_file_delete_observation_revision_owns_atomic_read_volatility(
         assert "File page tenant context is not trusted" in trigger_definition
     finally:
         engine.dispose()
+
+
+def test_file_delete_execution_revision_downgrades_only_while_empty(
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    """Issue #87 removes only unused execution machinery."""
+
+    alembic_configuration = Config(ROOT / "alembic.ini")
+    engine = create_database_engine(migration_configuration)
+    try:
+        with engine.connect() as connection:
+            assert connection.execute(
+                text("SELECT count(*) FROM file_delete_observation_execution")
+            ).scalar_one() == 0
+    finally:
+        engine.dispose()
+    try:
+        command.downgrade(alembic_configuration, "20260725_0030")
+        assert _revision_rows(migration_configuration) == ["20260725_0030"]
+        assert "file_delete_observation_execution" not in _application_tables(
+            migration_configuration
+        )
+        engine = create_database_engine(migration_configuration)
+        try:
+            with engine.connect() as connection:
+                assert connection.execute(
+                    text(
+                        "SELECT has_function_privilege("
+                        "'context_engine_worker_lease_definer', "
+                        "'context_control_tombstone_file_resource("
+                        "uuid,uuid,text,text,bigint,uuid)', 'EXECUTE')"
+                    )
+                ).scalar_one() is False
+        finally:
+            engine.dispose()
+    finally:
+        command.upgrade(alembic_configuration, "head")
+
+    assert _revision_rows(migration_configuration) == [HEAD_REVISION]
+    assert "file_delete_observation_execution" in _application_tables(
+        migration_configuration
+    )
+    engine = create_database_engine(migration_configuration)
+    try:
+        with engine.connect() as connection:
+            assert connection.execute(
+                text(
+                    "SELECT has_function_privilege("
+                    "'context_engine_worker_lease_definer', "
+                    "'context_control_tombstone_file_resource("
+                    "uuid,uuid,text,text,bigint,uuid)', 'EXECUTE')"
+                )
+            ).scalar_one() is True
+    finally:
+        engine.dispose()
+
+
+def test_mixed_file_upsert_scheduling_revision_downgrades_and_reapplies_empty(
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    """Issue #89 restores the prior mixed-page refusal when no lineage exists."""
+
+    alembic_configuration = Config(ROOT / "alembic.ini")
+    try:
+        command.downgrade(alembic_configuration, "20260725_0031")
+        assert _revision_rows(migration_configuration) == ["20260725_0031"]
+        engine = create_database_engine(migration_configuration)
+        try:
+            with engine.connect() as connection:
+                prior = connection.execute(
+                    text(
+                        "SELECT pg_catalog.pg_get_functiondef("
+                        "'public.context_control_schedule_file_change_page("
+                        "uuid,uuid,uuid,text,text,uuid,bigint,uuid)'::regprocedure)"
+                    )
+                ).scalar_one()
+                assert "selected_upsert_count" not in prior
+                assert "change.change_kind <> 'upsert'" in prior
+                assert connection.execute(
+                    text(
+                        "SELECT has_table_privilege("
+                        "'context_engine_worker_lease_definer', "
+                        "'public.alembic_version', 'SELECT')"
+                    )
+                ).scalar_one() is False
+        finally:
+            engine.dispose()
+    finally:
+        command.upgrade(alembic_configuration, "head")
+
+    assert _revision_rows(migration_configuration) == [HEAD_REVISION]
+    engine = create_database_engine(migration_configuration)
+    try:
+        with engine.connect() as connection:
+            current = connection.execute(
+                text(
+                    "SELECT pg_catalog.pg_get_functiondef("
+                    "'public.context_control_schedule_file_change_page("
+                    "uuid,uuid,uuid,text,text,uuid,bigint,uuid)'::regprocedure)"
+                    )
+                ).scalar_one()
+            assert "selected_upsert_count" in current
+            assert "change.change_kind NOT IN ('upsert', 'delete')" in current
+            assert current.count("change.change_kind = 'upsert'") == 4
+            assert "FROM public.alembic_version" in current
+            assert "insufficient_privilege" in current
+            assert HEAD_REVISION not in current
+            assert connection.execute(
+                text(
+                    "SELECT ARRAY["
+                    "has_table_privilege('context_engine_worker_lease_definer', "
+                    "'public.alembic_version', 'SELECT'), "
+                    "has_table_privilege('context_engine_control', "
+                    "'public.alembic_version', 'SELECT'), "
+                    "has_table_privilege('context_engine_runtime', "
+                    "'public.alembic_version', 'SELECT'), "
+                    "has_table_privilege('context_engine_worker', "
+                    "'public.alembic_version', 'SELECT')]"
+                )
+            ).scalar_one() == [True, False, False, False]
+    finally:
+        engine.dispose()
+
+
+def test_file_dispatch_revision_downgrades_and_reapplies_empty(
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    """Issue #91 removes only its unclaimed scheduler capability cleanly."""
+
+    alembic_configuration = Config(ROOT / "alembic.ini")
+    try:
+        command.downgrade(alembic_configuration, "20260725_0032")
+        assert _revision_rows(migration_configuration) == ["20260725_0032"]
+        engine = create_database_engine(migration_configuration)
+        try:
+            with engine.connect() as connection:
+                assert (
+                    connection.execute(
+                        text(
+                            "SELECT to_regprocedure("
+                            "'public.context_scheduler_claim_file_import("
+                            "bigint,bytea,text[])'"
+                            ") IS NULL"
+                        )
+                    ).scalar_one()
+                    is True
+                )
+                privileges = connection.execute(
+                    text(
+                        "SELECT table_name, privilege_type, NULL::text AS column_name "
+                        "FROM information_schema.table_privileges "
+                        "WHERE table_schema = 'public' AND grantee = "
+                        "'context_engine_file_dispatch_definer' "
+                        "UNION ALL "
+                        "SELECT table_name, privilege_type, column_name "
+                        "FROM information_schema.column_privileges "
+                        "WHERE table_schema = 'public' AND grantee = "
+                        "'context_engine_file_dispatch_definer'"
+                    )
+                ).all()
+                assert privileges == []
+                assert (
+                    connection.execute(
+                        text(
+                            "SELECT NOT EXISTS ("
+                            "SELECT 1 FROM information_schema.columns "
+                            "WHERE table_schema = 'public' "
+                            "AND table_name = 'file_import_job' "
+                            "AND column_name = 'dispatch_claimed')"
+                        )
+                    ).scalar_one()
+                    is True
+                )
+        finally:
+            engine.dispose()
+    finally:
+        command.upgrade(alembic_configuration, "head")
+
+    assert _revision_rows(migration_configuration) == [HEAD_REVISION]
+
+
+def test_file_reclaim_revision_downgrades_and_reapplies_empty(
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    """Issue #93 removes only its unminted higher-generation capability."""
+
+    alembic_configuration = Config(ROOT / "alembic.ini")
+    try:
+        command.downgrade(alembic_configuration, "20260725_0033")
+        assert _revision_rows(migration_configuration) == ["20260725_0033"]
+        engine = create_database_engine(migration_configuration)
+        try:
+            with engine.connect() as connection:
+                definition = connection.execute(
+                    text(
+                        "SELECT pg_get_functiondef("
+                        "'public.context_scheduler_claim_file_import("
+                        "bigint,bytea,text[])'::regprocedure)"
+                    )
+                ).scalar_one()
+                assert "context_scheduler_claim_first_file_import" not in definition
+                assert "event_type" not in definition
+                assert connection.execute(
+                    text(
+                        "SELECT to_regprocedure("
+                        "'public.context_scheduler_claim_first_file_import("
+                        "bigint,bytea,text[])') IS NULL"
+                    )
+                ).scalar_one()
+                assert connection.execute(
+                    text(
+                        "SELECT to_regclass("
+                        "'public.ix_file_import_job_dispatch_expired') IS NULL"
+                    )
+                ).scalar_one()
+        finally:
+            engine.dispose()
+    finally:
+        command.upgrade(alembic_configuration, "head")
+
+    assert _revision_rows(migration_configuration) == [HEAD_REVISION]
+
+
+def test_file_reclaim_revision_refuses_retained_higher_generation(
+    tmp_path: Path,
+    migration_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+) -> None:
+    """Downgrade preserves every retained scheduler-created reclaim fact."""
+
+    scenario = _prepare_file_import_scenario(
+        tmp_path,
+        migration_configuration,
+        guarded_control_engine,
+        issue_lease=False,
+    )
+    organization_id = scenario.organization_id
+    job_id = scenario.prepared.job_id
+    engine = create_database_engine(migration_configuration)
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "UPDATE file_import_job SET state = 'leased', "
+                    "lease_generation = 2, signing_key_version = 1, "
+                    "lease_nonce_digest = digest('reclaim-test', 'sha256'), "
+                    "lease_issued_at = clock_timestamp(), "
+                    "lease_expires_at = clock_timestamp() + interval '5 minutes', "
+                    "dispatch_claimed = true WHERE "
+                    "organization_id = :organization_id AND job_id = :job_id"
+                ),
+                {
+                    "organization_id": organization_id,
+                    "job_id": job_id,
+                },
+            )
+        with pytest.raises(
+            RuntimeError,
+            match="automatic File reclaim downgrade requires no retained",
+        ):
+            command.downgrade(Config(ROOT / "alembic.ini"), "20260725_0033")
+        assert _revision_rows(migration_configuration) == [HEAD_REVISION]
+        with engine.connect() as connection:
+            assert connection.execute(
+                text(
+                    "SELECT lease_generation, dispatch_claimed FROM "
+                    "file_import_job WHERE organization_id = :organization_id "
+                    "AND job_id = :job_id"
+                ),
+                {"organization_id": organization_id, "job_id": job_id},
+            ).one() == (2, True)
+    finally:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "UPDATE file_import_job SET state = 'available', "
+                    "lease_generation = 0, signing_key_version = NULL, "
+                    "lease_nonce_digest = NULL, lease_issued_at = NULL, "
+                    "lease_expires_at = NULL, dispatch_claimed = false WHERE "
+                    "organization_id = :organization_id AND job_id = :job_id"
+                ),
+                {"organization_id": organization_id, "job_id": job_id},
+            )
+        command.upgrade(Config(ROOT / "alembic.ini"), "head")
+        engine.dispose()
+
+
+def test_mixed_file_upsert_downgrade_waits_for_in_flight_scheduler(
+    tmp_path: Path,
+    migration_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+) -> None:
+    """Rollback fences an old function body before checking mixed lineage."""
+
+    scenario = _prepare_file_import_scenario(
+        tmp_path,
+        migration_configuration,
+        guarded_control_engine,
+        issue_lease=False,
+    )
+    provider_key = Ed25519PrivateKey.from_private_bytes(bytes(range(32)))
+    checkpoint_key = Ed25519PrivateKey.from_private_bytes(bytes(range(32, 64)))
+    authority = ControlOperatorAuthority(
+        _ControlAuthenticator(scenario.organization_id),
+        call_ttl=timedelta(minutes=5),
+        clock=lambda: NOW,
+    )
+    control = ContextControl(
+        store=PostgreSQLControlStore(
+            guarded_control_engine,
+            clock=lambda: NOW,
+            file_import_receiver=scenario.receiver,
+            file_change_checkpoint_signing_key=checkpoint_key,
+        ),
+        authority=authority,
+        clock=lambda: NOW,
+        file_change_proofs=FileChangeControlProofs(
+            provider_verification_key=provider_key.public_key()
+        ),
+    )
+    with authority.authorize(
+        opaque_credential="control-secret",
+        operation=ControlOperation.ACTIVATE_FILE_CHANGE_FEED,
+        request_id="mixed-downgrade-activate-v3",
+    ) as call:
+        control.activate_file_change_feed(
+            call,
+            ActivateFileChangeFeed(scenario.source_ref),
+        )
+    with authority.authorize(
+        opaque_credential="control-secret",
+        operation=ControlOperation.ACTIVATE_FILE_DELETE_OBSERVATIONS,
+        request_id="mixed-downgrade-activate-v4",
+    ) as call:
+        v4 = control.activate_file_delete_observations(
+            call,
+            ActivateFileDeleteObservations(scenario.source_ref),
+        )
+    (scenario.root / "removed.md").write_bytes(b"# Removed\n\nBaseline.\n")
+    provider = FileChangeProvider(
+        FileRootRegistry(
+            {scenario.root_ref: scenario.root},
+            limits=FileReadLimits(max_file_bytes=1_024 * 1_024),
+        ),
+        proofs=FileChangeProviderProofs(
+            provider_signing_key=provider_key,
+            checkpoint_verification_key=checkpoint_key.public_key(),
+        ),
+    )
+    source = FileChangeSource(scenario.organization_id, v4.active_version)
+    baseline = provider.read_changes(source, InitialScan(), ChangeLimit(2))
+    assert type(baseline) is ProviderOk
+    with authority.authorize(
+        opaque_credential="control-secret",
+        operation=ControlOperation.ACCEPT_FILE_CHANGE_PAGE,
+        request_id="mixed-downgrade-accept-baseline",
+    ) as call:
+        control.accept_file_change_page(call, baseline.value)
+    with authority.authorize(
+        opaque_credential="control-secret",
+        operation=ControlOperation.READ_SOURCE_PROGRESS,
+        request_id="mixed-downgrade-read-baseline",
+    ) as call:
+        progress = control.read_file_source_progress(call, scenario.source_ref)
+    assert progress.complete_change_baseline is not None
+    (scenario.root / "handbook.md").write_bytes(NEW_MARKDOWN)
+    (scenario.root / "removed.md").unlink()
+    mixed = provider.read_changes(
+        FileChangeSource(
+            scenario.organization_id,
+            v4.active_version,
+            scan_head=progress.change_scan_head,
+            complete_baseline=progress.complete_change_baseline,
+        ),
+        InitialScan(),
+        ChangeLimit(2),
+    )
+    assert type(mixed) is ProviderOk
+    assert {change.kind.value for change in mixed.value.changes} == {
+        "upsert",
+        "delete",
+    }
+    with authority.authorize(
+        opaque_credential="control-secret",
+        operation=ControlOperation.ACCEPT_FILE_CHANGE_PAGE,
+        request_id="mixed-downgrade-accept-current",
+    ) as call:
+        accepted = control.accept_file_change_page(call, mixed.value)
+    schedule = ScheduleFileChangePage(
+        accepted.source_ref,
+        accepted.source_version_ref,
+        accepted.page_ref,
+        FileImportAudience(
+            "principal:file-reader",
+            scenario.membership_id,
+            1,
+        ),
+    )
+
+    def schedule_page() -> ScheduledFileChangePage:
+        with authority.authorize(
+            opaque_credential="control-secret",
+            operation=ControlOperation.SCHEDULE_FILE_CHANGE_PAGE,
+            request_id="mixed-downgrade-in-flight-schedule",
+        ) as call:
+            return control.schedule_file_change_page(call, schedule)
+
+    engine = create_database_engine(migration_configuration)
+    alembic_configuration = Config(ROOT / "alembic.ini")
+    source_lock_key = "context-engine.file-source-progress:"
+    source_lock_key += f"{scenario.organization_id}:{scenario.source_ref.value}"
+    migration_fence_key = "context-engine.file-change-scheduling-migration-fence"
+    try:
+        with engine.connect() as blocker:
+            blocker_transaction = blocker.begin()
+            try:
+                blocker.execute(
+                    text(
+                        "SELECT pg_advisory_xact_lock("
+                        "hashtextextended(:source_lock_key, 0))"
+                    ),
+                    {"source_lock_key": source_lock_key},
+                )
+                with ThreadPoolExecutor(max_workers=2) as executor:
+                    pending_schedule = executor.submit(schedule_page)
+                    try:
+                        with engine.connect() as observer:
+                            deadline = monotonic() + 10
+                            while monotonic() < deadline:
+                                scheduler_waiting = observer.execute(
+                                    text(
+                                        """
+                                        SELECT EXISTS (
+                                            SELECT 1
+                                            FROM pg_locks AS waiting
+                                            JOIN pg_locks AS held
+                                              ON held.locktype = waiting.locktype
+                                             AND held.database = waiting.database
+                                             AND held.classid = waiting.classid
+                                             AND held.objid = waiting.objid
+                                             AND held.objsubid = waiting.objsubid
+                                            WHERE waiting.locktype = 'advisory'
+                                              AND waiting.mode = 'ExclusiveLock'
+                                              AND waiting.granted IS FALSE
+                                              AND waiting.database = (
+                                                SELECT database.oid
+                                                FROM pg_database AS database
+                                                WHERE database.datname =
+                                                  current_database()
+                                              )
+                                              AND waiting.classid = (
+                                                (hashtextextended(:lock_key, 0)
+                                                  >> 32) & 4294967295
+                                              )::oid
+                                              AND waiting.objid = (
+                                                hashtextextended(:lock_key, 0)
+                                                  & 4294967295
+                                              )::oid
+                                              AND waiting.objsubid = 1
+                                              AND held.mode = 'ExclusiveLock'
+                                              AND held.granted IS TRUE
+                                        )
+                                        """
+                                    ),
+                                    {"lock_key": source_lock_key},
+                                ).scalar_one()
+                                if scheduler_waiting:
+                                    break
+                                sleep(0.01)
+                        assert scheduler_waiting
+                        pending_downgrade = executor.submit(
+                            command.downgrade,
+                            alembic_configuration,
+                            "20260725_0031",
+                        )
+                        with engine.connect() as observer:
+                            deadline = monotonic() + 10
+                            while monotonic() < deadline:
+                                downgrade_waiting = observer.execute(
+                                    text(
+                                        """
+                                        SELECT EXISTS (
+                                            SELECT 1
+                                            FROM pg_locks AS waiting
+                                            JOIN pg_locks AS held
+                                              ON held.locktype = waiting.locktype
+                                             AND held.database = waiting.database
+                                             AND held.classid = waiting.classid
+                                             AND held.objid = waiting.objid
+                                             AND held.objsubid = waiting.objsubid
+                                            WHERE waiting.locktype = 'advisory'
+                                              AND waiting.mode = 'ExclusiveLock'
+                                              AND waiting.granted IS FALSE
+                                              AND waiting.database = (
+                                                SELECT database.oid
+                                                FROM pg_database AS database
+                                                WHERE database.datname =
+                                                  current_database()
+                                              )
+                                              AND waiting.classid = (
+                                                (hashtextextended(:lock_key, 0)
+                                                  >> 32) & 4294967295
+                                              )::oid
+                                              AND waiting.objid = (
+                                                hashtextextended(:lock_key, 0)
+                                                  & 4294967295
+                                              )::oid
+                                              AND waiting.objsubid = 1
+                                              AND held.mode = 'ShareLock'
+                                              AND held.granted IS TRUE
+                                        )
+                                        """
+                                    ),
+                                    {"lock_key": migration_fence_key},
+                                ).scalar_one()
+                                if downgrade_waiting:
+                                    break
+                                sleep(0.01)
+                        assert downgrade_waiting
+                    finally:
+                        blocker_transaction.commit()
+                    scheduled = pending_schedule.result(timeout=10)
+                    assert [change.ordinal for change in scheduled.changes] == [1]
+                    with pytest.raises(
+                        RuntimeError,
+                        match=(
+                            "mixed File upsert scheduling downgrade requires no "
+                            "retained"
+                        ),
+                    ):
+                        pending_downgrade.result(timeout=10)
+            finally:
+                if blocker_transaction.is_active:
+                    blocker_transaction.rollback()
+        assert _revision_rows(migration_configuration) == [HEAD_REVISION]
+    finally:
+        command.upgrade(alembic_configuration, "head")
+        engine.dispose()
+        _delete_issue_27_upgrade_fixture(
+            migration_configuration,
+            scenario.organization_id,
+        )
+
+
+def test_in_flight_old_scheduler_fails_closed_when_downgrade_wins_fence(
+    tmp_path: Path,
+    migration_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+) -> None:
+    """An old function body cannot write after rollback replaces its generation."""
+
+    scenario = _prepare_file_import_scenario(
+        tmp_path,
+        migration_configuration,
+        guarded_control_engine,
+        issue_lease=False,
+    )
+    provider_key = Ed25519PrivateKey.from_private_bytes(bytes(range(32)))
+    checkpoint_key = Ed25519PrivateKey.from_private_bytes(bytes(range(32, 64)))
+    authority = ControlOperatorAuthority(
+        _ControlAuthenticator(scenario.organization_id),
+        call_ttl=timedelta(minutes=5),
+        clock=lambda: NOW,
+    )
+    control = ContextControl(
+        store=PostgreSQLControlStore(
+            guarded_control_engine,
+            clock=lambda: NOW,
+            file_import_receiver=scenario.receiver,
+            file_change_checkpoint_signing_key=checkpoint_key,
+        ),
+        authority=authority,
+        clock=lambda: NOW,
+        file_change_proofs=FileChangeControlProofs(
+            provider_verification_key=provider_key.public_key()
+        ),
+    )
+    with authority.authorize(
+        opaque_credential="control-secret",
+        operation=ControlOperation.ACTIVATE_FILE_CHANGE_FEED,
+        request_id="mixed-downgrade-losing-activate-v3",
+    ) as call:
+        control.activate_file_change_feed(
+            call,
+            ActivateFileChangeFeed(scenario.source_ref),
+        )
+    with authority.authorize(
+        opaque_credential="control-secret",
+        operation=ControlOperation.ACTIVATE_FILE_DELETE_OBSERVATIONS,
+        request_id="mixed-downgrade-losing-activate-v4",
+    ) as call:
+        v4 = control.activate_file_delete_observations(
+            call,
+            ActivateFileDeleteObservations(scenario.source_ref),
+        )
+    (scenario.root / "removed.md").write_bytes(b"# Removed\n\nBaseline.\n")
+    provider = FileChangeProvider(
+        FileRootRegistry(
+            {scenario.root_ref: scenario.root},
+            limits=FileReadLimits(max_file_bytes=1_024 * 1_024),
+        ),
+        proofs=FileChangeProviderProofs(
+            provider_signing_key=provider_key,
+            checkpoint_verification_key=checkpoint_key.public_key(),
+        ),
+    )
+    source = FileChangeSource(scenario.organization_id, v4.active_version)
+    baseline = provider.read_changes(source, InitialScan(), ChangeLimit(2))
+    assert type(baseline) is ProviderOk
+    with authority.authorize(
+        opaque_credential="control-secret",
+        operation=ControlOperation.ACCEPT_FILE_CHANGE_PAGE,
+        request_id="mixed-downgrade-losing-accept-baseline",
+    ) as call:
+        control.accept_file_change_page(call, baseline.value)
+    with authority.authorize(
+        opaque_credential="control-secret",
+        operation=ControlOperation.READ_SOURCE_PROGRESS,
+        request_id="mixed-downgrade-losing-read-baseline",
+    ) as call:
+        progress = control.read_file_source_progress(call, scenario.source_ref)
+    assert progress.complete_change_baseline is not None
+    (scenario.root / "handbook.md").write_bytes(NEW_MARKDOWN)
+    (scenario.root / "removed.md").unlink()
+    mixed = provider.read_changes(
+        FileChangeSource(
+            scenario.organization_id,
+            v4.active_version,
+            scan_head=progress.change_scan_head,
+            complete_baseline=progress.complete_change_baseline,
+        ),
+        InitialScan(),
+        ChangeLimit(2),
+    )
+    assert type(mixed) is ProviderOk
+    assert {change.kind.value for change in mixed.value.changes} == {
+        "upsert",
+        "delete",
+    }
+    with authority.authorize(
+        opaque_credential="control-secret",
+        operation=ControlOperation.ACCEPT_FILE_CHANGE_PAGE,
+        request_id="mixed-downgrade-losing-accept-current",
+    ) as call:
+        accepted = control.accept_file_change_page(call, mixed.value)
+    schedule = ScheduleFileChangePage(
+        accepted.source_ref,
+        accepted.source_version_ref,
+        accepted.page_ref,
+        FileImportAudience(
+            "principal:file-reader",
+            scenario.membership_id,
+            1,
+        ),
+    )
+
+    def schedule_page() -> ScheduledFileChangePage:
+        with authority.authorize(
+            opaque_credential="control-secret",
+            operation=ControlOperation.SCHEDULE_FILE_CHANGE_PAGE,
+            request_id="mixed-downgrade-losing-old-scheduler",
+        ) as call:
+            return control.schedule_file_change_page(call, schedule)
+
+    engine = create_database_engine(migration_configuration)
+    alembic_configuration = Config(ROOT / "alembic.ini")
+    migration_fence_key = "context-engine.file-change-scheduling-migration-fence"
+    try:
+        with engine.connect() as blocker:
+            blocker_transaction = blocker.begin()
+            try:
+                blocker.execute(
+                    text("LOCK TABLE context_source IN ACCESS SHARE MODE")
+                )
+                with ThreadPoolExecutor(max_workers=2) as executor:
+                    pending_downgrade = executor.submit(
+                        command.downgrade,
+                        alembic_configuration,
+                        "20260725_0031",
+                    )
+                    try:
+                        with engine.connect() as observer:
+                            deadline = monotonic() + 10
+                            while monotonic() < deadline:
+                                downgrade_holds_fence = observer.execute(
+                                    text(
+                                        """
+                                        SELECT EXISTS (
+                                            SELECT 1
+                                            FROM pg_locks AS advisory
+                                            JOIN pg_locks AS relation_lock
+                                              ON relation_lock.pid = advisory.pid
+                                             AND relation_lock.database =
+                                                 advisory.database
+                                            WHERE advisory.locktype = 'advisory'
+                                              AND advisory.mode = 'ExclusiveLock'
+                                              AND advisory.granted IS TRUE
+                                              AND advisory.database = (
+                                                SELECT database.oid
+                                                FROM pg_database AS database
+                                                WHERE database.datname =
+                                                  current_database()
+                                              )
+                                              AND advisory.classid = (
+                                                (hashtextextended(:lock_key, 0)
+                                                  >> 32) & 4294967295
+                                              )::oid
+                                              AND advisory.objid = (
+                                                hashtextextended(:lock_key, 0)
+                                                  & 4294967295
+                                              )::oid
+                                              AND advisory.objsubid = 1
+                                              AND relation_lock.relation =
+                                                'public.context_source'::regclass
+                                              AND relation_lock.mode =
+                                                'AccessExclusiveLock'
+                                              AND relation_lock.granted IS FALSE
+                                        )
+                                        """
+                                    ),
+                                    {"lock_key": migration_fence_key},
+                                ).scalar_one()
+                                if downgrade_holds_fence:
+                                    break
+                                sleep(0.01)
+                        assert downgrade_holds_fence
+                        pending_schedule = executor.submit(schedule_page)
+                        with engine.connect() as observer:
+                            deadline = monotonic() + 10
+                            while monotonic() < deadline:
+                                scheduler_waiting = observer.execute(
+                                    text(
+                                        """
+                                        SELECT EXISTS (
+                                            SELECT 1 FROM pg_locks AS waiting
+                                            JOIN pg_locks AS held
+                                              ON held.locktype = waiting.locktype
+                                             AND held.database = waiting.database
+                                             AND held.classid = waiting.classid
+                                             AND held.objid = waiting.objid
+                                             AND held.objsubid = waiting.objsubid
+                                        WHERE waiting.locktype = 'advisory'
+                                          AND waiting.mode = 'ShareLock'
+                                          AND waiting.granted IS FALSE
+                                          AND waiting.database = (
+                                            SELECT database.oid
+                                            FROM pg_database AS database
+                                            WHERE database.datname =
+                                              current_database()
+                                          )
+                                          AND waiting.classid = (
+                                            (hashtextextended(:lock_key, 0)
+                                              >> 32) & 4294967295
+                                          )::oid
+                                          AND waiting.objid = (
+                                            hashtextextended(:lock_key, 0)
+                                              & 4294967295
+                                          )::oid
+                                          AND waiting.objsubid = 1
+                                          AND held.mode = 'ExclusiveLock'
+                                          AND held.granted IS TRUE
+                                    )
+                                    """
+                                ),
+                                {"lock_key": migration_fence_key},
+                                ).scalar_one()
+                                if scheduler_waiting:
+                                    break
+                                sleep(0.01)
+                        assert scheduler_waiting
+                    finally:
+                        blocker_transaction.commit()
+                    pending_downgrade.result(timeout=10)
+                    with pytest.raises(SourceNotAvailable):
+                        pending_schedule.result(timeout=10)
+            finally:
+                if blocker_transaction.is_active:
+                    blocker_transaction.rollback()
+        assert _revision_rows(migration_configuration) == ["20260725_0031"]
+        with engine.connect() as connection:
+            assert connection.execute(
+                text(
+                    "SELECT count(*) FROM file_acquisition "
+                    "WHERE organization_id = :organization_id "
+                    "AND change_page_ref IS NOT NULL"
+                ),
+                {"organization_id": scenario.organization_id},
+            ).scalar_one() == 0
+    finally:
+        command.upgrade(alembic_configuration, "head")
+        engine.dispose()
+        _delete_issue_27_upgrade_fixture(
+            migration_configuration,
+            scenario.organization_id,
+        )
 
 
 def test_file_delete_observation_revision_refuses_accepted_baseline_downgrade(

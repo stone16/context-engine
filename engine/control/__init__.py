@@ -58,6 +58,8 @@ from engine.control.file_change_pages import (
     VerifiedChangePage,
 )
 from engine.control.file_deletions import (
+    ExecutedFileDeleteObservation,
+    ExecuteFileDeleteObservation,
     FileResourceTombstone,
     TombstoneFileResource,
 )
@@ -129,6 +131,8 @@ __all__ = [
     "FileSourcePublishOutcome",
     "FileSourcePublishWatermark",
     "FileResourceTombstone",
+    "ExecuteFileDeleteObservation",
+    "ExecutedFileDeleteObservation",
     "RegisterFileSource",
     "OffboardFileSource",
     "PendingChangeCursor",
