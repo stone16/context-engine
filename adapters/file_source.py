@@ -257,25 +257,34 @@ class FileRootRegistry:
         if anchored is None:
             raise LookupError("File root is not configured")
         observed: list[tuple[FileImportPath, bytes]] = []
+        snapshots: dict[str, tuple[_DirectoryEntry, ...]] = {}
         self._observe_directory(
-            root_ref,
             anchored.descriptor,
             relative_prefix="",
             observed=observed,
+            snapshots=snapshots,
+        )
+        self._revalidate_directory_tree(
+            anchored.descriptor,
+            relative_prefix="",
+            snapshots=snapshots,
         )
         return tuple(sorted(observed, key=lambda item: item[0].value.encode("utf-8")))
 
     def _observe_directory(
         self,
-        root_ref: FileRootRef,
         descriptor: int,
         *,
         relative_prefix: str,
         observed: list[tuple[FileImportPath, bytes]],
+        snapshots: dict[str, tuple[_DirectoryEntry, ...]],
     ) -> None:
         """Descend one already-opened directory and verify its stable snapshot."""
 
         initial = _directory_snapshot(descriptor, relative_prefix)
+        if relative_prefix in snapshots:
+            raise RuntimeError("File root observation is unstable")
+        snapshots[relative_prefix] = initial
         for entry in initial:
             if entry.is_directory:
                 try:
@@ -290,10 +299,10 @@ class FileRootRegistry:
                     if _file_identity(os.fstat(child)) != entry.identity:
                         raise RuntimeError("File root observation is unstable")
                     self._observe_directory(
-                        root_ref,
                         child,
                         relative_prefix=entry.relative_path,
                         observed=observed,
+                        snapshots=snapshots,
                     )
                 finally:
                     os.close(child)
@@ -329,6 +338,43 @@ class FileRootRegistry:
                 raise LookupError("File root exceeds the configured scan bound")
         if _directory_snapshot(descriptor, relative_prefix) != initial:
             raise RuntimeError("File root observation is unstable")
+
+    def _revalidate_directory_tree(
+        self,
+        descriptor: int,
+        *,
+        relative_prefix: str,
+        snapshots: Mapping[str, tuple[_DirectoryEntry, ...]],
+    ) -> None:
+        """Revalidate every directory and file after the whole traversal."""
+
+        expected = snapshots.get(relative_prefix)
+        if (
+            expected is None
+            or _directory_snapshot(descriptor, relative_prefix) != expected
+        ):
+            raise RuntimeError("File root observation is unstable")
+        for entry in expected:
+            if not entry.is_directory:
+                continue
+            try:
+                child = os.open(
+                    entry.name,
+                    _DIRECTORY_OPEN_FLAGS,
+                    dir_fd=descriptor,
+                )
+            except OSError:
+                raise RuntimeError("File root observation is unstable") from None
+            try:
+                if _file_identity(os.fstat(child)) != entry.identity:
+                    raise RuntimeError("File root observation is unstable")
+                self._revalidate_directory_tree(
+                    child,
+                    relative_prefix=entry.relative_path,
+                    snapshots=snapshots,
+                )
+            finally:
+                os.close(child)
 
     def close(self) -> None:
         """Release the server-owned directory capabilities."""

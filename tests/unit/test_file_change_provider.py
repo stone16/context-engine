@@ -567,6 +567,46 @@ def test_scan_revalidates_earlier_files_after_reading_the_whole_root(
     assert type(outcome) is ProviderRetryableUnavailable
 
 
+def test_scan_revalidates_earlier_sibling_subtrees_after_the_whole_tree(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "registered-root"
+    earlier = root / "aa"
+    later = root / "zz"
+    earlier.mkdir(parents=True)
+    later.mkdir()
+    earlier_path = earlier / "a.md"
+    earlier_path.write_bytes(b"A1")
+    (later / "b.md").write_bytes(b"B1")
+    registry = FileRootRegistry(
+        {FileRootRef("handbook-root"): root},
+        limits=FileReadLimits(max_file_bytes=1_024),
+    )
+    provider_proofs, _ = _proofs()
+    provider = FileChangeProvider(registry, proofs=provider_proofs)
+    original_read = FileRootRegistry._read_regular_at
+    changed = False
+
+    def change_earlier_subtree(
+        self: FileRootRegistry,
+        parent_descriptor: int,
+        name: str,
+    ) -> tuple[bytes, os.stat_result]:
+        nonlocal changed
+        if name == "b.md" and not changed:
+            earlier_path.write_bytes(b"A2")
+            changed = True
+        return original_read(self, parent_descriptor, name)
+
+    with patch.object(FileRootRegistry, "_read_regular_at", change_earlier_subtree):
+        outcome = provider.read_changes(
+            _source(), InitialScan(), ChangeLimit(2)
+        )
+
+    assert changed is True
+    assert type(outcome) is ProviderRetryableUnavailable
+
+
 def test_scan_closes_when_file_disappears_before_post_read_stat(
     tmp_path: Path,
 ) -> None:
