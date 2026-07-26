@@ -35,6 +35,13 @@ from adapters.http.dogfood import (
 )
 from adapters.pgvector import DEFAULT_VECTOR_CANDIDATE_LIMIT
 from applications.api import main as api_main
+from applications.dogfood_evaluation import (
+    EvidenceIdentity,
+    GoldenCase,
+    GoldenExpectation,
+    GoldenSet,
+    evaluate_golden_set,
+)
 from engine.persistence import (
     DatabaseConfiguration,
     PostgreSQLAccessPolicyControl,
@@ -311,6 +318,23 @@ def _resolve(client: TestClient, secret: str = SECRET) -> Any:
     )
 
 
+class _PublicTestClientCaller:
+    def __init__(self, client: TestClient) -> None:
+        self._client = client
+
+    def acquire(self, *, query: str, request_id: str) -> dict[str, object]:
+        response = self._client.post(
+            "/v0/resolve",
+            headers={
+                "Authorization": f"Bearer {SECRET}",
+                "X-Context-Request-Id": request_id,
+            },
+            json={"kind": "acquire", "need": {"query": query}},
+        )
+        assert response.status_code == 200
+        return cast(dict[str, object], response.json())
+
+
 @pytest.mark.security_evidence(id="RUNTIME-DOGFOOD-CARRIER-102", layer="runtime")
 def test_dogfood_served_composition_delivers_release_scoped_file_evidence_before_limit(
     request: pytest.FixtureRequest,
@@ -388,6 +412,85 @@ def test_dogfood_rejects_an_active_release_with_an_unbound_embedding_profile(
             _environment(configuration, runtime_configuration),
             host="127.0.0.1",
         )
+
+
+def test_dogfood_evaluator_scores_real_public_resolve_evidence(
+    request: pytest.FixtureRequest,
+    tmp_path: Path,
+    migration_configuration: DatabaseConfiguration,
+    runtime_configuration: DatabaseConfiguration,
+    control_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+    guarded_worker_engine: Engine,
+) -> None:
+    scenario, user_id, target = _publish(
+        request,
+        tmp_path,
+        migration_configuration,
+        guarded_control_engine,
+        guarded_worker_engine,
+    )
+    configuration = _configuration(scenario, user_id)
+    client = TestClient(
+        create_dogfood_app(
+            configuration,
+            _environment(configuration, runtime_configuration),
+            host="127.0.0.1",
+        )
+    )
+    identity = EvidenceIdentity(
+        source_ref=target.source_ref,
+        resource_ref=target.resource_ref,
+        revision_ref=target.revision_ref,
+        fragment_ref=target.fragment_ref,
+    )
+    golden_set = GoldenSet(
+        name="integration-maintainer-notes-v0",
+        cases=tuple(
+            GoldenCase(
+                case_ref=f"integration-{index:02d}",
+                query=QUERY,
+                expected_evidence=(
+                    GoldenExpectation(path="handbook.md", identity=identity),
+                ),
+            )
+            for index in range(20)
+        ),
+    )
+
+    report = evaluate_golden_set(
+        golden_set,
+        _PublicTestClientCaller(client),
+    )
+
+    quality = report["quality"]
+    assert isinstance(quality, dict)
+    assert quality["casePassRate"] == 1.0
+    assert report["reliability"] == {"status": "not-evaluated"}
+    assert report["budget"] == {"status": "not-evaluated"}
+
+    control_engine = create_database_engine(control_configuration)
+    try:
+        PostgreSQLAccessPolicyControl(control_engine).change_access(
+            ResourceAccessRevocation(
+                organization_id=scenario.organization_id,
+                resource_ref=target.resource_ref,
+                principal_ref="principal:file-reader",
+                expected_access_version=1,
+            )
+        )
+    finally:
+        control_engine.dispose()
+    regressed = evaluate_golden_set(
+        golden_set,
+        _PublicTestClientCaller(client),
+    )
+    regressed_quality = regressed["quality"]
+    assert isinstance(regressed_quality, dict)
+    assert regressed_quality["casePassRate"] == 0.0
+    recall = regressed_quality["evidenceRecall"]
+    assert isinstance(recall, dict)
+    assert recall["value"] == 0.0
 
 
 @pytest.mark.security_evidence(id="RUNTIME-DOGFOOD-AUTH-102", layer="runtime")

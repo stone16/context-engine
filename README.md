@@ -167,6 +167,11 @@ network exposure, group/public delivery, dogfood `OpenCitation`, `Continue`, hyb
 non-File providers remain `NOT_ACTIVE`; see
 [ADR-0068](./docs/decisions/0068-activate-loopback-dogfood-runtime.md).
 
+Once the bounded API is running, the maintainer caller and Quality runner are
+documented in [`eval/README.md`](./eval/README.md). They call only the frozen
+resolve HTTP operation; the evaluation report remains separate from the
+security release gate.
+
 ### Run the worker
 
 The Supply worker is a separate process from the API, with one entry point and
