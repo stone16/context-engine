@@ -269,7 +269,7 @@ def _worker_database_time(engine: Engine) -> datetime:
         raise FileImportUnavailable("File import clock is unavailable") from None
     if type(checked_at) is not datetime or checked_at.tzinfo is None:
         raise FileImportUnavailable("File import clock is unavailable")
-    return checked_at
+    return checked_at.astimezone(UTC)
 
 
 def _run_file_dispatch(*, single_cycle: bool) -> int:

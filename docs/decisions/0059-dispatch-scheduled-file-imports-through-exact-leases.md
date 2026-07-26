@@ -54,7 +54,9 @@ fresh nonce, constructs the existing `FileImportLeaseRedemption`, and invokes
 `PostgreSQLFileImportWorker`. Immediate verification reads the worker database
 clock at whole-second protocol precision, matching the database-issued lease
 timestamps and the redemption function's authoritative expiry check rather than
-depending on host-clock alignment. Dispatch loads every served logical root from one
+depending on host-clock alignment. PostgreSQL `timestamptz` results are normalized
+from their session-zone representation to UTC before the strict lease contract is
+constructed or verified. Dispatch loads every served logical root from one
 server-owned JSON registry, so cross-Organization selection cannot consume an
 eligible job merely because another configured root was omitted. A claim is
 marked internally for downgrade

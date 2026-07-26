@@ -45,6 +45,14 @@ def _utc_now() -> datetime:
     return datetime.now(UTC).replace(microsecond=0)
 
 
+def _database_timestamp_utc(field_name: str, value: object) -> datetime:
+    """Normalize one PostgreSQL timestamptz representation to protocol UTC."""
+
+    if type(value) is not datetime or value.tzinfo is None:
+        raise ValueError(f"{field_name} must be timezone-aware")
+    return _require_utc(field_name, value.astimezone(UTC))
+
+
 @dataclass(frozen=True, slots=True)
 class WorkerLeaseIssueRequest:
     """Trusted durable-row locator; the issuer owns lease time and entropy."""
@@ -264,8 +272,8 @@ class PostgreSQLFileDispatchAuthority:
                 ).one_or_none()
             if row is None:
                 return FileDispatchNoWork()
-            issued_at = _require_utc("issued_at", row.issued_at)
-            expires_at = _require_utc("expires_at", row.expires_at)
+            issued_at = _database_timestamp_utc("issued_at", row.issued_at)
+            expires_at = _database_timestamp_utc("expires_at", row.expires_at)
             organization_id = _require_uuid(
                 "organization_id", row.organization_id
             )

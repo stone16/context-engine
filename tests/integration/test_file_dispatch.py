@@ -5,6 +5,7 @@ import os
 import queue
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC
 from hashlib import sha256
 from pathlib import Path
 from threading import Thread
@@ -13,13 +14,14 @@ from typing import TextIO, cast
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import Engine, text
+from sqlalchemy import Engine, create_engine, text
 from sqlalchemy.exc import DBAPIError
 from uvicorn import Config, Server
 
 from adapters.exact_phrase import PostgreSQLExactPhraseCandidateIndex
 from adapters.file_source import FileChangeProvider, FileReadLimits, FileRootRegistry
 from adapters.http.app import create_app
+from applications.worker import _worker_database_time
 from engine.control import (
     ChangeLimit,
     ControlOperation,
@@ -234,6 +236,42 @@ def test_scheduler_claims_only_current_page_scheduled_upsert(
 
     with pytest.raises(DBAPIError), guarded_scheduler_engine.connect() as connection:
         connection.execute(text("SELECT count(*) FROM file_import_job"))
+
+
+def test_dispatch_normalizes_non_utc_database_sessions(
+    tmp_path: Path,
+    guarded_control_engine: Engine,
+    scheduler_configuration: DatabaseConfiguration,
+    worker_configuration: DatabaseConfiguration,
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "offset.md").write_text("# Offset\n", encoding="utf-8")
+    _schedule_one(
+        root=root,
+        guarded_control_engine=guarded_control_engine,
+        migration_configuration=migration_configuration,
+    )
+    session_options = {"options": "-c timezone=Asia/Shanghai"}
+    scheduler_engine = create_engine(
+        scheduler_configuration.url,
+        connect_args=session_options,
+    )
+    worker_engine = create_engine(
+        worker_configuration.url,
+        connect_args=session_options,
+    )
+    try:
+        claim = _dispatch_authority(scheduler_engine).claim()
+        assert type(claim) is FileDispatchLease
+        assert claim.issued_at.utcoffset() == UTC.utcoffset(claim.issued_at)
+        assert claim.expires_at.utcoffset() == UTC.utcoffset(claim.expires_at)
+        checked_at = _worker_database_time(worker_engine)
+        assert checked_at.utcoffset() == UTC.utcoffset(checked_at)
+    finally:
+        scheduler_engine.dispose()
+        worker_engine.dispose()
 
 
 def test_revoked_audience_returns_content_free_no_work(

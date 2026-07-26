@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from threading import Event
 from typing import cast
@@ -25,6 +25,7 @@ from engine.persistence.worker_jobs import (
     FileDispatchLease,
     FileDispatchNoWork,
     PostgreSQLFileDispatchAuthority,
+    _database_timestamp_utc,
 )
 from engine.supply import (
     WorkerLeaseCodec,
@@ -274,6 +275,59 @@ class _FailingClockEngine:
 def test_dispatch_database_clock_failure_is_generic() -> None:
     with pytest.raises(FileImportUnavailable, match="clock is unavailable"):
         _worker_database_time(cast(Engine, _FailingClockEngine()))
+
+
+class _OffsetClockResult:
+    def scalar_one(self) -> datetime:
+        return datetime(
+            2026,
+            7,
+            25,
+            18,
+            tzinfo=timezone(timedelta(hours=8)),
+        )
+
+
+class _OffsetClockConnection:
+    def __enter__(self) -> _OffsetClockConnection:
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        return None
+
+    def execute(self, _statement: object) -> _OffsetClockResult:
+        return _OffsetClockResult()
+
+
+class _OffsetClockEngine:
+    def connect(self) -> _OffsetClockConnection:
+        return _OffsetClockConnection()
+
+
+def test_dispatch_database_clock_normalizes_session_offset_to_utc(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "applications.worker.assert_worker_role", lambda _connection: None
+    )
+
+    assert _worker_database_time(cast(Engine, _OffsetClockEngine())) == datetime(
+        2026, 7, 25, 10, tzinfo=UTC
+    )
+
+
+def test_dispatch_claim_normalizes_database_timestamp_offset_to_utc() -> None:
+    session_timestamp = datetime(
+        2026,
+        7,
+        25,
+        18,
+        tzinfo=timezone(timedelta(hours=8)),
+    )
+
+    assert _database_timestamp_utc("issued_at", session_timestamp) == datetime(
+        2026, 7, 25, 10, tzinfo=UTC
+    )
 
 
 def test_dispatch_database_failure_does_not_retain_generated_nonce(
