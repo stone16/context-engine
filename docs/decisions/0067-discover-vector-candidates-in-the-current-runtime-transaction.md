@@ -30,7 +30,8 @@ deterministic assembly independent of untrusted candidate order.
 ## Decision
 
 `PostgreSQLVectorCandidateIndex` uses the explicit `EmbeddingProvider` seam and
-requires exact compatibility with the stored 384-dimensional profile. Each
+requires exact dimensional compatibility with the stored 384-dimensional
+vectors. Each
 `Acquire` embeds only its exact query, validates the provider response through
 the same float32 contract used by publication, and collapses provider failure
 to one content-free availability category. HTTP maps that category to the
@@ -68,6 +69,14 @@ smuggled into this product-lane index change.
 The served composition does not activate the index here. Its default remains
 reject-all and reports Runtime delivery as not active.
 
+The current `EmbeddingProfile` records dimension only. It does not prove that
+publication and query vectors share one immutable model and input profile, so
+this slice does not claim semantic embedding-profile compatibility. A served
+external provider is prohibited until storage or immutable Release lineage
+binds that identity and Runtime rejects mismatches. The bounded dogfood
+activation may use only the deterministic network-free twin over a freshly
+reimported corpus produced by that same twin.
+
 An external query-embedding provider is also not eligible for served
 composition while Runtime cannot meter and enforce that call against the
 effective PackageBudget. The follow-up activation must either add that usage
@@ -96,7 +105,8 @@ can justify changing the sealed path.
 
 ## Consequences
 
-- Query embedding and vector discovery share one explicit profile with Supply.
+- Query embedding and publication share one dimension contract; semantic
+  model/input-profile identity is not yet persisted or release-bound.
 - FORCE RLS narrows discovery as defense in depth; it never grants authority.
 - Filtered HNSW scans can continue within a fixed work ceiling instead of
   silently stopping after the first filtered approximate batch.
@@ -121,6 +131,10 @@ reranking remain separate evidence-triggered decisions.
 
 Revisit before any served composition admits an external query-embedding
 provider without exact PackageBudget usage propagation.
+
+Revisit before any served external provider or mixed-origin corpus can be used
+without immutable publication/query embedding-profile identity and mismatch
+rejection.
 
 Revisit before any served composition can limit ANN candidates without first
 applying the current Kernel-computed EffectiveScope as a removal-only filter.
