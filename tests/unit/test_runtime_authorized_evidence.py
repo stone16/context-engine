@@ -153,9 +153,13 @@ class HostileCandidateIndex:
         self.calls = 0
 
     def discover(
-        self, request: Acquire, projection_session: object
+        self,
+        request: Acquire,
+        projection_session: object,
+        *,
+        effective_scope: object,
     ) -> tuple[CandidateRef, ...]:
-        del request, projection_session
+        del request, projection_session, effective_scope
         self.calls += 1
         return self.ranked
 
@@ -181,8 +185,9 @@ class RecordingMaterializedPort:
         limit: int,
         source_refs: tuple[str, ...] | None,
         resource_refs: tuple[str, ...] | None,
+        effective_scope: object,
     ) -> tuple[()]:
-        del query_embedding, limit, source_refs, resource_refs
+        del query_embedding, limit, source_refs, resource_refs, effective_scope
         return ()
 
     def source_is_active(self, source_ref: UUID) -> bool:

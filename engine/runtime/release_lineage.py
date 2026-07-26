@@ -18,12 +18,20 @@ PACKAGE_SCHEMA_REF_V0: Final = "context-package-openapi-v0"
 CONTENT_PROFILE_REF_V0: Final = "content-materialized-v0"
 CONTENT_SCHEMA_REF_V0: Final = "context-content-schema-v1"
 INDEX_PROFILE_REF_V0: Final = "index-exact-phrase-v0"
+DOGFOOD_VECTOR_INDEX_PROFILE_REF_V1: Final = (
+    "index-file-pgvector-deterministic-twin-v1"
+)
 INDEX_SCHEMA_REF_V0: Final = "context-index-schema-v1"
 CONTENT_PROFILE_DIGEST_V0: Final = sha256(
     b"context-engine.content-profile.materialized-v0"
 ).hexdigest()
 INDEX_PROFILE_DIGEST_V0: Final = sha256(
     b"context-engine.index-profile.exact-phrase-v0"
+).hexdigest()
+DOGFOOD_VECTOR_INDEX_PROFILE_DIGEST_V1: Final = sha256(
+    b"context-engine.index-profile.file-pgvector-v1\x00"
+    b"embedding-model:deterministic-twin-v1\x00"
+    b"embedding-input:contextual-fragment-v1"
 ).hexdigest()
 RUNTIME_PROFILE_DIGEST_V0: Final = sha256(
     b"context-engine.runtime-profile.materialized-openapi-v0"
@@ -148,14 +156,23 @@ class ActiveRuntimeRelease:
                 raise ValueError(
                     "active release Revisions must be unique and canonical"
                 )
+        supported_index_profile = (
+            self.index_profile_ref,
+            self.index_profile_digest,
+        ) in {
+            (INDEX_PROFILE_REF_V0, INDEX_PROFILE_DIGEST_V0),
+            (
+                DOGFOOD_VECTOR_INDEX_PROFILE_REF_V1,
+                DOGFOOD_VECTOR_INDEX_PROFILE_DIGEST_V1,
+            ),
+        }
         if (
             self.content_profile_ref != CONTENT_PROFILE_REF_V0
             or self.content_schema_ref != CONTENT_SCHEMA_REF_V0
-            or self.index_profile_ref != INDEX_PROFILE_REF_V0
+            or not supported_index_profile
             or self.index_schema_ref != INDEX_SCHEMA_REF_V0
             or self.runtime_profile_ref != RUNTIME_PROFILE_REF_V0
             or self.content_profile_digest != CONTENT_PROFILE_DIGEST_V0
-            or self.index_profile_digest != INDEX_PROFILE_DIGEST_V0
             or self.runtime_profile_digest != RUNTIME_PROFILE_DIGEST_V0
             or self.tokenizer_ref != RUNTIME_TOKENIZER_REF_V0
             or self.package_schema_ref != PACKAGE_SCHEMA_REF_V0
@@ -183,6 +200,8 @@ __all__ = [
     "CONTENT_SCHEMA_REF_V0",
     "CURATION_PROFILE_DIGEST_V0",
     "CURATION_PROFILE_REF_V0",
+    "DOGFOOD_VECTOR_INDEX_PROFILE_DIGEST_V1",
+    "DOGFOOD_VECTOR_INDEX_PROFILE_REF_V1",
     "INDEX_PROFILE_DIGEST_V0",
     "INDEX_PROFILE_REF_V0",
     "INDEX_SCHEMA_REF_V0",

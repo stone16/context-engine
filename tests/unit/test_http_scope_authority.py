@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import pickle
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 from datetime import UTC, datetime, timedelta, timezone
 from typing import Any, cast
 from uuid import UUID
@@ -9,16 +9,30 @@ from uuid import UUID
 import pytest
 
 from adapters.http.scope_authority import (
+    DogfoodFileScopeAuthority,
     MissingTrustedScopeAuthority,
     ScopeAuthority,
     ScopeAuthorityIdentity,
+    ScopeAuthorityUnavailable,
 )
-from engine.runtime.scope import MISSING_TRUSTED_SCOPE
+from engine.runtime.materialized import (
+    MaterializedProjectionPort,
+    MaterializedScopeOperands,
+    _close_materialized_projection_scope,
+    _construct_materialized_projection_session,
+    _open_materialized_projection_scope,
+)
+from engine.runtime.release_lineage import (
+    DOGFOOD_VECTOR_INDEX_PROFILE_DIGEST_V1,
+    DOGFOOD_VECTOR_INDEX_PROFILE_REF_V1,
+)
+from engine.runtime.scope import MISSING_TRUSTED_SCOPE, ScopeSet, ScopeTarget
 from engine.runtime.scope_authority import (
     TrustedScopeSnapshot,
     _require_active_trusted_scope_snapshot,
     _trusted_operands_from_snapshot,
 )
+from tests.support.releases import active_runtime_release
 
 CHECKED_AT = datetime(2026, 7, 21, 9, 30, tzinfo=UTC)
 ORGANIZATION_ID = UUID("81e18bca-86a1-478a-937d-7675c6fe69b0")
@@ -170,3 +184,94 @@ def test_scope_authority_identity_repr_does_not_expose_trusted_refs() -> None:
     assert "context.answer" not in rendered
     assert "request-1" not in rendered
     assert "binding-from-auth" not in rendered
+
+
+def test_dogfood_scope_carries_independent_durable_operands() -> None:
+    targets = tuple(
+        ScopeTarget(ORGANIZATION_ID, "source:file", f"resource:{name}")
+        for name in ("a", "b", "c", "d", "e")
+    )
+
+    class OperandPort:
+        def current_scope_operands(
+            self,
+            active_revision_ids: tuple[UUID, ...],
+        ) -> MaterializedScopeOperands:
+            assert active_revision_ids == (
+                UUID("0425904c-480f-4022-930f-15e8dd949a7e"),
+            )
+            return MaterializedScopeOperands(
+                organization_boundary=frozenset(targets),
+                membership_rights=frozenset(targets[:4]),
+                principal_grants=frozenset(targets[:3]),
+                source_native_acl=frozenset(targets[:2]),
+                resource_acl=frozenset(targets[:1]),
+            )
+
+        def source_is_active(self, source_ref: UUID) -> bool:
+            del source_ref
+            return True
+
+        def discover_vector(self, *args: object, **kwargs: object) -> tuple[()]:
+            del args, kwargs
+            return ()
+
+        def discover_exact_phrase(self, phrase_digest: str) -> tuple[()]:
+            del phrase_digest
+            return ()
+
+        def observe_publication(self, candidate_ref: object) -> None:
+            del candidate_ref
+
+        def locate(self, candidate_ref: object) -> None:
+            del candidate_ref
+
+        def project(self, locator: object) -> None:
+            del locator
+
+    projection_scope = _open_materialized_projection_scope()
+    session = _construct_materialized_projection_session(
+        authority_scope=projection_scope,
+        port=cast(MaterializedProjectionPort, OperandPort()),
+    )
+    release = active_runtime_release(
+        ORGANIZATION_ID,
+        active_revision_refs=("0425904c-480f-4022-930f-15e8dd949a7e",),
+        index_profile_ref=DOGFOOD_VECTOR_INDEX_PROFILE_REF_V1,
+        index_profile_digest=DOGFOOD_VECTOR_INDEX_PROFILE_DIGEST_V1,
+    )
+    bound = replace(
+        identity(),
+        materialized_projection_session=session,
+        active_runtime_release=release,
+    )
+    authority = DogfoodFileScopeAuthority(
+        organization_id=ORGANIZATION_ID,
+        principal_ref="principal-from-auth",
+        agent_version_ref="agent-version-from-server",
+        purpose="context.answer",
+    )
+    try:
+        with authority.current_scope(bound) as snapshot:
+            operands = _trusted_operands_from_snapshot(snapshot)
+            assert operands.organization_boundary == ScopeSet(frozenset(targets))
+            assert operands.membership_rights == ScopeSet(frozenset(targets[:4]))
+            assert operands.principal_grants == ScopeSet(frozenset(targets[:3]))
+            assert operands.source_native_acl == ScopeSet(frozenset(targets[:2]))
+            assert operands.resource_acl == ScopeSet(frozenset(targets[:1]))
+            assert operands.agent_ceiling == ScopeSet(frozenset(targets))
+            assert operands.purpose_policy == ScopeSet(frozenset(targets))
+        for mismatched in (
+            replace(bound, agent_version_ref="agent-version-not-authorized"),
+            replace(bound, purpose="context.not-authorized"),
+        ):
+            with (
+                pytest.raises(
+                    ScopeAuthorityUnavailable,
+                    match="scope binding is unavailable",
+                ),
+                authority.current_scope(mismatched),
+            ):
+                pass
+    finally:
+        _close_materialized_projection_scope(projection_scope)

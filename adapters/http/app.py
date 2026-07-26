@@ -5,7 +5,7 @@ from contextlib import ExitStack
 from datetime import UTC, datetime
 from hashlib import sha256
 from json import loads
-from typing import Annotated, Final
+from typing import Annotated, Final, NoReturn
 from uuid import UUID, uuid4
 
 from fastapi import Body, Depends, FastAPI, Header, Request, Response, Security
@@ -175,6 +175,34 @@ class DuplicateJsonObjectKey(ValueError):
     """Strict JSON decoding found an ambiguous object member."""
 
 
+class _RuntimeDeliveryActivation:
+    """Nominal receipt issued only by a validated served composition."""
+
+    __slots__ = ("_seal",)
+
+    def __init__(self) -> None:
+        raise TypeError("Runtime delivery activation is not constructible")
+
+    def __reduce__(self) -> NoReturn:
+        raise TypeError("Runtime delivery activation is not serializable")
+
+
+_RUNTIME_DELIVERY_ACTIVATION_SEAL = object()
+
+
+def _construct_runtime_delivery_activation() -> _RuntimeDeliveryActivation:
+    activation = object.__new__(_RuntimeDeliveryActivation)
+    object.__setattr__(activation, "_seal", _RUNTIME_DELIVERY_ACTIVATION_SEAL)
+    return activation
+
+
+def _is_runtime_delivery_active(value: object) -> bool:
+    return (
+        type(value) is _RuntimeDeliveryActivation
+        and getattr(value, "_seal", None) is _RUNTIME_DELIVERY_ACTIVATION_SEAL
+    )
+
+
 def _utc_now() -> datetime:
     return datetime.now(UTC)
 
@@ -219,6 +247,7 @@ def create_app(
     clock: Callable[[], datetime] = _utc_now,
     request_id_factory: Callable[[], str] = _new_request_id,
     transport_profile: HttpTransportProfile = HTTP_TRANSPORT_PROFILE_V1,
+    runtime_delivery_activation: _RuntimeDeliveryActivation | None = None,
 ) -> FastAPI:
     """Construct API; the module-level composition remains reject-all."""
 
@@ -234,6 +263,10 @@ def create_app(
         )
     if type(selected_runtime) is not Runtime:
         raise TypeError("runtime must be the sealed Runtime composition")
+    if runtime_delivery_activation is not None and not _is_runtime_delivery_active(
+        runtime_delivery_activation
+    ):
+        raise TypeError("Runtime delivery activation has the wrong nominal type")
     selected_authenticator = authenticator or RejectingAuthenticator()
     selected_organization_authority = (
         organization_authority or RejectingOrganizationAuthority()
@@ -393,7 +426,10 @@ def create_app(
 
     @app.get("/health", include_in_schema=False)
     def health() -> dict[str, str]:
-        return HEALTH_RESPONSE.copy()
+        response = HEALTH_RESPONSE.copy()
+        if _is_runtime_delivery_active(runtime_delivery_activation):
+            response["runtime_delivery"] = "ACTIVE"
+        return response
 
     @app.post(
         LEGACY_RESOLVE_PATH,
@@ -545,6 +581,12 @@ def create_app(
                             current_membership_verification.authentication_binding_ref
                         ),
                         checked_at=current_membership_verification.checked_at,
+                        materialized_projection_session=(
+                            current_membership_verification.materialized_projection_session
+                        ),
+                        active_runtime_release=(
+                            current_membership_verification.active_runtime_release
+                        ),
                     )
                 except (TypeError, ValueError):
                     raise TransportAuthenticationFailed from None

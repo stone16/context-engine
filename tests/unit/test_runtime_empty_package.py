@@ -84,8 +84,14 @@ class ContentIoSpy:
         self.provider_calls = 0
         self.source_content_calls = 0
 
-    def discover(self, request: Acquire, projection_session: object) -> tuple[()]:
-        del projection_session
+    def discover(
+        self,
+        request: Acquire,
+        projection_session: object,
+        *,
+        effective_scope: Any,
+    ) -> tuple[()]:
+        del request, projection_session, effective_scope
         self.index_calls += 1
         return ()
 
@@ -480,7 +486,11 @@ def test_content_io_spy_would_detect_every_runtime_dependency_call() -> None:
     candidate = runtime(spy)
     request = Acquire(need=ContextNeed(query="mutation control"))
 
-    candidate._content_io.index.discover(request, cast(Any, None))
+    candidate._content_io.index.discover(
+        request,
+        cast(Any, None),
+        effective_scope=cast(Any, None),
+    )
     candidate._content_io.provider.authorize_and_project()
     candidate._content_io.source_content.read_content()
 

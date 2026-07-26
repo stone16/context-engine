@@ -33,6 +33,7 @@ dev = [
 
 [project.scripts]
 context-engine-api = "applications.api:main"
+context-engine-dogfood-seed = "applications.dogfood:main"
 context-engine-worker = "applications.worker:main"
 
 [tool.hatch.build.targets.wheel]

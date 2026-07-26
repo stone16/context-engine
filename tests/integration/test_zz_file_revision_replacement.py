@@ -30,6 +30,7 @@ from engine.runtime.contracts import Acquire
 from engine.runtime.evidence import CandidateRef
 from engine.runtime.materialized import MaterializedProjectionSession
 from engine.runtime.package_digest import QueryDigestKeyring
+from engine.runtime.scope import EffectiveScope
 from engine.supply import (
     MarkdownCompilerConfig,
     ParsedDocument,
@@ -298,8 +299,14 @@ class _BlockingCandidateIndex:
         self,
         request: Acquire,
         projection_session: MaterializedProjectionSession,
+        *,
+        effective_scope: EffectiveScope,
     ) -> tuple[CandidateRef, ...]:
-        candidates = self._inner.discover(request, projection_session)
+        candidates = self._inner.discover(
+            request,
+            projection_session,
+            effective_scope=effective_scope,
+        )
         self.discovered.set()
         if not self.release.wait(timeout=5):
             raise AssertionError("candidate discovery barrier timed out")

@@ -9,6 +9,7 @@ from engine.runtime.materialized import (
     MaterializedProjectionSession,
     _discover_materialized_exact_phrase,
 )
+from engine.runtime.scope import EffectiveScope
 
 
 class PostgreSQLExactPhraseCandidateIndex:
@@ -18,9 +19,13 @@ class PostgreSQLExactPhraseCandidateIndex:
         self,
         request: Acquire,
         projection_session: MaterializedProjectionSession,
+        *,
+        effective_scope: EffectiveScope,
     ) -> tuple[CandidateRef, ...]:
         if type(request) is not Acquire:
             raise TypeError("exact phrase discovery requires Acquire")
+        if type(effective_scope) is not EffectiveScope:
+            raise TypeError("exact phrase discovery requires EffectiveScope")
         return _discover_materialized_exact_phrase(
             projection_session,
             exact_phrase_digest(request.need.query),

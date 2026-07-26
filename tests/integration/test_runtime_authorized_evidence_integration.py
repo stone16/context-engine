@@ -195,9 +195,13 @@ class HostileCandidateIndex:
         self.calls: list[Acquire] = []
 
     def discover(
-        self, request: Acquire, projection_session: object
+        self,
+        request: Acquire,
+        projection_session: object,
+        *,
+        effective_scope: object,
     ) -> tuple[CandidateRef, ...]:
-        del projection_session
+        del projection_session, effective_scope
         self.calls.append(request)
         return self._ranked
 

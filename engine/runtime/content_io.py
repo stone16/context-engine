@@ -7,6 +7,7 @@ from typing import Protocol
 from engine.runtime.contracts import Acquire
 from engine.runtime.evidence import CandidateRef
 from engine.runtime.materialized import MaterializedProjectionSession
+from engine.runtime.scope import EffectiveScope
 
 __all__ = [
     "CandidateIndex",
@@ -36,6 +37,8 @@ class CandidateIndex(Protocol):
         self,
         request: Acquire,
         projection_session: MaterializedProjectionSession,
+        *,
+        effective_scope: EffectiveScope,
     ) -> tuple[CandidateRef, ...]: ...
 
 
@@ -69,7 +72,10 @@ class _ProhibitedCandidateIndex:
         self,
         request: Acquire,
         projection_session: MaterializedProjectionSession,
+        *,
+        effective_scope: EffectiveScope,
     ) -> tuple[()]:
+        del request, projection_session, effective_scope
         raise RuntimeError("candidate index is prohibited on the empty Package path")
 
 

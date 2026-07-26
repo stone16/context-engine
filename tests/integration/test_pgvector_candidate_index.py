@@ -32,6 +32,7 @@ from engine.runtime.contracts import Acquire
 from engine.runtime.evidence import CandidateRef
 from engine.runtime.materialized import MaterializedProjectionSession
 from engine.runtime.package_digest import QueryDigestKeyring
+from engine.runtime.scope import EffectiveScope, ScopeTarget
 from engine.supply import EmbeddingProfile, EmbeddingProviderUnavailable
 from tests.integration.test_file_import_tracer import (
     _ExactScopeAuthority,
@@ -68,8 +69,14 @@ class _RecordingVectorCandidateIndex:
         self,
         request: Acquire,
         projection_session: MaterializedProjectionSession,
+        *,
+        effective_scope: EffectiveScope,
     ) -> tuple[CandidateRef, ...]:
-        candidates = self.inner.discover(request, projection_session)
+        candidates = self.inner.discover(
+            request,
+            projection_session,
+            effective_scope=effective_scope,
+        )
         self.calls.append(candidates)
         return candidates
 
@@ -85,8 +92,14 @@ class _BlockingVectorCandidateIndex:
         self,
         request: Acquire,
         projection_session: MaterializedProjectionSession,
+        *,
+        effective_scope: EffectiveScope,
     ) -> tuple[CandidateRef, ...]:
-        candidates = self.inner.discover(request, projection_session)
+        candidates = self.inner.discover(
+            request,
+            projection_session,
+            effective_scope=effective_scope,
+        )
         self.calls.append(candidates)
         self.discovered.set()
         if not self.release.wait(timeout=10):
@@ -312,12 +325,27 @@ def _ann_plan_and_exact_result(
     *,
     source_refs: tuple[str, ...] | None = None,
     resource_refs: tuple[str, ...] | None = None,
+    effective_scope: EffectiveScope | None = None,
 ) -> tuple[
     str,
     tuple[tuple[object, ...], ...],
     tuple[tuple[object, ...], ...],
 ]:
     embedding = DeterministicEmbeddingTwin().embed((QUERY,))[0]
+    if effective_scope is None:
+        effective_scope = EffectiveScope(
+            frozenset(
+                {
+                    ScopeTarget(
+                        scenario.organization_id,
+                        str(scenario.source_ref.value),
+                    )
+                }
+            )
+        )
+    resource_targets = tuple(
+        target for target in effective_scope.targets if target.resource_ref is not None
+    )
     parameters = {
         "query_embedding": "["
         + ",".join(repr(value) for value in embedding)
@@ -325,6 +353,13 @@ def _ann_plan_and_exact_result(
         "limit": 1,
         "source_refs": list(source_refs) if source_refs is not None else None,
         "resource_refs": list(resource_refs) if resource_refs is not None else None,
+        "scope_resource_organization_ids": [
+            target.organization_id for target in resource_targets
+        ],
+        "scope_resource_source_refs": [
+            target.source_ref for target in resource_targets
+        ],
+        "scope_resource_refs": [target.resource_ref for target in resource_targets],
     }
     with guarded_runtime_engine.begin() as connection:
         for name, value in _actor_settings(scenario, user_id).items():
@@ -502,7 +537,6 @@ def test_vector_candidate_http_chain_is_rls_scoped_content_free_and_bounded(
             index,
             request_id="issue-101-vector-authorized",
         ),
-        resource_refs=(candidate_a.resource_ref,),
     )
 
     assert response.status_code == 200
@@ -553,7 +587,17 @@ def test_vector_candidate_http_chain_is_rls_scoped_content_free_and_bounded(
         guarded_runtime_engine,
         org_a,
         user_a,
-        resource_refs=(candidate_a.resource_ref,),
+        effective_scope=EffectiveScope(
+            frozenset(
+                {
+                    ScopeTarget(
+                        candidate_a.organization_id,
+                        candidate_a.source_ref,
+                        candidate_a.resource_ref,
+                    )
+                }
+            )
+        ),
     )
     assert "Index Scan using ix_context_fragment_embedding_hnsw" in plan
     assert approximate == exact
@@ -608,7 +652,7 @@ def test_vector_candidate_denials_have_one_non_enumerating_empty_shape(
             )
         )
     )
-    assert index.calls == [(candidate,)]
+    assert index.calls == [()]
     migration_engine = create_database_engine(migration_configuration)
     try:
         with migration_engine.begin() as connection:
@@ -627,7 +671,7 @@ def test_vector_candidate_denials_have_one_non_enumerating_empty_shape(
         migration_engine.dispose()
 
     tombstoned_shape = _assert_empty(_resolve(client))
-    assert index.calls == [(candidate,), ()]
+    assert index.calls == [(), ()]
     assert tombstoned_shape == unknown_shape
 
     migration_engine = create_database_engine(migration_configuration)
@@ -650,7 +694,7 @@ def test_vector_candidate_denials_have_one_non_enumerating_empty_shape(
     revoked = _resolve(client)
     assert revoked.status_code == 401
     assert revoked.json() == {"code": "authentication_failed"}
-    assert index.calls == [(candidate,), ()]
+    assert index.calls == [(), ()]
     for forbidden in (
         candidate.source_ref,
         candidate.resource_ref,

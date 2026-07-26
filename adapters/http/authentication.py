@@ -1,5 +1,6 @@
 """Trusted HTTP authentication adapter contracts and fail-closed default."""
 
+import hmac
 from dataclasses import dataclass, field
 from typing import Protocol
 from uuid import UUID
@@ -115,3 +116,41 @@ class RejectingAuthenticator:
         opaque_credential: str,
     ) -> VerifiedAuthenticationContext:
         raise AuthenticationRejected
+
+
+class DogfoodAuthenticator:
+    """Constant-time local-secret verifier for one fixed seeded identity."""
+
+    __slots__ = ("_authentication", "_secret")
+
+    def __init__(
+        self,
+        *,
+        secret: str,
+        authentication: VerifiedAuthenticationContext,
+    ) -> None:
+        if (
+            type(secret) is not str
+            or len(secret.encode("utf-8")) < 32
+            or secret != secret.strip()
+            or any(character.isspace() for character in secret)
+        ):
+            raise ValueError("dogfood authentication configuration is unavailable")
+        if type(authentication) is not VerifiedAuthenticationContext:
+            raise TypeError("dogfood authentication identity is unavailable")
+        self._secret = secret.encode("utf-8")
+        self._authentication = authentication
+
+    def authenticate(self, opaque_credential: str) -> VerifiedAuthenticationContext:
+        if type(opaque_credential) is not str:
+            raise AuthenticationRejected
+        try:
+            supplied = opaque_credential.encode("utf-8")
+        except UnicodeEncodeError:
+            raise AuthenticationRejected from None
+        if not hmac.compare_digest(supplied, self._secret):
+            raise AuthenticationRejected
+        return self._authentication
+
+    def __repr__(self) -> str:
+        return "DogfoodAuthenticator(<redacted>)"

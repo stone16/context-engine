@@ -74,6 +74,8 @@ def active_runtime_release(
     *,
     suffix: str = "test-v0",
     active_revision_refs: tuple[str, ...] = (),
+    index_profile_ref: str = INDEX_PROFILE_REF_V0,
+    index_profile_digest: str = INDEX_PROFILE_DIGEST_V0,
 ) -> ActiveRuntimeRelease:
     return ActiveRuntimeRelease(
         organization_id=organization_id,
@@ -81,12 +83,12 @@ def active_runtime_release(
         active_generation=1,
         content_profile_ref=CONTENT_PROFILE_REF_V0,
         content_schema_ref=CONTENT_SCHEMA_REF_V0,
-        index_profile_ref=INDEX_PROFILE_REF_V0,
+        index_profile_ref=index_profile_ref,
         index_schema_ref=INDEX_SCHEMA_REF_V0,
         runtime_profile_ref=RUNTIME_PROFILE_REF_V0,
         runtime_profile_digest=RUNTIME_PROFILE_DIGEST_V0,
         content_profile_digest=CONTENT_PROFILE_DIGEST_V0,
-        index_profile_digest=INDEX_PROFILE_DIGEST_V0,
+        index_profile_digest=index_profile_digest,
         tokenizer_ref=RUNTIME_TOKENIZER_REF_V0,
         package_schema_ref=PACKAGE_SCHEMA_REF_V0,
         curation_profile_ref=CURATION_PROFILE_REF_V0,
@@ -104,6 +106,8 @@ def ensure_test_runtime_release(
     *,
     active_revision_refs: tuple[str, ...] | None = None,
     runtime_profile_ref: str = RUNTIME_PROFILE_REF_V0,
+    index_profile_ref: str = INDEX_PROFILE_REF_V0,
+    index_profile_digest: str = INDEX_PROFILE_DIGEST_V0,
     tokenizer_ref: str = RUNTIME_TOKENIZER_REF_V0,
     package_schema_ref: str = PACKAGE_SCHEMA_REF_V0,
 ) -> ActiveRuntimeRelease:
@@ -269,8 +273,8 @@ def ensure_test_runtime_release(
             content_schema_ref=CONTENT_SCHEMA_REF_V0,
         )
         index = IndexProfileRef(
-            profile_ref=INDEX_PROFILE_REF_V0,
-            profile_digest=INDEX_PROFILE_DIGEST_V0,
+            profile_ref=index_profile_ref,
+            profile_digest=index_profile_digest,
             content_profile_digest=content.profile_digest,
             content_schema_ref=content.content_schema_ref,
             index_schema_ref=INDEX_SCHEMA_REF_V0,

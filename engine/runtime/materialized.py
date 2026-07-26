@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Final, NoReturn, Protocol
+from typing import Final, NoReturn, Protocol, runtime_checkable
 from uuid import UUID
 
 from engine.runtime.evidence import (
@@ -11,6 +11,7 @@ from engine.runtime.evidence import (
     CandidateRef,
     validate_projected_field_refs,
 )
+from engine.runtime.scope import EffectiveScope, ScopeTarget
 
 __all__ = [
     "MaterializedFieldValue",
@@ -20,6 +21,9 @@ __all__ = [
     "MaterializedProjectionPort",
     "MaterializedProjectionSession",
     "MaterializedPublicationTrace",
+    "MaterializedScopeOperands",
+    "MaterializedScopePort",
+    "MaterializedScopeUnavailable",
 ]
 
 _STRUCTURED_FIELD_LINE_BREAKS: Final = frozenset(
@@ -71,6 +75,38 @@ class MaterializedProjectionKind(StrEnum):
 
     LEGACY_BODY = "body"
     STRUCTURED_FIELDS = "fields"
+
+
+class MaterializedScopeUnavailable(RuntimeError):
+    """Same-transaction scope facts could not be established."""
+
+
+@dataclass(frozen=True, slots=True)
+class MaterializedScopeOperands:
+    """Independent durable operands observed by one UserActor transaction."""
+
+    organization_boundary: frozenset[ScopeTarget]
+    membership_rights: frozenset[ScopeTarget]
+    principal_grants: frozenset[ScopeTarget]
+    source_native_acl: frozenset[ScopeTarget]
+    resource_acl: frozenset[ScopeTarget]
+
+    def __post_init__(self) -> None:
+        for field_name in (
+            "organization_boundary",
+            "membership_rights",
+            "principal_grants",
+            "source_native_acl",
+            "resource_acl",
+        ):
+            targets = getattr(self, field_name)
+            if type(targets) is not frozenset or any(
+                type(target) is not ScopeTarget or target.resource_ref is None
+                for target in targets
+            ):
+                raise TypeError(
+                    f"materialized {field_name} must contain exact Resource targets"
+                )
 
 
 @dataclass(frozen=True, slots=True)
@@ -202,6 +238,7 @@ class MaterializedProjectionPort(Protocol):
         limit: int,
         source_refs: tuple[str, ...] | None,
         resource_refs: tuple[str, ...] | None,
+        effective_scope: EffectiveScope,
     ) -> tuple[CandidateRef, ...]: ...
 
     def discover_exact_phrase(
@@ -225,6 +262,16 @@ class MaterializedProjectionPort(Protocol):
         self,
         locator: MaterializedFragmentLocator,
     ) -> MaterializedFragmentProjection | None: ...
+
+
+@runtime_checkable
+class MaterializedScopePort(Protocol):
+    """Explicit optional capability for independent trusted scope operands."""
+
+    def current_scope_operands(
+        self,
+        active_revision_ids: tuple[UUID, ...],
+    ) -> MaterializedScopeOperands: ...
 
 class _MaterializedProjectionScope:
     """Private lifetime token owned by one current UserActor transaction."""
@@ -267,6 +314,7 @@ class MaterializedProjectionSession:
 
     _authority_scope: _MaterializedProjectionScope = field(repr=False)
     _port: MaterializedProjectionPort = field(repr=False)
+    _scope_port: MaterializedScopePort | None = field(repr=False)
 
     def __init__(self, *args: object, **kwargs: object) -> None:
         raise TypeError(
@@ -322,7 +370,47 @@ def _construct_materialized_projection_session(
     session = object.__new__(MaterializedProjectionSession)
     object.__setattr__(session, "_authority_scope", authority_scope)
     object.__setattr__(session, "_port", port)
+    object.__setattr__(
+        session,
+        "_scope_port",
+        port if isinstance(port, MaterializedScopePort) else None,
+    )
     return session
+
+
+def _current_materialized_scope_operands(
+    session: MaterializedProjectionSession,
+    active_revision_refs: tuple[str, ...],
+) -> MaterializedScopeOperands:
+    """Read independent File-scope facts in the retained transaction."""
+
+    _require_active_materialized_projection_session(session)
+    if type(active_revision_refs) is not tuple or not active_revision_refs:
+        raise MaterializedScopeUnavailable(
+            "materialized scope release selection is unavailable"
+        )
+    try:
+        revision_ids = tuple(UUID(value) for value in active_revision_refs)
+    except (AttributeError, TypeError, ValueError):
+        raise MaterializedScopeUnavailable(
+            "materialized scope release selection is unavailable"
+        ) from None
+    if any(str(value) != reference for value, reference in zip(
+        revision_ids,
+        active_revision_refs,
+        strict=True,
+    )):
+        raise MaterializedScopeUnavailable(
+            "materialized scope release selection is unavailable"
+        )
+    if session._scope_port is None:
+        raise MaterializedScopeUnavailable(
+            "materialized scope authority is unavailable"
+        )
+    operands = session._scope_port.current_scope_operands(revision_ids)
+    if type(operands) is not MaterializedScopeOperands:
+        raise TypeError("materialized scope authority returned the wrong nominal type")
+    return operands
 
 
 def _is_materialized_source_active(
@@ -379,6 +467,7 @@ def _discover_materialized_vector(
     *,
     source_refs: tuple[str, ...] | None = None,
     resource_refs: tuple[str, ...] | None = None,
+    effective_scope: EffectiveScope,
 ) -> tuple[CandidateRef, ...]:
     """Discover bounded content-free ANN lineage in the retained transaction."""
 
@@ -387,6 +476,8 @@ def _discover_materialized_vector(
         raise ValueError("vector discovery requires a nonempty query embedding")
     if type(limit) is not int or limit <= 0:
         raise ValueError("vector discovery requires a positive exact limit")
+    if type(effective_scope) is not EffectiveScope:
+        raise TypeError("vector discovery requires EffectiveScope")
     for field_name, refs in (
         ("source_refs", source_refs),
         ("resource_refs", resource_refs),
@@ -402,6 +493,7 @@ def _discover_materialized_vector(
         limit,
         source_refs,
         resource_refs,
+        effective_scope,
     )
     if (
         type(candidates) is not tuple
