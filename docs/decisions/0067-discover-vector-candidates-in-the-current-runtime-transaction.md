@@ -75,6 +75,14 @@ propagation or explicitly compose only the deterministic network-free twin,
 classified as zero external provider calls and zero provider cost. External
 provider configuration must fail closed until the metered path exists.
 
+The follow-up served activation must also pass the Kernel-computed
+`EffectiveScope` to discovery as a removal-only pre-filter before the ANN
+limit. Caller narrowing alone is insufficient when trusted policy operands are
+stricter than the RLS-visible set. Every returned candidate must still pass the
+Kernel's exact authorization and projection; the pre-filter never grants
+authority. Until that propagation exists, the served vector carrier remains
+`NOT_ACTIVE`.
+
 ## Rationale
 
 Keeping discovery on the retained UserActor transaction preserves the exact
@@ -98,6 +106,9 @@ can justify changing the sealed path.
   semantic ranking quality is not claimed by this slice.
 - Served external query embedding remains `NOT_ACTIVE` until its provider call,
   cost, and elapsed usage can be enforced and recorded by Runtime.
+- Served vector discovery remains `NOT_ACTIVE` until the Kernel-computed
+  EffectiveScope can restrict candidates before the ANN limit without becoming
+  an authorization decision at the index.
 
 ## Revisit trigger
 
@@ -110,3 +121,6 @@ reranking remain separate evidence-triggered decisions.
 
 Revisit before any served composition admits an external query-embedding
 provider without exact PackageBudget usage propagation.
+
+Revisit before any served composition can limit ANN candidates without first
+applying the current Kernel-computed EffectiveScope as a removal-only filter.
