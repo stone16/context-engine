@@ -14,7 +14,10 @@ from sqlalchemy import Engine, text
 import engine.persistence.membership_context as membership_context_module
 from adapters.embeddings import DeterministicEmbeddingTwin
 from adapters.http.app import HEALTH_RESPONSE, create_app
-from adapters.pgvector import PostgreSQLVectorCandidateIndex
+from adapters.pgvector import (
+    DEFAULT_VECTOR_CANDIDATE_LIMIT,
+    PostgreSQLVectorCandidateIndex,
+)
 from engine.persistence import (
     DatabaseConfiguration,
     PostgreSQLAccessPolicyControl,
@@ -22,12 +25,14 @@ from engine.persistence import (
     ResourceAccessRevocation,
     create_database_engine,
 )
+from engine.persistence.membership_context import _VECTOR_CANDIDATE_SQL
 from engine.runtime.construction import Runtime, required_kernel_dependencies
 from engine.runtime.content_io import CandidateIndex
 from engine.runtime.contracts import Acquire
 from engine.runtime.evidence import CandidateRef
 from engine.runtime.materialized import MaterializedProjectionSession
 from engine.runtime.package_digest import QueryDigestKeyring
+from engine.supply import EmbeddingProfile, EmbeddingProviderUnavailable
 from tests.integration.test_file_import_tracer import (
     _ExactScopeAuthority,
     _OrganizationAuthority,
@@ -49,6 +54,7 @@ from tests.support.releases import (
 pytestmark = pytest.mark.integration
 QUERY = "ContextEngine delivers context."
 TOKEN = "runtime-secret"
+_ANN_DISTRACTOR_COUNT = 96
 
 
 class _RecordingVectorCandidateIndex:
@@ -84,6 +90,14 @@ class _BlockingVectorCandidateIndex:
         if not self.release.wait(timeout=10):
             raise RuntimeError("vector candidate barrier timed out")
         return candidates
+
+
+class _UnavailableEmbeddingProvider:
+    profile = EmbeddingProfile(384)
+
+    def embed(self, inputs: tuple[str, ...]) -> tuple[tuple[float, ...], ...]:
+        del inputs
+        raise EmbeddingProviderUnavailable("provider detail must not escape")
 
 
 def _published_scenario(
@@ -131,6 +145,131 @@ def _delete_published_scenario(
 ) -> None:
     clear_test_runtime_release(organization_id)
     delete_file_import_scenario(migration_configuration, organization_id)
+
+
+def _add_cross_organization_vector_distractors(
+    migration_configuration: DatabaseConfiguration,
+    scenario: FileImportScenario,
+    candidate: CandidateRef,
+) -> None:
+    embedding = DeterministicEmbeddingTwin().embed((QUERY,))[0]
+    parameters = [
+        {
+            "organization_id": scenario.organization_id,
+            "resource_ref": candidate.resource_ref,
+            "revision_id": UUID(candidate.revision_ref),
+            "fragment_ref": f"fragment:vector-distractor:{ordinal:03d}",
+            "ordinal": ordinal,
+            "content": QUERY,
+            "embedding": "[" + ",".join(repr(value) for value in embedding) + "]",
+        }
+        for ordinal in range(1, _ANN_DISTRACTOR_COUNT + 1)
+    ]
+    engine = create_database_engine(migration_configuration)
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO context_fragment (
+                        organization_id, resource_ref, revision_id,
+                        fragment_ref, ordinal, content, projection_kind,
+                        embedding
+                    ) VALUES (
+                        :organization_id, :resource_ref, :revision_id,
+                        :fragment_ref, :ordinal, :content, 'body',
+                        CAST(:embedding AS vector)
+                    )
+                    """
+                ),
+                parameters,
+            )
+    finally:
+        engine.dispose()
+
+
+def _actor_settings(
+    scenario: FileImportScenario,
+    user_id: UUID,
+) -> dict[str, str]:
+    return {
+        "app.actor_kind": "user",
+        "app.authentication_binding_ref": "binding:file-tracer",
+        "app.checked_at": NOW.isoformat().replace("+00:00", "Z"),
+        "app.membership_id": str(scenario.membership_id),
+        "app.membership_version": "1",
+        "app.organization_id": str(scenario.organization_id),
+        "app.principal_ref": "principal:file-reader",
+        "app.request_id": "issue-101-vector-plan",
+        "app.user_id": str(user_id),
+    }
+
+
+def _ann_plan_and_exact_result(
+    guarded_runtime_engine: Engine,
+    scenario: FileImportScenario,
+    user_id: UUID,
+) -> tuple[
+    str,
+    tuple[tuple[object, ...], ...],
+    tuple[tuple[object, ...], ...],
+]:
+    embedding = DeterministicEmbeddingTwin().embed((QUERY,))[0]
+    parameters = {
+        "query_embedding": "["
+        + ",".join(repr(value) for value in embedding)
+        + "]",
+        "limit": 1,
+    }
+    with guarded_runtime_engine.begin() as connection:
+        for name, value in _actor_settings(scenario, user_id).items():
+            connection.execute(
+                text("SELECT set_config(:name, :value, true)"),
+                {"name": name, "value": value},
+            )
+        for name, value in (
+            ("hnsw.iterative_scan", "strict_order"),
+            ("hnsw.max_scan_tuples", "20000"),
+            ("enable_seqscan", "off"),
+            ("enable_sort", "off"),
+        ):
+            connection.execute(
+                text("SELECT set_config(:name, :value, true)"),
+                {"name": name, "value": value},
+            )
+        ann_sql = (
+            "SELECT organization_id, resource_ref, revision_id, fragment_ref "
+            "FROM context_fragment WHERE embedding IS NOT NULL "
+            "ORDER BY embedding <=> CAST(:query_embedding AS vector) LIMIT :limit"
+        )
+        plan = "\n".join(
+            str(line)
+            for line in connection.execute(
+                text(
+                    "EXPLAIN (ANALYZE, COSTS OFF, TIMING OFF, SUMMARY OFF) "
+                    + ann_sql
+                ),
+                parameters,
+            ).scalars()
+        )
+        approximate: tuple[tuple[object, ...], ...] = tuple(
+            tuple(row)
+            for row in connection.execute(
+                text(_VECTOR_CANDIDATE_SQL),
+                parameters,
+            )
+        )
+        connection.execute(
+            text("SELECT set_config('enable_indexscan', 'off', true)")
+        )
+        exact: tuple[tuple[object, ...], ...] = tuple(
+            tuple(row)
+            for row in connection.execute(
+                text(_VECTOR_CANDIDATE_SQL),
+                parameters,
+            )
+        )
+    return plan, approximate, exact
 
 
 def _client(
@@ -227,6 +366,11 @@ def test_vector_candidate_http_chain_is_rls_scoped_content_free_and_bounded(
         guarded_worker_engine,
         label="org-b",
     )
+    _add_cross_organization_vector_distractors(
+        migration_configuration,
+        org_b,
+        candidate_b,
+    )
     index = _RecordingVectorCandidateIndex()
     response = _resolve(
         _client(
@@ -251,7 +395,7 @@ def test_vector_candidate_http_chain_is_rls_scoped_content_free_and_bounded(
     assert evidence["fragmentRef"] == candidate_a.fragment_ref
     assert index.calls == [(candidate_a,)]
     assert candidate_b not in index.calls[0]
-    assert len(index.calls[0]) <= 16
+    assert len(index.calls[0]) <= DEFAULT_VECTOR_CANDIDATE_LIMIT
     assert set(CandidateRef.__dataclass_fields__) == {
         "organization_id",
         "source_ref",
@@ -266,6 +410,21 @@ def test_vector_candidate_http_chain_is_rls_scoped_content_free_and_bounded(
         candidate_b.revision_ref,
     ):
         assert forbidden not in response.text
+    plan, approximate, exact = _ann_plan_and_exact_result(
+        guarded_runtime_engine,
+        org_a,
+        user_a,
+    )
+    assert "Index Scan using ix_context_fragment_embedding_hnsw" in plan
+    assert approximate == exact
+    assert len(approximate) == 1
+    assert approximate[0][:5] == (
+        candidate_a.organization_id,
+        candidate_a.source_ref,
+        candidate_a.resource_ref,
+        UUID(candidate_a.revision_ref),
+        candidate_a.fragment_ref,
+    )
 
 
 def test_vector_candidate_denials_have_one_non_enumerating_empty_shape(
@@ -447,6 +606,47 @@ def test_vector_candidate_stale_epoch_vetoes_already_discovered_evidence(
     _assert_empty(response)
     assert index.calls == [(candidate,)]
     assert reads == 3
+    for forbidden in (
+        candidate.source_ref,
+        candidate.resource_ref,
+        candidate.revision_ref,
+        candidate.fragment_ref,
+    ):
+        assert forbidden not in response.text
+
+
+def test_vector_embedding_outage_is_one_content_free_service_unavailable_response(
+    request: pytest.FixtureRequest,
+    tmp_path: Path,
+    migration_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+    guarded_worker_engine: Engine,
+    guarded_runtime_engine: Engine,
+    query_digest_keyring: QueryDigestKeyring,
+) -> None:
+    scenario, candidate, user_id = _published_scenario(
+        request,
+        tmp_path,
+        migration_configuration,
+        guarded_control_engine,
+        guarded_worker_engine,
+        label="provider-outage",
+    )
+    client = _client(
+        scenario,
+        candidate,
+        user_id,
+        guarded_runtime_engine,
+        query_digest_keyring,
+        PostgreSQLVectorCandidateIndex(_UnavailableEmbeddingProvider()),
+        request_id="issue-101-vector-provider-outage",
+    )
+
+    response = _resolve(client)
+
+    assert response.status_code == 503
+    assert response.json() == {"code": "service_unavailable"}
+    assert "provider detail" not in response.text
     for forbidden in (
         candidate.source_ref,
         candidate.resource_ref,

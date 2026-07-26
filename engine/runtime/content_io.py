@@ -8,6 +8,16 @@ from engine.runtime.contracts import Acquire
 from engine.runtime.evidence import CandidateRef
 from engine.runtime.materialized import MaterializedProjectionSession
 
+__all__ = [
+    "CandidateIndex",
+    "CandidateIndexUnavailable",
+    "ContextProvider",
+    "RuntimeContentIo",
+    "SourceContentReader",
+    "exact_phrase_digest",
+    "prohibited_empty_path_content_io",
+]
+
 _EXACT_PHRASE_DIGEST_DOMAIN = b"context-engine.exact-phrase.v1\x00"
 
 
@@ -27,6 +37,10 @@ class CandidateIndex(Protocol):
         request: Acquire,
         projection_session: MaterializedProjectionSession,
     ) -> tuple[CandidateRef, ...]: ...
+
+
+class CandidateIndexUnavailable(RuntimeError):
+    """Content-free transient failure of one configured candidate index."""
 
 
 class ContextProvider(Protocol):

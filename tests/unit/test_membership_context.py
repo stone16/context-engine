@@ -125,8 +125,9 @@ class _VectorConnection:
         statement: object,
         parameters: dict[str, object] | None = None,
     ) -> tuple[SimpleNamespace, ...]:
-        self.calls.append((str(statement), parameters))
-        return self._rows
+        sql = str(statement)
+        self.calls.append((sql, parameters))
+        return () if "set_config('hnsw.iterative_scan'" in sql else self._rows
 
 
 class _ReleaseConnection:
@@ -373,8 +374,15 @@ def test_postgres_vector_discovery_uses_one_content_free_bounded_ann_query() -> 
             fragment_ref="fragment:vector",
         ),
     )
-    assert len(connection.calls) == 1
-    statement, parameters = connection.calls[0]
+    assert len(connection.calls) == 2
+    setting_statement, setting_parameters = connection.calls[0]
+    assert "set_config('hnsw.iterative_scan'" in setting_statement
+    assert "set_config('hnsw.max_scan_tuples'" in setting_statement
+    assert setting_parameters == {
+        "iterative_scan": "strict_order",
+        "max_scan_tuples": "20000",
+    }
+    statement, parameters = connection.calls[1]
     assert "fragment.embedding <=> CAST(:query_embedding AS vector)" in statement
     assert "resource.active_revision_id = fragment.revision_id" in statement
     assert "resource.tombstoned IS FALSE" in statement
@@ -385,6 +393,26 @@ def test_postgres_vector_discovery_uses_one_content_free_bounded_ann_query() -> 
     assert "title" not in statement
     assert "score" not in statement
     assert parameters == {"query_embedding": "[0.25,-0.5]", "limit": 1}
+
+
+def test_postgres_vector_discovery_rejects_invalid_revision_lineage() -> None:
+    connection = _VectorConnection(
+        (
+            SimpleNamespace(
+                organization_id=identity().organization_id,
+                source_ref="source:vector",
+                resource_ref="resource:vector",
+                revision_id="not-a-database-uuid",
+                fragment_ref="fragment:vector",
+            ),
+        )
+    )
+    port = membership_context_module._PostgreSQLMaterializedProjectionPort(
+        cast(Connection, connection)
+    )
+
+    with pytest.raises(TypeError, match="invalid revision lineage"):
+        port.discover_vector((0.25, -0.5), 1)
 
 
 @pytest.mark.parametrize("invalid_value", (None, "", " \t"))

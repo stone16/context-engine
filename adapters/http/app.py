@@ -93,6 +93,7 @@ from engine.runtime.citation import (
     CitationAuthorityUnavailable,
 )
 from engine.runtime.construction import required_kernel_dependencies
+from engine.runtime.content_io import CandidateIndexUnavailable
 from engine.runtime.context_run import ContextRunPersistenceUnavailable
 from engine.runtime.contracts import (
     Acquire,
@@ -721,6 +722,8 @@ def create_app(
         except ScopeAuthorityUnavailable:
             raise TrustedAuthorityUnavailable from None
         except ActiveReleaseUnavailable:
+            raise TrustedAuthorityUnavailable from None
+        except CandidateIndexUnavailable:
             raise TrustedAuthorityUnavailable from None
         except InvalidTrustedScopeSnapshot:
             raise TrustedAuthorityUnavailable from None

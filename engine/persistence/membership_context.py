@@ -164,6 +164,27 @@ def _canonical_candidate_revision(value: str) -> UUID | None:
     return parsed
 
 
+_VECTOR_ITERATIVE_SCAN = "strict_order"
+_VECTOR_MAX_SCAN_TUPLES = 20_000
+_VECTOR_CANDIDATE_SQL = """
+    SELECT
+        resource.organization_id,
+        resource.source_ref,
+        fragment.resource_ref,
+        fragment.revision_id,
+        fragment.fragment_ref
+    FROM context_fragment AS fragment
+    JOIN context_resource AS resource
+      ON resource.organization_id = fragment.organization_id
+     AND resource.resource_ref = fragment.resource_ref
+     AND resource.active_revision_id = fragment.revision_id
+     AND resource.tombstoned IS FALSE
+    WHERE fragment.embedding IS NOT NULL
+    ORDER BY fragment.embedding <=> CAST(:query_embedding AS vector)
+    LIMIT :limit
+"""
+
+
 class _PostgreSQLMaterializedProjectionPort:
     """Two-stage Fragment reads on the owning current-UserActor transaction."""
 
@@ -189,26 +210,18 @@ class _PostgreSQLMaterializedProjectionPort:
         query_embedding: tuple[float, ...],
         limit: int,
     ) -> tuple[CandidateRef, ...]:
-        rows = self._connection.execute(
+        self._connection.execute(
             text(
-                """
-                SELECT
-                    resource.organization_id,
-                    resource.source_ref,
-                    fragment.resource_ref,
-                    fragment.revision_id,
-                    fragment.fragment_ref
-                FROM context_fragment AS fragment
-                JOIN context_resource AS resource
-                  ON resource.organization_id = fragment.organization_id
-                 AND resource.resource_ref = fragment.resource_ref
-                 AND resource.active_revision_id = fragment.revision_id
-                 AND resource.tombstoned IS FALSE
-                WHERE fragment.embedding IS NOT NULL
-                ORDER BY fragment.embedding <=> CAST(:query_embedding AS vector)
-                LIMIT :limit
-                """
+                "SELECT set_config('hnsw.iterative_scan', :iterative_scan, true), "
+                "set_config('hnsw.max_scan_tuples', :max_scan_tuples, true)"
             ),
+            {
+                "iterative_scan": _VECTOR_ITERATIVE_SCAN,
+                "max_scan_tuples": str(_VECTOR_MAX_SCAN_TUPLES),
+            },
+        )
+        rows = self._connection.execute(
+            text(_VECTOR_CANDIDATE_SQL),
             {
                 "query_embedding": "["
                 + ",".join(repr(value) for value in query_embedding)
@@ -216,16 +229,20 @@ class _PostgreSQLMaterializedProjectionPort:
                 "limit": limit,
             },
         )
-        return tuple(
-            CandidateRef(
-                organization_id=row.organization_id,
-                source_ref=row.source_ref,
-                resource_ref=row.resource_ref,
-                revision_ref=str(row.revision_id),
-                fragment_ref=row.fragment_ref,
+        candidates: list[CandidateRef] = []
+        for row in rows:
+            if type(row.revision_id) is not UUID:
+                raise TypeError("vector discovery returned invalid revision lineage")
+            candidates.append(
+                CandidateRef(
+                    organization_id=row.organization_id,
+                    source_ref=row.source_ref,
+                    resource_ref=row.resource_ref,
+                    revision_ref=str(row.revision_id),
+                    fragment_ref=row.fragment_ref,
+                )
             )
-            for row in rows
-        )
+        return tuple(candidates)
 
     def discover_exact_phrase(
         self,

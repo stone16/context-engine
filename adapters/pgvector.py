@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from engine.runtime.content_io import CandidateIndexUnavailable
 from engine.runtime.contracts import Acquire
 from engine.runtime.evidence import CandidateRef
 from engine.runtime.materialized import (
@@ -20,7 +21,7 @@ DEFAULT_VECTOR_CANDIDATE_LIMIT = 16
 MAX_VECTOR_CANDIDATE_LIMIT = 64
 
 
-class VectorCandidateIndexUnavailable(RuntimeError):
+class VectorCandidateIndexUnavailable(CandidateIndexUnavailable):
     """Content-free failure of query embedding or ANN candidate discovery."""
 
 
