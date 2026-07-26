@@ -2,7 +2,6 @@
 
 [![CI](https://github.com/stone16/context-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/stone16/context-engine/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](./LICENSE)
-[![Python](https://img.shields.io/badge/python-3.13-blue.svg)](./pyproject.toml)
 [![Status](https://img.shields.io/badge/status-pre--release-orange.svg)](./STATUS.md)
 
 **A permission-aware context delivery engine.** Connect your team's knowledge
@@ -18,7 +17,7 @@ toolchains answer *how do I find the nearest chunk?* ContextEngine exists
 because the two questions that actually block shipping a trustworthy assistant
 inside a company are different ones:
 
-### 1. What is this audience allowed to know, right now?
+## 1. What is this audience allowed to know, right now?
 
 Retrieval alone cannot answer that. In ContextEngine the index never returns
 deliverable text — it returns a `CandidateRef`. Every candidate must pass
@@ -31,7 +30,7 @@ Source ACL evidence is explicitly classified as `Live`, `Mirrored`, or `Weak`.
 `Weak` is only for sources that genuinely lack fine-grained ACLs — it is never
 a fallback when a `Live` or `Mirrored` check fails. That case fails closed.
 
-### 2. Who keeps the knowledge base organized?
+## 2. Who keeps the knowledge base organized?
 
 Organization cost is the largest hidden cost of any team knowledge base.
 ContextEngine assigns the automatable part to agents — semantic
@@ -70,12 +69,15 @@ The roadmap and milestone exit criteria live in [PLAN.md](./PLAN.md).
 
 ### Prerequisites
 
-| Requirement | Version | Why |
+| Requirement | Where the version comes from | Why |
 |---|---|---|
-| [Python](https://www.python.org/) | 3.13 (`>=3.13,<3.14`) | Engine, adapters, worker |
-| [uv](https://docs.astral.sh/uv/) | any recent | Dependency resolution, pinned by `uv.lock` |
-| [Node.js](https://nodejs.org/) | 22.12.0 (see [`sdk/typescript/.node-version`](./sdk/typescript/.node-version)) | TypeScript SDK, ActionPlane, BotDelivery |
-| Docker (with Compose) | any recent | Real PostgreSQL 17 + pgvector test harness |
+| [uv](https://docs.astral.sh/uv/) | — | Dependency resolution, pinned by `uv.lock` |
+| [Python](https://www.python.org/) | `requires-python` in [`pyproject.toml`](./pyproject.toml) — `uv sync` provisions a matching interpreter for you | Engine, adapters, worker |
+| [Node.js](https://nodejs.org/) | [`sdk/typescript/.node-version`](./sdk/typescript/.node-version) — `nvm use`, `fnm use`, and `asdf` read it automatically | TypeScript SDK, ActionPlane, BotDelivery |
+| Docker (with Compose) | Service versions are pinned in [`compose.yaml`](./compose.yaml) | Real PostgreSQL + pgvector test harness |
+
+Every version above is declared in a checked-in file, so none of them are
+repeated here — install the tool, and let it read the repository.
 
 ### Install and verify
 
@@ -95,15 +97,16 @@ make install && make db-up && make check && make db-down
 
 ### Run the API
 
+Bind an address explicitly so the example below is self-contained — run
+`context-engine-api --help` for the defaults and the full flag set
+(`--host`, `--port`, `--log-level`):
+
 ```bash
-uv run context-engine-api
+uv run context-engine-api --host 127.0.0.1 --port 8137
 ```
 
-Defaults to `127.0.0.1:8000`; override with `--host`, `--port`, `--log-level`
-(see `context-engine-api --help`). Then:
-
 ```bash
-curl http://127.0.0.1:8000/health
+curl http://127.0.0.1:8137/health
 ```
 
 ```json
@@ -201,7 +204,7 @@ never reported as an overall release PASS.
 
 ### The one public online contract
 
-```
+```text
 ContextRuntime.resolve(AuthenticatedInvocation, TrustedDeliveryContext,
                        Acquire | Continue | OpenCitation)
 
@@ -225,7 +228,7 @@ own — every open re-authenticates and re-authorizes.
 
 ### Repository layout
 
-```
+```text
 engine/            The sealed core — no HTTP, no vendor SDKs
   runtime/           resolve() orchestration, AuthorizationKernel, tickets,
                      budget, provenance, ContextRun, policy epoch

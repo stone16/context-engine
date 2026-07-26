@@ -2,7 +2,6 @@
 
 [![CI](https://github.com/stone16/context-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/stone16/context-engine/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](./LICENSE)
-[![Python](https://img.shields.io/badge/python-3.13-blue.svg)](./pyproject.toml)
 [![Status](https://img.shields.io/badge/status-pre--release-orange.svg)](./STATUS.md)
 
 **一个权限感知的上下文交付引擎。** 上游连接团队的知识源，下游把**经过授权、
@@ -16,7 +15,7 @@
 最近的 chunk」。ContextEngine 存在的理由是：真正卡住「在公司内部上线一个可信
 助手」的，是另外两个问题。
 
-### 一、此刻这个 audience 有权知道什么？
+## 一、此刻这个 audience 有权知道什么？
 
 单靠检索回答不了这个问题。在 ContextEngine 里，索引永远不返回可交付正文——它
 只返回 `CandidateRef`。每一个候选都必须先经过 sealed `AuthorizationKernel` 完成
@@ -28,7 +27,7 @@
 缺乏细粒度 ACL 的场景，**它绝不是 `Live` / `Mirrored` 校验失败时的降级回退**
 ——那种情况一律 fail closed。
 
-### 二、知识库由谁来组织？
+## 二、知识库由谁来组织？
 
 组织成本是任何团队知识库最大的隐性成本。ContextEngine 把其中可自动化的部分
 交给 agent——语义去重、过期标记、术语沉淀——而把 audit 留给人。所有 AI 产出的
@@ -64,12 +63,15 @@ ContextEngine 按里程碑逐步构建，每一项能力只在**可执行的证�
 
 ### 前置依赖
 
-| 依赖 | 版本 | 用途 |
+| 依赖 | 版本来自哪里 | 用途 |
 |---|---|---|
-| [Python](https://www.python.org/) | 3.13（`>=3.13,<3.14`） | 引擎、adapters、worker |
-| [uv](https://docs.astral.sh/uv/) | 近期版本 | 依赖解析，由 `uv.lock` 锁定 |
-| [Node.js](https://nodejs.org/) | 22.12.0（见 [`sdk/typescript/.node-version`](./sdk/typescript/.node-version)） | TypeScript SDK、ActionPlane、BotDelivery |
-| Docker（含 Compose） | 近期版本 | 真实 PostgreSQL 17 + pgvector 测试底座 |
+| [uv](https://docs.astral.sh/uv/) | — | 依赖解析，由 `uv.lock` 锁定 |
+| [Python](https://www.python.org/) | [`pyproject.toml`](./pyproject.toml) 的 `requires-python`——`uv sync` 会自动装好匹配的解释器 | 引擎、adapters、worker |
+| [Node.js](https://nodejs.org/) | [`sdk/typescript/.node-version`](./sdk/typescript/.node-version)——`nvm use`、`fnm use`、`asdf` 都会自动读取 | TypeScript SDK、ActionPlane、BotDelivery |
+| Docker（含 Compose） | 服务版本固定在 [`compose.yaml`](./compose.yaml) | 真实 PostgreSQL + pgvector 测试底座 |
+
+上表每个版本都声明在已提交的文件里，所以这里一个都不重复——装好工具，让它自己
+读仓库。
 
 ### 安装与验证
 
@@ -88,15 +90,15 @@ make install && make db-up && make check && make db-down
 
 ### 启动 API
 
+显式指定监听地址，使下面的示例自成一体——默认值与完整参数集
+（`--host`、`--port`、`--log-level`）见 `context-engine-api --help`：
+
 ```bash
-uv run context-engine-api
+uv run context-engine-api --host 127.0.0.1 --port 8137
 ```
 
-默认监听 `127.0.0.1:8000`，可用 `--host`、`--port`、`--log-level` 覆盖
-（见 `context-engine-api --help`）。然后：
-
 ```bash
-curl http://127.0.0.1:8000/health
+curl http://127.0.0.1:8137/health
 ```
 
 ```json
@@ -186,7 +188,7 @@ worktree 之间永不共享容器、网络或数据卷。镜像与拓扑版本�
 
 ### 唯一的在线公开契约
 
-```
+```text
 ContextRuntime.resolve(AuthenticatedInvocation, TrustedDeliveryContext,
                        Acquire | Continue | OpenCitation)
 
@@ -210,7 +212,7 @@ ContextRuntime.resolve(AuthenticatedInvocation, TrustedDeliveryContext,
 
 ### 仓库结构
 
-```
+```text
 engine/            sealed 内核——不含 HTTP，不含厂商 SDK
   runtime/           resolve() 编排、AuthorizationKernel、ticket、
                      budget、provenance、ContextRun、policy epoch

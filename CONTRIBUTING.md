@@ -49,8 +49,8 @@ is load-bearing. See [STATUS.md](./STATUS.md).
 
 ## Development setup
 
-See [Quick start](./README.md#quick-start) in the README for prerequisites
-(Python 3.13, uv, Node 22.12.0, Docker).
+Prerequisites and their sources of truth are listed under
+[Quick start](./README.md#quick-start) in the README.
 
 ```bash
 make install
