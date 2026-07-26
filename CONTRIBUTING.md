@@ -144,7 +144,7 @@ be cited or linked as public provenance.
 ## Architecture Decision Records
 
 Any non-obvious decision is recorded as an ADR under
-[`docs/decisions/`](./docs/decisions/README.md) — there are 56 of them, and they
+[`docs/decisions/`](./docs/decisions/README.md) — there are 60 of them, and they
 are the authority on boundaries, dependency direction, forbidden shortcuts, and
 revisit triggers.
 

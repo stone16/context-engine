@@ -51,7 +51,8 @@ I/O**. The following are known, designed, and deliberately not active:
 | Live Feishu / Slack / Google Docs connectors | See [PLAN.md](./PLAN.md) milestones M4 / M6 / M7 |
 | Group-chat delivery, compensating deletes | M5 |
 | MCP ingress | Held `NOT_ACTIVE` until a real caller exists |
-| Production worker queue / job loop | Default CLI has no production signing key source or queue loop |
+| Worker dead-letter transition / operator requeue | ADR-0060 adds bounded reclaim only; generation four is left untouched after expiry |
+| Provider polling, delete execution beyond ADR-0057 | See the File Provider ADRs for exact boundaries |
 | Streaming delivery | Explicit V1 non-goal — placeholder + edit instead |
 | Answer generation inside the engine | Permanent non-goal — generation always lives above the engine boundary |
 
@@ -87,6 +88,10 @@ Follow the ADR for its exact evidence boundary.
 | [0054](./docs/decisions/0054-acknowledge-file-change-pages-before-cursor-advance.md) | Acknowledge File change pages before cursor advance |
 | [0055](./docs/decisions/0055-schedule-accepted-file-observations-explicitly.md) | Schedule accepted File observations explicitly |
 | [0056](./docs/decisions/0056-detect-file-deletions-without-tombstone-authority.md) | Detect File deletions without tombstone authority |
+| [0057](./docs/decisions/0057-execute-current-file-deletes-through-tombstone-authority.md) | Execute current File deletes through tombstone authority |
+| [0058](./docs/decisions/0058-schedule-only-upserts-from-mixed-file-pages.md) | Schedule only upserts from mixed File pages |
+| [0059](./docs/decisions/0059-dispatch-scheduled-file-imports-through-exact-leases.md) | Dispatch scheduled File imports through exact leases |
+| [0060](./docs/decisions/0060-reclaim-expired-file-imports-with-bounded-retries.md) | Reclaim expired File imports with bounded retries |
 
 ### Wire contract, SDK, and trusted delivery
 
