@@ -51,6 +51,7 @@ from engine.persistence.egress import PostgreSQLEgressGrantRedemptionAuthority
 from engine.persistence.file_imports import (
     FileImportInterrupted,
     FileImportLeaseRedemption,
+    FileImportRefused,
     FileImportUnavailable,
     FilePublicationBoundary,
     PostgreSQLFileImportWorker,
@@ -136,6 +137,7 @@ __all__ = [
     "PostgreSQLDeliveryEvidenceRetentionPort",
     "PostgreSQLEgressGrantRedemptionAuthority",
     "FileImportLeaseRedemption",
+    "FileImportRefused",
     "FileDispatchLease",
     "FileDispatchNoWork",
     "PostgreSQLFileDispatchAuthority",

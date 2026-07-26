@@ -23,6 +23,7 @@ from engine.persistence import (
     FileDispatchLease,
     FileDispatchNoWork,
     FileImportLeaseRedemption,
+    FileImportRefused,
     FileImportUnavailable,
     PostgreSQLFileDispatchAuthority,
     PostgreSQLFileImportWorker,
@@ -98,7 +99,7 @@ def dispatch_one_file_import(
         worker_factory(FileImportReceiver(claim.service_principal_id)).run(
             claim.redemption
         )
-    except WorkNotAvailable:
+    except (FileImportRefused, WorkNotAvailable):
         return FileDispatchCycleResult("refused")
     return FileDispatchCycleResult("dispatched")
 

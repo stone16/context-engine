@@ -61,9 +61,11 @@ marked internally for downgrade
 fencing; process output contains only `dispatched`, `no_work`, or the closed
 job-level `refused` outcome for exact lease rejection and never raw
 claims, token, nonce, tenant identity, source bytes, or host path.
-Worker infrastructure unavailability terminates dispatch after the already
-claimed lease instead of claiming and stranding additional jobs; automatic
-retry/backoff remains inactive.
+A file/content failure becomes job-level `refused` only after the existing
+failure transaction durably seals that exact job or current authority rejects
+that exact failure transition. Worker infrastructure or failure-recording
+unavailability terminates dispatch after the already claimed lease instead of
+claiming and stranding additional jobs; automatic retry/backoff remains inactive.
 
 ## Consequences
 

@@ -20,7 +20,7 @@ from applications.worker import (
     dispatch_one_file_import,
 )
 from engine.control import FileImportPath, FileRootRef, SourceRef
-from engine.persistence.file_imports import FileImportUnavailable
+from engine.persistence.file_imports import FileImportRefused, FileImportUnavailable
 from engine.persistence.worker_jobs import (
     FileDispatchLease,
     FileDispatchNoWork,
@@ -149,6 +149,16 @@ class _UnavailableWorkerFactory:
         return _UnavailableWorker()
 
 
+class _TerminallyFailedWorker:
+    def run(self, _redemption: object) -> object:
+        raise FileImportRefused("File import is unavailable")
+
+
+class _TerminallyFailedWorkerFactory:
+    def __call__(self, _receiver: object) -> _TerminallyFailedWorker:
+        return _TerminallyFailedWorker()
+
+
 def test_dispatch_stops_after_worker_infrastructure_failure() -> None:
     claimed_at = datetime(2026, 7, 25, 10, tzinfo=UTC)
     claim = FileDispatchLease(
@@ -167,6 +177,27 @@ def test_dispatch_stops_after_worker_infrastructure_failure() -> None:
             _OneClaimAuthority(claim),
             _UnavailableWorkerFactory(),  # type: ignore[arg-type]
         )
+
+
+def test_dispatch_continues_after_durably_recorded_job_failure() -> None:
+    claimed_at = datetime(2026, 7, 25, 10, tzinfo=UTC)
+    claim = FileDispatchLease(
+        token=WorkerLeaseToken("lease-token"),
+        organization_id=uuid4(),
+        job_id=uuid4(),
+        source_ref=SourceRef(uuid4()),
+        service_principal_id=uuid4(),
+        lease_generation=1,
+        issued_at=claimed_at,
+        expires_at=claimed_at + timedelta(minutes=5),
+    )
+
+    result = dispatch_one_file_import(
+        _OneClaimAuthority(claim),
+        _TerminallyFailedWorkerFactory(),  # type: ignore[arg-type]
+    )
+
+    assert asdict(result) == {"outcome": "refused", "status": "complete"}
 
 
 class _StoppingNoWorkAuthority:
