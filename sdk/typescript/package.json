@@ -4,7 +4,7 @@
   "description": "Generated TypeScript client for the frozen ContextEngine resolve v0 contract",
   "type": "module",
   "private": true,
-  "license": "UNLICENSED",
+  "license": "Apache-2.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/stone16/context-engine.git",
@@ -27,6 +27,8 @@
     "contract/openapi-v0.sha256",
     "dist",
     "README.md",
+    "LICENSE",
+    "NOTICE",
     "THIRD_PARTY_NOTICES.md"
   ],
   "scripts": {
