@@ -12,6 +12,9 @@ from pathlib import Path
 from typing import Protocol
 from uuid import UUID
 
+from sqlalchemy import Engine, text
+from sqlalchemy.exc import SQLAlchemyError
+
 from adapters.file_source import FileReadLimits, FileRootRegistry
 from engine import BUILD_IDENTIFIER
 from engine.control import FileImportReceiver, FileRootRef, SourceRef
@@ -20,11 +23,13 @@ from engine.persistence import (
     FileDispatchLease,
     FileDispatchNoWork,
     FileImportLeaseRedemption,
+    FileImportUnavailable,
     PostgreSQLFileDispatchAuthority,
     PostgreSQLFileImportWorker,
     create_database_engine,
     load_database_configuration,
 )
+from engine.persistence.role_guard import assert_worker_role
 from engine.persistence.worker_jobs import (
     WorkerLeaseRedemption,
     WorkerNoOpCompletion,
@@ -250,6 +255,22 @@ def _file_dispatch_roots() -> FileRootRegistry:
     )
 
 
+def _worker_database_time(engine: Engine) -> datetime:
+    """Read the worker authority's clock for immediate lease verification."""
+
+    try:
+        with engine.connect() as connection:
+            assert_worker_role(connection)
+            checked_at = connection.execute(
+                text("SELECT pg_catalog.date_trunc('second', clock_timestamp())")
+            ).scalar_one()
+    except (SQLAlchemyError, AssertionError, ValueError):
+        raise FileImportUnavailable("File import clock is unavailable") from None
+    if type(checked_at) is not datetime or checked_at.tzinfo is None:
+        raise FileImportUnavailable("File import clock is unavailable")
+    return checked_at
+
+
 def _run_file_dispatch(*, single_cycle: bool) -> int:
     """Run configured autonomous File dispatch without caller routing facts."""
 
@@ -283,7 +304,7 @@ def _run_file_dispatch(*, single_cycle: bool) -> int:
                 receiver,
                 roots,
                 MarkdownCompilerConfig("markdown-config-v1"),
-                clock=lambda: datetime.now(UTC).replace(microsecond=0),
+                clock=lambda: _worker_database_time(worker_engine),
             )
 
         if single_cycle:

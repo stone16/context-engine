@@ -312,7 +312,7 @@
       "directTableMutationAllowed": false,
       "callerSelectedRoutingDimensions": [],
       "serverCapabilityInput": "all-or-nothing configured logical File root assertion applied only after globally oldest eligible selection and again during final post-lock revalidation; an omitted root yields no-work and cannot redirect selection",
-      "databaseOwnedTime": "full-precision clock_timestamp authority check refreshed after every progress-lock wait; protocol lease timestamps are separately normalized to whole seconds",
+      "databaseOwnedTime": "full-precision clock_timestamp authority check refreshed after every progress-lock wait; protocol lease timestamps and immediate worker verification use the PostgreSQL clock normalized to whole seconds",
       "fixedTtlSeconds": 300,
       "selection": "oldest current v3/v4 page-scheduled upsert ordered by database acceptance time, checkpoint sequence, page ordinal, change ordinal, Organization, Source, and job id; the claim holds the per-Source progress advisory lock, refreshes its statement snapshot, revalidates latest accepted scan epoch, and uses FOR UPDATE SKIP LOCKED authority-row fencing before leasing",
       "currentAuthority": [

@@ -15,6 +15,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from applications.worker import (
     FileDispatchCycleResult,
     _file_dispatch_roots,
+    _worker_database_time,
     dispatch_file_imports_until_stopped,
     dispatch_one_file_import,
 )
@@ -232,6 +233,16 @@ def test_dispatch_rejects_invalid_server_root_registry(
 class _FailingEngine:
     def begin(self) -> None:
         raise SQLAlchemyError("nonce=" + (b"n" * 32).hex())
+
+
+class _FailingClockEngine:
+    def connect(self) -> None:
+        raise SQLAlchemyError("database clock failed")
+
+
+def test_dispatch_database_clock_failure_is_generic() -> None:
+    with pytest.raises(FileImportUnavailable, match="clock is unavailable"):
+        _worker_database_time(cast(Engine, _FailingClockEngine()))
 
 
 def test_dispatch_database_failure_does_not_retain_generated_nonce(

@@ -51,7 +51,10 @@ invisible to the scheduler.
 
 Python mints the existing versioned WorkerLease solely from returned claims and
 fresh nonce, constructs the existing `FileImportLeaseRedemption`, and invokes
-`PostgreSQLFileImportWorker`. Dispatch loads every served logical root from one
+`PostgreSQLFileImportWorker`. Immediate verification reads the worker database
+clock at whole-second protocol precision, matching the database-issued lease
+timestamps and the redemption function's authoritative expiry check rather than
+depending on host-clock alignment. Dispatch loads every served logical root from one
 server-owned JSON registry, so cross-Organization selection cannot consume an
 eligible job merely because another configured root was omitted. A claim is
 marked internally for downgrade

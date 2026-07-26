@@ -265,6 +265,8 @@ worker URL、WorkerLease signing key 和服务端 JSON root registry
 Organization、Source、job 或 token。输出仅包含 `dispatched` / `no_work` / `refused`；Provider
 polling、过期 lease reclaim、retry/dead-letter 与 delete execution 仍未激活。Worker
 基础设施不可用会终止 dispatch，不会继续 claim 并滞留后续 job。
+Lease 的立即验证使用 worker PostgreSQL 时钟，与数据库签发时间保持同一时间域，
+不依赖 worker host clock 对齐。
 
 当前除固定 commit 的四仓静态证据与仓库内设计拆解外，已有
 [`compose.yaml`](./compose.yaml) 固定的真实 PostgreSQL + pgvector 基础 harness，
