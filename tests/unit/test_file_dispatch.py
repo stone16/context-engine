@@ -317,11 +317,40 @@ def test_worker_external_embedding_configuration_keeps_key_out_of_repr(
     )
     monkeypatch.setenv("CONTEXT_ENGINE_WORKER_EMBEDDING_MODEL", "configured-model")
     monkeypatch.setenv("CONTEXT_ENGINE_WORKER_EMBEDDING_API_KEY", "credential-value")
+    monkeypatch.setenv("CONTEXT_ENGINE_WORKER_EMBEDDING_BATCH_SIZE", "64")
 
     provider = _embedding_provider()
 
     assert type(provider) is ExternalEmbeddingProvider
     assert "credential-value" not in repr(provider)
+
+
+@pytest.mark.parametrize("batch_size", ["", "0", "257", "not-a-number"])
+def test_worker_refuses_missing_or_unbounded_external_embedding_batch_size(
+    monkeypatch: pytest.MonkeyPatch,
+    batch_size: str,
+) -> None:
+    monkeypatch.setenv("CONTEXT_ENGINE_WORKER_EMBEDDING_PROVIDER", "external")
+    monkeypatch.setenv(
+        "CONTEXT_ENGINE_WORKER_EMBEDDING_DIMENSION",
+        str(CONTEXT_FRAGMENT_EMBEDDING_DIMENSION),
+    )
+    monkeypatch.setenv(
+        "CONTEXT_ENGINE_WORKER_EMBEDDING_ENDPOINT",
+        "https://embedding.invalid/v1/embeddings",
+    )
+    monkeypatch.setenv("CONTEXT_ENGINE_WORKER_EMBEDDING_MODEL", "configured-model")
+    monkeypatch.setenv("CONTEXT_ENGINE_WORKER_EMBEDDING_API_KEY", "credential-value")
+    if batch_size:
+        monkeypatch.setenv("CONTEXT_ENGINE_WORKER_EMBEDDING_BATCH_SIZE", batch_size)
+    else:
+        monkeypatch.delenv(
+            "CONTEXT_ENGINE_WORKER_EMBEDDING_BATCH_SIZE",
+            raising=False,
+        )
+
+    with pytest.raises(ValueError, match="configuration is not available"):
+        _embedding_provider()
 
 
 @pytest.mark.parametrize(
@@ -355,7 +384,9 @@ def test_worker_default_file_limit_accepts_above_legacy_ceiling_and_refuses_over
     root = tmp_path / "configured-root"
     root.mkdir()
     (root / "above-legacy.md").write_bytes(b"a" * 4_097)
-    (root / "oversize.md").write_bytes(b"b" * (DEFAULT_WORKER_MAX_FILE_BYTES + 1))
+    (root / "oversize.md").write_bytes(
+        b"b" * (DEFAULT_WORKER_MAX_FILE_BYTES + 1)
+    )
     monkeypatch.setenv(
         "CONTEXT_ENGINE_WORKER_FILE_ROOTS_JSON",
         json.dumps({"configured-root": str(root)}),
@@ -363,15 +394,12 @@ def test_worker_default_file_limit_accepts_above_legacy_ceiling_and_refuses_over
     monkeypatch.delenv("CONTEXT_ENGINE_WORKER_MAX_FILE_BYTES", raising=False)
 
     with _file_dispatch_roots() as roots:
-        assert (
-            len(
-                roots.read(
-                    FileRootRef("configured-root"),
-                    FileImportPath("above-legacy.md"),
-                )
+        assert len(
+            roots.read(
+                FileRootRef("configured-root"),
+                FileImportPath("above-legacy.md"),
             )
-            == 4_097
-        )
+        ) == 4_097
         with pytest.raises(LookupError, match="regular configured-root file"):
             roots.read(
                 FileRootRef("configured-root"),

@@ -29,16 +29,21 @@ would also turn a network-free twin into accidental product behavior.
 
 Supply owns a small batch `EmbeddingProvider` seam. The current schema profile
 pins vectors to 384 dimensions in one source constant shared by worker
-composition, the deterministic twin, response validation, and the PostgreSQL
-column. Worker composition requires an explicit provider mode and dimension. A
-dimension other than the schema profile is rejected before work begins.
+composition, the deterministic twin, and response validation. The migration
+pins the PostgreSQL column to the same value, with a mechanical equality test
+preventing drift between the two declarations. Worker composition requires an
+explicit provider mode and dimension. A dimension other than the schema profile
+is rejected before work begins.
 
 The external adapter sends contextual Fragment text to one environment-derived
 HTTPS JSON endpoint. Endpoint, model, API key, timeout, and dimension enter only
-through worker environment configuration. Secret-bearing values are excluded
-from representations, and transport, status, parsing, ordering, count,
-dimension, non-finite, and zero-vector failures collapse to one content-free
-unavailability category.
+through worker environment configuration. A required 1–256 batch-size setting
+bounds each request while the adapter reassembles validated batches in original
+Fragment order. Secret-bearing values are excluded from representations, and
+transport, status, parsing, ordering, count,
+dimension, non-finite, and float32-zero-vector failures collapse to one
+content-free unavailability category. Provider values are normalized to the
+same IEEE-754 float32 representation pgvector persists before the nonzero check.
 
 The CI and integration twin is network-free. It derives a normalized vector
 from a domain-separated SHAKE-256 stream over exact contextual text, giving

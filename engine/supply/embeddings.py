@@ -5,10 +5,13 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from math import isfinite
+from struct import Struct
+from struct import error as StructError
 from typing import Protocol, cast
 
 CONTEXT_FRAGMENT_EMBEDDING_DIMENSION = 384
 type EmbeddingVector = tuple[float, ...]
+_FLOAT32 = Struct("!f")
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,12 +68,12 @@ def validate_embedding_batch(
                     raise EmbeddingProviderUnavailable(
                         "Embedding provider is unavailable"
                     )
-                vector.append(value)
+                vector.append(_FLOAT32.unpack(_FLOAT32.pack(value))[0])
             if not any(value != 0.0 for value in vector):
                 raise EmbeddingProviderUnavailable("Embedding provider is unavailable")
             validated.append(tuple(vector))
         return tuple(validated)
-    except (TypeError, ValueError, OverflowError):
+    except (TypeError, ValueError, OverflowError, StructError):
         raise EmbeddingProviderUnavailable(
             "Embedding provider is unavailable"
         ) from None

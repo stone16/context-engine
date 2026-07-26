@@ -150,7 +150,8 @@ schema-pinned dimension (`CONTEXT_ENGINE_WORKER_EMBEDDING_PROVIDER` and
 `CONTEXT_ENGINE_WORKER_EMBEDDING_DIMENSION`). CI uses the network-free `twin`
 mode. Real deployments select `external` and supply endpoint, model, and API key
 only through the corresponding `CONTEXT_ENGINE_WORKER_EMBEDDING_*` environment
-variables. Markdown files are discovered recursively. **A caller may not
+variables, including a required batch size bounded to 1–256 inputs per request.
+Markdown files are discovered recursively. **A caller may not
 supply Organization, Source, job, or token** — that is the point of the boundary.
 Output is limited to `dispatched` / `no_work` / `refused`.
 

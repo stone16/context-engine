@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
@@ -24,6 +25,7 @@ from engine.supply import (
     EmbeddingProviderUnavailable,
     EmbeddingVector,
     MarkdownCompilerConfig,
+    WorkNotAvailable,
 )
 from tests.support.file_imports import (
     FileImportScenario,
@@ -395,4 +397,62 @@ def test_provider_cannot_change_the_composed_dimension_during_publication(
         )
 
     assert interrupted.value.boundary is FilePublicationBoundary.ACQUIRED
+    assert _stored_vectors(migration_configuration, scenario) == ()
+
+
+def test_postgresql_refuses_a_vector_that_underflows_to_float32_zero(
+    request: pytest.FixtureRequest,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    migration_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+    guarded_worker_engine: Engine,
+) -> None:
+    scenario = prepare_file_import_scenario(
+        tmp_path,
+        migration_configuration,
+        guarded_control_engine,
+    )
+    request.addfinalizer(
+        lambda: delete_file_import_scenario(
+            migration_configuration, scenario.organization_id
+        )
+    )
+    assert scenario.token is not None
+
+    def underflow_document(
+        _worker: PostgreSQLFileImportWorker,
+        _token: object,
+        _claims: object,
+        document: object,
+    ) -> str:
+        fragments = cast(Any, document).fragments
+        return json.dumps(
+            [
+                {
+                    "embedding": [1.0e-50]
+                    * CONTEXT_FRAGMENT_EMBEDDING_DIMENSION,
+                    "fragmentRef": fragment.fragment_ref,
+                }
+                for fragment in fragments
+            ]
+        )
+
+    monkeypatch.setattr(
+        PostgreSQLFileImportWorker,
+        "_embedding_document",
+        underflow_document,
+    )
+
+    with pytest.raises(WorkNotAvailable):
+        _run(
+            _worker(
+                scenario,
+                guarded_worker_engine,
+                _RecordingEmbeddingProvider(),
+            ),
+            scenario,
+            scenario.token,
+        )
+
     assert _stored_vectors(migration_configuration, scenario) == ()

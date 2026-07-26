@@ -100,7 +100,8 @@ _EMBEDDING_VALIDATION = f"""THEN RETURN; END IF;
                                  AND char_length(component.value::text) <= 64
                                  AND component.value::text
                                       ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'
-                                THEN (component.value::text)::numeric <> 0
+                                THEN abs((component.value::text)::numeric)
+                                     > 7.006492321624085e-46
                                 ELSE false
                               END
                    )

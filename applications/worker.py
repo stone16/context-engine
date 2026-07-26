@@ -149,6 +149,24 @@ def _required_environment(name: str) -> str:
     return value
 
 
+def _required_bounded_integer_environment(
+    name: str,
+    *,
+    minimum: int,
+    maximum: int,
+) -> int:
+    raw_value = _required_environment(name)
+    if not raw_value.isascii() or not raw_value.isdecimal():
+        raise ValueError("Supply worker configuration is not available")
+    try:
+        value = int(raw_value)
+    except ValueError:
+        raise ValueError("Supply worker configuration is not available") from None
+    if not minimum <= value <= maximum:
+        raise ValueError("Supply worker configuration is not available")
+    return value
+
+
 def _file_read_limits() -> FileReadLimits:
     raw_limit = os.environ.get(_WORKER_MAX_FILE_BYTES_ENV)
     if raw_limit is None:
@@ -192,6 +210,11 @@ def _embedding_provider() -> EmbeddingProvider:
             model=_required_environment("CONTEXT_ENGINE_WORKER_EMBEDDING_MODEL"),
             api_key=_required_environment("CONTEXT_ENGINE_WORKER_EMBEDDING_API_KEY"),
             dimension=dimension,
+            batch_size=_required_bounded_integer_environment(
+                "CONTEXT_ENGINE_WORKER_EMBEDDING_BATCH_SIZE",
+                minimum=1,
+                maximum=256,
+            ),
             timeout_seconds=timeout_seconds,
         )
     )
@@ -205,9 +228,8 @@ def _run_one_file_import() -> int:
     engine = create_database_engine(configuration)
     roots = FileRootRegistry(
         {
-            FileRootRef(
-                _required_environment("CONTEXT_ENGINE_WORKER_FILE_ROOT_REF")
-            ): Path(_required_environment("CONTEXT_ENGINE_WORKER_FILE_ROOT_PATH"))
+            FileRootRef(_required_environment("CONTEXT_ENGINE_WORKER_FILE_ROOT_REF")):
+                Path(_required_environment("CONTEXT_ENGINE_WORKER_FILE_ROOT_PATH"))
         },
         limits=_file_read_limits(),
     )
@@ -219,7 +241,9 @@ def _run_one_file_import() -> int:
             ),
             FileImportReceiver(
                 UUID(
-                    _required_environment("CONTEXT_ENGINE_WORKER_SERVICE_PRINCIPAL_ID")
+                    _required_environment(
+                        "CONTEXT_ENGINE_WORKER_SERVICE_PRINCIPAL_ID"
+                    )
                 )
             ),
             roots,
@@ -353,7 +377,9 @@ def _run_file_dispatch(*, single_cycle: bool) -> int:
         authority = PostgreSQLFileDispatchAuthority(
             scheduler_engine,
             codec,
-            configured_root_refs=tuple(root_ref.value for root_ref in root_bindings),
+            configured_root_refs=tuple(
+                root_ref.value for root_ref in root_bindings
+            ),
         )
 
         def worker_factory(receiver: FileImportReceiver) -> PostgreSQLFileImportWorker:

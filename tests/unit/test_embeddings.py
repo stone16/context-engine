@@ -62,18 +62,20 @@ def test_external_provider_binds_model_dimension_and_input_without_leaking_key()
         model="configured-model",
         api_key="credential-value",
         dimension=CONTEXT_FRAGMENT_EMBEDDING_DIMENSION,
+        batch_size=1,
     )
     provider = ExternalEmbeddingProvider(configuration, transport=transport)
 
     vectors = provider.embed(("first", "second"))
 
     assert len(vectors) == 2
+    assert len(observed) == 2
     request, timeout, maximum_bytes = observed[0]
     payload = json.loads(cast(bytes, request.data or b"{}"))
     assert payload == {
         "dimensions": CONTEXT_FRAGMENT_EMBEDDING_DIMENSION,
         "encoding_format": "float",
-        "input": ["first", "second"],
+        "input": ["first"],
         "model": "configured-model",
     }
     assert request.get_header("Authorization") == "Bearer credential-value"
@@ -95,6 +97,7 @@ def test_external_provider_replaces_transport_details_with_generic_failure() -> 
             model="configured-model",
             api_key="credential-value",
             dimension=CONTEXT_FRAGMENT_EMBEDDING_DIMENSION,
+            batch_size=64,
         ),
         transport=transport,
     )
@@ -149,10 +152,104 @@ def test_external_configuration_refuses_unsafe_or_ambiguous_values(
             model=model,
             api_key=api_key,
             dimension=CONTEXT_FRAGMENT_EMBEDDING_DIMENSION,
+            batch_size=64,
         )
 
 
-@pytest.mark.parametrize("value", [float("nan"), float("inf"), 1.0e31, 0.0])
+def test_external_provider_preserves_order_across_bounded_batches() -> None:
+    observed_inputs: list[list[str]] = []
+
+    def transport(request: Request, _timeout: float, _maximum_bytes: int) -> bytes:
+        inputs = json.loads(cast(bytes, request.data or b"{}"))["input"]
+        observed_inputs.append(inputs)
+        return json.dumps(
+            {
+                "data": [
+                    {
+                        "index": index,
+                        "embedding": [float(value)]
+                        * CONTEXT_FRAGMENT_EMBEDDING_DIMENSION,
+                    }
+                    for index, value in reversed(tuple(enumerate(inputs, start=0)))
+                ]
+            }
+        ).encode("utf-8")
+
+    provider = ExternalEmbeddingProvider(
+        ExternalEmbeddingConfiguration(
+            endpoint="https://embedding.invalid/v1/embeddings",
+            model="configured-model",
+            api_key="credential-value",
+            dimension=CONTEXT_FRAGMENT_EMBEDDING_DIMENSION,
+            batch_size=2,
+        ),
+        transport=transport,
+    )
+
+    vectors = provider.embed(("1", "2", "3", "4", "5"))
+
+    assert observed_inputs == [["1", "2"], ["3", "4"], ["5"]]
+    assert tuple(vector[0] for vector in vectors) == (1.0, 2.0, 3.0, 4.0, 5.0)
+
+
+def test_external_provider_collapses_later_batch_failure() -> None:
+    call_count = 0
+
+    def transport(request: Request, _timeout: float, _maximum_bytes: int) -> bytes:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 2:
+            raise OSError("response details")
+        inputs = json.loads(cast(bytes, request.data or b"{}"))["input"]
+        return json.dumps(
+            {
+                "data": [
+                    {
+                        "index": index,
+                        "embedding": [0.25]
+                        * CONTEXT_FRAGMENT_EMBEDDING_DIMENSION,
+                    }
+                    for index, _value in enumerate(inputs)
+                ]
+            }
+        ).encode("utf-8")
+
+    provider = ExternalEmbeddingProvider(
+        ExternalEmbeddingConfiguration(
+            endpoint="https://embedding.invalid/v1/embeddings",
+            model="configured-model",
+            api_key="credential-value",
+            dimension=CONTEXT_FRAGMENT_EMBEDDING_DIMENSION,
+            batch_size=1,
+        ),
+        transport=transport,
+    )
+
+    with pytest.raises(EmbeddingProviderUnavailable) as failure:
+        provider.embed(("first", "second"))
+
+    assert call_count == 2
+    assert str(failure.value) == "Embedding provider is unavailable"
+
+
+@pytest.mark.parametrize("batch_size", [0, 257, True])
+def test_external_configuration_refuses_unbounded_batch_size(
+    batch_size: Any,
+) -> None:
+    with pytest.raises(ValueError, match="configuration is not available"):
+        ExternalEmbeddingConfiguration(
+            endpoint="https://embedding.invalid/v1/embeddings",
+            model="configured-model",
+            api_key="credential-value",
+            dimension=CONTEXT_FRAGMENT_EMBEDDING_DIMENSION,
+            batch_size=batch_size,
+        )
+
+
+@pytest.mark.parametrize(
+    "value",
+    [float("nan"), float("inf"), 1.0e31, 1.0e-50, 0.0],
+)
 def test_embedding_validation_refuses_unstorable_or_zero_vectors(
     value: float,
 ) -> None:
@@ -187,3 +284,4 @@ def test_worker_schema_probe_matches_the_embedding_migration_signature() -> None
         "public.context_worker_prepare_file_publication"
         f"{migration._NEW_PREPARE_SIGNATURE}"
     ) == _EMBEDDING_PREPARE_REGPROCEDURE
+    assert migration._DIMENSION == CONTEXT_FRAGMENT_EMBEDDING_DIMENSION

@@ -56,6 +56,7 @@ class ExternalEmbeddingConfiguration:
     model: str
     api_key: str = field(repr=False)
     dimension: int
+    batch_size: int
     timeout_seconds: float = _DEFAULT_TIMEOUT_SECONDS
 
     def __post_init__(self) -> None:
@@ -78,6 +79,8 @@ class ExternalEmbeddingConfiguration:
             or self.api_key != self.api_key.strip()
             or type(self.timeout_seconds) not in {int, float}
             or not 0 < float(self.timeout_seconds) <= 120
+            or type(self.batch_size) is not int
+            or not 1 <= self.batch_size <= 256
         ):
             raise ValueError("Embedding configuration is not available")
         EmbeddingProfile(self.dimension)
@@ -129,7 +132,18 @@ class ExternalEmbeddingProvider:
         ):
             raise EmbeddingProviderUnavailable("Embedding provider is unavailable")
         try:
-            body = json.dumps(
+            vectors: list[EmbeddingVector] = []
+            for offset in range(0, len(inputs), self._configuration.batch_size):
+                batch = inputs[offset : offset + self._configuration.batch_size]
+                vectors.extend(self._embed_batch(batch))
+            return tuple(vectors)
+        except Exception:
+            raise EmbeddingProviderUnavailable(
+                "Embedding provider is unavailable"
+            ) from None
+
+    def _embed_batch(self, inputs: tuple[str, ...]) -> tuple[EmbeddingVector, ...]:
+        body = json.dumps(
                 {
                     "dimensions": self.profile.dimension,
                     "encoding_format": "float",
@@ -139,50 +153,46 @@ class ExternalEmbeddingProvider:
                 ensure_ascii=False,
                 separators=(",", ":"),
             ).encode("utf-8")
-            request = Request(
-                self._configuration.endpoint,
-                data=body,
-                headers={
-                    "Accept": "application/json",
-                    "Authorization": f"Bearer {self._configuration.api_key}",
-                    "Content-Type": "application/json",
-                },
-                method="POST",
-            )
-            raw_response = self._transport(
-                request,
-                float(self._configuration.timeout_seconds),
-                _MAX_EXTERNAL_RESPONSE_BYTES,
-            )
-            response = json.loads(raw_response)
-            raw_data = response["data"]
-            if type(raw_data) is not list or len(raw_data) != len(inputs):
+        request = Request(
+            self._configuration.endpoint,
+            data=body,
+            headers={
+                "Accept": "application/json",
+                "Authorization": f"Bearer {self._configuration.api_key}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        raw_response = self._transport(
+            request,
+            float(self._configuration.timeout_seconds),
+            _MAX_EXTERNAL_RESPONSE_BYTES,
+        )
+        response = json.loads(raw_response)
+        raw_data = response["data"]
+        if type(raw_data) is not list or len(raw_data) != len(inputs):
+            raise ValueError
+        ordered: list[list[object] | None] = [None] * len(inputs)
+        for item in raw_data:
+            if type(item) is not dict:
                 raise ValueError
-            ordered: list[list[object] | None] = [None] * len(inputs)
-            for item in raw_data:
-                if type(item) is not dict:
-                    raise ValueError
-                index = item.get("index")
-                vector = item.get("embedding")
-                if (
-                    type(index) is not int
-                    or not 0 <= index < len(inputs)
-                    or ordered[index] is not None
-                    or type(vector) is not list
-                ):
-                    raise ValueError
-                ordered[index] = cast(list[object], vector)
-            if any(vector is None for vector in ordered):
+            index = item.get("index")
+            vector = item.get("embedding")
+            if (
+                type(index) is not int
+                or not 0 <= index < len(inputs)
+                or ordered[index] is not None
+                or type(vector) is not list
+            ):
                 raise ValueError
-            return validate_embedding_batch(
-                inputs,
-                cast(list[list[object]], ordered),
-                self.profile,
-            )
-        except Exception:
-            raise EmbeddingProviderUnavailable(
-                "Embedding provider is unavailable"
-            ) from None
+            ordered[index] = cast(list[object], vector)
+        if any(vector is None for vector in ordered):
+            raise ValueError
+        return validate_embedding_batch(
+            inputs,
+            cast(list[list[object]], ordered),
+            self.profile,
+        )
 
 
 class DeterministicEmbeddingTwin:
