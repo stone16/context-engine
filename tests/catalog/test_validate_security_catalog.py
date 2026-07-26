@@ -34,6 +34,7 @@ from scripts.validate_security_catalog import (
     CANONICAL_FILE_CHANGE_SCHEDULING_ACTIVATION,
     CANONICAL_FILE_DELETE_EXECUTION_ACTIVATION,
     CANONICAL_FILE_DELETE_OBSERVATION_ACTIVATION,
+    CANONICAL_FILE_DISPATCH_ACTIVATION,
     CANONICAL_FILE_MIXED_UPSERT_SCHEDULING_ACTIVATION,
     CANONICAL_INVARIANT_IDS,
     CANONICAL_MODEL_EGRESS_ACTIVATION,
@@ -587,6 +588,7 @@ def make_catalog() -> dict[str, object]:
             copy.deepcopy(CANONICAL_FILE_DELETE_OBSERVATION_ACTIVATION),
             copy.deepcopy(CANONICAL_FILE_DELETE_EXECUTION_ACTIVATION),
             copy.deepcopy(CANONICAL_FILE_MIXED_UPSERT_SCHEDULING_ACTIVATION),
+            copy.deepcopy(CANONICAL_FILE_DISPATCH_ACTIVATION),
         ],
         "invariants": invariants,
         "fixtures": fixtures,
@@ -705,6 +707,7 @@ def make_schema() -> dict[str, object]:
                             CANONICAL_FILE_MIXED_UPSERT_SCHEDULING_ACTIVATION
                         )
                     },
+                    {"const": copy.deepcopy(CANONICAL_FILE_DISPATCH_ACTIVATION)},
                 ],
                 "items": False,
             },
@@ -1106,7 +1109,7 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
         assert isinstance(upgrade_trigger, str)
         self.assertIn("Issue #71 activates", upgrade_trigger)
         self.assertEqual(
-            object_list_at(catalog, "activations")[-6],
+            object_list_at(catalog, "activations")[-7],
             CANONICAL_PRIVATE_BOT_DELIVERY_ACTIVATION,
         )
 
@@ -1458,7 +1461,7 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
 
     def test_issue_71_private_bot_activation_stops_before_live_providers(self) -> None:
         catalog = make_catalog()
-        activation = object_list_at(catalog, "activations")[-6]
+        activation = object_list_at(catalog, "activations")[-7]
 
         self.assertEqual(activation, CANONICAL_PRIVATE_BOT_DELIVERY_ACTIVATION)
         self.assertEqual(activation["invariantRef"], "ACTION-SEPARATION-014")
@@ -1482,7 +1485,7 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
 
     def test_issue_81_file_change_activation_stops_before_scheduling(self) -> None:
         catalog = make_catalog()
-        activation = object_list_at(catalog, "activations")[-5]
+        activation = object_list_at(catalog, "activations")[-6]
 
         self.assertEqual(activation, CANONICAL_FILE_CHANGE_FEED_ACTIVATION)
         self.assertEqual(activation["invariantRef"], "WORKER-LEASE-007")
@@ -1503,7 +1506,7 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
 
     def test_issue_83_file_change_scheduling_stays_explicit(self) -> None:
         catalog = make_catalog()
-        activation = object_list_at(catalog, "activations")[-4]
+        activation = object_list_at(catalog, "activations")[-5]
 
         self.assertEqual(
             activation,
@@ -1525,7 +1528,7 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
 
     def test_issue_85_file_delete_observation_has_no_execution_authority(self) -> None:
         catalog = make_catalog()
-        activation = object_list_at(catalog, "activations")[-3]
+        activation = object_list_at(catalog, "activations")[-4]
 
         self.assertEqual(
             activation,
@@ -1549,7 +1552,7 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
 
     def test_issue_87_executes_only_current_exact_file_deletes(self) -> None:
         catalog = make_catalog()
-        activation = object_list_at(catalog, "activations")[-2]
+        activation = object_list_at(catalog, "activations")[-3]
 
         self.assertEqual(
             activation,
@@ -1570,7 +1573,7 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
 
     def test_issue_89_schedules_only_the_mixed_page_upsert_projection(self) -> None:
         catalog = make_catalog()
-        activation = object_list_at(catalog, "activations")[-1]
+        activation = object_list_at(catalog, "activations")[-2]
 
         self.assertEqual(
             activation,
@@ -2011,7 +2014,7 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
 
         self.assertEqual(catalog["catalogVersion"], "1.3.0")
         self.assertEqual(
-            issue_refs[-20:],
+            issue_refs[-21:],
             [
                 "#15",
                 "#16",
@@ -2033,6 +2036,7 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
                 "#85",
                 "#87",
                 "#89",
+                "#91",
             ],
         )
         self.assertIn(

@@ -12,6 +12,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from engine.persistence import (
     DatabasePurpose,
+    assert_scheduler_role,
     assert_security_operator_role,
     create_database_engine,
     load_harness_database_configurations,
@@ -41,6 +42,7 @@ def wait_for_database(timeout_seconds: float) -> None:
                 configurations.action,
                 configurations.runtime,
                 configurations.worker,
+                configurations.scheduler,
                 configurations.learning,
                 configurations.operator,
                 configurations.security_test,
@@ -57,6 +59,8 @@ def wait_for_database(timeout_seconds: float) -> None:
                         )
                     if configuration.purpose is DatabasePurpose.SECURITY_OPERATOR:
                         assert_security_operator_role(connection)
+                    if configuration.purpose is DatabasePurpose.SUPPLY_SCHEDULER:
+                        assert_scheduler_role(connection)
                     if configuration.purpose is DatabasePurpose.LEARNING:
                         assert_learning_role(connection)
                     if configuration.purpose is DatabasePurpose.TRUSTED_IDENTITY:
@@ -85,7 +89,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     purpose_names = (
         "migration, control, identity, egress, action, runtime, worker, learning, "
         "security-operator, "
-        "security-test"
+        "scheduler, security-test"
     )
     print("PostgreSQL harness ready: " + purpose_names)
     return 0

@@ -52,6 +52,7 @@ def test_compose_project_identity_is_generated_per_checkout() -> None:
         "action_role",
         "runtime_role",
         "worker_role",
+        "scheduler_role",
         "learning_role",
         "security_operator_role",
     ],
@@ -100,6 +101,8 @@ def test_compose_passes_dedicated_operator_credentials_to_bootstrap() -> None:
 
     assert "CONTEXT_ENGINE_CONTROL_ROLE" in compose
     assert "CONTEXT_ENGINE_CONTROL_PASSWORD" in compose
+    assert "CONTEXT_ENGINE_SCHEDULER_ROLE" in compose
+    assert "CONTEXT_ENGINE_SCHEDULER_PASSWORD" in compose
     assert "CONTEXT_ENGINE_IDENTITY_ROLE" in compose
     assert "CONTEXT_ENGINE_IDENTITY_PASSWORD" in compose
     assert "CONTEXT_ENGINE_EGRESS_ROLE" in compose
@@ -116,6 +119,7 @@ def test_readiness_probe_includes_dedicated_operator_configuration() -> None:
     wait_script = repository_text("scripts/wait_for_database.py")
 
     assert "configurations.control" in wait_script
+    assert "configurations.scheduler" in wait_script
     assert "configurations.identity" in wait_script
     assert "configurations.egress" in wait_script
     assert "configurations.action" in wait_script

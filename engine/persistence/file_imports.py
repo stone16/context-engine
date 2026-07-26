@@ -144,6 +144,10 @@ class FileImportUnavailable(RuntimeError):
     """Generic failure after a valid lease reaches acquisition/publication."""
 
 
+class FileImportRefused(FileImportUnavailable):
+    """Content-free refusal after the exact job was durably sealed as failed."""
+
+
 class FilePublicationBoundary(StrEnum):
     """The three explicit post-commit fault-injection boundaries."""
 
@@ -265,26 +269,17 @@ class PostgreSQLFileImportWorker:
                 raise LookupError("accepted File observation changed")
             outcome = compile_markdown(source, self._config)
         except LookupError:
-            if redeemed.expected_content_sha256 is None:
+            with suppress(WorkNotAvailable):
                 self._fail(redemption.token, claims)
-            else:
-                with suppress(FileImportUnavailable, WorkNotAvailable):
-                    self._fail(redemption.token, claims)
-            raise FileImportUnavailable("File import is unavailable") from None
+            raise FileImportRefused("File import is unavailable") from None
         if type(outcome) is CompilationFailure:
-            if redeemed.expected_content_sha256 is None:
+            with suppress(WorkNotAvailable):
                 self._fail(redemption.token, claims)
-            else:
-                with suppress(FileImportUnavailable, WorkNotAvailable):
-                    self._fail(redemption.token, claims)
-            raise FileImportUnavailable("File import is unavailable")
+            raise FileImportRefused("File import is unavailable")
         if type(outcome) is not ParsedDocument:  # pragma: no cover - closed union
-            if redeemed.expected_content_sha256 is None:
+            with suppress(WorkNotAvailable):
                 self._fail(redemption.token, claims)
-            else:
-                with suppress(FileImportUnavailable, WorkNotAvailable):
-                    self._fail(redemption.token, claims)
-            raise FileImportUnavailable("File import is unavailable")
+            raise FileImportRefused("File import is unavailable")
         try:
             return self._publish(redemption.token, claims, redeemed, outcome)
         except FileImportInterrupted:

@@ -27,12 +27,14 @@ from engine.persistence.configuration import (
     DELIVERY_EVIDENCE_DEFINER_ROLE,
     EGRESS_GRANT_DEFINER_ROLE,
     EGRESS_ROLE,
+    FILE_DISPATCH_DEFINER_ROLE,
     IDENTITY_ROLE,
     LEARNING_ROLE,
     MIGRATOR_ROLE,
     OPERATOR_ROLE,
     RELEASE_DEFINER_ROLE,
     RUNTIME_ROLE,
+    SCHEDULER_ROLE,
     WORKER_LEASE_DEFINER_ROLE,
     WORKER_ROLE,
 )
@@ -102,6 +104,7 @@ def test_all_login_roles_have_reviewed_capabilities(
     action_configuration: DatabaseConfiguration,
     runtime_configuration: DatabaseConfiguration,
     worker_configuration: DatabaseConfiguration,
+    scheduler_configuration: DatabaseConfiguration,
     learning_configuration: DatabaseConfiguration,
     operator_configuration: DatabaseConfiguration,
 ) -> None:
@@ -113,6 +116,7 @@ def test_all_login_roles_have_reviewed_capabilities(
         action_configuration,
         runtime_configuration,
         worker_configuration,
+        scheduler_configuration,
         learning_configuration,
         operator_configuration,
     )
@@ -132,6 +136,7 @@ def test_all_login_roles_have_reviewed_capabilities(
         ACTION_ROLE,
         RUNTIME_ROLE,
         WORKER_ROLE,
+        SCHEDULER_ROLE,
         LEARNING_ROLE,
         OPERATOR_ROLE,
     }
@@ -172,6 +177,8 @@ def test_post_init_role_provisioning_repairs_a_legacy_volume_idempotently(
         egress_password=os.environ["CONTEXT_ENGINE_EGRESS_PASSWORD"],
         action_role=ACTION_ROLE,
         action_password=os.environ["CONTEXT_ENGINE_ACTION_PASSWORD"],
+        scheduler_role=SCHEDULER_ROLE,
+        scheduler_password=os.environ["CONTEXT_ENGINE_SCHEDULER_PASSWORD"],
         learning_role=LEARNING_ROLE,
         learning_password=os.environ["CONTEXT_ENGINE_LEARNING_PASSWORD"],
         security_operator_role=OPERATOR_ROLE,
@@ -180,6 +187,7 @@ def test_post_init_role_provisioning_repairs_a_legacy_volume_idempotently(
         ],
         definer_role=ACCESS_POLICY_DEFINER_ROLE,
         worker_lease_definer_role=WORKER_LEASE_DEFINER_ROLE,
+        file_dispatch_definer_role=FILE_DISPATCH_DEFINER_ROLE,
         context_run_reader_definer_role=CONTEXT_RUN_READER_DEFINER_ROLE,
         release_definer_role=RELEASE_DEFINER_ROLE,
         delivery_evidence_definer_role=DELIVERY_EVIDENCE_DEFINER_ROLE,
@@ -215,6 +223,7 @@ def test_post_init_role_provisioning_repairs_a_legacy_volume_idempotently(
             for role_name in (
                 ACCESS_POLICY_DEFINER_ROLE,
                 WORKER_LEASE_DEFINER_ROLE,
+                FILE_DISPATCH_DEFINER_ROLE,
                 CONTEXT_RUN_READER_DEFINER_ROLE,
                 DELIVERY_EVIDENCE_DEFINER_ROLE,
                 CITATION_DEFINER_ROLE,
@@ -238,13 +247,14 @@ def test_post_init_role_provisioning_repairs_a_legacy_volume_idempotently(
                 FROM pg_roles
                 WHERE rolname IN (
                     %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s
+                    %s, %s
                 )
                 """,
                 (
                     CONTROL_ROLE,
                     ACCESS_POLICY_DEFINER_ROLE,
                     WORKER_LEASE_DEFINER_ROLE,
+                    FILE_DISPATCH_DEFINER_ROLE,
                     CONTEXT_RUN_READER_DEFINER_ROLE,
                     DELIVERY_EVIDENCE_DEFINER_ROLE,
                     RELEASE_DEFINER_ROLE,
@@ -459,6 +469,55 @@ def test_post_init_role_provisioning_repairs_a_legacy_volume_idempotently(
                 True,
                 True,
                 1,
+            )
+            dispatch_facts = bootstrap_connection.execute(
+                """
+                SELECT
+                    dispatch.rolcanlogin,
+                    dispatch.rolsuper,
+                    dispatch.rolcreaterole,
+                    dispatch.rolcreatedb,
+                    dispatch.rolinherit,
+                    dispatch.rolreplication,
+                    dispatch.rolbypassrls,
+                    has_database_privilege(dispatch.oid, current_database(), 'CONNECT'),
+                    NOT EXISTS (
+                        SELECT 1
+                        FROM pg_auth_members AS granted_to_dispatch
+                        WHERE granted_to_dispatch.member = dispatch.oid
+                    ),
+                    (
+                        SELECT count(*)
+                        FROM pg_auth_members AS dispatch_members
+                        WHERE dispatch_members.roleid = dispatch.oid
+                    ),
+                    dispatch_membership.admin_option,
+                    dispatch_membership.inherit_option,
+                    dispatch_membership.set_option
+                FROM pg_roles AS dispatch
+                JOIN pg_auth_members AS dispatch_membership
+                  ON dispatch_membership.roleid = dispatch.oid
+                JOIN pg_roles AS migrator
+                  ON migrator.oid = dispatch_membership.member
+                WHERE dispatch.rolname = %s
+                  AND migrator.rolname = %s
+                """,
+                (FILE_DISPATCH_DEFINER_ROLE, MIGRATOR_ROLE),
+            ).fetchone()
+            assert dispatch_facts == (
+                False,
+                False,
+                False,
+                False,
+                False,
+                False,
+                False,
+                False,
+                True,
+                1,
+                False,
+                False,
+                True,
             )
             learning_facts = bootstrap_connection.execute(
                 """

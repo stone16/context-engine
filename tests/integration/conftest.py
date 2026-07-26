@@ -14,6 +14,7 @@ from engine.persistence import (
     assert_action_role,
     assert_control_role,
     assert_runtime_role,
+    assert_scheduler_role,
     assert_security_operator_role,
     assert_worker_role,
     create_database_engine,
@@ -107,6 +108,13 @@ def worker_configuration(
 
 
 @pytest.fixture(scope="session")
+def scheduler_configuration(
+    database_configurations: HarnessDatabaseConfigurations,
+) -> DatabaseConfiguration:
+    return database_configurations.scheduler
+
+
+@pytest.fixture(scope="session")
 def learning_configuration(
     database_configurations: HarnessDatabaseConfigurations,
 ) -> DatabaseConfiguration:
@@ -152,6 +160,21 @@ def guarded_worker_engine(
     try:
         with engine.connect() as connection:
             assert_worker_role(connection)
+        yield engine
+    finally:
+        engine.dispose()
+
+
+@pytest.fixture(scope="session")
+def guarded_scheduler_engine(
+    scheduler_configuration: DatabaseConfiguration,
+) -> Iterator[Engine]:
+    """Expose only the function-only non-owner File scheduler engine."""
+
+    engine = create_database_engine(scheduler_configuration)
+    try:
+        with engine.connect() as connection:
+            assert_scheduler_role(connection)
         yield engine
     finally:
         engine.dispose()

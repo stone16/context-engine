@@ -16,6 +16,7 @@ from engine.persistence.configuration import (
     MIGRATOR_ROLE,
     OPERATOR_ROLE,
     RUNTIME_ROLE,
+    SCHEDULER_ROLE,
     WORKER_ROLE,
     DatabaseConfigurationError,
     DatabasePurpose,
@@ -55,6 +56,10 @@ def database_environment() -> dict[str, str]:
             "postgresql+psycopg://context_engine_worker:worker-secret@"
             "127.0.0.1:5432/context_engine"
         ),
+        "CONTEXT_ENGINE_SCHEDULER_DATABASE_URL": (
+            "postgresql+psycopg://context_engine_scheduler:scheduler-secret@"
+            "127.0.0.1:5432/context_engine"
+        ),
         "CONTEXT_ENGINE_LEARNING_DATABASE_URL": (
             "postgresql+psycopg://context_engine_learning:learning-secret@"
             "127.0.0.1:5432/context_engine"
@@ -74,6 +79,7 @@ def database_environment() -> dict[str, str]:
         "CONTEXT_ENGINE_EGRESS_ROLE": EGRESS_ROLE,
         "CONTEXT_ENGINE_ACTION_ROLE": ACTION_ROLE,
         "CONTEXT_ENGINE_WORKER_ROLE": WORKER_ROLE,
+        "CONTEXT_ENGINE_SCHEDULER_ROLE": SCHEDULER_ROLE,
         "CONTEXT_ENGINE_LEARNING_ROLE": LEARNING_ROLE,
         "CONTEXT_ENGINE_SECURITY_OPERATOR_ROLE": OPERATOR_ROLE,
     }
@@ -89,6 +95,10 @@ def database_environment() -> dict[str, str]:
         (DatabasePurpose.TRUSTED_ACTION, "CONTEXT_ENGINE_ACTION_DATABASE_URL"),
         (DatabasePurpose.API_RUNTIME, "CONTEXT_ENGINE_RUNTIME_DATABASE_URL"),
         (DatabasePurpose.SUPPLY_WORKER, "CONTEXT_ENGINE_WORKER_DATABASE_URL"),
+        (
+            DatabasePurpose.SUPPLY_SCHEDULER,
+            "CONTEXT_ENGINE_SCHEDULER_DATABASE_URL",
+        ),
         (DatabasePurpose.LEARNING, "CONTEXT_ENGINE_LEARNING_DATABASE_URL"),
         (
             DatabasePurpose.SECURITY_OPERATOR,

@@ -11,6 +11,7 @@ from engine.persistence.configuration import (
     MIGRATOR_ROLE,
     OPERATOR_ROLE,
     RUNTIME_ROLE,
+    SCHEDULER_ROLE,
     WORKER_ROLE,
     DatabaseConfigurationError,
     DatabasePurpose,
@@ -49,6 +50,10 @@ def _database_environment() -> dict[str, str]:
             "postgresql+psycopg://context_engine_worker:worker-secret@"
             "127.0.0.1:5432/context_engine"
         ),
+        "CONTEXT_ENGINE_SCHEDULER_DATABASE_URL": (
+            "postgresql+psycopg://context_engine_scheduler:scheduler-secret@"
+            "127.0.0.1:5432/context_engine"
+        ),
         "CONTEXT_ENGINE_LEARNING_DATABASE_URL": (
             "postgresql+psycopg://context_engine_learning:learning-secret@"
             "127.0.0.1:5432/context_engine"
@@ -68,6 +73,7 @@ def _database_environment() -> dict[str, str]:
         "CONTEXT_ENGINE_ACTION_ROLE": ACTION_ROLE,
         "CONTEXT_ENGINE_RUNTIME_ROLE": RUNTIME_ROLE,
         "CONTEXT_ENGINE_WORKER_ROLE": WORKER_ROLE,
+        "CONTEXT_ENGINE_SCHEDULER_ROLE": SCHEDULER_ROLE,
         "CONTEXT_ENGINE_LEARNING_ROLE": LEARNING_ROLE,
         "CONTEXT_ENGINE_SECURITY_OPERATOR_ROLE": OPERATOR_ROLE,
     }
@@ -100,6 +106,7 @@ def test_harness_exposes_learning_as_a_distinct_login() -> None:
         configurations.action.expected_role,
         configurations.runtime.expected_role,
         configurations.worker.expected_role,
+        configurations.scheduler.expected_role,
         configurations.learning.expected_role,
         configurations.operator.expected_role,
     } == {
@@ -110,6 +117,7 @@ def test_harness_exposes_learning_as_a_distinct_login() -> None:
         ACTION_ROLE,
         RUNTIME_ROLE,
         WORKER_ROLE,
+        SCHEDULER_ROLE,
         LEARNING_ROLE,
         OPERATOR_ROLE,
     }

@@ -18,6 +18,8 @@ required_environment=(
   CONTEXT_ENGINE_RUNTIME_PASSWORD
   CONTEXT_ENGINE_WORKER_ROLE
   CONTEXT_ENGINE_WORKER_PASSWORD
+  CONTEXT_ENGINE_SCHEDULER_ROLE
+  CONTEXT_ENGINE_SCHEDULER_PASSWORD
   CONTEXT_ENGINE_LEARNING_ROLE
   CONTEXT_ENGINE_LEARNING_PASSWORD
   CONTEXT_ENGINE_SECURITY_OPERATOR_ROLE
@@ -51,6 +53,8 @@ psql \
 \getenv runtime_password CONTEXT_ENGINE_RUNTIME_PASSWORD
 \getenv worker_role CONTEXT_ENGINE_WORKER_ROLE
 \getenv worker_password CONTEXT_ENGINE_WORKER_PASSWORD
+\getenv scheduler_role CONTEXT_ENGINE_SCHEDULER_ROLE
+\getenv scheduler_password CONTEXT_ENGINE_SCHEDULER_PASSWORD
 \getenv learning_role CONTEXT_ENGINE_LEARNING_ROLE
 \getenv learning_password CONTEXT_ENGINE_LEARNING_PASSWORD
 \getenv security_operator_role CONTEXT_ENGINE_SECURITY_OPERATOR_ROLE
@@ -89,6 +93,16 @@ CREATE ROLE :"control_role"
 CREATE ROLE :"worker_role"
   LOGIN
   PASSWORD :'worker_password'
+  NOSUPERUSER
+  NOCREATEDB
+  NOCREATEROLE
+  NOINHERIT
+  NOREPLICATION
+  NOBYPASSRLS;
+
+CREATE ROLE :"scheduler_role"
+  LOGIN
+  PASSWORD :'scheduler_password'
   NOSUPERUSER
   NOCREATEDB
   NOCREATEROLE
@@ -148,14 +162,14 @@ CREATE ROLE :"security_operator_role"
 
 REVOKE ALL ON DATABASE :"database_name" FROM PUBLIC;
 GRANT CONNECT ON DATABASE :"database_name"
-  TO :"migrator_role", :"control_role", :"runtime_role", :"worker_role",
+  TO :"migrator_role", :"control_role", :"runtime_role", :"worker_role", :"scheduler_role",
      :"identity_role", :"egress_role", :"action_role", :"learning_role", :"security_operator_role";
 ALTER DATABASE :"database_name" OWNER TO :"migrator_role";
 
 REVOKE ALL ON SCHEMA public FROM PUBLIC;
 ALTER SCHEMA public OWNER TO :"migrator_role";
 GRANT USAGE ON SCHEMA public
-  TO :"control_role", :"runtime_role", :"worker_role",
+  TO :"control_role", :"runtime_role", :"worker_role", :"scheduler_role",
      :"identity_role", :"egress_role", :"action_role", :"learning_role", :"security_operator_role";
 
 -- pgvector is an untrusted extension, so only the disposable bootstrap
