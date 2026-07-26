@@ -2334,34 +2334,14 @@ def test_claim_refreshes_membership_expiry_after_waiting_for_source_progress(
     )
     migration_engine = create_database_engine(migration_configuration)
     try:
-        with migration_engine.connect() as blocker:
-            transaction = blocker.begin()
-            source_id = blocker.execute(
+        with migration_engine.connect() as connection:
+            source_id = connection.execute(
                 text(
                     "SELECT source_id FROM context_source "
                     "WHERE organization_id = :organization_id"
                 ),
                 {"organization_id": organization_id},
             ).scalar_one()
-            blocker.execute(
-                text(
-                    "UPDATE membership SET valid_until = "
-                    "pg_catalog.clock_timestamp() + interval '250 milliseconds' "
-                    "WHERE organization_id = :organization_id"
-                ),
-                {"organization_id": organization_id},
-            )
-            blocker.execute(
-                text(
-                    "SELECT pg_catalog.pg_advisory_xact_lock("
-                    "pg_catalog.hashtextextended("
-                    "'context-engine.file-source-progress:' || "
-                    "CAST(:organization_id AS text) || ':' || "
-                    "CAST(:source_id AS text), 0))"
-                ),
-                {"organization_id": organization_id, "source_id": source_id},
-            )
-            transaction.commit()
 
         with migration_engine.connect() as blocker:
             transaction = blocker.begin()
@@ -2402,7 +2382,14 @@ def test_claim_refreshes_membership_expiry_after_waiting_for_source_progress(
                     sleep(0.01)
                 if not waiting:
                     pytest.fail("File dispatch did not wait for Source progress")
-                sleep(0.4)
+                blocker.execute(
+                    text(
+                        "UPDATE membership SET valid_until = "
+                        "pg_catalog.clock_timestamp() - interval '1 second' "
+                        "WHERE organization_id = :organization_id"
+                    ),
+                    {"organization_id": organization_id},
+                )
                 transaction.commit()
                 assert pending_claim.result(timeout=5) == FileDispatchNoWork()
         with migration_engine.connect() as connection:
