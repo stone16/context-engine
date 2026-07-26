@@ -237,17 +237,12 @@ def _ann_plan_and_exact_result(
                 text("SELECT set_config(:name, :value, true)"),
                 {"name": name, "value": value},
             )
-        ann_sql = (
-            "SELECT organization_id, resource_ref, revision_id, fragment_ref "
-            "FROM context_fragment WHERE embedding IS NOT NULL "
-            "ORDER BY embedding <=> CAST(:query_embedding AS vector) LIMIT :limit"
-        )
         plan = "\n".join(
             str(line)
             for line in connection.execute(
                 text(
                     "EXPLAIN (ANALYZE, COSTS OFF, TIMING OFF, SUMMARY OFF) "
-                    + ann_sql
+                    + _VECTOR_CANDIDATE_SQL
                 ),
                 parameters,
             ).scalars()
