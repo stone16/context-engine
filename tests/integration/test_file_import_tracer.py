@@ -593,7 +593,7 @@ def test_registered_file_import_publishes_one_exact_authorized_http_package(
         )
     with migration_engine.connect() as connection:
         before_invalid = _publication_effect_counts(connection, organization_id)
-    with pytest.raises(ValueError, match="Markdown filename"):
+    with pytest.raises(ValueError, match="canonical relative Markdown path"):
         PrepareFileImport(
             source_ref=source.source_ref,
             path=FileImportPath("../outside.md"),

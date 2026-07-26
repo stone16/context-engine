@@ -42,6 +42,27 @@ _ACCEPT_FUNCTIONS = (
     f"context_control_accept_file_change_page{_ACCEPT_SIGNATURE}",
     f"context_internal_accept_file_delete_observation_page{_ACCEPT_SIGNATURE}",
 )
+_FILE_OPERATION_FENCES = (
+    "context-engine.file-change-scheduling-migration-fence",
+    "context-engine.file-dispatch-migration-fence",
+)
+_PATH_CONSTRAINTS = (
+    (
+        "file_acquisition",
+        "ck_file_acquisition_one_markdown_filename",
+        "",
+    ),
+    (
+        "file_source_change",
+        "ck_file_source_change_markdown_path",
+        "",
+    ),
+    (
+        "file_delete_observation_execution",
+        "ck_file_delete_observation_execution_observation",
+        " AND content_sha256 ~ '^[0-9a-f]{64}$' AND content_length >= 0",
+    ),
+)
 _FLAT_FUNCTION_PREDICATE = (
     "item.element->>'path' !~ '^[^/\\\\]*\\.[mM][dD]$'\n"
     "                   OR item.element->>'path' IN ('.', '..')"
@@ -86,42 +107,29 @@ def _replace_accept_path_predicate(searched: str, replacement: str) -> None:
 
 
 def _replace_constraints(path_predicate: str) -> None:
-    op.drop_constraint(
-        "ck_file_acquisition_one_markdown_filename",
-        "file_acquisition",
-        type_="check",
-    )
-    op.create_check_constraint(
-        "ck_file_acquisition_one_markdown_filename",
-        "file_acquisition",
-        path_predicate,
-    )
-    op.drop_constraint(
-        "ck_file_source_change_markdown_path",
-        "file_source_change",
-        type_="check",
-    )
-    op.create_check_constraint(
-        "ck_file_source_change_markdown_path",
-        "file_source_change",
-        path_predicate,
-    )
-    op.drop_constraint(
-        "ck_file_delete_observation_execution_observation",
-        "file_delete_observation_execution",
-        type_="check",
-    )
-    op.create_check_constraint(
-        "ck_file_delete_observation_execution_observation",
-        "file_delete_observation_execution",
-        f"{path_predicate} AND content_sha256 ~ '^[0-9a-f]{{64}}$' "
-        "AND content_length >= 0",
-    )
+    for table_name, constraint_name, additional_predicate in _PATH_CONSTRAINTS:
+        op.drop_constraint(constraint_name, table_name, type_="check")
+        op.create_check_constraint(
+            constraint_name,
+            table_name,
+            f"{path_predicate}{additional_predicate}",
+        )
+
+
+def _acquire_file_operation_fences() -> None:
+    connection = op.get_bind()
+    for migration_fence in _FILE_OPERATION_FENCES:
+        connection.exec_driver_sql(
+            "SELECT pg_catalog.pg_advisory_xact_lock("
+            "pg_catalog.hashtextextended(%s, 0))",
+            (migration_fence,),
+        )
 
 
 def upgrade() -> None:
     """Align every durable File path constraint with recursive acquisition."""
 
+    _acquire_file_operation_fences()
     _replace_constraints(_NESTED_MARKDOWN_PATH)
     _replace_accept_path_predicate(
         _FLAT_FUNCTION_PREDICATE,
@@ -132,6 +140,7 @@ def upgrade() -> None:
 def downgrade() -> None:
     """Restore flat paths only when no nested publication fact remains."""
 
+    _acquire_file_operation_fences()
     connection = op.get_bind()
     nested_count = connection.exec_driver_sql(
         """

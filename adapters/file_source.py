@@ -66,6 +66,24 @@ class _AnchoredRoot:
     descriptor: int
 
 
+@dataclass(frozen=True, slots=True)
+class _FileIdentity:
+    device: int
+    inode: int
+    mode_type: int
+    size: int
+    modified_ns: int
+    changed_ns: int
+
+
+@dataclass(frozen=True, slots=True)
+class _DirectoryEntry:
+    name: str
+    relative_path: str
+    identity: _FileIdentity
+    is_directory: bool
+
+
 def _open_anchored_directory(path: Path) -> tuple[Path, int]:
     """Open every absolute path component without following any symlink."""
 
@@ -237,52 +255,52 @@ class FileRootRegistry:
         initial = _directory_snapshot(descriptor, relative_prefix)
         directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
         no_follow = getattr(os, "O_NOFOLLOW", 0)
-        for name, kind, relative_path, identity in initial:
-            if kind == "directory":
+        for entry in initial:
+            if entry.is_directory:
                 try:
                     child = os.open(
-                        name,
+                        entry.name,
                         directory_flags | no_follow,
                         dir_fd=descriptor,
                     )
                 except OSError:
                     raise RuntimeError("File root observation is unstable") from None
                 try:
-                    if _file_identity(os.fstat(child)) != identity:
+                    if _file_identity(os.fstat(child)) != entry.identity:
                         raise RuntimeError("File root observation is unstable")
                     self._observe_directory(
                         root_ref,
                         child,
-                        relative_prefix=relative_path,
+                        relative_prefix=entry.relative_path,
                         observed=observed,
                     )
                 finally:
                     os.close(child)
                 try:
                     after = os.stat(
-                        name,
+                        entry.name,
                         dir_fd=descriptor,
                         follow_symlinks=False,
                     )
                 except OSError:
                     raise RuntimeError("File root observation is unstable") from None
-                if _file_identity(after) != identity:
+                if _file_identity(after) != entry.identity:
                     raise RuntimeError("File root observation is unstable")
                 continue
-            path = _file_import_path_or_none(relative_path)
-            if path is None or not stat.S_ISREG(identity[2]):
+            path = _file_import_path_or_none(entry.relative_path)
+            if path is None or not stat.S_ISREG(entry.identity.mode_type):
                 continue
             try:
                 payload, opened = self._read_regular(root_ref, path)
                 after = os.stat(
-                    name,
+                    entry.name,
                     dir_fd=descriptor,
                     follow_symlinks=False,
                 )
             except (LookupError, OSError):
                 raise RuntimeError("File root observation is unstable") from None
             if not (
-                identity == _file_identity(opened) == _file_identity(after)
+                entry.identity == _file_identity(opened) == _file_identity(after)
             ):
                 raise RuntimeError("File root observation is unstable")
             observed.append((path, payload))
@@ -306,14 +324,14 @@ class FileRootRegistry:
         self.close()
 
 
-def _file_identity(value: os.stat_result) -> tuple[int, int, int, int, int, int]:
-    return (
-        value.st_dev,
-        value.st_ino,
-        stat.S_IFMT(value.st_mode),
-        value.st_size,
-        value.st_mtime_ns,
-        value.st_ctime_ns,
+def _file_identity(value: os.stat_result) -> _FileIdentity:
+    return _FileIdentity(
+        device=value.st_dev,
+        inode=value.st_ino,
+        mode_type=stat.S_IFMT(value.st_mode),
+        size=value.st_size,
+        modified_ns=value.st_mtime_ns,
+        changed_ns=value.st_ctime_ns,
     )
 
 
@@ -327,33 +345,36 @@ def _file_import_path_or_none(name: str) -> FileImportPath | None:
 def _directory_snapshot(
     descriptor: int,
     relative_prefix: str,
-) -> tuple[tuple[str, str, str, tuple[int, int, int, int, int, int]], ...]:
+) -> tuple[_DirectoryEntry, ...]:
     """Classify only recursive directories and Markdown path candidates."""
 
     try:
         names = os.listdir(descriptor)
     except OSError:
         raise RuntimeError("File root observation is unstable") from None
-    entries: list[
-        tuple[str, str, str, tuple[int, int, int, int, int, int]]
-    ] = []
+    entries: list[_DirectoryEntry] = []
     safe_names = tuple(name for name in names if _safe_directory_component(name))
     for name in sorted(safe_names, key=lambda item: item.encode("utf-8")):
-        if not _safe_directory_component(name):
-            continue
         relative_path = f"{relative_prefix}/{name}" if relative_prefix else name
         try:
             metadata = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
         except OSError:
             raise RuntimeError("File root observation is unstable") from None
         if stat.S_ISDIR(metadata.st_mode) and len(relative_path) + len("/.md") <= 255:
-            kind = "directory"
+            is_directory = True
         elif _file_import_path_or_none(relative_path) is not None:
-            kind = "markdown"
+            is_directory = False
         else:
             continue
-        entries.append((name, kind, relative_path, _file_identity(metadata)))
-    return tuple(sorted(entries, key=lambda item: item[0].encode("utf-8")))
+        entries.append(
+            _DirectoryEntry(
+                name=name,
+                relative_path=relative_path,
+                identity=_file_identity(metadata),
+                is_directory=is_directory,
+            )
+        )
+    return tuple(sorted(entries, key=lambda item: item.name.encode("utf-8")))
 
 
 def _safe_directory_component(name: object) -> bool:

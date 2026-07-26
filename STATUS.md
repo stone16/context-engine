@@ -93,6 +93,18 @@ Follow the ADR for its exact evidence boundary.
 | [0059](./docs/decisions/0059-dispatch-scheduled-file-imports-through-exact-leases.md) | Dispatch scheduled File imports through exact leases |
 | [0060](./docs/decisions/0060-reclaim-expired-file-imports-with-bounded-retries.md) | Reclaim expired File imports with bounded retries |
 
+Issue #99 extends the active File Provider boundary from a flat root to
+deterministic recursive discovery of canonical nested Markdown paths. Each
+directory hop and final read stays anchored to the registered root with
+no-follow descriptors and stable before/after identity checks; symlinks,
+non-regular targets, path escapes, unstable scans, and roots beyond the retained
+10,000-path baseline bound fail closed. Worker reads use a server-owned bounded
+byte ceiling (1 MiB by default, configurable only within 1–64 MiB), and the real
+PostgreSQL evidence covers nested publication plus mixed flat/nested replay.
+
+This does **not** activate provider polling/watchers, a full-resync mechanism,
+new delete authority, or any non-Markdown carrier.
+
 ### Wire contract, SDK, and trusted delivery
 
 | ADR | Activates |
