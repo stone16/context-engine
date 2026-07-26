@@ -2081,6 +2081,83 @@ CANONICAL_FILE_DISPATCH_ACTIVATION: dict[str, object] = {
     ],
 }
 
+CANONICAL_FILE_RECLAIM_ACTIVATION: dict[str, object] = {
+    "issueRef": "#93",
+    "invariantRef": "WORKER-LEASE-007",
+    "carrier": "bounded autonomous reclaim of expired scheduled File upserts",
+    "status": "active_fail_closed",
+    "policyEpochScope": "not-runtime-authority",
+    "controlBoundary": (
+        "function-only scheduler login -> expired lease plus database-owned "
+        "exponential backoff -> current page/acquisition/audience/receiver "
+        "revalidation -> deterministic recovery-first SKIP LOCKED selector -> exact "
+        "next-generation WorkerLease -> existing durable-boundary File worker resume"
+    ),
+    "testEvidence": [
+        {
+            "id": "PG-FILE-RECLAIM-093",
+            "surface": (
+                "tests/integration/test_file_dispatch.py::"
+                "test_scheduler_reclaims_one_expired_dispatch_after_database_backoff "
+                "tests/integration/test_file_dispatch.py::"
+                "test_scheduler_does_not_reclaim_after_automatic_generation_budget "
+                "tests/integration/test_file_dispatch.py::"
+                "test_scheduler_reclaim_revalidates_current_membership_without_mutation"
+            ),
+            "oracle": (
+                "The non-owner scheduler reclaims only after database expiry plus "
+                "generation-derived backoff, atomically advances to the exact next "
+                "generation with one digest-only event, returns content-free no-work "
+                "before eligibility, after the generation-four budget, or after "
+                "current Membership authority is revoked, and mutates nothing on "
+                "refusal."
+            ),
+        },
+        {
+            "id": "PG-FILE-RECLAIM-CONCURRENCY-093",
+            "surface": (
+                "tests/integration/test_file_dispatch.py::"
+                "test_concurrent_schedulers_reclaim_one_expired_generation_once"
+            ),
+            "oracle": (
+                "Two scheduler-role authorities competing for one expired generation "
+                "yield exactly one next-generation lease and one immutable reclaim "
+                "event; the loser receives content-free no-work."
+            ),
+        },
+        {
+            "id": "PROC-FILE-RECLAIM-093",
+            "surface": (
+                "tests/integration/test_file_dispatch.py::"
+                "test_scheduler_recovers_interrupted_publication_and_stales_old_lease"
+            ),
+            "oracle": (
+                "Across acquired, prepared, and indexed durable boundaries, the "
+                "scheduler and existing File worker resume with one higher-generation "
+                "lease, the replaced lease has zero effect, and exactly one active "
+                "Revision/publication effect remains."
+            ),
+        },
+    ],
+    "deferredEvidence": [
+        "dead-letter state, exhaustion transition, operator remediation, requeue, "
+        "and retry observability",
+        "provider polling, automatic page acceptance, full resync, and automatic "
+        "delete ordering",
+    ],
+    "futureCarriers": [
+        "dead-letter and operator remediation owner",
+        "provider polling and full resync",
+        "explicit mixed-change ordering policy",
+    ],
+    "notActive": [
+        "scheduler tenant, Source, job, attempt, timing, backoff, or generation choice",
+        "terminal failure retry, dead-letter transition, or operator requeue",
+        "manual import or delete recovery",
+        "Runtime authorization from Supply retry or lease state",
+    ],
+}
+
 CANONICAL_ACTIVATIONS: list[dict[str, object]] = [
     CANONICAL_REVOCATION_ACTIVATION,
     CANONICAL_UNAVAILABLE_CAPABILITY_ACTIVATION,
@@ -2103,6 +2180,7 @@ CANONICAL_ACTIVATIONS: list[dict[str, object]] = [
     CANONICAL_FILE_DELETE_EXECUTION_ACTIVATION,
     CANONICAL_FILE_MIXED_UPSERT_SCHEDULING_ACTIVATION,
     CANONICAL_FILE_DISPATCH_ACTIVATION,
+    CANONICAL_FILE_RECLAIM_ACTIVATION,
 ]
 CANONICAL_ACTIVATION_ISSUE_LIST = ", ".join(
     f"Issue {activation['issueRef']}" for activation in CANONICAL_ACTIVATIONS

@@ -1196,6 +1196,111 @@ def test_file_dispatch_revision_downgrades_and_reapplies_empty(
     assert _revision_rows(migration_configuration) == [HEAD_REVISION]
 
 
+def test_file_reclaim_revision_downgrades_and_reapplies_empty(
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    """Issue #93 removes only its unminted higher-generation capability."""
+
+    alembic_configuration = Config(ROOT / "alembic.ini")
+    try:
+        command.downgrade(alembic_configuration, "20260725_0033")
+        assert _revision_rows(migration_configuration) == ["20260725_0033"]
+        engine = create_database_engine(migration_configuration)
+        try:
+            with engine.connect() as connection:
+                definition = connection.execute(
+                    text(
+                        "SELECT pg_get_functiondef("
+                        "'public.context_scheduler_claim_file_import("
+                        "bigint,bytea,text[])'::regprocedure)"
+                    )
+                ).scalar_one()
+                assert "context_scheduler_claim_first_file_import" not in definition
+                assert "event_type" not in definition
+                assert connection.execute(
+                    text(
+                        "SELECT to_regprocedure("
+                        "'public.context_scheduler_claim_first_file_import("
+                        "bigint,bytea,text[])') IS NULL"
+                    )
+                ).scalar_one()
+                assert connection.execute(
+                    text(
+                        "SELECT to_regclass("
+                        "'public.ix_file_import_job_dispatch_expired') IS NULL"
+                    )
+                ).scalar_one()
+        finally:
+            engine.dispose()
+    finally:
+        command.upgrade(alembic_configuration, "head")
+
+    assert _revision_rows(migration_configuration) == [HEAD_REVISION]
+
+
+def test_file_reclaim_revision_refuses_retained_higher_generation(
+    tmp_path: Path,
+    migration_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+) -> None:
+    """Downgrade preserves every retained scheduler-created reclaim fact."""
+
+    scenario = _prepare_file_import_scenario(
+        tmp_path,
+        migration_configuration,
+        guarded_control_engine,
+        issue_lease=False,
+    )
+    organization_id = scenario.organization_id
+    job_id = scenario.prepared.job_id
+    engine = create_database_engine(migration_configuration)
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "UPDATE file_import_job SET state = 'leased', "
+                    "lease_generation = 2, signing_key_version = 1, "
+                    "lease_nonce_digest = digest('reclaim-test', 'sha256'), "
+                    "lease_issued_at = clock_timestamp(), "
+                    "lease_expires_at = clock_timestamp() + interval '5 minutes', "
+                    "dispatch_claimed = true WHERE "
+                    "organization_id = :organization_id AND job_id = :job_id"
+                ),
+                {
+                    "organization_id": organization_id,
+                    "job_id": job_id,
+                },
+            )
+        with pytest.raises(
+            RuntimeError,
+            match="automatic File reclaim downgrade requires no retained",
+        ):
+            command.downgrade(Config(ROOT / "alembic.ini"), "20260725_0033")
+        assert _revision_rows(migration_configuration) == [HEAD_REVISION]
+        with engine.connect() as connection:
+            assert connection.execute(
+                text(
+                    "SELECT lease_generation, dispatch_claimed FROM "
+                    "file_import_job WHERE organization_id = :organization_id "
+                    "AND job_id = :job_id"
+                ),
+                {"organization_id": organization_id, "job_id": job_id},
+            ).one() == (2, True)
+    finally:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "UPDATE file_import_job SET state = 'available', "
+                    "lease_generation = 0, signing_key_version = NULL, "
+                    "lease_nonce_digest = NULL, lease_issued_at = NULL, "
+                    "lease_expires_at = NULL, dispatch_claimed = false WHERE "
+                    "organization_id = :organization_id AND job_id = :job_id"
+                ),
+                {"organization_id": organization_id, "job_id": job_id},
+            )
+        engine.dispose()
+
+
 def test_mixed_file_upsert_downgrade_waits_for_in_flight_scheduler(
     tmp_path: Path,
     migration_configuration: DatabaseConfiguration,

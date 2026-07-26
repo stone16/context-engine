@@ -39,6 +39,7 @@ if TYPE_CHECKING:
 
 DEFAULT_WORKER_LEASE_TTL_SECONDS: Final = 300
 MAX_WORKER_LEASE_TTL_SECONDS: Final = 3600
+FILE_DISPATCH_MAX_LEASE_GENERATION: Final = 4
 
 
 def _utc_now() -> datetime:
@@ -165,14 +166,14 @@ class WorkerLeaseAuthorityUnavailable(RuntimeError):
 
 @dataclass(frozen=True, slots=True)
 class FileDispatchNoWork:
-    """Closed, content-free result when no first-attempt File job is eligible."""
+    """Closed, content-free result when no automatic File work is eligible."""
 
     status: Literal["no_work"] = field(default="no_work", init=False)
 
 
 @dataclass(frozen=True, slots=True, repr=False)
 class FileDispatchLease:
-    """Scheduler-minted exact first-attempt lease and internal routing facts."""
+    """Scheduler-minted exact bounded-attempt lease and internal routing facts."""
 
     token: WorkerLeaseToken = field(repr=False)
     organization_id: UUID = field(repr=False)
@@ -191,8 +192,15 @@ class FileDispatchLease:
         if type(self.source_ref) is not SourceRef:
             raise TypeError("File dispatch source must be SourceRef")
         _require_uuid("service_principal_id", self.service_principal_id)
-        if self.lease_generation != 1:
-            raise ValueError("first-attempt File dispatch requires generation one")
+        if (
+            type(self.lease_generation) is not int
+            or not 1
+            <= self.lease_generation
+            <= FILE_DISPATCH_MAX_LEASE_GENERATION
+        ):
+            raise ValueError(
+                "File dispatch lease exceeds the automatic generation budget"
+            )
         issued_at = _require_utc("issued_at", self.issued_at)
         expires_at = _require_utc("expires_at", self.expires_at)
         if expires_at <= issued_at:
@@ -219,7 +227,7 @@ FileDispatchClaim = FileDispatchLease | FileDispatchNoWork
 
 
 class PostgreSQLFileDispatchAuthority:
-    """Claim the oldest eligible scheduled File import without tenant input."""
+    """Claim the oldest eligible first or bounded recovery File attempt."""
 
     __slots__ = ("_codec", "_configured_root_refs", "_scheduler_engine")
 
@@ -245,7 +253,7 @@ class PostgreSQLFileDispatchAuthority:
         self._configured_root_refs = configured_root_refs
 
     def claim(self) -> FileDispatchClaim:
-        """Atomically fence one first attempt, then mint its exact existing token."""
+        """Atomically fence one bounded attempt, then mint its exact token."""
 
         nonce = generate_worker_lease_nonce()
         try:
