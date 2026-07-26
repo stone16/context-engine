@@ -175,6 +175,16 @@ class RecordingMaterializedPort:
         del phrase_digest
         return ()
 
+    def discover_vector(
+        self,
+        query_embedding: tuple[float, ...],
+        limit: int,
+        source_refs: tuple[str, ...] | None,
+        resource_refs: tuple[str, ...] | None,
+    ) -> tuple[()]:
+        del query_embedding, limit, source_refs, resource_refs
+        return ()
+
     def source_is_active(self, source_ref: UUID) -> bool:
         del source_ref
         return True

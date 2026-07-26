@@ -17,6 +17,7 @@ from engine.runtime.materialized import (
     MaterializedProjectionSession,
     _close_materialized_projection_scope,
     _construct_materialized_projection_session,
+    _discover_materialized_vector,
     _locate_materialized_fragment,
     _open_materialized_projection_scope,
     _project_materialized_fragment,
@@ -52,6 +53,16 @@ class RecordingProjectionPort:
 
     def discover_exact_phrase(self, phrase_digest: str) -> tuple[CandidateRef, ...]:
         del phrase_digest
+        return ()
+
+    def discover_vector(
+        self,
+        query_embedding: tuple[float, ...],
+        limit: int,
+        source_refs: tuple[str, ...] | None,
+        resource_refs: tuple[str, ...] | None,
+    ) -> tuple[CandidateRef, ...]:
+        del query_embedding, limit, source_refs, resource_refs
         return ()
 
     def source_is_active(self, source_ref: UUID) -> bool:
@@ -95,6 +106,7 @@ def test_projection_session_is_nominal_lifetime_bound_and_nonserializable() -> N
             del args
 
         project = locate
+        discover_vector = locate
         discover_exact_phrase = locate
         observe_publication = locate
 
@@ -155,6 +167,21 @@ def test_locator_is_content_free_and_body_projection_is_a_separate_operation(
     assert port.locator_calls == [candidate()]
     assert port.projection_calls == [locator()]
     _close_materialized_projection_scope(scope)
+
+
+def test_vector_discovery_is_bounded_and_lifetime_bound() -> None:
+    scope = _open_materialized_projection_scope()
+    port = RecordingProjectionPort()
+    session = _construct_materialized_projection_session(
+        authority_scope=scope,
+        port=cast(MaterializedProjectionPort, port),
+    )
+
+    assert _discover_materialized_vector(session, (0.25,), 1) == ()
+    _close_materialized_projection_scope(scope)
+
+    with pytest.raises(ValueError, match="active materialized projection scope"):
+        _discover_materialized_vector(session, (0.25,), 1)
 
 
 def test_materialized_projection_rejects_more_than_the_public_field_bound() -> None:
