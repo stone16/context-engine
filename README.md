@@ -1,321 +1,341 @@
 # ContextEngine
 
-> A multi-tenant context delivery engine: connect your team's knowledge sources
-> upstream, deliver **authorized, evidence-backed, budget-bounded**
-> ContextPackages to agents and IM bots downstream.
+[![CI](https://github.com/stone16/context-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/stone16/context-engine/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](./LICENSE)
+[![Python](https://img.shields.io/badge/python-3.13-blue.svg)](./pyproject.toml)
+[![Status](https://img.shields.io/badge/status-pre--release-orange.svg)](./STATUS.md)
 
-多租户上下文交付引擎——上游连接团队知识源(飞书 / Slack / Google Docs /
-企业微信),下游把「经过授权、带证据、有预算」的 ContextPackage 交付给 agent
-应用与 IM bot(飞书群聊问答优先)。
+**A permission-aware context delivery engine.** Connect your team's knowledge
+sources upstream; deliver **authorized, evidence-backed, budget-bounded**
+ContextPackages to agents and chat bots downstream.
 
-**当前状态**:M0 工程骨架已启动。API 和独立 Supply worker 可运行，
-[`compose.yaml`](./compose.yaml) 固定的真实 PostgreSQL + pgvector 测试底座可复现；
-Organization 安全根、全局 User、Organization-scoped Membership 与一张代表性
-tenant-owned 表的非 owner FORCE RLS 隔离已验证；HTTP 已能把确定性测试认证解析成
-当前 Membership-backed `UserActor`，构造 nominal `AuthenticatedInvocation`，并用
-closed body 与通用错误证明 caller 不能注入 trusted identity；该测试组合已通过唯一
-`ContextRuntime.resolve` 返回 tenant-safe ContextPackage。默认应用仍拒绝全部
-credential 并保持空包、零内容 I/O；显式 conformance 组合已证明 hostile
-CandidateIndex 只能经同一 PostgreSQL 事务的 FORCE RLS、exact EffectiveScope 与 sealed
-AuthorizationKernel 交付一个 synthetic exact-authorized Evidence/block。生产认证、durable
-Principal/Agent grants、真实 Source ACL 与通用内容检索仍为 `NOT_ACTIVE`。Issue #17
-已激活唯一的 persistent no-op WorkerLease 子载体：server-minted lease 精确绑定
-Organization、job、registered ServicePrincipal binding、固定 workload/worker audience、
-过期时间与 nonce，并在 non-owner FORCE RLS 下只允许一次原子完成；该 bounded binding
-不是完整 canonical `ServiceActor`，真实 ingestion、outbox 与 publication job 仍为
-`NOT_ACTIVE`。[Issue #18 的 ADR-0030](./docs/decisions/0030-bound-ticket-audiences.md)
-也只激活 bounded signed-ticket separation proof：一个 synthetic
-Provider read 与一个 synthetic channel no-op 共享 current `UserActor` identity chain 和
-key configuration，但使用不同 nominal types、signed domains、fixed operations 和
-provider/channel audiences。Agent/purpose 只从 matching
-`AuthenticatedInvocation`/`TrustedDeliveryContext` 派生；各自的 type-aware deserializer
-在创建 nominal ticket 前验证 signed namespace。两者均绑定 trusted
-Organization/target、bounded expiry 与 V0 Policy Epoch；所有 mismatch 使用 generic
-rejection 且 effect 为零。Production Provider、
-Sender/IM 与完整 M2 ActionPlane 仍为 `NOT_ACTIVE`。[Issue #19 的
-ADR-0031](./docs/decisions/0031-persist-authorized-context-run-lineage.md) 进一步激活
-当前 Acquire 的 digest-only authorized ContextRun 与 restricted delivered-empty
-DecisionAudit；默认 production authentication、完整 Package/query retention 与通用
-observability redaction 仍未激活。整体计划见 [PLAN.md](./PLAN.md)。
+[简体中文](./README.zh-CN.md)
 
-## 开发命令
+---
 
-要求 Python 3.13 和 [uv](https://docs.astral.sh/uv/)。依赖版本由
-`uv.lock` 固定，仓库命令统一由 `make` 暴露：
+Most knowledge-base products answer *how do I store and search this?* Most RAG
+toolchains answer *how do I find the nearest chunk?* ContextEngine exists
+because the two questions that actually block shipping a trustworthy assistant
+inside a company are different ones:
 
-```bash
-make install   # uv sync --frozen
-make build     # 构建 wheel 和 sdist
-make lint      # Ruff
-make typecheck # strict mypy
-make test      # 单元测试
-make catalog   # 安全目录静态测试与校验
-make security-gate # 可执行 M0 安全否决门；要求先执行 make db-up
-make smoke     # API / worker 进程 smoke
-make db-up     # 启动 compose.yaml 固定的 PostgreSQL + pgvector 测试底座
-make db-down   # 停止测试底座并保留 disposable data volume
-make db-reset  # 删除并重建该测试底座的 disposable data volume
-make integration # 真实 PostgreSQL integration/security harness
-make check     # 全部门禁；要求先执行 make db-up
-```
+### 1. What is this audience allowed to know, right now?
 
-`make security-gate` 会发现并只执行注册的 M0 安全证据，核对真实 PostgreSQL
-RLS inventory，并将机器可读的原始证据与四门 release report 写入被 Git 忽略的
-`.context-engine/security-gate/`。Security 是独立否决门；尚未进入 M0 评估范围的
-Reliability、Quality 与 Budget 明确记录为 `not-evaluated`，所以这份报告只会给出
-`m0SecurityDecision`，不会把安全门通过误写成可发布或可 promotion 的总体 PASS。
+Retrieval alone cannot answer that. In ContextEngine the index never returns
+deliverable text — it returns a `CandidateRef`. Every candidate must pass
+through a sealed `AuthorizationKernel` that performs exact authorization and
+field projection before *anything* content-bearing happens. Hydration,
+reranking, relevance models, and packaging all run on `AuthorizedProjection`
+only. Every parent or neighbor expansion is re-authorized item by item.
 
-数据库底座首次启动时会在被 Git 忽略的
-`.context-engine/database.env` 生成随机凭据并将文件权限设为 `0600`；该文件是
-本地 migration、API Runtime、worker、security test 连接配置和该 checkout
-独有 Compose project 身份的唯一实时来源，避免多个 worktree 或 checkout 共享
-容器、网络与数据卷。
-镜像及服务拓扑的版本真相位于 [`compose.yaml`](./compose.yaml)，PostgreSQL 只绑定
-一个动态选择的 `127.0.0.1` host port。migration、runtime 与 worker 使用不同
-角色；runtime/security test 不会回退到 migration 或 bootstrap 凭据。
+Source ACL evidence is explicitly classified as `Live`, `Mirrored`, or `Weak`.
+`Weak` is only for sources that genuinely lack fine-grained ACLs — it is never
+a fallback when a `Live` or `Mirrored` check fails. That case fails closed.
 
-从 clean checkout 运行与 CI 相同的数据库门禁：
+### 2. Who keeps the knowledge base organized?
+
+Organization cost is the largest hidden cost of any team knowledge base.
+ContextEngine assigns the automatable part to agents — semantic
+deduplication, staleness marking, terminology capture — while humans keep the
+audit. Every AI-produced annotation is proposed, confirmed, then published
+atomically as a separate immutable `CurationSnapshot`. Published content
+revisions are never mutated in place.
+
+## Project status
+
+> **Pre-release. Not usable in production, and not trying to look like it is.**
+
+ContextEngine is being built milestone by milestone, and each capability is
+activated only when executable evidence proves it. Capabilities that have not
+been proven are labeled `NOT_ACTIVE` rather than quietly stubbed — including in
+the running service's own `/health` response.
+
+| Area | State |
+|---|---|
+| Real PostgreSQL 17 + pgvector harness, role separation, FORCE RLS | Active |
+| Organization / Membership / `UserActor` tenant transaction | Active |
+| Sealed `ContextRuntime.resolve` returning tenant-safe ContextPackage | Active |
+| Exact-authorized Evidence tracer over a hostile candidate index | Active |
+| OpenAPI v0 wire contract + generated TypeScript SDK + breaking-change gate | Active |
+| Private File-backed bot delivery flow (deterministic twin) | Active |
+| Autonomous File import dispatch + bounded expired-lease reclaim | Active |
+| Production authentication (OAuth/JWT) | `NOT_ACTIVE` |
+| Real source ACLs, general content retrieval, `Continue` / `OpenCitation` | `NOT_ACTIVE` |
+| Live Feishu / Slack / Google Docs connectors, group chat | `NOT_ACTIVE` |
+
+**[→ Full capability ledger with per-issue evidence boundaries (STATUS.md)](./STATUS.md)**
+
+The roadmap and milestone exit criteria live in [PLAN.md](./PLAN.md).
+
+## Quick start
+
+### Prerequisites
+
+| Requirement | Version | Why |
+|---|---|---|
+| [Python](https://www.python.org/) | 3.13 (`>=3.13,<3.14`) | Engine, adapters, worker |
+| [uv](https://docs.astral.sh/uv/) | any recent | Dependency resolution, pinned by `uv.lock` |
+| [Node.js](https://nodejs.org/) | 22.12.0 (see [`sdk/typescript/.node-version`](./sdk/typescript/.node-version)) | TypeScript SDK, ActionPlane, BotDelivery |
+| Docker (with Compose) | any recent | Real PostgreSQL 17 + pgvector test harness |
+
+### Install and verify
 
 ```bash
 make install
-make db-up
-make check
-make db-down
 ```
 
-`make db-reset` 只删除当前 checkout 的 generated Compose project 所属的
-disposable PostgreSQL volume，然后从初始化脚本重建。它不会删除仓库内容，但会
-清除该本地测试数据库中的全部数据。
+`make install` syncs the locked Python environment **and** runs `npm ci` for the
+three TypeScript workspaces (`sdk/`, `action_plane/`, `bot_delivery/`). Node is
+not optional.
 
-本地启动 API：
+Run the same gate CI runs, from a clean checkout:
+
+```bash
+make install && make db-up && make check && make db-down
+```
+
+### Run the API
 
 ```bash
 uv run context-engine-api
 ```
 
-监听地址和端口可通过 `context-engine-api --help` 中记录的参数覆盖；进程启动后
-在所配置地址请求 `/health`。
-
-确定性运行 worker 的 no-op 测试生命周期：
+Defaults to `127.0.0.1:8000`; override with `--host`, `--port`, `--log-level`
+(see `context-engine-api --help`). Then:
 
 ```bash
-uv run context-engine-worker --test-mode
+curl http://127.0.0.1:8000/health
 ```
 
-健康响应中的 `runtime_delivery: NOT_ACTIVE` 表示默认进程没有生产认证入口。worker
-输出中的 `job_behavior: NOT_ACTIVE` 特指默认 CLI 尚未配置生产签名密钥来源、queue/job
-loop；Issue #71 的 E2E 通过同一个 `context-engine-worker --run-file-job` 进程入口消费
-一个 exact signed FileImport WorkerLease。该入口要求显式 worker credential、已登记
-ServicePrincipal、logical File root 与 job binding，完成一个终态后退出，不引入第四个
-进程类型。
-loop 或真实 ingestion/publication handler；Issue #17 的 persistent no-op 应用 seam 与
-PostgreSQL authority 已激活并由 integration suite 调用。当前数据库测试证明 `compose.yaml` 固定的
-PostgreSQL/pgvector、
-角色隔离、迁移、连接池清理，以及 Organization + current Membership-backed
-`UserActor` + `organization_record` 的事务级租户上下文、复合所有权和 FORCE RLS。
-它不声明 durable Principal/Agent grants、真实 ACL、生产级内容授权或生产
-ContextPackage 交付已经实现；注入的 conformance 组合证明当前 Membership 门禁、
-Issue #12 synthetic EffectiveScope 的 fail-closed 单调不扩张路径，以及 Issue #13
-hostile CandidateIndex 的 synthetic exact-authorized Evidence 路径；Issue #14 的
-paired Runtime/HTTP gate 进一步证明 cross-Organization、same-Organization denied
-与 nonexistent Candidate 收敛为同一个 tenant-safe empty Package（不声明 timing
-等价）；Issue #15 进一步激活 Organization-level V0 Policy Epoch：内部专用最小权限
-non-owner Control 事务原子撤销 seeded access 并推进 epoch，sealed Acquire 在交付前复核当前
-epoch，因此相同 query、CandidateRef 与持久 Fragment 在第一次 post-revoke 请求中返回
-零 Evidence，且 Org B 不受影响。该测试能力不等于生产 grant/admin workflow。
-Issue #16 已把公开 Runtime wire 固定为 closed `Acquire | Continue | OpenCitation`
-union，并在 server-owned `RuntimeCapabilityGate` 激活 M0 拒绝路径：已知但尚无真实
-carrier 的 Continue、OpenCitation、federated discovery 与 source-native authorization
-在任何 Provider/index/source-content I/O 前分别返回通用 domain-level
-`request_not_available` 或 `citation_not_available`；unknown variant 或 caller 自报
-capability 仍为通用 422。该激活只证明 deterministic refusal，不表示 continuation、
-citation、federated/source-native Provider 或 File publication 已实现。
-Issue #17 进一步加入 Organization-owned `service_principal` 与 `worker_noop_job`，以及
-显式 versioned keyring 的 canonical HMAC-SHA256 WorkerLease。Control issuer 使用数据库
-事务时间和 server-owned bounded TTL 签出租约；若旧 lease 已按数据库时间过期，可用新
-时间与 nonce 原子 takeover，恢复“事务已提交但 token 未交付”的 crash window，且旧 token
-随后 effect 为零。worker 应用 seam 必须先以自身配置的 registered ServicePrincipal identity
-与时钟验证签名、Organization、job 和时效，再打开数据库事务；durable receiver 固定为
-`supply.noop` + `context-engine-worker` + `noop.complete`，不接受 worker call 覆盖。
-worker 无直接两张 tenant table 的 `SELECT` 或 job `UPDATE` 权限；专用 non-login definer
-function 是唯一 durable 读写边界，并在 FORCE RLS 下以数据库当前时间、key version、nonce
-digest、issued-at/expiry 做一次条件更新。有效 lease 的 effect count
-只能从 0 变为 1；wrong-org/job/audience、篡改、过期、禁用 ServicePrincipal、重放和
-并发 loser 均保持零新增 effect。该 bounded proof 不包含 Source/Resource/Revision、
-Policy Epoch、end-user delivery audience、idempotency/generation、outbox、File 或生产
-worker loop，也不发布或声称完整 canonical `ServiceActor`（其 source/allowed-set/Policy
-Epoch 尚不存在），并将完整 `ACCEPT-008` fixture 保持 `future/fail_closed`。
+```json
+{
+  "status": "ready",
+  "service": "context-engine-api",
+  "version": "...",
+  "runtime_delivery": "NOT_ACTIVE"
+}
+```
 
-Issue #18 加入 canonical HMAC-SHA256 `ContextAccessTicket` 与 `ActionTicket`
-protocols；两者使用同一 validated `AuthenticatedInvocation` /
-`TrustedDeliveryContext` identity chain 和 explicit versioned key configuration。
-Read protocol 固定
-`context-engine.context-access-ticket` / `CE-ContextAccessTicket` /
-`synthetic.provider.read` 并派生 `context-read:<provider>`；action protocol 固定
-`context-engine.action-ticket` / `CE-ActionTicket` /
-`synthetic.channel.noop` 并派生 `im-send:<channel>`。Issuer 与 handler 由 trusted
-configuration 绑定一个 Organization/target；Agent/purpose 不接受裸字符串，token 也不
-提供公开 value constructor。两个独立 deserializer 在构造 nominal type 前验证签名、
-domain/type、fixed operation 与 schema；handler 再校验完整 identity、purpose、bounded
-expiry、nonce 和 key version，并在两个独立 synthetic effect 前最后复核 Organization
-V0 Policy Epoch。使用同一 key 的 cross-plane deserialize/pass、wrong
-target/Organization、identity/audience mismatch、tamper、overlong/expired lifetime、
-authority failure 和 committed epoch bump 均返回一个 non-enumerating unavailable 结果，
-rejected effect 为零。该 bounded proof 不激活 production Provider
-discovery/projection、source credential、Sender/IM、`ActionPlane.prepare`/`perform`、
-payload/destination/approval/idempotency、DeliveryAttempt、durable one-shot/replay/
-concurrency、stored receipt 或 reconciliation；完整 `ACCEPT-012` carrier 在该
-Issue #18 激活中保持 `NOT_ACTIVE`。Issue #71 现已另行激活完整的私聊 File-backed
-deterministic-twin carrier：独立 TypeScript Bot 进程只经 installed generated SDK
-访问 Runtime，受控模型只消费一个当前 Package，placeholder 与 final/follow-up 分别
-通过 `ActionPlane.prepare` + `perform`，最终只保留 digest/ref 形式的
-`DeliveryReceipt` 与 restricted audit。Live Feishu、真实模型/Sender、群聊、补偿删除、
-Continue 与 MCP 仍为 `NOT_ACTIVE`。
+`runtime_delivery: NOT_ACTIVE` is expected and correct: the default application
+rejects every credential and performs zero content I/O. The public wire contract
+is `POST /v0/resolve`, frozen in [`openapi/v0/openapi.json`](./openapi/v0/openapi.json).
 
-Issue #19 为当前 authenticated Acquire 激活最小 durable lineage：每个成功空包或
-exact-authorized Package 都在返回前，于保留的 current-`UserActor` 事务内提交一条
-same-Organization、final、authorized-only `ContextRun`，公开 `decisionRef` 可经专用
-non-owner security-operator + exact Organization + 显式 trusted authorization seam
-解析。空包另写仅含 Organization/run/decision、PolicySnapshot/epoch、
-`no_authorized_evidence` 类别与时间的 restricted `DecisionAudit`；不保存 raw query、
-denied Candidate/Fragment/Resource body、ID、名称、原因或数量。Query 只保留
-Organization-bound、versioned HMAC-SHA256 digest；Package 公开并持久化可验证的
-versioned canonical SHA-256 digest，retention mode 固定为 `digest_only`，不长期保存
-完整 Package。Unauthenticated/注入失败不是 ContextRun。该 bounded
-`TRACE-REDACTION-012` 激活不扩称 logs/metrics/debug/evaluation/Learning、Continue/
-OpenCitation、feedback、完整 retrieval trace 或 production operator identity 已完成；
-默认应用的 production authentication 仍为 reject-all。
+### Run the worker
 
-### 当前 HTTP exact-authorized Evidence tracer
+The Supply worker is a separate process from the API, with one entry point and
+four modes:
 
-`POST /v1/context:resolve` 的 conformance 组合可注入一个把 opaque credential
-映射为 verified transport facts 的 authenticator、一个为已登记 Organization
-签发 request-bound nominal proof 的 trusted authority，以及一个在单次 PostgreSQL
-事务内校验 current Membership 并签发 lifetime-bound `UserActor` proof 的 authority；
-该事务保持到 sealed Runtime 与 ContextPackage 构造完成。默认组合的有效 Acquire 返回
-`200 resolved` 与 evidence-free ContextPackage；显式 synthetic conformance 组合可在同一
-事务中把 content-free CandidateRef 依次经过 RLS locator、exact EffectiveScope、body
-projection 与 sealed AuthorizationKernel，返回唯一 exact-authorized Evidence/block。
-无效 Membership 统一返回通用 401，
-数据库 authority 不可用统一返回通用 503，且两者都不会调用内容系统。模块级默认应用的
-认证、Organization 与 Membership 三条生产 authority 均 reject-all；scope authority
-默认显式返回七个 missing trusted operands，因此不会接受任何生产 credential，也不会
-产生可交付 scope。
+```bash
+uv run context-engine-worker --test-mode           # deterministic no-op lifecycle
+uv run context-engine-worker --run-file-job        # one exact signed File import job
+uv run context-engine-worker --dispatch-file-once  # one deterministic dispatch cycle
+uv run context-engine-worker --dispatch-files      # long-running dispatch loop
+```
 
-请求体是 closed `kind` union：Acquire 允许 `need.query`、可选的有限
-`packageBudget` 和可选 `requestNarrowing`；Continue 允许 opaque
-`continuationToken` 与可选更小的 `packageBudget`；OpenCitation 只允许 opaque
-`citationOpenRef`。所有 ref/token 长度与集合数量均受 active profile 限制；每层 unknown field、重复 JSON key
-以及重复 singleton security/transport header 都 fail closed；pre-auth body bytes 和
-JSON nesting 由 `adapters/http/transport.py` 的 versioned profile 限制。非法
-JSON/media type、
-认证失败和 closed-schema 失败分别使用 OpenAPI 记录的通用 400、401 和 422 响应，
-不会回显 tenant、Principal、Membership 或注入字段。purpose 只来自服务端 route
-policy；返回的 `organizationRef` 是新生成的 package-scoped opaque reference，不能作为
-后续请求的 trusted tenant input。空包的 blocks/evidence/gaps 均为空，coverage 为
-`no_authorized_evidence`；默认无候选路径的 Provider/index/source-content 调用均为零。内容 tracer 对 denied
-same-Organization 与 cross-Organization 候选保持零 body bytes、零 Evidence refs 和零外部
-effect，并为 authorized block 保持一对一 Evidence 引用闭包与完整 lineage。确定性
-denied、cross-Organization 与 nonexistent probes 的 HTTP status、closed product
-headers、Package body 与 Runtime domain outcome 在仅归一化 server-authored per-resolve
-refs/timestamps 以及由它们必然派生的 `packageDigest` 后完全相同；每个未归一化 Package
-仍先验证自己的 digest。响应不含 Resource 标识、名称、Candidate/denied 数量或拒绝
-原因。此门禁不测量或声明 timing equality。
+`--test-mode` reports `job_behavior: NOT_ACTIVE`, meaning the default CLI has no
+production signing key source, queue loop, or real ingestion handler configured.
 
-确定性 authorities 与 real-PostgreSQL seeded composition 只属于测试组合。生产 OAuth/JWT、durable
-Principal/Agent grant authority、真实 Source/Resource ACL、通用检索与 continuation
-不属于这个已激活 tracer。Policy Epoch V0 本身也不激活 UI/外部 admin、
-access-mutation DecisionAudit、outbox、cleanup、真实 Continue/OpenCitation 或完整
-production WorkerLease/ticket carrier；
-Issue #17 与 Issue #18 仅通过各自 ADR 单独激活前述 bounded proof。
-其中 Continue/OpenCitation 的 M0 通用拒绝已经激活，但真实 issuance/redemption carrier
-仍保持 future；restricted in-process audit 只保留 `UNSUPPORTED_CAPABILITY` 类别，
-Issue #19 的 durable DecisionAudit 仅覆盖 successful delivered-empty Acquire，不能被
-解释为 unavailable capability 或 Control access-mutation audit 已激活。
+`--dispatch-files` is the production long-running entry: it polls on a
+server-fixed one-second interval when there is no work, and exits on `SIGTERM`
+or `SIGINT`.
 
-本次公开候选 bundle 包含实现权威、ADR、安全契约、PRD、Tech Spec
-与四个公开参考仓的证据基线；经维护者批准并提交后，它们将与实现一同
-版本化。公开 prior art 仅限 Dify、RAGFlow、MaxKB、Onyx 的固定版本；
-ContextEngine 的安全协议依据自身需求与威胁模型独立设计，零代码复制。
+All dispatch modes read **only** a role-specific scheduler, worker URL,
+WorkerLease signing key, and the server-side JSON root registry
+(`CONTEXT_ENGINE_WORKER_FILE_ROOTS_JSON`). **A caller may not supply
+Organization, Source, job, or token** — that is the point of the boundary.
+Output is limited to `dispatched` / `no_work` / `refused`.
 
-## 文档入口
+Lease validation uses the worker's PostgreSQL clock, staying in the same time
+domain as database-issued timestamps rather than depending on worker host clock
+alignment. Unavailable worker infrastructure terminates dispatch instead of
+continuing to claim and strand later jobs. File or content failures return
+`refused` and continue scheduling only once that job is durably terminal-failed
+or the current authority rejects that exact failure transition.
 
-- [Domain glossary](./CONTEXT.md)：身份、安全、内容与生命周期术语的仓库
-  权威。
-- [Architecture Decision Record index](./docs/decisions/README.md)：实现
-  边界、依赖方向、禁止捷径与重访触发器。
-- [Implementation Design v1.2](./docs/design/2026-07-18-context-engine-implementation-design.md)：
-  集成后的实现权威与里程碑边界。
-- [四个公开参考仓证据基线](./docs/research/2026-07-19-four-public-repositories-evidence.md)：
-  四仓优势、局限、clean-room 拆解与证据缺口。
-- [Threat Model](./docs/security/context-engine-threat-model.md)：自有资产、
-  信任边界、威胁与 hard oracles。
-- [Program PRD](./docs/agents/prd-contextengine-implementation.md) 与
-  [Implementation Epic Tech Spec](./docs/specs/2026-07-19-context-engine-implementation-epic.md)：
-  需求、100 条 user stories、contract shapes 与 work packages。
-- [D0 Baseline Candidate](./DESIGN-BASELINE.md)：当前候选状态与尚未关闭的
-  evidence gates。
+Activation boundaries for File dispatch, reclaim, and delete execution are
+recorded in [STATUS.md](./STATUS.md).
 
-独立 Supply worker 的确定性单周期 File dispatch 使用
-`context-engine-worker --dispatch-file-once`。生产长运行入口是
-`context-engine-worker --dispatch-files`；它以服务端固定的一秒间隔轮询无工作结果，
-并在 `SIGTERM` / `SIGINT` 时结束。两种入口都只读取 role-specific scheduler、
-worker URL、WorkerLease signing key 和服务端 JSON root registry
-(`CONTEXT_ENGINE_WORKER_FILE_ROOTS_JSON`)；调用方不得提供
-Organization、Source、job 或 token。输出仅包含 `dispatched` / `no_work` / `refused`；Provider
-polling、过期 lease reclaim、retry/dead-letter 与 delete execution 仍未激活。Worker
-基础设施不可用会终止 dispatch，不会继续 claim 并滞留后续 job。
-文件/内容失败仅在该 job 已持久化为 terminal failed 或当前 authority 拒绝该精确
-failure transition 后返回 `refused` 并继续调度；failure recording 基础设施不可用仍会
-终止 dispatch。
-Lease 的立即验证使用 worker PostgreSQL 时钟，与数据库签发时间保持同一时间域，
-不依赖 worker host clock 对齐。
+### Development commands
 
-当前除固定 commit 的四仓静态证据与仓库内设计拆解外，已有
-[`compose.yaml`](./compose.yaml) 固定的真实 PostgreSQL + pgvector 基础 harness，
-以及首个 Organization-owned 代表表的 RLS 动态证据。
-完整 domain schema、ActorContext、filtered ANN 和飞书 capability 的动态证据仍未
-完成，因此不把这个证据切片扩称为完整产品授权能力。
+```bash
+make install        # sync locked Python env + npm ci for the 3 TS workspaces
+make build          # build wheel and sdist
+make lint           # Ruff
+make typecheck      # strict mypy + TS typecheck
+make test           # Python unit tests
+make catalog        # static security catalog tests and validation
+make smoke          # API / worker process smoke suite
+make db-up          # start the pinned PostgreSQL 17 + pgvector harness
+make db-down        # stop it, preserving the disposable data volume
+make db-reset       # destroy and rebuild only that disposable volume
+make integration    # real-PostgreSQL integration/security harness
+make security-gate  # executable M0 security veto gate (needs make db-up)
+make check          # everything above (needs make db-up)
+```
 
-## 为什么做这个
+On first start the harness generates random credentials into a git-ignored,
+mode-`0600` `.context-engine/database.env`. That file is the single live source
+for local migration, runtime, worker, and security-test connection settings, and
+it gives each checkout its own Compose project identity so parallel worktrees
+never share containers, networks, or volumes. Image and topology versions are
+pinned in [`compose.yaml`](./compose.yaml); PostgreSQL binds only one
+dynamically chosen `127.0.0.1` port. Migration, runtime, and worker use distinct
+roles, and runtime never falls back to migration or bootstrap credentials.
 
-现有知识库产品回答的是「怎么存、怎么搜」;RAG 工具链回答的是「怎么找到最近的
-chunk」。都没有回答两个更难的问题:
+`make security-gate` discovers and runs only registered M0 security evidence,
+cross-checks the live PostgreSQL RLS inventory, and writes machine-readable raw
+evidence plus an independent release-gate report to
+`.context-engine/security-gate/`. Because Reliability, Quality, and Budget are
+not yet in M0 scope, that report emits only an `m0SecurityDecision` and
+explicitly records the others as `not-evaluated` — a passing security gate is
+never reported as an overall release PASS.
 
-1. **这个 audience 此刻有权知道什么?** —— 索引只产生
-   `CandidateRef`;sealed `ContextRuntime.resolve` 必须经
-   `AuthorizationKernel` 执行 exact authorization 和字段投影,得到
-   `AuthorizedProjection` 后,才能进入 Runtime 内的水合、精排、相关性模型和
-   装箱。BotDelivery 的生成模型只接收由当前 audience-bound ContextPackage
-   派生的 `AuthorizedModelInput`。Live/Mirrored/Weak 三类
-   SourceAclEvidence 各有明确语义,Weak 绝不是强 ACL 故障时的 fallback。
-2. **知识库由谁来组织?** —— Agent 承担可自动化的组织工作(语义去重、过期
-   标记、术语沉淀),用户负责 audit;所有 AI 产物先提案、经确认、再以独立的
-   不可变 `CurationSnapshot` 原子发布,绝不修改已发布的内容 Revision。
+## Architecture
 
-## 核心在线契约
+### Three loops
 
-`ContextRuntime.resolve(AuthenticatedInvocation, TrustedDeliveryContext,
-Acquire | Continue | OpenCitation)` 是 Runtime 唯一公开能力,HTTP 是 V1 服务端
-ingress,TypeScript SDK 是 generated HTTP client;MCP 只在真实 caller 出现后
-激活。Continue 的 token 绑定 principal、one-shot 且累计预算;CitationOpenRef
-本身不授权,每次打开都重新认证与授权。
+| Loop | Responsibility | Key objects |
+|---|---|---|
+| **Supply** | Sources → trusted candidates: fetch, parse, chunk, index, publish atomically | `ContextSource` / `ContextResource` / `ContextRevision` / `ContextFragment` |
+| **Runtime** | Authenticated invocation → ContextPackage: candidates, authorized projection, relevance, packaging | `CandidateRef` / `AuthorizedProjection` / `ContextRun` / `ContextPackage` |
+| **Learning** | Authorized-only traces → releasable improvements: golden sets, slice gates, versioned profiles | golden set / `ReleaseManifest` / `CurationSnapshot` |
 
-IM 交付由受信 `BotDelivery` 深模块完成。它不在 wire body 自报 trusted
-audience,而是通过认证 metadata 传递 opaque `DeliveryEvidenceRef`,由 ingress
-兑换 `TrustedDeliveryContext` / `AudienceSnapshot`;群公开和提问者私有内容分别
-resolve,外部效果均通过 `ActionPlane.prepare` + `perform`。
+### The one public online contract
 
-## 三条硬底线(release veto,不是分数)
+```
+ContextRuntime.resolve(AuthenticatedInvocation, TrustedDeliveryContext,
+                       Acquire | Continue | OpenCitation)
 
-- 无授权证据泄漏 = 0(Unauthorized Evidence = 0)
-- 跨租户影响 = 0(wrong-Organization effect = 0)
-- 缺失租户上下文一律 fail closed
+  → query understanding + dual recall (FTS + vector, RRF fusion)
+  → CandidateRef                        ← carries NO deliverable body
+  → AuthorizationKernel                 ← exact authorization + field projection
+  → AuthorizedProjection                ← the first content-bearing value
+  → post-authorization hydration / rerank
+      + small-to-big expansion, each item re-authorized
+  → PackageBudget packing + sufficiency signal
+  → ContextPackage                      ← citations / purpose / TTL / asOf
+```
 
-任何功能收益不能抵消其中任何一条的失败。每次发布按版本化 catalog 报告
-`PASS / FAIL / NOT_ACTIVE / NOT_APPLICABLE`,并把 capability coverage
-单独列出;未激活能力不能冒充通过。
+This is the Runtime's **only** public capability. HTTP is the V1 server ingress;
+the TypeScript SDK is a generated HTTP client, not a second transport. MCP stays
+`NOT_ACTIVE` until a real caller exists.
+
+`Continue` uses a principal-bound, one-shot, budget-accumulating token.
+`OpenCitation` uses an opaque `CitationOpenRef` that carries no authority of its
+own — every open re-authenticates and re-authorizes.
+
+### Repository layout
+
+```
+engine/            The sealed core — no HTTP, no vendor SDKs
+  runtime/           resolve() orchestration, AuthorizationKernel, tickets,
+                     budget, provenance, ContextRun, policy epoch
+  supply/            source → revision → fragment ingestion contracts
+  learning/          evaluation, candidates, sole release-promotion authority
+  control/           operator-facing access + file-import authority
+  persistence/       PostgreSQL connectivity, tenant context, RLS boundary
+adapters/          Everything that touches the outside world
+  http/              FastAPI ingress, authentication, transport limits, routes
+  parsers/           format parsers (PDF / Markdown / Office)
+applications/      Thin process entry points (~200 LOC total)
+  api.py             `context-engine-api`
+  worker.py          `context-engine-worker`
+bot_delivery/      M2 trusted Bot process (TypeScript); generated-SDK caller
+action_plane/      prepare() → one-shot ticket → exact external effect
+sdk/typescript/    OpenAPI-generated HTTP client
+eval/              golden sets, slice gates, judges, security catalogs
+migrations/        Alembic migrations
+tests/             unit / integration / catalog / process suites
+docs/              design authority, 60 ADRs, threat model, PRD, research
+CONTEXT.md         domain glossary (terms only, no implementation)
+PLAN.md            vision, principles, roadmap, non-goals
+```
+
+Two structural facts worth noticing:
+
+- **Thin entry points, thick core.** `applications/` is roughly 200 lines. All
+  behavior lives in `engine/`, which is what makes "the production composition
+  root cannot substitute, skip, or wire a no-op `AuthorizationKernel`" an
+  enforceable property rather than a slogan.
+- **Tests outweigh implementation ~3:1.** Roughly 21k lines under `engine/`
+  against roughly 68k lines under `tests/`. For a project whose central claim is
+  a security invariant, the executable evidence *is* the product.
+
+### What is pluggable, and what is not
+
+| Layer | Pluggable (seam) | Sealed (kernel) |
+|---|---|---|
+| Parsing | PDF / Markdown / Office parsers | — |
+| Representation | embeddings, reranker, LLM | — |
+| Storage | V1 fixed on PostgreSQL FTS + pgvector; only an in-Runtime candidate-injection test seam | authorization source of truth (PostgreSQL) |
+| Ingress | connectors, HTTP server ingress, MCP once a real caller exists; the generated SDK is a client artifact | authenticated invocation + `TrustedDeliveryContext` construction |
+| Governance | evaluation judge models | sealed `ContextRuntime` orchestration, `AuthorizationKernel`, `DecisionAudit`, budget, provenance |
+
+Portability is deliberately not promised before a second real backend exists.
+
+### Trusted delivery
+
+IM delivery is handled by `BotDelivery`, a trusted deep module that runs as its
+own process from M2 and reaches the engine only through the generated HTTP SDK.
+It does **not** declare its own audience in the wire body. It passes an opaque
+`DeliveryEvidenceRef` in authenticated transport metadata; the ingress redeems
+that for a `TrustedDeliveryContext` / `AudienceSnapshot`. Group permission
+intersection is computed by the `AuthorizationKernel`, never by BotDelivery.
+
+A group-visible answer and an asker-private answer are two separate
+audience-bound resolves — never one package split after the fact. All external
+side effects go through `ActionPlane.prepare` then `ActionPlane.perform`, each
+with its own org-scoped, audience- and payload-bound, one-shot `ActionTicket`.
+
+## The three hard invariants
+
+These are **release vetoes, not scores**:
+
+- Unauthorized Evidence leaked = **0**
+- Wrong-Organization effect = **0**
+- Missing tenant context = **fail closed, always**
+
+No feature win offsets a failure in any of them. Every release reports
+`PASS / FAIL / NOT_ACTIVE / NOT_APPLICABLE` against a versioned catalog and
+lists capability coverage separately, so an inactive capability can never
+masquerade as a passing one.
+
+## Documentation
+
+| Document | What it gives you |
+|---|---|
+| [CONTEXT.md](./CONTEXT.md) | Domain glossary — the repository's authority on identity, security, content, and lifecycle terms |
+| [PLAN.md](./PLAN.md) | Vision, non-negotiable design principles, roadmap, explicit non-goals |
+| [STATUS.md](./STATUS.md) | Per-issue capability activation ledger and evidence boundaries |
+| [ADR index](./docs/decisions/README.md) | 60 decision records: boundaries, dependency direction, forbidden shortcuts, revisit triggers |
+| [Implementation Design](./docs/design/2026-07-18-context-engine-implementation-design.md) | The integrated implementation authority and milestone boundaries |
+| [Threat Model](./docs/security/context-engine-threat-model.md) | Assets, trust boundaries, threats, hard oracles |
+| [Program PRD](./docs/agents/prd-contextengine-implementation.md) · [Epic Tech Spec](./docs/specs/2026-07-19-context-engine-implementation-epic.md) | Requirements, 100 user stories, contract shapes, work packages |
+| [Prior-art evidence baseline](./docs/research/2026-07-19-four-public-repositories-evidence.md) | Strengths, limits, clean-room breakdown, and evidence gaps of four public repositories |
+| [D0 Baseline Candidate](./DESIGN-BASELINE.md) | Current candidate state and unclosed evidence gates |
+
+## Prior art
+
+The design draws on architectural study of four public open-source projects —
+**Dify**, **RAGFlow**, **MaxKB**, and **Onyx** — limited strictly to observable
+behavior, interface shape, test oracles, and product workflows. **Zero code was
+copied.** Pinned versions and first-party links are recorded in the
+[evidence baseline](./docs/research/2026-07-19-four-public-repositories-evidence.md).
+
+ContextEngine's security and multi-tenancy protocols are designed independently
+from its own requirements and threat model. Research from outside this
+repository may inform reasoning, but it is never cited as public provenance.
+
+## Contributing
+
+This project holds an unusually strict evidence bar — security invariants are
+veto gates, and capabilities may not be activated without executable proof.
+Please read [CONTRIBUTING.md](./CONTRIBUTING.md) before opening a pull request;
+it covers the verification contract, the ADR workflow, and what "done" means
+here.
+
+Issues and PRDs are tracked in
+[GitHub Issues](https://github.com/stone16/context-engine/issues).
 
 ## License
 
-TBD(设计阶段;在首个可运行版本前确定)。
+[Apache License 2.0](./LICENSE) — includes an explicit patent grant.
