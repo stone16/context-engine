@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from hashlib import sha256
 from pathlib import Path
 from threading import Thread
 from time import monotonic, sleep
-from typing import cast
+from typing import TextIO, cast
 from uuid import UUID, uuid4
 
 import pytest
@@ -70,6 +71,11 @@ from tests.support.releases import (
 pytestmark = pytest.mark.integration
 SIGNING_KEY = b"issue-91-file-dispatch-key-00001"
 ALL_TEST_ROOTS = ("dispatch-root",)
+
+
+def _drain_text_stream(stream: TextIO, lines: queue.Queue[str]) -> None:
+    for line in stream:
+        lines.put(line)
 
 
 def _dispatch_authority(
@@ -1163,9 +1169,28 @@ def test_claim_refreshes_membership_expiry_after_waiting_for_source_progress(
                     _dispatch_authority(guarded_scheduler_engine).claim
                 )
                 deadline = monotonic() + 5
-                while monotonic() < deadline and pending_claim.done():
+                waiting = False
+                while monotonic() < deadline:
+                    with migration_engine.connect() as observer:
+                        waiting = bool(
+                            observer.execute(
+                                text(
+                                    "SELECT EXISTS (SELECT 1 FROM "
+                                    "pg_catalog.pg_stat_activity AS activity JOIN "
+                                    "pg_catalog.pg_locks AS held_lock ON "
+                                    "held_lock.pid = activity.pid WHERE "
+                                    "activity.usename = "
+                                    "'context_engine_scheduler' AND "
+                                    "held_lock.locktype = "
+                                    "'advisory' AND held_lock.granted IS FALSE)"
+                                )
+                            ).scalar_one()
+                        )
+                    if waiting:
+                        break
                     sleep(0.01)
-                assert not pending_claim.done()
+                if not waiting:
+                    pytest.fail("File dispatch did not wait for Source progress")
                 sleep(0.4)
                 transaction.commit()
                 assert pending_claim.result(timeout=5) == FileDispatchNoWork()
@@ -1513,14 +1538,29 @@ def test_long_running_dispatch_process_exits_cleanly_on_sigterm(
         stderr=subprocess.PIPE,
         text=True,
     )
+    assert process.stdout is not None
+    assert process.stderr is not None
+    stdout_lines: queue.Queue[str] = queue.Queue()
+    stderr_lines: queue.Queue[str] = queue.Queue()
+    stdout_reader = Thread(
+        target=_drain_text_stream,
+        args=(process.stdout, stdout_lines),
+        daemon=True,
+    )
+    stderr_reader = Thread(
+        target=_drain_text_stream,
+        args=(process.stderr, stderr_lines),
+        daemon=True,
+    )
+    stdout_reader.start()
+    stderr_reader.start()
     try:
-        assert process.stdout is not None
-        assert json.loads(process.stdout.readline()) == {
+        assert json.loads(stdout_lines.get(timeout=10)) == {
             "dispatch": "file.import",
             "service": "context-engine-worker",
             "status": "ready",
         }
-        assert json.loads(process.stdout.readline()) == {
+        assert json.loads(stdout_lines.get(timeout=10)) == {
             "dispatch": "file.import",
             "outcome": "no_work",
             "service": "context-engine-worker",
@@ -1528,9 +1568,12 @@ def test_long_running_dispatch_process_exits_cleanly_on_sigterm(
         }
         process.terminate()
         process.wait(timeout=3)
+        stdout_reader.join(timeout=1)
+        stderr_reader.join(timeout=1)
         assert process.returncode == 0
-        assert process.stderr is not None
-        assert process.stderr.read() == ""
+        assert not stdout_reader.is_alive()
+        assert not stderr_reader.is_alive()
+        assert stderr_lines.empty()
     finally:
         if process.poll() is None:
             process.kill()

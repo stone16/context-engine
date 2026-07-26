@@ -39,6 +39,25 @@ def upgrade() -> None:
             server_default=sa.false(),
         ),
     )
+    op.create_index(
+        "ix_file_import_job_dispatch_available",
+        "file_import_job",
+        ["organization_id", "source_id", "job_id"],
+        postgresql_where=sa.text("state = 'available' AND lease_generation = 0"),
+    )
+    op.create_index(
+        "ix_file_source_checkpoint_dispatch_order",
+        "file_source_acquisition_checkpoint",
+        [
+            "accepted_at",
+            "sequence",
+            "organization_id",
+            "source_id",
+            "acquisition_id",
+            "job_id",
+        ],
+        postgresql_where=sa.text("change_kind = 'file_import'"),
+    )
     for table in (
         "context_source",
         "source_version",
@@ -439,4 +458,12 @@ def downgrade() -> None:
     ):
         op.execute(f"DROP POLICY {table}_file_dispatch_definer_select ON {table}")
         op.execute(f"REVOKE SELECT ON TABLE {table} FROM {_DEFINER}")
+    op.drop_index(
+        "ix_file_source_checkpoint_dispatch_order",
+        table_name="file_source_acquisition_checkpoint",
+    )
+    op.drop_index(
+        "ix_file_import_job_dispatch_available",
+        table_name="file_import_job",
+    )
     op.drop_column("file_import_job", "dispatch_claimed")

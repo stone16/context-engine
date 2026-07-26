@@ -1164,16 +1164,18 @@ def test_file_dispatch_revision_downgrades_and_reapplies_empty(
                 )
                 privileges = connection.execute(
                     text(
-                        "SELECT "
-                        "has_table_privilege('context_engine_file_dispatch_definer', "
-                        "'file_import_job', 'SELECT'), "
-                        "has_column_privilege('context_engine_file_dispatch_definer', "
-                        "'file_import_job', 'state', 'UPDATE'), "
-                        "has_table_privilege('context_engine_file_dispatch_definer', "
-                        "'membership', 'SELECT')"
+                        "SELECT table_name, privilege_type, NULL::text AS column_name "
+                        "FROM information_schema.table_privileges "
+                        "WHERE table_schema = 'public' AND grantee = "
+                        "'context_engine_file_dispatch_definer' "
+                        "UNION ALL "
+                        "SELECT table_name, privilege_type, column_name "
+                        "FROM information_schema.column_privileges "
+                        "WHERE table_schema = 'public' AND grantee = "
+                        "'context_engine_file_dispatch_definer'"
                     )
-                ).one()
-                assert tuple(privileges) == (False, False, False)
+                ).all()
+                assert privileges == []
                 assert (
                     connection.execute(
                         text(

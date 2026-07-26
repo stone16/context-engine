@@ -1728,6 +1728,9 @@
         ],
         "context_engine_action_execute_definer": [
           "SELECT"
+        ],
+        "context_engine_file_dispatch_definer": [
+          "SELECT"
         ]
       },
       "partitions": [],

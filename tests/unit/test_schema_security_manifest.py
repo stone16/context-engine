@@ -932,6 +932,7 @@ def test_issue_21_file_source_manifest_is_closed_and_role_separated() -> None:
         "context_engine_worker_lease_definer": ["SELECT", "INSERT"],
         "context_engine_action_prepare_definer": ["SELECT"],
         "context_engine_action_execute_definer": ["SELECT"],
+        "context_engine_file_dispatch_definer": ["SELECT"],
     }
     for entry in (source, version):
         assert entry["rowLevelSecurity"]["enabled"] is True

@@ -136,17 +136,7 @@ def _required_environment(name: str) -> str:
 def _run_one_file_import() -> int:
     """Consume one exact, signed File job in the independent Supply process."""
 
-    signing_key_hex = _required_environment(
-        "CONTEXT_ENGINE_WORKER_LEASE_SIGNING_KEY_HEX"
-    )
-    if len(signing_key_hex) != 64:
-        raise ValueError("Supply worker configuration is not available")
-    try:
-        signing_key = bytes.fromhex(signing_key_hex)
-    except ValueError:
-        raise ValueError("Supply worker configuration is not available") from None
-    if len(signing_key) != 32:
-        raise ValueError("Supply worker configuration is not available")
+    signing_key = _worker_signing_key()
     configuration = load_database_configuration(DatabasePurpose.SUPPLY_WORKER)
     engine = create_database_engine(configuration)
     roots = FileRootRegistry(

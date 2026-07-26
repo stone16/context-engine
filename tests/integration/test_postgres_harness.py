@@ -223,6 +223,7 @@ def test_post_init_role_provisioning_repairs_a_legacy_volume_idempotently(
             for role_name in (
                 ACCESS_POLICY_DEFINER_ROLE,
                 WORKER_LEASE_DEFINER_ROLE,
+                FILE_DISPATCH_DEFINER_ROLE,
                 CONTEXT_RUN_READER_DEFINER_ROLE,
                 DELIVERY_EVIDENCE_DEFINER_ROLE,
                 CITATION_DEFINER_ROLE,
@@ -246,13 +247,14 @@ def test_post_init_role_provisioning_repairs_a_legacy_volume_idempotently(
                 FROM pg_roles
                 WHERE rolname IN (
                     %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s
+                    %s, %s
                 )
                 """,
                 (
                     CONTROL_ROLE,
                     ACCESS_POLICY_DEFINER_ROLE,
                     WORKER_LEASE_DEFINER_ROLE,
+                    FILE_DISPATCH_DEFINER_ROLE,
                     CONTEXT_RUN_READER_DEFINER_ROLE,
                     DELIVERY_EVIDENCE_DEFINER_ROLE,
                     RELEASE_DEFINER_ROLE,
@@ -467,6 +469,55 @@ def test_post_init_role_provisioning_repairs_a_legacy_volume_idempotently(
                 True,
                 True,
                 1,
+            )
+            dispatch_facts = bootstrap_connection.execute(
+                """
+                SELECT
+                    dispatch.rolcanlogin,
+                    dispatch.rolsuper,
+                    dispatch.rolcreaterole,
+                    dispatch.rolcreatedb,
+                    dispatch.rolinherit,
+                    dispatch.rolreplication,
+                    dispatch.rolbypassrls,
+                    has_database_privilege(dispatch.oid, current_database(), 'CONNECT'),
+                    NOT EXISTS (
+                        SELECT 1
+                        FROM pg_auth_members AS granted_to_dispatch
+                        WHERE granted_to_dispatch.member = dispatch.oid
+                    ),
+                    (
+                        SELECT count(*)
+                        FROM pg_auth_members AS dispatch_members
+                        WHERE dispatch_members.roleid = dispatch.oid
+                    ),
+                    dispatch_membership.admin_option,
+                    dispatch_membership.inherit_option,
+                    dispatch_membership.set_option
+                FROM pg_roles AS dispatch
+                JOIN pg_auth_members AS dispatch_membership
+                  ON dispatch_membership.roleid = dispatch.oid
+                JOIN pg_roles AS migrator
+                  ON migrator.oid = dispatch_membership.member
+                WHERE dispatch.rolname = %s
+                  AND migrator.rolname = %s
+                """,
+                (FILE_DISPATCH_DEFINER_ROLE, MIGRATOR_ROLE),
+            ).fetchone()
+            assert dispatch_facts == (
+                False,
+                False,
+                False,
+                False,
+                False,
+                False,
+                False,
+                False,
+                True,
+                1,
+                False,
+                False,
+                True,
             )
             learning_facts = bootstrap_connection.execute(
                 """

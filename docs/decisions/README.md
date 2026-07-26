@@ -153,6 +153,7 @@ touched:
 - [0045 — Redeem private delivery evidence at ingress](0045-redeem-private-delivery-evidence-at-ingress.md)
 - [0046 — Bind egress to one exact Package hop](0046-bind-egress-to-one-exact-package-hop.md)
 - [0054 — Acknowledge File change pages before cursor advance](0054-acknowledge-file-change-pages-before-cursor-advance.md)
+- [0055 — Schedule accepted File observations explicitly](0055-schedule-accepted-file-observations-explicitly.md)
 - [0056 — Detect File deletions without tombstone authority](0056-detect-file-deletions-without-tombstone-authority.md)
 - [0057 — Execute current File deletes through tombstone authority](0057-execute-current-file-deletes-through-tombstone-authority.md)
 - [0058 — Schedule only upserts from mixed File pages](0058-schedule-only-upserts-from-mixed-file-pages.md)
