@@ -1,5 +1,5 @@
 {
-  "manifestVersion": "31.0.0",
+  "manifestVersion": "32.0.0",
   "controlOperations": [
     {
       "name": "register_file_source",
@@ -314,7 +314,15 @@
       "serverCapabilityInput": "all-or-nothing configured logical File root assertion applied only after globally oldest eligible selection and again during final post-lock revalidation; an omitted root yields no-work and cannot redirect selection",
       "databaseOwnedTime": "full-precision clock_timestamp authority check refreshed after every progress-lock wait; protocol lease timestamps and immediate worker verification use the PostgreSQL clock normalized to whole seconds",
       "fixedTtlSeconds": 300,
-      "selection": "oldest current v3/v4 page-scheduled upsert ordered by database acceptance time, checkpoint sequence, page ordinal, change ordinal, Organization, Source, and job id; the claim holds the per-Source progress advisory lock, refreshes its statement snapshot, revalidates latest accepted scan epoch, and uses FOR UPDATE SKIP LOCKED authority-row fencing before leasing",
+      "automaticReclaimPolicy": {
+        "maximumReclaims": 3,
+        "maximumLeaseGeneration": 4,
+        "baseBackoffSeconds": 30,
+        "backoff": "30 * 2^(current lease generation - 1), measured after database-issued lease expiry",
+        "eligibleStates": ["leased", "running", "prepared", "ready"],
+        "exhaustedBehavior": "content-free no-work; later dead-letter/operator owner remains NOT_ACTIVE"
+      },
+      "selection": "eligible expired recovery attempts are selected before first attempts; recovery orders by database-owned retry eligibility then original acceptance lineage and exact tenant/job tie-breakers, while first attempts retain the Issue #91 global order; both paths hold the per-Source progress advisory lock, refresh the statement snapshot, revalidate latest accepted scan epoch, and use FOR UPDATE SKIP LOCKED authority-row fencing before leasing",
       "currentAuthority": [
         "active exact SourceVersion",
         "latest accepted scan epoch",
@@ -322,7 +330,8 @@
         "enabled exact File import ServicePrincipal"
       ],
       "atomicWrites": [
-        "file_import_job"
+        "file_import_job",
+        "file_import_job_event"
       ]
     },
     {
@@ -5840,6 +5849,7 @@
           "context_worker_activate_recoverable_file_publication",
           "context_worker_record_file_import_interruption"
           ,"context_scheduler_claim_file_import"
+          ,"context_scheduler_claim_first_file_import"
         ],
         "definerRoles": [
           "context_engine_worker_lease_definer",
@@ -5884,7 +5894,7 @@
         ],
         "context_engine_file_dispatch_definer": [
           "SELECT",
-          "UPDATE state, signing_key_version, lease_nonce_digest, lease_issued_at, lease_expires_at, lease_generation, dispatch_claimed"
+          "UPDATE state, signing_key_version, lease_nonce_digest, lease_issued_at, lease_expires_at, lease_generation, dispatch_claimed, recovery_from_state, lease_redeemed_at"
         ]
       },
       "partitions": [],
@@ -5905,6 +5915,8 @@
         "PG-FILE-CHANGE-SUPERSESSION-083"
         ,"PG-FILE-DISPATCH-091"
         ,"PG-FILE-DISPATCH-CONCURRENCY-091"
+        ,"PG-FILE-RECLAIM-093"
+        ,"PG-FILE-RECLAIM-CONCURRENCY-093"
       ]
     },
     {
@@ -6171,6 +6183,22 @@
               "context_engine_worker_lease_definer"
             ],
             "withCheck": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"
+          },
+          {
+            "name": "file_import_job_event_file_dispatch_definer_select",
+            "command": "SELECT",
+            "roles": [
+              "context_engine_file_dispatch_definer"
+            ],
+            "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"
+          },
+          {
+            "name": "file_import_job_event_file_dispatch_definer_insert",
+            "command": "INSERT",
+            "roles": [
+              "context_engine_file_dispatch_definer"
+            ],
+            "withCheck": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"
           }
         ]
       },
@@ -6191,8 +6219,12 @@
           "context_worker_index_file_publication",
           "context_worker_activate_recoverable_file_publication",
           "context_worker_record_file_import_interruption"
+          ,"context_scheduler_claim_file_import"
         ],
-        "definerRole": "context_engine_worker_lease_definer",
+        "definerRoles": [
+          "context_engine_worker_lease_definer",
+          "context_engine_file_dispatch_definer"
+        ],
         "directTableMutationAllowed": false
       },
       "permittedOperations": {
@@ -6208,6 +6240,10 @@
           "EXECUTE context_worker_record_file_import_interruption"
         ],
         "context_engine_worker_lease_definer": [
+          "SELECT",
+          "INSERT"
+        ],
+        "context_engine_file_dispatch_definer": [
           "SELECT",
           "INSERT"
         ]
@@ -6228,7 +6264,9 @@
         "DB-001",
         "DB-004",
         "DB-008",
-        "PG-FILE-RECOVERY-027"
+        "PG-FILE-RECOVERY-027",
+        "PG-FILE-RECLAIM-093",
+        "PG-FILE-RECLAIM-CONCURRENCY-093"
       ]
     },
     {

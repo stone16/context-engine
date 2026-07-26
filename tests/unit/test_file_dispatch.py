@@ -22,6 +22,7 @@ from applications.worker import (
 from engine.control import FileImportPath, FileRootRef, SourceRef
 from engine.persistence.file_imports import FileImportRefused, FileImportUnavailable
 from engine.persistence.worker_jobs import (
+    FILE_DISPATCH_MAX_LEASE_GENERATION,
     FileDispatchLease,
     FileDispatchNoWork,
     PostgreSQLFileDispatchAuthority,
@@ -65,11 +66,11 @@ def test_dispatch_lease_redacts_every_routing_and_capability_value() -> None:
     assert claim.redemption.expected_source_ref == claim.source_ref
 
 
-@pytest.mark.parametrize("generation", [0, 2])
-def test_first_attempt_dispatch_rejects_any_other_generation(generation: int) -> None:
+@pytest.mark.parametrize("generation", [0, 5])
+def test_dispatch_rejects_generation_outside_automatic_budget(generation: int) -> None:
     claimed_at = datetime(2026, 7, 25, 10, tzinfo=UTC)
 
-    with pytest.raises(ValueError, match="generation one"):
+    with pytest.raises(ValueError, match="automatic generation budget"):
         FileDispatchLease(
             token=WorkerLeaseToken("lease-token"),
             organization_id=uuid4(),
@@ -80,6 +81,27 @@ def test_first_attempt_dispatch_rejects_any_other_generation(generation: int) ->
             issued_at=claimed_at,
             expires_at=claimed_at + timedelta(minutes=5),
         )
+
+
+@pytest.mark.parametrize("generation", [1, 2, 3, 4])
+def test_dispatch_accepts_only_the_versioned_automatic_generations(
+    generation: int,
+) -> None:
+    claimed_at = datetime(2026, 7, 25, 10, tzinfo=UTC)
+
+    claim = FileDispatchLease(
+        token=WorkerLeaseToken("lease-token"),
+        organization_id=uuid4(),
+        job_id=uuid4(),
+        source_ref=SourceRef(uuid4()),
+        service_principal_id=uuid4(),
+        lease_generation=generation,
+        issued_at=claimed_at,
+        expires_at=claimed_at + timedelta(minutes=5),
+    )
+
+    assert claim.lease_generation == generation
+    assert FILE_DISPATCH_MAX_LEASE_GENERATION == 4
 
 
 class _NoWorkAuthority:

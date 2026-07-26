@@ -541,6 +541,21 @@
       "selector": "tests/integration/test_file_dispatch.py::test_independent_worker_process_dispatches_and_publishes_one_job"
     },
     {
+      "id": "PG-FILE-RECLAIM-093",
+      "layer": "postgres",
+      "selector": "tests/integration/test_file_dispatch.py::test_scheduler_reclaims_one_expired_dispatch_after_database_backoff"
+    },
+    {
+      "id": "PG-FILE-RECLAIM-CONCURRENCY-093",
+      "layer": "postgres",
+      "selector": "tests/integration/test_file_dispatch.py::test_concurrent_schedulers_reclaim_one_expired_generation_once"
+    },
+    {
+      "id": "PROC-FILE-RECLAIM-093",
+      "layer": "runtime",
+      "selector": "tests/integration/test_file_dispatch.py::test_scheduler_recovers_interrupted_publication_and_stales_old_lease"
+    },
+    {
       "id": "HTTP-FILE-MIXED-UPSERT-NO-DELETE-089",
       "layer": "runtime",
       "selector": "tests/integration/test_z_egress_grant_file.py::test_mixed_file_upsert_scheduling_has_zero_delete_effect_over_generated_sdk"
@@ -686,12 +701,15 @@
           "PG-FILE-MIXED-UPSERT-SCHEDULE-089",
           "PG-FILE-MIXED-UPSERT-REPLAY-089",
           "PG-FILE-DISPATCH-091",
-          "PG-FILE-DISPATCH-CONCURRENCY-091"
+          "PG-FILE-DISPATCH-CONCURRENCY-091",
+          "PG-FILE-RECLAIM-093",
+          "PG-FILE-RECLAIM-CONCURRENCY-093"
         ],
         "runtime": [
           "RUNTIME-WORKER-LEASE-007",
           "HTTP-FILE-MIXED-UPSERT-NO-DELETE-089",
-          "PROC-FILE-DISPATCH-091"
+          "PROC-FILE-DISPATCH-091",
+          "PROC-FILE-RECLAIM-093"
         ]
       }
     },

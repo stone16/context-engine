@@ -57,7 +57,7 @@ class WorkerNoOpCompletionAuthority(Protocol):
 
 
 class FileDispatchAuthority(Protocol):
-    """Application port for database-selected first-attempt File work."""
+    """Application port for database-selected bounded-attempt File work."""
 
     def claim(self) -> FileDispatchLease | FileDispatchNoWork: ...
 

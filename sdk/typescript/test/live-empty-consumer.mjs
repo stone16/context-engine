@@ -17,7 +17,11 @@ const client = new ContextEngineResolveClient({
 const acquire = await client.resolve({
   request: {
     kind: "acquire",
-    need: { query: "ContextEngine delivers context." },
+    need: {
+      query:
+        process.env.CONTEXT_ENGINE_SDK_QUERY ??
+        "ContextEngine delivers context.",
+    },
   },
   requestId: process.env.CONTEXT_ENGINE_SDK_REQUEST_ID,
 });

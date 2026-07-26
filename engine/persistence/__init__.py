@@ -81,6 +81,7 @@ from engine.persistence.tenant_context import (
 )
 from engine.persistence.worker_jobs import (
     DEFAULT_WORKER_LEASE_TTL_SECONDS,
+    FILE_DISPATCH_MAX_LEASE_GENERATION,
     MAX_WORKER_LEASE_TTL_SECONDS,
     FileDispatchLease,
     FileDispatchNoWork,
@@ -162,6 +163,7 @@ __all__ = [
     "WorkerNoOpCompletion",
     "WorkerNoOpOutcome",
     "DEFAULT_WORKER_LEASE_TTL_SECONDS",
+    "FILE_DISPATCH_MAX_LEASE_GENERATION",
     "MAX_WORKER_LEASE_TTL_SECONDS",
     "assert_runtime_role",
     "assert_action_role",
