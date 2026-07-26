@@ -1,0 +1,698 @@
+"""Real loopback caller and deterministic golden-set evaluator for dogfood."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
+from email.message import Message
+from hashlib import sha256
+from pathlib import Path, PurePosixPath
+from typing import Final, Protocol
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlsplit
+from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
+
+from adapters.http.dogfood import DOGFOOD_SECRET_ENV
+
+DOGFOOD_BASE_URL_ENV: Final = "CONTEXT_ENGINE_DOGFOOD_BASE_URL"
+GOLDEN_SET_SCHEMA_VERSION: Final = "context-engine-golden-set-v0"
+EVAL_REPORT_VERSION: Final = "context-engine-dogfood-eval-v0"
+DEFAULT_GOLDEN_SET_PATH: Final = Path("eval/golden/v0/golden-set.json")
+MIN_GOLDEN_CASES: Final = 20
+MAX_GOLDEN_CASES: Final = 50
+MAX_QUERY_CHARACTERS: Final = 4_096
+MAX_RESPONSE_BYTES: Final = 16 * 1024 * 1024
+
+
+class DogfoodEvaluationUnavailable(RuntimeError):
+    """Caller configuration, golden input, or Runtime response is unavailable."""
+
+
+class _RejectRedirectHandler(HTTPRedirectHandler):
+    """Never forward the dogfood bearer credential to another destination."""
+
+    def redirect_request(
+        self,
+        request: Request,
+        fp: object,
+        code: int,
+        message: str,
+        headers: object,
+        new_url: str,
+    ) -> Request:
+        del fp, message, headers, new_url
+        raise HTTPError(
+            request.full_url,
+            code,
+            "dogfood redirect is unavailable",
+            Message(),
+            None,
+        )
+
+
+def _require_exact_text(name: str, value: object, *, maximum: int = 512) -> str:
+    if (
+        type(value) is not str
+        or not value
+        or value.isspace()
+        or value != value.strip()
+        or len(value) > maximum
+    ):
+        raise DogfoodEvaluationUnavailable(f"{name} is unavailable")
+    return value
+
+
+def _require_opaque_ref(name: str, value: object) -> str:
+    result = _require_exact_text(name, value)
+    if any(character.isspace() for character in result):
+        raise DogfoodEvaluationUnavailable(f"{name} is unavailable")
+    return result
+
+
+def _require_relative_path(value: object) -> str:
+    path = _require_exact_text("golden expected path", value, maximum=1_024)
+    parsed = PurePosixPath(path)
+    if (
+        parsed.is_absolute()
+        or str(parsed) != path
+        or path.startswith("./")
+        or "\\" in path
+        or any(part in {"", ".", ".."} for part in parsed.parts)
+    ):
+        raise DogfoodEvaluationUnavailable("golden expected path is unavailable")
+    return path
+
+
+@dataclass(frozen=True, slots=True, order=True)
+class EvidenceIdentity:
+    """Content-free public lineage used by one quality expectation."""
+
+    source_ref: str = field(repr=False)
+    resource_ref: str = field(repr=False)
+    revision_ref: str = field(repr=False)
+    fragment_ref: str = field(repr=False)
+
+    def __post_init__(self) -> None:
+        _require_opaque_ref("Evidence source_ref", self.source_ref)
+        _require_opaque_ref("Evidence resource_ref", self.resource_ref)
+        _require_opaque_ref("Evidence revision_ref", self.revision_ref)
+        _require_opaque_ref("Evidence fragment_ref", self.fragment_ref)
+
+    def public_document(self) -> dict[str, str]:
+        return {
+            "fragmentRef": self.fragment_ref,
+            "resourceRef": self.resource_ref,
+            "revisionRef": self.revision_ref,
+            "sourceRef": self.source_ref,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class GoldenExpectation:
+    """Maintainer-provided path annotation plus matchable public lineage."""
+
+    path: str
+    identity: EvidenceIdentity
+
+    def __post_init__(self) -> None:
+        _require_relative_path(self.path)
+        if type(self.identity) is not EvidenceIdentity:
+            raise TypeError("golden expectation requires EvidenceIdentity")
+
+
+@dataclass(frozen=True, slots=True)
+class GoldenCase:
+    """One real maintainer query and its expected Evidence lineage."""
+
+    case_ref: str
+    query: str = field(repr=False)
+    expected_evidence: tuple[GoldenExpectation, ...] = field(repr=False)
+
+    def __post_init__(self) -> None:
+        case_ref = _require_exact_text("golden case_ref", self.case_ref, maximum=128)
+        if (
+            case_ref[0] not in "abcdefghijklmnopqrstuvwxyz"
+            or any(
+                character not in "abcdefghijklmnopqrstuvwxyz0123456789_-"
+                for character in case_ref
+            )
+        ):
+            raise DogfoodEvaluationUnavailable("golden case_ref is unavailable")
+        _require_exact_text(
+            "golden query",
+            self.query,
+            maximum=MAX_QUERY_CHARACTERS,
+        )
+        if (
+            type(self.expected_evidence) is not tuple
+            or not self.expected_evidence
+            or any(
+                type(expectation) is not GoldenExpectation
+                for expectation in self.expected_evidence
+            )
+        ):
+            raise DogfoodEvaluationUnavailable(
+                "golden expected Evidence is unavailable"
+            )
+        identities = tuple(value.identity for value in self.expected_evidence)
+        if len(identities) != len(set(identities)):
+            raise DogfoodEvaluationUnavailable(
+                "golden expected Evidence must be unique"
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class GoldenSet:
+    """Frozen real-query dataset; construction rejects partial seed sets."""
+
+    name: str
+    cases: tuple[GoldenCase, ...] = field(repr=False)
+    digest: str = field(init=False)
+
+    def __post_init__(self) -> None:
+        _require_exact_text("golden set name", self.name, maximum=128)
+        if (
+            type(self.cases) is not tuple
+            or not MIN_GOLDEN_CASES <= len(self.cases) <= MAX_GOLDEN_CASES
+            or any(type(case) is not GoldenCase for case in self.cases)
+        ):
+            raise DogfoodEvaluationUnavailable(
+                f"golden set requires {MIN_GOLDEN_CASES}-{MAX_GOLDEN_CASES} cases"
+            )
+        refs = tuple(case.case_ref for case in self.cases)
+        if len(refs) != len(set(refs)) or refs != tuple(sorted(refs)):
+            raise DogfoodEvaluationUnavailable(
+                "golden cases must have unique canonical case_ref order"
+            )
+        canonical = _golden_set_document(self)
+        object.__setattr__(
+            self,
+            "digest",
+            sha256(
+                json.dumps(
+                    canonical,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ).encode("utf-8")
+            ).hexdigest(),
+        )
+
+
+def _golden_set_document(golden_set: GoldenSet) -> dict[str, object]:
+    return {
+        "entries": [
+            {
+                "caseRef": case.case_ref,
+                "expectedEvidence": [
+                    {
+                        "fragmentRef": expectation.identity.fragment_ref,
+                        "path": expectation.path,
+                        "resourceRef": expectation.identity.resource_ref,
+                        "revisionRef": expectation.identity.revision_ref,
+                        "sourceRef": expectation.identity.source_ref,
+                    }
+                    for expectation in case.expected_evidence
+                ],
+                "query": case.query,
+            }
+            for case in golden_set.cases
+        ],
+        "name": golden_set.name,
+        "schemaVersion": GOLDEN_SET_SCHEMA_VERSION,
+    }
+
+
+def _as_object(value: object, name: str) -> dict[str, object]:
+    if type(value) is not dict or any(type(key) is not str for key in value):
+        raise DogfoodEvaluationUnavailable(f"{name} is unavailable")
+    return value
+
+
+def _closed_object(
+    value: object,
+    name: str,
+    fields: frozenset[str],
+) -> dict[str, object]:
+    document = _as_object(value, name)
+    if frozenset(document) != fields:
+        raise DogfoodEvaluationUnavailable(f"{name} is unavailable")
+    return document
+
+
+def load_golden_set(path: Path) -> GoldenSet:
+    """Load the exact v0 schema without adding a runtime schema dependency."""
+
+    if not isinstance(path, Path):
+        raise TypeError("golden set path must be Path")
+    try:
+        raw = path.read_bytes()
+        document = _closed_object(
+            json.loads(raw),
+            "golden set",
+            frozenset({"schemaVersion", "name", "entries"}),
+        )
+        if document["schemaVersion"] != GOLDEN_SET_SCHEMA_VERSION:
+            raise DogfoodEvaluationUnavailable("golden set version is unavailable")
+        entries = document["entries"]
+        if type(entries) is not list:
+            raise DogfoodEvaluationUnavailable("golden entries are unavailable")
+        cases: list[GoldenCase] = []
+        for raw_case in entries:
+            case = _closed_object(
+                raw_case,
+                "golden case",
+                frozenset({"caseRef", "query", "expectedEvidence"}),
+            )
+            expected = case["expectedEvidence"]
+            if type(expected) is not list:
+                raise DogfoodEvaluationUnavailable(
+                    "golden expected Evidence is unavailable"
+                )
+            cases.append(
+                GoldenCase(
+                    case_ref=_require_exact_text("golden case_ref", case["caseRef"]),
+                    query=_require_exact_text(
+                        "golden query",
+                        case["query"],
+                        maximum=MAX_QUERY_CHARACTERS,
+                    ),
+                    expected_evidence=tuple(
+                        _parse_expectation(value) for value in expected
+                    ),
+                )
+            )
+        return GoldenSet(
+            name=_require_exact_text("golden set name", document["name"]),
+            cases=tuple(cases),
+        )
+    except DogfoodEvaluationUnavailable:
+        raise
+    except (OSError, UnicodeDecodeError, ValueError, TypeError, KeyError):
+        raise DogfoodEvaluationUnavailable("golden set is unavailable") from None
+
+
+def _parse_expectation(value: object) -> GoldenExpectation:
+    document = _closed_object(
+        value,
+        "golden expectation",
+        frozenset(
+            {"path", "sourceRef", "resourceRef", "revisionRef", "fragmentRef"}
+        ),
+    )
+    return GoldenExpectation(
+        path=_require_relative_path(document["path"]),
+        identity=EvidenceIdentity(
+            source_ref=_require_opaque_ref(
+                "Evidence source_ref",
+                document["sourceRef"],
+            ),
+            resource_ref=_require_opaque_ref(
+                "Evidence resource_ref",
+                document["resourceRef"],
+            ),
+            revision_ref=_require_opaque_ref(
+                "Evidence revision_ref",
+                document["revisionRef"],
+            ),
+            fragment_ref=_require_opaque_ref(
+                "Evidence fragment_ref",
+                document["fragmentRef"],
+            ),
+        ),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class DogfoodHttpConfiguration:
+    """Loopback-only destination and redacted bearer secret."""
+
+    base_url: str
+    secret: str = field(repr=False)
+
+    def __post_init__(self) -> None:
+        base_url = _require_exact_text("dogfood base URL", self.base_url)
+        try:
+            parsed = urlsplit(base_url)
+            port = parsed.port
+        except ValueError:
+            raise DogfoodEvaluationUnavailable(
+                "dogfood caller requires an explicit loopback HTTP URL"
+            ) from None
+        if (
+            parsed.scheme != "http"
+            or parsed.hostname not in {"127.0.0.1", "::1"}
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+            or parsed.path not in {"", "/"}
+            or port is None
+        ):
+            raise DogfoodEvaluationUnavailable(
+                "dogfood caller requires an explicit loopback HTTP URL"
+            )
+        secret = _require_exact_text(
+            "dogfood secret",
+            self.secret,
+            maximum=16_384,
+        )
+        if len(secret.encode("utf-8")) < 32:
+            raise DogfoodEvaluationUnavailable("dogfood secret is unavailable")
+
+    def reject_secret_retention(self, golden_set: GoldenSet) -> None:
+        """Refuse the configured bearer value anywhere in tracked eval input."""
+
+        if type(golden_set) is not GoldenSet:
+            raise TypeError("golden_set must be GoldenSet")
+        for case in golden_set.cases:
+            if self.secret in case.query or any(
+                self.secret in expectation.path
+                or self.secret in expectation.identity.source_ref
+                or self.secret in expectation.identity.resource_ref
+                or self.secret in expectation.identity.revision_ref
+                or self.secret in expectation.identity.fragment_ref
+                for expectation in case.expected_evidence
+            ):
+                raise DogfoodEvaluationUnavailable(
+                    "golden set contains configured secret material"
+                )
+
+    @classmethod
+    def load(
+        cls,
+        environment: Mapping[str, str] | None = None,
+    ) -> DogfoodHttpConfiguration:
+        source = os.environ if environment is None else environment
+        return cls(
+            base_url=_require_exact_text(
+                "dogfood base URL",
+                source.get(DOGFOOD_BASE_URL_ENV),
+            ).rstrip("/"),
+            secret=_require_exact_text(
+                "dogfood secret",
+                source.get(DOGFOOD_SECRET_ENV),
+                maximum=16_384,
+            ),
+        )
+
+
+class DogfoodResolveClient:
+    """Minimal plain-HTTP caller of only the frozen resolve operation."""
+
+    __slots__ = ("_configuration",)
+
+    def __init__(self, configuration: DogfoodHttpConfiguration) -> None:
+        if type(configuration) is not DogfoodHttpConfiguration:
+            raise TypeError("dogfood HTTP configuration is required")
+        self._configuration = configuration
+
+    def acquire(self, *, query: str, request_id: str) -> dict[str, object]:
+        query = _require_exact_text(
+            "dogfood query",
+            query,
+            maximum=MAX_QUERY_CHARACTERS,
+        )
+        request_id = _require_opaque_ref("dogfood request_id", request_id)
+        body = json.dumps(
+            {"kind": "acquire", "need": {"query": query}},
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        request = Request(
+            f"{self._configuration.base_url}/v0/resolve",
+            data=body,
+            headers={
+                "Accept": "application/json",
+                "Authorization": f"Bearer {self._configuration.secret}",
+                "Content-Type": "application/json",
+                "X-Context-Request-Id": request_id,
+            },
+            method="POST",
+        )
+        try:
+            with build_opener(
+                ProxyHandler({}),
+                _RejectRedirectHandler(),
+            ).open(  # noqa: S310
+                request,
+                timeout=30,
+            ) as response:
+                raw = response.read(MAX_RESPONSE_BYTES + 1)
+            if len(raw) > MAX_RESPONSE_BYTES:
+                raise DogfoodEvaluationUnavailable(
+                    "dogfood resolve response is unavailable"
+                )
+            outcome = _as_object(json.loads(raw), "dogfood resolve response")
+            if outcome.get("kind") != "resolved":
+                raise DogfoodEvaluationUnavailable(
+                    "dogfood resolve did not return a ContextPackage"
+                )
+            _package_from_outcome(outcome)
+            return outcome
+        except DogfoodEvaluationUnavailable:
+            raise
+        except (HTTPError, URLError, OSError, ValueError, UnicodeDecodeError):
+            raise DogfoodEvaluationUnavailable(
+                "dogfood resolve is unavailable"
+            ) from None
+
+    def __repr__(self) -> str:
+        return "DogfoodResolveClient(<redacted>)"
+
+
+class ResolveCaller(Protocol):
+    """Evaluation consumes only the public resolve behavior."""
+
+    def acquire(self, *, query: str, request_id: str) -> dict[str, object]: ...
+
+
+def _package_from_outcome(outcome: dict[str, object]) -> dict[str, object]:
+    package = _as_object(outcome.get("package"), "ContextPackage")
+    if type(package.get("blocks")) is not list or type(
+        package.get("evidence")
+    ) is not list:
+        raise DogfoodEvaluationUnavailable("ContextPackage is unavailable")
+    return package
+
+
+def _observed_evidence(
+    outcome: dict[str, object],
+) -> tuple[EvidenceIdentity, ...]:
+    package = _package_from_outcome(outcome)
+    values = package["evidence"]
+    if type(values) is not list:
+        raise DogfoodEvaluationUnavailable("ContextPackage Evidence is unavailable")
+    identities = tuple(
+        EvidenceIdentity(
+            source_ref=_require_opaque_ref(
+                "Evidence source_ref",
+                _as_object(value, "Evidence").get("sourceRef"),
+            ),
+            resource_ref=_require_opaque_ref(
+                "Evidence resource_ref",
+                _as_object(value, "Evidence").get("resourceRef"),
+            ),
+            revision_ref=_require_opaque_ref(
+                "Evidence revision_ref",
+                _as_object(value, "Evidence").get("revisionRef"),
+            ),
+            fragment_ref=_require_opaque_ref(
+                "Evidence fragment_ref",
+                _as_object(value, "Evidence").get("fragmentRef"),
+            ),
+        )
+        for value in values
+    )
+    if len(identities) != len(set(identities)):
+        raise DogfoodEvaluationUnavailable("ContextPackage Evidence is unavailable")
+    return identities
+
+
+def render_resolve(outcome: dict[str, object]) -> str:
+    """Render authorized blocks and content-free citation lineage for a human."""
+
+    package = _package_from_outcome(outcome)
+    evidence_values = package["evidence"]
+    block_values = package["blocks"]
+    if type(evidence_values) is not list or type(block_values) is not list:
+        raise DogfoodEvaluationUnavailable("ContextPackage is unavailable")
+    by_ref: dict[str, dict[str, object]] = {}
+    for value in evidence_values:
+        evidence = _as_object(value, "Evidence")
+        evidence_ref = _require_opaque_ref(
+            "Evidence evidence_ref",
+            evidence.get("evidenceRef"),
+        )
+        by_ref[evidence_ref] = evidence
+    lines = [
+        "coverage: "
+        + _require_exact_text(
+            "coverage status",
+            _as_object(package.get("coverage"), "coverage").get("status"),
+        ),
+        f"evidence: {len(evidence_values)}",
+    ]
+    for ordinal, value in enumerate(block_values, start=1):
+        block = _as_object(value, "ContextBlock")
+        text = _require_exact_text(
+            "ContextBlock text",
+            block.get("text"),
+            maximum=MAX_RESPONSE_BYTES,
+        )
+        refs = block.get("evidenceRefs")
+        if type(refs) is not list or len(refs) != 1:
+            raise DogfoodEvaluationUnavailable("ContextBlock Evidence is unavailable")
+        block_evidence = by_ref.get(_require_opaque_ref("Evidence ref", refs[0]))
+        if block_evidence is None:
+            raise DogfoodEvaluationUnavailable("ContextBlock Evidence is unavailable")
+        source_ref = _require_opaque_ref(
+            "Evidence source_ref",
+            block_evidence.get("sourceRef"),
+        )
+        resource_ref = _require_opaque_ref(
+            "Evidence resource_ref",
+            block_evidence.get("resourceRef"),
+        )
+        revision_ref = _require_opaque_ref(
+            "Evidence revision_ref",
+            block_evidence.get("revisionRef"),
+        )
+        fragment_ref = _require_opaque_ref(
+            "Evidence fragment_ref",
+            block_evidence.get("fragmentRef"),
+        )
+        lines.extend(
+            (
+                "",
+                f"[{ordinal}] {text}",
+                "    citation: "
+                f"source={source_ref} "
+                f"resource={resource_ref} "
+                f"revision={revision_ref} "
+                f"fragment={fragment_ref}",
+            )
+        )
+    return "\n".join(lines)
+
+
+def evaluate_golden_set(
+    golden_set: GoldenSet,
+    client: ResolveCaller,
+) -> dict[str, object]:
+    """Replay every query and return a canonical content-free quality report."""
+
+    if type(golden_set) is not GoldenSet:
+        raise TypeError("golden_set must be GoldenSet")
+    if not callable(getattr(client, "acquire", None)):
+        raise TypeError("client must provide public resolve behavior")
+    reports: list[dict[str, object]] = []
+    total_expected = 0
+    total_hits = 0
+    passed_cases = 0
+    for case in golden_set.cases:
+        outcome = client.acquire(
+            query=case.query,
+            request_id=f"dogfood-eval-{case.case_ref}",
+        )
+        observed = frozenset(_observed_evidence(outcome))
+        expected = tuple(value.identity for value in case.expected_evidence)
+        hits = tuple(sorted(value for value in expected if value in observed))
+        misses = tuple(sorted(value for value in expected if value not in observed))
+        total_expected += len(expected)
+        total_hits += len(hits)
+        if not misses:
+            passed_cases += 1
+        reports.append(
+            {
+                "caseRef": case.case_ref,
+                "expectedCount": len(expected),
+                "hits": [value.public_document() for value in hits],
+                "misses": [value.public_document() for value in misses],
+                "status": "hit" if not misses else "miss",
+            }
+        )
+    return {
+        "budget": {"status": "not-evaluated"},
+        "cases": reports,
+        "goldenSet": {
+            "caseCount": len(golden_set.cases),
+            "digest": golden_set.digest,
+            "name": golden_set.name,
+            "schemaVersion": GOLDEN_SET_SCHEMA_VERSION,
+        },
+        "quality": {
+            "casePassRate": passed_cases / len(golden_set.cases),
+            "measured": True,
+            "evidenceRecall": {
+                "hits": total_hits,
+                "totalExpected": total_expected,
+                "value": total_hits / total_expected,
+            },
+            "status": "measured",
+        },
+        "reliability": {"status": "not-evaluated"},
+        "reportVersion": EVAL_REPORT_VERSION,
+    }
+
+
+def _write_report(report: dict[str, object], output: Path | None) -> None:
+    rendered = json.dumps(
+        report,
+        ensure_ascii=False,
+        indent=2,
+        sort_keys=True,
+    ) + "\n"
+    if output is None:
+        print(rendered, end="")
+        return
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(rendered, encoding="utf-8")
+    print(f"dogfood eval report written: {output}", flush=True)
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Call or evaluate the loopback dogfood Runtime"
+    )
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    query = subparsers.add_parser("query", help="render one real resolve")
+    query.add_argument("query")
+    query.add_argument("--request-id", default="dogfood-maintainer-query")
+    run = subparsers.add_parser("run", help="replay golden set v0")
+    run.add_argument("--golden-set", type=Path, default=DEFAULT_GOLDEN_SET_PATH)
+    run.add_argument("--output", type=Path)
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> None:
+    parser = _parser()
+    args = parser.parse_args(argv)
+    try:
+        configuration = DogfoodHttpConfiguration.load()
+        client = DogfoodResolveClient(configuration)
+        if args.command == "query":
+            print(
+                render_resolve(
+                    client.acquire(query=args.query, request_id=args.request_id)
+                )
+            )
+            return
+        if args.command == "run":
+            golden_set = load_golden_set(args.golden_set)
+            configuration.reject_secret_retention(golden_set)
+            _write_report(
+                evaluate_golden_set(golden_set, client),
+                args.output,
+            )
+            return
+    except DogfoodEvaluationUnavailable as error:
+        parser.exit(1, f"dogfood evaluation unavailable: {error}\n")
+    raise AssertionError("closed parser returned an unknown command")
+
+
+if __name__ == "__main__":
+    main()

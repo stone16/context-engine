@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://context-engine.invalid/eval/golden/v0/schema.json",
+  "title": "ContextEngine maintainer golden set v0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "name", "entries"],
+  "properties": {
+    "schemaVersion": {
+      "const": "context-engine-golden-set-v0"
+    },
+    "name": {
+      "$ref": "#/$defs/nonblank"
+    },
+    "entries": {
+      "type": "array",
+      "minItems": 20,
+      "maxItems": 50,
+      "items": {
+        "$ref": "#/$defs/case"
+      }
+    }
+  },
+  "$defs": {
+    "nonblank": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "opaqueRef": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^\\S+$"
+    },
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^(?!/)(?!\\./)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\).+\\S$"
+    },
+    "expectation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sourceRef", "resourceRef", "revisionRef", "fragmentRef"],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "sourceRef": {
+          "$ref": "#/$defs/opaqueRef"
+        },
+        "resourceRef": {
+          "$ref": "#/$defs/opaqueRef"
+        },
+        "revisionRef": {
+          "$ref": "#/$defs/opaqueRef"
+        },
+        "fragmentRef": {
+          "$ref": "#/$defs/opaqueRef"
+        }
+      }
+    },
+    "case": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["caseRef", "query", "expectedEvidence"],
+      "properties": {
+        "caseRef": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,127}$"
+        },
+        "query": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096,
+          "pattern": "\\S"
+        },
+        "expectedEvidence": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "description": "Each four-part source/resource/revision/fragment lineage must also be unique within the case; the loader enforces this projected uniqueness because JSON Schema uniqueItems compares complete objects, including path.",
+          "items": {
+            "$ref": "#/$defs/expectation"
+          }
+        }
+      }
+    }
+  }
+}

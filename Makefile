@@ -1,4 +1,4 @@
-.PHONY: install build lint typecheck test catalog security-gate smoke db-up db-down db-reset integration openapi-generate openapi-check openapi-breaking-check sdk-generate sdk-check sdk-build sdk-test sdk-pack action-typecheck action-build action-test bot-typecheck bot-build bot-test check
+.PHONY: install build lint typecheck test catalog security-gate smoke db-up db-down db-reset integration dogfood-eval openapi-generate openapi-check openapi-breaking-check sdk-generate sdk-check sdk-build sdk-test sdk-pack action-typecheck action-build action-test bot-typecheck bot-build bot-test check
 
 install:
 	uv sync --frozen
@@ -41,6 +41,9 @@ db-reset:
 
 integration:
 	./scripts/database_harness.sh integration
+
+dogfood-eval:
+	uv run context-engine-dogfood-eval run --golden-set eval/golden/v0/golden-set.json
 
 openapi-generate:
 	uv run python scripts/freeze_openapi.py generate
