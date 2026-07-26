@@ -1,4 +1,4 @@
-"""Supply-only embedding contracts for immutable Fragment publication."""
+"""Embedding contracts for Fragment publication and content-free discovery."""
 
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ class EmbeddingProviderUnavailable(RuntimeError):
 
 
 class EmbeddingProvider(Protocol):
-    """Batch embedding seam used only by Supply publication."""
+    """Batch embedding seam shared by Supply publication and query discovery."""
 
     @property
     def profile(self) -> EmbeddingProfile: ...

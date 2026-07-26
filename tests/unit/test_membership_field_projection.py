@@ -44,6 +44,14 @@ class StructuredProjectionPort:
         del phrase_digest
         return ()
 
+    def discover_vector(
+        self,
+        query_embedding: tuple[float, ...],
+        limit: int,
+    ) -> tuple[()]:
+        del query_embedding, limit
+        return ()
+
     def source_is_active(self, source_ref: UUID) -> bool:
         del source_ref
         return True

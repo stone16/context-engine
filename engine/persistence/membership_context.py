@@ -184,6 +184,49 @@ class _PostgreSQLMaterializedProjectionPort:
         ).scalar_one()
         return observed is True
 
+    def discover_vector(
+        self,
+        query_embedding: tuple[float, ...],
+        limit: int,
+    ) -> tuple[CandidateRef, ...]:
+        rows = self._connection.execute(
+            text(
+                """
+                SELECT
+                    resource.organization_id,
+                    resource.source_ref,
+                    fragment.resource_ref,
+                    fragment.revision_id,
+                    fragment.fragment_ref
+                FROM context_fragment AS fragment
+                JOIN context_resource AS resource
+                  ON resource.organization_id = fragment.organization_id
+                 AND resource.resource_ref = fragment.resource_ref
+                 AND resource.active_revision_id = fragment.revision_id
+                 AND resource.tombstoned IS FALSE
+                WHERE fragment.embedding IS NOT NULL
+                ORDER BY fragment.embedding <=> CAST(:query_embedding AS vector)
+                LIMIT :limit
+                """
+            ),
+            {
+                "query_embedding": "["
+                + ",".join(repr(value) for value in query_embedding)
+                + "]",
+                "limit": limit,
+            },
+        )
+        return tuple(
+            CandidateRef(
+                organization_id=row.organization_id,
+                source_ref=row.source_ref,
+                resource_ref=row.resource_ref,
+                revision_ref=str(row.revision_id),
+                fragment_ref=row.fragment_ref,
+            )
+            for row in rows
+        )
+
     def discover_exact_phrase(
         self,
         phrase_digest: str,

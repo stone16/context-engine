@@ -196,6 +196,12 @@ class MaterializedPublicationTrace:
 class MaterializedProjectionPort(Protocol):
     """Narrow operations executed by the owning current database transaction."""
 
+    def discover_vector(
+        self,
+        query_embedding: tuple[float, ...],
+        limit: int,
+    ) -> tuple[CandidateRef, ...]: ...
+
     def discover_exact_phrase(
         self,
         phrase_digest: str,
@@ -306,6 +312,7 @@ def _construct_materialized_projection_session(
         not callable(getattr(port, "source_is_active", None))
         or not callable(getattr(port, "locate", None))
         or not callable(getattr(port, "project", None))
+        or not callable(getattr(port, "discover_vector", None))
         or not callable(getattr(port, "discover_exact_phrase", None))
         or not callable(getattr(port, "observe_publication", None))
     ):
@@ -359,6 +366,31 @@ def _discover_materialized_exact_phrase(
     ):
         raise TypeError(
             "materialized exact discovery must return exact CandidateRef values"
+        )
+    return candidates
+
+
+def _discover_materialized_vector(
+    session: MaterializedProjectionSession,
+    query_embedding: tuple[float, ...],
+    limit: int,
+) -> tuple[CandidateRef, ...]:
+    """Discover bounded content-free ANN lineage in the retained transaction."""
+
+    _require_active_materialized_projection_session(session)
+    if type(query_embedding) is not tuple or not query_embedding:
+        raise ValueError("vector discovery requires a nonempty query embedding")
+    if type(limit) is not int or limit <= 0:
+        raise ValueError("vector discovery requires a positive exact limit")
+    candidates = session._port.discover_vector(query_embedding, limit)
+    if (
+        type(candidates) is not tuple
+        or len(candidates) > limit
+        or any(type(candidate) is not CandidateRef for candidate in candidates)
+    ):
+        raise TypeError(
+            "materialized vector discovery must return bounded exact CandidateRef "
+            "values"
         )
     return candidates
 
