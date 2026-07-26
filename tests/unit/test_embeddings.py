@@ -248,7 +248,7 @@ def test_external_configuration_refuses_unbounded_batch_size(
 
 @pytest.mark.parametrize(
     "value",
-    [float("nan"), float("inf"), 1.0e31, 1.0e-50, 0.0],
+    [float("nan"), float("inf"), 1.0e31, 1.0e30, 1.0e-50, 0.0],
 )
 def test_embedding_validation_refuses_unstorable_or_zero_vectors(
     value: float,

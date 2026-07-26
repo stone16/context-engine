@@ -68,7 +68,12 @@ def validate_embedding_batch(
                     raise EmbeddingProviderUnavailable(
                         "Embedding provider is unavailable"
                     )
-                vector.append(_FLOAT32.unpack(_FLOAT32.pack(value))[0])
+                stored_value = _FLOAT32.unpack(_FLOAT32.pack(value))[0]
+                if not isfinite(stored_value) or abs(stored_value) > 1.0e30:
+                    raise EmbeddingProviderUnavailable(
+                        "Embedding provider is unavailable"
+                    )
+                vector.append(stored_value)
             if not any(value != 0.0 for value in vector):
                 raise EmbeddingProviderUnavailable("Embedding provider is unavailable")
             validated.append(tuple(vector))
