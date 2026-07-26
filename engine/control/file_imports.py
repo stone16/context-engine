@@ -29,25 +29,27 @@ def _require_token(field_name: str, value: object, *, maximum: int = 255) -> str
 
 @dataclass(frozen=True, slots=True)
 class FileImportPath:
-    """One relative Markdown filename; directories and traversal are closed."""
+    """One canonical relative Markdown path beneath a registered File root."""
 
     value: str = field(repr=False)
 
     def __post_init__(self) -> None:
         value = self.value
+        parts = value.split("/") if type(value) is str else ()
         if (
             type(value) is not str
             or not value
             or value != value.strip()
-            or value in {".", ".."}
-            or "/" in value
             or "\\" in value
             or not value.casefold().endswith(".md")
             or len(value) > 255
+            or any(not part or part in {".", ".."} for part in parts)
             or any(ord(character) < 0x20 for character in value)
             or any(0xD800 <= ord(character) <= 0xDFFF for character in value)
         ):
-            raise ValueError("File import path must be one bounded Markdown filename")
+            raise ValueError(
+                "File import path must be one bounded canonical relative Markdown path"
+            )
 
 
 @dataclass(frozen=True, slots=True)

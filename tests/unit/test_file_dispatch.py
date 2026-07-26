@@ -13,8 +13,10 @@ from sqlalchemy import Engine
 from sqlalchemy.exc import SQLAlchemyError
 
 from applications.worker import (
+    DEFAULT_WORKER_MAX_FILE_BYTES,
     FileDispatchCycleResult,
     _file_dispatch_roots,
+    _file_read_limits,
     _worker_database_time,
     dispatch_file_imports_until_stopped,
     dispatch_one_file_import,
@@ -271,6 +273,27 @@ def test_dispatch_loads_every_server_owned_file_root(
         assert (
             roots.read(FileRootRef("second"), FileImportPath("second.md")) == b"second"
         )
+
+
+def test_worker_file_byte_limit_defaults_to_one_mib_and_is_configurable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("CONTEXT_ENGINE_WORKER_MAX_FILE_BYTES", raising=False)
+    assert _file_read_limits().max_file_bytes == DEFAULT_WORKER_MAX_FILE_BYTES
+
+    monkeypatch.setenv("CONTEXT_ENGINE_WORKER_MAX_FILE_BYTES", "8192")
+    assert _file_read_limits().max_file_bytes == 8192
+
+
+@pytest.mark.parametrize("value", ["", "0", " 8192", "8192 ", "nope", "67108865"])
+def test_worker_rejects_invalid_file_byte_limits(
+    monkeypatch: pytest.MonkeyPatch,
+    value: str,
+) -> None:
+    monkeypatch.setenv("CONTEXT_ENGINE_WORKER_MAX_FILE_BYTES", value)
+
+    with pytest.raises(ValueError, match="configuration is not available"):
+        _file_read_limits()
 
 
 @pytest.mark.parametrize("document", ["[]", "{}", '{"root": 1}', "not-json"])

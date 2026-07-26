@@ -30,16 +30,24 @@ NOW = datetime(2026, 7, 22, 22, 0, tzinfo=UTC)
         "..",
         "../handbook.md",
         "/tmp/handbook.md",
-        "folder/handbook.md",
+        "folder/../handbook.md",
+        "folder/./handbook.md",
+        "folder//handbook.md",
         "folder\\handbook.md",
         "handbook.txt",
         " handbook.md",
         "handbook.md ",
     ),
 )
-def test_manual_import_path_is_one_bounded_markdown_filename(value: str) -> None:
-    with pytest.raises(ValueError, match="Markdown filename"):
+def test_manual_import_path_is_one_bounded_relative_markdown_path(value: str) -> None:
+    with pytest.raises(ValueError, match="relative Markdown path"):
         FileImportPath(value)
+
+
+def test_manual_import_path_accepts_canonical_nested_markdown_paths() -> None:
+    assert FileImportPath("folder/notes/handbook.md").value == (
+        "folder/notes/handbook.md"
+    )
 
 
 def test_manual_import_command_contains_no_host_path_or_credentials() -> None:
@@ -109,6 +117,33 @@ def test_root_registry_reads_one_regular_file_and_rejects_symlinks(
     with pytest.raises(LookupError, match="regular configured-root file"):
         registry.read(
             FileRootRef("handbook-root"), FileImportPath("linked.md")
+        )
+
+
+def test_root_registry_reads_nested_files_without_following_directory_symlinks(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "registered-root"
+    nested = root / "notes" / "daily"
+    nested.mkdir(parents=True)
+    (nested / "today.md").write_bytes(b"inside")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "today.md").write_bytes(b"outside")
+    (root / "linked").symlink_to(outside, target_is_directory=True)
+    registry = FileRootRegistry(
+        {FileRootRef("handbook-root"): root},
+        limits=FileReadLimits(max_file_bytes=1024),
+    )
+
+    assert registry.read(
+        FileRootRef("handbook-root"),
+        FileImportPath("notes/daily/today.md"),
+    ) == b"inside"
+    with pytest.raises(LookupError, match="regular configured-root file"):
+        registry.read(
+            FileRootRef("handbook-root"),
+            FileImportPath("linked/today.md"),
         )
 
 
