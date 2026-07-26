@@ -580,20 +580,18 @@ def test_scan_closes_when_file_disappears_before_post_read_stat(
     )
     provider_proofs, _ = _proofs()
     provider = FileChangeProvider(registry, proofs=provider_proofs)
-    original_read = FileRootRegistry._read_regular
+    original_read = FileRootRegistry._read_regular_at
 
     def remove_after_read(
         self: FileRootRegistry,
-        root_ref: FileRootRef,
-        path: object,
+        parent_descriptor: int,
+        name: str,
     ) -> tuple[bytes, os.stat_result]:
-        payload, metadata = original_read(
-            self, root_ref, path  # type: ignore[arg-type]
-        )
+        payload, metadata = original_read(self, parent_descriptor, name)
         file_path.unlink()
         return payload, metadata
 
-    with patch.object(FileRootRegistry, "_read_regular", remove_after_read):
+    with patch.object(FileRootRegistry, "_read_regular_at", remove_after_read):
         outcome = provider.read_changes(
             _source(), InitialScan(), ChangeLimit(1)
         )

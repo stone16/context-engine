@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import fields
 from datetime import UTC, datetime
 from pathlib import Path
@@ -7,6 +8,7 @@ from uuid import UUID
 
 import pytest
 
+import adapters.file_source as file_source
 from adapters.file_source import FileReadLimits, FileRootRegistry
 from engine.control import (
     FileImportAudience,
@@ -20,6 +22,22 @@ ORGANIZATION_ID = UUID("62f7e3b4-e7cf-44c5-afaf-2f58032801e0")
 MEMBERSHIP_ID = UUID("48e1ab62-8f7f-44c2-9d38-4a918d315f07")
 SOURCE_ID = UUID("1a4743a4-747e-423f-8dd9-7cccfb5c1d3c")
 NOW = datetime(2026, 7, 22, 22, 0, tzinfo=UTC)
+
+
+@pytest.mark.parametrize("flag_name", ("O_DIRECTORY", "O_NOFOLLOW"))
+def test_file_provider_refuses_a_missing_descriptor_safety_flag(
+    flag_name: str,
+) -> None:
+    original = getattr(os, flag_name)
+
+    with (
+        pytest.raises(RuntimeError, match=flag_name),
+        pytest.MonkeyPatch.context() as monkeypatch,
+    ):
+        monkeypatch.delattr(os, flag_name)
+        file_source._required_open_flag(flag_name)
+
+    assert file_source._required_open_flag(flag_name) == original
 
 
 @pytest.mark.parametrize(

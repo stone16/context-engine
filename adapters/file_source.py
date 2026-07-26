@@ -46,6 +46,20 @@ from engine.control import (
 MAX_CONFIGURED_FILE_BYTES = 64 * 1024 * 1024
 
 
+def _required_open_flag(name: str) -> int:
+    """Return one mandatory descriptor-safety flag or refuse this adapter."""
+
+    value = getattr(os, name, None)
+    if type(value) is not int or value == 0:
+        raise RuntimeError(f"File provider requires platform open flag {name}")
+    return value
+
+
+_O_DIRECTORY = _required_open_flag("O_DIRECTORY")
+_O_NOFOLLOW = _required_open_flag("O_NOFOLLOW")
+_DIRECTORY_OPEN_FLAGS = os.O_RDONLY | _O_DIRECTORY | _O_NOFOLLOW
+
+
 @dataclass(frozen=True, slots=True)
 class FileReadLimits:
     """Server-owned hard ceiling for one acquired File payload."""
@@ -62,12 +76,16 @@ class FileReadLimits:
 
 @dataclass(frozen=True, slots=True)
 class _AnchoredRoot:
+    """One configured root retained as an open directory capability."""
+
     display_path: Path
     descriptor: int
 
 
 @dataclass(frozen=True, slots=True)
 class _FileIdentity:
+    """Stable identity fields required for one directory or file observation."""
+
     device: int
     inode: int
     mode_type: int
@@ -78,6 +96,8 @@ class _FileIdentity:
 
 @dataclass(frozen=True, slots=True)
 class _DirectoryEntry:
+    """One relevant entry captured from a stable directory snapshot."""
+
     name: str
     relative_path: str
     identity: _FileIdentity
@@ -88,14 +108,12 @@ def _open_anchored_directory(path: Path) -> tuple[Path, int]:
     """Open every absolute path component without following any symlink."""
 
     absolute = Path(os.path.abspath(path))
-    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
-    no_follow = getattr(os, "O_NOFOLLOW", 0)
-    descriptor = os.open(absolute.anchor, flags | no_follow)
+    descriptor = os.open(absolute.anchor, _DIRECTORY_OPEN_FLAGS)
     try:
         for component in absolute.parts[1:]:
             next_descriptor = os.open(
                 component,
-                flags | no_follow,
+                _DIRECTORY_OPEN_FLAGS,
                 dir_fd=descriptor,
             )
             os.close(descriptor)
@@ -168,15 +186,13 @@ class FileRootRegistry:
         self.resolve(root_ref, path)
         anchored = self._roots[root_ref]
         components = path.value.split("/")
-        directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
-        no_follow = getattr(os, "O_NOFOLLOW", 0)
         parent_descriptor = os.dup(anchored.descriptor)
         try:
             for component in components[:-1]:
                 try:
                     next_descriptor = os.open(
                         component,
-                        directory_flags | no_follow,
+                        _DIRECTORY_OPEN_FLAGS,
                         dir_fd=parent_descriptor,
                     )
                 except OSError:
@@ -189,39 +205,46 @@ class FileRootRegistry:
                     raise LookupError(
                         "File target is not a regular configured-root file"
                     )
-            try:
-                descriptor = os.open(
-                    components[-1],
-                    os.O_RDONLY | no_follow,
-                    dir_fd=parent_descriptor,
-                )
-            except OSError:
-                raise LookupError(
-                    "File target is not a regular configured-root file"
-                ) from None
-            try:
-                before = os.fstat(descriptor)
-                if (
-                    not stat.S_ISREG(before.st_mode)
-                    or before.st_size > self._limits.max_file_bytes
-                ):
-                    raise LookupError(
-                        "File target is not a regular configured-root file"
-                    )
-                with os.fdopen(descriptor, "rb", closefd=False) as stream:
-                    payload = stream.read(self._limits.max_file_bytes + 1)
-                if len(payload) > self._limits.max_file_bytes:
-                    raise LookupError(
-                        "File target exceeds the configured byte ceiling"
-                    )
-                after = os.fstat(descriptor)
-                if _file_identity(before) != _file_identity(after):
-                    raise LookupError("File target changed while it was read")
-                return payload, after
-            finally:
-                os.close(descriptor)
+            return self._read_regular_at(parent_descriptor, components[-1])
         finally:
             os.close(parent_descriptor)
+
+    def _read_regular_at(
+        self,
+        parent_descriptor: int,
+        name: str,
+    ) -> tuple[bytes, os.stat_result]:
+        """Read one stable regular file relative to an already-open parent."""
+
+        try:
+            descriptor = os.open(
+                name,
+                os.O_RDONLY | _O_NOFOLLOW,
+                dir_fd=parent_descriptor,
+            )
+        except OSError:
+            raise LookupError(
+                "File target is not a regular configured-root file"
+            ) from None
+        try:
+            before = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(before.st_mode)
+                or before.st_size > self._limits.max_file_bytes
+            ):
+                raise LookupError(
+                    "File target is not a regular configured-root file"
+                )
+            with os.fdopen(descriptor, "rb", closefd=False) as stream:
+                payload = stream.read(self._limits.max_file_bytes + 1)
+            if len(payload) > self._limits.max_file_bytes:
+                raise LookupError("File target exceeds the configured byte ceiling")
+            after = os.fstat(descriptor)
+            if _file_identity(before) != _file_identity(after):
+                raise LookupError("File target changed while it was read")
+            return payload, after
+        finally:
+            os.close(descriptor)
 
     def _observe_markdown_files(
         self, root_ref: FileRootRef
@@ -253,14 +276,12 @@ class FileRootRegistry:
         """Descend one already-opened directory and verify its stable snapshot."""
 
         initial = _directory_snapshot(descriptor, relative_prefix)
-        directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
-        no_follow = getattr(os, "O_NOFOLLOW", 0)
         for entry in initial:
             if entry.is_directory:
                 try:
                     child = os.open(
                         entry.name,
-                        directory_flags | no_follow,
+                        _DIRECTORY_OPEN_FLAGS,
                         dir_fd=descriptor,
                     )
                 except OSError:
@@ -291,7 +312,7 @@ class FileRootRegistry:
             if path is None or not stat.S_ISREG(entry.identity.mode_type):
                 continue
             try:
-                payload, opened = self._read_regular(root_ref, path)
+                payload, opened = self._read_regular_at(descriptor, entry.name)
                 after = os.stat(
                     entry.name,
                     dir_fd=descriptor,
@@ -325,6 +346,8 @@ class FileRootRegistry:
 
 
 def _file_identity(value: os.stat_result) -> _FileIdentity:
+    """Project one stat result onto the fields used for stability checks."""
+
     return _FileIdentity(
         device=value.st_dev,
         inode=value.st_ino,
@@ -336,6 +359,8 @@ def _file_identity(value: os.stat_result) -> _FileIdentity:
 
 
 def _file_import_path_or_none(name: str) -> FileImportPath | None:
+    """Return a validated canonical Markdown path or ignore the candidate."""
+
     try:
         return FileImportPath(name)
     except ValueError:
@@ -378,6 +403,8 @@ def _directory_snapshot(
 
 
 def _safe_directory_component(name: object) -> bool:
+    """Return whether one observed name is safe to use as a path component."""
+
     return (
         type(name) is str
         and bool(name)

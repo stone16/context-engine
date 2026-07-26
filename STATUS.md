@@ -92,8 +92,9 @@ Follow the ADR for its exact evidence boundary.
 | [0058](./docs/decisions/0058-schedule-only-upserts-from-mixed-file-pages.md) | Schedule only upserts from mixed File pages |
 | [0059](./docs/decisions/0059-dispatch-scheduled-file-imports-through-exact-leases.md) | Dispatch scheduled File imports through exact leases |
 | [0060](./docs/decisions/0060-reclaim-expired-file-imports-with-bounded-retries.md) | Reclaim expired File imports with bounded retries |
+| [0065](./docs/decisions/0065-recurse-file-discovery-with-anchored-descriptors.md) | Recurse File discovery through anchored descriptors under one bounded byte ceiling |
 
-Issue #99 extends the active File Provider boundary from a flat root to
+ADR-0065 extends the active File Provider boundary from a flat root to
 deterministic recursive discovery of canonical nested Markdown paths. Each
 directory hop and final read stays anchored to the registered root with
 no-follow descriptors and stable before/after identity checks; symlinks,
