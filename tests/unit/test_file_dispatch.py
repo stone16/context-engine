@@ -285,6 +285,36 @@ def test_worker_file_byte_limit_defaults_to_one_mib_and_is_configurable(
     assert _file_read_limits().max_file_bytes == 8192
 
 
+def test_worker_default_file_limit_accepts_above_legacy_ceiling_and_refuses_oversize(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "configured-root"
+    root.mkdir()
+    (root / "above-legacy.md").write_bytes(b"a" * 4_097)
+    (root / "oversize.md").write_bytes(
+        b"b" * (DEFAULT_WORKER_MAX_FILE_BYTES + 1)
+    )
+    monkeypatch.setenv(
+        "CONTEXT_ENGINE_WORKER_FILE_ROOTS_JSON",
+        json.dumps({"configured-root": str(root)}),
+    )
+    monkeypatch.delenv("CONTEXT_ENGINE_WORKER_MAX_FILE_BYTES", raising=False)
+
+    with _file_dispatch_roots() as roots:
+        assert len(
+            roots.read(
+                FileRootRef("configured-root"),
+                FileImportPath("above-legacy.md"),
+            )
+        ) == 4_097
+        with pytest.raises(LookupError, match="regular configured-root file"):
+            roots.read(
+                FileRootRef("configured-root"),
+                FileImportPath("oversize.md"),
+            )
+
+
 @pytest.mark.parametrize("value", ["", "0", " 8192", "8192 ", "nope", "67108865"])
 def test_worker_rejects_invalid_file_byte_limits(
     monkeypatch: pytest.MonkeyPatch,
