@@ -46,6 +46,20 @@ from engine.control import (
 MAX_CONFIGURED_FILE_BYTES = 64 * 1024 * 1024
 
 
+def _required_open_flag(name: str) -> int:
+    """Return one mandatory descriptor-safety flag or refuse this adapter."""
+
+    value = getattr(os, name, None)
+    if type(value) is not int or value == 0:
+        raise RuntimeError(f"File provider requires platform open flag {name}")
+    return value
+
+
+_O_DIRECTORY = _required_open_flag("O_DIRECTORY")
+_O_NOFOLLOW = _required_open_flag("O_NOFOLLOW")
+_DIRECTORY_OPEN_FLAGS = os.O_RDONLY | _O_DIRECTORY | _O_NOFOLLOW
+
+
 @dataclass(frozen=True, slots=True)
 class FileReadLimits:
     """Server-owned hard ceiling for one acquired File payload."""
@@ -62,22 +76,44 @@ class FileReadLimits:
 
 @dataclass(frozen=True, slots=True)
 class _AnchoredRoot:
+    """One configured root retained as an open directory capability."""
+
     display_path: Path
     descriptor: int
+
+
+@dataclass(frozen=True, slots=True)
+class _FileIdentity:
+    """Stable identity fields required for one directory or file observation."""
+
+    device: int
+    inode: int
+    mode_type: int
+    size: int
+    modified_ns: int
+    changed_ns: int
+
+
+@dataclass(frozen=True, slots=True)
+class _DirectoryEntry:
+    """One relevant entry captured from a stable directory snapshot."""
+
+    name: str
+    relative_path: str
+    identity: _FileIdentity
+    is_directory: bool
 
 
 def _open_anchored_directory(path: Path) -> tuple[Path, int]:
     """Open every absolute path component without following any symlink."""
 
     absolute = Path(os.path.abspath(path))
-    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
-    no_follow = getattr(os, "O_NOFOLLOW", 0)
-    descriptor = os.open(absolute.anchor, flags | no_follow)
+    descriptor = os.open(absolute.anchor, _DIRECTORY_OPEN_FLAGS)
     try:
         for component in absolute.parts[1:]:
             next_descriptor = os.open(
                 component,
-                flags | no_follow,
+                _DIRECTORY_OPEN_FLAGS,
                 dir_fd=descriptor,
             )
             os.close(descriptor)
@@ -91,7 +127,7 @@ def _open_anchored_directory(path: Path) -> tuple[Path, int]:
 
 
 class FileRootRegistry:
-    """Resolve a logical root and closed filename without discovering files."""
+    """Resolve one logical root and symlink-safe relative Markdown paths."""
 
     __slots__ = ("_limits", "_roots")
 
@@ -134,10 +170,7 @@ class FileRootRegistry:
         anchored = self._roots.get(root_ref)
         if anchored is None:
             raise LookupError("File root is not configured")
-        target = anchored.display_path / path.value
-        if target.parent != anchored.display_path:
-            raise LookupError("File target is outside the configured root")
-        return target
+        return anchored.display_path.joinpath(*path.value.split("/"))
 
     def read(self, root_ref: FileRootRef, path: FileImportPath) -> bytes:
         """Read one regular file without following a final symlink."""
@@ -152,9 +185,43 @@ class FileRootRegistry:
 
         self.resolve(root_ref, path)
         anchored = self._roots[root_ref]
-        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        components = path.value.split("/")
+        parent_descriptor = os.dup(anchored.descriptor)
         try:
-            descriptor = os.open(path.value, flags, dir_fd=anchored.descriptor)
+            for component in components[:-1]:
+                try:
+                    next_descriptor = os.open(
+                        component,
+                        _DIRECTORY_OPEN_FLAGS,
+                        dir_fd=parent_descriptor,
+                    )
+                except OSError:
+                    raise LookupError(
+                        "File target is not a regular configured-root file"
+                    ) from None
+                os.close(parent_descriptor)
+                parent_descriptor = next_descriptor
+                if not stat.S_ISDIR(os.fstat(parent_descriptor).st_mode):
+                    raise LookupError(
+                        "File target is not a regular configured-root file"
+                    )
+            return self._read_regular_at(parent_descriptor, components[-1])
+        finally:
+            os.close(parent_descriptor)
+
+    def _read_regular_at(
+        self,
+        parent_descriptor: int,
+        name: str,
+    ) -> tuple[bytes, os.stat_result]:
+        """Read one stable regular file relative to an already-open parent."""
+
+        try:
+            descriptor = os.open(
+                name,
+                os.O_RDONLY | _O_NOFOLLOW,
+                dir_fd=parent_descriptor,
+            )
         except OSError:
             raise LookupError(
                 "File target is not a regular configured-root file"
@@ -182,7 +249,7 @@ class FileRootRegistry:
     def _observe_markdown_files(
         self, root_ref: FileRootRef
     ) -> tuple[tuple[FileImportPath, bytes], ...]:
-        """Read one stable shallow Markdown snapshot through the anchored root."""
+        """Read one stable recursive Markdown snapshot through anchored dirs."""
 
         if type(root_ref) is not FileRootRef:
             raise TypeError("File observation requires FileRootRef")
@@ -190,76 +257,124 @@ class FileRootRegistry:
         if anchored is None:
             raise LookupError("File root is not configured")
         observed: list[tuple[FileImportPath, bytes]] = []
-        initial_identities: dict[
-            FileImportPath, tuple[int, int, int, int, int, int]
-        ] = {}
-        try:
-            names = os.listdir(anchored.descriptor)
-        except OSError:
-            raise RuntimeError("File root observation is unstable") from None
-        accepted_names = tuple(
-            (name, path)
-            for name in names
-            if (path := _file_import_path_or_none(name)) is not None
+        snapshots: dict[str, tuple[_DirectoryEntry, ...]] = {}
+        self._observe_directory(
+            anchored.descriptor,
+            relative_prefix="",
+            observed=observed,
+            snapshots=snapshots,
         )
-        ordered_names = tuple(
-            sorted(accepted_names, key=lambda item: item[0].encode("utf-8"))
+        self._revalidate_directory_tree(
+            anchored.descriptor,
+            relative_prefix="",
+            snapshots=snapshots,
         )
-        for name, path in ordered_names:
-            try:
-                metadata = os.stat(
-                    name,
-                    dir_fd=anchored.descriptor,
-                    follow_symlinks=False,
-                )
-            except OSError:
-                raise RuntimeError("File root observation is unstable") from None
-            initial_identities[path] = _file_identity(metadata)
-            if not stat.S_ISREG(metadata.st_mode):
+        return tuple(sorted(observed, key=lambda item: item[0].value.encode("utf-8")))
+
+    def _observe_directory(
+        self,
+        descriptor: int,
+        *,
+        relative_prefix: str,
+        observed: list[tuple[FileImportPath, bytes]],
+        snapshots: dict[str, tuple[_DirectoryEntry, ...]],
+    ) -> None:
+        """Descend one already-opened directory and verify its stable snapshot."""
+
+        initial = _directory_snapshot(descriptor, relative_prefix)
+        if relative_prefix in snapshots:
+            raise RuntimeError("File root observation is unstable")
+        snapshots[relative_prefix] = initial
+        for entry in initial:
+            if entry.is_directory:
+                try:
+                    child = os.open(
+                        entry.name,
+                        _DIRECTORY_OPEN_FLAGS,
+                        dir_fd=descriptor,
+                    )
+                except OSError:
+                    raise RuntimeError("File root observation is unstable") from None
+                try:
+                    if _file_identity(os.fstat(child)) != entry.identity:
+                        raise RuntimeError("File root observation is unstable")
+                    self._observe_directory(
+                        child,
+                        relative_prefix=entry.relative_path,
+                        observed=observed,
+                        snapshots=snapshots,
+                    )
+                finally:
+                    os.close(child)
+                try:
+                    after = os.stat(
+                        entry.name,
+                        dir_fd=descriptor,
+                        follow_symlinks=False,
+                    )
+                except OSError:
+                    raise RuntimeError("File root observation is unstable") from None
+                if _file_identity(after) != entry.identity:
+                    raise RuntimeError("File root observation is unstable")
+                continue
+            path = _file_import_path_or_none(entry.relative_path)
+            if path is None or not stat.S_ISREG(entry.identity.mode_type):
                 continue
             try:
-                payload, opened = self._read_regular(root_ref, path)
+                payload, opened = self._read_regular_at(descriptor, entry.name)
                 after = os.stat(
-                    name,
-                    dir_fd=anchored.descriptor,
+                    entry.name,
+                    dir_fd=descriptor,
                     follow_symlinks=False,
                 )
             except (LookupError, OSError):
                 raise RuntimeError("File root observation is unstable") from None
             if not (
-                _file_identity(metadata)
-                == _file_identity(opened)
-                == _file_identity(after)
+                entry.identity == _file_identity(opened) == _file_identity(after)
             ):
                 raise RuntimeError("File root observation is unstable")
             observed.append((path, payload))
-        try:
-            final_names = tuple(
-                sorted(
-                    (
-                        (name, path)
-                        for name in os.listdir(anchored.descriptor)
-                        if (path := _file_import_path_or_none(name)) is not None
-                    ),
-                    key=lambda item: item[0].encode("utf-8"),
-                )
-            )
-        except OSError:
-            raise RuntimeError("File root observation is unstable") from None
-        if final_names != ordered_names:
+            if len(observed) > MAX_FILE_CHANGE_BASELINE_SIZE:
+                raise LookupError("File root exceeds the configured scan bound")
+        if _directory_snapshot(descriptor, relative_prefix) != initial:
             raise RuntimeError("File root observation is unstable")
-        for path, identity in initial_identities.items():
+
+    def _revalidate_directory_tree(
+        self,
+        descriptor: int,
+        *,
+        relative_prefix: str,
+        snapshots: Mapping[str, tuple[_DirectoryEntry, ...]],
+    ) -> None:
+        """Revalidate every directory and file after the whole traversal."""
+
+        expected = snapshots.get(relative_prefix)
+        if (
+            expected is None
+            or _directory_snapshot(descriptor, relative_prefix) != expected
+        ):
+            raise RuntimeError("File root observation is unstable")
+        for entry in expected:
+            if not entry.is_directory:
+                continue
             try:
-                final_metadata = os.stat(
-                    path.value,
-                    dir_fd=anchored.descriptor,
-                    follow_symlinks=False,
+                child = os.open(
+                    entry.name,
+                    _DIRECTORY_OPEN_FLAGS,
+                    dir_fd=descriptor,
                 )
             except OSError:
                 raise RuntimeError("File root observation is unstable") from None
-            if _file_identity(final_metadata) != identity:
-                raise RuntimeError("File root observation is unstable")
-        return tuple(observed)
+            try:
+                if _file_identity(os.fstat(child)) != entry.identity:
+                    raise RuntimeError("File root observation is unstable")
+                self._revalidate_directory_tree(
+                    child,
+                    relative_prefix=entry.relative_path,
+                    snapshots=snapshots,
+                )
+            finally:
+                os.close(child)
 
     def close(self) -> None:
         """Release the server-owned directory capabilities."""
@@ -276,22 +391,75 @@ class FileRootRegistry:
         self.close()
 
 
-def _file_identity(value: os.stat_result) -> tuple[int, int, int, int, int, int]:
-    return (
-        value.st_dev,
-        value.st_ino,
-        stat.S_IFMT(value.st_mode),
-        value.st_size,
-        value.st_mtime_ns,
-        value.st_ctime_ns,
+def _file_identity(value: os.stat_result) -> _FileIdentity:
+    """Project one stat result onto the fields used for stability checks."""
+
+    return _FileIdentity(
+        device=value.st_dev,
+        inode=value.st_ino,
+        mode_type=stat.S_IFMT(value.st_mode),
+        size=value.st_size,
+        modified_ns=value.st_mtime_ns,
+        changed_ns=value.st_ctime_ns,
     )
 
 
 def _file_import_path_or_none(name: str) -> FileImportPath | None:
+    """Return a validated canonical Markdown path or ignore the candidate."""
+
     try:
         return FileImportPath(name)
     except ValueError:
         return None
+
+
+def _directory_snapshot(
+    descriptor: int,
+    relative_prefix: str,
+) -> tuple[_DirectoryEntry, ...]:
+    """Classify only recursive directories and Markdown path candidates."""
+
+    try:
+        names = os.listdir(descriptor)
+    except OSError:
+        raise RuntimeError("File root observation is unstable") from None
+    entries: list[_DirectoryEntry] = []
+    safe_names = tuple(name for name in names if _safe_directory_component(name))
+    for name in sorted(safe_names, key=lambda item: item.encode("utf-8")):
+        relative_path = f"{relative_prefix}/{name}" if relative_prefix else name
+        try:
+            metadata = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+        except OSError:
+            raise RuntimeError("File root observation is unstable") from None
+        if stat.S_ISDIR(metadata.st_mode) and len(relative_path) + len("/.md") <= 255:
+            is_directory = True
+        elif _file_import_path_or_none(relative_path) is not None:
+            is_directory = False
+        else:
+            continue
+        entries.append(
+            _DirectoryEntry(
+                name=name,
+                relative_path=relative_path,
+                identity=_file_identity(metadata),
+                is_directory=is_directory,
+            )
+        )
+    return tuple(sorted(entries, key=lambda item: item.name.encode("utf-8")))
+
+
+def _safe_directory_component(name: object) -> bool:
+    """Return whether one observed name is safe to use as a path component."""
+
+    return (
+        type(name) is str
+        and bool(name)
+        and name not in {".", ".."}
+        and "/" not in name
+        and "\\" not in name
+        and not any(ord(character) < 0x20 for character in name)
+        and not any(0xD800 <= ord(character) <= 0xDFFF for character in name)
+    )
 
 
 _CURSOR_DOMAIN = "context-engine.file-change-cursor.v1"
@@ -314,7 +482,7 @@ class _ObservedChange:
 
 
 class FileChangeProvider:
-    """Deterministic shallow File `readChanges` Provider implementation."""
+    """Deterministic recursive File `readChanges` Provider implementation."""
 
     __slots__ = ("_proofs", "_registry")
 

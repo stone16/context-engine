@@ -2720,6 +2720,79 @@ def test_independent_worker_process_dispatches_and_publishes_one_job(
         clear_test_runtime_release(organization_id)
 
 
+def test_independent_worker_publishes_nested_markdown_fragment_lineage(
+    tmp_path: Path,
+    guarded_control_engine: Engine,
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    root = tmp_path / "recursive-process-root"
+    nested = root / "notes" / "architecture"
+    nested.mkdir(parents=True)
+    content = "# Nested Architecture\n\nRecursive File evidence.\n"
+    (nested / "runtime.md").write_text(content, encoding="utf-8")
+    organization_id, job_id, root_ref = _schedule_one(
+        root=root,
+        guarded_control_engine=guarded_control_engine,
+        migration_configuration=migration_configuration,
+    )
+
+    completed = subprocess.run(
+        ["context-engine-worker", "--dispatch-file-once"],
+        env={
+            **os.environ,
+            "CONTEXT_ENGINE_WORKER_LEASE_SIGNING_KEY_HEX": SIGNING_KEY.hex(),
+            "CONTEXT_ENGINE_WORKER_FILE_ROOTS_JSON": json.dumps(
+                {root_ref.value: str(root)}
+            ),
+        },
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert json.loads(completed.stdout)["outcome"] == "dispatched"
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.connect() as connection:
+            lineage = connection.execute(
+                text(
+                    """
+                    SELECT acquisition.relative_path, job.state AS job_state,
+                           publication.state AS revision_state, fragment.content
+                    FROM file_acquisition AS acquisition
+                    JOIN file_import_job AS job
+                      ON job.organization_id = acquisition.organization_id
+                     AND job.acquisition_id = acquisition.acquisition_id
+                    JOIN context_revision AS revision
+                      ON revision.organization_id = job.organization_id
+                     AND revision.revision_id = job.revision_id
+                    JOIN context_fragment AS fragment
+                      ON fragment.organization_id = revision.organization_id
+                     AND fragment.resource_ref = revision.resource_ref
+                     AND fragment.revision_id = revision.revision_id
+                    JOIN revision_publication_event AS publication
+                      ON publication.organization_id = revision.organization_id
+                     AND publication.resource_ref = revision.resource_ref
+                     AND publication.revision_id = revision.revision_id
+                     AND publication.state = 'active'
+                    WHERE acquisition.organization_id = :organization_id
+                      AND job.job_id = :job_id
+                    ORDER BY fragment.fragment_ref
+                    """
+                ),
+                {"organization_id": organization_id, "job_id": job_id},
+            ).all()
+    finally:
+        migration_engine.dispose()
+    assert lineage
+    assert {row.relative_path for row in lineage} == {
+        "notes/architecture/runtime.md"
+    }
+    assert {row.job_state for row in lineage} == {"completed"}
+    assert {row.revision_state for row in lineage} == {"active"}
+    assert all(row.content in content for row in lineage)
+
+
 def test_long_running_dispatch_process_exits_cleanly_on_sigterm(
     tmp_path: Path,
 ) -> None:

@@ -1150,7 +1150,64 @@ def test_control_executes_a_nonterminal_current_delete_observation(
             ).scalar_one() == HEAD_REVISION
     finally:
         migration_engine.dispose()
+def test_recursive_scan_replays_mixed_flat_and_nested_corpus_deterministically(
+    tmp_path: Path,
+    guarded_control_engine: Engine,
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    root = tmp_path / "recursive-change-root"
+    (root / "notes" / "daily").mkdir(parents=True)
+    (root / "z.md").write_bytes(b"Z")
+    (root / "notes" / "a.md").write_bytes(b"A")
+    (root / "notes" / "daily" / "b.md").write_bytes(b"B")
+    provider_proofs, control_proofs = _proofs()
+    organization_id = uuid4()
+    control, authority, source = _seed_file_change_source(
+        guarded_control_engine=guarded_control_engine,
+        migration_configuration=migration_configuration,
+        organization_id=organization_id,
+        receiver=FileImportReceiver(uuid4()),
+        root_ref=FileRootRef("recursive-change-root"),
+        control_proofs=control_proofs,
+    )
+    registry = FileRootRegistry(
+        {source.source_version.root_ref: root},
+        limits=FileReadLimits(max_file_bytes=1_024),
+    )
+    provider = FileChangeProvider(registry, proofs=provider_proofs)
 
+    first = provider.read_changes(source, InitialScan(), ChangeLimit(2))
+
+    assert type(first) is ProviderOk
+    assert [change.path.value for change in first.value.changes] == [
+        "notes/a.md",
+        "notes/daily/b.md",
+    ]
+    with _authorize(
+        authority,
+        organization_id,
+        ControlOperation.ACCEPT_FILE_CHANGE_PAGE,
+        "accept-recursive-first-page",
+    ) as call:
+        accepted_first = control.accept_file_change_page(call, first.value)
+    assert accepted_first.next_cursor is not None
+    source = replace(source, scan_head=accepted_first.scan_head)
+
+    second = provider.read_changes(
+        source,
+        accepted_first.next_cursor,
+        ChangeLimit(2),
+    )
+    replay = provider.read_changes(
+        source,
+        accepted_first.next_cursor,
+        ChangeLimit(2),
+    )
+
+    assert type(second) is ProviderOk
+    assert second == replay
+    assert [change.path.value for change in second.value.changes] == ["z.md"]
+    assert second.value.complete is True
 
 
 def test_control_refuses_a_current_nonterminal_mixed_file_page(

@@ -15,14 +15,19 @@ from adapters.file_source import FileChangeProvider, FileReadLimits, FileRootReg
 from engine._opaque import encode_base64url
 from engine.control import (
     FILE_CHANGE_CAPABILITY_MANIFEST,
+    FILE_DELETE_OBSERVATION_CAPABILITY_MANIFEST,
     FILE_IMPORT_CAPABILITY_MANIFEST,
     ChangeCursor,
     ChangeLimit,
+    FileChangeBaseline,
+    FileChangeBaselineEntry,
+    FileChangeBaselineRef,
     FileChangeControlProofs,
     FileChangeKind,
     FileChangeProviderProofs,
     FileChangeScanHead,
     FileChangeSource,
+    FileImportPath,
     FileRootRef,
     InitialScan,
     PendingChangeCursor,
@@ -72,7 +77,7 @@ def _source(*, scan_head: FileChangeScanHead | None = None) -> FileChangeSource:
     )
 
 
-def test_initial_scan_returns_one_ordered_content_free_markdown_change(
+def test_initial_scan_returns_recursively_ordered_content_free_markdown_changes(
     tmp_path: Path,
 ) -> None:
     root = tmp_path / "registered-root"
@@ -80,7 +85,10 @@ def test_initial_scan_returns_one_ordered_content_free_markdown_change(
     (root / "z-last.md").write_bytes(b"# Last\n")
     (root / "a-first.md").write_bytes(b"# First\n")
     (root / "ignored.txt").write_bytes(b"not markdown")
-    (root / "nested").mkdir()
+    nested = root / "nested"
+    nested.mkdir()
+    (nested / "inside.md").write_bytes(b"nested")
+    (nested / "ignored.txt").write_bytes(b"not markdown either")
     outside = tmp_path / "outside.md"
     outside.write_bytes(b"outside")
     (root / "linked.md").symlink_to(outside)
@@ -91,11 +99,11 @@ def test_initial_scan_returns_one_ordered_content_free_markdown_change(
     provider_proofs, _ = _proofs()
     provider = FileChangeProvider(registry, proofs=provider_proofs)
 
-    outcome = provider.read_changes(_source(), InitialScan(), ChangeLimit(1))
+    outcome = provider.read_changes(_source(), InitialScan(), ChangeLimit(3))
 
     assert type(outcome) is ProviderOk
     page = outcome.value
-    assert len(page.changes) == 1
+    assert len(page.changes) == 3
     change = page.changes[0]
     assert change.kind is FileChangeKind.UPSERT
     assert change.path.value == "a-first.md"
@@ -103,12 +111,99 @@ def test_initial_scan_returns_one_ordered_content_free_markdown_change(
     assert change.content_sha256 == (
         "9deb94158e91742ee59a098729128779da85eef76b28890b6c0cb64401537a29"
     )
-    assert page.next_cursor is not None
-    assert type(page.next_cursor) is PendingChangeCursor
-    assert page.complete is False
+    assert [item.path.value for item in page.changes] == [
+        "a-first.md",
+        "nested/inside.md",
+        "z-last.md",
+    ]
+    assert page.next_cursor is None
+    assert page.complete is True
     rendered = repr(page)
-    for forbidden in (str(tmp_path), "# First", "outside", "not markdown"):
+    for forbidden in (
+        str(tmp_path),
+        "# First",
+        "outside",
+        "not markdown",
+    ):
         assert forbidden not in rendered
+
+
+def test_recursive_scan_never_follows_directory_symlinks(tmp_path: Path) -> None:
+    root = tmp_path / "registered-root"
+    root.mkdir()
+    (root / "visible.md").write_bytes(b"visible")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.md").write_bytes(b"secret")
+    (root / "linked").symlink_to(outside, target_is_directory=True)
+    registry = FileRootRegistry(
+        {FileRootRef("handbook-root"): root},
+        limits=FileReadLimits(max_file_bytes=1_024),
+    )
+    provider_proofs, _ = _proofs()
+
+    outcome = FileChangeProvider(registry, proofs=provider_proofs).read_changes(
+        _source(), InitialScan(), ChangeLimit(10)
+    )
+
+    assert type(outcome) is ProviderOk
+    assert [change.path.value for change in outcome.value.changes] == ["visible.md"]
+    assert "secret" not in repr(outcome)
+
+
+def test_first_recursive_scan_preserves_flat_baseline_and_adds_nested_upsert(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "registered-root"
+    nested = root / "notes"
+    nested.mkdir(parents=True)
+    top_payload = b"top"
+    nested_payload = b"nested"
+    (root / "top.md").write_bytes(top_payload)
+    (nested / "new.md").write_bytes(nested_payload)
+    source = replace(
+        _source(),
+        source_version=replace(
+            _source().source_version,
+            capabilities=FILE_DELETE_OBSERVATION_CAPABILITY_MANIFEST,
+        ),
+        complete_baseline=FileChangeBaseline(
+            reference=FileChangeBaselineRef(
+                source_version_ref=SOURCE_VERSION_ID,
+                scan_ref="a" * 64,
+                scan_epoch=UUID("1027ad2a-5441-4a7a-a897-c13f5dffcb93"),
+                page_ref="b" * 64,
+                checkpoint_ref="facp_" + "c" * 64,
+                sequence=1,
+            ),
+            entries=(
+                FileChangeBaselineEntry(
+                    kind=FileChangeKind.UPSERT,
+                    path=FileImportPath("top.md"),
+                    content_sha256=(
+                        "28720365c5e7476a011e4f43ac003ee5f16247a263b9d623"
+                        "aa85ed311d73bf39"
+                    ),
+                    content_length=len(top_payload),
+                ),
+            ),
+        ),
+    )
+    registry = FileRootRegistry(
+        {source.source_version.root_ref: root},
+        limits=FileReadLimits(max_file_bytes=1_024),
+    )
+    provider_proofs, _ = _proofs()
+
+    outcome = FileChangeProvider(registry, proofs=provider_proofs).read_changes(
+        source, InitialScan(), ChangeLimit(10)
+    )
+
+    assert type(outcome) is ProviderOk
+    assert [
+        (change.path.value, change.kind.value)
+        for change in outcome.value.changes
+    ] == [("notes/new.md", "upsert"), ("top.md", "upsert")]
 
 
 def test_scan_ignores_non_utf8_names_outside_the_file_import_domain(
@@ -472,6 +567,46 @@ def test_scan_revalidates_earlier_files_after_reading_the_whole_root(
     assert type(outcome) is ProviderRetryableUnavailable
 
 
+def test_scan_revalidates_earlier_sibling_subtrees_after_the_whole_tree(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "registered-root"
+    earlier = root / "aa"
+    later = root / "zz"
+    earlier.mkdir(parents=True)
+    later.mkdir()
+    earlier_path = earlier / "a.md"
+    earlier_path.write_bytes(b"A1")
+    (later / "b.md").write_bytes(b"B1")
+    registry = FileRootRegistry(
+        {FileRootRef("handbook-root"): root},
+        limits=FileReadLimits(max_file_bytes=1_024),
+    )
+    provider_proofs, _ = _proofs()
+    provider = FileChangeProvider(registry, proofs=provider_proofs)
+    original_read = FileRootRegistry._read_regular_at
+    changed = False
+
+    def change_earlier_subtree(
+        self: FileRootRegistry,
+        parent_descriptor: int,
+        name: str,
+    ) -> tuple[bytes, os.stat_result]:
+        nonlocal changed
+        if name == "b.md" and not changed:
+            earlier_path.write_bytes(b"A2")
+            changed = True
+        return original_read(self, parent_descriptor, name)
+
+    with patch.object(FileRootRegistry, "_read_regular_at", change_earlier_subtree):
+        outcome = provider.read_changes(
+            _source(), InitialScan(), ChangeLimit(2)
+        )
+
+    assert changed is True
+    assert type(outcome) is ProviderRetryableUnavailable
+
+
 def test_scan_closes_when_file_disappears_before_post_read_stat(
     tmp_path: Path,
 ) -> None:
@@ -485,20 +620,18 @@ def test_scan_closes_when_file_disappears_before_post_read_stat(
     )
     provider_proofs, _ = _proofs()
     provider = FileChangeProvider(registry, proofs=provider_proofs)
-    original_read = FileRootRegistry._read_regular
+    original_read = FileRootRegistry._read_regular_at
 
     def remove_after_read(
         self: FileRootRegistry,
-        root_ref: FileRootRef,
-        path: object,
+        parent_descriptor: int,
+        name: str,
     ) -> tuple[bytes, os.stat_result]:
-        payload, metadata = original_read(
-            self, root_ref, path  # type: ignore[arg-type]
-        )
+        payload, metadata = original_read(self, parent_descriptor, name)
         file_path.unlink()
         return payload, metadata
 
-    with patch.object(FileRootRegistry, "_read_regular", remove_after_read):
+    with patch.object(FileRootRegistry, "_read_regular_at", remove_after_read):
         outcome = provider.read_changes(
             _source(), InitialScan(), ChangeLimit(1)
         )

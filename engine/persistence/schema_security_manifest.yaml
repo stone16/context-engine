@@ -1,5 +1,5 @@
 {
-  "manifestVersion": "32.0.0",
+  "manifestVersion": "33.0.0",
   "controlOperations": [
     {
       "name": "register_file_source",
@@ -5218,7 +5218,7 @@
       "checkConstraints": [
         {
           "name": "ck_file_acquisition_one_markdown_filename",
-          "expression": "relative_path ~ '^[^/\\\\]*\\.[mM][dD]$' AND relative_path NOT IN ('.', '..')"
+          "expression": "relative_path is one bounded canonical nested Markdown path with no empty, dot, dot-dot, backslash, control, surrogate, or edge-whitespace component"
         },
         {
           "name": "ck_file_acquisition_principal_nonblank",
@@ -7478,7 +7478,7 @@
       ],
       "checkConstraints": [
         {"name": "ck_file_delete_observation_execution_locator", "expression": "page_ref is lowercase SHA-256 and change_ordinal is 1..100"},
-        {"name": "ck_file_delete_observation_execution_observation", "expression": "one canonical shallow Markdown path with SHA-256 and nonnegative byte length"},
+        {"name": "ck_file_delete_observation_execution_observation", "expression": "one bounded canonical nested Markdown path with SHA-256 and nonnegative byte length"},
         {"name": "ck_file_delete_observation_execution_effect", "expression": "valid File Resource/event references and positive signed-64 event sequence/Policy Epoch"}
       ],
       "rowLevelSecurity": {"enabled": true, "forced": true, "policies": [
@@ -7549,7 +7549,7 @@
       ],
       "checkConstraints": [
         {"name": "ck_file_source_change_kind_ordinal", "expression": "change_ordinal is between 1 and 100 and change_kind is upsert or delete"},
-        {"name": "ck_file_source_change_markdown_path", "expression": "relative_path is one shallow Markdown filename"},
+        {"name": "ck_file_source_change_markdown_path", "expression": "relative_path is one bounded canonical nested Markdown path"},
         {"name": "ck_file_source_change_content_identity", "expression": "content_sha256 is lowercase SHA-256 and content_length is nonnegative"}
       ],
       "rowLevelSecurity": {"enabled": true, "forced": true, "policies": [

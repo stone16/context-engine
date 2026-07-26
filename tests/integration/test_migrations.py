@@ -2290,6 +2290,55 @@ def test_file_change_scheduling_revision_refuses_downgrade_with_new_manual_path(
         )
 
 
+def test_recursive_file_path_revision_downgrades_and_reapplies_when_empty(
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    alembic_configuration = Config(ROOT / "alembic.ini")
+
+    try:
+        command.downgrade(alembic_configuration, "20260726_0034")
+        assert _revision_rows(migration_configuration) == ["20260726_0034"]
+    finally:
+        command.upgrade(alembic_configuration, "head")
+
+    assert _revision_rows(migration_configuration) == [HEAD_REVISION]
+
+
+def test_recursive_file_path_revision_refuses_retained_nested_lineage(
+    tmp_path: Path,
+    migration_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+) -> None:
+    alembic_configuration = Config(ROOT / "alembic.ini")
+    scenario = _prepare_file_import_scenario(
+        tmp_path,
+        migration_configuration,
+        guarded_control_engine,
+    )
+    nested = scenario.root / "notes"
+    nested.mkdir()
+    (nested / "nested.md").write_bytes(b"# Nested\n")
+    _prepare_repeat_file_import(
+        scenario,
+        guarded_control_engine,
+        idempotency_key="nested-migration-lineage",
+        path=FileImportPath("notes/nested.md"),
+    )
+    try:
+        with pytest.raises(
+            RuntimeError,
+            match="requires no retained nested lineage",
+        ):
+            command.downgrade(alembic_configuration, "20260726_0034")
+        assert _revision_rows(migration_configuration) == [HEAD_REVISION]
+    finally:
+        command.upgrade(alembic_configuration, "head")
+        _delete_issue_27_upgrade_fixture(
+            migration_configuration,
+            scenario.organization_id,
+        )
+
+
 def test_file_change_scheduling_downgrade_serializes_with_manual_import(
     tmp_path: Path,
     migration_configuration: DatabaseConfiguration,

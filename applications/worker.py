@@ -46,6 +46,8 @@ from engine.supply import (
 )
 
 _FILE_DISPATCH_POLL_SECONDS = 1.0
+DEFAULT_WORKER_MAX_FILE_BYTES = 1_048_576
+_WORKER_MAX_FILE_BYTES_ENV = "CONTEXT_ENGINE_WORKER_MAX_FILE_BYTES"
 
 
 class WorkerNoOpCompletionAuthority(Protocol):
@@ -138,6 +140,18 @@ def _required_environment(name: str) -> str:
     return value
 
 
+def _file_read_limits() -> FileReadLimits:
+    raw_limit = os.environ.get(_WORKER_MAX_FILE_BYTES_ENV)
+    if raw_limit is None:
+        return FileReadLimits(max_file_bytes=DEFAULT_WORKER_MAX_FILE_BYTES)
+    if not raw_limit or raw_limit != raw_limit.strip() or not raw_limit.isdecimal():
+        raise ValueError("Supply worker configuration is not available")
+    try:
+        return FileReadLimits(max_file_bytes=int(raw_limit))
+    except ValueError:
+        raise ValueError("Supply worker configuration is not available") from None
+
+
 def _run_one_file_import() -> int:
     """Consume one exact, signed File job in the independent Supply process."""
 
@@ -149,7 +163,7 @@ def _run_one_file_import() -> int:
             FileRootRef(_required_environment("CONTEXT_ENGINE_WORKER_FILE_ROOT_REF")):
                 Path(_required_environment("CONTEXT_ENGINE_WORKER_FILE_ROOT_PATH"))
         },
-        limits=FileReadLimits(max_file_bytes=4_096),
+        limits=_file_read_limits(),
     )
     try:
         outcome = PostgreSQLFileImportWorker(
@@ -252,7 +266,7 @@ def _file_dispatch_root_bindings() -> dict[FileRootRef, Path]:
 def _file_dispatch_roots() -> FileRootRegistry:
     return FileRootRegistry(
         _file_dispatch_root_bindings(),
-        limits=FileReadLimits(max_file_bytes=4_096),
+        limits=_file_read_limits(),
     )
 
 
@@ -287,7 +301,7 @@ def _run_file_dispatch(*, single_cycle: bool) -> int:
     root_bindings = _file_dispatch_root_bindings()
     roots = FileRootRegistry(
         root_bindings,
-        limits=FileReadLimits(max_file_bytes=4_096),
+        limits=_file_read_limits(),
     )
     try:
         authority = PostgreSQLFileDispatchAuthority(
