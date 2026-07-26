@@ -69,6 +69,16 @@ class PostgreSQLVectorCandidateIndex:
                 projection_session,
                 query_embedding,
                 self._limit,
+                source_refs=(
+                    request.narrowing.source_refs
+                    if request.narrowing is not None
+                    else None
+                ),
+                resource_refs=(
+                    request.narrowing.resource_refs
+                    if request.narrowing is not None
+                    else None
+                ),
             )
         except EmbeddingProviderUnavailable:
             raise VectorCandidateIndexUnavailable(

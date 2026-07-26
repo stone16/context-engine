@@ -45,6 +45,12 @@ path, title, provider metadata, and distance score never leave persistence.
 Every result remains an untrusted `CandidateRef` and still passes the unchanged
 AuthorizationKernel before projection.
 
+Caller-supplied source and resource narrowing is passed through only as an ANN
+pre-filter before the candidate limit. It can remove candidates but cannot
+grant access; the Kernel independently recomputes the authoritative
+`EffectiveScope` intersection and exactly reauthorizes every surviving
+`CandidateRef`.
+
 Before the ANN query, the port sets pgvector `hnsw.iterative_scan` to strict
 order and a bounded maximum scan-tuple ceiling with transaction-local settings.
 This allows pgvector to continue scanning after RLS and live-resource filters
@@ -62,6 +68,24 @@ smuggled into this product-lane index change.
 The served composition does not activate the index here. Its default remains
 reject-all and reports Runtime delivery as not active.
 
+An external query-embedding provider is also not eligible for served
+composition while Runtime cannot meter and enforce that call against the
+effective PackageBudget. The follow-up activation must either add that usage
+propagation or explicitly compose only the deterministic network-free twin,
+classified as zero external provider calls and zero provider cost. External
+provider configuration must fail closed until the metered path exists.
+
+## Rationale
+
+Keeping discovery on the retained UserActor transaction preserves the exact
+FORCE-RLS and Membership lifetime already established for resolve; a second
+connection would require reconstructing trusted context and create a drift-prone
+authorization boundary. Strict-order iterative HNSW scanning bounds work while
+continuing past rows removed by tenant, lifecycle, ACL, and narrowing filters.
+Keeping rank outside the current Kernel preserves ADR-0025's deterministic,
+rank-independent assembly until a separately measured authorized-ranking stage
+can justify changing the sealed path.
+
 ## Consequences
 
 - Query embedding and vector discovery share one explicit profile with Supply.
@@ -72,6 +96,8 @@ reject-all and reports Runtime delivery as not active.
   not enter the candidate output or HTTP error response.
 - Current PackageBudget selection remains deterministic and rank-independent;
   semantic ranking quality is not claimed by this slice.
+- Served external query embedding remains `NOT_ACTIVE` until its provider call,
+  cost, and elapsed usage can be enforced and recorded by Runtime.
 
 ## Revisit trigger
 
@@ -81,3 +107,6 @@ current strategy includes exact-search recall delta, underfilled-result rate,
 `EXPLAIN ANALYZE`, corpus size, filter selectivity, hardware, iterative-scan or
 oversampling settings, latency, and cost. Hybrid fusion and content-bearing
 reranking remain separate evidence-triggered decisions.
+
+Revisit before any served composition admits an external query-embedding
+provider without exact PackageBudget usage propagation.

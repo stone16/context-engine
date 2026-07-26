@@ -363,7 +363,12 @@ def test_postgres_vector_discovery_uses_one_content_free_bounded_ann_query() -> 
         cast(Connection, connection)
     )
 
-    candidates = port.discover_vector((0.25, -0.5), 1)
+    candidates = port.discover_vector(
+        (0.25, -0.5),
+        1,
+        ("source:vector",),
+        ("resource:vector",),
+    )
 
     assert candidates == (
         CandidateRef(
@@ -387,12 +392,19 @@ def test_postgres_vector_discovery_uses_one_content_free_bounded_ann_query() -> 
     assert "resource.active_revision_id = fragment.revision_id" in statement
     assert "resource.tombstoned IS FALSE" in statement
     assert "fragment.embedding IS NOT NULL" in statement
+    assert "resource.source_ref = ANY(CAST(:source_refs AS text[]))" in statement
+    assert "fragment.resource_ref = ANY(CAST(:resource_refs AS text[]))" in statement
     assert "LIMIT :limit" in statement
     assert "content" not in statement
     assert "path" not in statement
     assert "title" not in statement
     assert "score" not in statement
-    assert parameters == {"query_embedding": "[0.25,-0.5]", "limit": 1}
+    assert parameters == {
+        "query_embedding": "[0.25,-0.5]",
+        "limit": 1,
+        "source_refs": ["source:vector"],
+        "resource_refs": ["resource:vector"],
+    }
 
 
 def test_postgres_vector_discovery_rejects_invalid_revision_lineage() -> None:
@@ -412,7 +424,7 @@ def test_postgres_vector_discovery_rejects_invalid_revision_lineage() -> None:
     )
 
     with pytest.raises(TypeError, match="invalid revision lineage"):
-        port.discover_vector((0.25, -0.5), 1)
+        port.discover_vector((0.25, -0.5), 1, None, None)
 
 
 @pytest.mark.parametrize("invalid_value", (None, "", " \t"))

@@ -53,8 +53,10 @@ from tests.support.releases import (
 
 pytestmark = pytest.mark.integration
 QUERY = "ContextEngine delivers context."
+NARROWED_TARGET_CONTENT = "The target handbook passage remains authorized."
 TOKEN = "runtime-secret"
 _ANN_DISTRACTOR_COUNT = 96
+_NARROWING_DISTRACTOR_COUNT = DEFAULT_VECTOR_CANDIDATE_LIMIT + 4
 
 
 class _RecordingVectorCandidateIndex:
@@ -108,6 +110,7 @@ def _published_scenario(
     guarded_worker_engine: Engine,
     *,
     label: str,
+    payload: bytes | None = b"# Handbook\n\nContextEngine delivers context.\n",
 ) -> tuple[FileImportScenario, CandidateRef, UUID]:
     root = tmp_path / label
     root.mkdir()
@@ -115,6 +118,7 @@ def _published_scenario(
         root,
         migration_configuration,
         guarded_control_engine,
+        payload=payload,
     )
     request.addfinalizer(
         lambda: _delete_published_scenario(
@@ -188,6 +192,102 @@ def _add_cross_organization_vector_distractors(
         engine.dispose()
 
 
+def _add_same_organization_narrowing_distractors(
+    migration_configuration: DatabaseConfiguration,
+    scenario: FileImportScenario,
+) -> None:
+    embedding = DeterministicEmbeddingTwin().embed((QUERY,))[0]
+    parameters = [
+        {
+            "organization_id": scenario.organization_id,
+            "resource_ref": f"resource:vector-narrowing-distractor:{ordinal:03d}",
+            "source_ref": str(scenario.source_ref.value),
+            "revision_id": uuid4(),
+            "fragment_ref": f"fragment:vector-narrowing-distractor:{ordinal:03d}",
+            "content": QUERY,
+            "embedding": "[" + ",".join(repr(value) for value in embedding) + "]",
+            "membership_id": scenario.membership_id,
+        }
+        for ordinal in range(_NARROWING_DISTRACTOR_COUNT)
+    ]
+    engine = create_database_engine(migration_configuration)
+    try:
+        with engine.begin() as connection:
+            connection.execute(text("SET CONSTRAINTS ALL DEFERRED"))
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO context_resource (
+                        organization_id, resource_ref, source_ref,
+                        active_revision_id, tombstoned
+                    ) VALUES (
+                        :organization_id, :resource_ref, :source_ref,
+                        :revision_id, false
+                    )
+                    """
+                ),
+                parameters,
+            )
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO context_revision (
+                        organization_id, resource_ref, revision_id
+                    ) VALUES (
+                        :organization_id, :resource_ref, :revision_id
+                    )
+                    """
+                ),
+                parameters,
+            )
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO context_fragment (
+                        organization_id, resource_ref, revision_id,
+                        fragment_ref, ordinal, content, projection_kind,
+                        embedding
+                    ) VALUES (
+                        :organization_id, :resource_ref, :revision_id,
+                        :fragment_ref, 0, :content, 'body',
+                        CAST(:embedding AS vector)
+                    )
+                    """
+                ),
+                parameters,
+            )
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO resource_access_policy (
+                        organization_id, resource_ref, principal_ref,
+                        access_version, access_state, revoked_at
+                    ) VALUES (
+                        :organization_id, :resource_ref, 'principal:file-reader',
+                        1, 'allowed', NULL
+                    )
+                    """
+                ),
+                parameters,
+            )
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO membership_resource_field_right (
+                        organization_id, membership_id, membership_version,
+                        resource_ref, field_ref
+                    ) VALUES (
+                        :organization_id, :membership_id, 1,
+                        :resource_ref, 'body'
+                    )
+                    """
+                ),
+                parameters,
+            )
+    finally:
+        engine.dispose()
+
+
 def _actor_settings(
     scenario: FileImportScenario,
     user_id: UUID,
@@ -209,6 +309,9 @@ def _ann_plan_and_exact_result(
     guarded_runtime_engine: Engine,
     scenario: FileImportScenario,
     user_id: UUID,
+    *,
+    source_refs: tuple[str, ...] | None = None,
+    resource_refs: tuple[str, ...] | None = None,
 ) -> tuple[
     str,
     tuple[tuple[object, ...], ...],
@@ -220,6 +323,8 @@ def _ann_plan_and_exact_result(
         + ",".join(repr(value) for value in embedding)
         + "]",
         "limit": 1,
+        "source_refs": list(source_refs) if source_refs is not None else None,
+        "resource_refs": list(resource_refs) if resource_refs is not None else None,
     }
     with guarded_runtime_engine.begin() as connection:
         for name, value in _actor_settings(scenario, user_id).items():
@@ -304,14 +409,29 @@ def _client(
     )
 
 
-def _resolve(client: TestClient) -> Response:
+def _resolve(
+    client: TestClient,
+    *,
+    source_refs: tuple[str, ...] | None = None,
+    resource_refs: tuple[str, ...] | None = None,
+) -> Response:
+    body: dict[str, object] = {"kind": "acquire", "need": {"query": QUERY}}
+    if source_refs is not None or resource_refs is not None:
+        body["requestNarrowing"] = {
+            key: value
+            for key, value in (
+                ("sourceRefs", source_refs),
+                ("resourceRefs", resource_refs),
+            )
+            if value is not None
+        }
     return client.post(
         "/v0/resolve",
         headers={
             "Authorization": f"Bearer {TOKEN}",
             "X-Context-Request-Id": "issue-101-vector-http",
         },
-        json={"kind": "acquire", "need": {"query": QUERY}},
+        json=body,
     )
 
 
@@ -352,6 +472,7 @@ def test_vector_candidate_http_chain_is_rls_scoped_content_free_and_bounded(
         guarded_control_engine,
         guarded_worker_engine,
         label="org-a",
+        payload=f"# Handbook\n\n{NARROWED_TARGET_CONTENT}\n".encode(),
     )
     org_b, candidate_b, _user_b = _published_scenario(
         request,
@@ -366,6 +487,10 @@ def test_vector_candidate_http_chain_is_rls_scoped_content_free_and_bounded(
         org_b,
         candidate_b,
     )
+    _add_same_organization_narrowing_distractors(
+        migration_configuration,
+        org_a,
+    )
     index = _RecordingVectorCandidateIndex()
     response = _resolve(
         _client(
@@ -376,12 +501,15 @@ def test_vector_candidate_http_chain_is_rls_scoped_content_free_and_bounded(
             query_digest_keyring,
             index,
             request_id="issue-101-vector-authorized",
-        )
+        ),
+        resource_refs=(candidate_a.resource_ref,),
     )
 
     assert response.status_code == 200
     package = response.json()["package"]
-    assert [block["text"] for block in package["blocks"]] == [QUERY]
+    assert [block["text"] for block in package["blocks"]] == [
+        NARROWED_TARGET_CONTENT
+    ]
     assert len(package["evidence"]) == 1
     evidence = package["evidence"][0]
     assert evidence["sourceRef"] == candidate_a.source_ref
@@ -405,21 +533,32 @@ def test_vector_candidate_http_chain_is_rls_scoped_content_free_and_bounded(
         candidate_b.revision_ref,
     ):
         assert forbidden not in response.text
-    plan, approximate, exact = _ann_plan_and_exact_result(
-        guarded_runtime_engine,
-        org_a,
-        user_a,
+    _unfiltered_plan, unfiltered_approximate, unfiltered_exact = (
+        _ann_plan_and_exact_result(
+            guarded_runtime_engine,
+            org_a,
+            user_a,
+        )
     )
-    assert "Index Scan using ix_context_fragment_embedding_hnsw" in plan
-    assert approximate == exact
-    assert len(approximate) == 1
-    assert approximate[0][:5] == (
+    target_row = (
         candidate_a.organization_id,
         candidate_a.source_ref,
         candidate_a.resource_ref,
         UUID(candidate_a.revision_ref),
         candidate_a.fragment_ref,
     )
+    assert target_row not in unfiltered_approximate
+    assert target_row not in unfiltered_exact
+    plan, approximate, exact = _ann_plan_and_exact_result(
+        guarded_runtime_engine,
+        org_a,
+        user_a,
+        resource_refs=(candidate_a.resource_ref,),
+    )
+    assert "Index Scan using ix_context_fragment_embedding_hnsw" in plan
+    assert approximate == exact
+    assert len(approximate) == 1
+    assert approximate[0][:5] == target_row
 
 
 def test_vector_candidate_denials_have_one_non_enumerating_empty_shape(

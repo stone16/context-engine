@@ -11,7 +11,7 @@ from adapters.pgvector import (
     PostgreSQLVectorCandidateIndex,
     VectorCandidateIndexUnavailable,
 )
-from engine.runtime.contracts import Acquire, ContextNeed
+from engine.runtime.contracts import Acquire, ContextNeed, RequestNarrowing
 from engine.runtime.evidence import CandidateRef
 from engine.runtime.materialized import (
     MaterializedProjectionPort,
@@ -25,14 +25,23 @@ from engine.supply import EmbeddingProfile, EmbeddingProviderUnavailable
 class _RecordingPort:
     def __init__(self, candidates: tuple[CandidateRef, ...]) -> None:
         self.candidates = candidates
-        self.calls: list[tuple[tuple[float, ...], int]] = []
+        self.calls: list[
+            tuple[
+                tuple[float, ...],
+                int,
+                tuple[str, ...] | None,
+                tuple[str, ...] | None,
+            ]
+        ] = []
 
     def discover_vector(
         self,
         query_embedding: tuple[float, ...],
         limit: int,
+        source_refs: tuple[str, ...] | None,
+        resource_refs: tuple[str, ...] | None,
     ) -> tuple[CandidateRef, ...]:
-        self.calls.append((query_embedding, limit))
+        self.calls.append((query_embedding, limit, source_refs, resource_refs))
         return self.candidates[:limit]
 
     def discover_exact_phrase(self, phrase_digest: str) -> tuple[()]:
@@ -91,9 +100,11 @@ def test_vector_index_embeds_query_and_returns_only_bounded_candidate_refs() -> 
 
     assert candidates == (_candidate(),)
     assert len(port.calls) == 1
-    query_embedding, limit = port.calls[0]
+    query_embedding, limit, source_refs, resource_refs = port.calls[0]
     assert len(query_embedding) == 384
     assert limit == 1
+    assert source_refs is None
+    assert resource_refs is None
     assert set(CandidateRef.__dataclass_fields__) == {
         "organization_id",
         "source_ref",
@@ -101,6 +112,36 @@ def test_vector_index_embeds_query_and_returns_only_bounded_candidate_refs() -> 
         "revision_ref",
         "fragment_ref",
     }
+
+
+def test_vector_index_applies_request_narrowing_before_ann_limit() -> None:
+    port = _RecordingPort((_candidate(),))
+    scope = _open_materialized_projection_scope()
+    session = _construct_materialized_projection_session(
+        authority_scope=scope,
+        port=cast(MaterializedProjectionPort, port),
+    )
+    try:
+        PostgreSQLVectorCandidateIndex(
+            DeterministicEmbeddingTwin(),
+            limit=1,
+        ).discover(
+            Acquire(
+                need=ContextNeed(query="semantic query"),
+                narrowing=RequestNarrowing(
+                    source_refs=("source:vector",),
+                    resource_refs=("resource:vector",),
+                ),
+            ),
+            session,
+        )
+    finally:
+        _close_materialized_projection_scope(scope)
+
+    assert port.calls[0][2:] == (
+        ("source:vector",),
+        ("resource:vector",),
+    )
 
 
 def test_vector_index_genericizes_query_embedding_failure_before_database_io() -> None:

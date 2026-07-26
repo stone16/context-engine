@@ -180,6 +180,14 @@ _VECTOR_CANDIDATE_SQL = """
      AND resource.active_revision_id = fragment.revision_id
      AND resource.tombstoned IS FALSE
     WHERE fragment.embedding IS NOT NULL
+      AND (
+        CAST(:source_refs AS text[]) IS NULL
+        OR resource.source_ref = ANY(CAST(:source_refs AS text[]))
+      )
+      AND (
+        CAST(:resource_refs AS text[]) IS NULL
+        OR fragment.resource_ref = ANY(CAST(:resource_refs AS text[]))
+      )
     ORDER BY fragment.embedding <=> CAST(:query_embedding AS vector)
     LIMIT :limit
 """
@@ -209,6 +217,8 @@ class _PostgreSQLMaterializedProjectionPort:
         self,
         query_embedding: tuple[float, ...],
         limit: int,
+        source_refs: tuple[str, ...] | None,
+        resource_refs: tuple[str, ...] | None,
     ) -> tuple[CandidateRef, ...]:
         self._connection.execute(
             text(
@@ -227,6 +237,10 @@ class _PostgreSQLMaterializedProjectionPort:
                 + ",".join(repr(value) for value in query_embedding)
                 + "]",
                 "limit": limit,
+                "source_refs": list(source_refs) if source_refs is not None else None,
+                "resource_refs": (
+                    list(resource_refs) if resource_refs is not None else None
+                ),
             },
         )
         candidates: list[CandidateRef] = []

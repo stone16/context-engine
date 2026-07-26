@@ -200,6 +200,8 @@ class MaterializedProjectionPort(Protocol):
         self,
         query_embedding: tuple[float, ...],
         limit: int,
+        source_refs: tuple[str, ...] | None,
+        resource_refs: tuple[str, ...] | None,
     ) -> tuple[CandidateRef, ...]: ...
 
     def discover_exact_phrase(
@@ -374,6 +376,9 @@ def _discover_materialized_vector(
     session: MaterializedProjectionSession,
     query_embedding: tuple[float, ...],
     limit: int,
+    *,
+    source_refs: tuple[str, ...] | None = None,
+    resource_refs: tuple[str, ...] | None = None,
 ) -> tuple[CandidateRef, ...]:
     """Discover bounded content-free ANN lineage in the retained transaction."""
 
@@ -382,7 +387,22 @@ def _discover_materialized_vector(
         raise ValueError("vector discovery requires a nonempty query embedding")
     if type(limit) is not int or limit <= 0:
         raise ValueError("vector discovery requires a positive exact limit")
-    candidates = session._port.discover_vector(query_embedding, limit)
+    for field_name, refs in (
+        ("source_refs", source_refs),
+        ("resource_refs", resource_refs),
+    ):
+        if refs is not None and (
+            type(refs) is not tuple
+            or not refs
+            or any(type(ref) is not str or not ref for ref in refs)
+        ):
+            raise ValueError(f"vector discovery {field_name} must be nonempty refs")
+    candidates = session._port.discover_vector(
+        query_embedding,
+        limit,
+        source_refs,
+        resource_refs,
+    )
     if (
         type(candidates) is not tuple
         or len(candidates) > limit
