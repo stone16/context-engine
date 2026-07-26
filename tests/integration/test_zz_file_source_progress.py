@@ -29,14 +29,6 @@ from engine.persistence import (
 )
 from engine.runtime import QueryDigestKeyring
 from engine.supply import FileImportPath
-from tests.integration.test_file_import_tracer import (
-    NOW,
-    _ControlAuthenticator,
-    _FileImportScenario,
-    _prepare_file_import_scenario,
-    _prepare_repeat_file_import,
-    _run_file_import,
-)
 from tests.integration.test_zz_file_publication_recovery import (
     _run,
     _wait_for_expiry,
@@ -48,6 +40,24 @@ from tests.integration.test_zz_file_revision_replacement import (
     OLD_MARKDOWN,
     _resolve,
     _scenario_user_id,
+)
+from tests.support.file_imports import (
+    NOW,
+)
+from tests.support.file_imports import (
+    ControlAuthenticator as _ControlAuthenticator,
+)
+from tests.support.file_imports import (
+    FileImportScenario as _FileImportScenario,
+)
+from tests.support.file_imports import (
+    prepare_file_import_scenario as _prepare_file_import_scenario,
+)
+from tests.support.file_imports import (
+    prepare_repeat_file_import as _prepare_repeat_file_import,
+)
+from tests.support.file_imports import (
+    run_file_import as _run_file_import,
 )
 
 pytestmark = pytest.mark.integration

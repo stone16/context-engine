@@ -74,16 +74,24 @@ from engine.runtime.egress import (
 from engine.runtime.evidence import CandidateRef
 from engine.runtime.package_digest import QueryDigestKeyring
 from tests.integration.test_file_import_tracer import (
-    NOW,
-    _ControlAuthenticator,
     _ExactScopeAuthority,
-    _FileImportScenario,
     _OrganizationAuthority,
-    _prepare_file_import_scenario,
     _RuntimeAuthenticator,
 )
 from tests.integration.test_zz_file_resource_tombstone import _tombstone
 from tests.integration.test_zz_file_source_offboarding import _offboard
+from tests.support.file_imports import (
+    NOW,
+)
+from tests.support.file_imports import (
+    ControlAuthenticator as _ControlAuthenticator,
+)
+from tests.support.file_imports import (
+    FileImportScenario as _FileImportScenario,
+)
+from tests.support.file_imports import (
+    prepare_file_import_scenario as _prepare_file_import_scenario,
+)
 from tests.support.releases import (
     clear_test_runtime_release,
     ensure_test_runtime_release,
