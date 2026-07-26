@@ -136,8 +136,10 @@ def downgrade() -> None:
     nested_count = connection.exec_driver_sql(
         """
         SELECT
-          (SELECT count(*) FROM file_acquisition WHERE strpos(relative_path, '/') > 0) +
-          (SELECT count(*) FROM file_source_change WHERE strpos(relative_path, '/') > 0) +
+          (SELECT count(*) FROM file_acquisition
+           WHERE strpos(relative_path, '/') > 0) +
+          (SELECT count(*) FROM file_source_change
+           WHERE strpos(relative_path, '/') > 0) +
           (SELECT count(*) FROM file_delete_observation_execution
            WHERE strpos(relative_path, '/') > 0)
         """
