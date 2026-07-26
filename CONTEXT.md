@@ -10,6 +10,15 @@ ContextEngine. 中文解释与英文定义具有相同语义；实现细节以
 本文件只固定名称、scope、lifecycle 和 authorization role，不定义 executable
 schema、Python type、threat fixture 或新的架构决策。
 
+当前词汇表覆盖 knowledge-snapshot family（知识快照内容族：快照发布为
+不可变 ContextRevision/ContextFragment lineage 的来源）。structured
+acquisition family（结构化获取族：请求时从数据库/API 获取的 context）按
+[ADR-0061](docs/decisions/0061-commit-to-the-complete-context-layer-thesis.md)
+deferred-by-design：其 canonical 术语在该族设计时加入；本词汇表的快照
+lifecycle 术语，以及建立在 ContextFragment 之上的 request-scoped 定义
+（如 `Evidence` 与 `ContextPackage` 的 Evidence 组成），都不得未经显式
+扩展类推套用于它。
+
 ## How to read this glossary
 
 - **Persistent**：对象具有跨请求的 durable identity 或 state。

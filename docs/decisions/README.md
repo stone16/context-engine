@@ -158,3 +158,7 @@ touched:
 - [0056 — Detect File deletions without tombstone authority](0056-detect-file-deletions-without-tombstone-authority.md)
 - [0057 — Execute current File deletes through tombstone authority](0057-execute-current-file-deletes-through-tombstone-authority.md)
 - [0058 — Schedule only upserts from mixed File pages](0058-schedule-only-upserts-from-mixed-file-pages.md)
+- [0061 — Commit to the complete context layer thesis](0061-commit-to-the-complete-context-layer-thesis.md)
+- [0062 — Pull development through dogfood workloads](0062-pull-development-through-dogfood-workloads.md)
+- [0063 — Admit an explicit dogfood authentication composition](0063-admit-an-explicit-dogfood-authentication-composition.md)
+- [0064 — Split process ceremony along the kernel-seam boundary](0064-split-process-ceremony-along-the-kernel-seam-boundary.md)
