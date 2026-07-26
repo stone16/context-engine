@@ -57,6 +57,7 @@ the running service's own `/health` response.
 | OpenAPI v0 wire contract + generated TypeScript SDK + breaking-change gate | Active |
 | Private File-backed bot delivery flow (deterministic twin) | Active |
 | Autonomous File import dispatch + bounded expired-lease reclaim | Active |
+| Loopback single-Membership File dogfood `Acquire` | Active when explicitly configured |
 | Production authentication (OAuth/JWT) | `NOT_ACTIVE` |
 | Real source ACLs, general content retrieval, `Continue` / `OpenCitation` | `NOT_ACTIVE` |
 | Live Feishu / Slack / Google Docs connectors, group chat | `NOT_ACTIVE` |
@@ -121,6 +122,50 @@ curl http://127.0.0.1:8137/health
 `runtime_delivery: NOT_ACTIVE` is expected and correct: the default application
 rejects every credential and performs zero content I/O. The public wire contract
 is `POST /v0/resolve`, frozen in [`openapi/v0/openapi.json`](./openapi/v0/openapi.json).
+
+### Run the bounded dogfood API
+
+The only served content-bearing composition is a local, loopback-only dogfood
+carrier. It is an explicit opt-in and is not production authentication. First
+seed one Organization, User, and current Membership with the configured
+migrator connection:
+
+```bash
+uv run context-engine-dogfood-seed \
+  --organization-id "$CONTEXT_ENGINE_DOGFOOD_ORGANIZATION_ID" \
+  --user-id "$CONTEXT_ENGINE_DOGFOOD_USER_ID" \
+  --membership-id "$CONTEXT_ENGINE_DOGFOOD_MEMBERSHIP_ID"
+```
+
+Configure the API with the Runtime database source and these dogfood settings:
+
+```text
+CONTEXT_ENGINE_API_COMPOSITION=dogfood-local-v1
+CONTEXT_ENGINE_DOGFOOD_SECRET
+CONTEXT_ENGINE_DOGFOOD_ORGANIZATION_ID
+CONTEXT_ENGINE_DOGFOOD_USER_ID
+CONTEXT_ENGINE_DOGFOOD_MEMBERSHIP_ID
+CONTEXT_ENGINE_DOGFOOD_MEMBERSHIP_VERSION
+CONTEXT_ENGINE_DOGFOOD_PRINCIPAL_REF
+CONTEXT_ENGINE_DOGFOOD_AGENT_VERSION_REF
+CONTEXT_ENGINE_DOGFOOD_APPLICATION_REF
+CONTEXT_ENGINE_DOGFOOD_AUTHENTICATION_BINDING_REF
+CONTEXT_ENGINE_DOGFOOD_EMBEDDING_PROVIDER=deterministic-twin-v1
+```
+
+Before activation, freshly reimport the File corpus with the Supply worker's
+network-free `twin` embedding mode and promote those exact Revision references
+through the existing Learning release operation using the dogfood vector index
+profile. The active Release binds the deterministic model and contextual-
+fragment input profile; a mismatch fails composition. Then run the API with an
+explicit loopback host. A valid composition reports `runtime_delivery: ACTIVE`;
+missing or partial configuration fails closed. The dogfood secret must come
+from one local secret source and must never be committed or printed.
+
+External query embeddings, production or multi-user authentication, remote
+network exposure, group/public delivery, dogfood `OpenCitation`, `Continue`, hybrid retrieval, and
+non-File providers remain `NOT_ACTIVE`; see
+[ADR-0068](./docs/decisions/0068-activate-loopback-dogfood-runtime.md).
 
 ### Run the worker
 

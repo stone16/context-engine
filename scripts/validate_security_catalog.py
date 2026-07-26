@@ -2158,6 +2158,117 @@ CANONICAL_FILE_RECLAIM_ACTIVATION: dict[str, object] = {
     ],
 }
 
+CANONICAL_DOGFOOD_AUTHENTICATION_ACTIVATION: dict[str, object] = {
+    "issueRef": "#102",
+    "invariantRef": "TRANSPORT-UNTRUSTED-008",
+    "carrier": "loopback-only single-Membership dogfood HTTP authentication",
+    "status": "active_fail_closed",
+    "policyEpochScope": "organization-v0",
+    "controlBoundary": (
+        "explicit local environment opt-in -> constant-time bearer verification -> "
+        "one fixed configured identity -> current UserActor Membership transaction"
+    ),
+    "testEvidence": [
+        {
+            "id": "RUNTIME-DOGFOOD-AUTH-102",
+            "surface": (
+                "tests/integration/test_dogfood_runtime_activation.py::"
+                "test_dogfood_secret_and_membership_fail_closed_without_secret_retention"
+            ),
+            "oracle": (
+                "Absent, wrong, or truncated secrets and revoked or expired configured "
+                "Membership authority return the same generic authentication failure; "
+                "the secret is absent from responses, logs, ContextRun, and "
+                "DecisionAudit."
+            ),
+        },
+    ],
+    "deferredEvidence": [
+        "production identity-provider authentication and key lifecycle",
+        "second-human and multi-Membership authentication",
+        "non-loopback network exposure and remote deployment",
+    ],
+    "futureCarriers": [
+        "production authentication composition",
+        "multi-user identity and Membership selection",
+        "authenticated remote network ingress",
+    ],
+    "notActive": [
+        "production authentication",
+        "a second human identity",
+        "network exposure beyond the maintainer machine",
+        "group or public audience",
+        "Continue",
+        "dogfood OpenCitation",
+        "hybrid retrieval",
+        "external query embedding",
+        "non-File providers",
+    ],
+}
+
+CANONICAL_DOGFOOD_RUNTIME_ACTIVATION: dict[str, object] = {
+    "issueRef": "#102",
+    "invariantRef": "INDEX-NOT-AUTHORITY-005",
+    "carrier": "loopback-only File pgvector dogfood Acquire delivery",
+    "status": "active_fail_closed",
+    "policyEpochScope": "organization-v0",
+    "controlBoundary": (
+        "current UserActor transaction -> database-derived exact EffectiveScope -> "
+        "pre-LIMIT pgvector scope reduction -> CandidateRef -> sealed "
+        "AuthorizationKernel -> AuthorizedProjection -> ContextPackage"
+    ),
+    "testEvidence": [
+        {
+            "id": "RUNTIME-DOGFOOD-CARRIER-102",
+            "surface": (
+                "tests/integration/test_dogfood_runtime_activation.py::"
+                "test_dogfood_served_composition_delivers_release_scoped_file_evidence_before_limit"
+            ),
+            "oracle": (
+                "The configured maintainer receives one real File Evidence block "
+                "through the served POST /v0/resolve carrier even when more than "
+                "the ANN limit of strictly closer RLS-visible distractors are "
+                "excluded by EffectiveScope; "
+                "the deterministic twin records zero external provider usage."
+            ),
+        },
+        {
+            "id": "RUNTIME-DOGFOOD-EPOCH-102",
+            "surface": (
+                "tests/integration/test_dogfood_runtime_activation.py::"
+                "test_dogfood_mid_resolve_policy_epoch_change_vetoes_stale_evidence"
+            ),
+            "oracle": (
+                "An access revocation that advances Policy Epoch after authorization "
+                "but "
+                "before delivery yields an authorized empty package with zero stale "
+                "Evidence, while the sealed Kernel remains the final authority."
+            ),
+        },
+    ],
+    "deferredEvidence": [
+        "external-provider embedding metering and profile identity",
+        "multi-source or hybrid discovery and non-File source-native ACL semantics",
+        "group, public, Continue, and remote deployment carriers",
+    ],
+    "futureCarriers": [
+        "metered external query embedding",
+        "hybrid and non-File retrieval",
+        "group, public, and Continue delivery",
+    ],
+    "notActive": [
+        "production authentication",
+        "a second human identity",
+        "network exposure beyond the maintainer machine",
+        "group or public audience",
+        "Continue",
+        "dogfood OpenCitation",
+        "hybrid retrieval",
+        "external query embedding",
+        "non-File providers",
+    ],
+}
+
 CANONICAL_ACTIVATIONS: list[dict[str, object]] = [
     CANONICAL_REVOCATION_ACTIVATION,
     CANONICAL_UNAVAILABLE_CAPABILITY_ACTIVATION,
@@ -2181,6 +2292,8 @@ CANONICAL_ACTIVATIONS: list[dict[str, object]] = [
     CANONICAL_FILE_MIXED_UPSERT_SCHEDULING_ACTIVATION,
     CANONICAL_FILE_DISPATCH_ACTIVATION,
     CANONICAL_FILE_RECLAIM_ACTIVATION,
+    CANONICAL_DOGFOOD_AUTHENTICATION_ACTIVATION,
+    CANONICAL_DOGFOOD_RUNTIME_ACTIVATION,
 ]
 CANONICAL_ACTIVATION_ISSUE_LIST = ", ".join(
     f"Issue {activation['issueRef']}" for activation in CANONICAL_ACTIVATIONS

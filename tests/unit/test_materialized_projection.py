@@ -22,6 +22,7 @@ from engine.runtime.materialized import (
     _open_materialized_projection_scope,
     _project_materialized_fragment,
 )
+from engine.runtime.scope import EffectiveScope
 
 ORGANIZATION_ID = UUID("81e18bca-86a1-478a-937d-7675c6fe69b0")
 
@@ -61,8 +62,9 @@ class RecordingProjectionPort:
         limit: int,
         source_refs: tuple[str, ...] | None,
         resource_refs: tuple[str, ...] | None,
+        effective_scope: EffectiveScope,
     ) -> tuple[CandidateRef, ...]:
-        del query_embedding, limit, source_refs, resource_refs
+        del query_embedding, limit, source_refs, resource_refs, effective_scope
         return ()
 
     def source_is_active(self, source_ref: UUID) -> bool:
@@ -177,11 +179,25 @@ def test_vector_discovery_is_bounded_and_lifetime_bound() -> None:
         port=cast(MaterializedProjectionPort, port),
     )
 
-    assert _discover_materialized_vector(session, (0.25,), 1) == ()
+    effective_scope = EffectiveScope(frozenset())
+    assert (
+        _discover_materialized_vector(
+            session,
+            (0.25,),
+            1,
+            effective_scope=effective_scope,
+        )
+        == ()
+    )
     _close_materialized_projection_scope(scope)
 
     with pytest.raises(ValueError, match="active materialized projection scope"):
-        _discover_materialized_vector(session, (0.25,), 1)
+        _discover_materialized_vector(
+            session,
+            (0.25,),
+            1,
+            effective_scope=effective_scope,
+        )
 
 
 def test_materialized_projection_rejects_more_than_the_public_field_bound() -> None:

@@ -64,8 +64,14 @@ class ContentIoSpy:
     def __init__(self) -> None:
         self.calls = 0
 
-    def discover(self, request: Acquire, projection_session: object) -> tuple[()]:
-        del request, projection_session
+    def discover(
+        self,
+        request: Acquire,
+        projection_session: object,
+        *,
+        effective_scope: object,
+    ) -> tuple[()]:
+        del request, projection_session, effective_scope
         self.calls += 1
         return ()
 

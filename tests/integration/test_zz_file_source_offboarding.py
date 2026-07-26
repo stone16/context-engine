@@ -51,6 +51,7 @@ from engine.runtime.organization import (
     _construct_existing_http_organization_verification,
 )
 from engine.runtime.package_digest import QueryDigestKeyring
+from engine.runtime.scope import EffectiveScope
 from engine.runtime.ticket_identity import (
     TicketExecutionIdentity,
     _construct_ticket_execution_identity,
@@ -101,8 +102,10 @@ class _ReplayCandidateIndex:
         self,
         request: Acquire,
         projection_session: MaterializedProjectionSession,
+        *,
+        effective_scope: EffectiveScope,
     ) -> tuple[CandidateRef, ...]:
-        del request, projection_session
+        del request, projection_session, effective_scope
         return (self.candidate,)
 
 

@@ -559,6 +559,21 @@
       "id": "HTTP-FILE-MIXED-UPSERT-NO-DELETE-089",
       "layer": "runtime",
       "selector": "tests/integration/test_z_egress_grant_file.py::test_mixed_file_upsert_scheduling_has_zero_delete_effect_over_generated_sdk"
+    },
+    {
+      "id": "RUNTIME-DOGFOOD-AUTH-102",
+      "layer": "runtime",
+      "selector": "tests/integration/test_dogfood_runtime_activation.py::test_dogfood_secret_and_membership_fail_closed_without_secret_retention"
+    },
+    {
+      "id": "RUNTIME-DOGFOOD-CARRIER-102",
+      "layer": "runtime",
+      "selector": "tests/integration/test_dogfood_runtime_activation.py::test_dogfood_served_composition_delivers_release_scoped_file_evidence_before_limit"
+    },
+    {
+      "id": "RUNTIME-DOGFOOD-EPOCH-102",
+      "layer": "runtime",
+      "selector": "tests/integration/test_dogfood_runtime_activation.py::test_dogfood_mid_resolve_policy_epoch_change_vetoes_stale_evidence"
     }
   ],
   "invariantMappings": [
@@ -653,7 +668,9 @@
           "PG-FILE-SOURCE-OFFBOARD-030"
         ],
         "runtime": [
-          "RUNTIME-INDEX-NOT-AUTHORITY-005"
+          "RUNTIME-INDEX-NOT-AUTHORITY-005",
+          "RUNTIME-DOGFOOD-CARRIER-102",
+          "RUNTIME-DOGFOOD-EPOCH-102"
         ]
       }
     },
@@ -732,7 +749,8 @@
           "HTTP-DELIVERY-EVIDENCE-063",
           "FILE-DELIVERY-EVIDENCE-063",
           "SDK-LIVE-FILE-064",
-          "SDK-PRIVATE-BOT-FLOW-071"
+          "SDK-PRIVATE-BOT-FLOW-071",
+          "RUNTIME-DOGFOOD-AUTH-102"
         ]
       }
     },

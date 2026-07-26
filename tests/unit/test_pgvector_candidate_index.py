@@ -19,6 +19,7 @@ from engine.runtime.materialized import (
     _construct_materialized_projection_session,
     _open_materialized_projection_scope,
 )
+from engine.runtime.scope import EffectiveScope, ScopeTarget
 from engine.supply import EmbeddingProfile, EmbeddingProviderUnavailable
 
 
@@ -31,6 +32,7 @@ class _RecordingPort:
                 int,
                 tuple[str, ...] | None,
                 tuple[str, ...] | None,
+                EffectiveScope,
             ]
         ] = []
 
@@ -40,8 +42,17 @@ class _RecordingPort:
         limit: int,
         source_refs: tuple[str, ...] | None,
         resource_refs: tuple[str, ...] | None,
+        effective_scope: EffectiveScope,
     ) -> tuple[CandidateRef, ...]:
-        self.calls.append((query_embedding, limit, source_refs, resource_refs))
+        self.calls.append(
+            (
+                query_embedding,
+                limit,
+                source_refs,
+                resource_refs,
+                effective_scope,
+            )
+        )
         return self.candidates[:limit]
 
     def discover_exact_phrase(self, phrase_digest: str) -> tuple[()]:
@@ -80,6 +91,21 @@ def _candidate() -> CandidateRef:
     )
 
 
+def _effective_scope() -> EffectiveScope:
+    candidate = _candidate()
+    return EffectiveScope(
+        frozenset(
+            {
+                ScopeTarget(
+                    candidate.organization_id,
+                    candidate.source_ref,
+                    candidate.resource_ref,
+                )
+            }
+        )
+    )
+
+
 def test_vector_index_embeds_query_and_returns_only_bounded_candidate_refs() -> None:
     port = _RecordingPort((_candidate(),))
     scope = _open_materialized_projection_scope()
@@ -94,17 +120,19 @@ def test_vector_index_embeds_query_and_returns_only_bounded_candidate_refs() -> 
         ).discover(
             Acquire(need=ContextNeed(query="semantic query")),
             session,
+            effective_scope=_effective_scope(),
         )
     finally:
         _close_materialized_projection_scope(scope)
 
     assert candidates == (_candidate(),)
     assert len(port.calls) == 1
-    query_embedding, limit, source_refs, resource_refs = port.calls[0]
+    query_embedding, limit, source_refs, resource_refs, effective_scope = port.calls[0]
     assert len(query_embedding) == 384
     assert limit == 1
     assert source_refs is None
     assert resource_refs is None
+    assert effective_scope == _effective_scope()
     assert set(CandidateRef.__dataclass_fields__) == {
         "organization_id",
         "source_ref",
@@ -134,11 +162,12 @@ def test_vector_index_applies_request_narrowing_before_ann_limit() -> None:
                 ),
             ),
             session,
+            effective_scope=_effective_scope(),
         )
     finally:
         _close_materialized_projection_scope(scope)
 
-    assert port.calls[0][2:] == (
+    assert port.calls[0][2:4] == (
         ("source:vector",),
         ("resource:vector",),
     )
@@ -159,6 +188,7 @@ def test_vector_index_genericizes_query_embedding_failure_before_database_io() -
             PostgreSQLVectorCandidateIndex(_UnavailableProvider()).discover(
                 Acquire(need=ContextNeed(query="semantic query")),
                 session,
+                effective_scope=_effective_scope(),
             )
     finally:
         _close_materialized_projection_scope(scope)

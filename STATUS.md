@@ -38,15 +38,17 @@ capability can never be reported as a passing one.
 ## Currently `NOT_ACTIVE`
 
 The default application **rejects every credential and performs zero content
-I/O**. The following are known, designed, and deliberately not active:
+I/O**. ADR-0068 separately activates one explicit loopback dogfood composition;
+it does not widen the default. The following are known, designed, and
+deliberately not active:
 
 | Capability | Note |
 |---|---|
 | Production authentication (OAuth / JWT) | Module-level default application is reject-all across all three production authorities (authentication, Organization, Membership) |
-| Durable Principal / Agent grants | Scope authority returns seven missing trusted operands by default, so no deliverable scope can be produced |
-| Real Source / Resource ACLs | Only synthetic conformance fixtures exist |
-| General content retrieval | No production candidate path |
-| `Continue` / `OpenCitation` carriers | The M0 *refusal* path is active; real issuance and redemption are not |
+| Durable general Principal / Agent grants | The default scope authority returns seven missing operands; dogfood separately carries the bounded current File operands and binds one configured Agent/purpose to the Release ceiling only |
+| General / multi-user Source and Resource ACLs | Dogfood uses current mirrored File access plus Membership field rights only; source-native and multi-user authorities remain absent |
+| General content retrieval | Only the loopback File pgvector dogfood `Acquire` carrier is active |
+| `Continue` / dogfood `OpenCitation` carriers | The bounded dogfood composition keeps both unavailable; other accepted ADRs own their narrower citation carriers |
 | Federated discovery, source-native authorization | Deterministic refusal only |
 | Live Feishu / Slack / Google Docs connectors | See [PLAN.md](./PLAN.md) milestones M4 / M6 / M7 |
 | Group-chat delivery, compensating deletes | M5 |
@@ -55,6 +57,19 @@ I/O**. The following are known, designed, and deliberately not active:
 | Provider polling, delete execution beyond ADR-0057 | See the File Provider ADRs for exact boundaries |
 | Streaming delivery | Explicit V1 non-goal — placeholder + edit instead |
 | Answer generation inside the engine | Permanent non-goal — generation always lives above the engine boundary |
+
+### Bounded dogfood Runtime
+
+| ADR | Activates |
+|---|---|
+| [0068](./docs/decisions/0068-activate-loopback-dogfood-runtime.md) | Explicit loopback single-Membership authentication plus File pgvector `Acquire`, with exact EffectiveScope removal before ANN `LIMIT`, sealed Kernel reauthorization, deterministic twin query embedding, and final Policy Epoch veto |
+
+`RUNTIME-DOGFOOD-AUTH-102`, `RUNTIME-DOGFOOD-CARRIER-102`, and
+`RUNTIME-DOGFOOD-EPOCH-102` are registered release-veto evidence. The default
+application remains reject-all and reports `NOT_ACTIVE`. Production
+authentication, a second human, network exposure beyond the maintainer machine,
+group/public audience, dogfood `OpenCitation`, `Continue`, hybrid retrieval, non-File providers, and
+external query embeddings remain `NOT_ACTIVE`.
 
 ## Activation ledger
 

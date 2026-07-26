@@ -76,7 +76,7 @@ from engine.runtime.organization import (
     _construct_existing_http_organization_verification,
 )
 from engine.runtime.package_digest import QueryDigestKeyring
-from engine.runtime.scope import ScopeSet, ScopeTarget
+from engine.runtime.scope import EffectiveScope, ScopeSet, ScopeTarget
 from engine.runtime.scope_authority import (
     TrustedScopeSnapshot,
     _close_scope_authority_scope,
@@ -300,8 +300,14 @@ class _ExactThenReplayCandidateIndex:
         self,
         request: Acquire,
         projection_session: MaterializedProjectionSession,
+        *,
+        effective_scope: EffectiveScope,
     ) -> tuple[CandidateRef, ...]:
-        exact = self.exact.discover(request, projection_session)
+        exact = self.exact.discover(
+            request,
+            projection_session,
+            effective_scope=effective_scope,
+        )
         return exact or (self.replay,)
 
 
@@ -1784,6 +1790,16 @@ def test_exact_phrase_discovery_does_not_hide_a_match_after_sixty_four_rows(
                 discovered = PostgreSQLExactPhraseCandidateIndex().discover(
                     Acquire(need=ContextNeed(query="same exact paragraph")),
                     projection_session,
+                    effective_scope=EffectiveScope(
+                        frozenset(
+                            {
+                                ScopeTarget(
+                                    organization_id,
+                                    "source:exact-limit",
+                                )
+                            }
+                        )
+                    ),
                 )
             finally:
                 _close_materialized_projection_scope(projection_scope)

@@ -66,6 +66,8 @@ from engine.runtime.materialized import (
     MaterializedProjectionKind,
     MaterializedProjectionSession,
     MaterializedPublicationTrace,
+    MaterializedScopeOperands,
+    MaterializedScopeUnavailable,
     _close_materialized_projection_scope,
     _construct_materialized_projection_session,
     _open_materialized_projection_scope,
@@ -79,6 +81,7 @@ from engine.runtime.policy_epoch import (
     _open_policy_epoch_authority_scope,
 )
 from engine.runtime.release_lineage import ActiveRuntimeRelease
+from engine.runtime.scope import EffectiveScope, ScopeTarget
 
 
 class MembershipNotCurrent(Exception):
@@ -181,6 +184,19 @@ _VECTOR_CANDIDATE_SQL = """
      AND resource.tombstoned IS FALSE
     WHERE fragment.embedding IS NOT NULL
       AND (
+        EXISTS (
+            SELECT 1
+            FROM unnest(
+                CAST(:scope_resource_organization_ids AS uuid[]),
+                CAST(:scope_resource_source_refs AS text[]),
+                CAST(:scope_resource_refs AS text[])
+            ) AS resource_scope(organization_id, source_ref, resource_ref)
+            WHERE resource_scope.organization_id = resource.organization_id
+              AND resource_scope.source_ref = resource.source_ref
+              AND resource_scope.resource_ref = fragment.resource_ref
+        )
+      )
+      AND (
         CAST(:source_refs AS text[]) IS NULL
         OR resource.source_ref = ANY(CAST(:source_refs AS text[]))
       )
@@ -213,13 +229,164 @@ class _PostgreSQLMaterializedProjectionPort:
         ).scalar_one()
         return observed is True
 
+    def current_scope_operands(
+        self,
+        active_revision_ids: tuple[UUID, ...],
+    ) -> MaterializedScopeOperands:
+        """Observe each durable File scope operand without pre-intersection."""
+
+        try:
+            rows = self._connection.execute(
+                text(
+                    """
+                    SELECT DISTINCT
+                        resource.organization_id,
+                        resource.source_ref,
+                        resource.resource_ref,
+                        access_policy.resource_ref IS NOT NULL AS principal_granted,
+                        EXISTS (
+                            SELECT 1
+                            FROM context_fragment AS fragment
+                            WHERE fragment.organization_id = resource.organization_id
+                              AND fragment.resource_ref = resource.resource_ref
+                              AND fragment.revision_id = resource.active_revision_id
+                              AND (
+                                (
+                                  fragment.projection_kind = 'body'
+                                  AND EXISTS (
+                                    SELECT 1
+                                    FROM membership_resource_field_right AS field_right
+                                    WHERE field_right.organization_id =
+                                        fragment.organization_id
+                                      AND field_right.membership_id = NULLIF(
+                                        current_setting('app.membership_id'), ''
+                                      )::uuid
+                                      AND field_right.membership_version = NULLIF(
+                                        current_setting('app.membership_version'), ''
+                                      )::bigint
+                                      AND field_right.resource_ref =
+                                        fragment.resource_ref
+                                      AND field_right.field_ref = 'body'
+                                  )
+                                )
+                                OR (
+                                  fragment.projection_kind = 'fields'
+                                  AND EXISTS (
+                                    SELECT 1
+                                    FROM context_fragment_field AS fragment_field
+                                    JOIN membership_resource_field_right AS field_right
+                                      ON field_right.organization_id =
+                                        fragment_field.organization_id
+                                     AND field_right.membership_id = NULLIF(
+                                        current_setting('app.membership_id'), ''
+                                     )::uuid
+                                     AND field_right.membership_version = NULLIF(
+                                        current_setting('app.membership_version'), ''
+                                     )::bigint
+                                     AND field_right.resource_ref =
+                                        fragment_field.resource_ref
+                                     AND field_right.field_ref =
+                                        fragment_field.field_ref
+                                    WHERE fragment_field.organization_id =
+                                        fragment.organization_id
+                                      AND fragment_field.resource_ref =
+                                        fragment.resource_ref
+                                      AND fragment_field.revision_id =
+                                        fragment.revision_id
+                                      AND fragment_field.fragment_ref =
+                                        fragment.fragment_ref
+                                  )
+                                )
+                              )
+                        ) AS membership_allowed
+                    FROM context_resource AS resource
+                    LEFT JOIN resource_access_policy AS access_policy
+                      ON access_policy.organization_id = resource.organization_id
+                     AND access_policy.resource_ref = resource.resource_ref
+                     AND access_policy.principal_ref = current_setting(
+                         'app.principal_ref'
+                     )
+                     AND access_policy.access_state = 'allowed'
+                    WHERE resource.tombstoned IS FALSE
+                      AND resource.active_revision_id IS NOT NULL
+                      AND resource.active_revision_id = ANY(
+                        CAST(:active_revision_ids AS uuid[])
+                      )
+                    ORDER BY resource.organization_id,
+                             resource.source_ref,
+                             resource.resource_ref
+                    """
+                ),
+                {"active_revision_ids": list(active_revision_ids)},
+            )
+        except SQLAlchemyError:
+            raise MaterializedScopeUnavailable(
+                "materialized scope authority is unavailable"
+            ) from None
+        try:
+            rows_with_targets = tuple(
+                (
+                    ScopeTarget(
+                        row.organization_id,
+                        row.source_ref,
+                        row.resource_ref,
+                    ),
+                    row.membership_allowed is True,
+                    row.principal_granted is True,
+                )
+                for row in rows
+            )
+            organization_boundary = frozenset(
+                target for target, _membership, _principal in rows_with_targets
+            )
+            membership_rights = frozenset(
+                target
+                for target, membership, _principal in rows_with_targets
+                if membership
+            )
+            principal_grants = frozenset(
+                target
+                for target, _membership, principal in rows_with_targets
+                if principal
+            )
+            # context_resource RLS already enforces the current File source
+            # lifecycle. That visible set is the local Mirrored source-native
+            # ACL; resource_access_policy separately carries the principal's
+            # grant and the resource ACL in the current File access model.
+            return MaterializedScopeOperands(
+                organization_boundary=organization_boundary,
+                membership_rights=membership_rights,
+                principal_grants=principal_grants,
+                source_native_acl=organization_boundary,
+                resource_acl=principal_grants,
+            )
+        except (TypeError, ValueError):
+            raise MaterializedScopeUnavailable(
+                "materialized scope authority is unavailable"
+            ) from None
+
     def discover_vector(
         self,
         query_embedding: tuple[float, ...],
         limit: int,
         source_refs: tuple[str, ...] | None,
         resource_refs: tuple[str, ...] | None,
+        effective_scope: EffectiveScope,
     ) -> tuple[CandidateRef, ...]:
+        resource_targets = tuple(
+            sorted(
+                (
+                    target
+                    for target in effective_scope.targets
+                    if target.resource_ref is not None
+                ),
+                key=lambda target: (
+                    target.organization_id.bytes,
+                    target.source_ref,
+                    target.resource_ref or "",
+                ),
+            )
+        )
         self._connection.execute(
             text(
                 "SELECT set_config('hnsw.iterative_scan', :iterative_scan, true), "
@@ -241,6 +408,15 @@ class _PostgreSQLMaterializedProjectionPort:
                 "resource_refs": (
                     list(resource_refs) if resource_refs is not None else None
                 ),
+                "scope_resource_organization_ids": [
+                    target.organization_id for target in resource_targets
+                ],
+                "scope_resource_source_refs": [
+                    target.source_ref for target in resource_targets
+                ],
+                "scope_resource_refs": [
+                    target.resource_ref for target in resource_targets
+                ],
             },
         )
         candidates: list[CandidateRef] = []

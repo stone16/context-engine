@@ -106,6 +106,30 @@ def assert_control_role(connection: Connection) -> None:
     _assert_non_owner_role(connection, CONTROL_ROLE)
 
 
+def assert_migrator_role(connection: Connection) -> None:
+    """Require the explicit migration login for the local seeding operation."""
+
+    row = connection.execute(
+        text(
+            """
+            SELECT current_user AS current_role,
+                   session_user AS session_role,
+                   role.rolsuper AS is_superuser,
+                   role.rolbypassrls AS bypasses_rls
+            FROM pg_roles AS role
+            WHERE role.rolname = current_user
+            """
+        )
+    ).mappings().one()
+    if dict(row) != {
+        "current_role": MIGRATOR_ROLE,
+        "session_role": MIGRATOR_ROLE,
+        "is_superuser": False,
+        "bypasses_rls": False,
+    }:
+        raise AssertionError("dogfood seeding requires the exact migrator login")
+
+
 def assert_identity_role(connection: Connection) -> None:
     """Require the dedicated trusted-identity evidence issuer login."""
 

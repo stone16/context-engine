@@ -313,8 +313,14 @@ class DownstreamContentIoSpy:
         self.provider_calls = 0
         self.source_content_calls = 0
 
-    def discover(self, request: Acquire, projection_session: object) -> tuple[()]:
-        del request, projection_session
+    def discover(
+        self,
+        request: Acquire,
+        projection_session: object,
+        *,
+        effective_scope: Any,
+    ) -> tuple[()]:
+        del request, projection_session, effective_scope
         self.index_calls += 1
         return ()
 

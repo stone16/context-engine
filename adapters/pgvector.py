@@ -9,6 +9,7 @@ from engine.runtime.materialized import (
     MaterializedProjectionSession,
     _discover_materialized_vector,
 )
+from engine.runtime.scope import EffectiveScope
 from engine.supply import (
     CONTEXT_FRAGMENT_EMBEDDING_DIMENSION,
     EmbeddingProfile,
@@ -56,9 +57,13 @@ class PostgreSQLVectorCandidateIndex:
         self,
         request: Acquire,
         projection_session: MaterializedProjectionSession,
+        *,
+        effective_scope: EffectiveScope,
     ) -> tuple[CandidateRef, ...]:
         if type(request) is not Acquire:
             raise TypeError("Vector candidate discovery requires Acquire")
+        if type(effective_scope) is not EffectiveScope:
+            raise TypeError("Vector candidate discovery requires EffectiveScope")
         try:
             query_embedding = validate_embedding_batch(
                 (request.need.query,),
@@ -79,6 +84,7 @@ class PostgreSQLVectorCandidateIndex:
                     if request.narrowing is not None
                     else None
                 ),
+                effective_scope=effective_scope,
             )
         except EmbeddingProviderUnavailable:
             raise VectorCandidateIndexUnavailable(

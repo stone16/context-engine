@@ -43,6 +43,7 @@ from engine.runtime.release_lineage import (
     RUNTIME_TOKENIZER_REF_V0,
     public_release_manifest_ref,
 )
+from engine.runtime.scope import EffectiveScope, ScopeTarget
 
 CHECKED_AT = datetime(2026, 7, 21, 8, 0, tzinfo=UTC)
 
@@ -368,6 +369,17 @@ def test_postgres_vector_discovery_uses_one_content_free_bounded_ann_query() -> 
         1,
         ("source:vector",),
         ("resource:vector",),
+        EffectiveScope(
+            frozenset(
+                {
+                    ScopeTarget(
+                        organization_id,
+                        "source:vector",
+                        "resource:vector",
+                    )
+                }
+            )
+        ),
     )
 
     assert candidates == (
@@ -404,6 +416,9 @@ def test_postgres_vector_discovery_uses_one_content_free_bounded_ann_query() -> 
         "limit": 1,
         "source_refs": ["source:vector"],
         "resource_refs": ["resource:vector"],
+        "scope_resource_organization_ids": [organization_id],
+        "scope_resource_source_refs": ["source:vector"],
+        "scope_resource_refs": ["resource:vector"],
     }
 
 
@@ -424,7 +439,23 @@ def test_postgres_vector_discovery_rejects_invalid_revision_lineage() -> None:
     )
 
     with pytest.raises(TypeError, match="invalid revision lineage"):
-        port.discover_vector((0.25, -0.5), 1, None, None)
+        port.discover_vector(
+            (0.25, -0.5),
+            1,
+            None,
+            None,
+            EffectiveScope(
+                frozenset(
+                    {
+                        ScopeTarget(
+                            identity().organization_id,
+                            "source:vector",
+                            "resource:vector",
+                        )
+                    }
+                )
+            ),
+        )
 
 
 @pytest.mark.parametrize("invalid_value", (None, "", " \t"))

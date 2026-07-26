@@ -34,6 +34,7 @@ from engine.runtime.contracts import Acquire
 from engine.runtime.evidence import CandidateRef
 from engine.runtime.materialized import MaterializedProjectionSession
 from engine.runtime.package_digest import QueryDigestKeyring
+from engine.runtime.scope import EffectiveScope
 from tests.integration.test_zz_file_revision_replacement import (
     OLD_MARKDOWN,
     _resolve,
@@ -66,8 +67,10 @@ class _ReplayCandidateIndex:
         self,
         request: Acquire,
         projection_session: MaterializedProjectionSession,
+        *,
+        effective_scope: EffectiveScope,
     ) -> tuple[CandidateRef, ...]:
-        del request, projection_session
+        del request, projection_session, effective_scope
         return (self.candidate,)
 
 
