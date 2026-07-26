@@ -19,6 +19,7 @@ from applications.worker import (
     dispatch_one_file_import,
 )
 from engine.control import FileImportPath, FileRootRef, SourceRef
+from engine.persistence.file_imports import FileImportUnavailable
 from engine.persistence.worker_jobs import (
     FileDispatchLease,
     FileDispatchNoWork,
@@ -135,6 +136,36 @@ def test_dispatch_cycle_reports_job_refusal_without_routing_content() -> None:
     )
 
     assert asdict(result) == {"outcome": "refused", "status": "complete"}
+
+
+class _UnavailableWorker:
+    def run(self, _redemption: object) -> object:
+        raise FileImportUnavailable("File publication is unavailable")
+
+
+class _UnavailableWorkerFactory:
+    def __call__(self, _receiver: object) -> _UnavailableWorker:
+        return _UnavailableWorker()
+
+
+def test_dispatch_stops_after_worker_infrastructure_failure() -> None:
+    claimed_at = datetime(2026, 7, 25, 10, tzinfo=UTC)
+    claim = FileDispatchLease(
+        token=WorkerLeaseToken("lease-token"),
+        organization_id=uuid4(),
+        job_id=uuid4(),
+        source_ref=SourceRef(uuid4()),
+        service_principal_id=uuid4(),
+        lease_generation=1,
+        issued_at=claimed_at,
+        expires_at=claimed_at + timedelta(minutes=5),
+    )
+
+    with pytest.raises(FileImportUnavailable, match="publication is unavailable"):
+        dispatch_one_file_import(
+            _OneClaimAuthority(claim),
+            _UnavailableWorkerFactory(),  # type: ignore[arg-type]
+        )
 
 
 class _StoppingNoWorkAuthority:

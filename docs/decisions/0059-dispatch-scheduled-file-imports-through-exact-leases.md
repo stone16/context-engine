@@ -56,8 +56,11 @@ server-owned JSON registry, so cross-Organization selection cannot consume an
 eligible job merely because another configured root was omitted. A claim is
 marked internally for downgrade
 fencing; process output contains only `dispatched`, `no_work`, or the closed
-job-level `refused` outcome and never raw
+job-level `refused` outcome for exact lease rejection and never raw
 claims, token, nonce, tenant identity, source bytes, or host path.
+Worker infrastructure unavailability terminates dispatch after the already
+claimed lease instead of claiming and stranding additional jobs; automatic
+retry/backoff remains inactive.
 
 ## Consequences
 
