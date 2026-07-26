@@ -1298,6 +1298,7 @@ def test_file_reclaim_revision_refuses_retained_higher_generation(
                 ),
                 {"organization_id": organization_id, "job_id": job_id},
             )
+        command.upgrade(Config(ROOT / "alembic.ini"), "head")
         engine.dispose()
 
 

@@ -6221,8 +6221,10 @@
           "context_worker_record_file_import_interruption"
           ,"context_scheduler_claim_file_import"
         ],
-        "definerRole": "context_engine_worker_lease_definer",
-        "additionalDefinerRoles": ["context_engine_file_dispatch_definer"],
+        "definerRoles": [
+          "context_engine_worker_lease_definer",
+          "context_engine_file_dispatch_definer"
+        ],
         "directTableMutationAllowed": false
       },
       "permittedOperations": {

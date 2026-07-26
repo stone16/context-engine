@@ -1358,6 +1358,55 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
             )
         )
 
+    def test_issue_93_file_reclaim_activation_is_independently_frozen(self) -> None:
+        catalog = load_document(DEFAULT_CATALOG_PATH)
+        schema = load_document(DEFAULT_SCHEMA_PATH)
+        activation = next(
+            item
+            for item in object_list_at(catalog, "activations")
+            if item["issueRef"] == "#93"
+        )
+        schema_activations = object_at(schema, "properties", "activations")
+        prefix_items = schema_activations["prefixItems"]
+        assert isinstance(prefix_items, list)
+        schema_activation = object_at(
+            cast(dict[str, object], prefix_items[-1]), "const"
+        )
+
+        expected_boundary = (
+            "function-only scheduler login -> expired lease plus database-owned "
+            "exponential backoff -> current page/acquisition/audience/receiver "
+            "revalidation -> deterministic recovery-first SKIP LOCKED selector -> "
+            "exact next-generation WorkerLease -> existing durable-boundary File "
+            "worker resume"
+        )
+        expected_evidence_ids = [
+            "PG-FILE-RECLAIM-093",
+            "PG-FILE-RECLAIM-CONCURRENCY-093",
+            "PROC-FILE-RECLAIM-093",
+        ]
+        expected_deferred = [
+            "dead-letter state, exhaustion transition, operator remediation, "
+            "requeue, and retry observability",
+            "provider polling, automatic page acceptance, full resync, and "
+            "automatic delete ordering",
+        ]
+        expected_not_active = [
+            "scheduler tenant, Source, job, attempt, timing, backoff, or generation "
+            "choice",
+            "terminal failure retry, dead-letter transition, or operator requeue",
+            "manual import or delete recovery",
+            "Runtime authorization from Supply retry or lease state",
+        ]
+        for record in (activation, schema_activation):
+            self.assertEqual(record["controlBoundary"], expected_boundary)
+            self.assertEqual(
+                [item["id"] for item in object_list_at(record, "testEvidence")],
+                expected_evidence_ids,
+            )
+            self.assertEqual(record["deferredEvidence"], expected_deferred)
+            self.assertEqual(record["notActive"], expected_not_active)
+
     def test_issue_67_action_prepare_activation_stops_before_effects(self) -> None:
         catalog = make_catalog()
         activation = object_list_at(catalog, "activations")[10]

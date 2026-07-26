@@ -57,6 +57,11 @@ queue, Runtime authority, or content-bearing retry path is introduced.
 - Downgrade is refused while a scheduler-owned higher-generation lease remains,
   because the previous schema cannot preserve its automatic-reclaim provenance.
 - Retry exhaustion remains durable but operationally unresolved.
+- The supporting partial-index build remains transactional with the migration
+  fences and therefore takes a relation lock. Before a production rollout, the
+  operator must measure the retained `file_import_job` population and index-build
+  lock duration against the deployment drain budget, using a maintenance window
+  when the measured bound is not acceptable.
 
 ## Revisit trigger
 

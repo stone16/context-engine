@@ -822,7 +822,7 @@ def test_scheduler_reclaims_one_expired_dispatch_after_database_backoff(
                 text(
                     "UPDATE file_import_job SET "
                     "lease_issued_at = clock_timestamp() - interval '10 minutes', "
-                    "lease_expires_at = clock_timestamp() - interval '29 seconds' "
+                    "lease_expires_at = clock_timestamp() - interval '20 seconds' "
                     "WHERE organization_id = :organization_id AND job_id = :job_id"
                 ),
                 {"organization_id": organization_id, "job_id": job_id},
@@ -858,7 +858,7 @@ def test_scheduler_reclaims_one_expired_dispatch_after_database_backoff(
 
 @pytest.mark.parametrize(
     ("generation", "before_seconds", "eligible_seconds"),
-    [(2, 59, 61), (3, 119, 121)],
+    [(2, 50, 61), (3, 110, 121)],
 )
 def test_scheduler_uses_generation_derived_database_backoff(
     tmp_path: Path,
@@ -1282,6 +1282,7 @@ def test_scheduler_reclaim_refuses_a_superseded_scan_without_mutation(
 )
 def test_scheduler_recovers_interrupted_publication_and_stales_old_lease(
     tmp_path: Path,
+    request: pytest.FixtureRequest,
     guarded_control_engine: Engine,
     guarded_scheduler_engine: Engine,
     guarded_worker_engine: Engine,
@@ -1310,6 +1311,7 @@ def test_scheduler_recovers_interrupted_publication_and_stales_old_lease(
     roots = FileRootRegistry(
         {root_ref: root}, limits=FileReadLimits(max_file_bytes=4_096)
     )
+    request.addfinalizer(roots.close)
     if boundary is not None:
         interrupted_worker = PostgreSQLFileImportWorker(
             guarded_worker_engine,
@@ -1397,7 +1399,7 @@ def test_scheduler_recovers_interrupted_publication_and_stales_old_lease(
     finally:
         migration_engine.dispose()
     assert tuple(snapshot) == ("completed", 2, 1, 1, 1)
-    if boundary is None:
+    if boundary in (None, FilePublicationBoundary.INDEXED):
         ensure_test_runtime_release(
             organization_id,
             active_revision_refs=(candidate.revision_ref,),

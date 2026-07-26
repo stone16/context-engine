@@ -545,6 +545,10 @@ def test_issue_27_file_recovery_contract_is_generation_fenced_and_auditable() ->
         assert entry["functionOnlyMutation"]["directTableMutationAllowed"] is False
         assert entry["permittedOperations"]["context_engine_runtime"] == []
     assert history["immutableRows"]["events"] == ["UPDATE", "DELETE"]
+    assert history["functionOnlyMutation"]["definerRoles"] == [
+        "context_engine_worker_lease_definer",
+        "context_engine_file_dispatch_definer",
+    ]
     assert checkpoint["retention"]["sourceContent"] == "none"
 
     boundary_functions = {
