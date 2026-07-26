@@ -2304,6 +2304,86 @@ def test_recursive_file_path_revision_downgrades_and_reapplies_when_empty(
     assert _revision_rows(migration_configuration) == [HEAD_REVISION]
 
 
+def test_fragment_embedding_revision_downgrades_and_reapplies_when_empty(
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    alembic_configuration = Config(ROOT / "alembic.ini")
+
+    try:
+        command.downgrade(alembic_configuration, "20260726_0035")
+        assert _revision_rows(migration_configuration) == ["20260726_0035"]
+        engine = create_database_engine(migration_configuration)
+        try:
+            with engine.connect() as connection:
+                assert (
+                    connection.execute(
+                        text(
+                            "SELECT to_regclass("
+                            "'public.ix_context_fragment_embedding_hnsw')"
+                        )
+                    ).scalar_one()
+                    is None
+                )
+        finally:
+            engine.dispose()
+    finally:
+        command.upgrade(alembic_configuration, "head")
+
+    assert _revision_rows(migration_configuration) == [HEAD_REVISION]
+
+
+def test_fragment_embedding_revision_preserves_retained_fragments(
+    tmp_path: Path,
+    migration_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+    guarded_worker_engine: Engine,
+) -> None:
+    alembic_configuration = Config(ROOT / "alembic.ini")
+    scenario = _prepare_file_import_scenario(
+        tmp_path,
+        migration_configuration,
+        guarded_control_engine,
+    )
+    assert scenario.token is not None
+    _run_file_import(
+        scenario,
+        scenario.prepared,
+        scenario.token,
+        guarded_worker_engine,
+    )
+    try:
+        command.downgrade(alembic_configuration, "20260726_0035")
+        assert _revision_rows(migration_configuration) == ["20260726_0035"]
+        engine = create_database_engine(migration_configuration)
+        try:
+            with engine.connect() as connection:
+                retained = connection.execute(
+                    text(
+                        "SELECT count(*) FROM context_fragment "
+                        "WHERE organization_id = :organization_id"
+                    ),
+                    {"organization_id": scenario.organization_id},
+                ).scalar_one()
+                embedding_column = connection.execute(
+                    text(
+                        "SELECT count(*) FROM information_schema.columns "
+                        "WHERE table_schema = 'public' "
+                        "AND table_name = 'context_fragment' "
+                        "AND column_name = 'embedding'"
+                    )
+                ).scalar_one()
+            assert retained > 0
+            assert embedding_column == 0
+        finally:
+            engine.dispose()
+    finally:
+        command.upgrade(alembic_configuration, "head")
+        _delete_issue_27_upgrade_fixture(
+            migration_configuration,
+            scenario.organization_id,
+        )
+
+
 def test_recursive_file_path_revision_refuses_retained_nested_lineage(
     tmp_path: Path,
     migration_configuration: DatabaseConfiguration,
@@ -2864,7 +2944,7 @@ def test_recovery_upgrade_adopts_an_existing_ready_replacement(
     guarded_control_engine: Engine,
     guarded_worker_engine: Engine,
 ) -> None:
-    """An Issue #26 ready job remains resumable after the Issue #27 upgrade."""
+    """A pre-embedding ready Revision rewinds and resumes through embedding."""
 
     scenario = _prepare_file_import_scenario(
         tmp_path,
@@ -2977,7 +3057,7 @@ def test_recovery_upgrade_adopts_an_existing_ready_replacement(
                             "job_id": claims.job_id,
                         },
                     ).scalar_one()
-                    == "ready"
+                    == "acquired"
                 )
         finally:
             migration_engine.dispose()

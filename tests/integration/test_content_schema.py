@@ -771,6 +771,7 @@ def test_content_tables_have_force_rls_and_least_privilege_grants(
                 "ordinal",
                 "projection_kind",
                 "content",
+                "embedding",
             },
         }
         assert {

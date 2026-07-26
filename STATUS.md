@@ -93,6 +93,7 @@ Follow the ADR for its exact evidence boundary.
 | [0059](./docs/decisions/0059-dispatch-scheduled-file-imports-through-exact-leases.md) | Dispatch scheduled File imports through exact leases |
 | [0060](./docs/decisions/0060-reclaim-expired-file-imports-with-bounded-retries.md) | Reclaim expired File imports with bounded retries |
 | [0065](./docs/decisions/0065-recurse-file-discovery-with-anchored-descriptors.md) | Recurse File discovery through anchored descriptors under one bounded byte ceiling |
+| [0066](./docs/decisions/0066-embed-fragments-before-publication.md) | Embed newly published Fragments before activation through an explicit provider |
 
 ADR-0065 extends the active File Provider boundary from a flat root to
 deterministic recursive discovery of canonical nested Markdown paths. Each
@@ -105,6 +106,15 @@ PostgreSQL evidence covers nested publication plus mixed flat/nested replay.
 
 This does **not** activate provider polling/watchers, a full-resync mechanism,
 new delete authority, or any non-Markdown carrier.
+
+ADR-0066 adds one Supply-owned embedding seam to File publication. New Fragment
+rows receive validated 384-dimensional float32 vectors in the same durable
+publication boundary before activation; unchanged acquisitions and recovery
+past preparation do not call the provider again. The partial HNSW index is a
+future candidate-discovery implementation detail and has no authorization role.
+
+This does **not** activate vector retrieval, query embedding, historical
+backfill, or any Runtime/AuthorizationKernel change.
 
 ### Wire contract, SDK, and trusted delivery
 

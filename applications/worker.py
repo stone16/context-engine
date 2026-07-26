@@ -15,6 +15,11 @@ from uuid import UUID
 from sqlalchemy import Engine, text
 from sqlalchemy.exc import SQLAlchemyError
 
+from adapters.embeddings import (
+    DeterministicEmbeddingTwin,
+    ExternalEmbeddingConfiguration,
+    ExternalEmbeddingProvider,
+)
 from adapters.file_source import FileReadLimits, FileRootRegistry
 from engine import BUILD_IDENTIFIER
 from engine.control import FileImportReceiver, FileRootRef, SourceRef
@@ -38,6 +43,8 @@ from engine.persistence.worker_jobs import (
 from engine.runtime import Runtime
 from engine.runtime.construction import required_kernel_dependencies
 from engine.supply import (
+    CONTEXT_FRAGMENT_EMBEDDING_DIMENSION,
+    EmbeddingProvider,
     MarkdownCompilerConfig,
     WorkerLeaseCodec,
     WorkerLeaseKeyring,
@@ -48,6 +55,8 @@ from engine.supply import (
 _FILE_DISPATCH_POLL_SECONDS = 1.0
 DEFAULT_WORKER_MAX_FILE_BYTES = 1_048_576
 _WORKER_MAX_FILE_BYTES_ENV = "CONTEXT_ENGINE_WORKER_MAX_FILE_BYTES"
+_WORKER_EMBEDDING_PROVIDER_ENV = "CONTEXT_ENGINE_WORKER_EMBEDDING_PROVIDER"
+_WORKER_EMBEDDING_DIMENSION_ENV = "CONTEXT_ENGINE_WORKER_EMBEDDING_DIMENSION"
 
 
 class WorkerNoOpCompletionAuthority(Protocol):
@@ -140,6 +149,24 @@ def _required_environment(name: str) -> str:
     return value
 
 
+def _required_bounded_integer_environment(
+    name: str,
+    *,
+    minimum: int,
+    maximum: int,
+) -> int:
+    raw_value = _required_environment(name)
+    if not raw_value.isascii() or not raw_value.isdecimal():
+        raise ValueError("Supply worker configuration is not available")
+    try:
+        value = int(raw_value)
+    except ValueError:
+        raise ValueError("Supply worker configuration is not available") from None
+    if not minimum <= value <= maximum:
+        raise ValueError("Supply worker configuration is not available")
+    return value
+
+
 def _file_read_limits() -> FileReadLimits:
     raw_limit = os.environ.get(_WORKER_MAX_FILE_BYTES_ENV)
     if raw_limit is None:
@@ -150,6 +177,47 @@ def _file_read_limits() -> FileReadLimits:
         return FileReadLimits(max_file_bytes=int(raw_limit))
     except ValueError:
         raise ValueError("Supply worker configuration is not available") from None
+
+
+def _embedding_provider() -> EmbeddingProvider:
+    """Compose the explicit CI twin or one environment-only external provider."""
+
+    mode = _required_environment(_WORKER_EMBEDDING_PROVIDER_ENV)
+    raw_dimension = _required_environment(_WORKER_EMBEDDING_DIMENSION_ENV)
+    if not raw_dimension.isdecimal():
+        raise ValueError("Supply worker configuration is not available")
+    try:
+        dimension = int(raw_dimension)
+    except ValueError:
+        raise ValueError("Supply worker configuration is not available") from None
+    if dimension != CONTEXT_FRAGMENT_EMBEDDING_DIMENSION:
+        raise ValueError("Supply worker configuration is not available")
+    if mode == "twin":
+        return DeterministicEmbeddingTwin(dimension)
+    if mode != "external":
+        raise ValueError("Supply worker configuration is not available")
+    raw_timeout = os.environ.get("CONTEXT_ENGINE_WORKER_EMBEDDING_TIMEOUT_SECONDS")
+    if raw_timeout is None:
+        timeout_seconds = 30.0
+    else:
+        try:
+            timeout_seconds = float(raw_timeout)
+        except ValueError:
+            raise ValueError("Supply worker configuration is not available") from None
+    return ExternalEmbeddingProvider(
+        ExternalEmbeddingConfiguration(
+            endpoint=_required_environment("CONTEXT_ENGINE_WORKER_EMBEDDING_ENDPOINT"),
+            model=_required_environment("CONTEXT_ENGINE_WORKER_EMBEDDING_MODEL"),
+            api_key=_required_environment("CONTEXT_ENGINE_WORKER_EMBEDDING_API_KEY"),
+            dimension=dimension,
+            batch_size=_required_bounded_integer_environment(
+                "CONTEXT_ENGINE_WORKER_EMBEDDING_BATCH_SIZE",
+                minimum=1,
+                maximum=256,
+            ),
+            timeout_seconds=timeout_seconds,
+        )
+    )
 
 
 def _run_one_file_import() -> int:
@@ -180,6 +248,7 @@ def _run_one_file_import() -> int:
             ),
             roots,
             MarkdownCompilerConfig("markdown-config-v1"),
+            embedding_provider=_embedding_provider(),
             clock=lambda: datetime.now(UTC).replace(microsecond=0),
         ).run(
             FileImportLeaseRedemption(
@@ -289,6 +358,7 @@ def _worker_database_time(engine: Engine) -> datetime:
 def _run_file_dispatch(*, single_cycle: bool) -> int:
     """Run configured autonomous File dispatch without caller routing facts."""
 
+    embedding_provider = _embedding_provider()
     codec = WorkerLeaseCodec(
         WorkerLeaseKeyring(active_version=1, keys={1: _worker_signing_key()})
     )
@@ -319,6 +389,7 @@ def _run_file_dispatch(*, single_cycle: bool) -> int:
                 receiver,
                 roots,
                 MarkdownCompilerConfig("markdown-config-v1"),
+                embedding_provider=embedding_provider,
                 clock=lambda: _worker_database_time(worker_engine),
             )
 

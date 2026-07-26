@@ -7,6 +7,14 @@ from engine.control.file_imports import (
     PreparedFileImport,
     PrepareFileImport,
 )
+from engine.supply.embeddings import (
+    CONTEXT_FRAGMENT_EMBEDDING_DIMENSION,
+    EmbeddingProfile,
+    EmbeddingProvider,
+    EmbeddingProviderUnavailable,
+    EmbeddingVector,
+    validate_embedding_batch,
+)
 from engine.supply.jobs import (
     FILE_IMPORT_WORKER_LEASE_OPERATION,
     WORKER_LEASE_ACTOR_KIND,
@@ -50,6 +58,7 @@ from engine.supply.markdown import (
 )
 
 __all__ = [
+    "CONTEXT_FRAGMENT_EMBEDDING_DIMENSION",
     "MARKDOWN_CANONICALIZATION_PROFILE",
     "MARKDOWN_CODE_LANGUAGE_MAX_LENGTH",
     "MARKDOWN_CANONICALIZATION_V1_PROFILE",
@@ -66,6 +75,10 @@ __all__ = [
     "CompilationProvenance",
     "CompilationWarning",
     "CompilationWarningCode",
+    "EmbeddingProfile",
+    "EmbeddingProvider",
+    "EmbeddingProviderUnavailable",
+    "EmbeddingVector",
     "CompiledFragment",
     "FileImportAudience",
     "FileImportPath",
@@ -92,4 +105,5 @@ __all__ = [
     "canonicalize_parsed_document",
     "worker_lease_digest",
     "worker_lease_nonce_digest",
+    "validate_embedding_batch",
 ]

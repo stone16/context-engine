@@ -699,6 +699,8 @@ def _published_file_scenario(
         worker_signing_key = bytes(range(32)).hex()
         worker_environment = {
             **os.environ,
+            "CONTEXT_ENGINE_WORKER_EMBEDDING_PROVIDER": "twin",
+            "CONTEXT_ENGINE_WORKER_EMBEDDING_DIMENSION": "384",
             "CONTEXT_ENGINE_WORKER_DATABASE_URL": worker_database_url,
             "CONTEXT_ENGINE_WORKER_FILE_ROOT_PATH": str(scenario.root),
             "CONTEXT_ENGINE_WORKER_FILE_ROOT_REF": scenario.root_ref.value,

@@ -20,6 +20,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import Connection, Engine, event, text
 from sqlalchemy.exc import DBAPIError, SQLAlchemyError
 
+from adapters.embeddings import DeterministicEmbeddingTwin
 from adapters.exact_phrase import PostgreSQLExactPhraseCandidateIndex
 from adapters.file_source import FileChangeProvider, FileReadLimits, FileRootRegistry
 from adapters.http.app import create_app
@@ -622,6 +623,7 @@ def test_control_executes_a_nonterminal_current_delete_observation(
             receiver,
             worker_roots,
             MarkdownCompilerConfig("markdown-config-v1"),
+            embedding_provider=DeterministicEmbeddingTwin(),
             clock=lambda: datetime.now(UTC).replace(microsecond=0),
         )
         publications = [
@@ -1778,6 +1780,7 @@ def test_control_accepts_delete_observations_without_visibility_effect(
             receiver,
             worker_roots,
             MarkdownCompilerConfig("markdown-config-v1"),
+            embedding_provider=DeterministicEmbeddingTwin(),
             clock=lambda: datetime.now(UTC).replace(microsecond=0),
         )
         published_deletes = {
@@ -3103,6 +3106,7 @@ def test_control_atomically_schedules_exact_accepted_file_upserts(
             receiver,
             worker_roots,
             MarkdownCompilerConfig("markdown-config-v1"),
+            embedding_provider=DeterministicEmbeddingTwin(),
             clock=lambda: datetime.now(UTC).replace(microsecond=0),
         ).run(
             FileImportLeaseRedemption(
@@ -3164,6 +3168,7 @@ def test_control_atomically_schedules_exact_accepted_file_upserts(
             receiver,
             worker_roots,
             MarkdownCompilerConfig("markdown-config-v1"),
+            embedding_provider=DeterministicEmbeddingTwin(),
             clock=lambda: datetime.now(UTC).replace(microsecond=0),
         ).run(
             FileImportLeaseRedemption(
@@ -3337,6 +3342,7 @@ def test_scheduled_file_missing_after_acceptance_fails_before_publication(
             receiver,
             worker_roots,
             MarkdownCompilerConfig("markdown-config-v1"),
+            embedding_provider=DeterministicEmbeddingTwin(),
             clock=lambda: datetime.now(UTC).replace(microsecond=0),
         ).run(
             FileImportLeaseRedemption(
@@ -3671,6 +3677,7 @@ def test_file_change_scheduling_allows_current_epoch_pages_and_refuses_supersede
             receiver,
             worker_roots,
             MarkdownCompilerConfig("markdown-config-v1"),
+            embedding_provider=DeterministicEmbeddingTwin(),
             clock=lambda: datetime.now(UTC).replace(microsecond=0),
         ).run(
             FileImportLeaseRedemption(
@@ -3751,6 +3758,7 @@ def test_file_change_scheduling_allows_current_epoch_pages_and_refuses_supersede
             receiver,
             worker_roots,
             MarkdownCompilerConfig("markdown-config-v1"),
+            embedding_provider=DeterministicEmbeddingTwin(),
             clock=lambda: datetime.now(UTC).replace(microsecond=0),
         ).run(
             FileImportLeaseRedemption(
@@ -3932,6 +3940,7 @@ def test_scheduled_redeem_waits_for_progress_before_offboard_job_fence(
                 receiver,
                 worker_roots,
                 MarkdownCompilerConfig("markdown-config-v1"),
+                embedding_provider=DeterministicEmbeddingTwin(),
                 clock=lambda: datetime.now(UTC).replace(microsecond=0),
             )
 
@@ -4135,6 +4144,7 @@ def test_scheduled_redeem_rechecks_expiry_after_waiting_for_progress(
                 receiver,
                 worker_roots,
                 MarkdownCompilerConfig("markdown-config-v1"),
+                embedding_provider=DeterministicEmbeddingTwin(),
                 clock=lambda: datetime.now(UTC).replace(microsecond=0),
             )
             with ThreadPoolExecutor(max_workers=1) as executor:
@@ -4317,6 +4327,7 @@ def test_scheduled_pages_reuse_unchanged_and_replaced_publication_paths(
                 receiver,
                 worker_roots,
                 MarkdownCompilerConfig("markdown-config-v1"),
+                embedding_provider=DeterministicEmbeddingTwin(),
                 clock=lambda: datetime.now(UTC).replace(microsecond=0),
             ).run(
                 FileImportLeaseRedemption(

@@ -20,6 +20,7 @@ from sqlalchemy import Engine, create_engine, text
 from sqlalchemy.exc import DBAPIError
 from uvicorn import Config, Server
 
+from adapters.embeddings import DeterministicEmbeddingTwin
 from adapters.exact_phrase import PostgreSQLExactPhraseCandidateIndex
 from adapters.file_source import FileChangeProvider, FileReadLimits, FileRootRegistry
 from adapters.http.app import create_app
@@ -84,6 +85,10 @@ from tests.support.releases import (
 pytestmark = pytest.mark.integration
 ROOT = Path(__file__).parents[2]
 SIGNING_KEY = b"issue-91-file-dispatch-key-00001"
+EMBEDDING_ENVIRONMENT = {
+    "CONTEXT_ENGINE_WORKER_EMBEDDING_PROVIDER": "twin",
+    "CONTEXT_ENGINE_WORKER_EMBEDDING_DIMENSION": "384",
+}
 ALL_TEST_ROOTS = ("dispatch-root",)
 
 
@@ -1319,6 +1324,7 @@ def test_scheduler_recovers_interrupted_publication_and_stales_old_lease(
             FileImportReceiver(first.service_principal_id),
             roots,
             MarkdownCompilerConfig("markdown-config-v1"),
+            embedding_provider=DeterministicEmbeddingTwin(),
             clock=lambda: first.issued_at,
             interrupt_after=boundary,
         )
@@ -1340,6 +1346,7 @@ def test_scheduler_recovers_interrupted_publication_and_stales_old_lease(
             ["context-engine-worker", "--dispatch-file-once"],
             env={
                 **os.environ,
+                **EMBEDDING_ENVIRONMENT,
                 "CONTEXT_ENGINE_WORKER_LEASE_SIGNING_KEY_HEX": SIGNING_KEY.hex(),
                 "CONTEXT_ENGINE_WORKER_FILE_ROOTS_JSON": json.dumps(
                     {root_ref.value: str(root)}
@@ -1363,6 +1370,7 @@ def test_scheduler_recovers_interrupted_publication_and_stales_old_lease(
             FileImportReceiver(first.service_principal_id),
             roots,
             MarkdownCompilerConfig("markdown-config-v1"),
+            embedding_provider=DeterministicEmbeddingTwin(),
             clock=lambda: first.issued_at,
         )
         with pytest.raises(WorkNotAvailable):
@@ -1544,6 +1552,7 @@ def test_autonomous_replacement_reclaim_is_all_old_then_all_new_over_sdk(
         receiver,
         roots,
         MarkdownCompilerConfig("markdown-config-v1"),
+        embedding_provider=DeterministicEmbeddingTwin(),
         clock=lambda: old_claim.issued_at,
     ).run(old_claim.redemption)
     with _authorize(
@@ -1597,6 +1606,7 @@ def test_autonomous_replacement_reclaim_is_all_old_then_all_new_over_sdk(
             receiver,
             roots,
             MarkdownCompilerConfig("markdown-config-v1"),
+            embedding_provider=DeterministicEmbeddingTwin(),
             clock=lambda: new_claim.issued_at,
             interrupt_after=FilePublicationBoundary.INDEXED,
         ).run(new_claim.redemption)
@@ -1704,6 +1714,7 @@ def test_autonomous_replacement_reclaim_is_all_old_then_all_new_over_sdk(
             ["context-engine-worker", "--dispatch-file-once"],
             env={
                 **os.environ,
+                **EMBEDDING_ENVIRONMENT,
                 "CONTEXT_ENGINE_WORKER_LEASE_SIGNING_KEY_HEX": SIGNING_KEY.hex(),
                 "CONTEXT_ENGINE_WORKER_FILE_ROOTS_JSON": json.dumps(
                     {source.source_version.root_ref.value: str(root)}
@@ -2556,6 +2567,7 @@ def test_independent_worker_process_dispatches_and_publishes_one_job(
         ["context-engine-worker", "--dispatch-file-once"],
         env={
             **os.environ,
+            **EMBEDDING_ENVIRONMENT,
             "CONTEXT_ENGINE_WORKER_LEASE_SIGNING_KEY_HEX": SIGNING_KEY.hex(),
             "CONTEXT_ENGINE_WORKER_FILE_ROOTS_JSON": json.dumps(
                 {root_ref.value: str(root)}
@@ -2578,6 +2590,7 @@ def test_independent_worker_process_dispatches_and_publishes_one_job(
         ["context-engine-worker", "--dispatch-file-once"],
         env={
             **os.environ,
+            **EMBEDDING_ENVIRONMENT,
             "CONTEXT_ENGINE_WORKER_LEASE_SIGNING_KEY_HEX": SIGNING_KEY.hex(),
             "CONTEXT_ENGINE_WORKER_FILE_ROOTS_JSON": json.dumps(
                 {root_ref.value: str(root)}
@@ -2740,6 +2753,7 @@ def test_independent_worker_publishes_nested_markdown_fragment_lineage(
         ["context-engine-worker", "--dispatch-file-once"],
         env={
             **os.environ,
+            **EMBEDDING_ENVIRONMENT,
             "CONTEXT_ENGINE_WORKER_LEASE_SIGNING_KEY_HEX": SIGNING_KEY.hex(),
             "CONTEXT_ENGINE_WORKER_FILE_ROOTS_JSON": json.dumps(
                 {root_ref.value: str(root)}
@@ -2802,6 +2816,7 @@ def test_long_running_dispatch_process_exits_cleanly_on_sigterm(
         ["context-engine-worker", "--dispatch-files"],
         env={
             **os.environ,
+            **EMBEDDING_ENVIRONMENT,
             "CONTEXT_ENGINE_WORKER_LEASE_SIGNING_KEY_HEX": SIGNING_KEY.hex(),
             "CONTEXT_ENGINE_WORKER_FILE_ROOTS_JSON": json.dumps(
                 {"empty-process-root": str(root)}

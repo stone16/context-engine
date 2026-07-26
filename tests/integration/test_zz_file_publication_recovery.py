@@ -11,6 +11,7 @@ import pytest
 from sqlalchemy import Engine, text
 from sqlalchemy.exc import SQLAlchemyError
 
+from adapters.embeddings import DeterministicEmbeddingTwin
 from adapters.file_source import FileReadLimits, FileRootRegistry
 from adapters.parsers.markdown import compile_markdown
 from engine.control import FileRootRef
@@ -76,6 +77,7 @@ def _worker(
             limits=FileReadLimits(max_file_bytes=4096),
         ),
         MarkdownCompilerConfig(config_version),
+        embedding_provider=DeterministicEmbeddingTwin(),
         clock=lambda: datetime.now(UTC).replace(microsecond=0),
         interrupt_after=interrupt_after,
     )

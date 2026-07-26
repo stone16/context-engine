@@ -12,9 +12,11 @@ import pytest
 from sqlalchemy import Engine
 from sqlalchemy.exc import SQLAlchemyError
 
+from adapters.embeddings import DeterministicEmbeddingTwin, ExternalEmbeddingProvider
 from applications.worker import (
     DEFAULT_WORKER_MAX_FILE_BYTES,
     FileDispatchCycleResult,
+    _embedding_provider,
     _file_dispatch_roots,
     _file_read_limits,
     _worker_database_time,
@@ -31,6 +33,7 @@ from engine.persistence.worker_jobs import (
     _database_timestamp_utc,
 )
 from engine.supply import (
+    CONTEXT_FRAGMENT_EMBEDDING_DIMENSION,
     WorkerLeaseCodec,
     WorkerLeaseKeyring,
     WorkerLeaseRejectionAuditReceipt,
@@ -283,6 +286,95 @@ def test_worker_file_byte_limit_defaults_to_one_mib_and_is_configurable(
 
     monkeypatch.setenv("CONTEXT_ENGINE_WORKER_MAX_FILE_BYTES", "8192")
     assert _file_read_limits().max_file_bytes == 8192
+
+
+def test_worker_composes_only_explicit_fixed_dimension_embedding_twin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CONTEXT_ENGINE_WORKER_EMBEDDING_PROVIDER", "twin")
+    monkeypatch.setenv(
+        "CONTEXT_ENGINE_WORKER_EMBEDDING_DIMENSION",
+        str(CONTEXT_FRAGMENT_EMBEDDING_DIMENSION),
+    )
+
+    provider = _embedding_provider()
+
+    assert type(provider) is DeterministicEmbeddingTwin
+    assert provider.profile.dimension == CONTEXT_FRAGMENT_EMBEDDING_DIMENSION
+
+
+def test_worker_external_embedding_configuration_keeps_key_out_of_repr(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CONTEXT_ENGINE_WORKER_EMBEDDING_PROVIDER", "external")
+    monkeypatch.setenv(
+        "CONTEXT_ENGINE_WORKER_EMBEDDING_DIMENSION",
+        str(CONTEXT_FRAGMENT_EMBEDDING_DIMENSION),
+    )
+    monkeypatch.setenv(
+        "CONTEXT_ENGINE_WORKER_EMBEDDING_ENDPOINT",
+        "https://embedding.invalid/v1/embeddings",
+    )
+    monkeypatch.setenv("CONTEXT_ENGINE_WORKER_EMBEDDING_MODEL", "configured-model")
+    monkeypatch.setenv("CONTEXT_ENGINE_WORKER_EMBEDDING_API_KEY", "credential-value")
+    monkeypatch.setenv("CONTEXT_ENGINE_WORKER_EMBEDDING_BATCH_SIZE", "64")
+
+    provider = _embedding_provider()
+
+    assert type(provider) is ExternalEmbeddingProvider
+    assert "credential-value" not in repr(provider)
+
+
+@pytest.mark.parametrize("batch_size", ["", "0", "257", "not-a-number"])
+def test_worker_refuses_missing_or_unbounded_external_embedding_batch_size(
+    monkeypatch: pytest.MonkeyPatch,
+    batch_size: str,
+) -> None:
+    monkeypatch.setenv("CONTEXT_ENGINE_WORKER_EMBEDDING_PROVIDER", "external")
+    monkeypatch.setenv(
+        "CONTEXT_ENGINE_WORKER_EMBEDDING_DIMENSION",
+        str(CONTEXT_FRAGMENT_EMBEDDING_DIMENSION),
+    )
+    monkeypatch.setenv(
+        "CONTEXT_ENGINE_WORKER_EMBEDDING_ENDPOINT",
+        "https://embedding.invalid/v1/embeddings",
+    )
+    monkeypatch.setenv("CONTEXT_ENGINE_WORKER_EMBEDDING_MODEL", "configured-model")
+    monkeypatch.setenv("CONTEXT_ENGINE_WORKER_EMBEDDING_API_KEY", "credential-value")
+    if batch_size:
+        monkeypatch.setenv("CONTEXT_ENGINE_WORKER_EMBEDDING_BATCH_SIZE", batch_size)
+    else:
+        monkeypatch.delenv(
+            "CONTEXT_ENGINE_WORKER_EMBEDDING_BATCH_SIZE",
+            raising=False,
+        )
+
+    with pytest.raises(ValueError, match="configuration is not available"):
+        _embedding_provider()
+
+
+@pytest.mark.parametrize(
+    ("mode", "dimension"),
+    [
+        ("", str(CONTEXT_FRAGMENT_EMBEDDING_DIMENSION)),
+        ("automatic", str(CONTEXT_FRAGMENT_EMBEDDING_DIMENSION)),
+        ("twin", str(CONTEXT_FRAGMENT_EMBEDDING_DIMENSION - 1)),
+        ("twin", "not-a-number"),
+    ],
+)
+def test_worker_refuses_missing_unknown_or_mismatched_embedding_configuration(
+    monkeypatch: pytest.MonkeyPatch,
+    mode: str,
+    dimension: str,
+) -> None:
+    if mode:
+        monkeypatch.setenv("CONTEXT_ENGINE_WORKER_EMBEDDING_PROVIDER", mode)
+    else:
+        monkeypatch.delenv("CONTEXT_ENGINE_WORKER_EMBEDDING_PROVIDER", raising=False)
+    monkeypatch.setenv("CONTEXT_ENGINE_WORKER_EMBEDDING_DIMENSION", dimension)
+
+    with pytest.raises(ValueError, match="configuration is not available"):
+        _embedding_provider()
 
 
 def test_worker_default_file_limit_accepts_above_legacy_ceiling_and_refuses_oversize(
