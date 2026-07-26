@@ -30,14 +30,6 @@ from engine.supply import (
     WorkNotAvailable,
     canonicalize_parsed_document,
 )
-from tests.integration.test_file_import_tracer import (
-    _FileImportScenario,
-    _prepare_file_import_scenario,
-    _prepare_repeat_file_import,
-    _redeem_direct,
-    _run_file_import,
-    _scenario_claims,
-)
 from tests.integration.test_zz_file_revision_replacement import (
     NEW_MARKDOWN,
     NEW_V1_MARKDOWN,
@@ -45,6 +37,24 @@ from tests.integration.test_zz_file_revision_replacement import (
     OLD_V1_MARKDOWN,
     _resolve,
     _scenario_user_id,
+)
+from tests.support.file_imports import (
+    FileImportScenario as _FileImportScenario,
+)
+from tests.support.file_imports import (
+    prepare_file_import_scenario as _prepare_file_import_scenario,
+)
+from tests.support.file_imports import (
+    prepare_repeat_file_import as _prepare_repeat_file_import,
+)
+from tests.support.file_imports import (
+    redeem_file_import_direct as _redeem_direct,
+)
+from tests.support.file_imports import (
+    run_file_import as _run_file_import,
+)
+from tests.support.file_imports import (
+    scenario_claims as _scenario_claims,
 )
 
 pytestmark = pytest.mark.integration

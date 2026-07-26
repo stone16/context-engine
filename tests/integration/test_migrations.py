@@ -60,17 +60,27 @@ from tests.integration.test_context_run_schema import (
     LineageIdentity,
     insert_context_run,
 )
-from tests.integration.test_file_import_tracer import (
-    NOW,
-    _ControlAuthenticator,
-    _prepare_file_import_scenario,
-    _prepare_repeat_file_import,
-    _run_file_import,
-    _scenario_claims,
-)
 from tests.integration.test_zz_file_resource_tombstone import _tombstone
 from tests.integration.test_zz_file_revision_replacement import NEW_MARKDOWN
 from tests.integration.test_zz_file_source_offboarding import _offboard
+from tests.support.file_imports import (
+    NOW,
+)
+from tests.support.file_imports import (
+    ControlAuthenticator as _ControlAuthenticator,
+)
+from tests.support.file_imports import (
+    prepare_file_import_scenario as _prepare_file_import_scenario,
+)
+from tests.support.file_imports import (
+    prepare_repeat_file_import as _prepare_repeat_file_import,
+)
+from tests.support.file_imports import (
+    run_file_import as _run_file_import,
+)
+from tests.support.file_imports import (
+    scenario_claims as _scenario_claims,
+)
 from tests.support.file_source_progress import clear_file_source_progress_projection
 from tests.support.migrations import HEAD_REVISION
 

@@ -32,10 +32,14 @@ from engine.runtime.citation import (
     redeem_citation_open_ref,
 )
 from engine.runtime.contracts import CitationOpenRef
-from tests.integration.test_file_import_tracer import (
-    _FileImportScenario,
-    _prepare_file_import_scenario,
-    _run_file_import,
+from tests.support.file_imports import (
+    FileImportScenario as _FileImportScenario,
+)
+from tests.support.file_imports import (
+    prepare_file_import_scenario as _prepare_file_import_scenario,
+)
+from tests.support.file_imports import (
+    run_file_import as _run_file_import,
 )
 
 pytestmark = pytest.mark.integration
