@@ -37,6 +37,9 @@ _CATEGORIES = (
     "unsupported_construct",
     "unsupported_document_shape",
 )
+_CATEGORY_SQL = ",\n                ".join(
+    f"'{category}'" for category in _CATEGORIES
+)
 
 
 def _create_category_fail_function() -> None:
@@ -59,9 +62,7 @@ def _create_category_fail_function() -> None:
             IF SESSION_USER <> '{_WORKER}' THEN RETURN false; END IF;
             IF requested_compilation_refusal_category IS NULL
                OR requested_compilation_refusal_category NOT IN (
-                'invalid_utf8',
-                'unsupported_construct',
-                'unsupported_document_shape'
+                {_CATEGORY_SQL}
             )
             THEN RETURN false; END IF;
             PERFORM pg_catalog.pg_advisory_xact_lock_shared(
@@ -225,6 +226,9 @@ def _create_status_function() -> None:
             FROM status
             LEFT JOIN refusals ON true
             ORDER BY refusals.relative_path COLLATE "C";
+            PERFORM pg_catalog.set_config(
+                'app.file_status_source_id', '', true
+            );
         END;
         $function$
         """
