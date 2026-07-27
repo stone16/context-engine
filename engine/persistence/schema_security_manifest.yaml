@@ -521,7 +521,7 @@
       "directTableMutationAllowed": false,
       "databaseOwnedTime": true,
       "rawNonceComparedAsSha256": true,
-      "migrationFence": "shared context-engine.file-status-migration-fence plus retained-column recheck; downgrade holds the exclusive fence before retained-state inspection",
+      "migrationFence": "shared context-engine.file-status-migration-fence plus retained-column recheck; downgrade preserves scheduling -> dispatch -> status exclusive-fence order before retained-state inspection",
       "retainedCompilationRefusalCategoryAllowed": true,
       "sourceContentOrCompilerInternalsPersistenceAllowed": false,
       "atomicWrites": [

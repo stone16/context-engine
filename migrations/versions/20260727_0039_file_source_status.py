@@ -28,6 +28,10 @@ _FAIL_SIGNATURE = (
 _STATUS = "context_control_read_file_source_status"
 _STATUS_SIGNATURE = "(uuid, uuid)"
 _MIGRATION_FENCE = "context-engine.file-status-migration-fence"
+_UPSTREAM_MIGRATION_FENCES = (
+    "context-engine.file-change-scheduling-migration-fence",
+    "context-engine.file-dispatch-migration-fence",
+)
 _CATEGORIES = (
     "invalid_utf8",
     "unsupported_construct",
@@ -281,10 +285,11 @@ def upgrade() -> None:
 def downgrade() -> None:
     """Remove status only when no retained category would be discarded."""
 
-    op.execute(
-        "SELECT pg_catalog.pg_advisory_xact_lock("
-        f"pg_catalog.hashtextextended('{_MIGRATION_FENCE}', 0))"
-    )
+    for migration_fence in (*_UPSTREAM_MIGRATION_FENCES, _MIGRATION_FENCE):
+        op.execute(
+            "SELECT pg_catalog.pg_advisory_xact_lock("
+            f"pg_catalog.hashtextextended('{migration_fence}', 0))"
+        )
     retained = (
         op.get_bind()
         .execute(

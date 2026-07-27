@@ -45,9 +45,11 @@ receive the same generic `FileImportRefused`.
 
 Category-bearing failure holds a shared File-status migration fence and
 rechecks that its retained column still exists before the terminal transition.
-Downgrade holds the matching exclusive fence before checking retained state,
-so it either observes an earlier category and refuses or prevents an old
-function body from writing after the column is removed.
+Downgrade first holds the established scheduling and dispatch fences, then the
+matching exclusive status fence before checking retained state. This preserves
+the older File migration lock order while ensuring downgrade either observes an
+earlier category and refuses or prevents an old function body from writing
+after the column is removed.
 
 Status derives refusals only for upsert paths in the latest complete scan of the
 active SourceVersion and binds each result to that exact path, SHA-256, and byte
