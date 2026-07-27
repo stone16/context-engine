@@ -33,12 +33,13 @@ dev = [
 
 [project.scripts]
 context-engine-api = "applications.api:main"
+context-engine-control = "applications.control:main"
 context-engine-dogfood-seed = "applications.dogfood:main"
 context-engine-dogfood-eval = "applications.dogfood_evaluation:main"
 context-engine-worker = "applications.worker:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["engine", "adapters", "applications"]
+packages = ["engine", "adapters", "applications", "migrations"]
 
 [tool.mypy]
 python_version = "3.13"

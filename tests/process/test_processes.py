@@ -13,15 +13,122 @@ from urllib.request import Request, urlopen
 from uuid import UUID
 
 import pytest
+from sqlalchemy import text
 
 from engine import BUILD_IDENTIFIER
+from engine.persistence import (
+    DatabasePurpose,
+    create_database_engine,
+    load_database_configuration,
+)
 from tests.process.conformance_app import (
     PROCESS_ORGANIZATION_REF,
     PROCESS_VALID_TOKEN,
 )
+from tests.support.migrations import HEAD_REVISION
 from tests.support.releases import active_runtime_release
 
 ROOT = Path(__file__).parents[2]
+
+
+def _database_environment() -> dict[str, str]:
+    environment_path = ROOT / ".context-engine" / "database.env"
+    return dict(
+        line.split("=", maxsplit=1)
+        for line in environment_path.read_text(encoding="utf-8").splitlines()
+    )
+
+
+def test_control_process_help_and_unknown_subcommand() -> None:
+    help_result = subprocess.run(
+        ["context-engine-control", "--help"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert "migrate" in help_result.stdout
+
+    unknown = subprocess.run(
+        ["context-engine-control", "not-a-command"],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert unknown.returncode != 0
+    assert "not-a-command" in unknown.stderr
+
+
+def test_control_process_migrates_to_head_and_is_idempotent() -> None:
+    database_environment = _database_environment()
+    process_environment = {
+        **os.environ,
+        "CONTEXT_ENGINE_MIGRATOR_ROLE": database_environment[
+            "CONTEXT_ENGINE_MIGRATOR_ROLE"
+        ],
+        "CONTEXT_ENGINE_MIGRATION_DATABASE_URL": database_environment[
+            "CONTEXT_ENGINE_MIGRATION_DATABASE_URL"
+        ],
+    }
+    command = ["context-engine-control", "migrate"]
+
+    first = subprocess.run(
+        command,
+        cwd=ROOT,
+        env=process_environment,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    second = subprocess.run(
+        command,
+        cwd=ROOT,
+        env=process_environment,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert first.stdout == second.stdout == f"{HEAD_REVISION}\n"
+    assert first.stderr == second.stderr == ""
+
+    configuration = load_database_configuration(
+        DatabasePurpose.MIGRATION, database_environment
+    )
+    engine = create_database_engine(configuration)
+    try:
+        with engine.connect() as connection:
+            assert connection.execute(
+                text("SELECT version_num FROM alembic_version")
+            ).scalar_one() == HEAD_REVISION
+    finally:
+        engine.dispose()
+
+
+def test_control_process_refuses_a_non_migration_configuration_generically() -> None:
+    database_environment = _database_environment()
+    process_environment = {
+        **os.environ,
+        "CONTEXT_ENGINE_MIGRATOR_ROLE": database_environment[
+            "CONTEXT_ENGINE_MIGRATOR_ROLE"
+        ],
+        "CONTEXT_ENGINE_MIGRATION_DATABASE_URL": database_environment[
+            "CONTEXT_ENGINE_RUNTIME_DATABASE_URL"
+        ],
+    }
+    refused = subprocess.run(
+        ["context-engine-control", "migrate"],
+        cwd=ROOT,
+        env=process_environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    rendered = refused.stdout + refused.stderr
+    assert refused.returncode != 0
+    assert refused.stdout == ""
+    assert refused.stderr == "context-engine-control: migration refused\n"
+    assert database_environment["CONTEXT_ENGINE_RUNTIME_DATABASE_URL"] not in rendered
 
 
 def _wait_until_ready(process: subprocess.Popen[str], port: int) -> None:

@@ -5,7 +5,7 @@ from __future__ import annotations
 from logging.config import fileConfig
 
 from alembic import context
-from sqlalchemy import engine_from_config, pool
+from sqlalchemy import Connection, engine_from_config, pool
 
 from engine.persistence.configuration import (
     DatabasePurpose,
@@ -41,6 +41,18 @@ def run_migrations_offline() -> None:
 
 def run_migrations_online() -> None:
     """Run migrations through the reviewed migrator and a one-shot pool."""
+
+    supplied_connection = configuration.attributes.get("connection")
+    if supplied_connection is not None:
+        if not isinstance(supplied_connection, Connection):
+            raise TypeError("Alembic connection attribute must be a Connection")
+        context.configure(
+            connection=supplied_connection,
+            target_metadata=target_metadata,
+        )
+        with context.begin_transaction():
+            context.run_migrations()
+        return
 
     connectable = engine_from_config(
         _migration_section(),
