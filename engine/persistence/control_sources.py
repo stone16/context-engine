@@ -941,9 +941,8 @@ class PostgreSQLControlStore:
                     ),
                     pending_change_schedules=tuple(
                         PendingFileChangeSchedule(
-                            source_version_ref=cast(
-                                UUID,
-                                document["source_version_ref"],
+                            source_version_ref=UUID(
+                                cast(str, document["source_version_ref"]),
                             ),
                             page_ref=cast(str, document["page_ref"]),
                         )
