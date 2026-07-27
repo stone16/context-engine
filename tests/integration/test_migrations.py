@@ -2369,6 +2369,63 @@ def test_direct_file_change_activation_revision_downgrades_and_reapplies(
     assert "selected_capabilities NOT IN" in definition()
 
 
+def test_pending_file_schedule_projection_revision_downgrades_and_reapplies(
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    """Issue #112 adds only one reversible read-only reconciliation function."""
+
+    alembic_configuration = Config(ROOT / "alembic.ini")
+    try:
+        command.downgrade(alembic_configuration, "20260727_0037")
+        assert _revision_rows(migration_configuration) == ["20260727_0037"]
+        engine = create_database_engine(migration_configuration)
+        try:
+            with engine.connect() as connection:
+                assert connection.execute(
+                    text(
+                        """
+                        SELECT to_regprocedure(
+                          'public.context_control_read_pending_file_change_schedules(uuid,uuid)'
+                        ) IS NULL
+                        """
+                    )
+                ).scalar_one() is True
+        finally:
+            engine.dispose()
+    finally:
+        command.upgrade(alembic_configuration, "head")
+
+    assert _revision_rows(migration_configuration) == [HEAD_REVISION]
+    engine = create_database_engine(migration_configuration)
+    try:
+        with engine.connect() as connection:
+            assert connection.execute(
+                text(
+                    """
+                    SELECT ARRAY[
+                      has_function_privilege(
+                        'context_engine_control',
+                        'public.context_control_read_pending_file_change_schedules(uuid,uuid)',
+                        'EXECUTE'
+                      ),
+                      has_function_privilege(
+                        'context_engine_runtime',
+                        'public.context_control_read_pending_file_change_schedules(uuid,uuid)',
+                        'EXECUTE'
+                      ),
+                      has_function_privilege(
+                        'context_engine_worker',
+                        'public.context_control_read_pending_file_change_schedules(uuid,uuid)',
+                        'EXECUTE'
+                      )
+                    ]
+                    """
+                )
+            ).scalar_one() == [True, False, False]
+    finally:
+        engine.dispose()
+
+
 def test_fragment_embedding_revision_preserves_retained_fragments(
     tmp_path: Path,
     migration_configuration: DatabaseConfiguration,

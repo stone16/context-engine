@@ -84,6 +84,7 @@ from engine.control.file_source_progress import (
     FileSourceProgress,
     FileSourcePublishOutcome,
     FileSourcePublishWatermark,
+    PendingFileChangeSchedule,
 )
 from engine.control.module import ContextControl, ControlStorePort
 
@@ -130,6 +131,7 @@ __all__ = [
     "FileSourceOffboarding",
     "FileSourcePublishOutcome",
     "FileSourcePublishWatermark",
+    "PendingFileChangeSchedule",
     "FileResourceTombstone",
     "ExecuteFileDeleteObservation",
     "ExecutedFileDeleteObservation",

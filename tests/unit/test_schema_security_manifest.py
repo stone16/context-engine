@@ -32,7 +32,7 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
     document = manifest()
     tables = table_entries(document)
 
-    assert document["manifestVersion"] == "33.0.0"
+    assert document["manifestVersion"] == "34.0.0"
     assert set(tables) == {
         "active_release_manifest",
         "action_delivery_attempt",
@@ -831,8 +831,13 @@ def test_issue_21_file_source_manifest_is_closed_and_role_separated() -> None:
         for operation in manifest()["controlOperations"]
         if operation["name"] == "read_file_source_progress"
     )
+    assert progress_read["databaseFunctions"] == [
+        "context_control_read_file_source_progress",
+        "context_control_read_pending_file_change_schedules",
+    ]
     assert "file_source_change_page" in progress_read["reads"]
     assert "file_source_delete_observation_page" in progress_read["reads"]
+    assert "file_acquisition" in progress_read["reads"]
     schedule = next(
         operation
         for operation in manifest()["controlOperations"]
@@ -846,9 +851,7 @@ def test_issue_21_file_source_manifest_is_closed_and_role_separated() -> None:
     assert schedule["filesystemAccessAllowed"] is False
     assert schedule["completePageValidation"] is True
     assert schedule["migrationFence"] == {
-        "sharedAdvisoryLock": (
-            "context-engine.file-change-scheduling-migration-fence"
-        ),
+        "sharedAdvisoryLock": ("context-engine.file-change-scheduling-migration-fence"),
         "definerOnlyGenerationRead": (
             "alembic_version SELECT revoked by 0032 downgrade"
         ),
@@ -879,9 +882,7 @@ def test_issue_21_file_source_manifest_is_closed_and_role_separated() -> None:
     assert watermark_fence["function"] == (
         "context_file_source_fence_scheduled_publication_epoch"
     )
-    assert watermark_fence["negativeTestIds"] == [
-        "PG-FILE-CHANGE-SUPERSESSION-083"
-    ]
+    assert watermark_fence["negativeTestIds"] == ["PG-FILE-CHANGE-SUPERSESSION-083"]
     assert {
         key["name"]: key["columns"]
         for key in entries["file_acquisition"]["organizationInclusiveKeys"]
@@ -908,6 +909,7 @@ def test_issue_21_file_source_manifest_is_closed_and_role_separated() -> None:
             "INSERT",
             "EXECUTE context_control_activate_file_change_feed",
             "EXECUTE context_control_activate_file_delete_observations",
+            "EXECUTE context_control_read_pending_file_change_schedules",
             "EXECUTE context_control_offboard_file_source",
         ],
         "context_engine_learning": [],
@@ -915,12 +917,12 @@ def test_issue_21_file_source_manifest_is_closed_and_role_separated() -> None:
         "context_engine_security_operator": [],
         "context_engine_worker": [],
         "context_engine_worker_lease_definer": ["SELECT", "UPDATE"],
-            "context_engine_action_prepare_definer": ["SELECT"],
-            "context_engine_action_execute_definer": ["SELECT"],
-            "context_engine_file_dispatch_definer": [
-                "SELECT",
-                "UPDATE lifecycle_state, active_version_id",
-            ],
+        "context_engine_action_prepare_definer": ["SELECT"],
+        "context_engine_action_execute_definer": ["SELECT"],
+        "context_engine_file_dispatch_definer": [
+            "SELECT",
+            "UPDATE lifecycle_state, active_version_id",
+        ],
     }
     assert version["permittedOperations"] == {
         "context_engine_control": [
@@ -928,6 +930,7 @@ def test_issue_21_file_source_manifest_is_closed_and_role_separated() -> None:
             "INSERT",
             "EXECUTE context_control_activate_file_change_feed",
             "EXECUTE context_control_activate_file_delete_observations",
+            "EXECUTE context_control_read_pending_file_change_schedules",
         ],
         "context_engine_learning": [],
         "context_engine_runtime": [],

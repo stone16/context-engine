@@ -353,11 +353,14 @@ def test_dogfood_served_composition_delivers_release_scoped_file_evidence_before
         guarded_worker_engine,
     )
     _add_policy_out_of_scope_distractors(migration_configuration, scenario)
-    assert _strictly_closer_distractor_count(
-        migration_configuration,
-        scenario,
-        target,
-    ) > DEFAULT_VECTOR_CANDIDATE_LIMIT
+    assert (
+        _strictly_closer_distractor_count(
+            migration_configuration,
+            scenario,
+            target,
+        )
+        > DEFAULT_VECTOR_CANDIDATE_LIMIT
+    )
     configuration = _configuration(scenario, user_id)
     served: dict[str, object] = {}
     for name, value in _environment(configuration, runtime_configuration).items():
@@ -683,6 +686,7 @@ def test_dogfood_seed_cli_creates_one_idempotent_current_membership(
     organization_id = uuid4()
     user_id = uuid4()
     membership_id = uuid4()
+    receiver_id = uuid4()
     command = (
         "context-engine-dogfood-seed",
         "--organization-id",
@@ -691,6 +695,8 @@ def test_dogfood_seed_cli_creates_one_idempotent_current_membership(
         str(user_id),
         "--membership-id",
         str(membership_id),
+        "--file-import-service-principal-id",
+        str(receiver_id),
     )
     engine = create_database_engine(migration_configuration)
     try:
@@ -700,7 +706,17 @@ def test_dogfood_seed_cli_creates_one_idempotent_current_membership(
                 text(
                     """
                     SELECT user_id, status, membership_version, valid_from,
-                           valid_until, xmin::text
+                           valid_until, xmin::text,
+                           (
+                             SELECT count(*)
+                             FROM service_principal
+                             WHERE organization_id = :organization_id
+                               AND service_principal_id = :receiver_id
+                               AND workload = 'supply.file-import'
+                               AND worker_audience = 'context-engine-worker'
+                               AND operation = 'file.import'
+                               AND enabled IS TRUE
+                           ) AS receivers
                     FROM membership
                     WHERE organization_id = :organization_id
                       AND membership_id = :membership_id
@@ -709,6 +725,7 @@ def test_dogfood_seed_cli_creates_one_idempotent_current_membership(
                 {
                     "organization_id": organization_id,
                     "membership_id": membership_id,
+                    "receiver_id": receiver_id,
                 },
             ).one()
         second = subprocess.run(command, check=True, capture_output=True, text=True)
@@ -718,7 +735,17 @@ def test_dogfood_seed_cli_creates_one_idempotent_current_membership(
                 text(
                     """
                     SELECT user_id, status, membership_version, valid_from,
-                           valid_until, xmin::text
+                           valid_until, xmin::text,
+                           (
+                             SELECT count(*)
+                             FROM service_principal
+                             WHERE organization_id = :organization_id
+                               AND service_principal_id = :receiver_id
+                               AND workload = 'supply.file-import'
+                               AND worker_audience = 'context-engine-worker'
+                               AND operation = 'file.import'
+                               AND enabled IS TRUE
+                           ) AS receivers
                     FROM membership
                     WHERE organization_id = :organization_id
                       AND membership_id = :membership_id
@@ -727,11 +754,13 @@ def test_dogfood_seed_cli_creates_one_idempotent_current_membership(
                 {
                     "organization_id": organization_id,
                     "membership_id": membership_id,
+                    "receiver_id": receiver_id,
                 },
             ).one()
         assert row == first_row
         assert tuple(row)[:3] == (user_id, "active", 1)
         assert row.valid_until is None
+        assert row.receivers == 1
         with engine.begin() as connection:
             connection.execute(
                 text(
@@ -755,6 +784,19 @@ def test_dogfood_seed_cli_creates_one_idempotent_current_membership(
             connection.execute(
                 text(
                     """
+                    DELETE FROM service_principal
+                    WHERE organization_id = :organization_id
+                      AND service_principal_id = :receiver_id
+                    """
+                ),
+                {
+                    "organization_id": organization_id,
+                    "receiver_id": receiver_id,
+                },
+            )
+            connection.execute(
+                text(
+                    """
                     DELETE FROM membership
                     WHERE organization_id = :organization_id
                       AND membership_id = :membership_id
@@ -763,6 +805,182 @@ def test_dogfood_seed_cli_creates_one_idempotent_current_membership(
                 {
                     "organization_id": organization_id,
                     "membership_id": membership_id,
+                },
+            )
+            connection.execute(
+                text(
+                    "DELETE FROM organization WHERE organization_id = :organization_id"
+                ),
+                {"organization_id": organization_id},
+            )
+            connection.execute(
+                text("DELETE FROM user_account WHERE user_id = :user_id"),
+                {"user_id": user_id},
+            )
+        engine.dispose()
+
+
+@pytest.mark.parametrize(
+    ("workload", "operation", "enabled"),
+    (
+        ("supply.file-import", "file.import", False),
+        ("supply.noop", "noop.complete", True),
+    ),
+    ids=("disabled-exact-receiver", "conflicting-receiver-binding"),
+)
+def test_dogfood_seed_cli_rolls_back_when_file_import_receiver_conflicts(
+    migration_configuration: DatabaseConfiguration,
+    workload: str,
+    operation: str,
+    enabled: bool,
+) -> None:
+    organization_id = uuid4()
+    user_id = uuid4()
+    membership_id = uuid4()
+    receiver_id = uuid4()
+    command = (
+        "context-engine-dogfood-seed",
+        "--organization-id",
+        str(organization_id),
+        "--user-id",
+        str(user_id),
+        "--membership-id",
+        str(membership_id),
+        "--file-import-service-principal-id",
+        str(receiver_id),
+    )
+    engine = create_database_engine(migration_configuration)
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO organization (organization_id)
+                    VALUES (:organization_id)
+                    """
+                ),
+                {"organization_id": organization_id},
+            )
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO service_principal (
+                        organization_id, service_principal_id, workload,
+                        worker_audience, operation, enabled
+                    ) VALUES (
+                        :organization_id, :receiver_id, :workload,
+                        'context-engine-worker', :operation, :enabled
+                    )
+                    """
+                ),
+                {
+                    "organization_id": organization_id,
+                    "receiver_id": receiver_id,
+                    "workload": workload,
+                    "operation": operation,
+                    "enabled": enabled,
+                },
+            )
+        with engine.connect() as connection:
+            before = connection.execute(
+                text(
+                    """
+                    SELECT organization.xmin::text AS organization_xmin,
+                           principal.xmin::text AS receiver_xmin,
+                           principal.workload,
+                           principal.worker_audience,
+                           principal.operation,
+                           principal.enabled
+                    FROM organization
+                    JOIN service_principal AS principal
+                      USING (organization_id)
+                    WHERE organization_id = :organization_id
+                      AND principal.service_principal_id = :receiver_id
+                    """
+                ),
+                {
+                    "organization_id": organization_id,
+                    "receiver_id": receiver_id,
+                },
+            ).one()
+
+        refused = subprocess.run(command, check=False, capture_output=True, text=True)
+
+        assert refused.returncode != 0
+        assert "dogfood identity ready" not in refused.stdout
+        with engine.connect() as connection:
+            after = connection.execute(
+                text(
+                    """
+                    SELECT organization.xmin::text AS organization_xmin,
+                           principal.xmin::text AS receiver_xmin,
+                           principal.workload,
+                           principal.worker_audience,
+                           principal.operation,
+                           principal.enabled
+                    FROM organization
+                    JOIN service_principal AS principal
+                      USING (organization_id)
+                    WHERE organization_id = :organization_id
+                      AND principal.service_principal_id = :receiver_id
+                    """
+                ),
+                {
+                    "organization_id": organization_id,
+                    "receiver_id": receiver_id,
+                },
+            ).one()
+            attempted_identity_rows = connection.execute(
+                text(
+                    """
+                    SELECT
+                        (
+                            SELECT count(*)
+                            FROM user_account
+                            WHERE user_id = :user_id
+                        ) AS users,
+                        (
+                            SELECT count(*)
+                            FROM membership
+                            WHERE organization_id = :organization_id
+                              AND membership_id = :membership_id
+                        ) AS memberships
+                    """
+                ),
+                {
+                    "organization_id": organization_id,
+                    "user_id": user_id,
+                    "membership_id": membership_id,
+                },
+            ).one()
+        assert after == before
+        assert attempted_identity_rows == (0, 0)
+    finally:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    """
+                    DELETE FROM membership
+                    WHERE organization_id = :organization_id
+                      AND membership_id = :membership_id
+                    """
+                ),
+                {
+                    "organization_id": organization_id,
+                    "membership_id": membership_id,
+                },
+            )
+            connection.execute(
+                text(
+                    """
+                    DELETE FROM service_principal
+                    WHERE organization_id = :organization_id
+                      AND service_principal_id = :receiver_id
+                    """
+                ),
+                {
+                    "organization_id": organization_id,
+                    "receiver_id": receiver_id,
                 },
             )
             connection.execute(

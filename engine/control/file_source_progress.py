@@ -38,6 +38,19 @@ class FileSourcePublishOutcome(StrEnum):
     TOMBSTONED = "tombstoned"
 
 
+@dataclass(frozen=True, slots=True)
+class PendingFileChangeSchedule:
+    """One accepted current-scan page whose upserts have no durable jobs."""
+
+    source_version_ref: UUID = field(repr=False)
+    page_ref: str = field(repr=False)
+
+    def __post_init__(self) -> None:
+        if type(self.source_version_ref) is not UUID:
+            raise TypeError("pending File schedule SourceVersion must be UUID")
+        _require_progress_ref("pending File schedule page_ref", self.page_ref, "")
+
+
 def _require_sequence(name: str, value: object) -> int:
     if type(value) is not int or not 1 <= value <= _MAX_BIGINT:
         raise ValueError(f"{name} must fit a positive signed bigint")
@@ -51,8 +64,10 @@ def _require_resource_ref(value: object) -> str:
 def _require_progress_ref(name: str, value: object, prefix: str) -> str:
     token = _require_token(name, value)
     digest = token.removeprefix(prefix)
-    if not token.startswith(prefix) or len(digest) != 64 or any(
-        character not in "0123456789abcdef" for character in digest
+    if (
+        not token.startswith(prefix)
+        or len(digest) != 64
+        or any(character not in "0123456789abcdef" for character in digest)
     ):
         raise ValueError(f"{name} is not a recognized opaque reference")
     return token
@@ -212,9 +227,9 @@ class FileSourcePublishWatermark:
             event_sequence=self.event_sequence,
             allow_unresolved_import_resource=False,
         )
-        if (
-            self.change_kind is FileSourceChangeKind.FILE_TOMBSTONE
-        ) is not (self.outcome is FileSourcePublishOutcome.TOMBSTONED):
+        if (self.change_kind is FileSourceChangeKind.FILE_TOMBSTONE) is not (
+            self.outcome is FileSourcePublishOutcome.TOMBSTONED
+        ):
             raise ValueError("File Source publish outcome does not match its change")
         _require_utc("File Source publish published_at", self.published_at)
 
@@ -232,19 +247,25 @@ class FileSourceProgress:
         default=None,
         repr=False,
     )
+    pending_change_schedules: tuple[PendingFileChangeSchedule, ...] = field(
+        default=(),
+        repr=False,
+    )
 
     def __post_init__(self) -> None:
         if type(self.organization_id) is not UUID:
             raise TypeError("File Source progress organization_id must be UUID")
         if type(self.source_ref) is not SourceRef:
             raise TypeError("File Source progress source_ref must be SourceRef")
-        if self.acquisition_checkpoint is not None and type(
-            self.acquisition_checkpoint
-        ) is not FileSourceAcquisitionCheckpoint:
+        if (
+            self.acquisition_checkpoint is not None
+            and type(self.acquisition_checkpoint) is not FileSourceAcquisitionCheckpoint
+        ):
             raise TypeError("File Source acquisition checkpoint is invalid")
-        if self.publish_watermark is not None and type(
-            self.publish_watermark
-        ) is not FileSourcePublishWatermark:
+        if (
+            self.publish_watermark is not None
+            and type(self.publish_watermark) is not FileSourcePublishWatermark
+        ):
             raise TypeError("File Source publish watermark is invalid")
         if self.change_scan_head is not None:
             from engine.control.file_change_pages import FileChangeScanHead
@@ -253,14 +274,10 @@ class FileSourceProgress:
                 raise TypeError("File Source change scan head is invalid")
             if self.acquisition_checkpoint is None:
                 raise ValueError("File Source change head requires a checkpoint")
-            if (
-                self.change_scan_head.sequence
-                > self.acquisition_checkpoint.sequence
-            ):
+            if self.change_scan_head.sequence > self.acquisition_checkpoint.sequence:
                 raise ValueError("File Source change head exceeds its checkpoint")
             if (
-                self.change_scan_head.sequence
-                == self.acquisition_checkpoint.sequence
+                self.change_scan_head.sequence == self.acquisition_checkpoint.sequence
                 and (
                     self.change_scan_head.checkpoint_ref
                     != self.acquisition_checkpoint.checkpoint_ref
@@ -291,10 +308,27 @@ class FileSourceProgress:
                 raise ValueError(
                     "File Source complete baseline belongs to another SourceVersion"
                 )
+        if type(self.pending_change_schedules) is not tuple or any(
+            type(pending) is not PendingFileChangeSchedule
+            for pending in self.pending_change_schedules
+        ):
+            raise TypeError("File Source pending schedules must be a tuple")
+        pending_refs = tuple(
+            pending.page_ref for pending in self.pending_change_schedules
+        )
+        if len(pending_refs) != len(set(pending_refs)):
+            raise ValueError("File Source pending schedules must be unique")
+        if self.pending_change_schedules and (
+            self.change_scan_head is None
+            or any(
+                pending.source_version_ref != self.change_scan_head.source_version_ref
+                for pending in self.pending_change_schedules
+            )
+        ):
+            raise ValueError("File Source pending schedules must belong to the head")
         if self.publish_watermark is not None and (
             self.acquisition_checkpoint is None
-            or self.publish_watermark.sequence
-            > self.acquisition_checkpoint.sequence
+            or self.publish_watermark.sequence > self.acquisition_checkpoint.sequence
         ):
             raise ValueError("File Source publish watermark cannot exceed checkpoint")
         if (

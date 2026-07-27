@@ -215,6 +215,97 @@ or the current authority rejects that exact failure transition.
 Activation boundaries for File dispatch, reclaim, and delete execution are
 recorded in [STATUS.md](./STATUS.md).
 
+### Scan a local File source
+
+The local operator can run one bounded File acquisition cycle and hand its
+scheduled upserts to the existing worker. This remains an explicitly configured
+local process; it adds no HTTP operation, polling daemon, publication path, or
+delete authority.
+
+Load the generated harness database environment first, then configure the
+local operator composition described by
+[ADR-0069](./docs/decisions/0069-admit-an-explicit-local-operator-composition.md).
+The Control operation allowlist for this workflow is:
+
+```text
+register_source,read_source,read_source_progress,activate_file_change_feed,activate_file_delete_observations,accept_file_change_page,schedule_file_change_page
+```
+
+The scan and worker share the same server-owned root registry and byte ceiling.
+They additionally require one durable File-import receiver, the current private
+dogfood audience, and two distinct persistent Ed25519 proof keys:
+
+```text
+CONTEXT_ENGINE_WORKER_FILE_ROOTS_JSON
+CONTEXT_ENGINE_WORKER_MAX_FILE_BYTES                 # optional
+CONTEXT_ENGINE_WORKER_SERVICE_PRINCIPAL_ID
+CONTEXT_ENGINE_DOGFOOD_PRINCIPAL_REF
+CONTEXT_ENGINE_DOGFOOD_MEMBERSHIP_ID
+CONTEXT_ENGINE_DOGFOOD_MEMBERSHIP_VERSION
+CONTEXT_ENGINE_FILE_CHANGE_PROVIDER_SIGNING_KEY_HEX
+CONTEXT_ENGINE_FILE_CHANGE_CHECKPOINT_SIGNING_KEY_HEX
+CONTEXT_ENGINE_WORKER_LEASE_SIGNING_KEY_HEX
+```
+
+Each proof-key value is exactly 32 random bytes encoded as 64 lowercase or
+uppercase hexadecimal characters. Keep both in the same local secret source
+across process restarts and never print or commit them. They must be distinct
+from each other and from the Control, release, dogfood, and worker secrets. The
+worker signing key is already required by the explicit local operator
+composition and is checked here only to preserve that cross-plane separation.
+Seed the receiver together with the dogfood identity (the command is
+idempotent for the exact same bindings):
+
+```bash
+uv run context-engine-dogfood-seed \
+  --organization-id "$CONTEXT_ENGINE_DOGFOOD_ORGANIZATION_ID" \
+  --user-id "$CONTEXT_ENGINE_DOGFOOD_USER_ID" \
+  --membership-id "$CONTEXT_ENGINE_DOGFOOD_MEMBERSHIP_ID" \
+  --file-import-service-principal-id \
+    "$CONTEXT_ENGINE_WORKER_SERVICE_PRINCIPAL_ID"
+```
+
+Register the logical root, copy the returned `sourceRef` into
+`CONTEXT_ENGINE_FILE_SOURCE_REF`, activate its two existing immutable
+capability transitions, and run the cycle:
+
+```bash
+uv run context-engine-control register-file-source \
+  --organization-id "$CONTEXT_ENGINE_OPERATOR_ORGANIZATION_ID" \
+  --display-name "Maintainer notes" \
+  --root-ref "maintainer-notes" \
+  --idempotency-key "maintainer-notes-v1"
+
+uv run context-engine-control activate-change-feed \
+  --organization-id "$CONTEXT_ENGINE_OPERATOR_ORGANIZATION_ID" \
+  --source-ref "$CONTEXT_ENGINE_FILE_SOURCE_REF"
+
+uv run context-engine-control activate-delete-observations \
+  --organization-id "$CONTEXT_ENGINE_OPERATOR_ORGANIZATION_ID" \
+  --source-ref "$CONTEXT_ENGINE_FILE_SOURCE_REF"
+
+uv run context-engine-control scan \
+  --organization-id "$CONTEXT_ENGINE_OPERATOR_ORGANIZATION_ID" \
+  --source-ref "$CONTEXT_ENGINE_FILE_SOURCE_REF"
+
+uv run context-engine-worker --dispatch-file-once
+```
+
+`scan` requires that exact delete-observation activation because its complete
+durable baseline is also what makes unchanged-path scheduling decisions
+idempotent. A v1, v2, or v3 source is refused generically.
+
+Repeat the final worker command until it reports `no_work`, or run the existing
+long-lived dispatcher. The scan prints deterministic, content-free JSON counts.
+`advancedCursor` is the accepted durable checkpoint reference; an exact
+unchanged replay reports zero accepted changes and scheduled imports while
+retaining that already-advanced checkpoint when no accepted page is missing its
+schedule. Before returning, scan idempotently schedules any accepted current-
+scan upsert page that has no durable acquisition. Those counts are baseline deltas.
+Compilation refusals are counted before handoff using the worker's exact active
+Markdown configuration, but the worker remains the only publication path and
+makes the authoritative terminal transition for each scheduled import.
+
 ### Development commands
 
 ```bash

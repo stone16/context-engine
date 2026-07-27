@@ -41,6 +41,7 @@ from engine.control import (
     FileSourcePublishOutcome,
     FileSourcePublishWatermark,
     OffboardFileSource,
+    PendingFileChangeSchedule,
     RegisterFileSource,
     ScheduledFileChange,
     ScheduledFileChangePage,
@@ -62,6 +63,9 @@ from engine.supply import (
 )
 
 _REGISTRATION_OPERATION = "register_source"
+_PENDING_FILE_CHANGE_SCHEDULES_FUNCTION = (
+    "public.context_control_read_pending_file_change_schedules"
+)
 _ACTIVE_SOURCE_SELECT = """
     SELECT
         source.source_id,
@@ -111,8 +115,7 @@ def _registration_digest(command: RegisterFileSource) -> str:
         "source_kind": "file",
     }
     return hashlib.sha256(
-        b"context-engine.register-file-source.v1\x00"
-        + rfc8785.dumps(document)
+        b"context-engine.register-file-source.v1\x00" + rfc8785.dumps(document)
     ).hexdigest()
 
 
@@ -157,9 +160,7 @@ class PostgreSQLControlStore:
             file_change_checkpoint_signing_key, Ed25519PrivateKey
         ):
             raise TypeError("File change checkpoint signing key is invalid")
-        self._file_change_checkpoint_signing_key = (
-            file_change_checkpoint_signing_key
-        )
+        self._file_change_checkpoint_signing_key = file_change_checkpoint_signing_key
 
     def register_file_source(
         self,
@@ -262,19 +263,23 @@ class PostgreSQLControlStore:
             with self._engine.begin() as connection:
                 assert_control_role(connection)
                 _set_organization_context(connection, call.organization_id)
-                row = connection.execute(
-                    text(
-                        _ACTIVE_SOURCE_SELECT
-                        + """
+                row = (
+                    connection.execute(
+                        text(
+                            _ACTIVE_SOURCE_SELECT
+                            + """
                         WHERE source.organization_id = :organization_id
                           AND source.source_id = :source_id
                         """
-                    ),
-                    {
-                        "organization_id": call.organization_id,
-                        "source_id": source_ref.value,
-                    },
-                ).mappings().one_or_none()
+                        ),
+                        {
+                            "organization_id": call.organization_id,
+                            "source_id": source_ref.value,
+                        },
+                    )
+                    .mappings()
+                    .one_or_none()
+                )
                 if row is None:
                     raise SourceNotAvailable
                 return self._manifest(cast(Mapping[str, object], row))
@@ -318,24 +323,26 @@ class PostgreSQLControlStore:
                 ).one_or_none()
                 if row is None:
                     raise SourceNotAvailable
-                source_row = connection.execute(
-                    text(
-                        _ACTIVE_SOURCE_SELECT
-                        + """
+                source_row = (
+                    connection.execute(
+                        text(
+                            _ACTIVE_SOURCE_SELECT
+                            + """
                         WHERE source.organization_id = :organization_id
                           AND source.source_id = :source_id
                         """
-                    ),
-                    {
-                        "organization_id": call.organization_id,
-                        "source_id": command.source_ref.value,
-                    },
-                ).mappings().one_or_none()
+                        ),
+                        {
+                            "organization_id": call.organization_id,
+                            "source_id": command.source_ref.value,
+                        },
+                    )
+                    .mappings()
+                    .one_or_none()
+                )
                 if source_row is None or source_row["version_id"] != row[0]:
                     raise SourceNotAvailable
-                manifest = self._manifest(
-                    cast(Mapping[str, object], source_row)
-                )
+                manifest = self._manifest(cast(Mapping[str, object], source_row))
                 if (
                     manifest.active_version.capabilities
                     is not FILE_CHANGE_CAPABILITY_MANIFEST
@@ -382,24 +389,26 @@ class PostgreSQLControlStore:
                 ).one_or_none()
                 if row is None:
                     raise SourceNotAvailable
-                source_row = connection.execute(
-                    text(
-                        _ACTIVE_SOURCE_SELECT
-                        + """
+                source_row = (
+                    connection.execute(
+                        text(
+                            _ACTIVE_SOURCE_SELECT
+                            + """
                         WHERE source.organization_id = :organization_id
                           AND source.source_id = :source_id
                         """
-                    ),
-                    {
-                        "organization_id": call.organization_id,
-                        "source_id": command.source_ref.value,
-                    },
-                ).mappings().one_or_none()
+                        ),
+                        {
+                            "organization_id": call.organization_id,
+                            "source_id": command.source_ref.value,
+                        },
+                    )
+                    .mappings()
+                    .one_or_none()
+                )
                 if source_row is None or source_row["version_id"] != row[0]:
                     raise SourceNotAvailable
-                manifest = self._manifest(
-                    cast(Mapping[str, object], source_row)
-                )
+                manifest = self._manifest(cast(Mapping[str, object], source_row))
                 if (
                     manifest.active_version.capabilities
                     is not FILE_DELETE_OBSERVATION_CAPABILITY_MANIFEST
@@ -449,9 +458,7 @@ class PostgreSQLControlStore:
                         "scanEpoch": str(value.baseline_ref.scan_epoch),
                         "scanRef": value.baseline_ref.scan_ref,
                         "sequence": value.baseline_ref.sequence,
-                        "sourceVersionId": str(
-                            value.baseline_ref.source_version_ref
-                        ),
+                        "sourceVersionId": str(value.baseline_ref.source_version_ref),
                     }
                 )
                 delete_observations = (
@@ -495,16 +502,16 @@ class PostgreSQLControlStore:
                         ),
                         "predecessor_sequence": value.predecessor_sequence,
                         "superseded_scan_epoch": value.superseded_scan_epoch,
-                        "changes": rfc8785.dumps(
-                            cast(Any, changes_document)
-                        ).decode("utf-8"),
+                        "changes": rfc8785.dumps(cast(Any, changes_document)).decode(
+                            "utf-8"
+                        ),
                         "complete": value.complete,
                         "baseline": (
                             None
                             if baseline_document is None
-                            else rfc8785.dumps(
-                                cast(Any, baseline_document)
-                            ).decode("utf-8")
+                            else rfc8785.dumps(cast(Any, baseline_document)).decode(
+                                "utf-8"
+                            )
                         ),
                     },
                 ).one_or_none()
@@ -809,6 +816,22 @@ class PostgreSQLControlStore:
                     cast(Mapping[str, object], snapshot_row)
                     for snapshot_row in snapshot_rows
                 )
+                pending_schedule_rows = tuple(
+                    connection.execute(
+                        text(
+                            f"""
+                            SELECT *
+                            FROM {_PENDING_FILE_CHANGE_SCHEDULES_FUNCTION}(
+                                :organization_id, :source_id
+                            )
+                            """
+                        ),
+                        {
+                            "organization_id": call.organization_id,
+                            "source_id": source_ref.value,
+                        },
+                    ).mappings()
+                )
                 checkpoint = (
                     None
                     if row["acquisition_sequence"] is None
@@ -820,17 +843,13 @@ class PostgreSQLControlStore:
                         ),
                         acquisition_ref=row["acquisition_acquisition_id"],
                         job_ref=row["acquisition_job_id"],
-                        cleanup_intent_ref=row[
-                            "acquisition_cleanup_intent_id"
-                        ],
+                        cleanup_intent_ref=row["acquisition_cleanup_intent_id"],
                         resource_ref=row["acquisition_resource_ref"],
                         revision_ref=row["acquisition_revision_id"],
                         event_ref=row["acquisition_event_ref"],
                         event_sequence=row["acquisition_event_sequence"],
                         accepted_at=row["acquisition_accepted_at"],
-                        source_version_ref=row[
-                            "acquisition_source_version_id"
-                        ],
+                        source_version_ref=row["acquisition_source_version_id"],
                         change_page_ref=row["acquisition_change_page_ref"],
                     )
                 )
@@ -841,9 +860,7 @@ class PostgreSQLControlStore:
                         sequence=row["publish_sequence"],
                         watermark_ref=row["publish_watermark_ref"],
                         checkpoint_ref=row["publish_checkpoint_ref"],
-                        change_kind=FileSourceChangeKind(
-                            row["publish_change_kind"]
-                        ),
+                        change_kind=FileSourceChangeKind(row["publish_change_kind"]),
                         outcome=FileSourcePublishOutcome(row["publish_outcome"]),
                         acquisition_ref=row["publish_acquisition_id"],
                         job_ref=row["publish_job_id"],
@@ -864,15 +881,11 @@ class PostgreSQLControlStore:
                         None
                         if row["change_scan_epoch"] is None
                         else FileChangeScanHead(
-                            source_version_ref=row[
-                                "change_source_version_id"
-                            ],
+                            source_version_ref=row["change_source_version_id"],
                             scan_ref=row["change_scan_ref"],
                             scan_epoch=row["change_scan_epoch"],
                             page_limit=row["change_page_limit"],
-                            superseded_scan_epoch=row[
-                                "change_superseded_scan_epoch"
-                            ],
+                            superseded_scan_epoch=row["change_superseded_scan_epoch"],
                             page_ref=row["change_page_ref"],
                             checkpoint_ref=row["change_checkpoint_ref"],
                             sequence=row["change_sequence"],
@@ -881,6 +894,13 @@ class PostgreSQLControlStore:
                     ),
                     complete_change_baseline=self._complete_change_baseline(
                         baseline_rows,
+                    ),
+                    pending_change_schedules=tuple(
+                        PendingFileChangeSchedule(
+                            source_version_ref=row["pending_source_version_id"],
+                            page_ref=row["pending_page_ref"],
+                        )
+                        for row in pending_schedule_rows
                     ),
                 )
         except SourceNotAvailable:
@@ -933,12 +953,8 @@ class PostgreSQLControlStore:
                 continue
             entries.append(
                 FileChangeBaselineEntry(
-                    kind=FileChangeKind(
-                        cast(str, value["baseline_entry_kind"])
-                    ),
-                    path=FileImportPath(
-                        cast(str, value["baseline_entry_path"])
-                    ),
+                    kind=FileChangeKind(cast(str, value["baseline_entry_kind"])),
+                    path=FileImportPath(cast(str, value["baseline_entry_path"])),
                     content_sha256=cast(
                         str,
                         value["baseline_entry_content_sha256"],
@@ -1079,21 +1095,25 @@ class PostgreSQLControlStore:
         organization_id: UUID,
         idempotency_key: str,
     ) -> Mapping[str, object] | None:
-        row = connection.execute(
-            text(
-                _ACTIVE_SOURCE_SELECT
-                + """
+        row = (
+            connection.execute(
+                text(
+                    _ACTIVE_SOURCE_SELECT
+                    + """
                 WHERE source.organization_id = :organization_id
                   AND source.registration_operation = :registration_operation
                   AND source.idempotency_key = :idempotency_key
                 """
-            ),
-            {
-                "organization_id": organization_id,
-                "registration_operation": _REGISTRATION_OPERATION,
-                "idempotency_key": idempotency_key,
-            },
-        ).mappings().one_or_none()
+                ),
+                {
+                    "organization_id": organization_id,
+                    "registration_operation": _REGISTRATION_OPERATION,
+                    "idempotency_key": idempotency_key,
+                },
+            )
+            .mappings()
+            .one_or_none()
+        )
         if row is None:
             return None
         return cast(Mapping[str, object], row)
@@ -1107,9 +1127,7 @@ class PostgreSQLControlStore:
             )
         declaration_version_value = capabilities.get("declarationVersion")
         declaration_version = (
-            declaration_version_value
-            if type(declaration_version_value) is str
-            else ""
+            declaration_version_value if type(declaration_version_value) is str else ""
         )
         capability_manifest = _KNOWN_CAPABILITY_DOCUMENTS.get(declaration_version)
         if (

@@ -31,6 +31,7 @@ from engine.supply.jobs import (
     worker_lease_nonce_digest,
 )
 from engine.supply.markdown import (
+    ACTIVE_FILE_IMPORT_MARKDOWN_CONFIG_VERSION,
     MARKDOWN_CANONICALIZATION_PROFILE,
     MARKDOWN_CANONICALIZATION_V1_PROFILE,
     MARKDOWN_CODE_LANGUAGE_MAX_LENGTH,
@@ -58,6 +59,7 @@ from engine.supply.markdown import (
 )
 
 __all__ = [
+    "ACTIVE_FILE_IMPORT_MARKDOWN_CONFIG_VERSION",
     "CONTEXT_FRAGMENT_EMBEDDING_DIMENSION",
     "MARKDOWN_CANONICALIZATION_PROFILE",
     "MARKDOWN_CODE_LANGUAGE_MAX_LENGTH",

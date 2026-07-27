@@ -188,6 +188,7 @@ def test_progress_contracts_keep_checkpoint_and_watermark_semantics_separate() -
         "publish_watermark",
         "change_scan_head",
         "complete_change_baseline",
+        "pending_change_schedules",
     ]
     assert FileSourceChangeKind.FILE_IMPORT.value == "file_import"
     assert FileSourceChangeKind.FILE_TOMBSTONE.value == "file_tombstone"
@@ -427,9 +428,7 @@ def test_complete_change_baseline_is_distinct_from_an_incomplete_head() -> None:
             complete_change_baseline=FileChangeBaseline(
                 reference=replace(
                     complete_reference,
-                    source_version_ref=UUID(
-                        "3ea05cf1-29d9-46c8-a082-0798dc46cdfd"
-                    ),
+                    source_version_ref=UUID("3ea05cf1-29d9-46c8-a082-0798dc46cdfd"),
                 ),
                 entries=baseline.entries,
             ),
