@@ -47,7 +47,14 @@ def test_control_process_help_and_unknown_subcommand() -> None:
         capture_output=True,
         text=True,
     )
-    assert "migrate" in help_result.stdout
+    for subcommand in (
+        "migrate",
+        "register-file-source",
+        "read-source",
+        "activate-change-feed",
+        "activate-delete-observations",
+    ):
+        assert subcommand in help_result.stdout
 
     unknown = subprocess.run(
         ["context-engine-control", "not-a-command"],
