@@ -9,6 +9,8 @@ from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
+from applications.file_root_configuration import file_roots
+from applications.file_scan import FileScanReport, scan_file_source
 from applications.operator_authentication import (
     CONTROL_OPERATOR_SECRET_ENV,
     LocalOperatorAuthorities,
@@ -39,6 +41,7 @@ _OPERATOR_SUBCOMMANDS = frozenset(
         "read-source",
         "activate-change-feed",
         "activate-delete-observations",
+        "scan",
     }
 )
 
@@ -65,6 +68,7 @@ def _parser() -> argparse.ArgumentParser:
             "activate-delete-observations",
             "activate one File source delete-observation capability",
         ),
+        ("scan", "scan one registered File source and schedule changed upserts"),
     ):
         source_command = subcommands.add_parser(name, help=help_text)
         _organization_argument(source_command)
@@ -89,8 +93,13 @@ def main(argv: Sequence[str] | None = None) -> None:
     if arguments.subcommand not in _OPERATOR_SUBCOMMANDS:
         parser.error("unknown operation")
     try:
-        manifest = _run_operator_subcommand(arguments)
-        rendered = _manifest_json(manifest)
+        outcome = _run_operator_subcommand(arguments)
+        if type(outcome) is FileScanReport:
+            rendered = _scan_report_json(outcome)
+        elif type(outcome) is SourceManifest:
+            rendered = _manifest_json(outcome)
+        else:  # pragma: no cover - closed application union
+            raise SourceNotAvailable
     except Exception:  # Operator refusals disclose no supplied or trusted facts.
         parser.exit(1, "context-engine-control: operation refused\n")
     print(rendered, flush=True)
@@ -105,13 +114,14 @@ def local_operator_authorities() -> LocalOperatorAuthorities | None:
     return configuration.authorities()
 
 
-def _run_operator_subcommand(arguments: argparse.Namespace) -> SourceManifest:
+def _run_operator_subcommand(
+    arguments: argparse.Namespace,
+) -> SourceManifest | FileScanReport:
     authorities = local_operator_authorities()
     if authorities is None:
         raise SourceNotAvailable
     organization_id = UUID(arguments.organization_id)
     opaque_credential = os.environ[CONTROL_OPERATOR_SECRET_ENV]
-    operation = _operation(arguments.subcommand)
     configuration = load_database_configuration(DatabasePurpose.CONTROL_PLANE)
     engine = create_database_engine(configuration)
 
@@ -119,6 +129,18 @@ def _run_operator_subcommand(arguments: argparse.Namespace) -> SourceManifest:
         return datetime.now(UTC)
 
     try:
+        if arguments.subcommand == "scan":
+            with file_roots() as roots:
+                return scan_file_source(
+                    organization_id=organization_id,
+                    source_ref=SourceRef(UUID(arguments.source_ref)),
+                    authority=authorities.control,
+                    opaque_credential=opaque_credential,
+                    engine=engine,
+                    clock=clock,
+                    roots=roots,
+                )
+        operation = _operation(arguments.subcommand)
         control = ContextControl(
             store=PostgreSQLControlStore(engine, clock=clock),
             authority=authorities.control,
@@ -190,6 +212,24 @@ def _manifest_json(manifest: SourceManifest) -> str:
         "sourceRef": str(manifest.source_ref.value),
     }
     return json.dumps(document, separators=(",", ":"), sort_keys=True)
+
+
+def _scan_report_json(report: FileScanReport) -> str:
+    if type(report) is not FileScanReport:
+        raise SourceNotAvailable
+    return json.dumps(
+        {
+            "advancedCursor": report.advanced_cursor,
+            "changesAccepted": report.changes_accepted,
+            "compilationRefusals": report.compilation_refusals,
+            "deletesObserved": report.deletes_observed,
+            "importsScheduled": report.imports_scheduled,
+            "pathsObserved": report.paths_observed,
+            "sourceRef": str(report.source_ref.value),
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    )
 
 
 def _timestamp(value: datetime) -> str:

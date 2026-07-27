@@ -21,6 +21,21 @@ from adapters.embeddings import (
     ExternalEmbeddingProvider,
 )
 from adapters.file_source import FileReadLimits, FileRootRegistry
+from applications.file_root_configuration import (
+    DEFAULT_WORKER_MAX_FILE_BYTES as _DEFAULT_WORKER_MAX_FILE_BYTES,
+)
+from applications.file_root_configuration import (
+    file_read_limits as _configured_file_read_limits,
+)
+from applications.file_root_configuration import (
+    file_root_bindings as _file_dispatch_root_bindings,
+)
+from applications.file_root_configuration import (
+    file_roots as _configured_file_roots,
+)
+from applications.file_root_configuration import (
+    required_environment as _required_environment,
+)
 from engine import BUILD_IDENTIFIER
 from engine.control import FileImportReceiver, FileRootRef, SourceRef
 from engine.persistence import (
@@ -43,6 +58,7 @@ from engine.persistence.worker_jobs import (
 from engine.runtime import Runtime
 from engine.runtime.construction import required_kernel_dependencies
 from engine.supply import (
+    ACTIVE_FILE_IMPORT_MARKDOWN_CONFIG_VERSION,
     CONTEXT_FRAGMENT_EMBEDDING_DIMENSION,
     EmbeddingProvider,
     MarkdownCompilerConfig,
@@ -53,10 +69,14 @@ from engine.supply import (
 )
 
 _FILE_DISPATCH_POLL_SECONDS = 1.0
-DEFAULT_WORKER_MAX_FILE_BYTES = 1_048_576
-_WORKER_MAX_FILE_BYTES_ENV = "CONTEXT_ENGINE_WORKER_MAX_FILE_BYTES"
+DEFAULT_WORKER_MAX_FILE_BYTES = _DEFAULT_WORKER_MAX_FILE_BYTES
+_file_dispatch_roots = _configured_file_roots
 _WORKER_EMBEDDING_PROVIDER_ENV = "CONTEXT_ENGINE_WORKER_EMBEDDING_PROVIDER"
 _WORKER_EMBEDDING_DIMENSION_ENV = "CONTEXT_ENGINE_WORKER_EMBEDDING_DIMENSION"
+
+
+def _file_read_limits() -> FileReadLimits:
+    return _configured_file_read_limits()
 
 
 class WorkerNoOpCompletionAuthority(Protocol):
@@ -142,13 +162,6 @@ def complete_persistent_noop_job(
     return authority.complete_noop(redemption)
 
 
-def _required_environment(name: str) -> str:
-    value = os.environ.get(name)
-    if value is None or not value or value != value.strip():
-        raise ValueError("Supply worker configuration is not available")
-    return value
-
-
 def _required_bounded_integer_environment(
     name: str,
     *,
@@ -165,18 +178,6 @@ def _required_bounded_integer_environment(
     if not minimum <= value <= maximum:
         raise ValueError("Supply worker configuration is not available")
     return value
-
-
-def _file_read_limits() -> FileReadLimits:
-    raw_limit = os.environ.get(_WORKER_MAX_FILE_BYTES_ENV)
-    if raw_limit is None:
-        return FileReadLimits(max_file_bytes=DEFAULT_WORKER_MAX_FILE_BYTES)
-    if not raw_limit or raw_limit != raw_limit.strip() or not raw_limit.isdecimal():
-        raise ValueError("Supply worker configuration is not available")
-    try:
-        return FileReadLimits(max_file_bytes=int(raw_limit))
-    except ValueError:
-        raise ValueError("Supply worker configuration is not available") from None
 
 
 def _embedding_provider() -> EmbeddingProvider:
@@ -228,8 +229,9 @@ def _run_one_file_import() -> int:
     engine = create_database_engine(configuration)
     roots = FileRootRegistry(
         {
-            FileRootRef(_required_environment("CONTEXT_ENGINE_WORKER_FILE_ROOT_REF")):
-                Path(_required_environment("CONTEXT_ENGINE_WORKER_FILE_ROOT_PATH"))
+            FileRootRef(
+                _required_environment("CONTEXT_ENGINE_WORKER_FILE_ROOT_REF")
+            ): Path(_required_environment("CONTEXT_ENGINE_WORKER_FILE_ROOT_PATH"))
         },
         limits=_file_read_limits(),
     )
@@ -241,13 +243,11 @@ def _run_one_file_import() -> int:
             ),
             FileImportReceiver(
                 UUID(
-                    _required_environment(
-                        "CONTEXT_ENGINE_WORKER_SERVICE_PRINCIPAL_ID"
-                    )
+                    _required_environment("CONTEXT_ENGINE_WORKER_SERVICE_PRINCIPAL_ID")
                 )
             ),
             roots,
-            MarkdownCompilerConfig("markdown-config-v1"),
+            MarkdownCompilerConfig(ACTIVE_FILE_IMPORT_MARKDOWN_CONFIG_VERSION),
             embedding_provider=_embedding_provider(),
             clock=lambda: datetime.now(UTC).replace(microsecond=0),
         ).run(
@@ -309,36 +309,6 @@ def _worker_signing_key() -> bytes:
     return signing_key
 
 
-def _file_dispatch_root_bindings() -> dict[FileRootRef, Path]:
-    """Load the server-owned registry for every root this dispatcher serves."""
-
-    raw_registry = _required_environment("CONTEXT_ENGINE_WORKER_FILE_ROOTS_JSON")
-    try:
-        document = json.loads(raw_registry)
-    except json.JSONDecodeError:
-        raise ValueError("Supply worker configuration is not available") from None
-    if type(document) is not dict or not document:
-        raise ValueError("Supply worker configuration is not available")
-    bindings: dict[FileRootRef, Path] = {}
-    for raw_ref, raw_path in document.items():
-        if (
-            type(raw_ref) is not str
-            or type(raw_path) is not str
-            or not raw_path
-            or raw_path != raw_path.strip()
-        ):
-            raise ValueError("Supply worker configuration is not available")
-        bindings[FileRootRef(raw_ref)] = Path(raw_path)
-    return bindings
-
-
-def _file_dispatch_roots() -> FileRootRegistry:
-    return FileRootRegistry(
-        _file_dispatch_root_bindings(),
-        limits=_file_read_limits(),
-    )
-
-
 def _worker_database_time(engine: Engine) -> datetime:
     """Read the worker authority's clock for immediate lease verification."""
 
@@ -377,9 +347,7 @@ def _run_file_dispatch(*, single_cycle: bool) -> int:
         authority = PostgreSQLFileDispatchAuthority(
             scheduler_engine,
             codec,
-            configured_root_refs=tuple(
-                root_ref.value for root_ref in root_bindings
-            ),
+            configured_root_refs=tuple(root_ref.value for root_ref in root_bindings),
         )
 
         def worker_factory(receiver: FileImportReceiver) -> PostgreSQLFileImportWorker:
@@ -388,7 +356,7 @@ def _run_file_dispatch(*, single_cycle: bool) -> int:
                 codec,
                 receiver,
                 roots,
-                MarkdownCompilerConfig("markdown-config-v1"),
+                MarkdownCompilerConfig(ACTIVE_FILE_IMPORT_MARKDOWN_CONFIG_VERSION),
                 embedding_provider=embedding_provider,
                 clock=lambda: _worker_database_time(worker_engine),
             )
