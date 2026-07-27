@@ -370,6 +370,23 @@ def test_status_reports_progress_freshness_and_current_compilation_refusals(
     assert successful["ageSeconds"] >= 0
     assert after_workers["publishWatermark"] is not None
 
+    (root / "good.md").write_text(
+        "# Good changed\n\n> current content is refused\n",
+        encoding="utf-8",
+    )
+    _scan(organization_id, source_ref, environment)
+    assert _worker(environment)["outcome"] == "refused"
+    after_published_path_refusal = _status(
+        organization_id,
+        source_ref,
+        environment,
+    )
+    assert after_published_path_refusal["activeResourceCount"] == 1
+    assert after_published_path_refusal["refusals"] == [
+        {"category": "unsupported_construct", "path": "good.md"},
+        {"category": "unsupported_construct", "path": "refused.md"},
+    ]
+
     (root / "refused.md").unlink()
     deleted = _scan(organization_id, source_ref, environment)
     after_delete = _status(organization_id, source_ref, environment)
@@ -377,7 +394,9 @@ def test_status_reports_progress_freshness_and_current_compilation_refusals(
     assert deleted_head["checkpointRef"] == deleted["advancedCursor"]
     assert after_delete["completeChangeBaselineSize"] == 2
     assert after_delete["activeResourceCount"] == 1
-    assert after_delete["refusals"] == []
+    assert after_delete["refusals"] == [
+        {"category": "unsupported_construct", "path": "good.md"}
+    ]
 
 
 def test_scan_process_schedules_only_changed_upserts_and_existing_worker_consumes(

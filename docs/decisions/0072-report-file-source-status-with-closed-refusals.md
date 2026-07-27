@@ -44,10 +44,13 @@ update rolls back the whole terminal transition. The caller continues to
 receive the same generic `FileImportRefused`.
 
 Status derives refusals only for upsert paths in the latest complete scan of the
-active SourceVersion. It chooses the latest import for each path, excludes a
-path that is currently published, and drops a refusal from status after the path
-is deleted from the next complete scan. The retained job category remains
-durable history; the status projection determines current relevance.
+active SourceVersion and binds each result to that exact path, SHA-256, and byte
+length. A failed changed observation remains visible even while the prior
+published Revision stays active, and an unchanged refused observation retains
+its prior failure without scheduling duplicate work. A refusal drops from
+status after its path is deleted from the next complete scan. The retained job
+category remains durable history; the status projection determines current
+relevance.
 
 The projection is Control-only, scoped by tenant and Source through FORCE RLS,
 and content-free. It is operational evidence only. It cannot authorize Runtime,

@@ -155,7 +155,9 @@ def _create_status_function() -> None:
                  AND page.complete IS TRUE
                 ORDER BY checkpoint.sequence DESC LIMIT 1
             ), current_paths AS (
-                SELECT DISTINCT terminal.source_version_id, change.relative_path
+                SELECT DISTINCT terminal.source_version_id,
+                       change.relative_path, change.content_sha256,
+                       change.content_length
                 FROM terminal
                 JOIN public.file_source_change_page AS page
                   ON page.organization_id = requested_organization_id
@@ -186,27 +188,15 @@ def _create_status_function() -> None:
                           requested_organization_id
                       AND checkpoint.source_id = requested_source_id
                       AND checkpoint.change_kind = 'file_import'
-                      AND acquisition.source_version_id =
+                     AND acquisition.source_version_id =
                           path.source_version_id
                       AND acquisition.relative_path = path.relative_path
+                      AND acquisition.expected_content_sha256 =
+                          path.content_sha256
+                      AND acquisition.expected_content_length =
+                          path.content_length
                     ORDER BY checkpoint.sequence DESC LIMIT 1
                 ) AS latest ON latest.compilation_refusal_category IS NOT NULL
-                WHERE NOT EXISTS (
-                    SELECT 1
-                    FROM public.context_resource AS resource
-                    JOIN public.file_revision_snapshot AS snapshot
-                      ON snapshot.organization_id = resource.organization_id
-                     AND snapshot.resource_ref = resource.resource_ref
-                     AND snapshot.revision_id = resource.active_revision_id
-                    JOIN public.file_acquisition AS acquisition
-                      ON acquisition.organization_id = snapshot.organization_id
-                     AND acquisition.acquisition_id = snapshot.acquisition_id
-                    WHERE resource.organization_id = requested_organization_id
-                      AND resource.source_ref = requested_source_id::text
-                      AND resource.tombstoned IS FALSE
-                      AND acquisition.source_id = requested_source_id
-                      AND acquisition.relative_path = path.relative_path
-                )
             )
             SELECT status.observed_at,
                    status.resource_count,

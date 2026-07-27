@@ -842,7 +842,6 @@ def test_issue_21_file_source_manifest_is_closed_and_role_separated() -> None:
     assert "file_acquisition" in progress_read["reads"]
     assert "file_import_job" in progress_read["reads"]
     assert "context_resource" in progress_read["reads"]
-    assert "file_revision_snapshot" in progress_read["reads"]
     refusal_operation = next(
         operation
         for operation in manifest()["controlOperations"]
@@ -876,7 +875,6 @@ def test_issue_21_file_source_manifest_is_closed_and_role_separated() -> None:
         "file_acquisition",
         "file_import_job",
         "context_resource",
-        "file_revision_snapshot",
     ):
         assert "EXECUTE context_control_read_file_source_status" in entries[
             table_name

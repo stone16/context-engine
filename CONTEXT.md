@@ -519,8 +519,8 @@ rejects one acquisition. 中文：File compilation refusal 只保留封闭失败
 - **Owner/scope:** one Organization, ContextSource, File acquisition, and its
   already-durable canonical path.
 - **Lifecycle:** retained on the failed import job; File status reports it only
-  while that path is an upsert in the latest complete scan and is not currently
-  published.
+  while that exact path observation is an upsert in the latest complete scan
+  and its import is refused. A prior published Revision may remain active.
 - **Invariant:** the caller-visible worker refusal stays generic. The category
   is operational evidence and cannot authorize or suppress Runtime delivery.
 - **Do not confuse with:** source content, compiler diagnostic, retry state,

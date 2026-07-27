@@ -237,8 +237,7 @@
         "file_source_publish_watermark",
         "file_acquisition",
         "file_import_job",
-        "context_resource",
-        "file_revision_snapshot"
+        "context_resource"
       ]
     },
     {
@@ -6440,9 +6439,7 @@
         "directTableMutationAllowed": false
       },
       "permittedOperations": {
-        "context_engine_control": [
-          "EXECUTE context_control_read_file_source_status"
-        ],
+        "context_engine_control": [],
         "context_engine_runtime": [],
         "context_engine_worker": [
           "EXECUTE context_worker_publish_file_import_v2",
