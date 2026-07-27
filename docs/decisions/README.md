@@ -170,3 +170,4 @@ touched:
 - [0066 — Embed Fragments before publication](0066-embed-fragments-before-publication.md)
 - [0067 — Discover vector candidates in the current Runtime transaction](0067-discover-vector-candidates-in-the-current-runtime-transaction.md)
 - [0068 — Activate the loopback dogfood Runtime](0068-activate-loopback-dogfood-runtime.md)
+- [0069 — Admit an explicit local operator composition](0069-admit-an-explicit-local-operator-composition.md)
