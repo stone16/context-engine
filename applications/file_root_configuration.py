@@ -59,14 +59,17 @@ def file_root_bindings(
         raise ValueError("Supply worker configuration is not available")
     bindings: dict[FileRootRef, Path] = {}
     for raw_ref, raw_path in document.items():
+        path = Path(raw_path) if type(raw_path) is str else None
         if (
             type(raw_ref) is not str
             or type(raw_path) is not str
             or not raw_path
             or raw_path != raw_path.strip()
+            or path is None
+            or not path.is_absolute()
         ):
             raise ValueError("Supply worker configuration is not available")
-        bindings[FileRootRef(raw_ref)] = Path(raw_path)
+        bindings[FileRootRef(raw_ref)] = path
     return bindings
 
 

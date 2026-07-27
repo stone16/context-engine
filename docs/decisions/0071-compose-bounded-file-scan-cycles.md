@@ -24,8 +24,9 @@ One scan may require several provider pages and cannot hold one
 `TrustedControlCall` across the cycle. Acceptance and scheduling are distinct
 operations by design: accepting content-free provider observations does not
 infer a delivery audience. Process interruption can occur after either durable
-step. Their transactions remain independently idempotent, while automatic
-workflow recovery is outside this first command's activation.
+step. Their transactions remain independently idempotent. This first command
+needs narrow reconciliation for accepted current-scan pages missing jobs, while
+broader workflow recovery remains outside its activation.
 
 The existing page scheduler is all-or-none. The File provider emits a complete
 snapshot of upserts plus baseline-derived deletes, so scheduling a larger page
@@ -58,8 +59,11 @@ fail closed. A complete changed scan advances that baseline.
 An exact unchanged scan is recognized only when the complete baseline is also
 the durable head and the provider reproduces that scan identity. The report
 retains the already accepted durable checkpoint and counts zero accepted
-changes, newly scheduled imports, deletes, and compilation refusals. It does
-not create another scan epoch or job.
+changes and deletes. Before returning, the same `READ_SOURCE_PROGRESS` call
+also projects accepted upsert pages in the current scan epoch with no durable
+acquisition. Scan schedules those missing jobs idempotently and includes them
+in the scheduled-import and compilation-refusal counts. It does not create
+another scan epoch or duplicate an existing job.
 
 Scan and worker share one server-owned anchored root registry, byte ceiling,
 and exact active Markdown configuration pin. Scan preflights newly scheduled
@@ -72,8 +76,11 @@ work.
 
 The provider-page and checkpoint proof keys are explicit persistent Ed25519
 secrets, distinct from each other and from the Control, release, dogfood, and
-worker secrets. Scan output contains only deterministic content-free counts,
-the `SourceRef`, and the accepted opaque checkpoint reference.
+worker secrets. The worker secret is already part of ADR-0069's complete local
+operator configuration; scan reads it only for local cross-plane collision
+checking, never for lease issuance or redemption. Scan output contains only
+deterministic content-free counts, the `SourceRef`, and the accepted opaque
+checkpoint reference.
 
 This decision explicitly refines ADR-0068 decision 7's local migrator seed
 boundary. In addition to the existing Organization/User/current-Membership
@@ -89,7 +96,9 @@ Runtime process remains unable to create identities or receivers.
 
 - One-note additions create exactly one durable import without widening the
   page scheduler or Markdown grammar.
-- Exact unchanged scans create no jobs, scan epochs, or Revisions.
+- Exact unchanged scans create no scan epoch or Revision. They create no job
+  when the accepted scan is already fully scheduled; recovery may create only
+  the jobs missing from an accepted current-scan page.
 - A source with more observations performs more short-lived Control calls, but
   each authorization and durable transaction remains independently bounded.
 - Because the provider revalidates the full root for each continuation and the
@@ -100,8 +109,12 @@ Runtime process remains unable to create identities or receivers.
   selected-upsert scheduling contract or a restart-safe provider snapshot; it
   must not silently batch unchanged upserts.
 - The cycle is not atomic as a whole. Existing accepted-page and scheduled-job
-  transactions remain its durable boundaries; automatic workflow recovery is
-  not activated here.
+  transactions remain its durable boundaries. A later scan reconciles an
+  accepted current-scan upsert page that has no acquisition only when its
+  durable `page_limit` is the composition's exact singleton limit. Foreign or
+  future larger pages are not adopted because their all-or-none scheduling
+  could re-import baseline-identical upserts. Broader workflow recovery remains
+  inactive.
 - Polling, watching, full resync, delete execution, alternate publication,
   non-File providers, and network operator access remain inactive.
 

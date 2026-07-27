@@ -1,5 +1,5 @@
 {
-  "manifestVersion": "33.0.0",
+  "manifestVersion": "34.0.0",
   "controlOperations": [
     {
       "name": "register_file_source",
@@ -213,7 +213,10 @@
     },
     {
       "name": "read_file_source_progress",
-      "databaseFunction": "context_control_read_file_source_progress",
+      "databaseFunctions": [
+        "context_control_read_file_source_progress",
+        "context_control_read_pending_file_change_schedules"
+      ],
       "role": "context_engine_control",
       "definerRole": "context_engine_worker_lease_definer",
       "directTableMutationAllowed": false,
@@ -230,7 +233,8 @@
         "file_source_change_page",
         "file_source_change",
         "file_source_acquisition_checkpoint",
-        "file_source_publish_watermark"
+        "file_source_publish_watermark",
+        "file_acquisition"
       ]
     },
     {
@@ -1549,6 +1553,7 @@
           "INSERT",
           "EXECUTE context_control_activate_file_change_feed",
           "EXECUTE context_control_activate_file_delete_observations",
+          "EXECUTE context_control_read_pending_file_change_schedules",
           "EXECUTE context_control_offboard_file_source"
         ],
         "context_engine_learning": [],
@@ -1722,7 +1727,8 @@
           "SELECT",
           "INSERT",
           "EXECUTE context_control_activate_file_change_feed",
-          "EXECUTE context_control_activate_file_delete_observations"
+          "EXECUTE context_control_activate_file_delete_observations",
+          "EXECUTE context_control_read_pending_file_change_schedules"
         ],
         "context_engine_learning": [],
         "context_engine_runtime": [],
@@ -5299,7 +5305,8 @@
       "permittedOperations": {
         "context_engine_control": [
           "EXECUTE context_control_prepare_file_import",
-          "EXECUTE context_control_schedule_file_change_page"
+          "EXECUTE context_control_schedule_file_change_page",
+          "EXECUTE context_control_read_pending_file_change_schedules"
         ],
         "context_engine_runtime": [],
         "context_engine_worker": [],
@@ -7455,7 +7462,7 @@
         {"name": "file_source_delete_observation_page_definer_delete", "command": "DELETE", "roles": ["context_engine_worker_lease_definer"], "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"}
       ]},
       "functionOnlyMutation": {"databaseFunctions": ["context_control_accept_file_delete_observation_page"], "definerRole": "context_engine_worker_lease_definer", "directTableMutationAllowed": false},
-      "permittedOperations": {"context_engine_control": ["EXECUTE context_control_accept_file_delete_observation_page", "EXECUTE context_control_read_complete_file_change_baseline"], "context_engine_runtime": [], "context_engine_worker": [], "context_engine_worker_lease_definer": ["SELECT", "INSERT", "DELETE"]},
+      "permittedOperations": {"context_engine_control": ["EXECUTE context_control_accept_file_delete_observation_page", "EXECUTE context_control_read_complete_file_change_baseline", "EXECUTE context_control_read_pending_file_change_schedules"], "context_engine_runtime": [], "context_engine_worker": [], "context_engine_worker_lease_definer": ["SELECT", "INSERT", "DELETE"]},
       "partitions": [],
       "securityInvariantIds": ["TENANT-OWNERSHIP-001", "TENANT-FK-002", "RLS-FAIL-CLOSED-003", "WORKER-LEASE-007"],
       "negativeTestIds": ["DB-001", "DB-004", "DB-008", "PG-FILE-DELETE-PAGE-085", "PG-FILE-DELETE-NO-EFFECT-085"]
@@ -7526,7 +7533,7 @@
       ]},
       "immutableRows": {"trigger": "file_source_change_page_immutable", "function": "context_content_reject_mutation", "events": ["UPDATE", "DELETE"], "sqlstate": "55000"},
       "functionOnlyMutation": {"databaseFunctions": ["context_control_accept_file_change_page", "context_control_accept_file_delete_observation_page"], "definerRole": "context_engine_worker_lease_definer", "directTableMutationAllowed": false},
-      "permittedOperations": {"context_engine_control": ["EXECUTE context_control_accept_file_change_page", "EXECUTE context_control_accept_file_delete_observation_page", "EXECUTE context_control_read_complete_file_change_baseline", "EXECUTE context_control_schedule_file_change_page"], "context_engine_runtime": [], "context_engine_worker": [], "context_engine_worker_lease_definer": ["SELECT", "INSERT"]},
+      "permittedOperations": {"context_engine_control": ["EXECUTE context_control_accept_file_change_page", "EXECUTE context_control_accept_file_delete_observation_page", "EXECUTE context_control_read_complete_file_change_baseline", "EXECUTE context_control_read_pending_file_change_schedules", "EXECUTE context_control_schedule_file_change_page"], "context_engine_runtime": [], "context_engine_worker": [], "context_engine_worker_lease_definer": ["SELECT", "INSERT"]},
       "partitions": [],
       "securityInvariantIds": ["TENANT-OWNERSHIP-001", "TENANT-FK-002", "RLS-FAIL-CLOSED-003", "WORKER-LEASE-007"],
       "negativeTestIds": ["DB-001", "DB-004", "DB-008", "PG-FILE-CHANGE-PAGE-081", "PG-FILE-CHANGE-DENY-081"]
@@ -7560,7 +7567,7 @@
       ]},
       "immutableRows": {"trigger": "file_source_change_immutable", "function": "context_content_reject_mutation", "events": ["UPDATE", "DELETE"], "sqlstate": "55000"},
       "functionOnlyMutation": {"databaseFunctions": ["context_control_accept_file_change_page", "context_control_accept_file_delete_observation_page"], "definerRole": "context_engine_worker_lease_definer", "directTableMutationAllowed": false},
-      "permittedOperations": {"context_engine_control": ["EXECUTE context_control_accept_file_change_page", "EXECUTE context_control_accept_file_delete_observation_page", "EXECUTE context_control_schedule_file_change_page"], "context_engine_runtime": [], "context_engine_worker": [], "context_engine_worker_lease_definer": ["SELECT", "INSERT"]},
+      "permittedOperations": {"context_engine_control": ["EXECUTE context_control_accept_file_change_page", "EXECUTE context_control_accept_file_delete_observation_page", "EXECUTE context_control_read_pending_file_change_schedules", "EXECUTE context_control_schedule_file_change_page"], "context_engine_runtime": [], "context_engine_worker": [], "context_engine_worker_lease_definer": ["SELECT", "INSERT"]},
       "partitions": [],
       "securityInvariantIds": ["TENANT-OWNERSHIP-001", "TENANT-FK-002", "RLS-FAIL-CLOSED-003", "WORKER-LEASE-007"],
       "negativeTestIds": ["DB-001", "DB-004", "DB-008", "PG-FILE-CHANGE-PAGE-081", "PG-FILE-CHANGE-DENY-081", "PG-FILE-CHANGE-SCHEDULE-083"]
@@ -7786,6 +7793,7 @@
           "EXECUTE context_control_accept_file_change_page",
           "EXECUTE context_control_accept_file_delete_observation_page",
           "EXECUTE context_control_read_complete_file_change_baseline",
+          "EXECUTE context_control_read_pending_file_change_schedules",
           "EXECUTE context_control_schedule_file_change_page",
           "EXECUTE context_control_read_file_source_progress",
           "EXECUTE context_control_tombstone_file_resource"

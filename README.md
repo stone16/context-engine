@@ -244,11 +244,15 @@ CONTEXT_ENGINE_DOGFOOD_MEMBERSHIP_ID
 CONTEXT_ENGINE_DOGFOOD_MEMBERSHIP_VERSION
 CONTEXT_ENGINE_FILE_CHANGE_PROVIDER_SIGNING_KEY_HEX
 CONTEXT_ENGINE_FILE_CHANGE_CHECKPOINT_SIGNING_KEY_HEX
+CONTEXT_ENGINE_WORKER_LEASE_SIGNING_KEY_HEX
 ```
 
 Each proof-key value is exactly 32 random bytes encoded as 64 lowercase or
 uppercase hexadecimal characters. Keep both in the same local secret source
-across process restarts and never print or commit them. They must be distinct.
+across process restarts and never print or commit them. They must be distinct
+from each other and from the Control, release, dogfood, and worker secrets. The
+worker signing key is already required by the explicit local operator
+composition and is checked here only to preserve that cross-plane separation.
 Seed the receiver together with the dogfood identity (the command is
 idempotent for the exact same bindings):
 
@@ -295,7 +299,9 @@ Repeat the final worker command until it reports `no_work`, or run the existing
 long-lived dispatcher. The scan prints deterministic, content-free JSON counts.
 `advancedCursor` is the accepted durable checkpoint reference; an exact
 unchanged replay reports zero accepted changes and scheduled imports while
-retaining that already-advanced checkpoint. Those counts are baseline deltas;
+retaining that already-advanced checkpoint when no accepted page is missing its
+schedule. Before returning, scan idempotently schedules any accepted current-
+scan upsert page that has no durable acquisition. Those counts are baseline deltas.
 Compilation refusals are counted before handoff using the worker's exact active
 Markdown configuration, but the worker remains the only publication path and
 makes the authoritative terminal transition for each scheduled import.

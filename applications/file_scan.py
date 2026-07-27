@@ -38,6 +38,7 @@ from engine.control import (
     FileSourceProgress,
     InitialScan,
     ProviderOk,
+    ScheduledFileChangePage,
     ScheduleFileChangePage,
     SourceManifest,
     SourceNotAvailable,
@@ -128,6 +129,32 @@ def scan_file_source(
         organization_id=organization_id,
         source_ref=source_ref,
     )
+    imports_scheduled = 0
+    compilation_refusals = 0
+    reconciled_page_refs: set[str] = set()
+    for pending in progress.pending_change_schedules:
+        scheduled = _schedule_page(
+            control=control,
+            authority=authority,
+            opaque_credential=opaque_credential,
+            organization_id=organization_id,
+            source_ref=source_ref,
+            source_version_ref=pending.source_version_ref,
+            page_ref=pending.page_ref,
+            audience=audience,
+        )
+        imports_scheduled += len(scheduled.changes)
+        compilation_refusals += sum(
+            _compilation_refused(
+                roots,
+                manifest,
+                change.path.value,
+                change.content_sha256,
+                change.content_length,
+            )
+            for change in scheduled.changes
+        )
+        reconciled_page_refs.add(pending.page_ref)
     source = FileChangeSource(
         organization_id,
         manifest.active_version,
@@ -145,9 +172,7 @@ def scan_file_source(
     cursor: InitialScan | ChangeCursor = InitialScan()
     paths_observed: set[str] = set()
     changes_accepted = 0
-    imports_scheduled = 0
     deletes_observed = 0
-    compilation_refusals = 0
     advanced_cursor: str | None = None
     while True:
         proposed = provider.read_changes(
@@ -174,9 +199,9 @@ def scan_file_source(
                     entry.kind is FileChangeKind.UPSERT for entry in baseline.entries
                 ),
                 changes_accepted=0,
-                imports_scheduled=0,
+                imports_scheduled=imports_scheduled,
                 deletes_observed=0,
-                compilation_refusals=0,
+                compilation_refusals=compilation_refusals,
                 advanced_cursor=baseline.reference.checkpoint_ref,
             )
         observed = tuple(page.changes)
@@ -203,23 +228,17 @@ def scan_file_source(
             accepted = control.accept_file_change_page(call, page)
         changes_accepted += len(novel_upserts) + len(deletes)
         deletes_observed += len(deletes)
-        if novel_upserts:
-            with authority.authorize(
+        if novel_upserts and accepted.page_ref not in reconciled_page_refs:
+            scheduled = _schedule_page(
+                control=control,
+                authority=authority,
                 opaque_credential=opaque_credential,
-                operation=ControlOperation.SCHEDULE_FILE_CHANGE_PAGE,
-                request_id=f"local-scan-schedule-{uuid4().hex}",
-            ) as call:
-                if call.organization_id != organization_id:
-                    raise SourceNotAvailable
-                scheduled = control.schedule_file_change_page(
-                    call,
-                    ScheduleFileChangePage(
-                        accepted.source_ref,
-                        accepted.source_version_ref,
-                        accepted.page_ref,
-                        audience,
-                    ),
-                )
+                organization_id=organization_id,
+                source_ref=accepted.source_ref,
+                source_version_ref=accepted.source_version_ref,
+                page_ref=accepted.page_ref,
+                audience=audience,
+            )
             scheduled_changes = {
                 change.path.value: change
                 for change in scheduled.changes
@@ -251,6 +270,35 @@ def scan_file_source(
         compilation_refusals=compilation_refusals,
         advanced_cursor=advanced_cursor,
     )
+
+
+def _schedule_page(
+    *,
+    control: ContextControl,
+    authority: ControlOperatorAuthority,
+    opaque_credential: str,
+    organization_id: UUID,
+    source_ref: SourceRef,
+    source_version_ref: UUID,
+    page_ref: str,
+    audience: FileImportAudience,
+) -> ScheduledFileChangePage:
+    with authority.authorize(
+        opaque_credential=opaque_credential,
+        operation=ControlOperation.SCHEDULE_FILE_CHANGE_PAGE,
+        request_id=f"local-scan-schedule-{uuid4().hex}",
+    ) as call:
+        if call.organization_id != organization_id:
+            raise SourceNotAvailable
+        return control.schedule_file_change_page(
+            call,
+            ScheduleFileChangePage(
+                source_ref,
+                source_version_ref,
+                page_ref,
+                audience,
+            ),
+        )
 
 
 def _read_manifest(

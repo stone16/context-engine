@@ -4,13 +4,16 @@ import json
 import os
 import subprocess
 from collections.abc import Iterator
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import text
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from sqlalchemy import Engine, text
 
+from adapters.file_source import FileChangeProvider, FileReadLimits, FileRootRegistry
 from applications.operator_authentication import (
     CONTROL_OPERATOR_OPERATIONS_ENV,
     CONTROL_OPERATOR_SECRET_ENV,
@@ -18,8 +21,25 @@ from applications.operator_authentication import (
     OPERATOR_ORGANIZATION_ENV,
     RELEASE_OPERATOR_SECRET_ENV,
     WORKER_SECRET_ENV,
+    LocalOperatorConfiguration,
 )
-from engine.persistence import DatabaseConfiguration, create_database_engine
+from engine.control import (
+    ChangeLimit,
+    ContextControl,
+    ControlOperation,
+    FileChangeControlProofs,
+    FileChangeProviderProofs,
+    FileChangeSource,
+    FileImportReceiver,
+    InitialScan,
+    ProviderOk,
+    SourceRef,
+)
+from engine.persistence import (
+    DatabaseConfiguration,
+    PostgreSQLControlStore,
+    create_database_engine,
+)
 from engine.supply import CONTEXT_FRAGMENT_EMBEDDING_DIMENSION
 from tests.integration.test_file_change_pages import (
     _SCENARIOS,
@@ -477,6 +497,226 @@ def test_scan_process_schedules_only_changed_upserts_and_existing_worker_consume
                 ).one()
             )
         assert unchanged_counts == (3, 2)
+    finally:
+        engine.dispose()
+
+
+def test_scan_process_recovers_a_complete_accepted_page_missing_its_schedule(
+    migration_configuration: DatabaseConfiguration,
+    file_scan_scenario: tuple[UUID, UUID, UUID, Path, dict[str, str]],
+) -> None:
+    organization_id, _membership_id, receiver_id, root, environment = file_scan_scenario
+    (root / "recover.md").write_text(
+        "# Recover\n\nSchedule this accepted note.\n",
+        encoding="utf-8",
+    )
+    source_ref = _register_activated_source(organization_id, environment)
+    engine = create_database_engine(migration_configuration)
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    """
+                    UPDATE service_principal
+                    SET enabled = false
+                    WHERE organization_id = :org
+                      AND service_principal_id = :receiver
+                    """
+                ),
+                {"org": organization_id, "receiver": receiver_id},
+            )
+
+        interrupted = _control(
+            [
+                "scan",
+                "--organization-id",
+                str(organization_id),
+                "--source-ref",
+                str(source_ref),
+            ],
+            environment=environment,
+            check=False,
+        )
+
+        assert interrupted.returncode != 0
+        assert interrupted.stdout == ""
+        assert interrupted.stderr == "context-engine-control: operation refused\n"
+        with engine.connect() as connection:
+            stranded = tuple(
+                connection.execute(
+                    text(
+                        """
+                        SELECT
+                          (SELECT count(*) FROM file_source_change_page
+                           WHERE organization_id = :org
+                             AND source_id = :source
+                             AND complete IS TRUE),
+                          (SELECT count(*) FROM file_import_job
+                           WHERE organization_id = :org
+                             AND source_id = :source)
+                        """
+                    ),
+                    {"org": organization_id, "source": source_ref},
+                ).one()
+            )
+        assert stranded == (1, 0)
+
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    """
+                    UPDATE service_principal
+                    SET enabled = true
+                    WHERE organization_id = :org
+                      AND service_principal_id = :receiver
+                    """
+                ),
+                {"org": organization_id, "receiver": receiver_id},
+            )
+
+        recovered = _scan(organization_id, source_ref, environment)
+
+        assert recovered == {
+            "advancedCursor": recovered["advancedCursor"],
+            "changesAccepted": 0,
+            "compilationRefusals": 0,
+            "deletesObserved": 0,
+            "importsScheduled": 1,
+            "pathsObserved": 1,
+            "sourceRef": str(source_ref),
+        }
+        assert _worker(environment)["outcome"] == "dispatched"
+        assert _worker(environment)["outcome"] == "no_work"
+        with engine.connect() as connection:
+            assert tuple(
+                connection.execute(
+                    text(
+                        """
+                        SELECT
+                          (SELECT count(*) FROM file_import_job
+                           WHERE organization_id = :org
+                             AND source_id = :source),
+                          (SELECT count(*) FROM context_fragment
+                           WHERE organization_id = :org)
+                        """
+                    ),
+                    {"org": organization_id, "source": source_ref},
+                ).one()
+            ) == (1, 1)
+    finally:
+        engine.dispose()
+
+
+def test_scan_process_does_not_reconcile_a_foreign_larger_mixed_page(
+    migration_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+    file_scan_scenario: tuple[UUID, UUID, UUID, Path, dict[str, str]],
+) -> None:
+    organization_id, _membership_id, receiver_id, root, environment = file_scan_scenario
+    (root / "a.md").write_text("# A\n\nOriginal.\n", encoding="utf-8")
+    (root / "b.md").write_text("# B\n\nUnchanged.\n", encoding="utf-8")
+    source_ref = _register_activated_source(organization_id, environment)
+    baseline = _scan(organization_id, source_ref, environment)
+    assert baseline["importsScheduled"] == 2
+
+    (root / "a.md").write_text("# A\n\nChanged.\n", encoding="utf-8")
+    configuration = LocalOperatorConfiguration.load(environment)
+    assert configuration is not None
+
+    def clock() -> datetime:
+        return datetime.now(UTC)
+
+    authority = configuration.authorities(clock=clock).control
+    provider_key = Ed25519PrivateKey.from_private_bytes(PROVIDER_KEY)
+    checkpoint_key = Ed25519PrivateKey.from_private_bytes(CHECKPOINT_KEY)
+    control = ContextControl(
+        store=PostgreSQLControlStore(
+            guarded_control_engine,
+            clock=clock,
+            file_import_receiver=FileImportReceiver(receiver_id),
+            file_change_checkpoint_signing_key=checkpoint_key,
+        ),
+        authority=authority,
+        clock=clock,
+        file_change_proofs=FileChangeControlProofs(
+            provider_verification_key=provider_key.public_key()
+        ),
+    )
+    source = SourceRef(source_ref)
+    with authority.authorize(
+        opaque_credential=CONTROL_SECRET,
+        operation=ControlOperation.READ_SOURCE,
+        request_id="foreign-larger-read-source",
+    ) as call:
+        manifest = control.read_source(call, source)
+    with authority.authorize(
+        opaque_credential=CONTROL_SECRET,
+        operation=ControlOperation.READ_SOURCE_PROGRESS,
+        request_id="foreign-larger-read-baseline",
+    ) as call:
+        progress = control.read_file_source_progress(call, source)
+    provider_source = FileChangeSource(
+        organization_id,
+        manifest.active_version,
+        scan_head=progress.change_scan_head,
+        complete_baseline=progress.complete_change_baseline,
+    )
+    with FileRootRegistry(
+        {manifest.active_version.root_ref: root},
+        limits=FileReadLimits(max_file_bytes=1_048_576),
+    ) as roots:
+        page = FileChangeProvider(
+            roots,
+            proofs=FileChangeProviderProofs(
+                provider_signing_key=provider_key,
+                checkpoint_verification_key=checkpoint_key.public_key(),
+            ),
+        ).read_changes(provider_source, InitialScan(), ChangeLimit(2))
+    assert type(page) is ProviderOk
+    assert page.value.page_limit == 2
+    assert page.value.complete is True
+    assert tuple(change.path.value for change in page.value.changes) == (
+        "a.md",
+        "b.md",
+    )
+    with authority.authorize(
+        opaque_credential=CONTROL_SECRET,
+        operation=ControlOperation.ACCEPT_FILE_CHANGE_PAGE,
+        request_id="foreign-larger-accept-page",
+    ) as call:
+        control.accept_file_change_page(call, page.value)
+    with authority.authorize(
+        opaque_credential=CONTROL_SECRET,
+        operation=ControlOperation.READ_SOURCE_PROGRESS,
+        request_id="foreign-larger-read-pending",
+    ) as call:
+        accepted_progress = control.read_file_source_progress(call, source)
+
+    assert accepted_progress.pending_change_schedules == ()
+    refused = _control(
+        [
+            "scan",
+            "--organization-id",
+            str(organization_id),
+            "--source-ref",
+            str(source_ref),
+        ],
+        environment=environment,
+        check=False,
+    )
+    assert refused.returncode != 0
+    assert refused.stdout == ""
+    assert refused.stderr == "context-engine-control: operation refused\n"
+    engine = create_database_engine(migration_configuration)
+    try:
+        with engine.connect() as connection:
+            assert connection.execute(
+                text(
+                    "SELECT count(*) FROM file_import_job "
+                    "WHERE organization_id = :org AND source_id = :source"
+                ),
+                {"org": organization_id, "source": source_ref},
+            ).scalar_one() == 2
     finally:
         engine.dispose()
 
