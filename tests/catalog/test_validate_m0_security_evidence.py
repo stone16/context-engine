@@ -118,7 +118,13 @@ def test_planned_catalog_evidence_is_separate_from_executable_refs() -> None:
     assert mapping["evidenceRefs"] == {
         "property": ["PROP-RELEASE-OWNER-019"],
         "postgres": ["PG-RELEASE-OWNER-019"],
-        "runtime": ["RUNTIME-RELEASE-OWNER-019"],
+        "runtime": [
+            "RUNTIME-RELEASE-OWNER-019",
+            "RUNTIME-LOCAL-OPERATOR-ABSENT-110",
+            "RUNTIME-LOCAL-OPERATOR-SCOPE-110",
+            "RUNTIME-LOCAL-OPERATOR-CROSS-PLANE-110",
+            "RUNTIME-LOCAL-OPERATOR-EXTERNAL-110",
+        ],
     }
 
 

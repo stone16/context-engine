@@ -2269,6 +2269,90 @@ CANONICAL_DOGFOOD_RUNTIME_ACTIVATION: dict[str, object] = {
     ],
 }
 
+CANONICAL_LOCAL_OPERATOR_AUTHENTICATION_ACTIVATION: dict[str, object] = {
+    "issueRef": "#110",
+    "invariantRef": "RELEASE-OWNER-019",
+    "carrier": "explicit local-only Control and release operator authentication",
+    "status": "active_fail_closed",
+    "policyEpochScope": "not-runtime-authority",
+    "controlBoundary": (
+        "complete local configuration -> separate constant-time credential "
+        "verification -> fixed Control or release identity -> one "
+        "operation-bound authority context"
+    ),
+    "testEvidence": [
+        {
+            "id": "RUNTIME-LOCAL-OPERATOR-ABSENT-110",
+            "surface": (
+                "tests/unit/test_local_operator_authentication.py::"
+                "test_operator_configuration_is_absent_by_default_and_partial_"
+                "values_fail_closed"
+            ),
+            "oracle": (
+                "Absent configuration constructs no operator authority; every "
+                "partial configuration produces the same generic refusal without "
+                "Organization, operation, allowed-set, or credential disclosure."
+            ),
+        },
+        {
+            "id": "RUNTIME-LOCAL-OPERATOR-SCOPE-110",
+            "surface": (
+                "tests/unit/test_local_operator_authentication.py::"
+                "test_authority_grants_one_allowed_operation_per_context_lifetime"
+            ),
+            "oracle": (
+                "An enumerated Control operation obtains its own bounded "
+                "TrustedControlCall; an operation outside the exact allowed set "
+                "receives the same generic refusal, and the call has no authority "
+                "after its context closes."
+            ),
+        },
+        {
+            "id": "RUNTIME-LOCAL-OPERATOR-CROSS-PLANE-110",
+            "surface": (
+                "tests/unit/test_local_operator_authentication.py::"
+                "test_control_and_release_credentials_are_rejected_across_planes"
+            ),
+            "oracle": (
+                "The Control and release credentials establish distinct fixed "
+                "identities and each is rejected by the other plane with the same "
+                "generic plane-local refusal."
+            ),
+        },
+        {
+            "id": "RUNTIME-LOCAL-OPERATOR-EXTERNAL-110",
+            "surface": (
+                "tests/unit/test_local_operator_authentication.py::"
+                "test_dogfood_and_worker_credentials_are_rejected_by_both_planes"
+            ),
+            "oracle": (
+                "The dogfood Runtime credential and WorkerLease signing credential "
+                "are each rejected by both operator authenticators and retained by "
+                "neither representation."
+            ),
+        },
+    ],
+    "deferredEvidence": [
+        "production operator identity-provider authentication and key lifecycle",
+        "durable multi-operator assignment, delegation, and revocation",
+        "network-reachable administrative authentication",
+    ],
+    "futureCarriers": [
+        "production operator authentication composition",
+        "durable multi-operator authorization model",
+        "authenticated administrative API",
+    ],
+    "notActive": [
+        "production operator authentication",
+        "a second operator identity",
+        "role assignment, delegation, or RBAC",
+        "network-reachable operator surface",
+        "admin API or admin UI",
+        "Control operation subcommands",
+        "Release promotion subcommand",
+    ],
+}
+
 CANONICAL_ACTIVATIONS: list[dict[str, object]] = [
     CANONICAL_REVOCATION_ACTIVATION,
     CANONICAL_UNAVAILABLE_CAPABILITY_ACTIVATION,
@@ -2294,6 +2378,7 @@ CANONICAL_ACTIVATIONS: list[dict[str, object]] = [
     CANONICAL_FILE_RECLAIM_ACTIVATION,
     CANONICAL_DOGFOOD_AUTHENTICATION_ACTIVATION,
     CANONICAL_DOGFOOD_RUNTIME_ACTIVATION,
+    CANONICAL_LOCAL_OPERATOR_AUTHENTICATION_ACTIVATION,
 ]
 CANONICAL_ACTIVATION_ISSUE_LIST = ", ".join(
     f"Issue {activation['issueRef']}" for activation in CANONICAL_ACTIVATIONS
