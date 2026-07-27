@@ -18,6 +18,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from adapters.file_source import FileRootRegistry
 from adapters.parsers.markdown import compile_markdown
 from engine.control import (
+    FileCompilationRefusalCategory,
     FileImportPath,
     FileImportReceiver,
     FileRootRef,
@@ -302,7 +303,9 @@ class PostgreSQLFileImportWorker:
                 self._fail(
                     redemption.token,
                     claims,
-                    compilation_refusal_category=outcome.code.value,
+                    compilation_refusal_category=FileCompilationRefusalCategory(
+                        outcome.code.value
+                    ),
                 )
             raise FileImportRefused("File import is unavailable")
         if type(outcome) is not ParsedDocument:  # pragma: no cover - closed union
@@ -710,7 +713,7 @@ class PostgreSQLFileImportWorker:
         token: WorkerLeaseToken,
         claims: WorkerLeaseClaims,
         *,
-        compilation_refusal_category: str | None = None,
+        compilation_refusal_category: FileCompilationRefusalCategory | None = None,
     ) -> None:
         """Seal a job, optionally retaining only its closed compiler category."""
 

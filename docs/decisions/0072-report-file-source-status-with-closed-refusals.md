@@ -43,6 +43,12 @@ The function accepts no source content or diagnostic string, and its failed
 update rolls back the whole terminal transition. The caller continues to
 receive the same generic `FileImportRefused`.
 
+Category-bearing failure holds a shared File-status migration fence and
+rechecks that its retained column still exists before the terminal transition.
+Downgrade holds the matching exclusive fence before checking retained state,
+so it either observes an earlier category and refuses or prevents an old
+function body from writing after the column is removed.
+
 Status derives refusals only for upsert paths in the latest complete scan of the
 active SourceVersion and binds each result to that exact path, SHA-256, and byte
 length. A failed changed observation remains visible even while the prior
@@ -53,9 +59,10 @@ category remains durable history; the status projection determines current
 relevance.
 
 The projection is Control-only, scoped by tenant and Source through FORCE RLS,
-and content-free. It is operational evidence only. It cannot authorize Runtime,
-emit `stale_evidence`, mutate work, retry a job, repair a source, or change the
-Markdown grammar.
+and content-free. Progress, baseline, pending schedules, and status are composed
+in one PostgreSQL statement snapshot. It is operational evidence only. It
+cannot authorize Runtime, emit `stale_evidence`, mutate work, retry a job,
+repair a source, or change the Markdown grammar.
 
 ## Consequences
 

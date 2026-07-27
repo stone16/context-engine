@@ -38,6 +38,14 @@ class FileSourcePublishOutcome(StrEnum):
     TOMBSTONED = "tombstoned"
 
 
+class FileCompilationRefusalCategory(StrEnum):
+    """Closed content-free compilation categories retained for operations."""
+
+    INVALID_UTF8 = "invalid_utf8"
+    UNSUPPORTED_CONSTRUCT = "unsupported_construct"
+    UNSUPPORTED_DOCUMENT_SHAPE = "unsupported_document_shape"
+
+
 @dataclass(frozen=True, slots=True)
 class PendingFileChangeSchedule:
     """One accepted current-scan page whose upserts have no durable jobs."""
@@ -56,18 +64,14 @@ class FileCompilationRefusal:
     """Content-free status for one current observed path not yet published."""
 
     path: str
-    category: str
+    category: FileCompilationRefusalCategory
 
     def __post_init__(self) -> None:
         from engine.control.file_imports import FileImportPath
 
         FileImportPath(self.path)
-        if type(self.category) is not str or self.category not in {
-            "invalid_utf8",
-            "unsupported_construct",
-            "unsupported_document_shape",
-        }:
-            raise ValueError("File compilation refusal category is invalid")
+        if type(self.category) is not FileCompilationRefusalCategory:
+            raise TypeError("File compilation refusal category is invalid")
 
 
 @dataclass(frozen=True, slots=True)

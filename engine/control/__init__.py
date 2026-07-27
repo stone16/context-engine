@@ -80,6 +80,7 @@ from engine.control.file_source_offboarding import (
 )
 from engine.control.file_source_progress import (
     FileCompilationRefusal,
+    FileCompilationRefusalCategory,
     FileSourceAcquisitionCheckpoint,
     FileSourceChangeKind,
     FileSourceProgress,
@@ -125,6 +126,7 @@ __all__ = [
     "FileImportPath",
     "FileImportReceiver",
     "FileCompilationRefusal",
+    "FileCompilationRefusalCategory",
     "FileRootRef",
     "InitialScan",
     "FileSourceAcquisitionCheckpoint",

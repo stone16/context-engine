@@ -27,6 +27,7 @@ _FAIL_SIGNATURE = (
 )
 _STATUS = "context_control_read_file_source_status"
 _STATUS_SIGNATURE = "(uuid, uuid)"
+_MIGRATION_FENCE = "context-engine.file-status-migration-fence"
 _CATEGORIES = (
     "invalid_utf8",
     "unsupported_construct",
@@ -59,6 +60,16 @@ def _create_category_fail_function() -> None:
                 'unsupported_document_shape'
             )
             THEN RETURN false; END IF;
+            PERFORM pg_catalog.pg_advisory_xact_lock_shared(
+                pg_catalog.hashtextextended('{_MIGRATION_FENCE}', 0)
+            );
+            PERFORM 1
+            FROM pg_catalog.pg_attribute AS attribute
+            WHERE attribute.attrelid = 'public.file_import_job'::regclass
+              AND attribute.attname = 'compilation_refusal_category'
+              AND attribute.attnum > 0
+              AND attribute.attisdropped IS FALSE;
+            IF NOT FOUND THEN RETURN false; END IF;
             changed := public.context_worker_fail_file_import(
                 requested_organization_id, requested_job_id,
                 requested_service_principal_id, requested_source_ref,
@@ -263,13 +274,17 @@ def upgrade() -> None:
     op.execute(
         f"GRANT EXECUTE ON FUNCTION public.{_STATUS}{_STATUS_SIGNATURE} TO {_CONTROL}"
     )
-    op.execute(f"REVOKE CREATE ON SCHEMA public FROM {_DEFINER}")
     op.execute("RESET ROLE")
+    op.execute(f"REVOKE CREATE ON SCHEMA public FROM {_DEFINER}")
 
 
 def downgrade() -> None:
     """Remove status only when no retained category would be discarded."""
 
+    op.execute(
+        "SELECT pg_catalog.pg_advisory_xact_lock("
+        f"pg_catalog.hashtextextended('{_MIGRATION_FENCE}', 0))"
+    )
     retained = (
         op.get_bind()
         .execute(
@@ -289,9 +304,7 @@ def downgrade() -> None:
     op.execute(f"DROP FUNCTION public.{_STATUS}{_STATUS_SIGNATURE}")
     op.execute(f"DROP FUNCTION public.{_FAIL}{_FAIL_SIGNATURE}")
     op.execute("RESET ROLE")
-    op.execute(f"SET LOCAL ROLE {_DEFINER}")
     op.execute(f"REVOKE CREATE ON SCHEMA public FROM {_DEFINER}")
-    op.execute("RESET ROLE")
     op.drop_constraint(
         "ck_file_import_job_compilation_refusal_category",
         "file_import_job",

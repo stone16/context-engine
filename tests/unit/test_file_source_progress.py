@@ -20,6 +20,7 @@ from engine.control import (
     FileChangeKind,
     FileChangeScanHead,
     FileCompilationRefusal,
+    FileCompilationRefusalCategory,
     FileImportPath,
     FileResourceTombstone,
     FileSourceAcquisitionCheckpoint,
@@ -207,15 +208,21 @@ def test_file_source_status_retains_only_closed_content_free_refusals() -> None:
         refusals=(
             FileCompilationRefusal(
                 path="nested/refused.md",
-                category="unsupported_construct",
+                category=FileCompilationRefusalCategory.UNSUPPORTED_CONSTRUCT,
             ),
         ),
     )
     assert status.refusals[0].path == "nested/refused.md"
-    assert status.refusals[0].category == "unsupported_construct"
+    assert (
+        status.refusals[0].category
+        is FileCompilationRefusalCategory.UNSUPPORTED_CONSTRUCT
+    )
 
-    with pytest.raises(ValueError, match="category"):
-        FileCompilationRefusal(path="a.md", category="blockquote at line 3")
+    with pytest.raises(TypeError, match="category"):
+        FileCompilationRefusal(
+            path="a.md",
+            category="blockquote at line 3",  # type: ignore[arg-type]
+        )
     with pytest.raises(ValueError, match="absent success"):
         FileSourceStatus(
             observed_at=NOW,

@@ -301,7 +301,7 @@ def _status_json(progress: FileSourceProgress) -> str:
                 }
             ),
             "refusals": [
-                {"category": refusal.category, "path": refusal.path}
+                {"category": refusal.category.value, "path": refusal.path}
                 for refusal in status.refusals
             ],
             "sourceRef": str(progress.source_ref.value),
