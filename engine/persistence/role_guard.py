@@ -107,7 +107,7 @@ def assert_control_role(connection: Connection) -> None:
 
 
 def assert_migrator_role(connection: Connection) -> None:
-    """Require the explicit migration login for the local seeding operation."""
+    """Require the explicit migration login for schema and seed operations."""
 
     row = connection.execute(
         text(
@@ -127,7 +127,7 @@ def assert_migrator_role(connection: Connection) -> None:
         "is_superuser": False,
         "bypasses_rls": False,
     }:
-        raise AssertionError("dogfood seeding requires the exact migrator login")
+        raise AssertionError("migration authority requires the exact migrator login")
 
 
 def assert_identity_role(connection: Connection) -> None:

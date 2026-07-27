@@ -1,3 +1,5 @@
 """Shared migration assertions for tests that require the current schema head."""
 
-HEAD_REVISION = "20260726_0036"
+from engine.persistence.migrations import head_revision
+
+HEAD_REVISION = head_revision()
