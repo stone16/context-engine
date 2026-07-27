@@ -115,6 +115,7 @@ Follow the ADR for its exact evidence boundary.
 | [0060](./docs/decisions/0060-reclaim-expired-file-imports-with-bounded-retries.md) | Reclaim expired File imports with bounded retries |
 | [0065](./docs/decisions/0065-recurse-file-discovery-with-anchored-descriptors.md) | Recurse File discovery through anchored descriptors under one bounded byte ceiling |
 | [0066](./docs/decisions/0066-embed-fragments-before-publication.md) | Embed newly published Fragments before activation through an explicit provider |
+| [0070](./docs/decisions/0070-activate-file-change-feed-from-registration.md) | Advance an exact registered v1 or import-enabled v2 File source to the existing immutable v3 change-feed manifest |
 
 ADR-0065 extends the active File Provider boundary from a flat root to
 deterministic recursive discovery of canonical nested Markdown paths. Each

@@ -171,3 +171,4 @@ touched:
 - [0067 — Discover vector candidates in the current Runtime transaction](0067-discover-vector-candidates-in-the-current-runtime-transaction.md)
 - [0068 — Activate the loopback dogfood Runtime](0068-activate-loopback-dogfood-runtime.md)
 - [0069 — Admit an explicit local operator composition](0069-admit-an-explicit-local-operator-composition.md)
+- [0070 — Activate a File change feed from registration](0070-activate-file-change-feed-from-registration.md)

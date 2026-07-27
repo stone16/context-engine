@@ -2332,6 +2332,43 @@ def test_fragment_embedding_revision_downgrades_and_reapplies_when_empty(
     assert _revision_rows(migration_configuration) == [HEAD_REVISION]
 
 
+def test_direct_file_change_activation_revision_downgrades_and_reapplies(
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    alembic_configuration = Config(ROOT / "alembic.ini")
+    regprocedure = (
+        "public.context_control_activate_file_change_feed(uuid, uuid, uuid)"
+    )
+
+    def definition() -> str:
+        engine = create_database_engine(migration_configuration)
+        try:
+            with engine.connect() as connection:
+                return str(
+                    connection.execute(
+                        text(
+                            "SELECT pg_get_functiondef("
+                            f"'{regprocedure}'::regprocedure)"
+                        )
+                    ).scalar_one()
+                )
+        finally:
+            engine.dispose()
+
+    assert "selected_capabilities NOT IN" in definition()
+    try:
+        command.downgrade(alembic_configuration, "20260726_0036")
+        assert _revision_rows(migration_configuration) == ["20260726_0036"]
+        downgraded = definition()
+        assert "selected_capabilities <>" in downgraded
+        assert "selected_capabilities NOT IN" not in downgraded
+    finally:
+        command.upgrade(alembic_configuration, "head")
+
+    assert _revision_rows(migration_configuration) == [HEAD_REVISION]
+    assert "selected_capabilities NOT IN" in definition()
+
+
 def test_fragment_embedding_revision_preserves_retained_fragments(
     tmp_path: Path,
     migration_configuration: DatabaseConfiguration,
