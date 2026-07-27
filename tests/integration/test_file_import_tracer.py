@@ -2119,29 +2119,48 @@ def test_invalid_markdown_records_terminal_failure_without_content_effects(
         clock=lambda: datetime.now(UTC).replace(microsecond=0),
     )
 
-    with pytest.raises(FileImportUnavailable):
-        worker.run(
-            FileImportLeaseRedemption(
-                scenario.token,
-                scenario.organization_id,
-                scenario.prepared.job_id,
-                scenario.source_ref,
+    try:
+        with pytest.raises(FileImportUnavailable):
+            worker.run(
+                FileImportLeaseRedemption(
+                    scenario.token,
+                    scenario.organization_id,
+                    scenario.prepared.job_id,
+                    scenario.source_ref,
+                )
             )
-        )
 
-    assert _job_state(migration_configuration, scenario) == ("failed", 0)
-    assert _scenario_effect_counts(migration_configuration, scenario) == (
-        1,
-        1,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-    )
+        assert _job_state(migration_configuration, scenario) == ("failed", 0)
+        assert _scenario_effect_counts(migration_configuration, scenario) == (
+            1,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+        )
+    finally:
+        migration_engine = create_database_engine(migration_configuration)
+        try:
+            with migration_engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "UPDATE file_import_job "
+                        "SET compilation_refusal_category = NULL "
+                        "WHERE organization_id = :organization_id "
+                        "AND job_id = :job_id"
+                    ),
+                    {
+                        "organization_id": scenario.organization_id,
+                        "job_id": scenario.prepared.job_id,
+                    },
+                )
+        finally:
+            migration_engine.dispose()
 
 
 def test_late_publication_error_rolls_back_every_content_and_access_write(

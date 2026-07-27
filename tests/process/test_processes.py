@@ -54,6 +54,7 @@ def test_control_process_help_and_unknown_subcommand() -> None:
         "activate-change-feed",
         "activate-delete-observations",
         "scan",
+        "status",
     ):
         assert subcommand in help_result.stdout
 

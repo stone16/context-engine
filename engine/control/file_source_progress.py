@@ -38,6 +38,14 @@ class FileSourcePublishOutcome(StrEnum):
     TOMBSTONED = "tombstoned"
 
 
+class FileCompilationRefusalCategory(StrEnum):
+    """Closed content-free compilation categories retained for operations."""
+
+    INVALID_UTF8 = "invalid_utf8"
+    UNSUPPORTED_CONSTRUCT = "unsupported_construct"
+    UNSUPPORTED_DOCUMENT_SHAPE = "unsupported_document_shape"
+
+
 @dataclass(frozen=True, slots=True)
 class PendingFileChangeSchedule:
     """One accepted current-scan page whose upserts have no durable jobs."""
@@ -49,6 +57,62 @@ class PendingFileChangeSchedule:
         if type(self.source_version_ref) is not UUID:
             raise TypeError("pending File schedule SourceVersion must be UUID")
         _require_progress_ref("pending File schedule page_ref", self.page_ref, "")
+
+
+@dataclass(frozen=True, slots=True)
+class FileCompilationRefusal:
+    """Content-free status for one current observed path not yet published."""
+
+    path: str
+    category: FileCompilationRefusalCategory
+
+    def __post_init__(self) -> None:
+        from engine.control.file_imports import FileImportPath
+
+        FileImportPath(self.path)
+        if type(self.category) is not FileCompilationRefusalCategory:
+            raise TypeError("File compilation refusal category is invalid")
+
+
+@dataclass(frozen=True, slots=True)
+class FileSourceStatus:
+    """Operational File status that never participates in Runtime authority."""
+
+    observed_at: datetime
+    active_resource_count: int
+    last_successful_acquisition_at: datetime | None
+    last_successful_acquisition_age_seconds: int | None
+    refusals: tuple[FileCompilationRefusal, ...] = ()
+
+    def __post_init__(self) -> None:
+        _require_utc("File Source status observed_at", self.observed_at)
+        if (
+            type(self.active_resource_count) is not int
+            or self.active_resource_count < 0
+        ):
+            raise ValueError("File Source active Resource count must be nonnegative")
+        if self.last_successful_acquisition_at is None:
+            if self.last_successful_acquisition_age_seconds is not None:
+                raise ValueError("File Source absent success cannot have an age")
+        else:
+            _require_utc(
+                "File Source last successful acquisition",
+                self.last_successful_acquisition_at,
+            )
+            if (
+                type(self.last_successful_acquisition_age_seconds) is not int
+                or self.last_successful_acquisition_age_seconds < 0
+            ):
+                raise ValueError("File Source successful acquisition age is invalid")
+        if type(self.refusals) is not tuple or any(
+            type(refusal) is not FileCompilationRefusal for refusal in self.refusals
+        ):
+            raise TypeError("File Source refusals must be a tuple")
+        paths = tuple(refusal.path for refusal in self.refusals)
+        if paths != tuple(sorted(paths, key=lambda value: value.encode("utf-8"))):
+            raise ValueError("File Source refusal paths require canonical order")
+        if len(paths) != len(set(paths)):
+            raise ValueError("File Source refusal paths must be unique")
 
 
 def _require_sequence(name: str, value: object) -> int:
@@ -251,6 +315,7 @@ class FileSourceProgress:
         default=(),
         repr=False,
     )
+    status: FileSourceStatus | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         if type(self.organization_id) is not UUID:
@@ -326,6 +391,8 @@ class FileSourceProgress:
             )
         ):
             raise ValueError("File Source pending schedules must belong to the head")
+        if self.status is not None and type(self.status) is not FileSourceStatus:
+            raise TypeError("File Source status is invalid")
         if self.publish_watermark is not None and (
             self.acquisition_checkpoint is None
             or self.publish_watermark.sequence > self.acquisition_checkpoint.sequence

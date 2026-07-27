@@ -76,6 +76,9 @@ from tests.support.file_imports import (
     prepare_repeat_file_import as _prepare_repeat_file_import,
 )
 from tests.support.file_imports import (
+    redeem_file_import_direct as _redeem_file_import_direct,
+)
+from tests.support.file_imports import (
     run_file_import as _run_file_import,
 )
 from tests.support.file_imports import (
@@ -2424,6 +2427,252 @@ def test_pending_file_schedule_projection_revision_downgrades_and_reapplies(
             ).scalar_one() == [True, False, False]
     finally:
         engine.dispose()
+
+
+def test_file_source_status_revision_downgrades_and_reapplies_when_empty(
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    """Issue #113 adds closed status functions and one nullable category."""
+
+    alembic_configuration = Config(ROOT / "alembic.ini")
+    try:
+        command.downgrade(alembic_configuration, "20260727_0038")
+        assert _revision_rows(migration_configuration) == ["20260727_0038"]
+        engine = create_database_engine(migration_configuration)
+        try:
+            with engine.connect() as connection:
+                assert connection.execute(
+                    text(
+                        """
+                        SELECT ARRAY[
+                          to_regprocedure(
+                            'public.context_control_read_file_source_status(uuid,uuid)'
+                          ) IS NULL,
+                          to_regprocedure(
+                            'public.context_worker_fail_file_import_with_category(uuid,uuid,uuid,text,text,bigint,bigint,bytea,timestamptz,timestamptz)'
+                          ) IS NULL,
+                          NOT EXISTS (
+                            SELECT 1 FROM information_schema.columns
+                            WHERE table_schema = 'public'
+                              AND table_name = 'file_import_job'
+                              AND column_name = 'compilation_refusal_category'
+                          )
+                        ]
+                        """
+                    )
+                ).scalar_one() == [True, True, True]
+        finally:
+            engine.dispose()
+    finally:
+        command.upgrade(alembic_configuration, "head")
+
+    assert _revision_rows(migration_configuration) == [HEAD_REVISION]
+    engine = create_database_engine(migration_configuration)
+    try:
+        with engine.connect() as connection:
+            assert connection.execute(
+                text(
+                    """
+                    SELECT ARRAY[
+                      has_function_privilege(
+                        'context_engine_control',
+                        'public.context_control_read_file_source_status(uuid,uuid)',
+                        'EXECUTE'
+                      ),
+                      has_function_privilege(
+                        'context_engine_runtime',
+                        'public.context_control_read_file_source_status(uuid,uuid)',
+                        'EXECUTE'
+                      ),
+                      has_function_privilege(
+                        'context_engine_worker',
+                        'public.context_worker_fail_file_import_with_category(uuid,uuid,uuid,text,text,bigint,bigint,bytea,timestamptz,timestamptz)',
+                        'EXECUTE'
+                      ),
+                      has_function_privilege(
+                        'context_engine_control',
+                        'public.context_worker_fail_file_import_with_category(uuid,uuid,uuid,text,text,bigint,bigint,bytea,timestamptz,timestamptz)',
+                        'EXECUTE'
+                      ),
+                      has_schema_privilege(
+                        'context_engine_worker_lease_definer',
+                        'public',
+                        'CREATE'
+                      )
+                    ]
+                    """
+                )
+            ).scalar_one() == [True, False, True, False, False]
+    finally:
+        engine.dispose()
+
+
+def test_file_source_status_downgrade_observes_in_flight_compilation_refusal(
+    tmp_path: Path,
+    migration_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+    guarded_worker_engine: Engine,
+) -> None:
+    """The exclusive downgrade fence cannot discard a concurrent category."""
+
+    scenario = _prepare_file_import_scenario(
+        tmp_path,
+        migration_configuration,
+        guarded_control_engine,
+    )
+    claims = _scenario_claims(scenario)
+    assert _redeem_file_import_direct(guarded_worker_engine, claims) is not None
+    migration_engine = create_database_engine(migration_configuration)
+    fence = "context-engine.file-status-migration-fence"
+
+    def retain_refusal() -> bool:
+        with guarded_worker_engine.begin() as connection:
+            return bool(
+                connection.execute(
+                    text(
+                        """
+                        SELECT public.context_worker_fail_file_import_with_category(
+                            :organization_id, :job_id, :service_principal_id,
+                            :source_ref, 'unsupported_construct',
+                            :lease_generation, :signing_key_version, :nonce,
+                            :issued_at, :expires_at
+                        )
+                        """
+                    ),
+                    {
+                        "organization_id": claims.organization_id,
+                        "job_id": claims.job_id,
+                        "service_principal_id": claims.service_principal_id,
+                        "source_ref": claims.source_ref,
+                        "lease_generation": claims.lease_generation,
+                        "signing_key_version": claims.signing_key_version,
+                        "nonce": claims.nonce,
+                        "issued_at": claims.issued_at,
+                        "expires_at": claims.expires_at,
+                    },
+                ).scalar_one()
+            )
+
+    try:
+        with migration_engine.connect() as blocker:
+            blocker_transaction = blocker.begin()
+            try:
+                blocker.execute(
+                    text(
+                        "SELECT 1 FROM file_import_job "
+                        "WHERE organization_id = :organization_id "
+                        "AND job_id = :job_id FOR UPDATE"
+                    ),
+                    {
+                        "organization_id": scenario.organization_id,
+                        "job_id": scenario.prepared.job_id,
+                    },
+                )
+                with ThreadPoolExecutor(max_workers=2) as executor:
+                    pending_refusal = executor.submit(retain_refusal)
+                    with migration_engine.connect() as observer:
+                        deadline = monotonic() + 10
+                        while monotonic() < deadline:
+                            worker_holds_fence = observer.execute(
+                                text(
+                                    """
+                                    SELECT EXISTS (
+                                        SELECT 1 FROM pg_locks
+                                        WHERE locktype = 'advisory'
+                                          AND mode = 'ShareLock'
+                                          AND granted IS TRUE
+                                          AND database = (
+                                            SELECT oid FROM pg_database
+                                            WHERE datname = current_database()
+                                          )
+                                          AND classid = (
+                                            (hashtextextended(:fence, 0) >> 32)
+                                            & 4294967295
+                                          )::oid
+                                          AND objid = (
+                                            hashtextextended(:fence, 0)
+                                            & 4294967295
+                                          )::oid
+                                          AND objsubid = 1
+                                    )
+                                    """
+                                ),
+                                {"fence": fence},
+                            ).scalar_one()
+                            if worker_holds_fence:
+                                break
+                            sleep(0.01)
+                    assert worker_holds_fence
+                    pending_downgrade = executor.submit(
+                        command.downgrade,
+                        Config(ROOT / "alembic.ini"),
+                        "20260727_0038",
+                    )
+                    with migration_engine.connect() as observer:
+                        deadline = monotonic() + 10
+                        while monotonic() < deadline:
+                            downgrade_waits_for_worker = observer.execute(
+                                text(
+                                    """
+                                    SELECT EXISTS (
+                                        SELECT 1 FROM pg_locks
+                                        WHERE locktype = 'advisory'
+                                          AND mode = 'ExclusiveLock'
+                                          AND granted IS FALSE
+                                          AND database = (
+                                            SELECT oid FROM pg_database
+                                            WHERE datname = current_database()
+                                          )
+                                          AND classid = (
+                                            (hashtextextended(:fence, 0) >> 32)
+                                            & 4294967295
+                                          )::oid
+                                          AND objid = (
+                                            hashtextextended(:fence, 0)
+                                            & 4294967295
+                                          )::oid
+                                          AND objsubid = 1
+                                    )
+                                    """
+                                ),
+                                {"fence": fence},
+                            ).scalar_one()
+                            if downgrade_waits_for_worker:
+                                break
+                            sleep(0.01)
+                    assert downgrade_waits_for_worker
+                    blocker_transaction.commit()
+                    assert pending_refusal.result(timeout=10) is True
+                    with pytest.raises(
+                        RuntimeError,
+                        match="requires no retained compilation refusals",
+                    ):
+                        pending_downgrade.result(timeout=10)
+            finally:
+                if blocker_transaction.is_active:
+                    blocker_transaction.rollback()
+        assert _revision_rows(migration_configuration) == [HEAD_REVISION]
+        with migration_engine.connect() as connection:
+            assert (
+                connection.execute(
+                    text(
+                        "SELECT compilation_refusal_category FROM file_import_job "
+                        "WHERE organization_id = :organization_id AND job_id = :job_id"
+                    ),
+                    {
+                        "organization_id": scenario.organization_id,
+                        "job_id": scenario.prepared.job_id,
+                    },
+                ).scalar_one()
+                == "unsupported_construct"
+            )
+    finally:
+        command.upgrade(Config(ROOT / "alembic.ini"), "head")
+        migration_engine.dispose()
+        _delete_issue_27_upgrade_fixture(
+            migration_configuration,
+            scenario.organization_id,
+        )
 
 
 def test_fragment_embedding_revision_preserves_retained_fragments(

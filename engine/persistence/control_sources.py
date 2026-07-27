@@ -30,6 +30,8 @@ from engine.control import (
     FileChangeBaselineRef,
     FileChangeKind,
     FileChangeScanHead,
+    FileCompilationRefusal,
+    FileCompilationRefusalCategory,
     FileImportPath,
     FileResourceTombstone,
     FileRootRef,
@@ -40,6 +42,7 @@ from engine.control import (
     FileSourceProgress,
     FileSourcePublishOutcome,
     FileSourcePublishWatermark,
+    FileSourceStatus,
     OffboardFileSource,
     PendingFileChangeSchedule,
     RegisterFileSource,
@@ -63,9 +66,6 @@ from engine.supply import (
 )
 
 _REGISTRATION_OPERATION = "register_source"
-_PENDING_FILE_CHANGE_SCHEDULES_FUNCTION = (
-    "public.context_control_read_pending_file_change_schedules"
-)
 _ACTIVE_SOURCE_SELECT = """
     SELECT
         source.source_id,
@@ -793,14 +793,64 @@ class PostgreSQLControlStore:
                     connection.execute(
                         text(
                             """
-                            SELECT progress.*, baseline.*
-                            FROM public.context_control_read_file_source_progress(
-                                :organization_id, :source_id
-                            ) AS progress
-                            LEFT JOIN LATERAL public.
+                            WITH progress AS MATERIALIZED (
+                                SELECT * FROM public.
+                                    context_control_read_file_source_progress(
+                                        :organization_id, :source_id
+                                    )
+                            ), baseline AS MATERIALIZED (
+                                SELECT * FROM public.
                                 context_control_read_complete_file_change_baseline(
                                     :organization_id, :source_id
-                                ) AS baseline ON true
+                                )
+                            ), pending AS MATERIALIZED (
+                                SELECT COALESCE(
+                                    jsonb_agg(
+                                        jsonb_build_object(
+                                            'source_version_ref',
+                                                pending_source_version_id,
+                                            'page_ref', pending_page_ref
+                                        ) ORDER BY pending_page_ref COLLATE "C"
+                                    ),
+                                    '[]'::jsonb
+                                ) AS pending_schedules
+                                FROM public.
+                                    context_control_read_pending_file_change_schedules(
+                                        :organization_id, :source_id
+                                    )
+                            ), status_rows AS MATERIALIZED (
+                                SELECT * FROM public.
+                                    context_control_read_file_source_status(
+                                        :organization_id, :source_id
+                                    )
+                            ), status AS MATERIALIZED (
+                                SELECT max(status_observed_at)
+                                           AS status_observed_at,
+                                       max(active_resource_count)
+                                           AS active_resource_count,
+                                       max(last_successful_acquisition_at)
+                                           AS last_successful_acquisition_at,
+                                       max(last_successful_acquisition_age_seconds)
+                                           AS last_successful_acquisition_age_seconds,
+                                       COALESCE(
+                                           jsonb_agg(
+                                               jsonb_build_object(
+                                                   'path', refusal_path,
+                                                   'category', refusal_category
+                                               ) ORDER BY
+                                                   refusal_path COLLATE "C"
+                                           ) FILTER (
+                                               WHERE refusal_path IS NOT NULL
+                                           ),
+                                           '[]'::jsonb
+                                       ) AS refusal_documents
+                                FROM status_rows
+                            )
+                            SELECT progress.*, baseline.*, pending.*, status.*
+                            FROM progress
+                            LEFT JOIN baseline ON true
+                            CROSS JOIN pending
+                            CROSS JOIN status
                             """
                         ),
                         {
@@ -816,22 +866,16 @@ class PostgreSQLControlStore:
                     cast(Mapping[str, object], snapshot_row)
                     for snapshot_row in snapshot_rows
                 )
-                pending_schedule_rows = tuple(
-                    connection.execute(
-                        text(
-                            f"""
-                            SELECT *
-                            FROM {_PENDING_FILE_CHANGE_SCHEDULES_FUNCTION}(
-                                :organization_id, :source_id
-                            )
-                            """
-                        ),
-                        {
-                            "organization_id": call.organization_id,
-                            "source_id": source_ref.value,
-                        },
-                    ).mappings()
+                pending_schedule_documents = cast(
+                    list[dict[str, object]],
+                    row["pending_schedules"],
                 )
+                refusal_documents = cast(
+                    list[dict[str, object]],
+                    row["refusal_documents"],
+                )
+                if row["status_observed_at"] is None:
+                    raise SourceNotAvailable
                 checkpoint = (
                     None
                     if row["acquisition_sequence"] is None
@@ -893,14 +937,43 @@ class PostgreSQLControlStore:
                         )
                     ),
                     complete_change_baseline=self._complete_change_baseline(
-                        baseline_rows,
+                        cast(Sequence[Mapping[str, object]], baseline_rows),
                     ),
                     pending_change_schedules=tuple(
                         PendingFileChangeSchedule(
-                            source_version_ref=row["pending_source_version_id"],
-                            page_ref=row["pending_page_ref"],
+                            source_version_ref=UUID(
+                                cast(str, document["source_version_ref"]),
+                            ),
+                            page_ref=cast(str, document["page_ref"]),
                         )
-                        for row in pending_schedule_rows
+                        for document in pending_schedule_documents
+                    ),
+                    status=FileSourceStatus(
+                        observed_at=cast(
+                            datetime,
+                            row["status_observed_at"],
+                        ),
+                        active_resource_count=cast(
+                            int,
+                            row["active_resource_count"],
+                        ),
+                        last_successful_acquisition_at=cast(
+                            datetime | None,
+                            row["last_successful_acquisition_at"],
+                        ),
+                        last_successful_acquisition_age_seconds=cast(
+                            int | None,
+                            row["last_successful_acquisition_age_seconds"],
+                        ),
+                        refusals=tuple(
+                            FileCompilationRefusal(
+                                path=cast(str, document["path"]),
+                                category=FileCompilationRefusalCategory(
+                                    cast(str, document["category"])
+                                ),
+                            )
+                            for document in refusal_documents
+                        ),
                     ),
                 )
         except SourceNotAvailable:

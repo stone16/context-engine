@@ -32,7 +32,7 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
     document = manifest()
     tables = table_entries(document)
 
-    assert document["manifestVersion"] == "34.0.0"
+    assert document["manifestVersion"] == "35.0.0"
     assert set(tables) == {
         "active_release_manifest",
         "action_delivery_attempt",
@@ -718,11 +718,12 @@ def test_issue_30_file_source_offboarding_is_atomic_and_function_only() -> None:
         if policy["name"] == "context_resource_current_user_actor"
     )
     assert "context_runtime_file_source_lifecycle_allows" in (resource_policy["using"])
-    for policy in entries["file_import_job"]["rowLevelSecurity"]["policies"]:
-        if policy["roles"] == ["context_engine_worker_lease_definer"] and (
-            policy["command"] in {"SELECT", "UPDATE"}
-        ):
-            assert "active_source.lifecycle_state = 'active'" in policy["using"]
+    policies = {
+        policy["name"]: policy
+        for policy in entries["file_import_job"]["rowLevelSecurity"]["policies"]
+    }
+    for name in ("file_import_job_definer_select", "file_import_job_definer_update"):
+        assert "active_source.lifecycle_state = 'active'" in policies[name]["using"]
 
 
 def test_issue_21_file_source_manifest_is_closed_and_role_separated() -> None:
@@ -834,10 +835,50 @@ def test_issue_21_file_source_manifest_is_closed_and_role_separated() -> None:
     assert progress_read["databaseFunctions"] == [
         "context_control_read_file_source_progress",
         "context_control_read_pending_file_change_schedules",
+        "context_control_read_file_source_status",
     ]
     assert "file_source_change_page" in progress_read["reads"]
     assert "file_source_delete_observation_page" in progress_read["reads"]
     assert "file_acquisition" in progress_read["reads"]
+    assert "file_import_job" in progress_read["reads"]
+    assert "context_resource" in progress_read["reads"]
+    refusal_operation = next(
+        operation
+        for operation in manifest()["controlOperations"]
+        if operation["name"] == "fail_file_import"
+    )
+    assert refusal_operation["databaseFunctions"] == [
+        "context_worker_fail_file_import",
+        "context_worker_fail_file_import_with_category",
+    ]
+    assert refusal_operation["retainedCompilationRefusalCategoryAllowed"] is True
+    assert (
+        refusal_operation["sourceContentOrCompilerInternalsPersistenceAllowed"]
+        is False
+    )
+    job = entries["file_import_job"]
+    assert "ck_file_import_job_compilation_refusal_category" in {
+        constraint["name"] for constraint in job["checkConstraints"]
+    }
+    status_policy = next(
+        policy
+        for policy in job["rowLevelSecurity"]["policies"]
+        if policy["name"] == "file_import_job_file_status_definer_select"
+    )
+    assert "app.file_status_source_id" in status_policy["using"]
+    for table_name in (
+        "context_source",
+        "file_source_change_page",
+        "file_source_change",
+        "file_source_acquisition_checkpoint",
+        "file_source_publish_watermark",
+        "file_acquisition",
+        "file_import_job",
+        "context_resource",
+    ):
+        assert "EXECUTE context_control_read_file_source_status" in entries[
+            table_name
+        ]["permittedOperations"]["context_engine_control"]
     schedule = next(
         operation
         for operation in manifest()["controlOperations"]
@@ -908,9 +949,10 @@ def test_issue_21_file_source_manifest_is_closed_and_role_separated() -> None:
             "SELECT",
             "INSERT",
             "EXECUTE context_control_activate_file_change_feed",
-            "EXECUTE context_control_activate_file_delete_observations",
-            "EXECUTE context_control_read_pending_file_change_schedules",
-            "EXECUTE context_control_offboard_file_source",
+                "EXECUTE context_control_activate_file_delete_observations",
+                "EXECUTE context_control_read_pending_file_change_schedules",
+                "EXECUTE context_control_read_file_source_status",
+                "EXECUTE context_control_offboard_file_source",
         ],
         "context_engine_learning": [],
         "context_engine_runtime": [],
@@ -1725,7 +1767,8 @@ def test_content_manifest_preserves_lineage_visibility_and_immutability() -> Non
                 "UPDATE tombstoned",
             ]
             expected_operations["context_engine_control"] = [
-                "EXECUTE context_control_tombstone_file_resource"
+                "EXECUTE context_control_tombstone_file_resource",
+                "EXECUTE context_control_read_file_source_status",
             ]
         if entry["name"] in {"context_resource", "context_fragment"}:
             expected_operations["context_engine_citation_definer"] = ["SELECT"]

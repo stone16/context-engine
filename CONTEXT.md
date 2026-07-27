@@ -60,6 +60,7 @@ lifecycle 术语，以及建立在 ContextFragment 之上的 request-scoped 定�
 | `acquisition checkpoint` | Persistent monotonic acquisition progress | One Organization and ContextSource | None |
 | `publish watermark` | Persistent monotonic visibility progress | One Organization and ContextSource | None |
 | `File change baseline` | Persistent bounded projection of one complete accepted File scan | One Organization, ContextSource, and exact SourceVersion | Observation lineage only; never tombstone or Runtime authority |
+| `File compilation refusal` | Persistent closed category on a failed File import; current relevance is projected by status | One Organization, ContextSource, acquisition, and observed path | Operational evidence only; never Runtime authority |
 | `File delete observation` | Persistent content-free vanished-path evidence | One Organization, ContextSource, SourceVersion, scan, and prior baseline upsert | None; deletion execution remains separate |
 
 Reviewer classification: `ContextRevision` and `ContextFragment` are persistent;
@@ -508,6 +509,22 @@ diff，不保存正文。
   content-free. It neither authorizes Runtime delivery nor executes deletion.
 - **Do not confuse with:** acquisition checkpoint, publish watermark,
   ContextRevision snapshot, caller manifest, or source ACL evidence.
+
+### `File compilation refusal`
+
+A closed, content-free classification retained when the active File compiler
+rejects one acquisition. 中文：File compilation refusal 只保留封闭失败类别，不保留
+正文、解析器诊断或编译器内部信息。
+
+- **Owner/scope:** one Organization, ContextSource, File acquisition, and its
+  already-durable canonical path.
+- **Lifecycle:** retained on the failed import job; File status reports it only
+  while that exact path observation is an upsert in the latest complete scan
+  and its import is refused. A prior published Revision may remain active.
+- **Invariant:** the caller-visible worker refusal stays generic. The category
+  is operational evidence and cannot authorize or suppress Runtime delivery.
+- **Do not confuse with:** source content, compiler diagnostic, retry state,
+  acquisition checkpoint, publish watermark, or `stale_evidence`.
 
 ### `File delete observation`
 

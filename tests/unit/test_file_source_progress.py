@@ -19,6 +19,8 @@ from engine.control import (
     FileChangeBaselineRef,
     FileChangeKind,
     FileChangeScanHead,
+    FileCompilationRefusal,
+    FileCompilationRefusalCategory,
     FileImportPath,
     FileResourceTombstone,
     FileSourceAcquisitionCheckpoint,
@@ -27,6 +29,7 @@ from engine.control import (
     FileSourceProgress,
     FileSourcePublishOutcome,
     FileSourcePublishWatermark,
+    FileSourceStatus,
     OffboardFileSource,
     RegisterFileSource,
     ScheduledFileChangePage,
@@ -189,10 +192,44 @@ def test_progress_contracts_keep_checkpoint_and_watermark_semantics_separate() -
         "change_scan_head",
         "complete_change_baseline",
         "pending_change_schedules",
+        "status",
     ]
     assert FileSourceChangeKind.FILE_IMPORT.value == "file_import"
     assert FileSourceChangeKind.FILE_TOMBSTONE.value == "file_tombstone"
     assert FileSourcePublishOutcome.TOMBSTONED.value == "tombstoned"
+
+
+def test_file_source_status_retains_only_closed_content_free_refusals() -> None:
+    status = FileSourceStatus(
+        observed_at=NOW,
+        active_resource_count=1,
+        last_successful_acquisition_at=NOW - timedelta(seconds=7),
+        last_successful_acquisition_age_seconds=7,
+        refusals=(
+            FileCompilationRefusal(
+                path="nested/refused.md",
+                category=FileCompilationRefusalCategory.UNSUPPORTED_CONSTRUCT,
+            ),
+        ),
+    )
+    assert status.refusals[0].path == "nested/refused.md"
+    assert (
+        status.refusals[0].category
+        is FileCompilationRefusalCategory.UNSUPPORTED_CONSTRUCT
+    )
+
+    with pytest.raises(TypeError, match="category"):
+        FileCompilationRefusal(
+            path="a.md",
+            category="blockquote at line 3",  # type: ignore[arg-type]
+        )
+    with pytest.raises(ValueError, match="absent success"):
+        FileSourceStatus(
+            observed_at=NOW,
+            active_resource_count=0,
+            last_successful_acquisition_at=None,
+            last_successful_acquisition_age_seconds=0,
+        )
 
     with pytest.raises(ValueError, match="cannot exceed"):
         FileSourceProgress(

@@ -2186,7 +2186,7 @@ def test_progress_and_complete_baseline_share_one_statement_snapshot(
     guarded_control_engine: Engine,
     migration_configuration: DatabaseConfiguration,
 ) -> None:
-    """A concurrent complete-page commit cannot tear the progress projection."""
+    """A concurrent commit cannot tear the composed progress/status projection."""
 
     root = tmp_path / "root"
     root.mkdir()
@@ -2279,6 +2279,7 @@ def test_progress_and_complete_baseline_share_one_statement_snapshot(
     ) -> None:
         if (
             "context_control_read_file_source_progress" in statement
+            and "context_control_read_file_source_status" in statement
             and not snapshot_read.is_set()
         ):
             snapshot_read.set()
@@ -2328,6 +2329,8 @@ def test_progress_and_complete_baseline_share_one_statement_snapshot(
 
     assert observed.acquisition_checkpoint is not None
     assert observed.complete_change_baseline is not None
+    assert observed.status is not None
+    assert observed.status.active_resource_count == 0
     assert observed.acquisition_checkpoint.sequence == accepted_first.sequence
     assert observed.complete_change_baseline.reference.page_ref == (
         accepted_first.page_ref

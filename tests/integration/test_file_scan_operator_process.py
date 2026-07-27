@@ -265,6 +265,140 @@ def _scan(
     return cast(dict[str, object], json.loads(completed.stdout))
 
 
+def _status(
+    organization_id: UUID,
+    source_ref: UUID,
+    environment: dict[str, str],
+) -> dict[str, object]:
+    completed = _control(
+        [
+            "status",
+            "--organization-id",
+            str(organization_id),
+            "--source-ref",
+            str(source_ref),
+        ],
+        environment=environment,
+    )
+    assert completed.stderr == ""
+    return cast(dict[str, object], json.loads(completed.stdout))
+
+
+def test_status_reports_progress_freshness_and_current_compilation_refusals(
+    migration_configuration: DatabaseConfiguration,
+    file_scan_scenario: tuple[UUID, UUID, UUID, Path, dict[str, str]],
+) -> None:
+    organization_id, _membership_id, _receiver_id, root, environment = (
+        file_scan_scenario
+    )
+    (root / "good.md").write_text("# Good\n\nPublished.\n", encoding="utf-8")
+    (root / "refused.md").write_text(
+        "# Refused\n\n> category only\n",
+        encoding="utf-8",
+    )
+    source_ref = _register_activated_source(organization_id, environment)
+    never_scanned = _status(organization_id, source_ref, environment)
+    assert never_scanned == {
+        "acquisitionCheckpoint": None,
+        "activeResourceCount": 0,
+        "changeScanHead": None,
+        "completeChangeBaselineSize": 0,
+        "lastSuccessfulAcquisition": {"state": "never"},
+        "publishWatermark": None,
+        "refusals": [],
+        "sourceRef": str(source_ref),
+    }
+    scanned = _scan(organization_id, source_ref, environment)
+
+    before_publication = _status(organization_id, source_ref, environment)
+    assert before_publication == {
+        "acquisitionCheckpoint": before_publication["acquisitionCheckpoint"],
+        "activeResourceCount": 0,
+        "changeScanHead": before_publication["changeScanHead"],
+        "completeChangeBaselineSize": 2,
+        "lastSuccessfulAcquisition": {"state": "never"},
+        "publishWatermark": None,
+        "refusals": [],
+        "sourceRef": str(source_ref),
+    }
+    assert before_publication["acquisitionCheckpoint"] is not None
+    scan_head = cast(dict[str, object], before_publication["changeScanHead"])
+    assert scan_head == {
+        "checkpointRef": scanned["advancedCursor"],
+        "complete": True,
+        "pageLimit": 1,
+        "pageRef": scan_head["pageRef"],
+        "scanEpoch": scan_head["scanEpoch"],
+        "scanRef": scan_head["scanRef"],
+        "sequence": scan_head["sequence"],
+        "sourceVersionRef": scan_head["sourceVersionRef"],
+    }
+
+    assert _worker(environment)["outcome"] == "dispatched"
+    assert _worker(environment)["outcome"] == "refused"
+    after_workers = _status(organization_id, source_ref, environment)
+    assert after_workers["activeResourceCount"] == 1
+    assert after_workers["completeChangeBaselineSize"] == 2
+    assert after_workers["refusals"] == [
+        {"category": "unsupported_construct", "path": "refused.md"}
+    ]
+    engine = create_database_engine(migration_configuration)
+    try:
+        with engine.connect() as connection:
+            retained = connection.execute(
+                text(
+                    "SELECT acquisition.relative_path, "
+                    "job.compilation_refusal_category "
+                    "FROM file_import_job AS job "
+                    "JOIN file_acquisition AS acquisition "
+                    "ON acquisition.organization_id = job.organization_id "
+                    "AND acquisition.acquisition_id = job.acquisition_id "
+                    "WHERE job.organization_id = :organization_id "
+                    "AND job.source_id = :source_id "
+                    "AND job.compilation_refusal_category IS NOT NULL"
+                ),
+                {"organization_id": organization_id, "source_id": source_ref},
+            ).one()
+        assert retained._tuple() == ("refused.md", "unsupported_construct")
+        assert "category only" not in repr(retained._tuple())
+    finally:
+        engine.dispose()
+    successful = cast(dict[str, object], after_workers["lastSuccessfulAcquisition"])
+    assert successful["state"] == "succeeded"
+    assert type(successful["at"]) is str
+    assert type(successful["ageSeconds"]) is int
+    assert successful["ageSeconds"] >= 0
+    assert after_workers["publishWatermark"] is not None
+
+    (root / "good.md").write_text(
+        "# Good changed\n\n> current content is refused\n",
+        encoding="utf-8",
+    )
+    _scan(organization_id, source_ref, environment)
+    assert _worker(environment)["outcome"] == "refused"
+    after_published_path_refusal = _status(
+        organization_id,
+        source_ref,
+        environment,
+    )
+    assert after_published_path_refusal["activeResourceCount"] == 1
+    assert after_published_path_refusal["refusals"] == [
+        {"category": "unsupported_construct", "path": "good.md"},
+        {"category": "unsupported_construct", "path": "refused.md"},
+    ]
+
+    (root / "refused.md").unlink()
+    deleted = _scan(organization_id, source_ref, environment)
+    after_delete = _status(organization_id, source_ref, environment)
+    deleted_head = cast(dict[str, object], after_delete["changeScanHead"])
+    assert deleted_head["checkpointRef"] == deleted["advancedCursor"]
+    assert after_delete["completeChangeBaselineSize"] == 2
+    assert after_delete["activeResourceCount"] == 1
+    assert after_delete["refusals"] == [
+        {"category": "unsupported_construct", "path": "good.md"}
+    ]
+
+
 def test_scan_process_schedules_only_changed_upserts_and_existing_worker_consumes(
     migration_configuration: DatabaseConfiguration,
     file_scan_scenario: tuple[UUID, UUID, UUID, Path, dict[str, str]],
@@ -710,13 +844,16 @@ def test_scan_process_does_not_reconcile_a_foreign_larger_mixed_page(
     engine = create_database_engine(migration_configuration)
     try:
         with engine.connect() as connection:
-            assert connection.execute(
-                text(
-                    "SELECT count(*) FROM file_import_job "
-                    "WHERE organization_id = :org AND source_id = :source"
-                ),
-                {"org": organization_id, "source": source_ref},
-            ).scalar_one() == 2
+            assert (
+                connection.execute(
+                    text(
+                        "SELECT count(*) FROM file_import_job "
+                        "WHERE organization_id = :org AND source_id = :source"
+                    ),
+                    {"org": organization_id, "source": source_ref},
+                ).scalar_one()
+                == 2
+            )
     finally:
         engine.dispose()
 
