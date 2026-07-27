@@ -181,6 +181,10 @@ def test_post_init_role_provisioning_repairs_a_legacy_volume_idempotently(
         scheduler_password=os.environ["CONTEXT_ENGINE_SCHEDULER_PASSWORD"],
         learning_role=LEARNING_ROLE,
         learning_password=os.environ["CONTEXT_ENGINE_LEARNING_PASSWORD"],
+        release_operator_role="context_engine_release_operator",
+        release_operator_password=os.environ[
+            "CONTEXT_ENGINE_RELEASE_OPERATOR_PASSWORD"
+        ],
         security_operator_role=OPERATOR_ROLE,
         security_operator_password=os.environ[
             "CONTEXT_ENGINE_SECURITY_OPERATOR_PASSWORD"

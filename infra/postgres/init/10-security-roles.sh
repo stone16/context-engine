@@ -22,6 +22,8 @@ required_environment=(
   CONTEXT_ENGINE_SCHEDULER_PASSWORD
   CONTEXT_ENGINE_LEARNING_ROLE
   CONTEXT_ENGINE_LEARNING_PASSWORD
+  CONTEXT_ENGINE_RELEASE_OPERATOR_ROLE
+  CONTEXT_ENGINE_RELEASE_OPERATOR_PASSWORD
   CONTEXT_ENGINE_SECURITY_OPERATOR_ROLE
   CONTEXT_ENGINE_SECURITY_OPERATOR_PASSWORD
 )
@@ -57,6 +59,8 @@ psql \
 \getenv scheduler_password CONTEXT_ENGINE_SCHEDULER_PASSWORD
 \getenv learning_role CONTEXT_ENGINE_LEARNING_ROLE
 \getenv learning_password CONTEXT_ENGINE_LEARNING_PASSWORD
+\getenv release_operator_role CONTEXT_ENGINE_RELEASE_OPERATOR_ROLE
+\getenv release_operator_password CONTEXT_ENGINE_RELEASE_OPERATOR_PASSWORD
 \getenv security_operator_role CONTEXT_ENGINE_SECURITY_OPERATOR_ROLE
 \getenv security_operator_password CONTEXT_ENGINE_SECURITY_OPERATOR_PASSWORD
 
@@ -150,6 +154,16 @@ CREATE ROLE :"learning_role"
   NOREPLICATION
   NOBYPASSRLS;
 
+CREATE ROLE :"release_operator_role"
+  LOGIN
+  PASSWORD :'release_operator_password'
+  NOSUPERUSER
+  NOCREATEDB
+  NOCREATEROLE
+  NOINHERIT
+  NOREPLICATION
+  NOBYPASSRLS;
+
 CREATE ROLE :"security_operator_role"
   LOGIN
   PASSWORD :'security_operator_password'
@@ -164,6 +178,7 @@ REVOKE ALL ON DATABASE :"database_name" FROM PUBLIC;
 GRANT CONNECT ON DATABASE :"database_name"
   TO :"migrator_role", :"control_role", :"runtime_role", :"worker_role", :"scheduler_role",
      :"identity_role", :"egress_role", :"action_role", :"learning_role", :"security_operator_role";
+GRANT CONNECT ON DATABASE :"database_name" TO :"release_operator_role";
 ALTER DATABASE :"database_name" OWNER TO :"migrator_role";
 
 REVOKE ALL ON SCHEMA public FROM PUBLIC;
@@ -171,6 +186,7 @@ ALTER SCHEMA public OWNER TO :"migrator_role";
 GRANT USAGE ON SCHEMA public
   TO :"control_role", :"runtime_role", :"worker_role", :"scheduler_role",
      :"identity_role", :"egress_role", :"action_role", :"learning_role", :"security_operator_role";
+GRANT USAGE ON SCHEMA public TO :"release_operator_role";
 
 -- pgvector is an untrusted extension, so only the disposable bootstrap
 -- superuser creates it. Application schema objects remain migrator-owned.

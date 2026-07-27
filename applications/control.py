@@ -7,6 +7,7 @@ import json
 import os
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from uuid import UUID, uuid4
 
 from applications.file_root_configuration import file_roots
@@ -16,6 +17,7 @@ from applications.operator_authentication import (
     LocalOperatorAuthorities,
     LocalOperatorConfiguration,
 )
+from applications.release_promotion import promote_release, release_report_json
 from engine.control import (
     ActivateFileChangeFeed,
     ActivateFileDeleteObservations,
@@ -76,6 +78,12 @@ def _parser() -> argparse.ArgumentParser:
         source_command = subcommands.add_parser(name, help=help_text)
         _organization_argument(source_command)
         source_command.add_argument("--source-ref", required=True)
+    promote = subcommands.add_parser(
+        "promote-release",
+        help="evaluate and promote the exact current dogfood File corpus",
+    )
+    _organization_argument(promote)
+    promote.add_argument("--evidence-file", required=True, type=Path)
     return parser
 
 
@@ -92,6 +100,26 @@ def main(argv: Sequence[str] | None = None) -> None:
         except Exception:  # The local process must never render connection details.
             parser.exit(1, "context-engine-control: migration refused\n")
         print(revision, flush=True)
+        return
+    if arguments.subcommand == "promote-release":
+        try:
+            organization_id = UUID(arguments.organization_id)
+            configuration = LocalOperatorConfiguration.load(os.environ)
+            if (
+                configuration is None
+                or configuration.organization_id != organization_id
+            ):
+                raise SourceNotAvailable
+            promotion = promote_release(
+                organization_id=organization_id,
+                evidence_file=arguments.evidence_file,
+                configuration=configuration,
+                authorities=configuration.authorities(),
+            )
+            rendered = release_report_json(promotion)
+        except Exception:
+            parser.exit(1, "context-engine-control: operation refused\n")
+        print(rendered, flush=True)
         return
     if arguments.subcommand not in _OPERATOR_SUBCOMMANDS:
         parser.error("unknown operation")

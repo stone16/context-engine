@@ -23,6 +23,7 @@ from engine.learning import (
     PromotionCommit,
     ReleaseCandidate,
     ReleaseCandidateRef,
+    ReleaseCandidateSnapshot,
     ReleaseEvaluation,
     ReleaseEvaluationKeyring,
     ReleaseEvaluationUnavailable,
@@ -32,11 +33,15 @@ from engine.learning import (
     ReleasePromotionUnavailable,
     RuntimeProfileRef,
     TrustedPromotionCall,
+    VerifiedReleaseOperatorIdentity,
     verify_release_candidate,
     verify_release_evaluation,
     verify_release_manifest,
 )
-from engine.persistence.role_guard import assert_learning_role
+from engine.persistence.role_guard import (
+    assert_learning_role,
+    assert_release_operator_role,
+)
 
 
 def _gate_parameters(evidence: tuple[GateEvidence, ...]) -> dict[str, str]:
@@ -424,6 +429,64 @@ def _load_candidate(
             "release candidate reference does not match persisted lineage"
         )
     return candidate
+
+
+class PostgreSQLReleaseCandidateSnapshotStore:
+    """Release-operator-only observation of the current candidate inputs."""
+
+    def __init__(self, engine: Engine) -> None:
+        if not isinstance(engine, Engine):
+            raise TypeError(
+                "PostgreSQLReleaseCandidateSnapshotStore requires a SQLAlchemy Engine"
+            )
+        self._engine = engine
+
+    def observe_candidate_snapshot(
+        self,
+        organization_id: UUID,
+        identity: VerifiedReleaseOperatorIdentity,
+    ) -> ReleaseCandidateSnapshot:
+        """Observe the exact active release base and active Revision refs."""
+
+        if (
+            type(organization_id) is not UUID
+            or type(identity) is not VerifiedReleaseOperatorIdentity
+            or identity.organization_id != organization_id
+        ):
+            raise TypeError("candidate snapshot requires Organization UUID")
+        try:
+            with self._engine.begin() as connection:
+                assert_release_operator_role(connection)
+                row = connection.execute(
+                    text(
+                        "SELECT * FROM public."
+                        "context_release_observe_candidate_snapshot("
+                        ":organization_id, :operator_ref, "
+                        ":authentication_binding_ref, :authority_ref, "
+                        ":authority_digest)"
+                    ),
+                    {
+                        "organization_id": organization_id,
+                        "operator_ref": identity.operator_ref,
+                        "authentication_binding_ref": (
+                            identity.authentication_binding_ref
+                        ),
+                        "authority_ref": identity.authority_ref,
+                        "authority_digest": identity.authority_digest,
+                    },
+                ).one()
+            return ReleaseCandidateSnapshot(
+                organization_id=organization_id,
+                expected_active_generation=row.active_generation,
+                expected_base_manifest_digest=row.active_manifest_digest,
+                active_revision_refs=tuple(row.active_revision_refs),
+            )
+        except ReleaseEvaluationUnavailable:
+            raise
+        except (AssertionError, SQLAlchemyError, TypeError, ValueError) as error:
+            raise ReleaseEvaluationUnavailable(
+                "release candidate snapshot is unavailable"
+            ) from error
 
 
 class PostgreSQLReleaseStore:

@@ -15,6 +15,7 @@ from engine.persistence.configuration import (
     LEARNING_ROLE,
     MIGRATOR_ROLE,
     OPERATOR_ROLE,
+    RELEASE_OPERATOR_ROLE,
     RUNTIME_ROLE,
     SCHEDULER_ROLE,
     WORKER_ROLE,
@@ -64,6 +65,10 @@ def database_environment() -> dict[str, str]:
             "postgresql+psycopg://context_engine_learning:learning-secret@"
             "127.0.0.1:5432/context_engine"
         ),
+        "CONTEXT_ENGINE_RELEASE_OPERATOR_DATABASE_URL": (
+            "postgresql+psycopg://context_engine_release_operator:release-secret@"
+            "127.0.0.1:5432/context_engine"
+        ),
         "CONTEXT_ENGINE_SECURITY_OPERATOR_DATABASE_URL": (
             "postgresql+psycopg://context_engine_security_operator:operator-secret@"
             "127.0.0.1:5432/context_engine"
@@ -81,6 +86,7 @@ def database_environment() -> dict[str, str]:
         "CONTEXT_ENGINE_WORKER_ROLE": WORKER_ROLE,
         "CONTEXT_ENGINE_SCHEDULER_ROLE": SCHEDULER_ROLE,
         "CONTEXT_ENGINE_LEARNING_ROLE": LEARNING_ROLE,
+        "CONTEXT_ENGINE_RELEASE_OPERATOR_ROLE": RELEASE_OPERATOR_ROLE,
         "CONTEXT_ENGINE_SECURITY_OPERATOR_ROLE": OPERATOR_ROLE,
     }
 
@@ -100,6 +106,10 @@ def database_environment() -> dict[str, str]:
             "CONTEXT_ENGINE_SCHEDULER_DATABASE_URL",
         ),
         (DatabasePurpose.LEARNING, "CONTEXT_ENGINE_LEARNING_DATABASE_URL"),
+        (
+            DatabasePurpose.RELEASE_OPERATOR,
+            "CONTEXT_ENGINE_RELEASE_OPERATOR_DATABASE_URL",
+        ),
         (
             DatabasePurpose.SECURITY_OPERATOR,
             "CONTEXT_ENGINE_SECURITY_OPERATOR_DATABASE_URL",
@@ -159,6 +169,11 @@ def test_runtime_never_falls_back_to_migration_credentials() -> None:
         (
             DatabasePurpose.LEARNING,
             "CONTEXT_ENGINE_LEARNING_DATABASE_URL",
+            MIGRATOR_ROLE,
+        ),
+        (
+            DatabasePurpose.RELEASE_OPERATOR,
+            "CONTEXT_ENGINE_RELEASE_OPERATOR_DATABASE_URL",
             MIGRATOR_ROLE,
         ),
         (
@@ -239,6 +254,7 @@ def test_harness_contract_keeps_roles_distinct_and_test_uses_runtime() -> None:
     assert configurations.runtime.expected_role == RUNTIME_ROLE
     assert configurations.worker.expected_role == WORKER_ROLE
     assert configurations.learning.expected_role == LEARNING_ROLE
+    assert configurations.release_operator.expected_role == RELEASE_OPERATOR_ROLE
     assert configurations.operator.expected_role == OPERATOR_ROLE
     assert configurations.security_test.expected_role == RUNTIME_ROLE
     assert configurations.security_test.url == configurations.runtime.url

@@ -30,6 +30,7 @@ from engine.persistence.configuration import (
     MIGRATOR_ROLE,
     OPERATOR_ROLE,
     RELEASE_DEFINER_ROLE,
+    RELEASE_OPERATOR_ROLE,
     SCHEDULER_ROLE,
     WORKER_LEASE_DEFINER_ROLE,
 )
@@ -58,6 +59,8 @@ class RoleProvisioningContract:
     scheduler_password: str
     learning_role: str
     learning_password: str
+    release_operator_role: str
+    release_operator_password: str
     security_operator_role: str
     security_operator_password: str
     definer_role: str
@@ -82,6 +85,7 @@ class RoleProvisioningContract:
             "action_role",
             "scheduler_role",
             "learning_role",
+            "release_operator_role",
             "security_operator_role",
             "definer_role",
             "worker_lease_definer_role",
@@ -105,6 +109,7 @@ class RoleProvisioningContract:
             self.action_role,
             self.scheduler_role,
             self.learning_role,
+            self.release_operator_role,
             self.security_operator_role,
             self.definer_role,
             self.worker_lease_definer_role,
@@ -117,7 +122,7 @@ class RoleProvisioningContract:
             self.action_prepare_definer_role,
             self.action_execute_definer_role,
         }
-        if len(security_roles) != 18:
+        if len(security_roles) != 19:
             raise ValueError("provisioned database roles must be distinct")
         if type(self.postgres_port) is not int or not 1 <= self.postgres_port <= 65535:
             raise ValueError("postgres_port must be a valid TCP port")
@@ -129,6 +134,7 @@ class RoleProvisioningContract:
             "action_password",
             "scheduler_password",
             "learning_password",
+            "release_operator_password",
             "security_operator_password",
         ):
             value = getattr(self, field_name)
@@ -157,6 +163,8 @@ def _contract_from_environment(
         "CONTEXT_ENGINE_SCHEDULER_PASSWORD",
         "CONTEXT_ENGINE_LEARNING_ROLE",
         "CONTEXT_ENGINE_LEARNING_PASSWORD",
+        "CONTEXT_ENGINE_RELEASE_OPERATOR_ROLE",
+        "CONTEXT_ENGINE_RELEASE_OPERATOR_PASSWORD",
         "CONTEXT_ENGINE_SECURITY_OPERATOR_ROLE",
         "CONTEXT_ENGINE_SECURITY_OPERATOR_PASSWORD",
     }
@@ -184,6 +192,10 @@ def _contract_from_environment(
         raise ValueError("database role provisioning has an invalid scheduler role")
     if environment["CONTEXT_ENGINE_LEARNING_ROLE"] != LEARNING_ROLE:
         raise ValueError("database role provisioning has an invalid learning role")
+    if environment["CONTEXT_ENGINE_RELEASE_OPERATOR_ROLE"] != RELEASE_OPERATOR_ROLE:
+        raise ValueError(
+            "database role provisioning has an invalid release operator role"
+        )
     if environment["CONTEXT_ENGINE_SECURITY_OPERATOR_ROLE"] != OPERATOR_ROLE:
         raise ValueError(
             "database role provisioning has an invalid security operator role"
@@ -210,6 +222,10 @@ def _contract_from_environment(
         scheduler_password=environment["CONTEXT_ENGINE_SCHEDULER_PASSWORD"],
         learning_role=environment["CONTEXT_ENGINE_LEARNING_ROLE"],
         learning_password=environment["CONTEXT_ENGINE_LEARNING_PASSWORD"],
+        release_operator_role=environment["CONTEXT_ENGINE_RELEASE_OPERATOR_ROLE"],
+        release_operator_password=environment[
+            "CONTEXT_ENGINE_RELEASE_OPERATOR_PASSWORD"
+        ],
         security_operator_role=environment["CONTEXT_ENGINE_SECURITY_OPERATOR_ROLE"],
         security_operator_password=environment[
             "CONTEXT_ENGINE_SECURITY_OPERATOR_PASSWORD"
@@ -335,6 +351,7 @@ def provision_security_roles(
     _create_role_if_missing(connection, contract.action_role)
     _create_role_if_missing(connection, contract.scheduler_role)
     _create_role_if_missing(connection, contract.learning_role)
+    _create_role_if_missing(connection, contract.release_operator_role)
     _create_role_if_missing(connection, contract.security_operator_role)
     _create_role_if_missing(connection, contract.definer_role)
     _create_role_if_missing(connection, contract.worker_lease_definer_role)
@@ -405,6 +422,15 @@ def provision_security_roles(
         ).format(
             sql.Identifier(contract.learning_role),
             sql.Literal(contract.learning_password),
+        )
+    )
+    connection.execute(
+        sql.SQL(
+            "ALTER ROLE {} WITH LOGIN PASSWORD {} NOSUPERUSER NOCREATEDB "
+            "NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS"
+        ).format(
+            sql.Identifier(contract.release_operator_role),
+            sql.Literal(contract.release_operator_password),
         )
     )
     connection.execute(
@@ -492,6 +518,7 @@ def provision_security_roles(
     _revoke_roles_granted_to(connection, contract.action_role)
     _revoke_roles_granted_to(connection, contract.scheduler_role)
     _revoke_roles_granted_to(connection, contract.learning_role)
+    _revoke_roles_granted_to(connection, contract.release_operator_role)
     _revoke_roles_granted_to(connection, contract.security_operator_role)
     _revoke_roles_granted_to(connection, contract.definer_role)
     _revoke_roles_granted_to(connection, contract.worker_lease_definer_role)
@@ -509,6 +536,7 @@ def provision_security_roles(
     _revoke_members_of(connection, contract.action_role)
     _revoke_members_of(connection, contract.scheduler_role)
     _revoke_members_of(connection, contract.learning_role)
+    _revoke_members_of(connection, contract.release_operator_role)
     _revoke_members_of(connection, contract.security_operator_role)
     _revoke_members_of(connection, contract.definer_role)
     _revoke_members_of(connection, contract.worker_lease_definer_role)
@@ -588,6 +616,7 @@ def provision_security_roles(
         contract.action_role,
         contract.scheduler_role,
         contract.learning_role,
+        contract.release_operator_role,
         contract.security_operator_role,
         contract.definer_role,
         contract.worker_lease_definer_role,
@@ -650,6 +679,12 @@ def provision_security_roles(
         sql.SQL("GRANT CONNECT ON DATABASE {} TO {}").format(
             sql.Identifier(contract.database_name),
             sql.Identifier(contract.learning_role),
+        )
+    )
+    connection.execute(
+        sql.SQL("GRANT CONNECT ON DATABASE {} TO {}").format(
+            sql.Identifier(contract.database_name),
+            sql.Identifier(contract.release_operator_role),
         )
     )
     connection.execute(

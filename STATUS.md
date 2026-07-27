@@ -42,10 +42,13 @@ I/O**. ADR-0068 separately activates one explicit loopback dogfood composition;
 it does not widen the default. ADR-0069 also admits a separate, short-lived
 local operator process only when complete Control, release, dogfood, and worker
 credential separation is explicitly configured; it adds no HTTP route and
-grants one Control operation per call. Production operator authentication,
-multiple operators, durable role assignment, delegation, RBAC, and every
-network-reachable operator surface remain `NOT_ACTIVE`. The following are
-known, designed, and deliberately not active:
+grants one Control operation per call. ADR-0073 adds one explicit local
+`promote-release` command under the separate release identity; it assembles a
+candidate from the exact current File corpus and still delegates activation
+only to `ContextLearning.evaluate` and `ContextLearning.promote`. Production
+operator authentication, multiple operators, durable role assignment,
+delegation, RBAC, and every network-reachable operator surface remain
+`NOT_ACTIVE`. The following are known, designed, and deliberately not active:
 
 | Capability | Note |
 |---|---|
@@ -76,6 +79,21 @@ application remains reject-all and reports `NOT_ACTIVE`. Production
 authentication, a second human, network exposure beyond the maintainer machine,
 group/public audience, dogfood `OpenCitation`, `Continue`, hybrid retrieval, non-File providers, and
 external query embeddings remain `NOT_ACTIVE`.
+
+### Bounded local Release promotion
+
+| ADR | Activates |
+|---|---|
+| [0073](./docs/decisions/0073-compose-explicit-release-candidates-from-current-corpus.md) | Exact current-corpus candidate assembly and explicit four-gate promotion through the existing sole Learning publication owner |
+
+Real-PostgreSQL fixture evidence proves that every active Revision is selected,
+the dogfood profile becomes active, the API process then reports
+`runtime_delivery: ACTIVE`, unchanged reruns preserve the same immutable
+manifest while advancing its audited generation, empty corpora fail closed,
+and Control/release credentials are not interchangeable. This does not claim a
+maintainer-private corpus run. Rollback, autonomous candidate generation,
+automatic post-scan promotion, Curation publication, production grant
+administration, and a network operator surface remain `NOT_ACTIVE`.
 
 ## Activation ledger
 
@@ -118,6 +136,7 @@ Follow the ADR for its exact evidence boundary.
 | [0070](./docs/decisions/0070-activate-file-change-feed-from-registration.md) | Advance an exact registered v1 or import-enabled v2 File source to the existing immutable v3 change-feed manifest |
 | [0071](./docs/decisions/0071-compose-bounded-file-scan-cycles.md) | Compose a bounded local File scan from operation-exact accept and schedule calls with checkpoint idempotence |
 | [0072](./docs/decisions/0072-report-file-source-status-with-closed-refusals.md) | Report content-free File freshness and current unpublished paths using closed retained refusal categories |
+| [0073](./docs/decisions/0073-compose-explicit-release-candidates-from-current-corpus.md) | Compose and explicitly promote the exact current dogfood File corpus through ContextLearning |
 
 ADR-0065 extends the active File Provider boundary from a flat root to
 deterministic recursive discovery of canonical nested Markdown paths. Each

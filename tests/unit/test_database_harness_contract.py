@@ -54,6 +54,7 @@ def test_compose_project_identity_is_generated_per_checkout() -> None:
         "worker_role",
         "scheduler_role",
         "learning_role",
+        "release_operator_role",
         "security_operator_role",
     ],
 )
@@ -113,6 +114,8 @@ def test_compose_passes_dedicated_operator_credentials_to_bootstrap() -> None:
     assert "CONTEXT_ENGINE_SECURITY_OPERATOR_PASSWORD" in compose
     assert "CONTEXT_ENGINE_LEARNING_ROLE" in compose
     assert "CONTEXT_ENGINE_LEARNING_PASSWORD" in compose
+    assert "CONTEXT_ENGINE_RELEASE_OPERATOR_ROLE" in compose
+    assert "CONTEXT_ENGINE_RELEASE_OPERATOR_PASSWORD" in compose
 
 
 def test_readiness_probe_includes_dedicated_operator_configuration() -> None:
@@ -124,6 +127,7 @@ def test_readiness_probe_includes_dedicated_operator_configuration() -> None:
     assert "configurations.egress" in wait_script
     assert "configurations.action" in wait_script
     assert "configurations.learning" in wait_script
+    assert "configurations.release_operator" in wait_script
     assert "configurations.operator" in wait_script
     assert (
         "                    if configuration.purpose is "
@@ -172,6 +176,8 @@ def test_harness_provisions_post_init_roles_before_readiness() -> None:
     assert "contract.release_definer_role" in provisioner
     assert "LEARNING_ROLE" in provisioner
     assert "contract.learning_role" in provisioner
+    assert "contract.release_operator_role" in provisioner
+    assert "contract.release_operator_password" in provisioner
     assert "OPERATOR_ROLE" in provisioner
     assert "NOLOGIN NOSUPERUSER" in provisioner
     assert "WITH ADMIN FALSE, INHERIT FALSE, SET TRUE" in provisioner

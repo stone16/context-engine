@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import pytest
 
-from engine.persistence.configuration import LEARNING_ROLE, RELEASE_DEFINER_ROLE
+from engine.persistence.configuration import (
+    LEARNING_ROLE,
+    RELEASE_DEFINER_ROLE,
+    RELEASE_OPERATOR_ROLE,
+)
 from scripts.provision_database_roles import _contract_from_environment
 
 
@@ -25,6 +29,8 @@ def _provisioning_environment() -> dict[str, str]:
         "CONTEXT_ENGINE_SCHEDULER_PASSWORD": "7" * 64,
         "CONTEXT_ENGINE_LEARNING_ROLE": LEARNING_ROLE,
         "CONTEXT_ENGINE_LEARNING_PASSWORD": "c" * 64,
+        "CONTEXT_ENGINE_RELEASE_OPERATOR_ROLE": RELEASE_OPERATOR_ROLE,
+        "CONTEXT_ENGINE_RELEASE_OPERATOR_PASSWORD": "f" * 64,
         "CONTEXT_ENGINE_SECURITY_OPERATOR_ROLE": "context_engine_security_operator",
         "CONTEXT_ENGINE_SECURITY_OPERATOR_PASSWORD": "d" * 64,
     }
@@ -36,6 +42,7 @@ def test_provisioning_contract_requires_exact_learning_authority() -> None:
     assert contract.learning_role == LEARNING_ROLE
     assert contract.learning_password == "c" * 64
     assert contract.release_definer_role == RELEASE_DEFINER_ROLE
+    assert contract.release_operator_role == RELEASE_OPERATOR_ROLE
 
 
 @pytest.mark.parametrize(

@@ -32,7 +32,7 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
     document = manifest()
     tables = table_entries(document)
 
-    assert document["manifestVersion"] == "35.0.0"
+    assert document["manifestVersion"] == "37.0.0"
     assert set(tables) == {
         "active_release_manifest",
         "action_delivery_attempt",
@@ -955,6 +955,9 @@ def test_issue_21_file_source_manifest_is_closed_and_role_separated() -> None:
                 "EXECUTE context_control_offboard_file_source",
         ],
         "context_engine_learning": [],
+        "context_engine_release_operator": [
+            "EXECUTE context_release_observe_candidate_snapshot"
+        ],
         "context_engine_runtime": [],
         "context_engine_security_operator": [],
         "context_engine_worker": [],
@@ -965,6 +968,7 @@ def test_issue_21_file_source_manifest_is_closed_and_role_separated() -> None:
             "SELECT",
             "UPDATE lifecycle_state, active_version_id",
         ],
+        "context_engine_release_definer": ["SELECT"],
     }
     assert version["permittedOperations"] == {
         "context_engine_control": [
@@ -1770,6 +1774,11 @@ def test_content_manifest_preserves_lineage_visibility_and_immutability() -> Non
                 "EXECUTE context_control_tombstone_file_resource",
                 "EXECUTE context_control_read_file_source_status",
             ]
+            expected_operations["context_engine_release_definer"] = ["SELECT"]
+            expected_operations["context_engine_learning"] = []
+            expected_operations["context_engine_release_operator"] = [
+                "EXECUTE context_release_observe_candidate_snapshot"
+            ]
         if entry["name"] in {"context_resource", "context_fragment"}:
             expected_operations["context_engine_citation_definer"] = ["SELECT"]
         assert entry["permittedOperations"] == expected_operations
@@ -2465,6 +2474,13 @@ def test_release_force_rls_and_grants_match_the_promotion_boundary() -> None:
         )
         assert entry["permittedOperations"]["context_engine_worker"] == []
         assert entry["permittedOperations"]["context_engine_security_operator"] == []
+        assert entry["permittedOperations"].get(
+            "context_engine_release_operator", []
+        ) == (
+            ["EXECUTE context_release_observe_candidate_snapshot"]
+            if name in {"release_operator_grant", "active_release_manifest"}
+            else []
+        )
         runtime_policies = [
             policy
             for policy in rls["policies"]

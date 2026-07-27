@@ -28,6 +28,7 @@ RUNTIME_ROLE = "context_engine_runtime"
 WORKER_ROLE = "context_engine_worker"
 SCHEDULER_ROLE = "context_engine_scheduler"
 LEARNING_ROLE = "context_engine_learning"
+RELEASE_OPERATOR_ROLE = "context_engine_release_operator"
 OPERATOR_ROLE = "context_engine_security_operator"
 RELEASE_DEFINER_ROLE = "context_engine_release_definer"
 
@@ -47,6 +48,10 @@ class DatabasePurpose(Enum):
         SCHEDULER_ROLE,
     )
     LEARNING = ("CONTEXT_ENGINE_LEARNING_DATABASE_URL", LEARNING_ROLE)
+    RELEASE_OPERATOR = (
+        "CONTEXT_ENGINE_RELEASE_OPERATOR_DATABASE_URL",
+        RELEASE_OPERATOR_ROLE,
+    )
     SECURITY_OPERATOR = (
         "CONTEXT_ENGINE_SECURITY_OPERATOR_DATABASE_URL",
         OPERATOR_ROLE,
@@ -72,6 +77,7 @@ ROLE_ENVIRONMENT_VARIABLES: dict[DatabasePurpose, str] = {
     DatabasePurpose.SUPPLY_WORKER: "CONTEXT_ENGINE_WORKER_ROLE",
     DatabasePurpose.SUPPLY_SCHEDULER: "CONTEXT_ENGINE_SCHEDULER_ROLE",
     DatabasePurpose.LEARNING: "CONTEXT_ENGINE_LEARNING_ROLE",
+    DatabasePurpose.RELEASE_OPERATOR: "CONTEXT_ENGINE_RELEASE_OPERATOR_ROLE",
     DatabasePurpose.SECURITY_OPERATOR: "CONTEXT_ENGINE_SECURITY_OPERATOR_ROLE",
     DatabasePurpose.SECURITY_TEST: "CONTEXT_ENGINE_RUNTIME_ROLE",
 }
@@ -137,6 +143,7 @@ class HarnessDatabaseConfigurations:
     worker: DatabaseConfiguration
     scheduler: DatabaseConfiguration
     learning: DatabaseConfiguration
+    release_operator: DatabaseConfiguration
     operator: DatabaseConfiguration
     security_test: DatabaseConfiguration
 
@@ -216,6 +223,9 @@ def load_harness_database_configurations(
             DatabasePurpose.SUPPLY_SCHEDULER, source
         ),
         learning=load_database_configuration(DatabasePurpose.LEARNING, source),
+        release_operator=load_database_configuration(
+            DatabasePurpose.RELEASE_OPERATOR, source
+        ),
         operator=load_database_configuration(DatabasePurpose.SECURITY_OPERATOR, source),
         security_test=load_database_configuration(
             DatabasePurpose.SECURITY_TEST, source
@@ -231,12 +241,13 @@ def load_harness_database_configurations(
         configurations.worker.expected_role,
         configurations.scheduler.expected_role,
         configurations.learning.expected_role,
+        configurations.release_operator.expected_role,
         configurations.operator.expected_role,
     }
-    if len(distinct_roles) != 10:
+    if len(distinct_roles) != 11:
         raise DatabaseConfigurationError(
             "migration, control, identity, egress, action, runtime, worker, "
-            "scheduler, learning, and security-operator "
+            "scheduler, learning, release-operator, and security-operator "
             "database roles must be distinct"
         )
     if configurations.security_test.url != configurations.runtime.url:

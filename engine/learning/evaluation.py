@@ -159,6 +159,49 @@ class ReleaseCandidateRef:
 
 
 @dataclass(frozen=True, slots=True)
+class ReleaseCandidateSnapshot:
+    """Exact active release base and corpus refs observed for a candidate."""
+
+    organization_id: UUID = field(repr=False)
+    expected_active_generation: int
+    expected_base_manifest_digest: str | None = field(repr=False)
+    active_revision_refs: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        _require_uuid(
+            "ReleaseCandidateSnapshot organization_id",
+            self.organization_id,
+        )
+        generation = _require_generation(
+            "ReleaseCandidateSnapshot expected_active_generation",
+            self.expected_active_generation,
+        )
+        if generation == 0:
+            if self.expected_base_manifest_digest is not None:
+                raise ValueError("initial candidate snapshot requires an absent base")
+        elif self.expected_base_manifest_digest is None:
+            raise ValueError("noninitial candidate snapshot requires an exact base")
+        else:
+            _require_digest(
+                "ReleaseCandidateSnapshot expected_base_manifest_digest",
+                self.expected_base_manifest_digest,
+            )
+        if type(self.active_revision_refs) is not tuple:
+            raise TypeError("candidate snapshot Revisions must be a tuple")
+        for revision_ref in self.active_revision_refs:
+            _require_ref("candidate snapshot active Revision", revision_ref)
+        if (
+            len(set(self.active_revision_refs)) != len(self.active_revision_refs)
+            or self.active_revision_refs
+            != tuple(sorted(self.active_revision_refs))
+        ):
+            raise ValueError("candidate snapshot Revisions must be canonical")
+
+    def __reduce__(self) -> NoReturn:
+        raise TypeError("ReleaseCandidateSnapshot is not serializable")
+
+
+@dataclass(frozen=True, slots=True)
 class ReleaseCandidate:
     """Immutable release proposal bound to exact active base and gate evidence."""
 

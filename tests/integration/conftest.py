@@ -13,6 +13,7 @@ from engine.persistence import (
     HarnessDatabaseConfigurations,
     assert_action_role,
     assert_control_role,
+    assert_release_operator_role,
     assert_runtime_role,
     assert_scheduler_role,
     assert_security_operator_role,
@@ -122,6 +123,13 @@ def learning_configuration(
 
 
 @pytest.fixture(scope="session")
+def release_operator_configuration(
+    database_configurations: HarnessDatabaseConfigurations,
+) -> DatabaseConfiguration:
+    return database_configurations.release_operator
+
+
+@pytest.fixture(scope="session")
 def operator_configuration(
     database_configurations: HarnessDatabaseConfigurations,
 ) -> DatabaseConfiguration:
@@ -190,6 +198,21 @@ def guarded_learning_engine(
     try:
         with engine.connect() as connection:
             assert_learning_role(connection)
+        yield engine
+    finally:
+        engine.dispose()
+
+
+@pytest.fixture(scope="session")
+def guarded_release_operator_engine(
+    release_operator_configuration: DatabaseConfiguration,
+) -> Iterator[Engine]:
+    """Expose only the candidate-observation Release operator engine."""
+
+    engine = create_database_engine(release_operator_configuration)
+    try:
+        with engine.connect() as connection:
+            assert_release_operator_role(connection)
         yield engine
     finally:
         engine.dispose()
