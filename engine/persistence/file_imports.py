@@ -299,7 +299,11 @@ class PostgreSQLFileImportWorker:
             raise FileImportRefused("File import is unavailable") from None
         if type(outcome) is CompilationFailure:
             with suppress(WorkNotAvailable):
-                self._fail(redemption.token, claims)
+                self._fail(
+                    redemption.token,
+                    claims,
+                    compilation_refusal_category=outcome.code.value,
+                )
             raise FileImportRefused("File import is unavailable")
         if type(outcome) is not ParsedDocument:  # pragma: no cover - closed union
             with suppress(WorkNotAvailable):
@@ -579,9 +583,7 @@ class PostgreSQLFileImportWorker:
         with self._engine.begin() as connection:
             assert_worker_role(connection)
             available = connection.execute(
-                text(
-                    "SELECT pg_catalog.to_regprocedure(:signature) IS NOT NULL"
-                ),
+                text("SELECT pg_catalog.to_regprocedure(:signature) IS NOT NULL"),
                 {"signature": _EMBEDDING_PREPARE_REGPROCEDURE},
             ).scalar_one()
         return available is True
@@ -707,18 +709,30 @@ class PostgreSQLFileImportWorker:
         self,
         token: WorkerLeaseToken,
         claims: WorkerLeaseClaims,
+        *,
+        compilation_refusal_category: str | None = None,
     ) -> None:
-        """Seal a redeemed job as failed without retaining content or reason."""
+        """Seal a job, optionally retaining only its closed compiler category."""
 
         try:
             with self._engine.begin() as connection:
                 assert_worker_role(connection)
+                function_name = (
+                    "context_worker_fail_file_import"
+                    if compilation_refusal_category is None
+                    else "context_worker_fail_file_import_with_category"
+                )
+                category_parameter = (
+                    ""
+                    if compilation_refusal_category is None
+                    else ":compilation_refusal_category,"
+                )
                 changed = connection.execute(
                     text(
-                        """
-                        SELECT public.context_worker_fail_file_import(
+                        f"""
+                        SELECT public.{function_name}(
                             :organization_id, :job_id, :service_principal_id,
-                            :source_ref, :lease_generation,
+                            :source_ref, {category_parameter} :lease_generation,
                             :signing_key_version, :nonce,
                             :issued_at, :expires_at
                         )
@@ -729,6 +743,7 @@ class PostgreSQLFileImportWorker:
                         "job_id": claims.job_id,
                         "service_principal_id": claims.service_principal_id,
                         "source_ref": claims.source_ref,
+                        "compilation_refusal_category": (compilation_refusal_category),
                         "lease_generation": claims.lease_generation,
                         "signing_key_version": claims.signing_key_version,
                         "nonce": claims.nonce,

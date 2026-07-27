@@ -1,5 +1,5 @@
 {
-  "manifestVersion": "34.0.0",
+  "manifestVersion": "35.0.0",
   "controlOperations": [
     {
       "name": "register_file_source",
@@ -215,7 +215,8 @@
       "name": "read_file_source_progress",
       "databaseFunctions": [
         "context_control_read_file_source_progress",
-        "context_control_read_pending_file_change_schedules"
+        "context_control_read_pending_file_change_schedules",
+        "context_control_read_file_source_status"
       ],
       "role": "context_engine_control",
       "definerRole": "context_engine_worker_lease_definer",
@@ -234,7 +235,10 @@
         "file_source_change",
         "file_source_acquisition_checkpoint",
         "file_source_publish_watermark",
-        "file_acquisition"
+        "file_acquisition",
+        "file_import_job",
+        "context_resource",
+        "file_revision_snapshot"
       ]
     },
     {
@@ -509,13 +513,17 @@
     },
     {
       "name": "fail_file_import",
-      "databaseFunction": "context_worker_fail_file_import",
+      "databaseFunctions": [
+        "context_worker_fail_file_import",
+        "context_worker_fail_file_import_with_category"
+      ],
       "role": "context_engine_worker",
       "definerRole": "context_engine_worker_lease_definer",
       "directTableMutationAllowed": false,
       "databaseOwnedTime": true,
       "rawNonceComparedAsSha256": true,
-      "reasonOrContentPersistenceAllowed": false,
+      "retainedCompilationRefusalCategoryAllowed": true,
+      "sourceContentOrCompilerInternalsPersistenceAllowed": false,
       "atomicWrites": [
         "file_import_job"
       ]
@@ -1554,6 +1562,7 @@
           "EXECUTE context_control_activate_file_change_feed",
           "EXECUTE context_control_activate_file_delete_observations",
           "EXECUTE context_control_read_pending_file_change_schedules",
+          "EXECUTE context_control_read_file_source_status",
           "EXECUTE context_control_offboard_file_source"
         ],
         "context_engine_learning": [],
@@ -1905,7 +1914,8 @@
           "UPDATE tombstoned"
         ],
         "context_engine_control": [
-          "EXECUTE context_control_tombstone_file_resource"
+          "EXECUTE context_control_tombstone_file_resource",
+          "EXECUTE context_control_read_file_source_status"
         ],
         "context_engine_runtime": [
           "SELECT"
@@ -5306,7 +5316,8 @@
         "context_engine_control": [
           "EXECUTE context_control_prepare_file_import",
           "EXECUTE context_control_schedule_file_change_page",
-          "EXECUTE context_control_read_pending_file_change_schedules"
+          "EXECUTE context_control_read_pending_file_change_schedules",
+          "EXECUTE context_control_read_file_source_status"
         ],
         "context_engine_runtime": [],
         "context_engine_worker": [],
@@ -5653,7 +5664,7 @@
           "table": "file_import_job"
         }
       },
-      "purpose": "Durable one-shot File import job, exact WorkerLease redemption state, and terminal source-offboarding cancellation",
+      "purpose": "Durable one-shot File import job, exact WorkerLease redemption state, optional closed compilation-refusal category, and terminal source-offboarding cancellation",
       "organizationColumn": "organization_id",
       "organizationInclusiveKeys": [
         {
@@ -5761,6 +5772,10 @@
         {
           "name": "ck_file_import_job_recovery_from_state",
           "expression": "recovery_from_state IS NULL OR recovery_from_state IN ('running', 'prepared', 'ready')"
+        },
+        {
+          "name": "ck_file_import_job_compilation_refusal_category",
+          "expression": "compilation_refusal_category is null or belongs to a failed job and is invalid_utf8, unsupported_construct, or unsupported_document_shape"
         }
       ],
       "rowLevelSecurity": {
@@ -5834,6 +5849,14 @@
             ],
             "using": "true",
             "withCheck": "true"
+          },
+          {
+            "name": "file_import_job_file_status_definer_select",
+            "command": "SELECT",
+            "roles": [
+              "context_engine_worker_lease_definer"
+            ],
+            "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid AND source_id = NULLIF(current_setting('app.file_status_source_id', true), '')::uuid"
           }
         ]
       },
@@ -5845,6 +5868,7 @@
           "context_worker_issue_file_import_lease",
           "context_worker_redeem_file_import",
           "context_worker_fail_file_import",
+          "context_worker_fail_file_import_with_category",
           "context_worker_publish_file_import_v2",
           "context_worker_publish_structural_file_import_v2",
           "context_worker_stage_file_replacement",
@@ -5874,6 +5898,7 @@
           "EXECUTE context_control_prepare_file_import",
           "EXECUTE context_control_schedule_file_change_page",
           "EXECUTE context_control_offboard_file_source",
+          "EXECUTE context_control_read_file_source_status",
           "EXECUTE context_worker_issue_file_import_lease"
         ],
         "context_engine_runtime": [],
@@ -5883,6 +5908,7 @@
         "context_engine_worker": [
           "EXECUTE context_worker_redeem_file_import",
           "EXECUTE context_worker_fail_file_import",
+          "EXECUTE context_worker_fail_file_import_with_category",
           "EXECUTE context_worker_publish_file_import_v2",
           "EXECUTE context_worker_publish_structural_file_import_v2",
           "EXECUTE context_worker_stage_file_replacement",
@@ -6414,7 +6440,9 @@
         "directTableMutationAllowed": false
       },
       "permittedOperations": {
-        "context_engine_control": [],
+        "context_engine_control": [
+          "EXECUTE context_control_read_file_source_status"
+        ],
         "context_engine_runtime": [],
         "context_engine_worker": [
           "EXECUTE context_worker_publish_file_import_v2",
@@ -7533,7 +7561,7 @@
       ]},
       "immutableRows": {"trigger": "file_source_change_page_immutable", "function": "context_content_reject_mutation", "events": ["UPDATE", "DELETE"], "sqlstate": "55000"},
       "functionOnlyMutation": {"databaseFunctions": ["context_control_accept_file_change_page", "context_control_accept_file_delete_observation_page"], "definerRole": "context_engine_worker_lease_definer", "directTableMutationAllowed": false},
-      "permittedOperations": {"context_engine_control": ["EXECUTE context_control_accept_file_change_page", "EXECUTE context_control_accept_file_delete_observation_page", "EXECUTE context_control_read_complete_file_change_baseline", "EXECUTE context_control_read_pending_file_change_schedules", "EXECUTE context_control_schedule_file_change_page"], "context_engine_runtime": [], "context_engine_worker": [], "context_engine_worker_lease_definer": ["SELECT", "INSERT"]},
+      "permittedOperations": {"context_engine_control": ["EXECUTE context_control_accept_file_change_page", "EXECUTE context_control_accept_file_delete_observation_page", "EXECUTE context_control_read_complete_file_change_baseline", "EXECUTE context_control_read_pending_file_change_schedules", "EXECUTE context_control_schedule_file_change_page", "EXECUTE context_control_read_file_source_status"], "context_engine_runtime": [], "context_engine_worker": [], "context_engine_worker_lease_definer": ["SELECT", "INSERT"]},
       "partitions": [],
       "securityInvariantIds": ["TENANT-OWNERSHIP-001", "TENANT-FK-002", "RLS-FAIL-CLOSED-003", "WORKER-LEASE-007"],
       "negativeTestIds": ["DB-001", "DB-004", "DB-008", "PG-FILE-CHANGE-PAGE-081", "PG-FILE-CHANGE-DENY-081"]
@@ -7567,7 +7595,7 @@
       ]},
       "immutableRows": {"trigger": "file_source_change_immutable", "function": "context_content_reject_mutation", "events": ["UPDATE", "DELETE"], "sqlstate": "55000"},
       "functionOnlyMutation": {"databaseFunctions": ["context_control_accept_file_change_page", "context_control_accept_file_delete_observation_page"], "definerRole": "context_engine_worker_lease_definer", "directTableMutationAllowed": false},
-      "permittedOperations": {"context_engine_control": ["EXECUTE context_control_accept_file_change_page", "EXECUTE context_control_accept_file_delete_observation_page", "EXECUTE context_control_read_pending_file_change_schedules", "EXECUTE context_control_schedule_file_change_page"], "context_engine_runtime": [], "context_engine_worker": [], "context_engine_worker_lease_definer": ["SELECT", "INSERT"]},
+      "permittedOperations": {"context_engine_control": ["EXECUTE context_control_accept_file_change_page", "EXECUTE context_control_accept_file_delete_observation_page", "EXECUTE context_control_read_pending_file_change_schedules", "EXECUTE context_control_schedule_file_change_page", "EXECUTE context_control_read_file_source_status"], "context_engine_runtime": [], "context_engine_worker": [], "context_engine_worker_lease_definer": ["SELECT", "INSERT"]},
       "partitions": [],
       "securityInvariantIds": ["TENANT-OWNERSHIP-001", "TENANT-FK-002", "RLS-FAIL-CLOSED-003", "WORKER-LEASE-007"],
       "negativeTestIds": ["DB-001", "DB-004", "DB-008", "PG-FILE-CHANGE-PAGE-081", "PG-FILE-CHANGE-DENY-081", "PG-FILE-CHANGE-SCHEDULE-083"]
@@ -7796,6 +7824,7 @@
           "EXECUTE context_control_read_pending_file_change_schedules",
           "EXECUTE context_control_schedule_file_change_page",
           "EXECUTE context_control_read_file_source_progress",
+          "EXECUTE context_control_read_file_source_status",
           "EXECUTE context_control_tombstone_file_resource"
         ],
         "context_engine_runtime": [],
@@ -7978,6 +8007,7 @@
       "permittedOperations": {
         "context_engine_control": [
           "EXECUTE context_control_read_file_source_progress",
+          "EXECUTE context_control_read_file_source_status",
           "EXECUTE context_control_tombstone_file_resource"
         ],
         "context_engine_runtime": [],

@@ -22,6 +22,7 @@ from engine.control import (
     ContextControl,
     ControlOperation,
     FileRootRef,
+    FileSourceProgress,
     RegisterFileSource,
     SourceManifest,
     SourceNotAvailable,
@@ -42,6 +43,7 @@ _OPERATOR_SUBCOMMANDS = frozenset(
         "activate-change-feed",
         "activate-delete-observations",
         "scan",
+        "status",
     }
 )
 
@@ -69,6 +71,7 @@ def _parser() -> argparse.ArgumentParser:
             "activate one File source delete-observation capability",
         ),
         ("scan", "scan one registered File source and schedule changed upserts"),
+        ("status", "report one registered File source's operational status"),
     ):
         source_command = subcommands.add_parser(name, help=help_text)
         _organization_argument(source_command)
@@ -96,6 +99,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         outcome = _run_operator_subcommand(arguments)
         if type(outcome) is FileScanReport:
             rendered = _scan_report_json(outcome)
+        elif type(outcome) is FileSourceProgress:
+            rendered = _status_json(outcome)
         elif type(outcome) is SourceManifest:
             rendered = _manifest_json(outcome)
         else:  # pragma: no cover - closed application union
@@ -116,7 +121,7 @@ def local_operator_authorities() -> LocalOperatorAuthorities | None:
 
 def _run_operator_subcommand(
     arguments: argparse.Namespace,
-) -> SourceManifest | FileScanReport:
+) -> SourceManifest | FileScanReport | FileSourceProgress:
     authorities = local_operator_authorities()
     if authorities is None:
         raise SourceNotAvailable
@@ -163,6 +168,8 @@ def _run_operator_subcommand(
                     ),
                 )
             source_ref = SourceRef(UUID(arguments.source_ref))
+            if operation is ControlOperation.READ_SOURCE_PROGRESS:
+                return control.read_file_source_progress(call, source_ref)
             if operation is ControlOperation.READ_SOURCE:
                 return control.read_source(call, source_ref)
             if operation is ControlOperation.ACTIVATE_FILE_CHANGE_FEED:
@@ -184,6 +191,7 @@ def _operation(subcommand: str) -> ControlOperation:
     operations = {
         "register-file-source": ControlOperation.REGISTER_SOURCE,
         "read-source": ControlOperation.READ_SOURCE,
+        "status": ControlOperation.READ_SOURCE_PROGRESS,
         "activate-change-feed": ControlOperation.ACTIVATE_FILE_CHANGE_FEED,
         "activate-delete-observations": (
             ControlOperation.ACTIVATE_FILE_DELETE_OBSERVATIONS
@@ -226,6 +234,77 @@ def _scan_report_json(report: FileScanReport) -> str:
             "importsScheduled": report.imports_scheduled,
             "pathsObserved": report.paths_observed,
             "sourceRef": str(report.source_ref.value),
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+
+
+def _status_json(progress: FileSourceProgress) -> str:
+    """Render content-free operational status with stable keys and ordering."""
+
+    if type(progress) is not FileSourceProgress or progress.status is None:
+        raise SourceNotAvailable
+    status = progress.status
+    checkpoint = progress.acquisition_checkpoint
+    watermark = progress.publish_watermark
+    head = progress.change_scan_head
+    baseline = progress.complete_change_baseline
+    return json.dumps(
+        {
+            "acquisitionCheckpoint": (
+                None
+                if checkpoint is None
+                else {
+                    "acceptedAt": _timestamp(checkpoint.accepted_at),
+                    "changeKind": checkpoint.change_kind.value,
+                    "checkpointRef": checkpoint.checkpoint_ref,
+                    "sequence": checkpoint.sequence,
+                }
+            ),
+            "activeResourceCount": status.active_resource_count,
+            "changeScanHead": (
+                None
+                if head is None
+                else {
+                    "checkpointRef": head.checkpoint_ref,
+                    "complete": head.complete,
+                    "pageLimit": head.page_limit,
+                    "pageRef": head.page_ref,
+                    "scanEpoch": str(head.scan_epoch),
+                    "scanRef": head.scan_ref,
+                    "sequence": head.sequence,
+                    "sourceVersionRef": str(head.source_version_ref),
+                }
+            ),
+            "completeChangeBaselineSize": (
+                0 if baseline is None else len(baseline.entries)
+            ),
+            "lastSuccessfulAcquisition": (
+                {"state": "never"}
+                if status.last_successful_acquisition_at is None
+                else {
+                    "ageSeconds": status.last_successful_acquisition_age_seconds,
+                    "at": _timestamp(status.last_successful_acquisition_at),
+                    "state": "succeeded",
+                }
+            ),
+            "publishWatermark": (
+                None
+                if watermark is None
+                else {
+                    "changeKind": watermark.change_kind.value,
+                    "outcome": watermark.outcome.value,
+                    "publishedAt": _timestamp(watermark.published_at),
+                    "sequence": watermark.sequence,
+                    "watermarkRef": watermark.watermark_ref,
+                }
+            ),
+            "refusals": [
+                {"category": refusal.category, "path": refusal.path}
+                for refusal in status.refusals
+            ],
+            "sourceRef": str(progress.source_ref.value),
         },
         separators=(",", ":"),
         sort_keys=True,

@@ -117,6 +117,7 @@ Follow the ADR for its exact evidence boundary.
 | [0066](./docs/decisions/0066-embed-fragments-before-publication.md) | Embed newly published Fragments before activation through an explicit provider |
 | [0070](./docs/decisions/0070-activate-file-change-feed-from-registration.md) | Advance an exact registered v1 or import-enabled v2 File source to the existing immutable v3 change-feed manifest |
 | [0071](./docs/decisions/0071-compose-bounded-file-scan-cycles.md) | Compose a bounded local File scan from operation-exact accept and schedule calls with checkpoint idempotence |
+| [0072](./docs/decisions/0072-report-file-source-status-with-closed-refusals.md) | Report content-free File freshness and current unpublished paths using closed retained refusal categories |
 
 ADR-0065 extends the active File Provider boundary from a flat root to
 deterministic recursive discovery of canonical nested Markdown paths. Each
@@ -149,6 +150,16 @@ compilation refusal, delete observation without delete execution, and
 384-dimensional Fragment publication. This does not claim that the maintainer's
 private corpus has run; it activates no watcher, alternate publisher, new
 tombstone authority, or network operation.
+
+ADR-0072 adds a Control-only `status` read for one registered File source. It
+reports acquisition/publication progress, the current scan and baseline,
+active Resource count, explicit never-succeeded or database-observed success
+age, and current observed unpublished paths with one closed compiler refusal
+category. Real-PostgreSQL fixture evidence covers unsupported Markdown,
+successful publication, and removal on the next complete scan. The worker's
+caller-visible refusal remains generic; no note content or compiler diagnostic
+is retained. This status is not Runtime authority and activates no
+`stale_evidence`, repair, retry, metrics, HTTP, watcher, or grammar surface.
 
 ### Wire contract, SDK, and trusted delivery
 

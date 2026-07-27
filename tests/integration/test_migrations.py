@@ -2426,6 +2426,79 @@ def test_pending_file_schedule_projection_revision_downgrades_and_reapplies(
         engine.dispose()
 
 
+def test_file_source_status_revision_downgrades_and_reapplies_when_empty(
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    """Issue #113 adds closed status functions and one nullable category."""
+
+    alembic_configuration = Config(ROOT / "alembic.ini")
+    try:
+        command.downgrade(alembic_configuration, "20260727_0038")
+        assert _revision_rows(migration_configuration) == ["20260727_0038"]
+        engine = create_database_engine(migration_configuration)
+        try:
+            with engine.connect() as connection:
+                assert connection.execute(
+                    text(
+                        """
+                        SELECT ARRAY[
+                          to_regprocedure(
+                            'public.context_control_read_file_source_status(uuid,uuid)'
+                          ) IS NULL,
+                          to_regprocedure(
+                            'public.context_worker_fail_file_import_with_category(uuid,uuid,uuid,text,text,bigint,bigint,bytea,timestamptz,timestamptz)'
+                          ) IS NULL,
+                          NOT EXISTS (
+                            SELECT 1 FROM information_schema.columns
+                            WHERE table_schema = 'public'
+                              AND table_name = 'file_import_job'
+                              AND column_name = 'compilation_refusal_category'
+                          )
+                        ]
+                        """
+                    )
+                ).scalar_one() == [True, True, True]
+        finally:
+            engine.dispose()
+    finally:
+        command.upgrade(alembic_configuration, "head")
+
+    assert _revision_rows(migration_configuration) == [HEAD_REVISION]
+    engine = create_database_engine(migration_configuration)
+    try:
+        with engine.connect() as connection:
+            assert connection.execute(
+                text(
+                    """
+                    SELECT ARRAY[
+                      has_function_privilege(
+                        'context_engine_control',
+                        'public.context_control_read_file_source_status(uuid,uuid)',
+                        'EXECUTE'
+                      ),
+                      has_function_privilege(
+                        'context_engine_runtime',
+                        'public.context_control_read_file_source_status(uuid,uuid)',
+                        'EXECUTE'
+                      ),
+                      has_function_privilege(
+                        'context_engine_worker',
+                        'public.context_worker_fail_file_import_with_category(uuid,uuid,uuid,text,text,bigint,bigint,bytea,timestamptz,timestamptz)',
+                        'EXECUTE'
+                      ),
+                      has_function_privilege(
+                        'context_engine_control',
+                        'public.context_worker_fail_file_import_with_category(uuid,uuid,uuid,text,text,bigint,bigint,bytea,timestamptz,timestamptz)',
+                        'EXECUTE'
+                      )
+                    ]
+                    """
+                )
+            ).scalar_one() == [True, False, True, False]
+    finally:
+        engine.dispose()
+
+
 def test_fragment_embedding_revision_preserves_retained_fragments(
     tmp_path: Path,
     migration_configuration: DatabaseConfiguration,

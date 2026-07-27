@@ -79,11 +79,13 @@ from engine.control.file_source_offboarding import (
     OffboardFileSource,
 )
 from engine.control.file_source_progress import (
+    FileCompilationRefusal,
     FileSourceAcquisitionCheckpoint,
     FileSourceChangeKind,
     FileSourceProgress,
     FileSourcePublishOutcome,
     FileSourcePublishWatermark,
+    FileSourceStatus,
     PendingFileChangeSchedule,
 )
 from engine.control.module import ContextControl, ControlStorePort
@@ -122,6 +124,7 @@ __all__ = [
     "FileImportAudience",
     "FileImportPath",
     "FileImportReceiver",
+    "FileCompilationRefusal",
     "FileRootRef",
     "InitialScan",
     "FileSourceAcquisitionCheckpoint",
@@ -131,6 +134,7 @@ __all__ = [
     "FileSourceOffboarding",
     "FileSourcePublishOutcome",
     "FileSourcePublishWatermark",
+    "FileSourceStatus",
     "PendingFileChangeSchedule",
     "FileResourceTombstone",
     "ExecuteFileDeleteObservation",

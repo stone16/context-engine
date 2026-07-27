@@ -289,6 +289,10 @@ uv run context-engine-control scan \
   --source-ref "$CONTEXT_ENGINE_FILE_SOURCE_REF"
 
 uv run context-engine-worker --dispatch-file-once
+
+uv run context-engine-control status \
+  --organization-id "$CONTEXT_ENGINE_OPERATOR_ORGANIZATION_ID" \
+  --source-ref "$CONTEXT_ENGINE_FILE_SOURCE_REF"
 ```
 
 `scan` requires that exact delete-observation activation because its complete
@@ -305,6 +309,12 @@ scan upsert page that has no durable acquisition. Those counts are baseline delt
 Compilation refusals are counted before handoff using the worker's exact active
 Markdown configuration, but the worker remains the only publication path and
 makes the authoritative terminal transition for each scheduled import.
+
+`status` prints content-free progress and freshness JSON for that source. It
+distinguishes a source that has never published, counts active Resources, and
+lists current observed unpublished paths using only a closed refusal category.
+It does not repair or retry work, expose diagnostics, or participate in Runtime
+authorization.
 
 ### Development commands
 

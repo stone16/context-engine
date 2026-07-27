@@ -30,6 +30,7 @@ from engine.control import (
     FileChangeBaselineRef,
     FileChangeKind,
     FileChangeScanHead,
+    FileCompilationRefusal,
     FileImportPath,
     FileResourceTombstone,
     FileRootRef,
@@ -40,6 +41,7 @@ from engine.control import (
     FileSourceProgress,
     FileSourcePublishOutcome,
     FileSourcePublishWatermark,
+    FileSourceStatus,
     OffboardFileSource,
     PendingFileChangeSchedule,
     RegisterFileSource,
@@ -66,6 +68,7 @@ _REGISTRATION_OPERATION = "register_source"
 _PENDING_FILE_CHANGE_SCHEDULES_FUNCTION = (
     "public.context_control_read_pending_file_change_schedules"
 )
+_FILE_SOURCE_STATUS_FUNCTION = "public.context_control_read_file_source_status"
 _ACTIVE_SOURCE_SELECT = """
     SELECT
         source.source_id,
@@ -832,6 +835,24 @@ class PostgreSQLControlStore:
                         },
                     ).mappings()
                 )
+                status_rows = tuple(
+                    connection.execute(
+                        text(
+                            f"""
+                            SELECT *
+                            FROM {_FILE_SOURCE_STATUS_FUNCTION}(
+                                :organization_id, :source_id
+                            )
+                            """
+                        ),
+                        {
+                            "organization_id": call.organization_id,
+                            "source_id": source_ref.value,
+                        },
+                    ).mappings()
+                )
+                if not status_rows:
+                    raise SourceNotAvailable
                 checkpoint = (
                     None
                     if row["acquisition_sequence"] is None
@@ -901,6 +922,24 @@ class PostgreSQLControlStore:
                             page_ref=row["pending_page_ref"],
                         )
                         for row in pending_schedule_rows
+                    ),
+                    status=FileSourceStatus(
+                        observed_at=status_rows[0]["status_observed_at"],
+                        active_resource_count=status_rows[0]["active_resource_count"],
+                        last_successful_acquisition_at=status_rows[0][
+                            "last_successful_acquisition_at"
+                        ],
+                        last_successful_acquisition_age_seconds=status_rows[0][
+                            "last_successful_acquisition_age_seconds"
+                        ],
+                        refusals=tuple(
+                            FileCompilationRefusal(
+                                path=status_row["refusal_path"],
+                                category=status_row["refusal_category"],
+                            )
+                            for status_row in status_rows
+                            if status_row["refusal_path"] is not None
+                        ),
                     ),
                 )
         except SourceNotAvailable:
