@@ -39,12 +39,18 @@ capability can never be reported as a passing one.
 
 The default application **rejects every credential and performs zero content
 I/O**. ADR-0068 separately activates one explicit loopback dogfood composition;
-it does not widen the default. The following are known, designed, and
-deliberately not active:
+it does not widen the default. ADR-0069 also admits a separate, short-lived
+local operator process only when complete Control, release, dogfood, and worker
+credential separation is explicitly configured; it adds no HTTP route and
+grants one Control operation per call. Production operator authentication,
+multiple operators, durable role assignment, delegation, RBAC, and every
+network-reachable operator surface remain `NOT_ACTIVE`. The following are
+known, designed, and deliberately not active:
 
 | Capability | Note |
 |---|---|
 | Production authentication (OAuth / JWT) | Module-level default application is reject-all across all three production authorities (authentication, Organization, Membership) |
+| Production operator authentication / admin API | The opt-in local operator composition is one fixed identity per plane, local-process-only, and never a production ancestor |
 | Durable general Principal / Agent grants | The default scope authority returns seven missing operands; dogfood separately carries the bounded current File operands and binds one configured Agent/purpose to the Release ceiling only |
 | General / multi-user Source and Resource ACLs | Dogfood uses current mirrored File access plus Membership field rights only; source-native and multi-user authorities remain absent |
 | General content retrieval | Only the loopback File pgvector dogfood `Acquire` carrier is active |
