@@ -38,6 +38,7 @@ OPERATOR_ENVIRONMENT_VARIABLES = frozenset(
     }
 )
 LOCAL_OPERATOR_TTL = timedelta(minutes=15)
+LOCAL_RELEASE_GRANT_TTL = timedelta(days=30)
 LOCAL_CONTROL_OPERATOR_REF = "operator:local-control:v1"
 LOCAL_CONTROL_BINDING_REF = "binding:local-control:v1"
 LOCAL_CONTROL_AUTHORITY_REF = "authority:local-control:v1"

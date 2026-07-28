@@ -149,6 +149,70 @@ def test_fresh_environment_has_a_dedicated_learning_credential(
     assert environment_path.stat().st_mode & 0o777 == 0o600
 
 
+def test_fresh_environment_has_a_dedicated_release_operator_credential(
+    tmp_path: Path,
+) -> None:
+    stub_directory = tmp_path / "bin"
+    stub_directory.mkdir()
+    _stub_harness_dependencies(stub_directory)
+    checkout = tmp_path / "checkout"
+
+    _run_stubbed_harness(checkout, stub_directory)
+
+    environment_path = checkout / ".context-engine/database.env"
+    generated = dict(
+        line.split("=", maxsplit=1)
+        for line in environment_path.read_text(encoding="utf-8").splitlines()
+    )
+    password = generated["CONTEXT_ENGINE_RELEASE_OPERATOR_PASSWORD"]
+    assert generated["CONTEXT_ENGINE_RELEASE_OPERATOR_ROLE"] == (
+        "context_engine_release_operator"
+    )
+    assert re.fullmatch(r"[0-9a-f]{64}", password)
+    assert generated["CONTEXT_ENGINE_RELEASE_OPERATOR_DATABASE_URL"] == (
+        "postgresql+psycopg://context_engine_release_operator:"
+        f"{password}@127.0.0.1:"
+        f"{generated['CONTEXT_ENGINE_POSTGRES_PORT']}/context_engine"
+    )
+
+
+def test_partial_legacy_release_operator_identity_is_replaced_as_one_exact_triple(
+    tmp_path: Path,
+) -> None:
+    stub_directory = tmp_path / "bin"
+    stub_directory.mkdir()
+    _stub_harness_dependencies(stub_directory)
+    checkout = tmp_path / "checkout"
+    project, _ = _run_stubbed_harness(checkout, stub_directory)
+    environment_path = checkout / ".context-engine/database.env"
+    retained = [
+        line
+        for line in environment_path.read_text(encoding="utf-8").splitlines()
+        if not line.startswith("CONTEXT_ENGINE_RELEASE_OPERATOR_")
+    ]
+    environment_path.write_text(
+        "\n".join(
+            [
+                *retained,
+                "CONTEXT_ENGINE_RELEASE_OPERATOR_ROLE=context_engine_release_operator",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    environment_path.chmod(0o600)
+
+    migrated_project, _ = _run_stubbed_harness(checkout, stub_directory)
+
+    lines = environment_path.read_text(encoding="utf-8").splitlines()
+    release_lines = [
+        line for line in lines if line.startswith("CONTEXT_ENGINE_RELEASE_OPERATOR_")
+    ]
+    assert migrated_project == project
+    assert len(release_lines) == 3
+    assert len({line.split("=", maxsplit=1)[0] for line in release_lines}) == 3
+
+
 def test_concurrent_first_use_converges_on_one_persisted_compose_project(
     tmp_path: Path,
 ) -> None:

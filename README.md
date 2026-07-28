@@ -154,13 +154,12 @@ CONTEXT_ENGINE_DOGFOOD_EMBEDDING_PROVIDER=deterministic-twin-v1
 ```
 
 Before activation, freshly reimport the File corpus with the Supply worker's
-network-free `twin` embedding mode and promote those exact Revision references
-through the existing Learning release operation using the dogfood vector index
-profile. The active Release binds the deterministic model and contextual-
-fragment input profile; a mismatch fails composition. Then run the API with an
-explicit loopback host. A valid composition reports `runtime_delivery: ACTIVE`;
-missing or partial configuration fails closed. The dogfood secret must come
-from one local secret source and must never be committed or printed.
+network-free `twin` embedding mode and use the explicit release procedure
+below. The active Release binds the deterministic model and contextual-fragment
+input profile; a mismatch fails composition. Then run the API with an explicit
+loopback host. A valid composition reports `runtime_delivery: ACTIVE`; missing
+or partial configuration fails closed. The dogfood secret must come from one
+local secret source and must never be committed or printed.
 
 External query embeddings, production or multi-user authentication, remote
 network exposure, group/public delivery, dogfood `OpenCitation`, `Continue`, hybrid retrieval, and
@@ -261,6 +260,7 @@ uv run context-engine-dogfood-seed \
   --organization-id "$CONTEXT_ENGINE_DOGFOOD_ORGANIZATION_ID" \
   --user-id "$CONTEXT_ENGINE_DOGFOOD_USER_ID" \
   --membership-id "$CONTEXT_ENGINE_DOGFOOD_MEMBERSHIP_ID" \
+  --provision-release-operator-grant \
   --file-import-service-principal-id \
     "$CONTEXT_ENGINE_WORKER_SERVICE_PRINCIPAL_ID"
 ```
@@ -295,12 +295,57 @@ uv run context-engine-control status \
   --source-ref "$CONTEXT_ENGINE_FILE_SOURCE_REF"
 ```
 
+Repeat the worker command until it reports `no_work`, or run the existing
+long-lived dispatcher. Then promote the exact current active corpus through
+the sole Learning publication owner. Promotion additionally requires a
+separate 32-byte, hex-encoded evaluation signing key and its positive decimal
+version:
+
+```text
+CONTEXT_ENGINE_RELEASE_EVALUATION_SIGNING_KEY_VERSION
+CONTEXT_ENGINE_RELEASE_EVALUATION_SIGNING_KEY_HEX
+```
+
+The key must be retained across invocations, supplied from the same local
+secret source as the operator configuration, and distinct from every Control,
+release, dogfood, and worker secret. Prepare a reviewed JSON evidence file
+outside the repository with exactly the four lowercase `pass` gate statuses,
+their SHA-256 evidence digests, the capability-coverage and fixture digests,
+and the commands that produced the evidence:
+
+```json
+{
+  "budget": {"evidenceDigest": "<64 lowercase hex>", "status": "pass"},
+  "capabilityCoverageDigest": "<64 lowercase hex>",
+  "fixtureDigest": "<64 lowercase hex>",
+  "quality": {"evidenceDigest": "<64 lowercase hex>", "status": "pass"},
+  "reliability": {"evidenceDigest": "<64 lowercase hex>", "status": "pass"},
+  "security": {"evidenceDigest": "<64 lowercase hex>", "status": "pass"},
+  "verificationCommands": ["make check"]
+}
+```
+
+Run the explicit release command, then boot the dogfood API as described
+above:
+
+```bash
+uv run context-engine-control promote-release \
+  --organization-id "$CONTEXT_ENGINE_OPERATOR_ORGANIZATION_ID" \
+  --evidence-file "$CONTEXT_ENGINE_RELEASE_EVIDENCE_FILE"
+```
+
+The content-free JSON result reports the active generation, exact active
+Revision count, dogfood index profile, and manifest reference. An empty corpus,
+stale or absent release grant, partial configuration, wrong plane credential,
+or failing gate is refused generically. Re-running without a corpus change
+advances the same immutable manifest through a new audited generation, matching
+the existing `ContextLearning.promote` contract.
+
 `scan` requires that exact delete-observation activation because its complete
 durable baseline is also what makes unchanged-path scheduling decisions
 idempotent. A v1, v2, or v3 source is refused generically.
 
-Repeat the final worker command until it reports `no_work`, or run the existing
-long-lived dispatcher. The scan prints deterministic, content-free JSON counts.
+The scan prints deterministic, content-free JSON counts.
 `advancedCursor` is the accepted durable checkpoint reference; an exact
 unchanged replay reports zero accepted changes and scheduled imports while
 retaining that already-advanced checkpoint when no accepted page is missing its

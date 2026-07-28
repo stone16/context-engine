@@ -12,6 +12,7 @@ from engine.persistence.configuration import (
     LEARNING_ROLE,
     MIGRATOR_ROLE,
     OPERATOR_ROLE,
+    RELEASE_OPERATOR_ROLE,
     RUNTIME_ROLE,
     SCHEDULER_ROLE,
     WORKER_ROLE,
@@ -207,6 +208,13 @@ def assert_learning_role(connection: Connection) -> None:
     """Require the dedicated least-privilege ContextLearning login."""
 
     _assert_non_owner_role(connection, LEARNING_ROLE)
+    _assert_no_owned_objects_or_role_members(connection)
+
+
+def assert_release_operator_role(connection: Connection) -> None:
+    """Require the candidate-observation-only Release operator login."""
+
+    _assert_non_owner_role(connection, RELEASE_OPERATOR_ROLE)
     _assert_no_owned_objects_or_role_members(connection)
 
 

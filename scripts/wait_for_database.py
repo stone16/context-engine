@@ -22,6 +22,7 @@ from engine.persistence.role_guard import (
     assert_egress_role,
     assert_identity_role,
     assert_learning_role,
+    assert_release_operator_role,
 )
 
 
@@ -44,6 +45,7 @@ def wait_for_database(timeout_seconds: float) -> None:
                 configurations.worker,
                 configurations.scheduler,
                 configurations.learning,
+                configurations.release_operator,
                 configurations.operator,
                 configurations.security_test,
             ):
@@ -63,6 +65,8 @@ def wait_for_database(timeout_seconds: float) -> None:
                         assert_scheduler_role(connection)
                     if configuration.purpose is DatabasePurpose.LEARNING:
                         assert_learning_role(connection)
+                    if configuration.purpose is DatabasePurpose.RELEASE_OPERATOR:
+                        assert_release_operator_role(connection)
                     if configuration.purpose is DatabasePurpose.TRUSTED_IDENTITY:
                         assert_identity_role(connection)
                     if configuration.purpose is DatabasePurpose.TRUSTED_EGRESS:
@@ -88,6 +92,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     wait_for_database(arguments.timeout)
     purpose_names = (
         "migration, control, identity, egress, action, runtime, worker, learning, "
+        "release-operator, "
         "security-operator, "
         "scheduler, security-test"
     )

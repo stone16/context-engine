@@ -1,5 +1,5 @@
 {
-  "manifestVersion": "35.0.0",
+  "manifestVersion": "37.0.0",
   "controlOperations": [
     {
       "name": "register_file_source",
@@ -527,6 +527,35 @@
       "atomicWrites": [
         "file_import_job"
       ]
+    },
+    {
+      "name": "context_release_observe_candidate_snapshot",
+      "databaseFunction": "context_release_observe_candidate_snapshot",
+      "role": "context_engine_release_operator",
+      "definerRole": "context_engine_release_definer",
+      "directTableMutationAllowed": false,
+      "databaseOwnedTime": true,
+      "securityDefiner": true,
+      "searchPath": [
+        "pg_catalog",
+        "pg_temp"
+      ],
+      "rowSecurity": true,
+      "sessionUser": "context_engine_release_operator",
+      "revalidates": [
+        "release_operator_grant"
+      ],
+      "reads": [
+        "active_release_manifest",
+        "context_source",
+        "context_resource"
+      ],
+      "returns": [
+        "active_generation",
+        "active_manifest_digest",
+        "active_revision_refs"
+      ],
+      "contentBearing": false
     },
     {
       "name": "context_learning_promote_release",
@@ -1548,6 +1577,14 @@
             "roles": ["context_engine_file_dispatch_definer"],
             "using": "true",
             "withCheck": "true"
+          },
+          {
+            "name": "context_source_release_definer_select",
+            "command": "SELECT",
+            "roles": [
+              "context_engine_release_definer"
+            ],
+            "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid AND source_kind = 'file' AND lifecycle_state = 'active'"
           }
         ]
       },
@@ -1566,6 +1603,9 @@
           "EXECUTE context_control_offboard_file_source"
         ],
         "context_engine_learning": [],
+        "context_engine_release_operator": [
+          "EXECUTE context_release_observe_candidate_snapshot"
+        ],
         "context_engine_runtime": [],
         "context_engine_security_operator": [],
         "context_engine_worker": [],
@@ -1582,6 +1622,9 @@
         "context_engine_file_dispatch_definer": [
           "SELECT",
           "UPDATE lifecycle_state, active_version_id"
+        ],
+        "context_engine_release_definer": [
+          "SELECT"
         ]
       },
       "partitions": [],
@@ -1893,6 +1936,14 @@
               "context_engine_citation_definer"
             ],
             "using": "true"
+          },
+          {
+            "name": "context_resource_release_definer_select",
+            "command": "SELECT",
+            "roles": [
+              "context_engine_release_definer"
+            ],
+            "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"
           }
         ]
       },
@@ -1931,6 +1982,13 @@
         ],
         "context_engine_citation_definer": [
           "SELECT"
+        ],
+        "context_engine_release_definer": [
+          "SELECT"
+        ],
+        "context_engine_learning": [],
+        "context_engine_release_operator": [
+          "EXECUTE context_release_observe_candidate_snapshot"
         ]
       },
       "partitions": [],
@@ -4975,6 +5033,9 @@
         "context_engine_release_definer": [
           "SELECT"
         ],
+        "context_engine_release_operator": [
+          "EXECUTE context_release_observe_candidate_snapshot"
+        ],
         "context_engine_runtime": [],
         "context_engine_security_operator": [],
         "context_engine_worker": []
@@ -5098,6 +5159,9 @@
           "SELECT",
           "INSERT",
           "UPDATE"
+        ],
+        "context_engine_release_operator": [
+          "EXECUTE context_release_observe_candidate_snapshot"
         ],
         "context_engine_runtime": [
           "SELECT"

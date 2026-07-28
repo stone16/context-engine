@@ -10,6 +10,7 @@ from engine.persistence.configuration import (
     LEARNING_ROLE,
     MIGRATOR_ROLE,
     OPERATOR_ROLE,
+    RELEASE_OPERATOR_ROLE,
     RUNTIME_ROLE,
     SCHEDULER_ROLE,
     WORKER_ROLE,
@@ -58,6 +59,10 @@ def _database_environment() -> dict[str, str]:
             "postgresql+psycopg://context_engine_learning:learning-secret@"
             "127.0.0.1:5432/context_engine"
         ),
+        "CONTEXT_ENGINE_RELEASE_OPERATOR_DATABASE_URL": (
+            "postgresql+psycopg://context_engine_release_operator:release-secret@"
+            "127.0.0.1:5432/context_engine"
+        ),
         "CONTEXT_ENGINE_SECURITY_OPERATOR_DATABASE_URL": (
             "postgresql+psycopg://context_engine_security_operator:operator-secret@"
             "127.0.0.1:5432/context_engine"
@@ -75,6 +80,7 @@ def _database_environment() -> dict[str, str]:
         "CONTEXT_ENGINE_WORKER_ROLE": WORKER_ROLE,
         "CONTEXT_ENGINE_SCHEDULER_ROLE": SCHEDULER_ROLE,
         "CONTEXT_ENGINE_LEARNING_ROLE": LEARNING_ROLE,
+        "CONTEXT_ENGINE_RELEASE_OPERATOR_ROLE": RELEASE_OPERATOR_ROLE,
         "CONTEXT_ENGINE_SECURITY_OPERATOR_ROLE": OPERATOR_ROLE,
     }
 
@@ -108,6 +114,7 @@ def test_harness_exposes_learning_as_a_distinct_login() -> None:
         configurations.worker.expected_role,
         configurations.scheduler.expected_role,
         configurations.learning.expected_role,
+        configurations.release_operator.expected_role,
         configurations.operator.expected_role,
     } == {
         MIGRATOR_ROLE,
@@ -119,6 +126,7 @@ def test_harness_exposes_learning_as_a_distinct_login() -> None:
         WORKER_ROLE,
         SCHEDULER_ROLE,
         LEARNING_ROLE,
+        RELEASE_OPERATOR_ROLE,
         OPERATOR_ROLE,
     }
     assert configurations.security_test.url == configurations.runtime.url

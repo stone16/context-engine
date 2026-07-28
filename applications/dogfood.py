@@ -3,12 +3,19 @@
 from __future__ import annotations
 
 import argparse
+import os
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from uuid import UUID
 
 from sqlalchemy import text
 
+from applications.operator_authentication import (
+    LOCAL_RELEASE_GRANT_TTL,
+    RELEASE_OPERATOR_SECRET_ENV,
+    LocalOperatorConfiguration,
+    LocalReleaseOperatorAuthenticator,
+)
 from engine.persistence import (
     DatabasePurpose,
     create_database_engine,
@@ -36,14 +43,34 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--membership-id", required=True, type=_uuid)
     parser.add_argument("--membership-version", default=1, type=int)
     parser.add_argument("--file-import-service-principal-id", type=_uuid)
+    parser.add_argument(
+        "--provision-release-operator-grant",
+        action="store_true",
+        help="provision the current bounded local release identity grant",
+    )
     args = parser.parse_args(argv)
     if not 1 <= args.membership_version < (1 << 63):
         parser.error("--membership-version must be a positive signed bigint")
 
+    seeded_at = datetime.now(UTC).replace(microsecond=0)
+    try:
+        release_identity = None
+        if args.provision_release_operator_grant:
+            configuration = LocalOperatorConfiguration.load(os.environ)
+            if (
+                configuration is None
+                or configuration.organization_id != args.organization_id
+            ):
+                raise RuntimeError
+            release_identity = LocalReleaseOperatorAuthenticator(
+                configuration,
+                clock=lambda: seeded_at,
+            ).authenticate(os.environ[RELEASE_OPERATOR_SECRET_ENV])
+    except Exception:
+        parser.exit(1, "context-engine-dogfood-seed: operation refused\n")
     engine = create_database_engine(
         load_database_configuration(DatabasePurpose.MIGRATION)
     )
-    seeded_at = datetime.now(UTC).replace(microsecond=0)
     try:
         with engine.begin() as connection:
             assert_migrator_role(connection)
@@ -163,6 +190,41 @@ def main(argv: Sequence[str] | None = None) -> None:
                     raise RuntimeError(
                         "dogfood receiver conflicts with durable ownership"
                     )
+            if release_identity is not None:
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO release_operator_grant (
+                            organization_id, authority_ref, authority_digest,
+                            operator_ref, authentication_binding_ref,
+                            valid_from, expires_at, revoked_at
+                        ) VALUES (
+                            :organization_id, :authority_ref, :authority_digest,
+                            :operator_ref, :authentication_binding_ref,
+                            :valid_from, :expires_at, NULL
+                        )
+                        ON CONFLICT (organization_id, authority_ref) DO UPDATE
+                        SET authority_digest = EXCLUDED.authority_digest,
+                            operator_ref = EXCLUDED.operator_ref,
+                            authentication_binding_ref =
+                                EXCLUDED.authentication_binding_ref,
+                            valid_from = EXCLUDED.valid_from,
+                            expires_at = EXCLUDED.expires_at,
+                            revoked_at = NULL
+                        """
+                    ),
+                    {
+                        "organization_id": release_identity.organization_id,
+                        "authority_ref": release_identity.authority_ref,
+                        "authority_digest": release_identity.authority_digest,
+                        "operator_ref": release_identity.operator_ref,
+                        "authentication_binding_ref": (
+                            release_identity.authentication_binding_ref
+                        ),
+                        "valid_from": seeded_at,
+                        "expires_at": seeded_at + LOCAL_RELEASE_GRANT_TTL,
+                    },
+                )
     finally:
         engine.dispose()
     print(
@@ -177,7 +239,8 @@ def main(argv: Sequence[str] | None = None) -> None:
                 " file_import_service_principal="
                 f"{args.file_import_service_principal_id}"
             )
-        ),
+        )
+        + ("" if release_identity is None else " release_operator_grant=ready"),
         flush=True,
     )
 

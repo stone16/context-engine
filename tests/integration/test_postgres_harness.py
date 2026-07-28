@@ -33,6 +33,7 @@ from engine.persistence.configuration import (
     MIGRATOR_ROLE,
     OPERATOR_ROLE,
     RELEASE_DEFINER_ROLE,
+    RELEASE_OPERATOR_ROLE,
     RUNTIME_ROLE,
     SCHEDULER_ROLE,
     WORKER_LEASE_DEFINER_ROLE,
@@ -181,6 +182,10 @@ def test_post_init_role_provisioning_repairs_a_legacy_volume_idempotently(
         scheduler_password=os.environ["CONTEXT_ENGINE_SCHEDULER_PASSWORD"],
         learning_role=LEARNING_ROLE,
         learning_password=os.environ["CONTEXT_ENGINE_LEARNING_PASSWORD"],
+        release_operator_role=RELEASE_OPERATOR_ROLE,
+        release_operator_password=os.environ[
+            "CONTEXT_ENGINE_RELEASE_OPERATOR_PASSWORD"
+        ],
         security_operator_role=OPERATOR_ROLE,
         security_operator_password=os.environ[
             "CONTEXT_ENGINE_SECURITY_OPERATOR_PASSWORD"

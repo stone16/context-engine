@@ -55,6 +55,7 @@ def test_control_process_help_and_unknown_subcommand() -> None:
         "activate-delete-observations",
         "scan",
         "status",
+        "promote-release",
     ):
         assert subcommand in help_result.stdout
 

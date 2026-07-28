@@ -174,3 +174,4 @@ touched:
 - [0070 — Activate a File change feed from registration](0070-activate-file-change-feed-from-registration.md)
 - [0071 — Compose bounded File scan cycles](0071-compose-bounded-file-scan-cycles.md)
 - [0072 — Report File source status with closed refusals](0072-report-file-source-status-with-closed-refusals.md)
+- [0073 — Compose explicit Release candidates from the current corpus](0073-compose-explicit-release-candidates-from-current-corpus.md)

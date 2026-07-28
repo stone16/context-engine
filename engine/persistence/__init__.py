@@ -21,6 +21,7 @@ from engine.persistence.configuration import (
     LEARNING_ROLE,
     OPERATOR_ROLE,
     RELEASE_DEFINER_ROLE,
+    RELEASE_OPERATOR_ROLE,
     DatabaseConfiguration,
     DatabaseConfigurationError,
     DatabasePurpose,
@@ -63,13 +64,17 @@ from engine.persistence.membership_context import (
     MembershipNotCurrent,
     PostgreSQLMembershipAuthority,
 )
-from engine.persistence.releases import PostgreSQLReleaseStore
+from engine.persistence.releases import (
+    PostgreSQLReleaseCandidateSnapshotStore,
+    PostgreSQLReleaseStore,
+)
 from engine.persistence.role_guard import (
     assert_action_role,
     assert_control_role,
     assert_egress_role,
     assert_identity_role,
     assert_learning_role,
+    assert_release_operator_role,
     assert_runtime_role,
     assert_scheduler_role,
     assert_security_operator_role,
@@ -117,6 +122,7 @@ __all__ = [
     "LEARNING_ROLE",
     "OPERATOR_ROLE",
     "RELEASE_DEFINER_ROLE",
+    "RELEASE_OPERATOR_ROLE",
     "MembershipAuthorityUnavailable",
     "MembershipIdentity",
     "MembershipNotCurrent",
@@ -152,6 +158,7 @@ __all__ = [
     "OrganizationContextBindingError",
     "PostgreSQLMembershipAuthority",
     "PostgreSQLReleaseStore",
+    "PostgreSQLReleaseCandidateSnapshotStore",
     "PostgreSQLWorkerLeaseAuthority",
     "PostgreSQLWorkerLeaseIssuer",
     "WorkerExecutionIdentity",
@@ -166,6 +173,7 @@ __all__ = [
     "FILE_DISPATCH_MAX_LEASE_GENERATION",
     "MAX_WORKER_LEASE_TTL_SECONDS",
     "assert_runtime_role",
+    "assert_release_operator_role",
     "assert_action_role",
     "assert_learning_role",
     "assert_identity_role",
