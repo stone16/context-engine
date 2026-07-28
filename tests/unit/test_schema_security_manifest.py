@@ -2563,6 +2563,39 @@ def test_release_force_rls_and_grants_match_the_promotion_boundary() -> None:
     ] == ["SELECT", "INSERT"]
 
 
+def test_release_candidate_snapshot_operation_is_definer_bound() -> None:
+    operation = next(
+        operation
+        for operation in manifest()["controlOperations"]
+        if operation["name"] == "context_release_observe_candidate_snapshot"
+    )
+
+    assert operation == {
+        "name": "context_release_observe_candidate_snapshot",
+        "databaseFunction": "context_release_observe_candidate_snapshot",
+        "role": "context_engine_release_operator",
+        "definerRole": "context_engine_release_definer",
+        "directTableMutationAllowed": False,
+        "databaseOwnedTime": True,
+        "securityDefiner": True,
+        "searchPath": ["pg_catalog", "pg_temp"],
+        "rowSecurity": True,
+        "sessionUser": "context_engine_release_operator",
+        "revalidates": ["release_operator_grant"],
+        "reads": [
+            "active_release_manifest",
+            "context_source",
+            "context_resource",
+        ],
+        "returns": [
+            "active_generation",
+            "active_manifest_digest",
+            "active_revision_refs",
+        ],
+        "contentBearing": False,
+    }
+
+
 def test_context_learning_promote_release_is_the_single_atomic_operation() -> None:
     """RELEASE-OWNER-019: promotion owns one generation-bound pointer/audit pair."""
 

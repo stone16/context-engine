@@ -66,7 +66,11 @@ outcome rather than adding idempotency.
 Durable release-operator grant provisioning remains deployment/security work.
 The existing local dogfood seed command may explicitly provision only the
 fixed ADR-0069 local release identity while already running under the migrator
-role; it does not promote, create candidates, or write the active pointer.
+role; it does not promote, create candidates, or write the active pointer. The
+seeded durable grant uses the separately bounded `LOCAL_RELEASE_GRANT_TTL` and
+can be refreshed by rerunning that explicit seed command. The authenticated
+identity and each `PromotionAuthorizationRequest` remain bounded by the shorter
+`LOCAL_OPERATOR_TTL`; a durable grant never extends a call identity.
 
 ## Consequences
 

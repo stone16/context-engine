@@ -11,6 +11,7 @@ from uuid import UUID
 from sqlalchemy import text
 
 from applications.operator_authentication import (
+    LOCAL_RELEASE_GRANT_TTL,
     RELEASE_OPERATOR_SECRET_ENV,
     LocalOperatorConfiguration,
     LocalReleaseOperatorAuthenticator,
@@ -220,8 +221,8 @@ def main(argv: Sequence[str] | None = None) -> None:
                         "authentication_binding_ref": (
                             release_identity.authentication_binding_ref
                         ),
-                        "valid_from": release_identity.valid_from,
-                        "expires_at": release_identity.expires_at,
+                        "valid_from": seeded_at,
+                        "expires_at": seeded_at + LOCAL_RELEASE_GRANT_TTL,
                     },
                 )
     finally:

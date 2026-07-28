@@ -37,6 +37,8 @@ from applications.api import main as api_main
 from applications.operator_authentication import (
     CONTROL_OPERATOR_OPERATIONS_ENV,
     CONTROL_OPERATOR_SECRET_ENV,
+    LOCAL_OPERATOR_TTL,
+    LOCAL_RELEASE_GRANT_TTL,
     OPERATOR_ORGANIZATION_ENV,
     RELEASE_OPERATOR_SECRET_ENV,
     WORKER_SECRET_ENV,
@@ -481,6 +483,21 @@ def test_promote_release_activates_every_current_revision_and_dogfood_runtime(
             membership_id=scenario.membership_id,
             environment=environment,
         )
+        migration_engine = create_database_engine(migration_configuration)
+        try:
+            with migration_engine.connect() as connection:
+                grant_lifetime = connection.execute(
+                    text(
+                        "SELECT expires_at - valid_from "
+                        "FROM release_operator_grant "
+                        "WHERE organization_id = :organization_id"
+                    ),
+                    {"organization_id": scenario.organization_id},
+                ).scalar_one()
+            assert grant_lifetime == LOCAL_RELEASE_GRANT_TTL
+            assert grant_lifetime > LOCAL_OPERATOR_TTL
+        finally:
+            migration_engine.dispose()
         dogfood_environment = _dogfood_environment(
             organization_id=scenario.organization_id,
             user_id=user_id,

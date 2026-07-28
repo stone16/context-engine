@@ -193,7 +193,12 @@ class ReleaseCandidateSnapshot:
         if (
             len(set(self.active_revision_refs)) != len(self.active_revision_refs)
             or self.active_revision_refs
-            != tuple(sorted(self.active_revision_refs))
+            != tuple(
+                sorted(
+                    self.active_revision_refs,
+                    key=lambda revision_ref: revision_ref.encode("utf-8"),
+                )
+            )
         ):
             raise ValueError("candidate snapshot Revisions must be canonical")
 

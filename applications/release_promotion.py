@@ -132,13 +132,15 @@ def _keyring(environment: Mapping[str, str]) -> ReleaseEvaluationKeyring:
         )
         worker_secret = environment[WORKER_SECRET_ENV]
         worker_key = bytes.fromhex(worker_secret)
+        raw_key_bytes = raw_key.encode("utf-8")
         if any(
-            hmac.compare_digest(raw_key, secret)
+            hmac.compare_digest(raw_key_bytes, secret.encode("utf-8"))
             or hmac.compare_digest(key, secret.encode("utf-8"))
             for secret in operator_secrets
-        ) or hmac.compare_digest(raw_key, worker_secret) or hmac.compare_digest(
-            key, worker_key
-        ):
+        ) or hmac.compare_digest(
+            raw_key_bytes,
+            worker_secret.encode("utf-8"),
+        ) or hmac.compare_digest(key, worker_key):
             raise ValueError
         return ReleaseEvaluationKeyring(
             active_version=version,

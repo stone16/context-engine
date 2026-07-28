@@ -109,8 +109,8 @@ def upgrade() -> None:
             END IF;
             SELECT coalesce(
                 pg_catalog.array_agg(
-                    DISTINCT resource.active_revision_id::text
-                    ORDER BY resource.active_revision_id::text
+                    DISTINCT resource.active_revision_id::text COLLATE "C"
+                    ORDER BY resource.active_revision_id::text COLLATE "C"
                 ),
                 ARRAY[]::text[]
             )
