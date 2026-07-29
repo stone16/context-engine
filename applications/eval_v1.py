@@ -109,8 +109,11 @@ def _durable_golden_root() -> Path:
     ):
         raise ValueError("durable golden root is unavailable")
     resolved = root.resolve(strict=True)
-    if resolved == REPOSITORY_ROOT or resolved.is_relative_to(REPOSITORY_ROOT):
-        raise ValueError("durable golden root must be outside the repository")
+    if any(
+        (candidate / ".git").exists()
+        for candidate in (resolved, *resolved.parents)
+    ):
+        raise ValueError("durable golden root must be outside every git worktree")
     return resolved
 
 

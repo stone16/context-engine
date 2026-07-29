@@ -12,7 +12,8 @@ The maintainer corpus is private and untracked. It must live in a durable,
 backed-up location outside every disposable repository worktree, configured as
 `CONTEXT_ENGINE_GOLDEN_ROOT`; no worktree-local default exists. The CLI refuses
 golden-set and lock paths outside that root and refuses repository or
-`.context-engine` corpus storage. Golden files, lock history, lineage maps,
+`.context-engine` corpus storage, including roots under any Git worktree.
+Golden files, lock history, lineage maps,
 judge observations, and raw reports from that corpus remain outside Git.
 The repository-local `.context-engine/` directory is ignored and may hold only
 regenerable report output, never the sole durable corpus copy.

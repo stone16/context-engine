@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -190,6 +191,43 @@ def test_cli_refuses_a_repository_worktree_as_the_durable_root(
     monkeypatch.setenv(GOLDEN_ROOT_ENV, str(repository_root))
     golden_path = tmp_path / "golden.json"
     lock_path = tmp_path / "golden.lock.json"
+    write_golden(golden_path, valid_composed_entries())
+
+    with pytest.raises(SystemExit) as error:
+        main(
+            [
+                "lock",
+                "--golden-set",
+                str(golden_path),
+                "--lock",
+                str(lock_path),
+                "--authority",
+                "maintainer",
+                "--reason",
+                "synthetic-test-lock",
+                "--recorded-at",
+                "2026-07-29T12:00:00Z",
+            ]
+        )
+
+    assert error.value.code == 1
+    assert not lock_path.exists()
+
+
+def test_cli_refuses_a_foreign_git_worktree_as_the_durable_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    foreign_repository = tmp_path / "foreign-repository"
+    subprocess.run(
+        ("git", "init", "--quiet", str(foreign_repository)),
+        check=True,
+    )
+    durable_root = foreign_repository / "private-golden"
+    durable_root.mkdir()
+    monkeypatch.setenv(GOLDEN_ROOT_ENV, str(durable_root))
+    golden_path = durable_root / "golden.json"
+    lock_path = durable_root / "golden.lock.json"
     write_golden(golden_path, valid_composed_entries())
 
     with pytest.raises(SystemExit) as error:
