@@ -1,0 +1,242 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://context-engine.invalid/eval/golden/v1/schema.json",
+  "title": "ContextEngine golden set v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "name", "synthetic", "entries"],
+  "properties": {
+    "schemaVersion": {
+      "const": "context-engine-golden-set-v1"
+    },
+    "name": {
+      "$ref": "#/$defs/nonblank"
+    },
+    "synthetic": {
+      "type": "boolean"
+    },
+    "entries": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/case"
+      }
+    }
+  },
+  "$defs": {
+    "nonblank": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "opaqueRef": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^\\S+$"
+    },
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^(?!/)(?!\\./)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\).+\\S$"
+    },
+    "expectation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sourceRef", "resourceRef", "revisionRef", "fragmentRef"],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "sourceRef": {
+          "$ref": "#/$defs/opaqueRef"
+        },
+        "resourceRef": {
+          "$ref": "#/$defs/opaqueRef"
+        },
+        "revisionRef": {
+          "$ref": "#/$defs/opaqueRef"
+        },
+        "fragmentRef": {
+          "$ref": "#/$defs/opaqueRef"
+        }
+      }
+    },
+    "hardNegativeExpectation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sourceRef",
+        "resourceRef",
+        "revisionRef",
+        "fragmentRef",
+        "topicCluster"
+      ],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "sourceRef": {
+          "$ref": "#/$defs/opaqueRef"
+        },
+        "resourceRef": {
+          "$ref": "#/$defs/opaqueRef"
+        },
+        "revisionRef": {
+          "$ref": "#/$defs/opaqueRef"
+        },
+        "fragmentRef": {
+          "$ref": "#/$defs/opaqueRef"
+        },
+        "topicCluster": {
+          "$ref": "#/$defs/opaqueRef"
+        }
+      }
+    },
+    "lineage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sourceRef", "resourceRef", "revisionRef", "fragmentRef"],
+      "properties": {
+        "sourceRef": {
+          "$ref": "#/$defs/opaqueRef"
+        },
+        "resourceRef": {
+          "$ref": "#/$defs/opaqueRef"
+        },
+        "revisionRef": {
+          "$ref": "#/$defs/opaqueRef"
+        },
+        "fragmentRef": {
+          "$ref": "#/$defs/opaqueRef"
+        }
+      }
+    },
+    "requiredClaim": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["claimRef", "claim", "expectedEvidence"],
+      "properties": {
+        "claimRef": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,127}$"
+        },
+        "claim": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096,
+          "pattern": "\\S"
+        },
+        "expectedEvidence": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/lineage"
+          }
+        }
+      }
+    },
+    "case": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "caseRef",
+        "query",
+        "expectedEvidence",
+        "expectedAnswer",
+        "requiredClaims",
+        "answerability",
+        "slice",
+        "partition",
+        "topicCluster",
+        "hardNegativeEvidence"
+      ],
+      "properties": {
+        "caseRef": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,127}$"
+        },
+        "query": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096,
+          "pattern": "\\S"
+        },
+        "expectedEvidence": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/expectation"
+          }
+        },
+        "expectedAnswer": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 16384,
+          "pattern": "\\S"
+        },
+        "requiredClaims": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/requiredClaim"
+          }
+        },
+        "answerability": {
+          "enum": ["answerable", "unanswerable"]
+        },
+        "slice": {
+          "enum": ["single_doc", "cross_doc", "temporal"]
+        },
+        "partition": {
+          "enum": ["dev", "pilot"]
+        },
+        "topicCluster": {
+          "$ref": "#/$defs/opaqueRef"
+        },
+        "hardNegativeEvidence": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/hardNegativeExpectation"
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "answerability": {
+                "const": "answerable"
+              }
+            },
+            "required": ["answerability"]
+          },
+          "then": {
+            "properties": {
+              "expectedEvidence": {
+                "minItems": 1
+              },
+              "requiredClaims": {
+                "minItems": 1
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "expectedEvidence": {
+                "maxItems": 0
+              },
+              "requiredClaims": {
+                "maxItems": 0
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

@@ -66,6 +66,7 @@ delegation, RBAC, and every network-reachable operator surface remain
 | Provider polling, delete execution beyond ADR-0057 | See the File Provider ADRs for exact boundaries |
 | Streaming delivery | Explicit V1 non-goal — placeholder + edit instead |
 | Answer generation inside the engine | Permanent non-goal — generation always lives above the engine boundary |
+| Authoritative golden evaluation report | M1 computes retrieval/citation/answer metrics but deliberately reports `REFUSED` because no run executor can produce the required security observation; issue #160 owns that executor |
 
 ### Bounded dogfood Runtime
 
@@ -424,6 +425,15 @@ authority, real Source/Resource ACLs, general retrieval, and continuation are
 not part of this activated tracer.
 
 ## Evidence and reporting
+
+Golden evaluation M1 validates and locks schema-v1 sets, computes deterministic
+retrieval/citation metrics plus attributable answer metrics, evaluates slice
+floors, and renders report machinery. It does **not** activate an evaluation run
+executor or a production security-observation constructor. File-only reports
+therefore retain their metrics but emit `REFUSED` with
+`no_run_executor_security_observation`; issue #160 owns the executor needed for
+an authoritative clean or violating observation. The public-subset maintainer
+authority is a preparatory privacy check with no promotion effect.
 
 `make security-gate` discovers and executes only registered M0 security
 evidence, cross-checks the live PostgreSQL RLS inventory, and writes
