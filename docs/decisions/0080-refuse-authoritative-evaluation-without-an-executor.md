@@ -1,5 +1,5 @@
 ---
-name: adr-0079-refuse-authoritative-evaluation-without-an-executor
+name: adr-0080-refuse-authoritative-evaluation-without-an-executor
 version: "1.0.0"
 description: >
   Keep M1 golden evaluation fail-closed: serialized observations cannot attest
@@ -7,7 +7,7 @@ description: >
   refused until a real executor owns that construction boundary.
 ---
 
-# 0079. Refuse authoritative evaluation without an executor
+# 0080. Refuse authoritative evaluation without an executor
 
 - Status: accepted
 - Date: 2026-07-30
