@@ -1,4 +1,4 @@
-.PHONY: install build lint typecheck test catalog security-gate smoke db-up db-down db-reset integration dogfood-eval openapi-generate openapi-check openapi-breaking-check sdk-generate sdk-check sdk-build sdk-test sdk-pack action-typecheck action-build action-test bot-typecheck bot-build bot-test check
+.PHONY: install build lint typecheck test catalog security-gate smoke db-up db-down db-reset integration dogfood-eval eval-v1 openapi-generate openapi-check openapi-breaking-check sdk-generate sdk-check sdk-build sdk-test sdk-pack action-typecheck action-build action-test bot-typecheck bot-build bot-test check
 
 install:
 	uv sync --frozen
@@ -44,6 +44,14 @@ integration:
 
 dogfood-eval:
 	uv run context-engine-dogfood-eval run --golden-set eval/golden/v0/golden-set.json
+
+eval-v1:
+	uv run context-engine-eval report \
+		--golden-set "$(GOLDEN_SET)" \
+		--lock "$(GOLDEN_LOCK)" \
+		--run "$(EVAL_RUN)" \
+		--output .context-engine/eval/golden-v1-report.json \
+		--generated-at "$(GENERATED_AT)"
 
 openapi-generate:
 	uv run python scripts/freeze_openapi.py generate
