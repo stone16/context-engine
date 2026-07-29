@@ -121,11 +121,17 @@ index and executes under the exact parent WorkerLease binding.
    recognition methods directly. ContextEngine rewrites rich construct
    classification, exact raw-byte position mapping, ancestry, typed output,
    and splitting because the upstream return shape cannot express those
-   contracts. The process performs no network or database I/O and retains no
-   independent state, cache, index, or checkpoint. Both the direct compiler
-   seam and subprocess envelope convert unexpected parser or domain-constructor
-   rejection into a typed all-or-nothing `CompilationFailure`; no partial
-   document or raw exception crosses the runner boundary.
+   contracts. The unleased entry point requires an exact process-local
+   acceptance context from a module-private capability that is not exported,
+   configurable, or environment-derived; omitting or forging that context is a
+   typed refusal. A sound static gate additionally forbids every other
+   production module from directly importing the raw compiler, local runner,
+   or private capability. The process performs no network or database I/O and
+   retains no independent state, cache, index, or checkpoint. Both the direct
+   compiler seam and subprocess envelope convert unexpected parser or
+   domain-constructor rejection into a typed all-or-nothing
+   `CompilationFailure`; no partial document or raw exception crosses the
+   runner boundary.
 7. **Activation remains deferred.** This decision proves the v3 pure transform
    and local acceptance reporting only. The active File import configuration,
    database publication functions, immutable Revision schemas, embeddings,
@@ -133,8 +139,8 @@ index and executes under the exact parent WorkerLease binding.
    production publication requires a separate decision and complete atomic
    publication and re-embedding evidence. The Supply execution bridge in issue
    #125 owns the future production invocation and must bind it to the exact
-   parent WorkerLease. No production module may call this issue's unleased
-   local subprocess helper.
+   parent WorkerLease. Production activation cannot reuse or manufacture this
+   issue's acceptance context.
 8. **Runtime remains sealed.** Compilation changes no Runtime composition.
    After any future v3 activation, each published Fragment is still only a
    candidate until it crosses the exact

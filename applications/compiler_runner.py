@@ -10,7 +10,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path, PurePath
-from typing import Final, cast
+from typing import Final, Protocol, cast
 
 from adapters.parsers.ragflow_markdown import compile_rich_markdown, rich_token_count
 from engine.supply import (
@@ -25,9 +25,24 @@ from engine.supply import (
     canonicalize_parsed_document,
     deserialize_parsed_document,
 )
+from eval._compiler_acceptance import (
+    _AcceptanceContext,
+    acceptance_context,
+    is_acceptance_context,
+)
 
 _RUNNER_MODULE: Final = "applications.compiler_runner"
 COMPILER_RUNNER_TIMEOUT_SECONDS: Final = 30.0
+
+
+class _AcceptanceEntryPoint(Protocol):
+    def __call__(
+        self,
+        source: bytes,
+        config: MarkdownCompilerConfig,
+        *,
+        acceptance_context: _AcceptanceContext,
+    ) -> CompilationOutcome: ...
 
 
 def _boundary_failure() -> CompilationFailure:
@@ -78,12 +93,36 @@ def _failure_from_document(value: object) -> CompilationFailure:
     )
 
 
+def _require_acceptance_context(
+    entry_point: _AcceptanceEntryPoint,
+) -> _AcceptanceEntryPoint:
+    def guarded(
+        source: bytes,
+        config: MarkdownCompilerConfig,
+        *,
+        acceptance_context: _AcceptanceContext | None = None,
+    ) -> CompilationOutcome:
+        if is_acceptance_context(acceptance_context):
+            return entry_point(
+                source,
+                config,
+                acceptance_context=cast(_AcceptanceContext, acceptance_context),
+            )
+        return _boundary_failure()
+
+    return cast(_AcceptanceEntryPoint, guarded)
+
+
+@_require_acceptance_context
 def compile_in_local_compiler_runner(
     source: bytes,
     config: MarkdownCompilerConfig,
+    *,
+    acceptance_context: _AcceptanceContext,
 ) -> CompilationOutcome:
     """Compile in an unleased local process that production must never call."""
 
+    assert is_acceptance_context(acceptance_context)
     if type(source) is not bytes:
         raise TypeError("compiler-runner source must be exact bytes")
     if type(config) is not MarkdownCompilerConfig:
@@ -136,11 +175,19 @@ def compile_in_local_compiler_runner(
     return _boundary_failure()
 
 
-def _emit(source: bytes, config: MarkdownCompilerConfig) -> None:
-    try:
-        outcome = compile_rich_markdown(source, config)
-    except Exception:
-        outcome = _boundary_failure()
+def _emit(
+    source: bytes,
+    config: MarkdownCompilerConfig,
+    *,
+    acceptance_context: _AcceptanceContext | None = None,
+) -> None:
+    if not is_acceptance_context(acceptance_context):
+        outcome: CompilationOutcome = _boundary_failure()
+    else:
+        try:
+            outcome = compile_rich_markdown(source, config)
+        except Exception:
+            outcome = _boundary_failure()
     if type(outcome) is ParsedDocument:
         envelope: dict[str, object] = {
             "outcome": "parsed",
@@ -200,7 +247,14 @@ def _safe_markdown_files(root: Path) -> tuple[Path, ...]:
     )
 
 
-def _acceptance_report(root: Path, token_ceiling: int) -> dict[str, object]:
+def _acceptance_report(
+    root: Path,
+    token_ceiling: int,
+    *,
+    acceptance_context: _AcceptanceContext,
+) -> dict[str, object]:
+    if not is_acceptance_context(acceptance_context):
+        raise ValueError("acceptance report requires its private context")
     accepted = 0
     refused = 0
     digests: list[str] = []
@@ -263,10 +317,20 @@ def _acceptance_report(root: Path, token_ceiling: int) -> dict[str, object]:
     }
 
 
-def _write_acceptance_report(root: Path, output: Path, token_ceiling: int) -> None:
+def _write_acceptance_report(
+    root: Path,
+    output: Path,
+    token_ceiling: int,
+    *,
+    acceptance_context: _AcceptanceContext,
+) -> None:
     if ".context-engine" not in output.parts:
         raise ValueError("acceptance reports must be written under .context-engine")
-    report = _acceptance_report(root, token_ceiling)
+    report = _acceptance_report(
+        root,
+        token_ceiling,
+        acceptance_context=acceptance_context,
+    )
     serialized = json.dumps(report, sort_keys=True, separators=(",", ":")) + "\n"
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(serialized, encoding="utf-8")
@@ -282,6 +346,7 @@ def main() -> None:
                 args.config,
                 token_ceiling=cast(int, args.token_ceiling),
             ),
+            acceptance_context=acceptance_context(),
         )
         return
     if args.acceptance_report:
@@ -291,6 +356,7 @@ def main() -> None:
             cast(Path, args.root),
             cast(Path, args.output),
             cast(int, args.token_ceiling),
+            acceptance_context=acceptance_context(),
         )
         return
     raise SystemExit("one runner operation is required")

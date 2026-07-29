@@ -15,6 +15,7 @@ from engine.supply import (
     ParsedDocument,
     deserialize_parsed_document,
 )
+from eval._compiler_acceptance import acceptance_context
 
 FIXTURES = Path(__file__).parents[1] / "fixtures/markdown"
 CONFIG = MarkdownCompilerConfig(version="markdown-config-v3")
@@ -111,6 +112,10 @@ def test_local_runner_wrapper_cannot_be_substituted_with_a_direct_call(
         direct_call_must_not_run,
     )
 
-    outcome = compiler_runner.compile_in_local_compiler_runner(b"# T\n", CONFIG)
+    outcome = compiler_runner.compile_in_local_compiler_runner(
+        b"# T\n",
+        CONFIG,
+        acceptance_context=acceptance_context(),
+    )
 
     assert type(outcome) is ParsedDocument

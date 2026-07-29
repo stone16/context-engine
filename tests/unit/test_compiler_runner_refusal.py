@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import subprocess
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
@@ -17,8 +18,41 @@ from engine.supply import (
     ParsedDocument,
     UnsupportedConstruct,
 )
+from eval._compiler_acceptance import _AcceptanceContext, acceptance_context
 
 CONFIG = MarkdownCompilerConfig(version="markdown-config-v3")
+
+
+def test_unleased_runner_without_acceptance_context_is_a_typed_refusal() -> None:
+    unchecked_runner = cast(Any, compile_in_local_compiler_runner)
+    outcome = unchecked_runner(b"# T\n", CONFIG)
+
+    assert type(outcome) is CompilationFailure
+    assert outcome.code is CompilationFailureCode.UNSUPPORTED_DOCUMENT_SHAPE
+    assert outcome.position is None
+
+
+def test_explicit_acceptance_context_allows_the_local_runner() -> None:
+    outcome = compile_in_local_compiler_runner(
+        b"# T\n",
+        CONFIG,
+        acceptance_context=acceptance_context(),
+    )
+
+    assert type(outcome) is ParsedDocument
+
+
+def test_acceptance_context_cannot_be_forged() -> None:
+    with pytest.raises(TypeError, match="cannot be constructed"):
+        _AcceptanceContext(object())
+
+    outcome = compile_in_local_compiler_runner(
+        b"# T\n",
+        CONFIG,
+        acceptance_context=cast(Any, object()),
+    )
+    assert type(outcome) is CompilationFailure
+    assert outcome.code is CompilationFailureCode.UNSUPPORTED_DOCUMENT_SHAPE
 
 
 @pytest.mark.parametrize(
@@ -56,7 +90,11 @@ def test_malformed_source_returns_typed_failure_across_runner_boundary(
     source: bytes,
     expected_code: CompilationFailureCode,
 ) -> None:
-    outcome = compile_in_local_compiler_runner(source, CONFIG)
+    outcome = compile_in_local_compiler_runner(
+        source,
+        CONFIG,
+        acceptance_context=acceptance_context(),
+    )
 
     assert type(outcome) is CompilationFailure
     assert outcome.code is expected_code
@@ -77,7 +115,11 @@ def test_unlisted_inline_constructs_are_typed_refusals(
     source: bytes,
     construct: UnsupportedConstruct,
 ) -> None:
-    outcome = compile_in_local_compiler_runner(source, CONFIG)
+    outcome = compile_in_local_compiler_runner(
+        source,
+        CONFIG,
+        acceptance_context=acceptance_context(),
+    )
 
     assert type(outcome) is CompilationFailure
     assert outcome.code is CompilationFailureCode.UNSUPPORTED_CONSTRUCT
@@ -111,7 +153,11 @@ def test_runner_boundary_converts_unexpected_compiler_exception_to_typed_failure
 
     monkeypatch.setattr(compiler_runner, "compile_rich_markdown", raise_unexpected)
 
-    compiler_runner._emit(b"# T\n", CONFIG)
+    compiler_runner._emit(
+        b"# T\n",
+        CONFIG,
+        acceptance_context=acceptance_context(),
+    )
 
     outcome = compiler_runner._failure_from_document(
         json.loads(capsys.readouterr().out)["failure"]
@@ -135,7 +181,11 @@ def test_runner_api_converts_child_process_failure_to_typed_failure(
         ),
     )
 
-    outcome = compile_in_local_compiler_runner(b"# T\n", CONFIG)
+    outcome = compile_in_local_compiler_runner(
+        b"# T\n",
+        CONFIG,
+        acceptance_context=acceptance_context(),
+    )
 
     assert type(outcome) is CompilationFailure
     assert outcome.code is CompilationFailureCode.UNSUPPORTED_DOCUMENT_SHAPE
@@ -153,7 +203,11 @@ def test_runner_api_passes_a_bound_and_converts_timeout_to_typed_failure(
 
     monkeypatch.setattr(subprocess, "run", wedge)
 
-    outcome = compile_in_local_compiler_runner(b"# T\n", CONFIG)
+    outcome = compile_in_local_compiler_runner(
+        b"# T\n",
+        CONFIG,
+        acceptance_context=acceptance_context(),
+    )
 
     assert observed and observed[0] > 0
     assert type(outcome) is CompilationFailure
@@ -178,7 +232,11 @@ def test_runner_api_terminates_a_deliberately_wedged_child(
     )
     monkeypatch.setattr(compiler_runner, "COMPILER_RUNNER_TIMEOUT_SECONDS", 0.05)
 
-    outcome = compile_in_local_compiler_runner(b"# T\n", CONFIG)
+    outcome = compile_in_local_compiler_runner(
+        b"# T\n",
+        CONFIG,
+        acceptance_context=acceptance_context(),
+    )
 
     assert type(outcome) is CompilationFailure
     assert outcome.code is CompilationFailureCode.UNSUPPORTED_DOCUMENT_SHAPE
@@ -302,7 +360,11 @@ def test_runner_api_converts_unexpected_deserializer_exception_to_typed_failure(
         reject_document,
     )
 
-    outcome = compile_in_local_compiler_runner(b"# T\n", CONFIG)
+    outcome = compile_in_local_compiler_runner(
+        b"# T\n",
+        CONFIG,
+        acceptance_context=acceptance_context(),
+    )
 
     assert type(outcome) is CompilationFailure
     assert outcome.code is CompilationFailureCode.UNSUPPORTED_DOCUMENT_SHAPE

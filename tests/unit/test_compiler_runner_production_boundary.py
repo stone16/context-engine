@@ -1,94 +1,31 @@
 from __future__ import annotations
 
 import ast
-from collections.abc import Iterable
 from pathlib import Path
 
 import applications.compiler_runner as compiler_runner
 
 REPOSITORY_ROOT = Path(__file__).parents[2]
 PRODUCTION_ROOTS = ("engine", "adapters", "applications")
-_LOCAL_RUNNER = REPOSITORY_ROOT / "applications/compiler_runner.py"
-_FORBIDDEN_PRODUCTION_CALLS = frozenset(
-    {
-        "adapters.parsers.ragflow_markdown.compile_rich_markdown",
-        "applications.compiler_runner.compile_in_local_compiler_runner",
-    }
-)
-_IGNORED_ROOT_MODULES = frozenset(
+_IGNORED_MODULES = frozenset(
     {
         "adapters.parsers.ragflow_markdown",
         "applications.compiler_runner",
     }
 )
-
-
-def _qualified_production_calls() -> tuple[tuple[str, str], ...]:
-    calls: list[tuple[str, str]] = []
-    for root_name in PRODUCTION_ROOTS:
-        for path in (REPOSITORY_ROOT / root_name).rglob("*.py"):
-            if path == _LOCAL_RUNNER:
-                continue
-            tree = ast.parse(path.read_bytes(), filename=str(path))
-            imported_modules: dict[str, str] = {}
-            imported_symbols: dict[str, str] = {}
-            for node in ast.walk(tree):
-                if isinstance(node, ast.Import):
-                    for alias in node.names:
-                        imported_modules[alias.asname or alias.name] = alias.name
-                elif isinstance(node, ast.ImportFrom) and node.module is not None:
-                    for alias in node.names:
-                        imported_symbols[alias.asname or alias.name] = (
-                            f"{node.module}.{alias.name}"
-                        )
-            for node in ast.walk(tree):
-                if not isinstance(node, ast.Call):
-                    continue
-                if isinstance(node.func, ast.Name):
-                    qualified = imported_symbols.get(node.func.id)
-                elif (
-                    isinstance(node.func, ast.Attribute)
-                    and isinstance(node.func.value, ast.Name)
-                ):
-                    module = imported_modules.get(node.func.value.id)
-                    qualified = f"{module}.{node.func.attr}" if module else None
-                else:
-                    qualified = None
-                if qualified is not None:
-                    calls.append((str(path.relative_to(REPOSITORY_ROOT)), qualified))
-    return tuple(calls)
+_FORBIDDEN_MODULES = frozenset(
+    {
+        "adapters.parsers.ragflow_markdown",
+        "applications.compiler_runner",
+        "eval._compiler_acceptance",
+    }
+)
 
 
 def _module_name(repository_root: Path, path: Path) -> str:
     relative = path.relative_to(repository_root)
     parts = relative.with_suffix("").parts
     return ".".join(parts[:-1] if parts[-1] == "__init__" else parts)
-
-
-def _function_definitions(
-    module: str, tree: ast.Module
-) -> dict[str, ast.FunctionDef | ast.AsyncFunctionDef]:
-    definitions: dict[str, ast.FunctionDef | ast.AsyncFunctionDef] = {}
-
-    def collect(nodes: list[ast.stmt], prefix: str) -> None:
-        for node in nodes:
-            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
-                qualified = f"{prefix}.{node.name}"
-                definitions[qualified] = node
-                collect(node.body, qualified)
-            elif isinstance(node, ast.ClassDef):
-                collect(node.body, f"{prefix}.{node.name}")
-            else:
-                pending = list(ast.iter_child_nodes(node))
-                while pending:
-                    child = pending.pop()
-                    if isinstance(child, ast.stmt):
-                        collect([child], prefix)
-                    else:
-                        pending.extend(ast.iter_child_nodes(child))
-
-    collect(tree.body, module)
-    return definitions
 
 
 def _resolve_import_module(module: str, imported: str | None, level: int) -> str:
@@ -101,13 +38,17 @@ def _resolve_import_module(module: str, imported: str | None, level: int) -> str
     return ".".join((*retained, *imported_parts))
 
 
-def _imports(nodes: Iterable[ast.AST], *, module: str) -> dict[str, str]:
-    imports: dict[str, str] = {}
-    for node in nodes:
+def _forbidden_imports(module: str, tree: ast.Module) -> frozenset[str]:
+    violations: set[str] = set()
+    for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
-                bound = alias.asname or alias.name.split(".", maxsplit=1)[0]
-                imports[bound] = alias.name if alias.asname else bound
+                if any(
+                    alias.name == forbidden
+                    or alias.name.startswith(f"{forbidden}.")
+                    for forbidden in _FORBIDDEN_MODULES
+                ):
+                    violations.add(alias.name)
         elif isinstance(node, ast.ImportFrom):
             imported_module = _resolve_import_module(
                 module,
@@ -115,216 +56,44 @@ def _imports(nodes: Iterable[ast.AST], *, module: str) -> dict[str, str]:
                 node.level,
             )
             for alias in node.names:
-                imports[alias.asname or alias.name] = (
+                qualified = (
                     f"{imported_module}.{alias.name}"
                     if imported_module
                     else alias.name
                 )
-    return imports
+                if any(
+                    imported_module == forbidden
+                    or imported_module.startswith(f"{forbidden}.")
+                    or qualified == forbidden
+                    or qualified.startswith(f"{forbidden}.")
+                    for forbidden in _FORBIDDEN_MODULES
+                ):
+                    violations.add(qualified)
+    return frozenset(violations)
 
 
-def _module_imports(tree: ast.Module, *, module: str) -> dict[str, str]:
-    return _imports(tree.body, module=module)
-
-
-def _scoped_nodes(
-    node: ast.FunctionDef | ast.AsyncFunctionDef,
-) -> Iterable[ast.AST]:
-    pending: list[ast.AST] = list(node.body)
-    while pending:
-        current = pending.pop()
-        yield current
-        if isinstance(
-            current,
-            ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef | ast.Lambda,
-        ):
-            continue
-        pending.extend(ast.iter_child_nodes(current))
-
-
-def _resolve_expression(
-    expression: ast.expr,
-    *,
-    names: dict[str, str],
-    module: str,
-    module_functions: frozenset[str],
-) -> str | None:
-    if isinstance(expression, ast.Name):
-        imported = names.get(expression.id)
-        local = f"{module}.{expression.id}"
-        return imported if imported is not None else (
-            local if local in module_functions else None
-        )
-    if isinstance(expression, ast.Attribute):
-        base = _resolve_expression(
-            expression.value,
-            names=names,
-            module=module,
-            module_functions=module_functions,
-        )
-        return f"{base}.{expression.attr}" if base is not None else None
-    return None
-
-
-def _function_calls(
-    node: ast.FunctionDef | ast.AsyncFunctionDef,
-    *,
-    qualified: str,
-    imports: dict[str, str],
-    module: str,
-    module_functions: frozenset[str],
-) -> frozenset[str]:
-    names = dict(imports)
-    scoped = tuple(_scoped_nodes(node))
-    names.update(_imports(scoped, module=module))
-    names.update(
-        {
-            child.name: f"{qualified}.{child.name}"
-            for child in scoped
-            if isinstance(child, ast.FunctionDef | ast.AsyncFunctionDef)
-        }
-    )
-    changed = True
-    while changed:
-        changed = False
-        for child in scoped:
-            if not isinstance(child, ast.Assign):
-                continue
-            resolved = _resolve_expression(
-                child.value,
-                names=names,
-                module=module,
-                module_functions=module_functions,
-            )
-            if resolved is None:
-                continue
-            for target in child.targets:
-                if isinstance(target, ast.Name) and names.get(target.id) != resolved:
-                    names[target.id] = resolved
-                    changed = True
-    return frozenset(
-        resolved
-        for child in scoped
-        if isinstance(child, ast.Call)
-        for resolved in (
-            _resolve_expression(
-                child.func,
-                names=names,
-                module=module,
-                module_functions=module_functions,
-            ),
-        )
-        if resolved is not None
-    )
-
-
-def _module_calls(
-    tree: ast.Module,
-    *,
-    module: str,
-    module_functions: frozenset[str],
-) -> frozenset[str]:
-    body = tuple(
-        node
-        for node in tree.body
-        if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef)
-    )
-    names = _module_imports(tree, module=module)
-    changed = True
-    while changed:
-        changed = False
-        for node in body:
-            if not isinstance(node, ast.Assign):
-                continue
-            resolved = _resolve_expression(
-                node.value,
-                names=names,
-                module=module,
-                module_functions=module_functions,
-            )
-            if resolved is None:
-                continue
-            for target in node.targets:
-                if isinstance(target, ast.Name) and names.get(target.id) != resolved:
-                    names[target.id] = resolved
-                    changed = True
-    return frozenset(
-        resolved
-        for root in body
-        for node in ast.walk(root)
-        if isinstance(node, ast.Call)
-        for resolved in (
-            _resolve_expression(
-                node.func,
-                names=names,
-                module=module,
-                module_functions=module_functions,
-            ),
-        )
-        if resolved is not None
-    )
-
-
-def _production_paths_to_forbidden(
+def _production_import_violations(
     repository_root: Path,
     *,
     production_roots: tuple[str, ...],
-    ignored_root_modules: frozenset[str],
-    forbidden: frozenset[str],
-) -> tuple[tuple[str, ...], ...]:
-    parsed: dict[str, ast.Module] = {}
-    definitions: dict[str, ast.FunctionDef | ast.AsyncFunctionDef] = {}
+    ignored_modules: frozenset[str],
+) -> tuple[tuple[str, str], ...]:
+    violations: set[tuple[str, str]] = set()
     for root_name in production_roots:
         root = repository_root / root_name
         if not root.exists():
             continue
         for path in root.rglob("*.py"):
             module = _module_name(repository_root, path)
+            if module in ignored_modules:
+                continue
             tree = ast.parse(path.read_bytes(), filename=str(path))
-            parsed[module] = tree
-            definitions.update(_function_definitions(module, tree))
-    function_names = frozenset(definitions)
-    graph = {
-        module: _module_calls(
-            tree,
-            module=module,
-            module_functions=frozenset(
-                name for name in function_names if name.startswith(f"{module}.")
-            ),
-        )
-        for module, tree in parsed.items()
-    }
-    for qualified, definition in definitions.items():
-        module = qualified.rsplit(".", maxsplit=1)[0]
-        while module not in parsed:
-            module = module.rsplit(".", maxsplit=1)[0]
-        graph[qualified] = _function_calls(
-            definition,
-            qualified=qualified,
-            imports=_module_imports(parsed[module], module=module),
-            module=module,
-            module_functions=frozenset(
-                name for name in function_names if name.startswith(f"{module}.")
-            ),
-        )
-
-    paths: set[tuple[str, ...]] = set()
-
-    def walk(current: str, path: tuple[str, ...]) -> None:
-        for called in graph.get(current, frozenset()):
-            next_path = (*path, called)
-            if called in forbidden:
-                paths.add(next_path)
-            elif called in graph and called not in path:
-                walk(called, next_path)
-
-    for function in graph:
-        if not any(
-            function == module or function.startswith(f"{module}.")
-            for module in ignored_root_modules
-        ):
-            walk(function, (function,))
-    return tuple(sorted(paths))
+            relative = path.relative_to(repository_root).as_posix()
+            violations.update(
+                (relative, imported)
+                for imported in _forbidden_imports(module, tree)
+            )
+    return tuple(sorted(violations))
 
 
 def test_unleased_subprocess_helper_is_explicitly_local_only() -> None:
@@ -332,351 +101,67 @@ def test_unleased_subprocess_helper_is_explicitly_local_only() -> None:
     assert hasattr(compiler_runner, "compile_in_local_compiler_runner")
 
 
-def test_no_production_module_calls_the_local_compiler_runner() -> None:
-    forbidden_module = "applications.compiler_runner"
-    forbidden_symbol = "compile_in_local_compiler_runner"
-    callers: list[str] = []
-    for root_name in PRODUCTION_ROOTS:
-        for path in (REPOSITORY_ROOT / root_name).rglob("*.py"):
-            if path == REPOSITORY_ROOT / "applications/compiler_runner.py":
-                continue
-            tree = ast.parse(path.read_bytes(), filename=str(path))
-            for node in ast.walk(tree):
-                imported_from_runner = isinstance(node, ast.ImportFrom) and (
-                    node.module == forbidden_module
-                    or any(alias.name == forbidden_symbol for alias in node.names)
-                    or (
-                        node.module == "applications"
-                        and any(
-                            alias.name == "compiler_runner" for alias in node.names
-                        )
-                    )
-                )
-                imported_runner = isinstance(node, ast.Import) and any(
-                    alias.name == forbidden_module for alias in node.names
-                )
-                if imported_from_runner or imported_runner:
-                    callers.append(str(path.relative_to(REPOSITORY_ROOT)))
-    assert callers == []
-
-
-def test_no_production_module_calls_the_unleased_raw_compiler_entry_point() -> None:
-    assert _production_paths_to_forbidden(
+def test_no_production_module_imports_an_unleased_compiler_surface() -> None:
+    assert _production_import_violations(
         REPOSITORY_ROOT,
         production_roots=PRODUCTION_ROOTS,
-        ignored_root_modules=_IGNORED_ROOT_MODULES,
-        forbidden=_FORBIDDEN_PRODUCTION_CALLS,
+        ignored_modules=_IGNORED_MODULES,
     ) == ()
 
 
-def test_production_reachability_detects_module_scope_calls(tmp_path: Path) -> None:
-    (tmp_path / "applications").mkdir()
-    (tmp_path / "adapters/parsers").mkdir(parents=True)
-    (tmp_path / "applications/entry.py").write_text(
-        """
-from adapters.parsers.ragflow_markdown import compile_rich_markdown
-
-RESULT = compile_rich_markdown(b"raw", object())
-""".lstrip(),
-        encoding="utf-8",
-    )
-    (tmp_path / "adapters/parsers/ragflow_markdown.py").write_text(
-        "def compile_rich_markdown(raw, config):\n    return raw, config\n",
-        encoding="utf-8",
-    )
-
-    paths = _production_paths_to_forbidden(
-        tmp_path,
-        production_roots=("engine", "adapters", "applications"),
-        ignored_root_modules=frozenset(),
-        forbidden=frozenset(
-            {"adapters.parsers.ragflow_markdown.compile_rich_markdown"}
-        ),
-    )
-
-    assert (
-        "applications.entry",
-        "adapters.parsers.ragflow_markdown.compile_rich_markdown",
-    ) in paths
-
-
-def test_production_reachability_analysis_detects_transitive_indirect_calls(
+def test_direct_production_import_gate_rejects_the_unleased_entry_point(
     tmp_path: Path,
 ) -> None:
     (tmp_path / "applications").mkdir()
-    (tmp_path / "adapters/parsers").mkdir(parents=True)
-    (tmp_path / "applications/bridge.py").write_text(
-        """
-from adapters.parsers.ragflow_markdown import compile_rich_markdown as rich_compile
-
-def hidden(raw, config):
-    compiler = rich_compile
-    return compiler(raw, config)
-""".lstrip(),
-        encoding="utf-8",
-    )
     (tmp_path / "applications/entry.py").write_text(
-        """
-from applications.bridge import hidden
-
-def production_entry(raw, config):
-    return hidden(raw, config)
-""".lstrip(),
-        encoding="utf-8",
-    )
-    (tmp_path / "adapters/parsers/ragflow_markdown.py").write_text(
-        "def compile_rich_markdown(raw, config):\n    return raw, config\n",
+        "from applications.compiler_runner import "
+        "compile_in_local_compiler_runner\n",
         encoding="utf-8",
     )
 
-    paths = _production_paths_to_forbidden(
+    assert _production_import_violations(
         tmp_path,
-        production_roots=("engine", "adapters", "applications"),
-        ignored_root_modules=frozenset(),
-        forbidden=frozenset(
-            {"adapters.parsers.ragflow_markdown.compile_rich_markdown"}
+        production_roots=("applications",),
+        ignored_modules=frozenset(),
+    ) == (
+        (
+            "applications/entry.py",
+            "applications.compiler_runner.compile_in_local_compiler_runner",
         ),
     )
 
-    assert (
-        "applications.entry.production_entry",
-        "applications.bridge.hidden",
-        "adapters.parsers.ragflow_markdown.compile_rich_markdown",
-    ) in paths
 
-
-def test_production_reachability_detects_scoped_and_relative_import_aliases(
+def test_production_import_gate_rejects_private_capability_imports(
     tmp_path: Path,
 ) -> None:
     (tmp_path / "applications").mkdir()
-    (tmp_path / "adapters/parsers").mkdir(parents=True)
-    (tmp_path / "applications/bridge.py").write_text(
-        """
-def hidden(raw, config):
-    from adapters.parsers.ragflow_markdown import compile_rich_markdown as rich
-    compiler = rich
-    return compiler(raw, config)
-""".lstrip(),
-        encoding="utf-8",
-    )
     (tmp_path / "applications/entry.py").write_text(
-        """
-from .bridge import hidden as delegated
-
-def production_entry(raw, config):
-    return delegated(raw, config)
-""".lstrip(),
-        encoding="utf-8",
-    )
-    (tmp_path / "adapters/parsers/ragflow_markdown.py").write_text(
-        "def compile_rich_markdown(raw, config):\n    return raw, config\n",
+        "from eval import _compiler_acceptance\n",
         encoding="utf-8",
     )
 
-    paths = _production_paths_to_forbidden(
+    assert _production_import_violations(
         tmp_path,
-        production_roots=("engine", "adapters", "applications"),
-        ignored_root_modules=frozenset(),
-        forbidden=frozenset(
-            {"adapters.parsers.ragflow_markdown.compile_rich_markdown"}
-        ),
-    )
-
-    assert (
-        "applications.entry.production_entry",
-        "applications.bridge.hidden",
-        "adapters.parsers.ragflow_markdown.compile_rich_markdown",
-    ) in paths
+        production_roots=("applications",),
+        ignored_modules=frozenset(),
+    ) == (("applications/entry.py", "eval._compiler_acceptance"),)
 
 
-def test_production_reachability_detects_reachable_nested_closure(
+def test_production_import_gate_rejects_module_and_submodule_spellings(
     tmp_path: Path,
 ) -> None:
     (tmp_path / "applications").mkdir()
-    (tmp_path / "adapters/parsers").mkdir(parents=True)
     (tmp_path / "applications/entry.py").write_text(
-        """
-def production_entry(raw, config):
-    def hidden():
-        from adapters.parsers.ragflow_markdown import compile_rich_markdown
-        return compile_rich_markdown(raw, config)
-    return hidden()
-""".lstrip(),
-        encoding="utf-8",
-    )
-    (tmp_path / "adapters/parsers/ragflow_markdown.py").write_text(
-        "def compile_rich_markdown(raw, config):\n    return raw, config\n",
+        "import applications.compiler_runner\n"
+        "import adapters.parsers.ragflow_markdown.helpers\n",
         encoding="utf-8",
     )
 
-    paths = _production_paths_to_forbidden(
+    assert _production_import_violations(
         tmp_path,
-        production_roots=("engine", "adapters", "applications"),
-        ignored_root_modules=frozenset(),
-        forbidden=frozenset(
-            {"adapters.parsers.ragflow_markdown.compile_rich_markdown"}
-        ),
+        production_roots=("applications",),
+        ignored_modules=frozenset(),
+    ) == (
+        ("applications/entry.py", "adapters.parsers.ragflow_markdown.helpers"),
+        ("applications/entry.py", "applications.compiler_runner"),
     )
-
-    assert (
-        "applications.entry.production_entry",
-        "applications.entry.production_entry.hidden",
-        "adapters.parsers.ragflow_markdown.compile_rich_markdown",
-    ) in paths
-
-
-def test_production_reachability_detects_conditionally_declared_closure(
-    tmp_path: Path,
-) -> None:
-    (tmp_path / "applications").mkdir()
-    (tmp_path / "adapters/parsers").mkdir(parents=True)
-    (tmp_path / "applications/entry.py").write_text(
-        """
-def production_entry(raw, config, enabled=True):
-    if enabled:
-        def hidden():
-            from adapters.parsers.ragflow_markdown import compile_rich_markdown
-            return compile_rich_markdown(raw, config)
-        return hidden()
-    return None
-""".lstrip(),
-        encoding="utf-8",
-    )
-    (tmp_path / "adapters/parsers/ragflow_markdown.py").write_text(
-        "def compile_rich_markdown(raw, config):\n    return raw, config\n",
-        encoding="utf-8",
-    )
-
-    paths = _production_paths_to_forbidden(
-        tmp_path,
-        production_roots=("engine", "adapters", "applications"),
-        ignored_root_modules=frozenset(),
-        forbidden=frozenset(
-            {"adapters.parsers.ragflow_markdown.compile_rich_markdown"}
-        ),
-    )
-
-    assert (
-        "applications.entry.production_entry",
-        "applications.entry.production_entry.hidden",
-        "adapters.parsers.ragflow_markdown.compile_rich_markdown",
-    ) in paths
-
-
-def test_production_reachability_detects_relative_module_import(
-    tmp_path: Path,
-) -> None:
-    (tmp_path / "applications").mkdir()
-    (tmp_path / "adapters/parsers").mkdir(parents=True)
-    (tmp_path / "applications/bridge.py").write_text(
-        """
-from adapters.parsers.ragflow_markdown import compile_rich_markdown
-
-def hidden(raw, config):
-    return compile_rich_markdown(raw, config)
-""".lstrip(),
-        encoding="utf-8",
-    )
-    (tmp_path / "applications/entry.py").write_text(
-        """
-from . import bridge
-
-def production_entry(raw, config):
-    return bridge.hidden(raw, config)
-""".lstrip(),
-        encoding="utf-8",
-    )
-    (tmp_path / "adapters/parsers/ragflow_markdown.py").write_text(
-        "def compile_rich_markdown(raw, config):\n    return raw, config\n",
-        encoding="utf-8",
-    )
-
-    paths = _production_paths_to_forbidden(
-        tmp_path,
-        production_roots=("engine", "adapters", "applications"),
-        ignored_root_modules=frozenset(),
-        forbidden=frozenset(
-            {"adapters.parsers.ragflow_markdown.compile_rich_markdown"}
-        ),
-    )
-
-    assert (
-        "applications.entry.production_entry",
-        "applications.bridge.hidden",
-        "adapters.parsers.ragflow_markdown.compile_rich_markdown",
-    ) in paths
-
-
-def test_production_reachability_detects_except_handler_closure(
-    tmp_path: Path,
-) -> None:
-    (tmp_path / "applications").mkdir()
-    (tmp_path / "adapters/parsers").mkdir(parents=True)
-    (tmp_path / "applications/entry.py").write_text(
-        """
-def production_entry(raw, config):
-    try:
-        raise RuntimeError
-    except RuntimeError:
-        def hidden():
-            from adapters.parsers.ragflow_markdown import compile_rich_markdown
-            return compile_rich_markdown(raw, config)
-        return hidden()
-""".lstrip(),
-        encoding="utf-8",
-    )
-    (tmp_path / "adapters/parsers/ragflow_markdown.py").write_text(
-        "def compile_rich_markdown(raw, config):\n    return raw, config\n",
-        encoding="utf-8",
-    )
-
-    paths = _production_paths_to_forbidden(
-        tmp_path,
-        production_roots=("engine", "adapters", "applications"),
-        ignored_root_modules=frozenset(),
-        forbidden=frozenset(
-            {"adapters.parsers.ragflow_markdown.compile_rich_markdown"}
-        ),
-    )
-
-    assert (
-        "applications.entry.production_entry",
-        "applications.entry.production_entry.hidden",
-        "adapters.parsers.ragflow_markdown.compile_rich_markdown",
-    ) in paths
-
-
-def test_production_reachability_detects_module_initializer_call(
-    tmp_path: Path,
-) -> None:
-    (tmp_path / "applications").mkdir()
-    (tmp_path / "adapters/parsers").mkdir(parents=True)
-    (tmp_path / "applications/entry.py").write_text(
-        """
-from adapters.parsers.ragflow_markdown import compile_rich_markdown
-
-raw = b"# heading"
-config = object()
-compiler = compile_rich_markdown
-compiler(raw, config)
-""".lstrip(),
-        encoding="utf-8",
-    )
-    (tmp_path / "adapters/parsers/ragflow_markdown.py").write_text(
-        "def compile_rich_markdown(raw, config):\n    return raw, config\n",
-        encoding="utf-8",
-    )
-
-    paths = _production_paths_to_forbidden(
-        tmp_path,
-        production_roots=("engine", "adapters", "applications"),
-        ignored_root_modules=frozenset(),
-        forbidden=frozenset(
-            {"adapters.parsers.ragflow_markdown.compile_rich_markdown"}
-        ),
-    )
-
-    assert (
-        "applications.entry",
-        "adapters.parsers.ragflow_markdown.compile_rich_markdown",
-    ) in paths
