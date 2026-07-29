@@ -30,10 +30,10 @@ def test_schema_v1_accepts_one_strict_synthetic_case(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("mutation", "reason"),
     (
-        (lambda case: case.pop("expectedAnswer"), "expectedAnswer"),
-        (lambda case: case.__setitem__("requiredClaims", []), "requiredClaims"),
-        (lambda case: case.__setitem__("slice", "global"), "slice"),
-        (lambda case: case.__setitem__("unexpected", True), "Additional"),
+        (lambda case: case.pop("expectedAnswer"), "required"),
+        (lambda case: case.__setitem__("requiredClaims", []), "minItems"),
+        (lambda case: case.__setitem__("slice", "global"), "enum"),
+        (lambda case: case.__setitem__("unexpected", True), "additionalProperties"),
     ),
 )
 def test_schema_v1_rejects_malformed_cases(
@@ -49,3 +49,41 @@ def test_schema_v1_rejects_malformed_cases(
 
     with pytest.raises(GoldenSetUnavailable, match=reason):
         load_golden_set(path, validate_set_composition=False)
+
+
+def test_schema_v1_requires_topic_binding_on_each_hard_negative(
+    tmp_path: Path,
+) -> None:
+    case = copy.deepcopy(golden_case("missing-hard-negative-topic"))
+    hard_negatives = case["hardNegativeEvidence"]
+    assert isinstance(hard_negatives, list)
+    assert isinstance(hard_negatives[0], dict)
+    hard_negatives[0].pop("topicCluster")
+    path = tmp_path / "golden.json"
+    _write(path, golden_document([case]))
+
+    with pytest.raises(GoldenSetUnavailable, match="required"):
+        load_golden_set(path, validate_set_composition=False)
+
+
+def test_schema_errors_never_echo_private_case_content(tmp_path: Path) -> None:
+    sensitive_markers = (
+        "PRIVATE_QUERY_MARKER",
+        "PRIVATE_ANSWER_MARKER",
+        "PRIVATE_CLAIM_MARKER",
+    )
+    case = copy.deepcopy(golden_case("private-error-redaction"))
+    case["query"] = sensitive_markers[0] * 500
+    case["expectedAnswer"] = sensitive_markers[1] * 1_000
+    claims = case["requiredClaims"]
+    assert isinstance(claims, list)
+    assert isinstance(claims[0], dict)
+    claims[0]["claim"] = sensitive_markers[2] * 500
+    path = tmp_path / "golden.json"
+    _write(path, golden_document([case]))
+
+    with pytest.raises(GoldenSetUnavailable) as error:
+        load_golden_set(path, validate_set_composition=False)
+
+    message = str(error.value)
+    assert all(marker not in message for marker in sensitive_markers)

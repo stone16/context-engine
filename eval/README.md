@@ -27,13 +27,18 @@ boundary over the tracked tree.
 Moving a case from the private corpus to a public subset is a privacy decision.
 The only configured authority is `maintainer`, recorded in
 `eval/public-subset-governance.json`; every other principal is refused by the
-promotion mechanism. The mechanism authenticates an opaque local credential and
-accepts only its construction-sealed nominal maintainer identity, never a
-caller-authored `"maintainer"` claim. M1 is single-tenant,
+promotion authority. Production composition reads one dedicated opaque local
+credential from the process environment and uses the fixed local authenticator;
+callers cannot inject an authenticator or construct its verified identity. M1 is single-tenant,
 and the maintainer is its sole privacy-responsible party. A designated
 privacy-reviewer role does not exist,
 and release-operator authority is deliberately insufficient: ReleaseManifest
 publication authority must not acquire privacy authority implicitly.
+
+No public-subset promotion effect or command exists in M1. The authority check
+and tracked configuration are an enforced preparatory seam only; they do not
+copy, rewrite, publish, or activate a case. Adding that effect requires its own
+privacy-reviewed operation, and the release-operator path remains outside it.
 
 An approved public case still may not publish or transform personal material.
 It must be independently rewritten as a wholly invented synthetic case, pass
@@ -49,9 +54,13 @@ cases, at least five unanswerable pilot cases, and at least one same-topic hard
 negative in every pilot topic cluster.
 
 The pilot cannot be evaluated without a lock record. Initial locking records
-the pilot content digest, authority, reason, and time. Later edits are refused
-until the explicit `relock` operation appends a new history entry; prior digest
-records remain intact.
+the pilot content digest, authority, reason, and time. This co-located,
+operator-editable record provides accidental-edit detection: ordinary later
+edits are refused until the explicit `relock` operation appends a history entry.
+It is not forgery-proof and does not authenticate a malicious operator who can
+rewrite both the private corpus and its co-located lock; M1 deliberately adds no
+signing/keyring boundary. Prior digest records remain intact during normal lock
+and re-lock operations.
 
 ```bash
 uv run context-engine-eval lock \
@@ -91,23 +100,32 @@ pilot composition is known, the maintainer preregisters sample sizes and scores
 and may record exactly one post-pilot calibration event. That maintainer action
 must bind the pilot digest, old and new threshold values, reason, and UTC time;
 the latest event must exactly bind the active tracked configuration. The action
-is pending preregistration, not part of this implementation.
+is pending preregistration, not part of this implementation. The report CLI
+always reads that tracked file and exposes no caller-selected threshold option.
+Any non-tracked threshold fixture used through the internal test seam is marked
+`non_authoritative` in the report and can never render `PASS`; any configured
+value without the recorded event is refused by the loader.
 
 Security never waits for calibration. Any unauthorized Evidence,
 wrong-Organization effect, or missing-context fallback forces the entire report
 to `FAIL`, regardless of every quality score or sample count. These totals are
-derived from the harness's closed per-case event observations, never accepted
-as caller-authored counters. Every case has a required typed security state:
-`observed` with zero events is clean, while the distinct `not_observed` sentinel,
-an absent field, or malformed evidence refuses report creation as an
-unestablished precondition. None can be coerced to zero or rendered green.
+derived only by the in-process `SecurityHarness` from the run executor's typed
+events, never accepted as caller-authored counters or reloaded JSON. The closed
+non-violation states are `observed_clean`, `not_observed`, and `malformed`.
+Only the harness can construct `observed_clean`; `not_observed`, an absent field,
+malformed evidence, and any serialized claim of `observed` render the report
+`REFUSED`, with counters left null rather than coerced to zero. A harness-observed
+violation remains an absolute `FAIL` veto independent of thresholds and slices.
 
 ## Offline report
 
 The CLI consumes a locked v1 set and a closed per-case observation document. It
 requires the observation `caseRef` set to exactly equal the golden set, records
-the blind judge model/profile identity, requires the harness security
-precondition for every case, and refuses partial runs. Report output must remain
+the blind judge model/profile identity, and refuses partial runs. Serialized
+input cannot establish the security precondition, so the file-only command
+emits `REFUSED`; an authoritative non-refused report requires the actual run
+executor to carry its `SecurityHarness` results in-process into report assembly.
+Report output must remain
 within a real ignored `.context-engine/` directory; path traversal and symlink
 escapes are refused.
 

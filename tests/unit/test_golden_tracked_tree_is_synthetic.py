@@ -6,8 +6,11 @@ from typing import cast
 
 import pytest
 
+from applications.eval_v1 import (
+    PUBLIC_SUBSET_MAINTAINER_SECRET_ENV,
+    load_local_public_subset_promotion_authority,
+)
 from engine.learning.governance import (
-    PublicSubsetMaintainerAuthentication,
     PublicSubsetPromotionAuthority,
     PublicSubsetPromotionRejected,
     VerifiedPublicSubsetMaintainerIdentity,
@@ -19,39 +22,9 @@ from tests.support.golden import golden_document, valid_composed_entries
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 
 
-class _SyntheticMaintainerAuthenticator:
-    def __init__(self, *, credential: str, authority_ref: str) -> None:
-        self._credential = credential
-        self._authority_ref = authority_ref
-
-    def authenticate(
-        self,
-        opaque_credential: str,
-    ) -> PublicSubsetMaintainerAuthentication:
-        if opaque_credential != self._credential:
-            raise PublicSubsetPromotionRejected("synthetic authentication rejected")
-        return PublicSubsetMaintainerAuthentication(
-            principal_ref="synthetic-maintainer-principal",
-            authentication_binding_ref="synthetic-maintainer-authentication",
-            authority_ref=self._authority_ref,
-        )
-
-
-def _authority(
-    *,
-    credential: str = "synthetic-maintainer-credential",
-    authority_ref: str = "maintainer",
-) -> PublicSubsetPromotionAuthority:
-    configuration = load_public_subset_governance(
-        REPOSITORY_ROOT / "eval/public-subset-governance.json"
-    )
-    return PublicSubsetPromotionAuthority(
-        configuration,
-        _SyntheticMaintainerAuthenticator(
-            credential=credential,
-            authority_ref=authority_ref,
-        )
-    )
+class _AttackerAuthenticator:
+    def authenticate(self, opaque_credential: str) -> object:
+        return object()
 
 
 def test_tracked_golden_tree_contains_only_placeholder_synthetic_cases() -> None:
@@ -86,38 +59,48 @@ def test_personal_or_non_placeholder_tracked_case_is_refused(tmp_path: Path) -> 
         assert_tracked_golden_tree_is_synthetic(golden_root)
 
 
-def test_only_configured_maintainer_authority_can_promote_public_subset() -> None:
+def test_only_configured_maintainer_authority_can_promote_public_subset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     configuration = load_public_subset_governance(
         REPOSITORY_ROOT / "eval/public-subset-governance.json"
     )
     assert configuration.promotion_authority == "maintainer"
+    maintainer_credential = "synthetic-maintainer-credential-value"
+    monkeypatch.setenv(PUBLIC_SUBSET_MAINTAINER_SECRET_ENV, maintainer_credential)
+    authority = load_local_public_subset_promotion_authority()
 
-    _authority().authorize("synthetic-maintainer-credential")
+    authority.authorize(maintainer_credential)
     with pytest.raises(PublicSubsetPromotionRejected):
-        _authority(
-            credential="synthetic-release-credential",
-            authority_ref="release-operator",
-        ).authorize(
-            "synthetic-release-credential",
-        )
+        authority.authorize("synthetic-release-operator-credential")
     with pytest.raises(PublicSubsetPromotionRejected):
-        _authority(
-            credential="synthetic-privacy-credential",
-            authority_ref="designated-privacy-reviewer",
-        ).authorize(
-            "synthetic-privacy-credential",
-        )
+        authority.authorize("synthetic-designated-privacy-reviewer-credential")
 
 
-def test_raw_maintainer_claim_cannot_forge_verified_privacy_authority() -> None:
+def test_production_promotion_authority_refuses_caller_injected_authenticator() -> None:
+    configuration = load_public_subset_governance(
+        REPOSITORY_ROOT / "eval/public-subset-governance.json"
+    )
+
+    with pytest.raises(TypeError, match="production-composed"):
+        PublicSubsetPromotionAuthority(configuration, _AttackerAuthenticator())
+
+
+def test_raw_maintainer_claim_cannot_forge_verified_privacy_authority(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     with pytest.raises(TypeError, match="authenticated"):
         VerifiedPublicSubsetMaintainerIdentity(
             principal_ref="synthetic-forged-principal",
             authentication_binding_ref="synthetic-forged-authentication",
             authority_ref="maintainer",
         )
+    monkeypatch.setenv(
+        PUBLIC_SUBSET_MAINTAINER_SECRET_ENV,
+        "synthetic-maintainer-credential-value",
+    )
     with pytest.raises(PublicSubsetPromotionRejected):
-        _authority().authorize("maintainer")
+        load_local_public_subset_promotion_authority().authorize("maintainer")
 
 
 @pytest.mark.parametrize("unknown_field", ("memo", "title", "excerpt", "body"))

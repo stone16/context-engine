@@ -115,6 +115,28 @@ class EvidenceExpectation:
 
 
 @dataclass(frozen=True, slots=True)
+class HardNegativeExpectation:
+    """A hard negative with an explicit, countable topic relation."""
+
+    path: str
+    lineage: EvidenceLineage
+    topic_cluster: str
+
+    def __post_init__(self) -> None:
+        _relative_path(self.path)
+        if type(self.lineage) is not EvidenceLineage:
+            raise TypeError("hard-negative Evidence requires exact lineage")
+        _opaque_ref("hard-negative topicCluster", self.topic_cluster)
+
+    def document(self) -> dict[str, str]:
+        return {
+            "path": self.path,
+            **self.lineage.document(),
+            "topicCluster": self.topic_cluster,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class RequiredClaim:
     """One expected answer claim bound to its exact supporting lineage."""
 
@@ -145,7 +167,7 @@ class GoldenCase:
     slice_name: Literal["single_doc", "cross_doc", "temporal"]
     partition: Literal["dev", "pilot"]
     topic_cluster: str
-    hard_negative_evidence: tuple[EvidenceExpectation, ...] = field(repr=False)
+    hard_negative_evidence: tuple[HardNegativeExpectation, ...] = field(repr=False)
 
     def document(self) -> dict[str, object]:
         return {
@@ -213,13 +235,16 @@ def _validate_schema(document: object, schema_path: Path) -> Mapping[str, object
         _schema_validator(schema_path).iter_errors(document),
         key=lambda error: (
             tuple(str(value) for value in error.absolute_path),
-            error.message,
+            str(error.validator),
         ),
     )
     if errors:
         error = errors[0]
         path = ".".join(str(value) for value in error.absolute_path) or "root"
-        raise GoldenSetUnavailable(f"golden schema {path}: {error.message}")
+        category = str(error.validator).replace(" ", "_")
+        raise GoldenSetUnavailable(
+            f"golden schema violation path={path} category={category} count=1"
+        )
     if type(document) is not dict:
         raise GoldenSetUnavailable("golden set is unavailable")
     return cast(Mapping[str, object], document)
@@ -248,6 +273,30 @@ def _expectation(value: object) -> EvidenceExpectation:
             resource_ref=_opaque_ref("Evidence resourceRef", document["resourceRef"]),
             revision_ref=_opaque_ref("Evidence revisionRef", document["revisionRef"]),
             fragment_ref=_opaque_ref("Evidence fragmentRef", document["fragmentRef"]),
+        ),
+    )
+
+
+def _hard_negative_expectation(value: object) -> HardNegativeExpectation:
+    if type(value) is not dict:
+        raise GoldenSetUnavailable("golden hard-negative Evidence is unavailable")
+    document = cast(dict[str, object], value)
+    return HardNegativeExpectation(
+        path=_relative_path(document["path"]),
+        lineage=EvidenceLineage(
+            source_ref=_opaque_ref("Evidence sourceRef", document["sourceRef"]),
+            resource_ref=_opaque_ref(
+                "Evidence resourceRef", document["resourceRef"]
+            ),
+            revision_ref=_opaque_ref(
+                "Evidence revisionRef", document["revisionRef"]
+            ),
+            fragment_ref=_opaque_ref(
+                "Evidence fragmentRef", document["fragmentRef"]
+            ),
+        ),
+        topic_cluster=_opaque_ref(
+            "hard-negative topicCluster", document["topicCluster"]
         ),
     )
 
@@ -287,7 +336,9 @@ def _case(value: object) -> GoldenCase:
     hard_negative_values = cast(list[object], document["hardNegativeEvidence"])
     claims = cast(list[object], document["requiredClaims"])
     expected = tuple(_expectation(item) for item in expected_values)
-    hard_negatives = tuple(_expectation(item) for item in hard_negative_values)
+    hard_negatives = tuple(
+        _hard_negative_expectation(item) for item in hard_negative_values
+    )
     if len({value.lineage for value in expected}) != len(expected):
         raise GoldenSetUnavailable("golden expected Evidence lineage must be unique")
     if len({value.lineage for value in hard_negatives}) != len(hard_negatives):
@@ -352,7 +403,12 @@ def validate_composition(golden_set: GoldenSet) -> None:
         )
     topic_counts = Counter(case.topic_cluster for case in pilot)
     hard_negative_counts = Counter(
-        case.topic_cluster for case in pilot if case.hard_negative_evidence
+        case.topic_cluster
+        for case in pilot
+        if any(
+            evidence.topic_cluster == case.topic_cluster
+            for evidence in case.hard_negative_evidence
+        )
     )
     missing = tuple(
         topic for topic in sorted(topic_counts) if hard_negative_counts[topic] == 0
@@ -360,7 +416,7 @@ def validate_composition(golden_set: GoldenSet) -> None:
     if missing:
         raise GoldenSetUnavailable(
             "golden pilot topic clusters lack same-topic hard negatives: "
-            + ", ".join(missing)
+            f"count={len(missing)}"
         )
 
 

@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import hmac
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Final, NoReturn, Protocol, cast
+from typing import Final, NoReturn, cast
 
 from engine.learning.golden import validate_golden_document_schema
 
@@ -57,36 +58,6 @@ class PublicSubsetGovernance:
             raise ValueError("public subset promotion authority is unavailable")
 
 
-@dataclass(frozen=True, slots=True)
-class PublicSubsetMaintainerAuthentication:
-    """Trusted nominal facts emitted only by the configured authenticator."""
-
-    principal_ref: str = field(repr=False)
-    authentication_binding_ref: str = field(repr=False)
-    authority_ref: str = field(repr=False)
-
-    def __post_init__(self) -> None:
-        for field_name, value in (
-            ("principal_ref", self.principal_ref),
-            ("authentication_binding_ref", self.authentication_binding_ref),
-            ("authority_ref", self.authority_ref),
-        ):
-            if (
-                type(value) is not str
-                or not value
-                or value.isspace()
-                or value != value.strip()
-                or any(character.isspace() for character in value)
-            ):
-                raise ValueError(
-                    f"public subset maintainer authentication {field_name} "
-                    "is unavailable"
-                )
-
-    def __reduce__(self) -> NoReturn:
-        raise TypeError("public subset maintainer authentication is not serializable")
-
-
 @dataclass(frozen=True, slots=True, init=False)
 class VerifiedPublicSubsetMaintainerIdentity:
     """Nominal trusted identity facts returned by the maintainer authenticator."""
@@ -104,31 +75,19 @@ class VerifiedPublicSubsetMaintainerIdentity:
         )
 
 
-class PublicSubsetMaintainerAuthenticator(Protocol):
-    """Verify one opaque credential against the local maintainer identity source."""
-
-    def authenticate(
-        self,
-        opaque_credential: str,
-    ) -> PublicSubsetMaintainerAuthentication: ...
-
-
 class PublicSubsetPromotionAuthority:
-    """Authenticate the sole privacy authority without publication authority."""
+    """Production-composed local privacy authority without publication authority."""
 
-    __slots__ = ("_authenticator", "_governance")
+    __slots__ = ("_credential", "_governance")
+    _credential: bytes
+    _governance: PublicSubsetGovernance
 
     def __init__(
         self,
-        governance: PublicSubsetGovernance,
-        authenticator: PublicSubsetMaintainerAuthenticator,
+        *args: object,
+        **kwargs: object,
     ) -> None:
-        if type(governance) is not PublicSubsetGovernance:
-            raise TypeError("public subset governance is required")
-        if not callable(getattr(authenticator, "authenticate", None)):
-            raise TypeError("public subset maintainer authenticator is incomplete")
-        self._governance = governance
-        self._authenticator = authenticator
+        raise TypeError("public subset authority is production-composed")
 
     def authorize(
         self,
@@ -143,23 +102,39 @@ class PublicSubsetPromotionAuthority:
         ):
             raise PublicSubsetPromotionRejected("public subset promotion refused")
         try:
-            identity = self._authenticator.authenticate(opaque_credential)
-        except Exception:
+            supplied = opaque_credential.encode("utf-8")
+        except UnicodeEncodeError:
             raise PublicSubsetPromotionRejected(
                 "public subset promotion refused"
             ) from None
-        if type(identity) is not PublicSubsetMaintainerAuthentication:
+        if not hmac.compare_digest(supplied, self._credential):
             raise PublicSubsetPromotionRejected("public subset promotion refused")
         verified = object.__new__(VerifiedPublicSubsetMaintainerIdentity)
-        object.__setattr__(verified, "principal_ref", identity.principal_ref)
+        object.__setattr__(verified, "principal_ref", "maintainer:local")
         object.__setattr__(
             verified,
             "authentication_binding_ref",
-            identity.authentication_binding_ref,
+            "binding:local-maintainer:v1",
         )
-        object.__setattr__(verified, "authority_ref", identity.authority_ref)
+        object.__setattr__(verified, "authority_ref", "maintainer")
         if verified.authority_ref != self._governance.promotion_authority:
             raise PublicSubsetPromotionRejected("public subset promotion refused")
+
+
+def _local_public_subset_promotion_authority(
+    governance: PublicSubsetGovernance,
+    credential: bytes,
+) -> PublicSubsetPromotionAuthority:
+    """Compose the fixed local authenticator; applications supply no strategy."""
+
+    if type(governance) is not PublicSubsetGovernance:
+        raise TypeError("public subset governance is required")
+    if type(credential) is not bytes or len(credential) < 32:
+        raise ValueError("public subset maintainer authentication is unavailable")
+    authority = object.__new__(PublicSubsetPromotionAuthority)
+    authority._governance = governance
+    authority._credential = credential
+    return authority
 
 
 def load_public_subset_governance(path: Path) -> PublicSubsetGovernance:

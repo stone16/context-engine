@@ -100,3 +100,13 @@ def test_lock_active_digest_cannot_change_without_history_entry(
 
     with pytest.raises(GoldenSetUnavailable, match="history"):
         load_golden_set(golden_path, lock_path=lock_path)
+
+
+def test_lock_governance_states_its_accident_detection_boundary_honestly() -> None:
+    readme = (
+        Path(__file__).resolve().parents[2] / "eval/README.md"
+    ).read_text(encoding="utf-8").lower()
+
+    assert "accidental-edit detection" in readme
+    assert "not forgery-proof" in readme
+    assert "co-located" in readme

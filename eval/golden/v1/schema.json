@@ -63,6 +63,38 @@
         }
       }
     },
+    "hardNegativeExpectation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sourceRef",
+        "resourceRef",
+        "revisionRef",
+        "fragmentRef",
+        "topicCluster"
+      ],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "sourceRef": {
+          "$ref": "#/$defs/opaqueRef"
+        },
+        "resourceRef": {
+          "$ref": "#/$defs/opaqueRef"
+        },
+        "revisionRef": {
+          "$ref": "#/$defs/opaqueRef"
+        },
+        "fragmentRef": {
+          "$ref": "#/$defs/opaqueRef"
+        },
+        "topicCluster": {
+          "$ref": "#/$defs/opaqueRef"
+        }
+      }
+    },
     "lineage": {
       "type": "object",
       "additionalProperties": false,
@@ -169,7 +201,7 @@
           "type": "array",
           "uniqueItems": true,
           "items": {
-            "$ref": "#/$defs/expectation"
+            "$ref": "#/$defs/hardNegativeExpectation"
           }
         }
       },

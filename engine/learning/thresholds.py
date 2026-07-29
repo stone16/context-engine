@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Final, Literal, cast
+from typing import Final, Literal, NoReturn, cast
 
-from engine.learning.judges import SliceFloor
+from engine.learning.judges import (
+    SliceCaseScore,
+    SliceFloor,
+    SliceFloorResult,
+    evaluate_pending_slice_floors,
+    evaluate_slice_floors,
+)
 
 THRESHOLDS_SCHEMA_VERSION: Final = "context-engine-eval-thresholds-v1"
 DEFAULT_THRESHOLDS_PATH: Final = (
@@ -66,13 +72,45 @@ class LayerSliceThreshold:
     minimum_score: ScoreThreshold
 
 
-@dataclass(frozen=True, slots=True)
+_THRESHOLD_LOADER_SEAL = object()
+
+
+@dataclass(frozen=True, slots=True, init=False)
 class EvaluationThresholds:
     minimum_answer_score: ScoreThreshold
     minimum_refusal_accuracy: ScoreThreshold
     slice_floors: tuple[LayerSliceThreshold, ...]
     maximum_calibration_events: int
     recorded_calibration_events: tuple[dict[str, object], ...]
+    source_authority: Literal["tracked", "non_authoritative"]
+    _loader_seal: object = field(repr=False)
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        raise TypeError("evaluation thresholds are loader-constructed")
+
+    def __reduce__(self) -> NoReturn:
+        raise TypeError("evaluation thresholds are not serializable")
+
+
+def require_loaded_thresholds(thresholds: EvaluationThresholds) -> None:
+    """Reject structurally forged threshold objects at the report boundary."""
+
+    if (
+        type(thresholds) is not EvaluationThresholds
+        or getattr(thresholds, "_loader_seal", None) is not _THRESHOLD_LOADER_SEAL
+    ):
+        raise TypeError("evaluation thresholds must come from the tracked loader")
+
+
+def threshold_report_document(
+    thresholds: EvaluationThresholds,
+) -> dict[str, object]:
+    """Render loaded threshold facts without exposing the construction seal."""
+
+    require_loaded_thresholds(thresholds)
+    document = asdict(thresholds)
+    del document["_loader_seal"]
+    return document
 
 
 def _object(value: object, name: str, fields: frozenset[str]) -> dict[str, object]:
@@ -212,6 +250,8 @@ def _calibration_event(value: object) -> dict[str, object]:
 
 
 def load_thresholds(path: Path) -> EvaluationThresholds:
+    if not isinstance(path, Path):
+        raise TypeError("evaluation thresholds path must be Path")
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, ValueError):
@@ -241,6 +281,22 @@ def load_thresholds(path: Path) -> EvaluationThresholds:
         raise ValueError("threshold calibration event count is unavailable")
     events = tuple(_calibration_event(event) for event in recorded_events)
     floors = _parse_floors(document["sliceFloors"])
+    answer_values = (
+        _pending_or_score(answer["minimumNormalizedScore"]),
+        _pending_or_score(answer["minimumRefusalAccuracy"]),
+    )
+    has_configured_value = any(
+        not isinstance(value, PendingValue)
+        for value in (
+            *answer_values,
+            *(floor.minimum_cases for floor in floors),
+            *(floor.minimum_score for floor in floors),
+        )
+    )
+    if has_configured_value and not events:
+        raise ValueError(
+            "configured thresholds require a recorded calibration event"
+        )
     if events:
         active_values = {
             "answer": document["answer"],
@@ -250,13 +306,23 @@ def load_thresholds(path: Path) -> EvaluationThresholds:
             raise ValueError(
                 "threshold calibration event must bind the active configuration"
             )
-    return EvaluationThresholds(
-        minimum_answer_score=_pending_or_score(answer["minimumNormalizedScore"]),
-        minimum_refusal_accuracy=_pending_or_score(answer["minimumRefusalAccuracy"]),
-        slice_floors=floors,
-        maximum_calibration_events=maximum_events,
-        recorded_calibration_events=events,
-    )
+    thresholds = object.__new__(EvaluationThresholds)
+    values: dict[str, object] = {
+        "minimum_answer_score": answer_values[0],
+        "minimum_refusal_accuracy": answer_values[1],
+        "slice_floors": floors,
+        "maximum_calibration_events": maximum_events,
+        "recorded_calibration_events": events,
+        "source_authority": (
+            "tracked"
+            if path.resolve() == DEFAULT_THRESHOLDS_PATH.resolve()
+            else "non_authoritative"
+        ),
+        "_loader_seal": _THRESHOLD_LOADER_SEAL,
+    }
+    for field_name, field_value in values.items():
+        object.__setattr__(thresholds, field_name, field_value)
+    return thresholds
 
 
 def slice_floors_from_thresholds(
@@ -265,6 +331,7 @@ def slice_floors_from_thresholds(
 ) -> tuple[SliceFloor, ...]:
     """Return one layer's configured floors or refuse any pending value."""
 
+    require_loaded_thresholds(thresholds)
     selected = tuple(floor for floor in thresholds.slice_floors if floor.layer == layer)
     if any(
         isinstance(floor.minimum_cases, PendingValue)
@@ -280,3 +347,33 @@ def slice_floors_from_thresholds(
         )
         for floor in selected
     )
+
+
+def evaluate_layer_slice_thresholds(
+    cases: tuple[SliceCaseScore, ...],
+    thresholds: EvaluationThresholds,
+    layer: Layer,
+) -> tuple[SliceFloorResult, ...]:
+    """Evaluate each ``(layer, slice)`` floor without layer-wide collapse."""
+
+    require_loaded_thresholds(thresholds)
+    selected = tuple(floor for floor in thresholds.slice_floors if floor.layer == layer)
+    if len(selected) != 3:
+        raise ValueError("threshold layer must contain exactly three slice floors")
+    pending_by_slice = {
+        result.slice_name: result for result in evaluate_pending_slice_floors(cases)
+    }
+    results: list[SliceFloorResult] = []
+    for floor in selected:
+        if isinstance(floor.minimum_cases, PendingValue) or isinstance(
+            floor.minimum_score, PendingValue
+        ):
+            results.append(pending_by_slice[floor.slice_name])
+            continue
+        configured = SliceFloor(
+            floor.slice_name,
+            floor.minimum_cases.value,
+            floor.minimum_score.value,
+        )
+        results.extend(evaluate_slice_floors(cases, (configured,)))
+    return tuple(sorted(results, key=lambda result: result.slice_name))

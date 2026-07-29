@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
@@ -19,7 +20,41 @@ from engine.learning.golden import (
     load_golden_set,
     relock_golden_set,
 )
+from engine.learning.governance import (
+    PublicSubsetPromotionAuthority,
+    _local_public_subset_promotion_authority,
+    load_public_subset_governance,
+)
 from engine.learning.thresholds import DEFAULT_THRESHOLDS_PATH, load_thresholds
+
+PUBLIC_SUBSET_MAINTAINER_SECRET_ENV = (
+    "CONTEXT_ENGINE_PUBLIC_SUBSET_MAINTAINER_SECRET"
+)
+PUBLIC_SUBSET_GOVERNANCE_PATH = (
+    Path(__file__).resolve().parents[1] / "eval/public-subset-governance.json"
+)
+
+
+def load_local_public_subset_promotion_authority() -> PublicSubsetPromotionAuthority:
+    """Compose the fixed local maintainer verifier from the process environment."""
+
+    try:
+        raw = os.environ[PUBLIC_SUBSET_MAINTAINER_SECRET_ENV]
+        credential = raw.encode("utf-8")
+    except (KeyError, UnicodeEncodeError):
+        raise ValueError(
+            "public subset maintainer authentication is unavailable"
+        ) from None
+    if (
+        len(credential) < 32
+        or raw != raw.strip()
+        or any(character.isspace() for character in raw)
+    ):
+        raise ValueError("public subset maintainer authentication is unavailable")
+    return _local_public_subset_promotion_authority(
+        load_public_subset_governance(PUBLIC_SUBSET_GOVERNANCE_PATH),
+        credential,
+    )
 
 
 def _require_ignored_output(path: Path) -> None:
@@ -88,7 +123,6 @@ def _parser() -> argparse.ArgumentParser:
     report.add_argument("--golden-set", required=True, type=Path)
     report.add_argument("--lock", required=True, type=Path)
     report.add_argument("--run", required=True, type=Path)
-    report.add_argument("--thresholds", type=Path, default=DEFAULT_THRESHOLDS_PATH)
     report.add_argument("--output", required=True, type=Path)
     report.add_argument("--generated-at", required=True, type=_time)
     return parser
@@ -146,7 +180,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             report = build_evaluation_report(
                 golden_set,
                 load_evaluation_run(args.run),
-                load_thresholds(args.thresholds),
+                load_thresholds(DEFAULT_THRESHOLDS_PATH),
                 generated_at=args.generated_at,
             )
             _write_report(args.output, report)

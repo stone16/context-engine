@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
@@ -8,12 +9,25 @@ from typing import cast
 import pytest
 
 from applications.eval_v1 import main
+from engine.learning.eval_report import (
+    CaseSecurityObservation,
+    SecurityHarness,
+    SecurityObservationState,
+)
 from engine.learning.eval_run import (
-    SecurityObservationNotObserved,
+    EvaluationRun,
+    EvaluationRunUnavailable,
+    build_evaluation_report,
     load_evaluation_run,
 )
 from engine.learning.golden import create_golden_lock, load_golden_set
-from tests.support.golden import valid_composed_entries, write_golden
+from engine.learning.thresholds import load_thresholds
+from tests.support.golden import (
+    golden_case,
+    golden_document,
+    valid_composed_entries,
+    write_golden,
+)
 
 
 def _run_document(entries: list[dict[str, object]]) -> dict[str, object]:
@@ -53,7 +67,7 @@ def _run_document(entries: list[dict[str, object]]) -> dict[str, object]:
     }
 
 
-def test_cli_emits_layered_report_but_pending_slice_gate_is_not_green(
+def test_cli_caller_loaded_run_is_refused_without_harness_security_execution(
     tmp_path: Path,
 ) -> None:
     entries = valid_composed_entries()
@@ -93,15 +107,16 @@ def test_cli_emits_layered_report_but_pending_slice_gate_is_not_green(
     )
     report = json.loads(output_path.read_text(encoding="utf-8"))
 
-    assert report["status"] == "PENDING_PREREGISTRATION"
+    assert report["status"] == "REFUSED"
     assert report["retrieval"]["status"] == "measured"
     assert report["citation"]["status"] == "pass"
     assert report["answer"]["status"] == "pending_preregistration"
     assert report["security"] == {
-        "missingContextFallbackCount": 0,
-        "status": "pass",
-        "unauthorizedEvidenceCount": 0,
-        "wrongOrganizationEffectCount": 0,
+        "missingContextFallbackCount": None,
+        "observationState": "malformed",
+        "status": "refused",
+        "unauthorizedEvidenceCount": None,
+        "wrongOrganizationEffectCount": None,
     }
     assert set(report["slices"]) == {"answer", "citation", "retrieval"}
     assert {
@@ -127,6 +142,26 @@ def test_cli_validate_refuses_pilot_without_lock(tmp_path: Path) -> None:
         assert error.code == 1
     else:
         raise AssertionError("unlocked pilot must be refused")
+
+
+def test_cli_validation_error_never_logs_private_case_content(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    sensitive_marker = "PRIVATE_CLI_QUERY_MARKER"
+    case = golden_case("private-cli-error-redaction")
+    case["query"] = sensitive_marker * 500
+    golden_path = tmp_path / "golden.json"
+    golden_path.write_text(
+        json.dumps(golden_document([case])),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SystemExit) as error:
+        main(["validate", "--golden-set", str(golden_path)])
+
+    assert error.value.code == 1
+    assert sensitive_marker not in capsys.readouterr().err
 
 
 def test_cli_refuses_report_output_outside_ignored_directory(tmp_path: Path) -> None:
@@ -240,7 +275,7 @@ def test_cli_unresolvable_citation_fails_whole_report(tmp_path: Path) -> None:
     report = json.loads(output_path.read_text(encoding="utf-8"))
 
     assert report["citation"]["status"] == "fail"
-    assert report["status"] == "FAIL"
+    assert report["status"] == "REFUSED"
 
 
 def test_cli_all_unanswerable_run_keeps_every_case_in_citation_slices(
@@ -279,7 +314,10 @@ def test_cli_refuses_missing_security_observation_instead_of_defaulting_clean(
     del cases[0]["securityObservation"]
     run_path.write_text(json.dumps(run), encoding="utf-8")
 
-    _assert_report_refused(golden_path, lock_path, run_path, output_path)
+    _run_report(golden_path, lock_path, run_path, output_path)
+    report = json.loads(output_path.read_text(encoding="utf-8"))
+    assert report["status"] == "REFUSED"
+    assert report["security"]["observationState"] == "malformed"
 
 
 def test_cli_refuses_not_observed_security_sentinel_as_a_distinct_type(
@@ -291,15 +329,19 @@ def test_cli_refuses_not_observed_security_sentinel_as_a_distinct_type(
     )
     run = _run_document(entries)
     cases = cast(list[dict[str, object]], run["cases"])
-    cases[0]["securityObservation"] = {"status": "not_observed"}
+    for case in cases:
+        case["securityObservation"] = {"status": "not_observed"}
     run_path.write_text(json.dumps(run), encoding="utf-8")
 
     loaded = load_evaluation_run(run_path)
-    assert isinstance(
-        loaded.cases[0].security_observation,
-        SecurityObservationNotObserved,
+    assert type(loaded.cases[0].security_observation) is CaseSecurityObservation
+    assert loaded.cases[0].security_observation.state is (
+        SecurityObservationState.NOT_OBSERVED
     )
-    _assert_report_refused(golden_path, lock_path, run_path, output_path)
+    _run_report(golden_path, lock_path, run_path, output_path)
+    report = json.loads(output_path.read_text(encoding="utf-8"))
+    assert report["status"] == "REFUSED"
+    assert report["security"]["observationState"] == "not_observed"
 
 
 def test_cli_refuses_malformed_security_observation_instead_of_coercing_it(
@@ -317,7 +359,35 @@ def test_cli_refuses_malformed_security_observation_instead_of_coercing_it(
     }
     run_path.write_text(json.dumps(run), encoding="utf-8")
 
-    _assert_report_refused(golden_path, lock_path, run_path, output_path)
+    loaded = load_evaluation_run(run_path)
+    assert type(loaded.cases[0].security_observation) is CaseSecurityObservation
+    assert loaded.cases[0].security_observation.state is (
+        SecurityObservationState.MALFORMED
+    )
+    _run_report(golden_path, lock_path, run_path, output_path)
+    report = json.loads(output_path.read_text(encoding="utf-8"))
+    assert report["status"] == "REFUSED"
+    assert report["security"]["observationState"] == "malformed"
+
+
+def test_caller_json_cannot_assert_an_authoritative_observed_clean_state(
+    tmp_path: Path,
+) -> None:
+    entries = valid_composed_entries()
+    golden_path, lock_path, run_path, output_path = _write_report_inputs(
+        tmp_path, entries
+    )
+    loaded = load_evaluation_run(run_path)
+
+    assert type(loaded.cases[0].security_observation) is CaseSecurityObservation
+    assert loaded.cases[0].security_observation.state is (
+        SecurityObservationState.MALFORMED
+    )
+    _run_report(golden_path, lock_path, run_path, output_path)
+    report = json.loads(output_path.read_text(encoding="utf-8"))
+    assert report["security"]["observationState"] == "malformed"
+    assert report["security"]["status"] == "refused"
+    assert report["status"] == "REFUSED"
 
 
 def test_cli_refuses_legacy_caller_authored_security_counts(tmp_path: Path) -> None:
@@ -332,7 +402,10 @@ def test_cli_refuses_legacy_caller_authored_security_counts(tmp_path: Path) -> N
     cases[0]["missingContextFallbackCount"] = 0
     run_path.write_text(json.dumps(run), encoding="utf-8")
 
-    _assert_report_refused(golden_path, lock_path, run_path, output_path)
+    _run_report(golden_path, lock_path, run_path, output_path)
+    report = json.loads(output_path.read_text(encoding="utf-8"))
+    assert report["status"] == "REFUSED"
+    assert report["security"]["observationState"] == "malformed"
 
 
 @pytest.mark.parametrize(
@@ -343,7 +416,7 @@ def test_cli_refuses_legacy_caller_authored_security_counts(tmp_path: Path) -> N
         "missing_context_fallback",
     ),
 )
-def test_cli_one_observed_security_violation_vetoes_the_whole_report(
+def test_cli_caller_authored_security_violation_is_not_treated_as_harness_evidence(
     tmp_path: Path,
     kind: str,
 ) -> None:
@@ -367,8 +440,9 @@ def test_cli_one_observed_security_violation_vetoes_the_whole_report(
     _run_report(golden_path, lock_path, run_path, output_path)
     report = json.loads(output_path.read_text(encoding="utf-8"))
 
-    assert report["status"] == "FAIL"
-    assert report["security"]["status"] == "fail"
+    assert report["status"] == "REFUSED"
+    assert report["security"]["status"] == "refused"
+    assert report["security"]["observationState"] == "malformed"
 
 
 def test_cli_refuses_calibration_for_a_different_pilot_digest(
@@ -404,6 +478,24 @@ def test_cli_refuses_calibration_for_a_different_pilot_digest(
     thresholds_path = tmp_path / "thresholds.json"
     thresholds_path.write_text(json.dumps(thresholds), encoding="utf-8")
 
+    with pytest.raises(EvaluationRunUnavailable, match="pilot digest"):
+        build_evaluation_report(
+            load_golden_set(golden_path, lock_path=lock_path),
+            load_evaluation_run(run_path),
+            load_thresholds(thresholds_path),
+            generated_at=datetime(2026, 7, 29, 12, tzinfo=UTC),
+        )
+    assert not output_path.exists()
+
+
+def test_cli_does_not_accept_a_caller_selected_threshold_file(
+    tmp_path: Path,
+) -> None:
+    entries = valid_composed_entries()
+    golden_path, lock_path, run_path, output_path = _write_report_inputs(
+        tmp_path, entries
+    )
+
     with pytest.raises(SystemExit) as error:
         main(
             [
@@ -415,15 +507,77 @@ def test_cli_refuses_calibration_for_a_different_pilot_digest(
                 "--run",
                 str(run_path),
                 "--thresholds",
-                str(thresholds_path),
+                str(tmp_path / "attacker-thresholds.json"),
                 "--output",
                 str(output_path),
                 "--generated-at",
                 "2026-07-29T12:00:00Z",
             ]
         )
-    assert error.value.code == 1
+
+    assert error.value.code == 2
     assert not output_path.exists()
+
+
+def test_nontracked_threshold_report_is_marked_non_authoritative(
+    tmp_path: Path,
+) -> None:
+    entries = valid_composed_entries()
+    golden_path, lock_path, run_path, _ = _write_report_inputs(tmp_path, entries)
+    golden_set = load_golden_set(golden_path, lock_path=lock_path)
+    document = json.loads(
+        (Path(__file__).resolve().parents[2] / "eval/thresholds/v1.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    old_values = {
+        "answer": document["answer"],
+        "sliceFloors": document["sliceFloors"],
+    }
+    new_values = json.loads(json.dumps(old_values))
+    new_values["answer"] = {
+        "minimumNormalizedScore": {"status": "configured", "value": 0.61},
+        "minimumRefusalAccuracy": {"status": "configured", "value": 0.61},
+    }
+    for floor in new_values["sliceFloors"]:
+        floor["minimumCases"] = {"status": "configured", "value": 1}
+        floor["minimumScore"] = {"status": "configured", "value": 0.61}
+    document["answer"] = new_values["answer"]
+    document["sliceFloors"] = new_values["sliceFloors"]
+    document["calibration"]["recordedEvents"] = [
+        {
+            "authority": "maintainer",
+            "newValues": new_values,
+            "oldValues": old_values,
+            "pilotDigest": golden_set.pilot_digest,
+            "reason": "synthetic-non-authoritative-report-fixture",
+            "recordedAt": "2026-07-29T12:00:00Z",
+        }
+    ]
+    thresholds_path = tmp_path / "thresholds.json"
+    thresholds_path.write_text(json.dumps(document), encoding="utf-8")
+    loaded = load_evaluation_run(run_path)
+    harness = SecurityHarness()
+    harnessed = EvaluationRun(
+        loaded.answer_judge_profile,
+        tuple(
+            replace(
+                case,
+                security_observation=harness.observe(case.case_ref, ()),
+            )
+            for case in loaded.cases
+        ),
+    )
+
+    report = build_evaluation_report(
+        golden_set,
+        harnessed,
+        load_thresholds(thresholds_path),
+        generated_at=datetime(2026, 7, 29, 12, tzinfo=UTC),
+    )
+
+    assert report["thresholdAuthority"] == "non_authoritative"
+    assert report["status"] == "NON_AUTHORITATIVE"
 
 
 def _write_report_inputs(
