@@ -11,8 +11,12 @@ from typing import Final, Literal, cast
 
 from engine.learning.eval_report import (
     CaseSecurityObservation,
-    EvaluationScores,
+    CaseSecurityResult,
+    CaseSecurityViolation,
+    EvaluationGateStatuses,
+    SecurityHarness,
     final_report_status,
+    security_report,
 )
 from engine.learning.golden import EvidenceLineage, GoldenSet
 from engine.learning.judges import (
@@ -22,8 +26,6 @@ from engine.learning.judges import (
     CitationClaim,
     RetrievalCaseInput,
     SliceCaseScore,
-    evaluate_pending_slice_floors,
-    evaluate_slice_floors,
     judge_answers,
     judge_citations,
     judge_retrieval,
@@ -31,7 +33,9 @@ from engine.learning.judges import (
 from engine.learning.thresholds import (
     EvaluationThresholds,
     PendingValue,
-    slice_floors_from_thresholds,
+    evaluate_layer_slice_thresholds,
+    require_loaded_thresholds,
+    threshold_report_document,
 )
 
 EVAL_RUN_SCHEMA_VERSION: Final = "context-engine-eval-run-v1"
@@ -92,56 +96,6 @@ class ObservedClaim:
     cited_evidence: tuple[EvidenceLineage, ...]
 
 
-type SecurityEventKind = Literal[
-    "unauthorized_evidence",
-    "wrong_organization_effect",
-    "missing_context_fallback",
-]
-
-
-@dataclass(frozen=True, slots=True)
-class HarnessSecurityEvent:
-    """One content-free hard-oracle event derived by the evaluation harness."""
-
-    kind: SecurityEventKind
-    observation_ref: str
-
-    def __post_init__(self) -> None:
-        if self.kind not in {
-            "unauthorized_evidence",
-            "wrong_organization_effect",
-            "missing_context_fallback",
-        }:
-            raise ValueError("harness security event kind is unavailable")
-        _text("harness security observation_ref", self.observation_ref)
-
-
-@dataclass(frozen=True, slots=True)
-class SecurityObservationObserved:
-    """The harness ran the hard oracles; an empty event tuple means clean."""
-
-    events: tuple[HarnessSecurityEvent, ...]
-
-    def __post_init__(self) -> None:
-        if type(self.events) is not tuple or any(
-            type(event) is not HarnessSecurityEvent for event in self.events
-        ):
-            raise TypeError("observed harness security events must be a typed tuple")
-        refs = tuple(event.observation_ref for event in self.events)
-        if len(refs) != len(set(refs)):
-            raise ValueError("harness security observation_ref values must be unique")
-
-
-@dataclass(frozen=True, slots=True)
-class SecurityObservationNotObserved:
-    """Typed sentinel: hard-oracle evidence was not established for this case."""
-
-
-type HarnessSecurityObservation = (
-    SecurityObservationObserved | SecurityObservationNotObserved
-)
-
-
 @dataclass(frozen=True, slots=True)
 class EvaluationCaseObservation:
     case_ref: str
@@ -150,12 +104,12 @@ class EvaluationCaseObservation:
     blind_score: int
     refused: bool
     critical_contradiction: bool
-    security_observation: HarnessSecurityObservation
+    security_observation: CaseSecurityResult
 
     def __post_init__(self) -> None:
         if type(self.security_observation) not in {
-            SecurityObservationObserved,
-            SecurityObservationNotObserved,
+            CaseSecurityObservation,
+            CaseSecurityViolation,
         }:
             raise TypeError("evaluation case requires typed security observation")
 
@@ -174,43 +128,15 @@ class EvaluationRun:
             raise TypeError("evaluation run requires typed case observations")
 
 
-def _security_event(value: object) -> HarnessSecurityEvent:
-    document = _object(
-        value,
-        "security event",
-        frozenset({"kind", "observationRef"}),
-    )
-    kind = document["kind"]
-    if kind not in {
-        "unauthorized_evidence",
-        "wrong_organization_effect",
-        "missing_context_fallback",
-    }:
-        raise EvaluationRunUnavailable("security event kind is unavailable")
-    return HarnessSecurityEvent(
-        kind=cast(SecurityEventKind, kind),
-        observation_ref=_text("security observationRef", document["observationRef"]),
-    )
+_SECURITY_CLASSIFIER = SecurityHarness()
 
 
-def _security_observation(value: object) -> HarnessSecurityObservation:
+def _security_observation(value: object, case_ref: str) -> CaseSecurityObservation:
+    """Classify serialized security claims; never elevate them to observed clean."""
+
     if value == {"status": "not_observed"}:
-        return SecurityObservationNotObserved()
-    document = _object(
-        value,
-        "security observation",
-        frozenset({"events", "status"}),
-    )
-    if document["status"] != "observed":
-        raise EvaluationRunUnavailable("security observation status is unavailable")
-    events = tuple(
-        _security_event(item)
-        for item in _list(document["events"], "security observation events")
-    )
-    refs = tuple(event.observation_ref for event in events)
-    if len(refs) != len(set(refs)):
-        raise EvaluationRunUnavailable("security observationRef values must be unique")
-    return SecurityObservationObserved(events)
+        return _SECURITY_CLASSIFIER.not_observed(case_ref)
+    return _SECURITY_CLASSIFIER.malformed(case_ref)
 
 
 def _observed_claim(value: object) -> ObservedClaim:
@@ -234,21 +160,36 @@ def _observed_claim(value: object) -> ObservedClaim:
 
 
 def _case_observation(value: object) -> EvaluationCaseObservation:
-    document = _object(
-        value,
-        "evaluation case observation",
-        frozenset(
-            {
-                "blindScore",
-                "caseRef",
-                "claims",
-                "criticalContradiction",
-                "observedEvidence",
-                "refused",
-                "securityObservation",
-            }
-        ),
+    required_fields = frozenset(
+        {
+            "blindScore",
+            "caseRef",
+            "claims",
+            "criticalContradiction",
+            "observedEvidence",
+            "refused",
+        }
     )
+    security_fields = frozenset(
+        {
+            "securityObservation",
+            "unauthorizedEvidenceCount",
+            "wrongOrganizationEffectCount",
+            "missingContextFallbackCount",
+        }
+    )
+    if type(value) is not dict:
+        raise EvaluationRunUnavailable("evaluation case observation is malformed")
+    document = cast(dict[str, object], value)
+    actual_fields = frozenset(document)
+    if not required_fields <= actual_fields or actual_fields - (
+        required_fields | security_fields
+    ):
+        raise EvaluationRunUnavailable("evaluation case observation is malformed")
+    case_ref = _text("observed caseRef", document["caseRef"])
+    security_value = document.get("securityObservation")
+    if actual_fields & (security_fields - {"securityObservation"}):
+        security_value = None
     observed = tuple(
         _lineage(item)
         for item in _list(document["observedEvidence"], "observed Evidence")
@@ -270,13 +211,13 @@ def _case_observation(value: object) -> EvaluationCaseObservation:
     if type(refused) is not bool or type(contradiction) is not bool:
         raise EvaluationRunUnavailable("answer observation flags must be bool")
     return EvaluationCaseObservation(
-        case_ref=_text("observed caseRef", document["caseRef"]),
+        case_ref=case_ref,
         observed_evidence=observed,
         claims=claims,
         blind_score=blind_score,
         refused=refused,
         critical_contradiction=contradiction,
-        security_observation=_security_observation(document["securityObservation"]),
+        security_observation=_security_observation(security_value, case_ref),
     )
 
 
@@ -337,8 +278,7 @@ def build_evaluation_report(
         raise TypeError("golden_set must be GoldenSet")
     if type(run) is not EvaluationRun:
         raise TypeError("run must be EvaluationRun")
-    if type(thresholds) is not EvaluationThresholds:
-        raise TypeError("thresholds must be EvaluationThresholds")
+    require_loaded_thresholds(thresholds)
     if thresholds.recorded_calibration_events and (
         thresholds.recorded_calibration_events[-1]["pilotDigest"]
         != golden_set.pilot_digest
@@ -355,14 +295,14 @@ def build_evaluation_report(
     retrieval_inputs: list[RetrievalCaseInput] = []
     citation_inputs: list[CitationCaseInput] = []
     answer_inputs: list[AnswerCaseInput] = []
-    security_inputs: list[CaseSecurityObservation] = []
+    security_inputs: list[CaseSecurityResult] = []
     for case_ref in sorted(golden_by_ref):
         golden = golden_by_ref[case_ref]
         observed = observed_by_ref[case_ref]
         security_observation = observed.security_observation
-        if isinstance(security_observation, SecurityObservationNotObserved):
+        if security_observation.case_ref != case_ref:
             raise EvaluationRunUnavailable(
-                f"security precondition not met for caseRef {case_ref}"
+                "security observation caseRef does not match evaluation case"
             )
         expected_refs = frozenset(
             _lineage_ref(item.lineage) for item in golden.expected_evidence
@@ -404,23 +344,7 @@ def build_evaluation_report(
                 observed.refused,
             )
         )
-        security_inputs.append(
-            CaseSecurityObservation(
-                case_ref,
-                sum(
-                    event.kind == "unauthorized_evidence"
-                    for event in security_observation.events
-                ),
-                sum(
-                    event.kind == "wrong_organization_effect"
-                    for event in security_observation.events
-                ),
-                sum(
-                    event.kind == "missing_context_fallback"
-                    for event in security_observation.events
-                ),
-            )
-        )
+        security_inputs.append(security_observation)
     retrieval = judge_retrieval(tuple(retrieval_inputs))
     citation = judge_citations(tuple(citation_inputs))
     answer = judge_answers(tuple(answer_inputs), run.answer_judge_profile)
@@ -443,24 +367,18 @@ def build_evaluation_report(
             SliceCaseScore(case_ref, golden_by_ref[case_ref].slice_name, score)
             for case_ref, score in score_by_layer[layer].items()
         )
-        configured_for_layer = tuple(
-            floor for floor in thresholds.slice_floors if floor.layer == layer
+        layer_report = evaluate_layer_slice_thresholds(
+            case_scores,
+            thresholds,
+            layer,
         )
-        if any(
-            isinstance(floor.minimum_cases, PendingValue)
-            or isinstance(floor.minimum_score, PendingValue)
-            for floor in configured_for_layer
-        ):
-            layer_report = evaluate_pending_slice_floors(case_scores)
-        else:
-            layer_report = evaluate_slice_floors(
-                case_scores,
-                slice_floors_from_thresholds(thresholds, layer),
-            )
         slice_reports[layer] = [asdict(result) for result in layer_report]
         flat_slice_statuses.extend(result.status for result in layer_report)
     retrieval_status = "measured"
     citation_status = citation.status
+    answer_status: Literal[
+        "pass", "fail", "insufficient_data", "pending_preregistration"
+    ]
     if isinstance(thresholds.minimum_answer_score, PendingValue) or isinstance(
         thresholds.minimum_refusal_accuracy, PendingValue
     ):
@@ -478,29 +396,15 @@ def build_evaluation_report(
             else "fail"
         )
     status = final_report_status(
-        EvaluationScores(
-            retrieval=1.0,
-            citation=1.0 if citation.status == "pass" else 0.0,
-            answer=(
-                1.0
-                if answer_status in {"pass", "pending_preregistration"}
-                else 0.0
-            ),
+        EvaluationGateStatuses(
+            retrieval="measured",
+            citation=citation.status,
+            answer=answer_status,
             slice_statuses=tuple(flat_slice_statuses),
+            threshold_authority=thresholds.source_authority,
         ),
         tuple(security_inputs),
     )
-    security_totals = {
-        "missingContextFallbackCount": sum(
-            value.missing_context_fallback_count for value in security_inputs
-        ),
-        "unauthorizedEvidenceCount": sum(
-            value.unauthorized_evidence_count for value in security_inputs
-        ),
-        "wrongOrganizationEffectCount": sum(
-            value.wrong_organization_effect_count for value in security_inputs
-        ),
-    }
     report: dict[str, object] = {
         "answer": {**asdict(answer), "status": answer_status},
         "citation": {**asdict(citation), "status": citation_status},
@@ -514,13 +418,11 @@ def build_evaluation_report(
         },
         "reportVersion": EVAL_REPORT_VERSION,
         "retrieval": {**asdict(retrieval), "status": retrieval_status},
-        "security": {
-            "status": "pass" if not any(security_totals.values()) else "fail",
-            **security_totals,
-        },
+        "security": security_report(tuple(security_inputs)),
         "slices": slice_reports,
         "status": status,
-        "thresholds": asdict(thresholds),
+        "thresholdAuthority": thresholds.source_authority,
+        "thresholds": threshold_report_document(thresholds),
     }
     report["reportDigest"] = sha256(
         json.dumps(

@@ -46,7 +46,12 @@ def golden_case(
         "slice": "single_doc",
         "partition": partition,
         "topicCluster": topic_cluster,
-        "hardNegativeEvidence": [evidence(f"hard-negative-{case_ref}")]
+        "hardNegativeEvidence": [
+            {
+                **evidence(f"hard-negative-{case_ref}"),
+                "topicCluster": topic_cluster,
+            }
+        ]
         if hard_negative
         else [],
     }

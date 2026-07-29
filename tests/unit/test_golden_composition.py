@@ -98,5 +98,24 @@ def test_composition_requires_hard_negative_for_every_pilot_topic(
         ):
             case["hardNegativeEvidence"] = []
 
-    with pytest.raises(GoldenSetUnavailable, match="synthetic-topic-b"):
+    with pytest.raises(GoldenSetUnavailable, match="count=1"):
+        _load(tmp_path, entries)
+
+
+def test_composition_rejects_cross_topic_hard_negative_as_same_topic_coverage(
+    tmp_path: Path,
+) -> None:
+    entries = valid_composed_entries()
+    for case in entries:
+        if (
+            case["partition"] == "pilot"
+            and case["topicCluster"] == "synthetic-topic-b"
+        ):
+            hard_negatives = case["hardNegativeEvidence"]
+            assert isinstance(hard_negatives, list)
+            for hard_negative in hard_negatives:
+                assert isinstance(hard_negative, dict)
+                hard_negative["topicCluster"] = "synthetic-topic-a"
+
+    with pytest.raises(GoldenSetUnavailable, match="count=1"):
         _load(tmp_path, entries)
