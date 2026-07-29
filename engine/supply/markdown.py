@@ -1002,11 +1002,9 @@ def _rich_source_blocks(source: str) -> tuple[_RichSourceBlock, ...]:
             ),
             None,
         )
-        if closing == 1 or closing is not None and not any(
+        if closing is not None and any(
             line.strip() for line in lines[1:closing]
         ):
-            raise ValueError("rich frontmatter source must be complete and nonempty")
-        if closing is not None:
             blocks.append(
                 _RichSourceBlock(
                     kind=SectionKind.PARAGRAPH,
@@ -1067,6 +1065,16 @@ def _rich_source_blocks(source: str) -> tuple[_RichSourceBlock, ...]:
                 )
             )
             index = closing + 1
+            continue
+        if _THEMATIC_BREAK_PATTERN.fullmatch(line) is not None:
+            blocks.append(
+                _RichSourceBlock(
+                    kind=SectionKind.PARAGRAPH,
+                    start=starts[index],
+                    end=_rich_source_line_end(lines, starts, index),
+                )
+            )
+            index += 1
             continue
         if index + 1 < len(lines) and _RICH_SETEXT_PATTERN.fullmatch(
             lines[index + 1]
@@ -1162,16 +1170,6 @@ def _rich_source_blocks(source: str) -> tuple[_RichSourceBlock, ...]:
             )
             index = end
             continue
-        if _THEMATIC_BREAK_PATTERN.fullmatch(line) is not None:
-            blocks.append(
-                _RichSourceBlock(
-                    kind=SectionKind.PARAGRAPH,
-                    start=starts[index],
-                    end=_rich_source_line_end(lines, starts, index),
-                )
-            )
-            index += 1
-            continue
         end = index + 1
         while end < len(lines) and lines[end].strip():
             if (
@@ -1247,6 +1245,8 @@ def _expected_rich_fragment_layout(
 def _expected_rich_section_kind(source: str) -> SectionKind:
     lines = source.splitlines()
     if len(lines) >= 2 and lines[0] == "---" and lines[-1] == "---":
+        return SectionKind.PARAGRAPH
+    if len(lines) == 1 and _THEMATIC_BREAK_PATTERN.fullmatch(lines[0]) is not None:
         return SectionKind.PARAGRAPH
     if (
         _RICH_ATX_HEADING_PATTERN.fullmatch(source) is not None

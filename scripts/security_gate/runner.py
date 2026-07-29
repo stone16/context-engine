@@ -277,7 +277,14 @@ def _report_execution_command(
 def _execute_pytest(
     command: Sequence[str], *, cwd: Path, env: Mapping[str, str]
 ) -> int:
-    return subprocess.run(command, cwd=cwd, env=env, check=False).returncode
+    return subprocess.run(
+        command,
+        cwd=cwd,
+        env=env,
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    ).returncode
 
 
 def _audit_rls(

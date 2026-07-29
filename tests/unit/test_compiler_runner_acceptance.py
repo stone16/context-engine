@@ -195,6 +195,42 @@ def test_leading_unclosed_dash_rule_is_an_accepted_thematic_break(
     assert outcome.fragments[0].source_text == "---"
 
 
+@pytest.mark.parametrize("newline", (b"\n", b"\r\n"))
+@pytest.mark.parametrize("bom", (b"", b"\xef\xbb\xbf"))
+@pytest.mark.parametrize(
+    ("lines", "expected_fragments"),
+    (
+        ((b"---",), ("---",)),
+        ((b"---", b"---"), ("---", "---")),
+        ((b"---", b"", b"---"), ("---", "---")),
+        ((b"---", b"key: value", b"---"), ("frontmatter",)),
+        ((b"---", b"key: value"), ("---", "key: value")),
+        ((b"---", b"---", b"text"), ("---", "---", "text")),
+    ),
+)
+def test_leading_dash_delimiter_matrix_is_closed_and_exact(
+    newline: bytes,
+    bom: bytes,
+    lines: tuple[bytes, ...],
+    expected_fragments: tuple[str, ...],
+) -> None:
+    source = bom + newline.join(lines) + newline
+
+    outcome = compile_rich_markdown(source, CONFIG)
+
+    assert type(outcome) is ParsedDocument
+    expected = tuple(
+        (newline.join(lines).decode("utf-8") if value == "frontmatter" else value)
+        for value in expected_fragments
+    )
+    assert tuple(fragment.source_text for fragment in outcome.fragments) == expected
+    for fragment in outcome.fragments:
+        span = fragment.position
+        assert source[span.start.byte_offset : span.end.byte_offset] == (
+            fragment.source_text.encode("utf-8")
+        )
+
+
 def test_rich_constructor_rejects_forged_lineage_and_ancestry() -> None:
     compiled = compile_rich_markdown(b"# Root\n\nBody\n", CONFIG)
     assert type(compiled) is ParsedDocument

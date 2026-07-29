@@ -171,9 +171,7 @@ def _frontmatter_end(lines: list[str]) -> int | None:
         return None
     for index in range(1, len(lines)):
         if lines[index] == "---":
-            if index == 1 or not any(line.strip() for line in lines[1:index]):
-                return -1
-            return index
+            return index if any(line.strip() for line in lines[1:index]) else None
     return None
 
 
@@ -186,12 +184,6 @@ def _blocks(text: str) -> tuple[_Block, ...] | CompilationFailure:
     blocks: list[_Block] = []
     index = 0
     frontmatter_end = _frontmatter_end(lines)
-    if frontmatter_end == -1:
-        return _failure(
-            CompilationFailureCode.UNSUPPORTED_DOCUMENT_SHAPE,
-            text,
-            0,
-        )
     if frontmatter_end is not None:
         blocks.append(
             _Block(
@@ -285,6 +277,20 @@ def _blocks(text: str) -> tuple[_Block, ...] | CompilationFailure:
                 )
             )
             index = closing + 1
+            continue
+
+        if re.fullmatch(
+            r" {0,3}(?:(?:\*[ \t]*){3,}|(?:_[ \t]*){3,}|(?:-[ \t]*){3,})",
+            line,
+        ):
+            blocks.append(
+                _Block(
+                    kind=SectionKind.PARAGRAPH,
+                    start=starts[index],
+                    end=_line_end(lines, starts, index),
+                )
+            )
+            index += 1
             continue
 
         if index + 1 < len(lines) and _SETEXT.fullmatch(lines[index + 1]):
@@ -493,20 +499,6 @@ def _blocks(text: str) -> tuple[_Block, ...] | CompilationFailure:
                 starts[index],
                 UnsupportedConstruct.NESTED_HEADING,
             )
-
-        if re.fullmatch(
-            r" {0,3}(?:(?:\*[ \t]*){3,}|(?:_[ \t]*){3,}|(?:-[ \t]*){3,})",
-            line,
-        ):
-            blocks.append(
-                _Block(
-                    kind=SectionKind.PARAGRAPH,
-                    start=starts[index],
-                    end=_line_end(lines, starts, index),
-                )
-            )
-            index += 1
-            continue
 
         end = index + 1
         while end < len(lines) and lines[end].strip():
