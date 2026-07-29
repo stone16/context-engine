@@ -1,9 +1,168 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
+from copy import deepcopy
+from hashlib import sha256
 from pathlib import Path
+
+import pytest
+
+from eval.embedding_benchmark import (
+    BenchmarkUnavailable,
+    validate_json_schema_document,
+)
+
+REPOSITORY_ROOT = Path(__file__).parents[2]
+REPORT_SCHEMA = (
+    REPOSITORY_ROOT / "docs/contracts/compiler-runner-acceptance-v1.schema.json"
+)
+_PERSONAL_ROOT_PATTERNS = (
+    re.compile(r"/" + "Users" + r"/[^/\s]+/"),
+    re.compile(r"/" + "home" + r"/[^/\s]+/"),
+    re.compile(r"[A-Za-z]:\\(?:Users|Documents and Settings)\\", re.IGNORECASE),
+)
+_PRIVATE_ROOT_FRAGMENT_DIGESTS = frozenset(
+    {"c83ea566573fdfcacb79f350f86ea53935437f5672e1fe97703320cce4725394"}
+)
+_PRIVACY_BEARING_SCHEMA_WORDS = frozenset(
+    {"excerpt", "file", "filename", "path", "root", "source", "text", "title"}
+)
+
+
+def _schema_property_names(value: object) -> set[str]:
+    if type(value) is dict:
+        document = value
+        names: set[str] = set()
+        properties = document.get("properties")
+        if type(properties) is dict:
+            names.update(str(key).casefold() for key in properties)
+        names.update(
+            nested
+            for item in document.values()
+            for nested in _schema_property_names(item)
+        )
+        return names
+    if type(value) is list:
+        return {
+            nested for item in value for nested in _schema_property_names(item)
+        }
+    return set()
+
+
+def _schema_name_words(name: str) -> set[str]:
+    return {
+        word.casefold()
+        for word in re.findall(
+            r"[A-Z]+(?=[A-Z][a-z]|\b)|[A-Z]?[a-z]+|[0-9]+",
+            name,
+        )
+    }
+
+
+def _word_sequence_digests(value: str) -> set[str]:
+    words = tuple(
+        word.casefold()
+        for word in re.findall(r"[A-Z]+(?=[A-Z][a-z]|\b)|[A-Z]?[a-z]+", value)
+    )
+    return {
+        sha256("".join(words[index:end]).encode("utf-8")).hexdigest()
+        for index in range(len(words))
+        for end in range(index + 1, min(index + 4, len(words)) + 1)
+    }
+
+
+def test_tracked_tree_and_acceptance_schema_cannot_carry_private_paths() -> None:
+    tracked = subprocess.run(
+        ["git", "ls-files", "-z"],
+        cwd=REPOSITORY_ROOT,
+        check=True,
+        capture_output=True,
+    ).stdout.split(b"\0")
+    leaks: list[str] = []
+    for raw_path in tracked:
+        if not raw_path:
+            continue
+        path = REPOSITORY_ROOT / raw_path.decode("utf-8")
+        content = path.read_text(encoding="utf-8", errors="ignore")
+        if any(pattern.search(content) for pattern in _PERSONAL_ROOT_PATTERNS) or (
+            _PRIVATE_ROOT_FRAGMENT_DIGESTS & _word_sequence_digests(content)
+        ):
+            leaks.append(path.relative_to(REPOSITORY_ROOT).as_posix())
+
+    schema_text = REPORT_SCHEMA.read_text(encoding="utf-8")
+    schema = json.loads(schema_text)
+    schema_names = _schema_property_names(schema)
+    assert leaks == []
+    assert not any(
+        _PRIVACY_BEARING_SCHEMA_WORDS.intersection(_schema_name_words(name))
+        for name in schema_names
+    )
+    assert all(
+        pattern.search(schema_text) is None
+        for pattern in _PERSONAL_ROOT_PATTERNS
+    )
+
+
+def _count_only_report() -> dict[str, object]:
+    return {
+        "aggregateCompilationDigest": "a" * 64,
+        "compilerVersion": "context-engine-markdown-v3",
+        "configVersion": "markdown-config-v3",
+        "constructHistogram": {
+            "atxHeadings": 0,
+            "callouts": 0,
+            "embeds": 0,
+            "fencedCode": 0,
+            "footnotes": 0,
+            "frontmatter": 0,
+            "htmlBlocks": 0,
+            "inlineMath": 0,
+            "lists": 0,
+            "setextHeadings": 0,
+            "tables": 0,
+            "wikilinks": 0,
+        },
+        "documents": {
+            "accepted": 1,
+            "acceptanceRate": "1.000000",
+            "refused": 0,
+            "total": 1,
+        },
+        "maxFragmentTokenCount": 1,
+        "refusalHistogram": {},
+        "schemaVersion": "compiler-runner-acceptance-v1",
+        "tokenCeiling": 2048,
+    }
+
+
+def _private_path_shapes() -> tuple[str, ...]:
+    slash = chr(47)
+    backslash = chr(92)
+    return (
+        slash.join(("", "Volumes", "private", "entry.md")),
+        slash.join(("", "var", "private", "entry.md")),
+        slash.join(("~", "private", "entry.md")),
+        "Z" + chr(58) + backslash + backslash.join(("private", "entry.md")),
+        backslash * 2 + backslash.join(("server", "share", "entry.md")),
+        "private-entry.md",
+    )
+
+
+@pytest.mark.parametrize("path_shaped_key", _private_path_shapes())
+def test_acceptance_schema_rejects_paths_and_filenames_in_histogram_keys(
+    path_shaped_key: str,
+) -> None:
+    schema = json.loads(REPORT_SCHEMA.read_text(encoding="utf-8"))
+    report = deepcopy(_count_only_report())
+    refusal_histogram = report["refusalHistogram"]
+    assert type(refusal_histogram) is dict
+    refusal_histogram[path_shaped_key] = 1
+
+    with pytest.raises(BenchmarkUnavailable, match="report schema"):
+        validate_json_schema_document(report, schema)
 
 
 def test_acceptance_report_is_count_only_deterministic_and_written_under_ignore(
@@ -32,11 +191,17 @@ def test_acceptance_report_is_count_only_deterministic_and_written_under_ignore(
         str(output),
     ]
 
-    first = subprocess.run(command, check=True, capture_output=True, text=True)
+    first = subprocess.run(
+        command, check=True, capture_output=True, text=True, timeout=30
+    )
     first_bytes = output.read_bytes()
-    second = subprocess.run(command, check=True, capture_output=True, text=True)
+    second = subprocess.run(
+        command, check=True, capture_output=True, text=True, timeout=30
+    )
 
     report = json.loads(first_bytes)
+    schema = json.loads(REPORT_SCHEMA.read_text(encoding="utf-8"))
+    validate_json_schema_document(report, schema)
     assert report["schemaVersion"] == "compiler-runner-acceptance-v1"
     assert report["documents"] == {
         "accepted": 2,

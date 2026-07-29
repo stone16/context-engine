@@ -185,6 +185,16 @@ def test_every_adr_listed_rich_construct_is_explicitly_accepted(
     assert outcome.fragments
 
 
+@pytest.mark.parametrize("source", (b"---\n", b"---\n\ntext\n"))
+def test_leading_unclosed_dash_rule_is_an_accepted_thematic_break(
+    source: bytes,
+) -> None:
+    outcome = compile_rich_markdown(source, CONFIG)
+
+    assert type(outcome) is ParsedDocument
+    assert outcome.fragments[0].source_text == "---"
+
+
 def test_rich_constructor_rejects_forged_lineage_and_ancestry() -> None:
     compiled = compile_rich_markdown(b"# Root\n\nBody\n", CONFIG)
     assert type(compiled) is ParsedDocument
@@ -450,6 +460,72 @@ def test_rich_constructor_rejects_language_bearing_unmatched_fence() -> None:
                 ),
             ),
             provenance=compiled.provenance,
+        )
+
+
+@pytest.mark.parametrize(
+    "control_character",
+    ("\x00", "\x07", "\x1b", "\x1f", "\x7f", "\x85"),
+)
+def test_rich_constructor_rejects_every_control_character_forged_inside_fence(
+    control_character: str,
+) -> None:
+    compiled = compile_rich_markdown(b"```text\nbody\n```\n", CONFIG)
+    assert type(compiled) is ParsedDocument
+    section = compiled.sections[0]
+    fragment = compiled.fragments[0]
+    forged_body = f"bo{control_character}y"
+    forged_source = fragment.source_text.replace("body", forged_body)
+
+    with pytest.raises(ValueError, match="control character"):
+        ParsedDocument.rich_v3(
+            canonical_text=f"{forged_source}\n",
+            sections=(
+                replace(
+                    section,
+                    text=forged_source,
+                    code_body=forged_body,
+                ),
+            ),
+            fragments=(
+                replace(
+                    fragment,
+                    source_text=forged_source,
+                    contextual_text=forged_source,
+                    search_phrases=(forged_source,),
+                ),
+            ),
+            provenance=compiled.provenance,
+        )
+
+
+@pytest.mark.parametrize(
+    ("compiler_version", "config_version"),
+    (
+        ("context-engine-markdown-v1", "markdown-config-v1"),
+        ("arbitrary-compiler", "arbitrary-config"),
+    ),
+)
+def test_rich_constructor_rejects_forged_v3_provenance_identity(
+    compiler_version: str,
+    config_version: str,
+) -> None:
+    compiled = compile_rich_markdown(b"Plain\n", CONFIG)
+    assert type(compiled) is ParsedDocument
+
+    with pytest.raises(ValueError, match="rich provenance identity"):
+        provenance = CompilationProvenance(
+            compiler_version=compiler_version,
+            config_version=config_version,
+            canonicalization_profile=MARKDOWN_RICH_CANONICALIZATION_PROFILE,
+            compilation_digest_profile=MARKDOWN_RICH_COMPILATION_DIGEST_PROFILE,
+            token_ceiling=2048,
+        )
+        ParsedDocument.rich_v3(
+            canonical_text=compiled.canonical_text,
+            sections=compiled.sections,
+            fragments=compiled.fragments,
+            provenance=provenance,
         )
 
 

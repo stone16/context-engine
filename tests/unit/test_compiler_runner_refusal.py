@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -27,13 +28,21 @@ CONFIG = MarkdownCompilerConfig(version="markdown-config-v3")
             b"# Heading\n\n```python\nprint('open')\n",
             CompilationFailureCode.UNSUPPORTED_CONSTRUCT,
         ),
-        (
-            b"---\nkey: value\n# Missing close\n",
-            CompilationFailureCode.UNSUPPORTED_DOCUMENT_SHAPE,
-        ),
         (b"# Heading\n\n\xed\xa0\x80\n", CompilationFailureCode.INVALID_UTF8),
         (
             b"# Heading\n\ncontains\x00nul\n",
+            CompilationFailureCode.UNSUPPORTED_CONSTRUCT,
+        ),
+        (
+            b"```text\ncontains\x07bell\n```\n",
+            CompilationFailureCode.UNSUPPORTED_CONSTRUCT,
+        ),
+        (
+            b"```text\ncontains\x1bescape\n```\n",
+            CompilationFailureCode.UNSUPPORTED_CONSTRUCT,
+        ),
+        (
+            b"```text\ncontains\x1fseparator\n```\n",
             CompilationFailureCode.UNSUPPORTED_CONSTRUCT,
         ),
         (b"# Heading\n\ntruncated \xe4\xb8", CompilationFailureCode.INVALID_UTF8),
@@ -125,6 +134,49 @@ def test_runner_api_converts_child_process_failure_to_typed_failure(
             stderr=b"internal parser defect",
         ),
     )
+
+    outcome = compile_in_local_compiler_runner(b"# T\n", CONFIG)
+
+    assert type(outcome) is CompilationFailure
+    assert outcome.code is CompilationFailureCode.UNSUPPORTED_DOCUMENT_SHAPE
+    assert outcome.position is None
+
+
+def test_runner_api_passes_a_bound_and_converts_timeout_to_typed_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: list[float] = []
+
+    def wedge(*args: object, timeout: float, **kwargs: object) -> object:
+        observed.append(timeout)
+        raise subprocess.TimeoutExpired(cmd="wedged compiler", timeout=timeout)
+
+    monkeypatch.setattr(subprocess, "run", wedge)
+
+    outcome = compile_in_local_compiler_runner(b"# T\n", CONFIG)
+
+    assert observed and observed[0] > 0
+    assert type(outcome) is CompilationFailure
+    assert outcome.code is CompilationFailureCode.UNSUPPORTED_DOCUMENT_SHAPE
+    assert outcome.position is None
+
+
+def test_runner_api_terminates_a_deliberately_wedged_child(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    executable = tmp_path / "wedged-compiler"
+    executable.write_text(
+        "#!/usr/bin/env python3\nimport time\ntime.sleep(60)\n",
+        encoding="utf-8",
+    )
+    executable.chmod(0o700)
+    monkeypatch.setattr(
+        compiler_runner,
+        "sys",
+        type("Sys", (), {"executable": str(executable)}),
+    )
+    monkeypatch.setattr(compiler_runner, "COMPILER_RUNNER_TIMEOUT_SECONDS", 0.05)
 
     outcome = compile_in_local_compiler_runner(b"# T\n", CONFIG)
 

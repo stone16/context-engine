@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+import applications.compiler_runner as compiler_runner
 from adapters.parsers.ragflow_markdown import compile_rich_markdown
 from engine.supply import (
     MarkdownCompilerConfig,
@@ -55,12 +56,14 @@ def test_rich_compilation_digest_is_stable_in_process_and_across_runner(
         input=source,
         capture_output=True,
         check=True,
+        timeout=30,
     )
     second_process = subprocess.run(
         command,
         input=source,
         capture_output=True,
         check=True,
+        timeout=30,
     )
     assert first_process.stdout == second_process.stdout
     envelope = json.loads(first_process.stdout)
@@ -94,3 +97,20 @@ def test_representation_digest_distinguishes_exact_trailing_newline_bytes() -> N
         variants
     )
     assert len({document.compilation_digest for document in documents}) == len(variants)
+
+
+def test_local_runner_wrapper_cannot_be_substituted_with_a_direct_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def direct_call_must_not_run(*args: object, **kwargs: object) -> object:
+        raise AssertionError("wrapper bypassed its subprocess boundary")
+
+    monkeypatch.setattr(
+        compiler_runner,
+        "compile_rich_markdown",
+        direct_call_must_not_run,
+    )
+
+    outcome = compiler_runner.compile_in_local_compiler_runner(b"# T\n", CONFIG)
+
+    assert type(outcome) is ParsedDocument

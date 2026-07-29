@@ -30,6 +30,17 @@ _COMPILATION_DIGEST_V3_DOMAIN: Final = b"context-engine.markdown-compilation.v3\
 _MAX_VERSION_LENGTH: Final = 128
 
 
+def is_markdown_control_character(character: str) -> bool:
+    """Return whether one character is outside the closed Markdown grammar."""
+
+    if type(character) is not str or len(character) != 1:
+        raise TypeError("Markdown control classification requires one character")
+    codepoint = ord(character)
+    return (codepoint < 0x20 and character not in "\t\n\r") or (
+        0x7F <= codepoint <= 0x9F
+    )
+
+
 def _require_version(value: object) -> str:
     if (
         type(value) is not str
@@ -311,6 +322,13 @@ class CompilationProvenance:
         if self.content_hash_profile != MARKDOWN_CONTENT_HASH_PROFILE:
             raise ValueError("content hash profile must use the active version")
         if self.is_rich_v3:
+            if (
+                self.compiler_version != MARKDOWN_COMPILER_V3_VERSION
+                or self.config_version != "markdown-config-v3"
+            ):
+                raise ValueError(
+                    "rich provenance identity requires the v3 compiler and config"
+                )
             if type(self.token_ceiling) is not int or self.token_ceiling < 1:
                 raise ValueError("rich provenance requires a positive token ceiling")
         elif self.token_ceiling is not None:
@@ -984,18 +1002,19 @@ def _rich_source_blocks(source: str) -> tuple[_RichSourceBlock, ...]:
             ),
             None,
         )
-        if closing is None or closing == 1 or not any(
+        if closing == 1 or closing is not None and not any(
             line.strip() for line in lines[1:closing]
         ):
             raise ValueError("rich frontmatter source must be complete and nonempty")
-        blocks.append(
-            _RichSourceBlock(
-                kind=SectionKind.PARAGRAPH,
-                start=starts[0],
-                end=_rich_source_line_end(lines, starts, closing),
+        if closing is not None:
+            blocks.append(
+                _RichSourceBlock(
+                    kind=SectionKind.PARAGRAPH,
+                    start=starts[0],
+                    end=_rich_source_line_end(lines, starts, closing),
+                )
             )
-        )
-        index = closing + 1
+            index = closing + 1
 
     while index < len(lines):
         line = lines[index]
@@ -1557,6 +1576,8 @@ def _validate_rich_content(
 ) -> None:
     if not sections or not fragments or len(sections) != len(fragments):
         raise ValueError("rich Markdown requires one Fragment per parsed section")
+    if any(is_markdown_control_character(character) for character in canonical_text):
+        raise ValueError("rich Markdown cannot contain a control character")
     canonical_bytes = canonical_text.encode("utf-8")
     prior_end = 0
     refs: set[str] = set()

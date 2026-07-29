@@ -27,6 +27,7 @@ from engine.supply import (
 )
 
 _RUNNER_MODULE: Final = "applications.compiler_runner"
+COMPILER_RUNNER_TIMEOUT_SECONDS: Final = 30.0
 
 
 def _boundary_failure() -> CompilationFailure:
@@ -104,6 +105,7 @@ def compile_in_local_compiler_runner(
             input=source,
             capture_output=True,
             check=False,
+            timeout=COMPILER_RUNNER_TIMEOUT_SECONDS,
         )
     except Exception:
         return _boundary_failure()

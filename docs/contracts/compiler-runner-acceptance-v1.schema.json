@@ -70,6 +70,10 @@
     },
     "refusalHistogram": {
       "type": "object",
+      "propertyNames": {
+        "type": "string",
+        "pattern": "^(?:invalid_utf8|unsupported_document_shape|unsupported_construct:(?:atx_closing_sequence|blockquote|code_block|control_character|emphasis|entity|escape|frontmatter_or_rule|hard_break|html|inline_code|link_or_image|list|nested_heading|strikethrough|table))$"
+      },
       "additionalProperties": {"type": "integer", "minimum": 1}
     },
     "maxFragmentTokenCount": {"type": "integer", "minimum": 0},

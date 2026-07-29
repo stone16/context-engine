@@ -24,6 +24,7 @@ from engine.supply.markdown import (
     SourceSpan,
     StructuralPath,
     UnsupportedConstruct,
+    is_markdown_control_character,
     unsupported_rich_markdown_inline,
 )
 from third_party.ragflow.deepdoc.parser.markdown_parser import MarkdownElementExtractor
@@ -120,14 +121,11 @@ def _normalize(source: bytes) -> str | CompilationFailure:
             safe_prefix,
             len(safe_prefix),
         )
-    if any(
-        character == "\x00" or 0x7F <= ord(character) <= 0x9F
-        for character in decoded
-    ):
+    if any(is_markdown_control_character(character) for character in decoded):
         offset = next(
             index
             for index, character in enumerate(decoded)
-            if character == "\x00" or 0x7F <= ord(character) <= 0x9F
+            if is_markdown_control_character(character)
         )
         return _failure(
             CompilationFailureCode.UNSUPPORTED_CONSTRUCT,
@@ -176,7 +174,7 @@ def _frontmatter_end(lines: list[str]) -> int | None:
             if index == 1 or not any(line.strip() for line in lines[1:index]):
                 return -1
             return index
-    return -1
+    return None
 
 
 def _blocks(text: str) -> tuple[_Block, ...] | CompilationFailure:
