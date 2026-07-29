@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://context-engine.invalid/schemas/compiler-runner-acceptance-v1.json",
+  "title": "CompilerRunnerAcceptanceReportV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "aggregateCompilationDigest",
+    "compilerVersion",
+    "configVersion",
+    "constructHistogram",
+    "documents",
+    "maxFragmentTokenCount",
+    "schemaVersion",
+    "tokenCeiling"
+  ],
+  "properties": {
+    "aggregateCompilationDigest": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "compilerVersion": {"const": "context-engine-markdown-v3"},
+    "configVersion": {"const": "markdown-config-v3"},
+    "constructHistogram": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "atxHeadings",
+        "callouts",
+        "embeds",
+        "fencedCode",
+        "footnotes",
+        "frontmatter",
+        "htmlBlocks",
+        "inlineMath",
+        "lists",
+        "setextHeadings",
+        "tables",
+        "wikilinks"
+      ],
+      "properties": {
+        "atxHeadings": {"type": "integer", "minimum": 0},
+        "callouts": {"type": "integer", "minimum": 0},
+        "embeds": {"type": "integer", "minimum": 0},
+        "fencedCode": {"type": "integer", "minimum": 0},
+        "footnotes": {"type": "integer", "minimum": 0},
+        "frontmatter": {"type": "integer", "minimum": 0},
+        "htmlBlocks": {"type": "integer", "minimum": 0},
+        "inlineMath": {"type": "integer", "minimum": 0},
+        "lists": {"type": "integer", "minimum": 0},
+        "setextHeadings": {"type": "integer", "minimum": 0},
+        "tables": {"type": "integer", "minimum": 0},
+        "wikilinks": {"type": "integer", "minimum": 0}
+      }
+    },
+    "documents": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["accepted", "refused", "total"],
+      "properties": {
+        "accepted": {"type": "integer", "minimum": 0},
+        "refused": {"type": "integer", "minimum": 0},
+        "total": {"type": "integer", "minimum": 0}
+      }
+    },
+    "maxFragmentTokenCount": {"type": "integer", "minimum": 0},
+    "schemaVersion": {"const": "compiler-runner-acceptance-v1"},
+    "tokenCeiling": {"type": "integer", "minimum": 1}
+  }
+}

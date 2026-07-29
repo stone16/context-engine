@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from enum import StrEnum
@@ -12,15 +13,20 @@ import rfc8785
 
 MARKDOWN_COMPILER_V1_VERSION: Final = "context-engine-markdown-v1"
 MARKDOWN_COMPILER_VERSION: Final = "context-engine-markdown-v2"
+MARKDOWN_COMPILER_V3_VERSION: Final = "context-engine-markdown-v3"
 ACTIVE_FILE_IMPORT_MARKDOWN_CONFIG_VERSION: Final = "markdown-config-v1"
 MARKDOWN_CANONICALIZATION_V1_PROFILE: Final = "markdown-heading-paragraph-v1"
 MARKDOWN_CANONICALIZATION_PROFILE: Final = "markdown-structural-units-v2"
 MARKDOWN_CONTENT_HASH_PROFILE: Final = "sha256-canonical-utf8-v1"
 MARKDOWN_COMPILATION_DIGEST_V1_PROFILE: Final = "rfc8785-sha256-v1"
 MARKDOWN_COMPILATION_DIGEST_PROFILE: Final = "rfc8785-sha256-v2"
+MARKDOWN_RICH_CANONICALIZATION_PROFILE: Final = "markdown-rich-structural-v3"
+MARKDOWN_RICH_COMPILATION_DIGEST_PROFILE: Final = "rfc8785-sha256-v3"
 MARKDOWN_CODE_LANGUAGE_MAX_LENGTH: Final = 64
+MARKDOWN_RICH_TOKEN_CEILING: Final = 512
 _COMPILATION_DIGEST_V1_DOMAIN: Final = b"context-engine.markdown-compilation.v1\x00"
 _COMPILATION_DIGEST_DOMAIN: Final = b"context-engine.markdown-compilation.v2\x00"
+_COMPILATION_DIGEST_V3_DOMAIN: Final = b"context-engine.markdown-compilation.v3\x00"
 _MAX_VERSION_LENGTH: Final = 128
 
 
@@ -293,6 +299,10 @@ class CompilationProvenance:
                 MARKDOWN_COMPILATION_DIGEST_V1_PROFILE,
             ),
             (MARKDOWN_CANONICALIZATION_PROFILE, MARKDOWN_COMPILATION_DIGEST_PROFILE),
+            (
+                MARKDOWN_RICH_CANONICALIZATION_PROFILE,
+                MARKDOWN_RICH_COMPILATION_DIGEST_PROFILE,
+            ),
         }:
             raise ValueError("Markdown canonicalization and digest profiles must match")
         if self.content_hash_profile != MARKDOWN_CONTENT_HASH_PROFILE:
@@ -301,6 +311,10 @@ class CompilationProvenance:
     @property
     def is_structural_v2(self) -> bool:
         return self.canonicalization_profile == MARKDOWN_CANONICALIZATION_PROFILE
+
+    @property
+    def is_rich_v3(self) -> bool:
+        return self.canonicalization_profile == MARKDOWN_RICH_CANONICALIZATION_PROFILE
 
 
 @dataclass(frozen=True, slots=True)
@@ -338,7 +352,9 @@ class ParsedDocument:
             raise TypeError("parsed document warnings must be typed immutable values")
         if self.warnings:
             raise ValueError("the active Markdown compiler emits no warnings")
-        if self.provenance.is_structural_v2:
+        if self.provenance.is_rich_v3:
+            _validate_rich_content(self.canonical_text, self.sections, self.fragments)
+        elif self.provenance.is_structural_v2:
             _validate_structural_content(
                 self.canonical_text,
                 self.sections,
@@ -408,6 +424,37 @@ class ParsedDocument:
             raise TypeError(
                 "structural ParsedDocument construction requires v2 provenance"
             )
+        content_hash = sha256(canonical_text.encode("utf-8")).hexdigest()
+        compilation_digest = _compilation_digest(
+            canonical_text=canonical_text,
+            sections=sections,
+            fragments=fragments,
+            content_hash=content_hash,
+            provenance=provenance,
+            warnings=(),
+        )
+        return ParsedDocument(
+            canonical_text=canonical_text,
+            sections=sections,
+            content_hash=content_hash,
+            compilation_digest=compilation_digest,
+            provenance=provenance,
+            fragments=fragments,
+        )
+
+    @classmethod
+    def rich_v3(
+        cls,
+        *,
+        canonical_text: str,
+        sections: tuple[ParsedSection, ...],
+        fragments: tuple[CompiledFragment, ...],
+        provenance: CompilationProvenance,
+    ) -> ParsedDocument:
+        """Build one self-validating rich Markdown compilation result."""
+
+        if cls is not ParsedDocument or not provenance.is_rich_v3:
+            raise TypeError("rich ParsedDocument construction requires v3 provenance")
         content_hash = sha256(canonical_text.encode("utf-8")).hexdigest()
         compilation_digest = _compilation_digest(
             canonical_text=canonical_text,
@@ -649,7 +696,7 @@ def _compilation_document(
             for warning in warnings
         ],
     }
-    if provenance.is_structural_v2:
+    if provenance.is_structural_v2 or provenance.is_rich_v3:
         document["fragments"] = [
             _fragment_document(fragment) for fragment in fragments
         ]
@@ -684,11 +731,12 @@ def _compilation_digest(
         provenance=provenance,
         warnings=warnings,
     )
-    domain = (
-        _COMPILATION_DIGEST_DOMAIN
-        if provenance.is_structural_v2
-        else _COMPILATION_DIGEST_V1_DOMAIN
-    )
+    if provenance.is_rich_v3:
+        domain = _COMPILATION_DIGEST_V3_DOMAIN
+    elif provenance.is_structural_v2:
+        domain = _COMPILATION_DIGEST_DOMAIN
+    else:
+        domain = _COMPILATION_DIGEST_V1_DOMAIN
     return sha256(domain + rfc8785.dumps(cast(Any, document))).hexdigest()
 
 
@@ -928,6 +976,57 @@ def _validate_structural_content(
         raise ValueError("structural sections cannot omit trailing canonical content")
 
 
+def _validate_rich_content(
+    canonical_text: str,
+    sections: tuple[ParsedSection, ...],
+    fragments: tuple[CompiledFragment, ...],
+) -> None:
+    if (
+        "\r" in canonical_text
+        or canonical_text.startswith("\ufeff")
+        or canonical_text.endswith("\n\n")
+    ):
+        raise ValueError("rich Markdown must use canonical transport text")
+    if not sections or not fragments or len(sections) != len(fragments):
+        raise ValueError("rich Markdown requires one Fragment per parsed section")
+    canonical_bytes = canonical_text.encode("utf-8")
+    prior_end = 0
+    refs: set[str] = set()
+    for section, fragment in zip(sections, fragments, strict=True):
+        if (
+            fragment.kind is not section.kind
+            or fragment.path != section.path
+            or fragment.position != section.position
+            or fragment.fragment_ref in refs
+            or section.position.start.byte_offset < prior_end
+        ):
+            raise ValueError("rich Fragment lineage must match source order")
+        if _expected_point(canonical_text, section.position.start.byte_offset) != (
+            section.position.start
+        ) or _expected_point(canonical_text, section.position.end.byte_offset) != (
+            section.position.end
+        ):
+            raise ValueError("rich source coordinates must match UTF-8 offsets")
+        source = canonical_bytes[
+            section.position.start.byte_offset : section.position.end.byte_offset
+        ].decode("utf-8")
+        if source != fragment.source_text:
+            raise ValueError("rich Fragment source text must match its span")
+        if section.text != source and section.kind is not SectionKind.HEADING:
+            raise ValueError("rich section text must match its span")
+        omitted = canonical_bytes[
+            prior_end : section.position.start.byte_offset
+        ]
+        if any(byte not in b" \t\n" for byte in omitted):
+            raise ValueError("rich sections cannot omit non-whitespace source")
+        if fragment.contextual_text != _expected_contextual_text(fragment):
+            raise ValueError("rich Fragment context must be exact heading ancestry")
+        refs.add(fragment.fragment_ref)
+        prior_end = section.position.end.byte_offset
+    if any(byte not in b" \t\n" for byte in canonical_bytes[prior_end:]):
+        raise ValueError("rich sections cannot omit trailing source")
+
+
 def _validate_issue_22_content(
     canonical_text: str,
     sections: tuple[ParsedSection, ...],
@@ -987,3 +1086,127 @@ def canonicalize_parsed_document(document: ParsedDocument) -> bytes:
     canonical = _document_without_digest(document)
     canonical["compilationDigest"] = document.compilation_digest
     return rfc8785.dumps(cast(Any, canonical))
+
+
+def _source_point_from_document(value: object) -> SourcePoint:
+    if type(value) is not dict:
+        raise ValueError("source point document must be an object")
+    document = cast(dict[str, object], value)
+    if set(document) != {"line", "column", "byteOffset"}:
+        raise ValueError("source point document has unexpected fields")
+    return SourcePoint(
+        line=cast(int, document["line"]),
+        column=cast(int, document["column"]),
+        byte_offset=cast(int, document["byteOffset"]),
+    )
+
+
+def _source_span_from_document(value: object) -> SourceSpan:
+    if type(value) is not dict:
+        raise ValueError("source span document must be an object")
+    document = cast(dict[str, object], value)
+    if set(document) != {"start", "end"}:
+        raise ValueError("source span document has unexpected fields")
+    return SourceSpan(
+        start=_source_point_from_document(document["start"]),
+        end=_source_point_from_document(document["end"]),
+    )
+
+
+def _section_from_document(value: object) -> ParsedSection:
+    if type(value) is not dict:
+        raise ValueError("section document must be an object")
+    document = cast(dict[str, object], value)
+    kind = SectionKind(cast(str, document["kind"]))
+    path = StructuralPath(tuple(cast(list[str], document["path"])))
+    return ParsedSection(
+        kind=kind,
+        text=cast(str, document["text"]),
+        path=path,
+        position=_source_span_from_document(document["position"]),
+        level=cast(int | None, document.get("level")),
+        list_ordered=cast(bool | None, document.get("ordered")),
+        list_items=tuple(cast(list[str], document.get("items", []))),
+        code_language=cast(str | None, document.get("language")),
+        code_body=cast(str | None, document.get("code")),
+        table_header=tuple(cast(list[str], document.get("header", []))),
+        table_rows=tuple(
+            tuple(row) for row in cast(list[list[str]], document.get("rows", []))
+        ),
+    )
+
+
+def _fragment_from_document(
+    value: object,
+    heading_by_key: dict[tuple[str, ...], ParsedSection],
+) -> CompiledFragment:
+    if type(value) is not dict:
+        raise ValueError("Fragment document must be an object")
+    document = cast(dict[str, object], value)
+    parents: list[ParsedSection] = []
+    for parent_value in cast(list[object], document["parentHeadings"]):
+        if type(parent_value) is not dict:
+            raise ValueError("parent heading document must be an object")
+        parent = cast(dict[str, object], parent_value)
+        key = tuple(cast(list[str], parent["path"]))
+        heading = heading_by_key.get(key)
+        if heading is None:
+            raise ValueError("Fragment parent heading must name a parsed section")
+        parents.append(heading)
+    return CompiledFragment(
+        fragment_ref=cast(str, document["fragmentRef"]),
+        kind=SectionKind(cast(str, document["kind"])),
+        path=StructuralPath(tuple(cast(list[str], document["path"]))),
+        position=_source_span_from_document(document["position"]),
+        source_text=cast(str, document["sourceText"]),
+        contextual_text=cast(str, document["contextualText"]),
+        parent_headings=tuple(parents),
+        search_phrases=tuple(cast(list[str], document["searchPhrases"])),
+    )
+
+
+def deserialize_parsed_document(payload: bytes) -> ParsedDocument:
+    """Deserialize runner bytes into the existing self-validating contract."""
+
+    if type(payload) is not bytes:
+        raise TypeError("parsed document payload must be exact bytes")
+    raw = json.loads(payload)
+    if type(raw) is not dict:
+        raise ValueError("parsed document payload must contain one object")
+    document = cast(dict[str, object], raw)
+    provenance_value = document["provenance"]
+    if type(provenance_value) is not dict:
+        raise ValueError("parsed document provenance must be an object")
+    provenance_document = cast(dict[str, object], provenance_value)
+    provenance = CompilationProvenance(
+        compiler_version=cast(str, provenance_document["compilerVersion"]),
+        config_version=cast(str, provenance_document["configVersion"]),
+        canonicalization_profile=cast(
+            str, provenance_document["canonicalizationProfile"]
+        ),
+        content_hash_profile=cast(str, provenance_document["contentHashProfile"]),
+        compilation_digest_profile=cast(
+            str, provenance_document["compilationDigestProfile"]
+        ),
+    )
+    sections = tuple(
+        _section_from_document(value)
+        for value in cast(list[object], document["sections"])
+    )
+    heading_by_key = {
+        section.path.segments: section
+        for section in sections
+        if section.kind is SectionKind.HEADING
+    }
+    fragments = tuple(
+        _fragment_from_document(value, heading_by_key)
+        for value in cast(list[object], document.get("fragments", []))
+    )
+    return ParsedDocument(
+        canonical_text=cast(str, document["canonicalText"]),
+        sections=sections,
+        content_hash=cast(str, document["contentHash"]),
+        compilation_digest=cast(str, document["compilationDigest"]),
+        provenance=provenance,
+        fragments=fragments,
+    )
