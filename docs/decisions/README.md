@@ -175,3 +175,4 @@ touched:
 - [0071 — Compose bounded File scan cycles](0071-compose-bounded-file-scan-cycles.md)
 - [0072 — Report File source status with closed refusals](0072-report-file-source-status-with-closed-refusals.md)
 - [0073 — Compose explicit Release candidates from the current corpus](0073-compose-explicit-release-candidates-from-current-corpus.md)
+- [0074 — Adopt controlled third-party code reuse](0074-adopt-controlled-third-party-code-reuse.md)
