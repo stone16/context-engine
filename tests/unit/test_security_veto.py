@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import importlib
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -10,6 +12,7 @@ from engine.learning.eval_report import (
     EvaluationGateStatuses,
     SecurityEventKind,
     SecurityObservationState,
+    _CaseSecurityObservationInput,
     final_report_status,
     refused_security_observation,
     security_report,
@@ -32,10 +35,51 @@ def test_caller_cannot_mint_clean_security_without_an_executed_run() -> None:
     assert not hasattr(eval_report, "execute_security_case")
     assert not hasattr(eval_report, "_observation")
     with pytest.raises(TypeError, match="harness-constructed"):
-        CaseSecurityObservation(
-            case_ref="synthetic-forged-clean",
-            state=SecurityObservationState.OBSERVED_CLEAN,
-        )
+        CaseSecurityObservation(cast(_CaseSecurityObservationInput, object()))
+
+
+def test_security_result_types_cannot_be_subclassed() -> None:
+    with pytest.raises(TypeError, match="must not be subclassed"):
+
+        class _ForgedObservation(CaseSecurityObservation):
+            pass
+
+    with pytest.raises(TypeError, match="must not be subclassed"):
+
+        class _ForgedViolation(eval_report.CaseSecurityViolation):
+            pass
+
+
+def test_evaluation_authority_types_are_not_package_exports() -> None:
+    learning_package = importlib.import_module("engine.learning")
+    evaluation_package = importlib.import_module("eval")
+
+    for package in (learning_package, evaluation_package):
+        for name in (
+            "CaseSecurityObservation",
+            "CaseSecurityViolation",
+            "EvaluationThresholds",
+            "_SECURITY_HARNESS_SEAL",
+            "_THRESHOLD_LOADER_SEAL",
+            "_CaseSecurityObservationInput",
+            "_CaseSecurityViolationInput",
+            "_LoadedThresholdConfiguration",
+        ):
+            assert not hasattr(package, name)
+
+
+def test_evaluation_docs_scope_seals_to_supported_paths_and_m1_threat_model() -> None:
+    repository_root = Path(__file__).resolve().parents[2]
+    for path in (
+        repository_root / "eval/README.md",
+        repository_root
+        / "docs/decisions/0080-refuse-authoritative-evaluation-without-an-executor.md",
+    ):
+        text = path.read_text(encoding="utf-8").lower()
+        assert "accident and misuse" in text
+        assert "supported path" in text
+        assert "in-process adversary" in text
+        assert "single trusted local operator" in text
 
 
 @pytest.mark.parametrize(
@@ -110,10 +154,7 @@ def test_security_observation_has_exactly_the_closed_adjudicated_states() -> Non
 
 def test_callers_cannot_construct_clean_counts_or_observations_directly() -> None:
     with pytest.raises(TypeError, match="harness-constructed"):
-        CaseSecurityObservation(
-            case_ref="synthetic-forged-clean",
-            state=SecurityObservationState.OBSERVED_CLEAN,
-        )
+        CaseSecurityObservation(cast(_CaseSecurityObservationInput, object()))
 
 
 def test_pending_gate_propagates_without_becoming_a_numeric_pass() -> None:

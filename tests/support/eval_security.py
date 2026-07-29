@@ -1,7 +1,6 @@
 """Test-private factory for evaluation security veto/status oracles."""
 
 from engine.learning.eval_report import (
-    _SECURITY_HARNESS_SEAL,
     CaseSecurityObservation,
     CaseSecurityResult,
     CaseSecurityViolation,
@@ -9,6 +8,8 @@ from engine.learning.eval_report import (
     SecurityEventKind,
     SecurityObservationState,
     _case_ref,
+    _CaseSecurityObservationInput,
+    _CaseSecurityViolationInput,
 )
 
 
@@ -19,21 +20,16 @@ def harness_security_result(
     """Build synthetic harness output solely for test-tree assertions."""
 
     if not events:
-        clean = object.__new__(CaseSecurityObservation)
-        object.__setattr__(clean, "case_ref", _case_ref(case_ref))
-        object.__setattr__(
-            clean,
-            "state",
-            SecurityObservationState.OBSERVED_CLEAN,
+        return CaseSecurityObservation(
+            _CaseSecurityObservationInput(
+                case_ref=_case_ref(case_ref),
+                state=SecurityObservationState.OBSERVED_CLEAN,
+            )
         )
-        object.__setattr__(clean, "_seal", _SECURITY_HARNESS_SEAL)
-        return clean
     observations = tuple(HarnessSecurityEvent(*event) for event in events)
-    refs = tuple(event.observation_ref for event in observations)
-    if len(refs) != len(set(refs)):
-        raise ValueError("synthetic security observation refs must be unique")
-    violation = object.__new__(CaseSecurityViolation)
-    object.__setattr__(violation, "case_ref", _case_ref(case_ref))
-    object.__setattr__(violation, "events", observations)
-    object.__setattr__(violation, "_seal", _SECURITY_HARNESS_SEAL)
-    return violation
+    return CaseSecurityViolation(
+        _CaseSecurityViolationInput(
+            case_ref=_case_ref(case_ref),
+            events=observations,
+        )
+    )

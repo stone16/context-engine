@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import Literal, NoReturn
 
@@ -53,7 +53,16 @@ class SecurityObservationState(StrEnum):
     MALFORMED = "malformed"
 
 
-_SECURITY_HARNESS_SEAL = object()
+@dataclass(frozen=True, slots=True)
+class _CaseSecurityObservationInput:
+    case_ref: str
+    state: SecurityObservationState
+
+
+@dataclass(frozen=True, slots=True)
+class _CaseSecurityViolationInput:
+    case_ref: str
+    events: tuple[HarnessSecurityEvent, ...]
 
 
 @dataclass(frozen=True, slots=True, init=False)
@@ -62,10 +71,20 @@ class CaseSecurityObservation:
 
     case_ref: str
     state: SecurityObservationState
-    _seal: object = field(repr=False)
 
-    def __init__(self, *args: object, **kwargs: object) -> None:
-        raise TypeError("security observations are harness-constructed")
+    def __init__(
+        self,
+        observation: _CaseSecurityObservationInput,
+    ) -> None:
+        if type(observation) is not _CaseSecurityObservationInput:
+            raise TypeError("security observations are harness-constructed")
+        if type(observation.state) is not SecurityObservationState:
+            raise TypeError("security observation state is unavailable")
+        object.__setattr__(self, "case_ref", _case_ref(observation.case_ref))
+        object.__setattr__(self, "state", observation.state)
+
+    def __init_subclass__(cls, **kwargs: object) -> NoReturn:
+        raise TypeError("security observations must not be subclassed")
 
     def __reduce__(self) -> NoReturn:
         raise TypeError("security observations are not serializable")
@@ -77,10 +96,32 @@ class CaseSecurityViolation:
 
     case_ref: str
     events: tuple[HarnessSecurityEvent, ...]
-    _seal: object = field(repr=False)
 
-    def __init__(self, *args: object, **kwargs: object) -> None:
-        raise TypeError("security violations are harness-constructed")
+    def __init__(
+        self,
+        observation: _CaseSecurityViolationInput,
+    ) -> None:
+        if type(observation) is not _CaseSecurityViolationInput:
+            raise TypeError("security violations are harness-constructed")
+        if (
+            type(observation.events) is not tuple
+            or not observation.events
+            or any(
+                type(event) is not HarnessSecurityEvent
+                for event in observation.events
+            )
+        ):
+            raise TypeError("security violation events are unavailable")
+        observation_refs = tuple(
+            event.observation_ref for event in observation.events
+        )
+        if len(observation_refs) != len(set(observation_refs)):
+            raise ValueError("security violation observation refs must be unique")
+        object.__setattr__(self, "case_ref", _case_ref(observation.case_ref))
+        object.__setattr__(self, "events", observation.events)
+
+    def __init_subclass__(cls, **kwargs: object) -> NoReturn:
+        raise TypeError("security violations must not be subclassed")
 
     def __reduce__(self) -> NoReturn:
         raise TypeError("security violations are not serializable")
@@ -103,11 +144,9 @@ def refused_security_observation(
         SecurityObservationState.MALFORMED,
     }:
         raise ValueError("serialized security observation must be a refusal state")
-    result = object.__new__(CaseSecurityObservation)
-    object.__setattr__(result, "case_ref", _case_ref(case_ref))
-    object.__setattr__(result, "state", state)
-    object.__setattr__(result, "_seal", _SECURITY_HARNESS_SEAL)
-    return result
+    return CaseSecurityObservation(
+        _CaseSecurityObservationInput(case_ref=case_ref, state=state)
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -150,7 +189,22 @@ def _require_harness_results(
     for result in results:
         if type(result) not in {CaseSecurityObservation, CaseSecurityViolation}:
             raise TypeError("security results must be harness-constructed")
-        if getattr(result, "_seal", None) is not _SECURITY_HARNESS_SEAL:
+        if type(result) is CaseSecurityObservation:
+            _case_ref(result.case_ref)
+            if type(result.state) is not SecurityObservationState:
+                raise TypeError("security results must be harness-constructed")
+        elif type(result) is CaseSecurityViolation:
+            _case_ref(result.case_ref)
+            if (
+                type(result.events) is not tuple
+                or not result.events
+                or any(
+                    type(event) is not HarnessSecurityEvent
+                    for event in result.events
+                )
+            ):
+                raise TypeError("security results must be harness-constructed")
+        else:
             raise TypeError("security results must be harness-constructed")
         refs.append(result.case_ref)
     if len(refs) != len(set(refs)):

@@ -14,6 +14,8 @@ from engine.learning.governance import (
     PublicSubsetPromotionAuthority,
     PublicSubsetPromotionRejected,
     VerifiedPublicSubsetMaintainerIdentity,
+    _LocalPublicSubsetAuthorityConfiguration,
+    _VerifiedMaintainerAuthentication,
     assert_tracked_golden_tree_is_synthetic,
     load_public_subset_governance,
 )
@@ -78,12 +80,29 @@ def test_only_configured_maintainer_authority_can_promote_public_subset(
 
 
 def test_production_promotion_authority_refuses_caller_injected_authenticator() -> None:
-    configuration = load_public_subset_governance(
-        REPOSITORY_ROOT / "eval/public-subset-governance.json"
-    )
-
     with pytest.raises(TypeError, match="production-composed"):
-        PublicSubsetPromotionAuthority(configuration, _AttackerAuthenticator())
+        PublicSubsetPromotionAuthority(
+            cast(_LocalPublicSubsetAuthorityConfiguration, _AttackerAuthenticator())
+        )
+
+
+def test_public_subset_authority_types_cannot_be_subclassed() -> None:
+    with pytest.raises(TypeError, match="must not be subclassed"):
+
+        class _ForgedVerifiedIdentity(VerifiedPublicSubsetMaintainerIdentity):
+            pass
+
+    with pytest.raises(TypeError, match="must not be subclassed"):
+
+        class _ForgedPromotionAuthority(PublicSubsetPromotionAuthority):
+            pass
+
+
+def test_public_subset_authority_types_are_not_package_exports() -> None:
+    import engine.learning as learning_package
+
+    assert not hasattr(learning_package, "VerifiedPublicSubsetMaintainerIdentity")
+    assert not hasattr(learning_package, "PublicSubsetPromotionAuthority")
 
 
 def test_raw_maintainer_claim_cannot_forge_verified_privacy_authority(
@@ -91,9 +110,7 @@ def test_raw_maintainer_claim_cannot_forge_verified_privacy_authority(
 ) -> None:
     with pytest.raises(TypeError, match="authenticated"):
         VerifiedPublicSubsetMaintainerIdentity(
-            principal_ref="synthetic-forged-principal",
-            authentication_binding_ref="synthetic-forged-authentication",
-            authority_ref="maintainer",
+            cast(_VerifiedMaintainerAuthentication, object())
         )
     monkeypatch.setenv(
         PUBLIC_SUBSET_MAINTAINER_SECRET_ENV,

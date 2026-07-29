@@ -46,6 +46,22 @@ test tree so unit tests can prove that one violation yields whole-report
 the synthetic factory. The file-only CLI therefore cannot emit an authoritative
 non-refused report in M1.
 
+The threshold, security-result, verified-identity, and privacy-authority types
+reject subclassing. Their normal constructors require private inputs supplied
+by their owning modules, while supported application composition fixes the
+tracked threshold path and local maintainer verifier. These seals prevent
+accident and misuse through supported paths: a caller cannot select thresholds,
+skip the calibration event for active values, make non-tracked thresholds
+return `PASS`, mint a clean observation, inject an authenticator, or construct a
+verified identity through a supported entry point.
+
+These seals are not unforgeable or tamper-proof against an in-process adversary
+who deliberately bypasses Python constructors, imports private module objects,
+mutates instances, or monkeypatches code. M1 has a single trusted local operator
+and its threat model does not include that adversary. Adding tokens, registries,
+call-stack inspection, signing, or another cryptographic boundary would not be
+justified under the current threat model.
+
 ## Consequences
 
 - M1 ships schema, locking, judges, veto semantics, and report machinery, but
@@ -63,4 +79,5 @@ non-refused report in M1.
 Issue #160 must define and implement the concrete evaluation executor, the
 tracked Runtime seam it executes, and sole private-constructor ownership. If
 evaluation later admits untrusted callers, multiple tenants, or a remote
-runner, revisit cryptographic provenance in a new ADR with that threat model.
+runner, the supported-path trust boundary must be revisited in a new ADR with
+that threat model, including whether cryptographic provenance is then required.

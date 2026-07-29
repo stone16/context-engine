@@ -41,6 +41,19 @@ _CANONICAL_SCHEMA_PATHS: Final = frozenset(
 )
 
 
+@dataclass(frozen=True, slots=True)
+class _VerifiedMaintainerAuthentication:
+    principal_ref: str
+    authentication_binding_ref: str
+    authority_ref: str
+
+
+@dataclass(frozen=True, slots=True)
+class _LocalPublicSubsetAuthorityConfiguration:
+    governance: PublicSubsetGovernance
+    credential: bytes
+
+
 class PublicSubsetPromotionRejected(RuntimeError):
     """The caller lacks the configured maintainer privacy authority."""
 
@@ -66,8 +79,33 @@ class VerifiedPublicSubsetMaintainerIdentity:
     authentication_binding_ref: str = field(repr=False)
     authority_ref: str = field(repr=False)
 
-    def __init__(self, *args: object, **kwargs: object) -> None:
-        raise TypeError("verified public subset maintainer identity is authenticated")
+    def __init__(
+        self,
+        authentication: _VerifiedMaintainerAuthentication,
+    ) -> None:
+        if type(authentication) is not _VerifiedMaintainerAuthentication:
+            raise TypeError(
+                "verified public subset maintainer identity is authenticated"
+            )
+        if (
+            authentication.principal_ref != "maintainer:local"
+            or authentication.authentication_binding_ref
+            != "binding:local-maintainer:v1"
+            or authentication.authority_ref != "maintainer"
+        ):
+            raise TypeError("verified public subset maintainer identity is malformed")
+        object.__setattr__(self, "principal_ref", authentication.principal_ref)
+        object.__setattr__(
+            self,
+            "authentication_binding_ref",
+            authentication.authentication_binding_ref,
+        )
+        object.__setattr__(self, "authority_ref", authentication.authority_ref)
+
+    def __init_subclass__(cls, **kwargs: object) -> NoReturn:
+        raise TypeError(
+            "verified public subset maintainer identity must not be subclassed"
+        )
 
     def __reduce__(self) -> NoReturn:
         raise TypeError(
@@ -84,10 +122,22 @@ class PublicSubsetPromotionAuthority:
 
     def __init__(
         self,
-        *args: object,
-        **kwargs: object,
+        configuration: _LocalPublicSubsetAuthorityConfiguration,
     ) -> None:
-        raise TypeError("public subset authority is production-composed")
+        if type(configuration) is not _LocalPublicSubsetAuthorityConfiguration:
+            raise TypeError("public subset authority is production-composed")
+        if type(configuration.governance) is not PublicSubsetGovernance:
+            raise TypeError("public subset governance is required")
+        if (
+            type(configuration.credential) is not bytes
+            or len(configuration.credential) < 32
+        ):
+            raise ValueError("public subset maintainer authentication is unavailable")
+        self._governance = configuration.governance
+        self._credential = configuration.credential
+
+    def __init_subclass__(cls, **kwargs: object) -> NoReturn:
+        raise TypeError("public subset authority must not be subclassed")
 
     def authorize(
         self,
@@ -109,14 +159,13 @@ class PublicSubsetPromotionAuthority:
             ) from None
         if not hmac.compare_digest(supplied, self._credential):
             raise PublicSubsetPromotionRejected("public subset promotion refused")
-        verified = object.__new__(VerifiedPublicSubsetMaintainerIdentity)
-        object.__setattr__(verified, "principal_ref", "maintainer:local")
-        object.__setattr__(
-            verified,
-            "authentication_binding_ref",
-            "binding:local-maintainer:v1",
+        verified = VerifiedPublicSubsetMaintainerIdentity(
+            _VerifiedMaintainerAuthentication(
+                principal_ref="maintainer:local",
+                authentication_binding_ref="binding:local-maintainer:v1",
+                authority_ref="maintainer",
+            )
         )
-        object.__setattr__(verified, "authority_ref", "maintainer")
         if verified.authority_ref != self._governance.promotion_authority:
             raise PublicSubsetPromotionRejected("public subset promotion refused")
 
@@ -127,14 +176,12 @@ def _local_public_subset_promotion_authority(
 ) -> PublicSubsetPromotionAuthority:
     """Compose the fixed local authenticator; applications supply no strategy."""
 
-    if type(governance) is not PublicSubsetGovernance:
-        raise TypeError("public subset governance is required")
-    if type(credential) is not bytes or len(credential) < 32:
-        raise ValueError("public subset maintainer authentication is unavailable")
-    authority = object.__new__(PublicSubsetPromotionAuthority)
-    authority._governance = governance
-    authority._credential = credential
-    return authority
+    return PublicSubsetPromotionAuthority(
+        _LocalPublicSubsetAuthorityConfiguration(
+            governance=governance,
+            credential=credential,
+        )
+    )
 
 
 def load_public_subset_governance(path: Path) -> PublicSubsetGovernance:

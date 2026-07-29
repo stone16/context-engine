@@ -38,6 +38,14 @@ privacy-reviewer role does not exist,
 and release-operator authority is deliberately insufficient: ReleaseManifest
 publication authority must not acquire privacy authority implicitly.
 
+The verified-identity and authority types reject ordinary direct construction
+and subclassing, and production composition supplies the fixed local verifier.
+These seals prevent accident and misuse through every supported path. They are
+not tamper-proof against an in-process adversary deliberately bypassing Python
+constructors, importing private module objects, mutating instances, or
+monkeypatching code. That adversary is outside M1's single trusted local
+operator threat model.
+
 No public-subset promotion effect or command exists in M1. The authority check
 and tracked configuration are an enforced preparatory seam only; they do not
 copy, rewrite, publish, or activate a case. Adding that effect requires its own
@@ -108,6 +116,16 @@ Any non-tracked threshold fixture used through the internal test seam is marked
 `non_authoritative` in the report and can never render `PASS`; any configured
 value without the recorded event is refused by the loader.
 
+Threshold and security-result types reject subclassing, and their normal
+constructors require private module-owned construction inputs. These seals
+prevent accident and misuse through supported paths: callers cannot choose a
+threshold document, omit a calibration event for active values, obtain `PASS`
+from non-tracked thresholds, or mint an observed-clean result through the CLI
+or another supported entry point. They are not unforgeable or tamper-proof
+against an in-process adversary deliberately using `object.__new__`, importing
+private module objects, mutating instances, or monkeypatching code. M1's single
+trusted local operator threat model does not include such an adversary.
+
 Security never waits for calibration. Any unauthorized Evidence,
 wrong-Organization effect, or missing-context fallback forces the entire report
 to `FAIL`, regardless of every quality score or sample count. These totals are
@@ -124,6 +142,11 @@ outcome, not a transient error or score failure. The closed non-violation states
 remain `observed_clean`, `not_observed`, and `malformed`; once #160 supplies the
 real executor, one observed violation remains an absolute `FAIL` veto independent
 of thresholds and slices.
+
+If evaluation later accepts untrusted callers, becomes multi-tenant, or moves
+to a remote runner, the supported-path trust boundary above is no longer
+sufficient. That change requires its own ADR and threat model; issue #160
+already tracks the executor that will own observation construction.
 
 ## Offline report
 

@@ -3,12 +3,17 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
+from typing import cast
 
 import pytest
 
 from engine.learning.judges import SliceCaseScore, SliceFloor, evaluate_slice_floors
 from engine.learning.thresholds import (
     DEFAULT_THRESHOLDS_PATH,
+    EvaluationThresholds,
+    LayerSliceThreshold,
+    PendingValue,
+    _LoadedThresholdConfiguration,
     evaluate_layer_slice_thresholds,
     load_thresholds,
     slice_floors_from_thresholds,
@@ -237,12 +242,52 @@ def test_threshold_authority_cannot_be_forged_by_direct_construction() -> None:
 
     with pytest.raises(TypeError, match="loader-constructed"):
         EvaluationThresholds(
-            minimum_answer_score=object(),
-            minimum_refusal_accuracy=object(),
-            slice_floors=(),
-            maximum_calibration_events=1,
-            recorded_calibration_events=(),
-            source_authority="tracked",
+            cast(_LoadedThresholdConfiguration, object())
+        )
+
+
+def test_threshold_authority_type_cannot_be_subclassed() -> None:
+    with pytest.raises(TypeError, match="must not be subclassed"):
+
+        class _ForgedThresholds(EvaluationThresholds):
+            pass
+
+
+@pytest.mark.parametrize(
+    ("floors", "events"),
+    (
+        (
+            tuple(
+                LayerSliceThreshold(
+                    layer="retrieval",
+                    slice_name="single_doc",
+                    minimum_cases=PendingValue(),
+                    minimum_score=PendingValue(),
+                )
+                for _ in range(9)
+            ),
+            (),
+        ),
+        (
+            load_thresholds(DEFAULT_THRESHOLDS_PATH).slice_floors,
+            ({"authority": "malformed"},),
+        ),
+    ),
+)
+def test_sealed_threshold_constructor_revalidates_load_bearing_inputs(
+    floors: tuple[LayerSliceThreshold, ...],
+    events: tuple[dict[str, object], ...],
+) -> None:
+    with pytest.raises(TypeError, match="malformed"):
+        EvaluationThresholds(
+            _LoadedThresholdConfiguration(
+                minimum_answer_score=PendingValue(),
+                minimum_refusal_accuracy=PendingValue(),
+                slice_floors=floors,
+                maximum_calibration_events=1,
+                recorded_calibration_events=events,
+                source_authority="tracked",
+            )
         )
 
 
@@ -269,20 +314,27 @@ def test_one_pending_floor_does_not_hide_configured_sibling_outcomes(
 
 def test_v1_sources_do_not_anchor_forbidden_preregistration_values() -> None:
     repository_root = Path(__file__).resolve().parents[2]
-    forbidden = re.compile(r"\b0\.(?:8(?:0|5)?|9(?:0)?)\b")
-    sources = [
+    forbidden = re.compile(r"\b0\.(?:8(?:0*|50*)|90*)\b")
+    decimal = "0."
+    for equivalent_spelling in tuple(
+        decimal + suffix
+        for suffix in ("8", "80", "800", "85", "850", "9", "90", "900")
+    ):
+        assert forbidden.fullmatch(equivalent_spelling)
+    for allowed_value in tuple(
+        decimal + suffix for suffix in ("75", "81", "86", "91")
+    ):
+        assert forbidden.fullmatch(allowed_value) is None
+    sources = {
         repository_root / "applications/eval_v1.py",
-        *sorted((repository_root / "engine/learning").glob("eval_*.py")),
-        repository_root / "engine/learning/golden.py",
-        repository_root / "engine/learning/judges.py",
-        repository_root / "engine/learning/thresholds.py",
+        *sorted((repository_root / "engine/learning").glob("*.py")),
         *sorted((repository_root / "eval").rglob("*.json")),
         *sorted((repository_root / "tests/unit").glob("test_golden*.py")),
         *sorted((repository_root / "tests/unit").glob("test_*judge*.py")),
         repository_root / "tests/unit/test_eval_v1_cli.py",
         repository_root / "tests/unit/test_security_veto.py",
         Path(__file__),
-    ]
+    }
 
     for source in sources:
         assert forbidden.search(source.read_text(encoding="utf-8")) is None, source

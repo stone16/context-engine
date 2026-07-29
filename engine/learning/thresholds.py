@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Final, Literal, NoReturn, cast
@@ -72,7 +72,14 @@ class LayerSliceThreshold:
     minimum_score: ScoreThreshold
 
 
-_THRESHOLD_LOADER_SEAL = object()
+@dataclass(frozen=True, slots=True)
+class _LoadedThresholdConfiguration:
+    minimum_answer_score: ScoreThreshold
+    minimum_refusal_accuracy: ScoreThreshold
+    slice_floors: tuple[LayerSliceThreshold, ...]
+    maximum_calibration_events: int
+    recorded_calibration_events: tuple[dict[str, object], ...]
+    source_authority: Literal["tracked", "non_authoritative"]
 
 
 @dataclass(frozen=True, slots=True, init=False)
@@ -83,10 +90,60 @@ class EvaluationThresholds:
     maximum_calibration_events: int
     recorded_calibration_events: tuple[dict[str, object], ...]
     source_authority: Literal["tracked", "non_authoritative"]
-    _loader_seal: object = field(repr=False)
 
-    def __init__(self, *args: object, **kwargs: object) -> None:
-        raise TypeError("evaluation thresholds are loader-constructed")
+    def __init__(
+        self,
+        configuration: _LoadedThresholdConfiguration,
+    ) -> None:
+        if type(configuration) is not _LoadedThresholdConfiguration:
+            raise TypeError("evaluation thresholds are loader-constructed")
+        if (
+            type(configuration.minimum_answer_score)
+            not in {PendingValue, ConfiguredScore}
+            or type(configuration.minimum_refusal_accuracy)
+            not in {PendingValue, ConfiguredScore}
+            or type(configuration.slice_floors) is not tuple
+            or configuration.maximum_calibration_events != 1
+            or type(configuration.recorded_calibration_events) is not tuple
+            or configuration.source_authority
+            not in {"tracked", "non_authoritative"}
+        ):
+            raise TypeError("evaluation thresholds are malformed")
+        _validate_threshold_constructor_values(
+            configuration.minimum_answer_score,
+            configuration.minimum_refusal_accuracy,
+            configuration.slice_floors,
+            configuration.recorded_calibration_events,
+        )
+        object.__setattr__(
+            self,
+            "minimum_answer_score",
+            configuration.minimum_answer_score,
+        )
+        object.__setattr__(
+            self,
+            "minimum_refusal_accuracy",
+            configuration.minimum_refusal_accuracy,
+        )
+        object.__setattr__(self, "slice_floors", configuration.slice_floors)
+        object.__setattr__(
+            self,
+            "maximum_calibration_events",
+            configuration.maximum_calibration_events,
+        )
+        object.__setattr__(
+            self,
+            "recorded_calibration_events",
+            configuration.recorded_calibration_events,
+        )
+        object.__setattr__(
+            self,
+            "source_authority",
+            configuration.source_authority,
+        )
+
+    def __init_subclass__(cls, **kwargs: object) -> NoReturn:
+        raise TypeError("evaluation thresholds must not be subclassed")
 
     def __reduce__(self) -> NoReturn:
         raise TypeError("evaluation thresholds are not serializable")
@@ -95,22 +152,23 @@ class EvaluationThresholds:
 def require_loaded_thresholds(thresholds: EvaluationThresholds) -> None:
     """Reject structurally forged threshold objects at the report boundary."""
 
-    if (
-        type(thresholds) is not EvaluationThresholds
-        or getattr(thresholds, "_loader_seal", None) is not _THRESHOLD_LOADER_SEAL
-    ):
+    if type(thresholds) is not EvaluationThresholds:
         raise TypeError("evaluation thresholds must come from the tracked loader")
+    _validate_threshold_constructor_values(
+        thresholds.minimum_answer_score,
+        thresholds.minimum_refusal_accuracy,
+        thresholds.slice_floors,
+        thresholds.recorded_calibration_events,
+    )
 
 
 def threshold_report_document(
     thresholds: EvaluationThresholds,
 ) -> dict[str, object]:
-    """Render loaded threshold facts without exposing the construction seal."""
+    """Render validated threshold facts from the loader-owned configuration."""
 
     require_loaded_thresholds(thresholds)
-    document = asdict(thresholds)
-    del document["_loader_seal"]
-    return document
+    return asdict(thresholds)
 
 
 def _object(value: object, name: str, fields: frozenset[str]) -> dict[str, object]:
@@ -249,6 +307,85 @@ def _calibration_event(value: object) -> dict[str, object]:
     return document
 
 
+def _threshold_value_document(
+    value: CountThreshold | ScoreThreshold,
+) -> dict[str, object]:
+    return {"status": value.status, "value": value.value}
+
+
+def _validate_threshold_constructor_values(
+    minimum_answer_score: ScoreThreshold,
+    minimum_refusal_accuracy: ScoreThreshold,
+    slice_floors: tuple[LayerSliceThreshold, ...],
+    recorded_calibration_events: tuple[dict[str, object], ...],
+) -> None:
+    expected_pairs = {
+        (layer, slice_name)
+        for layer in ("retrieval", "citation", "answer")
+        for slice_name in ("single_doc", "cross_doc", "temporal")
+    }
+    if (
+        len(slice_floors) != 9
+        or any(type(floor) is not LayerSliceThreshold for floor in slice_floors)
+        or {(floor.layer, floor.slice_name) for floor in slice_floors}
+        != expected_pairs
+        or slice_floors
+        != tuple(
+            sorted(
+                slice_floors,
+                key=lambda floor: (floor.layer, floor.slice_name),
+            )
+        )
+        or any(
+            type(floor.minimum_cases) not in {PendingValue, ConfiguredCount}
+            or type(floor.minimum_score) not in {PendingValue, ConfiguredScore}
+            for floor in slice_floors
+        )
+        or len(recorded_calibration_events) > 1
+        or any(type(event) is not dict for event in recorded_calibration_events)
+    ):
+        raise TypeError("evaluation thresholds are malformed")
+    try:
+        events = tuple(
+            _calibration_event(event) for event in recorded_calibration_events
+        )
+    except ValueError:
+        raise TypeError("evaluation thresholds are malformed") from None
+    has_configured_value = any(
+        type(value) is not PendingValue
+        for value in (
+            minimum_answer_score,
+            minimum_refusal_accuracy,
+            *(floor.minimum_cases for floor in slice_floors),
+            *(floor.minimum_score for floor in slice_floors),
+        )
+    )
+    if has_configured_value and not events:
+        raise TypeError("evaluation thresholds are malformed")
+    if events:
+        active_values = {
+            "answer": {
+                "minimumNormalizedScore": _threshold_value_document(
+                    minimum_answer_score
+                ),
+                "minimumRefusalAccuracy": _threshold_value_document(
+                    minimum_refusal_accuracy
+                ),
+            },
+            "sliceFloors": [
+                {
+                    "layer": floor.layer,
+                    "minimumCases": _threshold_value_document(floor.minimum_cases),
+                    "minimumScore": _threshold_value_document(floor.minimum_score),
+                    "slice": floor.slice_name,
+                }
+                for floor in slice_floors
+            ],
+        }
+        if events[-1]["newValues"] != active_values:
+            raise TypeError("evaluation thresholds are malformed")
+
+
 def load_thresholds(path: Path) -> EvaluationThresholds:
     if not isinstance(path, Path):
         raise TypeError("evaluation thresholds path must be Path")
@@ -306,23 +443,20 @@ def load_thresholds(path: Path) -> EvaluationThresholds:
             raise ValueError(
                 "threshold calibration event must bind the active configuration"
             )
-    thresholds = object.__new__(EvaluationThresholds)
-    values: dict[str, object] = {
-        "minimum_answer_score": answer_values[0],
-        "minimum_refusal_accuracy": answer_values[1],
-        "slice_floors": floors,
-        "maximum_calibration_events": maximum_events,
-        "recorded_calibration_events": events,
-        "source_authority": (
-            "tracked"
-            if path.resolve() == DEFAULT_THRESHOLDS_PATH.resolve()
-            else "non_authoritative"
-        ),
-        "_loader_seal": _THRESHOLD_LOADER_SEAL,
-    }
-    for field_name, field_value in values.items():
-        object.__setattr__(thresholds, field_name, field_value)
-    return thresholds
+    return EvaluationThresholds(
+        _LoadedThresholdConfiguration(
+            minimum_answer_score=answer_values[0],
+            minimum_refusal_accuracy=answer_values[1],
+            slice_floors=floors,
+            maximum_calibration_events=maximum_events,
+            recorded_calibration_events=events,
+            source_authority=(
+                "tracked"
+                if path.resolve() == DEFAULT_THRESHOLDS_PATH.resolve()
+                else "non_authoritative"
+            ),
+        )
+    )
 
 
 def slice_floors_from_thresholds(
