@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Final, Literal, cast
 
@@ -111,6 +112,105 @@ def _slice(value: object) -> SliceName:
     return cast(SliceName, value)
 
 
+def _parse_floors(value: object) -> tuple[LayerSliceThreshold, ...]:
+    if type(value) is not list:
+        raise ValueError("sliceFloors is malformed")
+    floors: list[LayerSliceThreshold] = []
+    for raw_floor in cast(list[object], value):
+        floor = _object(
+            raw_floor,
+            "slice floor",
+            frozenset({"layer", "minimumCases", "minimumScore", "slice"}),
+        )
+        floors.append(
+            LayerSliceThreshold(
+                layer=_layer(floor["layer"]),
+                slice_name=_slice(floor["slice"]),
+                minimum_cases=_pending_or_count(floor["minimumCases"]),
+                minimum_score=_pending_or_score(floor["minimumScore"]),
+            )
+        )
+    expected_pairs = {
+        (layer, slice_name)
+        for layer in ("retrieval", "citation", "answer")
+        for slice_name in ("single_doc", "cross_doc", "temporal")
+    }
+    actual_pairs = {(floor.layer, floor.slice_name) for floor in floors}
+    if len(floors) != 9 or actual_pairs != expected_pairs:
+        raise ValueError("sliceFloors must cover each layer and slice exactly once")
+    return tuple(sorted(floors, key=lambda floor: (floor.layer, floor.slice_name)))
+
+
+def _threshold_snapshot(value: object, name: str) -> dict[str, object]:
+    document = _object(value, name, frozenset({"answer", "sliceFloors"}))
+    answer = _object(
+        document["answer"],
+        f"{name} answer",
+        frozenset({"minimumNormalizedScore", "minimumRefusalAccuracy"}),
+    )
+    _pending_or_score(answer["minimumNormalizedScore"])
+    _pending_or_score(answer["minimumRefusalAccuracy"])
+    _parse_floors(document["sliceFloors"])
+    return document
+
+
+def _calibration_event(value: object) -> dict[str, object]:
+    document = _object(
+        value,
+        "threshold calibration event",
+        frozenset(
+            {
+                "authority",
+                "newValues",
+                "oldValues",
+                "pilotDigest",
+                "reason",
+                "recordedAt",
+            }
+        ),
+    )
+    if document["authority"] != "maintainer":
+        raise ValueError("threshold calibration event authority is unavailable")
+    digest = document["pilotDigest"]
+    if (
+        type(digest) is not str
+        or len(digest) != 64
+        or any(character not in "0123456789abcdef" for character in digest)
+    ):
+        raise ValueError("threshold calibration event pilot digest is unavailable")
+    reason = document["reason"]
+    if (
+        type(reason) is not str
+        or not reason
+        or reason.isspace()
+        or reason != reason.strip()
+        or len(reason) > 1_024
+    ):
+        raise ValueError("threshold calibration event reason is unavailable")
+    recorded_at = document["recordedAt"]
+    if type(recorded_at) is not str:
+        raise ValueError("threshold calibration event time is unavailable")
+    try:
+        parsed_time = datetime.fromisoformat(recorded_at.replace("Z", "+00:00"))
+    except ValueError:
+        raise ValueError("threshold calibration event time is unavailable") from None
+    if (
+        not recorded_at.endswith("Z")
+        or parsed_time.tzinfo is None
+        or parsed_time.utcoffset() != timedelta(0)
+    ):
+        raise ValueError("threshold calibration event time must be aware UTC")
+    old_values = _threshold_snapshot(
+        document["oldValues"], "threshold calibration old values"
+    )
+    new_values = _threshold_snapshot(
+        document["newValues"], "threshold calibration new values"
+    )
+    if old_values == new_values:
+        raise ValueError("threshold calibration event must record a change")
+    return document
+
+
 def load_thresholds(path: Path) -> EvaluationThresholds:
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
@@ -139,44 +239,23 @@ def load_thresholds(path: Path) -> EvaluationThresholds:
         raise ValueError("threshold calibration must allow exactly one event")
     if type(recorded_events) is not list or len(recorded_events) > maximum_events:
         raise ValueError("threshold calibration event count is unavailable")
-    if any(type(event) is not dict for event in recorded_events):
-        raise ValueError("threshold calibration event is malformed")
-    raw_floors = document["sliceFloors"]
-    if type(raw_floors) is not list:
-        raise ValueError("sliceFloors is malformed")
-    floors: list[LayerSliceThreshold] = []
-    for raw_floor in cast(list[object], raw_floors):
-        floor = _object(
-            raw_floor,
-            "slice floor",
-            frozenset({"layer", "minimumCases", "minimumScore", "slice"}),
-        )
-        floors.append(
-            LayerSliceThreshold(
-                layer=_layer(floor["layer"]),
-                slice_name=_slice(floor["slice"]),
-                minimum_cases=_pending_or_count(floor["minimumCases"]),
-                minimum_score=_pending_or_score(floor["minimumScore"]),
+    events = tuple(_calibration_event(event) for event in recorded_events)
+    floors = _parse_floors(document["sliceFloors"])
+    if events:
+        active_values = {
+            "answer": document["answer"],
+            "sliceFloors": document["sliceFloors"],
+        }
+        if events[-1]["newValues"] != active_values:
+            raise ValueError(
+                "threshold calibration event must bind the active configuration"
             )
-        )
-    expected_pairs = {
-        (layer, slice_name)
-        for layer in ("retrieval", "citation", "answer")
-        for slice_name in ("single_doc", "cross_doc", "temporal")
-    }
-    actual_pairs = {(floor.layer, floor.slice_name) for floor in floors}
-    if len(floors) != 9 or actual_pairs != expected_pairs:
-        raise ValueError("sliceFloors must cover each layer and slice exactly once")
     return EvaluationThresholds(
         minimum_answer_score=_pending_or_score(answer["minimumNormalizedScore"]),
         minimum_refusal_accuracy=_pending_or_score(answer["minimumRefusalAccuracy"]),
-        slice_floors=tuple(
-            sorted(floors, key=lambda floor: (floor.layer, floor.slice_name))
-        ),
+        slice_floors=floors,
         maximum_calibration_events=maximum_events,
-        recorded_calibration_events=tuple(
-            cast(dict[str, object], event) for event in recorded_events
-        ),
+        recorded_calibration_events=events,
     )
 
 

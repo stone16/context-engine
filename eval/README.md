@@ -27,8 +27,11 @@ boundary over the tracked tree.
 Moving a case from the private corpus to a public subset is a privacy decision.
 The only configured authority is `maintainer`, recorded in
 `eval/public-subset-governance.json`; every other principal is refused by the
-promotion mechanism. M1 is single-tenant and the maintainer is its sole
-privacy-responsible party. A designated privacy-reviewer role does not exist,
+promotion mechanism. The mechanism authenticates an opaque local credential and
+accepts only its construction-sealed nominal maintainer identity, never a
+caller-authored `"maintainer"` claim. M1 is single-tenant,
+and the maintainer is its sole privacy-responsible party. A designated
+privacy-reviewer role does not exist,
 and release-operator authority is deliberately insufficient: ReleaseManifest
 publication authority must not acquire privacy authority implicitly.
 
@@ -86,17 +89,27 @@ for answer/refusal and all nine `(layer, slice)` floors. Pending is distinct
 from zero and absence and cannot be coerced to a permissive default. Once the
 pilot composition is known, the maintainer preregisters sample sizes and scores
 and may record exactly one post-pilot calibration event. That maintainer action
+must bind the pilot digest, old and new threshold values, reason, and UTC time;
+the latest event must exactly bind the active tracked configuration. The action
 is pending preregistration, not part of this implementation.
 
 Security never waits for calibration. Any unauthorized Evidence,
 wrong-Organization effect, or missing-context fallback forces the entire report
-to `FAIL`, regardless of every quality score or sample count.
+to `FAIL`, regardless of every quality score or sample count. These totals are
+derived from the harness's closed per-case event observations, never accepted
+as caller-authored counters. Every case has a required typed security state:
+`observed` with zero events is clean, while the distinct `not_observed` sentinel,
+an absent field, or malformed evidence refuses report creation as an
+unestablished precondition. None can be coerced to zero or rendered green.
 
 ## Offline report
 
 The CLI consumes a locked v1 set and a closed per-case observation document. It
 requires the observation `caseRef` set to exactly equal the golden set, records
-the blind judge model/profile identity, and refuses partial runs.
+the blind judge model/profile identity, requires the harness security
+precondition for every case, and refuses partial runs. Report output must remain
+within a real ignored `.context-engine/` directory; path traversal and symlink
+escapes are refused.
 
 ```bash
 uv run context-engine-eval report \

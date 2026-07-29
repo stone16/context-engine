@@ -89,3 +89,39 @@ def test_missing_produced_claims_score_zero_instead_of_being_dropped() -> None:
     assert report.lineage_resolvability == 0.0
     assert report.claim_support == 0.0
     assert report.completeness == 0.0
+
+
+def test_unanswerable_case_has_deterministic_no_citation_success_semantics() -> None:
+    report = judge_citations(
+        (
+            CitationCaseInput(
+                case_ref="synthetic-unanswerable",
+                required_claim_refs=frozenset(),
+                claims=(),
+                expected_evidence_by_claim=(),
+                resolvable_evidence=frozenset(),
+            ),
+        )
+    )
+
+    assert report.lineage_resolvability == 1.0
+    assert report.claim_support == 1.0
+    assert report.completeness == 1.0
+    assert report.status == "pass"
+
+
+def test_unanswerable_case_with_a_produced_citation_fails() -> None:
+    report = judge_citations(
+        (
+            CitationCaseInput(
+                case_ref="synthetic-unanswerable-with-citation",
+                required_claim_refs=frozenset(),
+                claims=(CitationClaim("claim-extra", frozenset({"evidence-a"})),),
+                expected_evidence_by_claim=(),
+                resolvable_evidence=frozenset({"evidence-a"}),
+            ),
+        )
+    )
+
+    assert report.status == "fail"
+    assert report.completeness == 0.0

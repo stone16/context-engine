@@ -90,3 +90,79 @@ def test_threshold_loader_refuses_zero_or_absent_pending_value(
 
     with pytest.raises(ValueError):
         load_thresholds(path)
+
+
+def test_threshold_loader_refuses_empty_calibration_event(tmp_path: Path) -> None:
+    source_path = Path(__file__).resolve().parents[2] / "eval/thresholds/v1.json"
+    document = json.loads(source_path.read_text(encoding="utf-8"))
+    document["calibration"]["recordedEvents"] = [{}]
+    path = tmp_path / "thresholds.json"
+    path.write_text(json.dumps(document), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="calibration event"):
+        load_thresholds(path)
+
+
+def test_threshold_loader_accepts_one_strict_maintainer_calibration_event(
+    tmp_path: Path,
+) -> None:
+    source_path = Path(__file__).resolve().parents[2] / "eval/thresholds/v1.json"
+    document = json.loads(source_path.read_text(encoding="utf-8"))
+    old_values = {
+        "answer": document["answer"],
+        "sliceFloors": document["sliceFloors"],
+    }
+    new_values = json.loads(json.dumps(old_values))
+    new_values["answer"]["minimumNormalizedScore"] = {
+        "status": "configured",
+        "value": 0.75,
+    }
+    document["answer"] = new_values["answer"]
+    document["sliceFloors"] = new_values["sliceFloors"]
+    document["calibration"]["recordedEvents"] = [
+        {
+            "authority": "maintainer",
+            "newValues": new_values,
+            "oldValues": old_values,
+            "pilotDigest": "a" * 64,
+            "reason": "synthetic-post-pilot-calibration",
+            "recordedAt": "2026-07-29T12:00:00Z",
+        }
+    ]
+    path = tmp_path / "thresholds.json"
+    path.write_text(json.dumps(document), encoding="utf-8")
+
+    thresholds = load_thresholds(path)
+
+    assert len(thresholds.recorded_calibration_events) == 1
+
+
+def test_calibration_event_must_bind_the_active_threshold_configuration(
+    tmp_path: Path,
+) -> None:
+    source_path = Path(__file__).resolve().parents[2] / "eval/thresholds/v1.json"
+    document = json.loads(source_path.read_text(encoding="utf-8"))
+    snapshot = {
+        "answer": document["answer"],
+        "sliceFloors": document["sliceFloors"],
+    }
+    changed = json.loads(json.dumps(snapshot))
+    changed["answer"]["minimumNormalizedScore"] = {
+        "status": "configured",
+        "value": 0.75,
+    }
+    document["calibration"]["recordedEvents"] = [
+        {
+            "authority": "maintainer",
+            "newValues": changed,
+            "oldValues": snapshot,
+            "pilotDigest": "a" * 64,
+            "reason": "synthetic-post-pilot-calibration",
+            "recordedAt": "2026-07-29T12:00:00Z",
+        }
+    ]
+    path = tmp_path / "thresholds.json"
+    path.write_text(json.dumps(document), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="active configuration"):
+        load_thresholds(path)

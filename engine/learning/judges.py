@@ -143,8 +143,7 @@ class CitationCaseInput:
 
     def __post_init__(self) -> None:
         _case_ref(self.case_ref)
-        if not _refs("required_claim_refs", self.required_claim_refs):
-            raise ValueError("citation judge requires required claims")
+        _refs("required_claim_refs", self.required_claim_refs)
         if type(self.claims) is not tuple:
             raise TypeError("citation claims must be a tuple")
         if any(type(claim) is not CitationClaim for claim in self.claims):
@@ -195,6 +194,17 @@ def judge_citations(cases: tuple[CitationCaseInput, ...]) -> CitationReport:
         if type(case) is not CitationCaseInput:
             raise TypeError("citation cases must be CitationCaseInput")
         expected_by_claim = dict(case.expected_evidence_by_claim)
+        if not case.required_claim_refs:
+            no_citation_success = not case.claims
+            results.append(
+                CitationCaseResult(
+                    case_ref=case.case_ref,
+                    lineage_resolvability=1.0 if no_citation_success else 0.0,
+                    claim_support=1.0 if no_citation_success else 0.0,
+                    completeness=1.0 if no_citation_success else 0.0,
+                )
+            )
+            continue
         resolvable = tuple(
             bool(claim.cited_evidence)
             and claim.cited_evidence <= case.resolvable_evidence

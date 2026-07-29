@@ -92,6 +92,56 @@ class ObservedClaim:
     cited_evidence: tuple[EvidenceLineage, ...]
 
 
+type SecurityEventKind = Literal[
+    "unauthorized_evidence",
+    "wrong_organization_effect",
+    "missing_context_fallback",
+]
+
+
+@dataclass(frozen=True, slots=True)
+class HarnessSecurityEvent:
+    """One content-free hard-oracle event derived by the evaluation harness."""
+
+    kind: SecurityEventKind
+    observation_ref: str
+
+    def __post_init__(self) -> None:
+        if self.kind not in {
+            "unauthorized_evidence",
+            "wrong_organization_effect",
+            "missing_context_fallback",
+        }:
+            raise ValueError("harness security event kind is unavailable")
+        _text("harness security observation_ref", self.observation_ref)
+
+
+@dataclass(frozen=True, slots=True)
+class SecurityObservationObserved:
+    """The harness ran the hard oracles; an empty event tuple means clean."""
+
+    events: tuple[HarnessSecurityEvent, ...]
+
+    def __post_init__(self) -> None:
+        if type(self.events) is not tuple or any(
+            type(event) is not HarnessSecurityEvent for event in self.events
+        ):
+            raise TypeError("observed harness security events must be a typed tuple")
+        refs = tuple(event.observation_ref for event in self.events)
+        if len(refs) != len(set(refs)):
+            raise ValueError("harness security observation_ref values must be unique")
+
+
+@dataclass(frozen=True, slots=True)
+class SecurityObservationNotObserved:
+    """Typed sentinel: hard-oracle evidence was not established for this case."""
+
+
+type HarnessSecurityObservation = (
+    SecurityObservationObserved | SecurityObservationNotObserved
+)
+
+
 @dataclass(frozen=True, slots=True)
 class EvaluationCaseObservation:
     case_ref: str
@@ -100,9 +150,14 @@ class EvaluationCaseObservation:
     blind_score: int
     refused: bool
     critical_contradiction: bool
-    unauthorized_evidence_count: int
-    wrong_organization_effect_count: int
-    missing_context_fallback_count: int
+    security_observation: HarnessSecurityObservation
+
+    def __post_init__(self) -> None:
+        if type(self.security_observation) not in {
+            SecurityObservationObserved,
+            SecurityObservationNotObserved,
+        }:
+            raise TypeError("evaluation case requires typed security observation")
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,11 +165,52 @@ class EvaluationRun:
     answer_judge_profile: AnswerJudgeProfile
     cases: tuple[EvaluationCaseObservation, ...]
 
+    def __post_init__(self) -> None:
+        if type(self.answer_judge_profile) is not AnswerJudgeProfile:
+            raise TypeError("evaluation run requires answer judge profile")
+        if type(self.cases) is not tuple or not self.cases or any(
+            type(case) is not EvaluationCaseObservation for case in self.cases
+        ):
+            raise TypeError("evaluation run requires typed case observations")
 
-def _count(field_name: str, value: object) -> int:
-    if type(value) is not int or value < 0:
-        raise EvaluationRunUnavailable(f"{field_name} must be nonnegative")
-    return value
+
+def _security_event(value: object) -> HarnessSecurityEvent:
+    document = _object(
+        value,
+        "security event",
+        frozenset({"kind", "observationRef"}),
+    )
+    kind = document["kind"]
+    if kind not in {
+        "unauthorized_evidence",
+        "wrong_organization_effect",
+        "missing_context_fallback",
+    }:
+        raise EvaluationRunUnavailable("security event kind is unavailable")
+    return HarnessSecurityEvent(
+        kind=cast(SecurityEventKind, kind),
+        observation_ref=_text("security observationRef", document["observationRef"]),
+    )
+
+
+def _security_observation(value: object) -> HarnessSecurityObservation:
+    if value == {"status": "not_observed"}:
+        return SecurityObservationNotObserved()
+    document = _object(
+        value,
+        "security observation",
+        frozenset({"events", "status"}),
+    )
+    if document["status"] != "observed":
+        raise EvaluationRunUnavailable("security observation status is unavailable")
+    events = tuple(
+        _security_event(item)
+        for item in _list(document["events"], "security observation events")
+    )
+    refs = tuple(event.observation_ref for event in events)
+    if len(refs) != len(set(refs)):
+        raise EvaluationRunUnavailable("security observationRef values must be unique")
+    return SecurityObservationObserved(events)
 
 
 def _observed_claim(value: object) -> ObservedClaim:
@@ -147,11 +243,9 @@ def _case_observation(value: object) -> EvaluationCaseObservation:
                 "caseRef",
                 "claims",
                 "criticalContradiction",
-                "missingContextFallbackCount",
                 "observedEvidence",
                 "refused",
-                "unauthorizedEvidenceCount",
-                "wrongOrganizationEffectCount",
+                "securityObservation",
             }
         ),
     )
@@ -182,15 +276,7 @@ def _case_observation(value: object) -> EvaluationCaseObservation:
         blind_score=blind_score,
         refused=refused,
         critical_contradiction=contradiction,
-        unauthorized_evidence_count=_count(
-            "unauthorizedEvidenceCount", document["unauthorizedEvidenceCount"]
-        ),
-        wrong_organization_effect_count=_count(
-            "wrongOrganizationEffectCount", document["wrongOrganizationEffectCount"]
-        ),
-        missing_context_fallback_count=_count(
-            "missingContextFallbackCount", document["missingContextFallbackCount"]
-        ),
+        security_observation=_security_observation(document["securityObservation"]),
     )
 
 
@@ -253,6 +339,13 @@ def build_evaluation_report(
         raise TypeError("run must be EvaluationRun")
     if type(thresholds) is not EvaluationThresholds:
         raise TypeError("thresholds must be EvaluationThresholds")
+    if thresholds.recorded_calibration_events and (
+        thresholds.recorded_calibration_events[-1]["pilotDigest"]
+        != golden_set.pilot_digest
+    ):
+        raise EvaluationRunUnavailable(
+            "threshold calibration pilot digest does not match the golden set"
+        )
     golden_by_ref = {case.case_ref: case for case in golden_set.cases}
     observed_by_ref = {case.case_ref: case for case in run.cases}
     if frozenset(golden_by_ref) != frozenset(observed_by_ref):
@@ -266,6 +359,11 @@ def build_evaluation_report(
     for case_ref in sorted(golden_by_ref):
         golden = golden_by_ref[case_ref]
         observed = observed_by_ref[case_ref]
+        security_observation = observed.security_observation
+        if isinstance(security_observation, SecurityObservationNotObserved):
+            raise EvaluationRunUnavailable(
+                f"security precondition not met for caseRef {case_ref}"
+            )
         expected_refs = frozenset(
             _lineage_ref(item.lineage) for item in golden.expected_evidence
         )
@@ -275,31 +373,28 @@ def build_evaluation_report(
         retrieval_inputs.append(
             RetrievalCaseInput(case_ref, expected_refs, observed_refs)
         )
-        if golden.answerability == "answerable":
-            expected_by_claim = tuple(
-                (
-                    claim.claim_ref,
-                    frozenset(_lineage_ref(item) for item in claim.expected_evidence),
-                )
-                for claim in golden.required_claims
+        expected_by_claim = tuple(
+            (
+                claim.claim_ref,
+                frozenset(_lineage_ref(item) for item in claim.expected_evidence),
             )
-            citation_inputs.append(
-                CitationCaseInput(
-                    case_ref,
-                    frozenset(claim.claim_ref for claim in golden.required_claims),
-                    tuple(
-                        CitationClaim(
-                            claim.claim_ref,
-                            frozenset(
-                                _lineage_ref(item) for item in claim.cited_evidence
-                            ),
-                        )
-                        for claim in observed.claims
-                    ),
-                    expected_by_claim,
-                    observed_refs,
-                )
+            for claim in golden.required_claims
+        )
+        citation_inputs.append(
+            CitationCaseInput(
+                case_ref,
+                frozenset(claim.claim_ref for claim in golden.required_claims),
+                tuple(
+                    CitationClaim(
+                        claim.claim_ref,
+                        frozenset(_lineage_ref(item) for item in claim.cited_evidence),
+                    )
+                    for claim in observed.claims
+                ),
+                expected_by_claim,
+                observed_refs,
             )
+        )
         answer_inputs.append(
             AnswerCaseInput(
                 case_ref,
@@ -312,9 +407,18 @@ def build_evaluation_report(
         security_inputs.append(
             CaseSecurityObservation(
                 case_ref,
-                observed.unauthorized_evidence_count,
-                observed.wrong_organization_effect_count,
-                observed.missing_context_fallback_count,
+                sum(
+                    event.kind == "unauthorized_evidence"
+                    for event in security_observation.events
+                ),
+                sum(
+                    event.kind == "wrong_organization_effect"
+                    for event in security_observation.events
+                ),
+                sum(
+                    event.kind == "missing_context_fallback"
+                    for event in security_observation.events
+                ),
             )
         )
     retrieval = judge_retrieval(tuple(retrieval_inputs))
@@ -356,7 +460,7 @@ def build_evaluation_report(
         slice_reports[layer] = [asdict(result) for result in layer_report]
         flat_slice_statuses.extend(result.status for result in layer_report)
     retrieval_status = "measured"
-    citation_status = "measured"
+    citation_status = citation.status
     if isinstance(thresholds.minimum_answer_score, PendingValue) or isinstance(
         thresholds.minimum_refusal_accuracy, PendingValue
     ):
@@ -376,7 +480,7 @@ def build_evaluation_report(
     status = final_report_status(
         EvaluationScores(
             retrieval=1.0,
-            citation=1.0,
+            citation=1.0 if citation.status == "pass" else 0.0,
             answer=(
                 1.0
                 if answer_status in {"pass", "pending_preregistration"}
