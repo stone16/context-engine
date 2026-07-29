@@ -64,6 +64,15 @@ models and local identity overrides are refused, and the runner hashes every
 on-disk artifact against the tracked expected digests before and after the
 backend loads the model.
 
+`SentenceTransformer` requires a directory path and reopens its artifacts, so
+the two checks do not create a tamper-proof snapshot. A concurrent writer could
+swap files during backend construction and restore the registered bytes before
+the post-load check. That adversary is outside M1's single trusted local operator
+threat model: the runner provides provenance under that trusted operator, not
+protection against adversarial concurrent writes. If an untrusted party gains
+concurrent write access to model storage, stronger snapshot or locking semantics
+require their own ADR.
+
 The input follows `embedding-benchmark/input.schema.json`; the output follows
 `embedding-benchmark/report.schema.json` and must be written below the ignored
 `.context-engine/` directory. The input includes the typed RFC 8785/SHA-256

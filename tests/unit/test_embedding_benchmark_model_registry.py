@@ -5,7 +5,8 @@ import json
 import math
 from copy import deepcopy
 from pathlib import Path
-from typing import Any
+from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 import rfc8785
@@ -91,18 +92,35 @@ def _expected_directory_digest(files: dict[str, bytes]) -> str:
     return hashlib.sha256(rfc8785.dumps(manifest)).hexdigest()
 
 
+def _identity_digest(identity: dict[str, object]) -> str:
+    digestable = {
+        key: value for key, value in identity.items() if key != "artifactDigest"
+    }
+    return hashlib.sha256(rfc8785.dumps(cast(Any, digestable))).hexdigest()
+
+
 def test_model_artifact_must_match_the_tracked_registry_digest(
     tmp_path: Path,
     monkeypatch: Any,
 ) -> None:
     model_dir = tmp_path / "model"
     model_dir.mkdir()
-    (model_dir / "model.safetensors").write_bytes(b"untracked artifact bytes")
+    actual = b"untracked artifact bytes"
+    (model_dir / "model.safetensors").write_bytes(actual)
     registry_path = tmp_path / "model-registry.json"
-    _write_registry(
-        registry_path,
+    registry = _registry(
         expected_files={"model.safetensors": b"tracked artifact bytes"},
     )
+    models = registry["models"]
+    assert isinstance(models, dict)
+    primary = models["primary"]
+    assert isinstance(primary, dict)
+    identity = primary["identity"]
+    assert isinstance(identity, dict)
+    identity["artifactDigest"] = _expected_directory_digest(
+        {"model.safetensors": actual}
+    )
+    registry_path.write_text(json.dumps(registry), encoding="utf-8")
     monkeypatch.setattr(cli, "MODEL_REGISTRY_PATH", registry_path)
 
     with pytest.raises(BenchmarkUnavailable, match="model identity is unresolved"):
@@ -190,6 +208,76 @@ def test_matching_artifact_uses_only_the_tracked_identity(
     )
 
 
+@pytest.mark.parametrize("role", ("primary", "baseline"))
+def test_loader_round_trips_every_registered_identity_field(
+    tmp_path: Path,
+    monkeypatch: Any,
+    role: str,
+) -> None:
+    artifact = b"tracked artifact bytes"
+    model_dir = tmp_path / "model"
+    model_dir.mkdir()
+    (model_dir / "model.safetensors").write_bytes(artifact)
+    registry = _registry(expected_files={"model.safetensors": artifact})
+    registry_path = tmp_path / "model-registry.json"
+    registry_path.write_text(json.dumps(registry), encoding="utf-8")
+    monkeypatch.setattr(cli, "MODEL_REGISTRY_PATH", registry_path)
+
+    identity = cli.load_registered_model_identity(
+        role=role,
+        backend=cli.SupportedBackend.SENTENCE_TRANSFORMERS,
+        model_dir=model_dir,
+    )
+
+    models = registry["models"]
+    assert isinstance(models, dict)
+    model = models[role]
+    assert isinstance(model, dict)
+    assert identity.public_document() == model["identity"]
+
+
+def test_loader_reads_dimension_from_the_validated_registry(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    artifact = b"tracked artifact bytes"
+    model_dir = tmp_path / "model"
+    model_dir.mkdir()
+    (model_dir / "model.safetensors").write_bytes(artifact)
+    registry = _registry(expected_files={"model.safetensors": artifact})
+    models = registry["models"]
+    assert isinstance(models, dict)
+    primary = models["primary"]
+    assert isinstance(primary, dict)
+    identity_document = primary["identity"]
+    assert isinstance(identity_document, dict)
+    identity_document["dimension"] = 385
+    registry_path = tmp_path / "model-registry.json"
+    registry_path.write_text(json.dumps(registry), encoding="utf-8")
+    monkeypatch.setattr(cli, "MODEL_REGISTRY_PATH", registry_path)
+    monkeypatch.setattr(cli, "validate_json_schema_document", lambda *_args: None)
+    monkeypatch.setitem(
+        cli._REGISTERED_IDENTITY_DIGESTS,
+        "primary",
+        _identity_digest(identity_document),
+    )
+    captured: dict[str, object] = {}
+
+    def capture_identity(**values: object) -> Any:
+        captured.update(values)
+        return SimpleNamespace(**values)
+
+    monkeypatch.setattr(cli, "ModelIdentity", capture_identity)
+
+    cli.load_registered_model_identity(
+        role="primary",
+        backend=cli.SupportedBackend.SENTENCE_TRANSFORMERS,
+        model_dir=model_dir,
+    )
+
+    assert captured["dimension"] == 385
+
+
 def test_complete_registered_sentence_transformer_layout_is_accepted(
     tmp_path: Path,
     monkeypatch: Any,
@@ -243,18 +331,15 @@ def test_complete_registered_layout_refuses_an_extra_untracked_file(
     tmp_path: Path,
     monkeypatch: Any,
 ) -> None:
-    files = {
-        "config.json": b"model config",
-        "model.safetensors": b"weights",
-        "modules.json": b"modules",
-    }
+    artifact = b"same bytes under the wrong path"
     model_dir = tmp_path / "model"
     model_dir.mkdir()
-    for relative_path, content in files.items():
-        (model_dir / relative_path).write_bytes(content)
-    (model_dir / "caller-identity.json").write_text("{}", encoding="utf-8")
+    (model_dir / "renamed.safetensors").write_bytes(artifact)
     registry_path = tmp_path / "model-registry.json"
-    _write_registry(registry_path, expected_files=files)
+    _write_registry(
+        registry_path,
+        expected_files={"model.safetensors": artifact},
+    )
     monkeypatch.setattr(cli, "MODEL_REGISTRY_PATH", registry_path)
 
     with pytest.raises(BenchmarkUnavailable, match="model identity is unresolved"):
@@ -360,6 +445,11 @@ def test_registry_declaring_a_pipeline_the_model_code_does_not_perform_is_refuse
     identity = primary["identity"]
     assert isinstance(identity, dict)
     identity["transformationPipeline"] = BASELINE_PIPELINE
+    monkeypatch.setitem(
+        cli._REGISTERED_IDENTITY_DIGESTS,
+        "primary",
+        _identity_digest(identity),
+    )
     registry_path = tmp_path / "model-registry.json"
     registry_path.write_text(json.dumps(registry), encoding="utf-8")
     monkeypatch.setattr(cli, "MODEL_REGISTRY_PATH", registry_path)
