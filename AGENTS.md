@@ -92,14 +92,19 @@ their accepted catalog activations; deferred carrier semantics remain
 - Do not hardcode volatile values (URLs, ports, versions) in prose; point to their source of truth.
 - **Runtime path is sealed, not merely wired**: production `ContextRuntime.resolve(AuthenticatedInvocation, TrustedDeliveryContext, Acquire | Continue | OpenCitation)` must pass through one non-pluggable `AuthorizationKernel` plus PackageBudget/provenance/audit gates; no feature flag, alternate composition, no-op dependency, or direct retriever-to-assembler path may bypass them.
 - **Security is veto, not score**: Unauthorized Evidence = 0, wrong-Organization effect = 0, missing-context fallback = 0. No feature win offsets a failed invariant.
-- **Zero code copying from Dify, RAGFlow, MaxKB, or Onyx** — use clean-room
-  observations of behavior, interface shape, test oracles, and product
-  workflows only, with every public reference claim traced through the
-  four-repository evidence report. Repository-external research inputs must
-  never be cited, linked, or presented as public provenance.
+- **Controlled third-party reuse (ADR-0074)** — copying is permitted only from
+  license-verified permissive regions at pinned commits (RAGFlow Apache-2.0;
+  Onyx outside every `ee/` directory, MIT; separately-licensed MIT SDK
+  subtrees), registered under `third_party/` with full attribution and SBOM
+  coverage in shipped artifacts. Dify root-licensed code, MaxKB GPLv3 code,
+  and Onyx `ee/` code remain clean-room only: behavior observations, interface
+  shapes, and test oracles via the two-room protocol. Every public reference
+  claim still traces through the four-repository evidence report;
+  repository-external research inputs must never be cited, linked, or
+  presented as public provenance.
 - Missing tenant context = fail closed, always. Index/cache filters never make authorization decisions.
 - Worker database context uses a registered least-privilege ServiceActor and a server-minted signed WorkerLease with exact durable-job binding. Never impersonate the triggering user or treat ingestion authority as delivery authority.
-- Inside Runtime, content-bearing rerank/hydration/relevance-model/assembly accepts `AuthorizedProjection` only. BotDelivery's generation ModelGateway accepts only `AuthorizedModelInput` derived from one current audience-bound ContextPackage plus a matching EgressGrant. `CandidateRef` must pass exact authorization and field projection first; every parent/neighbor expansion is re-authorized.
+- Inside Runtime, content-bearing rerank/hydration/relevance-model/assembly accepts `AuthorizedProjection` only. BotDelivery's generation ModelGateway accepts only `AuthorizedModelInput` derived from one current audience-bound ContextPackage plus a matching EgressGrant. `CandidateRef` must pass exact authorization and field projection first. The Article (`ContextResource`) is the only content authorization atom and Fragments never carry independent ACLs (ADR-0077): expansion within the same Article and current Revision inherits that Article's decision after lineage verification; every cross-Article expansion is re-authorized.
 - `SourceAclEvidence` is explicitly Live, Mirrored, or Weak. Weak is permitted only when the source genuinely lacks stronger ACL semantics; it is never a fallback for a failed Live/Mirrored check.
 - `TrustedDeliveryContext` and `AudienceSnapshot` are trusted facts. Callers cannot manufacture them; the Kernel, not BotDelivery, computes group authorization. Public-group and asker-private packages are separate resolves.
 - Remote BotDelivery passes only a per-resolve opaque `DeliveryEvidenceRef` in authenticated transport metadata. Raw trusted identity or audience claims never belong in the wire body; ingress must redeem and validate the reference before content work.

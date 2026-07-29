@@ -131,12 +131,20 @@ first, or declined.
   live source. Do not hardcode volatile values (URLs, ports, versions) in prose;
   point to their source of truth.
 
-### Zero code copying
+### Controlled third-party reuse
 
 The design draws on architectural study of **Dify**, **RAGFlow**, **MaxKB**, and
-**Onyx**, limited to observable behavior, interface shape, test oracles, and
-product workflows. **Do not copy code from them, in any amount.** Public
-reference claims must trace to the
+**Onyx**. Code reuse follows
+[ADR-0074](./docs/decisions/0074-adopt-controlled-third-party-code-reuse.md),
+per source region, never per product: Apache-2.0 regions (RAGFlow) and MIT
+regions (Onyx outside every `ee/` directory; separately-licensed SDK subtrees)
+may be copied and patched only after path-level license verification at a
+pinned commit, registered under `third_party/` with upstream license, exact
+provenance (`UPSTREAM.toml`), and modification notices, and shipped with
+complete attribution and SBOM coverage. Dify root-licensed code, MaxKB GPLv3
+code, and Onyx `ee/` code must never be copied — reuse them only through
+clean-room behavior specifications and test oracles produced by an observer
+who does not implement. Public reference claims must trace to the
 [evidence baseline](./docs/research/2026-07-19-four-public-repositories-evidence.md).
 Research from outside this repository may inform your reasoning, but must never
 be cited or linked as public provenance.
@@ -144,9 +152,8 @@ be cited or linked as public provenance.
 ## Architecture Decision Records
 
 Any non-obvious decision is recorded as an ADR under
-[`docs/decisions/`](./docs/decisions/README.md) — there are 60 of them, and they
-are the authority on boundaries, dependency direction, forbidden shortcuts, and
-revisit triggers.
+[`docs/decisions/`](./docs/decisions/README.md); the ADRs are the authority on
+boundaries, dependency direction, forbidden shortcuts, and revisit triggers.
 
 Write a new ADR when your change alters a boundary, introduces a dependency
 direction, or closes off an option that a future contributor might reasonably
