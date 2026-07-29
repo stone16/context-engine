@@ -1,0 +1,60 @@
+{
+  "schemaVersion": "context-engine-embedding-model-registry-v1",
+  "models": {
+    "primary": {
+      "backend": "sentence-transformers",
+      "artifacts": [
+        {"path": "1_Pooling/config.json", "sha256": "37bf193fa101f19101bfad9c31d3eb0f786e247b7b1e5cb7f007d730eed1ddbd"},
+        {"path": "config.json", "sha256": "b5bf1f51fc45be473a54718cef92448d90a1be001bf9b9a44b8c7f10a19feaa9"},
+        {"path": "config_sentence_transformers.json", "sha256": "10667c72ddb772627bf1780cb7f86af8e2ae0032b8c243c731172064105c6961"},
+        {"path": "generation_config.json", "sha256": "28396d421a2108acce96383f6a7de78008f7f1b17f807958f3c14c51dbfb65fb"},
+        {"path": "merges.txt", "sha256": "8831e4f1a044471340f7c0a83d7bd71306a5b867e95fd870f74d0c5308a904d5"},
+        {"path": "model.safetensors", "sha256": "0437e45c94563b09e13cb7a64478fc406947a93cb34a7e05870fc8dcd48e23fd"},
+        {"path": "modules.json", "sha256": "84e40c8e006c9b1d6c122e02cba9b02458120b5fb0c87b746c41e0207cf642cf"},
+        {"path": "tokenizer.json", "sha256": "def76fb086971c7867b829c23a26261e38d9d74e02139253b38aeb9df8b4b50a"},
+        {"path": "tokenizer_config.json", "sha256": "253153d0738ceb4c668d2eff957714dd2bea0b56de772a9fdccd96cbf517e6a0"},
+        {"path": "vocab.json", "sha256": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910"}
+      ],
+      "identity": {
+        "modelId": "Qwen/Qwen3-Embedding-0.6B",
+        "revision": "97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3",
+        "artifactDigest": "8cb25677d5be69ce6ac88ebbdfb5dad30980fee39c35c6324a583e325917eddc",
+        "dimension": 384,
+        "normalization": "l2",
+        "pooling": "last_token",
+        "queryPrefix": "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery:",
+        "documentPrefix": "",
+        "reduction": "matryoshka_truncate_384",
+        "precision": "float32",
+        "batchSize": 8
+      }
+    },
+    "baseline": {
+      "backend": "sentence-transformers",
+      "artifacts": [
+        {"path": "1_Pooling/config.json", "sha256": "987f7a67a38fa564c849bb5d277c52ab9088a84368fc0be31a354125aebb12a0"},
+        {"path": "config.json", "sha256": "69137736cab8b8903a07fe8afaafdda25aac55415a12a55d1bffa9f581abf959"},
+        {"path": "model.safetensors", "sha256": "1a55775f53449dac10a2bcbc312469fac40b96d53198c407081a831f81c98477"},
+        {"path": "modules.json", "sha256": "c6e29747481e8b5dd2b58401966aeac910de39092f90cda9a704b1545f902b04"},
+        {"path": "sentence_bert_config.json", "sha256": "948201d8329907aae938fa62f9ceeed53f5694dacc2b87b9f3b78b37ee986529"},
+        {"path": "sentencepiece.bpe.model", "sha256": "cfc8146abe2a0488e9e2a0c56de7952f7c11ab059eca145a0a727afce0db2865"},
+        {"path": "special_tokens_map.json", "sha256": "d05497f1da52c5e09554c0cd874037a083e1dc1b9cfd48034d1c717f1afc07a7"},
+        {"path": "tokenizer.json", "sha256": "0b44a9d7b51c3c62626640cda0e2c2f70fdacdc25bbbd68038369d14ebdf4c39"},
+        {"path": "tokenizer_config.json", "sha256": "a1d6bc8734a6f635dc158508bef000f8e2e5a759c7d92f984b2c86e5ff53425b"}
+      ],
+      "identity": {
+        "modelId": "intfloat/multilingual-e5-small",
+        "revision": "614241f622f53c4eeff9890bdc4f31cfecc418b3",
+        "artifactDigest": "961e0953328daf4df7916c1406751c5c63fe19e14a5c7e977d9f8b38964c5cf3",
+        "dimension": 384,
+        "normalization": "l2",
+        "pooling": "mean",
+        "queryPrefix": "query: ",
+        "documentPrefix": "passage: ",
+        "reduction": "none_native_384",
+        "precision": "float32",
+        "batchSize": 8
+      }
+    }
+  }
+}

@@ -11,6 +11,7 @@ from applications import embedding_benchmark as cli
 from eval.embedding_benchmark import (
     BenchmarkUnavailable,
     CaseHitMetric,
+    DatasetLockProfile,
     EvidenceRecallMetric,
     MacroRecallMetric,
     MicroRecallMetric,
@@ -77,7 +78,7 @@ def _write_dataset(path: Path) -> None:
     content_digest = cli.dataset_content_digest(document)
     document["lock"] = {
         "contentDigest": content_digest,
-        "profile": "sha256-rfc8785-v1",
+        "profile": "sha256-rfc8785-accidental-edit-detection-v1",
     }
     path.write_text(json.dumps(document), encoding="utf-8")
 
@@ -91,6 +92,17 @@ def test_loader_refuses_a_pilot_changed_after_locking(tmp_path: Path) -> None:
 
     with pytest.raises(BenchmarkUnavailable, match="lock is unavailable"):
         cli.load_dataset(path)
+
+
+def test_loader_returns_the_typed_accidental_edit_detection_profile(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "dataset.json"
+    _write_dataset(path)
+
+    dataset = cli.load_dataset(path)
+
+    assert dataset.lock_profile is DatasetLockProfile.ACCIDENTAL_EDIT_DETECTION
 
 
 @pytest.mark.parametrize(
@@ -129,6 +141,28 @@ def test_locked_document_accepted_by_schema_is_accepted_by_loader(
     dataset = cli.load_dataset(path)
 
     assert dataset.locked is True
+
+
+def test_loader_treats_the_supplied_schema_as_its_only_shape_authority(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    path = tmp_path / "dataset.json"
+    schema_path = tmp_path / "input.schema.json"
+    _write_dataset(path)
+    document = json.loads(path.read_text(encoding="utf-8"))
+    document["operatorAnnotation"] = "ignored by the benchmark domain loader"
+    unlocked = {key: value for key, value in document.items() if key != "lock"}
+    document["lock"]["contentDigest"] = cli.dataset_content_digest(unlocked)
+    path.write_text(json.dumps(document), encoding="utf-8")
+    schema = json.loads(cli.INPUT_SCHEMA_PATH.read_text(encoding="utf-8"))
+    schema["properties"]["operatorAnnotation"] = {"type": "string"}
+    schema_path.write_text(json.dumps(schema), encoding="utf-8")
+    monkeypatch.setattr(cli, "INPUT_SCHEMA_PATH", schema_path)
+
+    dataset = cli.load_dataset(path)
+
+    assert dataset.cases[0].case_ref == "case-alpha"
 
 
 def test_cli_run_writes_a_schema_valid_report_for_a_synthetic_set(

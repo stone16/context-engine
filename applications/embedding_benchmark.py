@@ -7,7 +7,6 @@ import importlib
 import json
 import sys
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
 from enum import StrEnum
 from hashlib import sha256
 from pathlib import Path
@@ -23,6 +22,7 @@ from eval.embedding_benchmark import (
     BenchmarkDocument,
     BenchmarkEmbeddingProvider,
     BenchmarkUnavailable,
+    DatasetLockProfile,
     ModelIdentity,
     RetrievalJudge,
     run_benchmark,
@@ -33,47 +33,17 @@ from eval.embedding_benchmark import (
 EVAL_ROOT = Path(__file__).resolve().parents[1] / "eval" / "embedding-benchmark"
 INPUT_SCHEMA_PATH = EVAL_ROOT / "input.schema.json"
 REPORT_SCHEMA_PATH = EVAL_ROOT / "report.schema.json"
-LOCK_PROFILE = "sha256-rfc8785-v1"
+MODEL_REGISTRY_PATH = EVAL_ROOT / "model-registry.json"
+MODEL_REGISTRY_SCHEMA_PATH = EVAL_ROOT / "model-registry.schema.json"
+LOCK_PROFILE = DatasetLockProfile.ACCIDENTAL_EDIT_DETECTION
 BENCHMARK_EXTRA = "context-engine[benchmark]"
+_IDENTITY_OVERRIDE_FILENAME = "benchmark-model-identity.json"
 
 
 class SupportedBackend(StrEnum):
     """Closed benchmark backend set; arbitrary import paths are not accepted."""
 
     SENTENCE_TRANSFORMERS = "sentence-transformers"
-
-
-@dataclass(frozen=True, slots=True)
-class _ExpectedModel:
-    model_id: str
-    revision: str
-    pooling: str
-    query_prefix: str
-    document_prefix: str
-    reduction: str
-
-
-_EXPECTED_MODELS = {
-    "primary": _ExpectedModel(
-        model_id="Qwen/Qwen3-Embedding-0.6B",
-        revision="97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3",
-        pooling="last_token",
-        query_prefix=(
-            "Instruct: Given a web search query, retrieve relevant passages that "
-            "answer the query\nQuery:"
-        ),
-        document_prefix="",
-        reduction="matryoshka_truncate_384",
-    ),
-    "baseline": _ExpectedModel(
-        model_id="intfloat/multilingual-e5-small",
-        revision="614241f622f53c4eeff9890bdc4f31cfecc418b3",
-        pooling="mean",
-        query_prefix="query: ",
-        document_prefix="passage: ",
-        reduction="none_native_384",
-    ),
-}
 
 
 class SentenceTransformersProvider:
@@ -135,58 +105,79 @@ def build_local_provider(
 ) -> BenchmarkEmbeddingProvider:
     """Construct one of the two known models through a closed backend enum."""
 
-    if type(backend) is not SupportedBackend or role not in _EXPECTED_MODELS:
+    if type(backend) is not SupportedBackend or role not in {"primary", "baseline"}:
         raise BenchmarkUnavailable("benchmark backend is unavailable")
-    expected = _EXPECTED_MODELS[role]
-    identity = _load_model_identity(model_dir, expected)
+    identity = load_registered_model_identity(
+        role=role,
+        backend=backend,
+        model_dir=model_dir,
+    )
     if backend is SupportedBackend.SENTENCE_TRANSFORMERS:
         return SentenceTransformersProvider(identity=identity, model_dir=model_dir)
     raise BenchmarkUnavailable("benchmark backend is unavailable")
 
 
-def _load_model_identity(model_dir: Path, expected: _ExpectedModel) -> ModelIdentity:
-    manifest_path = model_dir / "benchmark-model-identity.json"
+def load_registered_model_identity(
+    *,
+    role: str,
+    backend: SupportedBackend,
+    model_dir: Path,
+) -> ModelIdentity:
+    """Resolve identity only from the tracked registry and verify local bytes."""
+
+    override_path = model_dir / _IDENTITY_OVERRIDE_FILENAME
+    if override_path.exists():
+        raise BenchmarkUnavailable("local model identity override is unavailable")
     try:
-        manifest = _closed(
-            json.loads(manifest_path.read_text(encoding="utf-8")),
-            frozenset(
-                {
-                    "artifactDigest",
-                    "batchSize",
-                    "dimension",
-                    "documentPrefix",
-                    "modelId",
-                    "normalization",
-                    "pooling",
-                    "precision",
-                    "queryPrefix",
-                    "reduction",
-                    "revision",
-                }
-            ),
+        registry = json.loads(MODEL_REGISTRY_PATH.read_text(encoding="utf-8"))
+        registry_schema = json.loads(
+            MODEL_REGISTRY_SCHEMA_PATH.read_text(encoding="utf-8")
         )
-        identity = ModelIdentity(
-            model_id=cast(str, manifest["modelId"]),
-            revision=cast(str, manifest["revision"]),
-            artifact_digest=cast(str, manifest["artifactDigest"]),
-            dimension=cast(int, manifest["dimension"]),
-            normalization=cast(str, manifest["normalization"]),
-            pooling=cast(str, manifest["pooling"]),
-            query_prefix=cast(str, manifest["queryPrefix"]),
-            document_prefix=cast(str, manifest["documentPrefix"]),
-            reduction=cast(str, manifest["reduction"]),
-            precision=cast(str, manifest["precision"]),
-            batch_size=cast(int, manifest["batchSize"]),
-        )
+        try:
+            validate_json_schema_document(registry, registry_schema)
+        except BenchmarkUnavailable:
+            raise BenchmarkUnavailable("model identity is unresolved") from None
+        registry_root = cast(dict[str, object], registry)
         if (
-            identity.model_id != expected.model_id
-            or identity.revision != expected.revision
-            or identity.pooling != expected.pooling
-            or identity.query_prefix != expected.query_prefix
-            or identity.document_prefix != expected.document_prefix
-            or identity.reduction != expected.reduction
-            or identity.artifact_digest
-            != _model_artifact_digest(model_dir, excluded=manifest_path)
+            registry_root["schemaVersion"]
+            != "context-engine-embedding-model-registry-v1"
+        ):
+            raise BenchmarkUnavailable("model identity is unresolved")
+        models = cast(dict[str, object], registry_root["models"])
+        if (
+            role not in {"primary", "baseline"}
+            or frozenset(models).difference({"primary", "baseline"})
+            or role not in models
+        ):
+            raise BenchmarkUnavailable("model identity is unresolved")
+        model = cast(dict[str, object], models[role])
+        if model["backend"] != backend.value:
+            raise BenchmarkUnavailable("model identity is unresolved")
+        artifact_documents = cast(list[object], model["artifacts"])
+        expected_artifacts = tuple(
+            (
+                cast(str, cast(dict[str, object], value)["path"]),
+                cast(str, cast(dict[str, object], value)["sha256"]),
+            )
+            for value in artifact_documents
+        )
+        identity_document = cast(dict[str, object], model["identity"])
+        identity = ModelIdentity(
+            model_id=cast(str, identity_document["modelId"]),
+            revision=cast(str, identity_document["revision"]),
+            artifact_digest=cast(str, identity_document["artifactDigest"]),
+            dimension=cast(int, identity_document["dimension"]),
+            normalization=cast(str, identity_document["normalization"]),
+            pooling=cast(str, identity_document["pooling"]),
+            query_prefix=cast(str, identity_document["queryPrefix"]),
+            document_prefix=cast(str, identity_document["documentPrefix"]),
+            reduction=cast(str, identity_document["reduction"]),
+            precision=cast(str, identity_document["precision"]),
+            batch_size=cast(int, identity_document["batchSize"]),
+        )
+        if identity.artifact_digest != _model_artifact_digest(
+            model_dir,
+            expected_artifacts=expected_artifacts,
         ):
             raise BenchmarkUnavailable("model identity is unresolved")
         return identity
@@ -196,21 +187,34 @@ def _load_model_identity(model_dir: Path, expected: _ExpectedModel) -> ModelIden
         raise BenchmarkUnavailable("model identity is unresolved") from None
 
 
-def _model_artifact_digest(model_dir: Path, *, excluded: Path) -> str:
-    digest = sha256()
+def _model_artifact_digest(
+    model_dir: Path,
+    *,
+    expected_artifacts: tuple[tuple[str, str], ...],
+) -> str:
     files = tuple(sorted(path for path in model_dir.rglob("*") if path.is_file()))
-    if not files or any(path.is_symlink() for path in files):
+    if (
+        not files
+        or any(path.is_symlink() for path in files)
+        or any(not path.resolve().is_relative_to(model_dir.resolve()) for path in files)
+    ):
         raise BenchmarkUnavailable("model identity is unresolved")
-    for path in files:
-        if path == excluded:
-            continue
-        relative = path.relative_to(model_dir).as_posix().encode("utf-8")
-        digest.update(len(relative).to_bytes(8, "big"))
-        digest.update(relative)
+    actual_paths = tuple(path.relative_to(model_dir).as_posix() for path in files)
+    if actual_paths != tuple(path for path, _digest in expected_artifacts):
+        raise BenchmarkUnavailable("model identity is unresolved")
+    manifest: list[dict[str, str]] = []
+    for path, (relative_path, expected_digest) in zip(
+        files, expected_artifacts, strict=True
+    ):
+        file_digest = sha256()
         with path.open("rb") as handle:
             for block in iter(lambda: handle.read(1024 * 1024), b""):
-                digest.update(block)
-    return digest.hexdigest()
+                file_digest.update(block)
+        actual_digest = file_digest.hexdigest()
+        if actual_digest != expected_digest:
+            raise BenchmarkUnavailable("model identity is unresolved")
+        manifest.append({"path": relative_path, "sha256": actual_digest})
+    return sha256(rfc8785.dumps(manifest)).hexdigest()
 
 
 def load_retrieval_judge() -> RetrievalJudge:
@@ -236,14 +240,11 @@ def load_dataset(path: Path) -> BenchmarkDataset:
             raise BenchmarkUnavailable(
                 "benchmark input schema is unavailable"
             ) from None
-        root = _closed(
-            raw_root,
-            frozenset({"cases", "documents", "lock", "schemaVersion"}),
-        )
-        lock = _closed(root["lock"], frozenset({"contentDigest", "profile"}))
+        root = cast(dict[str, object], raw_root)
+        lock = cast(dict[str, object], root["lock"])
         unlocked = {key: value for key, value in root.items() if key != "lock"}
         if (
-            lock["profile"] != LOCK_PROFILE
+            lock["profile"] != LOCK_PROFILE.value
             or lock["contentDigest"] != dataset_content_digest(unlocked)
         ):
             raise BenchmarkUnavailable("benchmark dataset lock is unavailable")
@@ -257,7 +258,7 @@ def load_dataset(path: Path) -> BenchmarkDataset:
                 text=_text(document["text"]),
             )
             for value in raw_documents
-            for document in [_closed(value, frozenset({"documentRef", "text"}))]
+            for document in [cast(dict[str, object], value)]
         )
         cases = tuple(
             BenchmarkCase(
@@ -267,16 +268,13 @@ def load_dataset(path: Path) -> BenchmarkDataset:
                 slice_name=_text(case["slice"]),
             )
             for value in raw_cases
-            for case in [
-                _closed(
-                    value,
-                    frozenset(
-                        {"caseRef", "expectedDocumentRefs", "query", "slice"}
-                    ),
-                )
-            ]
+            for case in [cast(dict[str, object], value)]
         )
-        return BenchmarkDataset(documents=documents, cases=cases)
+        return BenchmarkDataset(
+            documents=documents,
+            cases=cases,
+            lock_profile=LOCK_PROFILE,
+        )
     except BenchmarkUnavailable:
         raise
     except (OSError, UnicodeDecodeError, json.JSONDecodeError, KeyError, TypeError):
@@ -290,14 +288,6 @@ def dataset_content_digest(document: object) -> str:
         return sha256(rfc8785.dumps(cast(Any, document))).hexdigest()
     except (TypeError, ValueError, OverflowError):
         raise BenchmarkUnavailable("benchmark dataset lock is unavailable") from None
-
-
-def _closed(value: object, fields: frozenset[str]) -> dict[str, object]:
-    if type(value) is not dict or frozenset(value) != fields:
-        raise BenchmarkUnavailable("benchmark dataset is unavailable")
-    if any(type(key) is not str for key in value):
-        raise BenchmarkUnavailable("benchmark dataset is unavailable")
-    return value
 
 
 def _text(value: object) -> str:

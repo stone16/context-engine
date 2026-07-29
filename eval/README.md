@@ -50,19 +50,31 @@ the exact 384-dimensional primary and baseline model identities required by
 issue #128 and never composes an `EmbeddingProvider` into Supply or Runtime.
 The main environment deliberately contains no model framework. The closed
 `sentence-transformers` backend is installed explicitly with
-`uv sync --extra benchmark`; each local pinned model directory supplies
-`benchmark-model-identity.json` with its fully resolved repository id,
-immutable revision, artifact digest, dimension, normalization, pooling, prompt
-prefixes, reduction, precision, and batching. The runner verifies the digest
-over the local model artifacts before it embeds anything.
+`uv sync --extra benchmark`. Each local pinned model directory is the exact
+complete `SentenceTransformer` snapshot declared by the tracked registry: its
+weight, model/config, tokenizer, modules, and pooling files must match the
+registry's closed path-and-SHA-256 artifact list, with no missing or extra
+files. The tracked
+`embedding-benchmark/model-registry.json`, not run input or a local manifest,
+owns the expected repository id, immutable revision, artifact digest,
+dimension, normalization, pooling, prompt prefixes, reduction, precision, and
+batching. Unknown models and local identity overrides are refused, and the
+runner hashes every on-disk artifact against the tracked expected digests before
+it embeds anything.
 
 The input follows `embedding-benchmark/input.schema.json`; the output follows
 `embedding-benchmark/report.schema.json` and must be written below the ignored
-`.context-engine/` directory. The input includes an RFC 8785/SHA-256 content
-lock and any post-lock edit is refused. Retrieval scores are not implemented by
-this runner: it imports the one fixed judge factory owned by issue #129, which
-is solely responsible for case hit, macro/micro Evidence recall, and slice
-breakdowns.
+`.context-engine/` directory. The input includes the typed RFC 8785/SHA-256
+`sha256-rfc8785-accidental-edit-detection-v1` lock. It detects accidental edits,
+truncation, and re-serialization performed without relocking, but it is not a
+defense against deliberate forgery: the M1 threat model is one trusted local
+operator who can recompute a colocated digest. If the boundary changes to an
+untrusted caller or remote runner, signing returns as its own ADR. Retrieval
+scores are not implemented by this runner: it imports the one fixed judge
+factory owned by issue #129, which is solely responsible for case hit,
+macro/micro Evidence recall, and slice breakdowns. Until #129 lands, the real
+CLI deliberately fails closed with `retrieval judge is unavailable` rather
+than degrading to a second metric implementation.
 
 The maintainer corpus is private and pending delivery to a durable,
 maintainer-controlled location outside disposable Git worktrees. Once available,
@@ -85,3 +97,7 @@ no worse on all three and strictly better on at least one. Exact equality is a
 tie; mixed wins are `inconclusive`. Per-slice results remain diagnostic and no
 weighted composite or tiebreak manufactures a winner. A losing or inconclusive
 primary is a valid benchmark outcome, not a runner error.
+
+The issue remains open while the corpus is pending. A real-model run, frozen
+numeric result, actual model verdict, and measured comparison to the standing
+3.8% twin baseline are not complete until that durable corpus arrives.

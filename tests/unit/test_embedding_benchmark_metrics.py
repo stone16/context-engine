@@ -15,6 +15,7 @@ from eval.embedding_benchmark import (
     EvidenceRecallMetric,
     MacroRecallMetric,
     MicroRecallMetric,
+    ModelComparisonOutcome,
     ModelIdentity,
     RetrievalJudgeCase,
     RetrievalMetrics,
@@ -174,23 +175,27 @@ def test_primary_loss_is_recorded_as_a_valid_result() -> None:
 @pytest.mark.parametrize(
     ("primary", "baseline", "expected"),
     (
-        ((0.9, 0.8, 0.7), (0.8, 0.7, 0.6), "win"),
-        ((0.8, 0.7, 0.6), (0.9, 0.8, 0.7), "lose"),
-        ((0.8, 0.8, 0.8), (0.8, 0.8, 0.8), "tie"),
-        ((0.9, 0.6, 0.8), (0.8, 0.7, 0.8), "inconclusive"),
+        ((0.9, 0.8, 0.7), (0.8, 0.7, 0.6), ModelComparisonOutcome.WIN),
+        ((0.8, 0.7, 0.6), (0.9, 0.8, 0.7), ModelComparisonOutcome.LOSE),
+        ((0.8, 0.8, 0.8), (0.8, 0.8, 0.8), ModelComparisonOutcome.TIE),
+        (
+            (0.9, 0.6, 0.8),
+            (0.8, 0.7, 0.8),
+            ModelComparisonOutcome.INCONCLUSIVE,
+        ),
     ),
 )
 def test_model_verdict_uses_pareto_dominance_across_all_retrieval_metrics(
     primary: tuple[float, float, float],
     baseline: tuple[float, float, float],
-    expected: str,
+    expected: ModelComparisonOutcome,
 ) -> None:
     verdict = compare_model_metrics(
         _retrieval_metrics(*primary),
         _retrieval_metrics(*baseline),
     )
 
-    assert verdict.outcome == expected
+    assert verdict.outcome is expected
     assert verdict.deltas == {
         "caseHit": pytest.approx(primary[0] - baseline[0]),
         "macroEvidenceRecall": pytest.approx(primary[1] - baseline[1]),

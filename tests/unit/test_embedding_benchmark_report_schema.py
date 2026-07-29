@@ -86,6 +86,29 @@ def _report() -> dict[str, object]:
     }
 
 
+def _set_model_metric_values(
+    report: dict[str, Any],
+    *,
+    primary: tuple[float, float, float],
+    baseline: tuple[float, float, float],
+    declared: str,
+) -> None:
+    for role, values in (("primary", primary), ("baseline", baseline)):
+        metrics = report["models"][role]["metrics"]
+        metrics["caseHit"]["value"] = values[0]
+        metrics["evidenceRecall"]["macro"]["value"] = values[1]
+        metrics["evidenceRecall"]["micro"]["value"] = values[2]
+    report["comparison"] = {
+        "metricDeltas": {
+            "caseHit": primary[0] - baseline[0],
+            "macroEvidenceRecall": primary[1] - baseline[1],
+            "microEvidenceRecall": primary[2] - baseline[2],
+        },
+        "primaryAgainstModelBaseline": declared,
+        "primaryAgainstStandingTwinBaseline": (
+            "win" if primary[0] > 0.038 else "lose"
+        ),
+    }
 def test_report_validates_against_the_tracked_closed_schema() -> None:
     schema = json.loads(REPORT_SCHEMA.read_text(encoding="utf-8"))
 
@@ -146,4 +169,73 @@ def test_report_refuses_a_missing_identity_metric_or_cost_field(
     del parent[remove[-1]]
 
     with pytest.raises(BenchmarkUnavailable, match="report schema"):
+        validate_report_document(report, schema_path=REPORT_SCHEMA)
+
+
+@pytest.mark.parametrize(
+    ("primary", "baseline"),
+    (
+        ((0.0, 0.0, 0.0), (1.0, 1.0, 1.0)),
+        ((1.0, 0.0, 0.5), (0.0, 1.0, 0.5)),
+    ),
+)
+def test_report_refuses_a_claimed_win_not_derived_from_recorded_metrics(
+    primary: tuple[float, float, float],
+    baseline: tuple[float, float, float],
+) -> None:
+    report: dict[str, Any] = _report()
+    _set_model_metric_values(
+        report,
+        primary=primary,
+        baseline=baseline,
+        declared="win",
+    )
+
+    with pytest.raises(BenchmarkUnavailable, match="report verdict"):
+        validate_report_document(report, schema_path=REPORT_SCHEMA)
+
+
+@pytest.mark.parametrize(
+    ("primary", "baseline", "declared"),
+    (
+        ((1.0, 1.0, 1.0), (0.0, 0.5, 1.0), "win"),
+        ((0.0, 0.5, 1.0), (1.0, 1.0, 1.0), "lose"),
+        ((0.5, 0.5, 0.5), (0.5, 0.5, 0.5), "tie"),
+        ((1.0, 0.0, 0.5), (0.0, 1.0, 0.5), "inconclusive"),
+    ),
+)
+def test_report_accepts_each_self_consistent_typed_pareto_outcome(
+    primary: tuple[float, float, float],
+    baseline: tuple[float, float, float],
+    declared: str,
+) -> None:
+    report: dict[str, Any] = _report()
+    _set_model_metric_values(
+        report,
+        primary=primary,
+        baseline=baseline,
+        declared=declared,
+    )
+
+    validate_report_document(report, schema_path=REPORT_SCHEMA)
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    (
+        lambda report: report["comparison"]["metricDeltas"].update(
+            {"microEvidenceRecall": 0.25}
+        ),
+        lambda report: report["comparison"].update(
+            {"primaryAgainstStandingTwinBaseline": "lose"}
+        ),
+    ),
+)
+def test_report_refuses_each_derived_comparison_field_when_fabricated(
+    mutate: Any,
+) -> None:
+    report: dict[str, Any] = _report()
+    mutate(report)
+
+    with pytest.raises(BenchmarkUnavailable, match="report verdict"):
         validate_report_document(report, schema_path=REPORT_SCHEMA)

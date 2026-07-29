@@ -29,7 +29,7 @@
       "additionalProperties": false,
       "required": ["primaryAgainstModelBaseline", "primaryAgainstStandingTwinBaseline", "metricDeltas"],
       "properties": {
-        "primaryAgainstModelBaseline": {"enum": ["win", "tie", "lose", "inconclusive"]},
+        "primaryAgainstModelBaseline": {"$ref": "#/$defs/modelComparisonOutcome"},
         "primaryAgainstStandingTwinBaseline": {"enum": ["win", "tie", "lose"]},
         "metricDeltas": {
           "type": "object",
@@ -46,6 +46,10 @@
   },
   "$defs": {
     "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "modelComparisonOutcome": {
+      "description": "Closed first-class Pareto outcome. Validation recomputes this value from the recorded primary and baseline case-hit, macro-recall, and micro-recall metrics and refuses any mismatch.",
+      "enum": ["win", "lose", "tie", "inconclusive"]
+    },
     "run": {
       "type": "object",
       "additionalProperties": false,

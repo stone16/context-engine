@@ -2,6 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://context-engine.invalid/eval/embedding-benchmark/input.schema.json",
   "title": "ContextEngine offline embedding benchmark input v1",
+  "description": "M1 assumes one trusted local operator. The colocated digest detects accidental edits, truncation, or re-serialization performed without relocking; it is not a defense against deliberate forgery because an operator can recompute the digest. If callers or runners become remote or untrusted, signing requires its own ADR.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schemaVersion", "lock", "documents", "cases"],
@@ -12,7 +13,10 @@
       "additionalProperties": false,
       "required": ["profile", "contentDigest"],
       "properties": {
-        "profile": {"const": "sha256-rfc8785-v1"},
+        "profile": {
+          "description": "Typed accidental-edit detector for one trusted local operator; not a tamper-proof or anti-forgery signature.",
+          "const": "sha256-rfc8785-accidental-edit-detection-v1"
+        },
         "contentDigest": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
       }
     },

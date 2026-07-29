@@ -7,13 +7,16 @@ import math
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
+from enum import StrEnum
 from hashlib import sha256
 from pathlib import Path
 from typing import Any, Final, Protocol, cast
 
 import rfc8785
 
-EMBEDDING_DIMENSION: Final = 384
+from engine.supply.embeddings import CONTEXT_FRAGMENT_EMBEDDING_DIMENSION
+
+EMBEDDING_DIMENSION: Final = CONTEXT_FRAGMENT_EMBEDDING_DIMENSION
 REPORT_SCHEMA_VERSION: Final = "context-engine-embedding-benchmark-report-v1"
 _PINNED_REVISION = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 _SHA256_DIGEST = re.compile(r"^[0-9a-f]{64}$")
@@ -23,6 +26,14 @@ _REDUCTIONS: Final = frozenset({"none_native_384", "matryoshka_truncate_384"})
 
 class BenchmarkUnavailable(RuntimeError):
     """The benchmark input, identity, provider, judge, or output is unavailable."""
+
+
+class DatasetLockProfile(StrEnum):
+    """Typed M1 lock that detects accidental edits by one trusted operator."""
+
+    ACCIDENTAL_EDIT_DETECTION = (
+        "sha256-rfc8785-accidental-edit-detection-v1"
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,6 +137,7 @@ class BenchmarkDataset:
     documents: tuple[BenchmarkDocument, ...] = field(repr=False)
     cases: tuple[BenchmarkCase, ...] = field(repr=False)
     locked: bool = True
+    lock_profile: DatasetLockProfile = DatasetLockProfile.ACCIDENTAL_EDIT_DETECTION
     digest: str = field(init=False)
 
     def __post_init__(self) -> None:
@@ -138,6 +150,7 @@ class BenchmarkDataset:
             or any(type(value) is not BenchmarkCase for value in self.cases)
             or type(self.locked) is not bool
             or not self.locked
+            or self.lock_profile is not DatasetLockProfile.ACCIDENTAL_EDIT_DETECTION
         ):
             raise BenchmarkUnavailable("benchmark dataset is unavailable")
         document_refs = tuple(value.document_ref for value in self.documents)
@@ -286,15 +299,24 @@ class RetrievalMetrics:
             raise BenchmarkUnavailable("retrieval judge is unavailable")
 
 
+class ModelComparisonOutcome(StrEnum):
+    """Closed Pareto outcome; mixed metric wins stay first-class."""
+
+    WIN = "win"
+    LOSE = "lose"
+    TIE = "tie"
+    INCONCLUSIVE = "inconclusive"
+
+
 @dataclass(frozen=True, slots=True)
 class ModelComparison:
     """Typed Pareto verdict and primary-minus-baseline metric deltas."""
 
-    outcome: str
+    outcome: ModelComparisonOutcome
     deltas: Mapping[str, float]
 
     def __post_init__(self) -> None:
-        if self.outcome not in {"win", "tie", "lose", "inconclusive"}:
+        if type(self.outcome) is not ModelComparisonOutcome:
             raise BenchmarkUnavailable("model comparison is unavailable")
         if frozenset(self.deltas) != frozenset(
             {"caseHit", "macroEvidenceRecall", "microEvidenceRecall"}
@@ -302,7 +324,7 @@ class ModelComparison:
             raise BenchmarkUnavailable("model comparison is unavailable")
 
     def public_document(self) -> dict[str, object]:
-        return {"deltas": dict(self.deltas), "outcome": self.outcome}
+        return {"deltas": dict(self.deltas), "outcome": self.outcome.value}
 
 
 class RetrievalJudge(Protocol):
@@ -355,7 +377,7 @@ def run_benchmark(
     return {
         "comparison": {
             "metricDeltas": dict(model_comparison.deltas),
-            "primaryAgainstModelBaseline": model_comparison.outcome,
+            "primaryAgainstModelBaseline": model_comparison.outcome.value,
             "primaryAgainstStandingTwinBaseline": _comparison(primary_hit, 0.038),
         },
         "models": {
@@ -535,20 +557,7 @@ def compare_model_metrics(
         baseline.evidence_recall.macro.value,
         baseline.evidence_recall.micro.value,
     )
-    if primary_values == baseline_values:
-        outcome = "tie"
-    elif all(
-        left >= right
-        for left, right in zip(primary_values, baseline_values, strict=True)
-    ):
-        outcome = "win"
-    elif all(
-        left <= right
-        for left, right in zip(primary_values, baseline_values, strict=True)
-    ):
-        outcome = "lose"
-    else:
-        outcome = "inconclusive"
+    outcome = _pareto_outcome(primary_values, baseline_values)
     return ModelComparison(
         outcome=outcome,
         deltas={
@@ -557,6 +566,25 @@ def compare_model_metrics(
             "microEvidenceRecall": primary_values[2] - baseline_values[2],
         },
     )
+
+
+def _pareto_outcome(
+    primary_values: tuple[float, float, float],
+    baseline_values: tuple[float, float, float],
+) -> ModelComparisonOutcome:
+    if primary_values == baseline_values:
+        return ModelComparisonOutcome.TIE
+    if all(
+        left >= right
+        for left, right in zip(primary_values, baseline_values, strict=True)
+    ):
+        return ModelComparisonOutcome.WIN
+    if all(
+        left <= right
+        for left, right in zip(primary_values, baseline_values, strict=True)
+    ):
+        return ModelComparisonOutcome.LOSE
+    return ModelComparisonOutcome.INCONCLUSIVE
 
 
 def _comparison(left: float, right: float) -> str:
@@ -655,8 +683,29 @@ def _validate_report(document: object, schema: object) -> None:
     )
     _require_ratio(standing["caseHitValue"])
     models = _closed_object(report["models"], frozenset({"baseline", "primary"}))
-    _validate_model_report(models["primary"])
-    _validate_model_report(models["baseline"])
+    primary_values = _validate_model_report(models["primary"])
+    baseline_values = _validate_model_report(models["baseline"])
+    try:
+        declared_outcome = ModelComparisonOutcome(
+            cast(str, comparison["primaryAgainstModelBaseline"])
+        )
+    except ValueError:
+        raise BenchmarkUnavailable("benchmark report verdict is unavailable") from None
+    expected_outcome = _pareto_outcome(primary_values, baseline_values)
+    expected_deltas = {
+        "caseHit": primary_values[0] - baseline_values[0],
+        "macroEvidenceRecall": primary_values[1] - baseline_values[1],
+        "microEvidenceRecall": primary_values[2] - baseline_values[2],
+    }
+    expected_standing = _comparison(
+        primary_values[0], cast(float, standing["caseHitValue"])
+    )
+    if (
+        declared_outcome is not expected_outcome
+        or deltas != expected_deltas
+        or comparison["primaryAgainstStandingTwinBaseline"] != expected_standing
+    ):
+        raise BenchmarkUnavailable("benchmark report verdict is unavailable")
 
 
 def validate_json_schema_document(value: object, schema: object) -> None:
@@ -774,7 +823,7 @@ def _canonical_json(value: object) -> bytes:
         raise BenchmarkUnavailable("benchmark report schema is unavailable") from None
 
 
-def _validate_model_report(value: object) -> None:
+def _validate_model_report(value: object) -> tuple[float, float, float]:
     report = _closed_object(value, frozenset({"identity", "metrics", "timing"}))
     identity = _closed_object(
         report["identity"],
@@ -807,7 +856,7 @@ def _validate_model_report(value: object) -> None:
         precision=cast(str, identity["precision"]),
         batch_size=cast(int, identity["batchSize"]),
     )
-    _validate_metrics(report["metrics"])
+    metric_values = _validate_metrics(report["metrics"])
     timing = _closed_object(
         report["timing"],
         frozenset(
@@ -818,9 +867,10 @@ def _validate_model_report(value: object) -> None:
         raise BenchmarkUnavailable("benchmark report schema is unavailable")
     _require_nonnegative_number(timing["perDocumentEmbedMilliseconds"])
     _require_nonnegative_number(timing["wallClockMilliseconds"])
+    return metric_values
 
 
-def _validate_metrics(value: object) -> None:
+def _validate_metrics(value: object) -> tuple[float, float, float]:
     metrics = _closed_object(
         value,
         frozenset({"caseHit", "evidenceRecall", "perSlice"}),
@@ -837,6 +887,19 @@ def _validate_metrics(value: object) -> None:
         )
         _validate_case_hit(item["caseHit"])
         _validate_recall(item["evidenceRecall"])
+    case_hit = _closed_object(
+        metrics["caseHit"], frozenset({"hits", "totalCases", "value"})
+    )
+    recall = _closed_object(metrics["evidenceRecall"], frozenset({"macro", "micro"}))
+    macro = _closed_object(recall["macro"], frozenset({"value"}))
+    micro = _closed_object(
+        recall["micro"], frozenset({"hits", "totalExpected", "value"})
+    )
+    return (
+        float(cast(int | float, case_hit["value"])),
+        float(cast(int | float, macro["value"])),
+        float(cast(int | float, micro["value"])),
+    )
 
 
 def _validate_case_hit(value: object) -> None:
