@@ -203,6 +203,33 @@ def test_model_verdict_uses_pareto_dominance_across_all_retrieval_metrics(
     }
 
 
+@pytest.mark.parametrize(
+    ("primary", "baseline", "expected"),
+    (
+        ((0.0, 0.5, 0.5), (0.0, 0.5, 0.5), ModelComparisonOutcome.TIE),
+        (
+            (1e-13, 0.5, 0.5),
+            (0.0, 0.5, 0.5),
+            ModelComparisonOutcome.TIE,
+        ),
+        (
+            (2e-12, 0.5, 0.5),
+            (0.0, 0.5, 0.5),
+            ModelComparisonOutcome.WIN,
+        ),
+    ),
+)
+def test_pareto_outcome_uses_the_same_tolerance_as_metric_consistency(
+    primary: tuple[float, float, float],
+    baseline: tuple[float, float, float],
+    expected: ModelComparisonOutcome,
+) -> None:
+    assert compare_model_metrics(
+        _retrieval_metrics(*primary),
+        _retrieval_metrics(*baseline),
+    ).outcome is expected
+
+
 def _retrieval_metrics(
     case_hit: float,
     macro: float,

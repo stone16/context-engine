@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import importlib
 import json
+import os
+import stat
 from pathlib import Path
 from typing import Any
 
@@ -350,4 +352,55 @@ def test_loader_refuses_pathological_json_as_a_typed_outcome(
     path.write_text(invalid_json, encoding="utf-8")
 
     with pytest.raises(BenchmarkUnavailable):
+        cli.load_dataset(path)
+
+
+def test_loader_refuses_duplicate_json_keys(tmp_path: Path) -> None:
+    path = tmp_path / "dataset.json"
+    path.write_text('{"duplicate": 1, "duplicate": 2}', encoding="utf-8")
+
+    with pytest.raises(BenchmarkUnavailable, match="JSON is unavailable"):
+        cli.load_dataset(path)
+
+
+def test_bounded_loader_refuses_a_fifo_before_reading(tmp_path: Path) -> None:
+    path = tmp_path / "dataset.pipe"
+    os.mkfifo(path)
+
+    with pytest.raises(BenchmarkUnavailable, match="JSON is unavailable"):
+        cli.load_dataset(path)
+
+
+def test_bounded_loader_refuses_a_directory(tmp_path: Path) -> None:
+    with pytest.raises(BenchmarkUnavailable, match="JSON is unavailable"):
+        cli.load_dataset(tmp_path)
+
+
+def test_bounded_loader_refuses_a_device_node() -> None:
+    null_device = Path(os.devnull)
+    assert stat.S_ISCHR(null_device.stat().st_mode)
+
+    with pytest.raises(BenchmarkUnavailable, match="JSON is unavailable"):
+        cli.load_dataset(null_device)
+
+
+def test_bounded_loader_refuses_a_dangling_symlink(tmp_path: Path) -> None:
+    path = tmp_path / "dangling.json"
+    path.symlink_to(tmp_path / "missing.json")
+
+    with pytest.raises(BenchmarkUnavailable, match="JSON is unavailable"):
+        cli.load_dataset(path)
+
+
+def test_bounded_loader_refuses_a_symlink_outside_its_expected_root(
+    tmp_path: Path,
+) -> None:
+    expected_root = tmp_path / "expected"
+    expected_root.mkdir()
+    outside = tmp_path / "outside.json"
+    outside.write_text("{}", encoding="utf-8")
+    path = expected_root / "dataset.json"
+    path.symlink_to(outside)
+
+    with pytest.raises(BenchmarkUnavailable, match="JSON is unavailable"):
         cli.load_dataset(path)

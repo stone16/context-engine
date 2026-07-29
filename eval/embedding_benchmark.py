@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import re
+import stat
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -604,9 +606,13 @@ def compare_model_metrics(
     return ModelComparison(
         outcome=outcome,
         deltas={
-            "caseHit": primary_values[0] - baseline_values[0],
-            "macroEvidenceRecall": primary_values[1] - baseline_values[1],
-            "microEvidenceRecall": primary_values[2] - baseline_values[2],
+            "caseHit": _metric_delta(primary_values[0], baseline_values[0]),
+            "macroEvidenceRecall": _metric_delta(
+                primary_values[1], baseline_values[1]
+            ),
+            "microEvidenceRecall": _metric_delta(
+                primary_values[2], baseline_values[2]
+            ),
         },
     )
 
@@ -615,25 +621,24 @@ def _pareto_outcome(
     primary_values: tuple[float, float, float],
     baseline_values: tuple[float, float, float],
 ) -> ModelComparisonOutcome:
-    if primary_values == baseline_values:
+    comparisons = tuple(
+        _compare_metric(left, right)
+        for left, right in zip(primary_values, baseline_values, strict=True)
+    )
+    if all(comparison == 0 for comparison in comparisons):
         return ModelComparisonOutcome.TIE
-    if all(
-        left >= right
-        for left, right in zip(primary_values, baseline_values, strict=True)
-    ):
+    if all(comparison >= 0 for comparison in comparisons):
         return ModelComparisonOutcome.WIN
-    if all(
-        left <= right
-        for left, right in zip(primary_values, baseline_values, strict=True)
-    ):
+    if all(comparison <= 0 for comparison in comparisons):
         return ModelComparisonOutcome.LOSE
     return ModelComparisonOutcome.INCONCLUSIVE
 
 
 def _comparison(left: float, right: float) -> str:
-    if left > right:
+    comparison = _compare_metric(left, right)
+    if comparison > 0:
         return "win"
-    if left < right:
+    if comparison < 0:
         return "lose"
     return "tie"
 
@@ -694,16 +699,31 @@ def load_bounded_json(path: Path) -> object:
     """Parse a bounded JSON document and reject hostile numeric extensions."""
 
     try:
-        if path.stat().st_size > _MAX_JSON_BYTES:
+        path_metadata = path.lstat()
+        if not stat.S_ISREG(path_metadata.st_mode):
             raise BenchmarkUnavailable("benchmark JSON is unavailable")
-        raw = path.read_text(encoding="utf-8")
-        if len(raw.encode("utf-8")) > _MAX_JSON_BYTES:
-            raise BenchmarkUnavailable("benchmark JSON is unavailable")
+        flags = os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(path, flags)
+        try:
+            metadata = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or metadata.st_size > _MAX_JSON_BYTES
+            ):
+                raise BenchmarkUnavailable("benchmark JSON is unavailable")
+            with os.fdopen(descriptor, "rb", closefd=False) as stream:
+                encoded = stream.read(_MAX_JSON_BYTES + 1)
+            if len(encoded) > _MAX_JSON_BYTES:
+                raise BenchmarkUnavailable("benchmark JSON is unavailable")
+            raw = encoded.decode("utf-8")
+        finally:
+            os.close(descriptor)
         value = json.loads(
             raw,
             parse_int=_parse_json_integer,
             parse_float=_parse_json_float,
             parse_constant=_reject_json_constant,
+            object_pairs_hook=_reject_duplicate_json_keys,
         )
         _validate_bounded_json_value(value)
         return value
@@ -737,6 +757,17 @@ def _parse_json_float(raw: str) -> float:
 
 def _reject_json_constant(_raw: str) -> None:
     raise BenchmarkUnavailable("benchmark JSON is unavailable")
+
+
+def _reject_duplicate_json_keys(
+    pairs: list[tuple[str, object]],
+) -> dict[str, object]:
+    document: dict[str, object] = {}
+    for key, value in pairs:
+        if key in document:
+            raise BenchmarkUnavailable("benchmark JSON is unavailable")
+        document[key] = value
+    return document
 
 
 def _validate_bounded_json_value(value: object) -> None:
@@ -831,9 +862,13 @@ def _validate_report(document: object, schema: object) -> None:
         raise BenchmarkUnavailable("benchmark report verdict is unavailable") from None
     expected_outcome = _pareto_outcome(primary_values, baseline_values)
     expected_deltas = {
-        "caseHit": primary_values[0] - baseline_values[0],
-        "macroEvidenceRecall": primary_values[1] - baseline_values[1],
-        "microEvidenceRecall": primary_values[2] - baseline_values[2],
+        "caseHit": _metric_delta(primary_values[0], baseline_values[0]),
+        "macroEvidenceRecall": _metric_delta(
+            primary_values[1], baseline_values[1]
+        ),
+        "microEvidenceRecall": _metric_delta(
+            primary_values[2], baseline_values[2]
+        ),
     }
     expected_standing = _comparison(
         primary_values[0], cast(float, standing["caseHitValue"])
@@ -1118,7 +1153,17 @@ def _validate_recall(value: object) -> tuple[float, int, int, float]:
 
 
 def _same_metric(left: float, right: float) -> bool:
-    return math.isclose(left, right, rel_tol=0.0, abs_tol=_METRIC_TOLERANCE)
+    return _compare_metric(left, right) == 0
+
+
+def _compare_metric(left: float, right: float) -> int:
+    if math.isclose(left, right, rel_tol=0.0, abs_tol=_METRIC_TOLERANCE):
+        return 0
+    return 1 if left > right else -1
+
+
+def _metric_delta(left: float, right: float) -> float:
+    return 0.0 if _same_metric(left, right) else left - right
 
 
 def _object(value: object) -> dict[str, object]:

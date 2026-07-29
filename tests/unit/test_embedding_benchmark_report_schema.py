@@ -364,3 +364,42 @@ def test_report_refuses_cross_model_population_contradictions(
 
     with pytest.raises(BenchmarkUnavailable, match="report schema"):
         validate_report_document(report, schema_path=REPORT_SCHEMA)
+
+
+def test_report_consistency_and_pareto_share_one_numeric_tolerance() -> None:
+    report: dict[str, Any] = _report()
+    primary_metrics = report["models"]["primary"]["metrics"]
+    primary_metrics["caseHit"].update(
+        {"hits": 0, "totalCases": 2, "value": 1e-13}
+    )
+    primary_metrics["perSlice"]["single_doc"]["caseHit"].update(
+        {"hits": 0, "totalCases": 2, "value": 1e-13}
+    )
+    baseline_metrics = report["models"]["baseline"]["metrics"]
+    baseline_metrics["caseHit"].update(
+        {"hits": 0, "totalCases": 2, "value": 0.0}
+    )
+    baseline_metrics["perSlice"]["single_doc"]["caseHit"].update(
+        {"hits": 0, "totalCases": 2, "value": 0.0}
+    )
+    report["comparison"]["metricDeltas"]["caseHit"] = 0.0
+    report["comparison"]["primaryAgainstModelBaseline"] = "tie"
+    report["comparison"]["primaryAgainstStandingTwinBaseline"] = "lose"
+
+    validate_report_document(report, schema_path=REPORT_SCHEMA)
+
+
+def test_report_refuses_count_value_difference_outside_shared_tolerance() -> None:
+    report: dict[str, Any] = _report()
+    primary_metrics = report["models"]["primary"]["metrics"]
+    primary_metrics["caseHit"].update(
+        {"hits": 0, "totalCases": 2, "value": 2e-12}
+    )
+    primary_metrics["perSlice"]["single_doc"]["caseHit"].update(
+        {"hits": 0, "totalCases": 2, "value": 2e-12}
+    )
+    report["comparison"]["metricDeltas"]["caseHit"] = 2e-12
+    report["comparison"]["primaryAgainstModelBaseline"] = "win"
+
+    with pytest.raises(BenchmarkUnavailable, match="report schema"):
+        validate_report_document(report, schema_path=REPORT_SCHEMA)
