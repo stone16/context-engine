@@ -78,6 +78,15 @@ def _function_definitions(
                 collect(node.body, qualified)
             elif isinstance(node, ast.ClassDef):
                 collect(node.body, f"{prefix}.{node.name}")
+            else:
+                collect(
+                    [
+                        child
+                        for child in ast.iter_child_nodes(node)
+                        if isinstance(child, ast.stmt)
+                    ],
+                    prefix,
+                )
 
     collect(tree.body, module)
     return definitions
@@ -89,7 +98,8 @@ def _resolve_import_module(module: str, imported: str | None, level: int) -> str
     package = module.rsplit(".", maxsplit=1)[0]
     parts = package.split(".") if package else []
     retained = parts[: max(0, len(parts) - level + 1)]
-    return ".".join((*retained, *((imported or "").split("."))))
+    imported_parts = imported.split(".") if imported else []
+    return ".".join((*retained, *imported_parts))
 
 
 def _imports(nodes: Iterable[ast.AST], *, module: str) -> dict[str, str]:
@@ -171,7 +181,7 @@ def _function_calls(
     names.update(
         {
             child.name: f"{qualified}.{child.name}"
-            for child in node.body
+            for child in scoped
             if isinstance(child, ast.FunctionDef | ast.AsyncFunctionDef)
         }
     )
@@ -425,5 +435,87 @@ def production_entry(raw, config):
     assert (
         "applications.entry.production_entry",
         "applications.entry.production_entry.hidden",
+        "adapters.parsers.ragflow_markdown.compile_rich_markdown",
+    ) in paths
+
+
+def test_production_reachability_detects_conditionally_declared_closure(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "applications").mkdir()
+    (tmp_path / "adapters/parsers").mkdir(parents=True)
+    (tmp_path / "applications/entry.py").write_text(
+        """
+def production_entry(raw, config, enabled=True):
+    if enabled:
+        def hidden():
+            from adapters.parsers.ragflow_markdown import compile_rich_markdown
+            return compile_rich_markdown(raw, config)
+        return hidden()
+    return None
+""".lstrip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "adapters/parsers/ragflow_markdown.py").write_text(
+        "def compile_rich_markdown(raw, config):\n    return raw, config\n",
+        encoding="utf-8",
+    )
+
+    paths = _production_paths_to_forbidden(
+        tmp_path,
+        production_roots=("engine", "adapters", "applications"),
+        ignored_root_modules=frozenset(),
+        forbidden=frozenset(
+            {"adapters.parsers.ragflow_markdown.compile_rich_markdown"}
+        ),
+    )
+
+    assert (
+        "applications.entry.production_entry",
+        "applications.entry.production_entry.hidden",
+        "adapters.parsers.ragflow_markdown.compile_rich_markdown",
+    ) in paths
+
+
+def test_production_reachability_detects_relative_module_import(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "applications").mkdir()
+    (tmp_path / "adapters/parsers").mkdir(parents=True)
+    (tmp_path / "applications/bridge.py").write_text(
+        """
+from adapters.parsers.ragflow_markdown import compile_rich_markdown
+
+def hidden(raw, config):
+    return compile_rich_markdown(raw, config)
+""".lstrip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "applications/entry.py").write_text(
+        """
+from . import bridge
+
+def production_entry(raw, config):
+    return bridge.hidden(raw, config)
+""".lstrip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "adapters/parsers/ragflow_markdown.py").write_text(
+        "def compile_rich_markdown(raw, config):\n    return raw, config\n",
+        encoding="utf-8",
+    )
+
+    paths = _production_paths_to_forbidden(
+        tmp_path,
+        production_roots=("engine", "adapters", "applications"),
+        ignored_root_modules=frozenset(),
+        forbidden=frozenset(
+            {"adapters.parsers.ragflow_markdown.compile_rich_markdown"}
+        ),
+    )
+
+    assert (
+        "applications.entry.production_entry",
+        "applications.bridge.hidden",
         "adapters.parsers.ragflow_markdown.compile_rich_markdown",
     ) in paths
