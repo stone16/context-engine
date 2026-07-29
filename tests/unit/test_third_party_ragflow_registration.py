@@ -5,7 +5,16 @@ import hashlib
 import json
 import re
 import tomllib
+from collections import Counter
 from pathlib import Path
+
+import pytest
+
+from adapters.parsers.ragflow_markdown import compile_rich_markdown
+from engine.supply import MarkdownCompilerConfig, ParsedDocument
+from third_party.ragflow.deepdoc.parser.markdown_parser import (
+    MarkdownElementExtractor,
+)
 
 REPOSITORY_ROOT = Path(__file__).parents[2]
 REGISTRATION_ROOT = REPOSITORY_ROOT / "third_party/ragflow"
@@ -155,7 +164,9 @@ def test_vendored_subtree_imports_only_approved_dependencies() -> None:
     assert "BSD 3-Clause" in modifications
 
 
-def test_registered_parser_region_is_executed_by_the_ce_adapter() -> None:
+def test_registered_parser_region_is_executed_by_the_ce_adapter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     adapter = REPOSITORY_ROOT / "adapters/parsers/ragflow_markdown.py"
     tree = ast.parse(adapter.read_bytes(), filename=str(adapter))
 
@@ -169,15 +180,38 @@ def test_registered_parser_region_is_executed_by_the_ce_adapter() -> None:
     assert [alias.name for alias in imports[0].names] == [
         "MarkdownElementExtractor"
     ]
-    called_helpers = {
-        node.func.attr
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-    }
-    assert {
+    helper_names = (
         "_get_fence_marker",
         "_is_closing_fence",
         "_is_table_row",
         "_is_table_separator_row",
         "_table_cells",
-    } <= called_helpers
+    )
+    calls: Counter[str] = Counter()
+    for helper_name in helper_names:
+        original = getattr(MarkdownElementExtractor, helper_name)
+
+        def recording_helper(
+            self: MarkdownElementExtractor,
+            *args: object,
+            _helper_name: str = helper_name,
+            _original: object = original,
+        ) -> object:
+            calls[_helper_name] += 1
+            assert callable(_original)
+            return _original(self, *args)
+
+        monkeypatch.setattr(MarkdownElementExtractor, helper_name, recording_helper)
+
+    source = (
+        b"# Executed\n\n"
+        b"```python\nprint('registered')\n```\n\n"
+        b"| Key | Value |\n| --- | --- |\n| parser | called |\n"
+    )
+    outcome = compile_rich_markdown(
+        source,
+        MarkdownCompilerConfig("markdown-config-v3"),
+    )
+
+    assert type(outcome) is ParsedDocument
+    assert all(calls[name] > 0 for name in helper_names)

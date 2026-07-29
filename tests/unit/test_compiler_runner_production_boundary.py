@@ -27,6 +27,12 @@ def test_no_production_module_calls_the_local_compiler_runner() -> None:
                 imported_from_runner = isinstance(node, ast.ImportFrom) and (
                     node.module == forbidden_module
                     or any(alias.name == forbidden_symbol for alias in node.names)
+                    or (
+                        node.module == "applications"
+                        and any(
+                            alias.name == "compiler_runner" for alias in node.names
+                        )
+                    )
                 )
                 imported_runner = isinstance(node, ast.Import) and any(
                     alias.name == forbidden_module for alias in node.names

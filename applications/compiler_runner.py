@@ -29,6 +29,13 @@ from engine.supply import (
 _RUNNER_MODULE: Final = "applications.compiler_runner"
 
 
+def _boundary_failure() -> CompilationFailure:
+    return CompilationFailure(
+        code=CompilationFailureCode.UNSUPPORTED_DOCUMENT_SHAPE,
+        position=None,
+    )
+
+
 def _failure_document(failure: CompilationFailure) -> dict[str, object]:
     return {
         "code": failure.code.value,
@@ -73,8 +80,6 @@ def _failure_from_document(value: object) -> CompilationFailure:
 def compile_in_local_compiler_runner(
     source: bytes,
     config: MarkdownCompilerConfig,
-    *,
-    token_ceiling: int = MARKDOWN_RICH_TOKEN_CEILING,
 ) -> CompilationOutcome:
     """Compile in an unleased local process that production must never call."""
 
@@ -82,6 +87,8 @@ def compile_in_local_compiler_runner(
         raise TypeError("compiler-runner source must be exact bytes")
     if type(config) is not MarkdownCompilerConfig:
         raise TypeError("compiler-runner config must be exact")
+    if config.token_ceiling is None:
+        raise ValueError("compiler-runner requires rich Markdown config")
     completed = subprocess.run(
         [
             sys.executable,
@@ -91,30 +98,44 @@ def compile_in_local_compiler_runner(
             "--config",
             config.version,
             "--token-ceiling",
-            str(token_ceiling),
+            str(config.token_ceiling),
         ],
         input=source,
         capture_output=True,
         check=False,
     )
     if completed.returncode != 0:
-        raise RuntimeError("compiler-runner process failed")
-    envelope = json.loads(completed.stdout)
+        return _boundary_failure()
+    try:
+        envelope = json.loads(completed.stdout)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return _boundary_failure()
     if type(envelope) is not dict:
-        raise RuntimeError("compiler-runner emitted an invalid envelope")
+        return _boundary_failure()
     document = cast(dict[str, object], envelope)
     if document.get("outcome") == "parsed":
         encoded = document.get("document")
         if type(encoded) is not str:
-            raise RuntimeError("compiler-runner parsed payload is invalid")
-        return deserialize_parsed_document(base64.b64decode(encoded, validate=True))
+            return _boundary_failure()
+        try:
+            return deserialize_parsed_document(
+                base64.b64decode(encoded, validate=True)
+            )
+        except (ValueError, TypeError):
+            return _boundary_failure()
     if document.get("outcome") == "failure":
-        return _failure_from_document(document.get("failure"))
-    raise RuntimeError("compiler-runner outcome is invalid")
+        try:
+            return _failure_from_document(document.get("failure"))
+        except (KeyError, ValueError, TypeError):
+            return _boundary_failure()
+    return _boundary_failure()
 
 
-def _emit(source: bytes, config: MarkdownCompilerConfig, token_ceiling: int) -> None:
-    outcome = compile_rich_markdown(source, config, token_ceiling=token_ceiling)
+def _emit(source: bytes, config: MarkdownCompilerConfig) -> None:
+    try:
+        outcome = compile_rich_markdown(source, config)
+    except Exception:
+        outcome = _boundary_failure()
     if type(outcome) is ParsedDocument:
         envelope: dict[str, object] = {
             "outcome": "parsed",
@@ -180,6 +201,7 @@ def _acceptance_report(root: Path, token_ceiling: int) -> dict[str, object]:
     digests: list[str] = []
     maximum = 0
     histogram = {name: 0 for name in _CONSTRUCT_PATTERNS}
+    refusal_histogram: dict[str, int] = {}
     for path in _safe_markdown_files(root):
         source = path.read_bytes()
         try:
@@ -191,8 +213,10 @@ def _acceptance_report(root: Path, token_ceiling: int) -> dict[str, object]:
             histogram[name] += len(pattern.findall(normalized))
         outcome = compile_rich_markdown(
             source,
-            MarkdownCompilerConfig("markdown-config-v3"),
-            token_ceiling=token_ceiling,
+            MarkdownCompilerConfig(
+                "markdown-config-v3",
+                token_ceiling=token_ceiling,
+            ),
         )
         if type(outcome) is ParsedDocument:
             accepted += 1
@@ -206,16 +230,28 @@ def _acceptance_report(root: Path, token_ceiling: int) -> dict[str, object]:
             )
         else:
             refused += 1
+            assert type(outcome) is CompilationFailure
+            category = outcome.code.value
+            if outcome.construct is not None:
+                category = f"{category}:{outcome.construct.value}"
+            refusal_histogram[category] = refusal_histogram.get(category, 0) + 1
     aggregate = hashlib.sha256()
     for digest in sorted(digests):
         aggregate.update(bytes.fromhex(digest))
     total = accepted + refused
+    acceptance_rate = f"{accepted / total:.6f}" if total else "0.000000"
     return {
         "schemaVersion": "compiler-runner-acceptance-v1",
         "compilerVersion": "context-engine-markdown-v3",
         "configVersion": "markdown-config-v3",
-        "documents": {"accepted": accepted, "refused": refused, "total": total},
+        "documents": {
+            "accepted": accepted,
+            "acceptanceRate": acceptance_rate,
+            "refused": refused,
+            "total": total,
+        },
         "constructHistogram": histogram,
+        "refusalHistogram": refusal_histogram,
         "tokenCeiling": token_ceiling,
         "maxFragmentTokenCount": maximum,
         "aggregateCompilationDigest": aggregate.hexdigest(),
@@ -237,8 +273,10 @@ def main() -> None:
     if args.compile:
         _emit(
             sys.stdin.buffer.read(),
-            MarkdownCompilerConfig(args.config),
-            cast(int, args.token_ceiling),
+            MarkdownCompilerConfig(
+                args.config,
+                token_ceiling=cast(int, args.token_ceiling),
+            ),
         )
         return
     if args.acceptance_report:

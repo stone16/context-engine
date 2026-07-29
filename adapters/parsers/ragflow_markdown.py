@@ -11,7 +11,6 @@ from engine.supply.markdown import (
     MARKDOWN_COMPILER_V3_VERSION,
     MARKDOWN_RICH_CANONICALIZATION_PROFILE,
     MARKDOWN_RICH_COMPILATION_DIGEST_PROFILE,
-    MARKDOWN_RICH_TOKEN_CEILING,
     CompilationFailure,
     CompilationFailureCode,
     CompilationOutcome,
@@ -25,6 +24,7 @@ from engine.supply.markdown import (
     SourceSpan,
     StructuralPath,
     UnsupportedConstruct,
+    unsupported_rich_markdown_inline,
 )
 from third_party.ragflow.deepdoc.parser.markdown_parser import MarkdownElementExtractor
 
@@ -39,6 +39,7 @@ _HTML_OPEN: Final = re.compile(
     r"th|td|p|ul|ol|li)\b[^>]*>",
     re.IGNORECASE,
 )
+_ANGLE_LITERAL: Final = re.compile(r"<[^<>\r\n]+>")
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,6 +47,7 @@ class _Block:
     kind: SectionKind
     start: int
     end: int
+    indivisible: bool = False
     level: int | None = None
     list_ordered: bool | None = None
     list_items: tuple[str, ...] = ()
@@ -160,6 +162,12 @@ def _table_cells(extractor: _ElementExtractor, line: str) -> tuple[str, ...]:
     return tuple(extractor._table_cells(line))
 
 
+def _is_table_source_line(line: str) -> bool:
+    """Return whether a nonblank line remains part of an opened pipe table."""
+
+    return "|" in line
+
+
 def _frontmatter_end(lines: list[str]) -> int | None:
     if not lines or lines[0] != "---":
         return None
@@ -204,6 +212,14 @@ def _blocks(text: str) -> tuple[_Block, ...] | CompilationFailure:
 
         atx = _ATX_HEADING.fullmatch(line)
         if atx is not None:
+            construct = unsupported_rich_markdown_inline(atx.group(2).strip())
+            if construct is not None:
+                return _failure(
+                    CompilationFailureCode.UNSUPPORTED_CONSTRUCT,
+                    text,
+                    starts[index],
+                    construct,
+                )
             blocks.append(
                 _Block(
                     kind=SectionKind.HEADING,
@@ -214,34 +230,35 @@ def _blocks(text: str) -> tuple[_Block, ...] | CompilationFailure:
             )
             index += 1
             continue
-        if index + 1 < len(lines) and _SETEXT.fullmatch(lines[index + 1]):
-            blocks.append(
-                _Block(
-                    kind=SectionKind.HEADING,
-                    start=starts[index],
-                    end=_line_end(lines, starts, index + 1),
-                    level=1 if lines[index + 1].lstrip().startswith("=") else 2,
-                )
-            )
-            index += 2
-            continue
-
         fence = extractor._get_fence_marker(line)
         if fence is not None:
             fence_character, fence_length = fence
+            language = line.lstrip()[fence_length:].strip() or None
             closing = index + 1
             while closing < len(lines) and not extractor._is_closing_fence(
                 lines[closing], fence_character, fence_length
             ):
                 closing += 1
             if closing >= len(lines):
+                if language is None and any(
+                    candidate.strip()
+                    for candidate in lines[index + 1 :]
+                ):
+                    blocks.append(
+                        _Block(
+                            kind=SectionKind.PARAGRAPH,
+                            start=starts[index],
+                            end=_line_end(lines, starts, len(lines) - 1),
+                        )
+                    )
+                    index = len(lines)
+                    continue
                 return _failure(
                     CompilationFailureCode.UNSUPPORTED_CONSTRUCT,
                     text,
                     starts[index],
                     UnsupportedConstruct.CODE_BLOCK,
                 )
-            language = line.lstrip()[fence_length:].strip() or None
             if language is not None and (
                 len(language) > MARKDOWN_CODE_LANGUAGE_MAX_LENGTH
                 or any(character.isspace() for character in language)
@@ -272,33 +289,70 @@ def _blocks(text: str) -> tuple[_Block, ...] | CompilationFailure:
             index = closing + 1
             continue
 
+        if index + 1 < len(lines) and _SETEXT.fullmatch(lines[index + 1]):
+            construct = unsupported_rich_markdown_inline(line.strip())
+            if construct is not None:
+                return _failure(
+                    CompilationFailureCode.UNSUPPORTED_CONSTRUCT,
+                    text,
+                    starts[index],
+                    construct,
+                )
+            blocks.append(
+                _Block(
+                    kind=SectionKind.HEADING,
+                    start=starts[index],
+                    end=_line_end(lines, starts, index + 1),
+                    level=1 if lines[index + 1].lstrip().startswith("=") else 2,
+                )
+            )
+            index += 2
+            continue
+
         if (
             index + 1 < len(lines)
             and extractor._is_table_row(line)
             and extractor._is_table_separator_row(lines[index + 1])
         ):
             header = _table_cells(extractor, line)
+            separator = _table_cells(extractor, lines[index + 1])
             width = len(header)
             rows: list[tuple[str, ...]] = []
             end = index + 2
-            while end < len(lines) and extractor._is_table_row(lines[end]):
+            while end < len(lines) and _is_table_source_line(lines[end]):
                 row = _table_cells(extractor, lines[end])
-                if len(row) != width:
-                    return _failure(
-                        CompilationFailureCode.UNSUPPORTED_CONSTRUCT,
-                        text,
-                        starts[end],
-                        UnsupportedConstruct.TABLE,
-                    )
                 rows.append(row)
                 end += 1
-            if not rows or any(not cell for row in (header, *rows) for cell in row):
-                return _failure(
-                    CompilationFailureCode.UNSUPPORTED_CONSTRUCT,
-                    text,
-                    starts[index],
-                    UnsupportedConstruct.TABLE,
+            if (
+                not rows
+                or width < 2
+                or len(separator) != width
+                or any(
+                    len(row) != width or any(not cell for cell in row)
+                    for row in (header, *rows)
                 )
+            ):
+                for table_index in range(index, end):
+                    construct = unsupported_rich_markdown_inline(
+                        lines[table_index]
+                    )
+                    if construct is not None:
+                        return _failure(
+                            CompilationFailureCode.UNSUPPORTED_CONSTRUCT,
+                            text,
+                            starts[table_index],
+                            construct,
+                        )
+                blocks.append(
+                    _Block(
+                        kind=SectionKind.PARAGRAPH,
+                        start=starts[index],
+                        end=_line_end(lines, starts, end - 1),
+                        indivisible=True,
+                    )
+                )
+                index = end
+                continue
             blocks.append(
                 _Block(
                     kind=SectionKind.TABLE,
@@ -320,10 +374,29 @@ def _blocks(text: str) -> tuple[_Block, ...] | CompilationFailure:
                 candidate = lines[end]
                 match = _LIST_ITEM.fullmatch(candidate)
                 if match is not None:
-                    items.append(match.group(2))
+                    item = match.group(2).rstrip(" \t")
+                    construct = unsupported_rich_markdown_inline(item)
+                    if construct not in {None, UnsupportedConstruct.LIST}:
+                        return _failure(
+                            CompilationFailureCode.UNSUPPORTED_CONSTRUCT,
+                            text,
+                            starts[end],
+                            construct,
+                        )
+                    items.append(item)
                     end += 1
                     continue
                 if candidate.strip() and candidate.startswith((" ", "\t")):
+                    construct = unsupported_rich_markdown_inline(
+                        candidate.lstrip()
+                    )
+                    if construct is not None:
+                        return _failure(
+                            CompilationFailureCode.UNSUPPORTED_CONSTRUCT,
+                            text,
+                            starts[end],
+                            construct,
+                        )
                     end += 1
                     continue
                 break
@@ -340,6 +413,16 @@ def _blocks(text: str) -> tuple[_Block, ...] | CompilationFailure:
             continue
 
         if line.lstrip().startswith("<"):
+            if _ANGLE_LITERAL.fullmatch(line.strip()) is not None:
+                blocks.append(
+                    _Block(
+                        kind=SectionKind.PARAGRAPH,
+                        start=starts[index],
+                        end=_line_end(lines, starts, index),
+                    )
+                )
+                index += 1
+                continue
             html_open = _HTML_OPEN.match(line)
             if html_open is None:
                 return _failure(
@@ -374,16 +457,24 @@ def _blocks(text: str) -> tuple[_Block, ...] | CompilationFailure:
             continue
 
         if line.lstrip().startswith(">"):
-            if _CALLOUT.fullmatch(line) is None:
-                return _failure(
-                    CompilationFailureCode.UNSUPPORTED_CONSTRUCT,
-                    text,
-                    starts[index],
-                    UnsupportedConstruct.BLOCKQUOTE,
-                )
             end = index + 1
             while end < len(lines) and lines[end].lstrip().startswith(">"):
                 end += 1
+            for quote_index in range(index, end):
+                quoted = lines[quote_index].lstrip()[1:].lstrip()
+                callout = _CALLOUT.fullmatch(lines[quote_index]) is not None
+                construct = (
+                    None
+                    if callout
+                    else unsupported_rich_markdown_inline(quoted)
+                )
+                if construct is not None:
+                    return _failure(
+                        CompilationFailureCode.UNSUPPORTED_CONSTRUCT,
+                        text,
+                        starts[quote_index],
+                        construct,
+                    )
             blocks.append(
                 _Block(
                     kind=SectionKind.PARAGRAPH,
@@ -395,7 +486,7 @@ def _blocks(text: str) -> tuple[_Block, ...] | CompilationFailure:
             continue
 
         if re.match(
-            r"^ {0,3}(?:#{1,6}[ \t]*|---[ \t]*|\*{3,}[ \t]*|_{3,}[ \t]*)$",
+            r"^ {0,3}#{1,6}[ \t]*$",
             line,
         ):
             return _failure(
@@ -405,6 +496,20 @@ def _blocks(text: str) -> tuple[_Block, ...] | CompilationFailure:
                 UnsupportedConstruct.NESTED_HEADING,
             )
 
+        if re.fullmatch(
+            r" {0,3}(?:(?:\*[ \t]*){3,}|(?:_[ \t]*){3,}|(?:-[ \t]*){3,})",
+            line,
+        ):
+            blocks.append(
+                _Block(
+                    kind=SectionKind.PARAGRAPH,
+                    start=starts[index],
+                    end=_line_end(lines, starts, index),
+                )
+            )
+            index += 1
+            continue
+
         end = index + 1
         while end < len(lines) and lines[end].strip():
             if (
@@ -412,7 +517,11 @@ def _blocks(text: str) -> tuple[_Block, ...] | CompilationFailure:
                 or extractor._get_fence_marker(lines[end]) is not None
                 or _LIST_ITEM.fullmatch(lines[end])
                 or lines[end].lstrip().startswith((">", "<"))
-                or re.fullmatch(r" {0,3}(?:\*{3,}|_{3,}|-{3,})[ \t]*", lines[end])
+                or re.fullmatch(
+                    r" {0,3}(?:(?:\*[ \t]*){3,}|(?:_[ \t]*){3,}|"
+                    r"(?:-[ \t]*){3,})",
+                    lines[end],
+                )
                 or (
                     end + 1 < len(lines)
                     and extractor._is_table_row(lines[end])
@@ -421,6 +530,17 @@ def _blocks(text: str) -> tuple[_Block, ...] | CompilationFailure:
             ):
                 break
             end += 1
+        for paragraph_index in range(index, end):
+            construct = unsupported_rich_markdown_inline(
+                lines[paragraph_index]
+            )
+            if construct is not None:
+                return _failure(
+                    CompilationFailureCode.UNSUPPORTED_CONSTRUCT,
+                    text,
+                    starts[paragraph_index],
+                    construct,
+                )
         blocks.append(
             _Block(
                 kind=SectionKind.PARAGRAPH,
@@ -433,7 +553,7 @@ def _blocks(text: str) -> tuple[_Block, ...] | CompilationFailure:
 
 
 def _heading_text(source: str, level: int) -> str:
-    lines = source.split("\n")
+    lines = source.splitlines()
     if len(lines) == 2 and _SETEXT.fullmatch(lines[1]):
         return lines[0].strip()
     match = _ATX_HEADING.fullmatch(source)
@@ -481,8 +601,6 @@ def _section(
 def compile_rich_markdown(
     source: bytes,
     config: MarkdownCompilerConfig,
-    *,
-    token_ceiling: int = MARKDOWN_RICH_TOKEN_CEILING,
 ) -> CompilationOutcome:
     """Compile exact bytes through the explicit rich v3 representation."""
 
@@ -492,12 +610,19 @@ def compile_rich_markdown(
         raise TypeError("rich Markdown compiler config must be exact")
     if config.version != "markdown-config-v3":
         raise ValueError("rich Markdown compiler requires markdown-config-v3")
-    if type(token_ceiling) is not int or token_ceiling < 1:
-        raise ValueError("rich Markdown token ceiling must be positive")
+    assert config.token_ceiling is not None
+    token_ceiling = config.token_ceiling
     normalized = _normalize(source)
     if isinstance(normalized, CompilationFailure):
         return normalized
-    blocks = _blocks(normalized)
+    try:
+        blocks = _blocks(normalized)
+    except Exception:
+        return _failure(
+            CompilationFailureCode.UNSUPPORTED_DOCUMENT_SHAPE,
+            normalized,
+            0,
+        )
     if isinstance(blocks, CompilationFailure):
         return blocks
     if not blocks:
@@ -537,7 +662,7 @@ def compile_rich_markdown(
                     normalized,
                     block.start,
                 )
-        elif block.kind in {
+        elif block.indivisible or block.kind in {
             SectionKind.LIST,
             SectionKind.FENCED_CODE,
             SectionKind.TABLE,
@@ -569,7 +694,14 @@ def compile_rich_markdown(
                 block.start + relative_start,
                 block.start + relative_end,
             )
-            section = _section(block, source_text, path, position)
+            try:
+                section = _section(block, source_text, path, position)
+            except Exception:
+                return _failure(
+                    CompilationFailureCode.UNSUPPORTED_DOCUMENT_SHAPE,
+                    normalized,
+                    block.start + relative_start,
+                )
             ordinals[block.kind] = ordinals.get(block.kind, 0) + 1
             contextual = f"{ancestry}\n\n{source_text}" if ancestry else source_text
             phrases = tuple(dict.fromkeys((source_text, section.text)))
@@ -595,10 +727,18 @@ def compile_rich_markdown(
         config_version=config.version,
         canonicalization_profile=MARKDOWN_RICH_CANONICALIZATION_PROFILE,
         compilation_digest_profile=MARKDOWN_RICH_COMPILATION_DIGEST_PROFILE,
+        token_ceiling=token_ceiling,
     )
-    return ParsedDocument.rich_v3(
-        canonical_text=normalized,
-        sections=tuple(sections),
-        fragments=tuple(fragments),
-        provenance=provenance,
-    )
+    try:
+        return ParsedDocument.rich_v3(
+            canonical_text=normalized,
+            sections=tuple(sections),
+            fragments=tuple(fragments),
+            provenance=provenance,
+        )
+    except Exception:
+        return _failure(
+            CompilationFailureCode.UNSUPPORTED_DOCUMENT_SHAPE,
+            normalized,
+            0,
+        )

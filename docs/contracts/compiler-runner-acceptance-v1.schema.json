@@ -11,6 +11,7 @@
     "constructHistogram",
     "documents",
     "maxFragmentTokenCount",
+    "refusalHistogram",
     "schemaVersion",
     "tokenCeiling"
   ],
@@ -56,12 +57,20 @@
     "documents": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["accepted", "refused", "total"],
+      "required": ["accepted", "acceptanceRate", "refused", "total"],
       "properties": {
         "accepted": {"type": "integer", "minimum": 0},
+        "acceptanceRate": {
+          "type": "string",
+          "pattern": "^(?:0|1)\\.[0-9]{6}$"
+        },
         "refused": {"type": "integer", "minimum": 0},
         "total": {"type": "integer", "minimum": 0}
       }
+    },
+    "refusalHistogram": {
+      "type": "object",
+      "additionalProperties": {"type": "integer", "minimum": 1}
     },
     "maxFragmentTokenCount": {"type": "integer", "minimum": 0},
     "schemaVersion": {"const": "compiler-runner-acceptance-v1"},

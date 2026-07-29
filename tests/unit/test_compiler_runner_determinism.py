@@ -1,12 +1,19 @@
 from __future__ import annotations
 
+import base64
+import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 from adapters.parsers.ragflow_markdown import compile_rich_markdown
-from applications.compiler_runner import compile_in_local_compiler_runner
-from engine.supply import MarkdownCompilerConfig, ParsedDocument
+from engine.supply import (
+    MarkdownCompilerConfig,
+    ParsedDocument,
+    deserialize_parsed_document,
+)
 
 FIXTURES = Path(__file__).parents[1] / "fixtures/markdown"
 CONFIG = MarkdownCompilerConfig(version="markdown-config-v3")
@@ -14,6 +21,7 @@ RICH_FIXTURES = (
     "rich-frontmatter.md",
     "rich-headings-lists.md",
     "rich-code-tables.md",
+    "rich-expanded.md",
     "rich-inline-html.md",
     "rich-mixed-newlines.hex",
 )
@@ -34,7 +42,31 @@ def test_rich_compilation_digest_is_stable_in_process_and_across_runner(
 
     first = compile_rich_markdown(source, CONFIG)
     second = compile_rich_markdown(source, CONFIG)
-    subprocess_result = compile_in_local_compiler_runner(source, CONFIG)
+    command = [
+        sys.executable,
+        "-m",
+        "applications.compiler_runner",
+        "--compile",
+        "--config",
+        CONFIG.version,
+    ]
+    first_process = subprocess.run(
+        command,
+        input=source,
+        capture_output=True,
+        check=True,
+    )
+    second_process = subprocess.run(
+        command,
+        input=source,
+        capture_output=True,
+        check=True,
+    )
+    assert first_process.stdout == second_process.stdout
+    envelope = json.loads(first_process.stdout)
+    subprocess_result = deserialize_parsed_document(
+        base64.b64decode(envelope["document"], validate=True)
+    )
 
     assert type(first) is ParsedDocument
     assert type(second) is ParsedDocument
