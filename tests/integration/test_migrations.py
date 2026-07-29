@@ -145,6 +145,10 @@ HEAD_TABLES = [
     "revision_publication_event",
     "service_principal",
     "source_version",
+    "supply_connector_accepted_page",
+    "supply_connector_checkpoint",
+    "supply_connector_job",
+    "supply_connector_staged_page",
     "user_account",
     "worker_noop_job",
 ]
@@ -339,6 +343,26 @@ def test_organization_isolation_revision_downgrades_and_reapplies_cleanly(
         command.downgrade(alembic_configuration, "20260720_0001")
         assert _revision_rows(migration_configuration) == ["20260720_0001"]
         assert _application_tables(migration_configuration) == ["alembic_version"]
+    finally:
+        command.upgrade(alembic_configuration, "head")
+
+    assert _revision_rows(migration_configuration) == [HEAD_REVISION]
+    assert _application_tables(migration_configuration) == HEAD_TABLES
+
+
+def test_supply_execution_bridge_revision_downgrades_and_reapplies_cleanly(
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    alembic_configuration = Config(ROOT / "alembic.ini")
+
+    try:
+        command.downgrade(alembic_configuration, "20260727_0040")
+        assert _revision_rows(migration_configuration) == ["20260727_0040"]
+        application_tables = _application_tables(migration_configuration)
+        assert "supply_connector_job" not in application_tables
+        assert "supply_connector_staged_page" not in application_tables
+        assert "supply_connector_accepted_page" not in application_tables
+        assert "supply_connector_checkpoint" not in application_tables
     finally:
         command.upgrade(alembic_configuration, "head")
 

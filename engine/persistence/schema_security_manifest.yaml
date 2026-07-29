@@ -1,5 +1,5 @@
 {
-  "manifestVersion": "37.0.0",
+  "manifestVersion": "38.0.0",
   "controlOperations": [
     {
       "name": "register_file_source",
@@ -270,6 +270,59 @@
       "callerSuppliedReceiverDimensions": [],
       "atomicWrites": [
         "worker_noop_job"
+      ]
+    },
+    {
+      "name": "issue_supply_connector_lease",
+      "databaseFunction": "context_supply_issue_connector_lease",
+      "role": "context_engine_control",
+      "definerRole": "context_engine_worker_lease_definer",
+      "directTableMutationAllowed": false,
+      "databaseOwnedTime": true,
+      "maxTtlSeconds": 3600,
+      "fixedReceiver": {
+        "databaseRole": "context_engine_control",
+        "workload": "supply.connector",
+        "workerAudience": "context-engine-connector-runner",
+        "operation": "connector.execute"
+      },
+      "exactBinding": [
+        "organization_id",
+        "source_id",
+        "source_version_id",
+        "worker_job_id",
+        "service_principal_id"
+      ],
+      "actorContextBinding": [
+        "policy_epoch",
+        "idempotency_key",
+        "allowed_source_version_ids",
+        "allowed_operations",
+        "service_actor_expires_at"
+      ],
+      "atomicWrites": ["supply_connector_job"]
+    },
+    {
+      "name": "accept_supply_connector_page",
+      "databaseFunction": "context_supply_accept_connector_page",
+      "role": "context_engine_worker",
+      "definerRole": "context_engine_worker_lease_definer",
+      "directTableMutationAllowed": false,
+      "databaseOwnedTime": true,
+      "checkpointOpaque": true,
+      "checkpointCommitRule": "accepted page lineage and checkpoint advance commit in one transaction",
+      "redeemsIdempotencyKeyOnTerminalPage": true,
+      "fixedReceiver": {
+        "databaseRole": "context_engine_worker",
+        "workload": "supply.connector",
+        "workerAudience": "context-engine-connector-runner",
+        "operation": "connector.execute"
+      },
+      "atomicWrites": [
+        "supply_connector_staged_page",
+        "supply_connector_accepted_page",
+        "supply_connector_checkpoint",
+        "supply_connector_job"
       ]
     },
     {
@@ -2238,6 +2291,14 @@
               "context_engine_action_execute_definer"
             ],
             "using": "true"
+          },
+          {
+            "name": "organization_policy_epoch_supply_connector_definer_select",
+            "command": "SELECT",
+            "roles": [
+              "context_engine_worker_lease_definer"
+            ],
+            "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"
           }
         ]
       },
@@ -2261,6 +2322,9 @@
           "SELECT"
         ],
         "context_engine_action_execute_definer": [
+          "SELECT"
+        ],
+        "context_engine_worker_lease_definer": [
           "SELECT"
         ],
         "context_engine_runtime": [
@@ -3697,7 +3761,7 @@
           "table": "service_principal"
         }
       },
-      "purpose": "Bounded registered receiver principal for exact no-op and File import WorkerLease operations; not the full canonical ServiceActor",
+      "purpose": "Bounded registered ServiceActor receiver principal for exact no-op, File import, and connector WorkerLease operation tuples",
       "organizationColumn": "organization_id",
       "organizationInclusiveKeys": [
         {
@@ -3742,7 +3806,7 @@
         },
         {
           "name": "ck_service_principal_workload_issue17",
-          "expression": "workload IN ('supply.noop', 'supply.file-import')"
+          "expression": "workload IN ('supply.noop', 'supply.file-import', 'supply.connector')"
         },
         {
           "name": "ck_service_principal_worker_audience_bounds",
@@ -3750,15 +3814,15 @@
         },
         {
           "name": "ck_service_principal_worker_audience_issue17",
-          "expression": "worker_audience = 'context-engine-worker'"
+          "expression": "worker_audience IN ('context-engine-worker', 'context-engine-connector-runner')"
         },
         {
           "name": "ck_service_principal_operation_noop_complete",
-          "expression": "operation IN ('noop.complete', 'file.import')"
+          "expression": "operation IN ('noop.complete', 'file.import', 'connector.execute')"
         },
         {
           "name": "ck_service_principal_workload_operation_binding",
-          "expression": "(workload = 'supply.noop' AND operation = 'noop.complete') OR (workload = 'supply.file-import' AND operation = 'file.import')"
+          "expression": "(workload = 'supply.noop' AND worker_audience = 'context-engine-worker' AND operation = 'noop.complete') OR (workload = 'supply.file-import' AND worker_audience = 'context-engine-worker' AND operation = 'file.import') OR (workload = 'supply.connector' AND worker_audience = 'context-engine-connector-runner' AND operation = 'connector.execute')"
         }
       ],
       "rowLevelSecurity": {
@@ -3789,6 +3853,12 @@
               "context_engine_worker_lease_definer"
             ],
             "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid AND workload = 'supply.file-import' AND worker_audience = 'context-engine-worker' AND operation = 'file.import' AND enabled IS TRUE"
+          },
+          {
+            "name": "service_principal_supply_connector_definer_select",
+            "command": "SELECT",
+            "roles": ["context_engine_worker_lease_definer"],
+            "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid AND workload = 'supply.connector' AND worker_audience = 'context-engine-connector-runner' AND operation = 'connector.execute' AND enabled IS TRUE"
           },
           {
             "name": "service_principal_file_dispatch_definer_select",
@@ -3834,6 +3904,132 @@
         "JOB-005",
         "WORKER-LEASE-007"
       ]
+    },
+    {
+      "name": "supply_connector_job",
+      "classification": "tenant_owned",
+      "nonOwnerEvidence": {"evidenceId": "PG-SUPPLY-BRIDGE-125", "selector": {"table": "supply_connector_job"}},
+      "purpose": "Content-free exact Organization, SourceVersion, durable WorkerJob, and ServiceActor execution authority for the connector runner",
+      "organizationColumn": "organization_id",
+      "organizationInclusiveKeys": [
+        {"name": "pk_supply_connector_job", "kind": "primary_key", "columns": ["organization_id", "worker_job_id"]},
+        {"name": "uq_supply_connector_job_exact_binding", "kind": "unique", "columns": ["organization_id", "source_id", "source_version_id", "worker_job_id"]}
+      ],
+      "foreignKeys": [
+        {"name": "fk_supply_connector_job_source_version_exact", "columns": ["organization_id", "source_id", "source_version_id"], "references": {"table": "source_version", "columns": ["organization_id", "source_id", "version_id"]}},
+        {"name": "fk_supply_connector_job_service_actor_exact", "columns": ["organization_id", "service_principal_id", "workload", "worker_audience", "operation"], "references": {"table": "service_principal", "columns": ["organization_id", "service_principal_id", "workload", "worker_audience", "operation"]}}
+      ],
+      "checkConstraints": [
+        {"name": "ck_supply_connector_job_service_actor", "expression": "workload = 'supply.connector' AND worker_audience = 'context-engine-connector-runner' AND actor_kind = 'service' AND operation = 'connector.execute'"},
+        {"name": "ck_supply_connector_job_state", "expression": "state IN ('available', 'leased', 'running', 'completed')"},
+        {"name": "ck_supply_connector_job_lease_generation", "expression": "lease_generation >= 0 AND lease_generation <= 9223372036854775807"},
+        {"name": "ck_supply_connector_job_lease_state", "expression": "available has no ActorContext or lease; leased/running has exact policy epoch, idempotency key, source/operation allowed sets, expiry, and current lease; completed records exact one-time redemption"}
+      ],
+      "rowLevelSecurity": {"enabled": true, "forced": true, "policies": [
+        {"name": "supply_connector_job_migrator_administration", "command": "ALL", "roles": ["context_engine_migrator"], "using": "true", "withCheck": "true"},
+        {"name": "supply_connector_job_supply_definer_select", "command": "SELECT", "roles": ["context_engine_worker_lease_definer"], "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid AND worker_job_id = NULLIF(current_setting('app.worker_job_id', true), '')::uuid"},
+        {"name": "supply_connector_job_supply_definer_update", "command": "UPDATE", "roles": ["context_engine_worker_lease_definer"], "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid AND worker_job_id = NULLIF(current_setting('app.worker_job_id', true), '')::uuid", "withCheck": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid AND worker_job_id = NULLIF(current_setting('app.worker_job_id', true), '')::uuid"}
+      ]},
+      "functionOnlyMutation": {"databaseFunctions": ["context_supply_issue_connector_lease", "context_supply_accept_connector_page"], "definerRole": "context_engine_worker_lease_definer", "directTableMutationAllowed": false},
+      "permittedOperations": {"context_engine_control": ["EXECUTE context_supply_issue_connector_lease"], "context_engine_runtime": [], "context_engine_worker": ["EXECUTE context_supply_load_connector_checkpoint", "EXECUTE context_supply_accept_connector_page"], "context_engine_worker_lease_definer": ["SELECT", "UPDATE"]},
+      "retention": {"sourceContent": "none", "checkpoint": "none", "authority": "content-free exact-job lineage"},
+      "partitions": [],
+      "securityInvariantIds": ["TENANT-OWNERSHIP-001", "TENANT-FK-002", "RLS-FAIL-CLOSED-003", "WORKER-LEASE-007"],
+      "negativeTestIds": ["DB-001", "DB-004", "DB-008", "JOB-001", "WORKER-LEASE-007", "PG-SUPPLY-BRIDGE-125"]
+    },
+    {
+      "name": "supply_connector_staged_page",
+      "classification": "tenant_owned",
+      "nonOwnerEvidence": {"evidenceId": "PG-SUPPLY-BRIDGE-125", "selector": {"table": "supply_connector_staged_page"}},
+      "purpose": "Engine-owned byte-exact emitted connector page staging awaiting downstream Supply compilation; not corpus publication or an independent runner store",
+      "organizationColumn": "organization_id",
+      "organizationInclusiveKeys": [
+        {"name": "pk_supply_connector_staged_page", "kind": "primary_key", "columns": ["organization_id", "source_version_id", "worker_job_id", "page_ref"]},
+        {"name": "uq_supply_connector_staged_page_exact", "kind": "unique", "columns": ["organization_id", "source_id", "source_version_id", "worker_job_id", "page_ref"]}
+      ],
+      "foreignKeys": [
+        {"name": "fk_supply_connector_staged_page_job_exact", "columns": ["organization_id", "source_id", "source_version_id", "worker_job_id"], "references": {"table": "supply_connector_job", "columns": ["organization_id", "source_id", "source_version_id", "worker_job_id"]}}
+      ],
+      "checkConstraints": [
+        {"name": "ck_supply_connector_staged_page_ref", "expression": "page_ref is a bounded nonblank opaque reference"},
+        {"name": "ck_supply_connector_staged_page_payload_bounds", "expression": "canonical full emitted page payload is 1 to 268435456 bytes"},
+        {"name": "ck_supply_connector_staged_page_payload_digest", "expression": "payload_digest is exactly 32 bytes"},
+        {"name": "ck_supply_connector_staged_page_checkpoint_digest", "expression": "checkpoint_proposal_digest is exactly 32 bytes and is derived from the opaque proposal in the staged page"}
+      ],
+      "rowLevelSecurity": {"enabled": true, "forced": true, "policies": [
+        {"name": "supply_connector_staged_page_migrator_administration", "command": "ALL", "roles": ["context_engine_migrator"], "using": "true", "withCheck": "true"},
+        {"name": "supply_connector_staged_page_supply_definer_insert", "command": "INSERT", "roles": ["context_engine_worker_lease_definer"], "withCheck": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid AND worker_job_id = NULLIF(current_setting('app.worker_job_id', true), '')::uuid"},
+        {"name": "supply_connector_staged_page_supply_definer_select", "command": "SELECT", "roles": ["context_engine_worker_lease_definer"], "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid AND worker_job_id = NULLIF(current_setting('app.worker_job_id', true), '')::uuid"}
+      ]},
+      "functionOnlyMutation": {"databaseFunction": "context_supply_accept_connector_page", "role": "context_engine_worker", "definerRole": "context_engine_worker_lease_definer", "directTableMutationAllowed": false},
+      "permittedOperations": {"context_engine_control": [], "context_engine_runtime": [], "context_engine_worker": ["EXECUTE context_supply_accept_connector_page", "EXECUTE context_supply_load_staged_connector_page"], "context_engine_worker_lease_definer": ["SELECT", "INSERT"]},
+      "retention": {"class": "supply_staging", "corpusPublished": false, "payload": "byte-exact complete emitted page", "checkpointCommitTogether": true},
+      "partitions": [],
+      "securityInvariantIds": ["TENANT-OWNERSHIP-001", "TENANT-FK-002", "RLS-FAIL-CLOSED-003", "WORKER-LEASE-007"],
+      "negativeTestIds": ["DB-001", "DB-004", "DB-008", "PG-SUPPLY-BRIDGE-125"]
+    },
+    {
+      "name": "supply_connector_accepted_page",
+      "classification": "tenant_owned",
+      "nonOwnerEvidence": {"evidenceId": "PG-SUPPLY-BRIDGE-125", "selector": {"table": "supply_connector_accepted_page"}},
+      "purpose": "Immutable content-free accepted connector page lineage whose digest binds one opaque checkpoint proposal without storing documents",
+      "organizationColumn": "organization_id",
+      "organizationInclusiveKeys": [
+        {"name": "pk_supply_connector_accepted_page", "kind": "primary_key", "columns": ["organization_id", "worker_job_id", "accepted_ordinal"]},
+        {"name": "uq_supply_connector_accepted_page_replay", "kind": "unique", "columns": ["organization_id", "source_version_id", "worker_job_id", "page_ref"]},
+        {"name": "uq_supply_connector_accepted_page_exact_lineage", "kind": "unique", "columns": ["organization_id", "source_id", "source_version_id", "worker_job_id", "accepted_ordinal", "page_ref"]}
+      ],
+      "foreignKeys": [
+        {"name": "fk_supply_connector_accepted_page_job_exact", "columns": ["organization_id", "source_id", "source_version_id", "worker_job_id"], "references": {"table": "supply_connector_job", "columns": ["organization_id", "source_id", "source_version_id", "worker_job_id"]}},
+        {"name": "fk_supply_connector_accepted_page_staged_exact", "columns": ["organization_id", "source_id", "source_version_id", "worker_job_id", "page_ref"], "references": {"table": "supply_connector_staged_page", "columns": ["organization_id", "source_id", "source_version_id", "worker_job_id", "page_ref"]}}
+      ],
+      "checkConstraints": [
+        {"name": "ck_supply_connector_accepted_page_ordinal", "expression": "accepted_ordinal > 0 AND accepted_ordinal <= 9223372036854775807"},
+        {"name": "ck_supply_connector_accepted_page_ref", "expression": "page_ref is a bounded nonblank opaque reference"},
+        {"name": "ck_supply_connector_accepted_page_checkpoint_digest", "expression": "checkpoint_digest is exactly 32 bytes"}
+      ],
+      "rowLevelSecurity": {"enabled": true, "forced": true, "policies": [
+        {"name": "supply_connector_accepted_page_migrator_administration", "command": "ALL", "roles": ["context_engine_migrator"], "using": "true", "withCheck": "true"},
+        {"name": "supply_connector_accepted_page_supply_definer_insert", "command": "INSERT", "roles": ["context_engine_worker_lease_definer"], "withCheck": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid AND worker_job_id = NULLIF(current_setting('app.worker_job_id', true), '')::uuid"},
+        {"name": "supply_connector_accepted_page_supply_definer_select", "command": "SELECT", "roles": ["context_engine_worker_lease_definer"], "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid AND worker_job_id = NULLIF(current_setting('app.worker_job_id', true), '')::uuid"}
+      ]},
+      "functionOnlyMutation": {"databaseFunction": "context_supply_accept_connector_page", "role": "context_engine_worker", "definerRole": "context_engine_worker_lease_definer", "directTableMutationAllowed": false},
+      "permittedOperations": {"context_engine_control": [], "context_engine_runtime": [], "context_engine_worker": ["EXECUTE context_supply_accept_connector_page"], "context_engine_worker_lease_definer": ["SELECT", "INSERT"]},
+      "retention": {"sourceContent": "none", "checkpoint": "sha256 digest only", "page": "opaque reference only"},
+      "partitions": [],
+      "securityInvariantIds": ["TENANT-OWNERSHIP-001", "TENANT-FK-002", "RLS-FAIL-CLOSED-003", "WORKER-LEASE-007"],
+      "negativeTestIds": ["DB-001", "DB-004", "DB-008", "PG-SUPPLY-BRIDGE-125"]
+    },
+    {
+      "name": "supply_connector_checkpoint",
+      "classification": "tenant_owned",
+      "nonOwnerEvidence": {"evidenceId": "PG-SUPPLY-BRIDGE-125", "selector": {"table": "supply_connector_checkpoint"}},
+      "purpose": "Engine-owned opaque connector checkpoint advanced atomically with one accepted change page under the exact durable job",
+      "organizationColumn": "organization_id",
+      "organizationInclusiveKeys": [
+        {"name": "pk_supply_connector_checkpoint", "kind": "primary_key", "columns": ["organization_id", "source_version_id", "worker_job_id"]}
+      ],
+      "foreignKeys": [
+        {"name": "fk_supply_connector_checkpoint_accepted_page_exact", "columns": ["organization_id", "source_id", "source_version_id", "worker_job_id", "accepted_ordinal", "accepted_page_ref"], "references": {"table": "supply_connector_accepted_page", "columns": ["organization_id", "source_id", "source_version_id", "worker_job_id", "accepted_ordinal", "page_ref"]}},
+        {"name": "fk_supply_connector_checkpoint_job_exact", "columns": ["organization_id", "source_id", "source_version_id", "worker_job_id"], "references": {"table": "supply_connector_job", "columns": ["organization_id", "source_id", "source_version_id", "worker_job_id"]}}
+      ],
+      "checkConstraints": [
+        {"name": "ck_supply_connector_checkpoint_ordinal", "expression": "accepted_ordinal > 0 AND accepted_ordinal <= 9223372036854775807"},
+        {"name": "ck_supply_connector_checkpoint_page_ref", "expression": "accepted_page_ref is a bounded nonblank opaque reference"},
+        {"name": "ck_supply_connector_checkpoint_opaque_bounds", "expression": "opaque_checkpoint is 1 to 1048576 bytes and is never parsed by the engine"}
+      ],
+      "rowLevelSecurity": {"enabled": true, "forced": true, "policies": [
+        {"name": "supply_connector_checkpoint_migrator_administration", "command": "ALL", "roles": ["context_engine_migrator"], "using": "true", "withCheck": "true"},
+        {"name": "supply_connector_checkpoint_supply_definer_insert", "command": "INSERT", "roles": ["context_engine_worker_lease_definer"], "withCheck": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid AND worker_job_id = NULLIF(current_setting('app.worker_job_id', true), '')::uuid"},
+        {"name": "supply_connector_checkpoint_supply_definer_select", "command": "SELECT", "roles": ["context_engine_worker_lease_definer"], "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid AND worker_job_id = NULLIF(current_setting('app.worker_job_id', true), '')::uuid"},
+        {"name": "supply_connector_checkpoint_supply_definer_update", "command": "UPDATE", "roles": ["context_engine_worker_lease_definer"], "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid AND worker_job_id = NULLIF(current_setting('app.worker_job_id', true), '')::uuid", "withCheck": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid AND worker_job_id = NULLIF(current_setting('app.worker_job_id', true), '')::uuid"}
+      ]},
+      "functionOnlyMutation": {"databaseFunction": "context_supply_accept_connector_page", "role": "context_engine_worker", "definerRole": "context_engine_worker_lease_definer", "directTableMutationAllowed": false},
+      "permittedOperations": {"context_engine_control": [], "context_engine_runtime": [], "context_engine_worker": ["EXECUTE context_supply_load_connector_checkpoint", "EXECUTE context_supply_accept_connector_page"], "context_engine_worker_lease_definer": ["SELECT", "INSERT", "UPDATE"]},
+      "retention": {"sourceContent": "none", "checkpoint": "opaque bytes only", "engineParsingAllowed": false},
+      "partitions": [],
+      "securityInvariantIds": ["TENANT-OWNERSHIP-001", "TENANT-FK-002", "RLS-FAIL-CLOSED-003", "WORKER-LEASE-007"],
+      "negativeTestIds": ["DB-001", "DB-004", "DB-008", "PG-SUPPLY-BRIDGE-125"]
     },
     {
       "name": "worker_noop_job",

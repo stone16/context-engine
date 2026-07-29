@@ -32,7 +32,7 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
     document = manifest()
     tables = table_entries(document)
 
-    assert document["manifestVersion"] == "37.0.0"
+    assert document["manifestVersion"] == "38.0.0"
     assert set(tables) == {
         "active_release_manifest",
         "action_delivery_attempt",
@@ -89,6 +89,10 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
         "resource_access_policy",
         "service_principal",
         "source_version",
+        "supply_connector_accepted_page",
+        "supply_connector_checkpoint",
+        "supply_connector_job",
+        "supply_connector_staged_page",
         "user_account",
         "worker_noop_job",
     }
@@ -176,6 +180,16 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
     assert tables["worker_noop_job"]["classification"] == "tenant_owned"
     assert tables["context_source"]["classification"] == "tenant_owned"
     assert tables["source_version"]["classification"] == "tenant_owned"
+    assert tables["supply_connector_job"]["classification"] == "tenant_owned"
+    assert tables["supply_connector_staged_page"]["classification"] == (
+        "tenant_owned"
+    )
+    assert tables["supply_connector_accepted_page"]["classification"] == (
+        "tenant_owned"
+    )
+    assert tables["supply_connector_checkpoint"]["classification"] == (
+        "tenant_owned"
+    )
     assert tables["file_source_change_page"]["classification"] == "tenant_owned"
     assert tables["file_source_change"]["classification"] == "tenant_owned"
     delete_binding = tables["file_source_delete_observation_page"]
@@ -2079,7 +2093,12 @@ def test_policy_epoch_manifest_seals_runtime_reads_and_control_mutation() -> Non
             "context_engine_worker": [],
         }
         if entry["name"] == "organization_policy_epoch":
-            expected_operations["context_engine_delivery_evidence_definer"] = ["SELECT"]
+            expected_operations["context_engine_worker_lease_definer"] = [
+                "SELECT"
+            ]
+            expected_operations["context_engine_delivery_evidence_definer"] = [
+                "SELECT"
+            ]
             expected_operations["context_engine_egress_grant_definer"] = ["SELECT"]
             expected_operations["context_engine_action_prepare_definer"] = ["SELECT"]
             expected_operations["context_engine_action_execute_definer"] = ["SELECT"]
