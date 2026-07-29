@@ -84,7 +84,7 @@ class SourcePoint:
 
 @dataclass(frozen=True, slots=True)
 class SourceSpan:
-    """End-exclusive source span over canonical normalized UTF-8 text."""
+    """End-exclusive source span over the compiler's UTF-8 representation."""
 
     start: SourcePoint
     end: SourcePoint
@@ -330,10 +330,8 @@ class ParsedDocument:
     warnings: tuple[CompilationWarning, ...] = ()
 
     def __post_init__(self) -> None:
-        if type(self.canonical_text) is not str or not self.canonical_text.endswith(
-            "\n"
-        ):
-            raise ValueError("parsed document requires final-newline canonical text")
+        if type(self.canonical_text) is not str or not self.canonical_text:
+            raise ValueError("parsed document requires nonempty canonical text")
         if type(self.sections) is not tuple or any(
             type(section) is not ParsedSection for section in self.sections
         ):
@@ -346,6 +344,8 @@ class ParsedDocument:
         _require_sha256("compilation digest", self.compilation_digest)
         if type(self.provenance) is not CompilationProvenance:
             raise TypeError("parsed document provenance must be CompilationProvenance")
+        if not self.provenance.is_rich_v3 and not self.canonical_text.endswith("\n"):
+            raise ValueError("parsed document requires final-newline canonical text")
         if type(self.warnings) is not tuple or any(
             type(warning) is not CompilationWarning for warning in self.warnings
         ):
@@ -981,12 +981,6 @@ def _validate_rich_content(
     sections: tuple[ParsedSection, ...],
     fragments: tuple[CompiledFragment, ...],
 ) -> None:
-    if (
-        "\r" in canonical_text
-        or canonical_text.startswith("\ufeff")
-        or canonical_text.endswith("\n\n")
-    ):
-        raise ValueError("rich Markdown must use canonical transport text")
     if not sections or not fragments or len(sections) != len(fragments):
         raise ValueError("rich Markdown requires one Fragment per parsed section")
     canonical_bytes = canonical_text.encode("utf-8")
@@ -1001,9 +995,13 @@ def _validate_rich_content(
             or section.position.start.byte_offset < prior_end
         ):
             raise ValueError("rich Fragment lineage must match source order")
-        if _expected_point(canonical_text, section.position.start.byte_offset) != (
+        if _expected_rich_point(
+            canonical_text, section.position.start.byte_offset
+        ) != (
             section.position.start
-        ) or _expected_point(canonical_text, section.position.end.byte_offset) != (
+        ) or _expected_rich_point(
+            canonical_text, section.position.end.byte_offset
+        ) != (
             section.position.end
         ):
             raise ValueError("rich source coordinates must match UTF-8 offsets")
@@ -1017,14 +1015,25 @@ def _validate_rich_content(
         omitted = canonical_bytes[
             prior_end : section.position.start.byte_offset
         ]
-        if any(byte not in b" \t\n" for byte in omitted):
+        if any(byte not in b" \t\r\n\xef\xbb\xbf" for byte in omitted):
             raise ValueError("rich sections cannot omit non-whitespace source")
         if fragment.contextual_text != _expected_contextual_text(fragment):
             raise ValueError("rich Fragment context must be exact heading ancestry")
         refs.add(fragment.fragment_ref)
         prior_end = section.position.end.byte_offset
-    if any(byte not in b" \t\n" for byte in canonical_bytes[prior_end:]):
+    if any(byte not in b" \t\r\n" for byte in canonical_bytes[prior_end:]):
         raise ValueError("rich sections cannot omit trailing source")
+
+
+def _expected_rich_point(source_text: str, byte_offset: int) -> SourcePoint:
+    prefix = source_text.encode("utf-8")[:byte_offset].decode("utf-8")
+    logical = prefix.replace("\r\n", "\n").replace("\r", "\n")
+    last_newline = logical.rfind("\n")
+    return SourcePoint(
+        line=logical.count("\n") + 1,
+        column=len(logical[last_newline + 1 :]) + 1,
+        byte_offset=byte_offset,
+    )
 
 
 def _validate_issue_22_content(

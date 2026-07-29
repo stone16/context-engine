@@ -33,20 +33,27 @@ index and executes under the exact parent WorkerLease binding.
    `context-engine-markdown-v3` with its own canonicalization and compilation
    digest profiles. V1 and v2 remain frozen and byte-reproducible; v3 never
    silently reinterprets either version.
-2. **Closed rich grammar.** V3 accepts UTF-8 Markdown containing YAML
-   frontmatter, ATX and setext headings, nested ordered or unordered lists,
+2. **Closed rich grammar.** V3 accepts UTF-8 Markdown containing nonempty,
+   `---`-delimited YAML frontmatter, ATX and setext headings, nested ordered or
+   unordered lists,
    backtick or tilde fenced code blocks whose content may contain shorter fence
    runs, pipe tables, wikilinks, embeds, footnotes, HTML blocks, Obsidian
-   callouts, inline math, and ordinary paragraphs. CRLF and lone CR input are
-   normalized to LF before positions and digests are derived. CommonMark or
-   unrestricted HTML compatibility is not claimed.
+   callouts, inline math, and ordinary paragraphs. CRLF, lone CR, and LF are
+   treated uniformly for grammar recognition and line/column calculation, but
+   exact decoded source bytes are retained so every byte span round-trips
+   against the original UTF-8 input and representation digests distinguish
+   distinct inputs. Frontmatter payload bytes are retained but not interpreted
+   or used as authority; semantic YAML validation, CommonMark compatibility,
+   and unrestricted HTML compatibility are not claimed. An optional leading
+   UTF-8 BOM is retained for representation identity and treated only as a
+   transport marker preceding the first Fragment.
 3. **Existing output contracts.** The runner emits and deserializes only the
    existing `ParsedDocument`, `CompiledFragment`, `SourceSpan`,
    `StructuralPath`, `CompilationProvenance`, or typed `CompilationFailure`
    contracts. Rich constructs are projected into those existing section kinds;
    no parallel document or Fragment model is introduced.
 4. **Exact provenance.** Every Fragment carries an end-exclusive UTF-8 byte,
-   line, and column span. Its `source_text` is exactly the canonical input byte
+   line, and column span. Its `source_text` is exactly the original input byte
    slice at that span. Non-whitespace source bytes cannot be omitted. Table
    Fragments obey the same round-trip rule. Heading ancestry is derived during
    compilation and copied into the same budget-visible Fragment.
@@ -57,17 +64,26 @@ index and executes under the exact parent WorkerLease binding.
    heading ancestry, exact source span, and structural lineage. If heading
    ancestry alone leaves no capacity, or an indivisible construct cannot be
    represented within the ceiling, compilation refuses all-or-nothing.
-6. **Owned pure process.** The compiler-runner receives exact source bytes and
-   configuration, invokes the registered vendored parser region plus the
-   ContextEngine hierarchy/span/bounds kernel, and emits deterministic bytes.
-   It performs no network or database I/O and retains no independent state,
-   cache, index, or checkpoint.
+6. **Owned pure process.** This issue delivers an unleased local/acceptance
+   process only. It receives exact source bytes and configuration, executes the
+   registered RAGFlow element-recognition helpers plus the ContextEngine-owned
+   grammar, hierarchy, raw-span, and bounds kernel, and emits deterministic
+   bytes. The copied upstream file remains deliberately unmodified so its hash
+   stays independently auditable; the adapter calls its fence and table
+   recognition methods directly. ContextEngine rewrites rich construct
+   classification, exact raw-byte position mapping, ancestry, typed output,
+   and splitting because the upstream return shape cannot express those
+   contracts. The process performs no network or database I/O and retains no
+   independent state, cache, index, or checkpoint.
 7. **Activation remains deferred.** This decision proves the v3 pure transform
    and local acceptance reporting only. The active File import configuration,
    database publication functions, immutable Revision schemas, embeddings,
    and existing v1 Revision migration remain unchanged. Activating v3 for
    production publication requires a separate decision and complete atomic
-   publication and re-embedding evidence.
+   publication and re-embedding evidence. The Supply execution bridge in issue
+   #125 owns the future production invocation and must bind it to the exact
+   parent WorkerLease. No production module may call this issue's unleased
+   local subprocess helper.
 8. **Runtime remains sealed.** Compilation changes no Runtime composition.
    After any future v3 activation, each published Fragment is still only a
    candidate until it crosses the exact

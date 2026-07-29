@@ -10,4 +10,5 @@
 
 The verbatim upstream license and the complete path-level registration ship in
 `third_party/ragflow/`. The registered parser imports Python-Markdown, which is
-distributed under the BSD 3-Clause License.
+distributed under the BSD 3-Clause License; its verbatim license ships beside
+the registration as `LICENSE.python-markdown`.

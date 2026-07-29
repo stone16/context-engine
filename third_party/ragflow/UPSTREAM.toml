@@ -8,6 +8,9 @@ excluded_paths = [
 ]
 reuse_mode = "copy-patch"
 approval = "https://github.com/stone16/context-engine/issues/124"
+nested_dependencies = [
+  { name = "Python-Markdown", version = "3.6", license = "BSD-3-Clause", license_path = "third_party/ragflow/LICENSE.python-markdown" },
+]
 
 [[files]]
 upstream_path = "deepdoc/parser/markdown_parser.py"

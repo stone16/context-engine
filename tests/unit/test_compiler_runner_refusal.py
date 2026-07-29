@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from applications.compiler_runner import compile_in_compiler_runner
+from applications.compiler_runner import compile_in_local_compiler_runner
 from engine.supply import (
     CompilationFailure,
     CompilationFailureCode,
@@ -29,13 +29,29 @@ CONFIG = MarkdownCompilerConfig(version="markdown-config-v3")
             CompilationFailureCode.UNSUPPORTED_CONSTRUCT,
         ),
         (b"# Heading\n\ntruncated \xe4\xb8", CompilationFailureCode.INVALID_UTF8),
+        (
+            b"# Heading\n\nplain paragraph\n> ordinary blockquote\n",
+            CompilationFailureCode.UNSUPPORTED_CONSTRUCT,
+        ),
+        (
+            b"# Heading\n\n<script>alert('no')</script>\n",
+            CompilationFailureCode.UNSUPPORTED_CONSTRUCT,
+        ),
+        (
+            b"# Heading\n\n***\n",
+            CompilationFailureCode.UNSUPPORTED_CONSTRUCT,
+        ),
+        (
+            b"  ---\nkey: value\n---\n# Heading\n",
+            CompilationFailureCode.UNSUPPORTED_CONSTRUCT,
+        ),
     ],
 )
 def test_malformed_source_returns_typed_failure_across_runner_boundary(
     source: bytes,
     expected_code: CompilationFailureCode,
 ) -> None:
-    outcome = compile_in_compiler_runner(source, CONFIG)
+    outcome = compile_in_local_compiler_runner(source, CONFIG)
 
     assert type(outcome) is CompilationFailure
     assert outcome.code is expected_code

@@ -32,8 +32,13 @@ _UTF8_BOM: Final = b"\xef\xbb\xbf"
 _ATX_HEADING: Final = re.compile(r"^ {0,3}(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$")
 _SETEXT: Final = re.compile(r"^ {0,3}(=+|-+)[ \t]*$")
 _LIST_ITEM: Final = re.compile(r"^([ \t]*)(?:[-+*]|[0-9]+[.)])[ \t]+(.+)$")
-_FRONTMATTER_FIELD: Final = re.compile(r"^[A-Za-z0-9_.-]+[ \t]*:[ \t]*(?:.*)$")
 _TOKEN: Final = re.compile(r"\S+")
+_CALLOUT: Final = re.compile(r"^ {0,3}>[ \t]*\[![A-Za-z0-9_-]+][+-]?(?: .*)?$")
+_HTML_OPEN: Final = re.compile(
+    r"^ {0,3}<(?P<tag>section|div|details|summary|table|thead|tbody|tr|"
+    r"th|td|p|ul|ol|li)\b[^>]*>",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,10 +95,11 @@ def _failure(
 
 def _point(text: str, offset: int) -> SourcePoint:
     prefix = text[:offset]
-    last_newline = prefix.rfind("\n")
+    logical_prefix = prefix.replace("\r\n", "\n").replace("\r", "\n")
+    last_newline = logical_prefix.rfind("\n")
     return SourcePoint(
-        line=prefix.count("\n") + 1,
-        column=len(prefix[last_newline + 1 :]) + 1,
+        line=logical_prefix.count("\n") + 1,
+        column=len(logical_prefix[last_newline + 1 :]) + 1,
         byte_offset=len(prefix.encode("utf-8")),
     )
 
@@ -103,43 +109,46 @@ def _span(text: str, start: int, end: int) -> SourceSpan:
 
 
 def _normalize(source: bytes) -> str | CompilationFailure:
-    raw = source.removeprefix(_UTF8_BOM)
     try:
-        decoded = raw.decode("utf-8", errors="strict")
+        decoded = source.decode("utf-8", errors="strict")
     except UnicodeDecodeError as error:
-        safe_prefix = raw[: error.start].decode("utf-8", errors="strict")
-        normalized_prefix = safe_prefix.replace("\r\n", "\n").replace("\r", "\n")
+        safe_prefix = source[: error.start].decode("utf-8", errors="strict")
         return _failure(
             CompilationFailureCode.INVALID_UTF8,
-            normalized_prefix,
-            len(normalized_prefix),
+            safe_prefix,
+            len(safe_prefix),
         )
-    normalized = decoded.replace("\r\n", "\n").replace("\r", "\n")
     if any(
         character == "\x00" or 0x7F <= ord(character) <= 0x9F
-        for character in normalized
+        for character in decoded
     ):
         offset = next(
             index
-            for index, character in enumerate(normalized)
+            for index, character in enumerate(decoded)
             if character == "\x00" or 0x7F <= ord(character) <= 0x9F
         )
         return _failure(
             CompilationFailureCode.UNSUPPORTED_CONSTRUCT,
-            normalized,
+            decoded,
             offset,
             UnsupportedConstruct.CONTROL_CHARACTER,
         )
-    return normalized.rstrip("\n") + "\n"
+    return decoded
 
 
 def _line_layout(text: str) -> tuple[list[str], list[int]]:
-    lines = text.removesuffix("\n").split("\n")
+    raw_lines = text.splitlines(keepends=True)
+    if not raw_lines:
+        raw_lines = [""]
+    lines: list[str] = []
     starts: list[int] = []
     offset = 0
-    for line in lines:
-        starts.append(offset)
-        offset += len(line) + 1
+    for index, raw_line in enumerate(raw_lines):
+        content = raw_line.removesuffix("\n").removesuffix("\r")
+        bom_width = 1 if index == 0 and content.startswith("\ufeff") else 0
+        lines.append(content[bom_width:])
+        starts.append(offset + bom_width)
+        offset += len(raw_line)
     return lines, starts
 
 
@@ -152,20 +161,12 @@ def _table_cells(extractor: _ElementExtractor, line: str) -> tuple[str, ...]:
 
 
 def _frontmatter_end(lines: list[str]) -> int | None:
-    if not lines or lines[0].strip() != "---":
+    if not lines or lines[0] != "---":
         return None
     for index in range(1, len(lines)):
-        if lines[index].strip() == "---":
-            if index == 1:
+        if lines[index] == "---":
+            if index == 1 or not any(line.strip() for line in lines[1:index]):
                 return -1
-            for line in lines[1:index]:
-                if not line.strip():
-                    continue
-                if line.startswith((" ", "\t")):
-                    if re.fullmatch(r"[ \t]+-[ \t]+.+", line) is None:
-                        return -1
-                elif _FRONTMATTER_FIELD.fullmatch(line) is None:
-                    return -1
             return index
     return -1
 
@@ -339,8 +340,49 @@ def _blocks(text: str) -> tuple[_Block, ...] | CompilationFailure:
             continue
 
         if line.lstrip().startswith("<"):
+            html_open = _HTML_OPEN.match(line)
+            if html_open is None:
+                return _failure(
+                    CompilationFailureCode.UNSUPPORTED_CONSTRUCT,
+                    text,
+                    starts[index],
+                    UnsupportedConstruct.HTML,
+                )
+            tag = html_open.group("tag")
             end = index + 1
             while end < len(lines) and lines[end].strip():
+                end += 1
+            html_source = text[starts[index] : _line_end(lines, starts, end - 1)]
+            closing_tag = re.search(
+                rf"</{re.escape(tag)}[ \t]*>", html_source, re.IGNORECASE
+            )
+            if closing_tag is None:
+                return _failure(
+                    CompilationFailureCode.UNSUPPORTED_CONSTRUCT,
+                    text,
+                    starts[index],
+                    UnsupportedConstruct.HTML,
+                )
+            blocks.append(
+                _Block(
+                    kind=SectionKind.PARAGRAPH,
+                    start=starts[index],
+                    end=_line_end(lines, starts, end - 1),
+                )
+            )
+            index = end
+            continue
+
+        if line.lstrip().startswith(">"):
+            if _CALLOUT.fullmatch(line) is None:
+                return _failure(
+                    CompilationFailureCode.UNSUPPORTED_CONSTRUCT,
+                    text,
+                    starts[index],
+                    UnsupportedConstruct.BLOCKQUOTE,
+                )
+            end = index + 1
+            while end < len(lines) and lines[end].lstrip().startswith(">"):
                 end += 1
             blocks.append(
                 _Block(
@@ -352,12 +394,25 @@ def _blocks(text: str) -> tuple[_Block, ...] | CompilationFailure:
             index = end
             continue
 
+        if re.match(
+            r"^ {0,3}(?:#{1,6}[ \t]*|---[ \t]*|\*{3,}[ \t]*|_{3,}[ \t]*)$",
+            line,
+        ):
+            return _failure(
+                CompilationFailureCode.UNSUPPORTED_CONSTRUCT,
+                text,
+                starts[index],
+                UnsupportedConstruct.NESTED_HEADING,
+            )
+
         end = index + 1
         while end < len(lines) and lines[end].strip():
             if (
                 _ATX_HEADING.fullmatch(lines[end])
                 or extractor._get_fence_marker(lines[end]) is not None
                 or _LIST_ITEM.fullmatch(lines[end])
+                or lines[end].lstrip().startswith((">", "<"))
+                or re.fullmatch(r" {0,3}(?:\*{3,}|_{3,}|-{3,})[ \t]*", lines[end])
                 or (
                     end + 1 < len(lines)
                     and extractor._is_table_row(lines[end])
@@ -476,6 +531,18 @@ def compile_rich_markdown(
         capacity = token_ceiling - rich_token_count(ancestry)
         if block.kind is SectionKind.HEADING:
             ranges: tuple[tuple[int, int], ...] = ((0, len(full_source)),)
+            if rich_token_count(full_source) > capacity:
+                return _failure(
+                    CompilationFailureCode.UNSUPPORTED_DOCUMENT_SHAPE,
+                    normalized,
+                    block.start,
+                )
+        elif block.kind in {
+            SectionKind.LIST,
+            SectionKind.FENCED_CODE,
+            SectionKind.TABLE,
+        }:
+            ranges = ((0, len(full_source)),)
             if rich_token_count(full_source) > capacity:
                 return _failure(
                     CompilationFailureCode.UNSUPPORTED_DOCUMENT_SHAPE,

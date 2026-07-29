@@ -70,13 +70,13 @@ def _failure_from_document(value: object) -> CompilationFailure:
     )
 
 
-def compile_in_compiler_runner(
+def compile_in_local_compiler_runner(
     source: bytes,
     config: MarkdownCompilerConfig,
     *,
     token_ceiling: int = MARKDOWN_RICH_TOKEN_CEILING,
 ) -> CompilationOutcome:
-    """Compile once in a fresh, state-free ContextEngine-owned process."""
+    """Compile in an unleased local process that production must never call."""
 
     if type(source) is not bytes:
         raise TypeError("compiler-runner source must be exact bytes")

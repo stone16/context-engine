@@ -40,18 +40,18 @@ def test_tracked_rich_construct_corpus_compiles_all_or_nothing(fixture: str) -> 
 
 
 @pytest.mark.parametrize("fixture", RICH_FIXTURES)
-def test_every_fragment_span_round_trips_to_exact_canonical_utf8(
+def test_every_fragment_span_round_trips_to_exact_original_utf8(
     fixture: str,
 ) -> None:
-    outcome = compile_rich_markdown(_source(fixture), CONFIG)
+    source = _source(fixture)
+    outcome = compile_rich_markdown(source, CONFIG)
 
     assert type(outcome) is ParsedDocument
-    canonical = outcome.canonical_text.encode("utf-8")
     for fragment in outcome.fragments:
         span = fragment.position
-        assert canonical[span.start.byte_offset : span.end.byte_offset].decode(
-            "utf-8"
-        ) == fragment.source_text
+        assert source[span.start.byte_offset : span.end.byte_offset] == (
+            fragment.source_text.encode("utf-8")
+        )
 
 
 def test_nested_setext_and_duplicate_headings_have_stable_ancestry() -> None:
@@ -78,4 +78,37 @@ def test_nested_setext_and_duplicate_headings_have_stable_ancestry() -> None:
         "heading[1]",
         "heading[2]",
         "paragraph[1]",
+    )
+
+
+@pytest.mark.parametrize(
+    "frontmatter",
+    (
+        (
+            b"owner:\n"
+            b"  name: compiler\n"
+            b"  teams:\n"
+            b"    - supply\n"
+            b"description: |\n"
+            b"  Compiler metadata keeps\n"
+            b"  ---\n"
+            b"  its exact source lines.\n"
+        ),
+        b"- alpha\n- beta\n",
+    ),
+)
+def test_delimited_yaml_frontmatter_is_accepted_as_exact_source_fragment(
+    frontmatter: bytes,
+) -> None:
+    source = b"---\n" + frontmatter + b"---\n# Handbook\n"
+
+    outcome = compile_rich_markdown(source, CONFIG)
+
+    assert type(outcome) is ParsedDocument
+    frontmatter_fragment = outcome.fragments[0]
+    expected = source[: source.index(b"#")].rstrip(b"\n").decode()
+    assert frontmatter_fragment.source_text == expected
+    span = frontmatter_fragment.position
+    assert source[span.start.byte_offset : span.end.byte_offset] == (
+        frontmatter_fragment.source_text.encode("utf-8")
     )

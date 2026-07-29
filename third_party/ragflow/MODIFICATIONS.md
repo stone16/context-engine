@@ -12,17 +12,28 @@ root `NOTICE` file.
 
 The copied file imports only Python standard-library modules and
 Python-Markdown. Python-Markdown is licensed under the BSD 3-Clause License.
-No other nested third-party dependency is imported by the copied region.
+Its verbatim license for the pinned 3.6 dependency is retained as
+`LICENSE.python-markdown`. No other nested third-party dependency is imported
+by the copied region.
 
-## ContextEngine modifications
+## Executed reuse and ContextEngine-owned behavior
 
-The upstream bytes are retained under `deepdoc/parser/markdown_parser.py` for
-auditable provenance. ContextEngine adapters patch behavior through the owned
-compiler-runner and do not import RAGFlow package initializers or its `rag/nlp`
-dependency carriers. Local changes add exact UTF-8 spans, heading ancestry,
-hard bounds, versioned deterministic output, and typed refusal at the
-ContextEngine seam.
+The exact upstream file is copied and executed: the ContextEngine adapter
+constructs its `MarkdownElementExtractor` and calls the upstream fence-marker,
+closing-fence, table-row, table-separator, and table-cell recognition methods.
+No RAGFlow package initializer or `rag/nlp` dependency carrier is copied or
+imported.
 
-The empty `patches/` directory is reserved for future upgrades that change the
-registered upstream file itself. The current integration wraps the copied file,
-so no source patch applies.
+The broader compilation pipeline is ContextEngine-owned. It implements the
+closed rich grammar, raw-input UTF-8 spans, heading ancestry, hard bounds,
+versioned deterministic output, and typed refusal because the upstream parser
+does not return the existing ContextEngine contracts and lacks exact byte-span
+and hard-bound semantics. This is intentionally narrow reuse of one verified
+Apache-2.0 file, not a claim that the entire upstream parser pipeline executes.
+
+`sbom.cyclonedx.json` is the deterministic component inventory for the copied
+parser and its sole nested dependency. Both wheel and source distribution
+artifacts include it alongside the applicable license texts.
+
+The empty `patches/` directory records that no textual source patch applies:
+the current integration wraps and directly executes selected copied helpers.

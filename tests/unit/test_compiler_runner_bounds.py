@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from adapters.parsers.ragflow_markdown import compile_rich_markdown, rich_token_count
-from engine.supply import MarkdownCompilerConfig, ParsedDocument
+from engine.supply import CompilationFailure, MarkdownCompilerConfig, ParsedDocument
 
 CONFIG = MarkdownCompilerConfig(version="markdown-config-v3")
 
@@ -19,7 +19,6 @@ def test_oversize_blocks_split_under_hard_bound_with_exact_spans_and_ancestry() 
     assert type(outcome) is ParsedDocument
     paragraph_fragments = outcome.fragments[2:]
     assert len(paragraph_fragments) > 1
-    canonical = outcome.canonical_text.encode("utf-8")
     for fragment in paragraph_fragments:
         assert rich_token_count(fragment.contextual_text) <= ceiling
         assert tuple(heading.text for heading in fragment.parent_headings) == (
@@ -27,9 +26,34 @@ def test_oversize_blocks_split_under_hard_bound_with_exact_spans_and_ancestry() 
             "Deep",
         )
         span = fragment.position
-        assert canonical[span.start.byte_offset : span.end.byte_offset].decode(
-            "utf-8"
-        ) == fragment.source_text
+        assert source[span.start.byte_offset : span.end.byte_offset] == (
+            fragment.source_text.encode("utf-8")
+        )
     assert " ".join(fragment.source_text for fragment in paragraph_fragments) == (
         outcome.canonical_text.split("\n\n", 2)[2].rstrip("\n")
+    )
+
+
+def test_oversize_indivisible_code_block_refuses_instead_of_token_splitting() -> None:
+    ceiling = 32
+    code = " ".join(f"operation_{index}()" for index in range(200))
+    source = f"# Root\r\n\r\n```python\r\n{code}\r\n```\r\n".encode()
+
+    outcome = compile_rich_markdown(source, CONFIG, token_ceiling=ceiling)
+
+    assert type(outcome) is CompilationFailure
+
+
+def test_every_emitted_fragment_obeys_the_ceiling() -> None:
+    ceiling = 12
+    source = (
+        "# Root\n\n" + " ".join(f"word{index}" for index in range(80)) + "\n"
+    ).encode()
+
+    outcome = compile_rich_markdown(source, CONFIG, token_ceiling=ceiling)
+
+    assert type(outcome) is ParsedDocument
+    assert all(
+        rich_token_count(fragment.contextual_text) <= ceiling
+        for fragment in outcome.fragments
     )
