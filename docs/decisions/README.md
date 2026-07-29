@@ -179,3 +179,4 @@ touched:
 - [0075 — Reuse Onyx capabilities through owned runners and seams](0075-reuse-onyx-capabilities-through-owned-runners-and-seams.md)
 - [0076 — Rejoin rank evidence after authorization](0076-rejoin-rank-evidence-after-authorization.md)
 - [0077 — Fix the Article as the content authorization atom](0077-fix-the-article-as-the-content-authorization-atom.md)
+- [0078 — Narrow the contract-kit gate to per-connector twins](0078-narrow-the-contract-kit-gate-to-per-connector-twins.md)
