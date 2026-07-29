@@ -37,9 +37,9 @@ from engine.runtime.candidate_ranking import (
 )
 from engine.runtime.contracts import Acquire
 from engine.runtime.evidence import CandidateRef
-from engine.runtime.materialized import MaterializedProjectionSession
+from engine.runtime.materialized import CandidateDiscoverySession
 from engine.runtime.package_digest import QueryDigestKeyring
-from engine.runtime.scope import EffectiveScope
+from engine.runtime.scope import CandidateDiscoveryScope
 from tests.integration.test_zz_file_revision_replacement import (
     OLD_MARKDOWN,
     _resolve,
@@ -71,11 +71,11 @@ class _ReplayCandidateIndex:
     def discover(
         self,
         request: Acquire,
-        projection_session: MaterializedProjectionSession,
+        discovery_session: CandidateDiscoverySession,
         *,
-        effective_scope: EffectiveScope,
+        effective_scope: CandidateDiscoveryScope,
     ) -> CandidateQuery:
-        del request, projection_session, effective_scope
+        del request, discovery_session, effective_scope
         return CandidateQuery(
             ranked_lists=(
                 RankedCandidateList(

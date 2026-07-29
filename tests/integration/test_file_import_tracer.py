@@ -70,8 +70,10 @@ from engine.runtime.delivery_evidence import (
 )
 from engine.runtime.evidence import CandidateRef
 from engine.runtime.materialized import (
-    MaterializedProjectionSession,
+    CandidateDiscoverySession,
+    _close_candidate_discovery_session,
     _close_materialized_projection_scope,
+    _construct_candidate_discovery_session,
     _construct_materialized_projection_session,
     _observe_materialized_publication,
     _open_materialized_projection_scope,
@@ -81,7 +83,12 @@ from engine.runtime.organization import (
     _construct_existing_http_organization_verification,
 )
 from engine.runtime.package_digest import QueryDigestKeyring
-from engine.runtime.scope import EffectiveScope, ScopeSet, ScopeTarget
+from engine.runtime.scope import (
+    CandidateDiscoveryScope,
+    EffectiveScope,
+    ScopeSet,
+    ScopeTarget,
+)
 from engine.runtime.scope_authority import (
     TrustedScopeSnapshot,
     _close_scope_authority_scope,
@@ -304,13 +311,13 @@ class _ExactThenReplayCandidateIndex:
     def discover(
         self,
         request: Acquire,
-        projection_session: MaterializedProjectionSession,
+        discovery_session: CandidateDiscoverySession,
         *,
-        effective_scope: EffectiveScope,
+        effective_scope: CandidateDiscoveryScope,
     ) -> CandidateQuery:
         exact = self.exact.discover(
             request,
-            projection_session,
+            discovery_session,
             effective_scope=effective_scope,
         )
         if any(ranked_list.candidates for ranked_list in exact.ranked_lists):
@@ -1797,25 +1804,36 @@ def test_exact_phrase_discovery_does_not_hide_a_match_after_sixty_four_rows(
             )
             projection_scope = _open_materialized_projection_scope()
             try:
+                exact_scope = EffectiveScope(
+                    frozenset(
+                        {
+                            ScopeTarget(
+                                organization_id,
+                                "source:exact-limit",
+                            )
+                        }
+                    )
+                )
+                discovery_scope = CandidateDiscoveryScope(exact_scope.digest)
                 projection_session = _construct_materialized_projection_session(
                     authority_scope=projection_scope,
                     port=_PostgreSQLMaterializedProjectionPort(connection),
                 )
+                discovery_session = _construct_candidate_discovery_session(
+                    projection_session,
+                    PostgreSQLExactPhraseCandidateIndex().prepare_discovery(
+                        Acquire(need=ContextNeed(query="same exact paragraph")),
+                        effective_scope=discovery_scope,
+                    ),
+                    effective_scope=exact_scope,
+                )
                 discovered = PostgreSQLExactPhraseCandidateIndex().discover(
                     Acquire(need=ContextNeed(query="same exact paragraph")),
-                    projection_session,
-                    effective_scope=EffectiveScope(
-                        frozenset(
-                            {
-                                ScopeTarget(
-                                    organization_id,
-                                    "source:exact-limit",
-                                )
-                            }
-                        )
-                    ),
+                    discovery_session,
+                    effective_scope=discovery_scope,
                 )
             finally:
+                _close_candidate_discovery_session(discovery_session)
                 _close_materialized_projection_scope(projection_scope)
                 transaction.rollback()
     finally:

@@ -13,7 +13,7 @@ from engine.persistence.membership_context import (
     PostgreSQLMembershipAuthority,
 )
 from engine.runtime.construction import (
-    AuthorizationKernel,
+    _construct_authorization_kernel_and_selector,
     required_kernel_dependencies,
 )
 from engine.runtime.evidence import (
@@ -74,6 +74,13 @@ def test_real_postgres_window_is_same_article_current_revision_only(
     fixture = _new_fixture()
     article = fixture.org_a.authorized
     other_article = fixture.org_a.denied
+    forged_other_article = CandidateRef(
+        organization_id=other_article.organization_id,
+        source_ref=other_article.source_ref,
+        resource_ref="resource:forged-window-hint",
+        revision_ref=other_article.revision_ref,
+        fragment_ref=other_article.fragment_ref,
+    )
     neighbor = CandidateRef(
         organization_id=article.organization_id,
         source_ref=article.source_ref,
@@ -148,8 +155,10 @@ def test_real_postgres_window_is_same_article_current_revision_only(
                 },
             )
 
-        reader = PostgreSQLFragmentWindowReader()
-        kernel = AuthorizationKernel(required_kernel_dependencies())
+        kernel, _selector = _construct_authorization_kernel_and_selector(
+            required_kernel_dependencies(),
+            fragment_window_reader=PostgreSQLFragmentWindowReader(),
+        )
         authority = PostgreSQLMembershipAuthority(guarded_runtime_engine)
         scope = _open_authorization_kernel_scope()
         try:
@@ -179,9 +188,11 @@ def test_real_postgres_window_is_same_article_current_revision_only(
                         anchor=anchor,
                         before=0,
                         after=1,
-                        expansion_candidates=(other_article,),
+                        expansion_candidates=(
+                            other_article,
+                            forged_other_article,
+                        ),
                     ),
-                    reader=reader,
                     projection_session=projection_session,
                 )
                 with pytest.raises(
@@ -194,7 +205,6 @@ def test_real_postgres_window_is_same_article_current_revision_only(
                             before=0,
                             after=1,
                         ),
-                        reader=reader,
                         projection_session=projection_session,
                     )
         finally:
@@ -209,7 +219,10 @@ def test_real_postgres_window_is_same_article_current_revision_only(
             fixture.org_a.authorized_body,
             "ORG-A-AUTHORIZED-NEIGHBOR",
         )
-        assert window.reauthorization_refs == (other_article,)
+        assert window.reauthorization_refs == (
+            other_article,
+            forged_other_article,
+        )
         assert all(
             projection.candidate_ref.resource_ref == article.resource_ref
             and projection.candidate_ref.revision_ref == article.revision_ref

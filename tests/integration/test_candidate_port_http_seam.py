@@ -61,9 +61,12 @@ def test_http_candidate_port_seals_raw_refs_before_content_consumer(
         )
 
         assert observations == (0, 0, 0)
-        assert len(consumed) == 1
-        assert consumed[0].projection.candidate_ref == fixture.org_a.authorized
-        assert consumed[0].projection.projected_body == fixture.org_a.authorized_body
+        assert consumed
+        assert all(
+            item.projection.candidate_ref == fixture.org_a.authorized
+            and item.projection.projected_body == fixture.org_a.authorized_body
+            for item in consumed
+        )
         assert all(
             item.projection.candidate_ref not in {
                 fixture.org_a.denied,

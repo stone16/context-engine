@@ -298,7 +298,7 @@ def test_evidence_ref_binds_the_exact_projected_body() -> None:
     _close_authorization_kernel_scope(kernel_scope)
 
 
-def test_package_content_is_deterministic_and_exactly_links_each_projection() -> None:
+def test_package_content_preserves_authorized_order_and_links_each_projection() -> None:
     kernel_scope = _open_authorization_kernel_scope()
     projection_b = projection("b", "body b", kernel_scope=kernel_scope)
     projection_a = projection("a", "body a", kernel_scope=kernel_scope)
@@ -310,15 +310,15 @@ def test_package_content_is_deterministic_and_exactly_links_each_projection() ->
         (projection_a, projection_b)
     )
 
-    assert content_from_hostile_rank == content_from_reverse_rank
+    assert content_from_hostile_rank != content_from_reverse_rank
     assert isinstance(content_from_hostile_rank, PackageContent)
     assert tuple(block.body for block in content_from_hostile_rank.blocks) == (
-        "body a",
         "body b",
+        "body a",
     )
     assert tuple(item.fragment_ref for item in content_from_hostile_rank.evidence) == (
-        "fragment-a",
         "fragment-b",
+        "fragment-a",
     )
     assert tuple(block.evidence_ref for block in content_from_hostile_rank.blocks) == (
         tuple(item.evidence_ref for item in content_from_hostile_rank.evidence)

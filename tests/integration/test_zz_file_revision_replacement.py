@@ -28,9 +28,9 @@ from engine.runtime.candidate_ranking import CandidateQuery
 from engine.runtime.construction import Runtime, required_kernel_dependencies
 from engine.runtime.content_io import CandidateIndex, exact_phrase_digest
 from engine.runtime.contracts import Acquire
-from engine.runtime.materialized import MaterializedProjectionSession
+from engine.runtime.materialized import CandidateDiscoverySession
 from engine.runtime.package_digest import QueryDigestKeyring
-from engine.runtime.scope import EffectiveScope
+from engine.runtime.scope import CandidateDiscoveryScope
 from engine.supply import (
     MarkdownCompilerConfig,
     ParsedDocument,
@@ -295,16 +295,27 @@ class _BlockingCandidateIndex:
         self.release = Event()
         self._inner = PostgreSQLExactPhraseCandidateIndex()
 
+    def prepare_discovery(
+        self,
+        request: Acquire,
+        *,
+        effective_scope: CandidateDiscoveryScope,
+    ) -> object:
+        return self._inner.prepare_discovery(
+            request,
+            effective_scope=effective_scope,
+        )
+
     def discover(
         self,
         request: Acquire,
-        projection_session: MaterializedProjectionSession,
+        discovery_session: CandidateDiscoverySession,
         *,
-        effective_scope: EffectiveScope,
+        effective_scope: CandidateDiscoveryScope,
     ) -> CandidateQuery:
         candidates = self._inner.discover(
             request,
-            projection_session,
+            discovery_session,
             effective_scope=effective_scope,
         )
         self.discovered.set()

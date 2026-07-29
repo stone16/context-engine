@@ -15,11 +15,17 @@ from engine.runtime.contracts import Acquire, ContextNeed, RequestNarrowing
 from engine.runtime.evidence import CandidateRef
 from engine.runtime.materialized import (
     MaterializedProjectionPort,
+    _close_candidate_discovery_session,
     _close_materialized_projection_scope,
+    _construct_candidate_discovery_session,
     _construct_materialized_projection_session,
     _open_materialized_projection_scope,
 )
-from engine.runtime.scope import EffectiveScope, ScopeTarget
+from engine.runtime.scope import (
+    CandidateDiscoveryScope,
+    EffectiveScope,
+    ScopeTarget,
+)
 from engine.supply import EmbeddingProfile, EmbeddingProviderUnavailable
 
 
@@ -32,7 +38,7 @@ class _RecordingPort:
                 int,
                 tuple[str, ...] | None,
                 tuple[str, ...] | None,
-                EffectiveScope,
+                frozenset[ScopeTarget],
             ]
         ] = []
 
@@ -42,7 +48,7 @@ class _RecordingPort:
         limit: int,
         source_refs: tuple[str, ...] | None,
         resource_refs: tuple[str, ...] | None,
-        effective_scope: EffectiveScope,
+        effective_scope: frozenset[ScopeTarget],
     ) -> tuple[CandidateRef, ...]:
         self.calls.append(
             (
@@ -106,6 +112,10 @@ def _effective_scope() -> EffectiveScope:
     )
 
 
+def _discovery_scope() -> CandidateDiscoveryScope:
+    return CandidateDiscoveryScope(_effective_scope().digest)
+
+
 def test_vector_index_embeds_query_and_returns_only_bounded_candidate_refs() -> None:
     port = _RecordingPort((_candidate(),))
     scope = _open_materialized_projection_scope()
@@ -113,16 +123,29 @@ def test_vector_index_embeds_query_and_returns_only_bounded_candidate_refs() -> 
         authority_scope=scope,
         port=cast(MaterializedProjectionPort, port),
     )
+    plan = PostgreSQLVectorCandidateIndex(
+        DeterministicEmbeddingTwin(),
+        limit=1,
+    ).prepare_discovery(
+        Acquire(need=ContextNeed(query="semantic query")),
+        effective_scope=_discovery_scope(),
+    )
+    discovery_session = _construct_candidate_discovery_session(
+        session,
+        plan,
+        effective_scope=_effective_scope(),
+    )
     try:
         candidate_query = PostgreSQLVectorCandidateIndex(
             DeterministicEmbeddingTwin(),
             limit=1,
         ).discover(
             Acquire(need=ContextNeed(query="semantic query")),
-            session,
-            effective_scope=_effective_scope(),
+            discovery_session,
+            effective_scope=_discovery_scope(),
         )
     finally:
+        _close_candidate_discovery_session(discovery_session)
         _close_materialized_projection_scope(scope)
 
     assert tuple(
@@ -135,7 +158,7 @@ def test_vector_index_embeds_query_and_returns_only_bounded_candidate_refs() -> 
     assert limit == 1
     assert source_refs is None
     assert resource_refs is None
-    assert effective_scope == _effective_scope()
+    assert effective_scope == _effective_scope().targets
     assert set(CandidateRef.__dataclass_fields__) == {
         "organization_id",
         "source_ref",
@@ -152,22 +175,30 @@ def test_vector_index_applies_request_narrowing_before_ann_limit() -> None:
         authority_scope=scope,
         port=cast(MaterializedProjectionPort, port),
     )
+    request = Acquire(
+        need=ContextNeed(query="semantic query"),
+        narrowing=RequestNarrowing(
+            source_refs=("source:vector",),
+            resource_refs=("resource:vector",),
+        ),
+    )
+    index = PostgreSQLVectorCandidateIndex(
+        DeterministicEmbeddingTwin(),
+        limit=1,
+    )
+    discovery_session = _construct_candidate_discovery_session(
+        session,
+        index.prepare_discovery(request, effective_scope=_discovery_scope()),
+        effective_scope=_effective_scope(),
+    )
     try:
-        PostgreSQLVectorCandidateIndex(
-            DeterministicEmbeddingTwin(),
-            limit=1,
-        ).discover(
-            Acquire(
-                need=ContextNeed(query="semantic query"),
-                narrowing=RequestNarrowing(
-                    source_refs=("source:vector",),
-                    resource_refs=("resource:vector",),
-                ),
-            ),
-            session,
-            effective_scope=_effective_scope(),
+        index.discover(
+            request,
+            discovery_session,
+            effective_scope=_discovery_scope(),
         )
     finally:
+        _close_candidate_discovery_session(discovery_session)
         _close_materialized_projection_scope(scope)
 
     assert port.calls[0][2:4] == (
@@ -183,17 +214,22 @@ def test_vector_index_genericizes_query_embedding_failure_before_database_io() -
         authority_scope=scope,
         port=cast(MaterializedProjectionPort, port),
     )
+    discovery_session = _construct_candidate_discovery_session(
+        session,
+        None,
+        effective_scope=_effective_scope(),
+    )
     try:
         with pytest.raises(
             VectorCandidateIndexUnavailable,
             match="Vector candidate discovery is unavailable",
         ) as failure:
-            PostgreSQLVectorCandidateIndex(_UnavailableProvider()).discover(
+            PostgreSQLVectorCandidateIndex(_UnavailableProvider()).prepare_discovery(
                 Acquire(need=ContextNeed(query="semantic query")),
-                session,
-                effective_scope=_effective_scope(),
+                effective_scope=_discovery_scope(),
             )
     finally:
+        _close_candidate_discovery_session(discovery_session)
         _close_materialized_projection_scope(scope)
 
     assert failure.value.__cause__ is None

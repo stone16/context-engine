@@ -7,8 +7,10 @@ from typing import Protocol
 from engine.runtime.candidate_ranking import CandidateQuery
 from engine.runtime.contracts import Acquire
 from engine.runtime.fragment_window import FragmentWindowReader
-from engine.runtime.materialized import MaterializedProjectionSession
-from engine.runtime.scope import EffectiveScope
+from engine.runtime.materialized import (
+    CandidateDiscoverySession,
+)
+from engine.runtime.scope import CandidateDiscoveryScope
 
 __all__ = [
     "CandidateIndex",
@@ -38,9 +40,9 @@ class CandidateIndex(Protocol):
     def discover(
         self,
         request: Acquire,
-        projection_session: MaterializedProjectionSession,
+        discovery_session: CandidateDiscoverySession,
         *,
-        effective_scope: EffectiveScope,
+        effective_scope: CandidateDiscoveryScope,
     ) -> CandidateQuery: ...
 
 
@@ -71,14 +73,23 @@ class RuntimeContentIo:
 
 
 class _ProhibitedCandidateIndex:
+    def prepare_discovery(
+        self,
+        request: Acquire,
+        *,
+        effective_scope: CandidateDiscoveryScope,
+    ) -> None:
+        del request, effective_scope
+        return None
+
     def discover(
         self,
         request: Acquire,
-        projection_session: MaterializedProjectionSession,
+        discovery_session: CandidateDiscoverySession,
         *,
-        effective_scope: EffectiveScope,
+        effective_scope: CandidateDiscoveryScope,
     ) -> CandidateQuery:
-        del request, projection_session, effective_scope
+        del request, discovery_session, effective_scope
         raise RuntimeError("candidate index is prohibited on the empty Package path")
 
 

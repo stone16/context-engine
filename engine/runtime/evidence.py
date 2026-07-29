@@ -653,7 +653,7 @@ def _evidence_ref_for_projection(projection: AuthorizedProjection) -> str:
 def construct_package_content(
     projections: tuple[AuthorizedProjection, ...],
 ) -> PackageContent:
-    """Build deterministic Package content only from active authorized values."""
+    """Build Package content in the authorized stage's exact supplied order."""
 
     if type(projections) is not tuple or any(
         type(projection) is not AuthorizedProjection for projection in projections
@@ -676,13 +676,9 @@ def construct_package_content(
         ):
             raise ValueError("package projections must share one request decision")
 
-    ordered = sorted(
-        projections,
-        key=lambda projection: _candidate_sort_key(projection.candidate_ref),
-    )
     blocks: list[PackageBlock] = []
     evidence: list[Evidence] = []
-    for projection in ordered:
+    for projection in projections:
         candidate_ref = projection.candidate_ref
         evidence_ref = _evidence_ref_for_projection(projection)
         evidence.append(

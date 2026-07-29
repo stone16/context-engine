@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from collections import deque
 from datetime import UTC, datetime
 
 import pytest
 
 from engine.runtime.construction import (
-    AuthorizationKernel,
+    Runtime,
+    _construct_authorization_kernel_and_selector,
     required_kernel_dependencies,
 )
 from engine.runtime.evidence import (
@@ -14,7 +16,12 @@ from engine.runtime.evidence import (
     _construct_authorized_projection,
     _open_authorization_kernel_scope,
 )
-from engine.runtime.fragment_window import FragmentWindowRead, FragmentWindowRequest
+from engine.runtime.fragment_window import (
+    FragmentWindowRead,
+    FragmentWindowRequest,
+    FragmentWindowSession,
+    _read_fragment_window_session,
+)
 from engine.runtime.materialized import (
     MaterializedFieldValue,
     MaterializedFragmentProjection,
@@ -44,14 +51,19 @@ class _AuthoritativeWindowPort(RecordingMaterializedPort):
         anchor: object,
         before: int,
         after: int,
-    ) -> tuple[MaterializedFragmentWindowItem, ...]:
+        expansion_candidates: tuple[object, ...],
+    ) -> FragmentWindowRead:
         assert anchor == locator(AUTHORIZED)
         assert (before, after) == (0, 0)
-        return (
-            MaterializedFragmentWindowItem(
-                locator=locator(AUTHORIZED),
-                projection=_projection("A-safe"),
+        assert expansion_candidates == ()
+        return FragmentWindowRead(
+            items=(
+                MaterializedFragmentWindowItem(
+                    locator=locator(AUTHORIZED),
+                    projection=_projection("A-safe"),
+                ),
             ),
+            reauthorization_refs=(),
         )
 
 
@@ -59,9 +71,9 @@ class _ForgedWindowReader:
     def read_window(
         self,
         request: FragmentWindowRequest,
-        projection_session: object,
+        window_session: FragmentWindowSession,
     ) -> FragmentWindowRead:
-        del request, projection_session
+        del request, window_session
         return FragmentWindowRead(
             items=(
                 MaterializedFragmentWindowItem(
@@ -73,9 +85,59 @@ class _ForgedWindowReader:
         )
 
 
+class _ReachableContentAttackReader:
+    def __init__(self) -> None:
+        self.arbitrary_content_capability_was_reachable = False
+
+    def read_window(
+        self,
+        request: FragmentWindowRequest,
+        window_session: FragmentWindowSession,
+    ) -> FragmentWindowRead:
+        queue = deque((request, window_session))
+        seen: set[int] = set()
+        while queue:
+            reachable = queue.popleft()
+            if id(reachable) in seen:
+                continue
+            seen.add(id(reachable))
+            for name in ("project", "locate", "read_fragment_window"):
+                if callable(getattr(reachable, name, None)):
+                    self.arbitrary_content_capability_was_reachable = True
+            slots = getattr(type(reachable), "__slots__", ())
+            if isinstance(slots, str):
+                slots = (slots,)
+            for slot in slots:
+                try:
+                    value = getattr(reachable, slot)
+                except AttributeError:
+                    continue
+                if value is not reachable:
+                    queue.append(value)
+            attributes = getattr(reachable, "__dict__", None)
+            if isinstance(attributes, dict):
+                queue.extend(attributes.values())
+        return _read_fragment_window_session(window_session)
+
+
+class _AliasingMutationReader:
+    def read_window(
+        self,
+        request: FragmentWindowRequest,
+        window_session: FragmentWindowSession,
+    ) -> FragmentWindowRead:
+        del request
+        read = _read_fragment_window_session(window_session)
+        object.__setattr__(
+            read.items[0].projection.fields[0],
+            "field_value",
+            "FORGED-THROUGH-ALIASED-READ",
+        )
+        return read
+
+
 def test_kernel_independently_verifies_fragment_reader_lineage_and_projection() -> None:
     port = _AuthoritativeWindowPort()
-    kernel = AuthorizationKernel(required_kernel_dependencies())
     scope = _open_authorization_kernel_scope()
     try:
         anchor = _construct_authorized_projection(
@@ -105,9 +167,103 @@ def test_kernel_independently_verifies_fragment_reader_lineage_and_projection() 
                 invocation.user_actor.materialized_projection_session
             )
             assert type(projection_session) is MaterializedProjectionSession
+            kernel, _selector = _construct_authorization_kernel_and_selector(
+                required_kernel_dependencies(),
+                fragment_window_reader=_ForgedWindowReader(),
+            )
             kernel.expand_fragment_window(
                 FragmentWindowRequest(anchor=anchor, before=0, after=0),
-                reader=_ForgedWindowReader(),
+                projection_session=projection_session,
+            )
+    finally:
+        _close_authorization_kernel_scope(scope)
+
+
+def test_fragment_window_is_not_a_second_runtime_delivery_surface() -> None:
+    assert not hasattr(Runtime, "expand_fragment_window")
+
+
+def test_fragment_reader_cannot_reach_an_arbitrary_content_capability() -> None:
+    port = _AuthoritativeWindowPort()
+    reader = _ReachableContentAttackReader()
+    scope = _open_authorization_kernel_scope()
+    try:
+        anchor = _construct_authorized_projection(
+            kernel_scope=scope,
+            candidate_ref=AUTHORIZED,
+            body="A-safe",
+            projected_field_refs=("body",),
+            lineage=EvidenceLineage(
+                run_ref="run:fragment-window-capability",
+                principal_ref="principal-authorized-evidence",
+                purpose="context.answer",
+                as_of=datetime(2026, 7, 29, tzinfo=UTC),
+                decision_ref="decision:fragment-window-capability",
+                policy_snapshot_ref="policy:fragment-window-capability",
+                policy_epoch=7,
+                source_acl_decision_ref="sourceacl:fragment-window-capability",
+            ),
+        )
+        with trusted_operands(port) as (invocation, _):
+            projection_session = (
+                invocation.user_actor.materialized_projection_session
+            )
+            assert type(projection_session) is MaterializedProjectionSession
+            kernel, _selector = _construct_authorization_kernel_and_selector(
+                required_kernel_dependencies(),
+                fragment_window_reader=reader,
+            )
+            result = kernel.expand_fragment_window(
+                FragmentWindowRequest(anchor=anchor, before=0, after=0),
+                projection_session=projection_session,
+            )
+        assert reader.arbitrary_content_capability_was_reachable is False
+        assert tuple(item.projected_body for item in result.projections) == (
+            "A-safe",
+        )
+    finally:
+        _close_authorization_kernel_scope(scope)
+
+
+def test_fragment_reader_cannot_mutate_both_sides_of_authoritative_comparison() -> (
+    None
+):
+    port = _AuthoritativeWindowPort()
+    scope = _open_authorization_kernel_scope()
+    try:
+        anchor = _construct_authorized_projection(
+            kernel_scope=scope,
+            candidate_ref=AUTHORIZED,
+            body="A-safe",
+            projected_field_refs=("body",),
+            lineage=EvidenceLineage(
+                run_ref="run:fragment-window-alias",
+                principal_ref="principal-authorized-evidence",
+                purpose="context.answer",
+                as_of=datetime(2026, 7, 29, tzinfo=UTC),
+                decision_ref="decision:fragment-window-alias",
+                policy_snapshot_ref="policy:fragment-window-alias",
+                policy_epoch=7,
+                source_acl_decision_ref="sourceacl:fragment-window-alias",
+            ),
+        )
+        with (
+            trusted_operands(port) as (invocation, _),
+            pytest.raises(
+                ValueError,
+                match="fragment window reader failed authoritative verification",
+            ),
+        ):
+            projection_session = (
+                invocation.user_actor.materialized_projection_session
+            )
+            assert type(projection_session) is MaterializedProjectionSession
+            kernel, _selector = _construct_authorization_kernel_and_selector(
+                required_kernel_dependencies(),
+                fragment_window_reader=_AliasingMutationReader(),
+            )
+            kernel.expand_fragment_window(
+                FragmentWindowRequest(anchor=anchor, before=0, after=0),
                 projection_session=projection_session,
             )
     finally:

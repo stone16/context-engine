@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import NoReturn, Protocol
 
 from engine.runtime.evidence import AuthorizedProjection, CandidateRef
 from engine.runtime.materialized import (
-    MaterializedFragmentWindowItem,
-    MaterializedProjectionSession,
+    MaterializedFragmentWindowRead,
 )
 
 __all__ = [
@@ -17,6 +16,7 @@ __all__ = [
     "FragmentWindowRead",
     "FragmentWindowRequest",
     "FragmentWindowResult",
+    "FragmentWindowSession",
 ]
 
 
@@ -53,6 +53,8 @@ class FragmentWindowRequest:
             for candidate in self.expansion_candidates
         ):
             raise TypeError("expansion candidates require exact CandidateRef values")
+        if len(self.expansion_candidates) > 64:
+            raise ValueError("fragment expansion candidates must be bounded")
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,23 +65,89 @@ class FragmentWindowResult:
     reauthorization_refs: tuple[CandidateRef, ...] = field(repr=False)
 
 
-@dataclass(frozen=True, slots=True)
-class FragmentWindowRead:
-    """Internal current-lineage read awaiting Kernel-owned construction."""
+class FragmentWindowSession:
+    """Request-bound window read with no arbitrary content/database capability."""
 
-    items: tuple[MaterializedFragmentWindowItem, ...] = field(repr=False)
-    reauthorization_refs: tuple[CandidateRef, ...] = field(repr=False)
+    __slots__ = ("_active", "_read")
+    _active: bool
+    _read: MaterializedFragmentWindowRead
 
-    def __post_init__(self) -> None:
-        if type(self.items) is not tuple or not self.items or any(
-            type(item) is not MaterializedFragmentWindowItem for item in self.items
-        ):
-            raise ValueError("fragment window read requires materialized items")
-        if type(self.reauthorization_refs) is not tuple or any(
-            type(candidate) is not CandidateRef
-            for candidate in self.reauthorization_refs
-        ):
-            raise TypeError("fragment window read requires exact reauthorization refs")
+    def __init__(self) -> None:
+        raise TypeError("FragmentWindowSession can only be constructed by Kernel")
+
+    def __reduce__(self) -> NoReturn:
+        raise TypeError("FragmentWindowSession is not serializable")
+
+
+def _construct_fragment_window_session(
+    read: MaterializedFragmentWindowRead,
+) -> FragmentWindowSession:
+    if type(read) is not MaterializedFragmentWindowRead:
+        raise TypeError("FragmentWindowSession requires an exact materialized read")
+    read.__post_init__()
+    session = object.__new__(FragmentWindowSession)
+    session._active = True
+    session._read = read
+    return session
+
+
+def _read_fragment_window_session(
+    session: FragmentWindowSession,
+) -> MaterializedFragmentWindowRead:
+    if type(session) is not FragmentWindowSession:
+        raise TypeError("fragment window session has the wrong nominal type")
+    if not session._active:
+        raise ValueError("fragment window session is inactive")
+    return session._read
+
+
+def _close_fragment_window_session(session: FragmentWindowSession) -> None:
+    if type(session) is not FragmentWindowSession:
+        raise TypeError("fragment window session has the wrong nominal type")
+    session._active = False
+    session._read = MaterializedFragmentWindowRead((), ())
+
+
+def _fragment_window_read_snapshot(
+    read: MaterializedFragmentWindowRead,
+) -> tuple[object, ...]:
+    """Copy one read into immutable primitive values for hostile-port comparison."""
+
+    if type(read) is not MaterializedFragmentWindowRead:
+        raise TypeError("fragment window snapshot requires an exact read")
+    read.__post_init__()
+    return (
+        tuple(
+            (
+                item.locator.organization_id.bytes,
+                item.locator.source_ref,
+                item.locator.resource_ref,
+                item.locator.revision_ref,
+                item.locator.fragment_ref,
+                item.projection.kind.value,
+                tuple(
+                    (
+                        field_value.field_ref,
+                        field_value.field_value,
+                        field_value.ordinal,
+                    )
+                    for field_value in item.projection.fields
+                ),
+                tuple(sorted(item.projection.projection_ceiling)),
+            )
+            for item in read.items
+        ),
+        tuple(
+            (
+                candidate.organization_id.bytes,
+                candidate.source_ref,
+                candidate.resource_ref,
+                candidate.revision_ref,
+                candidate.fragment_ref,
+            )
+            for candidate in read.reauthorization_refs
+        ),
+    )
 
 
 class FragmentWindowReader(Protocol):
@@ -88,5 +156,8 @@ class FragmentWindowReader(Protocol):
     def read_window(
         self,
         request: FragmentWindowRequest,
-        projection_session: MaterializedProjectionSession,
-    ) -> FragmentWindowRead: ...
+        window_session: FragmentWindowSession,
+    ) -> MaterializedFragmentWindowRead: ...
+
+
+FragmentWindowRead = MaterializedFragmentWindowRead

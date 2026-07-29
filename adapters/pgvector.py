@@ -10,10 +10,11 @@ from engine.runtime.candidate_ranking import (
 from engine.runtime.content_io import CandidateIndexUnavailable
 from engine.runtime.contracts import Acquire
 from engine.runtime.materialized import (
-    MaterializedProjectionSession,
-    _discover_materialized_vector,
+    CandidateDiscoverySession,
+    VectorDiscoveryRequest,
+    _discover_materialized_candidates,
 )
-from engine.runtime.scope import EffectiveScope
+from engine.runtime.scope import CandidateDiscoveryScope
 from engine.supply import (
     CONTEXT_FRAGMENT_EMBEDDING_DIMENSION,
     EmbeddingProfile,
@@ -57,51 +58,65 @@ class PostgreSQLVectorCandidateIndex:
         self._embedding_profile = embedding_profile
         self._limit = limit
 
-    def discover(
+    def prepare_discovery(
         self,
         request: Acquire,
-        projection_session: MaterializedProjectionSession,
         *,
-        effective_scope: EffectiveScope,
-    ) -> CandidateQuery:
+        effective_scope: CandidateDiscoveryScope,
+    ) -> VectorDiscoveryRequest:
         if type(request) is not Acquire:
             raise TypeError("Vector candidate discovery requires Acquire")
-        if type(effective_scope) is not EffectiveScope:
-            raise TypeError("Vector candidate discovery requires EffectiveScope")
+        if type(effective_scope) is not CandidateDiscoveryScope:
+            raise TypeError(
+                "Vector candidate discovery requires CandidateDiscoveryScope"
+            )
         try:
             query_embedding = validate_embedding_batch(
                 (request.need.query,),
                 self._embedding_provider.embed((request.need.query,)),
                 self._embedding_profile,
             )[0]
-            candidates = _discover_materialized_vector(
-                projection_session,
-                query_embedding,
-                self._limit,
-                source_refs=(
-                    request.narrowing.source_refs
-                    if request.narrowing is not None
-                    else None
-                ),
-                resource_refs=(
-                    request.narrowing.resource_refs
-                    if request.narrowing is not None
-                    else None
-                ),
-                effective_scope=effective_scope,
-            )
-            return CandidateQuery(
-                ranked_lists=(
-                    RankedCandidateList(
-                        ranker_ref="vector",
-                        candidates=tuple(
-                            RankedCandidate(candidate_ref=candidate)
-                            for candidate in candidates
-                        ),
-                    ),
-                )
-            )
         except EmbeddingProviderUnavailable:
             raise VectorCandidateIndexUnavailable(
                 "Vector candidate discovery is unavailable"
             ) from None
+        return VectorDiscoveryRequest(
+            query_embedding=query_embedding,
+            limit=self._limit,
+            source_refs=(
+                request.narrowing.source_refs
+                if request.narrowing is not None
+                else None
+            ),
+            resource_refs=(
+                request.narrowing.resource_refs
+                if request.narrowing is not None
+                else None
+            ),
+        )
+
+    def discover(
+        self,
+        request: Acquire,
+        discovery_session: CandidateDiscoverySession,
+        *,
+        effective_scope: CandidateDiscoveryScope,
+    ) -> CandidateQuery:
+        if type(request) is not Acquire:
+            raise TypeError("Vector candidate discovery requires Acquire")
+        if type(effective_scope) is not CandidateDiscoveryScope:
+            raise TypeError(
+                "Vector candidate discovery requires CandidateDiscoveryScope"
+            )
+        candidates = _discover_materialized_candidates(discovery_session)
+        return CandidateQuery(
+            ranked_lists=(
+                RankedCandidateList(
+                    ranker_ref="vector",
+                    candidates=tuple(
+                        RankedCandidate(candidate_ref=candidate)
+                        for candidate in candidates
+                    ),
+                ),
+            )
+        )

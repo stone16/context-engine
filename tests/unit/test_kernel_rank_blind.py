@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+from dataclasses import fields
 from typing import cast
 
 from engine.runtime.candidate_ranking import CandidateRankEvidence, RankerEvidence
@@ -9,7 +10,9 @@ from engine.runtime.construction import (
     AuthorizationDecision,
     AuthorizationKernel,
     PreparedAcquireAuthorization,
+    SealedPackageSelection,
     _close_authorization_decision,
+    _construct_authorization_kernel_and_selector,
     _OpaqueReferenceIssuer,
     required_kernel_dependencies,
 )
@@ -96,10 +99,26 @@ def test_kernel_accepts_sorted_refs_but_no_rank_or_discovery_dependency() -> Non
         value not in {CandidateRankEvidence, CandidateIndex}
         for value in hints.values()
     )
+    for method_name, method in inspect.getmembers(
+        AuthorizationKernel,
+        predicate=inspect.isfunction,
+    ):
+        assert "rank" not in method_name.lower()
+        method_hints = inspect.get_annotations(method)
+        assert all(
+            "rank" not in name.lower() and "rank" not in str(annotation).lower()
+            for name, annotation in method_hints.items()
+        )
+    assert all(
+        "rank" not in item.name.lower()
+        for item in fields(SealedPackageSelection)
+    )
 
 
 def test_permuting_rank_evidence_cannot_change_kernel_decision() -> None:
-    kernel = AuthorizationKernel(required_kernel_dependencies())
+    kernel, _selector = _construct_authorization_kernel_and_selector(
+        required_kernel_dependencies()
+    )
     port = RecordingMaterializedPort()
     request = Acquire(need=ContextNeed(query="rank-blind authorization"))
 

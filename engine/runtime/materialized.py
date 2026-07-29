@@ -11,12 +11,20 @@ from engine.runtime.evidence import (
     CandidateRef,
     validate_projected_field_refs,
 )
-from engine.runtime.scope import EffectiveScope, ScopeTarget
+from engine.runtime.scope import (
+    CandidateDiscoveryScope,
+    EffectiveScope,
+    ScopeTarget,
+    _require_candidate_discovery_scope_integrity,
+)
 
 __all__ = [
+    "CandidateDiscoverySession",
+    "ExactPhraseDiscoveryRequest",
     "MaterializedFieldValue",
     "MaterializedFragmentLocator",
     "MaterializedFragmentProjection",
+    "MaterializedFragmentWindowRead",
     "MaterializedFragmentWindowItem",
     "MaterializedProjectionKind",
     "MaterializedProjectionPort",
@@ -25,6 +33,7 @@ __all__ = [
     "MaterializedScopeOperands",
     "MaterializedScopePort",
     "MaterializedScopeUnavailable",
+    "VectorDiscoveryRequest",
 ]
 
 _STRUCTURED_FIELD_LINE_BREAKS: Final = frozenset(
@@ -244,22 +253,29 @@ class MaterializedFragmentWindowItem:
             raise TypeError("window item projection has the wrong nominal type")
 
 
+@dataclass(frozen=True, slots=True)
+class MaterializedFragmentWindowRead:
+    """Authoritative expansion read from one retained Runtime transaction."""
+
+    items: tuple[MaterializedFragmentWindowItem, ...] = field(repr=False)
+    reauthorization_refs: tuple[CandidateRef, ...] = field(repr=False)
+
+    def __post_init__(self) -> None:
+        if type(self.items) is not tuple or any(
+            type(item) is not MaterializedFragmentWindowItem for item in self.items
+        ):
+            raise TypeError("materialized fragment window requires exact items")
+        if type(self.reauthorization_refs) is not tuple or any(
+            type(candidate) is not CandidateRef
+            for candidate in self.reauthorization_refs
+        ):
+            raise TypeError(
+                "materialized fragment window requires exact reauthorization refs"
+            )
+
+
 class MaterializedProjectionPort(Protocol):
     """Narrow operations executed by the owning current database transaction."""
-
-    def discover_vector(
-        self,
-        query_embedding: tuple[float, ...],
-        limit: int,
-        source_refs: tuple[str, ...] | None,
-        resource_refs: tuple[str, ...] | None,
-        effective_scope: EffectiveScope,
-    ) -> tuple[CandidateRef, ...]: ...
-
-    def discover_exact_phrase(
-        self,
-        phrase_digest: str,
-    ) -> tuple[CandidateRef, ...]: ...
 
     def source_is_active(self, source_ref: UUID) -> bool: ...
 
@@ -278,6 +294,7 @@ class MaterializedProjectionPort(Protocol):
         locator: MaterializedFragmentLocator,
     ) -> MaterializedFragmentProjection | None: ...
 
+
 @runtime_checkable
 class MaterializedScopePort(Protocol):
     """Explicit optional capability for independent trusted scope operands."""
@@ -295,7 +312,9 @@ class _MaterializedFragmentWindowPort(Protocol):
         anchor: MaterializedFragmentLocator,
         before: int,
         after: int,
-    ) -> tuple[MaterializedFragmentWindowItem, ...]: ...
+        expansion_candidates: tuple[CandidateRef, ...],
+    ) -> MaterializedFragmentWindowRead: ...
+
 
 class _MaterializedProjectionScope:
     """Private lifetime token owned by one current UserActor transaction."""
@@ -350,6 +369,66 @@ class MaterializedProjectionSession:
         raise TypeError("MaterializedProjectionSession is not serializable")
 
 
+@dataclass(frozen=True, slots=True)
+class ExactPhraseDiscoveryRequest:
+    """Validated content-free exact-phrase lookup plan."""
+
+    phrase_digest: str
+
+    def __post_init__(self) -> None:
+        if type(self.phrase_digest) is not str or not self.phrase_digest:
+            raise ValueError("exact phrase digest must be nonblank")
+
+
+@dataclass(frozen=True, slots=True)
+class VectorDiscoveryRequest:
+    """Validated content-free vector lookup plan."""
+
+    query_embedding: tuple[float, ...]
+    limit: int
+    source_refs: tuple[str, ...] | None = None
+    resource_refs: tuple[str, ...] | None = None
+
+    def __post_init__(self) -> None:
+        if type(self.query_embedding) is not tuple or not self.query_embedding:
+            raise ValueError("vector discovery requires a nonempty query embedding")
+        if any(type(value) is not float for value in self.query_embedding):
+            raise TypeError("vector discovery embedding requires exact floats")
+        if type(self.limit) is not int or self.limit <= 0:
+            raise ValueError("vector discovery requires a positive exact limit")
+        for field_name, refs in (
+            ("source_refs", self.source_refs),
+            ("resource_refs", self.resource_refs),
+        ):
+            if refs is not None and (
+                type(refs) is not tuple
+                or not refs
+                or any(type(ref) is not str or not ref for ref in refs)
+            ):
+                raise ValueError(
+                    f"vector discovery {field_name} must be nonempty refs"
+                )
+
+
+CandidateDiscoveryRequest = ExactPhraseDiscoveryRequest | VectorDiscoveryRequest
+
+
+class CandidateDiscoverySession:
+    """Disposable data-only discovery result; carries no database capability."""
+
+    __slots__ = ("_active", "_candidates")
+    _active: bool
+    _candidates: tuple[CandidateRef, ...]
+
+    def __init__(self) -> None:
+        raise TypeError(
+            "CandidateDiscoverySession can only be constructed by Runtime"
+        )
+
+    def __reduce__(self) -> NoReturn:
+        raise TypeError("CandidateDiscoverySession is not serializable")
+
+
 def _require_active_materialized_projection_session(
     session: MaterializedProjectionSession,
 ) -> None:
@@ -386,8 +465,6 @@ def _construct_materialized_projection_session(
         not callable(getattr(port, "source_is_active", None))
         or not callable(getattr(port, "locate", None))
         or not callable(getattr(port, "project", None))
-        or not callable(getattr(port, "discover_vector", None))
-        or not callable(getattr(port, "discover_exact_phrase", None))
         or not callable(getattr(port, "observe_publication", None))
     ):
         raise TypeError("materialized projection port is incomplete")
@@ -400,6 +477,85 @@ def _construct_materialized_projection_session(
         port if isinstance(port, MaterializedScopePort) else None,
     )
     return session
+
+
+def _construct_candidate_discovery_session(
+    session: MaterializedProjectionSession,
+    request: CandidateDiscoveryRequest | None,
+    *,
+    effective_scope: EffectiveScope,
+) -> CandidateDiscoverySession:
+    """Execute trusted lookup, then expose only its content-free result."""
+
+    _require_active_materialized_projection_session(session)
+    from engine.runtime.scope import _require_effective_scope_integrity
+
+    _require_effective_scope_integrity(effective_scope)
+    if request is None:
+        candidates: tuple[CandidateRef, ...] = ()
+    elif type(request) is ExactPhraseDiscoveryRequest:
+        discover_exact_phrase = getattr(
+            session._port,
+            "discover_exact_phrase",
+            None,
+        )
+        if not callable(discover_exact_phrase):
+            raise TypeError("materialized candidate discovery port is incomplete")
+        candidates = discover_exact_phrase(request.phrase_digest)
+    elif type(request) is VectorDiscoveryRequest:
+        discover_vector = getattr(session._port, "discover_vector", None)
+        if not callable(discover_vector):
+            raise TypeError("materialized candidate discovery port is incomplete")
+        candidates = discover_vector(
+            request.query_embedding,
+            request.limit,
+            request.source_refs,
+            request.resource_refs,
+            frozenset(effective_scope.targets),
+        )
+        if len(candidates) > request.limit:
+            raise TypeError(
+                "materialized vector discovery must return bounded candidates"
+            )
+    else:
+        raise TypeError("candidate discovery request has the wrong nominal type")
+    if type(candidates) is not tuple or any(
+        type(candidate) is not CandidateRef for candidate in candidates
+    ):
+        raise TypeError(
+            "materialized discovery must return exact CandidateRef values"
+        )
+    discovery = object.__new__(CandidateDiscoverySession)
+    discovery._active = True
+    discovery._candidates = candidates
+    return discovery
+
+
+def _candidate_discovery_candidates(
+    session: CandidateDiscoverySession,
+) -> tuple[CandidateRef, ...]:
+    if type(session) is not CandidateDiscoverySession:
+        raise TypeError("candidate discovery session has the wrong nominal type")
+    if not session._active:
+        raise ValueError("candidate discovery session is inactive")
+    return session._candidates
+
+
+def _discover_materialized_candidates(
+    session: CandidateDiscoverySession,
+) -> tuple[CandidateRef, ...]:
+    """Return the already-materialized content-free lookup result once."""
+
+    return _candidate_discovery_candidates(session)
+
+
+def _close_candidate_discovery_session(
+    session: CandidateDiscoverySession,
+) -> None:
+    if type(session) is not CandidateDiscoverySession:
+        raise TypeError("candidate discovery session has the wrong nominal type")
+    session._active = False
+    session._candidates = ()
 
 
 def _current_materialized_scope_operands(
@@ -466,42 +622,33 @@ def _locate_materialized_fragment(
 
 
 def _discover_materialized_exact_phrase(
-    session: MaterializedProjectionSession,
+    session: CandidateDiscoverySession,
     phrase_digest: str,
 ) -> tuple[CandidateRef, ...]:
     """Discover content-free lineage on the retained current-UserActor transaction."""
 
-    _require_active_materialized_projection_session(session)
     if type(phrase_digest) is not str or not phrase_digest:
         raise ValueError("exact phrase digest must be nonblank")
-    candidates = session._port.discover_exact_phrase(phrase_digest)
-    if type(candidates) is not tuple or any(
-        type(candidate) is not CandidateRef for candidate in candidates
-    ):
-        raise TypeError(
-            "materialized exact discovery must return exact CandidateRef values"
-        )
-    return candidates
+    del phrase_digest
+    return _candidate_discovery_candidates(session)
 
 
 def _discover_materialized_vector(
-    session: MaterializedProjectionSession,
+    session: CandidateDiscoverySession,
     query_embedding: tuple[float, ...],
     limit: int,
     *,
     source_refs: tuple[str, ...] | None = None,
     resource_refs: tuple[str, ...] | None = None,
-    effective_scope: EffectiveScope,
+    effective_scope: CandidateDiscoveryScope,
 ) -> tuple[CandidateRef, ...]:
     """Discover bounded content-free ANN lineage in the retained transaction."""
 
-    _require_active_materialized_projection_session(session)
     if type(query_embedding) is not tuple or not query_embedding:
         raise ValueError("vector discovery requires a nonempty query embedding")
     if type(limit) is not int or limit <= 0:
         raise ValueError("vector discovery requires a positive exact limit")
-    if type(effective_scope) is not EffectiveScope:
-        raise TypeError("vector discovery requires EffectiveScope")
+    _require_candidate_discovery_scope_integrity(effective_scope)
     for field_name, refs in (
         ("source_refs", source_refs),
         ("resource_refs", resource_refs),
@@ -512,13 +659,7 @@ def _discover_materialized_vector(
             or any(type(ref) is not str or not ref for ref in refs)
         ):
             raise ValueError(f"vector discovery {field_name} must be nonempty refs")
-    candidates = session._port.discover_vector(
-        query_embedding,
-        limit,
-        source_refs,
-        resource_refs,
-        effective_scope,
-    )
+    candidates = _candidate_discovery_candidates(session)
     if (
         type(candidates) is not tuple
         or len(candidates) > limit
@@ -567,7 +708,8 @@ def _read_materialized_fragment_window(
     anchor: MaterializedFragmentLocator,
     before: int,
     after: int,
-) -> tuple[MaterializedFragmentWindowItem, ...]:
+    expansion_candidates: tuple[CandidateRef, ...] = (),
+) -> MaterializedFragmentWindowRead:
     """Read a bounded active Article/Revision window in the retained transaction."""
 
     _require_active_materialized_projection_session(session)
@@ -580,10 +722,25 @@ def _read_materialized_fragment_window(
         or not 0 <= after <= 32
     ):
         raise ValueError("fragment window bounds must be exact integers from 0 to 32")
+    if type(expansion_candidates) is not tuple or any(
+        type(candidate) is not CandidateRef for candidate in expansion_candidates
+    ):
+        raise TypeError("fragment expansion candidates require exact refs")
+    if len(expansion_candidates) > 64:
+        raise ValueError("fragment expansion candidates must be bounded")
     if not isinstance(session._port, _MaterializedFragmentWindowPort):
         raise TypeError("materialized projection port has no fragment window")
-    items = session._port.read_fragment_window(anchor, before, after)
-    if type(items) is not tuple or any(
+    read = session._port.read_fragment_window(
+        anchor,
+        before,
+        after,
+        expansion_candidates,
+    )
+    if type(read) is not MaterializedFragmentWindowRead:
+        raise TypeError("materialized fragment window returned the wrong nominal type")
+    read.__post_init__()
+    items = read.items
+    if any(
         type(item) is not MaterializedFragmentWindowItem for item in items
     ):
         raise TypeError("materialized fragment window returned the wrong nominal type")
@@ -596,4 +753,13 @@ def _read_materialized_fragment_window(
             or item.locator.revision_ref != anchor.revision_ref
         ):
             raise ValueError("materialized fragment window crossed Article lineage")
-    return items
+    if len(set(read.reauthorization_refs)) != len(read.reauthorization_refs):
+        raise ValueError("materialized fragment expansion refs must be unique")
+    if any(
+        candidate.organization_id == anchor.organization_id
+        and candidate.source_ref == anchor.source_ref
+        and candidate.resource_ref == anchor.resource_ref
+        for candidate in read.reauthorization_refs
+    ):
+        raise ValueError("same-Article expansion cannot request reauthorization")
+    return read

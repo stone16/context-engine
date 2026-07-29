@@ -64,6 +64,7 @@ from engine.runtime.materialized import (
     MaterializedFragmentLocator,
     MaterializedFragmentProjection,
     MaterializedFragmentWindowItem,
+    MaterializedFragmentWindowRead,
     MaterializedProjectionKind,
     MaterializedProjectionSession,
     MaterializedPublicationTrace,
@@ -82,7 +83,7 @@ from engine.runtime.policy_epoch import (
     _open_policy_epoch_authority_scope,
 )
 from engine.runtime.release_lineage import ActiveRuntimeRelease
-from engine.runtime.scope import EffectiveScope, ScopeTarget
+from engine.runtime.scope import ScopeTarget
 
 
 class MembershipNotCurrent(Exception):
@@ -372,13 +373,13 @@ class _PostgreSQLMaterializedProjectionPort:
         limit: int,
         source_refs: tuple[str, ...] | None,
         resource_refs: tuple[str, ...] | None,
-        effective_scope: EffectiveScope,
+        effective_targets: frozenset[ScopeTarget],
     ) -> tuple[CandidateRef, ...]:
         resource_targets = tuple(
             sorted(
                 (
                     target
-                    for target in effective_scope.targets
+                    for target in effective_targets
                     if target.resource_ref is not None
                 ),
                 key=lambda target: (
@@ -719,12 +720,13 @@ class _PostgreSQLMaterializedProjectionPort:
         anchor: MaterializedFragmentLocator,
         before: int,
         after: int,
-    ) -> tuple[MaterializedFragmentWindowItem, ...]:
+        expansion_candidates: tuple[CandidateRef, ...],
+    ) -> MaterializedFragmentWindowRead:
         """Project active same-Article/Revision neighbors around an anchor."""
 
         revision_id = _canonical_candidate_revision(anchor.revision_ref)
         if revision_id is None:
-            return ()
+            return MaterializedFragmentWindowRead((), ())
         anchor_ordinal = self._connection.execute(
             text(
                 """
@@ -751,7 +753,7 @@ class _PostgreSQLMaterializedProjectionPort:
             },
         ).scalar_one_or_none()
         if anchor_ordinal is None:
-            return ()
+            return MaterializedFragmentWindowRead((), ())
         fragment_refs = tuple(
             self._connection.execute(
                 text(
@@ -798,7 +800,19 @@ class _PostgreSQLMaterializedProjectionPort:
                         projection=projection,
                     )
                 )
-        return tuple(items)
+        reauthorization_refs = tuple(
+            candidate
+            for candidate in expansion_candidates
+            if (
+                candidate.organization_id != anchor.organization_id
+                or candidate.source_ref != anchor.source_ref
+                or candidate.resource_ref != anchor.resource_ref
+            )
+        )
+        return MaterializedFragmentWindowRead(
+            items=tuple(items),
+            reauthorization_refs=reauthorization_refs,
+        )
 
 
 def _observe_active_runtime_release(

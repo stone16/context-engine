@@ -15,7 +15,7 @@ from engine.runtime.actor import (
     _construct_current_membership_verification,
     _open_membership_authority_scope,
 )
-from engine.runtime.budget import PackageBudgetRequest
+from engine.runtime.budget import PackageBudget, PackageBudgetRequest
 from engine.runtime.candidate_ranking import (
     CandidateQuery,
     RankedCandidate,
@@ -33,11 +33,10 @@ from engine.runtime.citation import (
 )
 from engine.runtime.construction import (
     DEFAULT_SERVER_PACKAGE_BUDGET,
-    AuthorizationKernel,
     DecisionAuditGate,
     DecisionProvenanceReceipt,
     Runtime,
-    _assemble_authorized_ranking,
+    _construct_authorization_kernel_and_selector,
     _OpaqueReferenceIssuer,
     required_kernel_dependencies,
 )
@@ -56,7 +55,7 @@ from engine.runtime.delivery import (
     TrustedDeliveryContext,
     _construct_direct_delivery_context,
 )
-from engine.runtime.evidence import CandidateRef
+from engine.runtime.evidence import CandidateRef, construct_package_content
 from engine.runtime.invocation import (
     AuthenticatedInvocation,
     _construct_authenticated_http_invocation,
@@ -829,7 +828,9 @@ def test_mid_resolve_epoch_change_discards_content_before_delivery() -> None:
 
 def test_final_epoch_veto_changes_only_the_decision_scope_digest() -> None:
     port = RecordingMaterializedPort()
-    kernel = AuthorizationKernel(required_kernel_dependencies())
+    kernel, selector = _construct_authorization_kernel_and_selector(
+        required_kernel_dependencies()
+    )
     issuer = _OpaqueReferenceIssuer()
 
     with trusted_operands(
@@ -850,10 +851,10 @@ def test_final_epoch_veto_changes_only_the_decision_scope_digest() -> None:
             (AUTHORIZED,),
             projection_session=invocation.user_actor.materialized_projection_session,
         )
+        selection = selector.select_for_delivery(decision, ())
         finalized = kernel.finalize_for_delivery(
             invocation,
-            decision,
-            _assemble_authorized_ranking(decision, ()),
+            selection,
         )
 
     assert finalized.policy_receipt.effective_scope == EffectiveScope(frozenset())
@@ -869,7 +870,9 @@ def test_pre_revocation_decision_cannot_be_laundered_by_fresh_invocation() -> No
     """CACHE-002: a current invocation cannot make stale decision content current."""
 
     port = RecordingMaterializedPort()
-    kernel = AuthorizationKernel(required_kernel_dependencies())
+    kernel, selector = _construct_authorization_kernel_and_selector(
+        required_kernel_dependencies()
+    )
     issuer = _OpaqueReferenceIssuer()
 
     with trusted_operands(
@@ -892,19 +895,17 @@ def test_pre_revocation_decision_cannot_be_laundered_by_fresh_invocation() -> No
                 pre_revocation_invocation.user_actor.materialized_projection_session
             ),
         )
-        stale_content = _assemble_authorized_ranking(stale_decision, ())
-
     assert stale_decision.policy_receipt.policy_epoch == 7
-    assert stale_content.blocks[0].body == "A-safe"
+    assert stale_decision.projections[0].projected_body == "A-safe"
 
     with trusted_operands(
         RecordingMaterializedPort(),
         policy_epoch_port=SequencedPolicyEpochPort(8),
     ) as (post_revocation_invocation, _delivery):
+        stale_selection = selector.select_for_delivery(stale_decision, ())
         finalized = kernel.finalize_for_delivery(
             post_revocation_invocation,
-            stale_decision,
-            stale_content,
+            stale_selection,
         )
 
     # Mutation witness: checking only the fresh invocation's current epoch leaks
@@ -922,7 +923,9 @@ def test_pre_revocation_decision_cannot_be_laundered_by_fresh_invocation() -> No
 def test_stale_content_cannot_be_spliced_into_a_current_decision() -> None:
     """Decision receipts cannot relabel old Evidence lineage as current."""
 
-    kernel = AuthorizationKernel(required_kernel_dependencies())
+    kernel, selector = _construct_authorization_kernel_and_selector(
+        required_kernel_dependencies()
+    )
     issuer = _OpaqueReferenceIssuer()
     request = Acquire(need=ContextNeed(query="spliced cached decision"))
 
@@ -938,7 +941,7 @@ def test_stale_content_cannot_be_spliced_into_a_current_decision() -> None:
             as_of=AS_OF,
             reference_issuer=issuer,
         )
-        stale_decision = kernel.authorize_acquire(
+        kernel.authorize_acquire(
             pre_revocation_invocation,
             stale_preparation,
             (AUTHORIZED,),
@@ -946,8 +949,6 @@ def test_stale_content_cannot_be_spliced_into_a_current_decision() -> None:
                 pre_revocation_invocation.user_actor.materialized_projection_session
             ),
         )
-        stale_content = _assemble_authorized_ranking(stale_decision, ())
-
     with trusted_operands(
         RecordingMaterializedPort(),
         policy_epoch_port=SequencedPolicyEpochPort(8),
@@ -968,10 +969,15 @@ def test_stale_content_cannot_be_spliced_into_a_current_decision() -> None:
                 post_revocation_invocation.user_actor.materialized_projection_session
             ),
         )
+        with pytest.raises(TypeError, match="SealedPackageSelection"):
+            kernel.finalize_for_delivery(
+                post_revocation_invocation,
+                current_decision,  # type: ignore[arg-type]
+            )
+        current_selection = selector.select_for_delivery(current_decision, ())
         finalized = kernel.finalize_for_delivery(
             post_revocation_invocation,
-            current_decision,
-            stale_content,
+            current_selection,
         )
 
     # Mutation witness: receipt/invocation epoch checks alone accept the epoch-8
@@ -979,11 +985,93 @@ def test_stale_content_cannot_be_spliced_into_a_current_decision() -> None:
     policy_receipt = finalized.policy_receipt
     content = finalized.content
     audit_receipt = finalized.audit_receipt
-    assert policy_receipt.effective_scope.targets == frozenset()
-    assert content.blocks == ()
-    assert content.evidence == ()
-    assert audit_receipt.authorized_evidence_count == 0
-    assert "A-safe" not in repr(content)
+    assert policy_receipt.effective_scope.targets
+    assert tuple(block.body for block in content.blocks) == ("A-safe",)
+    assert audit_receipt.authorized_evidence_count == 1
+
+
+def test_finalizer_refuses_arbitrary_content_that_bypasses_budget_selection() -> None:
+    """The sealed finalizer cannot accept a caller-assembled projection superset."""
+
+    port = RecordingMaterializedPort()
+    kernel, selector = _construct_authorization_kernel_and_selector(
+        required_kernel_dependencies()
+    )
+    with trusted_operands(port) as (invocation, delivery):
+        allowed = scope_for(AUTHORIZED, AUTHORIZED_SECOND)
+        for operand_name in (
+            "organization_boundary",
+            "membership_rights",
+            "principal_grants",
+            "agent_ceiling",
+            "source_native_acl",
+            "resource_acl",
+            "purpose_policy",
+        ):
+            object.__setattr__(
+                invocation.trusted_scope_snapshot,
+                operand_name,
+                allowed,
+            )
+        preparation = kernel.prepare_acquire(
+            invocation,
+            delivery,
+            Acquire(need=ContextNeed(query="sealed budget")),
+            server_budget=PackageBudget(
+                max_tokens=6,
+                max_provider_calls=1,
+                max_cost_microunits=1,
+                max_elapsed_ms=1,
+            ),
+            as_of=AS_OF,
+            reference_issuer=_OpaqueReferenceIssuer(),
+        )
+        decision = kernel.authorize_acquire(
+            invocation,
+            preparation,
+            (AUTHORIZED, AUTHORIZED_SECOND),
+            projection_session=(
+                invocation.user_actor.materialized_projection_session
+            ),
+        )
+        arbitrary_content = construct_package_content(decision.projections)
+
+        with pytest.raises(TypeError, match="SealedPackageSelection"):
+            kernel.finalize_for_delivery(
+                invocation,
+                arbitrary_content,  # type: ignore[arg-type]
+            )
+        selection = selector.select_for_delivery(decision, ())
+        selected_budget_limits = selection.effective_budget_limits
+        object.__setattr__(
+            decision,
+            "effective_budget",
+            PackageBudget(
+                max_tokens=12,
+                max_provider_calls=1,
+                max_cost_microunits=1,
+                max_elapsed_ms=1,
+            ),
+        )
+        with pytest.raises(ValueError, match="sealed selection integrity"):
+            kernel.finalize_for_delivery(
+                invocation,
+                selection,
+            )
+        object.__setattr__(
+            decision,
+            "effective_budget",
+            PackageBudget(*selected_budget_limits),
+        )
+        finalized = kernel.finalize_for_delivery(
+            invocation,
+            selection,
+        )
+        assert sum(
+            len(block.body.encode("utf-8"))
+            for block in finalized.content.blocks
+        ) <= decision.effective_budget.max_tokens
+        assert len(finalized.content.blocks) == 1
 
 
 def test_explicit_candidate_index_requires_same_transaction_projection_session() -> (

@@ -18,10 +18,85 @@ from engine.runtime.candidate_ranking import (
 from engine.runtime.content_io import CandidateIndex
 from engine.runtime.contracts import Acquire, ContextNeed
 from engine.runtime.evidence import CandidateRef
-from engine.runtime.materialized import MaterializedProjectionSession
-from engine.runtime.scope import EffectiveScope
+from engine.runtime.materialized import CandidateDiscoverySession
+from engine.runtime.scope import CandidateDiscoveryScope
 
 ROOT = Path(__file__).parents[2]
+_CANDIDATE_RESULT_TYPES = frozenset(
+    {
+        "CandidateQuery",
+        "CandidateRef",
+        "FusedCandidates",
+        "RankedCandidate",
+        "RankedCandidateList",
+    }
+)
+
+
+def _candidate_discovery_protocols(
+    paths: tuple[Path, ...],
+    *,
+    relative_to: Path,
+) -> list[tuple[Path, str]]:
+    parsed = tuple((path, ast.parse(path.read_text())) for path in paths)
+    classes = tuple(
+        (path, node)
+        for path, tree in parsed
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ClassDef)
+    )
+    protocol_names = {"Protocol"}
+    changed = True
+    while changed:
+        changed = False
+        for _path, node in classes:
+            if node.name in protocol_names or not any(
+                ast.unparse(base).split(".")[-1] in protocol_names
+                for base in node.bases
+            ):
+                continue
+            protocol_names.add(node.name)
+            changed = True
+
+    candidate_protocol_names = {
+        node.name
+        for _path, node in classes
+        if node.name in protocol_names
+        and any(
+            isinstance(child, ast.FunctionDef | ast.AsyncFunctionDef)
+            and child.returns is not None
+            and any(
+                result_type in ast.unparse(child.returns)
+                for result_type in _CANDIDATE_RESULT_TYPES
+            )
+            for child in node.body
+        )
+    }
+    changed = True
+    while changed:
+        changed = False
+        for _path, node in classes:
+            if (
+                node.name in candidate_protocol_names
+                or node.name not in protocol_names
+                or not any(
+                    ast.unparse(base).split(".")[-1]
+                    in candidate_protocol_names
+                    for base in node.bases
+                )
+            ):
+                continue
+            candidate_protocol_names.add(node.name)
+            changed = True
+
+    return sorted(
+        (
+            (path.relative_to(relative_to), node.name)
+            for path, node in classes
+            if node.name in candidate_protocol_names
+        ),
+        key=lambda item: (str(item[0]), item[1]),
+    )
 
 
 def _candidate(label: str) -> CandidateRef:
@@ -41,43 +116,54 @@ class _FakeRanker:
     def discover(
         self,
         request: Acquire,
-        projection_session: MaterializedProjectionSession,
+        discovery_session: CandidateDiscoverySession,
         *,
-        effective_scope: EffectiveScope,
+        effective_scope: CandidateDiscoveryScope,
     ) -> CandidateQuery:
-        del request, projection_session, effective_scope
+        del request, discovery_session, effective_scope
         return self.result
 
 
 def test_exactly_one_candidate_discovery_protocol_extends_existing_seam() -> None:
-    protocols: list[tuple[Path, str]] = []
-    paths = (
-        *ROOT.joinpath("engine").rglob("*.py"),
-        *ROOT.joinpath("adapters").rglob("*.py"),
+    paths = tuple(
+        path
+        for path in ROOT.rglob("*.py")
+        if not any(
+            part in {".context-engine", ".git", ".venv", "tests", "third_party"}
+            for part in path.relative_to(ROOT).parts
+        )
     )
-    for path in paths:
-        tree = ast.parse(path.read_text())
-        for node in tree.body:
-            if not isinstance(node, ast.ClassDef):
-                continue
-            base_names = {
-                base.id
-                for base in node.bases
-                if isinstance(base, ast.Name)
-            }
-            methods = {
-                child.name
-                for child in node.body
-                if isinstance(child, ast.FunctionDef | ast.AsyncFunctionDef)
-            }
-            if "Protocol" in base_names and "discover" in methods:
-                protocols.append((path.relative_to(ROOT), node.name))
-
-    assert protocols == [(Path("engine/runtime/content_io.py"), "CandidateIndex")]
+    assert _candidate_discovery_protocols(paths, relative_to=ROOT) == [
+        (Path("engine/runtime/content_io.py"), "CandidateIndex")
+    ]
     assert get_type_hints(CandidateIndex.discover)["return"] is CandidateQuery
     assert get_type_hints(PostgreSQLExactPhraseCandidateIndex.discover)[
         "return"
     ] is CandidateQuery
+
+
+def test_candidate_protocol_oracle_detects_other_packages_and_inherited_seams(
+    tmp_path: Path,
+) -> None:
+    engine = tmp_path / "engine.py"
+    application = tmp_path / "application.py"
+    engine.write_text(
+        "from typing import Protocol\n"
+        "class CandidateIndex(Protocol):\n"
+        "    def discover(self) -> CandidateQuery: ...\n"
+    )
+    application.write_text(
+        "class AlternateLookup(CandidateIndex):\n"
+        "    def search_candidates(self) -> CandidateRef: ...\n"
+    )
+
+    assert _candidate_discovery_protocols(
+        (engine, application),
+        relative_to=tmp_path,
+    ) == [
+        (Path("application.py"), "AlternateLookup"),
+        (Path("engine.py"), "CandidateIndex"),
+    ]
     assert get_type_hints(PostgreSQLVectorCandidateIndex.discover)[
         "return"
     ] is CandidateQuery
@@ -105,8 +191,8 @@ def test_candidate_query_preserves_ranker_identity_and_opaque_candidate_order() 
 
     discovered = ranker.discover(
         Acquire(need=ContextNeed(query="ranked query")),
-        cast(MaterializedProjectionSession, object()),
-        effective_scope=cast(EffectiveScope, object()),
+        cast(CandidateDiscoverySession, object()),
+        effective_scope=cast(CandidateDiscoveryScope, object()),
     )
 
     assert tuple(item.ranker_ref for item in discovered.ranked_lists) == (

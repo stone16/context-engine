@@ -31,9 +31,9 @@ from engine.runtime.construction import Runtime, required_kernel_dependencies
 from engine.runtime.content_io import CandidateIndex
 from engine.runtime.contracts import Acquire
 from engine.runtime.evidence import CandidateRef
-from engine.runtime.materialized import MaterializedProjectionSession
+from engine.runtime.materialized import CandidateDiscoverySession
 from engine.runtime.package_digest import QueryDigestKeyring
-from engine.runtime.scope import EffectiveScope, ScopeTarget
+from engine.runtime.scope import CandidateDiscoveryScope, EffectiveScope, ScopeTarget
 from engine.supply import EmbeddingProfile, EmbeddingProviderUnavailable
 from tests.integration.test_file_import_tracer import (
     _ExactScopeAuthority,
@@ -74,16 +74,27 @@ class _RecordingVectorCandidateIndex:
         self.inner = PostgreSQLVectorCandidateIndex(DeterministicEmbeddingTwin())
         self.calls: list[CandidateQuery] = []
 
+    def prepare_discovery(
+        self,
+        request: Acquire,
+        *,
+        effective_scope: CandidateDiscoveryScope,
+    ) -> object:
+        return self.inner.prepare_discovery(
+            request,
+            effective_scope=effective_scope,
+        )
+
     def discover(
         self,
         request: Acquire,
-        projection_session: MaterializedProjectionSession,
+        discovery_session: CandidateDiscoverySession,
         *,
-        effective_scope: EffectiveScope,
+        effective_scope: CandidateDiscoveryScope,
     ) -> CandidateQuery:
         candidates = self.inner.discover(
             request,
-            projection_session,
+            discovery_session,
             effective_scope=effective_scope,
         )
         self.calls.append(candidates)
@@ -97,16 +108,27 @@ class _BlockingVectorCandidateIndex:
         self.release = Event()
         self.calls: list[CandidateQuery] = []
 
+    def prepare_discovery(
+        self,
+        request: Acquire,
+        *,
+        effective_scope: CandidateDiscoveryScope,
+    ) -> object:
+        return self.inner.prepare_discovery(
+            request,
+            effective_scope=effective_scope,
+        )
+
     def discover(
         self,
         request: Acquire,
-        projection_session: MaterializedProjectionSession,
+        discovery_session: CandidateDiscoverySession,
         *,
-        effective_scope: EffectiveScope,
+        effective_scope: CandidateDiscoveryScope,
     ) -> CandidateQuery:
         candidates = self.inner.discover(
             request,
-            projection_session,
+            discovery_session,
             effective_scope=effective_scope,
         )
         self.calls.append(candidates)

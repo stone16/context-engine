@@ -51,12 +51,12 @@ from engine.runtime.contracts import Acquire
 from engine.runtime.delivery import _construct_direct_delivery_context
 from engine.runtime.evidence import CandidateRef
 from engine.runtime.invocation import _construct_authenticated_http_invocation
-from engine.runtime.materialized import MaterializedProjectionSession
+from engine.runtime.materialized import CandidateDiscoverySession
 from engine.runtime.organization import (
     _construct_existing_http_organization_verification,
 )
 from engine.runtime.package_digest import QueryDigestKeyring
-from engine.runtime.scope import EffectiveScope
+from engine.runtime.scope import CandidateDiscoveryScope
 from engine.runtime.ticket_identity import (
     TicketExecutionIdentity,
     _construct_ticket_execution_identity,
@@ -106,11 +106,11 @@ class _ReplayCandidateIndex:
     def discover(
         self,
         request: Acquire,
-        projection_session: MaterializedProjectionSession,
+        discovery_session: CandidateDiscoverySession,
         *,
-        effective_scope: EffectiveScope,
+        effective_scope: CandidateDiscoveryScope,
     ) -> CandidateQuery:
-        del request, projection_session, effective_scope
+        del request, discovery_session, effective_scope
         return CandidateQuery(
             ranked_lists=(
                 RankedCandidateList(
