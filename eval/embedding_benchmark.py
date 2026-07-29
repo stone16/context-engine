@@ -197,10 +197,23 @@ class CaseHitMetric:
     total_cases: int
     value: float
 
+    def __post_init__(self) -> None:
+        if (
+            type(self.hits) is not int
+            or type(self.total_cases) is not int
+            or not 0 <= self.hits <= self.total_cases
+            or self.total_cases < 1
+        ):
+            raise BenchmarkUnavailable("retrieval judge is unavailable")
+        _require_judge_ratio(self.value)
+
 
 @dataclass(frozen=True, slots=True)
 class MacroRecallMetric:
     value: float
+
+    def __post_init__(self) -> None:
+        _require_judge_ratio(self.value)
 
 
 @dataclass(frozen=True, slots=True)
@@ -209,11 +222,28 @@ class MicroRecallMetric:
     total_expected: int
     value: float
 
+    def __post_init__(self) -> None:
+        if (
+            type(self.hits) is not int
+            or type(self.total_expected) is not int
+            or not 0 <= self.hits <= self.total_expected
+            or self.total_expected < 1
+        ):
+            raise BenchmarkUnavailable("retrieval judge is unavailable")
+        _require_judge_ratio(self.value)
+
 
 @dataclass(frozen=True, slots=True)
 class EvidenceRecallMetric:
     macro: MacroRecallMetric
     micro: MicroRecallMetric
+
+    def __post_init__(self) -> None:
+        if (
+            type(self.macro) is not MacroRecallMetric
+            or type(self.micro) is not MicroRecallMetric
+        ):
+            raise BenchmarkUnavailable("retrieval judge is unavailable")
 
 
 @dataclass(frozen=True, slots=True)
@@ -221,12 +251,34 @@ class SliceMetrics:
     case_hit: CaseHitMetric
     evidence_recall: EvidenceRecallMetric
 
+    def __post_init__(self) -> None:
+        if (
+            type(self.case_hit) is not CaseHitMetric
+            or type(self.evidence_recall) is not EvidenceRecallMetric
+        ):
+            raise BenchmarkUnavailable("retrieval judge is unavailable")
+
 
 @dataclass(frozen=True, slots=True)
 class RetrievalMetrics:
     case_hit: CaseHitMetric
     evidence_recall: EvidenceRecallMetric
     per_slice: Mapping[str, SliceMetrics]
+
+    def __post_init__(self) -> None:
+        if (
+            type(self.case_hit) is not CaseHitMetric
+            or type(self.evidence_recall) is not EvidenceRecallMetric
+            or not isinstance(self.per_slice, Mapping)
+            or not self.per_slice
+            or any(
+                type(name) is not str
+                or not name
+                or type(value) is not SliceMetrics
+                for name, value in self.per_slice.items()
+            )
+        ):
+            raise BenchmarkUnavailable("retrieval judge is unavailable")
 
 
 class RetrievalJudge(Protocol):
@@ -322,6 +374,8 @@ def _run_model(
         for index, case in enumerate(dataset.cases)
     )
     metrics = judge.evaluate_retrieval(judged_cases)
+    if type(metrics) is not RetrievalMetrics:
+        raise BenchmarkUnavailable("retrieval judge is unavailable")
     finished = clock()
     return {
         "identity": provider.identity.public_document(),
@@ -454,6 +508,14 @@ def _require_nonblank(name: str, value: object) -> str:
     if type(value) is not str or not value or value != value.strip():
         raise BenchmarkUnavailable(f"{name} is unavailable")
     return value
+
+
+def _require_judge_ratio(value: object) -> None:
+    if type(value) not in {int, float}:
+        raise BenchmarkUnavailable("retrieval judge is unavailable")
+    number = float(cast(int | float, value))
+    if not math.isfinite(number) or not 0.0 <= number <= 1.0:
+        raise BenchmarkUnavailable("retrieval judge is unavailable")
 
 
 def validate_report_document(

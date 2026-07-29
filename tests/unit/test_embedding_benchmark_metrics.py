@@ -1,13 +1,16 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, cast
+
+import pytest
 
 from eval.embedding_benchmark import (
     EMBEDDING_DIMENSION,
     BenchmarkCase,
     BenchmarkDataset,
     BenchmarkDocument,
+    BenchmarkUnavailable,
     CaseHitMetric,
     EvidenceRecallMetric,
     MacroRecallMetric,
@@ -137,3 +140,52 @@ def test_runner_delegates_metrics_to_the_injected_129_retrieval_judge() -> None:
         "macro": {"value": 0.75},
         "micro": {"hits": 2, "totalExpected": 3, "value": 2 / 3},
     }
+
+
+def test_primary_loss_is_recorded_as_a_valid_result() -> None:
+    class LosingJudge(RecordingJudge):
+        def evaluate_retrieval(
+            self, cases: tuple[RetrievalJudgeCase, ...]
+        ) -> RetrievalMetrics:
+            result = super().evaluate_retrieval(cases)
+            if len(self.calls) == 1:
+                return RetrievalMetrics(
+                    case_hit=CaseHitMetric(hits=0, total_cases=2, value=0.0),
+                    evidence_recall=result.evidence_recall,
+                    per_slice=result.per_slice,
+                )
+            return result
+
+    report = run_benchmark(
+        dataset=_dataset(),
+        primary=SyntheticProvider(_identity("Qwen/Qwen3-Embedding-0.6B")),
+        baseline=SyntheticProvider(_identity("intfloat/multilingual-e5-small")),
+        judge=LosingJudge(),
+        top_k=2,
+        clock=lambda: 1.0,
+    )
+
+    assert cast(dict[str, Any], report["comparison"])[
+        "primaryAgainstModelBaseline"
+    ] == "lose"
+
+
+def test_runner_requires_the_declared_384_dimension_reduction_per_model() -> None:
+    primary = SyntheticProvider(
+        replace(
+            _identity("Qwen/Qwen3-Embedding-0.6B"),
+            reduction="none_native_384",
+        )
+    )
+
+    with pytest.raises(BenchmarkUnavailable, match="reduction is unavailable"):
+        run_benchmark(
+            dataset=_dataset(),
+            primary=primary,
+            baseline=SyntheticProvider(
+                _identity("intfloat/multilingual-e5-small")
+            ),
+            judge=RecordingJudge(),
+            top_k=2,
+            clock=lambda: 1.0,
+        )
