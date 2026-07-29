@@ -17,6 +17,7 @@ __all__ = [
     "MaterializedFieldValue",
     "MaterializedFragmentLocator",
     "MaterializedFragmentProjection",
+    "MaterializedFragmentWindowItem",
     "MaterializedProjectionKind",
     "MaterializedProjectionPort",
     "MaterializedProjectionSession",
@@ -229,6 +230,20 @@ class MaterializedPublicationTrace:
         _require_nonblank_ref("active revision ref", self.active_revision_ref)
 
 
+@dataclass(frozen=True, slots=True)
+class MaterializedFragmentWindowItem:
+    """One active same-Article/current-Revision Fragment in ordinal order."""
+
+    locator: MaterializedFragmentLocator
+    projection: MaterializedFragmentProjection
+
+    def __post_init__(self) -> None:
+        if type(self.locator) is not MaterializedFragmentLocator:
+            raise TypeError("window item locator has the wrong nominal type")
+        if type(self.projection) is not MaterializedFragmentProjection:
+            raise TypeError("window item projection has the wrong nominal type")
+
+
 class MaterializedProjectionPort(Protocol):
     """Narrow operations executed by the owning current database transaction."""
 
@@ -263,7 +278,6 @@ class MaterializedProjectionPort(Protocol):
         locator: MaterializedFragmentLocator,
     ) -> MaterializedFragmentProjection | None: ...
 
-
 @runtime_checkable
 class MaterializedScopePort(Protocol):
     """Explicit optional capability for independent trusted scope operands."""
@@ -272,6 +286,16 @@ class MaterializedScopePort(Protocol):
         self,
         active_revision_ids: tuple[UUID, ...],
     ) -> MaterializedScopeOperands: ...
+
+
+@runtime_checkable
+class _MaterializedFragmentWindowPort(Protocol):
+    def read_fragment_window(
+        self,
+        anchor: MaterializedFragmentLocator,
+        before: int,
+        after: int,
+    ) -> tuple[MaterializedFragmentWindowItem, ...]: ...
 
 class _MaterializedProjectionScope:
     """Private lifetime token owned by one current UserActor transaction."""
@@ -536,3 +560,40 @@ def _project_materialized_fragment(
         raise TypeError("materialized projection port returned the wrong nominal type")
     projection.__post_init__()
     return projection
+
+
+def _read_materialized_fragment_window(
+    session: MaterializedProjectionSession,
+    anchor: MaterializedFragmentLocator,
+    before: int,
+    after: int,
+) -> tuple[MaterializedFragmentWindowItem, ...]:
+    """Read a bounded active Article/Revision window in the retained transaction."""
+
+    _require_active_materialized_projection_session(session)
+    if type(anchor) is not MaterializedFragmentLocator:
+        raise TypeError("fragment window requires exact active locator")
+    if (
+        type(before) is not int
+        or type(after) is not int
+        or not 0 <= before <= 32
+        or not 0 <= after <= 32
+    ):
+        raise ValueError("fragment window bounds must be exact integers from 0 to 32")
+    if not isinstance(session._port, _MaterializedFragmentWindowPort):
+        raise TypeError("materialized projection port has no fragment window")
+    items = session._port.read_fragment_window(anchor, before, after)
+    if type(items) is not tuple or any(
+        type(item) is not MaterializedFragmentWindowItem for item in items
+    ):
+        raise TypeError("materialized fragment window returned the wrong nominal type")
+    for item in items:
+        item.__post_init__()
+        if (
+            item.locator.organization_id != anchor.organization_id
+            or item.locator.source_ref != anchor.source_ref
+            or item.locator.resource_ref != anchor.resource_ref
+            or item.locator.revision_ref != anchor.revision_ref
+        ):
+            raise ValueError("materialized fragment window crossed Article lineage")
+    return items

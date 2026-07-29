@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+from engine.runtime.candidate_ranking import (
+    CandidateQuery,
+    RankedCandidate,
+    RankedCandidateList,
+)
 from engine.runtime.content_io import CandidateIndexUnavailable
 from engine.runtime.contracts import Acquire
-from engine.runtime.evidence import CandidateRef
 from engine.runtime.materialized import (
     MaterializedProjectionSession,
     _discover_materialized_vector,
@@ -59,7 +63,7 @@ class PostgreSQLVectorCandidateIndex:
         projection_session: MaterializedProjectionSession,
         *,
         effective_scope: EffectiveScope,
-    ) -> tuple[CandidateRef, ...]:
+    ) -> CandidateQuery:
         if type(request) is not Acquire:
             raise TypeError("Vector candidate discovery requires Acquire")
         if type(effective_scope) is not EffectiveScope:
@@ -70,7 +74,7 @@ class PostgreSQLVectorCandidateIndex:
                 self._embedding_provider.embed((request.need.query,)),
                 self._embedding_profile,
             )[0]
-            return _discover_materialized_vector(
+            candidates = _discover_materialized_vector(
                 projection_session,
                 query_embedding,
                 self._limit,
@@ -85,6 +89,17 @@ class PostgreSQLVectorCandidateIndex:
                     else None
                 ),
                 effective_scope=effective_scope,
+            )
+            return CandidateQuery(
+                ranked_lists=(
+                    RankedCandidateList(
+                        ranker_ref="vector",
+                        candidates=tuple(
+                            RankedCandidate(candidate_ref=candidate)
+                            for candidate in candidates
+                        ),
+                    ),
+                )
             )
         except EmbeddingProviderUnavailable:
             raise VectorCandidateIndexUnavailable(

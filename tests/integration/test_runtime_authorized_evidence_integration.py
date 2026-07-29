@@ -23,6 +23,11 @@ from engine.persistence import (
     PostgreSQLMembershipAuthority,
     create_database_engine,
 )
+from engine.runtime.candidate_ranking import (
+    CandidateQuery,
+    RankedCandidate,
+    RankedCandidateList,
+)
 from engine.runtime.construction import Runtime, required_kernel_dependencies
 from engine.runtime.content_io import CandidateIndex
 from engine.runtime.context_run import ContextRunOutcome
@@ -200,10 +205,20 @@ class HostileCandidateIndex:
         projection_session: object,
         *,
         effective_scope: object,
-    ) -> tuple[CandidateRef, ...]:
+    ) -> CandidateQuery:
         del projection_session, effective_scope
         self.calls.append(request)
-        return self._ranked
+        return CandidateQuery(
+            ranked_lists=(
+                RankedCandidateList(
+                    ranker_ref="hostile",
+                    candidates=tuple(
+                        RankedCandidate(candidate_ref=candidate)
+                        for candidate in self._ranked
+                    ),
+                ),
+            )
+        )
 
 
 def _new_fixture() -> RuntimeEvidenceFixture:

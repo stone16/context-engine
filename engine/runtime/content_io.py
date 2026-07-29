@@ -4,8 +4,9 @@ from dataclasses import dataclass
 from hashlib import sha256
 from typing import Protocol
 
+from engine.runtime.candidate_ranking import CandidateQuery
 from engine.runtime.contracts import Acquire
-from engine.runtime.evidence import CandidateRef
+from engine.runtime.fragment_window import FragmentWindowReader
 from engine.runtime.materialized import MaterializedProjectionSession
 from engine.runtime.scope import EffectiveScope
 
@@ -14,6 +15,7 @@ __all__ = [
     "CandidateIndexUnavailable",
     "ContextProvider",
     "RuntimeContentIo",
+    "FragmentWindowReader",
     "SourceContentReader",
     "exact_phrase_digest",
     "prohibited_empty_path_content_io",
@@ -39,7 +41,7 @@ class CandidateIndex(Protocol):
         projection_session: MaterializedProjectionSession,
         *,
         effective_scope: EffectiveScope,
-    ) -> tuple[CandidateRef, ...]: ...
+    ) -> CandidateQuery: ...
 
 
 class CandidateIndexUnavailable(RuntimeError):
@@ -65,6 +67,7 @@ class RuntimeContentIo:
     index: CandidateIndex
     provider: ContextProvider
     source_content: SourceContentReader
+    fragment_windows: FragmentWindowReader | None = None
 
 
 class _ProhibitedCandidateIndex:
@@ -74,7 +77,7 @@ class _ProhibitedCandidateIndex:
         projection_session: MaterializedProjectionSession,
         *,
         effective_scope: EffectiveScope,
-    ) -> tuple[()]:
+    ) -> CandidateQuery:
         del request, projection_session, effective_scope
         raise RuntimeError("candidate index is prohibited on the empty Package path")
 

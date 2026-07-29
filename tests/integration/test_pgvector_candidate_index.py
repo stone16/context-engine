@@ -26,6 +26,7 @@ from engine.persistence import (
     create_database_engine,
 )
 from engine.persistence.membership_context import _VECTOR_CANDIDATE_SQL
+from engine.runtime.candidate_ranking import CandidateQuery
 from engine.runtime.construction import Runtime, required_kernel_dependencies
 from engine.runtime.content_io import CandidateIndex
 from engine.runtime.contracts import Acquire
@@ -60,10 +61,18 @@ _ANN_DISTRACTOR_COUNT = 96
 _NARROWING_DISTRACTOR_COUNT = DEFAULT_VECTOR_CANDIDATE_LIMIT + 4
 
 
+def _candidate_refs(query: CandidateQuery) -> tuple[CandidateRef, ...]:
+    return tuple(
+        item.candidate_ref
+        for ranked_list in query.ranked_lists
+        for item in ranked_list.candidates
+    )
+
+
 class _RecordingVectorCandidateIndex:
     def __init__(self) -> None:
         self.inner = PostgreSQLVectorCandidateIndex(DeterministicEmbeddingTwin())
-        self.calls: list[tuple[CandidateRef, ...]] = []
+        self.calls: list[CandidateQuery] = []
 
     def discover(
         self,
@@ -71,7 +80,7 @@ class _RecordingVectorCandidateIndex:
         projection_session: MaterializedProjectionSession,
         *,
         effective_scope: EffectiveScope,
-    ) -> tuple[CandidateRef, ...]:
+    ) -> CandidateQuery:
         candidates = self.inner.discover(
             request,
             projection_session,
@@ -86,7 +95,7 @@ class _BlockingVectorCandidateIndex:
         self.inner = PostgreSQLVectorCandidateIndex(DeterministicEmbeddingTwin())
         self.discovered = Event()
         self.release = Event()
-        self.calls: list[tuple[CandidateRef, ...]] = []
+        self.calls: list[CandidateQuery] = []
 
     def discover(
         self,
@@ -94,7 +103,7 @@ class _BlockingVectorCandidateIndex:
         projection_session: MaterializedProjectionSession,
         *,
         effective_scope: EffectiveScope,
-    ) -> tuple[CandidateRef, ...]:
+    ) -> CandidateQuery:
         candidates = self.inner.discover(
             request,
             projection_session,
@@ -550,9 +559,9 @@ def test_vector_candidate_http_chain_is_rls_scoped_content_free_and_bounded(
     assert evidence["resourceRef"] == candidate_a.resource_ref
     assert evidence["revisionRef"] == candidate_a.revision_ref
     assert evidence["fragmentRef"] == candidate_a.fragment_ref
-    assert index.calls == [(candidate_a,)]
-    assert candidate_b not in index.calls[0]
-    assert len(index.calls[0]) <= DEFAULT_VECTOR_CANDIDATE_LIMIT
+    assert tuple(_candidate_refs(query) for query in index.calls) == ((candidate_a,),)
+    assert candidate_b not in _candidate_refs(index.calls[0])
+    assert len(_candidate_refs(index.calls[0])) <= DEFAULT_VECTOR_CANDIDATE_LIMIT
     assert set(CandidateRef.__dataclass_fields__) == {
         "organization_id",
         "source_ref",
@@ -652,7 +661,7 @@ def test_vector_candidate_denials_have_one_non_enumerating_empty_shape(
             )
         )
     )
-    assert index.calls == [()]
+    assert tuple(_candidate_refs(query) for query in index.calls) == ((),)
     migration_engine = create_database_engine(migration_configuration)
     try:
         with migration_engine.begin() as connection:
@@ -671,7 +680,7 @@ def test_vector_candidate_denials_have_one_non_enumerating_empty_shape(
         migration_engine.dispose()
 
     tombstoned_shape = _assert_empty(_resolve(client))
-    assert index.calls == [(), ()]
+    assert tuple(_candidate_refs(query) for query in index.calls) == ((), ())
     assert tombstoned_shape == unknown_shape
 
     migration_engine = create_database_engine(migration_configuration)
@@ -694,7 +703,7 @@ def test_vector_candidate_denials_have_one_non_enumerating_empty_shape(
     revoked = _resolve(client)
     assert revoked.status_code == 401
     assert revoked.json() == {"code": "authentication_failed"}
-    assert index.calls == [(), ()]
+    assert tuple(_candidate_refs(query) for query in index.calls) == ((), ())
     for forbidden in (
         candidate.source_ref,
         candidate.resource_ref,
@@ -782,7 +791,7 @@ def test_vector_candidate_stale_epoch_vetoes_already_discovered_evidence(
         control_engine.dispose()
 
     _assert_empty(response)
-    assert index.calls == [(candidate,)]
+    assert tuple(_candidate_refs(query) for query in index.calls) == ((candidate,),)
     assert reads == 3
     for forbidden in (
         candidate.source_ref,

@@ -13,6 +13,7 @@ from engine.runtime.actor import (
     _construct_current_membership_verification,
     _open_membership_authority_scope,
 )
+from engine.runtime.candidate_ranking import CandidateQuery, RankedCandidateList
 from engine.runtime.construction import Runtime, required_kernel_dependencies
 from engine.runtime.content_io import RuntimeContentIo
 from engine.runtime.contracts import Acquire, ContextNeed, RequestNarrowing, Resolved
@@ -70,10 +71,12 @@ class ContentIoSpy:
         projection_session: object,
         *,
         effective_scope: object,
-    ) -> tuple[()]:
+    ) -> CandidateQuery:
         del request, projection_session, effective_scope
         self.calls += 1
-        return ()
+        return CandidateQuery(
+            ranked_lists=(RankedCandidateList(ranker_ref="test", candidates=()),)
+        )
 
     def authorize_and_project(self) -> tuple[()]:
         self.calls += 1

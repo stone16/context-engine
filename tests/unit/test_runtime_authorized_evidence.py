@@ -16,6 +16,11 @@ from engine.runtime.actor import (
     _open_membership_authority_scope,
 )
 from engine.runtime.budget import PackageBudgetRequest
+from engine.runtime.candidate_ranking import (
+    CandidateQuery,
+    RankedCandidate,
+    RankedCandidateList,
+)
 from engine.runtime.citation import (
     CitationOpenIssue,
     CitationOpenProfile,
@@ -28,11 +33,11 @@ from engine.runtime.citation import (
 )
 from engine.runtime.construction import (
     DEFAULT_SERVER_PACKAGE_BUDGET,
-    AuthorizationDecision,
     AuthorizationKernel,
     DecisionAuditGate,
     DecisionProvenanceReceipt,
     Runtime,
+    _assemble_authorized_ranking,
     _OpaqueReferenceIssuer,
     required_kernel_dependencies,
 )
@@ -158,10 +163,20 @@ class HostileCandidateIndex:
         projection_session: object,
         *,
         effective_scope: object,
-    ) -> tuple[CandidateRef, ...]:
+    ) -> CandidateQuery:
         del request, projection_session, effective_scope
         self.calls += 1
-        return self.ranked
+        return CandidateQuery(
+            ranked_lists=(
+                RankedCandidateList(
+                    ranker_ref="hostile",
+                    candidates=tuple(
+                        RankedCandidate(candidate_ref=candidate)
+                        for candidate in self.ranked
+                    ),
+                ),
+            )
+        )
 
 
 class RecordingMaterializedPort:
@@ -813,7 +828,6 @@ def test_mid_resolve_epoch_change_discards_content_before_delivery() -> None:
 
 
 def test_final_epoch_veto_changes_only_the_decision_scope_digest() -> None:
-    index = HostileCandidateIndex((AUTHORIZED,))
     port = RecordingMaterializedPort()
     kernel = AuthorizationKernel(required_kernel_dependencies())
     issuer = _OpaqueReferenceIssuer()
@@ -822,17 +836,25 @@ def test_final_epoch_veto_changes_only_the_decision_scope_digest() -> None:
         port,
         policy_epoch_port=SequencedPolicyEpochPort(7, 7, 8),
     ) as (invocation, delivery):
-        decision = kernel.authorize_acquire(
+        preparation = kernel.prepare_acquire(
             invocation,
             delivery,
             Acquire(need=ContextNeed(query="finalized provenance")),
             server_budget=DEFAULT_SERVER_PACKAGE_BUDGET,
             as_of=AS_OF,
             reference_issuer=issuer,
-            candidate_index=cast(CandidateIndex, index),
+        )
+        decision = kernel.authorize_acquire(
+            invocation,
+            preparation,
+            (AUTHORIZED,),
             projection_session=invocation.user_actor.materialized_projection_session,
         )
-        finalized = kernel.finalize_for_delivery(invocation, decision)
+        finalized = kernel.finalize_for_delivery(
+            invocation,
+            decision,
+            _assemble_authorized_ranking(decision, ()),
+        )
 
     assert finalized.policy_receipt.effective_scope == EffectiveScope(frozenset())
     assert finalized.provenance_receipt == replace(
@@ -846,7 +868,6 @@ def test_final_epoch_veto_changes_only_the_decision_scope_digest() -> None:
 def test_pre_revocation_decision_cannot_be_laundered_by_fresh_invocation() -> None:
     """CACHE-002: a current invocation cannot make stale decision content current."""
 
-    index = HostileCandidateIndex((AUTHORIZED,))
     port = RecordingMaterializedPort()
     kernel = AuthorizationKernel(required_kernel_dependencies())
     issuer = _OpaqueReferenceIssuer()
@@ -855,21 +876,26 @@ def test_pre_revocation_decision_cannot_be_laundered_by_fresh_invocation() -> No
         port,
         policy_epoch_port=SequencedPolicyEpochPort(7),
     ) as (pre_revocation_invocation, delivery):
-        stale_decision = kernel.authorize_acquire(
+        preparation = kernel.prepare_acquire(
             pre_revocation_invocation,
             delivery,
             Acquire(need=ContextNeed(query="cached pre-revocation decision")),
             server_budget=DEFAULT_SERVER_PACKAGE_BUDGET,
             as_of=AS_OF,
             reference_issuer=issuer,
-            candidate_index=cast(CandidateIndex, index),
+        )
+        stale_decision = kernel.authorize_acquire(
+            pre_revocation_invocation,
+            preparation,
+            (AUTHORIZED,),
             projection_session=(
                 pre_revocation_invocation.user_actor.materialized_projection_session
             ),
         )
+        stale_content = _assemble_authorized_ranking(stale_decision, ())
 
     assert stale_decision.policy_receipt.policy_epoch == 7
-    assert stale_decision.content.blocks[0].body == "A-safe"
+    assert stale_content.blocks[0].body == "A-safe"
 
     with trusted_operands(
         RecordingMaterializedPort(),
@@ -878,6 +904,7 @@ def test_pre_revocation_decision_cannot_be_laundered_by_fresh_invocation() -> No
         finalized = kernel.finalize_for_delivery(
             post_revocation_invocation,
             stale_decision,
+            stale_content,
         )
 
     # Mutation witness: checking only the fresh invocation's current epoch leaks
@@ -903,48 +930,48 @@ def test_stale_content_cannot_be_spliced_into_a_current_decision() -> None:
         RecordingMaterializedPort(),
         policy_epoch_port=SequencedPolicyEpochPort(7),
     ) as (pre_revocation_invocation, delivery):
-        stale_decision = kernel.authorize_acquire(
+        stale_preparation = kernel.prepare_acquire(
             pre_revocation_invocation,
             delivery,
             request,
             server_budget=DEFAULT_SERVER_PACKAGE_BUDGET,
             as_of=AS_OF,
             reference_issuer=issuer,
-            candidate_index=cast(
-                CandidateIndex,
-                HostileCandidateIndex((AUTHORIZED,)),
-            ),
+        )
+        stale_decision = kernel.authorize_acquire(
+            pre_revocation_invocation,
+            stale_preparation,
+            (AUTHORIZED,),
             projection_session=(
                 pre_revocation_invocation.user_actor.materialized_projection_session
             ),
         )
+        stale_content = _assemble_authorized_ranking(stale_decision, ())
 
     with trusted_operands(
         RecordingMaterializedPort(),
         policy_epoch_port=SequencedPolicyEpochPort(8),
     ) as (post_revocation_invocation, delivery):
-        current_decision = kernel.authorize_acquire(
+        current_preparation = kernel.prepare_acquire(
             post_revocation_invocation,
             delivery,
             request,
             server_budget=DEFAULT_SERVER_PACKAGE_BUDGET,
             as_of=AS_OF,
             reference_issuer=issuer,
-            candidate_index=cast(
-                CandidateIndex,
-                HostileCandidateIndex((AUTHORIZED,)),
-            ),
+        )
+        current_decision = kernel.authorize_acquire(
+            post_revocation_invocation,
+            current_preparation,
+            (AUTHORIZED,),
             projection_session=(
                 post_revocation_invocation.user_actor.materialized_projection_session
             ),
         )
-        spliced_decision: AuthorizationDecision = replace(
-            current_decision,
-            content=stale_decision.content,
-        )
         finalized = kernel.finalize_for_delivery(
             post_revocation_invocation,
-            spliced_decision,
+            current_decision,
+            stale_content,
         )
 
     # Mutation witness: receipt/invocation epoch checks alone accept the epoch-8
@@ -1275,7 +1302,7 @@ def test_authorized_body_over_budget_is_not_delivered() -> None:
     assert outcome.package.coverage.status == "empty"
 
 
-def test_budget_selection_is_independent_of_hostile_candidate_rank() -> None:
+def test_budget_selection_uses_rank_only_after_authorization() -> None:
     def resolve(ranked: tuple[CandidateRef, ...]) -> tuple[str, ...]:
         index = HostileCandidateIndex(ranked)
         port = RecordingMaterializedPort()
@@ -1326,7 +1353,8 @@ def test_budget_selection_is_independent_of_hostile_candidate_rank() -> None:
     forward = resolve((AUTHORIZED, AUTHORIZED_SECOND))
     reversed_rank = resolve((AUTHORIZED_SECOND, AUTHORIZED))
 
-    assert forward == reversed_rank == ("A-safe",)
+    assert forward == ("A-safe",)
+    assert reversed_rank == ("Z-safe",)
 
 
 def test_hostile_index_duplicate_candidates_are_deduplicated_before_projection() -> (

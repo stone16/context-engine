@@ -63,6 +63,7 @@ from engine.runtime.materialized import (
     MaterializedFieldValue,
     MaterializedFragmentLocator,
     MaterializedFragmentProjection,
+    MaterializedFragmentWindowItem,
     MaterializedProjectionKind,
     MaterializedProjectionSession,
     MaterializedPublicationTrace,
@@ -712,6 +713,92 @@ class _PostgreSQLMaterializedProjectionPort:
             fields=fields,
             projection_ceiling=frozenset(field.field_ref for field in fields),
         )
+
+    def read_fragment_window(
+        self,
+        anchor: MaterializedFragmentLocator,
+        before: int,
+        after: int,
+    ) -> tuple[MaterializedFragmentWindowItem, ...]:
+        """Project active same-Article/Revision neighbors around an anchor."""
+
+        revision_id = _canonical_candidate_revision(anchor.revision_ref)
+        if revision_id is None:
+            return ()
+        anchor_ordinal = self._connection.execute(
+            text(
+                """
+                SELECT fragment.ordinal
+                FROM context_resource AS resource
+                JOIN context_fragment AS fragment
+                  ON fragment.organization_id = resource.organization_id
+                 AND fragment.resource_ref = resource.resource_ref
+                 AND fragment.revision_id = resource.active_revision_id
+                WHERE resource.organization_id = :organization_id
+                  AND resource.source_ref = :source_ref
+                  AND resource.resource_ref = :resource_ref
+                  AND resource.active_revision_id = :revision_id
+                  AND resource.tombstoned IS FALSE
+                  AND fragment.fragment_ref = :fragment_ref
+                """
+            ),
+            {
+                "organization_id": anchor.organization_id,
+                "source_ref": anchor.source_ref,
+                "resource_ref": anchor.resource_ref,
+                "revision_id": revision_id,
+                "fragment_ref": anchor.fragment_ref,
+            },
+        ).scalar_one_or_none()
+        if anchor_ordinal is None:
+            return ()
+        fragment_refs = tuple(
+            self._connection.execute(
+                text(
+                    """
+                    SELECT fragment.fragment_ref
+                    FROM context_resource AS resource
+                    JOIN context_fragment AS fragment
+                      ON fragment.organization_id = resource.organization_id
+                     AND fragment.resource_ref = resource.resource_ref
+                     AND fragment.revision_id = resource.active_revision_id
+                    WHERE resource.organization_id = :organization_id
+                      AND resource.source_ref = :source_ref
+                      AND resource.resource_ref = :resource_ref
+                      AND resource.active_revision_id = :revision_id
+                      AND resource.tombstoned IS FALSE
+                      AND fragment.ordinal BETWEEN :minimum_ordinal AND :maximum_ordinal
+                    ORDER BY fragment.ordinal, fragment.fragment_ref
+                    """
+                ),
+                {
+                    "organization_id": anchor.organization_id,
+                    "source_ref": anchor.source_ref,
+                    "resource_ref": anchor.resource_ref,
+                    "revision_id": revision_id,
+                    "minimum_ordinal": max(0, anchor_ordinal - before),
+                    "maximum_ordinal": anchor_ordinal + after,
+                },
+            ).scalars()
+        )
+        items = []
+        for fragment_ref in fragment_refs:
+            locator = MaterializedFragmentLocator(
+                organization_id=anchor.organization_id,
+                source_ref=anchor.source_ref,
+                resource_ref=anchor.resource_ref,
+                revision_ref=anchor.revision_ref,
+                fragment_ref=fragment_ref,
+            )
+            projection = self.project(locator)
+            if projection is not None:
+                items.append(
+                    MaterializedFragmentWindowItem(
+                        locator=locator,
+                        projection=projection,
+                    )
+                )
+        return tuple(items)
 
 
 def _observe_active_runtime_release(

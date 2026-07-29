@@ -42,6 +42,11 @@ from engine.persistence import (
     create_database_engine,
 )
 from engine.runtime import ContextAccessTicketIssuer, TicketSigningKeyring
+from engine.runtime.candidate_ranking import (
+    CandidateQuery,
+    RankedCandidate,
+    RankedCandidateList,
+)
 from engine.runtime.contracts import Acquire
 from engine.runtime.delivery import _construct_direct_delivery_context
 from engine.runtime.evidence import CandidateRef
@@ -104,9 +109,16 @@ class _ReplayCandidateIndex:
         projection_session: MaterializedProjectionSession,
         *,
         effective_scope: EffectiveScope,
-    ) -> tuple[CandidateRef, ...]:
+    ) -> CandidateQuery:
         del request, projection_session, effective_scope
-        return (self.candidate,)
+        return CandidateQuery(
+            ranked_lists=(
+                RankedCandidateList(
+                    ranker_ref="replay",
+                    candidates=(RankedCandidate(candidate_ref=self.candidate),),
+                ),
+            )
+        )
 
 
 def _control(

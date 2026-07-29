@@ -28,6 +28,11 @@ from engine.persistence import (
     PostgreSQLMembershipAuthority,
     create_database_engine,
 )
+from engine.runtime.candidate_ranking import (
+    CandidateQuery,
+    RankedCandidate,
+    RankedCandidateList,
+)
 from engine.runtime.construction import Runtime, required_kernel_dependencies
 from engine.runtime.content_io import CandidateIndex
 from engine.runtime.context_run import (
@@ -190,11 +195,18 @@ class SameContentFreeCandidateIndex:
         projection_session: object,
         *,
         effective_scope: object,
-    ) -> tuple[CandidateRef, ...]:
+    ) -> CandidateQuery:
         del projection_session, effective_scope
         self.calls.append(request)
         self.returned_candidates.append(self.candidate)
-        return (self.candidate,)
+        return CandidateQuery(
+            ranked_lists=(
+                RankedCandidateList(
+                    ranker_ref="field_projection",
+                    candidates=(RankedCandidate(candidate_ref=self.candidate),),
+                ),
+            )
+        )
 
 
 def _new_fixture() -> FieldProjectionFixture:

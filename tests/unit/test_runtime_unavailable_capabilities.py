@@ -17,6 +17,7 @@ from engine.runtime.actor import (
     _open_membership_authority_scope,
 )
 from engine.runtime.budget import PackageBudgetRequest
+from engine.runtime.candidate_ranking import CandidateQuery, RankedCandidateList
 from engine.runtime.capabilities import (
     M0_RUNTIME_CAPABILITY_DECLARATION,
     RuntimeCapability,
@@ -93,10 +94,12 @@ class ContentIoTwin:
         projection_session: object,
         *,
         effective_scope: Any,
-    ) -> tuple[()]:
+    ) -> CandidateQuery:
         del request, projection_session, effective_scope
         self.index_calls += 1
-        return ()
+        return CandidateQuery(
+            ranked_lists=(RankedCandidateList(ranker_ref="test", candidates=()),)
+        )
 
     def authorize_and_project(self) -> tuple[()]:
         self.provider_calls += 1

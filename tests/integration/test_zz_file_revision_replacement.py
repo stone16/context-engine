@@ -24,10 +24,10 @@ from engine.persistence import (
     create_database_engine,
 )
 from engine.persistence.file_imports import PostgreSQLFileImportWorker, _resource_ref
+from engine.runtime.candidate_ranking import CandidateQuery
 from engine.runtime.construction import Runtime, required_kernel_dependencies
 from engine.runtime.content_io import CandidateIndex, exact_phrase_digest
 from engine.runtime.contracts import Acquire
-from engine.runtime.evidence import CandidateRef
 from engine.runtime.materialized import MaterializedProjectionSession
 from engine.runtime.package_digest import QueryDigestKeyring
 from engine.runtime.scope import EffectiveScope
@@ -301,7 +301,7 @@ class _BlockingCandidateIndex:
         projection_session: MaterializedProjectionSession,
         *,
         effective_scope: EffectiveScope,
-    ) -> tuple[CandidateRef, ...]:
+    ) -> CandidateQuery:
         candidates = self._inner.discover(
             request,
             projection_session,

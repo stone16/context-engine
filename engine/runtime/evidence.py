@@ -324,6 +324,35 @@ def _construct_authorized_projection(
     return projection
 
 
+def _construct_inherited_authorized_projection(
+    *,
+    anchor: AuthorizedProjection,
+    candidate_ref: CandidateRef,
+    body: str,
+    projected_field_refs: tuple[str, ...],
+) -> AuthorizedProjection:
+    """Inherit one current same-Article decision after exact lineage verification."""
+
+    _require_active_authorized_projection(anchor)
+    if type(candidate_ref) is not CandidateRef:
+        raise TypeError("inherited projection requires CandidateRef")
+    anchor_ref = anchor.candidate_ref
+    if (
+        candidate_ref.organization_id != anchor_ref.organization_id
+        or candidate_ref.source_ref != anchor_ref.source_ref
+        or candidate_ref.resource_ref != anchor_ref.resource_ref
+        or candidate_ref.revision_ref != anchor_ref.revision_ref
+    ):
+        raise ValueError("inherited projection crossed Article/Revision lineage")
+    return _construct_authorized_projection(
+        kernel_scope=anchor._kernel_scope,
+        candidate_ref=candidate_ref,
+        body=body,
+        projected_field_refs=projected_field_refs,
+        lineage=anchor.lineage,
+    )
+
+
 def _require_active_authorized_projection(
     projection: AuthorizedProjection,
 ) -> None:

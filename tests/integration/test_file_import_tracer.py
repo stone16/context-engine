@@ -54,6 +54,11 @@ from engine.persistence.membership_context import (
     MembershipIdentity,
     _PostgreSQLMaterializedProjectionPort,
 )
+from engine.runtime.candidate_ranking import (
+    CandidateQuery,
+    RankedCandidate,
+    RankedCandidateList,
+)
 from engine.runtime.construction import Runtime, required_kernel_dependencies
 from engine.runtime.content_io import exact_phrase_digest
 from engine.runtime.context_run import ContextRunOutcome
@@ -302,13 +307,22 @@ class _ExactThenReplayCandidateIndex:
         projection_session: MaterializedProjectionSession,
         *,
         effective_scope: EffectiveScope,
-    ) -> tuple[CandidateRef, ...]:
+    ) -> CandidateQuery:
         exact = self.exact.discover(
             request,
             projection_session,
             effective_scope=effective_scope,
         )
-        return exact or (self.replay,)
+        if any(ranked_list.candidates for ranked_list in exact.ranked_lists):
+            return exact
+        return CandidateQuery(
+            ranked_lists=(
+                RankedCandidateList(
+                    ranker_ref="lexical",
+                    candidates=(RankedCandidate(candidate_ref=self.replay),),
+                ),
+            )
+        )
 
 
 def _publish_direct(
@@ -1807,8 +1821,11 @@ def test_exact_phrase_discovery_does_not_hide_a_match_after_sixty_four_rows(
     finally:
         migration_engine.dispose()
 
-    assert len(discovered) == 65
-    assert discovered[-1].resource_ref == "resource:exact-limit:064"
+    assert len(discovered.ranked_lists[0].candidates) == 65
+    assert (
+        discovered.ranked_lists[0].candidates[-1].candidate_ref.resource_ref
+        == "resource:exact-limit:064"
+    )
 
 
 @pytest.mark.parametrize(

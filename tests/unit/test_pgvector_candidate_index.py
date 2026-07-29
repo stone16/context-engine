@@ -114,7 +114,7 @@ def test_vector_index_embeds_query_and_returns_only_bounded_candidate_refs() -> 
         port=cast(MaterializedProjectionPort, port),
     )
     try:
-        candidates = PostgreSQLVectorCandidateIndex(
+        candidate_query = PostgreSQLVectorCandidateIndex(
             DeterministicEmbeddingTwin(),
             limit=1,
         ).discover(
@@ -125,7 +125,10 @@ def test_vector_index_embeds_query_and_returns_only_bounded_candidate_refs() -> 
     finally:
         _close_materialized_projection_scope(scope)
 
-    assert candidates == (_candidate(),)
+    assert tuple(
+        item.candidate_ref
+        for item in candidate_query.ranked_lists[0].candidates
+    ) == (_candidate(),)
     assert len(port.calls) == 1
     query_embedding, limit, source_refs, resource_refs, effective_scope = port.calls[0]
     assert len(query_embedding) == 384

@@ -13,7 +13,13 @@ from typing import Literal, overload
 from uuid import UUID
 
 from engine.runtime.actor import _require_active_user_actor
+from engine.runtime.authorized_ranking import join_authorized_ranking
 from engine.runtime.budget import PackageBudget, effective_package_budget
+from engine.runtime.candidate_ranking import (
+    CandidateQuery,
+    CandidateRankEvidence,
+    preserve_single_ranker_candidates,
+)
 from engine.runtime.capabilities import (
     RuntimeCapability,
     RuntimeCapabilityGate,
@@ -80,15 +86,24 @@ from engine.runtime.egress import (
 )
 from engine.runtime.egress_payload import channel_payload_digest, model_input_digest
 from engine.runtime.evidence import (
+    AuthorizedProjection,
     CandidateRef,
     EvidenceLineage,
     PackageContent,
     _attach_citation_open_refs,
+    _AuthorizationKernelScope,
     _candidate_sort_key,
     _close_authorization_kernel_scope,
     _construct_authorized_projection,
+    _construct_inherited_authorized_projection,
     _open_authorization_kernel_scope,
     construct_package_content,
+)
+from engine.runtime.fragment_window import (
+    FragmentWindowRead,
+    FragmentWindowReader,
+    FragmentWindowRequest,
+    FragmentWindowResult,
 )
 from engine.runtime.invocation import AuthenticatedInvocation
 from engine.runtime.materialized import (
@@ -96,6 +111,7 @@ from engine.runtime.materialized import (
     MaterializedProjectionSession,
     _locate_materialized_fragment,
     _project_materialized_fragment,
+    _read_materialized_fragment_window,
 )
 from engine.runtime.package_digest import QueryDigestKeyring, context_package_digest
 from engine.runtime.policy_epoch import (
@@ -181,7 +197,17 @@ class AuthorizationDecision:
     effective_budget: PackageBudget
     policy_receipt: PolicyReceipt
     provenance_receipt: DecisionProvenanceReceipt
-    content: PackageContent
+    projections: tuple[AuthorizedProjection, ...]
+    _projection_scope: _AuthorizationKernelScope | None = field(repr=False)
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedAcquireAuthorization:
+    """Rank-blind policy and provenance state prepared before discovery."""
+
+    effective_budget: PackageBudget
+    policy_receipt: PolicyReceipt
+    provenance_receipt: DecisionProvenanceReceipt
 
 
 @dataclass(frozen=True, slots=True)
@@ -585,7 +611,7 @@ class AuthorizationKernel:
         self._provenance = validated.provenance
         self._egress = validated.egress
 
-    def authorize_acquire(
+    def prepare_acquire(
         self,
         invocation: AuthenticatedInvocation,
         delivery_context: TrustedDeliveryContext,
@@ -594,10 +620,8 @@ class AuthorizationKernel:
         server_budget: PackageBudget,
         as_of: datetime,
         reference_issuer: _OpaqueReferenceIssuer,
-        candidate_index: CandidateIndex | None,
-        projection_session: MaterializedProjectionSession | None,
-    ) -> AuthorizationDecision:
-        """Run policy, budget, provenance, exact projection, and assembly."""
+    ) -> PreparedAcquireAuthorization:
+        """Run policy, budget, and provenance before content-free discovery."""
 
         policy_receipt = self._policy.validate_acquire(
             invocation,
@@ -619,37 +643,41 @@ class AuthorizationKernel:
             as_of=as_of,
             reference_issuer=reference_issuer,
         )
-        candidates: tuple[CandidateRef, ...] = ()
-        if policy_receipt.effective_scope.targets and candidate_index is not None:
-            if projection_session is None:
-                raise RuntimeConfigurationError(
-                    "candidate discovery requires same-transaction projection session"
-                )
-            discovered = candidate_index.discover(
-                request,
-                projection_session,
-                effective_scope=policy_receipt.effective_scope,
-            )
-            if type(discovered) is not tuple or any(
-                type(candidate) is not CandidateRef for candidate in discovered
-            ):
-                raise TypeError(
-                    "CandidateIndex must return a tuple of exact CandidateRef values"
-                )
-            candidates = discovered
-        content = self._authorize_and_assemble(
-            invocation,
-            policy_receipt,
-            provenance_receipt,
-            effective_budget,
-            candidates,
-            projection_session,
-        )
-        return AuthorizationDecision(
+        return PreparedAcquireAuthorization(
             effective_budget=effective_budget,
             policy_receipt=policy_receipt,
             provenance_receipt=provenance_receipt,
-            content=content,
+        )
+
+    def authorize_acquire(
+        self,
+        invocation: AuthenticatedInvocation,
+        preparation: PreparedAcquireAuthorization,
+        candidate_refs: tuple[CandidateRef, ...],
+        *,
+        projection_session: MaterializedProjectionSession | None,
+    ) -> AuthorizationDecision:
+        """Project sorted opaque refs under one prepared rank-blind decision."""
+
+        if type(preparation) is not PreparedAcquireAuthorization:
+            raise TypeError("Kernel requires PreparedAcquireAuthorization")
+        if type(candidate_refs) is not tuple or any(
+            type(candidate) is not CandidateRef for candidate in candidate_refs
+        ):
+            raise TypeError("Kernel candidate_refs must be exact CandidateRef values")
+        projections, projection_scope = self._authorize_and_project(
+            invocation,
+            preparation.policy_receipt,
+            preparation.provenance_receipt,
+            candidate_refs,
+            projection_session,
+        )
+        return AuthorizationDecision(
+            effective_budget=preparation.effective_budget,
+            policy_receipt=preparation.policy_receipt,
+            provenance_receipt=preparation.provenance_receipt,
+            projections=projections,
+            _projection_scope=projection_scope,
         )
 
     def authorize_open_citation(
@@ -685,11 +713,10 @@ class AuthorizationKernel:
             as_of=as_of,
             reference_issuer=reference_issuer,
         )
-        content = self._authorize_and_assemble(
+        projections, projection_scope = self._authorize_and_project(
             invocation,
             policy_receipt,
             provenance_receipt,
-            effective_budget,
             (candidate,) if candidate is not None else (),
             projection_session,
         )
@@ -697,7 +724,67 @@ class AuthorizationKernel:
             effective_budget=effective_budget,
             policy_receipt=policy_receipt,
             provenance_receipt=provenance_receipt,
-            content=content,
+            projections=projections,
+            _projection_scope=projection_scope,
+        )
+
+    def expand_fragment_window(
+        self,
+        request: FragmentWindowRequest,
+        *,
+        reader: FragmentWindowReader,
+        projection_session: MaterializedProjectionSession,
+    ) -> FragmentWindowResult:
+        """Construct inherited projections only after current-lineage read proof."""
+
+        if type(request) is not FragmentWindowRequest:
+            raise TypeError("Kernel fragment expansion requires FragmentWindowRequest")
+        read = reader.read_window(request, projection_session)
+        if type(read) is not FragmentWindowRead:
+            raise TypeError("fragment window reader returned the wrong nominal type")
+        read.__post_init__()
+        authoritative_items = _read_materialized_fragment_window(
+            projection_session,
+            MaterializedFragmentLocator(
+                organization_id=request.anchor.candidate_ref.organization_id,
+                source_ref=request.anchor.candidate_ref.source_ref,
+                resource_ref=request.anchor.candidate_ref.resource_ref,
+                revision_ref=request.anchor.candidate_ref.revision_ref,
+                fragment_ref=request.anchor.candidate_ref.fragment_ref,
+            ),
+            request.before,
+            request.after,
+        )
+        if read.items != authoritative_items:
+            raise ValueError(
+                "fragment window reader failed authoritative verification"
+            )
+        anchor_ref = request.anchor.candidate_ref
+        projections = tuple(
+            _construct_inherited_authorized_projection(
+                anchor=request.anchor,
+                candidate_ref=CandidateRef(
+                    organization_id=item.locator.organization_id,
+                    source_ref=item.locator.source_ref,
+                    resource_ref=item.locator.resource_ref,
+                    revision_ref=item.locator.revision_ref,
+                    fragment_ref=item.locator.fragment_ref,
+                ),
+                body=item.projection.rendered_body,
+                projected_field_refs=item.projection.projected_field_refs,
+            )
+            for item in read.items
+        )
+        if any(
+            candidate.organization_id == anchor_ref.organization_id
+            and candidate.source_ref == anchor_ref.source_ref
+            and candidate.resource_ref == anchor_ref.resource_ref
+            for candidate in read.reauthorization_refs
+        ):
+            raise ValueError("same-Article expansion cannot request reauthorization")
+        return FragmentWindowResult(
+            projections=projections,
+            reauthorization_refs=read.reauthorization_refs,
         )
 
     def preflight_unavailable_request(
@@ -741,6 +828,7 @@ class AuthorizationKernel:
         self,
         invocation: AuthenticatedInvocation,
         decision: AuthorizationDecision,
+        content: PackageContent,
     ) -> FinalizedAuthorizationResult:
         """Revalidate immediately before audit and Package construction."""
 
@@ -748,7 +836,6 @@ class AuthorizationKernel:
             raise TypeError("final Policy Epoch gate requires AuthorizationDecision")
         _require_active_user_actor(invocation.user_actor)
         policy_receipt = decision.policy_receipt
-        content = decision.content
         provenance = decision.provenance_receipt
         content_binding_matches_decision = all(
             evidence.lineage.run_ref == provenance.run_ref
@@ -847,17 +934,16 @@ class AuthorizationKernel:
             issued_at=issued_at,
         )
 
-    def _authorize_and_assemble(
+    def _authorize_and_project(
         self,
         invocation: AuthenticatedInvocation,
         policy_receipt: PolicyReceipt,
         provenance_receipt: DecisionProvenanceReceipt,
-        effective_budget: PackageBudget,
         candidates: tuple[CandidateRef, ...],
         projection_session: MaterializedProjectionSession | None,
-    ) -> PackageContent:
+    ) -> tuple[tuple[AuthorizedProjection, ...], _AuthorizationKernelScope | None]:
         if not candidates or not policy_receipt.effective_scope.targets:
-            return construct_package_content(())
+            return (), None
         if projection_session is None:
             raise RuntimeConfigurationError(
                 "candidate discovery requires same-transaction projection session"
@@ -866,7 +952,6 @@ class AuthorizationKernel:
         kernel_scope = _open_authorization_kernel_scope()
         try:
             projections = []
-            consumed_tokens = 0
             ordered_candidates = sorted(
                 set(candidates),
                 key=_candidate_sort_key,
@@ -912,14 +997,44 @@ class AuthorizationKernel:
                         ),
                     ),
                 )
-                body_tokens = len(projection.projected_body.encode("utf-8"))
-                if consumed_tokens + body_tokens > effective_budget.max_tokens:
-                    continue
                 projections.append(projection)
-                consumed_tokens += body_tokens
-            return construct_package_content(tuple(projections))
-        finally:
+            return tuple(projections), kernel_scope
+        except BaseException:
             _close_authorization_kernel_scope(kernel_scope)
+            raise
+
+
+def _close_authorization_decision(decision: AuthorizationDecision) -> None:
+    """Close any post-projection lifetime after authorized consumers finish."""
+
+    if type(decision) is not AuthorizationDecision:
+        raise TypeError("closing authorization requires AuthorizationDecision")
+    if decision._projection_scope is not None:
+        _close_authorization_kernel_scope(decision._projection_scope)
+
+
+def _assemble_authorized_ranking(
+    decision: AuthorizationDecision,
+    rank_evidence: tuple[CandidateRankEvidence, ...],
+) -> PackageContent:
+    """Join retrieval rank after projection, then apply PackageBudget."""
+
+    joined = join_authorized_ranking(decision.projections, rank_evidence)
+    selected = []
+    consumed_tokens = 0
+    for item in sorted(
+        joined,
+        key=lambda value: (
+            value.fused_rank,
+            _candidate_sort_key(value.projection.candidate_ref),
+        ),
+    ):
+        body_tokens = len(item.projection.projected_body.encode("utf-8"))
+        if consumed_tokens + body_tokens > decision.effective_budget.max_tokens:
+            continue
+        selected.append(item.projection)
+        consumed_tokens += body_tokens
+    return construct_package_content(tuple(selected))
 
 
 def _locator_matches_candidate(
@@ -1188,18 +1303,49 @@ class Runtime:
         as_of = _require_utc("Runtime clock", self._clock())
         if request_type is Acquire:
             assert isinstance(request, Acquire)
-            decision = self._kernel.authorize_acquire(
+            preparation = self._kernel.prepare_acquire(
                 invocation,
                 delivery_context,
                 request,
                 server_budget=self._server_budget,
                 as_of=as_of,
                 reference_issuer=self._reference_issuer,
-                candidate_index=(
-                    self._content_io.index
-                    if self._candidate_discovery_enabled
-                    else None
-                ),
+            )
+            candidate_refs: tuple[CandidateRef, ...] = ()
+            rank_evidence: tuple[CandidateRankEvidence, ...] = ()
+            if (
+                preparation.policy_receipt.effective_scope.targets
+                and self._candidate_discovery_enabled
+            ):
+                projection_session = (
+                    invocation.user_actor.materialized_projection_session
+                )
+                if projection_session is None:
+                    raise RuntimeConfigurationError(
+                        "candidate discovery requires same-transaction projection "
+                        "session"
+                    )
+                discovered = self._content_io.index.discover(
+                    request,
+                    projection_session,
+                    effective_scope=preparation.policy_receipt.effective_scope,
+                )
+                if type(discovered) is not CandidateQuery:
+                    raise TypeError("CandidateIndex must return CandidateQuery")
+                try:
+                    fused = preserve_single_ranker_candidates(discovered)
+                except ValueError as error:
+                    raise RuntimeConfigurationError(
+                        "multi-ranker fusion policy is not active"
+                    ) from error
+                candidate_refs = tuple(
+                    sorted(fused.candidate_refs, key=_candidate_sort_key)
+                )
+                rank_evidence = fused.rank_evidence
+            decision = self._kernel.authorize_acquire(
+                invocation,
+                preparation,
+                candidate_refs,
                 projection_session=(
                     invocation.user_actor.materialized_projection_session
                 ),
@@ -1232,7 +1378,16 @@ class Runtime:
                     invocation.user_actor.materialized_projection_session
                 ),
             )
-        finalized = self._kernel.finalize_for_delivery(invocation, decision)
+            rank_evidence = ()
+        try:
+            content = _assemble_authorized_ranking(decision, rank_evidence)
+            finalized = self._kernel.finalize_for_delivery(
+                invocation,
+                decision,
+                content,
+            )
+        finally:
+            _close_authorization_decision(decision)
         policy_receipt = finalized.policy_receipt
         content = finalized.content
         audit_receipt = finalized.audit_receipt
