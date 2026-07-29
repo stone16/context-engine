@@ -21,6 +21,14 @@ replacement to retain version-explicit compilation, exact source provenance,
 all-or-nothing failure, atomic immutable publication, budget-visible context,
 and the sealed Runtime authorization order.
 
+V3 accepts both nonempty `---`-delimited frontmatter and thematic breaks, so it
+must define how an initial `---` without a valid closing delimiter is
+classified. Treating every leading `---` as frontmatter would make the accepted
+thematic-break grammar depend on document position. Independent construction
+testing also showed that v3 profile labels alone do not bind the exact
+compiler/configuration identity, and a runner subprocess without a deadline
+could fail to produce either an accepted document or a typed refusal.
+
 ADR-0074 permits a pinned, registered copy of RAGFlow's Apache-2.0 Markdown
 parser region after path-level license and nested-dependency verification.
 ADR-0075 permits Supply work in a ContextEngine-owned runner subprocess only
@@ -45,6 +53,10 @@ index and executes under the exact parent WorkerLease binding.
    ragged or empty rows as one exact atomic source block rather than silently
    truncating the document; typed cell metadata remains best-effort within
    that exact source block.
+   A leading `---` opens frontmatter only when a later `---` closes a nonempty
+   payload. Without that closing delimiter, the leading line is an accepted
+   thematic break. This delimiter-complete rule preserves both constructs in
+   the closed grammar and does not infer metadata from ordinary following prose.
    A bare unmatched fence-marker line plus following nonblank text is retained
    as one exact literal paragraph block; an empty or language-bearing
    unterminated fence remains a typed refusal.
@@ -73,6 +85,13 @@ index and executes under the exact parent WorkerLease binding.
    section metadata, coordinates, paths, parent headings, stable Fragment
    references, search phrases, contextual text, and the provenance-bound
    ceiling; parser-supplied metadata cannot bypass those checks.
+   Rich provenance binds the exact `context-engine-markdown-v3` compiler and
+   `markdown-config-v3` configuration identifiers as well as the v3 profiles.
+   The self-validating domain constructor rejects older or arbitrary identities.
+   The constructor and parser share only the closed control-character
+   classifier: C0 controls other than tab and line endings, DEL, and C1 controls
+   are refused. The constructor invokes it independently over exact source, so
+   fenced-code metadata cannot bypass a parser-ingress check.
 5. **Hard splitting gate.** V3 uses a representation-bound 2,048-token default
    ceiling, recorded in both configuration and compilation provenance. The
    deterministic counter treats each non-whitespace run as one token. A block
@@ -111,6 +130,20 @@ index and executes under the exact parent WorkerLease binding.
 
 ## Consequences
 
+- Delimiter completeness makes the two already accepted `---` meanings
+  deterministic without changing v1 or v2. A document beginning with an
+  unclosed `---` compiles that line as a thematic break; complete nonempty
+  frontmatter retains its exact raw span.
+- Exact identity binding keeps stored provenance interpretable. Forged v3
+  documents cannot substitute an older or arbitrary compiler/config identity
+  while retaining rich profiles. Sharing the finite character predicate
+  prevents drift without trusting any parser-provided structure, span, or
+  construct metadata.
+- The local compiler-runner call has a fixed positive timeout. Child timeout or
+  launch failure produces the same content-free typed boundary failure as any
+  other subprocess-boundary failure; an unbounded wait is not an outcome. A
+  positive deadline completes the all-or-nothing process contract even when a
+  child wedges before emitting bytes.
 - Rich-note and hard-bound behavior can be verified without creating durable
   content or adding another persistence truth.
 - Deterministic source spans and heading context remain part of the same
@@ -126,4 +159,6 @@ index and executes under the exact parent WorkerLease binding.
 Revisit before accepting a construct outside the closed v3 grammar, changing
 the token counter or ceiling, splitting an indivisible construct differently,
 activating v3 publication, migrating an existing Revision, adding runner-local
-state, or changing the same-Fragment ancestry rule.
+state, changing the same-Fragment ancestry rule, changing leading delimiter
+disambiguation or v3 identity binding, or making the fixed subprocess timeout a
+caller-controlled runtime parameter.
