@@ -38,15 +38,27 @@ index and executes under the exact parent WorkerLease binding.
    unordered lists,
    backtick or tilde fenced code blocks whose content may contain shorter fence
    runs, pipe tables, wikilinks, embeds, footnotes, HTML blocks, Obsidian
-   callouts, inline math, and ordinary paragraphs. CRLF, lone CR, and LF are
-   treated uniformly for grammar recognition and line/column calculation, but
-   exact decoded source bytes are retained so every byte span round-trips
-   against the original UTF-8 input and representation digests distinguish
-   distinct inputs. Frontmatter payload bytes are retained but not interpreted
-   or used as authority; semantic YAML validation, CommonMark compatibility,
-   and unrestricted HTML compatibility are not claimed. An optional leading
-   UTF-8 BOM is retained for representation identity and treated only as a
-   transport marker preceding the first Fragment.
+   callouts, ordinary blockquotes, inline math, emphasis/strong text, inline
+   code, inline or reference links/images and reference definitions,
+   strikethrough, angle-bracket literals, hard line breaks, thematic breaks,
+   and ordinary paragraphs. Pipe tables retain
+   ragged or empty rows as one exact atomic source block rather than silently
+   truncating the document; typed cell metadata remains best-effort within
+   that exact source block.
+   A bare unmatched fence-marker line plus following nonblank text is retained
+   as one exact literal paragraph block; an empty or language-bearing
+   unterminated fence remains a typed refusal.
+   These additional bounded constructs are explicit because the real-corpus
+   acceptance gate showed they are required to close the measured v1 gap; raw
+   syntax remains exact source text and is not re-rendered. CRLF, lone CR, and
+   LF are treated uniformly for grammar recognition and line/column
+   calculation, but exact decoded source bytes are retained so every byte span
+   round-trips against the original UTF-8 input and representation digests
+   distinguish distinct inputs. Frontmatter payload bytes are retained but not
+   interpreted or used as authority; semantic YAML validation, CommonMark
+   compatibility, and unrestricted HTML compatibility are not claimed. An
+   optional leading UTF-8 BOM is retained for representation identity and
+   treated only as a transport marker preceding the first Fragment.
 3. **Existing output contracts.** The runner emits and deserializes only the
    existing `ParsedDocument`, `CompiledFragment`, `SourceSpan`,
    `StructuralPath`, `CompilationProvenance`, or typed `CompilationFailure`
@@ -56,8 +68,13 @@ index and executes under the exact parent WorkerLease binding.
    line, and column span. Its `source_text` is exactly the original input byte
    slice at that span. Non-whitespace source bytes cannot be omitted. Table
    Fragments obey the same round-trip rule. Heading ancestry is derived during
-   compilation and copied into the same budget-visible Fragment.
-5. **Hard splitting gate.** V3 uses a representation-bound token ceiling. The
+   compilation and copied into the same budget-visible Fragment. The v3 domain
+   constructor independently re-derives the closed source grammar, typed
+   section metadata, coordinates, paths, parent headings, stable Fragment
+   references, search phrases, contextual text, and the provenance-bound
+   ceiling; parser-supplied metadata cannot bypass those checks.
+5. **Hard splitting gate.** V3 uses a representation-bound 2,048-token default
+   ceiling, recorded in both configuration and compilation provenance. The
    deterministic counter treats each non-whitespace run as one token. A block
    whose contextual text would exceed the ceiling is split at source token
    boundaries into ordered Fragments; every part retains the same preceding
@@ -74,7 +91,10 @@ index and executes under the exact parent WorkerLease binding.
    classification, exact raw-byte position mapping, ancestry, typed output,
    and splitting because the upstream return shape cannot express those
    contracts. The process performs no network or database I/O and retains no
-   independent state, cache, index, or checkpoint.
+   independent state, cache, index, or checkpoint. Both the direct compiler
+   seam and subprocess envelope convert unexpected parser or domain-constructor
+   rejection into a typed all-or-nothing `CompilationFailure`; no partial
+   document or raw exception crosses the runner boundary.
 7. **Activation remains deferred.** This decision proves the v3 pure transform
    and local acceptance reporting only. The active File import configuration,
    database publication functions, immutable Revision schemas, embeddings,
