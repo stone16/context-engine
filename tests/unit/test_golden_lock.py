@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime, timedelta
+from hashlib import sha256
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,25 @@ from engine.learning.golden import (
     relock_golden_set,
 )
 from tests.support.golden import valid_composed_entries, write_golden
+
+
+def _entry_digest(entry: dict[str, object]) -> str:
+    payload = {key: value for key, value in entry.items() if key != "entryDigest"}
+    canonical = json.dumps(
+        payload,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return sha256(canonical).hexdigest()
+
+
+def _rewrite_chain_digests(history: list[dict[str, object]]) -> None:
+    previous: str | None = None
+    for entry in history:
+        entry["previousEntryDigest"] = previous
+        entry["entryDigest"] = _entry_digest(entry)
+        previous = str(entry["entryDigest"])
 
 
 def test_editing_locked_pilot_case_is_refused_and_relock_is_recorded(
@@ -158,6 +178,55 @@ def test_rewritten_prior_lock_history_entry_is_refused(
     )
     lock_document = json.loads(lock_path.read_text(encoding="utf-8"))
     lock_document["history"][0][field] = replacement
+    lock_path.write_text(json.dumps(lock_document), encoding="utf-8")
+
+    with pytest.raises(GoldenSetUnavailable, match="history entry"):
+        load_golden_set(golden_path, lock_path=lock_path)
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    (
+        ("authority", ""),
+        ("digest", "A" * 64),
+        ("reason", ""),
+        ("recordedAt", "2026-07-29T12:00:00Z"),
+    ),
+)
+def test_semantically_invalid_prior_history_is_refused_even_if_rehashed(
+    tmp_path: Path,
+    field: str,
+    replacement: str,
+) -> None:
+    golden_path = tmp_path / "golden.json"
+    lock_path = tmp_path / "golden.lock.json"
+    entries = valid_composed_entries()
+    write_golden(golden_path, entries)
+    initial_time = datetime(2026, 7, 29, 12, tzinfo=UTC)
+    original = load_golden_set(
+        golden_path,
+        allow_unlocked_pilot_for_initial_lock=True,
+    )
+    create_golden_lock(
+        original,
+        lock_path,
+        authority="maintainer",
+        reason="initial-pilot-lock",
+        recorded_at=initial_time,
+    )
+    entries[-1]["expectedAnswer"] = "synthetic-recorded-correction"
+    write_golden(golden_path, entries)
+    relock_golden_set(
+        golden_path,
+        lock_path,
+        authority="maintainer",
+        reason="recorded-correction",
+        recorded_at=initial_time + timedelta(minutes=5),
+    )
+    lock_document = json.loads(lock_path.read_text(encoding="utf-8"))
+    history = lock_document["history"]
+    history[0][field] = replacement
+    _rewrite_chain_digests(history)
     lock_path.write_text(json.dumps(lock_document), encoding="utf-8")
 
     with pytest.raises(GoldenSetUnavailable, match="history entry"):
