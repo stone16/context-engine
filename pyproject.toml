@@ -8,13 +8,19 @@ version = "0.1.0"
 description = "Permission-aware context delivery engine"
 readme = "README.md"
 license = "Apache-2.0"
-license-files = ["LICENSE", "NOTICE"]
+license-files = [
+  "LICENSE",
+  "NOTICE",
+  "THIRD_PARTY_NOTICES.md",
+  "third_party/ragflow/LICENSE.upstream",
+]
 requires-python = ">=3.13,<3.14"
 dependencies = [
   "alembic>=1.16,<1.17",
   "cryptography>=49,<50",
   "fastapi>=0.116,<0.117",
   "jsonschema>=4.25,<5",
+  "markdown>=3.6,<3.7",
   "pydantic>=2.13,<2.14",
   "psycopg[binary]>=3.2,<3.3",
   "rfc8785>=0.1.4,<0.2",
@@ -48,7 +54,14 @@ benchmark = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["engine", "adapters", "applications", "eval", "migrations"]
+packages = [
+  "engine",
+  "adapters",
+  "applications",
+  "eval",
+  "migrations",
+  "third_party",
+]
 
 [tool.hatch.build.targets.wheel.force-include]
 "eval/golden/v1/schema.json" = "eval/golden/v1/schema.json"
@@ -82,3 +95,6 @@ line-length = 88
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.ruff.lint.per-file-ignores]
+"third_party/**/*.py" = ["E501", "SIM103", "UP009", "UP032"]
