@@ -67,6 +67,11 @@ def _report() -> dict[str, object]:
     )
     return {
         "comparison": {
+            "metricDeltas": {
+                "caseHit": 0.0,
+                "macroEvidenceRecall": 0.0,
+                "microEvidenceRecall": 0.0,
+            },
             "primaryAgainstModelBaseline": "tie",
             "primaryAgainstStandingTwinBaseline": "win",
         },

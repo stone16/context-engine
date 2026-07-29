@@ -19,6 +19,7 @@ from eval.embedding_benchmark import (
     RetrievalJudgeCase,
     RetrievalMetrics,
     SliceMetrics,
+    compare_model_metrics,
     run_benchmark,
 )
 
@@ -168,6 +169,56 @@ def test_primary_loss_is_recorded_as_a_valid_result() -> None:
     assert cast(dict[str, Any], report["comparison"])[
         "primaryAgainstModelBaseline"
     ] == "lose"
+
+
+@pytest.mark.parametrize(
+    ("primary", "baseline", "expected"),
+    (
+        ((0.9, 0.8, 0.7), (0.8, 0.7, 0.6), "win"),
+        ((0.8, 0.7, 0.6), (0.9, 0.8, 0.7), "lose"),
+        ((0.8, 0.8, 0.8), (0.8, 0.8, 0.8), "tie"),
+        ((0.9, 0.6, 0.8), (0.8, 0.7, 0.8), "inconclusive"),
+    ),
+)
+def test_model_verdict_uses_pareto_dominance_across_all_retrieval_metrics(
+    primary: tuple[float, float, float],
+    baseline: tuple[float, float, float],
+    expected: str,
+) -> None:
+    verdict = compare_model_metrics(
+        _retrieval_metrics(*primary),
+        _retrieval_metrics(*baseline),
+    )
+
+    assert verdict.outcome == expected
+    assert verdict.deltas == {
+        "caseHit": pytest.approx(primary[0] - baseline[0]),
+        "macroEvidenceRecall": pytest.approx(primary[1] - baseline[1]),
+        "microEvidenceRecall": pytest.approx(primary[2] - baseline[2]),
+    }
+
+
+def _retrieval_metrics(
+    case_hit: float,
+    macro: float,
+    micro: float,
+) -> RetrievalMetrics:
+    return RetrievalMetrics(
+        case_hit=CaseHitMetric(hits=0, total_cases=1, value=case_hit),
+        evidence_recall=EvidenceRecallMetric(
+            macro=MacroRecallMetric(value=macro),
+            micro=MicroRecallMetric(hits=0, total_expected=1, value=micro),
+        ),
+        per_slice={
+            "single_doc": SliceMetrics(
+                case_hit=CaseHitMetric(hits=0, total_cases=1, value=case_hit),
+                evidence_recall=EvidenceRecallMetric(
+                    macro=MacroRecallMetric(value=macro),
+                    micro=MicroRecallMetric(hits=0, total_expected=1, value=micro),
+                ),
+            )
+        },
+    )
 
 
 def test_runner_requires_the_declared_384_dimension_reduction_per_model() -> None:

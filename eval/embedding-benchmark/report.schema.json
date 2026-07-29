@@ -24,12 +24,23 @@
       "properties": {"caseHitValue": {"type": "number", "minimum": 0, "maximum": 1}}
     },
     "comparison": {
+      "description": "Frozen Pareto verdict across case hit, macro Evidence recall, and micro Evidence recall. One model wins iff no worse on all three and strictly better on at least one; exact equality ties; mixed wins are inconclusive. Per-slice metrics do not enter the verdict and weighted blending is prohibited.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["primaryAgainstModelBaseline", "primaryAgainstStandingTwinBaseline"],
+      "required": ["primaryAgainstModelBaseline", "primaryAgainstStandingTwinBaseline", "metricDeltas"],
       "properties": {
-        "primaryAgainstModelBaseline": {"enum": ["win", "tie", "lose"]},
-        "primaryAgainstStandingTwinBaseline": {"enum": ["win", "tie", "lose"]}
+        "primaryAgainstModelBaseline": {"enum": ["win", "tie", "lose", "inconclusive"]},
+        "primaryAgainstStandingTwinBaseline": {"enum": ["win", "tie", "lose"]},
+        "metricDeltas": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["caseHit", "macroEvidenceRecall", "microEvidenceRecall"],
+          "properties": {
+            "caseHit": {"type": "number"},
+            "macroEvidenceRecall": {"type": "number"},
+            "microEvidenceRecall": {"type": "number"}
+          }
+        }
       }
     }
   },

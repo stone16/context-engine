@@ -4,9 +4,18 @@
   "title": "ContextEngine offline embedding benchmark input v1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schemaVersion", "documents", "cases"],
+  "required": ["schemaVersion", "lock", "documents", "cases"],
   "properties": {
     "schemaVersion": {"const": "context-engine-embedding-benchmark-input-v1"},
+    "lock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profile", "contentDigest"],
+      "properties": {
+        "profile": {"const": "sha256-rfc8785-v1"},
+        "contentDigest": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
     "documents": {
       "type": "array",
       "minItems": 1,

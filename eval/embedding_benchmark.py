@@ -9,7 +9,9 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from hashlib import sha256
 from pathlib import Path
-from typing import Final, Protocol, cast
+from typing import Any, Final, Protocol, cast
+
+import rfc8785
 
 EMBEDDING_DIMENSION: Final = 384
 REPORT_SCHEMA_VERSION: Final = "context-engine-embedding-benchmark-report-v1"
@@ -123,6 +125,7 @@ class BenchmarkDataset:
 
     documents: tuple[BenchmarkDocument, ...] = field(repr=False)
     cases: tuple[BenchmarkCase, ...] = field(repr=False)
+    locked: bool = True
     digest: str = field(init=False)
 
     def __post_init__(self) -> None:
@@ -133,6 +136,8 @@ class BenchmarkDataset:
             or type(self.cases) is not tuple
             or not self.cases
             or any(type(value) is not BenchmarkCase for value in self.cases)
+            or type(self.locked) is not bool
+            or not self.locked
         ):
             raise BenchmarkUnavailable("benchmark dataset is unavailable")
         document_refs = tuple(value.document_ref for value in self.documents)
@@ -281,6 +286,25 @@ class RetrievalMetrics:
             raise BenchmarkUnavailable("retrieval judge is unavailable")
 
 
+@dataclass(frozen=True, slots=True)
+class ModelComparison:
+    """Typed Pareto verdict and primary-minus-baseline metric deltas."""
+
+    outcome: str
+    deltas: Mapping[str, float]
+
+    def __post_init__(self) -> None:
+        if self.outcome not in {"win", "tie", "lose", "inconclusive"}:
+            raise BenchmarkUnavailable("model comparison is unavailable")
+        if frozenset(self.deltas) != frozenset(
+            {"caseHit", "macroEvidenceRecall", "microEvidenceRecall"}
+        ) or any(not math.isfinite(value) for value in self.deltas.values()):
+            raise BenchmarkUnavailable("model comparison is unavailable")
+
+    def public_document(self) -> dict[str, object]:
+        return {"deltas": dict(self.deltas), "outcome": self.outcome}
+
+
 class RetrievalJudge(Protocol):
     """Injected adapter to #129; this issue intentionally implements no metrics."""
 
@@ -312,8 +336,11 @@ def run_benchmark(
         raise BenchmarkUnavailable("baseline benchmark reduction is unavailable")
     primary_report = _run_model(dataset, primary, judge, top_k, clock)
     baseline_report = _run_model(dataset, baseline, judge, top_k, clock)
-    primary_hit = _metric_case_hit(primary_report)
-    baseline_hit = _metric_case_hit(baseline_report)
+    model_comparison = compare_model_metrics(
+        primary_report.metrics,
+        baseline_report.metrics,
+    )
+    primary_hit = primary_report.metrics.case_hit.value
     run_document = {
         "datasetDigest": dataset.digest,
         "topK": top_k,
@@ -327,14 +354,27 @@ def run_benchmark(
     )
     return {
         "comparison": {
-            "primaryAgainstModelBaseline": _comparison(primary_hit, baseline_hit),
+            "metricDeltas": dict(model_comparison.deltas),
+            "primaryAgainstModelBaseline": model_comparison.outcome,
             "primaryAgainstStandingTwinBaseline": _comparison(primary_hit, 0.038),
         },
-        "models": {"baseline": baseline_report, "primary": primary_report},
+        "models": {
+            "baseline": baseline_report.public_document(),
+            "primary": primary_report.public_document(),
+        },
         "run": {**run_document, "runIdentity": run_identity},
         "schemaVersion": REPORT_SCHEMA_VERSION,
         "standingTwinBaseline": {"caseHitValue": 0.038},
     }
+
+
+@dataclass(frozen=True, slots=True)
+class _ModelRun:
+    document: Mapping[str, object]
+    metrics: RetrievalMetrics
+
+    def public_document(self) -> dict[str, object]:
+        return dict(self.document)
 
 
 def _run_model(
@@ -343,7 +383,7 @@ def _run_model(
     judge: RetrievalJudge,
     top_k: int,
     clock: Callable[[], float],
-) -> dict[str, object]:
+) -> _ModelRun:
     query_values = tuple(
         provider.identity.query_prefix + case.query for case in dataset.cases
     )
@@ -377,20 +417,23 @@ def _run_model(
     if type(metrics) is not RetrievalMetrics:
         raise BenchmarkUnavailable("retrieval judge is unavailable")
     finished = clock()
-    return {
-        "identity": provider.identity.public_document(),
-        "metrics": _metrics_document(metrics),
-        "timing": {
-            "documentCount": len(dataset.documents),
-            "perDocumentEmbedMilliseconds": max(
-                0.0,
-                (document_finished - document_started)
-                * 1000
-                / len(dataset.documents),
-            ),
-            "wallClockMilliseconds": max(0.0, (finished - started) * 1000),
+    return _ModelRun(
+        document={
+            "identity": provider.identity.public_document(),
+            "metrics": _metrics_document(metrics),
+            "timing": {
+                "documentCount": len(dataset.documents),
+                "perDocumentEmbedMilliseconds": max(
+                    0.0,
+                    (document_finished - document_started)
+                    * 1000
+                    / len(dataset.documents),
+                ),
+                "wallClockMilliseconds": max(0.0, (finished - started) * 1000),
+            },
         },
-    }
+        metrics=metrics,
+    )
 
 
 def _validated_vectors(
@@ -476,13 +519,44 @@ def _recall_document(value: EvidenceRecallMetric) -> dict[str, object]:
     }
 
 
-def _metric_case_hit(model_report: dict[str, object]) -> float:
-    metrics = _object(model_report["metrics"])
-    case_hit = _object(metrics["caseHit"])
-    value = case_hit["value"]
-    if type(value) not in {int, float}:
-        raise BenchmarkUnavailable("retrieval judge is unavailable")
-    return float(cast(int | float, value))
+def compare_model_metrics(
+    primary: RetrievalMetrics,
+    baseline: RetrievalMetrics,
+) -> ModelComparison:
+    """Apply the frozen no-blending Pareto rule across three retrieval metrics."""
+
+    primary_values = (
+        primary.case_hit.value,
+        primary.evidence_recall.macro.value,
+        primary.evidence_recall.micro.value,
+    )
+    baseline_values = (
+        baseline.case_hit.value,
+        baseline.evidence_recall.macro.value,
+        baseline.evidence_recall.micro.value,
+    )
+    if primary_values == baseline_values:
+        outcome = "tie"
+    elif all(
+        left >= right
+        for left, right in zip(primary_values, baseline_values, strict=True)
+    ):
+        outcome = "win"
+    elif all(
+        left <= right
+        for left, right in zip(primary_values, baseline_values, strict=True)
+    ):
+        outcome = "lose"
+    else:
+        outcome = "inconclusive"
+    return ModelComparison(
+        outcome=outcome,
+        deltas={
+            "caseHit": primary_values[0] - baseline_values[0],
+            "macroEvidenceRecall": primary_values[1] - baseline_values[1],
+            "microEvidenceRecall": primary_values[2] - baseline_values[2],
+        },
+    )
 
 
 def _comparison(left: float, right: float) -> str:
@@ -527,7 +601,7 @@ def validate_report_document(
 
     try:
         schema = json.loads(schema_path.read_text(encoding="utf-8"))
-        _validate_json_schema(document, _object(schema), _object(schema))
+        validate_json_schema_document(document, schema)
         _validate_report(document, schema)
     except BenchmarkUnavailable:
         raise
@@ -551,12 +625,24 @@ def _validate_report(document: object, schema: object) -> None:
     )
     if report["schemaVersion"] != REPORT_SCHEMA_VERSION:
         raise BenchmarkUnavailable("benchmark report schema is unavailable")
-    _closed_object(
+    comparison = _closed_object(
         report["comparison"],
         frozenset(
-            {"primaryAgainstModelBaseline", "primaryAgainstStandingTwinBaseline"}
+            {
+                "metricDeltas",
+                "primaryAgainstModelBaseline",
+                "primaryAgainstStandingTwinBaseline",
+            }
         ),
     )
+    deltas = _closed_object(
+        comparison["metricDeltas"],
+        frozenset(
+            {"caseHit", "macroEvidenceRecall", "microEvidenceRecall"}
+        ),
+    )
+    for value in deltas.values():
+        _require_finite_number(value)
     run = _closed_object(
         report["run"], frozenset({"datasetDigest", "runIdentity", "topK"})
     )
@@ -571,6 +657,13 @@ def _validate_report(document: object, schema: object) -> None:
     models = _closed_object(report["models"], frozenset({"baseline", "primary"}))
     _validate_model_report(models["primary"])
     _validate_model_report(models["baseline"])
+
+
+def validate_json_schema_document(value: object, schema: object) -> None:
+    """Validate documents against the tracked schema vocabulary used by eval."""
+
+    root = _object(schema)
+    _validate_json_schema(value, root, root)
 
 
 def _validate_json_schema(
@@ -640,11 +733,28 @@ def _validate_json_schema(
         if type(value) not in {int, float}:
             raise BenchmarkUnavailable("benchmark report schema is unavailable")
         _validate_numeric_bounds(cast(int | float, value), schema)
+    elif expected_type == "array":
+        if type(value) is not list:
+            raise BenchmarkUnavailable("benchmark report schema is unavailable")
+        minimum_items = schema.get("minItems", 0)
+        if type(minimum_items) is not int or len(value) < minimum_items:
+            raise BenchmarkUnavailable("benchmark report schema is unavailable")
+        if schema.get("uniqueItems") is True and len(
+            {_canonical_json(item) for item in value}
+        ) != len(value):
+            raise BenchmarkUnavailable("benchmark report schema is unavailable")
+        items = schema.get("items")
+        if items is not None:
+            item_schema = _object(items)
+            for item in value:
+                _validate_json_schema(item, item_schema, root)
     elif expected_type is not None:
         raise BenchmarkUnavailable("benchmark report schema is unavailable")
 
 
 def _validate_numeric_bounds(value: int | float, schema: dict[str, object]) -> None:
+    if not math.isfinite(float(value)):
+        raise BenchmarkUnavailable("benchmark report schema is unavailable")
     minimum = schema.get("minimum")
     maximum = schema.get("maximum")
     if minimum is not None and (
@@ -655,6 +765,13 @@ def _validate_numeric_bounds(value: int | float, schema: dict[str, object]) -> N
         type(maximum) not in {int, float} or value > cast(int | float, maximum)
     ):
         raise BenchmarkUnavailable("benchmark report schema is unavailable")
+
+
+def _canonical_json(value: object) -> bytes:
+    try:
+        return rfc8785.dumps(cast(Any, value))
+    except (TypeError, ValueError, OverflowError):
+        raise BenchmarkUnavailable("benchmark report schema is unavailable") from None
 
 
 def _validate_model_report(value: object) -> None:
@@ -782,4 +899,11 @@ def _require_nonnegative_number(value: object) -> None:
         raise BenchmarkUnavailable("benchmark report schema is unavailable")
     number = float(cast(int | float, value))
     if not math.isfinite(number) or number < 0.0:
+        raise BenchmarkUnavailable("benchmark report schema is unavailable")
+
+
+def _require_finite_number(value: object) -> None:
+    if type(value) not in {int, float} or not math.isfinite(
+        float(cast(int | float, value))
+    ):
         raise BenchmarkUnavailable("benchmark report schema is unavailable")

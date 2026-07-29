@@ -39,6 +39,11 @@ context-engine-dogfood-eval = "applications.dogfood_evaluation:main"
 context-engine-embedding-benchmark = "applications.embedding_benchmark:main"
 context-engine-worker = "applications.worker:main"
 
+[project.optional-dependencies]
+benchmark = [
+    "sentence-transformers>=5,<6",
+]
+
 [tool.hatch.build.targets.wheel]
 packages = ["engine", "adapters", "applications", "eval", "migrations"]
 
@@ -49,6 +54,7 @@ files = [
   "engine",
   "adapters",
   "applications",
+  "eval",
   "migrations",
   "scripts/provision_database_roles.py",
   "scripts/wait_for_database.py",

@@ -48,17 +48,20 @@ feed the release-gate report, and there is no CI threshold.
 `context-engine-embedding-benchmark` is an offline evaluation CLI. It compares
 the exact 384-dimensional primary and baseline model identities required by
 issue #128 and never composes an `EmbeddingProvider` into Supply or Runtime.
-The main environment deliberately contains no model framework: each local,
-pinned model directory supplies a benchmark-only `context_engine_provider.py`
-plugin and its fully resolved identity (repository id, immutable revision,
-artifact digest, dimension, normalization, pooling, prompt prefixes, reduction,
-precision, and batching).
+The main environment deliberately contains no model framework. The closed
+`sentence-transformers` backend is installed explicitly with
+`uv sync --extra benchmark`; each local pinned model directory supplies
+`benchmark-model-identity.json` with its fully resolved repository id,
+immutable revision, artifact digest, dimension, normalization, pooling, prompt
+prefixes, reduction, precision, and batching. The runner verifies the digest
+over the local model artifacts before it embeds anything.
 
 The input follows `embedding-benchmark/input.schema.json`; the output follows
 `embedding-benchmark/report.schema.json` and must be written below the ignored
-`.context-engine/` directory. Retrieval scores are not implemented by this
-runner. `--judge module:factory` injects the retrieval judge owned by issue #129,
-which is solely responsible for case hit, macro/micro Evidence recall, and slice
+`.context-engine/` directory. The input includes an RFC 8785/SHA-256 content
+lock and any post-lock edit is refused. Retrieval scores are not implemented by
+this runner: it imports the one fixed judge factory owned by issue #129, which
+is solely responsible for case hit, macro/micro Evidence recall, and slice
 breakdowns.
 
 The maintainer corpus is private and pending delivery to a durable,
@@ -68,13 +71,17 @@ an operator may run:
 ```bash
 uv run context-engine-embedding-benchmark run \
   --dataset "$DURABLE_GOLDEN_ROOT/embedding-benchmark-v1.json" \
+  --backend sentence-transformers \
   --primary-model-dir "$PINNED_MODEL_ROOT/qwen3-embedding-0.6b" \
   --baseline-model-dir "$PINNED_MODEL_ROOT/multilingual-e5-small" \
-  --judge eval.retrieval_judge:create_judge \
   --output .context-engine/eval/embedding-benchmark-v1.json
 ```
 
 The tracked frozen result contains metrics only. It currently records
 `pending_corpus`; it must never contain queries, note titles, paths, excerpts,
-or model weights. A losing primary is a valid benchmark outcome and is frozen as
-`lose`, not treated as a runner error.
+or model weights. The model verdict uses Pareto dominance across case hit,
+macro Evidence recall, and micro Evidence recall: one model wins only when it is
+no worse on all three and strictly better on at least one. Exact equality is a
+tie; mixed wins are `inconclusive`. Per-slice results remain diagnostic and no
+weighted composite or tiebreak manufactures a winner. A losing or inconclusive
+primary is a valid benchmark outcome, not a runner error.
