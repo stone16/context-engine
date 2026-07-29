@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://context-engine.invalid/eval/embedding-benchmark/input.schema.json",
+  "title": "ContextEngine offline embedding benchmark input v1",
+  "description": "M1 assumes one trusted local operator. The colocated digest detects accidental edits, truncation, or re-serialization performed without relocking; it is not a defense against deliberate forgery because an operator can recompute the digest. If callers or runners become remote or untrusted, signing requires its own ADR.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "lock", "documents", "cases"],
+  "properties": {
+    "schemaVersion": {"const": "context-engine-embedding-benchmark-input-v1"},
+    "lock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profile", "contentDigest"],
+      "properties": {
+        "profile": {
+          "description": "Typed accidental-edit detector for one trusted local operator; not a tamper-proof or anti-forgery signature.",
+          "const": "sha256-rfc8785-accidental-edit-detection-v1"
+        },
+        "contentDigest": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "documents": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["documentRef", "text"],
+        "properties": {
+          "documentRef": {"$ref": "#/$defs/nonblank"},
+          "text": {"$ref": "#/$defs/nonblank"}
+        }
+      }
+    },
+    "cases": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["caseRef", "query", "expectedDocumentRefs", "slice"],
+        "properties": {
+          "caseRef": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,127}$"},
+          "query": {"$ref": "#/$defs/nonblank"},
+          "expectedDocumentRefs": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {"$ref": "#/$defs/nonblank"}
+          },
+          "slice": {"$ref": "#/$defs/nonblank"}
+        }
+      }
+    }
+  },
+  "$defs": {
+    "nonblank": {"type": "string", "minLength": 1, "pattern": ".*\\S.*"}
+  }
+}

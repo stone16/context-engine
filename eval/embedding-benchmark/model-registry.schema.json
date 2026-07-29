@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://context-engine.invalid/eval/embedding-benchmark/model-registry.schema.json",
+  "title": "ContextEngine offline embedding tracked model registry v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "models"],
+  "properties": {
+    "schemaVersion": {"const": "context-engine-embedding-model-registry-v1"},
+    "models": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["primary", "baseline"],
+      "properties": {
+        "primary": {"$ref": "#/$defs/model"},
+        "baseline": {"$ref": "#/$defs/model"}
+      }
+    }
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["modelId", "revision", "artifactDigest", "dimension", "transformationPipeline", "pooling", "queryPrefix", "documentPrefix", "precision", "batchSize"],
+      "properties": {
+        "modelId": {"type": "string", "minLength": 1},
+        "revision": {"type": "string", "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"},
+        "artifactDigest": {"$ref": "#/$defs/digest"},
+        "dimension": {"const": 384},
+        "transformationPipeline": {
+          "description": "Complete ordered vector transformation, including upstream normalization, dimensional reduction, and final normalization. Both supported pipelines emit unit-norm 384-dimensional vectors.",
+          "enum": ["l2 -> truncate 1024->384 -> l2", "l2 -> keep native 384 -> l2"]
+        },
+        "pooling": {"type": "string", "minLength": 1},
+        "queryPrefix": {"type": "string"},
+        "documentPrefix": {"type": "string"},
+        "precision": {"type": "string", "minLength": 1},
+        "batchSize": {"type": "integer", "minimum": 1}
+      }
+    },
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["backend", "artifacts", "identity"],
+      "properties": {
+        "backend": {"const": "sentence-transformers"},
+        "artifacts": {
+          "description": "The exact complete local snapshot consumed by SentenceTransformer. Every required config, tokenizer, pooling, and weight file is present and digest-bound; extra or missing files are refused.",
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path", "sha256"],
+            "properties": {
+              "path": {"type": "string", "minLength": 1},
+              "sha256": {"$ref": "#/$defs/digest"}
+            }
+          }
+        },
+        "identity": {"$ref": "#/$defs/identity"}
+      }
+    }
+  }
+}
