@@ -226,6 +226,109 @@ def test_rich_constructor_rejects_forged_lineage_and_ancestry() -> None:
         )
 
 
+def _point_for(canonical_text: str, byte_offset: int) -> SourcePoint:
+    prefix = canonical_text.encode("utf-8")[:byte_offset].decode("utf-8")
+    logical = prefix.replace("\r\n", "\n").replace("\r", "\n")
+    return SourcePoint(
+        line=logical.count("\n") + 1,
+        column=len(logical.rsplit("\n", maxsplit=1)[-1]) + 1,
+        byte_offset=byte_offset,
+    )
+
+
+def _forged_sections(
+    canonical_text: str,
+    parts: tuple[tuple[SectionKind, str, tuple[str, ...]], ...],
+) -> tuple[tuple[ParsedSection, ...], tuple[CompiledFragment, ...]]:
+    sections: list[ParsedSection] = []
+    fragments: list[CompiledFragment] = []
+    search_start = 0
+    kind_ordinals: dict[SectionKind, int] = {}
+    for kind, source, list_items in parts:
+        start = canonical_text.index(source, search_start)
+        end = start + len(source.encode("utf-8"))
+        search_start = end
+        kind_ordinals[kind] = kind_ordinals.get(kind, 0) + 1
+        ordinal = kind_ordinals[kind]
+        path = StructuralPath(("document", f"{kind.value}[{ordinal}]"))
+        position = SourceSpan(
+            start=_point_for(canonical_text, start),
+            end=_point_for(canonical_text, end),
+        )
+        section = ParsedSection(
+            kind=kind,
+            text=source,
+            path=path,
+            position=position,
+            list_ordered=False if kind is SectionKind.LIST else None,
+            list_items=list_items,
+        )
+        sections.append(section)
+        fragments.append(
+            CompiledFragment(
+                fragment_ref=f"fragment:{kind.value}:{ordinal}",
+                kind=kind,
+                path=path,
+                position=position,
+                source_text=source,
+                contextual_text=source,
+                parent_headings=(),
+                search_phrases=(source,),
+            )
+        )
+    return tuple(sections), tuple(fragments)
+
+
+def test_rich_constructor_rejects_split_of_undersize_paragraph() -> None:
+    canonical_text = "one two three\n"
+    sections, fragments = _forged_sections(
+        canonical_text,
+        (
+            (SectionKind.PARAGRAPH, "one", ()),
+            (SectionKind.PARAGRAPH, "two three", ()),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="rich block splitting must be exact"):
+        ParsedDocument.rich_v3(
+            canonical_text=canonical_text,
+            sections=sections,
+            fragments=fragments,
+            provenance=CompilationProvenance(
+                compiler_version=MARKDOWN_COMPILER_V3_VERSION,
+                config_version="markdown-config-v3",
+                canonicalization_profile=MARKDOWN_RICH_CANONICALIZATION_PROFILE,
+                compilation_digest_profile=MARKDOWN_RICH_COMPILATION_DIGEST_PROFILE,
+                token_ceiling=2048,
+            ),
+        )
+
+
+def test_rich_constructor_rejects_split_of_one_contiguous_list() -> None:
+    canonical_text = "- one\n- two\n"
+    sections, fragments = _forged_sections(
+        canonical_text,
+        (
+            (SectionKind.LIST, "- one", ("one",)),
+            (SectionKind.LIST, "- two", ("two",)),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="rich block splitting must be exact"):
+        ParsedDocument.rich_v3(
+            canonical_text=canonical_text,
+            sections=sections,
+            fragments=fragments,
+            provenance=CompilationProvenance(
+                compiler_version=MARKDOWN_COMPILER_V3_VERSION,
+                config_version="markdown-config-v3",
+                canonicalization_profile=MARKDOWN_RICH_CANONICALIZATION_PROFILE,
+                compilation_digest_profile=MARKDOWN_RICH_COMPILATION_DIGEST_PROFILE,
+                token_ceiling=2048,
+            ),
+        )
+
+
 def test_rich_constructor_rederives_section_kind_from_exact_source() -> None:
     compiled = compile_rich_markdown(b"# Root\n", CONFIG)
     assert type(compiled) is ParsedDocument

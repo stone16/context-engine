@@ -923,6 +923,308 @@ def _rich_table_source_ranges(source: str) -> tuple[tuple[int, int], ...]:
     return tuple(ranges)
 
 
+@dataclass(frozen=True, slots=True)
+class _RichSourceBlock:
+    kind: SectionKind
+    start: int
+    end: int
+    indivisible: bool = False
+    heading_level: int | None = None
+    heading_text: str | None = None
+
+
+def _rich_source_line_layout(source: str) -> tuple[list[str], list[int]]:
+    raw_lines = source.splitlines(keepends=True) or [source]
+    lines: list[str] = []
+    starts: list[int] = []
+    offset = 0
+    for index, raw_line in enumerate(raw_lines):
+        content = raw_line.removesuffix("\n").removesuffix("\r")
+        bom_width = 1 if index == 0 and content.startswith("\ufeff") else 0
+        lines.append(content[bom_width:])
+        starts.append(offset + bom_width)
+        offset += len(raw_line)
+    return lines, starts
+
+
+def _rich_source_line_end(
+    lines: list[str], starts: list[int], index: int
+) -> int:
+    return starts[index] + len(lines[index])
+
+
+def _rich_table_starts_at(lines: list[str], index: int) -> bool:
+    if index + 1 >= len(lines) or "|" not in lines[index]:
+        return False
+    header = _rich_table_cells(lines[index])
+    separator = _rich_table_cells(lines[index + 1])
+    return (
+        len(header) >= 2
+        and any(header)
+        and len(separator) >= 2
+        and all(
+            re.fullmatch(r":?-+:?", cell.replace(" ", "")) is not None
+            for cell in separator
+        )
+    )
+
+
+def _rich_source_blocks(source: str) -> tuple[_RichSourceBlock, ...]:
+    """Independently derive v3 block boundaries from the canonical source."""
+
+    lines, starts = _rich_source_line_layout(source)
+    blocks: list[_RichSourceBlock] = []
+    index = 0
+    if lines and lines[0] == "---":
+        closing = next(
+            (
+                candidate
+                for candidate in range(1, len(lines))
+                if lines[candidate] == "---"
+            ),
+            None,
+        )
+        if closing is None or closing == 1 or not any(
+            line.strip() for line in lines[1:closing]
+        ):
+            raise ValueError("rich frontmatter source must be complete and nonempty")
+        blocks.append(
+            _RichSourceBlock(
+                kind=SectionKind.PARAGRAPH,
+                start=starts[0],
+                end=_rich_source_line_end(lines, starts, closing),
+            )
+        )
+        index = closing + 1
+
+    while index < len(lines):
+        line = lines[index]
+        if not line.strip():
+            index += 1
+            continue
+        atx = _RICH_ATX_HEADING_PATTERN.fullmatch(line)
+        if atx is not None:
+            blocks.append(
+                _RichSourceBlock(
+                    kind=SectionKind.HEADING,
+                    start=starts[index],
+                    end=_rich_source_line_end(lines, starts, index),
+                    heading_level=len(atx.group(1)),
+                    heading_text=atx.group(2).strip(),
+                )
+            )
+            index += 1
+            continue
+        fence = _RICH_FENCE_PATTERN.match(line)
+        if fence is not None:
+            marker = fence.group("fence")
+            closing = index + 1
+            while closing < len(lines) and re.fullmatch(
+                rf"[ \t]{{0,3}}{re.escape(marker[0])}{{{len(marker)},}}[ \t]*",
+                lines[closing],
+            ) is None:
+                closing += 1
+            if closing >= len(lines):
+                language = line.lstrip()[len(marker) :].strip()
+                if not language and any(
+                    candidate.strip() for candidate in lines[index + 1 :]
+                ):
+                    blocks.append(
+                        _RichSourceBlock(
+                            kind=SectionKind.PARAGRAPH,
+                            start=starts[index],
+                            end=_rich_source_line_end(lines, starts, len(lines) - 1),
+                        )
+                    )
+                    index = len(lines)
+                    continue
+                raise ValueError("rich fenced source must match the closed grammar")
+            blocks.append(
+                _RichSourceBlock(
+                    kind=SectionKind.FENCED_CODE,
+                    start=starts[index],
+                    end=_rich_source_line_end(lines, starts, closing),
+                    indivisible=True,
+                )
+            )
+            index = closing + 1
+            continue
+        if index + 1 < len(lines) and _RICH_SETEXT_PATTERN.fullmatch(
+            lines[index + 1]
+        ):
+            underline = lines[index + 1].lstrip()
+            blocks.append(
+                _RichSourceBlock(
+                    kind=SectionKind.HEADING,
+                    start=starts[index],
+                    end=_rich_source_line_end(lines, starts, index + 1),
+                    heading_level=1 if underline.startswith("=") else 2,
+                    heading_text=line.strip(),
+                )
+            )
+            index += 2
+            continue
+        if _rich_table_starts_at(lines, index):
+            end = index + 2
+            while end < len(lines) and "|" in lines[end]:
+                end += 1
+            header = _rich_table_cells(lines[index])
+            separator = _rich_table_cells(lines[index + 1])
+            rows = tuple(
+                _rich_table_cells(candidate)
+                for candidate in lines[index + 2 : end]
+            )
+            valid = (
+                bool(rows)
+                and len(header) >= 2
+                and len(separator) == len(header)
+                and all(
+                    len(row) == len(header) and all(row)
+                    for row in (header, *rows)
+                )
+            )
+            blocks.append(
+                _RichSourceBlock(
+                    kind=SectionKind.TABLE if valid else SectionKind.PARAGRAPH,
+                    start=starts[index],
+                    end=_rich_source_line_end(lines, starts, end - 1),
+                    indivisible=not valid,
+                )
+            )
+            index = end
+            continue
+        if _RICH_LIST_ITEM_PATTERN.fullmatch(line) is not None:
+            end = index + 1
+            while end < len(lines):
+                candidate = lines[end]
+                if _RICH_LIST_ITEM_PATTERN.fullmatch(candidate) is not None:
+                    end += 1
+                    continue
+                if candidate.strip() and candidate.startswith((" ", "\t")):
+                    end += 1
+                    continue
+                break
+            blocks.append(
+                _RichSourceBlock(
+                    kind=SectionKind.LIST,
+                    start=starts[index],
+                    end=_rich_source_line_end(lines, starts, end - 1),
+                    indivisible=True,
+                )
+            )
+            index = end
+            continue
+        if line.lstrip().startswith("<"):
+            if _RICH_ANGLE_LITERAL_PATTERN.fullmatch(line.strip()) is not None:
+                end = index + 1
+            else:
+                end = index + 1
+                while end < len(lines) and lines[end].strip():
+                    end += 1
+            blocks.append(
+                _RichSourceBlock(
+                    kind=SectionKind.PARAGRAPH,
+                    start=starts[index],
+                    end=_rich_source_line_end(lines, starts, end - 1),
+                )
+            )
+            index = end
+            continue
+        if line.lstrip().startswith(">"):
+            end = index + 1
+            while end < len(lines) and lines[end].lstrip().startswith(">"):
+                end += 1
+            blocks.append(
+                _RichSourceBlock(
+                    kind=SectionKind.PARAGRAPH,
+                    start=starts[index],
+                    end=_rich_source_line_end(lines, starts, end - 1),
+                )
+            )
+            index = end
+            continue
+        if _THEMATIC_BREAK_PATTERN.fullmatch(line) is not None:
+            blocks.append(
+                _RichSourceBlock(
+                    kind=SectionKind.PARAGRAPH,
+                    start=starts[index],
+                    end=_rich_source_line_end(lines, starts, index),
+                )
+            )
+            index += 1
+            continue
+        end = index + 1
+        while end < len(lines) and lines[end].strip():
+            if (
+                _RICH_ATX_HEADING_PATTERN.fullmatch(lines[end]) is not None
+                or _RICH_FENCE_PATTERN.match(lines[end]) is not None
+                or _RICH_LIST_ITEM_PATTERN.fullmatch(lines[end]) is not None
+                or lines[end].lstrip().startswith((">", "<"))
+                or _THEMATIC_BREAK_PATTERN.fullmatch(lines[end]) is not None
+                or _rich_table_starts_at(lines, end)
+            ):
+                break
+            end += 1
+        blocks.append(
+            _RichSourceBlock(
+                kind=SectionKind.PARAGRAPH,
+                start=starts[index],
+                end=_rich_source_line_end(lines, starts, end - 1),
+            )
+        )
+        index = end
+    return tuple(blocks)
+
+
+def _expected_rich_fragment_layout(
+    canonical_text: str,
+    token_ceiling: int,
+) -> tuple[tuple[SectionKind, int, int], ...]:
+    expected: list[tuple[SectionKind, int, int]] = []
+    headings: list[tuple[int, str]] = []
+    for block in _rich_source_blocks(canonical_text):
+        if block.kind is SectionKind.HEADING:
+            assert block.heading_level is not None
+            headings = [
+                heading for heading in headings if heading[0] < block.heading_level
+            ]
+        source = canonical_text[block.start : block.end]
+        ancestry = "\n\n".join(
+            f"{'#' * level} {text}" for level, text in headings
+        )
+        capacity = token_ceiling - len(re.findall(r"\S+", ancestry))
+        indivisible = block.indivisible or block.kind in {
+            SectionKind.HEADING,
+            SectionKind.LIST,
+            SectionKind.FENCED_CODE,
+            SectionKind.TABLE,
+        }
+        ranges: tuple[tuple[int, int], ...]
+        if indivisible:
+            if len(re.findall(r"\S+", source)) > capacity:
+                raise ValueError("rich indivisible source exceeds its ceiling")
+            ranges = ((0, len(source)),)
+        else:
+            tokens = tuple(re.finditer(r"\S+", source))
+            if not tokens or capacity < 1:
+                raise ValueError("rich paragraph cannot fit its ceiling")
+            ranges = tuple(
+                (
+                    tokens[index].start(),
+                    tokens[min(index + capacity, len(tokens)) - 1].end(),
+                )
+                for index in range(0, len(tokens), capacity)
+            )
+        for relative_start, relative_end in ranges:
+            start = len(canonical_text[: block.start + relative_start].encode("utf-8"))
+            end = len(canonical_text[: block.start + relative_end].encode("utf-8"))
+            expected.append((block.kind, start, end))
+        if block.kind is SectionKind.HEADING:
+            assert block.heading_level is not None and block.heading_text is not None
+            headings.append((block.heading_level, block.heading_text))
+    return tuple(expected)
+
+
 def _expected_rich_section_kind(source: str) -> SectionKind:
     lines = source.splitlines()
     if len(lines) >= 2 and lines[0] == "---" and lines[-1] == "---":
@@ -1280,6 +1582,21 @@ def _validate_rich_content(
             or overlapping_sections[0].position.end.byte_offset != table_end
         ):
             raise ValueError("rich table source must remain atomic")
+    expected_layout = tuple(
+        (start, end)
+        for _, start, end in _expected_rich_fragment_layout(
+            canonical_text, token_ceiling
+        )
+    )
+    actual_layout = tuple(
+        (
+            section.position.start.byte_offset,
+            section.position.end.byte_offset,
+        )
+        for section in sections
+    )
+    if actual_layout != expected_layout:
+        raise ValueError("rich block splitting must be exact")
     for section, fragment in zip(sections, fragments, strict=True):
         if (
             fragment.kind is not section.kind

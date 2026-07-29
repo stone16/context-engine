@@ -89,21 +89,24 @@ def compile_in_local_compiler_runner(
         raise TypeError("compiler-runner config must be exact")
     if config.token_ceiling is None:
         raise ValueError("compiler-runner requires rich Markdown config")
-    completed = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            _RUNNER_MODULE,
-            "--compile",
-            "--config",
-            config.version,
-            "--token-ceiling",
-            str(config.token_ceiling),
-        ],
-        input=source,
-        capture_output=True,
-        check=False,
-    )
+    try:
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                _RUNNER_MODULE,
+                "--compile",
+                "--config",
+                config.version,
+                "--token-ceiling",
+                str(config.token_ceiling),
+            ],
+            input=source,
+            capture_output=True,
+            check=False,
+        )
+    except Exception:
+        return _boundary_failure()
     if completed.returncode != 0:
         return _boundary_failure()
     try:
@@ -121,12 +124,12 @@ def compile_in_local_compiler_runner(
             return deserialize_parsed_document(
                 base64.b64decode(encoded, validate=True)
             )
-        except (ValueError, TypeError):
+        except Exception:
             return _boundary_failure()
     if document.get("outcome") == "failure":
         try:
             return _failure_from_document(document.get("failure"))
-        except (KeyError, ValueError, TypeError):
+        except Exception:
             return _boundary_failure()
     return _boundary_failure()
 

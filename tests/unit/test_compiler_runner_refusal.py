@@ -11,6 +11,7 @@ from applications.compiler_runner import compile_in_local_compiler_runner
 from engine.supply import (
     CompilationFailure,
     CompilationFailureCode,
+    CompiledFragment,
     MarkdownCompilerConfig,
     ParsedDocument,
     UnsupportedConstruct,
@@ -204,6 +205,56 @@ def test_direct_compiler_converts_unexpected_domain_exception_to_typed_failure(
     assert type(outcome) is CompilationFailure
     assert outcome.code is CompilationFailureCode.UNSUPPORTED_DOCUMENT_SHAPE
     assert outcome.position is not None
+
+
+def test_direct_compiler_converts_unexpected_fragment_exception_to_typed_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def reject_fragment(*args: object, **kwargs: object) -> CompiledFragment:
+        raise RuntimeError("unexpected Fragment defect")
+
+    monkeypatch.setattr(
+        "adapters.parsers.ragflow_markdown.CompiledFragment",
+        reject_fragment,
+    )
+
+    outcome = compile_rich_markdown(b"# T\n", CONFIG)
+
+    assert type(outcome) is CompilationFailure
+    assert outcome.code is CompilationFailureCode.UNSUPPORTED_DOCUMENT_SHAPE
+    assert outcome.position is not None
+
+
+def test_runner_api_converts_unexpected_deserializer_exception_to_typed_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args=args,
+            returncode=0,
+            stdout=json.dumps(
+                {"outcome": "parsed", "document": "e30="}
+            ).encode(),
+            stderr=b"",
+        ),
+    )
+
+    def reject_document(payload: bytes) -> ParsedDocument:
+        raise RuntimeError("unexpected deserializer defect")
+
+    monkeypatch.setattr(
+        compiler_runner,
+        "deserialize_parsed_document",
+        reject_document,
+    )
+
+    outcome = compile_in_local_compiler_runner(b"# T\n", CONFIG)
+
+    assert type(outcome) is CompilationFailure
+    assert outcome.code is CompilationFailureCode.UNSUPPORTED_DOCUMENT_SHAPE
+    assert outcome.position is None
 
 
 def test_direct_compiler_converts_parser_helper_rejection_to_typed_failure(

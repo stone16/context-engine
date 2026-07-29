@@ -686,27 +686,22 @@ def compile_rich_markdown(
             source_text = full_source[relative_start:relative_end]
             key = (parent_path, block.kind)
             counters[key] = counters.get(key, 0) + 1
-            path = StructuralPath(
-                parent_path + (f"{block.kind.value}[{counters[key]}]",)
-            )
-            position = _span(
-                normalized,
-                block.start + relative_start,
-                block.start + relative_end,
-            )
             try:
-                section = _section(block, source_text, path, position)
-            except Exception:
-                return _failure(
-                    CompilationFailureCode.UNSUPPORTED_DOCUMENT_SHAPE,
+                path = StructuralPath(
+                    parent_path + (f"{block.kind.value}[{counters[key]}]",)
+                )
+                position = _span(
                     normalized,
                     block.start + relative_start,
+                    block.start + relative_end,
                 )
-            ordinals[block.kind] = ordinals.get(block.kind, 0) + 1
-            contextual = f"{ancestry}\n\n{source_text}" if ancestry else source_text
-            phrases = tuple(dict.fromkeys((source_text, section.text)))
-            fragments.append(
-                CompiledFragment(
+                section = _section(block, source_text, path, position)
+                ordinals[block.kind] = ordinals.get(block.kind, 0) + 1
+                contextual = (
+                    f"{ancestry}\n\n{source_text}" if ancestry else source_text
+                )
+                phrases = tuple(dict.fromkeys((source_text, section.text)))
+                fragment = CompiledFragment(
                     fragment_ref=(
                         f"fragment:{block.kind.value}:{ordinals[block.kind]}"
                     ),
@@ -718,18 +713,24 @@ def compile_rich_markdown(
                     parent_headings=parents,
                     search_phrases=phrases,
                 )
-            )
+            except Exception:
+                return _failure(
+                    CompilationFailureCode.UNSUPPORTED_DOCUMENT_SHAPE,
+                    normalized,
+                    block.start + relative_start,
+                )
+            fragments.append(fragment)
             sections.append(section)
             if block.kind is SectionKind.HEADING:
                 headings.append(section)
-    provenance = CompilationProvenance(
-        compiler_version=MARKDOWN_COMPILER_V3_VERSION,
-        config_version=config.version,
-        canonicalization_profile=MARKDOWN_RICH_CANONICALIZATION_PROFILE,
-        compilation_digest_profile=MARKDOWN_RICH_COMPILATION_DIGEST_PROFILE,
-        token_ceiling=token_ceiling,
-    )
     try:
+        provenance = CompilationProvenance(
+            compiler_version=MARKDOWN_COMPILER_V3_VERSION,
+            config_version=config.version,
+            canonicalization_profile=MARKDOWN_RICH_CANONICALIZATION_PROFILE,
+            compilation_digest_profile=MARKDOWN_RICH_COMPILATION_DIGEST_PROFILE,
+            token_ceiling=token_ceiling,
+        )
         return ParsedDocument.rich_v3(
             canonical_text=normalized,
             sections=tuple(sections),
