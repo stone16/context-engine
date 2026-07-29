@@ -204,6 +204,7 @@ def test_leading_unclosed_dash_rule_is_an_accepted_thematic_break(
         ((b"---", b"---"), ("---", "---")),
         ((b"---", b"", b"---"), ("---", "---")),
         ((b"---", b"key: value", b"---"), ("frontmatter",)),
+        ((b"---", b"ordinary prose", b"---"), ("---", "ordinary-prose")),
         ((b"---", b"key: value"), ("---", "key: value")),
         ((b"---", b"---", b"text"), ("---", "---", "text")),
     ),
@@ -220,7 +221,13 @@ def test_leading_dash_delimiter_matrix_is_closed_and_exact(
 
     assert type(outcome) is ParsedDocument
     expected = tuple(
-        (newline.join(lines).decode("utf-8") if value == "frontmatter" else value)
+        (
+            newline.join(lines).decode("utf-8")
+            if value == "frontmatter"
+            else newline.join(lines[1:]).decode("utf-8")
+            if value == "ordinary-prose"
+            else value
+        )
         for value in expected_fragments
     )
     assert tuple(fragment.source_text for fragment in outcome.fragments) == expected

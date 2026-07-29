@@ -54,16 +54,21 @@ index and executes under the exact parent WorkerLease binding.
    truncating the document; typed cell metadata remains best-effort within
    that exact source block.
    A leading `---` opens frontmatter only when the first later `---` closes a
-   nonempty payload. The complete delimiter matrix is closed as follows: a bare
+   nonempty YAML-shaped mapping or sequence payload. The complete delimiter
+   matrix is closed as follows: a bare
    `---` is one thematic break; adjacent delimiters are two thematic breaks;
    delimiters separated only by blank lines remain thematic breaks; a nonempty
-   key-value payload with a closing delimiter is frontmatter; the same payload
-   without a closing delimiter is ordinary content after the leading thematic
-   break; and adjacent delimiters followed by text remain two thematic breaks
-   followed by ordinary content. CRLF and LF forms have identical grammar, and
-   an optional leading BOM changes none of these classifications. This
-   delimiter-complete rule preserves both constructs and does not infer
-   metadata from empty payloads or ordinary following prose.
+   YAML-shaped mapping or sequence payload with a closing delimiter is
+   frontmatter; the same payload without a closing delimiter is ordinary
+   content after the leading thematic break; ordinary prose between delimiters
+   is a leading thematic break followed by ordinary Markdown (so a closing
+   `---` may serve as its setext underline); and adjacent delimiters followed
+   by text remain two thematic breaks followed by ordinary content. CRLF and LF
+   forms have identical grammar, and an optional leading BOM changes none of
+   these classifications. The mapping/sequence check is lexical rather than
+   semantic YAML interpretation. This delimiter-complete rule preserves both
+   constructs and does not infer metadata from empty payloads or ordinary
+   following prose.
    A bare unmatched fence-marker line plus following nonblank text is retained
    as one exact literal paragraph block; an empty or language-bearing
    unterminated fence remains a typed refusal.

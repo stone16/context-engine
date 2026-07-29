@@ -41,6 +41,11 @@ _HTML_OPEN: Final = re.compile(
     re.IGNORECASE,
 )
 _ANGLE_LITERAL: Final = re.compile(r"<[^<>\r\n]+>")
+_FRONTMATTER_MAPPING: Final = re.compile(
+    r"^[ \t]*(?:[A-Za-z0-9_.-]+|\"[^\"\r\n]+\"|'[^'\r\n]+')"
+    r"[ \t]*:[ \t]*(?:.*)?$"
+)
+_FRONTMATTER_SEQUENCE: Final = re.compile(r"^[ \t]*-[ \t]+\S.*$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -171,7 +176,19 @@ def _frontmatter_end(lines: list[str]) -> int | None:
         return None
     for index in range(1, len(lines)):
         if lines[index] == "---":
-            return index if any(line.strip() for line in lines[1:index]) else None
+            first_payload_line = next(
+                (line for line in lines[1:index] if line.strip()),
+                None,
+            )
+            return (
+                index
+                if first_payload_line is not None
+                and (
+                    _FRONTMATTER_MAPPING.fullmatch(first_payload_line) is not None
+                    or _FRONTMATTER_SEQUENCE.fullmatch(first_payload_line) is not None
+                )
+                else None
+            )
     return None
 
 

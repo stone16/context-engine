@@ -5,7 +5,6 @@ import re
 import subprocess
 import sys
 from copy import deepcopy
-from hashlib import sha256
 from pathlib import Path
 
 import pytest
@@ -24,11 +23,13 @@ _PERSONAL_ROOT_PATTERNS = (
     re.compile(r"/" + "home" + r"/[^/\s]+/"),
     re.compile(r"[A-Za-z]:\\(?:Users|Documents and Settings)\\", re.IGNORECASE),
 )
-_PRIVATE_ROOT_FRAGMENT_DIGESTS = frozenset(
-    {"c83ea566573fdfcacb79f350f86ea53935437f5672e1fe97703320cce4725394"}
-)
+_SYNTHETIC_PRIVATE_ROOT_FRAGMENT = "-".join(("synthetic", "corpus", "canary"))
 _PRIVACY_BEARING_SCHEMA_WORDS = frozenset(
     {"excerpt", "file", "filename", "path", "root", "source", "text", "title"}
+)
+_PRIVACY_GUARD_PATHS = (
+    Path(__file__),
+    REPOSITORY_ROOT / "tests/integration/test_zzz_security_gate_cli_privacy.py",
 )
 
 
@@ -62,16 +63,25 @@ def _schema_name_words(name: str) -> set[str]:
     }
 
 
-def _word_sequence_digests(value: str) -> set[str]:
-    words = tuple(
-        word.casefold()
-        for word in re.findall(r"[A-Z]+(?=[A-Z][a-z]|\b)|[A-Z]?[a-z]+", value)
+def _contains_private_location(value: str) -> bool:
+    return any(pattern.search(value) for pattern in _PERSONAL_ROOT_PATTERNS) or (
+        _SYNTHETIC_PRIVATE_ROOT_FRAGMENT in value
     )
-    return {
-        sha256("".join(words[index:end]).encode("utf-8")).hexdigest()
-        for index in range(len(words))
-        for end in range(index + 1, min(index + 4, len(words)) + 1)
-    }
+
+
+def test_privacy_guards_do_not_embed_identifier_fingerprints() -> None:
+    fingerprint = re.compile(r"(?<![0-9a-f])[0-9a-f]{64}(?![0-9a-f])")
+
+    assert all(
+        fingerprint.search(path.read_text(encoding="utf-8")) is None
+        for path in _PRIVACY_GUARD_PATHS
+    )
+
+
+def test_private_location_scan_rejects_synthetic_path_and_fragment_canaries() -> None:
+    assert _contains_private_location("/" + "Users" + "/person/corpus")
+    assert _contains_private_location(_SYNTHETIC_PRIVATE_ROOT_FRAGMENT)
+    assert not _contains_private_location("aggregate-counts-only")
 
 
 def test_tracked_tree_and_acceptance_schema_cannot_carry_private_paths() -> None:
@@ -87,9 +97,7 @@ def test_tracked_tree_and_acceptance_schema_cannot_carry_private_paths() -> None
             continue
         path = REPOSITORY_ROOT / raw_path.decode("utf-8")
         content = path.read_text(encoding="utf-8", errors="ignore")
-        if any(pattern.search(content) for pattern in _PERSONAL_ROOT_PATTERNS) or (
-            _PRIVATE_ROOT_FRAGMENT_DIGESTS & _word_sequence_digests(content)
-        ):
+        if _contains_private_location(content):
             leaks.append(path.relative_to(REPOSITORY_ROOT).as_posix())
 
     schema_text = REPORT_SCHEMA.read_text(encoding="utf-8")

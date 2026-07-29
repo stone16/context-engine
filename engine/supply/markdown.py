@@ -1002,9 +1002,25 @@ def _rich_source_blocks(source: str) -> tuple[_RichSourceBlock, ...]:
             ),
             None,
         )
-        if closing is not None and any(
-            line.strip() for line in lines[1:closing]
-        ):
+        first_payload_line = next(
+            (line for line in lines[1:closing] if line.strip()),
+            None,
+        ) if closing is not None else None
+        mapping_payload = (
+            first_payload_line is not None
+            and re.fullmatch(
+                r"^[ \t]*(?:[A-Za-z0-9_.-]+|\"[^\"\r\n]+\"|'[^'\r\n]+')"
+                r"[ \t]*:[ \t]*(?:.*)?$",
+                first_payload_line,
+            )
+            is not None
+        )
+        sequence_payload = (
+            first_payload_line is not None
+            and re.fullmatch(r"^[ \t]*-[ \t]+\S.*$", first_payload_line)
+            is not None
+        )
+        if closing is not None and (mapping_payload or sequence_payload):
             blocks.append(
                 _RichSourceBlock(
                     kind=SectionKind.PARAGRAPH,
