@@ -36,7 +36,7 @@ ContextEngine/
 ├── adapters/         # parsers, connectors, HTTP ingress, optional future MCP; File is Provider #1
 ├── bot_delivery/      # M2 Bot app process; trusted IM delivery; generated HTTP SDK caller
 ├── action_plane/      # co-resident Bot app Module; prepare -> ticket -> exact effect
-├── contract_kit/     # base runner + twins before Feishu; versioned kit v1 proven by Slack
+├── contract_kit/     # dissolved by ADR-0078: contract owned by the Supply seam; twins ship with each connector's tests
 ├── eval/             # golden set, slice gates, judges
 ├── tests/            # incl. security suite: real PG17 + non-owner role + FORCE RLS
 ├── docs/             # design/ + decisions/ (ADRs)
