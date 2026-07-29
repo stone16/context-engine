@@ -11,7 +11,6 @@ import pytest
 from applications.eval_v1 import main
 from engine.learning.eval_report import (
     CaseSecurityObservation,
-    SecurityHarness,
     SecurityObservationState,
 )
 from engine.learning.eval_run import (
@@ -22,6 +21,7 @@ from engine.learning.eval_run import (
 )
 from engine.learning.golden import create_golden_lock, load_golden_set
 from engine.learning.thresholds import load_thresholds
+from tests.support.eval_security import harness_security_result
 from tests.support.golden import (
     golden_case,
     golden_document,
@@ -114,6 +114,7 @@ def test_cli_caller_loaded_run_is_refused_without_harness_security_execution(
     assert report["security"] == {
         "missingContextFallbackCount": None,
         "observationState": "malformed",
+        "reason": "no_run_executor_security_observation",
         "status": "refused",
         "unauthorizedEvidenceCount": None,
         "wrongOrganizationEffectCount": None,
@@ -557,13 +558,12 @@ def test_nontracked_threshold_report_is_marked_non_authoritative(
     thresholds_path = tmp_path / "thresholds.json"
     thresholds_path.write_text(json.dumps(document), encoding="utf-8")
     loaded = load_evaluation_run(run_path)
-    harness = SecurityHarness()
     harnessed = EvaluationRun(
         loaded.answer_judge_profile,
         tuple(
             replace(
                 case,
-                security_observation=harness.observe(case.case_ref, ()),
+                security_observation=harness_security_result(case.case_ref),
             )
             for case in loaded.cases
         ),

@@ -54,13 +54,12 @@ cases, at least five unanswerable pilot cases, and at least one same-topic hard
 negative in every pilot topic cluster.
 
 The pilot cannot be evaluated without a lock record. Initial locking records
-the pilot content digest, authority, reason, and time. This co-located,
-operator-editable record provides accidental-edit detection: ordinary later
-edits are refused until the explicit `relock` operation appends a history entry.
-It is not forgery-proof and does not authenticate a malicious operator who can
-rewrite both the private corpus and its co-located lock; M1 deliberately adds no
-signing/keyring boundary. Prior digest records remain intact during normal lock
-and re-lock operations.
+the pilot content digest, authority, reason, and time. Every history entry
+validates its values and binds the preceding entry digest, so edits to prior
+history are refused by this accidental-edit detection. This co-located,
+operator-editable chain is not forgery-proof and does not authenticate a malicious operator who can rewrite
+both the private corpus and its co-located lock; M1 deliberately adds no
+signing/keyring boundary.
 
 ```bash
 uv run context-engine-eval lock \
@@ -109,13 +108,19 @@ value without the recorded event is refused by the loader.
 Security never waits for calibration. Any unauthorized Evidence,
 wrong-Organization effect, or missing-context fallback forces the entire report
 to `FAIL`, regardless of every quality score or sample count. These totals are
-derived only by the in-process `SecurityHarness` from the run executor's typed
-events, never accepted as caller-authored counters or reloaded JSON. The closed
-non-violation states are `observed_clean`, `not_observed`, and `malformed`.
-Only the harness can construct `observed_clean`; `not_observed`, an absent field,
-malformed evidence, and any serialized claim of `observed` render the report
-`REFUSED`, with counters left null rather than coerced to zero. A harness-observed
-violation remains an absolute `FAIL` veto independent of thresholds and slices.
+must eventually be derived as an in-process run executor invokes a case and
+records its typed hard-oracle events. M1 deliberately ships no such executor and
+no production observation-minting helper; issue #160 owns the future executor
+and its private construction boundary. Consequently, M1 cannot attest a clean
+run. Caller-authored or reloaded JSON can establish neither clean counters nor a
+violation. `not_observed`, an absent field, malformed evidence, and any
+serialized claim of `observed` render the overall report `REFUSED` with reason
+`no_run_executor_security_observation`, while retrieval, citation, and answer
+metrics still compute normally. This refusal is a deliberate typed precondition
+outcome, not a transient error or score failure. The closed non-violation states
+remain `observed_clean`, `not_observed`, and `malformed`; once #160 supplies the
+real executor, one observed violation remains an absolute `FAIL` veto independent
+of thresholds and slices.
 
 ## Offline report
 
@@ -123,8 +128,9 @@ The CLI consumes a locked v1 set and a closed per-case observation document. It
 requires the observation `caseRef` set to exactly equal the golden set, records
 the blind judge model/profile identity, and refuses partial runs. Serialized
 input cannot establish the security precondition, so the file-only command
-emits `REFUSED`; an authoritative non-refused report requires the actual run
-executor to carry its `SecurityHarness` results in-process into report assembly.
+emits `REFUSED` for `no_run_executor_security_observation`. An authoritative
+non-refused report is unavailable in M1 and requires the actual run executor
+tracked by issue #160 to carry its results in-process into report assembly.
 Report output must remain
 within a real ignored `.context-engine/` directory; path traversal and symlink
 escapes are refused.

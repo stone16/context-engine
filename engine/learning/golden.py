@@ -469,15 +469,19 @@ def _lock_entry(
     golden_set: GoldenSet,
     *,
     authority: str,
+    previous_entry_digest: str | None,
     reason: str,
     recorded_at: datetime,
-) -> dict[str, str]:
-    return {
+) -> dict[str, object]:
+    entry: dict[str, object] = {
         "authority": _opaque_ref("golden lock authority", authority),
         "digest": golden_set.pilot_digest,
+        "previousEntryDigest": previous_entry_digest,
         "reason": _exact_text("golden lock reason", reason, maximum=1_024),
         "recordedAt": _timestamp(recorded_at),
     }
+    entry["entryDigest"] = _digest(entry)
+    return entry
 
 
 def _write_lock(path: Path, document: dict[str, object]) -> None:
@@ -503,6 +507,7 @@ def create_golden_lock(
     entry = _lock_entry(
         golden_set,
         authority=authority,
+        previous_entry_digest=None,
         reason=reason,
         recorded_at=recorded_at,
     )
@@ -531,13 +536,78 @@ def _load_lock(path: Path) -> dict[str, object]:
     history = document["history"]
     if type(history) is not list or not history:
         raise GoldenSetUnavailable("golden lock history is unavailable")
-    if any(
-        type(item) is not dict
-        or frozenset(item)
-        != frozenset({"authority", "digest", "reason", "recordedAt"})
-        for item in history
-    ):
-        raise GoldenSetUnavailable("golden lock history is malformed")
+    expected_fields = frozenset(
+        {
+            "authority",
+            "digest",
+            "entryDigest",
+            "previousEntryDigest",
+            "reason",
+            "recordedAt",
+        }
+    )
+    previous_entry_digest: str | None = None
+    previous_recorded_at: datetime | None = None
+    for item in history:
+        if type(item) is not dict or frozenset(item) != expected_fields:
+            raise GoldenSetUnavailable("golden lock history entry is malformed")
+        entry = cast(dict[str, object], item)
+        try:
+            _opaque_ref("golden lock history authority", entry["authority"])
+            _exact_text(
+                "golden lock history reason",
+                entry["reason"],
+                maximum=1_024,
+            )
+        except GoldenSetUnavailable:
+            raise GoldenSetUnavailable(
+                "golden lock history entry is inconsistent"
+            ) from None
+        digest = entry["digest"]
+        entry_digest = entry["entryDigest"]
+        if (
+            type(digest) is not str
+            or len(digest) != 64
+            or any(character not in "0123456789abcdef" for character in digest)
+            or type(entry_digest) is not str
+            or len(entry_digest) != 64
+            or any(
+                character not in "0123456789abcdef"
+                for character in entry_digest
+            )
+            or entry["previousEntryDigest"] != previous_entry_digest
+        ):
+            raise GoldenSetUnavailable(
+                "golden lock history entry is inconsistent"
+            )
+        recorded_value = entry["recordedAt"]
+        if type(recorded_value) is not str:
+            raise GoldenSetUnavailable(
+                "golden lock history entry is inconsistent"
+            )
+        try:
+            recorded_at = datetime.fromisoformat(
+                recorded_value.replace("Z", "+00:00")
+            )
+            if _timestamp(recorded_at) != recorded_value:
+                raise ValueError
+        except ValueError:
+            raise GoldenSetUnavailable(
+                "golden lock history entry is inconsistent"
+            ) from None
+        if previous_recorded_at is not None and recorded_at <= previous_recorded_at:
+            raise GoldenSetUnavailable(
+                "golden lock history entry is inconsistent"
+            )
+        digest_input = {
+            key: value for key, value in entry.items() if key != "entryDigest"
+        }
+        if _digest(digest_input) != entry_digest:
+            raise GoldenSetUnavailable(
+                "golden lock history entry is inconsistent"
+            )
+        previous_entry_digest = entry_digest
+        previous_recorded_at = recorded_at
     last_entry = cast(dict[str, object], history[-1])
     if document["activePilotDigest"] != last_entry["digest"]:
         raise GoldenSetUnavailable(
@@ -574,10 +644,17 @@ def relock_golden_set(
     if document["goldenSetName"] != golden_set.name:
         raise GoldenSetUnavailable("golden lock set identity is unavailable")
     history = cast(list[object], document["history"])
+    previous_entry = cast(dict[str, object], history[-1])
+    previous_recorded_at = cast(str, previous_entry["recordedAt"])
+    if _timestamp(recorded_at) <= previous_recorded_at:
+        raise GoldenSetUnavailable(
+            "golden lock history entry time must be strictly increasing"
+        )
     history.append(
         _lock_entry(
             golden_set,
             authority=authority,
+            previous_entry_digest=cast(str, previous_entry["entryDigest"]),
             reason=reason,
             recorded_at=recorded_at,
         )

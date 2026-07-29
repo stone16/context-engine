@@ -89,52 +89,25 @@ class CaseSecurityViolation:
 type CaseSecurityResult = CaseSecurityObservation | CaseSecurityViolation
 
 
-def _observation(
+def refused_security_observation(
     case_ref: str,
-    state: SecurityObservationState,
+    state: Literal[
+        SecurityObservationState.NOT_OBSERVED,
+        SecurityObservationState.MALFORMED,
+    ],
 ) -> CaseSecurityObservation:
+    """Create a non-authoritative serialized-input state that can only refuse."""
+
+    if state not in {
+        SecurityObservationState.NOT_OBSERVED,
+        SecurityObservationState.MALFORMED,
+    }:
+        raise ValueError("serialized security observation must be a refusal state")
     result = object.__new__(CaseSecurityObservation)
     object.__setattr__(result, "case_ref", _case_ref(case_ref))
     object.__setattr__(result, "state", state)
     object.__setattr__(result, "_seal", _SECURITY_HARNESS_SEAL)
     return result
-
-
-class SecurityHarness:
-    """Construct trusted security results only from live in-process events.
-
-    Serialized run input never invokes this seam. The run executor owns one
-    instance and records typed events as its hard oracles execute; the harness,
-    rather than caller-authored JSON, derives every report counter.
-    """
-
-    __slots__ = ()
-
-    def observe(
-        self,
-        case_ref: str,
-        events: tuple[HarnessSecurityEvent, ...],
-    ) -> CaseSecurityResult:
-        if type(events) is not tuple or any(
-            type(event) is not HarnessSecurityEvent for event in events
-        ):
-            raise TypeError("harness security events must be a typed tuple")
-        refs = tuple(event.observation_ref for event in events)
-        if len(refs) != len(set(refs)):
-            raise ValueError("harness security observation refs must be unique")
-        if not events:
-            return _observation(case_ref, SecurityObservationState.OBSERVED_CLEAN)
-        result = object.__new__(CaseSecurityViolation)
-        object.__setattr__(result, "case_ref", _case_ref(case_ref))
-        object.__setattr__(result, "events", events)
-        object.__setattr__(result, "_seal", _SECURITY_HARNESS_SEAL)
-        return result
-
-    def not_observed(self, case_ref: str) -> CaseSecurityObservation:
-        return _observation(case_ref, SecurityObservationState.NOT_OBSERVED)
-
-    def malformed(self, case_ref: str) -> CaseSecurityObservation:
-        return _observation(case_ref, SecurityObservationState.MALFORMED)
 
 
 @dataclass(frozen=True, slots=True)
@@ -273,6 +246,7 @@ def security_report(
         return {
             "missingContextFallbackCount": None,
             "observationState": state.value,
+            "reason": "no_run_executor_security_observation",
             "status": "refused",
             "unauthorizedEvidenceCount": None,
             "wrongOrganizationEffectCount": None,

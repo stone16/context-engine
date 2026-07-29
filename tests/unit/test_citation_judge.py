@@ -51,6 +51,45 @@ def test_claim_support_is_partial_when_only_some_citations_are_supported() -> No
     assert report.claim_support == pytest.approx(0.5)
 
 
+def test_partial_and_extra_evidence_are_hand_scored_and_fail_the_layer() -> None:
+    report = judge_citations(
+        (
+            CitationCaseInput(
+                case_ref="synthetic-hand-checked-support",
+                required_claim_refs=frozenset({"claim-a", "claim-b"}),
+                claims=(
+                    CitationClaim("claim-a", frozenset({"evidence-a"})),
+                    CitationClaim(
+                        "claim-b",
+                        frozenset({"evidence-b", "evidence-extra"}),
+                    ),
+                ),
+                expected_evidence_by_claim=(
+                    (
+                        "claim-a",
+                        frozenset({"evidence-a", "evidence-a-second"}),
+                    ),
+                    ("claim-b", frozenset({"evidence-b"})),
+                ),
+                resolvable_evidence=frozenset(
+                    {
+                        "evidence-a",
+                        "evidence-a-second",
+                        "evidence-b",
+                        "evidence-extra",
+                    }
+                ),
+            ),
+        )
+    )
+
+    # Jaccard support is hand-checkable: each claim has 1 overlap / 2 union.
+    assert report.lineage_resolvability == 1.0
+    assert report.claim_support == pytest.approx(0.5)
+    assert report.completeness == 0.0
+    assert report.status == "fail"
+
+
 def test_completeness_distinguishes_support_from_required_claim_coverage() -> None:
     report = judge_citations(
         (

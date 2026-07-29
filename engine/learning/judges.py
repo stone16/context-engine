@@ -210,20 +210,26 @@ def judge_citations(cases: tuple[CitationCaseInput, ...]) -> CitationReport:
             and claim.cited_evidence <= case.resolvable_evidence
             for claim in case.claims
         )
-        supported = tuple(
-            claim.claim_ref in expected_by_claim
-            and bool(claim.cited_evidence & expected_by_claim[claim.claim_ref])
-            and claim.cited_evidence <= case.resolvable_evidence
+        support_scores = tuple(
+            (
+                len(claim.cited_evidence & expected_by_claim[claim.claim_ref])
+                / len(claim.cited_evidence | expected_by_claim[claim.claim_ref])
+                if claim.claim_ref in expected_by_claim
+                and claim.cited_evidence <= case.resolvable_evidence
+                else 0.0
+            )
             for claim in case.claims
         )
         supported_required = {
             claim.claim_ref
-            for claim, is_supported in zip(case.claims, supported, strict=True)
-            if is_supported
+            for claim, support_score in zip(
+                case.claims, support_scores, strict=True
+            )
+            if support_score == 1.0
         }
         if case.claims:
             lineage_score = sum(resolvable) / len(resolvable)
-            support_score = sum(supported) / len(supported)
+            support_score = sum(support_scores) / len(support_scores)
         else:
             lineage_score = 0.0
             support_score = 0.0
@@ -237,11 +243,17 @@ def judge_citations(cases: tuple[CitationCaseInput, ...]) -> CitationReport:
         )
     ordered = tuple(sorted(results, key=lambda result: result.case_ref))
     lineage = sum(result.lineage_resolvability for result in ordered) / len(ordered)
+    support = sum(result.claim_support for result in ordered) / len(ordered)
+    completeness = sum(result.completeness for result in ordered) / len(ordered)
     return CitationReport(
         lineage_resolvability=lineage,
-        claim_support=sum(result.claim_support for result in ordered) / len(ordered),
-        completeness=sum(result.completeness for result in ordered) / len(ordered),
-        status="pass" if lineage == 1.0 else "fail",
+        claim_support=support,
+        completeness=completeness,
+        status=(
+            "pass"
+            if lineage == 1.0 and support == 1.0 and completeness == 1.0
+            else "fail"
+        ),
         cases=ordered,
     )
 
@@ -312,15 +324,17 @@ def judge_answers(
     for case in cases:
         if type(case) is not AnswerCaseInput:
             raise TypeError("answer cases must be AnswerCaseInput")
+        if case.answerability == "unanswerable":
+            refusal_correct.append(case.refused)
+        elif case.refused:
+            refusal_correct.append(False)
         score = case.blind_score / 2
         if case.critical_contradiction:
             score = 0.0
         elif case.refused:
             correct_refusal = case.answerability == "unanswerable"
             score = 1.0 if correct_refusal else 0.0
-            refusal_correct.append(correct_refusal)
         elif case.answerability == "unanswerable":
-            refusal_correct.append(False)
             score = 0.0
         results.append(
             AnswerCaseResult(

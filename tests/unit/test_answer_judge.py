@@ -83,3 +83,26 @@ def test_wrong_refusal_on_answerable_case_scores_zero() -> None:
     )
 
     assert report.cases[0].normalized_score == 0.0
+
+
+def test_contradictory_unanswerable_nonrefusal_counts_as_refusal_failure() -> None:
+    report = judge_answers(
+        (
+            AnswerCaseInput(
+                "synthetic-confidently-wrong-answer",
+                "unanswerable",
+                2,
+                critical_contradiction=True,
+                refused=False,
+            ),
+            AnswerCaseInput(
+                "synthetic-correct-refusal",
+                "unanswerable",
+                0,
+                refused=True,
+            ),
+        ),
+        PROFILE,
+    )
+
+    assert report.refusal_accuracy == pytest.approx(0.5)

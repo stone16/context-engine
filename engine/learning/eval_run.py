@@ -14,8 +14,9 @@ from engine.learning.eval_report import (
     CaseSecurityResult,
     CaseSecurityViolation,
     EvaluationGateStatuses,
-    SecurityHarness,
+    SecurityObservationState,
     final_report_status,
+    refused_security_observation,
     security_report,
 )
 from engine.learning.golden import EvidenceLineage, GoldenSet
@@ -128,15 +129,15 @@ class EvaluationRun:
             raise TypeError("evaluation run requires typed case observations")
 
 
-_SECURITY_CLASSIFIER = SecurityHarness()
-
-
 def _security_observation(value: object, case_ref: str) -> CaseSecurityObservation:
     """Classify serialized security claims; never elevate them to observed clean."""
 
     if value == {"status": "not_observed"}:
-        return _SECURITY_CLASSIFIER.not_observed(case_ref)
-    return _SECURITY_CLASSIFIER.malformed(case_ref)
+        return refused_security_observation(
+            case_ref,
+            SecurityObservationState.NOT_OBSERVED,
+        )
+    return refused_security_observation(case_ref, SecurityObservationState.MALFORMED)
 
 
 def _observed_claim(value: object) -> ObservedClaim:
