@@ -1,0 +1,142 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://context-engine.invalid/eval/embedding-benchmark/report.schema.json",
+  "title": "ContextEngine offline embedding benchmark report v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "run", "models", "standingTwinBaseline", "comparison"],
+  "properties": {
+    "schemaVersion": {"const": "context-engine-embedding-benchmark-report-v1"},
+    "run": {"$ref": "#/$defs/run"},
+    "models": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["primary", "baseline"],
+      "properties": {
+        "primary": {"$ref": "#/$defs/modelReport"},
+        "baseline": {"$ref": "#/$defs/modelReport"}
+      }
+    },
+    "standingTwinBaseline": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["caseHitValue"],
+      "properties": {"caseHitValue": {"type": "number", "minimum": 0, "maximum": 1}}
+    },
+    "comparison": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["primaryAgainstModelBaseline", "primaryAgainstStandingTwinBaseline"],
+      "properties": {
+        "primaryAgainstModelBaseline": {"enum": ["win", "tie", "lose"]},
+        "primaryAgainstStandingTwinBaseline": {"enum": ["win", "tie", "lose"]}
+      }
+    }
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["datasetDigest", "runIdentity", "topK"],
+      "properties": {
+        "datasetDigest": {"$ref": "#/$defs/digest"},
+        "runIdentity": {"$ref": "#/$defs/digest"},
+        "topK": {"type": "integer", "minimum": 1}
+      }
+    },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["modelId", "revision", "artifactDigest", "dimension", "normalization", "pooling", "queryPrefix", "documentPrefix", "reduction", "precision", "batchSize"],
+      "properties": {
+        "modelId": {"type": "string", "minLength": 1},
+        "revision": {"type": "string", "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"},
+        "artifactDigest": {"$ref": "#/$defs/digest"},
+        "dimension": {"const": 384},
+        "normalization": {"enum": ["l2", "none"]},
+        "pooling": {"type": "string", "minLength": 1},
+        "queryPrefix": {"type": "string"},
+        "documentPrefix": {"type": "string"},
+        "reduction": {"enum": ["none_native_384", "matryoshka_truncate_384"]},
+        "precision": {"type": "string", "minLength": 1},
+        "batchSize": {"type": "integer", "minimum": 1}
+      }
+    },
+    "caseHit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["hits", "totalCases", "value"],
+      "properties": {
+        "hits": {"type": "integer", "minimum": 0},
+        "totalCases": {"type": "integer", "minimum": 1},
+        "value": {"type": "number", "minimum": 0, "maximum": 1}
+      }
+    },
+    "recall": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["macro", "micro"],
+      "properties": {
+        "macro": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["value"],
+          "properties": {"value": {"type": "number", "minimum": 0, "maximum": 1}}
+        },
+        "micro": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["hits", "totalExpected", "value"],
+          "properties": {
+            "hits": {"type": "integer", "minimum": 0},
+            "totalExpected": {"type": "integer", "minimum": 1},
+            "value": {"type": "number", "minimum": 0, "maximum": 1}
+          }
+        }
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["caseHit", "evidenceRecall", "perSlice"],
+      "properties": {
+        "caseHit": {"$ref": "#/$defs/caseHit"},
+        "evidenceRecall": {"$ref": "#/$defs/recall"},
+        "perSlice": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["caseHit", "evidenceRecall"],
+            "properties": {
+              "caseHit": {"$ref": "#/$defs/caseHit"},
+              "evidenceRecall": {"$ref": "#/$defs/recall"}
+            }
+          }
+        }
+      }
+    },
+    "timing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["documentCount", "perDocumentEmbedMilliseconds", "wallClockMilliseconds"],
+      "properties": {
+        "documentCount": {"type": "integer", "minimum": 1},
+        "perDocumentEmbedMilliseconds": {"type": "number", "minimum": 0},
+        "wallClockMilliseconds": {"type": "number", "minimum": 0}
+      }
+    },
+    "modelReport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["identity", "metrics", "timing"],
+      "properties": {
+        "identity": {"$ref": "#/$defs/identity"},
+        "metrics": {"$ref": "#/$defs/metrics"},
+        "timing": {"$ref": "#/$defs/timing"}
+      }
+    }
+  }
+}
