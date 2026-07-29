@@ -48,9 +48,12 @@ ContextEngine/
 (Directories are the planned M0–M2 shape; create on first use, don't pre-scaffold empties. D0 closes and versions semantic contracts before production code; isolated disposable evidence spikes are allowed and must not become runtime foundations.)
 
 Process topology is explicit: the engine is an API process plus an independent
-Supply worker; M2 adds one trusted Bot application process containing
-BotDelivery and ActionPlane. No further process boundary is added without
-measured isolation or performance evidence.
+Supply worker; Supply work may execute in ContextEngine-owned runner
+subprocesses (connector-runner, compiler-runner) under exact WorkerLease
+binding with no independent persistence or index (ADR-0075); M2 adds one
+trusted Bot application process containing BotDelivery and ActionPlane. No
+further process boundary is added without measured isolation or performance
+evidence.
 
 ## Commands
 

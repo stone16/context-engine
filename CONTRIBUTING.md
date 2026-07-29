@@ -118,8 +118,10 @@ first, or declined.
   bypass the `AuthorizationKernel`, PackageBudget, provenance, or audit gates.
 - **Authorization precedes anything content-bearing.** Indexes return
   `CandidateRef` only. Hydration, reranking, relevance models, and assembly
-  accept `AuthorizedProjection` only. Every parent/neighbor expansion is
-  re-authorized.
+  accept `AuthorizedProjection` only. Expansion within the same authorized
+  Article/current Revision requires lineage verification; every cross-Article
+  parent/neighbor expansion emits a new `CandidateRef` and is re-authorized
+  (ADR-0077).
 - **`Weak` ACL evidence is never a fallback.** It is permitted only where a
   source genuinely lacks finer-grained ACL semantics. A failed `Live` or
   `Mirrored` check fails closed.
