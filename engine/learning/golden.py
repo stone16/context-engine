@@ -225,6 +225,18 @@ def _validate_schema(document: object, schema_path: Path) -> Mapping[str, object
     return cast(Mapping[str, object], document)
 
 
+def validate_golden_document_schema(
+    document: object,
+    *,
+    schema_path: Path = DEFAULT_GOLDEN_SCHEMA_PATH,
+) -> None:
+    """Validate one document's closed v1 shape without loading private content."""
+
+    if not isinstance(schema_path, Path):
+        raise TypeError("golden schema path must be Path")
+    _validate_schema(document, schema_path)
+
+
 def _expectation(value: object) -> EvidenceExpectation:
     if type(value) is not dict:
         raise GoldenSetUnavailable("golden expected Evidence is unavailable")

@@ -23,7 +23,34 @@ from engine.learning.thresholds import DEFAULT_THRESHOLDS_PATH, load_thresholds
 
 
 def _require_ignored_output(path: Path) -> None:
-    if ".context-engine" not in path.parts:
+    if not isinstance(path, Path):
+        raise TypeError("evaluation output path must be Path")
+    if ".." in path.parts:
+        raise ValueError(
+            "evaluation output must stay under an ignored .context-engine directory"
+        )
+    candidates = tuple(
+        parent for parent in (path, *path.parents) if parent.name == ".context-engine"
+    )
+    if len(candidates) != 1:
+        raise ValueError(
+            "evaluation output must stay under an ignored .context-engine directory"
+        )
+    ignored_root = candidates[0]
+    if not ignored_root.exists():
+        ignored_root.mkdir()
+    if (
+        not ignored_root.is_dir()
+        or ignored_root.is_symlink()
+    ):
+        raise ValueError(
+            "evaluation output must stay under an ignored .context-engine directory"
+        )
+    resolved_root = ignored_root.resolve(strict=True)
+    resolved_output = path.resolve(strict=False)
+    if resolved_output == resolved_root or not resolved_output.is_relative_to(
+        resolved_root
+    ):
         raise ValueError(
             "evaluation output must stay under an ignored .context-engine directory"
         )
@@ -70,6 +97,7 @@ def _parser() -> argparse.ArgumentParser:
 def _write_report(path: Path, report: dict[str, object]) -> None:
     _require_ignored_output(path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    _require_ignored_output(path)
     path.write_text(
         json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
