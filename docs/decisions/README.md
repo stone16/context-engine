@@ -178,3 +178,4 @@ touched:
 - [0074 — Adopt controlled third-party code reuse](0074-adopt-controlled-third-party-code-reuse.md)
 - [0075 — Reuse Onyx capabilities through owned runners and seams](0075-reuse-onyx-capabilities-through-owned-runners-and-seams.md)
 - [0076 — Rejoin rank evidence after authorization](0076-rejoin-rank-evidence-after-authorization.md)
+- [0077 — Fix the Article as the content authorization atom](0077-fix-the-article-as-the-content-authorization-atom.md)
