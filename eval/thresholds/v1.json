@@ -1,0 +1,73 @@
+{
+  "answer": {
+    "minimumNormalizedScore": {
+      "status": "pending_preregistration",
+      "value": null
+    },
+    "minimumRefusalAccuracy": {
+      "status": "pending_preregistration",
+      "value": null
+    }
+  },
+  "calibration": {
+    "maximumRecordedEvents": 1,
+    "recordedEvents": []
+  },
+  "schemaVersion": "context-engine-eval-thresholds-v1",
+  "sliceFloors": [
+    {
+      "layer": "answer",
+      "minimumCases": {"status": "pending_preregistration", "value": null},
+      "minimumScore": {"status": "pending_preregistration", "value": null},
+      "slice": "cross_doc"
+    },
+    {
+      "layer": "answer",
+      "minimumCases": {"status": "pending_preregistration", "value": null},
+      "minimumScore": {"status": "pending_preregistration", "value": null},
+      "slice": "single_doc"
+    },
+    {
+      "layer": "answer",
+      "minimumCases": {"status": "pending_preregistration", "value": null},
+      "minimumScore": {"status": "pending_preregistration", "value": null},
+      "slice": "temporal"
+    },
+    {
+      "layer": "citation",
+      "minimumCases": {"status": "pending_preregistration", "value": null},
+      "minimumScore": {"status": "pending_preregistration", "value": null},
+      "slice": "cross_doc"
+    },
+    {
+      "layer": "citation",
+      "minimumCases": {"status": "pending_preregistration", "value": null},
+      "minimumScore": {"status": "pending_preregistration", "value": null},
+      "slice": "single_doc"
+    },
+    {
+      "layer": "citation",
+      "minimumCases": {"status": "pending_preregistration", "value": null},
+      "minimumScore": {"status": "pending_preregistration", "value": null},
+      "slice": "temporal"
+    },
+    {
+      "layer": "retrieval",
+      "minimumCases": {"status": "pending_preregistration", "value": null},
+      "minimumScore": {"status": "pending_preregistration", "value": null},
+      "slice": "cross_doc"
+    },
+    {
+      "layer": "retrieval",
+      "minimumCases": {"status": "pending_preregistration", "value": null},
+      "minimumScore": {"status": "pending_preregistration", "value": null},
+      "slice": "single_doc"
+    },
+    {
+      "layer": "retrieval",
+      "minimumCases": {"status": "pending_preregistration", "value": null},
+      "minimumScore": {"status": "pending_preregistration", "value": null},
+      "slice": "temporal"
+    }
+  ]
+}
