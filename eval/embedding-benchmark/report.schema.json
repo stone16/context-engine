@@ -1,0 +1,159 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://context-engine.invalid/eval/embedding-benchmark/report.schema.json",
+  "title": "ContextEngine offline embedding benchmark report v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "run", "models", "standingTwinBaseline", "comparison"],
+  "properties": {
+    "schemaVersion": {"const": "context-engine-embedding-benchmark-report-v1"},
+    "run": {"$ref": "#/$defs/run"},
+    "models": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["primary", "baseline"],
+      "properties": {
+        "primary": {"$ref": "#/$defs/modelReport"},
+        "baseline": {"$ref": "#/$defs/modelReport"}
+      }
+    },
+    "standingTwinBaseline": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["caseHitValue"],
+      "properties": {"caseHitValue": {"type": "number", "minimum": 0, "maximum": 1}}
+    },
+    "comparison": {
+      "description": "Frozen Pareto verdict across case hit, macro Evidence recall, and micro Evidence recall. All metric consistency checks, delta calculation, standing-baseline comparison, and Pareto comparison use one equality rule: zero relative tolerance and 1e-12 absolute tolerance. Values within that tolerance compare equal and record a zero delta; strict dominance requires exceeding it. One model wins iff no worse on all three and strictly better on at least one; all-equal metrics tie; mixed wins are inconclusive. Per-slice metrics do not enter the verdict and weighted blending is prohibited.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["primaryAgainstModelBaseline", "primaryAgainstStandingTwinBaseline", "metricDeltas"],
+      "properties": {
+        "primaryAgainstModelBaseline": {"$ref": "#/$defs/modelComparisonOutcome"},
+        "primaryAgainstStandingTwinBaseline": {"enum": ["win", "tie", "lose"]},
+        "metricDeltas": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["caseHit", "macroEvidenceRecall", "microEvidenceRecall"],
+          "properties": {
+            "caseHit": {"type": "number"},
+            "macroEvidenceRecall": {"type": "number"},
+            "microEvidenceRecall": {"type": "number"}
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "modelComparisonOutcome": {
+      "description": "Closed first-class Pareto outcome. Validation recomputes this value from the recorded primary and baseline case-hit, macro-recall, and micro-recall metrics and refuses any mismatch.",
+      "enum": ["win", "lose", "tie", "inconclusive"]
+    },
+    "run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["datasetDigest", "runIdentity", "topK"],
+      "properties": {
+        "datasetDigest": {"$ref": "#/$defs/digest"},
+        "runIdentity": {"$ref": "#/$defs/digest"},
+        "topK": {"type": "integer", "minimum": 1}
+      }
+    },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["modelId", "revision", "artifactDigest", "dimension", "transformationPipeline", "pooling", "queryPrefix", "documentPrefix", "precision", "batchSize"],
+      "properties": {
+        "modelId": {"type": "string", "minLength": 1},
+        "revision": {"type": "string", "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"},
+        "artifactDigest": {"$ref": "#/$defs/digest"},
+        "dimension": {"const": 384},
+        "transformationPipeline": {
+          "description": "Complete ordered vector transformation, including upstream normalization, dimensional reduction, and final normalization.",
+          "enum": ["l2 -> truncate 1024->384 -> l2", "l2 -> keep native 384 -> l2"]
+        },
+        "pooling": {"type": "string", "minLength": 1},
+        "queryPrefix": {"type": "string"},
+        "documentPrefix": {"type": "string"},
+        "precision": {"type": "string", "minLength": 1},
+        "batchSize": {"type": "integer", "minimum": 1}
+      }
+    },
+    "caseHit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["hits", "totalCases", "value"],
+      "properties": {
+        "hits": {"type": "integer", "minimum": 0},
+        "totalCases": {"type": "integer", "minimum": 1},
+        "value": {"type": "number", "minimum": 0, "maximum": 1}
+      }
+    },
+    "recall": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["macro", "micro"],
+      "properties": {
+        "macro": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["value"],
+          "properties": {"value": {"type": "number", "minimum": 0, "maximum": 1}}
+        },
+        "micro": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["hits", "totalExpected", "value"],
+          "properties": {
+            "hits": {"type": "integer", "minimum": 0},
+            "totalExpected": {"type": "integer", "minimum": 1},
+            "value": {"type": "number", "minimum": 0, "maximum": 1}
+          }
+        }
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["caseHit", "evidenceRecall", "perSlice"],
+      "properties": {
+        "caseHit": {"$ref": "#/$defs/caseHit"},
+        "evidenceRecall": {"$ref": "#/$defs/recall"},
+        "perSlice": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["caseHit", "evidenceRecall"],
+            "properties": {
+              "caseHit": {"$ref": "#/$defs/caseHit"},
+              "evidenceRecall": {"$ref": "#/$defs/recall"}
+            }
+          }
+        }
+      }
+    },
+    "timing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["documentCount", "perDocumentEmbedMilliseconds", "wallClockMilliseconds"],
+      "properties": {
+        "documentCount": {"type": "integer", "minimum": 1},
+        "perDocumentEmbedMilliseconds": {"type": "number", "minimum": 0},
+        "wallClockMilliseconds": {"type": "number", "minimum": 0}
+      }
+    },
+    "modelReport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["identity", "metrics", "timing"],
+      "properties": {
+        "identity": {"$ref": "#/$defs/identity"},
+        "metrics": {"$ref": "#/$defs/metrics"},
+        "timing": {"$ref": "#/$defs/timing"}
+      }
+    }
+  }
+}
