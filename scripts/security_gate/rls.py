@@ -16,6 +16,11 @@ GLOBAL_CLASSIFICATION = "global"
 TENANT_CLASSIFICATION = "tenant_owned"
 PINNED_GLOBAL_TABLES = frozenset({"alembic_version", "organization", "user_account"})
 NON_OWNER_EVIDENCE_BY_TABLE: Mapping[str, str] = {
+    "article_access_group": "PG-ARTICLE-ACCESS-RLS-141",
+    "article_access_group_membership": "PG-ARTICLE-ACCESS-RLS-141",
+    "article_access_policy": "PG-ARTICLE-ACCESS-RLS-141",
+    "article_explicit_policy_setting": "PG-ARTICLE-ACCESS-RLS-141",
+    "article_source_acl_observation": "PG-ARTICLE-ACCESS-RLS-141",
     "action_delivery_attempt": "PG-ACTION-PREPARE-067",
     "action_perform_audit": "PG-ACTION-PERFORM-068",
     "action_prepare_audit": "PG-ACTION-PREPARE-067",
@@ -32,6 +37,7 @@ NON_OWNER_EVIDENCE_BY_TABLE: Mapping[str, str] = {
     "private_delivery_audit": "PG-PRIVATE-BOT-FLOW-071",
     "membership": "PG-SCOPE-INTERSECTION-004",
     "organization_record": "PG-TENANT-FK-002",
+    "organization_article_policy_default": "PG-ARTICLE-ACCESS-RLS-141",
     "context_resource": "PG-INDEX-NOT-AUTHORITY-005",
     "context_revision": "PG-INDEX-NOT-AUTHORITY-005",
     "context_fragment": "PG-INDEX-NOT-AUTHORITY-005",
@@ -60,6 +66,7 @@ NON_OWNER_EVIDENCE_BY_TABLE: Mapping[str, str] = {
     "decision_audit": "PG-TRACE-REDACTION-012",
     "service_principal": "PG-WORKER-LEASE-007",
     "source_version": "PG-FILE-SOURCE-RLS-021",
+    "source_article_policy_default": "PG-ARTICLE-ACCESS-RLS-141",
     "worker_noop_job": "PG-WORKER-LEASE-007",
     "context_fragment_field": "PG-FIELD-PROJECTION-RLS-048",
     "membership_resource_field_right": "PG-FIELD-PROJECTION-RLS-048",

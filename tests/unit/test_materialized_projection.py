@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import FrozenInstanceError
+from datetime import UTC, datetime
 from pickle import dumps
 from typing import cast
 from uuid import UUID
@@ -47,6 +48,8 @@ def locator() -> MaterializedFragmentLocator:
         resource_ref="resource:authorized",
         revision_ref="revision:active",
         fragment_ref="fragment:authorized",
+        source_acl_projection_ref="sourceacl_materialized",
+        source_acl_as_of=datetime(2026, 7, 21, 5, 0, tzinfo=UTC),
     )
 
 
@@ -155,9 +158,11 @@ def test_locator_is_content_free_and_body_projection_is_a_separate_operation(
         "organization_id",
         "source_ref",
         "resource_ref",
-        "revision_ref",
-        "fragment_ref",
-    }
+            "revision_ref",
+            "fragment_ref",
+            "source_acl_projection_ref",
+            "source_acl_as_of",
+        }
     assert all(
         forbidden not in MaterializedFragmentLocator.__dataclass_fields__
         for forbidden in ("body", "content", "text", "snippet", "title", "path")

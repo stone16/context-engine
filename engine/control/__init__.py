@@ -1,5 +1,9 @@
 """Public ContextControl Module contracts."""
 
+from engine.control.article_access_policy import (
+    SetSourceArticlePolicyDefault,
+    SetTenantArticlePolicyDefault,
+)
 from engine.control.authority import (
     ControlOperation,
     ControlOperatorAuthenticationRejected,
@@ -20,7 +24,6 @@ from engine.control.contracts import (
     FileCapabilityManifest,
     FileRootRef,
     RegisterFileSource,
-    SourceAclEvidenceMode,
     SourceContentKind,
     SourceControlUnavailable,
     SourceKind,
@@ -89,7 +92,12 @@ from engine.control.file_source_progress import (
     FileSourceStatus,
     PendingFileChangeSchedule,
 )
-from engine.control.module import ContextControl, ControlStorePort
+from engine.control.module import (
+    ArticlePolicyDefaultStorePort,
+    ContextControl,
+    ControlStorePort,
+)
+from engine.source_acl import SourceAclEvidenceMode
 
 __all__ = [
     "MAX_FILE_CHANGE_BASELINE_SIZE",
@@ -97,6 +105,7 @@ __all__ = [
     "AcceptedChangePage",
     "ActivateFileChangeFeed",
     "ActivateFileDeleteObservations",
+    "ArticlePolicyDefaultStorePort",
     "FILE_CAPABILITY_MANIFEST",
     "FILE_CHANGE_CAPABILITY_MANIFEST",
     "FILE_DELETE_OBSERVATION_CAPABILITY_MANIFEST",
@@ -165,6 +174,8 @@ __all__ = [
     "SourceRef",
     "SourceResourceKind",
     "SourceVersion",
+    "SetSourceArticlePolicyDefault",
+    "SetTenantArticlePolicyDefault",
     "TrustedControlCall",
     "TombstoneFileResource",
     "VerifiedControlOperatorIdentity",

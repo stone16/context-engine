@@ -1319,6 +1319,8 @@ class AuthorizationKernel:
                         source_acl_decision_ref=(
                             provenance_receipt.source_acl_decision_ref
                         ),
+                        source_acl_projection_ref=locator.source_acl_projection_ref,
+                        source_acl_as_of=locator.source_acl_as_of,
                     ),
                 )
                 projections.append(projection)

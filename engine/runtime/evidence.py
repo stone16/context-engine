@@ -126,6 +126,8 @@ class EvidenceLineage:
     policy_snapshot_ref: str = field(repr=False)
     policy_epoch: int = field(repr=False)
     source_acl_decision_ref: str = field(repr=False)
+    source_acl_projection_ref: str = field(repr=False)
+    source_acl_as_of: datetime = field(repr=False)
 
     def __post_init__(self) -> None:
         for field_name in (
@@ -135,12 +137,14 @@ class EvidenceLineage:
             "decision_ref",
             "policy_snapshot_ref",
             "source_acl_decision_ref",
+            "source_acl_projection_ref",
         ):
             _require_opaque_ref(
                 f"Evidence lineage {field_name}",
                 getattr(self, field_name),
             )
         _require_utc_as_of(self.as_of)
+        _require_utc_as_of(self.source_acl_as_of)
         if (
             type(self.policy_epoch) is not int
             or not 1 <= self.policy_epoch <= MAX_POLICY_EPOCH
@@ -216,6 +220,8 @@ def _projection_integrity_digest(
         lineage.policy_snapshot_ref,
         str(lineage.policy_epoch),
         lineage.source_acl_decision_ref,
+        lineage.source_acl_projection_ref,
+        lineage.source_acl_as_of.isoformat(timespec="microseconds"),
     ):
         canonical += _encode_text(value)
     for field_ref in projected_field_refs:
@@ -455,6 +461,8 @@ def _lineage_canonical_bytes(lineage: EvidenceLineage) -> bytes:
         lineage.policy_snapshot_ref,
         str(lineage.policy_epoch),
         lineage.source_acl_decision_ref,
+        lineage.source_acl_projection_ref,
+        lineage.source_acl_as_of.isoformat(timespec="microseconds"),
     ):
         canonical += _encode_text(value)
     return canonical
@@ -643,6 +651,8 @@ def _evidence_ref_for_projection(projection: AuthorizedProjection) -> str:
         lineage.policy_snapshot_ref,
         str(lineage.policy_epoch),
         lineage.source_acl_decision_ref,
+        lineage.source_acl_projection_ref,
+        lineage.source_acl_as_of.isoformat(timespec="microseconds"),
     ):
         canonical += _encode_text(value)
     for field_ref in projection.projected_field_refs:

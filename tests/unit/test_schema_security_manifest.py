@@ -32,7 +32,7 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
     document = manifest()
     tables = table_entries(document)
 
-    assert document["manifestVersion"] == "37.0.0"
+    assert document["manifestVersion"] == "38.0.0"
     assert set(tables) == {
         "active_release_manifest",
         "action_delivery_attempt",
@@ -44,6 +44,11 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
         "action_ticket",
         "alembic_version",
         "citation_open_locator",
+        "article_access_group",
+        "article_access_group_membership",
+        "article_access_policy",
+        "article_explicit_policy_setting",
+        "article_source_acl_observation",
         "context_fragment",
         "context_fragment_field",
         "context_resource",
@@ -78,6 +83,7 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
         "membership",
         "membership_resource_field_right",
         "organization",
+        "organization_article_policy_default",
         "organization_policy_epoch",
         "organization_record",
         "release_candidate",
@@ -89,6 +95,7 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
         "resource_access_policy",
         "service_principal",
         "source_version",
+        "source_article_policy_default",
         "user_account",
         "worker_noop_job",
     }
@@ -971,6 +978,7 @@ def test_issue_21_file_source_manifest_is_closed_and_role_separated() -> None:
         "context_engine_release_definer": ["SELECT"],
     }
     assert version["permittedOperations"] == {
+        "context_engine_access_policy_definer": ["SELECT"],
         "context_engine_control": [
             "SELECT",
             "INSERT",
@@ -1830,8 +1838,8 @@ def test_content_manifest_preserves_lineage_visibility_and_immutability() -> Non
     assert "projection_kind = 'fields'" in fragment_policy
     assert "membership_resource_field_right" in fragment_policy
     assert "field_right.field_ref = 'body'" in fragment_policy
-    assert "resource_access_policy" in fragment_policy
-    assert "current_access.access_state = 'allowed'" in fragment_policy
+    assert "article_access_policy" in fragment_policy
+    assert "resource_access_policy" not in fragment_policy
 
     assert field["organizationInclusiveKeys"] == [
         {
@@ -1997,9 +2005,8 @@ def test_content_manifest_preserves_lineage_visibility_and_immutability() -> Non
     )
     assert "membership_resource_field_right" in field_policy
     assert "field_right.field_ref = context_fragment_field.field_ref" in field_policy
-    assert "resource_access_policy" in field_policy
-    assert "current_access.principal_ref = current_setting" in field_policy
-    assert "current_access.access_state = 'allowed'" in field_policy
+    assert "article_access_policy" in field_policy
+    assert "resource_access_policy" not in field_policy
     right_policy = next(
         policy["using"]
         for policy in right["rowLevelSecurity"]["policies"]
@@ -2007,8 +2014,8 @@ def test_content_manifest_preserves_lineage_visibility_and_immutability() -> Non
     )
     assert "context_resource" in right_policy
     assert "tombstoned IS FALSE" in right_policy
-    assert "resource_access_policy" in right_policy
-    assert "current_access.access_state = 'allowed'" in right_policy
+    assert "article_access_policy" in right_policy
+    assert "resource_access_policy" not in right_policy
 
 
 def test_policy_epoch_manifest_seals_runtime_reads_and_control_mutation() -> None:

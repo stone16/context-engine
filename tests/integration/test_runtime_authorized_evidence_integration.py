@@ -486,6 +486,48 @@ def _seed_fixture(
                 for organization in organizations
             ],
         )
+        connection.execute(
+            text(
+                """
+                INSERT INTO article_access_policy (
+                    organization_id, resource_ref, policy_version,
+                    local_policy_kind, local_group_refs, policy_kind, group_refs,
+                    published, resolution_rung, source_evidence_mode,
+                    source_observation_status, source_observation_version,
+                    source_acl_as_of, source_declared_lag_seconds,
+                    fixed_at_policy_epoch
+                ) VALUES (
+                    :organization_id, :resource_ref, 1,
+                    'private', ARRAY[]::text[], 'private', ARRAY[]::text[],
+                    true, 'explicit_article', 'mirrored', 'resolved', 1,
+                    :source_acl_as_of, 0, 1
+                ) ON CONFLICT (organization_id, resource_ref) DO NOTHING
+                """
+            ),
+            [
+                {
+                    "organization_id": organization.organization_id,
+                    "resource_ref": candidate.resource_ref,
+                    "source_acl_as_of": RECEIVED_AT - timedelta(minutes=1),
+                }
+                for organization in organizations
+                for candidate in (organization.authorized, organization.denied)
+            ],
+        )
+        connection.execute(
+            text(
+                "UPDATE article_access_policy SET "
+                "source_acl_as_of = :source_acl_as_of, "
+                "source_declared_lag_seconds = 0 WHERE organization_id = ANY("
+                "CAST(:organization_ids AS uuid[]))"
+            ),
+            {
+                "source_acl_as_of": RECEIVED_AT - timedelta(minutes=1),
+                "organization_ids": [
+                    organization.organization_id for organization in organizations
+                ],
+            },
+        )
 
 
 def _persistent_content_snapshot(
@@ -552,6 +594,13 @@ def _cleanup_fixture(engine: Engine, fixture: RuntimeEvidenceFixture) -> None:
         )
     try:
         with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "DELETE FROM article_access_policy "
+                    "WHERE organization_id IN (:org_a_id, :org_b_id)"
+                ),
+                organizations,
+            )
             connection.execute(
                 text(
                     """
@@ -860,7 +909,9 @@ def _assert_exact_authorized_http_resolve(
     assert evidence["sourceAclEvidence"] == {
         "kind": "mirrored",
         "projectionRef": evidence["sourceAclEvidence"]["projectionRef"],
-        "aclAsOf": package["asOf"],
+        "aclAsOf": (RECEIVED_AT - timedelta(minutes=1))
+        .isoformat()
+        .replace("+00:00", "Z"),
         "freshnessProfileRef": "file-source-access-current-transaction-v1",
     }
 

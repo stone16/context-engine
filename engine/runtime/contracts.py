@@ -443,8 +443,8 @@ def context_package_digest_document(package: ContextPackage) -> dict[str, object
                 "policyEpoch": item.lineage.policy_epoch,
                 "sourceAclEvidence": {
                     "kind": "mirrored",
-                    "projectionRef": item.lineage.source_acl_decision_ref,
-                    "aclAsOf": _wire_datetime(item.lineage.as_of),
+                    "projectionRef": item.lineage.source_acl_projection_ref,
+                    "aclAsOf": _wire_datetime(item.lineage.source_acl_as_of),
                     "freshnessProfileRef": (
                         "file-source-access-current-transaction-v1"
                     ),

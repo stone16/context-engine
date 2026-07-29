@@ -56,6 +56,8 @@ def lineage(
         policy_snapshot_ref="policy-snapshot-7",
         policy_epoch=7,
         source_acl_decision_ref="source-acl-decision-4",
+        source_acl_projection_ref="sourceacl_projection-4",
+        source_acl_as_of=AS_OF,
     )
 
 
