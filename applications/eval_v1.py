@@ -30,8 +30,10 @@ from engine.learning.thresholds import DEFAULT_THRESHOLDS_PATH, load_thresholds
 PUBLIC_SUBSET_MAINTAINER_SECRET_ENV = (
     "CONTEXT_ENGINE_PUBLIC_SUBSET_MAINTAINER_SECRET"
 )
+GOLDEN_ROOT_ENV = "CONTEXT_ENGINE_GOLDEN_ROOT"
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 PUBLIC_SUBSET_GOVERNANCE_PATH = (
-    Path(__file__).resolve().parents[1] / "eval/public-subset-governance.json"
+    REPOSITORY_ROOT / "eval/public-subset-governance.json"
 )
 
 
@@ -91,6 +93,52 @@ def _require_ignored_output(path: Path) -> None:
         )
 
 
+def _durable_golden_root() -> Path:
+    try:
+        configured = os.environ[GOLDEN_ROOT_ENV]
+    except KeyError:
+        raise ValueError("durable golden root is unavailable") from None
+    if not configured or configured != configured.strip():
+        raise ValueError("durable golden root is unavailable")
+    root = Path(configured)
+    if (
+        not root.is_absolute()
+        or not root.is_dir()
+        or root.is_symlink()
+        or ".context-engine" in root.parts
+    ):
+        raise ValueError("durable golden root is unavailable")
+    resolved = root.resolve(strict=True)
+    if resolved == REPOSITORY_ROOT or resolved.is_relative_to(REPOSITORY_ROOT):
+        raise ValueError("durable golden root must be outside the repository")
+    return resolved
+
+
+def _require_durable_golden_path(
+    path: Path,
+    *,
+    root: Path,
+) -> None:
+    if (
+        not isinstance(path, Path)
+        or ".." in path.parts
+        or any(
+            candidate.is_symlink()
+            for candidate in (path, *path.parents)
+            if candidate.exists()
+        )
+    ):
+        raise ValueError("golden corpus path must stay under the durable root")
+    resolved = path.resolve(strict=False)
+    if (
+        not resolved.is_relative_to(root)
+        or resolved in (root, REPOSITORY_ROOT)
+        or resolved.is_relative_to(REPOSITORY_ROOT)
+        or ".context-engine" in resolved.parts
+    ):
+        raise ValueError("golden corpus path must stay under the durable root")
+
+
 def _time(value: str) -> datetime:
     try:
         return datetime.fromisoformat(value.replace("Z", "+00:00"))
@@ -103,7 +151,7 @@ def _parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True)
     validate = commands.add_parser("validate")
     validate.add_argument("--golden-set", required=True, type=Path)
-    validate.add_argument("--lock", type=Path)
+    validate.add_argument("--lock", required=True, type=Path)
 
     lock = commands.add_parser("lock")
     lock.add_argument("--golden-set", required=True, type=Path)
@@ -143,6 +191,9 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser = _parser()
     args = parser.parse_args(argv)
     try:
+        durable_root = _durable_golden_root()
+        _require_durable_golden_path(args.golden_set, root=durable_root)
+        _require_durable_golden_path(args.lock, root=durable_root)
         if args.command == "validate":
             golden_set = load_golden_set(args.golden_set, lock_path=args.lock)
             print(

@@ -8,7 +8,7 @@ from typing import cast
 
 import pytest
 
-from applications.eval_v1 import main
+from applications.eval_v1 import GOLDEN_ROOT_ENV, main
 from engine.learning.eval_report import (
     CaseSecurityObservation,
     SecurityObservationState,
@@ -28,6 +28,11 @@ from tests.support.golden import (
     valid_composed_entries,
     write_golden,
 )
+
+
+@pytest.fixture(autouse=True)
+def _durable_golden_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(GOLDEN_ROOT_ENV, str(tmp_path))
 
 
 def _run_document(entries: list[dict[str, object]]) -> dict[str, object]:
@@ -137,12 +142,110 @@ def test_cli_validate_refuses_pilot_without_lock(tmp_path: Path) -> None:
     golden_path = tmp_path / "golden.json"
     write_golden(golden_path, valid_composed_entries())
 
-    try:
+    with pytest.raises(SystemExit) as error:
         main(["validate", "--golden-set", str(golden_path)])
-    except SystemExit as error:
-        assert error.code == 1
-    else:
-        raise AssertionError("unlocked pilot must be refused")
+
+    assert error.value.code == 2
+
+
+def test_cli_refuses_corpus_and_lock_outside_configured_durable_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    durable_root = tmp_path / "durable"
+    outside_root = tmp_path / "outside"
+    durable_root.mkdir()
+    outside_root.mkdir()
+    monkeypatch.setenv(GOLDEN_ROOT_ENV, str(durable_root))
+    golden_path = outside_root / "golden.json"
+    lock_path = outside_root / "golden.lock.json"
+    write_golden(golden_path, valid_composed_entries())
+
+    with pytest.raises(SystemExit) as error:
+        main(
+            [
+                "lock",
+                "--golden-set",
+                str(golden_path),
+                "--lock",
+                str(lock_path),
+                "--authority",
+                "maintainer",
+                "--reason",
+                "synthetic-test-lock",
+                "--recorded-at",
+                "2026-07-29T12:00:00Z",
+            ]
+        )
+
+    assert error.value.code == 1
+    assert not lock_path.exists()
+
+
+def test_cli_refuses_a_repository_worktree_as_the_durable_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository_root = Path(__file__).resolve().parents[2]
+    monkeypatch.setenv(GOLDEN_ROOT_ENV, str(repository_root))
+    golden_path = tmp_path / "golden.json"
+    lock_path = tmp_path / "golden.lock.json"
+    write_golden(golden_path, valid_composed_entries())
+
+    with pytest.raises(SystemExit) as error:
+        main(
+            [
+                "lock",
+                "--golden-set",
+                str(golden_path),
+                "--lock",
+                str(lock_path),
+                "--authority",
+                "maintainer",
+                "--reason",
+                "synthetic-test-lock",
+                "--recorded-at",
+                "2026-07-29T12:00:00Z",
+            ]
+        )
+
+    assert error.value.code == 1
+    assert not lock_path.exists()
+
+
+def test_cli_refuses_symlink_escape_from_the_durable_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    durable_root = tmp_path / "durable"
+    outside_root = tmp_path / "outside"
+    durable_root.mkdir()
+    outside_root.mkdir()
+    monkeypatch.setenv(GOLDEN_ROOT_ENV, str(durable_root))
+    (durable_root / "escape").symlink_to(outside_root, target_is_directory=True)
+    golden_path = durable_root / "escape/golden.json"
+    lock_path = durable_root / "escape/golden.lock.json"
+    write_golden(golden_path, valid_composed_entries())
+
+    with pytest.raises(SystemExit) as error:
+        main(
+            [
+                "lock",
+                "--golden-set",
+                str(golden_path),
+                "--lock",
+                str(lock_path),
+                "--authority",
+                "maintainer",
+                "--reason",
+                "synthetic-test-lock",
+                "--recorded-at",
+                "2026-07-29T12:00:00Z",
+            ]
+        )
+
+    assert error.value.code == 1
+    assert not lock_path.exists()
 
 
 def test_cli_validation_error_never_logs_private_case_content(
@@ -157,9 +260,18 @@ def test_cli_validation_error_never_logs_private_case_content(
         json.dumps(golden_document([case])),
         encoding="utf-8",
     )
+    lock_path = tmp_path / "golden.lock.json"
 
     with pytest.raises(SystemExit) as error:
-        main(["validate", "--golden-set", str(golden_path)])
+        main(
+            [
+                "validate",
+                "--golden-set",
+                str(golden_path),
+                "--lock",
+                str(lock_path),
+            ]
+        )
 
     assert error.value.code == 1
     assert sensitive_marker not in capsys.readouterr().err
