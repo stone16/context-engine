@@ -17,6 +17,7 @@ from eval.embedding_benchmark import (
     MicroRecallMetric,
     ModelComparisonOutcome,
     ModelIdentity,
+    ModelTransformationPipeline,
     RetrievalJudgeCase,
     RetrievalMetrics,
     SliceMetrics,
@@ -31,15 +32,14 @@ def _identity(model_id: str) -> ModelIdentity:
         revision="a" * 40,
         artifact_digest=("b" if model_id.startswith("Qwen") else "c") * 64,
         dimension=EMBEDDING_DIMENSION,
-        normalization="l2",
+        transformation_pipeline=(
+            ModelTransformationPipeline.PRIMARY
+            if model_id.startswith("Qwen")
+            else ModelTransformationPipeline.BASELINE
+        ),
         pooling="mean",
         query_prefix="query: ",
         document_prefix="passage: ",
-        reduction=(
-            "matryoshka_truncate_384"
-            if model_id.startswith("Qwen")
-            else "none_native_384"
-        ),
         precision="float32",
         batch_size=8,
     )
@@ -226,15 +226,15 @@ def _retrieval_metrics(
     )
 
 
-def test_runner_requires_the_declared_384_dimension_reduction_per_model() -> None:
+def test_runner_requires_the_declared_transformation_pipeline_per_model() -> None:
     primary = SyntheticProvider(
         replace(
             _identity("Qwen/Qwen3-Embedding-0.6B"),
-            reduction="none_native_384",
+            transformation_pipeline=ModelTransformationPipeline.BASELINE,
         )
     )
 
-    with pytest.raises(BenchmarkUnavailable, match="reduction is unavailable"):
+    with pytest.raises(BenchmarkUnavailable, match="pipeline is unavailable"):
         run_benchmark(
             dataset=_dataset(),
             primary=primary,

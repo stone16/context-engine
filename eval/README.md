@@ -57,10 +57,12 @@ registry's closed path-and-SHA-256 artifact list, with no missing or extra
 files. The tracked
 `embedding-benchmark/model-registry.json`, not run input or a local manifest,
 owns the expected repository id, immutable revision, artifact digest,
-dimension, normalization, pooling, prompt prefixes, reduction, precision, and
-batching. Unknown models and local identity overrides are refused, and the
-runner hashes every on-disk artifact against the tracked expected digests before
-it embeds anything.
+dimension, complete transformation pipeline, pooling, prompt prefixes,
+precision, and batching. See that registry for the exact ordered pipelines;
+both emit unit-norm 384-dimensional vectors under the same geometry. Unknown
+models and local identity overrides are refused, and the runner hashes every
+on-disk artifact against the tracked expected digests before and after the
+backend loads the model.
 
 The input follows `embedding-benchmark/input.schema.json`; the output follows
 `embedding-benchmark/report.schema.json` and must be written below the ignored
@@ -69,8 +71,10 @@ The input follows `embedding-benchmark/input.schema.json`; the output follows
 truncation, and re-serialization performed without relocking, but it is not a
 defense against deliberate forgery: the M1 threat model is one trusted local
 operator who can recompute a colocated digest. If the boundary changes to an
-untrusted caller or remote runner, signing returns as its own ADR. Retrieval
-scores are not implemented by this runner: it imports the one fixed judge
+untrusted caller or remote runner, signing returns as its own ADR. All benchmark
+JSON entry points reject out-of-range or non-finite numbers and bound document
+size, nesting, strings, and containers with a typed refusal. Retrieval scores
+are not implemented by this runner: it imports the one fixed judge
 factory owned by issue #129, which is solely responsible for case hit,
 macro/micro Evidence recall, and slice breakdowns. Until #129 lands, the real
 CLI deliberately fails closed with `retrieval judge is unavailable` rather

@@ -20,8 +20,17 @@ EMBEDDING_DIMENSION: Final = CONTEXT_FRAGMENT_EMBEDDING_DIMENSION
 REPORT_SCHEMA_VERSION: Final = "context-engine-embedding-benchmark-report-v1"
 _PINNED_REVISION = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 _SHA256_DIGEST = re.compile(r"^[0-9a-f]{64}$")
-_NORMALIZATIONS: Final = frozenset({"l2", "none"})
-_REDUCTIONS: Final = frozenset({"none_native_384", "matryoshka_truncate_384"})
+PRIMARY_TRANSFORMATION_PIPELINE: Final = "l2 -> truncate 1024->384 -> l2"
+BASELINE_TRANSFORMATION_PIPELINE: Final = "l2 -> keep native 384 -> l2"
+_MAX_JSON_BYTES: Final = 16 * 1024 * 1024
+_MAX_JSON_DEPTH: Final = 64
+_MAX_JSON_CONTAINER_ITEMS: Final = 10_000
+_MAX_JSON_STRING_LENGTH: Final = 1024 * 1024
+_MAX_JSON_NODES: Final = 100_000
+_MAX_JSON_INTEGER: Final = (1 << 63) - 1
+_MIN_JSON_INTEGER: Final = -(1 << 63)
+_MAX_ABS_JSON_FLOAT: Final = 1e18
+_METRIC_TOLERANCE: Final = 1e-12
 
 
 class BenchmarkUnavailable(RuntimeError):
@@ -36,6 +45,21 @@ class DatasetLockProfile(StrEnum):
     )
 
 
+class ModelTransformationPipeline(StrEnum):
+    """Closed, executable vector transformation identities."""
+
+    PRIMARY = PRIMARY_TRANSFORMATION_PIPELINE
+    BASELINE = BASELINE_TRANSFORMATION_PIPELINE
+
+    @property
+    def raw_dimension(self) -> int:
+        if self is ModelTransformationPipeline.PRIMARY:
+            return 1024
+        if self is ModelTransformationPipeline.BASELINE:
+            return EMBEDDING_DIMENSION
+        raise BenchmarkUnavailable("model identity is unresolved")
+
+
 @dataclass(frozen=True, slots=True)
 class ModelIdentity:
     """Complete, reproducible identity for one offline embedding provider."""
@@ -44,11 +68,10 @@ class ModelIdentity:
     revision: str
     artifact_digest: str
     dimension: int
-    normalization: str
+    transformation_pipeline: ModelTransformationPipeline
     pooling: str
     query_prefix: str
     document_prefix: str
-    reduction: str
     precision: str
     batch_size: int
 
@@ -61,13 +84,12 @@ class ModelIdentity:
             or not _SHA256_DIGEST.fullmatch(self.artifact_digest)
             or type(self.dimension) is not int
             or self.dimension != EMBEDDING_DIMENSION
-            or self.normalization not in _NORMALIZATIONS
+            or type(self.transformation_pipeline) is not ModelTransformationPipeline
             or type(self.pooling) is not str
             or not self.pooling
             or self.pooling != self.pooling.strip()
             or type(self.query_prefix) is not str
             or type(self.document_prefix) is not str
-            or self.reduction not in _REDUCTIONS
             or type(self.precision) is not str
             or not self.precision
             or self.precision != self.precision.strip()
@@ -83,12 +105,11 @@ class ModelIdentity:
             "dimension": self.dimension,
             "documentPrefix": self.document_prefix,
             "modelId": self.model_id,
-            "normalization": self.normalization,
             "pooling": self.pooling,
             "precision": self.precision,
             "queryPrefix": self.query_prefix,
-            "reduction": self.reduction,
             "revision": self.revision,
+            "transformationPipeline": self.transformation_pipeline.value,
         }
 
 
@@ -350,12 +371,18 @@ def run_benchmark(
         raise BenchmarkUnavailable("benchmark configuration is unavailable")
     if primary.identity.model_id != "Qwen/Qwen3-Embedding-0.6B":
         raise BenchmarkUnavailable("primary benchmark model is unavailable")
-    if primary.identity.reduction != "matryoshka_truncate_384":
-        raise BenchmarkUnavailable("primary benchmark reduction is unavailable")
+    if (
+        primary.identity.transformation_pipeline
+        is not ModelTransformationPipeline.PRIMARY
+    ):
+        raise BenchmarkUnavailable("primary benchmark pipeline is unavailable")
     if baseline.identity.model_id != "intfloat/multilingual-e5-small":
         raise BenchmarkUnavailable("baseline benchmark model is unavailable")
-    if baseline.identity.reduction != "none_native_384":
-        raise BenchmarkUnavailable("baseline benchmark reduction is unavailable")
+    if (
+        baseline.identity.transformation_pipeline
+        is not ModelTransformationPipeline.BASELINE
+    ):
+        raise BenchmarkUnavailable("baseline benchmark pipeline is unavailable")
     primary_report = _run_model(dataset, primary, judge, top_k, clock)
     baseline_report = _run_model(dataset, baseline, judge, top_k, clock)
     model_comparison = compare_model_metrics(
@@ -397,6 +424,22 @@ class _ModelRun:
 
     def public_document(self) -> dict[str, object]:
         return dict(self.document)
+
+
+@dataclass(frozen=True, slots=True)
+class _ReportPopulation:
+    """Structural population identity shared by both model evaluations."""
+
+    total_cases: int
+    total_expected: int
+    slice_counts: tuple[tuple[str, int, int], ...]
+    document_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class _ValidatedModelReport:
+    values: tuple[float, float, float]
+    population: _ReportPopulation
 
 
 def _run_model(
@@ -628,13 +671,104 @@ def validate_report_document(
     """Validate the closed v1 report without adding a production dependency."""
 
     try:
-        schema = json.loads(schema_path.read_text(encoding="utf-8"))
+        schema = load_bounded_json(schema_path)
         validate_json_schema_document(document, schema)
         _validate_report(document, schema)
     except BenchmarkUnavailable:
         raise
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError, KeyError, TypeError):
+    except (
+        OSError,
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        KeyError,
+        TypeError,
+        ValueError,
+        OverflowError,
+        RecursionError,
+        MemoryError,
+    ):
         raise BenchmarkUnavailable("benchmark report schema is unavailable") from None
+
+
+def load_bounded_json(path: Path) -> object:
+    """Parse a bounded JSON document and reject hostile numeric extensions."""
+
+    try:
+        if path.stat().st_size > _MAX_JSON_BYTES:
+            raise BenchmarkUnavailable("benchmark JSON is unavailable")
+        raw = path.read_text(encoding="utf-8")
+        if len(raw.encode("utf-8")) > _MAX_JSON_BYTES:
+            raise BenchmarkUnavailable("benchmark JSON is unavailable")
+        value = json.loads(
+            raw,
+            parse_int=_parse_json_integer,
+            parse_float=_parse_json_float,
+            parse_constant=_reject_json_constant,
+        )
+        _validate_bounded_json_value(value)
+        return value
+    except BenchmarkUnavailable:
+        raise
+    except (
+        OSError,
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        OverflowError,
+        RecursionError,
+        MemoryError,
+        ValueError,
+    ):
+        raise BenchmarkUnavailable("benchmark JSON is unavailable") from None
+
+
+def _parse_json_integer(raw: str) -> int:
+    value = int(raw)
+    if not _MIN_JSON_INTEGER <= value <= _MAX_JSON_INTEGER:
+        raise BenchmarkUnavailable("benchmark JSON is unavailable")
+    return value
+
+
+def _parse_json_float(raw: str) -> float:
+    value = float(raw)
+    if not math.isfinite(value) or abs(value) > _MAX_ABS_JSON_FLOAT:
+        raise BenchmarkUnavailable("benchmark JSON is unavailable")
+    return value
+
+
+def _reject_json_constant(_raw: str) -> None:
+    raise BenchmarkUnavailable("benchmark JSON is unavailable")
+
+
+def _validate_bounded_json_value(value: object) -> None:
+    pending: list[tuple[object, int]] = [(value, 0)]
+    nodes = 0
+    while pending:
+        item, depth = pending.pop()
+        nodes += 1
+        if nodes > _MAX_JSON_NODES or depth > _MAX_JSON_DEPTH:
+            raise BenchmarkUnavailable("benchmark JSON is unavailable")
+        if type(item) is str:
+            if len(item) > _MAX_JSON_STRING_LENGTH:
+                raise BenchmarkUnavailable("benchmark JSON is unavailable")
+        elif type(item) is int:
+            if not _MIN_JSON_INTEGER <= item <= _MAX_JSON_INTEGER:
+                raise BenchmarkUnavailable("benchmark JSON is unavailable")
+        elif type(item) is float:
+            if not math.isfinite(item) or abs(item) > _MAX_ABS_JSON_FLOAT:
+                raise BenchmarkUnavailable("benchmark JSON is unavailable")
+        elif type(item) is list:
+            if len(item) > _MAX_JSON_CONTAINER_ITEMS:
+                raise BenchmarkUnavailable("benchmark JSON is unavailable")
+            pending.extend((child, depth + 1) for child in item)
+        elif type(item) is dict:
+            if len(item) > _MAX_JSON_CONTAINER_ITEMS or any(
+                type(key) is not str or len(key) > _MAX_JSON_STRING_LENGTH
+                for key in item
+            ):
+                raise BenchmarkUnavailable("benchmark JSON is unavailable")
+            pending.extend((child, depth + 1) for child in item.values())
+        elif item is not None and type(item) is not bool:
+            raise BenchmarkUnavailable("benchmark JSON is unavailable")
 
 
 def _validate_report(document: object, schema: object) -> None:
@@ -683,8 +817,12 @@ def _validate_report(document: object, schema: object) -> None:
     )
     _require_ratio(standing["caseHitValue"])
     models = _closed_object(report["models"], frozenset({"baseline", "primary"}))
-    primary_values = _validate_model_report(models["primary"])
-    baseline_values = _validate_model_report(models["baseline"])
+    primary_report = _validate_model_report(models["primary"])
+    baseline_report = _validate_model_report(models["baseline"])
+    if primary_report.population != baseline_report.population:
+        raise BenchmarkUnavailable("benchmark report schema is unavailable")
+    primary_values = primary_report.values
+    baseline_values = baseline_report.values
     try:
         declared_outcome = ModelComparisonOutcome(
             cast(str, comparison["primaryAgainstModelBaseline"])
@@ -711,6 +849,8 @@ def _validate_report(document: object, schema: object) -> None:
 def validate_json_schema_document(value: object, schema: object) -> None:
     """Validate documents against the tracked schema vocabulary used by eval."""
 
+    _validate_bounded_json_value(value)
+    _validate_bounded_json_value(schema)
     root = _object(schema)
     _validate_json_schema(value, root, root)
 
@@ -823,7 +963,7 @@ def _canonical_json(value: object) -> bytes:
         raise BenchmarkUnavailable("benchmark report schema is unavailable") from None
 
 
-def _validate_model_report(value: object) -> tuple[float, float, float]:
+def _validate_model_report(value: object) -> _ValidatedModelReport:
     report = _closed_object(value, frozenset({"identity", "metrics", "timing"}))
     identity = _closed_object(
         report["identity"],
@@ -834,12 +974,11 @@ def _validate_model_report(value: object) -> tuple[float, float, float]:
                 "dimension",
                 "documentPrefix",
                 "modelId",
-                "normalization",
                 "pooling",
                 "precision",
                 "queryPrefix",
-                "reduction",
                 "revision",
+                "transformationPipeline",
             }
         ),
     )
@@ -848,15 +987,18 @@ def _validate_model_report(value: object) -> tuple[float, float, float]:
         revision=cast(str, identity["revision"]),
         artifact_digest=cast(str, identity["artifactDigest"]),
         dimension=cast(int, identity["dimension"]),
-        normalization=cast(str, identity["normalization"]),
+        transformation_pipeline=ModelTransformationPipeline(
+            cast(str, identity["transformationPipeline"])
+        ),
         pooling=cast(str, identity["pooling"]),
         query_prefix=cast(str, identity["queryPrefix"]),
         document_prefix=cast(str, identity["documentPrefix"]),
-        reduction=cast(str, identity["reduction"]),
         precision=cast(str, identity["precision"]),
         batch_size=cast(int, identity["batchSize"]),
     )
-    metric_values = _validate_metrics(report["metrics"])
+    metric_values, total_cases, total_expected, slice_counts = _validate_metrics(
+        report["metrics"]
+    )
     timing = _closed_object(
         report["timing"],
         frozenset(
@@ -867,42 +1009,73 @@ def _validate_model_report(value: object) -> tuple[float, float, float]:
         raise BenchmarkUnavailable("benchmark report schema is unavailable")
     _require_nonnegative_number(timing["perDocumentEmbedMilliseconds"])
     _require_nonnegative_number(timing["wallClockMilliseconds"])
-    return metric_values
+    return _ValidatedModelReport(
+        values=metric_values,
+        population=_ReportPopulation(
+            total_cases=total_cases,
+            total_expected=total_expected,
+            slice_counts=slice_counts,
+            document_count=timing["documentCount"],
+        ),
+    )
 
 
-def _validate_metrics(value: object) -> tuple[float, float, float]:
+def _validate_metrics(
+    value: object,
+) -> tuple[
+    tuple[float, float, float],
+    int,
+    int,
+    tuple[tuple[str, int, int], ...],
+]:
     metrics = _closed_object(
         value,
         frozenset({"caseHit", "evidenceRecall", "perSlice"}),
     )
-    _validate_case_hit(metrics["caseHit"])
-    _validate_recall(metrics["evidenceRecall"])
+    aggregate_case_hit = _validate_case_hit(metrics["caseHit"])
+    aggregate_recall = _validate_recall(metrics["evidenceRecall"])
     per_slice = _object(metrics["perSlice"])
     if not per_slice:
         raise BenchmarkUnavailable("benchmark report schema is unavailable")
-    for slice_metrics in per_slice.values():
+    slice_case_hits: list[tuple[int, int, float]] = []
+    slice_recalls: list[tuple[float, int, int, float]] = []
+    slice_counts: list[tuple[str, int, int]] = []
+    for slice_name, slice_metrics in sorted(per_slice.items()):
         item = _closed_object(
             slice_metrics,
             frozenset({"caseHit", "evidenceRecall"}),
         )
-        _validate_case_hit(item["caseHit"])
-        _validate_recall(item["evidenceRecall"])
-    case_hit = _closed_object(
-        metrics["caseHit"], frozenset({"hits", "totalCases", "value"})
-    )
-    recall = _closed_object(metrics["evidenceRecall"], frozenset({"macro", "micro"}))
-    macro = _closed_object(recall["macro"], frozenset({"value"}))
-    micro = _closed_object(
-        recall["micro"], frozenset({"hits", "totalExpected", "value"})
-    )
+        case_hit = _validate_case_hit(item["caseHit"])
+        recall = _validate_recall(item["evidenceRecall"])
+        slice_case_hits.append(case_hit)
+        slice_recalls.append(recall)
+        slice_counts.append((slice_name, case_hit[1], recall[2]))
+    if (
+        aggregate_case_hit[0] != sum(item[0] for item in slice_case_hits)
+        or aggregate_case_hit[1] != sum(item[1] for item in slice_case_hits)
+        or aggregate_recall[1] != sum(item[1] for item in slice_recalls)
+        or aggregate_recall[2] != sum(item[2] for item in slice_recalls)
+    ):
+        raise BenchmarkUnavailable("benchmark report schema is unavailable")
+    weighted_macro = sum(
+        recall[0] * case_hit[1]
+        for recall, case_hit in zip(slice_recalls, slice_case_hits, strict=True)
+    ) / aggregate_case_hit[1]
+    if not _same_metric(aggregate_recall[0], weighted_macro):
+        raise BenchmarkUnavailable("benchmark report schema is unavailable")
     return (
-        float(cast(int | float, case_hit["value"])),
-        float(cast(int | float, macro["value"])),
-        float(cast(int | float, micro["value"])),
+        (
+            aggregate_case_hit[2],
+            aggregate_recall[0],
+            aggregate_recall[3],
+        ),
+        aggregate_case_hit[1],
+        aggregate_recall[2],
+        tuple(slice_counts),
     )
 
 
-def _validate_case_hit(value: object) -> None:
+def _validate_case_hit(value: object) -> tuple[int, int, float]:
     metric = _closed_object(value, frozenset({"hits", "totalCases", "value"}))
     if (
         type(metric["hits"]) is not int
@@ -912,9 +1085,15 @@ def _validate_case_hit(value: object) -> None:
     ):
         raise BenchmarkUnavailable("benchmark report schema is unavailable")
     _require_ratio(metric["value"])
+    hits = metric["hits"]
+    total = metric["totalCases"]
+    reported = float(cast(int | float, metric["value"]))
+    if not _same_metric(reported, hits / total):
+        raise BenchmarkUnavailable("benchmark report schema is unavailable")
+    return hits, total, reported
 
 
-def _validate_recall(value: object) -> None:
+def _validate_recall(value: object) -> tuple[float, int, int, float]:
     recall = _closed_object(value, frozenset({"macro", "micro"}))
     macro = _closed_object(recall["macro"], frozenset({"value"}))
     _require_ratio(macro["value"])
@@ -929,6 +1108,17 @@ def _validate_recall(value: object) -> None:
     ):
         raise BenchmarkUnavailable("benchmark report schema is unavailable")
     _require_ratio(micro["value"])
+    macro_value = float(cast(int | float, macro["value"]))
+    hits = micro["hits"]
+    total = micro["totalExpected"]
+    reported = float(cast(int | float, micro["value"]))
+    if not _same_metric(reported, hits / total):
+        raise BenchmarkUnavailable("benchmark report schema is unavailable")
+    return macro_value, hits, total, reported
+
+
+def _same_metric(left: float, right: float) -> bool:
+    return math.isclose(left, right, rel_tol=0.0, abs_tol=_METRIC_TOLERANCE)
 
 
 def _object(value: object) -> dict[str, object]:

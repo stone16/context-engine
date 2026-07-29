@@ -327,3 +327,27 @@ def test_closed_backend_enum_refuses_arbitrary_import_paths() -> None:
                 ".context-engine/report.json",
             ]
         )
+
+
+@pytest.mark.parametrize(
+    "invalid_json",
+    (
+        '{"absurd": 9223372036854775808}',
+        '{"absurd": 1e1000000}',
+        '{"absurd": NaN}',
+        '{"absurd": Infinity}',
+        '{"absurd": -Infinity}',
+        "[" * 80 + "0" + "]" * 80,
+        json.dumps({"absurd": "x" * (1024 * 1024 + 1)}),
+        json.dumps({"absurd": [0] * 10_001}),
+    ),
+)
+def test_loader_refuses_pathological_json_as_a_typed_outcome(
+    tmp_path: Path,
+    invalid_json: str,
+) -> None:
+    path = tmp_path / "dataset.json"
+    path.write_text(invalid_json, encoding="utf-8")
+
+    with pytest.raises(BenchmarkUnavailable):
+        cli.load_dataset(path)

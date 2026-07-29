@@ -9,6 +9,7 @@ from eval.embedding_benchmark import (
     EMBEDDING_DIMENSION,
     BenchmarkUnavailable,
     ModelIdentity,
+    ModelTransformationPipeline,
 )
 
 
@@ -18,11 +19,10 @@ def _resolved_identity() -> ModelIdentity:
         revision="a" * 40,
         artifact_digest="b" * 64,
         dimension=EMBEDDING_DIMENSION,
-        normalization="l2",
+        transformation_pipeline=ModelTransformationPipeline.PRIMARY,
         pooling="last_token",
         query_prefix="Instruct: retrieve relevant passages\nQuery:",
         document_prefix="",
-        reduction="matryoshka_truncate_384",
         precision="float32",
         batch_size=8,
     )
@@ -35,11 +35,10 @@ def _resolved_identity() -> ModelIdentity:
         ("revision", "main"),
         ("artifact_digest", "pending"),
         ("dimension", 0),
-        ("normalization", "unknown"),
+        ("transformation_pipeline", "unknown"),
         ("pooling", ""),
         ("query_prefix", None),
         ("document_prefix", None),
-        ("reduction", "unknown"),
         ("precision", ""),
         ("batch_size", 0),
     ),

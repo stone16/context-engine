@@ -20,11 +20,10 @@
         "revision": "97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3",
         "artifactDigest": "8cb25677d5be69ce6ac88ebbdfb5dad30980fee39c35c6324a583e325917eddc",
         "dimension": 384,
-        "normalization": "l2",
         "pooling": "last_token",
         "queryPrefix": "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery:",
         "documentPrefix": "",
-        "reduction": "matryoshka_truncate_384",
+        "transformationPipeline": "l2 -> truncate 1024->384 -> l2",
         "precision": "float32",
         "batchSize": 8
       }
@@ -47,11 +46,10 @@
         "revision": "614241f622f53c4eeff9890bdc4f31cfecc418b3",
         "artifactDigest": "961e0953328daf4df7916c1406751c5c63fe19e14a5c7e977d9f8b38964c5cf3",
         "dimension": 384,
-        "normalization": "l2",
         "pooling": "mean",
         "queryPrefix": "query: ",
         "documentPrefix": "passage: ",
-        "reduction": "none_native_384",
+        "transformationPipeline": "l2 -> keep native 384 -> l2",
         "precision": "float32",
         "batchSize": 8
       }

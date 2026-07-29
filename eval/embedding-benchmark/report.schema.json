@@ -63,17 +63,19 @@
     "identity": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["modelId", "revision", "artifactDigest", "dimension", "normalization", "pooling", "queryPrefix", "documentPrefix", "reduction", "precision", "batchSize"],
+      "required": ["modelId", "revision", "artifactDigest", "dimension", "transformationPipeline", "pooling", "queryPrefix", "documentPrefix", "precision", "batchSize"],
       "properties": {
         "modelId": {"type": "string", "minLength": 1},
         "revision": {"type": "string", "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"},
         "artifactDigest": {"$ref": "#/$defs/digest"},
         "dimension": {"const": 384},
-        "normalization": {"enum": ["l2", "none"]},
+        "transformationPipeline": {
+          "description": "Complete ordered vector transformation, including upstream normalization, dimensional reduction, and final normalization.",
+          "enum": ["l2 -> truncate 1024->384 -> l2", "l2 -> keep native 384 -> l2"]
+        },
         "pooling": {"type": "string", "minLength": 1},
         "queryPrefix": {"type": "string"},
         "documentPrefix": {"type": "string"},
-        "reduction": {"enum": ["none_native_384", "matryoshka_truncate_384"]},
         "precision": {"type": "string", "minLength": 1},
         "batchSize": {"type": "integer", "minimum": 1}
       }

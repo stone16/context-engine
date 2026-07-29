@@ -7,7 +7,11 @@ from typing import Any
 
 import pytest
 
-from eval.embedding_benchmark import BenchmarkUnavailable, validate_report_document
+from eval.embedding_benchmark import (
+    BenchmarkUnavailable,
+    validate_json_schema_document,
+    validate_report_document,
+)
 
 REPORT_SCHEMA = Path("eval/embedding-benchmark/report.schema.json")
 
@@ -19,11 +23,14 @@ def _identity(model_id: str, *, pooling: str) -> dict[str, object]:
         "dimension": 384,
         "documentPrefix": "",
         "modelId": model_id,
-        "normalization": "l2",
         "pooling": pooling,
         "precision": "float32",
         "queryPrefix": "query: ",
-        "reduction": "none_native_384",
+        "transformationPipeline": (
+            "l2 -> truncate 1024->384 -> l2"
+            if model_id.startswith("Qwen")
+            else "l2 -> keep native 384 -> l2"
+        ),
         "revision": "a" * 40,
     }
 
@@ -95,9 +102,21 @@ def _set_model_metric_values(
 ) -> None:
     for role, values in (("primary", primary), ("baseline", baseline)):
         metrics = report["models"][role]["metrics"]
-        metrics["caseHit"]["value"] = values[0]
+        case_hits = round(values[0] * 2)
+        micro_hits = round(values[2] * 4)
+        metrics["caseHit"].update({"hits": case_hits, "value": values[0]})
         metrics["evidenceRecall"]["macro"]["value"] = values[1]
-        metrics["evidenceRecall"]["micro"]["value"] = values[2]
+        metrics["evidenceRecall"]["micro"].update(
+            {"hits": micro_hits, "value": values[2]}
+        )
+        slice_metrics = metrics["perSlice"]["single_doc"]
+        slice_metrics["caseHit"].update(
+            {"hits": case_hits, "value": values[0]}
+        )
+        slice_metrics["evidenceRecall"]["macro"]["value"] = values[1]
+        slice_metrics["evidenceRecall"]["micro"].update(
+            {"hits": micro_hits, "value": values[2]}
+        )
     report["comparison"] = {
         "metricDeltas": {
             "caseHit": primary[0] - baseline[0],
@@ -238,4 +257,110 @@ def test_report_refuses_each_derived_comparison_field_when_fabricated(
     mutate(report)
 
     with pytest.raises(BenchmarkUnavailable, match="report verdict"):
+        validate_report_document(report, schema_path=REPORT_SCHEMA)
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    (
+        lambda report: report["models"]["primary"]["metrics"]["caseHit"].update(
+            {"hits": 0}
+        ),
+        lambda report: report["models"]["primary"]["metrics"][
+            "evidenceRecall"
+        ]["micro"].update({"hits": 0}),
+    ),
+)
+def test_report_refuses_metric_counts_that_contradict_their_values(
+    mutate: Any,
+) -> None:
+    report: dict[str, Any] = _report()
+    mutate(report)
+
+    with pytest.raises(BenchmarkUnavailable, match="report schema"):
+        validate_report_document(report, schema_path=REPORT_SCHEMA)
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    (
+        lambda report: report["models"]["primary"]["metrics"]["perSlice"][
+            "single_doc"
+        ]["caseHit"].update({"hits": 1, "value": 0.5}),
+        lambda report: report["models"]["primary"]["metrics"]["perSlice"][
+            "single_doc"
+        ]["evidenceRecall"]["macro"].update({"value": 0.5}),
+        lambda report: report["models"]["primary"]["metrics"]["perSlice"][
+            "single_doc"
+        ]["evidenceRecall"]["micro"].update(
+            {"hits": 2, "totalExpected": 4, "value": 0.5}
+        ),
+    ),
+)
+def test_report_refuses_per_slice_metrics_inconsistent_with_the_aggregate(
+    mutate: Any,
+) -> None:
+    report: dict[str, Any] = _report()
+    mutate(report)
+
+    with pytest.raises(BenchmarkUnavailable, match="report schema"):
+        validate_report_document(report, schema_path=REPORT_SCHEMA)
+
+
+@pytest.mark.parametrize(
+    "absurd",
+    (
+        9223372036854775808,
+        float("inf"),
+        float("nan"),
+        "x" * (1024 * 1024 + 1),
+        [0] * 10_001,
+        {"nested": {"deeper": {"value": [0] * 10_001}}},
+    ),
+)
+def test_report_refuses_absurd_numeric_or_oversized_values_as_typed_outcomes(
+    absurd: object,
+) -> None:
+    with pytest.raises(BenchmarkUnavailable):
+        validate_json_schema_document(absurd, {})
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    (
+        lambda report: (
+            report["models"]["baseline"]["metrics"]["caseHit"].update(
+                {"hits": 4, "totalCases": 4, "value": 1.0}
+            ),
+            report["models"]["baseline"]["metrics"]["perSlice"]["single_doc"][
+                "caseHit"
+            ].update({"hits": 4, "totalCases": 4, "value": 1.0}),
+        ),
+        lambda report: (
+            report["models"]["baseline"]["metrics"]["evidenceRecall"][
+                "micro"
+            ].update({"hits": 6, "totalExpected": 8, "value": 0.75}),
+            report["models"]["baseline"]["metrics"]["perSlice"]["single_doc"][
+                "evidenceRecall"
+            ]["micro"].update({"hits": 6, "totalExpected": 8, "value": 0.75}),
+        ),
+        lambda report: report["models"]["baseline"]["metrics"]["perSlice"].update(
+            {
+                "renamed": report["models"]["baseline"]["metrics"]["perSlice"].pop(
+                    "single_doc"
+                )
+            }
+        ),
+        lambda report: report["models"]["primary"]["timing"].update(
+            {"documentCount": 99}
+        ),
+    ),
+)
+def test_report_refuses_cross_model_population_contradictions(
+    mutate: Any,
+) -> None:
+    report: dict[str, Any] = _report()
+    mutate(report)
+
+    with pytest.raises(BenchmarkUnavailable, match="report schema"):
         validate_report_document(report, schema_path=REPORT_SCHEMA)

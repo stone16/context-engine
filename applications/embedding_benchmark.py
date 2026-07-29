@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import importlib
 import json
+import math
 import sys
 from collections.abc import Callable, Sequence
 from enum import StrEnum
@@ -24,7 +25,9 @@ from eval.embedding_benchmark import (
     BenchmarkUnavailable,
     DatasetLockProfile,
     ModelIdentity,
+    ModelTransformationPipeline,
     RetrievalJudge,
+    load_bounded_json,
     run_benchmark,
     validate_json_schema_document,
     validate_report_document,
@@ -38,6 +41,10 @@ MODEL_REGISTRY_SCHEMA_PATH = EVAL_ROOT / "model-registry.schema.json"
 LOCK_PROFILE = DatasetLockProfile.ACCIDENTAL_EDIT_DETECTION
 BENCHMARK_EXTRA = "context-engine[benchmark]"
 _IDENTITY_OVERRIDE_FILENAME = "benchmark-model-identity.json"
+_REGISTERED_IDENTITY_DIGESTS = {
+    "primary": "f748d119fd4d5c6b2843e70e977e9da86000afb195bf8bd5b867d483b6409e1e",
+    "baseline": "a915cb9d63a908bbd47113d46719f0d582db7a2f787ba83de4ae5eef8f4f890a",
+}
 
 
 class SupportedBackend(StrEnum):
@@ -77,14 +84,33 @@ class SentenceTransformersProvider:
                 list(values),
                 batch_size=self.identity.batch_size,
                 convert_to_numpy=True,
-                normalize_embeddings=self.identity.normalization == "l2",
+                normalize_embeddings=True,
                 precision=self.identity.precision,
                 show_progress_bar=False,
             )
-            return tuple(
-                tuple(float(value) for value in vector[:EMBEDDING_DIMENSION])
-                for vector in vectors
-            )
+            expected_raw_dimension = self.identity.transformation_pipeline.raw_dimension
+            normalized: list[tuple[float, ...]] = []
+            for vector in vectors:
+                if len(vector) != expected_raw_dimension:
+                    raise BenchmarkUnavailable("local benchmark model is unavailable")
+                truncated = tuple(
+                    float(value) for value in vector[:EMBEDDING_DIMENSION]
+                )
+                if not all(math.isfinite(value) for value in truncated):
+                    raise BenchmarkUnavailable("local benchmark model is unavailable")
+                norm = math.sqrt(sum(value * value for value in truncated))
+                if not math.isfinite(norm) or norm == 0.0:
+                    raise BenchmarkUnavailable("local benchmark model is unavailable")
+                emitted = tuple(value / norm for value in truncated)
+                if not math.isclose(
+                    math.sqrt(sum(value * value for value in emitted)),
+                    1.0,
+                    rel_tol=0.0,
+                    abs_tol=1e-6,
+                ):
+                    raise BenchmarkUnavailable("local benchmark model is unavailable")
+                normalized.append(emitted)
+            return tuple(normalized)
         except Exception:
             raise BenchmarkUnavailable("local benchmark model is unavailable") from None
 
@@ -107,13 +133,19 @@ def build_local_provider(
 
     if type(backend) is not SupportedBackend or role not in {"primary", "baseline"}:
         raise BenchmarkUnavailable("benchmark backend is unavailable")
-    identity = load_registered_model_identity(
+    identity, expected_artifacts = _load_registered_model_contract(
         role=role,
         backend=backend,
         model_dir=model_dir,
     )
     if backend is SupportedBackend.SENTENCE_TRANSFORMERS:
-        return SentenceTransformersProvider(identity=identity, model_dir=model_dir)
+        provider = SentenceTransformersProvider(identity=identity, model_dir=model_dir)
+        if identity.artifact_digest != _model_artifact_digest(
+            model_dir,
+            expected_artifacts=expected_artifacts,
+        ):
+            raise BenchmarkUnavailable("model identity is unresolved")
+        return provider
     raise BenchmarkUnavailable("benchmark backend is unavailable")
 
 
@@ -125,14 +157,28 @@ def load_registered_model_identity(
 ) -> ModelIdentity:
     """Resolve identity only from the tracked registry and verify local bytes."""
 
+    identity, _expected_artifacts = _load_registered_model_contract(
+        role=role,
+        backend=backend,
+        model_dir=model_dir,
+    )
+    return identity
+
+
+def _load_registered_model_contract(
+    *,
+    role: str,
+    backend: SupportedBackend,
+    model_dir: Path,
+) -> tuple[ModelIdentity, tuple[tuple[str, str], ...]]:
+    """Resolve one identity plus the exact artifact manifest used to verify it."""
+
     override_path = model_dir / _IDENTITY_OVERRIDE_FILENAME
     if override_path.exists():
         raise BenchmarkUnavailable("local model identity override is unavailable")
     try:
-        registry = json.loads(MODEL_REGISTRY_PATH.read_text(encoding="utf-8"))
-        registry_schema = json.loads(
-            MODEL_REGISTRY_SCHEMA_PATH.read_text(encoding="utf-8")
-        )
+        registry = load_bounded_json(MODEL_REGISTRY_PATH)
+        registry_schema = load_bounded_json(MODEL_REGISTRY_SCHEMA_PATH)
         try:
             validate_json_schema_document(registry, registry_schema)
         except BenchmarkUnavailable:
@@ -162,28 +208,55 @@ def load_registered_model_identity(
             for value in artifact_documents
         )
         identity_document = cast(dict[str, object], model["identity"])
+        digestable_identity = {
+            key: value
+            for key, value in identity_document.items()
+            if key != "artifactDigest"
+        }
+        if sha256(rfc8785.dumps(cast(Any, digestable_identity))).hexdigest() != (
+            _REGISTERED_IDENTITY_DIGESTS[role]
+        ):
+            raise BenchmarkUnavailable("model identity is unresolved")
         identity = ModelIdentity(
             model_id=cast(str, identity_document["modelId"]),
             revision=cast(str, identity_document["revision"]),
             artifact_digest=cast(str, identity_document["artifactDigest"]),
             dimension=cast(int, identity_document["dimension"]),
-            normalization=cast(str, identity_document["normalization"]),
+            transformation_pipeline=ModelTransformationPipeline(
+                cast(str, identity_document["transformationPipeline"])
+            ),
             pooling=cast(str, identity_document["pooling"]),
             query_prefix=cast(str, identity_document["queryPrefix"]),
             document_prefix=cast(str, identity_document["documentPrefix"]),
-            reduction=cast(str, identity_document["reduction"]),
             precision=cast(str, identity_document["precision"]),
             batch_size=cast(int, identity_document["batchSize"]),
         )
+        expected_pipeline = (
+            ModelTransformationPipeline.PRIMARY
+            if role == "primary"
+            else ModelTransformationPipeline.BASELINE
+        )
+        if identity.transformation_pipeline is not expected_pipeline:
+            raise BenchmarkUnavailable("model identity is unresolved")
         if identity.artifact_digest != _model_artifact_digest(
             model_dir,
             expected_artifacts=expected_artifacts,
         ):
             raise BenchmarkUnavailable("model identity is unresolved")
-        return identity
+        return identity, expected_artifacts
     except BenchmarkUnavailable:
         raise
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError, KeyError, TypeError):
+    except (
+        OSError,
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        KeyError,
+        TypeError,
+        ValueError,
+        OverflowError,
+        RecursionError,
+        MemoryError,
+    ):
         raise BenchmarkUnavailable("model identity is unresolved") from None
 
 
@@ -232,8 +305,8 @@ def load_dataset(path: Path) -> BenchmarkDataset:
     """Load the strict drop-in input format used by the pending durable corpus."""
 
     try:
-        raw_root = json.loads(path.read_text(encoding="utf-8"))
-        schema = json.loads(INPUT_SCHEMA_PATH.read_text(encoding="utf-8"))
+        raw_root = load_bounded_json(path)
+        schema = load_bounded_json(INPUT_SCHEMA_PATH)
         try:
             validate_json_schema_document(raw_root, schema)
         except BenchmarkUnavailable:
@@ -277,7 +350,16 @@ def load_dataset(path: Path) -> BenchmarkDataset:
         )
     except BenchmarkUnavailable:
         raise
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError, KeyError, TypeError):
+    except (
+        OSError,
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        KeyError,
+        TypeError,
+        OverflowError,
+        RecursionError,
+        MemoryError,
+    ):
         raise BenchmarkUnavailable("benchmark dataset is unavailable") from None
 
 
