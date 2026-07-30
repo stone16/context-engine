@@ -1,4 +1,4 @@
-.PHONY: install build lint typecheck test catalog security-gate smoke db-up db-down db-reset integration dogfood-eval eval-v1 openapi-generate openapi-check openapi-breaking-check sdk-generate sdk-check sdk-build sdk-test sdk-pack action-typecheck action-build action-test bot-typecheck bot-build bot-test check
+.PHONY: install build lint typecheck test catalog third-party-check third-party-artifacts security-gate smoke db-up db-down db-reset integration dogfood-eval eval-v1 openapi-generate openapi-check openapi-breaking-check sdk-generate sdk-check sdk-build sdk-test sdk-pack action-typecheck action-build action-test bot-typecheck bot-build bot-test check
 
 install:
 	uv sync --frozen
@@ -23,6 +23,14 @@ test: bot-build
 catalog:
 	uv run pytest -q tests/catalog
 	uv run python scripts/validate_security_catalog.py
+	$(MAKE) third-party-check
+
+third-party-check:
+	uv run python scripts/third_party_governance.py validate
+	uv run python scripts/third_party_governance.py generate --check
+
+third-party-artifacts:
+	uv run python scripts/third_party_governance.py artifacts
 
 security-gate:
 	uv run python scripts/run_m0_security_gate.py --output-dir .context-engine/security-gate
@@ -97,4 +105,4 @@ bot-test: bot-build
 	npm --prefix bot_delivery/typescript run test:runtime
 	npm --prefix bot_delivery/typescript run test:package
 
-check: build lint typecheck openapi-check sdk-check sdk-build sdk-test sdk-pack action-build action-test bot-build bot-test test catalog smoke integration security-gate
+check: build lint typecheck openapi-check sdk-check sdk-build sdk-test sdk-pack action-build action-test bot-build bot-test test catalog smoke integration security-gate third-party-artifacts

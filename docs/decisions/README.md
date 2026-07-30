@@ -188,3 +188,4 @@ touched:
 - [0080 — Refuse authoritative evaluation without an executor](0080-refuse-authoritative-evaluation-without-an-executor.md)
 - [0081 — Seal candidate discovery behind a data-only session](0081-seal-candidate-discovery-behind-a-data-only-session.md)
 - [0082 — Recover the golden corpus and refuse stale lineage](0082-recover-the-golden-corpus-and-refuse-stale-lineage.md)
+- [0084 — Exempt maintainer-decided unproduced artifact kinds](0084-exempt-maintainer-decided-unproduced-artifact-kinds.md)
