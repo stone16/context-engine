@@ -21,6 +21,7 @@ from engine.control import (
     ControlOperatorAuthority,
     ControlStorePort,
     SourceControlUnavailable,
+    SourceNotAvailable,
     VerifiedControlOperatorIdentity,
 )
 from engine.control.bulk_article_policy import (
@@ -260,6 +261,71 @@ def test_confirmed_selection_commits_all_policies_one_epoch_and_one_safe_audit(
             )
         )
         assert audit["reason_category"] == "operator_confirmed_visibility_change"
+    finally:
+        engine.dispose()
+        delete_article_policy_scenario(migration_configuration, organization_id)
+
+
+def test_reused_confirmation_digest_is_refused_without_a_second_effect(
+    guarded_control_engine: Engine,
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    from engine.persistence import create_database_engine
+
+    engine = create_database_engine(migration_configuration)
+    organization_id = uuid4()
+    try:
+        refs = _prepare_articles(engine, organization_id=organization_id, count=2)
+        control, authority = _control(guarded_control_engine, organization_id)
+        preview = _preview(control, authority, refs)
+
+        first = _commit(control, authority, preview, "first-confirmation")
+        with pytest.raises(SourceNotAvailable):
+            _commit(control, authority, preview, "replayed-confirmation")
+
+        assert first.policy_epoch == 2
+        assert tuple(article_policy(engine, organization_id, ref) for ref in refs) == (
+            ("organization", 2, "explicit_article"),
+        ) * 2
+        assert policy_epoch(engine, organization_id) == 2
+        assert _audit_count(engine, organization_id) == 1
+    finally:
+        engine.dispose()
+        delete_article_policy_scenario(migration_configuration, organization_id)
+
+
+def test_bulk_change_refuses_policy_epoch_overflow_without_any_effect(
+    guarded_control_engine: Engine,
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    from engine.persistence import create_database_engine
+
+    engine = create_database_engine(migration_configuration)
+    organization_id = uuid4()
+    try:
+        refs = _prepare_articles(engine, organization_id=organization_id, count=1)
+        control, authority = _control(guarded_control_engine, organization_id)
+        preview = _preview(control, authority, refs)
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "UPDATE organization_policy_epoch "
+                    "SET policy_epoch = 9223372036854775807 "
+                    "WHERE organization_id = :organization_id"
+                ),
+                {"organization_id": organization_id},
+            )
+
+        with pytest.raises(SourceControlUnavailable):
+            _commit(control, authority, preview, "epoch-overflow")
+
+        assert article_policy(engine, organization_id, refs[0]) == (
+            "private",
+            1,
+            "tenant_default",
+        )
+        assert policy_epoch(engine, organization_id) == 9223372036854775807
+        assert _audit_count(engine, organization_id) == 0
     finally:
         engine.dispose()
         delete_article_policy_scenario(migration_configuration, organization_id)
