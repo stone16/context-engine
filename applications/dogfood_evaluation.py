@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from email.message import Message
 from hashlib import sha256
 from pathlib import Path, PurePosixPath
-from typing import Final, Protocol
+from typing import Final, Protocol, cast
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
@@ -29,6 +29,10 @@ MAX_RESPONSE_BYTES: Final = 16 * 1024 * 1024
 
 class DogfoodEvaluationUnavailable(RuntimeError):
     """Caller configuration, golden input, or Runtime response is unavailable."""
+
+
+class DogfoodSecretExclusionUnavailable(DogfoodEvaluationUnavailable):
+    """The caller cannot keep configured secret material out of its output."""
 
 
 class _RejectRedirectHandler(HTTPRedirectHandler):
@@ -381,6 +385,27 @@ class DogfoodHttpConfiguration:
                     "golden set contains configured secret material"
                 )
 
+    def reject_secret_material(self, value: object) -> None:
+        """Reject any decoded value containing the configured bearer."""
+
+        pending = [value]
+        while pending:
+            current = pending.pop()
+            if type(current) is str:
+                if self.secret in current:
+                    raise DogfoodSecretExclusionUnavailable(
+                        "dogfood secret exclusion is unavailable"
+                    )
+                continue
+            if type(current) is dict:
+                document = cast(dict[object, object], current)
+                pending.extend(document.keys())
+                pending.extend(document.values())
+                continue
+            if type(current) in {list, tuple}:
+                sequence = cast(list[object] | tuple[object, ...], current)
+                pending.extend(sequence)
+
     @classmethod
     def load(
         cls,
@@ -410,13 +435,16 @@ class DogfoodResolveClient:
             raise TypeError("dogfood HTTP configuration is required")
         self._configuration = configuration
 
-    def acquire(self, *, query: str, request_id: str) -> dict[str, object]:
+    def resolve_acquire(self, *, query: str, request_id: str) -> dict[str, object]:
+        """Invoke one Acquire without collapsing a closed refusal outcome."""
+
         query = _require_exact_text(
             "dogfood query",
             query,
             maximum=MAX_QUERY_CHARACTERS,
         )
         request_id = _require_opaque_ref("dogfood request_id", request_id)
+        self._configuration.reject_secret_material(query)
         body = json.dumps(
             {"kind": "acquire", "need": {"query": query}},
             ensure_ascii=False,
@@ -446,12 +474,16 @@ class DogfoodResolveClient:
                 raise DogfoodEvaluationUnavailable(
                     "dogfood resolve response is unavailable"
                 )
-            outcome = _as_object(json.loads(raw), "dogfood resolve response")
-            if outcome.get("kind") != "resolved":
-                raise DogfoodEvaluationUnavailable(
-                    "dogfood resolve did not return a ContextPackage"
+            if self._configuration.secret.encode("utf-8") in raw:
+                raise DogfoodSecretExclusionUnavailable(
+                    "dogfood secret exclusion is unavailable"
                 )
-            _package_from_outcome(outcome)
+            outcome = _as_object(json.loads(raw), "dogfood resolve response")
+            self._configuration.reject_secret_material(outcome)
+            if outcome.get("kind") not in {"resolved", "request_not_available"}:
+                raise DogfoodEvaluationUnavailable(
+                    "dogfood resolve outcome is unavailable"
+                )
             return outcome
         except DogfoodEvaluationUnavailable:
             raise
@@ -459,6 +491,22 @@ class DogfoodResolveClient:
             raise DogfoodEvaluationUnavailable(
                 "dogfood resolve is unavailable"
             ) from None
+
+    def acquire(self, *, query: str, request_id: str) -> dict[str, object]:
+        """Invoke one Acquire and require a ContextPackage for evaluation."""
+
+        outcome = self.resolve_acquire(query=query, request_id=request_id)
+        if outcome.get("kind") != "resolved":
+            raise DogfoodEvaluationUnavailable(
+                "dogfood resolve did not return a ContextPackage"
+            )
+        _package_from_outcome(outcome)
+        return outcome
+
+    def reject_secret_material(self, value: object) -> None:
+        """Expose only the configuration's redacted exclusion check."""
+
+        self._configuration.reject_secret_material(value)
 
     def __repr__(self) -> str:
         return "DogfoodResolveClient(<redacted>)"

@@ -25,6 +25,13 @@ may never contain real, anonymized, lightly edited, or excerpted personal
 content, note titles, paths, or Evidence references. A unit test enforces this
 boundary over the tracked tree.
 
+The repo-local Claude Code consumer appends each real question as a golden-set
+candidate to `claude-code-candidates-v1.jsonl` under the configured durable
+root. Each owner-only record contains only a generated candidate ref, capture
+instant, exact question, and closed resolve disposition. It deliberately omits
+Package content and every corpus path; the maintainer reviews and annotates
+expected Evidence separately before admitting a candidate to a golden set.
+
 ## Durable storage, backup, and recovery
 
 The corpus root and its backup root are two separate durable locations, each
