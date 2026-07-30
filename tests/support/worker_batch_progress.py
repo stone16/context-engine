@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import threading
 from dataclasses import dataclass
+from pathlib import Path
 from time import monotonic, sleep
 from typing import cast
 
@@ -122,10 +123,8 @@ def run_scheduled_file_batch(
     )
 
 
-def file_root_registry(root_ref: FileRootRef, root: object) -> FileRootRegistry:
-    from pathlib import Path
-
-    if type(root) is not Path:
+def file_root_registry(root_ref: FileRootRef, root: Path) -> FileRootRegistry:
+    if not isinstance(root, Path):
         raise TypeError("test File root must be Path")
     return FileRootRegistry(
         {root_ref: root},

@@ -65,7 +65,7 @@ def test_progress_is_emitted_during_real_work_at_the_bounded_interval(
     active_times = [capture.emitted_at[index] for index in active_indices]
     assert all(
         later - earlier <= 0.09
-        for earlier, later in zip(active_times, active_times[1:], strict=True)
+        for earlier, later in zip(active_times, active_times[1:])
     )
     assert capture.documents[-1]["phase"] == "complete"
     assert sum(

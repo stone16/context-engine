@@ -2848,12 +2848,8 @@ def test_long_running_dispatch_process_exits_cleanly_on_sigterm(
             "service": "context-engine-worker",
             "status": "ready",
         }
-        assert json.loads(stdout_lines.get(timeout=10)) == {
-            "dispatch": "file.import",
-            "outcome": "no_work",
-            "service": "context-engine-worker",
-            "status": "complete",
-        }
+        with pytest.raises(queue.Empty):
+            stdout_lines.get(timeout=1.2)
         process.terminate()
         process.wait(timeout=3)
         stdout_reader.join(timeout=1)

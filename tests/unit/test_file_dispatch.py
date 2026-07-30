@@ -23,6 +23,10 @@ from applications.worker import (
     dispatch_file_imports_until_stopped,
     dispatch_one_file_import,
 )
+from applications.worker_progress import (
+    FileDispatchFailureCategory,
+    opaque_file_job_ref,
+)
 from engine.control import FileImportPath, FileRootRef, SourceRef
 from engine.persistence.file_imports import FileImportRefused, FileImportUnavailable
 from engine.persistence.worker_jobs import (
@@ -125,7 +129,12 @@ def test_dispatch_cycle_stops_on_content_free_no_work() -> None:
         _ForbiddenWorkerFactory(),  # type: ignore[arg-type]
     )
 
-    assert asdict(result) == {"outcome": "no_work", "status": "complete"}
+    assert asdict(result) == {
+        "job_ref": None,
+        "outcome": "no_work",
+        "reason_category": None,
+        "status": "complete",
+    }
 
 
 class _OneClaimAuthority:
@@ -164,7 +173,12 @@ def test_dispatch_cycle_reports_job_refusal_without_routing_content() -> None:
         _RefusingWorkerFactory(),  # type: ignore[arg-type]
     )
 
-    assert asdict(result) == {"outcome": "refused", "status": "complete"}
+    assert asdict(result) == {
+        "job_ref": opaque_file_job_ref(claim.job_id),
+        "outcome": "refused",
+        "reason_category": FileDispatchFailureCategory.WORKER_LEASE_REFUSED,
+        "status": "complete",
+    }
 
 
 class _UnavailableWorker:
@@ -225,7 +239,12 @@ def test_dispatch_continues_after_durably_recorded_job_failure() -> None:
         _TerminallyFailedWorkerFactory(),  # type: ignore[arg-type]
     )
 
-    assert asdict(result) == {"outcome": "refused", "status": "complete"}
+    assert asdict(result) == {
+        "job_ref": opaque_file_job_ref(claim.job_id),
+        "outcome": "refused",
+        "reason_category": FileDispatchFailureCategory.FILE_IMPORT_REFUSED,
+        "status": "complete",
+    }
 
 
 class _StoppingNoWorkAuthority:
@@ -253,7 +272,12 @@ def test_long_running_dispatch_loop_honors_shutdown_after_no_work() -> None:
 
     assert authority.claim_count == 1
     assert [asdict(result) for result in observed] == [
-        {"outcome": "no_work", "status": "complete"}
+        {
+            "job_ref": None,
+            "outcome": "no_work",
+            "reason_category": None,
+            "status": "complete",
+        }
     ]
 
 
