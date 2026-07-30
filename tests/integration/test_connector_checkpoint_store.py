@@ -995,11 +995,19 @@ def test_atomic_acceptance_refuses_payload_outside_the_exact_binding(
     )
 
 
+@pytest.mark.parametrize(
+    "observation_path",
+    [
+        ("documents", 0, "acl_observation"),
+        ("deleted_document_refs", 0, "acl_observation"),
+    ],
+)
 def test_atomic_acceptance_refuses_unjustified_weak_acl_payload(
     scenarios: list[_Scenario],
     migration_configuration: DatabaseConfiguration,
     guarded_control_engine: Engine,
     guarded_worker_engine: Engine,
+    observation_path: tuple[str | int, ...],
 ) -> None:
     scenario = _seed_scenario(migration_configuration, guarded_control_engine)
     scenarios.append(scenario)
@@ -1008,7 +1016,9 @@ def test_atomic_acceptance_refuses_unjustified_weak_acl_payload(
     store = PostgreSQLConnectorCheckpointStore(guarded_worker_engine)
     assert store.redeem_for_execution(page.binding, lease_claims=claims) is None
     payload = json.loads(serialize_supply_change_page(page))
-    observation = payload["documents"][0]["acl_observation"]
+    observation = payload
+    for path_element in observation_path:
+        observation = observation[path_element]
     observation["evidence_class"] = "weak"
     observation["evidence_payload"] = None
     observation["source_lacks_stronger_acl"] = None
@@ -1055,6 +1065,15 @@ def test_atomic_acceptance_refuses_unjustified_weak_acl_payload(
         ).one_or_none()
 
     assert row is None
+    assert store.load(page.binding, lease_claims=claims) is None
+    assert (
+        PostgreSQLStagedArtifactSink(guarded_worker_engine).load(
+            page.binding,
+            page.page_ref,
+            lease_claims=claims,
+        )
+        is None
+    )
 
 
 def test_checkpoint_comes_only_from_page_and_no_stage_mutator_exists(
