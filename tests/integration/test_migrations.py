@@ -299,6 +299,7 @@ MIGRATION_TEST_START_REVISIONS = {
 MIGRATION_TEST_HEAD_PRECONDITIONS = {
     "test_article_policy_downgrade_rejects_every_deferred_admin_state",
     "test_article_policy_downgrade_refuses_state_that_would_reauthorize_content",
+    "test_file_scan_bound_acceptance_fails_closed_after_downgrade",
     "test_file_scan_bound_revision_downgrades_and_reapplies_when_default_only",
     "test_file_scan_bound_downgrade_observes_in_flight_refusal_report",
     "test_file_reclaim_revision_refuses_retained_higher_generation",
@@ -3515,6 +3516,104 @@ def test_file_scan_bound_revision_downgrades_and_reapplies_when_default_only(
         command.upgrade(alembic_configuration, "head")
 
     assert _revision_rows(migration_configuration) == [HEAD_REVISION]
+
+
+def test_file_scan_bound_acceptance_fails_closed_after_downgrade(
+    tmp_path: Path,
+    migration_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+) -> None:
+    """A store bound to provenance authority never falls back after rollback."""
+
+    scenario = _prepare_file_import_scenario(
+        tmp_path,
+        migration_configuration,
+        guarded_control_engine,
+        issue_lease=False,
+    )
+    provider_key = Ed25519PrivateKey.from_private_bytes(bytes(range(32)))
+    checkpoint_key = Ed25519PrivateKey.from_private_bytes(bytes(range(32, 64)))
+    authority = ControlOperatorAuthority(
+        _ControlAuthenticator(scenario.organization_id),
+        call_ttl=timedelta(minutes=5),
+        clock=lambda: NOW,
+    )
+    control = ContextControl(
+        store=PostgreSQLControlStore(
+            guarded_control_engine,
+            clock=lambda: NOW,
+            file_import_receiver=scenario.receiver,
+            file_change_checkpoint_signing_key=checkpoint_key,
+        ),
+        authority=authority,
+        clock=lambda: NOW,
+        file_change_proofs=FileChangeControlProofs(
+            provider_verification_key=provider_key.public_key()
+        ),
+    )
+    with authority.authorize(
+        opaque_credential="control-secret",
+        operation=ControlOperation.ACTIVATE_FILE_CHANGE_FEED,
+        request_id="bound-rollback-activate-v3",
+    ) as call:
+        control.activate_file_change_feed(
+            call,
+            ActivateFileChangeFeed(scenario.source_ref),
+        )
+    with authority.authorize(
+        opaque_credential="control-secret",
+        operation=ControlOperation.ACTIVATE_FILE_DELETE_OBSERVATIONS,
+        request_id="bound-rollback-activate-v4",
+    ) as call:
+        v4 = control.activate_file_delete_observations(
+            call,
+            ActivateFileDeleteObservations(scenario.source_ref),
+        )
+    provider = FileChangeProvider(
+        FileRootRegistry(
+            {scenario.root_ref: scenario.root},
+            limits=FileReadLimits(max_file_bytes=1_024 * 1_024),
+        ),
+        proofs=FileChangeProviderProofs(
+            provider_signing_key=provider_key,
+            checkpoint_verification_key=checkpoint_key.public_key(),
+        ),
+    )
+    page = provider.read_changes(
+        FileChangeSource(scenario.organization_id, v4.active_version),
+        InitialScan(),
+        ChangeLimit(2),
+    )
+    assert type(page) is ProviderOk
+    with authority.authorize(
+        opaque_credential="control-secret",
+        operation=ControlOperation.ACCEPT_FILE_CHANGE_PAGE,
+        request_id="bound-rollback-accept-at-head",
+    ) as call:
+        control.accept_file_change_page(call, page.value)
+
+    alembic_configuration = Config(ROOT / "alembic.ini")
+    try:
+        command.downgrade(alembic_configuration, "20260730_0044")
+        with (
+            authority.authorize(
+                opaque_credential="control-secret",
+                operation=ControlOperation.ACCEPT_FILE_CHANGE_PAGE,
+                request_id="bound-rollback-replay-after-downgrade",
+            ) as call,
+            pytest.raises(SourceNotAvailable),
+        ):
+            control.accept_file_change_page(call, page.value)
+    finally:
+        command.upgrade(alembic_configuration, "head")
+        clear_file_source_progress_projection(
+            migration_configuration,
+            scenario.organization_id,
+        )
+        _delete_file_import_scenario(
+            migration_configuration,
+            scenario.organization_id,
+        )
 
 
 def test_file_scan_bound_downgrade_observes_in_flight_refusal_report(
