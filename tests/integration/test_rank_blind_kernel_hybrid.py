@@ -23,6 +23,7 @@ from engine.runtime.candidate_ranking import (
 )
 from engine.runtime.construction import Runtime, required_kernel_dependencies
 from engine.runtime.content_io import CandidateIndex
+from engine.runtime.context_run import ContextRunOutcome
 from engine.runtime.contracts import Acquire
 from engine.runtime.evidence import CandidateRef
 from engine.runtime.materialized import (
@@ -42,6 +43,7 @@ from tests.integration.test_runtime_authorized_evidence_integration import (
     _new_fixture,
     _seed_fixture,
 )
+from tests.support.context_run_operator import exact_test_context_run_operator_read
 from tests.support.releases import ensure_test_runtime_release
 from tests.unit import test_kernel_rank_blind as rank_blind_oracles
 
@@ -372,6 +374,8 @@ def test_hybrid_rank_permutation_and_refusals_are_tenant_invisible(
 
 def test_hybrid_http_refused_candidate_cannot_change_delivered_order(
     migration_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+    guarded_operator_engine: Engine,
     guarded_runtime_engine: Engine,
     query_digest_keyring: QueryDigestKeyring,
 ) -> None:
@@ -408,3 +412,21 @@ def test_hybrid_http_refused_candidate_cannot_change_delivered_order(
         assert refused.resource_ref not in visible
         assert refused.revision_ref not in visible
         assert refused.fragment_ref not in visible
+        for variant, package in (
+            ("without-refused", without_refused),
+            ("with-refused", with_refused),
+        ):
+            decision_ref = cast(str, package["decisionRef"])
+            with exact_test_context_run_operator_read(
+                control_engine=guarded_control_engine,
+                operator_engine=guarded_operator_engine,
+                organization_id=fixture.org_a.organization_id,
+                decision_ref=decision_ref,
+                request_id=f"test:issue-131:audit:{variant}",
+                opaque_credential=f"test:issue-131:audit:{variant}:credential",
+                authorized_at=RECEIVED_AT,
+            ) as (reader, authorization):
+                run = reader.find_by_decision_ref(authorization, decision_ref)
+            assert run is not None
+            assert run.outcome is ContextRunOutcome.DELIVERED_AUTHORIZED
+            assert run.decision_audit_category is None
