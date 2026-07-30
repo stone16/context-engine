@@ -16,6 +16,7 @@ from engine.supply.execution import (
     SourceAclObservation,
     StagedArtifact,
     SupplyChangePage,
+    SupplyDocumentDeleteObservation,
     SupplyDocumentEnvelope,
     serialize_supply_change_page,
 )
@@ -24,6 +25,7 @@ ORGANIZATION_ID = UUID("0198fb91-e6e2-75ea-a174-912597825765")
 SOURCE_VERSION_ID = UUID("0198fb92-1787-70bd-9c79-cb2090379d4d")
 WORKER_JOB_ID = UUID("0198fb92-3650-79e4-8657-1539f459846d")
 NOW = datetime(2026, 7, 29, 16, 30, tzinfo=UTC)
+POLICY_EPOCH = 7
 
 
 def _binding(**overrides: object) -> ConnectorCheckpointBinding:
@@ -39,11 +41,22 @@ def _binding(**overrides: object) -> ConnectorCheckpointBinding:
 def _acl(**overrides: object) -> SourceAclObservation:
     values: dict[str, object] = {
         "organization_id": ORGANIZATION_ID,
+        "observed_at": NOW,
+        "policy_epoch": POLICY_EPOCH,
         "evidence_class": SourceAclEvidenceClass.MIRRORED,
         "evidence_payload": b"synthetic-mirrored-acl-v1",
     }
     values.update(overrides)
     return SourceAclObservation(**values)  # type: ignore[arg-type]
+
+
+def _delete(**overrides: object) -> SupplyDocumentDeleteObservation:
+    values: dict[str, object] = {
+        "document_ref": "document:deleted-handbook",
+        "acl_observation": _acl(),
+    }
+    values.update(overrides)
+    return SupplyDocumentDeleteObservation(**values)  # type: ignore[arg-type]
 
 
 def _envelope(**overrides: object) -> SupplyDocumentEnvelope:
@@ -166,6 +179,29 @@ def test_document_envelope_rejects_cross_binding_acl_observation() -> None:
         )
 
 
+def test_delete_observation_carries_acl_freshness() -> None:
+    deletion = _delete()
+
+    assert deletion.document_ref == "document:deleted-handbook"
+    assert deletion.acl_observation.observed_at == NOW
+    assert deletion.acl_observation.policy_epoch == POLICY_EPOCH
+
+
+def test_change_page_rejects_cross_binding_delete_observation() -> None:
+    with pytest.raises(ValueError, match="deleted document Organization"):
+        _page(
+            deleted_document_refs=(
+                _delete(
+                    acl_observation=_acl(
+                        organization_id=UUID(
+                            "0198fb94-57ab-710b-b03d-3e29149ae95a"
+                        )
+                    )
+                ),
+            )
+        )
+
+
 @pytest.mark.parametrize(
     ("field_name", "foreign_value"),
     [
@@ -240,6 +276,8 @@ def test_staged_serialization_refuses_unjustified_weak_acl_downgrade() -> None:
         (_page, "documents", (None,)),
         (_page, "deleted_document_refs", []),
         (_page, "deleted_document_refs", ("",)),
+        (_delete, "document_ref", ""),
+        (_delete, "acl_observation", None),
         (_page, "checkpoint_proposal", b""),
         (_page, "checkpoint_proposal", None),
         (_page, "terminal", None),
@@ -272,6 +310,7 @@ def test_all_supply_execution_dataclasses_are_frozen_slotted_and_validate() -> N
     contracts = (
         binding,
         _acl(),
+        _delete(),
         _envelope(),
         ConnectorCheckpointProposal(
             binding=binding,
@@ -326,29 +365,37 @@ def test_acl_observation_requires_evidence_or_explicit_weak_justification(
     with pytest.raises(ValueError):
         SourceAclObservation(
             organization_id=ORGANIZATION_ID,
+            observed_at=NOW,
+            policy_epoch=POLICY_EPOCH,
             evidence_class=evidence_class,
             evidence_payload=payload,
             source_lacks_stronger_acl=justification,
         )
 
 
-def test_live_and_mirrored_acl_observations_carry_evidence_payloads() -> None:
+def test_live_and_mirrored_acl_observations_carry_evidence_and_freshness() -> None:
     for evidence_class in (
         SourceAclEvidenceClass.LIVE,
         SourceAclEvidenceClass.MIRRORED,
     ):
         observation = SourceAclObservation(
             organization_id=ORGANIZATION_ID,
+            observed_at=NOW,
+            policy_epoch=POLICY_EPOCH,
             evidence_class=evidence_class,
             evidence_payload=b"synthetic-source-acl-evidence",
         )
         assert observation.evidence_payload == b"synthetic-source-acl-evidence"
+        assert observation.observed_at == NOW
+        assert observation.policy_epoch == POLICY_EPOCH
         assert observation.source_lacks_stronger_acl is None
 
 
 def test_weak_acl_observation_requires_and_retains_honest_justification() -> None:
     observation = SourceAclObservation(
         organization_id=ORGANIZATION_ID,
+        observed_at=NOW,
+        policy_epoch=POLICY_EPOCH,
         evidence_class=SourceAclEvidenceClass.WEAK,
         source_lacks_stronger_acl="source exposes membership but no object ACL",
     )
@@ -364,6 +411,11 @@ def test_weak_acl_observation_requires_and_retains_honest_justification() -> Non
     [
         ("organization_id", None),
         ("organization_id", "org-1"),
+        ("observed_at", None),
+        ("observed_at", datetime(2026, 7, 29, 16, 30)),
+        ("policy_epoch", None),
+        ("policy_epoch", 0),
+        ("policy_epoch", 2**63),
         ("evidence_class", None),
         ("evidence_class", "mirrored"),
         ("evidence_payload", "not-bytes"),
@@ -376,3 +428,20 @@ def test_acl_observation_rejects_missing_or_wrong_type_fields(
 ) -> None:
     with pytest.raises((TypeError, ValueError)):
         _acl(**{field_name: invalid})
+
+
+def test_acl_observation_refuses_missing_freshness_fields() -> None:
+    with pytest.raises(TypeError):
+        SourceAclObservation(  # type: ignore[call-arg]
+            organization_id=ORGANIZATION_ID,
+            policy_epoch=POLICY_EPOCH,
+            evidence_class=SourceAclEvidenceClass.MIRRORED,
+            evidence_payload=b"synthetic-mirrored-acl-v1",
+        )
+    with pytest.raises(TypeError):
+        SourceAclObservation(  # type: ignore[call-arg]
+            organization_id=ORGANIZATION_ID,
+            observed_at=NOW,
+            evidence_class=SourceAclEvidenceClass.MIRRORED,
+            evidence_payload=b"synthetic-mirrored-acl-v1",
+        )

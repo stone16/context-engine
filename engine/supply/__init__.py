@@ -30,6 +30,7 @@ from engine.supply.execution import (
     StagedArtifactSink,
     SupplyBridgeExecution,
     SupplyChangePage,
+    SupplyDocumentDeleteObservation,
     SupplyDocumentEnvelope,
     serialize_supply_change_page,
 )
@@ -138,6 +139,7 @@ __all__ = [
     "StagedArtifactSink",
     "SupplyBridgeExecution",
     "SupplyChangePage",
+    "SupplyDocumentDeleteObservation",
     "SupplyDocumentEnvelope",
     "serialize_supply_change_page",
     "UnsupportedConstruct",

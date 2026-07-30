@@ -21,6 +21,7 @@ _MAX_CHECKPOINT_BYTES = 1024 * 1024
 _MAX_EVIDENCE_BYTES = 1024 * 1024
 _MAX_METADATA_ITEMS = 128
 _MAX_REASON_LENGTH = 512
+_MAX_POLICY_EPOCH = (1 << 63) - 1
 
 
 def _require_uuid(field_name: str, value: object) -> UUID:
@@ -60,6 +61,14 @@ def _require_utc(field_name: str, value: object) -> datetime:
         or value.utcoffset() != timedelta(0)
     ):
         raise ValueError(f"{field_name} must be an aware UTC datetime")
+    return value
+
+
+def _require_policy_epoch(value: object) -> int:
+    if type(value) is not int or not 1 <= value <= _MAX_POLICY_EPOCH:
+        raise ValueError(
+            "ACL observation Policy Epoch must fit a positive signed 64-bit integer"
+        )
     return value
 
 
@@ -147,6 +156,8 @@ class SourceAclObservation:
     """Connector-local ACL evidence that grants no access by itself."""
 
     organization_id: UUID = field(repr=False)
+    observed_at: datetime
+    policy_epoch: int
     evidence_class: SourceAclEvidenceClass
     evidence_payload: bytes | None = field(default=None, repr=False)
     source_lacks_stronger_acl: str | None = field(default=None, repr=False)
@@ -157,6 +168,8 @@ class SourceAclObservation:
 
 def _validate_source_acl_observation(observation: SourceAclObservation) -> None:
     _require_uuid("ACL observation Organization", observation.organization_id)
+    _require_utc("ACL observation observed_at", observation.observed_at)
+    _require_policy_epoch(observation.policy_epoch)
     if type(observation.evidence_class) is not SourceAclEvidenceClass:
         raise TypeError("ACL observation evidence_class must be closed")
     if observation.evidence_payload is not None:
@@ -187,6 +200,26 @@ def _validate_source_acl_observation(observation: SourceAclObservation) -> None:
             "Weak ACL evidence requires explicit source-lacks-stronger-ACL "
             "justification and no strong evidence payload"
         )
+
+
+@dataclass(frozen=True, slots=True)
+class SupplyDocumentDeleteObservation:
+    """One source document deletion with its exact ACL observation."""
+
+    document_ref: str = field(repr=False)
+    acl_observation: SourceAclObservation = field(repr=False)
+
+    def __post_init__(self) -> None:
+        _validate_supply_document_delete_observation(self)
+
+
+def _validate_supply_document_delete_observation(
+    observation: SupplyDocumentDeleteObservation,
+) -> None:
+    _require_ref("deleted document_ref", observation.document_ref)
+    if type(observation.acl_observation) is not SourceAclObservation:
+        raise TypeError("deleted document ACL must be SourceAclObservation")
+    _validate_source_acl_observation(observation.acl_observation)
 
 
 @dataclass(frozen=True, slots=True)
@@ -253,7 +286,9 @@ class SupplyChangePage:
     binding: ConnectorCheckpointBinding = field(repr=False)
     page_ref: str = field(repr=False)
     documents: tuple[SupplyDocumentEnvelope, ...] = field(repr=False)
-    deleted_document_refs: tuple[str, ...] = field(repr=False)
+    deleted_document_refs: tuple[SupplyDocumentDeleteObservation, ...] = field(
+        repr=False
+    )
     checkpoint_proposal: bytes = field(repr=False)
     terminal: bool = False
 
@@ -277,15 +312,23 @@ def _validate_supply_change_page(page: SupplyChangePage) -> None:
             or document.worker_job_id != page.binding.worker_job_id
         ):
             raise ValueError("change page document exact binding must match")
-    if type(page.deleted_document_refs) is not tuple:
-        raise TypeError("deleted document refs must be an exact tuple")
-    for document_ref in page.deleted_document_refs:
-        _require_ref("deleted document_ref", document_ref)
+    if type(page.deleted_document_refs) is not tuple or any(
+        type(observation) is not SupplyDocumentDeleteObservation
+        for observation in page.deleted_document_refs
+    ):
+        raise TypeError("deleted document refs must be an exact observation tuple")
+    for observation in page.deleted_document_refs:
+        _validate_supply_document_delete_observation(observation)
+        if observation.acl_observation.organization_id != page.binding.organization_id:
+            raise ValueError("change page deleted document Organization must match")
     emitted_refs = tuple(document.document_ref for document in page.documents)
+    deleted_refs = tuple(
+        observation.document_ref for observation in page.deleted_document_refs
+    )
     if (
         len(emitted_refs) != len(set(emitted_refs))
-        or len(page.deleted_document_refs) != len(set(page.deleted_document_refs))
-        or set(emitted_refs).intersection(page.deleted_document_refs)
+        or len(deleted_refs) != len(set(deleted_refs))
+        or set(emitted_refs).intersection(deleted_refs)
     ):
         raise ValueError("change page document identities must be disjoint and unique")
     _require_bytes(
@@ -331,23 +374,20 @@ def serialize_supply_change_page(page: SupplyChangePage) -> bytes:
         "checkpoint_proposal": base64.b64encode(page.checkpoint_proposal).decode(
             "ascii"
         ),
-        "deleted_document_refs": list(page.deleted_document_refs),
+        "deleted_document_refs": [
+            {
+                "acl_observation": _serialize_source_acl_observation(
+                    observation.acl_observation
+                ),
+                "document_ref": observation.document_ref,
+            }
+            for observation in page.deleted_document_refs
+        ],
         "documents": [
             {
-                "acl_observation": {
-                    "evidence_class": envelope.acl_observation.evidence_class.value,
-                    "evidence_payload": (
-                        base64.b64encode(
-                            envelope.acl_observation.evidence_payload
-                        ).decode("ascii")
-                        if envelope.acl_observation.evidence_payload is not None
-                        else None
-                    ),
-                    "organization_id": str(envelope.acl_observation.organization_id),
-                    "source_lacks_stronger_acl": (
-                        envelope.acl_observation.source_lacks_stronger_acl
-                    ),
-                },
+                "acl_observation": _serialize_source_acl_observation(
+                    envelope.acl_observation
+                ),
                 "content": base64.b64encode(envelope.content).decode("ascii"),
                 "content_type": envelope.content_type,
                 "document_ref": envelope.document_ref,
@@ -373,6 +413,23 @@ def serialize_supply_change_page(page: SupplyChangePage) -> bytes:
         maximum_length=_MAX_STAGED_PAGE_BYTES,
     )
     return payload
+
+
+def _serialize_source_acl_observation(
+    observation: SourceAclObservation,
+) -> dict[str, object]:
+    return {
+        "evidence_class": observation.evidence_class.value,
+        "evidence_payload": (
+            base64.b64encode(observation.evidence_payload).decode("ascii")
+            if observation.evidence_payload is not None
+            else None
+        ),
+        "observed_at": observation.observed_at.isoformat(),
+        "organization_id": str(observation.organization_id),
+        "policy_epoch": observation.policy_epoch,
+        "source_lacks_stronger_acl": observation.source_lacks_stronger_acl,
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -484,6 +541,7 @@ __all__ = [
     "StagedArtifactSink",
     "SupplyBridgeExecution",
     "SupplyChangePage",
+    "SupplyDocumentDeleteObservation",
     "SupplyDocumentEnvelope",
     "serialize_supply_change_page",
 ]
