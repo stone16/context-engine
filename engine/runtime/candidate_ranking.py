@@ -4,10 +4,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from math import isfinite
+from typing import Final
 
 from engine.runtime.evidence import CandidateRef
 
 __all__ = [
+    "DEFAULT_CANDIDATE_SUBMISSION_LIMIT",
+    "MAX_CANDIDATE_SUBMISSION_CEILING",
+    "MAX_SUBMITTED_RANKED_LISTS",
     "CandidateQuery",
     "CandidateRankEvidence",
     "FusedCandidates",
@@ -15,7 +19,24 @@ __all__ = [
     "RankedCandidateList",
     "RankerEvidence",
     "preserve_single_ranker_candidates",
+    "require_bounded_candidate_submission",
+    "require_candidate_submission_limit",
 ]
+
+MAX_CANDIDATE_SUBMISSION_CEILING: Final = 512
+DEFAULT_CANDIDATE_SUBMISSION_LIMIT: Final = 128
+MAX_SUBMITTED_RANKED_LISTS: Final = 8
+
+
+def require_candidate_submission_limit(limit: object) -> int:
+    """Validate one server-owned submission bound at configuration time."""
+
+    if type(limit) is not int or not 1 <= limit <= MAX_CANDIDATE_SUBMISSION_CEILING:
+        raise ValueError(
+            "candidate submission limit must be a positive exact integer within "
+            "the server ceiling"
+        )
+    return limit
 
 
 def _require_ranker_ref(value: object) -> str:
@@ -90,6 +111,29 @@ class CandidateQuery:
         identities = tuple(item.ranker_ref for item in self.ranked_lists)
         if len(identities) != len(set(identities)):
             raise ValueError("CandidateQuery ranker identity must be unique")
+
+
+def require_bounded_candidate_submission(
+    query: CandidateQuery,
+    *,
+    submission_limit: int,
+) -> CandidateQuery:
+    """Re-derive the seam contract, then bound one untrusted submission."""
+
+    if type(query) is not CandidateQuery:
+        raise TypeError("candidate submission requires CandidateQuery")
+    require_candidate_submission_limit(submission_limit)
+    query.__post_init__()
+    for ranked_list in query.ranked_lists:
+        ranked_list.__post_init__()
+        for ranked in ranked_list.candidates:
+            ranked.__post_init__()
+    if len(query.ranked_lists) > MAX_SUBMITTED_RANKED_LISTS:
+        raise ValueError("candidate submission exceeded the server ranker bound")
+    submitted = sum(len(ranked_list.candidates) for ranked_list in query.ranked_lists)
+    if submitted > submission_limit:
+        raise ValueError("candidate submission exceeded the server candidate bound")
+    return query
 
 
 @dataclass(frozen=True, slots=True)

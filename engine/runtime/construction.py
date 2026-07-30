@@ -21,9 +21,12 @@ from engine.runtime.authorized_ranking import (
 )
 from engine.runtime.budget import PackageBudget, effective_package_budget
 from engine.runtime.candidate_ranking import (
+    DEFAULT_CANDIDATE_SUBMISSION_LIMIT,
     CandidateQuery,
     CandidateRankEvidence,
     preserve_single_ranker_candidates,
+    require_bounded_candidate_submission,
+    require_candidate_submission_limit,
 )
 from engine.runtime.capabilities import (
     RuntimeCapability,
@@ -123,6 +126,7 @@ from engine.runtime.materialized import (
     _locate_materialized_fragment,
     _project_materialized_fragment,
     _read_materialized_fragment_window,
+    require_bounded_discovery_request,
 )
 from engine.runtime.package_digest import QueryDigestKeyring, context_package_digest
 from engine.runtime.policy_epoch import (
@@ -1450,6 +1454,7 @@ class Runtime:
         server_budget: PackageBudget = DEFAULT_SERVER_PACKAGE_BUDGET,
         content_io: RuntimeContentIo | None = None,
         candidate_index: CandidateIndex | None = None,
+        candidate_submission_limit: int = DEFAULT_CANDIDATE_SUBMISSION_LIMIT,
         acquire_capability: RuntimeCapability = (
             RuntimeCapability.MATERIALIZED_ACQUIRE
         ),
@@ -1485,6 +1490,12 @@ class Runtime:
             for method_name in ("prepare_discovery", "discover")
         ):
             raise RuntimeConfigurationError("candidate_index is incomplete")
+        try:
+            require_candidate_submission_limit(candidate_submission_limit)
+        except ValueError as error:
+            raise RuntimeConfigurationError(
+                "candidate submission limit must be a server-owned positive bound"
+            ) from error
         if type(
             acquire_capability
         ) is not RuntimeCapability or acquire_capability not in {
@@ -1504,6 +1515,7 @@ class Runtime:
         self._server_budget = server_budget
         self._content_io = selected_content_io
         self._candidate_discovery_enabled = candidate_index is not None
+        self._candidate_submission_limit = candidate_submission_limit
         self._acquire_capability = acquire_capability
         self._capability_gate = RuntimeCapabilityGate()
         self._clock = clock
@@ -1659,6 +1671,10 @@ class Runtime:
                     effective_scope=discovery_scope,
                 )
                 _require_candidate_discovery_scope_integrity(discovery_scope)
+                require_bounded_discovery_request(
+                    discovery_request,
+                    submission_limit=self._candidate_submission_limit,
+                )
                 discovery_session: CandidateDiscoverySession | None = None
                 try:
                     discovery_session = _construct_candidate_discovery_session(
@@ -1677,6 +1693,10 @@ class Runtime:
                         _close_candidate_discovery_session(discovery_session)
                 if type(discovered) is not CandidateQuery:
                     raise TypeError("CandidateIndex must return CandidateQuery")
+                require_bounded_candidate_submission(
+                    discovered,
+                    submission_limit=self._candidate_submission_limit,
+                )
                 try:
                     fused = preserve_single_ranker_candidates(discovered)
                 except ValueError as error:
