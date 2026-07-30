@@ -380,9 +380,15 @@ uv run context-engine-control status \
 
 `scan-all` first discovers the Organization's active File sources under one
 exact existing `read_source` call, then runs the same operation-exact bounded
-scan for each. Source-wide `status` independently consumes one
-`read_source_progress` call per discovered source. Neither command changes the
-six-variable operator opt-in, widens a WorkerLease, or promotes a Release.
+scan for each. A source-local refusal is reported with the closed
+`operation_refused` category and does not prevent later discovered Sources from
+scanning; shared authorization, configuration, or process failure still aborts
+the command generically. Bare source-wide `status` also requires one
+`read_source` discovery call before it independently consumes one
+`read_source_progress` call per discovered source; an operator with only
+`read_source_progress` can use `status --source-ref` but cannot use bare
+`status`. Neither command changes the six-variable operator opt-in, widens a
+WorkerLease, or promotes a Release.
 Source-wide status aggregates refusal categories and counts without rendering
 the path-bearing single-source refusal projection.
 The fresh before/after ceremony audit is recorded in
