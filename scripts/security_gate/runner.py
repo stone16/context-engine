@@ -439,6 +439,57 @@ def _live_database_revision(environment: Mapping[str, str]) -> str:
     return values[0]
 
 
+_RETAINED_FILE_LINEAGE = sql_text(
+    """
+    SELECT
+      (SELECT count(*) FROM organization),
+      (SELECT count(*) FROM file_acquisition),
+      (SELECT count(*) FROM file_source_change),
+      (SELECT count(*) FROM file_delete_observation_execution),
+      (SELECT count(*) FROM file_acquisition
+       WHERE strpos(relative_path, '/') > 0)
+      + (SELECT count(*) FROM file_source_change
+         WHERE strpos(relative_path, '/') > 0)
+      + (SELECT count(*) FROM file_delete_observation_execution
+         WHERE strpos(relative_path, '/') > 0)
+    """
+)
+
+
+def _retained_file_lineage(environment: Mapping[str, str]) -> dict[str, object]:
+    """Count the retained File lineage the downgrade guards are written against.
+
+    The verdict must be readable as "passed on this volume", not only "passed
+    after a reset", so the gate records how populated the database was before it
+    executed a single registered selector. Counts only; no tenant content.
+    """
+
+    configurations = load_harness_database_configurations(environment)
+    engine = create_engine(configurations.migration.url)
+    try:
+        with engine.connect() as connection:
+            (
+                organization_count,
+                acquisition_count,
+                change_count,
+                delete_execution_count,
+                nested_count,
+            ) = connection.execute(_RETAINED_FILE_LINEAGE).one()
+    finally:
+        engine.dispose()
+    lineage_count = acquisition_count + change_count + delete_execution_count
+    return {
+        "observedBeforeExecution": True,
+        "organizationCount": organization_count,
+        "fileAcquisitionCount": acquisition_count,
+        "fileSourceChangeCount": change_count,
+        "fileDeleteObservationExecutionCount": delete_execution_count,
+        "nestedRelativePathCount": nested_count,
+        "populatedVolume": lineage_count > 0,
+        "retainedNestedLineage": nested_count > 0,
+    }
+
+
 def _provenance(
     paths: GatePaths,
     registry: Mapping[str, object],
@@ -446,6 +497,7 @@ def _provenance(
     *,
     selectors: Sequence[str],
     live_database_revision: str,
+    retained_file_lineage: Mapping[str, object],
     alembic_head: str | None = None,
 ) -> dict[str, object]:
     migration_files = sorted(
@@ -481,6 +533,7 @@ def _provenance(
         "migrationStateDigest": canonical_digest(migration_state),
         "alembicHead": alembic_head or _alembic_head(paths),
         "liveDatabaseRevision": live_database_revision,
+        "retainedFileLineage": dict(retained_file_lineage),
         "composeDigest": compose_digest,
         "alembicConfigDigest": alembic_config_digest,
         "configurationDigest": configuration_digest,
@@ -495,6 +548,7 @@ def _best_effort_provenance(
     selectors: Sequence[str] = (),
     alembic_head: str | None = None,
     live_database_revision: str | None = None,
+    retained_file_lineage: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     """Retain only safe aggregate provenance facts available at failure time."""
 
@@ -551,6 +605,8 @@ def _best_effort_provenance(
         provenance["alembicHead"] = resolved_head
     if live_database_revision is not None:
         provenance["liveDatabaseRevision"] = live_database_revision
+    if retained_file_lineage is not None:
+        provenance["retainedFileLineage"] = dict(retained_file_lineage)
     if selectors:
         provenance["executionCommand"] = _report_execution_command(selectors)
     configuration_fields = {
@@ -672,6 +728,7 @@ def run_gate(
     selectors: tuple[str, ...] = ()
     alembic_head: str | None = None
     live_database_revision: str | None = None
+    retained_file_lineage: dict[str, object] | None = None
     raw: dict[str, object] = {
         "rawEvidenceVersion": RAW_EVIDENCE_VERSION,
         "runnerFailure": "gate did not reach pytest execution",
@@ -704,6 +761,7 @@ def run_gate(
                 "live Alembic revision does not match the repository head: "
                 f"{live_database_revision!r} != {alembic_head!r}"
             )
+        retained_file_lineage = _retained_file_lineage(environment)
         runner_execution_id = secrets.token_hex(32)
         command = build_pytest_command(selectors, raw_path=raw_path)
         process_environment = dict(os.environ)
@@ -748,6 +806,7 @@ def run_gate(
                 catalog,
                 selectors=selectors,
                 live_database_revision=live_database_revision,
+                retained_file_lineage=retained_file_lineage,
                 alembic_head=alembic_head,
             ),
             raw_result_digest=raw_result_digest,
@@ -780,6 +839,7 @@ def run_gate(
                 selectors=selectors,
                 alembic_head=alembic_head,
                 live_database_revision=live_database_revision,
+                retained_file_lineage=retained_file_lineage,
             ),
             raw_result_digest=_file_digest(raw_path),
         )

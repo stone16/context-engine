@@ -192,3 +192,4 @@ touched:
 - [0084 — Exempt maintainer-decided unproduced artifact kinds](0084-exempt-maintainer-decided-unproduced-artifact-kinds.md)
 - [0085 — Bound Supply connector executions before acceptance](0085-bound-supply-connector-executions.md)
 - [0086 — Report worker batches and compose source-wide cycles](0086-report-worker-batches-and-compose-source-wide-cycles.md)
+- [0087 — Bind downgrade-guard evidence to its own revision](0087-bind-downgrade-guard-evidence-to-its-own-revision.md)
