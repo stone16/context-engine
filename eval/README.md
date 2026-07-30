@@ -25,6 +25,131 @@ may never contain real, anonymized, lightly edited, or excerpted personal
 content, note titles, paths, or Evidence references. A unit test enforces this
 boundary over the tracked tree.
 
+## Durable storage, backup, and recovery
+
+The corpus root and its backup root are two separate durable locations, each
+configured in the environment and each outside every Git worktree
+(ADR-0082). Neither may contain the other, so one deletion cannot remove both
+copies, and neither has a worktree-local default:
+
+| Variable | Holds |
+|---|---|
+| `CONTEXT_ENGINE_GOLDEN_ROOT` | the working corpus: golden set, lock history, lineage map, judge observations |
+| `CONTEXT_ENGINE_GOLDEN_BACKUP_ROOT` | immutable timestamped snapshots of that whole root |
+
+Both roots are refused when they are relative, missing, a symlink, inside any
+Git worktree, or under an ignored `.context-engine` directory. The only ignored
+in-repository location is `.context-engine/`, which holds regenerable report
+output and never the sole durable copy; the durable roots live outside the
+repository, so no `.gitignore` rule can — or should — name them.
+
+`context-engine-golden-backup` takes no path argument. Roots come from the
+environment, and every line it prints is counts, a snapshot instant, and
+digests, so no corpus path or filename can reach a terminal, a transcript, or a
+refusal message.
+
+```bash
+uv run context-engine-golden-backup backup \
+  --recorded-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+uv run context-engine-golden-backup list
+uv run context-engine-golden-backup verify
+```
+
+Re-running `backup` on unchanged content records nothing and reports
+`unchanged`. Changed content records a new snapshot. A backup that is not newer
+than the newest recorded snapshot is refused; `--allow-older` records it as
+history, and even then the newer snapshot remains the one recovery restores. An
+already recorded snapshot instant is never overwritten, with or without that
+flag.
+
+Each snapshot is staged, verified byte for byte, fsynced, and then renamed into
+place, so an interrupted run leaves neither a snapshot nor a staging directory.
+A leftover staging entry refuses the next backup until the operator inspects
+it. `verify` refuses truncation, corruption, missing content, unexpected
+content, a manifest that disagrees with its own record, and any file or
+directory readable beyond its owner.
+
+Recovery verifies before it writes, refuses a corrupted snapshot, and refuses a
+non-empty destination, so it can never overwrite a working copy:
+
+```bash
+mkdir -p "$CONTEXT_ENGINE_GOLDEN_ROOT"
+chmod 700 "$CONTEXT_ENGINE_GOLDEN_ROOT"
+uv run context-engine-golden-backup recover
+uv run context-engine-eval validate \
+  --golden-set "$GOLDEN_SET" \
+  --lock "$GOLDEN_LOCK"
+```
+
+The recovered corpus must report the same case count and set digest as before
+the loss. `recover` restores the newest snapshot; `--snapshot` names an older
+one. These digest guarantees detect accident and corruption under M1's single
+trusted local operator threat model. They are not forgery-proof: an operator
+who deliberately rewrites both a snapshot and its manifest can produce a
+self-consistent backup, exactly as the co-located lock chain below can be
+recomputed.
+
+## Lineage recapture after Release promotion
+
+Golden expectations bind to exact `source/resource/revision/fragment` refs.
+Publication is immutable (ADR-0018) and promotion advances one Release
+(ADR-0033), so a promotion can leave an expectation pointing at a Revision
+that no longer resolves. Scoring such a case would report `evidence_recall = 0`
+and look like a quality regression, so the loader reports it as
+`stale_lineage`, excludes it from every judge input, and refuses the report.
+
+The lineage map records exactly the Evidence lineage that resolves in one
+promoted Release. It lives beside the corpus in the durable root, is never
+tracked, and follows `context-engine-golden-lineage-map-v1`: `schemaVersion`,
+`releaseRef`, an aware-UTC `capturedAt`, and a nonempty unique `entries` array
+of four-field lineage objects.
+
+After **every** Release promotion, run these steps before evaluating anything:
+
+1. Back up first, so recapture is reversible.
+
+   ```bash
+   uv run context-engine-golden-backup backup \
+     --recorded-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+   ```
+
+2. Recapture the map for the promoted Release into
+   `$GOLDEN_LINEAGE_MAP`, writing one entry per Fragment that the promoted
+   Release resolves, with `releaseRef` set to that Release and `capturedAt` set
+   to the capture instant.
+
+3. Check the corpus against the recaptured map. Exit status 0 means every case
+   still resolves; a nonzero status names how many cases went stale and no
+   ref value is printed.
+
+   ```bash
+   uv run context-engine-eval lineage-check \
+     --golden-set "$GOLDEN_SET" \
+     --lock "$GOLDEN_LOCK" \
+     --lineage-map "$GOLDEN_LINEAGE_MAP"
+   ```
+
+4. For each stale case, repoint its expected Evidence at the current Revision
+   in the corpus, then rerun step 3 until it passes. A stale case is a
+   bookkeeping repair, never a score.
+
+5. Pass the map to the report so a stale set refuses instead of producing a
+   number. Re-lock the pilot only when the corpus content itself changed.
+
+   ```bash
+   uv run context-engine-eval report \
+     --golden-set "$GOLDEN_SET" \
+     --lock "$GOLDEN_LOCK" \
+     --run "$EVAL_RUN" \
+     --lineage-map "$GOLDEN_LINEAGE_MAP" \
+     --output .context-engine/eval/golden-v1-report.json \
+     --generated-at "$GENERATED_AT"
+   ```
+
+M1 captures this map rather than resolving refs against a live index, because
+it ships no evaluation run executor; issue #160 owns the executor that will
+replace the captured map with a live check.
+
 ## Sanitized public subset
 
 Moving a case from the private corpus to a public subset is a privacy decision.
