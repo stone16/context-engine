@@ -5,7 +5,8 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
-from typing import Any, cast
+from threading import Lock
+from typing import Any, Literal, cast
 from uuid import UUID, uuid4
 
 import rfc8785
@@ -81,6 +82,7 @@ _LEGACY_FILE_DELETE_ACCEPT = (
     "(uuid,uuid,uuid,text,uuid,smallint,text,text,text,bigint,uuid,jsonb,"
     "boolean,jsonb)"
 )
+type _FileDeleteAcceptGeneration = Literal["bounded", "legacy"]
 _ACTIVE_SOURCE_SELECT = """
     SELECT
         source.source_id,
@@ -176,6 +178,8 @@ class PostgreSQLControlStore:
         ):
             raise TypeError("File change checkpoint signing key is invalid")
         self._file_change_checkpoint_signing_key = file_change_checkpoint_signing_key
+        self._file_delete_accept_generation: _FileDeleteAcceptGeneration | None = None
+        self._file_delete_accept_generation_lock = Lock()
 
     def register_file_source(
         self,
@@ -617,34 +621,68 @@ class PostgreSQLControlStore:
                         ),
                         {"fence": _FILE_SCAN_BOUND_MIGRATION_FENCE},
                     )
-                    accept_authority = connection.execute(
+                    with self._file_delete_accept_generation_lock:
+                        generation = self._file_delete_accept_generation
+                        if generation is None:
+                            available = connection.execute(
+                                text(
+                                    "SELECT "
+                                    "CASE WHEN to_regprocedure(:bounded_accept) "
+                                    "IS NULL THEN false ELSE "
+                                    "pg_catalog.has_function_privilege("
+                                    "SESSION_USER, "
+                                    "to_regprocedure(:bounded_accept), 'EXECUTE') "
+                                    "END AS bounded, "
+                                    "CASE WHEN to_regprocedure(:legacy_accept) "
+                                    "IS NULL THEN false ELSE "
+                                    "pg_catalog.has_function_privilege("
+                                    "SESSION_USER, "
+                                    "to_regprocedure(:legacy_accept), 'EXECUTE') "
+                                    "END AS legacy"
+                                ),
+                                {
+                                    "bounded_accept": _BOUNDED_FILE_DELETE_ACCEPT,
+                                    "legacy_accept": _LEGACY_FILE_DELETE_ACCEPT,
+                                },
+                            ).mappings().one()
+                            if available["bounded"] is True:
+                                generation = "bounded"
+                            elif (
+                                available["legacy"] is True
+                                and value.scan_bound
+                                == DEFAULT_FILE_CHANGE_BASELINE_SIZE
+                            ):
+                                # Bind this store to the historical 10,000-bound
+                                # schema generation. It must never switch to the
+                                # legacy authority after observing revision 0045.
+                                generation = "legacy"
+                            else:
+                                raise SourceNotAvailable
+                            self._file_delete_accept_generation = generation
+                    selected_accept = (
+                        _BOUNDED_FILE_DELETE_ACCEPT
+                        if generation == "bounded"
+                        else _LEGACY_FILE_DELETE_ACCEPT
+                    )
+                    selected_available = connection.execute(
                         text(
-                            "SELECT "
-                            "to_regprocedure(:bounded_accept) IS NOT NULL, "
-                            "CASE WHEN to_regprocedure(:legacy_accept) IS NULL "
-                            "THEN false ELSE pg_catalog.has_function_privilege("
-                            "SESSION_USER, to_regprocedure(:legacy_accept), "
+                            "SELECT CASE WHEN to_regprocedure(:selected_accept) "
+                            "IS NULL THEN false ELSE "
+                            "pg_catalog.has_function_privilege("
+                            "SESSION_USER, to_regprocedure(:selected_accept), "
                             "'EXECUTE') END"
                         ),
-                        {
-                            "bounded_accept": _BOUNDED_FILE_DELETE_ACCEPT,
-                            "legacy_accept": _LEGACY_FILE_DELETE_ACCEPT,
-                        },
-                    ).one()
-                    bounded_delete_observations = accept_authority[0] is True
-                    legacy_delete_observations = accept_authority[1] is True
+                        {"selected_accept": selected_accept},
+                    ).scalar_one()
+                    if selected_available is not True:
+                        raise SourceNotAvailable
+                    bounded_delete_observations = generation == "bounded"
                     if bounded_delete_observations:
                         function_name = (
                             "context_control_accept_bounded_file_delete_observation_page"
                         )
                         baseline_argument = ", :scan_bound, CAST(:baseline AS jsonb)"
-                    elif (
-                        legacy_delete_observations
-                        and value.scan_bound == DEFAULT_FILE_CHANGE_BASELINE_SIZE
-                    ):
-                        # A pre-provenance schema can accept only ADR-0065's
-                        # historical default. Raised bounds never cross the
-                        # legacy authority, which cannot retain their provenance.
+                    elif value.scan_bound == DEFAULT_FILE_CHANGE_BASELINE_SIZE:
                         function_name = (
                             "context_control_accept_file_delete_observation_page"
                         )
