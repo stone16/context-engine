@@ -73,14 +73,14 @@ from engine.supply import (
 _REGISTRATION_OPERATION = "register_source"
 _FILE_STATUS_MIGRATION_FENCE = "context-engine.file-status-migration-fence"
 _BOUNDED_FILE_DELETE_ACCEPT = (
-    "public.context_control_accept_bounded_file_delete_observation_page"
-    "(uuid,uuid,uuid,text,uuid,smallint,text,text,text,bigint,uuid,jsonb,"
-    "boolean,integer,jsonb)"
+    "context_control_accept_bounded_file_delete_observation_page",
+    "uuid, uuid, uuid, text, uuid, smallint, text, text, text, bigint, uuid, "
+    "jsonb, boolean, integer, jsonb",
 )
 _LEGACY_FILE_DELETE_ACCEPT = (
-    "public.context_control_accept_file_delete_observation_page"
-    "(uuid,uuid,uuid,text,uuid,smallint,text,text,text,bigint,uuid,jsonb,"
-    "boolean,jsonb)"
+    "context_control_accept_file_delete_observation_page",
+    "uuid, uuid, uuid, text, uuid, smallint, text, text, text, bigint, uuid, "
+    "jsonb, boolean, jsonb",
 )
 type _FileDeleteAcceptGeneration = Literal["bounded", "legacy"]
 _ACTIVE_SOURCE_SELECT = """
@@ -148,6 +148,30 @@ def _set_organization_context(connection: Any, organization_id: UUID) -> None:
         raise SourceControlUnavailable(
             "source Control Organization context could not be bound"
         )
+
+
+def _has_file_delete_accept_authority(
+    connection: Any,
+    identity: tuple[str, str],
+) -> bool:
+    return (
+        connection.execute(
+            text(
+                "SELECT count(*) = 1 FROM pg_catalog.pg_proc p "
+                "JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace "
+                "WHERE n.nspname = 'public' "
+                "AND p.proname = :function_name "
+                "AND pg_catalog.oidvectortypes(p.proargtypes) = :argument_types "
+                "AND pg_catalog.has_function_privilege("
+                "SESSION_USER, p.oid, 'EXECUTE')"
+            ),
+            {
+                "function_name": identity[0],
+                "argument_types": identity[1],
+            },
+        ).scalar_one()
+        is True
+    )
 
 
 class PostgreSQLControlStore:
@@ -594,6 +618,38 @@ class PostgreSQLControlStore:
                 }
                 for change in value.changes
             ]
+            delete_observations = (
+                value.capability_version
+                == FILE_DELETE_OBSERVATION_CAPABILITY_MANIFEST.declaration_version
+            )
+            generation: _FileDeleteAcceptGeneration | None = None
+            if delete_observations:
+                with self._file_delete_accept_generation_lock:
+                    generation = self._file_delete_accept_generation
+                    if generation is None:
+                        with self._engine.begin() as connection:
+                            assert_control_role(connection)
+                            bounded_available = _has_file_delete_accept_authority(
+                                connection,
+                                _BOUNDED_FILE_DELETE_ACCEPT,
+                            )
+                            legacy_available = _has_file_delete_accept_authority(
+                                connection,
+                                _LEGACY_FILE_DELETE_ACCEPT,
+                            )
+                        if bounded_available:
+                            generation = "bounded"
+                        elif (
+                            legacy_available
+                            and value.scan_bound == DEFAULT_FILE_CHANGE_BASELINE_SIZE
+                        ):
+                            # Bind this store to the historical 10,000-bound
+                            # schema generation. It must never switch to the
+                            # legacy authority after observing revision 0045.
+                            generation = "legacy"
+                        else:
+                            raise SourceNotAvailable
+                        self._file_delete_accept_generation = generation
             with self._engine.begin() as connection:
                 assert_control_role(connection)
                 baseline_document = (
@@ -608,12 +664,10 @@ class PostgreSQLControlStore:
                         "sourceVersionId": str(value.baseline_ref.source_version_ref),
                     }
                 )
-                delete_observations = (
-                    value.capability_version
-                    == FILE_DELETE_OBSERVATION_CAPABILITY_MANIFEST.declaration_version
-                )
                 bounded_delete_observations = False
                 if delete_observations:
+                    if generation is None:
+                        raise SourceNotAvailable
                     connection.execute(
                         text(
                             "SELECT pg_catalog.pg_advisory_xact_lock_shared("
@@ -621,74 +675,24 @@ class PostgreSQLControlStore:
                         ),
                         {"fence": _FILE_STATUS_MIGRATION_FENCE},
                     )
-                    with self._file_delete_accept_generation_lock:
-                        generation = self._file_delete_accept_generation
-                        if generation is None:
-                            available = connection.execute(
-                                text(
-                                    "SELECT "
-                                    "CASE WHEN to_regprocedure(:bounded_accept) "
-                                    "IS NULL THEN false ELSE "
-                                    "pg_catalog.has_function_privilege("
-                                    "SESSION_USER, "
-                                    "to_regprocedure(:bounded_accept), 'EXECUTE') "
-                                    "END AS bounded, "
-                                    "CASE WHEN to_regprocedure(:legacy_accept) "
-                                    "IS NULL THEN false ELSE "
-                                    "pg_catalog.has_function_privilege("
-                                    "SESSION_USER, "
-                                    "to_regprocedure(:legacy_accept), 'EXECUTE') "
-                                    "END AS legacy"
-                                ),
-                                {
-                                    "bounded_accept": _BOUNDED_FILE_DELETE_ACCEPT,
-                                    "legacy_accept": _LEGACY_FILE_DELETE_ACCEPT,
-                                },
-                            ).mappings().one()
-                            if available["bounded"] is True:
-                                generation = "bounded"
-                            elif (
-                                available["legacy"] is True
-                                and value.scan_bound
-                                == DEFAULT_FILE_CHANGE_BASELINE_SIZE
-                            ):
-                                # Bind this store to the historical 10,000-bound
-                                # schema generation. It must never switch to the
-                                # legacy authority after observing revision 0045.
-                                generation = "legacy"
-                            else:
-                                raise SourceNotAvailable
-                            self._file_delete_accept_generation = generation
                     selected_accept = (
                         _BOUNDED_FILE_DELETE_ACCEPT
                         if generation == "bounded"
                         else _LEGACY_FILE_DELETE_ACCEPT
                     )
-                    selected_available = connection.execute(
-                        text(
-                            "SELECT CASE WHEN to_regprocedure(:selected_accept) "
-                            "IS NULL THEN false ELSE "
-                            "pg_catalog.has_function_privilege("
-                            "SESSION_USER, to_regprocedure(:selected_accept), "
-                            "'EXECUTE') END"
-                        ),
-                        {"selected_accept": selected_accept},
-                    ).scalar_one()
-                    if selected_available is not True:
+                    if not _has_file_delete_accept_authority(
+                        connection,
+                        selected_accept,
+                    ):
                         raise SourceNotAvailable
                     bounded_delete_observations = generation == "bounded"
                     if bounded_delete_observations:
-                        function_name = (
-                            "context_control_accept_bounded_file_delete_observation_page"
-                        )
                         baseline_argument = ", :scan_bound, CAST(:baseline AS jsonb)"
                     elif value.scan_bound == DEFAULT_FILE_CHANGE_BASELINE_SIZE:
-                        function_name = (
-                            "context_control_accept_file_delete_observation_page"
-                        )
                         baseline_argument = ", CAST(:baseline AS jsonb)"
                     else:
                         raise SourceNotAvailable
+                    function_name = selected_accept[0]
                 else:
                     function_name = "context_control_accept_file_change_page"
                     baseline_argument = ""
