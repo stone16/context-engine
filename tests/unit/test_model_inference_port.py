@@ -17,7 +17,9 @@ from uuid import UUID
 
 import pytest
 
+from engine.runtime.authorized_ranking import join_authorized_ranking
 from engine.runtime.budget import BudgetUsage, PackageBudget, PackageBudgetMeter
+from engine.runtime.candidate_ranking import CandidateRankEvidence, RankerEvidence
 from engine.runtime.egress import (
     ChannelEgressGrant,
     EgressGrantRedemption,
@@ -346,6 +348,45 @@ def test_select_accepts_authorized_projection_and_returns_only_declared_subset()
 
     assert result.projections == (projections[2], projections[0])
     assert len(authority.calls) == 1
+
+
+def test_rerank_and_select_requests_preserve_authorized_stage_input_order() -> None:
+    """Model consumers start from the sole post-authorization retrieval order."""
+
+    with _projections("retrieval-second", "retrieval-first") as projections:
+        joined = join_authorized_ranking(
+            projections,
+            (
+                CandidateRankEvidence(
+                    candidate_ref=projections[1].candidate_ref,
+                    per_ranker=(RankerEvidence("hybrid", 1),),
+                    fused_rank=1,
+                ),
+                CandidateRankEvidence(
+                    candidate_ref=projections[0].candidate_ref,
+                    per_ranker=(RankerEvidence("hybrid", 2),),
+                    fused_rank=2,
+                ),
+            ),
+        )
+        authorized_order = tuple(item.projection for item in joined)
+        rerank_request = RerankModelRequest(
+            profile=_profile(ModelInferenceOperation.RERANK),
+            query="preserve authorized stage input",
+            projections=authorized_order,
+        )
+        select_request = SelectModelRequest(
+            profile=_profile(ModelInferenceOperation.SELECT),
+            query="preserve authorized stage input",
+            projections=authorized_order,
+            maximum_items=2,
+        )
+
+        assert tuple(
+            projection.candidate_ref for projection in authorized_order
+        ) == (projections[1].candidate_ref, projections[0].candidate_ref)
+        assert rerank_request.projections == authorized_order
+        assert select_request.projections == authorized_order
 
 
 def test_rerank_and_select_reject_candidate_ref_at_type_and_runtime_seams(
