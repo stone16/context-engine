@@ -245,6 +245,8 @@ dogfood audience, and two distinct persistent Ed25519 proof keys:
 ```text
 CONTEXT_ENGINE_WORKER_FILE_ROOTS_JSON
 CONTEXT_ENGINE_WORKER_MAX_FILE_BYTES                 # optional
+CONTEXT_ENGINE_WORKER_MAX_FILE_CHANGE_BASELINE_SIZE  # optional
+CONTEXT_ENGINE_WORKER_FILE_CURATED_SUBTREES_JSON     # optional
 CONTEXT_ENGINE_WORKER_SERVICE_PRINCIPAL_ID
 CONTEXT_ENGINE_DOGFOOD_PRINCIPAL_REF
 CONTEXT_ENGINE_DOGFOOD_MEMBERSHIP_ID
@@ -253,6 +255,32 @@ CONTEXT_ENGINE_FILE_CHANGE_PROVIDER_SIGNING_KEY_HEX
 CONTEXT_ENGINE_FILE_CHANGE_CHECKPOINT_SIGNING_KEY_HEX
 CONTEXT_ENGINE_WORKER_LEASE_SIGNING_KEY_HEX
 ```
+
+File scans keep ADR-0065's default limit of 10,000 Markdown paths. An operator
+may explicitly set `CONTEXT_ENGINE_WORKER_MAX_FILE_CHANGE_BASELINE_SIZE` to a
+positive integer no greater than 15,000; invalid values fail process
+configuration. The effective value is signed with provider pages and retained
+on durable scan provenance. Crossing it fails closed before a partial baseline
+is accepted, and `status` reports the content-free closed condition
+`scan_bound_exceeded` plus the effective bound.
+
+The alternative configuration path keeps the default bound and selects a
+curated subtree per logical root. The value is JSON from each configured root
+reference to one nonempty canonical relative directory, for example:
+
+```text
+CONTEXT_ENGINE_WORKER_FILE_CURATED_SUBTREES_JSON={"maintainer-notes":"curated/notes"}
+```
+
+The registered root remains the descriptor-anchored read capability. Scan
+traversal starts at the selected subtree while keeping full registered-root
+relative path identities; switching a whole-root baseline to a selection that
+would reinterpret active paths refuses before accepting a page. Absolute
+paths, empty components, `.` / `..`, backslashes, and unknown root references
+are refused at configuration time. Whole-vault versus curated subtree remains
+a maintainer decision. Their synthetic measured costs and the single-command
+reproduction are recorded in
+[`2026-07-30-file-scan-baseline-measurement.md`](./docs/design/2026-07-30-file-scan-baseline-measurement.md).
 
 Each proof-key value is exactly 32 random bytes encoded as 64 lowercase or
 uppercase hexadecimal characters. Keep both in the same local secret source

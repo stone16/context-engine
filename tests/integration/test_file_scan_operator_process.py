@@ -302,10 +302,12 @@ def test_status_reports_progress_freshness_and_current_compilation_refusals(
         "acquisitionCheckpoint": None,
         "activeResourceCount": 0,
         "changeScanHead": None,
+        "completeChangeBaselineScanBound": None,
         "completeChangeBaselineSize": 0,
         "lastSuccessfulAcquisition": {"state": "never"},
         "publishWatermark": None,
         "refusals": [],
+        "scanRefusal": None,
         "sourceRef": str(source_ref),
     }
     scanned = _scan(organization_id, source_ref, environment)
@@ -315,10 +317,12 @@ def test_status_reports_progress_freshness_and_current_compilation_refusals(
         "acquisitionCheckpoint": before_publication["acquisitionCheckpoint"],
         "activeResourceCount": 0,
         "changeScanHead": before_publication["changeScanHead"],
+        "completeChangeBaselineScanBound": 10_000,
         "completeChangeBaselineSize": 2,
         "lastSuccessfulAcquisition": {"state": "never"},
         "publishWatermark": None,
         "refusals": [],
+        "scanRefusal": None,
         "sourceRef": str(source_ref),
     }
     assert before_publication["acquisitionCheckpoint"] is not None
@@ -330,6 +334,7 @@ def test_status_reports_progress_freshness_and_current_compilation_refusals(
         "pageRef": scan_head["pageRef"],
         "scanEpoch": scan_head["scanEpoch"],
         "scanRef": scan_head["scanRef"],
+        "scanBound": 10_000,
         "sequence": scan_head["sequence"],
         "sourceVersionRef": scan_head["sourceVersionRef"],
     }
@@ -422,6 +427,7 @@ def test_scan_process_schedules_only_changed_upserts_and_existing_worker_consume
         "deletesObserved": 0,
         "importsScheduled": 2,
         "pathsObserved": 2,
+        "scanBound": 10_000,
         "sourceRef": str(source_ref),
     }
     assert type(first["advancedCursor"]) is str
@@ -462,6 +468,7 @@ def test_scan_process_schedules_only_changed_upserts_and_existing_worker_consume
             "deletesObserved": 0,
             "importsScheduled": 0,
             "pathsObserved": 2,
+            "scanBound": 10_000,
             "sourceRef": str(source_ref),
         }
         with engine.connect() as connection:
@@ -485,6 +492,7 @@ def test_scan_process_schedules_only_changed_upserts_and_existing_worker_consume
             "deletesObserved": 0,
             "importsScheduled": 1,
             "pathsObserved": 3,
+            "scanBound": 10_000,
             "sourceRef": str(source_ref),
         }
         assert changed["advancedCursor"] != first["advancedCursor"]
@@ -561,6 +569,7 @@ def test_scan_process_schedules_only_changed_upserts_and_existing_worker_consume
             "deletesObserved": 1,
             "importsScheduled": 0,
             "pathsObserved": 2,
+            "scanBound": 10_000,
             "sourceRef": str(source_ref),
         }
         assert deleted["advancedCursor"] != changed["advancedCursor"]
@@ -613,6 +622,7 @@ def test_scan_process_schedules_only_changed_upserts_and_existing_worker_consume
             "deletesObserved": 0,
             "importsScheduled": 0,
             "pathsObserved": 2,
+            "scanBound": 10_000,
             "sourceRef": str(source_ref),
         }
         with engine.connect() as connection:
@@ -717,6 +727,7 @@ def test_scan_process_recovers_a_complete_accepted_page_missing_its_schedule(
             "deletesObserved": 0,
             "importsScheduled": 1,
             "pathsObserved": 1,
+            "scanBound": 10_000,
             "sourceRef": str(source_ref),
         }
         assert _worker(environment)["outcome"] == "dispatched"

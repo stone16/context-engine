@@ -1,0 +1,84 @@
+{
+  "environment": {
+    "machine": "arm64",
+    "python": "3.13.5",
+    "system": "Darwin"
+  },
+  "measuredAt": "2026-07-30T16:29:30.286524Z",
+  "measurements": [
+    {
+      "continuationPeakMemoryBytes": 849094,
+      "continuationWallClockSeconds": 0.236323,
+      "estimatedSingletonCycleSeconds": 236.348,
+      "initialPeakMemoryBytes": 934926,
+      "initialWallClockSeconds": 0.261369,
+      "measurementRef": "synthetic-1000",
+      "pageCount": 1000,
+      "pathCount": 1000,
+      "peakMemoryBytes": 934926
+    },
+    {
+      "continuationPeakMemoryBytes": 4345406,
+      "continuationWallClockSeconds": 1.148789,
+      "estimatedSingletonCycleSeconds": 5743.982,
+      "initialPeakMemoryBytes": 4345710,
+      "initialWallClockSeconds": 1.187794,
+      "measurementRef": "synthetic-5000",
+      "pageCount": 5000,
+      "pathCount": 5000,
+      "peakMemoryBytes": 4345710
+    },
+    {
+      "continuationPeakMemoryBytes": 8593552,
+      "continuationWallClockSeconds": 2.433297,
+      "estimatedSingletonCycleSeconds": 24332.896,
+      "initialPeakMemoryBytes": 8579008,
+      "initialWallClockSeconds": 2.359169,
+      "measurementRef": "synthetic-10000",
+      "pageCount": 10000,
+      "pathCount": 10000,
+      "peakMemoryBytes": 8593552
+    },
+    {
+      "continuationPeakMemoryBytes": 12819760,
+      "continuationWallClockSeconds": 3.612044,
+      "estimatedSingletonCycleSeconds": 54180.696,
+      "initialPeakMemoryBytes": 12805464,
+      "initialWallClockSeconds": 3.647206,
+      "measurementRef": "synthetic-15000",
+      "pageCount": 15000,
+      "pathCount": 15000,
+      "peakMemoryBytes": 12819760
+    }
+  ],
+  "method": {
+    "curatedOptionUsesConfiguredTraversal": true,
+    "generatedTree": true,
+    "pageLimit": 1,
+    "productionProviderSeam": true,
+    "singletonCycleEstimate": "initial call plus pageCount minus one times the measured signed continuation call"
+  },
+  "options": {
+    "configurableWholeVault": {
+      "continuationWallClockSeconds": 3.612044,
+      "estimatedSingletonCycleSeconds": 54180.696,
+      "initialWallClockSeconds": 3.647206,
+      "label": "configurable whole-vault bound",
+      "measurementRef": "synthetic-15000",
+      "pageCount": 15000,
+      "peakMemoryBytes": 12819760,
+      "representativePathCount": 15000
+    },
+    "curatedSubtree": {
+      "continuationWallClockSeconds": 1.165121,
+      "estimatedSingletonCycleSeconds": 5825.604,
+      "initialWallClockSeconds": 1.165012,
+      "label": "illustrative curated subtree",
+      "measurementRef": "synthetic-curated-5000",
+      "pageCount": 5000,
+      "peakMemoryBytes": 4466215,
+      "representativePathCount": 5000
+    }
+  },
+  "schemaVersion": "context-engine-file-scan-measurement-v1"
+}

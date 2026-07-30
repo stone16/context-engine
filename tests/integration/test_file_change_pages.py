@@ -24,6 +24,7 @@ from adapters.file_source import FileChangeProvider, FileReadLimits, FileRootReg
 from adapters.http.app import create_app
 from adapters.parsers.markdown import compile_markdown as compile_markdown_original
 from engine.control import (
+    MAX_CONFIGURED_FILE_CHANGE_BASELINE_SIZE,
     MAX_FILE_CHANGE_BASELINE_SIZE,
     ActivateFileChangeFeed,
     ActivateFileDeleteObservations,
@@ -52,6 +53,7 @@ from engine.control import (
     ProviderGenericDenied,
     ProviderInvalidCheckpoint,
     ProviderOk,
+    ProviderScanBoundExceeded,
     RegisterFileSource,
     ScheduleFileChangePage,
     SourceControlUnavailable,
@@ -2566,7 +2568,9 @@ def test_oversized_delete_diff_is_denied_before_durable_progress(
 
     outcome = provider.read_changes(source, InitialScan(), ChangeLimit(1))
 
-    assert type(outcome) is ProviderGenericDenied
+    assert outcome == ProviderScanBoundExceeded(
+        scan_bound=MAX_FILE_CHANGE_BASELINE_SIZE
+    )
     migration_engine = create_database_engine(migration_configuration)
     try:
         with migration_engine.connect() as connection:
@@ -2591,6 +2595,279 @@ def test_oversized_delete_diff_is_denied_before_durable_progress(
     finally:
         migration_engine.dispose()
     assert after == before
+
+
+def test_bounded_delete_page_replay_at_exact_bound_is_idempotent(
+    tmp_path: Path,
+    guarded_control_engine: Engine,
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "only.md").write_bytes(b"# Only\n")
+    provider_proofs, control_proofs = _proofs()
+    organization_id = uuid4()
+    control, authority, source = _seed_file_change_source(
+        guarded_control_engine=guarded_control_engine,
+        migration_configuration=migration_configuration,
+        organization_id=organization_id,
+        receiver=FileImportReceiver(uuid4()),
+        root_ref=FileRootRef("exact-bound-replay-root"),
+        control_proofs=control_proofs,
+    )
+    source = _activate_delete_observations(
+        control,
+        authority,
+        organization_id,
+        source,
+    )
+    registry = FileRootRegistry(
+        {source.source_version.root_ref: root},
+        limits=FileReadLimits(max_file_bytes=1_024, max_baseline_entries=1),
+    )
+    provider = FileChangeProvider(
+        registry,
+        proofs=provider_proofs,
+    )
+    try:
+        page = provider.read_changes(source, InitialScan(), ChangeLimit(1))
+    finally:
+        registry.close()
+    assert type(page) is ProviderOk
+    verified = control_proofs.verify_page(page.value)
+    assert verified is not None
+    changes_document = [
+        {
+            "contentLength": change.content_length,
+            "contentSha256": change.content_sha256,
+            "kind": change.kind.value,
+            "path": change.path.value,
+        }
+        for change in page.value.changes
+    ]
+    with guarded_control_engine.begin() as connection:
+        invalid = connection.execute(
+            text(
+                """
+                SELECT * FROM public.
+                  context_control_accept_bounded_file_delete_observation_page(
+                    :organization_id, :source_id, :source_version_id,
+                    :scan_ref, :scan_epoch, :page_limit, :page_ref,
+                    NULL, NULL, NULL, :superseded_scan_epoch,
+                    CAST(:changes AS jsonb), :complete, NULL, NULL
+                  )
+                """
+            ),
+            {
+                "organization_id": organization_id,
+                "source_id": page.value.source_ref,
+                "source_version_id": page.value.source_version_ref,
+                "scan_ref": page.value.scan_ref,
+                "scan_epoch": page.value.scan_epoch,
+                "page_limit": page.value.page_limit,
+                "page_ref": verified.page_ref,
+                "superseded_scan_epoch": page.value.superseded_scan_epoch,
+                "changes": json.dumps(changes_document, separators=(",", ":")),
+                "complete": page.value.complete,
+            },
+        ).one_or_none()
+    assert invalid is None
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.connect() as connection:
+            assert connection.execute(
+                text(
+                    "SELECT count(*) FROM file_source_change_page "
+                    "WHERE organization_id = :organization_id"
+                ),
+                {"organization_id": organization_id},
+            ).scalar_one() == 0
+    finally:
+        migration_engine.dispose()
+
+    with _authorize(
+        authority,
+        organization_id,
+        ControlOperation.ACCEPT_FILE_CHANGE_PAGE,
+        "accept-exact-bound-page",
+    ) as call:
+        accepted = control.accept_file_change_page(call, page.value)
+    with _authorize(
+        authority,
+        organization_id,
+        ControlOperation.ACCEPT_FILE_CHANGE_PAGE,
+        "record-newer-bound-refusal",
+    ) as call:
+        control.report_file_scan_bound_refusal(
+            call,
+            accepted.source_ref,
+            1,
+        )
+    with _authorize(
+        authority,
+        organization_id,
+        ControlOperation.ACCEPT_FILE_CHANGE_PAGE,
+        "replay-exact-bound-page",
+    ) as call:
+        replayed = control.accept_file_change_page(call, page.value)
+    with _authorize(
+        authority,
+        organization_id,
+        ControlOperation.READ_SOURCE_PROGRESS,
+        "read-refusal-after-stale-terminal-replay",
+    ) as call:
+        progress = control.read_file_source_progress(call, accepted.source_ref)
+
+    assert replayed == accepted
+    status = progress.status
+    assert status is not None
+    assert status.scan_refusal_category is not None
+    assert status.scan_refusal_category.value == "scan_bound_exceeded"
+    assert status.scan_refusal_bound == 1
+
+
+def test_durable_configured_ceiling_accepts_exactly_then_refuses_oversize_pages(
+    guarded_control_engine: Engine,
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    provider_proofs, control_proofs = _proofs()
+    del provider_proofs
+    organization_id = uuid4()
+    _control, _authority, source = _seed_file_change_source(
+        guarded_control_engine=guarded_control_engine,
+        migration_configuration=migration_configuration,
+        organization_id=organization_id,
+        receiver=FileImportReceiver(uuid4()),
+        root_ref=FileRootRef("durable-configured-ceiling-root"),
+        control_proofs=control_proofs,
+    )
+    source = _activate_delete_observations(
+        _control,
+        _authority,
+        organization_id,
+        source,
+    )
+    scan_ref = "e" * 64
+    scan_epoch = uuid4()
+    predecessor_page_ref: str | None = None
+    predecessor_checkpoint_ref: str | None = None
+    predecessor_sequence: int | None = None
+    page_size = 100
+    page_count = MAX_CONFIGURED_FILE_CHANGE_BASELINE_SIZE // page_size
+
+    with guarded_control_engine.begin() as connection:
+        for page_ordinal in range(page_count):
+            first_index = page_ordinal * page_size
+            changes = [
+                {
+                    "contentLength": 1,
+                    "contentSha256": f"{index % 16:x}" * 64,
+                    "kind": "upsert",
+                    "path": f"{index:05d}.md",
+                }
+                for index in range(first_index, first_index + page_size)
+            ]
+            page_ref = f"{page_ordinal + 1:064x}"
+            accepted = connection.execute(
+                text(
+                    """
+                    SELECT * FROM public.
+                      context_control_accept_bounded_file_delete_observation_page(
+                        :organization_id, :source_id, :source_version_id,
+                        :scan_ref, :scan_epoch, :page_limit, :page_ref,
+                        :predecessor_page_ref, :predecessor_checkpoint_ref,
+                        :predecessor_sequence, NULL,
+                        CAST(:changes AS jsonb), false, :scan_bound, NULL
+                      )
+                    """
+                ),
+                {
+                    "organization_id": organization_id,
+                    "source_id": source.source_version.source_ref.value,
+                    "source_version_id": source.source_version.version_ref,
+                    "scan_ref": scan_ref,
+                    "scan_epoch": scan_epoch,
+                    "page_limit": page_size,
+                    "page_ref": page_ref,
+                    "predecessor_page_ref": predecessor_page_ref,
+                    "predecessor_checkpoint_ref": predecessor_checkpoint_ref,
+                    "predecessor_sequence": predecessor_sequence,
+                    "changes": json.dumps(changes, separators=(",", ":")),
+                    "scan_bound": MAX_CONFIGURED_FILE_CHANGE_BASELINE_SIZE,
+                },
+            ).one()
+            predecessor_page_ref = accepted.page_ref
+            predecessor_checkpoint_ref = accepted.checkpoint_ref
+            predecessor_sequence = accepted.sequence
+
+        for page_ref, change_count in (("f" * 64, 1), ("d" * 64, page_size)):
+            changes = [
+                {
+                    "contentLength": 1,
+                    "contentSha256": "a" * 64,
+                    "kind": "upsert",
+                    "path": f"overflow-{index:03d}.md",
+                }
+                for index in range(change_count)
+            ]
+            refused = connection.execute(
+                text(
+                    """
+                    SELECT * FROM public.
+                      context_control_accept_bounded_file_delete_observation_page(
+                        :organization_id, :source_id, :source_version_id,
+                        :scan_ref, :scan_epoch, :page_limit, :page_ref,
+                        :predecessor_page_ref, :predecessor_checkpoint_ref,
+                        :predecessor_sequence, NULL,
+                        CAST(:changes AS jsonb), false, :scan_bound, NULL
+                      )
+                    """
+                ),
+                {
+                    "organization_id": organization_id,
+                    "source_id": source.source_version.source_ref.value,
+                    "source_version_id": source.source_version.version_ref,
+                    "scan_ref": scan_ref,
+                    "scan_epoch": scan_epoch,
+                    "page_limit": page_size,
+                    "page_ref": page_ref,
+                    "predecessor_page_ref": predecessor_page_ref,
+                    "predecessor_checkpoint_ref": predecessor_checkpoint_ref,
+                    "predecessor_sequence": predecessor_sequence,
+                    "changes": json.dumps(changes, separators=(",", ":")),
+                    "scan_bound": MAX_CONFIGURED_FILE_CHANGE_BASELINE_SIZE,
+                },
+            ).one_or_none()
+            assert refused is None
+
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.connect() as connection:
+            retained = connection.execute(
+                text(
+                    """
+                    SELECT count(*), COALESCE(sum(change_count), 0),
+                           min(scan_bound), max(scan_bound)
+                    FROM file_source_change_page
+                    WHERE organization_id = :organization_id
+                      AND source_id = :source_id
+                      AND scan_epoch = :scan_epoch
+                    """
+                ),
+                {
+                    "organization_id": organization_id,
+                    "source_id": source.source_version.source_ref.value,
+                    "scan_epoch": scan_epoch,
+                },
+            ).one()
+    finally:
+        migration_engine.dispose()
+    assert tuple(retained) == (
+        page_count,
+        MAX_CONFIGURED_FILE_CHANGE_BASELINE_SIZE,
+        MAX_CONFIGURED_FILE_CHANGE_BASELINE_SIZE,
+        MAX_CONFIGURED_FILE_CHANGE_BASELINE_SIZE,
+    )
 
 
 @pytest.mark.security_evidence(id="PG-FILE-DELETE-DETECT-085", layer="postgres")

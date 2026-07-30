@@ -91,6 +91,21 @@ class _Store:
             accepted_at=NOW,
         )
 
+    def report_file_scan_bound_refusal(
+        self,
+        call: TrustedControlCall,
+        source_ref: SourceRef,
+        scan_bound: int,
+    ) -> None:
+        raise AssertionError("unexpected Control operation")
+
+    def clear_file_scan_bound_refusal(
+        self,
+        call: TrustedControlCall,
+        source_ref: SourceRef,
+    ) -> None:
+        raise AssertionError("unexpected Control operation")
+
     def activate_file_change_feed(
         self, call: TrustedControlCall, command: ActivateFileChangeFeed
     ) -> SourceManifest:

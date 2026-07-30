@@ -68,7 +68,7 @@
     },
     {
       "name": "accept_file_delete_observation_page",
-      "databaseFunction": "context_control_accept_file_delete_observation_page",
+      "databaseFunction": "context_control_accept_bounded_file_delete_observation_page",
       "role": "context_engine_control",
       "definerRole": "context_engine_worker_lease_definer",
       "directTableMutationAllowed": false,
@@ -81,8 +81,10 @@
         "file_source_delete_observation_page",
         "file_source_change_page",
         "file_source_change",
-        "file_source_acquisition_checkpoint"
-      ]
+        "file_source_acquisition_checkpoint",
+        "context_source"
+      ],
+      "scanBoundProvenance": "signed provider page plus durable scan_bound, default 10000, configured ceiling 15000"
     },
     {
       "name": "schedule_file_change_page",
@@ -216,7 +218,8 @@
       "databaseFunctions": [
         "context_control_read_file_source_progress",
         "context_control_read_pending_file_change_schedules",
-        "context_control_read_file_source_status"
+        "context_control_read_file_source_status",
+        "context_control_read_file_scan_bound_status"
       ],
       "role": "context_engine_control",
       "definerRole": "context_engine_worker_lease_definer",
@@ -1607,6 +1610,10 @@
         {
           "name": "ck_context_source_lifecycle",
           "expression": "active has no disabled version/time; disabled binds disabled_version_id to active_version_id and has disabled_at"
+        },
+        {
+          "name": "ck_context_source_file_scan_refusal",
+          "expression": "both refusal fields are null or category is scan_bound_exceeded and bound is between 1 and 15000"
         }
       ],
       "rowLevelSecurity": {
@@ -1727,7 +1734,10 @@
           "EXECUTE context_control_activate_file_delete_observations",
           "EXECUTE context_control_read_pending_file_change_schedules",
           "EXECUTE context_control_read_file_source_status",
-          "EXECUTE context_control_offboard_file_source"
+          "EXECUTE context_control_offboard_file_source",
+          "EXECUTE context_control_report_file_scan_bound_refusal",
+          "EXECUTE context_control_clear_file_scan_bound_refusal",
+          "EXECUTE context_control_read_file_scan_bound_status"
         ],
         "context_engine_learning": [],
         "context_engine_release_operator": [
@@ -1738,7 +1748,7 @@
         "context_engine_worker": [],
         "context_engine_worker_lease_definer": [
           "SELECT",
-          "UPDATE"
+          "UPDATE active_version_id, file_scan_refusal_category, file_scan_refusal_bound"
         ],
         "context_engine_action_prepare_definer": [
           "SELECT"
@@ -9851,14 +9861,14 @@
       },
       "functionOnlyMutation": {
         "databaseFunctions": [
-          "context_control_accept_file_delete_observation_page"
+          "context_control_accept_bounded_file_delete_observation_page"
         ],
         "definerRole": "context_engine_worker_lease_definer",
         "directTableMutationAllowed": false
       },
       "permittedOperations": {
         "context_engine_control": [
-          "EXECUTE context_control_accept_file_delete_observation_page",
+          "EXECUTE context_control_accept_bounded_file_delete_observation_page",
           "EXECUTE context_control_read_complete_file_change_baseline",
           "EXECUTE context_control_read_pending_file_change_schedules"
         ],
@@ -10139,6 +10149,10 @@
         {
           "name": "ck_file_source_change_page_bounds",
           "expression": "page_ordinal is positive bigint, page_limit is between 1 and 100, and change_count is between 0 and page_limit"
+        },
+        {
+          "name": "ck_file_source_change_page_scan_bound",
+          "expression": "scan_bound is between 1 and 15000"
         }
       ],
       "rowLevelSecurity": {
@@ -10192,7 +10206,7 @@
       "functionOnlyMutation": {
         "databaseFunctions": [
           "context_control_accept_file_change_page",
-          "context_control_accept_file_delete_observation_page"
+          "context_control_accept_bounded_file_delete_observation_page"
         ],
         "definerRole": "context_engine_worker_lease_definer",
         "directTableMutationAllowed": false
@@ -10200,11 +10214,12 @@
       "permittedOperations": {
         "context_engine_control": [
           "EXECUTE context_control_accept_file_change_page",
-          "EXECUTE context_control_accept_file_delete_observation_page",
+          "EXECUTE context_control_accept_bounded_file_delete_observation_page",
           "EXECUTE context_control_read_complete_file_change_baseline",
           "EXECUTE context_control_read_pending_file_change_schedules",
           "EXECUTE context_control_schedule_file_change_page",
-          "EXECUTE context_control_read_file_source_status"
+          "EXECUTE context_control_read_file_source_status",
+          "EXECUTE context_control_read_file_scan_bound_status"
         ],
         "context_engine_runtime": [],
         "context_engine_worker": [],
@@ -10352,7 +10367,7 @@
       "functionOnlyMutation": {
         "databaseFunctions": [
           "context_control_accept_file_change_page",
-          "context_control_accept_file_delete_observation_page"
+          "context_control_accept_bounded_file_delete_observation_page"
         ],
         "definerRole": "context_engine_worker_lease_definer",
         "directTableMutationAllowed": false
@@ -10360,7 +10375,7 @@
       "permittedOperations": {
         "context_engine_control": [
           "EXECUTE context_control_accept_file_change_page",
-          "EXECUTE context_control_accept_file_delete_observation_page",
+          "EXECUTE context_control_accept_bounded_file_delete_observation_page",
           "EXECUTE context_control_read_pending_file_change_schedules",
           "EXECUTE context_control_schedule_file_change_page",
           "EXECUTE context_control_read_file_source_status"
@@ -10592,14 +10607,14 @@
           "context_file_source_checkpoint_import_job",
           "context_file_source_checkpoint_tombstone",
           "context_control_accept_file_change_page",
-          "context_control_accept_file_delete_observation_page",
+          "context_control_accept_bounded_file_delete_observation_page",
           "context_control_schedule_file_change_page"
         ],
         "causalDatabaseFunctions": [
           "context_control_prepare_file_import",
           "context_control_tombstone_file_resource",
           "context_control_accept_file_change_page",
-          "context_control_accept_file_delete_observation_page",
+          "context_control_accept_bounded_file_delete_observation_page",
           "context_control_schedule_file_change_page"
         ],
         "definerRole": "context_engine_worker_lease_definer",
@@ -10609,7 +10624,7 @@
         "context_engine_control": [
           "EXECUTE context_control_prepare_file_import",
           "EXECUTE context_control_accept_file_change_page",
-          "EXECUTE context_control_accept_file_delete_observation_page",
+          "EXECUTE context_control_accept_bounded_file_delete_observation_page",
           "EXECUTE context_control_read_complete_file_change_baseline",
           "EXECUTE context_control_read_pending_file_change_schedules",
           "EXECUTE context_control_schedule_file_change_page",

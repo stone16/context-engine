@@ -28,7 +28,20 @@ from engine.control.contracts import (
 from engine.control.file_imports import FileImportPath
 
 MAX_FILE_CHANGE_PAGE_SIZE = 100
-MAX_FILE_CHANGE_BASELINE_SIZE = 10_000
+DEFAULT_FILE_CHANGE_BASELINE_SIZE = 10_000
+MAX_CONFIGURED_FILE_CHANGE_BASELINE_SIZE = 15_000
+# ADR-0065's unchanged default. Individual scans carry an explicit configured
+# bound up to MAX_CONFIGURED_FILE_CHANGE_BASELINE_SIZE as provenance.
+MAX_FILE_CHANGE_BASELINE_SIZE = DEFAULT_FILE_CHANGE_BASELINE_SIZE
+
+
+def _require_scan_bound(value: object) -> int:
+    if (
+        type(value) is not int
+        or not 1 <= value <= MAX_CONFIGURED_FILE_CHANGE_BASELINE_SIZE
+    ):
+        raise ValueError("File scan bound must be a bounded positive integer")
+    return value
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,6 +109,7 @@ class FileChangeScanHead:
     checkpoint_ref: str = field(repr=False)
     sequence: int
     complete: bool
+    scan_bound: int = DEFAULT_FILE_CHANGE_BASELINE_SIZE
     superseded_scan_epoch: UUID | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
@@ -115,6 +129,7 @@ class FileChangeScanHead:
             raise ValueError("File change scan head sequence is invalid")
         if type(self.complete) is not bool:
             raise TypeError("File change scan head complete must be bool")
+        _require_scan_bound(self.scan_bound)
         if (
             self.superseded_scan_epoch is not None
             and type(self.superseded_scan_epoch) is not UUID
@@ -132,6 +147,7 @@ class FileChangeBaselineRef:
     page_ref: str = field(repr=False)
     checkpoint_ref: str = field(repr=False)
     sequence: int
+    scan_bound: int = DEFAULT_FILE_CHANGE_BASELINE_SIZE
     comparison_baseline_ref: FileChangeBaselineRef | None = field(
         default=None,
         repr=False,
@@ -147,6 +163,7 @@ class FileChangeBaselineRef:
         _require_checkpoint_ref(self.checkpoint_ref)
         if type(self.sequence) is not int or not 1 <= self.sequence <= 2**63 - 1:
             raise ValueError("File change baseline sequence is invalid")
+        _require_scan_bound(self.scan_bound)
         if self.comparison_baseline_ref is not None:
             if type(self.comparison_baseline_ref) is not FileChangeBaselineRef:
                 raise TypeError("File change comparison baseline is invalid")
@@ -191,7 +208,8 @@ class FileChangeBaseline:
             raise TypeError("File change baseline reference is invalid")
         if (
             type(self.entries) is not tuple
-            or len(self.entries) > MAX_FILE_CHANGE_BASELINE_SIZE
+            or len(self.entries) > MAX_CONFIGURED_FILE_CHANGE_BASELINE_SIZE
+            or len(self.entries) > self.reference.scan_bound
             or any(type(entry) is not FileChangeBaselineEntry for entry in self.entries)
         ):
             raise TypeError("File change baseline entries must be bounded")
@@ -298,6 +316,7 @@ class ChangePage:
     provider_proof: str = field(repr=False)
     baseline_ref: FileChangeBaselineRef | None = field(default=None, repr=False)
     capability_version: str = "file-capabilities-v3"
+    scan_bound: int = DEFAULT_FILE_CHANGE_BASELINE_SIZE
 
     def __post_init__(self) -> None:
         if any(
@@ -322,6 +341,7 @@ class ChangePage:
             or not 1 <= self.page_limit <= MAX_FILE_CHANGE_PAGE_SIZE
         ):
             raise ValueError("ChangePage page_limit is invalid")
+        _require_scan_bound(self.scan_bound)
         if self.predecessor_page_ref is not None:
             _require_sha256(
                 "ChangePage predecessor_page_ref", self.predecessor_page_ref
@@ -424,6 +444,7 @@ def _page_document(page: ChangePage) -> dict[str, object]:
         "predecessorPageRef": page.predecessor_page_ref,
         "predecessorSequence": page.predecessor_sequence,
         "scanEpoch": str(page.scan_epoch),
+        "scanBound": page.scan_bound,
         "scanRef": page.scan_ref,
         "supersededScanEpoch": (
             None
@@ -450,6 +471,7 @@ def _baseline_reference_document(
         "scanEpoch": str(reference.scan_epoch),
         "scanRef": reference.scan_ref,
         "sequence": reference.sequence,
+        "scanBound": reference.scan_bound,
         "sourceVersionId": str(reference.source_version_ref),
     }
 
@@ -543,6 +565,7 @@ class AcceptedChangePage:
     complete: bool
     next_cursor: ChangeCursor | None = field(repr=False)
     accepted_at: datetime
+    scan_bound: int = DEFAULT_FILE_CHANGE_BASELINE_SIZE
 
     def __post_init__(self) -> None:
         _validate_acceptance_fields(
@@ -563,6 +586,7 @@ class AcceptedChangePage:
             or not 1 <= self.page_limit <= MAX_FILE_CHANGE_PAGE_SIZE
         ):
             raise ValueError("accepted page page_limit is invalid")
+        _require_scan_bound(self.scan_bound)
         if (
             self.superseded_scan_epoch is not None
             and type(self.superseded_scan_epoch) is not UUID
@@ -586,6 +610,7 @@ class AcceptedChangePage:
             checkpoint_ref=self.checkpoint_ref,
             sequence=self.sequence,
             complete=self.complete,
+            scan_bound=self.scan_bound,
             superseded_scan_epoch=self.superseded_scan_epoch,
         )
 
@@ -803,10 +828,21 @@ class ProviderGenericDenied:
     """One non-enumerating refusal for an unavailable source binding."""
 
 
+@dataclass(frozen=True, slots=True)
+class ProviderScanBoundExceeded:
+    """Closed content-free refusal that tells an operator which limit to act on."""
+
+    scan_bound: int
+
+    def __post_init__(self) -> None:
+        _require_scan_bound(self.scan_bound)
+
+
 FileChangeProviderOutcome = (
     ProviderOk[ChangePage]
     | ProviderUnsupported
     | ProviderRetryableUnavailable
     | ProviderInvalidCheckpoint
     | ProviderGenericDenied
+    | ProviderScanBoundExceeded
 )

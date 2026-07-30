@@ -26,6 +26,9 @@ from applications.file_root_configuration import (
     DEFAULT_WORKER_MAX_FILE_BYTES as _DEFAULT_WORKER_MAX_FILE_BYTES,
 )
 from applications.file_root_configuration import (
+    file_curated_subtrees as _file_dispatch_curated_subtrees,
+)
+from applications.file_root_configuration import (
     file_read_limits as _configured_file_read_limits,
 )
 from applications.file_root_configuration import (
@@ -532,6 +535,7 @@ def _run_file_dispatch(*, single_cycle: bool) -> int:
     roots = FileRootRegistry(
         root_bindings,
         limits=_file_read_limits(),
+        curated_subtrees=_file_dispatch_curated_subtrees(),
     )
     try:
         authority = PostgreSQLFileDispatchAuthority(

@@ -13,10 +13,16 @@ from applications.operator_authentication import (
     OPERATOR_ORGANIZATION_ENV,
 )
 from engine.persistence import DatabaseConfiguration, create_database_engine
-from tests.integration.test_file_scan_operator_process import _control, _worker
+from tests.integration.test_file_scan_operator_process import (
+    _control,
+    _worker,
+)
+from tests.integration.test_file_scan_operator_process import (
+    file_scan_scenario as _file_scan_scenario,
+)
 
+file_scan_scenario = _file_scan_scenario
 pytestmark = pytest.mark.integration
-pytest_plugins = ("tests.integration.test_file_scan_operator_process",)
 
 
 def _register_activated(
@@ -199,6 +205,7 @@ def test_scan_all_and_status_discover_every_active_source_without_source_args(
             "importsScheduled": 3,
             "pathsObserved": 3,
             "refusalCount": 0,
+            "scanBounds": [10_000],
             "sourceCount": 2,
         }
         assert scan["refusals"] == []
@@ -320,6 +327,7 @@ def test_scan_all_reports_one_refusal_and_continues_with_later_sources(
         "importsScheduled": 2,
         "pathsObserved": 2,
         "refusalCount": 1,
+        "scanBounds": [10_000],
         "sourceCount": 3,
     }
 

@@ -133,6 +133,19 @@ class FileChangePageStorePort(Protocol):
         page: VerifiedChangePage,
     ) -> AcceptedChangePage: ...
 
+    def report_file_scan_bound_refusal(
+        self,
+        call: TrustedControlCall,
+        source_ref: SourceRef,
+        scan_bound: int,
+    ) -> None: ...
+
+    def clear_file_scan_bound_refusal(
+        self,
+        call: TrustedControlCall,
+        source_ref: SourceRef,
+    ) -> None: ...
+
 
 class ArticlePolicyDefaultStorePort(Protocol):
     """Narrow persistence capability for future-Article default writes."""
@@ -183,7 +196,12 @@ class ContextControl:
         ]
         if file_change_proofs is not None:
             required_methods.extend(
-                ("accept_file_change_page", "schedule_file_change_page")
+                (
+                    "accept_file_change_page",
+                    "clear_file_scan_bound_refusal",
+                    "report_file_scan_bound_refusal",
+                    "schedule_file_change_page",
+                )
             )
         for method_name in required_methods:
             if not callable(getattr(store, method_name, None)):
@@ -310,6 +328,7 @@ class ContextControl:
                 or accepted.source_version_ref != page.source_version_ref
                 or accepted.scan_ref != page.scan_ref
                 or accepted.scan_epoch != page.scan_epoch
+                or accepted.scan_bound != page.scan_bound
                 or accepted.page_limit != page.page_limit
                 or (
                     page.predecessor_page_ref is None
@@ -330,6 +349,66 @@ class ContextControl:
         except Exception:
             raise SourceControlUnavailable(
                 "File change page acceptance is unavailable"
+            ) from None
+
+    def report_file_scan_bound_refusal(
+        self,
+        call: TrustedControlCall,
+        source_ref: SourceRef,
+        scan_bound: int,
+    ) -> None:
+        """Retain one closed operator condition under exact page-accept authority."""
+
+        if type(source_ref) is not SourceRef or type(scan_bound) is not int:
+            raise TypeError("File scan bound refusal is invalid")
+        try:
+            _validate_and_consume_control_call(
+                call,
+                authority=self._authority,
+                expected_operation=ControlOperation.ACCEPT_FILE_CHANGE_PAGE,
+                checked_at=self._clock(),
+            )
+            cast(FileChangePageStorePort, self._store).report_file_scan_bound_refusal(
+                call,
+                source_ref,
+                scan_bound,
+            )
+        except (ControlOperatorAuthenticationRejected, SourceNotAvailable):
+            raise SourceNotAvailable from None
+        except SourceControlUnavailable:
+            raise
+        except Exception:
+            raise SourceControlUnavailable(
+                "File scan bound refusal reporting is unavailable"
+            ) from None
+
+    def clear_file_scan_bound_refusal(
+        self,
+        call: TrustedControlCall,
+        source_ref: SourceRef,
+    ) -> None:
+        """Clear the closed condition after a complete snapshot revalidation."""
+
+        if type(source_ref) is not SourceRef:
+            raise TypeError("File scan bound refusal clear is invalid")
+        try:
+            _validate_and_consume_control_call(
+                call,
+                authority=self._authority,
+                expected_operation=ControlOperation.ACCEPT_FILE_CHANGE_PAGE,
+                checked_at=self._clock(),
+            )
+            cast(FileChangePageStorePort, self._store).clear_file_scan_bound_refusal(
+                call,
+                source_ref,
+            )
+        except (ControlOperatorAuthenticationRejected, SourceNotAvailable):
+            raise SourceNotAvailable from None
+        except SourceControlUnavailable:
+            raise
+        except Exception:
+            raise SourceControlUnavailable(
+                "File scan bound refusal clear is unavailable"
             ) from None
 
     def activate_file_change_feed(
