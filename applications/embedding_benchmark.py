@@ -296,8 +296,11 @@ def load_retrieval_judge() -> RetrievalJudge:
         factory = importlib.import_module("eval.retrieval_judge").create_judge
         if not callable(factory):
             raise TypeError
-        return cast(Callable[[], RetrievalJudge], factory)()
-    except (ImportError, AttributeError, TypeError):
+        judge = cast(Callable[[], object], factory)()
+        if not callable(getattr(judge, "evaluate_retrieval", None)):
+            raise TypeError
+        return cast(RetrievalJudge, judge)
+    except Exception:
         raise BenchmarkUnavailable("retrieval judge is unavailable") from None
 
 
