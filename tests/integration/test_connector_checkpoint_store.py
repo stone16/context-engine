@@ -124,6 +124,28 @@ class _EmptyNoProgressAdapter(ConnectorAdapter):
         return page
 
 
+class _ScriptedAdapter(ConnectorAdapter):
+    def __init__(self, pages: tuple[SupplyChangePage, ...]) -> None:
+        self._pages = iter(pages)
+        self.loaded_checkpoints: list[bytes | None] = []
+        self.emitted_page_refs: list[str] = []
+
+    def load_checkpoint(self, opaque_checkpoint: bytes | None) -> None:
+        self.loaded_checkpoints.append(opaque_checkpoint)
+
+    def load(self, binding: ConnectorCheckpointBinding) -> SupplyChangePage:
+        return self._emit(binding)
+
+    def poll(self, binding: ConnectorCheckpointBinding) -> SupplyChangePage:
+        return self._emit(binding)
+
+    def _emit(self, binding: ConnectorCheckpointBinding) -> SupplyChangePage:
+        page = next(self._pages)
+        assert page.binding == binding
+        self.emitted_page_refs.append(page.page_ref)
+        return page
+
+
 class _FailBeforeAtomicAcceptance(StagedArtifactSink):
     def __init__(self, inner: StagedArtifactSink, page_ref: str) -> None:
         self._inner = inner
@@ -728,6 +750,76 @@ def test_repeating_empty_pages_without_cursor_progress_terminate_content_free(
             lease_claims=_claims(scenario),
         )
         is None
+    )
+
+
+def test_no_progress_count_resets_after_content_and_checkpoint_progress(
+    scenarios: list[_Scenario],
+    migration_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+    guarded_worker_engine: Engine,
+) -> None:
+    scenario = _seed_scenario(migration_configuration, guarded_control_engine)
+    scenarios.append(scenario)
+    binding = scenario.execution.binding
+    bootstrap = _page(scenario, 1, terminal=False)
+    first_empty = SupplyChangePage(
+        binding=binding,
+        page_ref="empty-before-progress",
+        documents=(),
+        deleted_document_refs=(),
+        checkpoint_proposal=bootstrap.checkpoint_proposal,
+        terminal=False,
+    )
+    progress = _page(scenario, 2, terminal=False)
+    second_empty = SupplyChangePage(
+        binding=binding,
+        page_ref="empty-after-progress",
+        documents=(),
+        deleted_document_refs=(),
+        checkpoint_proposal=progress.checkpoint_proposal,
+        terminal=False,
+    )
+    terminal = SupplyChangePage(
+        binding=binding,
+        page_ref="terminal-after-reset",
+        documents=(),
+        deleted_document_refs=(),
+        checkpoint_proposal=b"terminal-checkpoint",
+        terminal=True,
+    )
+    adapter = _ScriptedAdapter(
+        (bootstrap, first_empty, progress, second_empty, terminal)
+    )
+    store = PostgreSQLConnectorCheckpointStore(guarded_worker_engine)
+
+    result = _bridge(
+        scenario,
+        guarded_worker_engine,
+        store,
+        configuration=SupplyExecutionConfiguration(
+            page_limit=5,
+            no_progress_page_limit=1,
+        ),
+    ).execute(scenario.execution, adapter)
+
+    assert result.accepted_page_refs == (
+        "page:1",
+        "empty-before-progress",
+        "page:2",
+        "empty-after-progress",
+        "terminal-after-reset",
+    )
+    assert adapter.loaded_checkpoints == [
+        None,
+        bootstrap.checkpoint_proposal,
+        bootstrap.checkpoint_proposal,
+        progress.checkpoint_proposal,
+        progress.checkpoint_proposal,
+    ]
+    assert (
+        store.load(binding, lease_claims=_claims(scenario))
+        == b"terminal-checkpoint"
     )
 
 
