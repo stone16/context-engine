@@ -14,6 +14,7 @@ from engine.runtime.candidate_ranking import (
     CandidateQuery,
     RankedCandidate,
     RankedCandidateList,
+    preserve_single_ranker_candidates,
 )
 from engine.runtime.content_io import CandidateIndex
 from engine.runtime.contracts import Acquire, ContextNeed
@@ -232,3 +233,30 @@ def test_candidate_query_refuses_merged_or_duplicate_ranker_lists() -> None:
     )
     with pytest.raises(ValueError, match="ranker identity must be unique"):
         CandidateQuery(ranked_lists=(repeated, repeated))
+
+
+def test_deferred_multi_ranker_policy_refuses_instead_of_dropping_rankers() -> None:
+    """Silently keeping only the first list would activate a policy nobody chose."""
+
+    lexical_only = _candidate("lexical-only")
+    vector_only = _candidate("vector-only")
+    query = CandidateQuery(
+        ranked_lists=(
+            RankedCandidateList(
+                ranker_ref="lexical",
+                candidates=(RankedCandidate(candidate_ref=lexical_only),),
+            ),
+            RankedCandidateList(
+                ranker_ref="vector",
+                candidates=(RankedCandidate(candidate_ref=vector_only),),
+            ),
+        )
+    )
+
+    with pytest.raises(ValueError, match="multi-ranker fusion policy is not active"):
+        preserve_single_ranker_candidates(query)
+
+    preserved = preserve_single_ranker_candidates(
+        CandidateQuery(ranked_lists=(query.ranked_lists[0],))
+    )
+    assert preserved.candidate_refs == (lexical_only,)

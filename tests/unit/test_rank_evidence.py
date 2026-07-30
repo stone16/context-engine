@@ -82,3 +82,17 @@ def test_rank_evidence_refuses_content_acl_and_authority_payloads() -> None:
             fused_rank=1,
             authority=object(),
         )
+
+
+def test_rank_evidence_refuses_one_ranker_counted_twice() -> None:
+    """A repeated ranker would double its own weight in authorized fusion."""
+
+    with pytest.raises(ValueError, match="rankers must be unique"):
+        CandidateRankEvidence(
+            candidate_ref=_candidate(),
+            per_ranker=(
+                RankerEvidence(ranker_ref="lexical", position=1),
+                RankerEvidence(ranker_ref="lexical", position=2),
+            ),
+            fused_rank=1,
+        )
