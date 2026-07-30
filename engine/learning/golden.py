@@ -633,7 +633,7 @@ def relock_golden_set(
     authority: str,
     reason: str,
     recorded_at: datetime,
-) -> None:
+) -> str:
     """Explicitly append a new pilot digest while retaining all prior locks."""
 
     golden_set = load_golden_set(
@@ -661,3 +661,4 @@ def relock_golden_set(
     )
     document["activePilotDigest"] = golden_set.pilot_digest
     _write_lock(lock_path, document)
+    return golden_set.pilot_digest

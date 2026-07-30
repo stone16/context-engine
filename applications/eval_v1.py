@@ -9,16 +9,14 @@ from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
 
-from applications.eval_executor import (
-    execute_evaluation_report,
-    load_answer_judgments,
-)
 from engine.learning.eval_run import (
     EvaluationRunUnavailable,
     build_evaluation_report,
     load_evaluation_run,
+    record_lineage_check,
 )
 from engine.learning.golden import (
+    GoldenSet,
     GoldenSetUnavailable,
     create_golden_lock,
     load_golden_set,
@@ -35,6 +33,7 @@ from engine.learning.governance import (
 )
 from engine.learning.lineage import (
     LineageMapUnavailable,
+    LineageResolutionReport,
     StaleGoldenLineage,
     detect_stale_lineage,
     load_lineage_map,
@@ -166,7 +165,30 @@ def _write_report(path: Path, report: dict[str, object]) -> None:
         json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
-    print(f"golden v1 report written: {path}", flush=True)
+    print(f"golden v1 report written: digest={report['reportDigest']}", flush=True)
+
+
+def _resolved_lineage_check(
+    golden_set: GoldenSet,
+    lineage_map_path: Path | None,
+) -> LineageResolutionReport | None:
+    if lineage_map_path is None:
+        return None
+    lineage_check = detect_stale_lineage(
+        golden_set,
+        load_lineage_map(lineage_map_path),
+    )
+    require_resolved_lineage(lineage_check)
+    return lineage_check
+
+
+def _record_lineage_check(
+    report: dict[str, object],
+    lineage_check: LineageResolutionReport | None,
+) -> dict[str, object]:
+    if lineage_check is None:
+        return report
+    return record_lineage_check(report, lineage_check)
 
 
 def main(argv: Sequence[str] | None = None) -> None:
@@ -202,17 +224,20 @@ def main(argv: Sequence[str] | None = None) -> None:
                 reason=args.reason,
                 recorded_at=args.recorded_at,
             )
-            print(f"golden pilot locked: {args.lock}", flush=True)
+            print(f"golden pilot locked: digest={golden_set.pilot_digest}", flush=True)
             return
         if args.command == "relock":
-            relock_golden_set(
+            pilot_digest = relock_golden_set(
                 args.golden_set,
                 args.lock,
                 authority=args.authority,
                 reason=args.reason,
                 recorded_at=args.recorded_at,
             )
-            print(f"golden pilot re-locked: {args.lock}", flush=True)
+            print(
+                f"golden pilot re-locked: digest={pilot_digest}",
+                flush=True,
+            )
             return
         if args.command == "lineage-check":
             golden_set = load_golden_set(args.golden_set, lock_path=args.lock)
@@ -229,38 +254,41 @@ def main(argv: Sequence[str] | None = None) -> None:
             return
         if args.command == "report":
             golden_set = load_golden_set(args.golden_set, lock_path=args.lock)
-            if lineage_map_path is not None:
-                require_resolved_lineage(
-                    detect_stale_lineage(
-                        golden_set,
-                        load_lineage_map(lineage_map_path),
-                    )
-                )
+            lineage_check = _resolved_lineage_check(
+                golden_set,
+                lineage_map_path,
+            )
             report = build_evaluation_report(
                 golden_set,
                 load_evaluation_run(args.run),
                 load_thresholds(DEFAULT_THRESHOLDS_PATH),
                 generated_at=args.generated_at,
             )
-            _write_report(args.output, report)
-            return
-        if args.command == "execute":
-            golden_set = load_golden_set(args.golden_set, lock_path=args.lock)
-            if lineage_map_path is not None:
-                require_resolved_lineage(
-                    detect_stale_lineage(
-                        golden_set,
-                        load_lineage_map(lineage_map_path),
-                    )
-                )
             _write_report(
                 args.output,
-                execute_evaluation_report(
-                    golden_set,
-                    load_answer_judgments(args.judgments),
-                    load_thresholds(DEFAULT_THRESHOLDS_PATH),
-                    generated_at=args.generated_at,
-                ),
+                _record_lineage_check(report, lineage_check),
+            )
+            return
+        if args.command == "execute":
+            from applications.eval_executor import (
+                execute_evaluation_report,
+                load_answer_judgments,
+            )
+
+            golden_set = load_golden_set(args.golden_set, lock_path=args.lock)
+            lineage_check = _resolved_lineage_check(
+                golden_set,
+                lineage_map_path,
+            )
+            report = execute_evaluation_report(
+                golden_set,
+                load_answer_judgments(args.judgments),
+                load_thresholds(DEFAULT_THRESHOLDS_PATH),
+                generated_at=args.generated_at,
+            )
+            _write_report(
+                args.output,
+                _record_lineage_check(report, lineage_check),
             )
             return
     except (

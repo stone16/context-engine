@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -32,6 +33,7 @@ from tests.support.golden import (
     valid_composed_entries,
     write_golden,
 )
+from tests.support.golden_backup import expected_lineages, lineage_document
 
 
 @pytest.fixture(autouse=True)
@@ -117,6 +119,11 @@ def test_cli_caller_loaded_run_is_refused_without_harness_security_execution(
     report = json.loads(output_path.read_text(encoding="utf-8"))
 
     assert report["status"] == "REFUSED"
+    assert report["lineageCheck"] == {
+        "ran": False,
+        "staleCaseCount": None,
+        "totalCaseCount": len(entries),
+    }
     assert report["retrieval"]["status"] == "measured"
     assert report["citation"]["status"] == "pass"
     assert report["answer"]["status"] == "pending_preregistration"
@@ -142,6 +149,110 @@ def test_cli_caller_loaded_run_is_refused_without_harness_security_execution(
     assert citation_single_doc["case_count"] == len(entries)
 
 
+def test_cli_report_records_resolved_lineage_check_counts(tmp_path: Path) -> None:
+    entries = valid_composed_entries()
+    golden_path, lock_path, run_path, output_path = _write_report_inputs(
+        tmp_path, entries
+    )
+    lineage_map_path = tmp_path / "lineage-map.json"
+    lineage_map_path.write_text(
+        json.dumps(lineage_document(expected_lineages(entries))),
+        encoding="utf-8",
+    )
+
+    main(
+        [
+            "report",
+            "--golden-set",
+            str(golden_path),
+            "--lock",
+            str(lock_path),
+            "--run",
+            str(run_path),
+            "--lineage-map",
+            str(lineage_map_path),
+            "--output",
+            str(output_path),
+            "--generated-at",
+            "2026-07-29T12:00:00Z",
+        ]
+    )
+    report = json.loads(output_path.read_text(encoding="utf-8"))
+
+    assert report["lineageCheck"] == {
+        "ran": True,
+        "staleCaseCount": 0,
+        "totalCaseCount": len(entries),
+    }
+
+
+def test_cli_success_output_never_discloses_an_absolute_corpus_path(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    entries = valid_composed_entries()
+    golden_path = tmp_path / "golden.json"
+    lock_path = tmp_path / "golden.lock.json"
+    run_path = tmp_path / "run.json"
+    output_path = tmp_path / ".context-engine/eval/report.json"
+    write_golden(golden_path, entries)
+
+    main(
+        [
+            "lock",
+            "--golden-set",
+            str(golden_path),
+            "--lock",
+            str(lock_path),
+            "--authority",
+            "maintainer",
+            "--reason",
+            "synthetic-test-lock",
+            "--recorded-at",
+            "2026-07-29T12:00:00Z",
+        ]
+    )
+    main(
+        [
+            "relock",
+            "--golden-set",
+            str(golden_path),
+            "--lock",
+            str(lock_path),
+            "--authority",
+            "maintainer",
+            "--reason",
+            "synthetic-test-relock",
+            "--recorded-at",
+            "2026-07-29T12:01:00Z",
+        ]
+    )
+    run_path.write_text(json.dumps(_run_document(entries)), encoding="utf-8")
+    _run_report(golden_path, lock_path, run_path, output_path)
+
+    output = capsys.readouterr().out
+    assert str(tmp_path) not in output
+    assert "golden pilot locked: digest=" in output
+    assert "golden pilot re-locked: digest=" in output
+    assert "golden v1 report written: digest=" in output
+
+
+def test_importing_cli_does_not_eagerly_import_the_run_executor() -> None:
+    completed = subprocess.run(
+        (
+            sys.executable,
+            "-c",
+            "import sys; import applications.eval_v1; "
+            "assert 'applications.eval_executor' not in sys.modules",
+        ),
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+
+
 def test_cli_execute_reaches_a_non_refused_report_through_an_executed_run(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -155,6 +266,11 @@ def test_cli_execute_reaches_a_non_refused_report_through_an_executed_run(
         json.dumps(judgment_document(entries)),
         encoding="utf-8",
     )
+    lineage_map_path = tmp_path / "lineage-map.json"
+    lineage_map_path.write_text(
+        json.dumps(lineage_document(expected_lineages(entries))),
+        encoding="utf-8",
+    )
 
     with serving(clean_responder(entries), monkeypatch):
         main(
@@ -166,6 +282,8 @@ def test_cli_execute_reaches_a_non_refused_report_through_an_executed_run(
                 str(lock_path),
                 "--judgments",
                 str(judgments_path),
+                "--lineage-map",
+                str(lineage_map_path),
                 "--output",
                 str(output_path),
                 "--generated-at",
@@ -176,6 +294,11 @@ def test_cli_execute_reaches_a_non_refused_report_through_an_executed_run(
 
     assert report["status"] != "REFUSED"
     assert report["status"] == "PENDING_PREREGISTRATION"
+    assert report["lineageCheck"] == {
+        "ran": True,
+        "staleCaseCount": 0,
+        "totalCaseCount": len(entries),
+    }
     assert report["security"] == {
         "missingContextFallbackCount": 0,
         "observationState": "observed_clean",
