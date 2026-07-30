@@ -245,7 +245,7 @@ def _run_operator_subcommand(
             control = ContextControl(
                 store=PostgreSQLControlStore(engine, clock=clock),
                 bulk_article_policy_store=policy_store,
-                authority=authorities.control,
+                authority=authority,
                 clock=clock,
             )
             command = BulkArticlePolicyChange(
@@ -259,7 +259,7 @@ def _run_operator_subcommand(
                 operation = ControlOperation.PREVIEW_BULK_ARTICLE_POLICY_CHANGE
             else:
                 operation = ControlOperation.COMMIT_BULK_ARTICLE_POLICY_CHANGE
-            with authorities.control.authorize(
+            with authority.authorize(
                 opaque_credential=opaque_credential,
                 operation=operation,
                 request_id=f"local-{arguments.subcommand}-{uuid4().hex}",
