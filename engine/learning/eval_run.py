@@ -31,6 +31,7 @@ from engine.learning.judges import (
     judge_citations,
     judge_retrieval,
 )
+from engine.learning.lineage import LineageResolutionReport
 from engine.learning.thresholds import (
     EvaluationThresholds,
     PendingValue,
@@ -274,6 +275,44 @@ def _timestamp(value: datetime) -> str:
     return rendered.replace("+00:00", "Z")
 
 
+def _report_digest(report: dict[str, object]) -> str:
+    return sha256(
+        json.dumps(
+            report,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def record_lineage_check(
+    report: dict[str, object],
+    lineage_check: LineageResolutionReport,
+) -> dict[str, object]:
+    """Bind a completed lineage check into an evaluation report digest."""
+
+    if type(report) is not dict or type(lineage_check) is not LineageResolutionReport:
+        raise TypeError("report requires a typed lineage resolution")
+    golden_set = report.get("goldenSet")
+    if (
+        type(golden_set) is not dict
+        or golden_set.get("digest") != lineage_check.golden_digest
+    ):
+        raise EvaluationRunUnavailable(
+            "lineage resolution belongs to a different set"
+        )
+    updated = dict(report)
+    updated["lineageCheck"] = {
+        "ran": True,
+        "staleCaseCount": len(lineage_check.stale_cases),
+        "totalCaseCount": lineage_check.total_cases,
+    }
+    updated.pop("reportDigest", None)
+    updated["reportDigest"] = _report_digest(updated)
+    return updated
+
+
 def build_evaluation_report(
     golden_set: GoldenSet,
     run: EvaluationRun,
@@ -425,6 +464,11 @@ def build_evaluation_report(
             "pilotDigest": golden_set.pilot_digest,
             "schemaVersion": "context-engine-golden-set-v1",
         },
+        "lineageCheck": {
+            "ran": False,
+            "staleCaseCount": None,
+            "totalCaseCount": len(golden_set.cases),
+        },
         "reportVersion": EVAL_REPORT_VERSION,
         "retrieval": {**asdict(retrieval), "status": retrieval_status},
         "run": {"executedSeamRef": run.executed_seam_ref},
@@ -434,12 +478,5 @@ def build_evaluation_report(
         "thresholdAuthority": thresholds.source_authority,
         "thresholds": threshold_report_document(thresholds),
     }
-    report["reportDigest"] = sha256(
-        json.dumps(
-            report,
-            ensure_ascii=False,
-            separators=(",", ":"),
-            sort_keys=True,
-        ).encode("utf-8")
-    ).hexdigest()
+    report["reportDigest"] = _report_digest(report)
     return report
