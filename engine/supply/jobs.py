@@ -19,15 +19,18 @@ from uuid import UUID
 WORKER_LEASE_ACTOR_KIND: Final = "service"
 WORKER_LEASE_OPERATION: Final = "noop.complete"
 FILE_IMPORT_WORKER_LEASE_OPERATION: Final = "file.import"
+SUPPLY_CONNECTOR_WORKER_LEASE_OPERATION: Final = "connector.execute"
 _ALGORITHM: Final = "HS256"
 _TOKEN_TYPE: Final = "CE-WorkerLease"
 _TOKEN_VERSION: Final = 1
 _FILE_IMPORT_TOKEN_VERSION: Final = 3
+_SUPPLY_CONNECTOR_TOKEN_VERSION: Final = 4
 _DOMAIN: Final = "context-engine.worker-lease"
 _MAX_KEY_VERSION: Final = (1 << 63) - 1
 _MINIMUM_SECRET_BYTES: Final = 32
 _NONCE_BYTES: Final = 32
 _MAX_TOKEN_LENGTH: Final = 8192
+_MAX_ALLOWED_SET_ITEMS: Final = 32
 _HEADER_FIELDS: Final = frozenset({"alg", "dom", "kid", "typ", "v"})
 _CLAIM_FIELDS: Final = frozenset(
     {
@@ -46,6 +49,17 @@ _CLAIM_FIELDS: Final = frozenset(
 )
 _FILE_IMPORT_CLAIM_FIELDS: Final = _CLAIM_FIELDS | frozenset(
     {"lease_generation", "source_ref"}
+)
+_SUPPLY_CONNECTOR_CLAIM_FIELDS: Final = _CLAIM_FIELDS | frozenset(
+    {
+        "allowed_operations",
+        "allowed_source_version_refs",
+        "idempotency_key",
+        "lease_generation",
+        "policy_epoch",
+        "service_actor_expires_at",
+        "source_version_ref",
+    }
 )
 
 
@@ -75,6 +89,28 @@ def _require_uuid(field_name: str, value: object) -> UUID:
     return value
 
 
+def _require_positive_int(field_name: str, value: object) -> int:
+    if type(value) is not int or not 1 <= value <= _MAX_KEY_VERSION:
+        raise ValueError(f"{field_name} must be a positive signed 64-bit integer")
+    return value
+
+
+def _require_identifier_set(
+    field_name: str,
+    value: object,
+    *,
+    maximum_length: int,
+) -> tuple[str, ...]:
+    if type(value) is not tuple or not 1 <= len(value) <= _MAX_ALLOWED_SET_ITEMS:
+        raise ValueError(f"{field_name} must be a bounded exact tuple")
+    items = value
+    for item in items:
+        _require_identifier(field_name, item, maximum_length=maximum_length)
+    if items != tuple(sorted(set(items))):
+        raise ValueError(f"{field_name} must be sorted and unique")
+    return items
+
+
 def _require_utc(field_name: str, value: object) -> datetime:
     if (
         type(value) is not datetime
@@ -102,7 +138,15 @@ class WorkerLeaseClaims:
     nonce: bytes = field(repr=False)
     operation: str = field(default=WORKER_LEASE_OPERATION, repr=False)
     source_ref: str | None = field(default=None, repr=False)
+    source_version_ref: str | None = field(default=None, repr=False)
     lease_generation: int | None = field(default=None, repr=False)
+    policy_epoch: int | None = field(default=None, repr=False)
+    idempotency_key: str | None = field(default=None, repr=False)
+    allowed_source_version_refs: tuple[str, ...] | None = field(
+        default=None, repr=False
+    )
+    allowed_operations: tuple[str, ...] | None = field(default=None, repr=False)
+    service_actor_expires_at: datetime | None = field(default=None, repr=False)
     actor_kind: Literal["service"] = field(
         default=WORKER_LEASE_ACTOR_KIND, init=False, repr=False
     )
@@ -125,21 +169,108 @@ class WorkerLeaseClaims:
         if self.operation not in {
             WORKER_LEASE_OPERATION,
             FILE_IMPORT_WORKER_LEASE_OPERATION,
+            SUPPLY_CONNECTOR_WORKER_LEASE_OPERATION,
         }:
             raise ValueError("WorkerLease operation must be closed")
         if self.operation == WORKER_LEASE_OPERATION:
-            if self.source_ref is not None or self.lease_generation is not None:
+            if (
+                self.source_ref is not None
+                or self.source_version_ref is not None
+                or self.lease_generation is not None
+                or self.policy_epoch is not None
+                or self.idempotency_key is not None
+                or self.allowed_source_version_refs is not None
+                or self.allowed_operations is not None
+                or self.service_actor_expires_at is not None
+            ):
                 raise ValueError(
                     "no-op WorkerLease cannot bind a source or lease generation"
                 )
-        else:
+        elif self.operation == FILE_IMPORT_WORKER_LEASE_OPERATION:
             _require_identifier("source_ref", self.source_ref, maximum_length=255)
+            if self.source_version_ref is not None:
+                raise ValueError("File WorkerLease cannot bind connector SourceVersion")
+            if any(
+                value is not None
+                for value in (
+                    self.policy_epoch,
+                    self.idempotency_key,
+                    self.allowed_source_version_refs,
+                    self.allowed_operations,
+                    self.service_actor_expires_at,
+                )
+            ):
+                raise ValueError("File WorkerLease cannot bind connector ActorContext")
             if (
                 type(self.lease_generation) is not int
                 or not 1 <= self.lease_generation <= _MAX_KEY_VERSION
             ):
                 raise ValueError(
                     "File WorkerLease generation must be a positive signed "
+                    "64-bit integer"
+                )
+        else:
+            if self.source_ref is not None:
+                raise ValueError("connector WorkerLease cannot bind File source_ref")
+            _require_identifier(
+                "source_version_ref",
+                self.source_version_ref,
+                maximum_length=255,
+            )
+            _require_positive_int("connector policy epoch", self.policy_epoch)
+            _require_identifier(
+                "connector idempotency key",
+                self.idempotency_key,
+                maximum_length=255,
+            )
+            if (
+                type(self.idempotency_key) is not str
+                or len(self.idempotency_key) != 64
+                or any(
+                    character not in "0123456789abcdef"
+                    for character in self.idempotency_key
+                )
+            ):
+                raise ValueError(
+                    "connector idempotency key must be lowercase SHA-256"
+                )
+            allowed_sources = _require_identifier_set(
+                "connector allowed source versions",
+                self.allowed_source_version_refs,
+                maximum_length=255,
+            )
+            allowed_operations = _require_identifier_set(
+                "connector allowed operations",
+                self.allowed_operations,
+                maximum_length=128,
+            )
+            if self.source_version_ref not in allowed_sources:
+                raise ValueError("connector source must belong to its allowed set")
+            for source_version_ref in allowed_sources:
+                try:
+                    parsed_source_version = UUID(source_version_ref)
+                except ValueError:
+                    raise ValueError(
+                        "connector allowed sources must be canonical UUIDs"
+                    ) from None
+                if str(parsed_source_version) != source_version_ref:
+                    raise ValueError(
+                        "connector allowed sources must be canonical UUIDs"
+                    )
+            if self.operation not in allowed_operations:
+                raise ValueError("connector operation must belong to its allowed set")
+            actor_expiry = _require_utc(
+                "connector ServiceActor expiry",
+                self.service_actor_expires_at,
+            )
+            if actor_expiry < self.expires_at:
+                raise ValueError("connector ServiceActor cannot expire before lease")
+            if (
+                type(self.lease_generation) is not int
+                or not 1 <= self.lease_generation <= _MAX_KEY_VERSION
+            ):
+                raise ValueError(
+                    "connector WorkerLease generation must be a positive signed "
                     "64-bit integer"
                 )
 
@@ -298,6 +429,18 @@ def _claims_document(claims: WorkerLeaseClaims) -> dict[str, object]:
     if claims.operation == FILE_IMPORT_WORKER_LEASE_OPERATION:
         document["source_ref"] = claims.source_ref
         document["lease_generation"] = claims.lease_generation
+    elif claims.operation == SUPPLY_CONNECTOR_WORKER_LEASE_OPERATION:
+        document["source_version_ref"] = claims.source_version_ref
+        document["lease_generation"] = claims.lease_generation
+        document["policy_epoch"] = claims.policy_epoch
+        document["idempotency_key"] = claims.idempotency_key
+        document["allowed_source_version_refs"] = (
+            claims.allowed_source_version_refs
+        )
+        document["allowed_operations"] = claims.allowed_operations
+        document["service_actor_expires_at"] = _timestamp(
+            cast(datetime, claims.service_actor_expires_at)
+        )
     return document
 
 
@@ -325,11 +468,11 @@ class WorkerLeaseCodec:
         key = self._keyring._key_for(claims.signing_key_version)
         if key is None:  # pragma: no cover - keyring construction proves this
             raise ValueError("active WorkerLease signing key is unavailable")
-        token_version = (
-            _TOKEN_VERSION
-            if claims.operation == WORKER_LEASE_OPERATION
-            else _FILE_IMPORT_TOKEN_VERSION
-        )
+        token_version = {
+            WORKER_LEASE_OPERATION: _TOKEN_VERSION,
+            FILE_IMPORT_WORKER_LEASE_OPERATION: _FILE_IMPORT_TOKEN_VERSION,
+            SUPPLY_CONNECTOR_WORKER_LEASE_OPERATION: _SUPPLY_CONNECTOR_TOKEN_VERSION,
+        }[claims.operation]
         header = {
             "alg": _ALGORITHM,
             "dom": _DOMAIN,
@@ -357,6 +500,7 @@ class WorkerLeaseCodec:
         expected_worker_audience: str,
         now: datetime,
         expected_source_ref: str | None = None,
+        expected_source_version_ref: str | None = None,
     ) -> WorkerLeaseClaims:
         if type(token) is not WorkerLeaseToken:
             raise TypeError("token must be WorkerLeaseToken")
@@ -374,6 +518,7 @@ class WorkerLeaseCodec:
         if expected_operation not in {
             WORKER_LEASE_OPERATION,
             FILE_IMPORT_WORKER_LEASE_OPERATION,
+            SUPPLY_CONNECTOR_WORKER_LEASE_OPERATION,
         }:
             raise WorkNotAvailable(
                 WorkerLeaseRejectionAuditReceipt(worker_lease_digest(token))
@@ -382,7 +527,19 @@ class WorkerLeaseCodec:
             _require_identifier(
                 "expected_source_ref", expected_source_ref, maximum_length=255
             )
-        elif expected_source_ref is not None:
+            if expected_source_version_ref is not None:
+                raise ValueError(
+                    "File verification cannot bind connector SourceVersion"
+                )
+        elif expected_operation == SUPPLY_CONNECTOR_WORKER_LEASE_OPERATION:
+            _require_identifier(
+                "expected_source_version_ref",
+                expected_source_version_ref,
+                maximum_length=255,
+            )
+            if expected_source_ref is not None:
+                raise ValueError("connector verification cannot bind File source_ref")
+        elif expected_source_ref is not None or expected_source_version_ref is not None:
             raise ValueError("no-op verification cannot bind a source")
         checked_at = _require_utc("now", now)
         try:
@@ -394,6 +551,7 @@ class WorkerLeaseCodec:
                 or claims.workload != expected_workload
                 or claims.operation != expected_operation
                 or claims.source_ref != expected_source_ref
+                or claims.source_version_ref != expected_source_version_ref
                 or claims.worker_audience != expected_worker_audience
                 or checked_at < claims.issued_at
                 or checked_at >= claims.expires_at
@@ -417,7 +575,11 @@ class WorkerLeaseCodec:
         if type(header["v"]) is not int:
             raise ValueError
         token_version = header["v"]
-        if token_version not in {_TOKEN_VERSION, _FILE_IMPORT_TOKEN_VERSION}:
+        if token_version not in {
+            _TOKEN_VERSION,
+            _FILE_IMPORT_TOKEN_VERSION,
+            _SUPPLY_CONNECTOR_TOKEN_VERSION,
+        }:
             raise ValueError
         if header != {
             "alg": _ALGORITHM,
@@ -438,11 +600,11 @@ class WorkerLeaseCodec:
         expected_signature = hmac.digest(key, signing_input, "sha256")
         if not hmac.compare_digest(supplied_signature, expected_signature):
             raise ValueError
-        claim_fields = (
-            _CLAIM_FIELDS
-            if token_version == _TOKEN_VERSION
-            else _FILE_IMPORT_CLAIM_FIELDS
-        )
+        claim_fields = {
+            _TOKEN_VERSION: _CLAIM_FIELDS,
+            _FILE_IMPORT_TOKEN_VERSION: _FILE_IMPORT_CLAIM_FIELDS,
+            _SUPPLY_CONNECTOR_TOKEN_VERSION: _SUPPLY_CONNECTOR_CLAIM_FIELDS,
+        }[token_version]
         document = _decode_document(encoded_claims, claim_fields)
         if (
             type(document["signing_key_version"]) is not int
@@ -451,11 +613,11 @@ class WorkerLeaseCodec:
             raise ValueError
         if document["actor_kind"] != WORKER_LEASE_ACTOR_KIND:
             raise ValueError
-        expected_operation = (
-            WORKER_LEASE_OPERATION
-            if token_version == _TOKEN_VERSION
-            else FILE_IMPORT_WORKER_LEASE_OPERATION
-        )
+        expected_operation = {
+            _TOKEN_VERSION: WORKER_LEASE_OPERATION,
+            _FILE_IMPORT_TOKEN_VERSION: FILE_IMPORT_WORKER_LEASE_OPERATION,
+            _SUPPLY_CONNECTOR_TOKEN_VERSION: SUPPLY_CONNECTOR_WORKER_LEASE_OPERATION,
+        }[token_version]
         if document["operation"] != expected_operation:
             raise ValueError
         return WorkerLeaseClaims(
@@ -474,9 +636,40 @@ class WorkerLeaseCodec:
                 if token_version == _FILE_IMPORT_TOKEN_VERSION
                 else None
             ),
+            source_version_ref=(
+                cast(str, document["source_version_ref"])
+                if token_version == _SUPPLY_CONNECTOR_TOKEN_VERSION
+                else None
+            ),
             lease_generation=(
                 cast(int, document["lease_generation"])
-                if token_version == _FILE_IMPORT_TOKEN_VERSION
+                if token_version
+                in {_FILE_IMPORT_TOKEN_VERSION, _SUPPLY_CONNECTOR_TOKEN_VERSION}
+                else None
+            ),
+            policy_epoch=(
+                cast(int, document["policy_epoch"])
+                if token_version == _SUPPLY_CONNECTOR_TOKEN_VERSION
+                else None
+            ),
+            idempotency_key=(
+                cast(str, document["idempotency_key"])
+                if token_version == _SUPPLY_CONNECTOR_TOKEN_VERSION
+                else None
+            ),
+            allowed_source_version_refs=(
+                tuple(cast(list[str], document["allowed_source_version_refs"]))
+                if token_version == _SUPPLY_CONNECTOR_TOKEN_VERSION
+                else None
+            ),
+            allowed_operations=(
+                tuple(cast(list[str], document["allowed_operations"]))
+                if token_version == _SUPPLY_CONNECTOR_TOKEN_VERSION
+                else None
+            ),
+            service_actor_expires_at=(
+                _parse_timestamp(document["service_actor_expires_at"])
+                if token_version == _SUPPLY_CONNECTOR_TOKEN_VERSION
                 else None
             ),
         )

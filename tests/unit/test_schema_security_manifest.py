@@ -32,7 +32,7 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
     document = manifest()
     tables = table_entries(document)
 
-    assert document["manifestVersion"] == "37.0.0"
+    assert document["manifestVersion"] == "38.0.0"
     assert set(tables) == {
         "active_release_manifest",
         "action_delivery_attempt",
@@ -89,6 +89,11 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
         "resource_access_policy",
         "service_principal",
         "source_version",
+        "supply_connector_accepted_page",
+        "supply_connector_checkpoint",
+        "supply_connector_job",
+        "supply_connector_lease_event",
+        "supply_connector_staged_page",
         "user_account",
         "worker_noop_job",
     }
@@ -176,6 +181,12 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
     assert tables["worker_noop_job"]["classification"] == "tenant_owned"
     assert tables["context_source"]["classification"] == "tenant_owned"
     assert tables["source_version"]["classification"] == "tenant_owned"
+    assert tables["supply_connector_job"]["classification"] == "tenant_owned"
+    assert tables["supply_connector_staged_page"]["classification"] == ("tenant_owned")
+    assert tables["supply_connector_accepted_page"]["classification"] == (
+        "tenant_owned"
+    )
+    assert tables["supply_connector_checkpoint"]["classification"] == ("tenant_owned")
     assert tables["file_source_change_page"]["classification"] == "tenant_owned"
     assert tables["file_source_change"]["classification"] == "tenant_owned"
     delete_binding = tables["file_source_delete_observation_page"]
@@ -853,8 +864,7 @@ def test_issue_21_file_source_manifest_is_closed_and_role_separated() -> None:
     ]
     assert refusal_operation["retainedCompilationRefusalCategoryAllowed"] is True
     assert (
-        refusal_operation["sourceContentOrCompilerInternalsPersistenceAllowed"]
-        is False
+        refusal_operation["sourceContentOrCompilerInternalsPersistenceAllowed"] is False
     )
     job = entries["file_import_job"]
     assert "ck_file_import_job_compilation_refusal_category" in {
@@ -876,9 +886,10 @@ def test_issue_21_file_source_manifest_is_closed_and_role_separated() -> None:
         "file_import_job",
         "context_resource",
     ):
-        assert "EXECUTE context_control_read_file_source_status" in entries[
-            table_name
-        ]["permittedOperations"]["context_engine_control"]
+        assert (
+            "EXECUTE context_control_read_file_source_status"
+            in entries[table_name]["permittedOperations"]["context_engine_control"]
+        )
     schedule = next(
         operation
         for operation in manifest()["controlOperations"]
@@ -949,10 +960,10 @@ def test_issue_21_file_source_manifest_is_closed_and_role_separated() -> None:
             "SELECT",
             "INSERT",
             "EXECUTE context_control_activate_file_change_feed",
-                "EXECUTE context_control_activate_file_delete_observations",
-                "EXECUTE context_control_read_pending_file_change_schedules",
-                "EXECUTE context_control_read_file_source_status",
-                "EXECUTE context_control_offboard_file_source",
+            "EXECUTE context_control_activate_file_delete_observations",
+            "EXECUTE context_control_read_pending_file_change_schedules",
+            "EXECUTE context_control_read_file_source_status",
+            "EXECUTE context_control_offboard_file_source",
         ],
         "context_engine_learning": [],
         "context_engine_release_operator": [
@@ -2079,6 +2090,7 @@ def test_policy_epoch_manifest_seals_runtime_reads_and_control_mutation() -> Non
             "context_engine_worker": [],
         }
         if entry["name"] == "organization_policy_epoch":
+            expected_operations["context_engine_worker_lease_definer"] = ["SELECT"]
             expected_operations["context_engine_delivery_evidence_definer"] = ["SELECT"]
             expected_operations["context_engine_egress_grant_definer"] = ["SELECT"]
             expected_operations["context_engine_action_prepare_definer"] = ["SELECT"]
