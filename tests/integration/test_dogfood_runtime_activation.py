@@ -1197,7 +1197,11 @@ def test_executed_run_observes_a_clean_report_from_the_real_runtime(
     client = TestClient(
         create_dogfood_app(
             configuration,
-            _environment(configuration, runtime_configuration),
+            _environment(
+                configuration,
+                runtime_configuration,
+                control_configuration,
+            ),
             host="127.0.0.1",
         )
     )
