@@ -1231,6 +1231,7 @@ def test_control_function_and_table_grants_seal_the_only_mutation_path(
                 "context_fix_article_access_policy",
                 "requested_organization_id uuid, requested_resource_ref text",
             ),
+            ("context_source_advance_article_evidence_epoch", ""),
             ("context_source_initialize_article_policy_default", ""),
         }
         assert definer_owned_routines == {

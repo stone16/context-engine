@@ -36,6 +36,9 @@ from tests.support.file_imports import (
     FileImportScenario as _FileImportScenario,
 )
 from tests.support.file_imports import (
+    delete_file_import_scenario as _delete_file_import_scenario,
+)
+from tests.support.file_imports import (
     prepare_file_import_scenario as _prepare_file_import_scenario,
 )
 from tests.support.file_imports import (
@@ -86,6 +89,10 @@ def citation_file_scenario(
                 {"org": scenario.organization_id},
             )
         migration_engine.dispose()
+        _delete_file_import_scenario(
+            migration_configuration,
+            scenario.organization_id,
+        )
 
 
 def _identity(

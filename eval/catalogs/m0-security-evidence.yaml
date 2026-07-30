@@ -201,6 +201,11 @@
       "selector": "tests/integration/test_revocation_takes_effect_without_reindex.py::test_groups_membership_removal_refuses_next_resolve_under_current_membership"
     },
     {
+      "id": "PG-ARTICLE-GROUP-INTERSECTION-141",
+      "layer": "postgres",
+      "selector": "tests/integration/test_article_access_policy_rls.py::test_groups_floor_persists_exact_intersection_and_disjoint_groups_isolate"
+    },
+    {
       "id": "PROP-WORKER-LEASE-007",
       "layer": "property",
       "selector": "tests/unit/test_worker_lease.py::test_wrong_binding_not_yet_valid_and_expired_are_generic"
@@ -680,7 +685,8 @@
         "postgres": [
           "PG-SCOPE-INTERSECTION-004",
           "PG-FIELD-PROJECTION-RLS-048",
-          "PG-ARTICLE-ACCESS-RLS-141"
+          "PG-ARTICLE-ACCESS-RLS-141",
+          "PG-ARTICLE-GROUP-INTERSECTION-141"
         ],
         "runtime": [
           "RUNTIME-SCOPE-INTERSECTION-004",

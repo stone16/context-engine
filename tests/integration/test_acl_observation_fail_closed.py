@@ -7,6 +7,7 @@ from sqlalchemy import Engine, text
 
 from engine.persistence import DatabaseConfiguration, create_database_engine
 from tests.support.article_access_policy import (
+    delete_article_policy_scenario,
     ingest_article,
     insert_organization,
     observe_source_acl,
@@ -90,6 +91,7 @@ def test_missing_failed_or_unresolved_source_acl_observation_isolates(
         assert observed_mode != "weak"
     finally:
         engine.dispose()
+        delete_article_policy_scenario(migration_configuration, organization_id)
 
 
 def test_no_public_control_operation_accepts_caller_asserted_source_acl() -> None:

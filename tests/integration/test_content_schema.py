@@ -859,8 +859,7 @@ def test_content_tables_have_force_rls_and_least_privilege_grants(
             if table_name == "context_fragment":
                 assert "membership_resource_field_right" in normalized_policy
                 assert "field_right.field_ref = 'body'" in normalized_policy
-                assert "resource_access_policy" in normalized_policy
-                assert "current_access.access_state = 'allowed'" in normalized_policy
+                assert "article_access_policy" in normalized_policy
             migrator_policy = policies[
                 (table_name, f"{table_name}_migrator_administration")
             ]

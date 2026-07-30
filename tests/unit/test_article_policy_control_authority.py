@@ -6,6 +6,10 @@ from uuid import UUID
 
 import pytest
 
+from engine.article_access_policy import (
+    ArticleAccessPolicyKind,
+    ArticleAccessPolicySetting,
+)
 from engine.control import (
     ArticlePolicyDefaultStorePort,
     ContextControl,
@@ -17,10 +21,6 @@ from engine.control import (
     SourceNotAvailable,
     TrustedControlCall,
     VerifiedControlOperatorIdentity,
-)
-from engine.runtime.article_access_policy import (
-    ArticleAccessPolicyKind,
-    ArticleAccessPolicySetting,
 )
 
 ORGANIZATION_ID = UUID("161260a4-76cd-4fae-b719-1dc8e3764f6e")

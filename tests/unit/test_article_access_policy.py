@@ -4,7 +4,7 @@ from uuid import UUID
 
 import pytest
 
-from engine.runtime.article_access_policy import (
+from engine.article_access_policy import (
     ArticleAccessPolicy,
     ArticleAccessPolicyKind,
     GroupRef,

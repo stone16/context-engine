@@ -24,6 +24,19 @@ _WORKER_DEFINER = "context_engine_worker_lease_definer"
 _ACCESS_DEFINER = "context_engine_access_policy_definer"
 _RUNTIME_SOURCE_VERSION_FUNCTION = "context_runtime_article_source_version_allows"
 _RUNTIME_SOURCE_VERSION_SIGNATURE = "(uuid,text,uuid)"
+_SOURCE_VERSION_WRITER_PROCEDURES = (
+    "context_control_activate_file_change_feed(uuid,uuid,uuid)",
+    "context_control_activate_file_delete_observations(uuid,uuid,uuid)",
+)
+_SOURCE_VERSION_PUBLICATION_FENCE = """\
+            PERFORM pg_catalog.pg_advisory_xact_lock(
+                pg_catalog.hashtextextended(
+                    'context-engine.file-publication:'
+                    || requested_organization_id::text,
+                    0
+                )
+            );
+"""
 _FILE_OPERATION_FENCES = (
     "context-engine.file-change-scheduling-migration-fence",
     "context-engine.file-dispatch-migration-fence",
@@ -232,6 +245,30 @@ def _secure_table(table_name: str) -> None:
             f"CREATE POLICY {table_name}_access_definer_{command_lower} "
             f"ON {table_name} FOR {command} TO {_ACCESS_DEFINER} {expression}"
         )
+
+
+def _rewrite_source_version_writer_fences(*, install: bool) -> None:
+    marker = "            SELECT source.active_version_id, version.root_ref,\n"
+    searched = marker if install else _SOURCE_VERSION_PUBLICATION_FENCE + marker
+    replacement = _SOURCE_VERSION_PUBLICATION_FENCE + marker if install else marker
+    connection = op.get_bind()
+    for procedure in _SOURCE_VERSION_WRITER_PROCEDURES:
+        definition = connection.execute(
+            sa.text(
+                "SELECT pg_catalog.pg_get_functiondef("
+                "CAST(:procedure AS regprocedure))"
+            ),
+            {"procedure": f"public.{procedure}"},
+        ).scalar_one()
+        if not isinstance(definition, str) or definition.count(searched) != 1:
+            raise RuntimeError(
+                f"SourceVersion writer shape was not recognized: {procedure}"
+            )
+        op.execute(f"GRANT CREATE ON SCHEMA public TO {_WORKER_DEFINER}")
+        op.execute(f"SET LOCAL ROLE {_WORKER_DEFINER}")
+        op.execute(definition.replace(searched, replacement))
+        op.execute("RESET ROLE")
+        op.execute(f"REVOKE CREATE ON SCHEMA public FROM {_WORKER_DEFINER}")
 
 
 def upgrade() -> None:
@@ -767,6 +804,54 @@ def upgrade() -> None:
         "AFTER INSERT ON context_source FOR EACH ROW EXECUTE FUNCTION "
         "public.context_source_initialize_article_policy_default()"
     )
+    op.execute(
+        f"""
+        CREATE FUNCTION public.context_source_advance_article_evidence_epoch()
+        RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+        SET search_path = pg_catalog SET row_security = on
+        AS $function$
+        DECLARE next_epoch bigint;
+        BEGIN
+            IF NEW.active_version_id IS NOT DISTINCT FROM OLD.active_version_id
+               OR NOT EXISTS (
+                    SELECT 1
+                    FROM public.article_access_policy AS policy
+                    WHERE policy.organization_id = NEW.organization_id
+                      AND policy.source_version_ref = OLD.active_version_id
+               )
+            THEN RETURN NEW; END IF;
+            PERFORM pg_catalog.set_config(
+                'app.organization_id', NEW.organization_id::text, true
+            );
+            UPDATE public.organization_policy_epoch AS epoch
+            SET policy_epoch = epoch.policy_epoch + 1
+            WHERE epoch.organization_id = NEW.organization_id
+              AND epoch.policy_epoch < {_MAX}
+            RETURNING epoch.policy_epoch INTO next_epoch;
+            IF next_epoch IS NULL THEN
+                RAISE EXCEPTION USING ERRCODE = '40001',
+                    MESSAGE = 'SourceVersion evidence invalidation was not accepted';
+            END IF;
+            RETURN NEW;
+        END; $function$
+        """
+    )
+    op.execute(f"GRANT CREATE ON SCHEMA public TO {_ACCESS_DEFINER}")
+    op.execute(
+        "ALTER FUNCTION public.context_source_advance_article_evidence_epoch() "
+        f"OWNER TO {_ACCESS_DEFINER}"
+    )
+    op.execute(f"REVOKE CREATE ON SCHEMA public FROM {_ACCESS_DEFINER}")
+    op.execute(
+        "REVOKE ALL ON FUNCTION "
+        "public.context_source_advance_article_evidence_epoch() FROM PUBLIC"
+    )
+    op.execute(
+        "CREATE TRIGGER context_source_advance_article_evidence_epoch "
+        "BEFORE UPDATE OF active_version_id ON context_source FOR EACH ROW "
+        "EXECUTE FUNCTION public.context_source_advance_article_evidence_epoch()"
+    )
+    _rewrite_source_version_writer_fences(install=True)
 
     op.execute(
         f"""
@@ -1280,6 +1365,8 @@ def downgrade() -> None:
     # representability decision and DDL. PostgreSQL holds these locks until the
     # migration transaction commits or rolls back.
     for table_name in (
+        "context_source",
+        "source_version",
         "organization_policy_epoch",
         "resource_access_policy",
         "article_access_policy",
@@ -1356,6 +1443,14 @@ def downgrade() -> None:
         "context_control_set_tenant_article_policy_default(uuid,bigint,text,text[])",
     ):
         op.execute(f"DROP FUNCTION public.{function_signature}")
+    _rewrite_source_version_writer_fences(install=False)
+    op.execute(
+        "DROP TRIGGER context_source_advance_article_evidence_epoch "
+        "ON context_source"
+    )
+    op.execute(
+        "DROP FUNCTION public.context_source_advance_article_evidence_epoch()"
+    )
     resource_actor = _CURRENT_USER_ACTOR.format(table_name="context_resource")
     op.execute("DROP POLICY context_resource_current_user_actor ON context_resource")
     op.execute(
@@ -1405,6 +1500,7 @@ def downgrade() -> None:
     op.execute(
         "DROP POLICY source_version_access_policy_definer_select ON source_version"
     )
+    op.execute(f"REVOKE SELECT ON TABLE source_version FROM {_ACCESS_DEFINER}")
     for table_name in reversed(_TABLES):
         op.drop_table(table_name)
     op.execute(

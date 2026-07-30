@@ -4,13 +4,16 @@ from uuid import UUID
 
 import pytest
 
-from engine.runtime.article_access_policy import (
+from engine.article_access_policy import (
     AclObservationStatus,
     ArticleAccessPolicyKind,
     ArticleAccessPolicySetting,
+    ArticlePolicyResolution,
+    ArticlePolicyResolutionRung,
     GroupRef,
     SourceAclEvidence,
     apply_source_acl_floor,
+    resolve_article_access_policy,
 )
 
 ORGANIZATION_ID = UUID("e907b18b-1a9c-4699-a5f5-e63afd98fbd8")
@@ -35,6 +38,25 @@ class GroupDirectory:
         return None
 
 
+def _local_resolution(
+    setting: ArticleAccessPolicySetting,
+    rung: ArticlePolicyResolutionRung = ArticlePolicyResolutionRung.EXPLICIT_ARTICLE,
+) -> ArticlePolicyResolution:
+    cascade = {
+        ArticlePolicyResolutionRung.EXPLICIT_ARTICLE: (setting, None, None),
+        ArticlePolicyResolutionRung.SOURCE_DEFAULT: (None, setting, None),
+        ArticlePolicyResolutionRung.TENANT_DEFAULT: (None, None, setting),
+    }
+    explicit, source_default, tenant_default = cascade[rung]
+    return resolve_article_access_policy(
+        organization_id=ORGANIZATION_ID,
+        explicit=explicit,
+        source_default=source_default,
+        tenant_default=tenant_default,
+        group_directory=GroupDirectory(),
+    )
+
+
 @pytest.mark.parametrize(
     ("local", "source", "expected"),
     (
@@ -53,7 +75,7 @@ def test_source_acl_floor_narrows_but_never_widens(
 ) -> None:
     result = apply_source_acl_floor(
         organization_id=ORGANIZATION_ID,
-        local_policy=local,
+        local_resolution=_local_resolution(local),
         source_evidence=SourceAclEvidence(
             status=AclObservationStatus.RESOLVED,
             observed_policy=source,
@@ -69,7 +91,7 @@ def test_source_acl_floor_narrows_but_never_widens(
 def test_disjoint_group_intersection_isolates_instead_of_widening() -> None:
     result = apply_source_acl_floor(
         organization_id=ORGANIZATION_ID,
-        local_policy=GROUP_A,
+        local_resolution=_local_resolution(GROUP_A),
         source_evidence=SourceAclEvidence(
             status=AclObservationStatus.RESOLVED,
             observed_policy=ArticleAccessPolicySetting(
@@ -82,3 +104,22 @@ def test_disjoint_group_intersection_isolates_instead_of_widening() -> None:
 
     assert result.policy is None
     assert result.published is False
+
+
+def test_source_acl_floor_retains_the_local_cascade_provenance() -> None:
+    result = apply_source_acl_floor(
+        organization_id=ORGANIZATION_ID,
+        local_resolution=_local_resolution(
+            ORGANIZATION,
+            ArticlePolicyResolutionRung.SOURCE_DEFAULT,
+        ),
+        source_evidence=SourceAclEvidence(
+            status=AclObservationStatus.RESOLVED,
+            observed_policy=GROUP_A,
+        ),
+        group_directory=GroupDirectory(),
+    )
+
+    assert result.policy is not None
+    assert result.policy.setting == GROUP_A
+    assert result.rung is ArticlePolicyResolutionRung.SOURCE_DEFAULT

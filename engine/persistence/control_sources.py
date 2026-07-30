@@ -294,7 +294,7 @@ class PostgreSQLControlStore:
 
     @staticmethod
     def _policy_parameters(setting: object) -> tuple[str | None, list[str]]:
-        from engine.runtime.article_access_policy import ArticleAccessPolicySetting
+        from engine.article_access_policy import ArticleAccessPolicySetting
 
         if setting is None:
             return None, []

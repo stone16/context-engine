@@ -12,6 +12,7 @@ from sqlalchemy.exc import DBAPIError
 from engine.persistence import DatabaseConfiguration, create_database_engine
 from tests.support.article_access_policy import (
     article_policy,
+    delete_article_policy_scenario,
     ingest_article,
     insert_organization,
     observe_source_acl,
@@ -88,6 +89,7 @@ def test_production_sql_uses_exact_visibility_cascade(
         )
     finally:
         engine.dispose()
+        delete_article_policy_scenario(migration_configuration, organization_id)
 
 
 @pytest.mark.parametrize(
@@ -123,12 +125,14 @@ def test_production_sql_source_acl_floor_only_narrows(
             resource_ref=resource_ref,
         )
 
-        assert article_policy(engine, organization_id, resource_ref)[:2] == (
+        assert article_policy(engine, organization_id, resource_ref) == (
             expected_kind,
             1,
+            "tenant_default",
         )
     finally:
         engine.dispose()
+        delete_article_policy_scenario(migration_configuration, organization_id)
 
 
 @contextmanager
@@ -495,17 +499,20 @@ def test_groups_floor_persists_exact_intersection_and_disjoint_groups_isolate(
                     text("SELECT set_config('app.organization_id', :org, true)"),
                     {"org": str(organization_id)},
                 )
-                assert connection.execute(
-                    text(
-                        "SELECT public.context_fix_article_access_policy("
-                        ":org, :resource)"
-                    ),
-                    {"org": organization_id, "resource": resource_ref},
-                ).scalar_one() is True
+                assert (
+                    connection.execute(
+                        text(
+                            "SELECT public.context_fix_article_access_policy("
+                            ":org, :resource)"
+                        ),
+                        {"org": organization_id, "resource": resource_ref},
+                    ).scalar_one()
+                    is True
+                )
 
             overlap = connection.execute(
                 text(
-                    "SELECT policy_kind, group_refs, published "
+                    "SELECT policy_kind, group_refs, published, resolution_rung "
                     "FROM article_access_policy "
                     "WHERE organization_id = :org AND resource_ref = :resource"
                 ),
@@ -513,21 +520,24 @@ def test_groups_floor_persists_exact_intersection_and_disjoint_groups_isolate(
             ).one()
             disjoint = connection.execute(
                 text(
-                    "SELECT policy_kind, group_refs, published "
+                    "SELECT policy_kind, group_refs, published, resolution_rung "
                     "FROM article_access_policy "
                     "WHERE organization_id = :org AND resource_ref = :resource"
                 ),
                 {"org": organization_id, "resource": disjoint_resource},
             ).one()
-        assert (overlap.policy_kind, overlap.group_refs, overlap.published) == (
+        assert tuple(overlap) == (
             "groups",
             [shared],
             True,
+            "tenant_default",
         )
-        assert (disjoint.policy_kind, disjoint.group_refs, disjoint.published) == (
+        assert tuple(disjoint) == (
             None,
             [],
             False,
+            "tenant_default",
         )
     finally:
         engine.dispose()
+        delete_article_policy_scenario(migration_configuration, organization_id)

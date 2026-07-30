@@ -1,4 +1,4 @@
-"""Versioned Article visibility and source-ACL intersection oracles."""
+"""Shared Article visibility domain and source-ACL intersection oracles."""
 
 from __future__ import annotations
 
@@ -274,17 +274,21 @@ def _intersect_policy_settings(
 def apply_source_acl_floor(
     *,
     organization_id: UUID,
-    local_policy: ArticleAccessPolicySetting,
+    local_resolution: ArticlePolicyResolution,
     source_evidence: SourceAclEvidence | None,
     group_directory: GroupDirectory,
-    version: int = 1,
 ) -> ArticlePolicyResolution:
     """Intersect local visibility with source evidence or isolate fail closed."""
 
+    if type(local_resolution) is not ArticlePolicyResolution:
+        raise TypeError("source ACL floor requires an Article policy resolution")
+    local_resolution.__post_init__()
+    if local_resolution.policy is None:
+        return local_resolution
     local = _validated_policy(
         organization_id=organization_id,
-        setting=local_policy,
-        version=version,
+        setting=local_resolution.policy.setting,
+        version=local_resolution.policy.version,
         group_directory=group_directory,
     )
     if source_evidence is None or type(source_evidence) is not SourceAclEvidence:
@@ -296,7 +300,7 @@ def apply_source_acl_floor(
     source = _validated_policy(
         organization_id=organization_id,
         setting=source_evidence.observed_policy,
-        version=version,
+        version=local.version,
         group_directory=group_directory,
     )
     intersection = _intersect_policy_settings(local.setting, source.setting)
@@ -306,8 +310,8 @@ def apply_source_acl_floor(
         _validated_policy(
             organization_id=organization_id,
             setting=intersection,
-            version=version,
+            version=local.version,
             group_directory=group_directory,
         ),
-        ArticlePolicyResolutionRung.EXPLICIT_ARTICLE,
+        local_resolution.rung,
     )

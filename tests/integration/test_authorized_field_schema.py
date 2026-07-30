@@ -1344,14 +1344,11 @@ def test_field_authority_tables_have_force_rls_and_least_privilege_grants(
             ("context_fragment_field", "context_fragment_field_current_user_actor")
         ][2]
     ).lower()
-    assert "resource_access_policy" in field_policy
-    assert "current_access.principal_ref" in field_policy
-    assert "current_access.access_state = 'allowed'" in field_policy
+    assert "article_access_policy" in field_policy
     fragment_policy = str(
         policies[("context_fragment", "context_fragment_current_user_actor")][2]
     ).lower()
-    assert "resource_access_policy" in fragment_policy
-    assert "current_access.access_state = 'allowed'" in fragment_policy
+    assert "article_access_policy" in fragment_policy
     right_policy = str(
         policies[
             (
@@ -1362,8 +1359,7 @@ def test_field_authority_tables_have_force_rls_and_least_privilege_grants(
     ).lower()
     assert "context_resource" in right_policy
     assert "tombstoned is false" in right_policy
-    assert "resource_access_policy" in right_policy
-    assert "current_access.access_state = 'allowed'" in right_policy
+    assert "article_access_policy" in right_policy
     assert WORKER_ROLE not in {grant[0] for grant in grants}
 
 

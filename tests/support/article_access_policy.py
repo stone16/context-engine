@@ -4,6 +4,29 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import Engine, text
 
+from engine.persistence import DatabaseConfiguration, create_database_engine
+
+
+def delete_article_policy_scenario(
+    configuration: DatabaseConfiguration,
+    organization_id: UUID,
+) -> None:
+    """Remove one disposable Article-policy scenario and its Organization."""
+
+    engine = create_database_engine(configuration)
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                text("DELETE FROM context_resource WHERE organization_id = :org"),
+                {"org": organization_id},
+            )
+            connection.execute(
+                text("DELETE FROM organization WHERE organization_id = :org"),
+                {"org": organization_id},
+            )
+    finally:
+        engine.dispose()
+
 
 def insert_organization(engine: Engine, organization_id: UUID) -> None:
     with engine.begin() as connection:

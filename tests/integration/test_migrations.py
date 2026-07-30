@@ -71,6 +71,9 @@ from tests.support.file_imports import (
     ControlAuthenticator as _ControlAuthenticator,
 )
 from tests.support.file_imports import (
+    delete_file_import_scenario as _delete_file_import_scenario,
+)
+from tests.support.file_imports import (
     prepare_file_import_scenario as _prepare_file_import_scenario,
 )
 from tests.support.file_imports import (
@@ -920,6 +923,100 @@ def test_article_policy_downgrade_refuses_state_that_would_reauthorize_content(
                 {"org": organization_id},
             )
         engine.dispose()
+
+
+def test_article_policy_downgrade_restores_source_version_least_privilege(
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    """0041 must not leave its SourceVersion definer capability in 0040."""
+
+    alembic_configuration = Config(ROOT / "alembic.ini")
+    try:
+        command.downgrade(alembic_configuration, "20260727_0040")
+        engine = create_database_engine(migration_configuration)
+        try:
+            with engine.connect() as connection:
+                assert connection.execute(
+                    text(
+                        "SELECT has_table_privilege("
+                        "'context_engine_access_policy_definer', "
+                        "'public.source_version', 'SELECT')"
+                    )
+                ).scalar_one() is False
+        finally:
+            engine.dispose()
+    finally:
+        command.upgrade(alembic_configuration, "head")
+
+
+def test_article_policy_downgrade_waits_for_source_authority_writer(
+    tmp_path: Path,
+    migration_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+) -> None:
+    """0041 representability is serialized behind current SourceVersion state."""
+
+    alembic_configuration = Config(ROOT / "alembic.ini")
+    scenario = _prepare_file_import_scenario(
+        tmp_path,
+        migration_configuration,
+        guarded_control_engine,
+        issue_lease=False,
+    )
+    engine = create_database_engine(migration_configuration)
+    try:
+        with guarded_control_engine.connect() as writer:
+            writer_transaction = writer.begin()
+            try:
+                activated_version_id = uuid4()
+                assert writer.execute(
+                    text(
+                        "SELECT activated_version_id FROM public."
+                        "context_control_activate_file_change_feed("
+                        ":org, :source_id, :activated_version_id)"
+                    ),
+                    {
+                        "org": scenario.organization_id,
+                        "source_id": scenario.source_ref.value,
+                        "activated_version_id": activated_version_id,
+                    },
+                ).scalar_one() == activated_version_id
+                with ThreadPoolExecutor(max_workers=1) as executor:
+                    downgrade = executor.submit(
+                        command.downgrade,
+                        alembic_configuration,
+                        "20260727_0040",
+                    )
+                    waiting = False
+                    deadline = monotonic() + 5
+                    while monotonic() < deadline:
+                        with engine.connect() as observer:
+                            waiting = observer.execute(
+                                text(
+                                    "SELECT EXISTS (SELECT 1 FROM pg_locks "
+                                    "WHERE relation = 'context_source'::regclass "
+                                    "AND mode = 'AccessExclusiveLock' "
+                                    "AND granted IS FALSE)"
+                                )
+                            ).scalar_one()
+                        if waiting or downgrade.done():
+                            break
+                        sleep(0.01)
+                    assert waiting is True
+                    assert downgrade.done() is False
+                    writer_transaction.commit()
+                    downgrade.result(timeout=10)
+            finally:
+                if writer_transaction.is_active:
+                    writer_transaction.rollback()
+        assert _revision_rows(migration_configuration) == ["20260727_0040"]
+    finally:
+        command.upgrade(alembic_configuration, "head")
+        engine.dispose()
+        _delete_file_import_scenario(
+            migration_configuration,
+            scenario.organization_id,
+        )
 
 
 def test_organization_isolation_revision_downgrades_and_reapplies_cleanly(
@@ -3437,9 +3534,11 @@ def test_file_change_scheduling_downgrade_serializes_with_manual_import(
                                                 FROM pg_database
                                                 WHERE datname = current_database()
                                             )
-                                              AND relation = (
-                                                  'public.file_acquisition'::regclass
-                                              )
+                                                  AND relation IN (
+                                                      'public.context_source'::regclass,
+                                                      'public.source_version'::regclass,
+                                                      'public.file_acquisition'::regclass
+                                                  )
                                               AND mode = 'AccessExclusiveLock'
                                               AND granted IS FALSE
                                         )
@@ -4418,7 +4517,7 @@ def test_field_projection_downgrade_refuses_populated_content_atomically(
                     """
                 )
             ).scalar_one()
-        assert "resource_access_policy" in str(policy)
+            assert "article_access_policy" in str(policy)
         assert "membership_resource_field_right" in str(policy)
     finally:
         try:

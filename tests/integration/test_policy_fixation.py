@@ -7,6 +7,10 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import Engine, text
 
+from engine.article_access_policy import (
+    ArticleAccessPolicyKind,
+    ArticleAccessPolicySetting,
+)
 from engine.control import (
     ContextControl,
     ControlOperation,
@@ -18,12 +22,9 @@ from engine.persistence import (
     PostgreSQLControlStore,
     create_database_engine,
 )
-from engine.runtime.article_access_policy import (
-    ArticleAccessPolicyKind,
-    ArticleAccessPolicySetting,
-)
 from tests.support.article_access_policy import (
     article_policy,
+    delete_article_policy_scenario,
     ingest_article,
     insert_organization,
     observe_source_acl,
@@ -220,6 +221,7 @@ def test_source_default_change_affects_only_articles_first_ingested_later(
         )
     finally:
         engine.dispose()
+        delete_article_policy_scenario(migration_configuration, organization_id)
 
 
 def test_tenant_default_change_affects_only_articles_first_ingested_later(
@@ -266,3 +268,4 @@ def test_tenant_default_change_affects_only_articles_first_ingested_later(
         )
     finally:
         engine.dispose()
+        delete_article_policy_scenario(migration_configuration, organization_id)

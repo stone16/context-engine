@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from engine.runtime.article_access_policy import (
+from engine.article_access_policy import (
     ArticleAccessPolicySetting,
 )
 

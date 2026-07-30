@@ -396,6 +396,8 @@ def delete_file_import_scenario(
                     ).scalars()
                 )
                 for table in (
+                    "decision_audit",
+                    "context_run",
                     "article_source_acl_observation",
                     "article_access_policy",
                     "article_explicit_policy_setting",

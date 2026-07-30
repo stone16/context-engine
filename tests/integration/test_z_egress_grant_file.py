@@ -41,6 +41,7 @@ from engine.control import (
     FileChangeProviderProofs,
     FileChangeSource,
     FileImportAudience,
+    FileImportPath,
     InitialScan,
     ProviderOk,
     ScheduleFileChangePage,
@@ -90,8 +91,15 @@ from tests.support.file_imports import (
     FileImportScenario as _FileImportScenario,
 )
 from tests.support.file_imports import (
+    delete_file_import_scenario as _delete_file_import_scenario,
+)
+from tests.support.file_imports import (
     prepare_file_import_scenario as _prepare_file_import_scenario,
 )
+from tests.support.file_imports import (
+    prepare_repeat_file_import as _prepare_repeat_file_import,
+)
+from tests.support.file_imports import run_file_import as _run_file_import
 from tests.support.releases import (
     clear_test_runtime_release,
     ensure_test_runtime_release,
@@ -577,10 +585,42 @@ def _file_citation_profile() -> CitationOpenProfile:
     )
 
 
+def _publish_additional_file_under_active_source_version(
+    scenario: _FileImportScenario,
+    guarded_control_engine: Engine,
+    guarded_worker_engine: Engine,
+    *,
+    path: FileImportPath,
+    idempotency_key: str,
+) -> PublishedFileImport:
+    (scenario.root / path.value).write_bytes(
+        b"# Reference\n\nContextEngine delivers context.\n"
+    )
+    prepared, token = _prepare_repeat_file_import(
+        scenario,
+        guarded_control_engine,
+        idempotency_key=idempotency_key,
+        path=path,
+    )
+    published = _run_file_import(
+        scenario,
+        prepared,
+        token,
+        guarded_worker_engine,
+    )
+    clear_test_runtime_release(scenario.organization_id)
+    ensure_test_runtime_release(scenario.organization_id)
+    return published
+
+
 def _accept_published_path_delete_observation(
     scenario: _FileImportScenario,
     guarded_control_engine: Engine,
+    *,
+    before_baseline: Callable[[], None] | None = None,
+    deleted_path: FileImportPath | None = None,
 ) -> tuple[ContextControl, ControlOperatorAuthority, ExecuteFileDeleteObservation]:
+    selected_deleted_path = deleted_path or FileImportPath("handbook.md")
     provider_key = Ed25519PrivateKey.from_private_bytes(bytes(range(32)))
     checkpoint_key = Ed25519PrivateKey.from_private_bytes(bytes(range(32, 64)))
     authority = ControlOperatorAuthority(
@@ -620,6 +660,8 @@ def _accept_published_path_delete_observation(
             ActivateFileDeleteObservations(scenario.source_ref),
         )
     assert v4.active_version.version_ref != v3.active_version.version_ref
+    if before_baseline is not None:
+        before_baseline()
     provider = FileChangeProvider(
         FileRootRegistry(
             {scenario.root_ref: scenario.root},
@@ -631,7 +673,7 @@ def _accept_published_path_delete_observation(
         ),
     )
     source = FileChangeSource(scenario.organization_id, v4.active_version)
-    initial_page = provider.read_changes(source, InitialScan(), ChangeLimit(1))
+    initial_page = provider.read_changes(source, InitialScan(), ChangeLimit(2))
     assert type(initial_page) is ProviderOk
     with authority.authorize(
         opaque_credential="control-secret",
@@ -646,7 +688,7 @@ def _accept_published_path_delete_observation(
     ) as call:
         progress = control.read_file_source_progress(call, scenario.source_ref)
     assert progress.complete_change_baseline is not None
-    (scenario.root / "handbook.md").unlink()
+    (scenario.root / selected_deleted_path.value).unlink()
     delete_page = provider.read_changes(
         FileChangeSource(
             scenario.organization_id,
@@ -655,10 +697,16 @@ def _accept_published_path_delete_observation(
             complete_baseline=progress.complete_change_baseline,
         ),
         InitialScan(),
-        ChangeLimit(1),
+        ChangeLimit(2),
     )
     assert type(delete_page) is ProviderOk
-    assert [change.kind.value for change in delete_page.value.changes] == ["delete"]
+    delete_ordinals = [
+        ordinal
+        for ordinal, change in enumerate(delete_page.value.changes, start=1)
+        if change.kind.value == "delete"
+        and change.path == selected_deleted_path
+    ]
+    assert len(delete_ordinals) == 1
     with authority.authorize(
         opaque_credential="control-secret",
         operation=ControlOperation.ACCEPT_FILE_CHANGE_PAGE,
@@ -672,7 +720,7 @@ def _accept_published_path_delete_observation(
             accepted.source_ref,
             accepted.source_version_ref,
             accepted.page_ref,
-            1,
+            delete_ordinals[0],
         ),
     )
 
@@ -842,6 +890,10 @@ def _published_file_scenario(
                         text(f"ALTER TABLE {table} ENABLE TRIGGER {trigger}")
                     )
         migration_engine.dispose()
+        _delete_file_import_scenario(
+            migration_configuration,
+            scenario.organization_id,
+        )
 
 
 @pytest.mark.security_evidence(id="RUNTIME-EGRESS-011", layer="runtime")
@@ -1248,6 +1300,7 @@ def test_mixed_file_upsert_scheduling_has_zero_delete_effect_over_generated_sdk(
     _published_file_scenario: tuple[_FileImportScenario, PublishedFileImport, Engine],
     guarded_runtime_engine: Engine,
     guarded_control_engine: Engine,
+    guarded_worker_engine: Engine,
     query_digest_keyring: QueryDigestKeyring,
     tmp_path: Path,
 ) -> None:
@@ -1442,10 +1495,8 @@ def test_mixed_file_upsert_scheduling_has_zero_delete_effect_over_generated_sdk(
     assert sdk_result["kind"] == "resolved"
     package = sdk_result["package"]
     assert isinstance(package, dict)
-    assert package["blocks"][0]["text"] == "ContextEngine delivers context."
-    assert package["evidence"][0]["revisionRef"] == (
-        published.candidate_ref.revision_ref
-    )
+    assert package["blocks"] == []
+    assert package["evidence"] == []
     with migration_engine.connect() as connection:
         after = tuple(
             connection.execute(
@@ -1469,7 +1520,8 @@ def test_mixed_file_upsert_scheduling_has_zero_delete_effect_over_generated_sdk(
                 {"org": scenario.organization_id},
             ).one()
         )
-    assert after[:4] == before[:4]
+    assert after[0] == before[0] + 1
+    assert after[1:4] == before[1:4]
     assert after[4:] == (before[4] + 1, before[5] + 1)
 
 
@@ -1478,6 +1530,7 @@ def test_file_delete_execution_is_immediately_invisible_over_generated_sdk(
     _published_file_scenario: tuple[_FileImportScenario, PublishedFileImport, Engine],
     guarded_runtime_engine: Engine,
     guarded_control_engine: Engine,
+    guarded_worker_engine: Engine,
     query_digest_keyring: QueryDigestKeyring,
     tmp_path: Path,
 ) -> None:
@@ -1491,6 +1544,26 @@ def test_file_delete_execution_is_immediately_invisible_over_generated_sdk(
             ),
             {"org": scenario.organization_id, "membership": scenario.membership_id},
         ).scalar_one()
+    current: PublishedFileImport | None = None
+
+    def publish_current_article() -> None:
+        nonlocal current
+        current = _publish_additional_file_under_active_source_version(
+            scenario,
+            guarded_control_engine,
+            guarded_worker_engine,
+            path=FileImportPath("reference.md"),
+            idempotency_key="delete-sdk-current-version-article",
+        )
+
+    control, authority, command = _accept_published_path_delete_observation(
+        scenario,
+        guarded_control_engine,
+        before_baseline=publish_current_article,
+        deleted_path=FileImportPath("reference.md"),
+    )
+    assert current is not None
+    with migration_engine.connect() as connection:
         retained_before = tuple(
             connection.execute(
                 text(
@@ -1518,8 +1591,8 @@ def test_file_delete_execution_is_immediately_invisible_over_generated_sdk(
         organization_authority=_OrganizationAuthority(),
         membership_authority=PostgreSQLMembershipAuthority(guarded_runtime_engine),
         scope_authority=_ExactScopeAuthority(
-            published.candidate_ref.source_ref,
-            published.candidate_ref.resource_ref,
+            current.candidate_ref.source_ref,
+            current.candidate_ref.resource_ref,
         ),
         runtime=Runtime(
             required_kernel_dependencies(),
@@ -1530,10 +1603,6 @@ def test_file_delete_execution_is_immediately_invisible_over_generated_sdk(
             query_digest_keyring=query_digest_keyring,
         ),
         clock=lambda: request_now,
-    )
-    control, authority, command = _accept_published_path_delete_observation(
-        scenario,
-        guarded_control_engine,
     )
     with TestClient(application) as client:
         before = client.post(
@@ -1625,6 +1694,7 @@ def test_packed_typescript_sdk_resolves_authorized_file_package_over_live_http(
     runtime_configuration: DatabaseConfiguration,
     worker_configuration: DatabaseConfiguration,
     guarded_control_engine: Engine,
+    guarded_worker_engine: Engine,
     guarded_runtime_engine: Engine,
     query_digest_keyring: QueryDigestKeyring,
 ) -> None:
@@ -1707,10 +1777,26 @@ def test_packed_typescript_sdk_resolves_authorized_file_package_over_live_http(
         consumer_root = tmp_path / "installed-sdk-consumer"
         consumer_root.mkdir()
         _pack_and_install_sdk(consumer_root)
+        current: PublishedFileImport | None = None
+
+        def publish_current_article() -> None:
+            nonlocal current
+            current = _publish_additional_file_under_active_source_version(
+                scenario,
+                guarded_control_engine,
+                guarded_worker_engine,
+                path=FileImportPath("reference.md"),
+                idempotency_key="live-sdk-current-version-article",
+            )
+
         _accept_published_path_delete_observation(
             scenario,
             guarded_control_engine,
+            before_baseline=publish_current_article,
+            deleted_path=FileImportPath("reference.md"),
         )
+        assert current is not None
+        published = current
         with migration_engine.connect() as connection:
             zero_effect = connection.execute(
                 text(
@@ -1734,7 +1820,7 @@ def test_packed_typescript_sdk_resolves_authorized_file_package_over_live_http(
                     "resource_ref": published.candidate_ref.resource_ref,
                 },
             ).one()
-        assert tuple(zero_effect) == (False, 1, 0, 1)
+        assert tuple(zero_effect) == (False, 2, 0, 2)
         request_now = datetime.now(UTC).replace(microsecond=0)
 
         evidence_issuer = PrivateDeliveryEvidenceIssuer(
@@ -1760,7 +1846,7 @@ def test_packed_typescript_sdk_resolves_authorized_file_package_over_live_http(
                 destination_ref="private-chat:file-tracer",
                 consumer_ref="consumer:file-tracer",
                 purpose="context.answer",
-                policy_epoch=1,
+                policy_epoch=2,
                 issued_at=request_now - timedelta(seconds=1),
                 expires_at=request_now + timedelta(minutes=10),
             )
@@ -1789,7 +1875,7 @@ def test_packed_typescript_sdk_resolves_authorized_file_package_over_live_http(
                 destination_ref="private-chat:file-tracer",
                 consumer_ref="consumer:file-tracer",
                 purpose="citation.open",
-                policy_epoch=1,
+                policy_epoch=2,
                 issued_at=request_now - timedelta(seconds=1),
                 expires_at=request_now + timedelta(minutes=10),
             )
