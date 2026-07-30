@@ -35,6 +35,7 @@ FRAGMENT_PERMISSION_FUNCTION = re.compile(
     r"[\s\S]{0,256}\breturns\b",
     re.IGNORECASE,
 )
+NON_PERMISSION_FRAGMENT_OPERATION_FIELDS = frozenset({"_fragment_window_reader"})
 
 
 def _string_constants(tree: ast.AST) -> dict[str, str]:
@@ -112,6 +113,21 @@ def _migration_fragment_schema() -> tuple[set[str], set[str], set[str]]:
     return tables, columns, sql_violations
 
 
+def _is_fragment_permission_field(class_name: str, field_name: str) -> bool:
+    if field_name in NON_PERMISSION_FRAGMENT_OPERATION_FIELDS:
+        return False
+    fragment_scoped = "fragment" in class_name.lower()
+    permission_named = ACL_NAME.search(field_name) is not None
+    article_decision_provenance = field_name in {
+        "source_acl_as_of",
+        "source_acl_projection_ref",
+    }
+    fragment_permission_named = "fragment" in field_name.lower() and permission_named
+    return (
+        fragment_scoped and permission_named and not article_decision_provenance
+    ) or fragment_permission_named
+
+
 def _fragment_scoped_permission_fields() -> set[str]:
     violations: set[str] = set()
     for source_path in sorted(ENGINE_CODE.rglob("*.py")):
@@ -130,20 +146,7 @@ def _fragment_scoped_permission_fields() -> set[str]:
                 elif isinstance(statement, ast.arg):
                     field_names.append(statement.arg)
                 for field_name in field_names:
-                    fragment_scoped = "fragment" in node.name.lower()
-                    permission_named = ACL_NAME.search(field_name) is not None
-                    article_decision_provenance = field_name in {
-                        "source_acl_as_of",
-                        "source_acl_projection_ref",
-                    }
-                    fragment_permission_named = (
-                        "fragment" in field_name.lower() and permission_named
-                    )
-                    if (
-                        fragment_scoped
-                        and permission_named
-                        and not article_decision_provenance
-                    ) or fragment_permission_named:
+                    if _is_fragment_permission_field(node.name, field_name):
                         violations.add(
                             f"{source_path.relative_to(ROOT)}:{node.name}.{field_name}"
                         )
@@ -186,3 +189,12 @@ def test_fragment_acl_scanner_detects_representative_runtime_fields() -> None:
     assert ACL_NAME.search("readers") is not None
     assert ACL_NAME.search("access_policy") is not None
     assert ACL_NAME.search("principal_grants") is not None
+    assert _is_fragment_permission_field("CandidateRef", "fragment_acl") is True
+    assert _is_fragment_permission_field("FragmentRecord", "readers") is True
+    assert (
+        _is_fragment_permission_field(
+            "AuthorizationKernel",
+            "_fragment_window_reader",
+        )
+        is False
+    )
