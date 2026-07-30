@@ -117,7 +117,7 @@ def test_progress_contract_has_no_content_path_title_excerpt_or_identity_field()
     raw_job_id = UUID("d8bd0f3d-b7c5-41b8-af7a-d4e2b0733dd0")
     rendered = json.dumps(_documents(), sort_keys=True)
     adversarial_values = (
-        "/Users/private/Vault/Plans/Acquisition.md",
+        "/private/vault/plans/acquisition.md",
         "Confidential acquisition plan",
         "excerpt: the private deal closes Friday",
         "principal:maintainer@example.invalid",
