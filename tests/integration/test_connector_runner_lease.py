@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+import os
+import subprocess
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -125,3 +128,58 @@ def test_valid_exact_lease_executes_file_scan_in_independent_process(
     ).execute(scenario.execution, adapter)
 
     assert len(result.accepted_page_refs) == 2
+
+
+def test_worker_process_executes_exact_leased_file_connector_job(
+    tmp_path: Path,
+    scenarios: list[_Scenario],
+    migration_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+) -> None:
+    scenario = _seed_scenario(migration_configuration, guarded_control_engine)
+    scenarios.append(scenario)
+    vault = tmp_path / "worker-connector-vault"
+    vault.mkdir()
+    (vault / "alpha.md").write_bytes(b"# Alpha\n")
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "CONTEXT_ENGINE_WORKER_FILE_ROOT_PATH": str(vault),
+            "CONTEXT_ENGINE_WORKER_FILE_ROOT_REF": "synthetic-root",
+            "CONTEXT_ENGINE_WORKER_JOB_ID": str(scenario.job_id),
+            "CONTEXT_ENGINE_WORKER_LEASE_SIGNING_KEY_HEX": bytes(range(32)).hex(),
+            "CONTEXT_ENGINE_WORKER_LEASE_TOKEN": (
+                scenario.execution.worker_lease.serialize()
+            ),
+            "CONTEXT_ENGINE_WORKER_ORGANIZATION_ID": str(
+                scenario.organization_id
+            ),
+            "CONTEXT_ENGINE_WORKER_SERVICE_PRINCIPAL_ID": str(
+                scenario.service_principal_id
+            ),
+            "CONTEXT_ENGINE_WORKER_SOURCE_VERSION_ID": str(
+                scenario.source_version_id
+            ),
+            "CONTEXT_ENGINE_WORKER_SUPPLY_CUMULATIVE_BYTE_LIMIT": "1",
+            "CONTEXT_ENGINE_WORKER_SUPPLY_NO_PROGRESS_PAGE_LIMIT": "1",
+            "CONTEXT_ENGINE_WORKER_SUPPLY_PAGE_LIMIT": "1",
+        }
+    )
+
+    completed = subprocess.run(
+        ["context-engine-worker", "--run-file-connector-job"],
+        check=False,
+        capture_output=True,
+        env=environment,
+        text=True,
+        timeout=60,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stderr == ""
+    assert json.loads(completed.stdout) == {
+        "acceptedPageCount": 2,
+        "jobBehavior": "connector.execute",
+        "service": "context-engine-worker",
+        "status": "complete",
+    }
