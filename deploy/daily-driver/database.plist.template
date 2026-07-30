@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>${label_prefix}.database</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>${python}</string>
+    <string>-m</string>
+    <string>scripts.daily_driver.jobs</string>
+    <string>bootstrap</string>
+    <string>--service</string>
+    <string>database</string>
+    <string>--checkout</string>
+    <string>${checkout}</string>
+    <string>--docker-executable</string>
+    <string>${docker_executable}</string>
+    <string>--uv-executable</string>
+    <string>${uv_executable}</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>${checkout}</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>StandardOutPath</key>
+  <string>${log_root}/database.log</string>
+  <key>StandardErrorPath</key>
+  <string>${log_root}/database.error.log</string>
+</dict>
+</plist>

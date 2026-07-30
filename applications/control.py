@@ -17,7 +17,7 @@ from applications.file_root_configuration import file_roots
 from applications.file_scan import FileScanReport, scan_file_source
 from applications.operator_authentication import (
     CONTROL_OPERATOR_SECRET_ENV,
-    LocalOperatorAuthorities,
+    LocalControlOperatorConfiguration,
     LocalOperatorConfiguration,
 )
 from applications.release_promotion import promote_release, release_report_json
@@ -26,6 +26,7 @@ from engine.control import (
     ActivateFileDeleteObservations,
     ContextControl,
     ControlOperation,
+    ControlOperatorAuthority,
     FileRootRef,
     FileSourceProgress,
     RegisterFileSource,
@@ -161,13 +162,13 @@ def main(argv: Sequence[str] | None = None) -> None:
     print(rendered, flush=True)
 
 
-def local_operator_authorities() -> LocalOperatorAuthorities | None:
-    """Construct local operator authority only after complete explicit opt-in."""
+def local_control_operator_authority() -> ControlOperatorAuthority | None:
+    """Construct routine Control authority without loading release credentials."""
 
-    configuration = LocalOperatorConfiguration.load(os.environ)
+    configuration = LocalControlOperatorConfiguration.load(os.environ)
     if configuration is None:
         return None
-    return configuration.authorities()
+    return configuration.authority()
 
 
 def _run_operator_subcommand(
@@ -179,8 +180,8 @@ def _run_operator_subcommand(
     | MultiSourceScanReport
     | MultiSourceStatusReport
 ):
-    authorities = local_operator_authorities()
-    if authorities is None:
+    authority = local_control_operator_authority()
+    if authority is None:
         raise SourceNotAvailable
     organization_id = UUID(arguments.organization_id)
     opaque_credential = os.environ[CONTROL_OPERATOR_SECRET_ENV]
@@ -196,7 +197,7 @@ def _run_operator_subcommand(
                 if arguments.subcommand == "scan-all":
                     manifests = _list_sources(
                         organization_id=organization_id,
-                        authorities=authorities,
+                        authority=authority,
                         opaque_credential=opaque_credential,
                         engine=engine,
                         clock=clock,
@@ -206,7 +207,7 @@ def _run_operator_subcommand(
                             scan_file_source(
                                 organization_id=organization_id,
                                 source_ref=manifest.source_ref,
-                                authority=authorities.control,
+                                authority=authority,
                                 opaque_credential=opaque_credential,
                                 engine=engine,
                                 clock=clock,
@@ -218,7 +219,7 @@ def _run_operator_subcommand(
                 return scan_file_source(
                     organization_id=organization_id,
                     source_ref=SourceRef(UUID(arguments.source_ref)),
-                    authority=authorities.control,
+                    authority=authority,
                     opaque_credential=opaque_credential,
                     engine=engine,
                     clock=clock,
@@ -227,14 +228,14 @@ def _run_operator_subcommand(
         operation = _operation(arguments.subcommand)
         control = ContextControl(
             store=PostgreSQLControlStore(engine, clock=clock),
-            authority=authorities.control,
+            authority=authority,
             clock=clock,
         )
         if arguments.subcommand == "status" and arguments.source_ref is None:
             manifests = _list_sources_with_control(
                 control=control,
                 organization_id=organization_id,
-                authorities=authorities,
+                authority=authority,
                 opaque_credential=opaque_credential,
             )
             progress = tuple(
@@ -242,13 +243,13 @@ def _run_operator_subcommand(
                     control=control,
                     organization_id=organization_id,
                     source_ref=manifest.source_ref,
-                    authorities=authorities,
+                    authority=authority,
                     opaque_credential=opaque_credential,
                 )
                 for manifest in manifests
             )
             return MultiSourceStatusReport(progress)
-        with authorities.control.authorize(
+        with authority.authorize(
             opaque_credential=opaque_credential,
             operation=operation,
             request_id=f"local-{arguments.subcommand}-{uuid4().hex}",
@@ -319,20 +320,20 @@ class MultiSourceStatusReport:
 def _list_sources(
     *,
     organization_id: UUID,
-    authorities: LocalOperatorAuthorities,
+    authority: ControlOperatorAuthority,
     opaque_credential: str,
     engine: Engine,
     clock: Callable[[], datetime],
 ) -> tuple[SourceManifest, ...]:
     control = ContextControl(
         store=PostgreSQLControlStore(engine, clock=clock),
-        authority=authorities.control,
+        authority=authority,
         clock=clock,
     )
     return _list_sources_with_control(
         control=control,
         organization_id=organization_id,
-        authorities=authorities,
+        authority=authority,
         opaque_credential=opaque_credential,
     )
 
@@ -341,10 +342,10 @@ def _list_sources_with_control(
     *,
     control: ContextControl,
     organization_id: UUID,
-    authorities: LocalOperatorAuthorities,
+    authority: ControlOperatorAuthority,
     opaque_credential: str,
 ) -> tuple[SourceManifest, ...]:
-    with authorities.control.authorize(
+    with authority.authorize(
         opaque_credential=opaque_credential,
         operation=ControlOperation.READ_SOURCE,
         request_id=f"local-list-sources-{uuid4().hex}",
@@ -359,10 +360,10 @@ def _read_status(
     control: ContextControl,
     organization_id: UUID,
     source_ref: SourceRef,
-    authorities: LocalOperatorAuthorities,
+    authority: ControlOperatorAuthority,
     opaque_credential: str,
 ) -> FileSourceProgress:
-    with authorities.control.authorize(
+    with authority.authorize(
         opaque_credential=opaque_credential,
         operation=ControlOperation.READ_SOURCE_PROGRESS,
         request_id=f"local-status-{uuid4().hex}",

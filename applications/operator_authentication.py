@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import hmac
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
@@ -27,6 +28,10 @@ OPERATOR_ORGANIZATION_ENV = "CONTEXT_ENGINE_OPERATOR_ORGANIZATION_ID"
 CONTROL_OPERATOR_OPERATIONS_ENV = "CONTEXT_ENGINE_CONTROL_OPERATOR_OPERATIONS"
 DOGFOOD_SECRET_ENV = "CONTEXT_ENGINE_DOGFOOD_SECRET"
 WORKER_SECRET_ENV = "CONTEXT_ENGINE_WORKER_LEASE_SIGNING_KEY_HEX"
+RELEASE_OPERATOR_SECRET_FINGERPRINT_ENV = (
+    "CONTEXT_ENGINE_RELEASE_OPERATOR_SECRET_SHA256"
+)
+DOGFOOD_SECRET_FINGERPRINT_ENV = "CONTEXT_ENGINE_DOGFOOD_SECRET_SHA256"
 OPERATOR_ENVIRONMENT_VARIABLES = frozenset(
     {
         CONTROL_OPERATOR_SECRET_ENV,
@@ -52,6 +57,70 @@ class LocalOperatorConfigurationUnavailable(ValueError):
 
     def __init__(self) -> None:
         super().__init__("operator authentication rejected")
+
+
+def local_secret_fingerprint(value: str) -> str:
+    """Fingerprint one local secret for collision checks without delegating it."""
+
+    if type(value) is not str or not value:
+        raise LocalOperatorConfigurationUnavailable
+    return hashlib.sha256(value.lower().encode("utf-8")).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
+class LocalControlOperatorConfiguration:
+    """The routine Control identity without any release publication credential."""
+
+    organization_id: UUID
+    control_secret: bytes = field(repr=False)
+    control_operations: frozenset[ControlOperation] = field(repr=False)
+
+    @classmethod
+    def load(
+        cls,
+        environment: Mapping[str, str],
+    ) -> LocalControlOperatorConfiguration | None:
+        names = frozenset(
+            {
+                CONTROL_OPERATOR_SECRET_ENV,
+                OPERATOR_ORGANIZATION_ENV,
+                CONTROL_OPERATOR_OPERATIONS_ENV,
+            }
+        )
+        configured = names.intersection(environment)
+        if not configured:
+            return None
+        if configured != names:
+            raise LocalOperatorConfigurationUnavailable
+        try:
+            raw_operations = environment[CONTROL_OPERATOR_OPERATIONS_ENV].split(",")
+            if any(not value or value != value.strip() for value in raw_operations):
+                raise ValueError
+            operations = frozenset(ControlOperation(value) for value in raw_operations)
+            if len(operations) != len(raw_operations):
+                raise ValueError
+            return cls(
+                organization_id=UUID(environment[OPERATOR_ORGANIZATION_ENV]),
+                control_secret=_secret(environment[CONTROL_OPERATOR_SECRET_ENV]),
+                control_operations=operations,
+            )
+        except (KeyError, TypeError, ValueError, UnicodeError):
+            raise LocalOperatorConfigurationUnavailable from None
+
+    def authority(
+        self,
+        *,
+        clock: Callable[[], datetime] | None = None,
+    ) -> ControlOperatorAuthority:
+        active_clock = clock or (lambda: datetime.now(UTC))
+        return ControlOperatorAuthority(
+            LocalControlOperatorAuthenticator(self, clock=active_clock),
+            call_ttl=LOCAL_OPERATOR_TTL,
+            clock=active_clock,
+        )
+
+    def __repr__(self) -> str:
+        return "LocalControlOperatorConfiguration(<redacted>)"
 
 
 def _secret(value: object) -> bytes:
@@ -181,11 +250,14 @@ class LocalControlOperatorAuthenticator:
 
     def __init__(
         self,
-        configuration: LocalOperatorConfiguration,
+        configuration: LocalOperatorConfiguration | LocalControlOperatorConfiguration,
         *,
         clock: Callable[[], datetime],
     ) -> None:
-        if type(configuration) is not LocalOperatorConfiguration:
+        if type(configuration) not in {
+            LocalOperatorConfiguration,
+            LocalControlOperatorConfiguration,
+        }:
             raise TypeError("operator authentication rejected")
         if not callable(clock):
             raise TypeError("operator authentication rejected")

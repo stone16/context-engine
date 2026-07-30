@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>${label_prefix}.scan</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>${python}</string>
+    <string>-m</string>
+    <string>scripts.daily_driver.jobs</string>
+    <string>run</string>
+    <string>--job</string>
+    <string>scan</string>
+    <string>--checkout</string>
+    <string>${checkout}</string>
+    <string>--database-environment</string>
+    <string>${database_environment}</string>
+    <string>--operator-environment</string>
+    <string>${operator_environment}</string>
+    <string>--failure-root</string>
+    <string>${failure_root}</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>${checkout}</string>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>${scan_hour}</integer>
+    <key>Minute</key>
+    <integer>0</integer>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>${log_root}/scan.log</string>
+  <key>StandardErrorPath</key>
+  <string>${log_root}/scan.error.log</string>
+</dict>
+</plist>

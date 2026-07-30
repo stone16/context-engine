@@ -6,6 +6,7 @@ readonly ROOT_DIR
 readonly STATE_DIR="$ROOT_DIR/.context-engine"
 readonly ENV_FILE="$STATE_DIR/database.env"
 readonly ENV_MIGRATION_LOCK="$STATE_DIR/database.env.migration.lock"
+readonly DURABLE_DEPLOYMENT_MARKER="$STATE_DIR/durable-deployment"
 readonly LEGACY_PROJECT_FILE="$STATE_DIR/compose-project"
 readonly COMPOSE_FILE="$ROOT_DIR/compose.yaml"
 COMPOSE_PROJECT=''
@@ -671,6 +672,10 @@ database_down() {
 }
 
 database_reset() {
+  if [[ -e "$DURABLE_DEPLOYMENT_MARKER" || -L "$DURABLE_DEPLOYMENT_MARKER" ]]; then
+    printf 'refusing to reset a durable deployment database\n' >&2
+    exit 1
+  fi
   require_command docker
   require_command uv
   load_environment
