@@ -386,6 +386,82 @@ def test_change_access_atomically_revokes_exact_grant_and_advances_epoch(
         migration_engine.dispose()
 
 
+def test_revoking_one_private_principal_preserves_other_allowed_grants(
+    control_configuration: DatabaseConfiguration,
+    migration_configuration: DatabaseConfiguration,
+    access_fixture: AccessFixture,
+) -> None:
+    control_engine = create_database_engine(control_configuration)
+    migration_engine = create_database_engine(migration_configuration)
+    other_principal = f"principal:{uuid4()}"
+    try:
+        with migration_engine.begin() as connection:
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO resource_access_policy (
+                        organization_id, resource_ref, principal_ref,
+                        access_version, access_state, revoked_at
+                    ) VALUES (
+                        :organization_id, :resource_ref, :principal_ref,
+                        1, 'allowed', NULL
+                    )
+                    """
+                ),
+                {
+                    "organization_id": access_fixture.organization_a,
+                    "resource_ref": access_fixture.resource_a_one,
+                    "principal_ref": other_principal,
+                },
+            )
+
+        epoch = PostgreSQLAccessPolicyControl(control_engine).change_access(
+            _command(
+                access_fixture.organization_a,
+                access_fixture.resource_a_one,
+                access_fixture.principal_a,
+            )
+        )
+
+        with migration_engine.connect() as connection:
+            policy = connection.execute(
+                text(
+                    """
+                    SELECT policy_version, policy_kind, published,
+                           source_observation_status
+                    FROM article_access_policy
+                    WHERE organization_id = :organization_id
+                      AND resource_ref = :resource_ref
+                    """
+                ),
+                {
+                    "organization_id": access_fixture.organization_a,
+                    "resource_ref": access_fixture.resource_a_one,
+                },
+            ).one()
+            remaining = connection.execute(
+                text(
+                    """
+                    SELECT access_state FROM resource_access_policy
+                    WHERE organization_id = :organization_id
+                      AND resource_ref = :resource_ref
+                      AND principal_ref = :principal_ref
+                    """
+                ),
+                {
+                    "organization_id": access_fixture.organization_a,
+                    "resource_ref": access_fixture.resource_a_one,
+                    "principal_ref": other_principal,
+                },
+            ).scalar_one()
+        assert epoch.value == 2
+        assert tuple(policy) == (1, "private", True, "resolved")
+        assert remaining == "allowed"
+    finally:
+        control_engine.dispose()
+        migration_engine.dispose()
+
+
 @pytest.mark.parametrize("failure", ["missing", "already-revoked", "access-overflow"])
 def test_rejected_access_change_rolls_back_epoch_and_policy_together(
     failure: str,

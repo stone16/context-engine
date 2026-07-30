@@ -387,8 +387,19 @@ def test_groups_membership_removal_refuses_next_resolve_under_current_membership
                     "group_refs": [group_ref],
                 },
             )
+            connection.execute(
+                text(
+                    "DELETE FROM resource_access_policy "
+                    "WHERE organization_id = :org AND resource_ref = :resource_ref"
+                ),
+                {
+                    "org": fixture.org_a.organization_id,
+                    "resource_ref": fixture.org_a.authorized.resource_ref,
+                },
+            )
         # GROUPS is the Article policy grant and uses current Membership at the
-        # Article atom; group administration itself remains deferred to #130.
+        # Article atom, including the publication trace. There is deliberately
+        # no legacy principal grant. Group administration remains deferred to #130.
         _assert_authorized(_resolve(client), fixture.org_a)
         with migration_engine.begin() as connection:
             connection.execute(

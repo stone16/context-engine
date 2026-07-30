@@ -327,6 +327,19 @@ def test_article_policy_tables_force_rls_and_groups_authorize_at_article_atom(
                 ),
                 parameters,
             )
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO revision_publication_event (
+                        organization_id, resource_ref, revision_id,
+                        ordinal, state, recorded_at
+                    ) VALUES
+                    (:org_a, :resource_a, :revision_a, 0, 'prepared', :valid_from),
+                    (:org_b, :resource_b, :revision_b, 0, 'prepared', :valid_from)
+                    """
+                ),
+                parameters,
+            )
 
         with _user_actor(
             guarded_runtime_engine,
@@ -354,6 +367,12 @@ def test_article_policy_tables_force_rls_and_groups_authorize_at_article_atom(
                     "ORDER BY organization_id, resource_ref"
                 )
             ).scalars().all() == [resource_a]
+            assert connection.execute(
+                text(
+                    "SELECT state FROM revision_publication_event "
+                    "ORDER BY organization_id, resource_ref, ordinal"
+                )
+            ).scalars().all() == ["prepared"]
 
             # The remaining policy carriers are administrative facts and have
             # neither a Runtime table grant nor a policy that could leak them.
@@ -390,6 +409,10 @@ def test_article_policy_tables_force_rls_and_groups_authorize_at_article_atom(
     finally:
         with migration_engine.begin() as connection:
             for table_name, trigger_name in (
+                (
+                    "revision_publication_event",
+                    "revision_publication_event_immutable",
+                ),
                 ("context_fragment", "context_fragment_reject_mutation"),
                 ("context_revision", "context_revision_reject_mutation"),
             ):
@@ -400,6 +423,8 @@ def test_article_policy_tables_force_rls_and_groups_authorize_at_article_atom(
             with migration_engine.begin() as connection:
                 for statement in (
                     "DELETE FROM membership_resource_field_right WHERE "
+                    "organization_id IN (:org_a, :org_b)",
+                    "DELETE FROM revision_publication_event WHERE "
                     "organization_id IN (:org_a, :org_b)",
                     "DELETE FROM context_fragment WHERE "
                     "organization_id IN (:org_a, :org_b)",
@@ -418,6 +443,10 @@ def test_article_policy_tables_force_rls_and_groups_authorize_at_article_atom(
                 for table_name, trigger_name in (
                     ("context_revision", "context_revision_reject_mutation"),
                     ("context_fragment", "context_fragment_reject_mutation"),
+                    (
+                        "revision_publication_event",
+                        "revision_publication_event_immutable",
+                    ),
                 ):
                     connection.execute(
                         text(f"ALTER TABLE {table_name} ENABLE TRIGGER {trigger_name}")

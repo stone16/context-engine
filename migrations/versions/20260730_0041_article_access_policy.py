@@ -701,6 +701,19 @@ def upgrade() -> None:
         "WHERE article_policy.organization_id = context_resource.organization_id "
         "AND article_policy.resource_ref = context_resource.resource_ref))"
     )
+    publication_actor = _CURRENT_USER_ACTOR.format(
+        table_name="revision_publication_event"
+    )
+    publication_access = _article_access("revision_publication_event")
+    op.execute(
+        "DROP POLICY revision_publication_event_current_user_actor "
+        "ON revision_publication_event"
+    )
+    op.execute(
+        "CREATE POLICY revision_publication_event_current_user_actor "
+        "ON revision_publication_event FOR SELECT TO "
+        f"{_RUNTIME} USING ({publication_actor} AND {publication_access})"
+    )
     op.execute(
         f"GRANT SELECT ON TABLE article_access_policy, article_access_group_membership "
         f"TO {_RUNTIME}"
@@ -1181,6 +1194,15 @@ def upgrade() -> None:
                 RETURN NULL;
             END IF;
             IF OLD.access_state = 'allowed' AND NEW.access_state = 'revoked' THEN
+                IF EXISTS (
+                    SELECT 1
+                    FROM public.resource_access_policy AS remaining_access
+                    WHERE remaining_access.organization_id = NEW.organization_id
+                      AND remaining_access.resource_ref = NEW.resource_ref
+                      AND remaining_access.access_state = 'allowed'
+                ) THEN
+                    RETURN NULL;
+                END IF;
                 SELECT * INTO prior_policy
                 FROM public.article_access_policy AS policy
                 WHERE policy.organization_id = NEW.organization_id
@@ -1458,6 +1480,19 @@ def downgrade() -> None:
         f"FOR SELECT TO {_RUNTIME} USING ({resource_actor} AND tombstoned IS FALSE "
         "AND public.context_runtime_file_source_lifecycle_allows("
         "context_resource.organization_id, context_resource.source_ref))"
+    )
+    publication_actor = _CURRENT_USER_ACTOR.format(
+        table_name="revision_publication_event"
+    )
+    publication_access = _legacy_resource_access("revision_publication_event")
+    op.execute(
+        "DROP POLICY revision_publication_event_current_user_actor "
+        "ON revision_publication_event"
+    )
+    op.execute(
+        "CREATE POLICY revision_publication_event_current_user_actor "
+        "ON revision_publication_event FOR SELECT TO "
+        f"{_RUNTIME} USING ({publication_actor} AND {publication_access})"
     )
     for table_name, expression in (
         (
