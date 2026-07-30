@@ -1,0 +1,27 @@
+{
+  "allowedOperations": [
+    "backup",
+    "drain",
+    "health",
+    "refresh",
+    "scan"
+  ],
+  "jobs": [
+    {
+      "operation": "backup",
+      "publicationAuthority": "NONE",
+      "schedule": "StartCalendarInterval"
+    },
+    {
+      "operation": "scan",
+      "publicationAuthority": "NONE",
+      "schedule": "StartCalendarInterval"
+    },
+    {
+      "operation": "health",
+      "publicationAuthority": "NONE",
+      "schedule": "StartInterval"
+    }
+  ],
+  "schemaVersion": 1
+}

@@ -11,6 +11,26 @@ GOLDEN_BACKUP_ROOT_ENV: Final = "CONTEXT_ENGINE_GOLDEN_BACKUP_ROOT"
 REPOSITORY_ROOT: Final = Path(__file__).resolve().parents[2]
 
 
+def require_durable_storage_root(root: Path) -> Path:
+    """Apply the one durable, worktree-external root convention."""
+
+    if (
+        not isinstance(root, Path)
+        or not root.is_absolute()
+        or not root.is_dir()
+        or root.is_symlink()
+        or ".context-engine" in root.parts
+    ):
+        raise ValueError("durable storage root is unavailable")
+    resolved = root.resolve(strict=True)
+    if any(
+        (candidate / ".git").exists()
+        for candidate in (resolved, *resolved.parents)
+    ):
+        raise ValueError("durable storage root must be outside every git worktree")
+    return resolved
+
+
 def _configured_durable_root(variable: str) -> Path:
     try:
         configured = os.environ[variable]
@@ -18,21 +38,11 @@ def _configured_durable_root(variable: str) -> Path:
         raise ValueError("durable golden root is unavailable") from None
     if not configured or configured != configured.strip():
         raise ValueError("durable golden root is unavailable")
-    root = Path(configured)
-    if (
-        not root.is_absolute()
-        or not root.is_dir()
-        or root.is_symlink()
-        or ".context-engine" in root.parts
-    ):
-        raise ValueError("durable golden root is unavailable")
-    resolved = root.resolve(strict=True)
-    if any(
-        (candidate / ".git").exists()
-        for candidate in (resolved, *resolved.parents)
-    ):
-        raise ValueError("durable golden root must be outside every git worktree")
-    return resolved
+    try:
+        return require_durable_storage_root(Path(configured))
+    except ValueError as error:
+        message = str(error).replace("storage", "golden")
+        raise ValueError(message) from None
 
 
 def durable_golden_root() -> Path:

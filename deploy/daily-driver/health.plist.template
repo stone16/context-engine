@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>${label_prefix}.health</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>${python}</string>
+    <string>-m</string>
+    <string>scripts.daily_driver.jobs</string>
+    <string>run</string>
+    <string>--job</string>
+    <string>health</string>
+    <string>--checkout</string>
+    <string>${checkout}</string>
+    <string>--failure-root</string>
+    <string>${failure_root}</string>
+    <string>--health-url</string>
+    <string>${health_url}</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>${checkout}</string>
+  <key>StartInterval</key>
+  <integer>${health_interval_seconds}</integer>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>${log_root}/health.log</string>
+  <key>StandardErrorPath</key>
+  <string>${log_root}/health.error.log</string>
+</dict>
+</plist>

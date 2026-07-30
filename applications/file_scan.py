@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import os
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import datetime
@@ -18,8 +19,11 @@ from applications.file_root_configuration import required_environment
 from applications.operator_authentication import (
     CONTROL_OPERATOR_SECRET_ENV,
     DOGFOOD_SECRET_ENV,
+    DOGFOOD_SECRET_FINGERPRINT_ENV,
     RELEASE_OPERATOR_SECRET_ENV,
+    RELEASE_OPERATOR_SECRET_FINGERPRINT_ENV,
     WORKER_SECRET_ENV,
+    local_secret_fingerprint,
 )
 from engine.control import (
     FILE_DELETE_OBSERVATION_CAPABILITY_MANIFEST,
@@ -355,14 +359,27 @@ def _proof_keys() -> tuple[Ed25519PrivateKey, Ed25519PrivateKey]:
     checkpoint_material = _private_key_material(CHECKPOINT_SIGNING_KEY_ENV)
     operator_secret_values = (
         required_environment(CONTROL_OPERATOR_SECRET_ENV),
-        required_environment(RELEASE_OPERATOR_SECRET_ENV),
-        required_environment(DOGFOOD_SECRET_ENV),
+        required_environment(WORKER_SECRET_ENV),
     )
     encoded_proof_values = (
         provider_material.hex(),
         checkpoint_material.hex(),
     )
+    external_fingerprints = tuple(
+        _external_secret_fingerprint(secret_name, fingerprint_name)
+        for secret_name, fingerprint_name in (
+            (RELEASE_OPERATOR_SECRET_ENV, RELEASE_OPERATOR_SECRET_FINGERPRINT_ENV),
+            (DOGFOOD_SECRET_ENV, DOGFOOD_SECRET_FINGERPRINT_ENV),
+        )
+    )
     if any(
+        hmac.compare_digest(
+            local_secret_fingerprint(proof_value),
+            external_fingerprint,
+        )
+        for proof_value in encoded_proof_values
+        for external_fingerprint in external_fingerprints
+    ) or any(
         hmac.compare_digest(proof_value, operator_secret.lower())
         for proof_value in encoded_proof_values
         for operator_secret in operator_secret_values
@@ -384,6 +401,22 @@ def _proof_keys() -> tuple[Ed25519PrivateKey, Ed25519PrivateKey]:
         Ed25519PrivateKey.from_private_bytes(provider_material),
         Ed25519PrivateKey.from_private_bytes(checkpoint_material),
     )
+
+
+def _external_secret_fingerprint(secret_name: str, fingerprint_name: str) -> str:
+    raw = os.environ.get(secret_name)
+    if raw is not None:
+        return local_secret_fingerprint(raw)
+    fingerprint = required_environment(fingerprint_name)
+    if len(fingerprint) != 64:
+        raise SourceNotAvailable
+    try:
+        decoded = bytes.fromhex(fingerprint)
+    except ValueError:
+        raise SourceNotAvailable from None
+    if len(decoded) != 32:
+        raise SourceNotAvailable
+    return fingerprint.lower()
 
 
 def _positive_bigint(value: str) -> int:

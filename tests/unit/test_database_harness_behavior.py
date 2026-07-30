@@ -53,6 +53,42 @@ def _stub_harness_dependencies(stub_directory: Path) -> None:
     _write_executable(stub_directory / "uv", "#!/usr/bin/env bash\nexit 0\n")
 
 
+def test_reset_refuses_a_checkout_marked_as_a_durable_deployment(
+    tmp_path: Path,
+) -> None:
+    stub_directory = tmp_path / "bin"
+    stub_directory.mkdir()
+    _stub_harness_dependencies(stub_directory)
+    checkout = tmp_path / "checkout"
+    scripts = checkout / "scripts"
+    scripts.mkdir(parents=True)
+    shutil.copy2(ROOT / "scripts/database_harness.sh", scripts)
+    (checkout / "compose.yaml").write_text("services: {}\n", encoding="utf-8")
+    state = checkout / ".context-engine"
+    state.mkdir()
+    (state / "durable-deployment").write_text(
+        "daily-driver-v1\n",
+        encoding="utf-8",
+    )
+    command_log = checkout / "docker-command.log"
+
+    completed = subprocess.run(
+        ["/bin/bash", str(scripts / "database_harness.sh"), "reset"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "HARNESS_COMMAND_LOG": str(command_log),
+            "PATH": f"{stub_directory}{os.pathsep}{os.environ['PATH']}",
+        },
+    )
+
+    assert completed.returncode != 0
+    assert "refusing to reset a durable deployment database" in completed.stderr
+    assert not command_log.exists()
+
+
 def test_two_checkouts_generate_distinct_persistent_compose_projects(
     tmp_path: Path,
 ) -> None:

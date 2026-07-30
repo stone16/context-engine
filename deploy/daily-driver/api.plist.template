@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>${label_prefix}.api</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>${python}</string>
+    <string>-m</string>
+    <string>scripts.daily_driver.jobs</string>
+    <string>daemon</string>
+    <string>--service</string>
+    <string>api</string>
+    <string>--checkout</string>
+    <string>${checkout}</string>
+    <string>--database-environment</string>
+    <string>${database_environment}</string>
+    <string>--operator-environment</string>
+    <string>${operator_environment}</string>
+    <string>--api-port</string>
+    <string>${api_port}</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>${checkout}</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>StandardOutPath</key>
+  <string>${log_root}/api.log</string>
+  <key>StandardErrorPath</key>
+  <string>${log_root}/api.error.log</string>
+</dict>
+</plist>
