@@ -98,7 +98,7 @@ def test_acceptance_cli_parser_error_does_not_echo_the_invalid_argument() -> Non
     _assert_process_output_is_private(completed)
 
 
-def test_five_acceptance_cli_operator_errors_and_uncaught_exceptions_are_private(
+def test_five_acceptance_cli_operator_errors_emit_their_specific_safe_messages(
     tmp_path: Path,
 ) -> None:
     corpus = tmp_path / "corpus"
@@ -138,3 +138,28 @@ def test_five_acceptance_cli_operator_errors_and_uncaught_exceptions_are_private
         assert completed.stdout == ""
         assert completed.stderr == f"{expected_message}\n"
         _assert_process_output_is_private(completed)
+
+
+def test_acceptance_cli_unexpected_failure_emits_only_the_generic_safe_message(
+    tmp_path: Path,
+) -> None:
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    (corpus / "note.md").write_text("# Note\n\nBody.\n", encoding="utf-8")
+    state_directory = tmp_path / ".context-engine"
+    state_directory.mkdir()
+    blocked_parent = state_directory / "blocked-parent"
+    blocked_parent.write_text("not a directory\n", encoding="utf-8")
+
+    completed = _run_acceptance_cli(
+        "--acceptance-report",
+        "--root",
+        str(corpus),
+        "--output",
+        str(blocked_parent / "report.json"),
+    )
+
+    assert completed.returncode != 0
+    assert completed.stdout == ""
+    assert completed.stderr == "compiler runner operation failed\n"
+    _assert_process_output_is_private(completed)
