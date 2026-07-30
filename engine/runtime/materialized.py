@@ -27,6 +27,8 @@ __all__ = [
     "CandidateDiscoveryRequest",
     "CandidateDiscoverySession",
     "ExactPhraseDiscoveryRequest",
+    "FtsDiscoveryRequest",
+    "HybridDiscoveryRequest",
     "MaterializedFieldValue",
     "MaterializedFragmentLocator",
     "MaterializedFragmentProjection",
@@ -43,9 +45,7 @@ __all__ = [
     "require_bounded_discovery_request",
 ]
 
-_STRUCTURED_FIELD_LINE_BREAKS: Final = frozenset(
-    "\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029"
-)
+_STRUCTURED_FIELD_LINE_BREAKS: Final = frozenset("\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029")
 
 
 def _require_bounded_discovery_limit(value: object) -> int:
@@ -166,8 +166,10 @@ class MaterializedFragmentProjection:
     def __post_init__(self) -> None:
         if type(self.kind) is not MaterializedProjectionKind:
             raise TypeError("materialized projection kind must be closed")
-        if type(self.fields) is not tuple or not self.fields or any(
-            type(value) is not MaterializedFieldValue for value in self.fields
+        if (
+            type(self.fields) is not tuple
+            or not self.fields
+            or any(type(value) is not MaterializedFieldValue for value in self.fields)
         ):
             raise ValueError("materialized projection requires authorized fields")
         if (
@@ -429,12 +431,60 @@ class VectorDiscoveryRequest:
                 or not refs
                 or any(type(ref) is not str or not ref for ref in refs)
             ):
-                raise ValueError(
-                    f"vector discovery {field_name} must be nonempty refs"
-                )
+                raise ValueError(f"vector discovery {field_name} must be nonempty refs")
 
 
-CandidateDiscoveryRequest = ExactPhraseDiscoveryRequest | VectorDiscoveryRequest
+@dataclass(frozen=True, slots=True)
+class FtsDiscoveryRequest:
+    """Validated native PostgreSQL full-text lookup plan."""
+
+    query_text: str = field(repr=False)
+    limit: int
+    source_refs: tuple[str, ...] | None = None
+    resource_refs: tuple[str, ...] | None = None
+
+    def __post_init__(self) -> None:
+        if (
+            type(self.query_text) is not str
+            or not self.query_text
+            or self.query_text.isspace()
+        ):
+            raise ValueError("FTS discovery requires nonblank query text")
+        _require_bounded_discovery_limit(self.limit)
+        for field_name, refs in (
+            ("source_refs", self.source_refs),
+            ("resource_refs", self.resource_refs),
+        ):
+            if refs is not None and (
+                type(refs) is not tuple
+                or not refs
+                or any(type(ref) is not str or not ref for ref in refs)
+            ):
+                raise ValueError(f"FTS discovery {field_name} must be nonempty refs")
+
+
+@dataclass(frozen=True, slots=True)
+class HybridDiscoveryRequest:
+    """One bounded lexical and vector plan for the retained transaction."""
+
+    fts: FtsDiscoveryRequest
+    vector: VectorDiscoveryRequest
+
+    def __post_init__(self) -> None:
+        if type(self.fts) is not FtsDiscoveryRequest:
+            raise TypeError("hybrid discovery requires an FTS request")
+        if type(self.vector) is not VectorDiscoveryRequest:
+            raise TypeError("hybrid discovery requires a vector request")
+        self.fts.__post_init__()
+        self.vector.__post_init__()
+
+
+type CandidateDiscoveryRequest = (
+    ExactPhraseDiscoveryRequest
+    | FtsDiscoveryRequest
+    | VectorDiscoveryRequest
+    | HybridDiscoveryRequest
+)
 
 
 def require_bounded_discovery_request(
@@ -444,26 +494,35 @@ def require_bounded_discovery_request(
 ) -> CandidateDiscoveryRequest:
     """Bound one untrusted prepared plan before the trusted transaction runs it."""
 
-    if type(request) not in {ExactPhraseDiscoveryRequest, VectorDiscoveryRequest}:
+    if type(request) not in {
+        ExactPhraseDiscoveryRequest,
+        FtsDiscoveryRequest,
+        VectorDiscoveryRequest,
+        HybridDiscoveryRequest,
+    }:
         raise TypeError("candidate discovery request has the wrong nominal type")
     request.__post_init__()
     require_candidate_submission_limit(submission_limit)
-    if type(request) is VectorDiscoveryRequest and request.limit > submission_limit:
+    if isinstance(request, FtsDiscoveryRequest | VectorDiscoveryRequest) and (
+        request.limit > submission_limit
+    ):
         raise ValueError("prepared candidate discovery exceeded the server bound")
+    if type(request) is HybridDiscoveryRequest and (
+        request.fts.limit + request.vector.limit > submission_limit
+    ):
+        raise ValueError("prepared hybrid discovery exceeded the server bound")
     return request
 
 
 class CandidateDiscoverySession:
     """Disposable data-only discovery result; carries no database capability."""
 
-    __slots__ = ("_active", "_candidates")
+    __slots__ = ("_active", "_candidate_sets")
     _active: bool
-    _candidates: tuple[CandidateRef, ...]
+    _candidate_sets: tuple[tuple[str, tuple[CandidateRef, ...]], ...]
 
     def __init__(self) -> None:
-        raise TypeError(
-            "CandidateDiscoverySession can only be constructed by Runtime"
-        )
+        raise TypeError("CandidateDiscoverySession can only be constructed by Runtime")
 
     def __reduce__(self) -> NoReturn:
         raise TypeError("CandidateDiscoverySession is not serializable")
@@ -481,8 +540,7 @@ def _require_active_materialized_projection_session(
         or not getattr(scope, "_active", False)
     ):
         raise ValueError(
-            "materialized projection requires an active materialized projection "
-            "scope"
+            "materialized projection requires an active materialized projection scope"
         )
 
 
@@ -498,8 +556,7 @@ def _construct_materialized_projection_session(
         or not getattr(authority_scope, "_active", False)
     ):
         raise ValueError(
-            "materialized projection requires an active materialized projection "
-            "scope"
+            "materialized projection requires an active materialized projection scope"
         )
     if (
         not callable(getattr(port, "source_is_active", None))
@@ -531,6 +588,7 @@ def _construct_candidate_discovery_session(
     from engine.runtime.scope import _require_effective_scope_integrity
 
     _require_effective_scope_integrity(effective_scope)
+    candidate_sets: tuple[tuple[str, tuple[CandidateRef, ...]], ...]
     if type(request) is ExactPhraseDiscoveryRequest:
         discover_exact_phrase = getattr(
             session._port,
@@ -539,34 +597,86 @@ def _construct_candidate_discovery_session(
         )
         if not callable(discover_exact_phrase):
             raise TypeError("materialized candidate discovery port is incomplete")
-        candidates = discover_exact_phrase(request.phrase_digest)
-    elif type(request) is VectorDiscoveryRequest:
-        discover_vector = getattr(session._port, "discover_vector", None)
-        if not callable(discover_vector):
-            raise TypeError("materialized candidate discovery port is incomplete")
-        candidates = discover_vector(
-            request.query_embedding,
-            request.limit,
-            request.source_refs,
-            request.resource_refs,
-            frozenset(effective_scope.targets),
+        candidate_sets = (
+            ("exact_phrase", discover_exact_phrase(request.phrase_digest)),
         )
-        if len(candidates) > request.limit:
-            raise TypeError(
-                "materialized vector discovery must return bounded candidates"
-            )
+    elif type(request) is FtsDiscoveryRequest:
+        candidate_sets = (
+            ("fts", _discover_fts_candidates(session, request, effective_scope)),
+        )
+    elif type(request) is VectorDiscoveryRequest:
+        candidate_sets = (
+            ("vector", _discover_vector_candidates(session, request, effective_scope)),
+        )
+    elif type(request) is HybridDiscoveryRequest:
+        candidate_sets = (
+            ("fts", _discover_fts_candidates(session, request.fts, effective_scope)),
+            (
+                "vector",
+                _discover_vector_candidates(session, request.vector, effective_scope),
+            ),
+        )
     else:
         raise TypeError("candidate discovery request has the wrong nominal type")
+    for _ranker_ref, candidates in candidate_sets:
+        if type(candidates) is not tuple or any(
+            type(candidate) is not CandidateRef for candidate in candidates
+        ):
+            raise TypeError(
+                "materialized discovery must return exact CandidateRef values"
+            )
+    discovery = object.__new__(CandidateDiscoverySession)
+    discovery._active = True
+    discovery._candidate_sets = candidate_sets
+    return discovery
+
+
+def _discover_vector_candidates(
+    session: MaterializedProjectionSession,
+    request: VectorDiscoveryRequest,
+    effective_scope: EffectiveScope,
+) -> tuple[CandidateRef, ...]:
+    discover_vector = getattr(session._port, "discover_vector", None)
+    if not callable(discover_vector):
+        raise TypeError("materialized candidate discovery port is incomplete")
+    candidates = discover_vector(
+        request.query_embedding,
+        request.limit,
+        request.source_refs,
+        request.resource_refs,
+        frozenset(effective_scope.targets),
+    )
     if type(candidates) is not tuple or any(
         type(candidate) is not CandidateRef for candidate in candidates
     ):
-        raise TypeError(
-            "materialized discovery must return exact CandidateRef values"
-        )
-    discovery = object.__new__(CandidateDiscoverySession)
-    discovery._active = True
-    discovery._candidates = candidates
-    return discovery
+        raise TypeError("materialized vector discovery requires CandidateRefs")
+    if len(candidates) > request.limit:
+        raise TypeError("materialized vector discovery must return bounded candidates")
+    return candidates
+
+
+def _discover_fts_candidates(
+    session: MaterializedProjectionSession,
+    request: FtsDiscoveryRequest,
+    effective_scope: EffectiveScope,
+) -> tuple[CandidateRef, ...]:
+    discover_fts = getattr(session._port, "discover_fts", None)
+    if not callable(discover_fts):
+        raise TypeError("materialized candidate discovery port is incomplete")
+    candidates = discover_fts(
+        request.query_text,
+        request.limit,
+        request.source_refs,
+        request.resource_refs,
+        frozenset(effective_scope.targets),
+    )
+    if type(candidates) is not tuple or any(
+        type(candidate) is not CandidateRef for candidate in candidates
+    ):
+        raise TypeError("materialized FTS discovery requires CandidateRefs")
+    if len(candidates) > request.limit:
+        raise TypeError("materialized FTS discovery must return bounded candidates")
+    return candidates
 
 
 def _candidate_discovery_candidates(
@@ -576,7 +686,27 @@ def _candidate_discovery_candidates(
         raise TypeError("candidate discovery session has the wrong nominal type")
     if not session._active:
         raise ValueError("candidate discovery session is inactive")
-    return session._candidates
+    if len(session._candidate_sets) != 1:
+        raise ValueError("ranker-specific discovery result is required")
+    return session._candidate_sets[0][1]
+
+
+def _candidate_discovery_ranker_candidates(
+    session: CandidateDiscoverySession,
+    ranker_ref: str,
+) -> tuple[CandidateRef, ...]:
+    if type(session) is not CandidateDiscoverySession:
+        raise TypeError("candidate discovery session has the wrong nominal type")
+    if not session._active:
+        raise ValueError("candidate discovery session is inactive")
+    matches = tuple(
+        candidates
+        for candidate_ranker_ref, candidates in session._candidate_sets
+        if candidate_ranker_ref == ranker_ref
+    )
+    if len(matches) != 1:
+        raise ValueError("candidate discovery ranker result is unavailable")
+    return matches[0]
 
 
 def _discover_materialized_candidates(
@@ -593,7 +723,7 @@ def _close_candidate_discovery_session(
     if type(session) is not CandidateDiscoverySession:
         raise TypeError("candidate discovery session has the wrong nominal type")
     session._active = False
-    session._candidates = ()
+    session._candidate_sets = ()
 
 
 def _current_materialized_scope_operands(
@@ -613,11 +743,14 @@ def _current_materialized_scope_operands(
         raise MaterializedScopeUnavailable(
             "materialized scope release selection is unavailable"
         ) from None
-    if any(str(value) != reference for value, reference in zip(
-        revision_ids,
-        active_revision_refs,
-        strict=True,
-    )):
+    if any(
+        str(value) != reference
+        for value, reference in zip(
+            revision_ids,
+            active_revision_refs,
+            strict=True,
+        )
+    ):
         raise MaterializedScopeUnavailable(
             "materialized scope release selection is unavailable"
         )
@@ -778,9 +911,7 @@ def _read_materialized_fragment_window(
         raise TypeError("materialized fragment window returned the wrong nominal type")
     read.__post_init__()
     items = read.items
-    if any(
-        type(item) is not MaterializedFragmentWindowItem for item in items
-    ):
+    if any(type(item) is not MaterializedFragmentWindowItem for item in items):
         raise TypeError("materialized fragment window returned the wrong nominal type")
     for item in items:
         item.__post_init__()

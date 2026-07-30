@@ -16,6 +16,8 @@ from weakref import WeakKeyDictionary
 
 from engine.runtime.actor import _require_active_user_actor
 from engine.runtime.authorized_ranking import (
+    UNIFORM_RANKER_WEIGHTS,
+    RankerWeights,
     join_authorized_ranking,
     select_authorized_ranking,
 )
@@ -24,7 +26,6 @@ from engine.runtime.candidate_ranking import (
     DEFAULT_CANDIDATE_SUBMISSION_LIMIT,
     CandidateQuery,
     CandidateRankEvidence,
-    preserve_single_ranker_candidates,
     require_bounded_candidate_submission,
     require_candidate_submission_limit,
 )
@@ -135,6 +136,7 @@ from engine.runtime.policy_epoch import (
     _policy_epoch_is_current,
     _require_active_policy_epoch_verification,
 )
+from engine.runtime.prekernel_fusion import fuse_candidate_evidence
 from engine.runtime.release_lineage import ActiveReleaseUnavailable
 from engine.runtime.scope import (
     OMITTED_REQUEST_NARROWING,
@@ -754,6 +756,8 @@ class SealedRuntimeSelector:
         self,
         decision: AuthorizationDecision,
         rank_evidence: tuple[CandidateRankEvidence, ...],
+        *,
+        ranker_weights: RankerWeights | None = None,
     ) -> SealedPackageSelection:
         if type(decision) is not AuthorizationDecision:
             raise TypeError("sealed selection requires AuthorizationDecision")
@@ -773,7 +777,13 @@ class SealedRuntimeSelector:
         ):
             raise ValueError("authorization decision integrity validation failed")
         selected = select_authorized_ranking(
-            join_authorized_ranking(decision.projections, rank_evidence),
+            join_authorized_ranking(
+                decision.projections,
+                rank_evidence,
+                ranker_weights=(
+                    ranker_weights.values if ranker_weights is not None else None
+                ),
+            ),
             decision.effective_budget,
         )
         content = construct_package_content(
@@ -1455,6 +1465,7 @@ class Runtime:
         content_io: RuntimeContentIo | None = None,
         candidate_index: CandidateIndex | None = None,
         candidate_submission_limit: int = DEFAULT_CANDIDATE_SUBMISSION_LIMIT,
+        ranker_weights: RankerWeights = UNIFORM_RANKER_WEIGHTS,
         acquire_capability: RuntimeCapability = (
             RuntimeCapability.MATERIALIZED_ACQUIRE
         ),
@@ -1516,6 +1527,9 @@ class Runtime:
         self._content_io = selected_content_io
         self._candidate_discovery_enabled = candidate_index is not None
         self._candidate_submission_limit = candidate_submission_limit
+        if type(ranker_weights) is not RankerWeights:
+            raise RuntimeConfigurationError("ranker weights must be server-owned")
+        self._ranker_weights = ranker_weights
         self._acquire_capability = acquire_capability
         self._capability_gate = RuntimeCapabilityGate()
         self._clock = clock
@@ -1697,12 +1711,7 @@ class Runtime:
                     discovered,
                     submission_limit=self._candidate_submission_limit,
                 )
-                try:
-                    fused = preserve_single_ranker_candidates(discovered)
-                except ValueError as error:
-                    raise RuntimeConfigurationError(
-                        "multi-ranker fusion policy is not active"
-                    ) from error
+                fused = fuse_candidate_evidence(discovered)
                 candidate_refs = tuple(
                     sorted(fused.candidate_refs, key=_candidate_sort_key)
                 )
@@ -1748,6 +1757,7 @@ class Runtime:
             selection = self._selector.select_for_delivery(
                 decision,
                 rank_evidence,
+                ranker_weights=self._ranker_weights,
             )
             finalized = self._kernel.finalize_for_delivery(
                 invocation,

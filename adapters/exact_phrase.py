@@ -12,7 +12,7 @@ from engine.runtime.contracts import Acquire
 from engine.runtime.materialized import (
     CandidateDiscoverySession,
     ExactPhraseDiscoveryRequest,
-    _discover_materialized_candidates,
+    _candidate_discovery_ranker_candidates,
 )
 from engine.runtime.scope import CandidateDiscoveryScope
 
@@ -29,12 +29,8 @@ class PostgreSQLExactPhraseCandidateIndex:
         if type(request) is not Acquire:
             raise TypeError("exact phrase discovery requires Acquire")
         if type(effective_scope) is not CandidateDiscoveryScope:
-            raise TypeError(
-                "exact phrase discovery requires CandidateDiscoveryScope"
-            )
-        return ExactPhraseDiscoveryRequest(
-            exact_phrase_digest(request.need.query)
-        )
+            raise TypeError("exact phrase discovery requires CandidateDiscoveryScope")
+        return ExactPhraseDiscoveryRequest(exact_phrase_digest(request.need.query))
 
     def discover(
         self,
@@ -46,17 +42,16 @@ class PostgreSQLExactPhraseCandidateIndex:
         if type(request) is not Acquire:
             raise TypeError("exact phrase discovery requires Acquire")
         if type(effective_scope) is not CandidateDiscoveryScope:
-            raise TypeError(
-                "exact phrase discovery requires CandidateDiscoveryScope"
-            )
+            raise TypeError("exact phrase discovery requires CandidateDiscoveryScope")
         return CandidateQuery(
             ranked_lists=(
                 RankedCandidateList(
                     ranker_ref="lexical",
                     candidates=tuple(
                         RankedCandidate(candidate_ref=candidate)
-                        for candidate in _discover_materialized_candidates(
-                            discovery_session
+                        for candidate in _candidate_discovery_ranker_candidates(
+                            discovery_session,
+                            "exact_phrase",
                         )
                     ),
                 ),

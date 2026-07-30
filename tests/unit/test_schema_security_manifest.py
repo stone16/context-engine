@@ -48,7 +48,7 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
     document = manifest()
     tables = table_entries(document)
 
-    assert document["manifestVersion"] == "39.0.0"
+    assert document["manifestVersion"] == "40.0.0"
     assert set(tables) == {
         "active_release_manifest",
         "action_delivery_attempt",

@@ -18,7 +18,6 @@ __all__ = [
     "RankedCandidate",
     "RankedCandidateList",
     "RankerEvidence",
-    "preserve_single_ranker_candidates",
     "require_bounded_candidate_submission",
     "require_candidate_submission_limit",
 ]
@@ -56,9 +55,7 @@ def _require_ranker_ref(value: object) -> str:
 
 def _require_optional_score(value: float | None) -> float | None:
     if value is not None and (
-        type(value) not in {int, float}
-        or type(value) is bool
-        or not isfinite(value)
+        type(value) not in {int, float} or type(value) is bool or not isfinite(value)
     ):
         raise ValueError("ranked candidate score must be finite or absent")
     return value
@@ -162,8 +159,10 @@ class CandidateRankEvidence:
     def __post_init__(self) -> None:
         if type(self.candidate_ref) is not CandidateRef:
             raise TypeError("rank evidence requires CandidateRef")
-        if type(self.per_ranker) is not tuple or not self.per_ranker or any(
-            type(evidence) is not RankerEvidence for evidence in self.per_ranker
+        if (
+            type(self.per_ranker) is not tuple
+            or not self.per_ranker
+            or any(type(evidence) is not RankerEvidence for evidence in self.per_ranker)
         ):
             raise ValueError("candidate rank evidence requires per-ranker evidence")
         identities = tuple(item.ranker_ref for item in self.per_ranker)
@@ -194,38 +193,3 @@ class FusedCandidates:
             self.candidate_refs
         ):
             raise ValueError("fused candidates and rank evidence must align exactly")
-
-
-def preserve_single_ranker_candidates(query: CandidateQuery) -> FusedCandidates:
-    """Preserve one active ranker without selecting the deferred fusion policy."""
-
-    if type(query) is not CandidateQuery:
-        raise TypeError("single-ranker preservation requires CandidateQuery")
-    if len(query.ranked_lists) != 1:
-        raise ValueError("multi-ranker fusion policy is not active")
-    ranked_list = query.ranked_lists[0]
-    candidates = []
-    evidence = []
-    seen: set[CandidateRef] = set()
-    for position, ranked in enumerate(ranked_list.candidates, start=1):
-        if ranked.candidate_ref in seen:
-            continue
-        seen.add(ranked.candidate_ref)
-        candidates.append(ranked.candidate_ref)
-        evidence.append(
-            CandidateRankEvidence(
-                candidate_ref=ranked.candidate_ref,
-                per_ranker=(
-                    RankerEvidence(
-                        ranker_ref=ranked_list.ranker_ref,
-                        position=position,
-                        score=ranked.score,
-                    ),
-                ),
-                fused_rank=len(candidates),
-            )
-        )
-    return FusedCandidates(
-        candidate_refs=tuple(candidates),
-        rank_evidence=tuple(evidence),
-    )

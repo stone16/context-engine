@@ -14,7 +14,6 @@ from engine.runtime.candidate_ranking import (
     CandidateQuery,
     RankedCandidate,
     RankedCandidateList,
-    preserve_single_ranker_candidates,
 )
 from engine.runtime.content_io import CandidateIndex
 from engine.runtime.contracts import Acquire, ContextNeed
@@ -84,8 +83,7 @@ def _candidate_discovery_protocols(
                 node.name in candidate_protocol_names
                 or node.name not in protocol_names
                 or not any(
-                    ast.unparse(base).split(".")[-1]
-                    in candidate_protocol_names
+                    ast.unparse(base).split(".")[-1] in candidate_protocol_names
                     for base in node.bases
                 )
             ):
@@ -145,9 +143,10 @@ def test_exactly_one_candidate_discovery_protocol_extends_existing_seam() -> Non
         get_type_hints(CandidateIndex.prepare_discovery)["return"]
         == CandidateDiscoveryRequest
     )
-    assert get_type_hints(PostgreSQLExactPhraseCandidateIndex.discover)[
-        "return"
-    ] is CandidateQuery
+    assert (
+        get_type_hints(PostgreSQLExactPhraseCandidateIndex.discover)["return"]
+        is CandidateQuery
+    )
 
 
 def test_candidate_protocol_oracle_detects_other_packages_and_inherited_seams(
@@ -172,9 +171,10 @@ def test_candidate_protocol_oracle_detects_other_packages_and_inherited_seams(
         (Path("application.py"), "AlternateLookup"),
         (Path("engine.py"), "CandidateIndex"),
     ]
-    assert get_type_hints(PostgreSQLVectorCandidateIndex.discover)[
-        "return"
-    ] is CandidateQuery
+    assert (
+        get_type_hints(PostgreSQLVectorCandidateIndex.discover)["return"]
+        is CandidateQuery
+    )
 
 
 def test_candidate_query_preserves_ranker_identity_and_opaque_candidate_order() -> None:
@@ -235,9 +235,7 @@ def test_candidate_query_refuses_merged_or_duplicate_ranker_lists() -> None:
         CandidateQuery(ranked_lists=(repeated, repeated))
 
 
-def test_deferred_multi_ranker_policy_refuses_instead_of_dropping_rankers() -> None:
-    """Silently keeping only the first list would activate a policy nobody chose."""
-
+def test_multi_ranker_query_keeps_separate_ranker_lists() -> None:
     lexical_only = _candidate("lexical-only")
     vector_only = _candidate("vector-only")
     query = CandidateQuery(
@@ -253,10 +251,5 @@ def test_deferred_multi_ranker_policy_refuses_instead_of_dropping_rankers() -> N
         )
     )
 
-    with pytest.raises(ValueError, match="multi-ranker fusion policy is not active"):
-        preserve_single_ranker_candidates(query)
-
-    preserved = preserve_single_ranker_candidates(
-        CandidateQuery(ranked_lists=(query.ranked_lists[0],))
-    )
-    assert preserved.candidate_refs == (lexical_only,)
+    assert query.ranked_lists[0].candidates[0].candidate_ref == lexical_only
+    assert query.ranked_lists[1].candidates[0].candidate_ref == vector_only
