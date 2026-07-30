@@ -188,7 +188,11 @@ production signing key source, queue loop, or real ingestion handler configured.
 
 `--dispatch-files` is the production long-running entry: it polls on a
 server-fixed one-second interval when there is no work, and exits on `SIGTERM`
-or `SIGINT`.
+or `SIGINT`. It emits its existing readiness line, then schema-versioned batch
+progress while work is active. Repeated idle polls emit nothing; the first idle
+observation after an active drain emits one aggregate summary. Progress records
+validate against
+[`worker-batch-progress-v1.schema.json`](./docs/contracts/worker-batch-progress-v1.schema.json).
 
 All dispatch modes read **only** a role-specific scheduler, worker URL,
 WorkerLease signing key, the server-side JSON root registry
@@ -202,7 +206,11 @@ only through the corresponding `CONTEXT_ENGINE_WORKER_EMBEDDING_*` environment
 variables, including a required batch size bounded to 1–256 inputs per request.
 Markdown files are discovered recursively. **A caller may not
 supply Organization, Source, job, or token** — that is the point of the boundary.
-Output is limited to `dispatched` / `no_work` / `refused`.
+Single-cycle output remains limited to `dispatched` / `no_work` / `refused`.
+Long-running batch output carries only counts, phase, opaque batch/job refs,
+and the closed `file_import_refused` or `worker_lease_refused` category. It has
+no path, title, excerpt, principal, Organization, Source, lease, or credential
+field.
 
 Lease validation uses the worker's PostgreSQL clock, staying in the same time
 domain as database-issued timestamps rather than depending on worker host clock
@@ -358,6 +366,25 @@ makes the authoritative terminal transition for each scheduled import.
 `status` prints content-free progress and freshness JSON for that source. It
 distinguishes a source that has never published, counts active Resources, and
 lists current observed unpublished paths using only a closed refusal category.
+
+For recurring work after registration and capability activation, scan and
+inspect every active registered File source without copying any `sourceRef`:
+
+```bash
+uv run context-engine-control scan-all \
+  --organization-id "$CONTEXT_ENGINE_OPERATOR_ORGANIZATION_ID"
+
+uv run context-engine-control status \
+  --organization-id "$CONTEXT_ENGINE_OPERATOR_ORGANIZATION_ID"
+```
+
+`scan-all` first discovers the Organization's active File sources under one
+exact existing `read_source` call, then runs the same operation-exact bounded
+scan for each. Source-wide `status` independently consumes one
+`read_source_progress` call per discovered source. Neither command changes the
+six-variable operator opt-in, widens a WorkerLease, or promotes a Release.
+The fresh before/after ceremony audit is recorded in
+[`worker batch progress and operator ceremony measurement`](./docs/design/2026-07-30-worker-batch-progress-ceremony-measurement.md).
 It does not repair or retry work, expose diagnostics, or participate in Runtime
 authorization.
 
