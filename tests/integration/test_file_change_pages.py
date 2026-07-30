@@ -2719,9 +2719,11 @@ def test_bounded_delete_page_replay_at_exact_bound_is_idempotent(
         progress = control.read_file_source_progress(call, accepted.source_ref)
 
     assert replayed == accepted
-    assert progress.status.scan_refusal_category is not None
-    assert progress.status.scan_refusal_category.value == "scan_bound_exceeded"
-    assert progress.status.scan_refusal_bound == 1
+    status = progress.status
+    assert status is not None
+    assert status.scan_refusal_category is not None
+    assert status.scan_refusal_category.value == "scan_bound_exceeded"
+    assert status.scan_refusal_bound == 1
 
 
 def test_durable_configured_ceiling_accepts_exactly_then_refuses_oversize_pages(

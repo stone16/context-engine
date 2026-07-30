@@ -3596,9 +3596,9 @@ def test_file_scan_bound_downgrade_observes_in_flight_refusal_report(
         )
     fence = "context-engine.file-status-migration-fence"
 
-    def report_refusal() -> object:
+    def report_refusal() -> str:
         with guarded_control_engine.begin() as connection:
-            return connection.execute(
+            row = connection.execute(
                 text(
                     "SELECT * FROM public."
                     "context_control_report_file_scan_bound_refusal("
@@ -3609,6 +3609,9 @@ def test_file_scan_bound_downgrade_observes_in_flight_refusal_report(
                     "source_id": source.source_ref.value,
                 },
             ).one()
+            category = row.refusal_category
+            assert type(category) is str
+            return category
 
     try:
         with migration_engine.connect() as blocker:
@@ -3660,9 +3663,7 @@ def test_file_scan_bound_downgrade_observes_in_flight_refusal_report(
                         "20260730_0043",
                     )
                     transaction.commit()
-                    assert pending_report.result(timeout=10)[0] == (
-                        "scan_bound_exceeded"
-                    )
+                    assert pending_report.result(timeout=10) == "scan_bound_exceeded"
                     with pytest.raises(
                         RuntimeError,
                         match="default-only retained provenance",
