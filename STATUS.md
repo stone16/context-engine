@@ -138,7 +138,7 @@ Follow the ADR for its exact evidence boundary.
 | [0071](./docs/decisions/0071-compose-bounded-file-scan-cycles.md) | Compose a bounded local File scan from operation-exact accept and schedule calls with checkpoint idempotence |
 | [0072](./docs/decisions/0072-report-file-source-status-with-closed-refusals.md) | Report content-free File freshness and current unpublished paths using closed retained refusal categories |
 | [0073](./docs/decisions/0073-compose-explicit-release-candidates-from-current-corpus.md) | Compose and explicitly promote the exact current dogfood File corpus through ContextLearning |
-| [0082](./docs/decisions/0086-report-worker-batches-and-compose-source-wide-cycles.md) | Emit privacy-shaped worker batch progress and compose source-wide scan/status from existing exact Control calls |
+| [0086](./docs/decisions/0086-report-worker-batches-and-compose-source-wide-cycles.md) | Emit privacy-shaped worker batch progress and compose source-wide scan/status from existing exact Control calls |
 
 ADR-0065 extends the active File Provider boundary from a flat root to
 deterministic recursive discovery of canonical nested Markdown paths. Each
