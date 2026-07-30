@@ -72,6 +72,16 @@ def test_acceptance_cli_success_output_has_no_machine_local_absolute_path(
     _assert_process_output_is_private(completed)
 
 
+def test_acceptance_cli_parser_error_does_not_echo_the_invalid_argument() -> None:
+    invalid_argument = "/private-machine/repository/not-an-integer"
+
+    completed = _run_acceptance_cli("--token-ceiling", invalid_argument)
+
+    assert completed.returncode != 0
+    assert invalid_argument not in completed.stdout + completed.stderr
+    _assert_process_output_is_private(completed)
+
+
 def test_five_acceptance_cli_operator_errors_and_uncaught_exceptions_are_private(
     tmp_path: Path,
 ) -> None:

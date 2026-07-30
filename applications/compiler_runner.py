@@ -45,6 +45,11 @@ class _AcceptanceEntryPoint(Protocol):
     ) -> CompilationOutcome: ...
 
 
+class _PrivacySafeArgumentParser(argparse.ArgumentParser):
+    def error(self, message: str) -> None:
+        raise SystemExit("compiler runner arguments are invalid")
+
+
 def _boundary_failure() -> CompilationFailure:
     return CompilationFailure(
         code=CompilationFailureCode.UNSUPPORTED_DOCUMENT_SHAPE,
@@ -202,7 +207,7 @@ def _emit(
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = _PrivacySafeArgumentParser(description=__doc__)
     parser.add_argument("--compile", action="store_true")
     parser.add_argument("--config", default="markdown-config-v3")
     parser.add_argument(
