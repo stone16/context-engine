@@ -15,14 +15,17 @@ from engine.runtime.materialized import (
     MaterializedProjectionKind,
     MaterializedProjectionPort,
     MaterializedProjectionSession,
+    VectorDiscoveryRequest,
+    _close_candidate_discovery_session,
     _close_materialized_projection_scope,
+    _construct_candidate_discovery_session,
     _construct_materialized_projection_session,
     _discover_materialized_vector,
     _locate_materialized_fragment,
     _open_materialized_projection_scope,
     _project_materialized_fragment,
 )
-from engine.runtime.scope import EffectiveScope
+from engine.runtime.scope import CandidateDiscoveryScope, EffectiveScope
 
 ORGANIZATION_ID = UUID("81e18bca-86a1-478a-937d-7675c6fe69b0")
 
@@ -62,7 +65,7 @@ class RecordingProjectionPort:
         limit: int,
         source_refs: tuple[str, ...] | None,
         resource_refs: tuple[str, ...] | None,
-        effective_scope: EffectiveScope,
+        effective_scope: CandidateDiscoveryScope,
     ) -> tuple[CandidateRef, ...]:
         del query_embedding, limit, source_refs, resource_refs, effective_scope
         return ()
@@ -178,11 +181,17 @@ def test_vector_discovery_is_bounded_and_lifetime_bound() -> None:
         authority_scope=scope,
         port=cast(MaterializedProjectionPort, port),
     )
-
-    effective_scope = EffectiveScope(frozenset())
+    kernel_scope = EffectiveScope(frozenset())
+    effective_scope = CandidateDiscoveryScope(kernel_scope.digest)
+    request = VectorDiscoveryRequest((0.25,), 1)
+    discovery_session = _construct_candidate_discovery_session(
+        session,
+        request,
+        effective_scope=kernel_scope,
+    )
     assert (
         _discover_materialized_vector(
-            session,
+            discovery_session,
             (0.25,),
             1,
             effective_scope=effective_scope,
@@ -191,9 +200,19 @@ def test_vector_discovery_is_bounded_and_lifetime_bound() -> None:
     )
     _close_materialized_projection_scope(scope)
 
-    with pytest.raises(ValueError, match="active materialized projection scope"):
+    assert (
         _discover_materialized_vector(
-            session,
+            discovery_session,
+            (0.25,),
+            1,
+            effective_scope=effective_scope,
+        )
+        == ()
+    )
+    _close_candidate_discovery_session(discovery_session)
+    with pytest.raises(ValueError, match="inactive"):
+        _discover_materialized_vector(
+            discovery_session,
             (0.25,),
             1,
             effective_scope=effective_scope,

@@ -11,6 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import Engine, text
 
+from adapters.exact_phrase import PostgreSQLExactPhraseCandidateIndex
 from adapters.http.app import create_app
 from adapters.http.authentication import (
     AuthenticationRejected,
@@ -23,11 +24,17 @@ from engine.persistence import (
     PostgreSQLMembershipAuthority,
     create_database_engine,
 )
+from engine.runtime.candidate_ranking import (
+    CandidateQuery,
+    RankedCandidate,
+    RankedCandidateList,
+)
 from engine.runtime.construction import Runtime, required_kernel_dependencies
 from engine.runtime.content_io import CandidateIndex
 from engine.runtime.context_run import ContextRunOutcome
 from engine.runtime.contracts import Acquire
 from engine.runtime.evidence import CandidateRef
+from engine.runtime.materialized import ExactPhraseDiscoveryRequest
 from engine.runtime.organization import (
     ExistingOrganizationVerification,
     _construct_existing_http_organization_verification,
@@ -194,16 +201,37 @@ class HostileCandidateIndex:
         )
         self.calls: list[Acquire] = []
 
+    def prepare_discovery(
+        self,
+        request: Acquire,
+        *,
+        effective_scope: object,
+    ) -> ExactPhraseDiscoveryRequest:
+        return PostgreSQLExactPhraseCandidateIndex().prepare_discovery(
+            request,
+            effective_scope=effective_scope,  # type: ignore[arg-type]
+        )
+
     def discover(
         self,
         request: Acquire,
         projection_session: object,
         *,
         effective_scope: object,
-    ) -> tuple[CandidateRef, ...]:
+    ) -> CandidateQuery:
         del projection_session, effective_scope
         self.calls.append(request)
-        return self._ranked
+        return CandidateQuery(
+            ranked_lists=(
+                RankedCandidateList(
+                    ranker_ref="hostile",
+                    candidates=tuple(
+                        RankedCandidate(candidate_ref=candidate)
+                        for candidate in self._ranked
+                    ),
+                ),
+            )
+        )
 
 
 def _new_fixture() -> RuntimeEvidenceFixture:

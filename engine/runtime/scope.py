@@ -130,6 +130,60 @@ class EffectiveScope:
         object.__setattr__(self, "digest", _effective_scope_digest(self.targets))
 
 
+class CandidateDiscoveryScope(str):
+    """Immutable digest-only view handed across the replaceable discovery seam."""
+
+    __slots__ = ()
+
+    def __new__(cls, digest: str) -> "CandidateDiscoveryScope":
+        if (
+            type(digest) is not str
+            or len(digest) != 64
+            or any(character not in "0123456789abcdef" for character in digest)
+        ):
+            raise ValueError("candidate discovery scope requires one SHA-256 digest")
+        return str.__new__(cls, digest)
+
+    @property
+    def digest(self) -> str:
+        return str(self)
+
+
+def candidate_discovery_scope(scope: EffectiveScope) -> CandidateDiscoveryScope:
+    """Copy trusted policy state into a disposable pre-Kernel view."""
+
+    _require_effective_scope_integrity(scope)
+    return CandidateDiscoveryScope(scope.digest)
+
+
+def _require_effective_scope_integrity(scope: EffectiveScope) -> None:
+    """Re-derive the trusted scope digest at every security-sensitive use."""
+
+    if type(scope) is not EffectiveScope:
+        raise TypeError("effective scope has the wrong nominal type")
+    if type(scope.targets) is not frozenset or any(
+        type(target) is not ScopeTarget for target in scope.targets
+    ):
+        raise ValueError("effective scope integrity validation failed")
+    if scope.digest != _effective_scope_digest(scope.targets):
+        raise ValueError("effective scope integrity validation failed")
+
+
+def _require_candidate_discovery_scope_integrity(
+    scope: CandidateDiscoveryScope,
+) -> None:
+    """Reject mutation of the disposable discovery view before database use."""
+
+    if type(scope) is not CandidateDiscoveryScope:
+        raise TypeError("candidate discovery scope has the wrong nominal type")
+    if (
+        len(scope) != 64
+        or any(character not in "0123456789abcdef" for character in scope)
+        or scope.digest != str(scope)
+    ):
+        raise ValueError("candidate discovery scope integrity validation failed")
+
+
 def _length_prefix(value: bytes) -> bytes:
     return len(value).to_bytes(8, byteorder="big") + value
 

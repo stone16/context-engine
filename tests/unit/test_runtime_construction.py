@@ -1,4 +1,5 @@
 from dataclasses import replace
+from typing import cast
 
 import pytest
 
@@ -8,6 +9,13 @@ from engine.runtime import (
     RuntimeConfigurationError,
 )
 from engine.runtime.construction import required_kernel_dependencies
+from engine.runtime.content_io import CandidateIndex, prohibited_empty_path_content_io
+
+
+class _IndexWithoutDiscoveryPreparation:
+    def discover(self, *args: object, **kwargs: object) -> object:
+        del args, kwargs
+        raise AssertionError("an incomplete index must never be called")
 
 
 @pytest.mark.parametrize(
@@ -64,3 +72,33 @@ def test_runtime_rejects_a_duck_typed_validation_bypass() -> None:
 
     with pytest.raises(RuntimeConfigurationError, match="must be KernelDependencies"):
         Runtime(BypassDependencies())  # type: ignore[arg-type]
+
+
+def test_runtime_rejects_candidate_index_without_discovery_preparation() -> None:
+    with pytest.raises(
+        RuntimeConfigurationError,
+        match="candidate_index is incomplete",
+    ):
+        Runtime(
+            required_kernel_dependencies(),
+            candidate_index=cast(
+                CandidateIndex,
+                _IndexWithoutDiscoveryPreparation(),
+            ),
+        )
+
+
+def test_runtime_rejects_composed_index_without_discovery_preparation() -> None:
+    incomplete = cast(CandidateIndex, _IndexWithoutDiscoveryPreparation())
+
+    with pytest.raises(
+        RuntimeConfigurationError,
+        match="candidate_index is incomplete",
+    ):
+        Runtime(
+            required_kernel_dependencies(),
+            content_io=replace(
+                prohibited_empty_path_content_io(),
+                index=incomplete,
+            ),
+        )

@@ -3,17 +3,28 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field, fields, replace
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
+from hmac import compare_digest
 from hmac import new as new_hmac
 from secrets import token_bytes
 from threading import Lock
 from typing import Literal, overload
 from uuid import UUID
+from weakref import WeakKeyDictionary
 
 from engine.runtime.actor import _require_active_user_actor
+from engine.runtime.authorized_ranking import (
+    join_authorized_ranking,
+    select_authorized_ranking,
+)
 from engine.runtime.budget import PackageBudget, effective_package_budget
+from engine.runtime.candidate_ranking import (
+    CandidateQuery,
+    CandidateRankEvidence,
+    preserve_single_ranker_candidates,
+)
 from engine.runtime.capabilities import (
     RuntimeCapability,
     RuntimeCapabilityGate,
@@ -80,22 +91,38 @@ from engine.runtime.egress import (
 )
 from engine.runtime.egress_payload import channel_payload_digest, model_input_digest
 from engine.runtime.evidence import (
+    AuthorizedProjection,
     CandidateRef,
     EvidenceLineage,
     PackageContent,
     _attach_citation_open_refs,
+    _AuthorizationKernelScope,
     _candidate_sort_key,
     _close_authorization_kernel_scope,
     _construct_authorized_projection,
+    _construct_inherited_authorized_projection,
     _open_authorization_kernel_scope,
     construct_package_content,
 )
+from engine.runtime.fragment_window import (
+    FragmentWindowRead,
+    FragmentWindowReader,
+    FragmentWindowRequest,
+    FragmentWindowResult,
+    _close_fragment_window_session,
+    _construct_fragment_window_session,
+    _fragment_window_read_snapshot,
+)
 from engine.runtime.invocation import AuthenticatedInvocation
 from engine.runtime.materialized import (
+    CandidateDiscoverySession,
     MaterializedFragmentLocator,
     MaterializedProjectionSession,
+    _close_candidate_discovery_session,
+    _construct_candidate_discovery_session,
     _locate_materialized_fragment,
     _project_materialized_fragment,
+    _read_materialized_fragment_window,
 )
 from engine.runtime.package_digest import QueryDigestKeyring, context_package_digest
 from engine.runtime.policy_epoch import (
@@ -109,6 +136,9 @@ from engine.runtime.scope import (
     OMITTED_REQUEST_NARROWING,
     EffectiveScope,
     ScopeTarget,
+    _require_candidate_discovery_scope_integrity,
+    _require_effective_scope_integrity,
+    candidate_discovery_scope,
     compute_effective_scope,
 )
 from engine.runtime.scope_authority import (
@@ -119,6 +149,18 @@ from engine.runtime.trusted_inputs import _validate_trusted_invocation_and_deliv
 
 class RuntimeConfigurationError(RuntimeError):
     """Raised when the sealed Runtime composition is incomplete or invalid."""
+
+
+def _package_budget_limits(budget: PackageBudget) -> tuple[int, int, int, int]:
+    if type(budget) is not PackageBudget:
+        raise TypeError("PackageBudget has the wrong nominal type")
+    budget.__post_init__()
+    return (
+        budget.max_tokens,
+        budget.max_provider_calls,
+        budget.max_cost_microunits,
+        budget.max_elapsed_ms,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -181,7 +223,39 @@ class AuthorizationDecision:
     effective_budget: PackageBudget
     policy_receipt: PolicyReceipt
     provenance_receipt: DecisionProvenanceReceipt
-    content: PackageContent
+    projections: tuple[AuthorizedProjection, ...]
+    _projection_scope: _AuthorizationKernelScope | None = field(repr=False)
+    _effective_budget_limits: tuple[int, int, int, int] = field(
+        init=False,
+        repr=False,
+    )
+    _integrity_seal: bytes = field(init=False, repr=False, default=b"")
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "_effective_budget_limits",
+            _package_budget_limits(self.effective_budget),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class SealedPackageSelection:
+    """Exact sealed-Runtime budget selection awaiting final epoch veto."""
+
+    decision: AuthorizationDecision = field(repr=False)
+    content: PackageContent = field(repr=False)
+    effective_budget_limits: tuple[int, int, int, int] = field(repr=False)
+    integrity_seal: bytes = field(repr=False)
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedAcquireAuthorization:
+    """Rank-blind policy and provenance state prepared before discovery."""
+
+    effective_budget: PackageBudget
+    policy_receipt: PolicyReceipt
+    provenance_receipt: DecisionProvenanceReceipt
 
 
 @dataclass(frozen=True, slots=True)
@@ -541,6 +615,190 @@ type KernelDependency = (
 )
 
 
+def _decision_integrity_snapshot(decision: AuthorizationDecision) -> tuple[object, ...]:
+    """Snapshot every rank-free decision value trusted after authorization."""
+
+    policy = decision.policy_receipt
+    provenance = decision.provenance_receipt
+    projections = tuple(
+        (
+            projection.candidate_ref.organization_id,
+            projection.candidate_ref.source_ref,
+            projection.candidate_ref.resource_ref,
+            projection.candidate_ref.revision_ref,
+            projection.candidate_ref.fragment_ref,
+            projection.projected_body,
+            projection.projected_field_refs,
+            tuple(
+                getattr(projection.lineage, item.name)
+                for item in fields(projection.lineage)
+            ),
+        )
+        for projection in decision.projections
+    )
+    return (
+        id(decision),
+        _package_budget_limits(decision.effective_budget),
+        decision._effective_budget_limits,
+        policy.request_id,
+        policy.purpose,
+        policy.policy_epoch,
+        tuple(
+            sorted(
+                (
+                    target.organization_id.bytes,
+                    target.source_ref,
+                    target.resource_ref or "",
+                )
+                for target in policy.effective_scope.targets
+            )
+        ),
+        policy.effective_scope.digest,
+        tuple(getattr(provenance, item.name) for item in fields(provenance)),
+        projections,
+    )
+
+
+def _decision_integrity_material(decision: AuthorizationDecision) -> bytes:
+    return repr(
+        (
+            "context-engine:authorization-decision:v1",
+            _decision_integrity_snapshot(decision),
+        )
+    ).encode("utf-8", "surrogatepass")
+
+
+def _selection_integrity_material(
+    decision: AuthorizationDecision,
+    content: PackageContent,
+    effective_budget_limits: tuple[int, int, int, int],
+) -> bytes:
+    """Encode every rank-free value trusted by final Package construction."""
+
+    content_snapshot = (
+        tuple((block.evidence_ref, block.body) for block in content.blocks),
+        tuple(
+            tuple(getattr(evidence, item.name) for item in fields(evidence))
+            for evidence in content.evidence
+        ),
+    )
+    return repr(
+        (
+            "context-engine:sealed-package-selection:v1",
+            _decision_integrity_snapshot(decision),
+            decision._integrity_seal,
+            effective_budget_limits,
+            content_snapshot,
+        )
+    ).encode("utf-8", "surrogatepass")
+
+
+class _SelectionAuthority:
+    """Opaque per-composition signer; key bytes never enter the object graph."""
+
+    __slots__ = ("__weakref__",)
+
+    def __init__(self) -> None:
+        raise TypeError("selection authority is not directly constructible")
+
+
+_SELECTION_AUTHORITY_KEYS: WeakKeyDictionary[_SelectionAuthority, bytes] = (
+    WeakKeyDictionary()
+)
+
+
+def _new_selection_authority() -> _SelectionAuthority:
+    authority = object.__new__(_SelectionAuthority)
+    _SELECTION_AUTHORITY_KEYS[authority] = token_bytes(32)
+    return authority
+
+
+def _issue_selection_authority_seal(
+    authority: _SelectionAuthority,
+    material: bytes,
+) -> bytes:
+    if type(authority) is not _SelectionAuthority or type(material) is not bytes:
+        raise TypeError("selection sealing requires exact authority and bytes")
+    secret = _SELECTION_AUTHORITY_KEYS.get(authority)
+    if secret is None:
+        raise RuntimeConfigurationError("selection authority is unavailable")
+    return new_hmac(secret, material, sha256).digest()
+
+
+def _verify_selection_authority_seal(
+    authority: _SelectionAuthority,
+    seal: bytes,
+    material: bytes,
+) -> bool:
+    if type(seal) is not bytes:
+        return False
+    return compare_digest(
+        seal,
+        _issue_selection_authority_seal(authority, material),
+    )
+
+
+class SealedRuntimeSelector:
+    """Non-pluggable post-authorization ranking and budget boundary."""
+
+    __slots__ = ("__weakref__",)
+
+    def __init__(self) -> None:
+        raise TypeError("SealedRuntimeSelector can only be constructed by Runtime")
+
+    def select_for_delivery(
+        self,
+        decision: AuthorizationDecision,
+        rank_evidence: tuple[CandidateRankEvidence, ...],
+    ) -> SealedPackageSelection:
+        if type(decision) is not AuthorizationDecision:
+            raise TypeError("sealed selection requires AuthorizationDecision")
+        if type(rank_evidence) is not tuple or any(
+            type(evidence) is not CandidateRankEvidence
+            for evidence in rank_evidence
+        ):
+            raise TypeError("sealed selection requires exact rank evidence")
+        authority = _SELECTOR_AUTHORITIES.get(self)
+        if type(authority) is not _SelectionAuthority:
+            raise RuntimeConfigurationError("sealed selector authority is unavailable")
+        if (
+            type(decision._integrity_seal) is not bytes
+            or not _verify_selection_authority_seal(
+                authority,
+                decision._integrity_seal,
+                _decision_integrity_material(decision),
+            )
+        ):
+            raise ValueError("authorization decision integrity validation failed")
+        selected = select_authorized_ranking(
+            join_authorized_ranking(decision.projections, rank_evidence),
+            decision.effective_budget,
+        )
+        content = construct_package_content(
+            tuple(item.projection for item in selected),
+        )
+        budget_limits = decision._effective_budget_limits
+        material = _selection_integrity_material(
+            decision,
+            content,
+            budget_limits,
+        )
+        return SealedPackageSelection(
+            decision=decision,
+            content=content,
+            effective_budget_limits=budget_limits,
+            integrity_seal=_issue_selection_authority_seal(
+                authority,
+                material,
+            ),
+        )
+
+
+_SELECTOR_AUTHORITIES: WeakKeyDictionary[
+    SealedRuntimeSelector, _SelectionAuthority
+] = WeakKeyDictionary()
+
+
 @dataclass(frozen=True, slots=True)
 class KernelDependencies:
     """Exact mandatory concrete gates; callers cannot replace their behavior."""
@@ -573,19 +831,59 @@ def _validate_kernel_dependencies(dependencies: object) -> KernelDependencies:
     return dependencies
 
 
+_KERNEL_SELECTION_AUTHORITIES: WeakKeyDictionary[
+    AuthorizationKernel, _SelectionAuthority
+] = WeakKeyDictionary()
+
+
+def _kernel_selection_authority(
+    kernel: AuthorizationKernel,
+) -> _SelectionAuthority:
+    authority = _KERNEL_SELECTION_AUTHORITIES.get(kernel)
+    if type(authority) is not _SelectionAuthority:
+        raise RuntimeConfigurationError("Kernel selection authority is unavailable")
+    return authority
+
+
 class AuthorizationKernel:
     """Non-pluggable exact authorization and projection boundary."""
 
-    def __init__(self, dependencies: KernelDependencies) -> None:
+    __slots__ = (
+        "_policy",
+        "_policy_epoch",
+        "_audit",
+        "_budget",
+        "_provenance",
+        "_egress",
+        "_fragment_window_reader",
+        "__weakref__",
+    )
+
+    def __init__(
+        self,
+        dependencies: KernelDependencies,
+        *,
+        _selection_authority: _SelectionAuthority | None = None,
+        _fragment_window_reader: FragmentWindowReader | None = None,
+    ) -> None:
         validated = _validate_kernel_dependencies(dependencies)
+        if (
+            type(_selection_authority) is not _SelectionAuthority
+            or _selection_authority not in _SELECTION_AUTHORITY_KEYS
+        ):
+            raise RuntimeConfigurationError(
+                "AuthorizationKernel requires Runtime-owned selection authority"
+            )
         self._policy = validated.policy
         self._policy_epoch = validated.policy_epoch
         self._audit = validated.audit
         self._budget = validated.budget
         self._provenance = validated.provenance
         self._egress = validated.egress
+        self._fragment_window_reader = _fragment_window_reader
+        _KERNEL_SELECTION_AUTHORITIES[self] = _selection_authority
 
-    def authorize_acquire(
+    def prepare_acquire(
         self,
         invocation: AuthenticatedInvocation,
         delivery_context: TrustedDeliveryContext,
@@ -594,10 +892,8 @@ class AuthorizationKernel:
         server_budget: PackageBudget,
         as_of: datetime,
         reference_issuer: _OpaqueReferenceIssuer,
-        candidate_index: CandidateIndex | None,
-        projection_session: MaterializedProjectionSession | None,
-    ) -> AuthorizationDecision:
-        """Run policy, budget, provenance, exact projection, and assembly."""
+    ) -> PreparedAcquireAuthorization:
+        """Run policy, budget, and provenance before content-free discovery."""
 
         policy_receipt = self._policy.validate_acquire(
             invocation,
@@ -619,38 +915,54 @@ class AuthorizationKernel:
             as_of=as_of,
             reference_issuer=reference_issuer,
         )
-        candidates: tuple[CandidateRef, ...] = ()
-        if policy_receipt.effective_scope.targets and candidate_index is not None:
-            if projection_session is None:
-                raise RuntimeConfigurationError(
-                    "candidate discovery requires same-transaction projection session"
-                )
-            discovered = candidate_index.discover(
-                request,
-                projection_session,
-                effective_scope=policy_receipt.effective_scope,
-            )
-            if type(discovered) is not tuple or any(
-                type(candidate) is not CandidateRef for candidate in discovered
-            ):
-                raise TypeError(
-                    "CandidateIndex must return a tuple of exact CandidateRef values"
-                )
-            candidates = discovered
-        content = self._authorize_and_assemble(
-            invocation,
-            policy_receipt,
-            provenance_receipt,
-            effective_budget,
-            candidates,
-            projection_session,
-        )
-        return AuthorizationDecision(
+        return PreparedAcquireAuthorization(
             effective_budget=effective_budget,
             policy_receipt=policy_receipt,
             provenance_receipt=provenance_receipt,
-            content=content,
         )
+
+    def authorize_acquire(
+        self,
+        invocation: AuthenticatedInvocation,
+        preparation: PreparedAcquireAuthorization,
+        candidate_refs: tuple[CandidateRef, ...],
+        *,
+        projection_session: MaterializedProjectionSession | None,
+    ) -> AuthorizationDecision:
+        """Project sorted opaque refs under one prepared rank-blind decision."""
+
+        if type(preparation) is not PreparedAcquireAuthorization:
+            raise TypeError("Kernel requires PreparedAcquireAuthorization")
+        if type(candidate_refs) is not tuple or any(
+            type(candidate) is not CandidateRef for candidate in candidate_refs
+        ):
+            raise TypeError("Kernel candidate_refs must be exact CandidateRef values")
+        _require_effective_scope_integrity(
+            preparation.policy_receipt.effective_scope
+        )
+        projections, projection_scope = self._authorize_and_project(
+            invocation,
+            preparation.policy_receipt,
+            preparation.provenance_receipt,
+            candidate_refs,
+            projection_session,
+        )
+        decision = AuthorizationDecision(
+            effective_budget=preparation.effective_budget,
+            policy_receipt=preparation.policy_receipt,
+            provenance_receipt=preparation.provenance_receipt,
+            projections=projections,
+            _projection_scope=projection_scope,
+        )
+        object.__setattr__(
+            decision,
+            "_integrity_seal",
+            _issue_selection_authority_seal(
+                _kernel_selection_authority(self),
+                _decision_integrity_material(decision),
+            ),
+        )
+        return decision
 
     def authorize_open_citation(
         self,
@@ -685,19 +997,95 @@ class AuthorizationKernel:
             as_of=as_of,
             reference_issuer=reference_issuer,
         )
-        content = self._authorize_and_assemble(
+        projections, projection_scope = self._authorize_and_project(
             invocation,
             policy_receipt,
             provenance_receipt,
-            effective_budget,
             (candidate,) if candidate is not None else (),
             projection_session,
         )
-        return AuthorizationDecision(
+        decision = AuthorizationDecision(
             effective_budget=effective_budget,
             policy_receipt=policy_receipt,
             provenance_receipt=provenance_receipt,
-            content=content,
+            projections=projections,
+            _projection_scope=projection_scope,
+        )
+        object.__setattr__(
+            decision,
+            "_integrity_seal",
+            _issue_selection_authority_seal(
+                _kernel_selection_authority(self),
+                _decision_integrity_material(decision),
+            ),
+        )
+        return decision
+
+    def expand_fragment_window(
+        self,
+        request: FragmentWindowRequest,
+        *,
+        projection_session: MaterializedProjectionSession,
+    ) -> FragmentWindowResult:
+        """Construct inherited projections only after current-lineage read proof."""
+
+        if type(request) is not FragmentWindowRequest:
+            raise TypeError("Kernel fragment expansion requires FragmentWindowRequest")
+        reader = self._fragment_window_reader
+        if reader is None:
+            raise RuntimeConfigurationError("fragment window reader is not composed")
+        authoritative_read = _read_materialized_fragment_window(
+            projection_session,
+            MaterializedFragmentLocator(
+                organization_id=request.anchor.candidate_ref.organization_id,
+                source_ref=request.anchor.candidate_ref.source_ref,
+                resource_ref=request.anchor.candidate_ref.resource_ref,
+                revision_ref=request.anchor.candidate_ref.revision_ref,
+                fragment_ref=request.anchor.candidate_ref.fragment_ref,
+            ),
+            request.before,
+            request.after,
+            request.expansion_candidates,
+        )
+        authoritative_snapshot = _fragment_window_read_snapshot(authoritative_read)
+        window_session = _construct_fragment_window_session(authoritative_read)
+        try:
+            read = reader.read_window(request, window_session)
+        finally:
+            _close_fragment_window_session(window_session)
+        if type(read) is not FragmentWindowRead:
+            raise TypeError("fragment window reader returned the wrong nominal type")
+        read.__post_init__()
+        if _fragment_window_read_snapshot(read) != authoritative_snapshot:
+            raise ValueError(
+                "fragment window reader failed authoritative verification"
+            )
+        anchor_ref = request.anchor.candidate_ref
+        projections = tuple(
+            _construct_inherited_authorized_projection(
+                anchor=request.anchor,
+                candidate_ref=CandidateRef(
+                    organization_id=item.locator.organization_id,
+                    source_ref=item.locator.source_ref,
+                    resource_ref=item.locator.resource_ref,
+                    revision_ref=item.locator.revision_ref,
+                    fragment_ref=item.locator.fragment_ref,
+                ),
+                body=item.projection.rendered_body,
+                projected_field_refs=item.projection.projected_field_refs,
+            )
+            for item in read.items
+        )
+        if any(
+            candidate.organization_id == anchor_ref.organization_id
+            and candidate.source_ref == anchor_ref.source_ref
+            and candidate.resource_ref == anchor_ref.resource_ref
+            for candidate in read.reauthorization_refs
+        ):
+            raise ValueError("same-Article expansion cannot request reauthorization")
+        return FragmentWindowResult(
+            projections=projections,
+            reauthorization_refs=read.reauthorization_refs,
         )
 
     def preflight_unavailable_request(
@@ -740,15 +1128,38 @@ class AuthorizationKernel:
     def finalize_for_delivery(
         self,
         invocation: AuthenticatedInvocation,
-        decision: AuthorizationDecision,
+        selection: SealedPackageSelection,
     ) -> FinalizedAuthorizationResult:
-        """Revalidate immediately before audit and Package construction."""
+        """Revalidate a Kernel-owned exact budget selection before delivery."""
 
-        if type(decision) is not AuthorizationDecision:
-            raise TypeError("final Policy Epoch gate requires AuthorizationDecision")
+        if type(selection) is not SealedPackageSelection:
+            raise TypeError("sealed Runtime requires SealedPackageSelection")
+        decision = selection.decision
+        budget_limits = _package_budget_limits(decision.effective_budget)
+        material = _selection_integrity_material(
+            decision,
+            selection.content,
+            selection.effective_budget_limits,
+        )
+        expected_seal = _issue_selection_authority_seal(
+            _kernel_selection_authority(self),
+            material,
+        )
+        if (
+            budget_limits != decision._effective_budget_limits
+            or budget_limits != selection.effective_budget_limits
+            or type(selection.integrity_seal) is not bytes
+            or not compare_digest(selection.integrity_seal, expected_seal)
+        ):
+            raise ValueError("sealed selection integrity validation failed")
+        content = selection.content
+        if sum(
+            len(block.body.encode("utf-8")) for block in content.blocks
+        ) > budget_limits[0]:
+            raise ValueError("sealed selection exceeds PackageBudget")
         _require_active_user_actor(invocation.user_actor)
         policy_receipt = decision.policy_receipt
-        content = decision.content
+        _require_effective_scope_integrity(policy_receipt.effective_scope)
         provenance = decision.provenance_receipt
         content_binding_matches_decision = all(
             evidence.lineage.run_ref == provenance.run_ref
@@ -762,6 +1173,7 @@ class AuthorizationKernel:
             == provenance.source_acl_decision_ref
             for evidence in content.evidence
         )
+
         decision_binding_matches_invocation = (
             provenance.organization_id == invocation.user_actor.organization_id
             and provenance.user_id == invocation.user_actor.user_id
@@ -823,7 +1235,6 @@ class AuthorizationKernel:
             content=content,
             audit_receipt=audit_receipt,
         )
-
     def finalize_egress(
         self,
         *,
@@ -847,17 +1258,16 @@ class AuthorizationKernel:
             issued_at=issued_at,
         )
 
-    def _authorize_and_assemble(
+    def _authorize_and_project(
         self,
         invocation: AuthenticatedInvocation,
         policy_receipt: PolicyReceipt,
         provenance_receipt: DecisionProvenanceReceipt,
-        effective_budget: PackageBudget,
         candidates: tuple[CandidateRef, ...],
         projection_session: MaterializedProjectionSession | None,
-    ) -> PackageContent:
+    ) -> tuple[tuple[AuthorizedProjection, ...], _AuthorizationKernelScope | None]:
         if not candidates or not policy_receipt.effective_scope.targets:
-            return construct_package_content(())
+            return (), None
         if projection_session is None:
             raise RuntimeConfigurationError(
                 "candidate discovery requires same-transaction projection session"
@@ -866,7 +1276,6 @@ class AuthorizationKernel:
         kernel_scope = _open_authorization_kernel_scope()
         try:
             projections = []
-            consumed_tokens = 0
             ordered_candidates = sorted(
                 set(candidates),
                 key=_candidate_sort_key,
@@ -912,14 +1321,40 @@ class AuthorizationKernel:
                         ),
                     ),
                 )
-                body_tokens = len(projection.projected_body.encode("utf-8"))
-                if consumed_tokens + body_tokens > effective_budget.max_tokens:
-                    continue
                 projections.append(projection)
-                consumed_tokens += body_tokens
-            return construct_package_content(tuple(projections))
-        finally:
+            return tuple(projections), kernel_scope
+        except BaseException:
             _close_authorization_kernel_scope(kernel_scope)
+            raise
+
+
+def _construct_authorization_kernel_and_selector(
+    dependencies: KernelDependencies,
+    *,
+    fragment_window_reader: FragmentWindowReader | None = None,
+) -> tuple[AuthorizationKernel, SealedRuntimeSelector]:
+    """Create the inseparable rank-blind Kernel and post-Kernel selector pair."""
+
+    selection_authority = _new_selection_authority()
+    selector = object.__new__(SealedRuntimeSelector)
+    _SELECTOR_AUTHORITIES[selector] = selection_authority
+    return (
+        AuthorizationKernel(
+            dependencies,
+            _selection_authority=selection_authority,
+            _fragment_window_reader=fragment_window_reader,
+        ),
+        selector,
+    )
+
+
+def _close_authorization_decision(decision: AuthorizationDecision) -> None:
+    """Close any post-projection lifetime after authorized consumers finish."""
+
+    if type(decision) is not AuthorizationDecision:
+        raise TypeError("closing authorization requires AuthorizationDecision")
+    if decision._projection_scope is not None:
+        _close_authorization_kernel_scope(decision._projection_scope)
 
 
 def _locator_matches_candidate(
@@ -1029,10 +1464,6 @@ class Runtime:
         selected_content_io = content_io or prohibited_empty_path_content_io()
         if type(selected_content_io) is not RuntimeContentIo:
             raise RuntimeConfigurationError("content_io must be RuntimeContentIo")
-        if candidate_index is not None and not callable(
-            getattr(candidate_index, "discover", None)
-        ):
-            raise RuntimeConfigurationError("candidate_index is incomplete")
         if (
             content_io is not None
             and candidate_index is not None
@@ -1047,6 +1478,11 @@ class Runtime:
                 provider=selected_content_io.provider,
                 source_content=selected_content_io.source_content,
             )
+        if any(
+            not callable(getattr(selected_content_io.index, method_name, None))
+            for method_name in ("prepare_discovery", "discover")
+        ):
+            raise RuntimeConfigurationError("candidate_index is incomplete")
         if type(
             acquire_capability
         ) is not RuntimeCapability or acquire_capability not in {
@@ -1056,9 +1492,14 @@ class Runtime:
         }:
             raise RuntimeConfigurationError(
                 "acquire capability must be a server-owned Acquire capability"
-            )
+        )
         self._dependencies = validated
-        self._kernel = AuthorizationKernel(validated)
+        self._kernel, self._selector = (
+            _construct_authorization_kernel_and_selector(
+                validated,
+                fragment_window_reader=selected_content_io.fragment_windows,
+            )
+        )
         self._package_ttl_seconds = package_ttl_seconds
         self._server_budget = server_budget
         self._content_io = selected_content_io
@@ -1188,18 +1629,70 @@ class Runtime:
         as_of = _require_utc("Runtime clock", self._clock())
         if request_type is Acquire:
             assert isinstance(request, Acquire)
-            decision = self._kernel.authorize_acquire(
+            preparation = self._kernel.prepare_acquire(
                 invocation,
                 delivery_context,
                 request,
                 server_budget=self._server_budget,
                 as_of=as_of,
                 reference_issuer=self._reference_issuer,
-                candidate_index=(
-                    self._content_io.index
-                    if self._candidate_discovery_enabled
-                    else None
-                ),
+            )
+            candidate_refs: tuple[CandidateRef, ...] = ()
+            rank_evidence: tuple[CandidateRankEvidence, ...] = ()
+            if (
+                preparation.policy_receipt.effective_scope.targets
+                and self._candidate_discovery_enabled
+            ):
+                projection_session = (
+                    invocation.user_actor.materialized_projection_session
+                )
+                if projection_session is None:
+                    raise RuntimeConfigurationError(
+                        "candidate discovery requires same-transaction projection "
+                        "session"
+                    )
+                discovery_scope = candidate_discovery_scope(
+                    preparation.policy_receipt.effective_scope
+                )
+                discovery_request = self._content_io.index.prepare_discovery(
+                    request,
+                    effective_scope=discovery_scope,
+                )
+                _require_candidate_discovery_scope_integrity(discovery_scope)
+                discovery_session: CandidateDiscoverySession | None = None
+                try:
+                    discovery_session = _construct_candidate_discovery_session(
+                        projection_session,
+                        discovery_request,
+                        effective_scope=(
+                            preparation.policy_receipt.effective_scope
+                        ),
+                    )
+                    discovered = self._content_io.index.discover(
+                        request,
+                        discovery_session,
+                        effective_scope=discovery_scope,
+                    )
+                    _require_candidate_discovery_scope_integrity(discovery_scope)
+                finally:
+                    if discovery_session is not None:
+                        _close_candidate_discovery_session(discovery_session)
+                if type(discovered) is not CandidateQuery:
+                    raise TypeError("CandidateIndex must return CandidateQuery")
+                try:
+                    fused = preserve_single_ranker_candidates(discovered)
+                except ValueError as error:
+                    raise RuntimeConfigurationError(
+                        "multi-ranker fusion policy is not active"
+                    ) from error
+                candidate_refs = tuple(
+                    sorted(fused.candidate_refs, key=_candidate_sort_key)
+                )
+                rank_evidence = fused.rank_evidence
+            decision = self._kernel.authorize_acquire(
+                invocation,
+                preparation,
+                candidate_refs,
                 projection_session=(
                     invocation.user_actor.materialized_projection_session
                 ),
@@ -1232,7 +1725,18 @@ class Runtime:
                     invocation.user_actor.materialized_projection_session
                 ),
             )
-        finalized = self._kernel.finalize_for_delivery(invocation, decision)
+            rank_evidence = ()
+        try:
+            selection = self._selector.select_for_delivery(
+                decision,
+                rank_evidence,
+            )
+            finalized = self._kernel.finalize_for_delivery(
+                invocation,
+                selection,
+            )
+        finally:
+            _close_authorization_decision(decision)
         policy_receipt = finalized.policy_receipt
         content = finalized.content
         audit_receipt = finalized.audit_receipt

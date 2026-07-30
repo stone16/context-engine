@@ -13,12 +13,18 @@ from fastapi.testclient import TestClient
 from httpx import Response
 from sqlalchemy import Engine, text
 
+from adapters.exact_phrase import PostgreSQLExactPhraseCandidateIndex
 from adapters.http.app import create_app
 from engine.persistence import (
     DatabaseConfiguration,
     PostgreSQLMembershipAuthority,
     assert_runtime_role,
     create_database_engine,
+)
+from engine.runtime.candidate_ranking import (
+    CandidateQuery,
+    RankedCandidate,
+    RankedCandidateList,
 )
 from engine.runtime.construction import Runtime, required_kernel_dependencies
 from engine.runtime.content_io import CandidateIndex
@@ -28,6 +34,7 @@ from engine.runtime.context_run import (
 )
 from engine.runtime.contracts import Acquire, Resolved
 from engine.runtime.evidence import CandidateRef
+from engine.runtime.materialized import ExactPhraseDiscoveryRequest
 from engine.runtime.package_digest import QueryDigestKeyring
 from tests.integration.test_runtime_authorized_evidence_integration import (
     ExactScopeAuthority,
@@ -126,19 +133,40 @@ class SequencedCandidateIndex:
         self.rankings = rankings
         self.calls: list[Acquire] = []
 
+    def prepare_discovery(
+        self,
+        request: Acquire,
+        *,
+        effective_scope: object,
+    ) -> ExactPhraseDiscoveryRequest:
+        return PostgreSQLExactPhraseCandidateIndex().prepare_discovery(
+            request,
+            effective_scope=effective_scope,  # type: ignore[arg-type]
+        )
+
     def discover(
         self,
         request: Acquire,
         projection_session: object,
         *,
         effective_scope: object,
-    ) -> tuple[CandidateRef, ...]:
+    ) -> CandidateQuery:
         del projection_session, effective_scope
         call_index = len(self.calls)
         self.calls.append(request)
         if call_index >= len(self.rankings):
             raise AssertionError("unexpected extra CandidateIndex discovery")
-        return self.rankings[call_index]
+        return CandidateQuery(
+            ranked_lists=(
+                RankedCandidateList(
+                    ranker_ref="non_enumeration",
+                    candidates=tuple(
+                        RankedCandidate(candidate_ref=candidate)
+                        for candidate in self.rankings[call_index]
+                    ),
+                ),
+            )
+        )
 
 
 class SequencedRequestIdFactory:

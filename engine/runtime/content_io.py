@@ -4,16 +4,21 @@ from dataclasses import dataclass
 from hashlib import sha256
 from typing import Protocol
 
+from engine.runtime.candidate_ranking import CandidateQuery
 from engine.runtime.contracts import Acquire
-from engine.runtime.evidence import CandidateRef
-from engine.runtime.materialized import MaterializedProjectionSession
-from engine.runtime.scope import EffectiveScope
+from engine.runtime.fragment_window import FragmentWindowReader
+from engine.runtime.materialized import (
+    CandidateDiscoveryRequest,
+    CandidateDiscoverySession,
+)
+from engine.runtime.scope import CandidateDiscoveryScope
 
 __all__ = [
     "CandidateIndex",
     "CandidateIndexUnavailable",
     "ContextProvider",
     "RuntimeContentIo",
+    "FragmentWindowReader",
     "SourceContentReader",
     "exact_phrase_digest",
     "prohibited_empty_path_content_io",
@@ -33,13 +38,20 @@ def exact_phrase_digest(value: str) -> str:
 class CandidateIndex(Protocol):
     """Content-free candidate discovery seam; never an authorization source."""
 
+    def prepare_discovery(
+        self,
+        request: Acquire,
+        *,
+        effective_scope: CandidateDiscoveryScope,
+    ) -> CandidateDiscoveryRequest: ...
+
     def discover(
         self,
         request: Acquire,
-        projection_session: MaterializedProjectionSession,
+        discovery_session: CandidateDiscoverySession,
         *,
-        effective_scope: EffectiveScope,
-    ) -> tuple[CandidateRef, ...]: ...
+        effective_scope: CandidateDiscoveryScope,
+    ) -> CandidateQuery: ...
 
 
 class CandidateIndexUnavailable(RuntimeError):
@@ -65,17 +77,27 @@ class RuntimeContentIo:
     index: CandidateIndex
     provider: ContextProvider
     source_content: SourceContentReader
+    fragment_windows: FragmentWindowReader | None = None
 
 
 class _ProhibitedCandidateIndex:
+    def prepare_discovery(
+        self,
+        request: Acquire,
+        *,
+        effective_scope: CandidateDiscoveryScope,
+    ) -> CandidateDiscoveryRequest:
+        del request, effective_scope
+        raise RuntimeError("candidate index is prohibited on the empty Package path")
+
     def discover(
         self,
         request: Acquire,
-        projection_session: MaterializedProjectionSession,
+        discovery_session: CandidateDiscoverySession,
         *,
-        effective_scope: EffectiveScope,
-    ) -> tuple[()]:
-        del request, projection_session, effective_scope
+        effective_scope: CandidateDiscoveryScope,
+    ) -> CandidateQuery:
+        del request, discovery_session, effective_scope
         raise RuntimeError("candidate index is prohibited on the empty Package path")
 
 

@@ -10,6 +10,7 @@ import pytest
 from sqlalchemy import Engine, text
 from sqlalchemy.exc import SQLAlchemyError
 
+from adapters.exact_phrase import PostgreSQLExactPhraseCandidateIndex
 from engine.control import (
     ContextControl,
     ControlOperation,
@@ -30,11 +31,19 @@ from engine.persistence import (
     PostgreSQLWorkerLeaseIssuer,
     create_database_engine,
 )
+from engine.runtime.candidate_ranking import (
+    CandidateQuery,
+    RankedCandidate,
+    RankedCandidateList,
+)
 from engine.runtime.contracts import Acquire
 from engine.runtime.evidence import CandidateRef
-from engine.runtime.materialized import MaterializedProjectionSession
+from engine.runtime.materialized import (
+    CandidateDiscoverySession,
+    ExactPhraseDiscoveryRequest,
+)
 from engine.runtime.package_digest import QueryDigestKeyring
-from engine.runtime.scope import EffectiveScope
+from engine.runtime.scope import CandidateDiscoveryScope
 from tests.integration.test_zz_file_revision_replacement import (
     OLD_MARKDOWN,
     _resolve,
@@ -63,15 +72,33 @@ class _ReplayCandidateIndex:
     def __init__(self, candidate: CandidateRef) -> None:
         self.candidate = candidate
 
+    def prepare_discovery(
+        self,
+        request: Acquire,
+        *,
+        effective_scope: CandidateDiscoveryScope,
+    ) -> ExactPhraseDiscoveryRequest:
+        return PostgreSQLExactPhraseCandidateIndex().prepare_discovery(
+            request,
+            effective_scope=effective_scope,
+        )
+
     def discover(
         self,
         request: Acquire,
-        projection_session: MaterializedProjectionSession,
+        discovery_session: CandidateDiscoverySession,
         *,
-        effective_scope: EffectiveScope,
-    ) -> tuple[CandidateRef, ...]:
-        del request, projection_session, effective_scope
-        return (self.candidate,)
+        effective_scope: CandidateDiscoveryScope,
+    ) -> CandidateQuery:
+        del request, discovery_session, effective_scope
+        return CandidateQuery(
+            ranked_lists=(
+                RankedCandidateList(
+                    ranker_ref="replay",
+                    candidates=(RankedCandidate(candidate_ref=self.candidate),),
+                ),
+            )
+        )
 
 
 def _control(
