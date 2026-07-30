@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://context-engine.invalid/contracts/worker-batch-progress-v1.schema.json",
+  "title": "ContextEngine worker batch progress v1",
+  "$comment": "JSON Schema 2020-12 cannot express numeric relations between sibling properties. Consumers must additionally enforce the tracked x-context-engine-invariants; applications.worker_progress.validate_worker_batch_progress_document is the reference validator.",
+  "x-context-engine-invariants": [
+    "failed <= processed <= total",
+    "phase == complete implies processed == total"
+  ],
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "batchRef",
+    "currentJobRef",
+    "failed",
+    "outcome",
+    "phase",
+    "processed",
+    "reasonCategory",
+    "schemaVersion",
+    "total"
+  ],
+  "properties": {
+    "batchRef": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "currentJobRef": {
+      "oneOf": [
+        {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        {"type": "null"}
+      ]
+    },
+    "failed": {"type": "integer", "minimum": 0},
+    "outcome": {"enum": ["dispatched", "refused", null]},
+    "phase": {"enum": ["dispatching", "complete"]},
+    "processed": {"type": "integer", "minimum": 0},
+    "reasonCategory": {
+      "enum": ["file_import_refused", "worker_lease_refused", null]
+    },
+    "schemaVersion": {"const": "context-engine-worker-batch-progress-v1"},
+    "total": {"type": "integer", "minimum": 0}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"phase": {"const": "complete"}}},
+      "then": {
+        "properties": {
+          "currentJobRef": {"type": "null"},
+          "outcome": {"type": "null"},
+          "reasonCategory": {"type": "null"}
+        }
+      },
+      "else": {
+        "properties": {
+          "currentJobRef": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        }
+      }
+    },
+    {
+      "if": {"properties": {"outcome": {"const": "refused"}}},
+      "then": {
+        "properties": {
+          "reasonCategory": {
+            "enum": ["file_import_refused", "worker_lease_refused"]
+          }
+        }
+      },
+      "else": {"properties": {"reasonCategory": {"type": "null"}}}
+    }
+  ]
+}

@@ -114,6 +114,16 @@ class ControlStorePort(Protocol):
         command: OffboardFileSource,
     ) -> FileSourceOffboarding: ...
 
+
+class SourceListingStorePort(Protocol):
+    """Optional Organization-scoped discovery under existing source-read authority."""
+
+    def list_file_sources(
+        self,
+        call: TrustedControlCall,
+    ) -> tuple[SourceManifest, ...]: ...
+
+
 class FileChangePageStorePort(Protocol):
     """Optional v3 persistence surface activated with File change proofs."""
 
@@ -484,6 +494,43 @@ class ContextControl:
             raise
         except Exception:
             raise SourceControlUnavailable("source read is unavailable") from None
+
+    def list_sources(
+        self,
+        call: TrustedControlCall,
+    ) -> tuple[SourceManifest, ...]:
+        """List active source manifests under one exact existing read call."""
+
+        try:
+            _validate_and_consume_control_call(
+                call,
+                authority=self._authority,
+                expected_operation=ControlOperation.READ_SOURCE,
+                checked_at=self._clock(),
+            )
+            method = getattr(self._store, "list_file_sources", None)
+            if not callable(method):
+                raise SourceControlUnavailable("source listing is unavailable")
+            manifests = cast(SourceListingStorePort, self._store).list_file_sources(
+                call
+            )
+            if type(manifests) is not tuple:
+                raise SourceControlUnavailable("source listing is invalid")
+            for manifest in manifests:
+                self._require_manifest(manifest)
+            source_refs = tuple(manifest.source_ref.value for manifest in manifests)
+            if (
+                source_refs != tuple(sorted(source_refs))
+                or len(set(source_refs)) != len(source_refs)
+            ):
+                raise SourceControlUnavailable("source listing is invalid")
+            return manifests
+        except (ControlOperatorAuthenticationRejected, SourceNotAvailable):
+            raise SourceNotAvailable from None
+        except SourceControlUnavailable:
+            raise
+        except Exception:
+            raise SourceControlUnavailable("source listing is unavailable") from None
 
     def prepare_file_import(
         self,
