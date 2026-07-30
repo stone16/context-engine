@@ -119,6 +119,7 @@ class EvaluationCaseObservation:
 class EvaluationRun:
     answer_judge_profile: AnswerJudgeProfile
     cases: tuple[EvaluationCaseObservation, ...]
+    executed_seam_ref: str | None = None
 
     def __post_init__(self) -> None:
         if type(self.answer_judge_profile) is not AnswerJudgeProfile:
@@ -127,6 +128,13 @@ class EvaluationRun:
             type(case) is not EvaluationCaseObservation for case in self.cases
         ):
             raise TypeError("evaluation run requires typed case observations")
+        if self.executed_seam_ref is not None and (
+            type(self.executed_seam_ref) is not str
+            or not self.executed_seam_ref
+            or self.executed_seam_ref != self.executed_seam_ref.strip()
+            or any(character.isspace() for character in self.executed_seam_ref)
+        ):
+            raise TypeError("evaluation run seam ref must be an opaque ref")
 
 
 def _security_observation(value: object, case_ref: str) -> CaseSecurityObservation:
@@ -419,6 +427,7 @@ def build_evaluation_report(
         },
         "reportVersion": EVAL_REPORT_VERSION,
         "retrieval": {**asdict(retrieval), "status": retrieval_status},
+        "run": {"executedSeamRef": run.executed_seam_ref},
         "security": security_report(tuple(security_inputs)),
         "slices": slice_reports,
         "status": status,
