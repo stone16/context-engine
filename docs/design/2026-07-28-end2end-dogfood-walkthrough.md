@@ -77,7 +77,7 @@ make install
 make db-up                       # worktree-scoped compose project
 set -a; source .context-engine/database.env; source <secrets env>; set +a
 uv run context-engine-control migrate            # → 20260727_0040
-make security-gate               # MUST run on a clean volume — see finding 2
+make security-gate               # any volume state; see finding 2 and ADR-0085
 uv run context-engine-dogfood-seed \
   --organization-id "$CONTEXT_ENGINE_DOGFOOD_ORGANIZATION_ID" \
   --user-id "$CONTEXT_ENGINE_DOGFOOD_USER_ID" \
@@ -157,13 +157,17 @@ eval README forbids inventing entries.
    **raw Obsidian ingestion remains UNPROVEN**. The v1 three-line shape also
    forces whole-note flattening: every published note is one
    `fragment:paragraph:1`, so citation granularity is the entire note.
-2. **Security gate is corpus-sensitive.** With the dogfood corpus in the
-   harness database, 4 of 164 gate tests fail: migration-downgrade guards fire
-   in a different order when nested File lineage from another Organization is
-   retained (observed: `recursive File path downgrade requires no retained
-   nested lineage` instead of the asserted accepted-change guard). The gate
-   passes only on a clean volume; run it before ingesting, or expect to
-   `make db-reset` and replay the pipeline.
+2. **Security gate was corpus-sensitive — fixed by ADR-0085.** With the dogfood
+   corpus in the harness database, 4 of 164 gate tests failed: the registered
+   evidence drove Alembic through a multi-revision downgrade chain, so with
+   nested File lineage from another Organization retained, the recursive-path
+   guard fired before the guard each test asserted (observed: `recursive File
+   path downgrade requires no retained nested lineage` instead of the asserted
+   accepted-change guard). Each registered assertion now exercises exactly its
+   own revision's downgrade, and the gate records the retained-lineage counts it
+   observed under `provenance.retainedFileLineage`, so a reader can tell a pass
+   produced on a populated volume from one produced after a reset. No guard was
+   deleted, tenant-scoped, or relaxed.
 3. **Twin embeddings give no semantic relevance, and coverage cannot say
    "not in corpus".** SHAKE-256 twin vectors are content-hash noise: 0/5 real
    questions cited their topical note, and the negative probe still returned
