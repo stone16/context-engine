@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="page-heading">
+  <p class="eyebrow">ContextPackage · Citation closure</p>
+  <h1>Ask ContextEngine</h1>
+  <p>Every clean answer Block includes a resolvable Article → Revision → Fragment
+     citation. Incomplete lineage refuses the answer.</p>
+</header>
+<form method="post" action="/ui/ask" class="work-form">
+  <label for="query">Question</label>
+  <textarea id="query" name="query" maxlength="2000" required>{{ query }}</textarea>
+  <button class="button button-primary" type="submit">Ask</button>
+</form>
+{% if result %}
+  <section aria-labelledby="answer-blocks">
+    <div class="section-heading">
+      <h2 id="answer-blocks">Authorized answer context</h2>
+      <span class="status">{{ result.coverage_status }}</span>
+    </div>
+    {% if result.hits %}
+      <ol class="hit-list">
+      {% for hit in result.hits %}
+        <li class="evidence-block">
+          <h3>Answer Block {{ hit.ordinal }}</h3>
+          <div class="block-body">{{ hit.body }}</div>
+          <details>
+            <summary>
+              <span class="summary-action">Flip to evidence</span>
+            </summary>
+            <dl class="lineage">
+              <div><dt>Article</dt><dd><code>{{ hit.evidence.resource_ref }}</code></dd></div>
+              <div><dt>Revision</dt><dd><code>{{ hit.evidence.revision_ref }}</code></dd></div>
+              <div><dt>Fragment</dt><dd><code>{{ hit.evidence.fragment_ref }}</code></dd></div>
+              <div><dt>Evidence</dt><dd><code>{{ hit.evidence.evidence_ref }}</code></dd></div>
+              <div><dt>Citation</dt><dd><code>{{ hit.evidence.citation_open_ref }}</code></dd></div>
+              <div><dt>Policy Epoch</dt><dd>{{ hit.evidence.policy_epoch }}</dd></div>
+            </dl>
+          </details>
+        </li>
+      {% endfor %}
+      </ol>
+    {% else %}
+      <div class="state state-empty">
+        <h3>No authorized evidence</h3>
+        <p>{{ result.coverage_reason or 'no_authorized_evidence' }}</p>
+      </div>
+    {% endif %}
+    {% if result.hits %}
+      <form method="post" action="/ui/feedback" class="work-form">
+        <h3>Was this answer context helpful?</h3>
+        <input type="hidden" name="runRef" value="{{ result.run_ref }}">
+        <fieldset>
+          <legend>Rating</legend>
+          <label><input type="radio" name="rating" value="helpful" required> Helpful</label>
+          <label><input type="radio" name="rating" value="not_helpful" required> Not helpful</label>
+        </fieldset>
+        <label for="answer-feedback-note">Note <span>(optional)</span></label>
+        <textarea id="answer-feedback-note" name="note" maxlength="1000"></textarea>
+        <button class="button button-primary" type="submit">Record answer feedback</button>
+      </form>
+    {% endif %}
+  </section>
+{% endif %}
+{% endblock %}

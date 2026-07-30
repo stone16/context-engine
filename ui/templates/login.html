@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-header">
+  <p class="eyebrow">Request-scoped authority</p>
+  <h1>Authenticate</h1>
+  <p>Enter the local dogfood credential to open a short-lived operator session.</p>
+</section>
+<form method="post" action="/ui/login" class="work-surface">
+  <label for="credential">Credential</label>
+  <input id="credential" name="credential" type="password" required autocomplete="current-password">
+  <input name="next" type="hidden" value="{{ next_path }}">
+  <button type="submit">Open session</button>
+</form>
+{% endblock %}

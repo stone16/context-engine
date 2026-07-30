@@ -68,6 +68,7 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
         "bulk_article_policy_change_audit",
         "context_fragment",
         "context_fragment_field",
+        "context_feedback",
         "context_resource",
         "context_revision",
         "context_run",
@@ -1557,6 +1558,8 @@ def test_membership_manifest_requires_exact_user_actor_and_read_only_runtime() -
         "context_engine_action_prepare_definer": ["SELECT"],
         "context_engine_action_execute_definer": ["SELECT"],
         "context_engine_citation_definer": ["SELECT"],
+        "context_engine_access_policy_definer": ["SELECT"],
+        "context_engine_context_run_reader_definer": ["SELECT"],
         "context_engine_file_dispatch_definer": [
             "SELECT",
             "UPDATE status, valid_from, valid_until",

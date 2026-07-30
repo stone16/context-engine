@@ -169,6 +169,7 @@ def _dogfood_environment(
     user_id: UUID,
     membership_id: UUID,
     runtime_configuration: DatabaseConfiguration,
+    control_configuration: DatabaseConfiguration,
 ) -> dict[str, str]:
     return {
         DOGFOOD_COMPOSITION_ENV: DOGFOOD_COMPOSITION_VALUE,
@@ -185,6 +186,10 @@ def _dogfood_environment(
         "CONTEXT_ENGINE_RUNTIME_ROLE": runtime_configuration.expected_role,
         "CONTEXT_ENGINE_RUNTIME_DATABASE_URL": (
             runtime_configuration.url.render_as_string(hide_password=False)
+        ),
+        "CONTEXT_ENGINE_CONTROL_ROLE": control_configuration.expected_role,
+        "CONTEXT_ENGINE_CONTROL_DATABASE_URL": (
+            control_configuration.url.render_as_string(hide_password=False)
         ),
     }
 
@@ -424,6 +429,7 @@ def test_promote_release_activates_every_current_revision_and_dogfood_runtime(
     release_evidence_file: Path,
     migration_configuration: DatabaseConfiguration,
     runtime_configuration: DatabaseConfiguration,
+    control_configuration: DatabaseConfiguration,
     guarded_control_engine: Engine,
     guarded_learning_engine: Engine,
     guarded_release_operator_engine: Engine,
@@ -503,6 +509,7 @@ def test_promote_release_activates_every_current_revision_and_dogfood_runtime(
             user_id=user_id,
             membership_id=scenario.membership_id,
             runtime_configuration=runtime_configuration,
+            control_configuration=control_configuration,
         )
         with pytest.raises(DogfoodConfigurationUnavailable):
             create_served_app(dogfood_environment, host="127.0.0.1")

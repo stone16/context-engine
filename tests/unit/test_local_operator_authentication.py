@@ -263,14 +263,17 @@ def test_authority_grants_one_allowed_operation_per_context_lifetime() -> None:
         )
 
 
-def test_http_composition_cannot_reach_local_operator_authentication() -> None:
+def test_general_http_composition_cannot_reach_local_operator_authentication() -> None:
     prohibited_module_names = {
         "applications.control",
         "applications.operator_authentication",
     }
     pending = [
-        ROOT / "applications" / "api.py",
-        *sorted((ROOT / "adapters" / "http").rglob("*.py")),
+        *sorted(
+            path
+            for path in (ROOT / "adapters" / "http").rglob("*.py")
+            if path.name != "dogfood.py"
+        ),
     ]
     visited: set[Path] = set()
     while pending:
@@ -299,3 +302,29 @@ def test_http_composition_cannot_reach_local_operator_authentication() -> None:
             ):
                 if candidate.is_file() and candidate not in visited:
                     pending.append(candidate)
+
+
+def test_dogfood_http_is_the_only_local_operator_authentication_composition() -> None:
+    api_path = ROOT / "applications" / "api.py"
+    api_tree = ast.parse(
+        api_path.read_text(encoding="utf-8"),
+        filename=api_path,
+    )
+    api_imports = {
+        node.module
+        for node in ast.walk(api_tree)
+        if isinstance(node, ast.ImportFrom) and node.module is not None
+    }
+    path = ROOT / "adapters" / "http" / "dogfood.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=path)
+    imported = {
+        node.module
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module is not None
+    }
+
+    assert "adapters.http.dogfood" in api_imports
+    assert "applications.operator_authentication" not in api_imports
+    assert "applications.control" not in api_imports
+    assert "applications.operator_authentication" in imported
+    assert "applications.control" not in imported

@@ -21,6 +21,7 @@ dependencies = [
   "cryptography>=49,<50",
   "fastapi>=0.116,<0.117",
   "jsonschema>=4.25,<5",
+  "jinja2>=3.1,<3.2",
   "markdown>=3.6,<3.7",
   "pydantic>=2.13,<2.14",
   "psycopg[binary]>=3.2,<3.3",
@@ -66,6 +67,7 @@ packages = [
   "eval",
   "migrations",
   "third_party",
+  "ui",
 ]
 
 [tool.hatch.build.targets.wheel.force-include]
@@ -86,6 +88,7 @@ files = [
   "applications",
   "eval",
   "migrations",
+  "ui",
   "scripts/provision_database_roles.py",
   "scripts/third_party_governance.py",
   "scripts/wait_for_database.py",

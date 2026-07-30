@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="page-heading">
+  <p class="eyebrow">Article is the authorization atom</p>
+  <h1>Article visibility</h1>
+  <p>Inspect the effective policy and its exact resolution rung. Historical policy
+     changes require a separate preview and confirmation that advances Policy Epoch.</p>
+</header>
+{% if receipt %}
+<section class="state" aria-labelledby="policy-changed">
+  <h2 id="policy-changed">Article policy changed</h2>
+  <dl>
+    <div><dt>Policy version</dt><dd>{{ receipt.policy_version }}</dd></div>
+    <div><dt>Policy Epoch</dt><dd>{{ receipt.policy_epoch }}</dd></div>
+  </dl>
+  <a class="button button-secondary" href="/ui/articles">Inspect another Article</a>
+</section>
+{% else %}
+<form method="post" action="/ui/articles/view" class="work-form">
+  <label for="resource-ref">Exact Article ref</label>
+  <input id="resource-ref" name="resourceRef" maxlength="512" required>
+  <label for="article-read-control-credential">Control operator credential</label>
+  <input id="article-read-control-credential" name="controlCredential" type="password" required autocomplete="off">
+  <button class="button button-primary" type="submit">View visibility</button>
+</form>
+{% endif %}
+{% if article %}
+<section aria-labelledby="policy-heading">
+  <div class="section-heading">
+    <h2 id="policy-heading">Effective visibility</h2>
+    <span class="status">{{ article.resolution_rung }}</span>
+  </div>
+  <dl class="lineage">
+    <div><dt>Article</dt><dd><code>{{ article.resource_ref }}</code></dd></div>
+    <div><dt>Source</dt><dd><code>{{ article.source_ref }}</code></dd></div>
+    <div><dt>Published</dt><dd>{{ article.published }}</dd></div>
+    <div><dt>Local policy</dt><dd>{{ article.local_policy_kind or 'isolation' }}</dd></div>
+    <div><dt>Effective policy</dt><dd>{{ article.effective_policy_kind or 'isolation' }}</dd></div>
+    <div><dt>Groups</dt><dd>{{ article.effective_group_refs|join(', ') or '—' }}</dd></div>
+    <div><dt>Policy version</dt><dd>{{ article.policy_version }}</dd></div>
+    <div><dt>Policy Epoch</dt><dd>{{ article.policy_epoch }}</dd></div>
+  </dl>
+</section>
+{% if change %}
+<section class="state" aria-labelledby="change-preview">
+  <p class="eyebrow">Preview · no historical change yet</p>
+  <h2 id="change-preview">Confirm explicit Article policy</h2>
+  <p>Proposed policy: <strong>{{ change.policy_kind }}</strong>
+     {% if change.group_refs %}({{ change.group_refs|join(', ') }}){% endif %}</p>
+  <p>Confirmation rechecks the exact policy version and Policy Epoch atomically.</p>
+  <div class="button-row">
+    <form method="post" action="/ui/articles/confirm">
+      <input type="hidden" name="previewToken" value="{{ change.preview_token }}">
+      <label for="article-confirm-control-credential">Control operator credential</label>
+      <input id="article-confirm-control-credential" name="controlCredential" type="password" required autocomplete="off">
+      <button class="button button-primary" type="submit">Confirm and advance epoch</button>
+    </form>
+    <a class="button button-secondary" href="/ui/articles">Cancel</a>
+  </div>
+</section>
+{% else %}
+<form method="post" action="/ui/articles/preview" class="work-form policy-form">
+  <h2>Preview an explicit policy change</h2>
+  <input type="hidden" name="resourceRef" value="{{ article.resource_ref }}">
+  <label for="policy-kind">Policy</label>
+  <select id="policy-kind" name="policyKind" required>
+    <option value="private">Private</option>
+    <option value="organization">Organization</option>
+    <option value="groups">Groups</option>
+  </select>
+  <label for="group-refs">Group refs <span>(comma-separated; Groups only)</span></label>
+  <input id="group-refs" name="groupRefs" maxlength="2048">
+  <label for="article-change-control-credential">Control operator credential</label>
+  <input id="article-change-control-credential" name="controlCredential" type="password" required autocomplete="off">
+  <button class="button button-primary" type="submit">Preview change</button>
+</form>
+{% endif %}
+{% endif %}
+{% endblock %}

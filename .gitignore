@@ -1,6 +1,5 @@
 # --- Private exploratory history (kept local, not published) ---
 .grill/
-DESIGN.md
 
 # The current design, ADR, security, glossary, and agent charter are intended
 # to be versioned with the open-source implementation. Historical drafts remain

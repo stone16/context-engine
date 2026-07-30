@@ -124,6 +124,7 @@ HEAD_TABLES = [
     "article_source_acl_observation",
     "bulk_article_policy_change_audit",
     "citation_open_locator",
+    "context_feedback",
     "context_fragment",
     "context_fragment_field",
     "context_resource",
@@ -482,6 +483,7 @@ def _delete_issue_27_upgrade_fixture(
                 for table in (
                     "action_ticket",
                     "action_delivery_attempt",
+                    "context_feedback",
                     "file_delete_observation_execution",
                     "file_source_publish_watermark",
                     "file_source_acquisition_checkpoint",

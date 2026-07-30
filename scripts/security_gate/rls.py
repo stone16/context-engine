@@ -63,6 +63,7 @@ NON_OWNER_EVIDENCE_BY_TABLE: Mapping[str, str] = {
     "organization_policy_epoch": "PG-REVOCATION-006",
     "resource_access_policy": "PG-REVOCATION-006",
     "context_run": "PG-TRACE-REDACTION-012",
+    "context_feedback": "PG-TRACE-REDACTION-012",
     "context_run_operator_read_ticket": "PG-TRACE-REDACTION-012",
     "decision_audit": "PG-TRACE-REDACTION-012",
     "service_principal": "PG-WORKER-LEASE-007",

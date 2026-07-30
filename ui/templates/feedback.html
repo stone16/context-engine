@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="page-heading">
+  <p class="eyebrow">Evidence only · no publication authority</p>
+  <h1>Answer feedback</h1>
+  <p>Record a minimal observation against one authorized ContextRun. Feedback cannot
+     activate, promote, publish, or roll back a Release.</p>
+</header>
+{% if receipt %}
+<section class="state" aria-labelledby="feedback-recorded">
+  <h2 id="feedback-recorded">Feedback recorded</h2>
+  <p>Evidence receipt <code>{{ receipt }}</code></p>
+  <a class="button button-secondary" href="/ui/ask">Return to Ask</a>
+</section>
+{% else %}
+<form method="post" action="/ui/feedback" class="work-form">
+  <label for="run-ref">ContextRun ref</label>
+  <input id="run-ref" name="runRef" maxlength="256" required>
+  <fieldset>
+    <legend>Was this answer helpful?</legend>
+    <label><input type="radio" name="rating" value="helpful" required> Helpful</label>
+    <label><input type="radio" name="rating" value="not_helpful" required> Not helpful</label>
+  </fieldset>
+  <label for="note">Note <span>(optional)</span></label>
+  <textarea id="note" name="note" maxlength="1000"></textarea>
+  <button class="button button-primary" type="submit">Record feedback</button>
+</form>
+{% endif %}
+{% endblock %}

@@ -2179,7 +2179,9 @@ CANONICAL_DOGFOOD_AUTHENTICATION_ACTIVATION: dict[str, object] = {
                 "Absent, wrong, or truncated secrets and revoked or expired configured "
                 "Membership authority return the same generic authentication failure; "
                 "the secret is absent from responses, logs, ContextRun, and "
-                "DecisionAudit."
+                "DecisionAudit. A successful dogfood resolve issues one private File "
+                "CitationOpenRef that reopens only through a second current-Membership "
+                "sealed Runtime resolve."
             ),
         },
     ],
@@ -2199,7 +2201,6 @@ CANONICAL_DOGFOOD_AUTHENTICATION_ACTIVATION: dict[str, object] = {
         "network exposure beyond the maintainer machine",
         "group or public audience",
         "Continue",
-        "dogfood OpenCitation",
         "hybrid retrieval",
         "external query embedding",
         "non-File providers",
@@ -2209,7 +2210,9 @@ CANONICAL_DOGFOOD_AUTHENTICATION_ACTIVATION: dict[str, object] = {
 CANONICAL_DOGFOOD_RUNTIME_ACTIVATION: dict[str, object] = {
     "issueRef": "#102",
     "invariantRef": "INDEX-NOT-AUTHORITY-005",
-    "carrier": "loopback-only File pgvector dogfood Acquire delivery",
+    "carrier": (
+        "loopback-only File pgvector dogfood Acquire and private OpenCitation delivery"
+    ),
     "status": "active_fail_closed",
     "policyEpochScope": "organization-v0",
     "controlBoundary": (
@@ -2262,7 +2265,6 @@ CANONICAL_DOGFOOD_RUNTIME_ACTIVATION: dict[str, object] = {
         "network exposure beyond the maintainer machine",
         "group or public audience",
         "Continue",
-        "dogfood OpenCitation",
         "hybrid retrieval",
         "external query embedding",
         "non-File providers",

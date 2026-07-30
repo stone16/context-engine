@@ -1,4 +1,4 @@
-.PHONY: install build lint typecheck test catalog third-party-check third-party-artifacts security-gate smoke db-up db-down db-reset integration dogfood-eval eval-v1 eval-v1-execute openapi-generate openapi-check openapi-breaking-check sdk-generate sdk-check sdk-build sdk-test sdk-pack action-typecheck action-build action-test bot-typecheck bot-build bot-test check
+.PHONY: install build lint typecheck test catalog third-party-check third-party-artifacts security-gate smoke db-up db-down db-reset integration dogfood-eval eval-v1 eval-v1-execute openapi-generate openapi-check openapi-breaking-check sdk-generate sdk-check sdk-build sdk-test sdk-pack action-typecheck action-build action-test bot-typecheck bot-build bot-test ui-build ui-test check
 
 install:
 	uv sync --frozen
@@ -113,4 +113,16 @@ bot-test: bot-build
 	npm --prefix bot_delivery/typescript run test:runtime
 	npm --prefix bot_delivery/typescript run test:package
 
-check: build lint typecheck openapi-check sdk-check sdk-build sdk-test sdk-pack action-build action-test bot-build bot-test test catalog smoke integration security-gate third-party-artifacts
+ui-build:
+	uv run python -m py_compile ui/*.py
+
+ui-test: ui-build
+	uv run pytest -q \
+		tests/unit/test_ui_uses_public_seam_only.py \
+		tests/unit/test_source_overview_matches_promoted_release.py \
+		tests/unit/test_citation_lineage_resolvable.py \
+		tests/unit/test_profile_change_surfaces_reembed.py \
+		tests/unit/test_feedback_has_no_publication_authority.py \
+		tests/unit/test_fail_closed_renders_refusal.py
+
+check: build lint typecheck openapi-check sdk-check sdk-build sdk-test sdk-pack action-build action-test bot-build bot-test ui-build ui-test test catalog smoke integration security-gate third-party-artifacts

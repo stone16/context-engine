@@ -19,7 +19,18 @@ from adapters.http.authentication import (
 from adapters.http.organization_authority import DogfoodOrganizationAuthority
 from adapters.http.scope_authority import DogfoodFileScopeAuthority
 from adapters.pgvector import PostgreSQLVectorCandidateIndex
+from applications.file_root_configuration import (
+    WORKER_FILE_ROOTS_ENV,
+    file_roots,
+)
+from applications.operator_authentication import (
+    CONTROL_OPERATOR_SECRET_ENV,
+    LocalOperatorConfiguration,
+    LocalOperatorConfigurationUnavailable,
+)
+from engine.control import MinimalUiControlGate
 from engine.persistence import (
+    DatabaseConfigurationError,
     DatabasePurpose,
     PostgreSQLMembershipAuthority,
     create_database_engine,
@@ -31,6 +42,7 @@ from engine.persistence.membership_context import (
     MembershipNotCurrent,
 )
 from engine.runtime import Runtime
+from engine.runtime.citation import PRIVATE_FILE_CITATION_OPEN_PROFILE
 from engine.runtime.construction import required_kernel_dependencies
 from engine.runtime.package_digest import QueryDigestKeyring
 from engine.runtime.release_lineage import (
@@ -52,8 +64,10 @@ DOGFOOD_APPLICATION_ENV = "CONTEXT_ENGINE_DOGFOOD_APPLICATION_REF"
 DOGFOOD_BINDING_ENV = "CONTEXT_ENGINE_DOGFOOD_AUTHENTICATION_BINDING_REF"
 DOGFOOD_EMBEDDING_PROVIDER_ENV = "CONTEXT_ENGINE_DOGFOOD_EMBEDDING_PROVIDER"
 DOGFOOD_EMBEDDING_PROVIDER_VALUE = "deterministic-twin-v1"
+DOGFOOD_FILE_IMPORT_RECEIVER_ENV = "CONTEXT_ENGINE_WORKER_SERVICE_PRINCIPAL_ID"
 
 _QUERY_DIGEST_DERIVATION_DOMAIN = b"context-engine.dogfood.query-digest.v1\x00"
+_UI_PREVIEW_DERIVATION_DOMAIN = b"context-engine.dogfood.ui-preview.v1\x00"
 
 
 class DogfoodConfigurationUnavailable(ValueError):
@@ -104,10 +118,9 @@ class DogfoodConfiguration:
                 raise DogfoodConfigurationUnavailable(
                     "dogfood API configuration is unavailable"
                 )
-        if (
-            type(self.membership_version) is not int
-            or not 1 <= self.membership_version < (1 << 63)
-        ):
+        if type(
+            self.membership_version
+        ) is not int or not 1 <= self.membership_version < (1 << 63):
             raise DogfoodConfigurationUnavailable(
                 "dogfood API configuration is unavailable"
             )
@@ -138,13 +151,9 @@ class DogfoodConfiguration:
                 raise ValueError
             return cls(
                 secret=_required(environment, DOGFOOD_SECRET_ENV),
-                organization_id=UUID(
-                    _required(environment, DOGFOOD_ORGANIZATION_ENV)
-                ),
+                organization_id=UUID(_required(environment, DOGFOOD_ORGANIZATION_ENV)),
                 user_id=UUID(_required(environment, DOGFOOD_USER_ENV)),
-                membership_id=UUID(
-                    _required(environment, DOGFOOD_MEMBERSHIP_ENV)
-                ),
+                membership_id=UUID(_required(environment, DOGFOOD_MEMBERSHIP_ENV)),
                 membership_version=int(membership_version_text),
                 principal_ref=_required(environment, DOGFOOD_PRINCIPAL_ENV),
                 agent_version_ref=_required(environment, DOGFOOD_AGENT_ENV),
@@ -208,6 +217,7 @@ def create_dogfood_app(
     runtime = Runtime(
         required_kernel_dependencies(),
         candidate_index=PostgreSQLVectorCandidateIndex(DeterministicEmbeddingTwin()),
+        citation_profile=PRIVATE_FILE_CITATION_OPEN_PROFILE,
         query_digest_keyring=configuration.query_digest_keyring(),
     )
     membership_authority = PostgreSQLMembershipAuthority(runtime_engine)
@@ -220,9 +230,7 @@ def create_dogfood_app(
                 membership_version=configuration.membership_version,
                 principal_ref=configuration.principal_ref,
                 request_id="dogfood-composition-activation",
-                authentication_binding_ref=(
-                    configuration.authentication_binding_ref
-                ),
+                authentication_binding_ref=(configuration.authentication_binding_ref),
                 checked_at=datetime.now(UTC),
             )
         ) as current_user_actor:
@@ -230,8 +238,7 @@ def create_dogfood_app(
             if (
                 release is None
                 or release.organization_id != configuration.organization_id
-                or release.index_profile_ref
-                != DOGFOOD_VECTOR_INDEX_PROFILE_REF_V1
+                or release.index_profile_ref != DOGFOOD_VECTOR_INDEX_PROFILE_REF_V1
                 or release.index_profile_digest
                 != DOGFOOD_VECTOR_INDEX_PROFILE_DIGEST_V1
                 or not release.active_revision_refs
@@ -253,9 +260,57 @@ def create_dogfood_app(
         ) from None
 
     from adapters.http.app import (
+        DIRECT_ACQUIRE_PURPOSE,
+        DIRECT_CITATION_PURPOSE,
         _construct_runtime_delivery_activation,
         create_app,
     )
+    from adapters.http.ui_api import PostgreSQLUiApi
+
+    roots = None
+    control_engine = None
+    control_authority = None
+    control_gate = None
+
+    def ui_clock() -> datetime:
+        return datetime.now(UTC)
+
+    try:
+        operator_configuration = (
+            LocalOperatorConfiguration.load(environment)
+            if environment.get(CONTROL_OPERATOR_SECRET_ENV) is not None
+            else None
+        )
+        receiver_id = None
+        if operator_configuration is not None:
+            control_engine = create_database_engine(
+                load_database_configuration(
+                    DatabasePurpose.CONTROL_PLANE,
+                    environment,
+                )
+            )
+            if environment.get(WORKER_FILE_ROOTS_ENV) is not None:
+                roots = file_roots(environment)
+            raw_receiver = environment.get(DOGFOOD_FILE_IMPORT_RECEIVER_ENV)
+            receiver_id = None if raw_receiver is None else UUID(raw_receiver)
+            control_authority = operator_configuration.authorities(
+                clock=ui_clock
+            ).control
+            control_gate = MinimalUiControlGate(control_authority, clock=ui_clock)
+    except (
+        DatabaseConfigurationError,
+        LocalOperatorConfigurationUnavailable,
+        TypeError,
+        ValueError,
+    ):
+        runtime_engine.dispose()
+        if control_engine is not None:
+            control_engine.dispose()
+        if roots is not None:
+            roots.close()
+        raise DogfoodConfigurationUnavailable(
+            "dogfood UI configuration is unavailable"
+        ) from None
 
     app = create_app(
         authenticator=DogfoodAuthenticator(
@@ -270,12 +325,32 @@ def create_dogfood_app(
             organization_id=configuration.organization_id,
             principal_ref=configuration.principal_ref,
             agent_version_ref=configuration.agent_version_ref,
-            purpose="context.answer",
+            purposes=frozenset(
+                {DIRECT_ACQUIRE_PURPOSE, DIRECT_CITATION_PURPOSE}
+            ),
         ),
         runtime=runtime,
         runtime_delivery_activation=_construct_runtime_delivery_activation(),
+        ui_bearer_token=configuration.secret,
+        ui_control_authority=control_authority,
+        ui_api=PostgreSQLUiApi(
+            membership_authority,
+            control_engine,
+            feedback_engine=runtime_engine,
+            preview_key=sha256(
+                _UI_PREVIEW_DERIVATION_DOMAIN + configuration.secret.encode("utf-8")
+            ).digest(),
+            control_gate=control_gate,
+            roots=roots,
+            file_import_service_principal_id=receiver_id,
+            clock=ui_clock,
+        ),
     )
     app.add_event_handler("shutdown", runtime_engine.dispose)
+    if control_engine is not None:
+        app.add_event_handler("shutdown", control_engine.dispose)
+    if roots is not None:
+        app.add_event_handler("shutdown", roots.close)
     return app
 
 

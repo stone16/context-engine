@@ -115,6 +115,7 @@ def _configuration(
 def _environment(
     configuration: DogfoodConfiguration,
     runtime_configuration: DatabaseConfiguration,
+    control_configuration: DatabaseConfiguration,
 ) -> dict[str, str]:
     return {
         DOGFOOD_COMPOSITION_ENV: DOGFOOD_COMPOSITION_VALUE,
@@ -131,6 +132,10 @@ def _environment(
         "CONTEXT_ENGINE_RUNTIME_ROLE": runtime_configuration.expected_role,
         "CONTEXT_ENGINE_RUNTIME_DATABASE_URL": (
             runtime_configuration.url.render_as_string(hide_password=False)
+        ),
+        "CONTEXT_ENGINE_CONTROL_ROLE": control_configuration.expected_role,
+        "CONTEXT_ENGINE_CONTROL_DATABASE_URL": (
+            control_configuration.url.render_as_string(hide_password=False)
         ),
     }
 
@@ -185,6 +190,18 @@ def _delete(
     migration_configuration: DatabaseConfiguration,
     organization_id: UUID,
 ) -> None:
+    engine = create_database_engine(migration_configuration)
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "DELETE FROM citation_open_locator "
+                    "WHERE organization_id = :organization_id"
+                ),
+                {"organization_id": organization_id},
+            )
+    finally:
+        engine.dispose()
     clear_test_runtime_release(organization_id)
     delete_file_import_scenario(migration_configuration, organization_id)
 
@@ -362,6 +379,7 @@ def test_dogfood_served_composition_delivers_release_scoped_file_evidence_before
     tmp_path: Path,
     migration_configuration: DatabaseConfiguration,
     runtime_configuration: DatabaseConfiguration,
+    control_configuration: DatabaseConfiguration,
     guarded_control_engine: Engine,
     guarded_worker_engine: Engine,
     monkeypatch: pytest.MonkeyPatch,
@@ -384,7 +402,11 @@ def test_dogfood_served_composition_delivers_release_scoped_file_evidence_before
     )
     configuration = _configuration(scenario, user_id)
     served: dict[str, object] = {}
-    for name, value in _environment(configuration, runtime_configuration).items():
+    for name, value in _environment(
+        configuration,
+        runtime_configuration,
+        control_configuration,
+    ).items():
         monkeypatch.setenv(name, value)
 
     def observe(app: object, **kwargs: object) -> None:
@@ -418,6 +440,7 @@ def test_dogfood_rejects_an_active_release_with_an_unbound_embedding_profile(
     tmp_path: Path,
     migration_configuration: DatabaseConfiguration,
     runtime_configuration: DatabaseConfiguration,
+    control_configuration: DatabaseConfiguration,
     guarded_control_engine: Engine,
     guarded_worker_engine: Engine,
 ) -> None:
@@ -433,7 +456,11 @@ def test_dogfood_rejects_an_active_release_with_an_unbound_embedding_profile(
 
     with pytest.raises(DogfoodConfigurationUnavailable):
         create_served_app(
-            _environment(configuration, runtime_configuration),
+            _environment(
+                configuration,
+                runtime_configuration,
+                control_configuration,
+            ),
             host="127.0.0.1",
         )
 
@@ -458,7 +485,11 @@ def test_dogfood_evaluator_scores_real_public_resolve_evidence(
     client = TestClient(
         create_dogfood_app(
             configuration,
-            _environment(configuration, runtime_configuration),
+            _environment(
+                configuration,
+                runtime_configuration,
+                control_configuration,
+            ),
             host="127.0.0.1",
         )
     )
@@ -523,6 +554,7 @@ def test_dogfood_secret_and_membership_fail_closed_without_secret_retention(
     tmp_path: Path,
     migration_configuration: DatabaseConfiguration,
     runtime_configuration: DatabaseConfiguration,
+    control_configuration: DatabaseConfiguration,
     guarded_control_engine: Engine,
     guarded_worker_engine: Engine,
     caplog: pytest.LogCaptureFixture,
@@ -538,13 +570,31 @@ def test_dogfood_secret_and_membership_fail_closed_without_secret_retention(
     client = TestClient(
         create_dogfood_app(
             configuration,
-            _environment(configuration, runtime_configuration),
+            _environment(
+                configuration,
+                runtime_configuration,
+                control_configuration,
+            ),
             host="127.0.0.1",
         )
     )
     successful = _resolve(client)
     assert successful.status_code == 200
     assert successful.json()["package"]["evidence"]
+    citation_ref = successful.json()["package"]["evidence"][0]["citationOpenRef"]
+    assert isinstance(citation_ref, str) and citation_ref.startswith("cor_")
+    opened = client.post(
+        "/v0/resolve",
+        headers={
+            "Authorization": f"Bearer {SECRET}",
+            "X-Context-Request-Id": "dogfood-open-citation",
+        },
+        json={"kind": "open_citation", "citationOpenRef": citation_ref},
+    )
+    assert opened.status_code == 200
+    assert opened.json()["package"]["evidence"][0]["resourceRef"] == (
+        successful.json()["package"]["evidence"][0]["resourceRef"]
+    )
 
     with caplog.at_level(logging.DEBUG):
         responses = (
@@ -642,7 +692,11 @@ def test_dogfood_mid_resolve_policy_epoch_change_vetoes_stale_evidence(
     client = TestClient(
         create_dogfood_app(
             configuration,
-            _environment(configuration, runtime_configuration),
+            _environment(
+                configuration,
+                runtime_configuration,
+                control_configuration,
+            ),
             host="127.0.0.1",
         )
     )
@@ -1143,7 +1197,11 @@ def test_executed_run_observes_a_clean_report_from_the_real_runtime(
     client = TestClient(
         create_dogfood_app(
             configuration,
-            _environment(configuration, runtime_configuration),
+            _environment(
+                configuration,
+                runtime_configuration,
+                control_configuration,
+            ),
             host="127.0.0.1",
         )
     )

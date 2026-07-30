@@ -103,6 +103,7 @@ from engine.control.file_source_progress import (
     FileSourceStatus,
     PendingFileChangeSchedule,
 )
+from engine.control.minimal_ui import MinimalUiControlGate
 from engine.control.module import (
     ArticlePolicyDefaultStorePort,
     BulkArticlePolicyStorePort,
@@ -117,6 +118,7 @@ __all__ = [
     "MAX_CONFIGURED_FILE_CHANGE_BASELINE_SIZE",
     "MAX_FILE_CHANGE_BASELINE_SIZE",
     "MAX_FILE_CHANGE_PAGE_SIZE",
+    "MinimalUiControlGate",
     "AcceptedChangePage",
     "ActivateFileChangeFeed",
     "ActivateFileDeleteObservations",

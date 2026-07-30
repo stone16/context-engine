@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="robots" content="noindex,nofollow">
+    <title>{{ title }} · ContextEngine</title>
+    <link rel="stylesheet" href="{{ url_for('ui-static', path='/ui.css') }}">
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="site-header">
+      <a class="wordmark" href="/ui">ContextEngine <span>Evidence Console</span></a>
+      <nav aria-label="Operator jobs">
+        <a{% if active_page == 'overview' %} aria-current="page"{% endif %} href="/ui">Overview</a>
+        <a{% if active_page == 'ask' %} aria-current="page"{% endif %} href="/ui/ask">Ask</a>
+        <a{% if active_page == 'import' %} aria-current="page"{% endif %} href="/ui/import">Import</a>
+        <a{% if active_page == 'hit-test' %} aria-current="page"{% endif %} href="/ui/hit-test">Hit Test</a>
+        <a{% if active_page == 'articles' %} aria-current="page"{% endif %} href="/ui/articles">Articles</a>
+        <a{% if active_page == 'profiles' %} aria-current="page"{% endif %} href="/ui/profiles">Profiles</a>
+        <a{% if active_page == 'feedback' %} aria-current="page"{% endif %} href="/ui/feedback">Feedback</a>
+      </nav>
+      {% if active_page %}
+      <form class="logout" method="post" action="/ui/logout">
+        <button type="submit">End session</button>
+      </form>
+      {% endif %}
+    </header>
+    <main id="main" tabindex="-1">
+      {% block content %}{% endblock %}
+    </main>
+    <footer>
+      Server-rendered through the public HTTP seam.
+      Build <code>{{ build_identifier }}</code>
+    </footer>
+  </body>
+</html>

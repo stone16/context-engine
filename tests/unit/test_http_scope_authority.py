@@ -249,18 +249,19 @@ def test_dogfood_scope_carries_independent_durable_operands() -> None:
         organization_id=ORGANIZATION_ID,
         principal_ref="principal-from-auth",
         agent_version_ref="agent-version-from-server",
-        purpose="context.answer",
+        purposes=frozenset({"context.answer", "citation.open"}),
     )
     try:
-        with authority.current_scope(bound) as snapshot:
-            operands = _trusted_operands_from_snapshot(snapshot)
-            assert operands.organization_boundary == ScopeSet(frozenset(targets))
-            assert operands.membership_rights == ScopeSet(frozenset(targets[:4]))
-            assert operands.principal_grants == ScopeSet(frozenset(targets[:3]))
-            assert operands.source_native_acl == ScopeSet(frozenset(targets[:2]))
-            assert operands.resource_acl == ScopeSet(frozenset(targets[:1]))
-            assert operands.agent_ceiling == ScopeSet(frozenset(targets))
-            assert operands.purpose_policy == ScopeSet(frozenset(targets))
+        for purpose in ("context.answer", "citation.open"):
+            with authority.current_scope(replace(bound, purpose=purpose)) as snapshot:
+                operands = _trusted_operands_from_snapshot(snapshot)
+                assert operands.organization_boundary == ScopeSet(frozenset(targets))
+                assert operands.membership_rights == ScopeSet(frozenset(targets[:4]))
+                assert operands.principal_grants == ScopeSet(frozenset(targets[:3]))
+                assert operands.source_native_acl == ScopeSet(frozenset(targets[:2]))
+                assert operands.resource_acl == ScopeSet(frozenset(targets[:1]))
+                assert operands.agent_ceiling == ScopeSet(frozenset(targets))
+                assert operands.purpose_policy == ScopeSet(frozenset(targets))
         for mismatched in (
             replace(bound, agent_version_ref="agent-version-not-authorized"),
             replace(bound, purpose="context.not-authorized"),

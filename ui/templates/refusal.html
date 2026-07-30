@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="state state-refusal" role="alert" aria-labelledby="refusal-title">
+  <p class="eyebrow">Fail closed</p>
+  <h1 id="refusal-title" tabindex="-1" autofocus>Request refused</h1>
+  <p>The operation did not establish the trusted context it requires.</p>
+  {% if submitted %}
+  <details>
+    <summary>Submitted non-secret input</summary>
+    <dl class="submitted-input">
+      {% for label, value in submitted %}
+      <div><dt>{{ label }}</dt><dd><code>{{ value }}</code></dd></div>
+      {% endfor %}
+    </dl>
+  </details>
+  {% endif %}
+  <dl><div><dt>Category</dt><dd><code>{{ category }}</code></dd></div></dl>
+  <a class="button button-secondary" href="{{ return_path }}">{{ return_label }}</a>
+</section>
+{% endblock %}
