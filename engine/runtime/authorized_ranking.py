@@ -117,11 +117,12 @@ def join_authorized_ranking(
     *,
     ranker_weights: dict[str, float] | None = None,
 ) -> tuple[AuthorizedRerankItem, ...]:
-    """Join only admitted projections; evidence without one is discarded.
+    """Join and order only admitted projections; discard all other evidence.
 
     Retrieval fusion weighting belongs here and nowhere earlier: only this stage
     can see rank positions recomputed over admitted candidates alone. Omitted
-    weights fuse uniformly.
+    weights fuse uniformly. The returned tuple is the sole retrieval-derived
+    order consumed by every later content-bearing stage.
     """
 
     if type(projections) is not tuple or any(
@@ -208,14 +209,22 @@ def join_authorized_ranking(
             authorized_rank.get(projection.candidate_ref, neutral_rank),
         )
         joined.append(item)
-    return tuple(joined)
+    return tuple(
+        sorted(
+            joined,
+            key=lambda item: (
+                item.fused_rank,
+                _candidate_sort_key(item.projection.candidate_ref),
+            ),
+        )
+    )
 
 
 def select_authorized_ranking(
     joined: tuple[AuthorizedRerankItem, ...],
     budget: PackageBudget,
 ) -> tuple[AuthorizedRerankItem, ...]:
-    """Order admitted content, then pack only that authorized order to budget."""
+    """Pack the authorized ranking stage's exact supplied order to budget."""
 
     if type(joined) is not tuple or any(
         type(item) is not AuthorizedRerankItem for item in joined
@@ -223,27 +232,9 @@ def select_authorized_ranking(
         raise TypeError("authorized selection requires rerank items")
     if type(budget) is not PackageBudget:
         raise TypeError("authorized selection requires PackageBudget")
-    ranked_values = tuple(
-        item.fused_rank for item in joined if item.rank_evidence is not None
-    )
-    neutral_rank = (
-        (min(ranked_values) + max(ranked_values)) // 2
-        if ranked_values
-        else NEUTRAL_FUSED_RANK
-    )
-    for item in joined:
-        if item.rank_evidence is None:
-            object.__setattr__(item, "fused_rank", neutral_rank)
-    ordered = sorted(
-        joined,
-        key=lambda item: (
-            item.fused_rank,
-            _candidate_sort_key(item.projection.candidate_ref),
-        ),
-    )
     selected = []
     consumed_tokens = 0
-    for item in ordered:
+    for item in joined:
         body_tokens = len(item.projection.projected_body.encode("utf-8"))
         if consumed_tokens + body_tokens > budget.max_tokens:
             continue
