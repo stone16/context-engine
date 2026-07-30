@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass, field
+from math import isfinite
 from typing import Final
 
 from engine.runtime.budget import PackageBudget
@@ -17,12 +18,44 @@ from engine.runtime.evidence import (
 
 __all__ = [
     "NEUTRAL_FUSED_RANK",
+    "UNIFORM_RANKER_WEIGHT",
     "AuthorizedRerankItem",
     "join_authorized_ranking",
     "select_authorized_ranking",
 ]
 
 NEUTRAL_FUSED_RANK: Final = 1
+UNIFORM_RANKER_WEIGHT: Final = 1.0
+
+
+def _authorized_ranker_weights(
+    ranker_weights: dict[str, float] | None,
+    admitted_ranker_refs: frozenset[str],
+) -> dict[str, float]:
+    """Resolve one server-owned weight per admitted ranker; never caller-supplied.
+
+    Weights may cover rankers that admitted nothing, so containment rather than
+    exact identity equality is required.
+    """
+
+    if ranker_weights is None:
+        return dict.fromkeys(admitted_ranker_refs, UNIFORM_RANKER_WEIGHT)
+    if type(ranker_weights) is not dict or not admitted_ranker_refs.issubset(
+        ranker_weights
+    ):
+        raise ValueError("authorized fusion weights must cover every admitted ranker")
+    if any(
+        type(weight) not in {int, float}
+        or type(weight) is bool
+        or not isfinite(weight)
+        or weight <= 0.0
+        for weight in ranker_weights.values()
+    ):
+        raise ValueError("authorized fusion weights must be positive finite floats")
+    return {
+        ranker_ref: float(ranker_weights[ranker_ref])
+        for ranker_ref in admitted_ranker_refs
+    }
 
 
 @dataclass(frozen=True, slots=True, init=False)
@@ -62,8 +95,15 @@ class AuthorizedRerankItem:
 def join_authorized_ranking(
     projections: tuple[AuthorizedProjection, ...],
     rank_evidence: tuple[CandidateRankEvidence, ...],
+    *,
+    ranker_weights: dict[str, float] | None = None,
 ) -> tuple[AuthorizedRerankItem, ...]:
-    """Join only admitted projections; evidence without one is discarded."""
+    """Join only admitted projections; evidence without one is discarded.
+
+    Retrieval fusion weighting belongs here and nowhere earlier: only this stage
+    can see rank positions recomputed over admitted candidates alone. Omitted
+    weights fuse uniformly.
+    """
 
     if type(projections) is not tuple or any(
         type(projection) is not AuthorizedProjection for projection in projections
@@ -99,11 +139,13 @@ def join_authorized_ranking(
         ):
             compacted_positions[(candidate_ref, ranker_ref)] = compacted
 
+    weights = _authorized_ranker_weights(ranker_weights, frozenset(by_ranker))
     normalized_evidence: dict[CandidateRef, CandidateRankEvidence] = {}
     fused_scores: dict[CandidateRef, float] = {}
     for candidate_ref, admitted in admitted_evidence.items():
         fused_scores[candidate_ref] = sum(
-            1.0 / compacted_positions[(candidate_ref, ranker.ranker_ref)]
+            weights[ranker.ranker_ref]
+            / compacted_positions[(candidate_ref, ranker.ranker_ref)]
             for ranker in admitted.per_ranker
         )
     ranked_refs = tuple(

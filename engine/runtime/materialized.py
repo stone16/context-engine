@@ -6,6 +6,10 @@ from enum import StrEnum
 from typing import Final, NoReturn, Protocol, runtime_checkable
 from uuid import UUID
 
+from engine.runtime.candidate_ranking import (
+    MAX_CANDIDATE_SUBMISSION_CEILING,
+    require_candidate_submission_limit,
+)
 from engine.runtime.evidence import (
     MAX_PROJECTED_FIELD_REF_LENGTH,
     MAX_PROJECTED_FIELD_REFS,
@@ -36,11 +40,21 @@ __all__ = [
     "MaterializedScopePort",
     "MaterializedScopeUnavailable",
     "VectorDiscoveryRequest",
+    "require_bounded_discovery_request",
 ]
 
 _STRUCTURED_FIELD_LINE_BREAKS: Final = frozenset(
     "\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029"
 )
+
+
+def _require_bounded_discovery_limit(value: object) -> int:
+    if type(value) is not int or not 1 <= value <= MAX_CANDIDATE_SUBMISSION_CEILING:
+        raise ValueError(
+            "candidate discovery requires a positive exact limit within the server "
+            "ceiling"
+        )
+    return value
 
 
 def _require_nonblank_ref(field_name: str, value: object) -> str:
@@ -405,8 +419,7 @@ class VectorDiscoveryRequest:
             raise ValueError("vector discovery requires a nonempty query embedding")
         if any(type(value) is not float for value in self.query_embedding):
             raise TypeError("vector discovery embedding requires exact floats")
-        if type(self.limit) is not int or self.limit <= 0:
-            raise ValueError("vector discovery requires a positive exact limit")
+        _require_bounded_discovery_limit(self.limit)
         for field_name, refs in (
             ("source_refs", self.source_refs),
             ("resource_refs", self.resource_refs),
@@ -422,6 +435,22 @@ class VectorDiscoveryRequest:
 
 
 CandidateDiscoveryRequest = ExactPhraseDiscoveryRequest | VectorDiscoveryRequest
+
+
+def require_bounded_discovery_request(
+    request: CandidateDiscoveryRequest,
+    *,
+    submission_limit: int,
+) -> CandidateDiscoveryRequest:
+    """Bound one untrusted prepared plan before the trusted transaction runs it."""
+
+    if type(request) not in {ExactPhraseDiscoveryRequest, VectorDiscoveryRequest}:
+        raise TypeError("candidate discovery request has the wrong nominal type")
+    request.__post_init__()
+    require_candidate_submission_limit(submission_limit)
+    if type(request) is VectorDiscoveryRequest and request.limit > submission_limit:
+        raise ValueError("prepared candidate discovery exceeded the server bound")
+    return request
 
 
 class CandidateDiscoverySession:

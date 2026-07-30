@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from collections import deque
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
+from typing import Any, cast
 
 import pytest
 
@@ -11,6 +14,8 @@ from engine.runtime.construction import (
     required_kernel_dependencies,
 )
 from engine.runtime.evidence import (
+    AuthorizedProjection,
+    CandidateRef,
     EvidenceLineage,
     _close_authorization_kernel_scope,
     _construct_authorized_projection,
@@ -26,8 +31,12 @@ from engine.runtime.materialized import (
     MaterializedFieldValue,
     MaterializedFragmentProjection,
     MaterializedFragmentWindowItem,
+    MaterializedFragmentWindowRead,
     MaterializedProjectionKind,
     MaterializedProjectionSession,
+    _construct_materialized_projection_session,
+    _open_materialized_projection_scope,
+    _read_materialized_fragment_window,
 )
 from tests.unit.test_runtime_authorized_evidence import (
     AS_OF,
@@ -325,3 +334,113 @@ def test_fragment_reader_cannot_mutate_inherited_source_acl_lineage() -> None:
             )
     finally:
         _close_authorization_kernel_scope(scope)
+
+
+@contextmanager
+def _anchor_projection() -> Iterator[AuthorizedProjection]:
+    scope = _open_authorization_kernel_scope()
+    try:
+        yield _construct_authorized_projection(
+            kernel_scope=scope,
+            candidate_ref=AUTHORIZED,
+            body="A-safe",
+            projected_field_refs=("body",),
+            lineage=EvidenceLineage(
+                run_ref="run:fragment-window-bounds",
+                principal_ref="principal:fragment-window-bounds",
+                purpose="context.answer",
+                as_of=datetime(2026, 7, 30, tzinfo=UTC),
+                decision_ref="decision:fragment-window-bounds",
+                policy_snapshot_ref="policy:fragment-window-bounds",
+                policy_epoch=1,
+                source_acl_decision_ref="sourceacl:fragment-window-bounds",
+                source_acl_projection_ref=(
+                    "sourceacl_projection:fragment-window-bounds"
+                ),
+                source_acl_as_of=datetime(2026, 7, 30, tzinfo=UTC),
+            ),
+        )
+    finally:
+        _close_authorization_kernel_scope(scope)
+
+
+def test_fragment_window_span_is_bounded_in_both_directions() -> None:
+    with _anchor_projection() as anchor:
+        for before, after in ((33, 0), (0, 33), (-1, 0), (0, -1)):
+            with pytest.raises(ValueError, match="from 0 to 32"):
+                FragmentWindowRequest(anchor=anchor, before=before, after=after)
+        assert FragmentWindowRequest(anchor=anchor, before=32, after=32).before == 32
+
+
+def test_fragment_expansion_candidates_are_bounded() -> None:
+    candidates = tuple(
+        CandidateRef(
+            organization_id=AUTHORIZED.organization_id,
+            source_ref=AUTHORIZED.source_ref,
+            resource_ref=f"resource:expansion-{ordinal}",
+            revision_ref=AUTHORIZED.revision_ref,
+            fragment_ref=f"fragment:expansion-{ordinal}",
+        )
+        for ordinal in range(65)
+    )
+    with _anchor_projection() as anchor:
+        with pytest.raises(ValueError, match="expansion candidates must be bounded"):
+            FragmentWindowRequest(
+                anchor=anchor,
+                before=0,
+                after=0,
+                expansion_candidates=candidates,
+            )
+        assert (
+            len(
+                FragmentWindowRequest(
+                    anchor=anchor,
+                    before=0,
+                    after=0,
+                    expansion_candidates=candidates[:64],
+                ).expansion_candidates
+            )
+            == 64
+        )
+
+
+def test_materialized_fragment_window_refuses_a_cross_article_item() -> None:
+    """ADR-0077: inheritance is confined to the anchor Article and Revision."""
+
+    other_article = locator(AUTHORIZED).__class__(
+        organization_id=AUTHORIZED.organization_id,
+        source_ref=AUTHORIZED.source_ref,
+        resource_ref="resource:another-article",
+        revision_ref=AUTHORIZED.revision_ref,
+        fragment_ref=AUTHORIZED.fragment_ref,
+        source_acl_projection_ref="sourceacl_runtime-authorized",
+        source_acl_as_of=AS_OF,
+    )
+
+    class _CrossArticleWindowPort(RecordingMaterializedPort):
+        def read_fragment_window(
+            self,
+            anchor: object,
+            before: int,
+            after: int,
+            expansion_candidates: tuple[object, ...],
+        ) -> MaterializedFragmentWindowRead:
+            del anchor, before, after, expansion_candidates
+            return MaterializedFragmentWindowRead(
+                items=(
+                    MaterializedFragmentWindowItem(
+                        locator=other_article,
+                        projection=_projection("OTHER-ARTICLE-BODY"),
+                    ),
+                ),
+                reauthorization_refs=(),
+            )
+
+    scope = _open_materialized_projection_scope()
+    session = _construct_materialized_projection_session(
+        authority_scope=scope,
+        port=cast("Any", _CrossArticleWindowPort()),
+    )
+
+    with pytest.raises(ValueError, match="crossed Article lineage"):
+        _read_materialized_fragment_window(session, locator(AUTHORIZED), 0, 0)
