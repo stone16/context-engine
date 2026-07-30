@@ -15,6 +15,7 @@ from sqlalchemy.exc import DBAPIError, SQLAlchemyError
 
 from engine._opaque import encode_base64url
 from engine.control import (
+    DEFAULT_FILE_CHANGE_BASELINE_SIZE,
     FILE_CAPABILITY_MANIFEST,
     FILE_CHANGE_CAPABILITY_MANIFEST,
     FILE_DELETE_OBSERVATION_CAPABILITY_MANIFEST,
@@ -69,6 +70,17 @@ from engine.supply import (
 )
 
 _REGISTRATION_OPERATION = "register_source"
+_FILE_SCAN_BOUND_MIGRATION_FENCE = "context-engine.file-status-migration-fence"
+_BOUNDED_FILE_DELETE_ACCEPT = (
+    "public.context_control_accept_bounded_file_delete_observation_page"
+    "(uuid,uuid,uuid,text,uuid,smallint,text,text,text,bigint,uuid,jsonb,"
+    "boolean,integer,jsonb)"
+)
+_LEGACY_FILE_DELETE_ACCEPT = (
+    "public.context_control_accept_file_delete_observation_page"
+    "(uuid,uuid,uuid,text,uuid,smallint,text,text,text,bigint,uuid,jsonb,"
+    "boolean,jsonb)"
+)
 _ACTIVE_SOURCE_SELECT = """
     SELECT
         source.source_id,
@@ -596,16 +608,52 @@ class PostgreSQLControlStore:
                     value.capability_version
                     == FILE_DELETE_OBSERVATION_CAPABILITY_MANIFEST.declaration_version
                 )
-                function_name = (
-                    "context_control_accept_bounded_file_delete_observation_page"
-                    if delete_observations
-                    else "context_control_accept_file_change_page"
-                )
-                baseline_argument = (
-                    ", :scan_bound, CAST(:baseline AS jsonb)"
-                    if delete_observations
-                    else ""
-                )
+                bounded_delete_observations = False
+                if delete_observations:
+                    connection.execute(
+                        text(
+                            "SELECT pg_catalog.pg_advisory_xact_lock_shared("
+                            "pg_catalog.hashtextextended(:fence, 0))"
+                        ),
+                        {"fence": _FILE_SCAN_BOUND_MIGRATION_FENCE},
+                    )
+                    accept_authority = connection.execute(
+                        text(
+                            "SELECT "
+                            "to_regprocedure(:bounded_accept) IS NOT NULL, "
+                            "CASE WHEN to_regprocedure(:legacy_accept) IS NULL "
+                            "THEN false ELSE pg_catalog.has_function_privilege("
+                            "SESSION_USER, to_regprocedure(:legacy_accept), "
+                            "'EXECUTE') END"
+                        ),
+                        {
+                            "bounded_accept": _BOUNDED_FILE_DELETE_ACCEPT,
+                            "legacy_accept": _LEGACY_FILE_DELETE_ACCEPT,
+                        },
+                    ).one()
+                    bounded_delete_observations = accept_authority[0] is True
+                    legacy_delete_observations = accept_authority[1] is True
+                    if bounded_delete_observations:
+                        function_name = (
+                            "context_control_accept_bounded_file_delete_observation_page"
+                        )
+                        baseline_argument = ", :scan_bound, CAST(:baseline AS jsonb)"
+                    elif (
+                        legacy_delete_observations
+                        and value.scan_bound == DEFAULT_FILE_CHANGE_BASELINE_SIZE
+                    ):
+                        # A pre-provenance schema can accept only ADR-0065's
+                        # historical default. Raised bounds never cross the
+                        # legacy authority, which cannot retain their provenance.
+                        function_name = (
+                            "context_control_accept_file_delete_observation_page"
+                        )
+                        baseline_argument = ", CAST(:baseline AS jsonb)"
+                    else:
+                        raise SourceNotAvailable
+                else:
+                    function_name = "context_control_accept_file_change_page"
+                    baseline_argument = ""
                 row = connection.execute(
                     text(
                         f"""
@@ -686,7 +734,9 @@ class PostgreSQLControlStore:
                 next_cursor=next_cursor,
                 accepted_at=row.accepted_at,
                 scan_bound=(
-                    row.scan_bound if delete_observations else value.scan_bound
+                    row.scan_bound
+                    if bounded_delete_observations
+                    else value.scan_bound
                 ),
             )
         except SourceNotAvailable:
