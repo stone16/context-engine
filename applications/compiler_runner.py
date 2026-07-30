@@ -237,11 +237,17 @@ _CONSTRUCT_PATTERNS: Final[dict[str, re.Pattern[str]]] = {
 
 
 def _safe_markdown_files(root: Path) -> tuple[Path, ...]:
-    if not root.is_dir():
-        raise ValueError("acceptance root must be a directory")
+    if root.is_symlink() or not root.is_dir():
+        raise ValueError("acceptance root must be a non-symlink directory")
     return tuple(
         sorted(
-            (path for path in root.rglob("*.md") if path.is_file()),
+            (
+                path
+                for path in root.rglob("*", recurse_symlinks=False)
+                if path.suffix.casefold() == ".md"
+                and not path.is_symlink()
+                and path.is_file()
+            ),
             key=lambda path: PurePath(*path.relative_to(root).parts).as_posix(),
         )
     )
@@ -330,7 +336,19 @@ def _write_acceptance_report(
     *,
     acceptance_context: _AcceptanceContext,
 ) -> None:
-    if ".context-engine" not in output.parts:
+    try:
+        state_index = len(output.parts) - 1 - output.parts[::-1].index(
+            ".context-engine"
+        )
+    except ValueError:
+        raise ValueError(
+            "acceptance reports must be written under .context-engine"
+        ) from None
+    state_directory = Path(*output.parts[: state_index + 1]).resolve()
+    resolved_output = output.resolve()
+    if resolved_output == state_directory or not resolved_output.is_relative_to(
+        state_directory
+    ):
         raise ValueError("acceptance reports must be written under .context-engine")
     report = _acceptance_report(
         root,
@@ -338,8 +356,8 @@ def _write_acceptance_report(
         acceptance_context=acceptance_context,
     )
     serialized = json.dumps(report, sort_keys=True, separators=(",", ":")) + "\n"
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(serialized, encoding="utf-8")
+    resolved_output.parent.mkdir(parents=True, exist_ok=True)
+    resolved_output.write_text(serialized, encoding="utf-8")
     sys.stdout.write(serialized)
 
 
@@ -368,5 +386,12 @@ def main() -> None:
     raise SystemExit("one runner operation is required")
 
 
+def _privacy_safe_main() -> None:
+    try:
+        main()
+    except Exception:
+        raise SystemExit("compiler runner operation failed") from None
+
+
 if __name__ == "__main__":
-    main()
+    _privacy_safe_main()
