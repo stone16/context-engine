@@ -7,7 +7,7 @@ import json
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import StrEnum
-from typing import Protocol
+from typing import Final, Protocol
 from uuid import UUID
 
 from sqlalchemy import Connection
@@ -22,6 +22,72 @@ _MAX_EVIDENCE_BYTES = 1024 * 1024
 _MAX_METADATA_ITEMS = 128
 _MAX_REASON_LENGTH = 512
 _MAX_POLICY_EPOCH = (1 << 63) - 1
+
+DEFAULT_SUPPLY_EXECUTION_PAGE_LIMIT: Final = 1024
+MAX_SUPPLY_EXECUTION_PAGE_LIMIT: Final = 65536
+DEFAULT_SUPPLY_EXECUTION_CUMULATIVE_BYTE_LIMIT: Final = 16 * _MAX_STAGED_PAGE_BYTES
+MAX_SUPPLY_EXECUTION_CUMULATIVE_BYTE_LIMIT: Final = 256 * _MAX_STAGED_PAGE_BYTES
+DEFAULT_SUPPLY_EXECUTION_NO_PROGRESS_PAGE_LIMIT: Final = 3
+MAX_SUPPLY_EXECUTION_NO_PROGRESS_PAGE_LIMIT: Final = 64
+
+
+@dataclass(frozen=True, slots=True)
+class SupplyExecutionConfiguration:
+    """Validated finite limits for one connector execution."""
+
+    page_limit: int = DEFAULT_SUPPLY_EXECUTION_PAGE_LIMIT
+    cumulative_byte_limit: int = DEFAULT_SUPPLY_EXECUTION_CUMULATIVE_BYTE_LIMIT
+    no_progress_page_limit: int = DEFAULT_SUPPLY_EXECUTION_NO_PROGRESS_PAGE_LIMIT
+
+    def __post_init__(self) -> None:
+        _require_execution_limit(
+            "Supply execution page limit",
+            self.page_limit,
+            ceiling=MAX_SUPPLY_EXECUTION_PAGE_LIMIT,
+        )
+        _require_execution_limit(
+            "Supply execution cumulative byte limit",
+            self.cumulative_byte_limit,
+            ceiling=MAX_SUPPLY_EXECUTION_CUMULATIVE_BYTE_LIMIT,
+        )
+        _require_execution_limit(
+            "Supply execution no-progress page limit",
+            self.no_progress_page_limit,
+            ceiling=MAX_SUPPLY_EXECUTION_NO_PROGRESS_PAGE_LIMIT,
+        )
+
+
+def _require_execution_limit(field_name: str, value: object, *, ceiling: int) -> int:
+    if type(value) is not int or not 1 <= value <= ceiling:
+        raise ValueError(f"{field_name} is outside the closed bounds")
+    return value
+
+
+class SupplyExecutionBoundReason(StrEnum):
+    """Closed content-free reasons for refusing further connector work."""
+
+    PAGE_COUNT = "page_count"
+    PAGE_BYTES = "page_bytes"
+    CUMULATIVE_BYTES = "cumulative_bytes"
+    NO_PROGRESS = "no_progress"
+
+
+class SupplyExecutionBoundExceeded(RuntimeError):
+    """One finite execution bound was exceeded without accepting more content."""
+
+    __slots__ = ("reason",)
+
+    def __init__(self, reason: SupplyExecutionBoundReason) -> None:
+        if type(reason) is not SupplyExecutionBoundReason:
+            raise TypeError("Supply execution bound reason must be closed")
+        self.reason = reason
+        super().__init__(f"Supply execution bound exceeded: {reason.value}")
+
+
+class SupplyStagedPageByteLimitExceeded(ValueError):
+    """Canonical page bytes exceed the engine-owned staging ceiling."""
+
+    __slots__ = ()
 
 
 def _require_uuid(field_name: str, value: object) -> UUID:
@@ -407,11 +473,10 @@ def serialize_supply_change_page(page: SupplyChangePage) -> bytes:
         separators=(",", ":"),
         sort_keys=True,
     ).encode("ascii")
-    _require_bytes(
-        "serialized staged page",
-        payload,
-        maximum_length=_MAX_STAGED_PAGE_BYTES,
-    )
+    if len(payload) > _MAX_STAGED_PAGE_BYTES:
+        raise SupplyStagedPageByteLimitExceeded(
+            "serialized staged page exceeds its byte limit"
+        )
     return payload
 
 
@@ -535,6 +600,12 @@ __all__ = [
     "ConnectorFailureCategory",
     "ConnectorHeartbeat",
     "ConnectorOperationalSink",
+    "DEFAULT_SUPPLY_EXECUTION_CUMULATIVE_BYTE_LIMIT",
+    "DEFAULT_SUPPLY_EXECUTION_NO_PROGRESS_PAGE_LIMIT",
+    "DEFAULT_SUPPLY_EXECUTION_PAGE_LIMIT",
+    "MAX_SUPPLY_EXECUTION_CUMULATIVE_BYTE_LIMIT",
+    "MAX_SUPPLY_EXECUTION_NO_PROGRESS_PAGE_LIMIT",
+    "MAX_SUPPLY_EXECUTION_PAGE_LIMIT",
     "SourceAclEvidenceClass",
     "SourceAclObservation",
     "StagedArtifact",
@@ -543,5 +614,9 @@ __all__ = [
     "SupplyChangePage",
     "SupplyDocumentDeleteObservation",
     "SupplyDocumentEnvelope",
+    "SupplyExecutionBoundExceeded",
+    "SupplyExecutionBoundReason",
+    "SupplyExecutionConfiguration",
+    "SupplyStagedPageByteLimitExceeded",
     "serialize_supply_change_page",
 ]

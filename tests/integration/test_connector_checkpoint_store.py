@@ -11,6 +11,7 @@ import pytest
 from sqlalchemy import Connection, Engine, text
 from sqlalchemy.exc import ProgrammingError
 
+import engine.supply.execution as supply_execution_contracts
 from engine.persistence import (
     DatabaseConfiguration,
     PostgreSQLConnectorCheckpointStore,
@@ -35,6 +36,9 @@ from engine.supply.execution import (
     SupplyChangePage,
     SupplyDocumentDeleteObservation,
     SupplyDocumentEnvelope,
+    SupplyExecutionBoundExceeded,
+    SupplyExecutionBoundReason,
+    SupplyExecutionConfiguration,
     serialize_supply_change_page,
 )
 from engine.supply.jobs import WorkerLeaseClaims, WorkNotAvailable
@@ -87,6 +91,36 @@ class _TwoPageAdapter(ConnectorAdapter):
             page = self._ordered[prior_index + 1]
         self.emitted_pages.append(page)
         self.emitted_page_refs.append(page.page_ref)
+        return page
+
+
+class _EmptyNoProgressAdapter(ConnectorAdapter):
+    def __init__(self, binding: ConnectorCheckpointBinding) -> None:
+        self._binding = binding
+        self.loaded_checkpoints: list[bytes | None] = []
+        self.emitted_pages: list[SupplyChangePage] = []
+
+    def load_checkpoint(self, opaque_checkpoint: bytes | None) -> None:
+        self.loaded_checkpoints.append(opaque_checkpoint)
+
+    def load(self, binding: ConnectorCheckpointBinding) -> SupplyChangePage:
+        return self._emit(binding)
+
+    def poll(self, binding: ConnectorCheckpointBinding) -> SupplyChangePage:
+        return self._emit(binding)
+
+    def _emit(self, binding: ConnectorCheckpointBinding) -> SupplyChangePage:
+        assert binding == self._binding
+        ordinal = len(self.emitted_pages) + 1
+        page = SupplyChangePage(
+            binding=binding,
+            page_ref=f"empty-page:{ordinal}",
+            documents=(),
+            deleted_document_refs=(),
+            checkpoint_proposal=b"unchanged-empty-cursor",
+            terminal=False,
+        )
+        self.emitted_pages.append(page)
         return page
 
 
@@ -374,6 +408,7 @@ def _bridge(
     guarded_worker_engine: Engine,
     store: ConnectorCheckpointStore,
     staged_sink: StagedArtifactSink | None = None,
+    configuration: SupplyExecutionConfiguration | None = None,
 ) -> PostgreSQLSupplyExecutionBridge:
     claims = _claims(scenario)
     policy_epoch = claims.policy_epoch
@@ -396,6 +431,7 @@ def _bridge(
         ),
         store,
         staged_sink or PostgreSQLStagedArtifactSink(guarded_worker_engine),
+        configuration=configuration or SupplyExecutionConfiguration(),
     )
 
 
@@ -499,6 +535,248 @@ def test_checkpoint_advances_only_with_durably_accepted_change_pages(
             ).scalars().all() == ["page:1", "page:2"]
     finally:
         migration_engine.dispose()
+
+
+def test_page_bound_stops_before_polling_or_advancing_past_accepted_page(
+    scenarios: list[_Scenario],
+    migration_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+    guarded_worker_engine: Engine,
+) -> None:
+    scenario = _seed_scenario(migration_configuration, guarded_control_engine)
+    scenarios.append(scenario)
+    pages = (_page(scenario, 1, terminal=False), _page(scenario, 2, terminal=True))
+    adapter = _TwoPageAdapter(pages)
+    store = PostgreSQLConnectorCheckpointStore(guarded_worker_engine)
+    staged_sink = PostgreSQLStagedArtifactSink(guarded_worker_engine)
+
+    with pytest.raises(SupplyExecutionBoundExceeded) as caught:
+        _bridge(
+            scenario,
+            guarded_worker_engine,
+            store,
+            configuration=SupplyExecutionConfiguration(page_limit=1),
+        ).execute(scenario.execution, adapter)
+
+    _assert_content_free_bound_failure(
+        caught.value,
+        SupplyExecutionBoundReason.PAGE_COUNT,
+    )
+    assert adapter.emitted_page_refs == ["page:1"]
+    assert (
+        store.load(
+            scenario.execution.binding,
+            lease_claims=_claims(scenario),
+        )
+        == b"opaque-checkpoint-1"
+    )
+    assert (
+        staged_sink.load(
+            pages[1].binding,
+            pages[1].page_ref,
+            lease_claims=_claims(scenario),
+        )
+        is None
+    )
+
+
+def test_cumulative_byte_bound_refuses_page_before_acceptance_or_checkpoint_advance(
+    scenarios: list[_Scenario],
+    migration_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+    guarded_worker_engine: Engine,
+) -> None:
+    scenario = _seed_scenario(migration_configuration, guarded_control_engine)
+    scenarios.append(scenario)
+    pages = (_page(scenario, 1, terminal=False), _page(scenario, 2, terminal=True))
+    adapter = _TwoPageAdapter(pages)
+    store = PostgreSQLConnectorCheckpointStore(guarded_worker_engine)
+    staged_sink = PostgreSQLStagedArtifactSink(guarded_worker_engine)
+    first_page_bytes = len(serialize_supply_change_page(pages[0]))
+
+    with pytest.raises(SupplyExecutionBoundExceeded) as caught:
+        _bridge(
+            scenario,
+            guarded_worker_engine,
+            store,
+            configuration=SupplyExecutionConfiguration(
+                cumulative_byte_limit=first_page_bytes
+            ),
+        ).execute(scenario.execution, adapter)
+
+    _assert_content_free_bound_failure(
+        caught.value,
+        SupplyExecutionBoundReason.CUMULATIVE_BYTES,
+    )
+    assert adapter.emitted_page_refs == ["page:1", "page:2"]
+    assert (
+        store.load(
+            scenario.execution.binding,
+            lease_claims=_claims(scenario),
+        )
+        == b"opaque-checkpoint-1"
+    )
+    assert (
+        staged_sink.load(
+            pages[1].binding,
+            pages[1].page_ref,
+            lease_claims=_claims(scenario),
+        )
+        is None
+    )
+
+
+def test_staged_page_byte_bound_is_typed_and_has_zero_durable_effect(
+    scenarios: list[_Scenario],
+    migration_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+    guarded_worker_engine: Engine,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scenario = _seed_scenario(migration_configuration, guarded_control_engine)
+    scenarios.append(scenario)
+    page = _page(scenario, 1, terminal=True)
+    adapter = _TwoPageAdapter((page,))
+    store = PostgreSQLConnectorCheckpointStore(guarded_worker_engine)
+    staged_sink = PostgreSQLStagedArtifactSink(guarded_worker_engine)
+    page_byte_count = len(serialize_supply_change_page(page))
+    monkeypatch.setattr(
+        supply_execution_contracts,
+        "_MAX_STAGED_PAGE_BYTES",
+        page_byte_count - 1,
+    )
+
+    with pytest.raises(SupplyExecutionBoundExceeded) as caught:
+        _bridge(scenario, guarded_worker_engine, store).execute(
+            scenario.execution,
+            adapter,
+        )
+
+    _assert_content_free_bound_failure(
+        caught.value,
+        SupplyExecutionBoundReason.PAGE_BYTES,
+    )
+    assert adapter.emitted_page_refs == ["page:1"]
+    assert (
+        store.load(
+            scenario.execution.binding,
+            lease_claims=_claims(scenario),
+        )
+        is None
+    )
+    assert (
+        staged_sink.load(
+            page.binding,
+            page.page_ref,
+            lease_claims=_claims(scenario),
+        )
+        is None
+    )
+
+
+def test_repeating_empty_pages_without_cursor_progress_terminate_content_free(
+    scenarios: list[_Scenario],
+    migration_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+    guarded_worker_engine: Engine,
+) -> None:
+    scenario = _seed_scenario(migration_configuration, guarded_control_engine)
+    scenarios.append(scenario)
+    adapter = _EmptyNoProgressAdapter(scenario.execution.binding)
+    store = PostgreSQLConnectorCheckpointStore(guarded_worker_engine)
+    staged_sink = PostgreSQLStagedArtifactSink(guarded_worker_engine)
+
+    with pytest.raises(SupplyExecutionBoundExceeded) as caught:
+        _bridge(
+            scenario,
+            guarded_worker_engine,
+            store,
+            configuration=SupplyExecutionConfiguration(
+                page_limit=8,
+                no_progress_page_limit=1,
+            ),
+        ).execute(scenario.execution, adapter)
+
+    _assert_content_free_bound_failure(
+        caught.value,
+        SupplyExecutionBoundReason.NO_PROGRESS,
+    )
+    assert [page.page_ref for page in adapter.emitted_pages] == [
+        "empty-page:1",
+        "empty-page:2",
+        "empty-page:3",
+    ]
+    assert (
+        store.load(
+            scenario.execution.binding,
+            lease_claims=_claims(scenario),
+        )
+        == b"unchanged-empty-cursor"
+    )
+    assert (
+        staged_sink.load(
+            scenario.execution.binding,
+            "empty-page:2",
+            lease_claims=_claims(scenario),
+        )
+        is not None
+    )
+    assert (
+        staged_sink.load(
+            scenario.execution.binding,
+            "empty-page:3",
+            lease_claims=_claims(scenario),
+        )
+        is None
+    )
+
+
+def test_empty_terminal_page_is_success_not_a_bound_failure(
+    scenarios: list[_Scenario],
+    migration_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+    guarded_worker_engine: Engine,
+) -> None:
+    scenario = _seed_scenario(migration_configuration, guarded_control_engine)
+    scenarios.append(scenario)
+    terminal_page = SupplyChangePage(
+        binding=scenario.execution.binding,
+        page_ref="empty-terminal-page",
+        documents=(),
+        deleted_document_refs=(),
+        checkpoint_proposal=b"terminal-cursor",
+        terminal=True,
+    )
+    store = PostgreSQLConnectorCheckpointStore(guarded_worker_engine)
+
+    result = _bridge(
+        scenario,
+        guarded_worker_engine,
+        store,
+        configuration=SupplyExecutionConfiguration(
+            page_limit=1,
+            no_progress_page_limit=1,
+        ),
+    ).execute(scenario.execution, _TwoPageAdapter((terminal_page,)))
+
+    assert result.accepted_page_refs == ("empty-terminal-page",)
+    assert (
+        store.load(
+            scenario.execution.binding,
+            lease_claims=_claims(scenario),
+        )
+        == b"terminal-cursor"
+    )
+
+
+def _assert_content_free_bound_failure(
+    failure: SupplyExecutionBoundExceeded,
+    reason: SupplyExecutionBoundReason,
+) -> None:
+    assert failure.reason is reason
+    assert failure.args == (f"Supply execution bound exceeded: {reason.value}",)
+    assert failure.__dict__ == {}
+    assert "Synthetic page" not in repr(failure)
 
 
 def test_staged_payload_round_trip_preserves_every_emitted_page_fact(
@@ -717,11 +995,19 @@ def test_atomic_acceptance_refuses_payload_outside_the_exact_binding(
     )
 
 
+@pytest.mark.parametrize(
+    "observation_path",
+    [
+        ("documents", 0, "acl_observation"),
+        ("deleted_document_refs", 0, "acl_observation"),
+    ],
+)
 def test_atomic_acceptance_refuses_unjustified_weak_acl_payload(
     scenarios: list[_Scenario],
     migration_configuration: DatabaseConfiguration,
     guarded_control_engine: Engine,
     guarded_worker_engine: Engine,
+    observation_path: tuple[str | int, ...],
 ) -> None:
     scenario = _seed_scenario(migration_configuration, guarded_control_engine)
     scenarios.append(scenario)
@@ -730,7 +1016,9 @@ def test_atomic_acceptance_refuses_unjustified_weak_acl_payload(
     store = PostgreSQLConnectorCheckpointStore(guarded_worker_engine)
     assert store.redeem_for_execution(page.binding, lease_claims=claims) is None
     payload = json.loads(serialize_supply_change_page(page))
-    observation = payload["documents"][0]["acl_observation"]
+    observation = payload
+    for path_element in observation_path:
+        observation = observation[path_element]
     observation["evidence_class"] = "weak"
     observation["evidence_payload"] = None
     observation["source_lacks_stronger_acl"] = None
@@ -777,6 +1065,15 @@ def test_atomic_acceptance_refuses_unjustified_weak_acl_payload(
         ).one_or_none()
 
     assert row is None
+    assert store.load(page.binding, lease_claims=claims) is None
+    assert (
+        PostgreSQLStagedArtifactSink(guarded_worker_engine).load(
+            page.binding,
+            page.page_ref,
+            lease_claims=claims,
+        )
+        is None
+    )
 
 
 def test_checkpoint_comes_only_from_page_and_no_stage_mutator_exists(

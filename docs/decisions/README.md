@@ -190,3 +190,4 @@ touched:
 - [0082 — Recover the golden corpus and refuse stale lineage](0082-recover-the-golden-corpus-and-refuse-stale-lineage.md)
 - [0083 — Bound candidate submission and weight fusion after authorization](0083-bound-candidate-submission-and-weight-fusion-after-authorization.md)
 - [0084 — Exempt maintainer-decided unproduced artifact kinds](0084-exempt-maintainer-decided-unproduced-artifact-kinds.md)
+- [0085 — Bound Supply connector executions before acceptance](0085-bound-supply-connector-executions.md)
