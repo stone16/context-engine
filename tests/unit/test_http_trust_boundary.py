@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 from pydantic import BaseModel
 
 import adapters.http.app as http_app_module
+from adapters.exact_phrase import PostgreSQLExactPhraseCandidateIndex
 from adapters.http.app import create_app
 from adapters.http.authentication import (
     AuthenticationRejected,
@@ -42,6 +43,7 @@ from engine.runtime.actor import (
     _construct_current_membership_verification,
     _open_membership_authority_scope,
 )
+from engine.runtime.candidate_ranking import CandidateQuery, RankedCandidateList
 from engine.runtime.construction import required_kernel_dependencies
 from engine.runtime.content_io import RuntimeContentIo
 from engine.runtime.contracts import Acquire
@@ -62,6 +64,7 @@ from engine.runtime.egress import (
     _construct_egress_grant_issuance_session,
     _open_egress_grant_issuance_scope,
 )
+from engine.runtime.materialized import ExactPhraseDiscoveryRequest
 from engine.runtime.organization import (
     ExistingOrganizationVerification,
     OrganizationVerificationProvenance,
@@ -313,16 +316,29 @@ class DownstreamContentIoSpy:
         self.provider_calls = 0
         self.source_content_calls = 0
 
+    def prepare_discovery(
+        self,
+        request: Acquire,
+        *,
+        effective_scope: Any,
+    ) -> ExactPhraseDiscoveryRequest:
+        return PostgreSQLExactPhraseCandidateIndex().prepare_discovery(
+            request,
+            effective_scope=effective_scope,
+        )
+
     def discover(
         self,
         request: Acquire,
         projection_session: object,
         *,
         effective_scope: Any,
-    ) -> tuple[()]:
+    ) -> CandidateQuery:
         del request, projection_session, effective_scope
         self.index_calls += 1
-        return ()
+        return CandidateQuery(
+            ranked_lists=(RankedCandidateList(ranker_ref="test", candidates=()),)
+        )
 
     def authorize_and_project(self) -> tuple[()]:
         self.provider_calls += 1

@@ -14,6 +14,7 @@ dependencies = [
   "alembic>=1.16,<1.17",
   "cryptography>=49,<50",
   "fastapi>=0.116,<0.117",
+  "jsonschema>=4.25,<5",
   "pydantic>=2.13,<2.14",
   "psycopg[binary]>=3.2,<3.3",
   "rfc8785>=0.1.4,<0.2",
@@ -29,6 +30,7 @@ dev = [
   "mypy>=1.17,<1.18",
   "pytest>=8.4,<8.5",
   "ruff>=0.12,<0.13",
+  "types-jsonschema>=4.25,<5",
 ]
 
 [project.scripts]
@@ -36,10 +38,22 @@ context-engine-api = "applications.api:main"
 context-engine-control = "applications.control:main"
 context-engine-dogfood-seed = "applications.dogfood:main"
 context-engine-dogfood-eval = "applications.dogfood_evaluation:main"
+context-engine-embedding-benchmark = "applications.embedding_benchmark:main"
+context-engine-eval = "applications.eval_v1:main"
 context-engine-worker = "applications.worker:main"
 
+[project.optional-dependencies]
+benchmark = [
+    "sentence-transformers>=5,<6",
+]
+
 [tool.hatch.build.targets.wheel]
-packages = ["engine", "adapters", "applications", "migrations"]
+packages = ["engine", "adapters", "applications", "eval", "migrations"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"eval/golden/v1/schema.json" = "eval/golden/v1/schema.json"
+"eval/public-subset-governance.json" = "eval/public-subset-governance.json"
+"eval/thresholds/v1.json" = "eval/thresholds/v1.json"
 
 [tool.mypy]
 python_version = "3.13"
@@ -48,6 +62,7 @@ files = [
   "engine",
   "adapters",
   "applications",
+  "eval",
   "migrations",
   "scripts/provision_database_roles.py",
   "scripts/wait_for_database.py",

@@ -1,0 +1,8 @@
+{
+  "models": {
+    "baseline": "pending_corpus",
+    "primary": "pending_corpus"
+  },
+  "result": "pending_corpus",
+  "schemaVersion": "context-engine-embedding-benchmark-frozen-result-v1"
+}

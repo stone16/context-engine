@@ -8,11 +8,13 @@ from uuid import UUID
 
 import pytest
 
+from adapters.exact_phrase import PostgreSQLExactPhraseCandidateIndex
 from engine.runtime.actor import (
     _close_membership_authority_scope,
     _construct_current_membership_verification,
     _open_membership_authority_scope,
 )
+from engine.runtime.candidate_ranking import CandidateQuery, RankedCandidateList
 from engine.runtime.construction import Runtime, required_kernel_dependencies
 from engine.runtime.content_io import RuntimeContentIo
 from engine.runtime.contracts import Acquire, ContextNeed, RequestNarrowing, Resolved
@@ -24,6 +26,7 @@ from engine.runtime.invocation import (
     AuthenticatedInvocation,
     _construct_authenticated_http_invocation,
 )
+from engine.runtime.materialized import ExactPhraseDiscoveryRequest
 from engine.runtime.organization import (
     _construct_existing_http_organization_verification,
 )
@@ -64,16 +67,29 @@ class ContentIoSpy:
     def __init__(self) -> None:
         self.calls = 0
 
+    def prepare_discovery(
+        self,
+        request: Acquire,
+        *,
+        effective_scope: object,
+    ) -> ExactPhraseDiscoveryRequest:
+        return PostgreSQLExactPhraseCandidateIndex().prepare_discovery(
+            request,
+            effective_scope=effective_scope,  # type: ignore[arg-type]
+        )
+
     def discover(
         self,
         request: Acquire,
         projection_session: object,
         *,
         effective_scope: object,
-    ) -> tuple[()]:
+    ) -> CandidateQuery:
         del request, projection_session, effective_scope
         self.calls += 1
-        return ()
+        return CandidateQuery(
+            ranked_lists=(RankedCandidateList(ranker_ref="test", candidates=()),)
+        )
 
     def authorize_and_project(self) -> tuple[()]:
         self.calls += 1

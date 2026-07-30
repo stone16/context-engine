@@ -43,7 +43,7 @@ from engine.runtime.release_lineage import (
     RUNTIME_TOKENIZER_REF_V0,
     public_release_manifest_ref,
 )
-from engine.runtime.scope import EffectiveScope, ScopeTarget
+from engine.runtime.scope import ScopeTarget
 
 CHECKED_AT = datetime(2026, 7, 21, 8, 0, tzinfo=UTC)
 
@@ -369,16 +369,14 @@ def test_postgres_vector_discovery_uses_one_content_free_bounded_ann_query() -> 
         1,
         ("source:vector",),
         ("resource:vector",),
-        EffectiveScope(
-            frozenset(
-                {
-                    ScopeTarget(
-                        organization_id,
-                        "source:vector",
-                        "resource:vector",
-                    )
-                }
-            )
+        frozenset(
+            {
+                ScopeTarget(
+                    organization_id,
+                    "source:vector",
+                    "resource:vector",
+                )
+            }
         ),
     )
 
@@ -444,16 +442,14 @@ def test_postgres_vector_discovery_rejects_invalid_revision_lineage() -> None:
             1,
             None,
             None,
-            EffectiveScope(
-                frozenset(
-                    {
-                        ScopeTarget(
-                            identity().organization_id,
-                            "source:vector",
-                            "resource:vector",
-                        )
-                    }
-                )
+            frozenset(
+                {
+                    ScopeTarget(
+                        identity().organization_id,
+                        "source:vector",
+                        "resource:vector",
+                    )
+                }
             ),
         )
 
