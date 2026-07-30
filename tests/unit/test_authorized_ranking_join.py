@@ -105,6 +105,37 @@ def test_join_uses_exact_ref_discards_refused_and_assigns_neutral_rank() -> None
         assert "refused" not in repr(joined)
 
 
+def test_join_discards_refused_ranker_payload_without_reading_it() -> None:
+    """Only the exact ref may be read to discard a refused evidence record."""
+
+    allowed = _candidate("allowed")
+    refused = _candidate("refused")
+    refused_evidence = _rank(refused, 1)
+
+    class _UnreadableRankerPayload:
+        def __iter__(self) -> Iterator[RankerEvidence]:
+            raise AssertionError("refused per-ranker evidence was read")
+
+        def __repr__(self) -> str:
+            raise AssertionError("refused per-ranker evidence was rendered")
+
+    object.__setattr__(
+        refused_evidence,
+        "per_ranker",
+        cast("tuple[RankerEvidence, ...]", _UnreadableRankerPayload()),
+    )
+
+    with _projections(allowed) as projections:
+        joined = join_authorized_ranking(
+            projections,
+            (refused_evidence, _rank(allowed, 1)),
+        )
+
+        assert tuple(item.projection.candidate_ref for item in joined) == (allowed,)
+        assert joined[0].rank_evidence is not None
+        assert joined[0].rank_evidence.candidate_ref == allowed
+
+
 def test_join_refuses_mismatched_or_duplicate_exact_ref_evidence() -> None:
     allowed = _candidate("allowed")
     same_fragment_other_article = CandidateRef(
@@ -205,10 +236,7 @@ def test_tied_ranker_positions_have_a_stable_total_order() -> None:
         with _projections(*input_order) as projections:
             joined = join_authorized_ranking(projections, tied_evidence)
             observed_orders.append(
-                tuple(
-                    item.projection.candidate_ref
-                    for item in sorted(joined, key=lambda item: item.fused_rank)
-                )
+                tuple(item.projection.candidate_ref for item in joined)
             )
 
     assert (
@@ -349,10 +377,50 @@ def test_pre_kernel_fused_rank_cannot_influence_delivered_order() -> None:
     with _projections(first_by_position, second_by_position) as projections:
         joined = join_authorized_ranking(projections, inverted_pre_kernel_rank)
 
-        assert tuple(
-            item.projection.candidate_ref
-            for item in sorted(joined, key=lambda item: item.fused_rank)
-        ) == (first_by_position, second_by_position)
+        assert tuple(item.projection.candidate_ref for item in joined) == (
+            first_by_position,
+            second_by_position,
+        )
+
+
+def test_join_output_is_the_single_downstream_source_of_order() -> None:
+    """The post-projection stage, not a later consumer, owns retrieval order."""
+
+    ranked_first = _candidate("z-ranked-first")
+    ranked_second = _candidate("a-ranked-second")
+    evidence = (
+        _rank(ranked_first, 1),
+        _rank(ranked_second, 2),
+    )
+
+    with _projections(ranked_second, ranked_first) as projections:
+        joined = join_authorized_ranking(projections, evidence)
+
+        assert tuple(item.projection.candidate_ref for item in joined) == (
+            ranked_first,
+            ranked_second,
+        )
+
+
+def test_budget_packing_preserves_the_authorized_stage_order() -> None:
+    """Selection consumes the stage order instead of deriving another one."""
+
+    ranked_first = _candidate("ranked-first")
+    ranked_second = _candidate("ranked-second")
+    budget = PackageBudget(
+        max_tokens=100,
+        max_provider_calls=1,
+        max_cost_microunits=1,
+        max_elapsed_ms=1,
+    )
+    with _projections(ranked_first, ranked_second) as projections:
+        joined = join_authorized_ranking(
+            projections,
+            (_rank(ranked_first, 1), _rank(ranked_second, 2)),
+        )
+        supplied_order = tuple(reversed(joined))
+
+        assert select_authorized_ranking(supplied_order, budget) == supplied_order
 
 
 def test_authorized_fusion_weights_reorder_only_admitted_candidates() -> None:
@@ -374,10 +442,7 @@ def test_authorized_fusion_weights_reorder_only_admitted_candidates() -> None:
                 evidence,
                 ranker_weights=dict(weights) or None,
             )
-            return tuple(
-                item.projection.candidate_ref
-                for item in sorted(joined, key=lambda item: item.fused_rank)
-            )
+            return tuple(item.projection.candidate_ref for item in joined)
 
     assert _order() == (lexical_favoured, vector_favoured)
     assert _order(lexical=1.0, vector=1.0) == (lexical_favoured, vector_favoured)

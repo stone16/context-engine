@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -60,6 +61,45 @@ def test_hybrid_http_keeps_raw_candidates_before_the_kernel(
     monkeypatch.setattr(AuthorizedRerankItem, "__init__", observe)
     try:
         _seed_fixture(migration_engine, fixture)
+        active = fixture.org_a
+        first_body = f"{active.authorized_body} {active.authorized_body}"
+        second_body = active.authorized_body
+        second_admitted = CandidateRef(
+            organization_id=active.authorized.organization_id,
+            source_ref=active.authorized.source_ref,
+            resource_ref=active.authorized.resource_ref,
+            revision_ref=active.authorized.revision_ref,
+            fragment_ref=f"fragment:000-ranked-second:{uuid4()}",
+        )
+        with migration_engine.begin() as connection:
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO context_fragment (
+                        organization_id,
+                        resource_ref,
+                        revision_id,
+                        fragment_ref,
+                        ordinal,
+                        content
+                    ) VALUES (
+                        :organization_id,
+                        :resource_ref,
+                        :revision_id,
+                        :fragment_ref,
+                        1,
+                        :content
+                    )
+                    """
+                ),
+                {
+                    "organization_id": second_admitted.organization_id,
+                    "resource_ref": second_admitted.resource_ref,
+                    "revision_id": UUID(second_admitted.revision_ref),
+                    "fragment_ref": second_admitted.fragment_ref,
+                    "content": second_body,
+                },
+            )
         with migration_engine.begin() as connection:
             connection.execute(
                 text(
@@ -69,24 +109,30 @@ def test_hybrid_http_keeps_raw_candidates_before_the_kernel(
             )
         try:
             with migration_engine.begin() as connection:
-                embedding = DeterministicEmbeddingTwin().embed(
-                    (fixture.org_a.authorized_body,)
-                )[0]
-                connection.execute(
-                    text(
-                        "UPDATE context_fragment "
-                        "SET embedding = CAST(:embedding AS vector) "
-                        "WHERE organization_id = :organization_id "
-                        "AND resource_ref = :resource_ref"
-                    ),
-                    {
-                        "embedding": "["
-                        + ",".join(repr(item) for item in embedding)
-                        + "]",
-                        "organization_id": fixture.org_a.organization_id,
-                        "resource_ref": fixture.org_a.authorized.resource_ref,
-                    },
-                )
+                for fragment_ref, body in (
+                    (active.authorized.fragment_ref, first_body),
+                    (second_admitted.fragment_ref, second_body),
+                ):
+                    embedding = DeterministicEmbeddingTwin().embed((body,))[0]
+                    connection.execute(
+                        text(
+                            "UPDATE context_fragment "
+                            "SET content = :content, "
+                            "embedding = CAST(:embedding AS vector) "
+                            "WHERE organization_id = :organization_id "
+                            "AND resource_ref = :resource_ref "
+                            "AND fragment_ref = :fragment_ref"
+                        ),
+                        {
+                            "embedding": "["
+                            + ",".join(repr(item) for item in embedding)
+                            + "]",
+                            "content": body,
+                            "organization_id": active.organization_id,
+                            "resource_ref": active.authorized.resource_ref,
+                            "fragment_ref": fragment_ref,
+                        },
+                    )
         finally:
             with migration_engine.begin() as connection:
                 connection.execute(
@@ -106,7 +152,6 @@ def test_hybrid_http_keeps_raw_candidates_before_the_kernel(
             clock=lambda: RECEIVED_AT,
             query_digest_keyring=query_digest_keyring,
         )
-        active = fixture.org_a
         client = TestClient(
             create_app(
                 authenticator=SeededAuthenticator(active, token="hybrid-token"),
@@ -130,20 +175,27 @@ def test_hybrid_http_keeps_raw_candidates_before_the_kernel(
             },
             json={
                 "kind": "acquire",
-                "need": {"query": active.authorized_body},
+                "need": {"query": first_body},
             },
         )
 
         assert response.status_code == 200
         assert [item["text"] for item in response.json()["package"]["blocks"]] == [
-            active.authorized_body
+            first_body,
+            second_body,
         ]
-        assert len(consumed) == 1
-        assert consumed[0].projection.candidate_ref == active.authorized
-        assert tuple(
-            item.ranker_ref
-            for item in consumed[0].rank_evidence.per_ranker  # type: ignore[union-attr]
-        ) == ("fts", "vector")
+        assert tuple(item.projection.candidate_ref for item in consumed) == (
+            second_admitted,
+            active.authorized,
+        )
+        assert all(
+            tuple(
+                ranker.ranker_ref
+                for ranker in item.rank_evidence.per_ranker  # type: ignore[union-attr]
+            )
+            == ("fts", "vector")
+            for item in consumed
+        )
         record_property("hybrid_candidate_kernel_projection", "PASS")
     finally:
         _cleanup_fixture(migration_engine, fixture)
