@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import hmac
 from collections.abc import Callable
 from datetime import datetime
 from typing import Protocol, cast
+from uuid import UUID
 
 from engine.control.article_access_policy import (
     SetSourceArticlePolicyDefault,
@@ -16,6 +18,14 @@ from engine.control.authority import (
     ControlOperatorAuthority,
     TrustedControlCall,
     _validate_and_consume_control_call,
+)
+from engine.control.bulk_article_policy import (
+    BulkArticlePolicyChange,
+    BulkArticlePolicyCommit,
+    BulkArticlePolicyConfirmation,
+    BulkArticlePolicyPreview,
+    BulkArticlePolicyResult,
+    _issue_bulk_article_policy_commit,
 )
 from engine.control.contracts import (
     ActivateFileChangeFeed,
@@ -163,12 +173,28 @@ class ArticlePolicyDefaultStorePort(Protocol):
     ) -> int: ...
 
 
+class BulkArticlePolicyStorePort(Protocol):
+    """Sole preview/commit persistence capability for historical policies."""
+
+    def preview_bulk_article_policy_change(
+        self,
+        organization_id: UUID,
+        command: BulkArticlePolicyChange,
+    ) -> BulkArticlePolicyPreview: ...
+
+    def change_access(
+        self,
+        command: BulkArticlePolicyCommit,
+    ) -> BulkArticlePolicyResult: ...
+
+
 class ContextControl:
     """Own trusted File enrollment, read-back, and import preparation."""
 
     __slots__ = (
         "_article_policy_store",
         "_authority",
+        "_bulk_article_policy_store",
         "_clock",
         "_file_change_proofs",
         "_store",
@@ -182,6 +208,7 @@ class ContextControl:
         clock: Callable[[], datetime],
         file_change_proofs: FileChangeControlProofs | None = None,
         article_policy_store: ArticlePolicyDefaultStorePort | None = None,
+        bulk_article_policy_store: BulkArticlePolicyStorePort | None = None,
     ) -> None:
         required_methods = [
             "activate_file_change_feed",
@@ -222,11 +249,97 @@ class ContextControl:
             ):
                 if not callable(getattr(article_policy_store, method_name, None)):
                     raise TypeError("Article policy default store is incomplete")
+        if bulk_article_policy_store is not None:
+            for method_name in (
+                "change_access",
+                "preview_bulk_article_policy_change",
+            ):
+                if not callable(getattr(bulk_article_policy_store, method_name, None)):
+                    raise TypeError("bulk Article policy store is incomplete")
         self._store = store
         self._article_policy_store = article_policy_store
+        self._bulk_article_policy_store = bulk_article_policy_store
         self._authority = authority
         self._clock = clock
         self._file_change_proofs = file_change_proofs
+
+    def preview_bulk_article_policy_change(
+        self,
+        call: TrustedControlCall,
+        command: BulkArticlePolicyChange,
+    ) -> BulkArticlePolicyPreview:
+        if type(command) is not BulkArticlePolicyChange:
+            raise TypeError("bulk Article preview requires its exact command")
+        command.__post_init__()
+        self._consume_article_policy_call(
+            call, ControlOperation.PREVIEW_BULK_ARTICLE_POLICY_CHANGE
+        )
+        store = self._bulk_article_policy_store
+        if store is None:
+            raise SourceControlUnavailable("bulk Article policy is unavailable")
+        result = self._invoke_article_policy_store(
+            lambda: store.preview_bulk_article_policy_change(
+                call.organization_id, command
+            )
+        )
+        if type(result) is not BulkArticlePolicyPreview:
+            raise SourceControlUnavailable("bulk Article preview was not produced")
+        result.__post_init__()
+        if result.organization_id != call.organization_id:
+            raise SourceControlUnavailable("bulk Article preview was not produced")
+        return result
+
+    def commit_bulk_article_policy_change(
+        self,
+        call: TrustedControlCall,
+        command: BulkArticlePolicyChange,
+        confirmation: BulkArticlePolicyConfirmation,
+    ) -> BulkArticlePolicyResult:
+        if (
+            type(command) is not BulkArticlePolicyChange
+            or type(confirmation) is not BulkArticlePolicyConfirmation
+        ):
+            raise TypeError("bulk Article commit requires command and confirmation")
+        command.__post_init__()
+        confirmation.__post_init__()
+        self._consume_article_policy_call(
+            call, ControlOperation.COMMIT_BULK_ARTICLE_POLICY_CHANGE
+        )
+        store = self._bulk_article_policy_store
+        if store is None:
+            raise SourceControlUnavailable("bulk Article policy is unavailable")
+        preview = self._invoke_article_policy_store(
+            lambda: store.preview_bulk_article_policy_change(
+                call.organization_id, command
+            )
+        )
+        if type(preview) is not BulkArticlePolicyPreview:
+            raise SourceControlUnavailable("bulk Article preview was not produced")
+        preview.__post_init__()
+        if (
+            preview.organization_id != call.organization_id
+            or not hmac.compare_digest(
+                preview.digest, confirmation.preview_digest
+            )
+        ):
+            raise SourceNotAvailable
+        commit = _issue_bulk_article_policy_commit(
+            organization_id=call.organization_id,
+            preview=preview,
+            operator_ref=call.operator_ref,
+            authority_ref=call.authority_ref,
+            request_id=call.request_id,
+        )
+        try:
+            result = self._invoke_article_policy_store(
+                lambda: store.change_access(commit)
+            )
+        finally:
+            object.__setattr__(commit, "_seal", b"")
+        if type(result) is not BulkArticlePolicyResult:
+            raise SourceControlUnavailable("bulk Article policy was not changed")
+        result.__post_init__()
+        return result
 
     def set_tenant_article_policy_default(
         self,

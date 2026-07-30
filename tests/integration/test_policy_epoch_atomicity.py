@@ -5,12 +5,19 @@ from datetime import timedelta
 from pathlib import Path
 from threading import Event, Lock
 from time import monotonic, sleep
+from uuid import UUID
 
 import pytest
 from sqlalchemy import Engine, text
 
+from engine.article_access_policy import (
+    ArticleAccessPolicyKind,
+    ArticleAccessPolicySetting,
+)
 from engine.control import (
     ActivateFileChangeFeed,
+    BulkArticlePolicyChange,
+    BulkArticlePolicyConfirmation,
     ContextControl,
     ControlOperation,
     ControlOperatorAuthority,
@@ -308,6 +315,235 @@ def test_source_version_activation_invalidates_an_inflight_article_delivery(
         assert read_count == 3
     finally:
         release_final_gate.set()
+        with engine.begin() as connection:
+            connection.execute(
+                text("DELETE FROM decision_audit WHERE organization_id = :org"),
+                {"org": scenario.organization_id},
+            )
+            connection.execute(
+                text("DELETE FROM context_run WHERE organization_id = :org"),
+                {"org": scenario.organization_id},
+            )
+        clear_test_runtime_release(scenario.organization_id)
+        engine.dispose()
+        delete_file_import_scenario(migration_configuration, scenario.organization_id)
+
+
+def test_bulk_policy_change_vetoes_an_inflight_stale_article_delivery(
+    tmp_path: Path,
+    migration_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+    guarded_worker_engine: Engine,
+    guarded_runtime_engine: Engine,
+    query_digest_keyring: QueryDigestKeyring,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A pre-change Article decision cannot pass the final epoch gate."""
+
+    scenario, resource_ref = _published_file(
+        tmp_path,
+        migration_configuration,
+        guarded_control_engine,
+        guarded_worker_engine,
+    )
+    engine = create_database_engine(migration_configuration)
+    final_gate = Event()
+    release_final_gate = Event()
+    read_lock = Lock()
+    read_count = 0
+    original_read = (
+        membership_context_module._PostgreSQLPolicyEpochPort.read_current_epoch
+    )
+
+    def block_final_epoch_read(
+        port: membership_context_module._PostgreSQLPolicyEpochPort,
+        organization_id: UUID,
+    ) -> object:
+        nonlocal read_count
+        with read_lock:
+            read_count += 1
+            current_read = read_count
+        if current_read == 3:
+            final_gate.set()
+            if not release_final_gate.wait(timeout=10):
+                raise RuntimeError("final Policy Epoch read was not released")
+        return original_read(port, organization_id)
+
+    monkeypatch.setattr(
+        membership_context_module._PostgreSQLPolicyEpochPort,
+        "read_current_epoch",
+        block_final_epoch_read,
+    )
+    try:
+        with engine.connect() as connection:
+            user_id = connection.execute(
+                text(
+                    "SELECT user_id FROM membership WHERE organization_id = :org "
+                    "AND membership_id = :membership"
+                ),
+                {"org": scenario.organization_id, "membership": scenario.membership_id},
+            ).scalar_one()
+        policy_store = PostgreSQLAccessPolicyControl(guarded_control_engine)
+        authority = ControlOperatorAuthority(
+            ControlAuthenticator(scenario.organization_id),
+            call_ttl=timedelta(minutes=5),
+            clock=lambda: NOW,
+        )
+        control = ContextControl(
+            store=PostgreSQLControlStore(guarded_control_engine, clock=lambda: NOW),
+            bulk_article_policy_store=policy_store,
+            authority=authority,
+            clock=lambda: NOW,
+        )
+        command = BulkArticlePolicyChange(
+            (resource_ref,),
+            ArticleAccessPolicySetting(ArticleAccessPolicyKind.PRIVATE),
+        )
+        with authority.authorize(
+            opaque_credential="control-secret",
+            operation=ControlOperation.PREVIEW_BULK_ARTICLE_POLICY_CHANGE,
+            request_id="bulk-policy-mid-resolve-preview",
+        ) as call:
+            preview = control.preview_bulk_article_policy_change(call, command)
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            pending = executor.submit(
+                _resolve_file,
+                scenario,
+                guarded_runtime_engine,
+                query_digest_keyring,
+                user_id=user_id,
+                query="ContextEngine delivers context.",
+                request_id="bulk-policy-mid-resolve",
+            )
+            assert final_gate.wait(timeout=10)
+            with authority.authorize(
+                opaque_credential="control-secret",
+                operation=ControlOperation.COMMIT_BULK_ARTICLE_POLICY_CHANGE,
+                request_id="bulk-policy-mid-resolve-commit",
+            ) as call:
+                result = control.commit_bulk_article_policy_change(
+                    call,
+                    command,
+                    BulkArticlePolicyConfirmation(preview.digest),
+                )
+            assert result.policy_epoch == 2
+            release_final_gate.set()
+            package = pending.result(timeout=10)
+
+        assert package["blocks"] == []
+        assert package["evidence"] == []
+        assert package["coverage"] == {
+            "status": "empty",
+            "reason": "no_authorized_evidence",
+        }
+        assert read_count == 3
+    finally:
+        release_final_gate.set()
+        with engine.begin() as connection:
+            connection.execute(
+                text("DELETE FROM decision_audit WHERE organization_id = :org"),
+                {"org": scenario.organization_id},
+            )
+            connection.execute(
+                text("DELETE FROM context_run WHERE organization_id = :org"),
+                {"org": scenario.organization_id},
+            )
+        clear_test_runtime_release(scenario.organization_id)
+        engine.dispose()
+        delete_file_import_scenario(migration_configuration, scenario.organization_id)
+
+
+def test_first_resolve_after_bulk_commit_observes_the_new_article_policy(
+    tmp_path: Path,
+    migration_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+    guarded_worker_engine: Engine,
+    guarded_runtime_engine: Engine,
+    query_digest_keyring: QueryDigestKeyring,
+) -> None:
+    """The first post-commit HTTP resolve authorizes from the new policy."""
+
+    scenario, resource_ref = _published_file(
+        tmp_path,
+        migration_configuration,
+        guarded_control_engine,
+        guarded_worker_engine,
+    )
+    engine = create_database_engine(migration_configuration)
+    try:
+        with engine.begin() as connection:
+            user_id = connection.execute(
+                text(
+                    "SELECT user_id FROM membership WHERE organization_id = :org "
+                    "AND membership_id = :membership"
+                ),
+                {"org": scenario.organization_id, "membership": scenario.membership_id},
+            ).scalar_one()
+            connection.execute(
+                text(
+                    """
+                    UPDATE article_source_acl_observation
+                    SET policy_kind = 'organization', group_refs = ARRAY[]::text[],
+                        observation_version = observation_version + 1
+                    WHERE organization_id = :org AND resource_ref = :resource
+                    """
+                ),
+                {"org": scenario.organization_id, "resource": resource_ref},
+            )
+            connection.execute(
+                text(
+                    "DELETE FROM resource_access_policy "
+                    "WHERE organization_id = :org AND resource_ref = :resource"
+                ),
+                {"org": scenario.organization_id, "resource": resource_ref},
+            )
+
+        policy_store = PostgreSQLAccessPolicyControl(guarded_control_engine)
+        authority = ControlOperatorAuthority(
+            ControlAuthenticator(scenario.organization_id),
+            call_ttl=timedelta(minutes=5),
+            clock=lambda: NOW,
+        )
+        control = ContextControl(
+            store=PostgreSQLControlStore(guarded_control_engine, clock=lambda: NOW),
+            bulk_article_policy_store=policy_store,
+            authority=authority,
+            clock=lambda: NOW,
+        )
+        command = BulkArticlePolicyChange(
+            (resource_ref,),
+            ArticleAccessPolicySetting(ArticleAccessPolicyKind.ORGANIZATION),
+        )
+        with authority.authorize(
+            opaque_credential="control-secret",
+            operation=ControlOperation.PREVIEW_BULK_ARTICLE_POLICY_CHANGE,
+            request_id="post-commit-resolve-preview",
+        ) as call:
+            preview = control.preview_bulk_article_policy_change(call, command)
+        with authority.authorize(
+            opaque_credential="control-secret",
+            operation=ControlOperation.COMMIT_BULK_ARTICLE_POLICY_CHANGE,
+            request_id="post-commit-resolve-confirm",
+        ) as call:
+            control.commit_bulk_article_policy_change(
+                call,
+                command,
+                BulkArticlePolicyConfirmation(preview.digest),
+            )
+
+        package = _resolve_file(
+            scenario,
+            guarded_runtime_engine,
+            query_digest_keyring,
+            user_id=user_id,
+            query="ContextEngine delivers context.",
+            request_id="first-resolve-after-bulk-policy",
+        )
+
+        assert package["blocks"]
+        assert package["evidence"]
+        assert package["coverage"]["status"] == "sufficient"
+    finally:
         with engine.begin() as connection:
             connection.execute(
                 text("DELETE FROM decision_audit WHERE organization_id = :org"),

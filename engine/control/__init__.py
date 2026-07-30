@@ -13,6 +13,13 @@ from engine.control.authority import (
     TrustedControlCall,
     VerifiedControlOperatorIdentity,
 )
+from engine.control.bulk_article_policy import (
+    BulkArticlePolicyChange,
+    BulkArticlePolicyConfirmation,
+    BulkArticlePolicyPreview,
+    BulkArticlePolicyPreviewItem,
+    BulkArticlePolicyResult,
+)
 from engine.control.contracts import (
     FILE_CAPABILITY_MANIFEST,
     FILE_CHANGE_CAPABILITY_MANIFEST,
@@ -98,6 +105,7 @@ from engine.control.file_source_progress import (
 )
 from engine.control.module import (
     ArticlePolicyDefaultStorePort,
+    BulkArticlePolicyStorePort,
     ContextControl,
     ControlStorePort,
     SourceListingStorePort,
@@ -113,6 +121,12 @@ __all__ = [
     "ActivateFileChangeFeed",
     "ActivateFileDeleteObservations",
     "ArticlePolicyDefaultStorePort",
+    "BulkArticlePolicyChange",
+    "BulkArticlePolicyConfirmation",
+    "BulkArticlePolicyPreview",
+    "BulkArticlePolicyPreviewItem",
+    "BulkArticlePolicyResult",
+    "BulkArticlePolicyStorePort",
     "FILE_CAPABILITY_MANIFEST",
     "FILE_CHANGE_CAPABILITY_MANIFEST",
     "FILE_DELETE_OBSERVATION_CAPABILITY_MANIFEST",

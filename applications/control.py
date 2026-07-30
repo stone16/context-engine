@@ -26,9 +26,18 @@ from applications.operator_authentication import (
     LocalOperatorConfiguration,
 )
 from applications.release_promotion import promote_release, release_report_json
+from engine.article_access_policy import (
+    ArticleAccessPolicyKind,
+    ArticleAccessPolicySetting,
+    GroupRef,
+)
 from engine.control import (
     ActivateFileChangeFeed,
     ActivateFileDeleteObservations,
+    BulkArticlePolicyChange,
+    BulkArticlePolicyConfirmation,
+    BulkArticlePolicyPreview,
+    BulkArticlePolicyResult,
     ContextControl,
     ControlOperation,
     ControlOperatorAuthority,
@@ -39,8 +48,10 @@ from engine.control import (
     SourceNotAvailable,
     SourceRef,
 )
+from engine.control.bulk_article_policy import article_policy_setting_document
 from engine.persistence import (
     DatabasePurpose,
+    PostgreSQLAccessPolicyControl,
     PostgreSQLControlStore,
     create_database_engine,
     load_database_configuration,
@@ -56,6 +67,8 @@ _OPERATOR_SUBCOMMANDS = frozenset(
         "scan",
         "scan-all",
         "status",
+        "commit-bulk-article-policy",
+        "preview-bulk-article-policy",
     }
 )
 
@@ -109,6 +122,27 @@ def _parser() -> argparse.ArgumentParser:
     )
     _organization_argument(promote)
     promote.add_argument("--evidence-file", required=True, type=Path)
+    for name, help_text in (
+        (
+            "preview-bulk-article-policy",
+            "preview one historical Article policy change without mutation",
+        ),
+        (
+            "commit-bulk-article-policy",
+            "commit one exact separately previewed Article policy change",
+        ),
+    ):
+        bulk_policy = subcommands.add_parser(name, help=help_text)
+        _organization_argument(bulk_policy)
+        bulk_policy.add_argument("--resource-ref", required=True, action="append")
+        bulk_policy.add_argument(
+            "--target-policy",
+            required=True,
+            choices=tuple(kind.value for kind in ArticleAccessPolicyKind),
+        )
+        bulk_policy.add_argument("--group-ref", action="append", default=[])
+        if name == "commit-bulk-article-policy":
+            bulk_policy.add_argument("--confirm-preview-digest", required=True)
     return parser
 
 
@@ -160,6 +194,10 @@ def main(argv: Sequence[str] | None = None) -> None:
             rendered = _status_json(outcome)
         elif type(outcome) is SourceManifest:
             rendered = _manifest_json(outcome)
+        elif type(outcome) is BulkArticlePolicyPreview:
+            rendered = _bulk_article_policy_preview_json(outcome)
+        elif type(outcome) is BulkArticlePolicyResult:
+            rendered = _bulk_article_policy_result_json(outcome)
         else:  # pragma: no cover - closed application union
             raise SourceNotAvailable
     except Exception:  # Operator refusals disclose no supplied or trusted facts.
@@ -184,6 +222,8 @@ def _run_operator_subcommand(
     | FileSourceProgress
     | MultiSourceScanReport
     | MultiSourceStatusReport
+    | BulkArticlePolicyPreview
+    | BulkArticlePolicyResult
 ):
     authority = local_control_operator_authority()
     if authority is None:
@@ -197,6 +237,42 @@ def _run_operator_subcommand(
         return datetime.now(UTC)
 
     try:
+        if arguments.subcommand in {
+            "commit-bulk-article-policy",
+            "preview-bulk-article-policy",
+        }:
+            policy_store = PostgreSQLAccessPolicyControl(engine)
+            control = ContextControl(
+                store=PostgreSQLControlStore(engine, clock=clock),
+                bulk_article_policy_store=policy_store,
+                authority=authorities.control,
+                clock=clock,
+            )
+            command = BulkArticlePolicyChange(
+                resource_refs=tuple(arguments.resource_ref),
+                target_policy=ArticleAccessPolicySetting(
+                    ArticleAccessPolicyKind(arguments.target_policy),
+                    frozenset(GroupRef(value) for value in arguments.group_ref),
+                ),
+            )
+            if arguments.subcommand == "preview-bulk-article-policy":
+                operation = ControlOperation.PREVIEW_BULK_ARTICLE_POLICY_CHANGE
+            else:
+                operation = ControlOperation.COMMIT_BULK_ARTICLE_POLICY_CHANGE
+            with authorities.control.authorize(
+                opaque_credential=opaque_credential,
+                operation=operation,
+                request_id=f"local-{arguments.subcommand}-{uuid4().hex}",
+            ) as call:
+                if call.organization_id != organization_id:
+                    raise SourceNotAvailable
+                if operation is ControlOperation.PREVIEW_BULK_ARTICLE_POLICY_CHANGE:
+                    return control.preview_bulk_article_policy_change(call, command)
+                return control.commit_bulk_article_policy_change(
+                    call,
+                    command,
+                    BulkArticlePolicyConfirmation(arguments.confirm_preview_digest),
+                )
         if arguments.subcommand in {"scan", "scan-all"}:
             with file_roots() as roots:
                 if arguments.subcommand == "scan-all":
@@ -421,6 +497,46 @@ def _operation(subcommand: str) -> ControlOperation:
         return operations[subcommand]
     except KeyError:
         raise SourceNotAvailable from None
+
+
+def _bulk_article_policy_preview_json(preview: BulkArticlePolicyPreview) -> str:
+    if type(preview) is not BulkArticlePolicyPreview:
+        raise SourceNotAvailable
+    return json.dumps(
+        {
+            "previewDigest": preview.digest,
+            "articles": [
+                {
+                    "currentPolicy": article_policy_setting_document(
+                        item.current_policy
+                    ),
+                    "policyVersion": item.policy_version,
+                    "resolutionRung": item.resolution_rung.value,
+                    "resourceRef": item.resource_ref,
+                    "targetPolicy": article_policy_setting_document(
+                        item.target_policy
+                    ),
+                }
+                for item in preview.items
+            ],
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+
+
+def _bulk_article_policy_result_json(result: BulkArticlePolicyResult) -> str:
+    if type(result) is not BulkArticlePolicyResult:
+        raise SourceNotAvailable
+    return json.dumps(
+        {
+            "auditRef": str(result.audit_ref),
+            "changedArticles": result.changed_articles,
+            "policyEpoch": result.policy_epoch,
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    )
 
 
 def _manifest_json(manifest: SourceManifest) -> str:

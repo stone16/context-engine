@@ -65,6 +65,7 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
         "article_access_policy",
         "article_explicit_policy_setting",
         "article_source_acl_observation",
+        "bulk_article_policy_change_audit",
         "context_fragment",
         "context_fragment_field",
         "context_resource",
@@ -2195,6 +2196,25 @@ def test_policy_epoch_manifest_seals_runtime_reads_and_control_mutation() -> Non
             "organization_policy_epoch",
         ],
     }
+    operations = {
+        operation["name"]: operation for operation in document["controlOperations"]
+    }
+    assert operations["preview_bulk_article_policy_change"] == {
+        "name": "preview_bulk_article_policy_change",
+        "databaseFunction": "context_control_preview_bulk_article_policy_change",
+        "role": "context_engine_control",
+        "definerRole": "context_engine_access_policy_definer",
+        "directTableMutationAllowed": False,
+        "trustedOrganizationSource": "TrustedControlCall",
+        "contentBearing": False,
+        "nonEnumerating": True,
+        "reads": ["article_access_group", "article_access_policy"],
+    }
+    assert operations["commit_bulk_article_policy_change"]["atomicWrites"] == [
+        "article_access_policy",
+        "organization_policy_epoch",
+        "bulk_article_policy_change_audit",
+    ]
 
 
 def test_release_manifest_records_exact_immutable_lineage_keys() -> None:

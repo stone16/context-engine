@@ -219,7 +219,7 @@ def article_policy(
     engine: Engine,
     organization_id: UUID,
     resource_ref: str,
-) -> tuple[str, int, str]:
+) -> tuple[str | None, int, str]:
     with engine.connect() as connection:
         row = connection.execute(
             text(

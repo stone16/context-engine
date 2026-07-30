@@ -57,6 +57,8 @@ def test_control_process_help_and_unknown_subcommand() -> None:
         "scan-all",
         "status",
         "promote-release",
+        "commit-bulk-article-policy",
+        "preview-bulk-article-policy",
     ):
         assert subcommand in help_result.stdout
 
