@@ -386,6 +386,82 @@ def test_change_access_atomically_revokes_exact_grant_and_advances_epoch(
         migration_engine.dispose()
 
 
+def test_revoking_one_private_principal_preserves_other_allowed_grants(
+    control_configuration: DatabaseConfiguration,
+    migration_configuration: DatabaseConfiguration,
+    access_fixture: AccessFixture,
+) -> None:
+    control_engine = create_database_engine(control_configuration)
+    migration_engine = create_database_engine(migration_configuration)
+    other_principal = f"principal:{uuid4()}"
+    try:
+        with migration_engine.begin() as connection:
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO resource_access_policy (
+                        organization_id, resource_ref, principal_ref,
+                        access_version, access_state, revoked_at
+                    ) VALUES (
+                        :organization_id, :resource_ref, :principal_ref,
+                        1, 'allowed', NULL
+                    )
+                    """
+                ),
+                {
+                    "organization_id": access_fixture.organization_a,
+                    "resource_ref": access_fixture.resource_a_one,
+                    "principal_ref": other_principal,
+                },
+            )
+
+        epoch = PostgreSQLAccessPolicyControl(control_engine).change_access(
+            _command(
+                access_fixture.organization_a,
+                access_fixture.resource_a_one,
+                access_fixture.principal_a,
+            )
+        )
+
+        with migration_engine.connect() as connection:
+            policy = connection.execute(
+                text(
+                    """
+                    SELECT policy_version, policy_kind, published,
+                           source_observation_status
+                    FROM article_access_policy
+                    WHERE organization_id = :organization_id
+                      AND resource_ref = :resource_ref
+                    """
+                ),
+                {
+                    "organization_id": access_fixture.organization_a,
+                    "resource_ref": access_fixture.resource_a_one,
+                },
+            ).one()
+            remaining = connection.execute(
+                text(
+                    """
+                    SELECT access_state FROM resource_access_policy
+                    WHERE organization_id = :organization_id
+                      AND resource_ref = :resource_ref
+                      AND principal_ref = :principal_ref
+                    """
+                ),
+                {
+                    "organization_id": access_fixture.organization_a,
+                    "resource_ref": access_fixture.resource_a_one,
+                    "principal_ref": other_principal,
+                },
+            ).scalar_one()
+        assert epoch.value == 2
+        assert tuple(policy) == (1, "private", True, "resolved")
+        assert remaining == "allowed"
+    finally:
+        control_engine.dispose()
+        migration_engine.dispose()
+
+
 @pytest.mark.parametrize("failure", ["missing", "already-revoked", "access-overflow"])
 def test_rejected_access_change_rolls_back_epoch_and_policy_together(
     failure: str,
@@ -947,9 +1023,17 @@ def test_control_function_and_table_grants_seal_the_only_mutation_path(
                         LEFT JOIN pg_roles AS grantee
                           ON grantee.oid = privilege.grantee
                         WHERE namespace.nspname = 'public'
-                          AND relation.relname IN (
-                              'organization_policy_epoch',
-                              'resource_access_policy'
+                          AND (
+                              COALESCE(grantee.rolname, 'PUBLIC') = :definer_role
+                              OR relation.relname IN (
+                                  'article_access_group_membership',
+                                  'article_access_policy',
+                                  'context_resource',
+                                  'membership',
+                                  'organization_policy_epoch',
+                                  'resource_access_policy',
+                                  'source_version'
+                              )
                           )
                           AND COALESCE(grantee.rolname, 'PUBLIC') IN (
                               'PUBLIC',
@@ -1015,7 +1099,10 @@ def test_control_function_and_table_grants_seal_the_only_mutation_path(
                         SELECT tablename, cmd, roles, qual, with_check
                         FROM pg_policies
                         WHERE schemaname = 'public'
-                          AND policyname LIKE '%access_policy_definer_%'
+                          AND (
+                              policyname LIKE '%access_policy_definer_%'
+                              OR policyname LIKE '%_access_definer_%'
+                          )
                         """
                     )
                 )
@@ -1142,11 +1229,43 @@ def test_control_function_and_table_grants_seal_the_only_mutation_path(
             (ACCESS_POLICY_DEFINER_ROLE, "EXECUTE"),
             (CONTROL_ROLE, "EXECUTE"),
         }
+        article_policy_definer_grants = {
+            ("article_access_group", "SELECT"),
+            ("article_access_policy", "INSERT"),
+            ("article_access_policy", "SELECT"),
+            ("article_access_policy", "UPDATE"),
+            ("article_explicit_policy_setting", "SELECT"),
+            ("article_source_acl_observation", "INSERT"),
+            ("article_source_acl_observation", "SELECT"),
+            ("article_source_acl_observation", "UPDATE"),
+            ("organization_article_policy_default", "SELECT"),
+            ("organization_article_policy_default", "UPDATE"),
+            ("source_article_policy_default", "INSERT"),
+            ("source_article_policy_default", "SELECT"),
+            ("source_article_policy_default", "UPDATE"),
+            ("source_version", "SELECT"),
+        }
         assert relevant_table_grants == {
+            (ACCESS_POLICY_DEFINER_ROLE, table_name, privilege)
+            for table_name, privilege in article_policy_definer_grants
+        } | {
+            (ACCESS_POLICY_DEFINER_ROLE, "context_resource", "SELECT"),
+            (ACCESS_POLICY_DEFINER_ROLE, "context_source", "SELECT"),
+            (ACCESS_POLICY_DEFINER_ROLE, "file_import_job", "SELECT"),
+            (ACCESS_POLICY_DEFINER_ROLE, "file_resource_cleanup_intent", "INSERT"),
+            (ACCESS_POLICY_DEFINER_ROLE, "file_resource_cleanup_intent", "SELECT"),
+            (ACCESS_POLICY_DEFINER_ROLE, "file_source_cleanup_intent", "INSERT"),
+            (ACCESS_POLICY_DEFINER_ROLE, "file_source_cleanup_intent", "SELECT"),
             (ACCESS_POLICY_DEFINER_ROLE, "organization_policy_epoch", "SELECT"),
             (ACCESS_POLICY_DEFINER_ROLE, "organization_policy_epoch", "UPDATE"),
             (ACCESS_POLICY_DEFINER_ROLE, "resource_access_policy", "SELECT"),
             (ACCESS_POLICY_DEFINER_ROLE, "resource_access_policy", "UPDATE"),
+            (CONTROL_ROLE, "source_version", "INSERT"),
+            (CONTROL_ROLE, "source_version", "SELECT"),
+            (RUNTIME_ROLE, "article_access_group_membership", "SELECT"),
+            (RUNTIME_ROLE, "article_access_policy", "SELECT"),
+            (RUNTIME_ROLE, "context_resource", "SELECT"),
+            (RUNTIME_ROLE, "membership", "SELECT"),
             (RUNTIME_ROLE, "organization_policy_epoch", "SELECT"),
             (RUNTIME_ROLE, "resource_access_policy", "SELECT"),
         }
@@ -1171,7 +1290,30 @@ def test_control_function_and_table_grants_seal_the_only_mutation_path(
         }
         assert roles_granted_to_definer == set()
         assert definer_owned_relations == set()
+        article_policy_routines = {
+            ("article_access_policy_fix_from_file_access_grant", ""),
+            (
+                "context_control_set_source_article_policy_default",
+                "requested_organization_id uuid, requested_source_ref text, "
+                "expected_version bigint, requested_policy_kind text, "
+                "requested_group_refs text[]",
+            ),
+            (
+                "context_control_set_tenant_article_policy_default",
+                "requested_organization_id uuid, expected_version bigint, "
+                "requested_policy_kind text, requested_group_refs text[]",
+            ),
+            (
+                "context_fix_article_access_policy",
+                "requested_organization_id uuid, requested_resource_ref text",
+            ),
+            ("context_source_advance_article_evidence_epoch", ""),
+            ("context_source_initialize_article_policy_default", ""),
+        }
         assert definer_owned_routines == {
+            ("public", routine_name, arguments)
+            for routine_name, arguments in article_policy_routines
+        } | {
             (
                 "public",
                 "context_control_revoke_resource_access",
@@ -1192,18 +1334,30 @@ def test_control_function_and_table_grants_seal_the_only_mutation_path(
                 "requested_organization_id uuid, requested_source_id uuid, "
                 "requested_cleanup_intent_id uuid",
             ),
-            (
-                "public",
-                "context_runtime_file_source_lifecycle_allows",
-                "requested_organization_id uuid, requested_source_ref text",
-            ),
-        }
+                (
+                    "public",
+                    "context_runtime_file_source_lifecycle_allows",
+                    "requested_organization_id uuid, requested_source_ref text",
+                ),
+                (
+                    "public",
+                    "context_runtime_article_source_version_allows",
+                    "requested_organization_id uuid, requested_resource_ref text, "
+                    "expected_source_version_ref uuid",
+                ),
+            }
         assert definer_owned_namespaces == set()
         assert definer_owned_databases == set()
+        article_policy_commands = article_policy_definer_grants - {
+            ("source_version", "SELECT")
+        }
         assert {
             (table, command, roles)
             for table, command, roles, _, _ in definer_policies
         } == {
+            (table_name, command, (ACCESS_POLICY_DEFINER_ROLE,))
+            for table_name, command in article_policy_commands
+        } | {
             (
                 "organization_policy_epoch",
                 "SELECT",
@@ -1274,6 +1428,7 @@ def test_control_function_and_table_grants_seal_the_only_mutation_path(
                 "INSERT",
                 (ACCESS_POLICY_DEFINER_ROLE,),
             ),
+            ("source_version", "SELECT", (ACCESS_POLICY_DEFINER_ROLE,)),
         }
         for _, command, _, using_expression, check_expression in definer_policies:
             if command == "SELECT":

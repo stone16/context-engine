@@ -49,6 +49,8 @@ from engine.control import (
     ScheduledFileChange,
     ScheduledFileChangePage,
     ScheduleFileChangePage,
+    SetSourceArticlePolicyDefault,
+    SetTenantArticlePolicyDefault,
     SourceControlUnavailable,
     SourceManifest,
     SourceNotAvailable,
@@ -288,6 +290,100 @@ class PostgreSQLControlStore:
         except (DBAPIError, SQLAlchemyError, AssertionError):
             raise SourceControlUnavailable(
                 "File source read database authority is unavailable"
+            ) from None
+
+    @staticmethod
+    def _policy_parameters(setting: object) -> tuple[str | None, list[str]]:
+        from engine.article_access_policy import ArticleAccessPolicySetting
+
+        if setting is None:
+            return None, []
+        if type(setting) is not ArticleAccessPolicySetting:
+            raise SourceNotAvailable
+        setting.__post_init__()
+        return setting.kind.value, sorted(ref.value for ref in setting.group_refs)
+
+    def set_tenant_article_policy_default(
+        self,
+        call: TrustedControlCall,
+        command: SetTenantArticlePolicyDefault,
+    ) -> int:
+        if (
+            type(call) is not TrustedControlCall
+            or type(command) is not SetTenantArticlePolicyDefault
+        ):
+            raise SourceNotAvailable
+        command.__post_init__()
+        kind, groups = self._policy_parameters(command.setting)
+        result = self._call_article_policy_function(
+            call,
+            "context_control_set_tenant_article_policy_default",
+            {
+                "expected_version": command.expected_version,
+                "policy_kind": kind,
+                "group_refs": groups,
+            },
+        )
+        if type(result) is not int:
+            raise SourceNotAvailable
+        return result
+
+    def set_source_article_policy_default(
+        self,
+        call: TrustedControlCall,
+        command: SetSourceArticlePolicyDefault,
+    ) -> int:
+        if (
+            type(call) is not TrustedControlCall
+            or type(command) is not SetSourceArticlePolicyDefault
+        ):
+            raise SourceNotAvailable
+        command.__post_init__()
+        kind, groups = self._policy_parameters(command.setting)
+        result = self._call_article_policy_function(
+            call,
+            "context_control_set_source_article_policy_default",
+            {
+                "source_ref": command.source_ref,
+                "expected_version": command.expected_version,
+                "policy_kind": kind,
+                "group_refs": groups,
+            },
+        )
+        if type(result) is not int:
+            raise SourceNotAvailable
+        return result
+
+    def _call_article_policy_function(
+        self,
+        call: TrustedControlCall,
+        function_name: str,
+        parameters: dict[str, object],
+    ) -> object:
+        arguments = ["requested_organization_id => :organization_id"]
+        for name in parameters:
+            value = (
+                "CAST(:group_refs AS text[])"
+                if name == "group_refs"
+                else f":{name}"
+            )
+            database_name = name if name == "expected_version" else f"requested_{name}"
+            arguments.append(f"{database_name} => {value}")
+        try:
+            with self._engine.begin() as connection:
+                assert_control_role(connection)
+                _set_organization_context(connection, call.organization_id)
+                return connection.execute(
+                    text(
+                        f"SELECT public.{function_name}(" + ", ".join(arguments) + ")"
+                    ),
+                    {"organization_id": call.organization_id, **parameters},
+                ).scalar_one_or_none()
+        except SourceNotAvailable:
+            raise
+        except (DBAPIError, SQLAlchemyError, AssertionError):
+            raise SourceControlUnavailable(
+                "Article policy database authority is unavailable"
             ) from None
 
     def activate_file_change_feed(

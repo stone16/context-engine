@@ -113,10 +113,17 @@ def _delete_disposable_file_change_organization(
                     "file_source_acquisition_checkpoint",
                     "file_import_job",
                     "file_acquisition",
+                    "article_access_policy",
+                    "article_source_acl_observation",
+                    "article_explicit_policy_setting",
+                    "article_access_group_membership",
+                    "article_access_group",
+                    "source_article_policy_default",
                     "context_source",
                     "source_version",
                     "service_principal",
                     "membership",
+                    "organization_article_policy_default",
                 ):
                     connection.execute(
                         text(

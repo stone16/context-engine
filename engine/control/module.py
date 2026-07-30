@@ -6,6 +6,10 @@ from collections.abc import Callable
 from datetime import datetime
 from typing import Protocol, cast
 
+from engine.control.article_access_policy import (
+    SetSourceArticlePolicyDefault,
+    SetTenantArticlePolicyDefault,
+)
 from engine.control.authority import (
     ControlOperation,
     ControlOperatorAuthenticationRejected,
@@ -110,7 +114,6 @@ class ControlStorePort(Protocol):
         command: OffboardFileSource,
     ) -> FileSourceOffboarding: ...
 
-
 class FileChangePageStorePort(Protocol):
     """Optional v3 persistence surface activated with File change proofs."""
 
@@ -121,10 +124,32 @@ class FileChangePageStorePort(Protocol):
     ) -> AcceptedChangePage: ...
 
 
+class ArticlePolicyDefaultStorePort(Protocol):
+    """Narrow persistence capability for future-Article default writes."""
+
+    def set_tenant_article_policy_default(
+        self,
+        call: TrustedControlCall,
+        command: SetTenantArticlePolicyDefault,
+    ) -> int: ...
+
+    def set_source_article_policy_default(
+        self,
+        call: TrustedControlCall,
+        command: SetSourceArticlePolicyDefault,
+    ) -> int: ...
+
+
 class ContextControl:
     """Own trusted File enrollment, read-back, and import preparation."""
 
-    __slots__ = ("_authority", "_clock", "_file_change_proofs", "_store")
+    __slots__ = (
+        "_article_policy_store",
+        "_authority",
+        "_clock",
+        "_file_change_proofs",
+        "_store",
+    )
 
     def __init__(
         self,
@@ -133,6 +158,7 @@ class ContextControl:
         authority: ControlOperatorAuthority,
         clock: Callable[[], datetime],
         file_change_proofs: FileChangeControlProofs | None = None,
+        article_policy_store: ArticlePolicyDefaultStorePort | None = None,
     ) -> None:
         required_methods = [
             "activate_file_change_feed",
@@ -156,14 +182,91 @@ class ContextControl:
             raise TypeError("ContextControl requires ControlOperatorAuthority")
         if not callable(clock):
             raise TypeError("ContextControl clock must be callable")
-        if file_change_proofs is not None and type(
-            file_change_proofs
-        ) is not FileChangeControlProofs:
+        if (
+            file_change_proofs is not None
+            and type(file_change_proofs) is not FileChangeControlProofs
+        ):
             raise TypeError("ContextControl File change proofs are invalid")
+        if article_policy_store is not None:
+            for method_name in (
+                "set_source_article_policy_default",
+                "set_tenant_article_policy_default",
+            ):
+                if not callable(getattr(article_policy_store, method_name, None)):
+                    raise TypeError("Article policy default store is incomplete")
         self._store = store
+        self._article_policy_store = article_policy_store
         self._authority = authority
         self._clock = clock
         self._file_change_proofs = file_change_proofs
+
+    def set_tenant_article_policy_default(
+        self,
+        call: TrustedControlCall,
+        command: SetTenantArticlePolicyDefault,
+    ) -> int:
+        if type(command) is not SetTenantArticlePolicyDefault:
+            raise TypeError("tenant Article default requires its exact command")
+        self._consume_article_policy_call(
+            call, ControlOperation.SET_TENANT_ARTICLE_POLICY_DEFAULT
+        )
+        store = self._article_policy_store
+        if store is None:
+            raise SourceControlUnavailable("Article policy defaults are unavailable")
+        result = self._invoke_article_policy_store(
+            lambda: store.set_tenant_article_policy_default(call, command)
+        )
+        if type(result) is not int:
+            raise SourceControlUnavailable("tenant Article default was not changed")
+        return result
+
+    def set_source_article_policy_default(
+        self,
+        call: TrustedControlCall,
+        command: SetSourceArticlePolicyDefault,
+    ) -> int:
+        if type(command) is not SetSourceArticlePolicyDefault:
+            raise TypeError("source Article default requires its exact command")
+        self._consume_article_policy_call(
+            call, ControlOperation.SET_SOURCE_ARTICLE_POLICY_DEFAULT
+        )
+        store = self._article_policy_store
+        if store is None:
+            raise SourceControlUnavailable("Article policy defaults are unavailable")
+        result = self._invoke_article_policy_store(
+            lambda: store.set_source_article_policy_default(call, command)
+        )
+        if type(result) is not int:
+            raise SourceControlUnavailable("source Article default was not changed")
+        return result
+
+    def _consume_article_policy_call(
+        self,
+        call: TrustedControlCall,
+        operation: ControlOperation,
+    ) -> None:
+        try:
+            _validate_and_consume_control_call(
+                call,
+                authority=self._authority,
+                expected_operation=operation,
+                checked_at=self._clock(),
+            )
+        except ControlOperatorAuthenticationRejected:
+            raise SourceNotAvailable from None
+
+    @staticmethod
+    def _invoke_article_policy_store(work: Callable[[], object]) -> object:
+        try:
+            return work()
+        except (ControlOperatorAuthenticationRejected, SourceNotAvailable):
+            raise SourceNotAvailable from None
+        except SourceControlUnavailable:
+            raise
+        except Exception:
+            raise SourceControlUnavailable(
+                "Article policy administration is unavailable"
+            ) from None
 
     def accept_file_change_page(
         self,
@@ -200,8 +303,7 @@ class ContextControl:
                 or accepted.page_limit != page.page_limit
                 or (
                     page.predecessor_page_ref is None
-                    and accepted.superseded_scan_epoch
-                    != page.superseded_scan_epoch
+                    and accepted.superseded_scan_epoch != page.superseded_scan_epoch
                 )
                 or accepted.page_ref != verified.page_ref
                 or accepted.change_count != len(page.changes)
@@ -228,9 +330,7 @@ class ContextControl:
         """Activate only the server-owned immutable File change capability."""
 
         if type(command) is not ActivateFileChangeFeed:
-            raise TypeError(
-                "activate_file_change_feed requires ActivateFileChangeFeed"
-            )
+            raise TypeError("activate_file_change_feed requires ActivateFileChangeFeed")
         try:
             _validate_and_consume_control_call(
                 call,
@@ -270,9 +370,7 @@ class ContextControl:
             _validate_and_consume_control_call(
                 call,
                 authority=self._authority,
-                expected_operation=(
-                    ControlOperation.ACTIVATE_FILE_DELETE_OBSERVATIONS
-                ),
+                expected_operation=(ControlOperation.ACTIVATE_FILE_DELETE_OBSERVATIONS),
                 checked_at=self._clock(),
             )
             manifest = self._store.activate_file_delete_observations(
@@ -468,9 +566,7 @@ class ContextControl:
         """Schedule one complete accepted page under explicit Control authority."""
 
         if type(command) is not ScheduleFileChangePage:
-            raise TypeError(
-                "schedule_file_change_page requires ScheduleFileChangePage"
-            )
+            raise TypeError("schedule_file_change_page requires ScheduleFileChangePage")
         try:
             _validate_and_consume_control_call(
                 call,

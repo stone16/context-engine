@@ -22,6 +22,11 @@ TENANT_TABLES = {
     "action_receipt",
     "action_reconciliation",
     "action_ticket",
+    "article_access_group",
+    "article_access_group_membership",
+    "article_access_policy",
+    "article_explicit_policy_setting",
+    "article_source_acl_observation",
     "citation_open_locator",
     "context_fragment",
     "context_fragment_field",
@@ -57,6 +62,7 @@ TENANT_TABLES = {
     "membership",
     "membership_resource_field_right",
     "organization_policy_epoch",
+    "organization_article_policy_default",
     "organization_record",
     "release_candidate",
     "release_evaluation",
@@ -67,6 +73,7 @@ TENANT_TABLES = {
     "resource_access_policy",
     "service_principal",
     "source_version",
+    "source_article_policy_default",
     "supply_connector_accepted_page",
     "supply_connector_checkpoint",
     "supply_connector_job",
@@ -156,7 +163,7 @@ def test_manifest_declares_exact_live_table_denominator_and_rls_evidence() -> No
 
     assert global_tables == GLOBAL_TABLES
     assert tenant_tables == TENANT_TABLES
-    assert len(tables) == 62
+    assert len(tables) == 69
 
     for name in sorted(GLOBAL_TABLES):
         rationale = tables[name]["classificationRationale"]
@@ -179,8 +186,8 @@ def test_rls_auditor_requires_every_live_control_and_non_owner_evidence() -> Non
 
     assert report["passed"] is True
     assert report["coverage"] == {
-        "numerator": 59,
-        "denominator": 59,
+        "numerator": 66,
+        "denominator": 66,
         "percent": 100.0,
     }
     inventory = cast(dict[str, object], report["inventory"])
@@ -205,7 +212,7 @@ def test_rls_auditor_does_not_count_force_rls_or_evidence_gaps() -> None:
     assert report["passed"] is False
     assert report["coverage"] == {
         "numerator": 0,
-        "denominator": 59,
+        "denominator": 66,
         "percent": 0.0,
     }
     tenant_reports = cast(list[dict[str, Any]], report["tenantTables"])

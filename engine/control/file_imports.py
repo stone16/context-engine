@@ -189,13 +189,8 @@ class ScheduledFileChangePage:
         ):
             raise TypeError("scheduled File page requires a nonempty change tuple")
         ordinals = tuple(change.ordinal for change in self.changes)
-        if any(
-            current >= following
-            for current, following in pairwise(ordinals)
-        ):
-            raise ValueError(
-                "scheduled File page changes must be strictly increasing"
-            )
+        if any(current >= following for current, following in pairwise(ordinals)):
+            raise ValueError("scheduled File page changes must be strictly increasing")
         if any(
             change.prepared_import.organization_id != self.organization_id
             or change.prepared_import.source_ref != self.source_ref

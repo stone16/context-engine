@@ -79,6 +79,8 @@ def authorized_outcome() -> Resolved:
         policy_snapshot_ref="policy-snapshot-current",
         policy_epoch=17,
         source_acl_decision_ref="source-decision-current",
+        source_acl_projection_ref="sourceacl_projection-current",
+        source_acl_as_of=AS_OF,
     )
     evidence = Evidence(
         evidence_ref=EVIDENCE_REF,
@@ -141,7 +143,7 @@ def test_authorized_package_maps_to_the_exact_closed_public_shape() -> None:
         "package": {
             "packageId": "pkg_" + "c" * 32,
             "packageDigest": (
-                "cab1b244227cbdb1a817d6c102337b819e5e7d12d30b7d9aa9e6be096773b03d"
+                    "d832b8ebb912337db1e3c01d179a65ab6ac252c5f225c8cccd6a40e5100f6a5f"
             ),
             "purpose": "context.answer",
             "audienceDigest": "a" * 64,
@@ -179,7 +181,7 @@ def test_authorized_package_maps_to_the_exact_closed_public_shape() -> None:
                     "policyEpoch": 17,
                     "sourceAclEvidence": {
                         "kind": "mirrored",
-                        "projectionRef": "source-decision-current",
+                        "projectionRef": "sourceacl_projection-current",
                         "aclAsOf": "2026-07-21T05:00:00Z",
                         "freshnessProfileRef": (
                             "file-source-access-current-transaction-v1"

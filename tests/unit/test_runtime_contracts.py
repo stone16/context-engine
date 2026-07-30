@@ -60,6 +60,8 @@ AUTHORIZED_LINEAGE = EvidenceLineage(
     policy_snapshot_ref="policy-current",
     policy_epoch=1,
     source_acl_decision_ref="source-decision-current",
+    source_acl_projection_ref="sourceacl_projection-current",
+    source_acl_as_of=AS_OF,
 )
 AUTHORIZED_EVIDENCE = Evidence(
     evidence_ref=EVIDENCE_REF,

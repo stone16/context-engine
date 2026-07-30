@@ -151,7 +151,6 @@ load_module("engine.runtime.materialized")
         module_name="eval",
         is_package=True,
     )
-
     assert "engine.runtime" in imported_modules
     assert "eval.runtime_probe" in imported_modules
     assert "engine.runtime.construction" in imported_modules

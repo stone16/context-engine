@@ -478,6 +478,8 @@ def test_postgres_projection_absorbs_malformed_structured_field_values(
             resource_ref="resource:authorized",
             revision_ref="05b82c43-4e8f-49ae-a286-a40289a3413e",
             fragment_ref="fragment:authorized",
+            source_acl_projection_ref="sourceacl_current-policy",
+            source_acl_as_of=identity().checked_at,
         )
     )
 

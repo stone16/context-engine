@@ -1,6 +1,7 @@
 """Lifetime-bound same-transaction materialized Fragment projection seam."""
 
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import Final, NoReturn, Protocol, runtime_checkable
 from uuid import UUID
@@ -211,6 +212,8 @@ class MaterializedFragmentLocator:
     resource_ref: str = field(repr=False)
     revision_ref: str = field(repr=False)
     fragment_ref: str = field(repr=False)
+    source_acl_projection_ref: str = field(repr=False)
+    source_acl_as_of: datetime = field(repr=False)
 
     def __post_init__(self) -> None:
         if type(self.organization_id) is not UUID:
@@ -220,11 +223,18 @@ class MaterializedFragmentLocator:
             "resource_ref",
             "revision_ref",
             "fragment_ref",
+            "source_acl_projection_ref",
         ):
             _require_nonblank_ref(
                 f"materialized {field_name}",
                 getattr(self, field_name),
             )
+        if (
+            type(self.source_acl_as_of) is not datetime
+            or self.source_acl_as_of.tzinfo is None
+            or self.source_acl_as_of.utcoffset() != timedelta(0)
+        ):
+            raise ValueError("materialized source ACL as-of must be aware UTC")
 
 
 @dataclass(frozen=True, slots=True)

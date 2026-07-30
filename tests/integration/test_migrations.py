@@ -19,6 +19,7 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from adapters.file_source import FileChangeProvider, FileReadLimits, FileRootRegistry
 from adapters.parsers.markdown import compile_markdown
 from engine.control import (
+    FILE_CAPABILITY_MANIFEST,
     ActivateFileChangeFeed,
     ActivateFileDeleteObservations,
     ChangeLimit,
@@ -70,6 +71,9 @@ from tests.support.file_imports import (
     ControlAuthenticator as _ControlAuthenticator,
 )
 from tests.support.file_imports import (
+    delete_file_import_scenario as _delete_file_import_scenario,
+)
+from tests.support.file_imports import (
     prepare_file_import_scenario as _prepare_file_import_scenario,
 )
 from tests.support.file_imports import (
@@ -99,6 +103,11 @@ HEAD_TABLES = [
     "action_ticket",
     "active_release_manifest",
     "alembic_version",
+    "article_access_group",
+    "article_access_group_membership",
+    "article_access_policy",
+    "article_explicit_policy_setting",
+    "article_source_acl_observation",
     "citation_open_locator",
     "context_fragment",
     "context_fragment_field",
@@ -133,6 +142,7 @@ HEAD_TABLES = [
     "membership_resource_field_right",
     "model_egress_audit",
     "organization",
+    "organization_article_policy_default",
     "organization_policy_epoch",
     "organization_record",
     "private_delivery_audit",
@@ -144,6 +154,7 @@ HEAD_TABLES = [
     "resource_access_policy",
     "revision_publication_event",
     "service_principal",
+    "source_article_policy_default",
     "source_version",
     "supply_connector_accepted_page",
     "supply_connector_checkpoint",
@@ -153,6 +164,15 @@ HEAD_TABLES = [
     "user_account",
     "worker_noop_job",
 ]
+ARTICLE_POLICY_TABLES = {
+    "article_access_group",
+    "article_access_group_membership",
+    "article_access_policy",
+    "article_explicit_policy_setting",
+    "article_source_acl_observation",
+    "organization_article_policy_default",
+    "source_article_policy_default",
+}
 
 
 @pytest.fixture(autouse=True)
@@ -241,6 +261,11 @@ def _delete_issue_27_upgrade_fixture(
                     "revision_publication_event",
                     "membership_resource_field_right",
                     "resource_access_policy",
+                    "article_access_policy",
+                    "article_source_acl_observation",
+                    "article_explicit_policy_setting",
+                    "article_access_group_membership",
+                    "article_access_group",
                     "context_fragment",
                     "file_revision_snapshot",
                     "context_revision",
@@ -252,10 +277,12 @@ def _delete_issue_27_upgrade_fixture(
                     "file_source_delete_observation_page",
                     "file_source_change",
                     "file_source_change_page",
+                    "source_article_policy_default",
                     "context_source",
                     "source_version",
                     "service_principal",
                     "membership",
+                    "organization_article_policy_default",
                 ):
                     connection.execute(
                         text(f"DELETE FROM {table} WHERE organization_id = :org"),
@@ -333,6 +360,670 @@ def test_empty_baseline_remains_a_reversible_historical_revision(
     finally:
         command.upgrade(alembic_configuration, "head")
     assert _revision_rows(migration_configuration) == [HEAD_REVISION]
+
+
+def test_article_policy_revision_backfills_legacy_access_and_reapplies_cleanly(
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    """Issue #141 preserves legacy PRIVATE access across 0040 compatibility."""
+
+    alembic_configuration = Config(ROOT / "alembic.ini")
+    organization_id = uuid4()
+    visible_resource_ref = f"resource:article-backfill-visible:{uuid4()}"
+    isolated_resource_ref = f"resource:article-backfill-isolated:{uuid4()}"
+    principal_ref = f"principal:article-backfill:{uuid4()}"
+    source_ref = f"source:article-backfill:{uuid4()}"
+
+    try:
+        command.downgrade(alembic_configuration, "20260727_0040")
+        assert _revision_rows(migration_configuration) == ["20260727_0040"]
+        assert ARTICLE_POLICY_TABLES.isdisjoint(
+            _application_tables(migration_configuration)
+        )
+        engine = create_database_engine(migration_configuration)
+        try:
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "INSERT INTO organization (organization_id) "
+                        "VALUES (:organization_id)"
+                    ),
+                    {"organization_id": organization_id},
+                )
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO context_resource (
+                            organization_id, resource_ref, source_ref,
+                            active_revision_id, tombstoned
+                        ) VALUES
+                        (:organization_id, :visible_resource_ref, :source_ref,
+                         NULL, false),
+                        (:organization_id, :isolated_resource_ref, :source_ref,
+                         NULL, false)
+                        """
+                    ),
+                    {
+                        "organization_id": organization_id,
+                        "visible_resource_ref": visible_resource_ref,
+                        "isolated_resource_ref": isolated_resource_ref,
+                        "source_ref": source_ref,
+                    },
+                )
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO resource_access_policy (
+                            organization_id, resource_ref, principal_ref,
+                            access_version, access_state, revoked_at
+                        ) VALUES (
+                            :organization_id, :resource_ref, :principal_ref,
+                            1, 'allowed', NULL
+                        )
+                        """
+                    ),
+                    {
+                        "organization_id": organization_id,
+                        "resource_ref": visible_resource_ref,
+                        "principal_ref": principal_ref,
+                    },
+                )
+        finally:
+            engine.dispose()
+
+        for pass_number in (1, 2):
+            command.upgrade(alembic_configuration, "head")
+            assert _revision_rows(migration_configuration) == [HEAD_REVISION]
+            assert ARTICLE_POLICY_TABLES.issubset(
+                _application_tables(migration_configuration)
+            )
+            engine = create_database_engine(migration_configuration)
+            try:
+                with engine.connect() as connection:
+                    policies = {
+                        row.resource_ref: tuple(row)[1:]
+                        for row in connection.execute(
+                            text(
+                                """
+                                SELECT resource_ref, local_policy_kind,
+                                       policy_kind, published, resolution_rung,
+                                       source_evidence_mode,
+                                       source_observation_status,
+                                       source_observation_version,
+                                       fixed_at_policy_epoch
+                                FROM article_access_policy
+                                WHERE organization_id = :organization_id
+                                ORDER BY resource_ref
+                                """
+                            ),
+                            {"organization_id": organization_id},
+                        )
+                    }
+                    observations = connection.execute(
+                        text(
+                            """
+                            SELECT resource_ref, evidence_mode,
+                                   observation_status, policy_kind,
+                                   observation_version
+                            FROM article_source_acl_observation
+                            WHERE organization_id = :organization_id
+                            """
+                        ),
+                        {"organization_id": organization_id},
+                    ).all()
+            finally:
+                engine.dispose()
+            assert policies == {
+                visible_resource_ref: (
+                    "private",
+                    "private",
+                    True,
+                    "explicit_article",
+                    "mirrored",
+                    "resolved",
+                    1,
+                    1,
+                ),
+                isolated_resource_ref: (
+                    "private",
+                    None,
+                    False,
+                    "tenant_default",
+                    "mirrored",
+                    "missing",
+                    None,
+                    1,
+                ),
+            }
+            assert [tuple(row) for row in observations] == [
+                (
+                    visible_resource_ref,
+                    "mirrored",
+                    "resolved",
+                    "private",
+                    1,
+                )
+            ]
+            if pass_number == 1:
+                command.downgrade(alembic_configuration, "20260727_0040")
+                assert ARTICLE_POLICY_TABLES.isdisjoint(
+                    _application_tables(migration_configuration)
+                )
+    finally:
+        command.upgrade(alembic_configuration, "head")
+        engine = create_database_engine(migration_configuration)
+        try:
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "DELETE FROM resource_access_policy "
+                        "WHERE organization_id = :organization_id"
+                    ),
+                    {"organization_id": organization_id},
+                )
+                connection.execute(
+                    text(
+                        "DELETE FROM context_resource "
+                        "WHERE organization_id = :organization_id"
+                    ),
+                    {"organization_id": organization_id},
+                )
+                connection.execute(
+                    text(
+                        "DELETE FROM organization "
+                        "WHERE organization_id = :organization_id"
+                    ),
+                    {"organization_id": organization_id},
+                )
+        finally:
+            engine.dispose()
+
+
+def test_article_policy_revision_backfills_exact_file_acl_version_and_stales(
+    migration_configuration: DatabaseConfiguration,
+    guarded_runtime_engine: Engine,
+) -> None:
+    """Legacy File access binds durable ACL time and the active SourceVersion."""
+
+    alembic_configuration = Config(ROOT / "alembic.ini")
+    organization_id = uuid4()
+    source_id = uuid4()
+    source_version_id = uuid4()
+    replacement_version_id = uuid4()
+    resource_ref = f"resource:file-article-backfill:{uuid4()}"
+    principal_ref = f"principal:file-article-backfill:{uuid4()}"
+    capability_document = json.dumps(
+        FILE_CAPABILITY_MANIFEST.document(), separators=(",", ":"), sort_keys=True
+    )
+
+    try:
+        command.downgrade(alembic_configuration, "20260727_0040")
+        engine = create_database_engine(migration_configuration)
+        try:
+            with engine.begin() as connection:
+                connection.execute(
+                    text("INSERT INTO organization (organization_id) VALUES (:org)"),
+                    {"org": organization_id},
+                )
+                connection.execute(text("SET CONSTRAINTS ALL DEFERRED"))
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO context_source (
+                            organization_id, source_id, display_name, source_kind,
+                            registration_operation, idempotency_key,
+                            registration_digest, active_version_id, created_at
+                        ) VALUES (
+                            :org, :source_id, 'Legacy File', 'file',
+                            'register_source', :idempotency_key,
+                            :registration_digest, :source_version_id,
+                            statement_timestamp()
+                        )
+                        """
+                    ),
+                    {
+                        "org": organization_id,
+                        "source_id": source_id,
+                        "idempotency_key": f"legacy-file-{uuid4().hex}",
+                        "registration_digest": "a" * 64,
+                        "source_version_id": source_version_id,
+                    },
+                )
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO source_version (
+                            organization_id, source_id, version_id, source_kind,
+                            root_ref, capability_manifest, created_at
+                        ) VALUES (
+                            :org, :source_id, :source_version_id, 'file',
+                            'legacy-file-root', CAST(:capabilities AS jsonb),
+                            statement_timestamp()
+                        )
+                        """
+                    ),
+                    {
+                        "org": organization_id,
+                        "source_id": source_id,
+                        "source_version_id": source_version_id,
+                        "capabilities": capability_document,
+                    },
+                )
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO context_resource (
+                            organization_id, resource_ref, source_ref,
+                            active_revision_id, tombstoned
+                        ) VALUES (:org, :resource, :source_ref, NULL, false)
+                        """
+                    ),
+                    {
+                        "org": organization_id,
+                        "resource": resource_ref,
+                        "source_ref": str(source_id),
+                    },
+                )
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO resource_access_policy (
+                            organization_id, resource_ref, principal_ref,
+                            access_version, access_state, revoked_at
+                        ) VALUES (:org, :resource, :principal, 1, 'allowed', NULL)
+                        """
+                    ),
+                    {
+                        "org": organization_id,
+                        "resource": resource_ref,
+                        "principal": principal_ref,
+                    },
+                )
+        finally:
+            engine.dispose()
+
+        command.upgrade(alembic_configuration, "head")
+        engine = create_database_engine(migration_configuration)
+        try:
+            with engine.connect() as connection:
+                observation = connection.execute(
+                    text(
+                        """
+                        SELECT source_id, source_version_ref, observed_at, acl_as_of,
+                               declared_lag_seconds
+                        FROM article_source_acl_observation
+                        WHERE organization_id = :org AND resource_ref = :resource
+                        """
+                    ),
+                    {"org": organization_id, "resource": resource_ref},
+                ).one()
+                policy = connection.execute(
+                    text(
+                        """
+                        SELECT source_version_ref, source_acl_as_of,
+                               source_declared_lag_seconds, published
+                        FROM article_access_policy
+                        WHERE organization_id = :org AND resource_ref = :resource
+                        """
+                    ),
+                    {"org": organization_id, "resource": resource_ref},
+                ).one()
+            assert tuple(observation[:2]) == (source_id, source_version_id)
+            assert observation.observed_at == observation.acl_as_of
+            assert observation.declared_lag_seconds == 0
+            assert tuple(policy) == (
+                source_version_id,
+                observation.acl_as_of,
+                0,
+                True,
+            )
+
+            with guarded_runtime_engine.begin() as connection:
+                connection.execute(
+                    text("SELECT set_config('app.organization_id', :org, true)"),
+                    {"org": str(organization_id)},
+                )
+                assert connection.execute(
+                    text(
+                        "SELECT public.context_runtime_article_source_version_allows("
+                        ":org, :resource, :version)"
+                    ),
+                    {
+                        "org": organization_id,
+                        "resource": resource_ref,
+                        "version": source_version_id,
+                    },
+                ).scalar_one() is True
+
+            with engine.begin() as connection:
+                connection.execute(text("SET CONSTRAINTS ALL DEFERRED"))
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO source_version (
+                            organization_id, source_id, version_id, source_kind,
+                            root_ref, capability_manifest, created_at
+                        ) VALUES (
+                            :org, :source_id, :version_id, 'file',
+                            'replacement-file-root', CAST(:capabilities AS jsonb),
+                            statement_timestamp()
+                        )
+                        """
+                    ),
+                    {
+                        "org": organization_id,
+                        "source_id": source_id,
+                        "version_id": replacement_version_id,
+                        "capabilities": capability_document,
+                    },
+                )
+                connection.execute(
+                    text(
+                        "UPDATE context_source SET active_version_id = :version_id "
+                        "WHERE organization_id = :org AND source_id = :source_id"
+                    ),
+                    {
+                        "org": organization_id,
+                        "source_id": source_id,
+                        "version_id": replacement_version_id,
+                    },
+                )
+
+            with guarded_runtime_engine.begin() as connection:
+                connection.execute(
+                    text("SELECT set_config('app.organization_id', :org, true)"),
+                    {"org": str(organization_id)},
+                )
+                assert connection.execute(
+                    text(
+                        "SELECT public.context_runtime_article_source_version_allows("
+                        ":org, :resource, :version)"
+                    ),
+                    {
+                        "org": organization_id,
+                        "resource": resource_ref,
+                        "version": source_version_id,
+                    },
+                ).scalar_one() is False
+
+            with pytest.raises(RuntimeError, match="not safely representable"):
+                command.downgrade(alembic_configuration, "20260727_0040")
+        finally:
+            engine.dispose()
+    finally:
+        command.upgrade(alembic_configuration, "head")
+        _delete_issue_27_upgrade_fixture(migration_configuration, organization_id)
+
+
+def test_article_policy_downgrade_rejects_every_deferred_admin_state(
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    """0040 cannot represent changed defaults, explicit settings, or groups."""
+
+    alembic_configuration = Config(ROOT / "alembic.ini")
+    organization_id = uuid4()
+    source_ref = f"source:downgrade-admin:{uuid4()}"
+    resource_ref = f"resource:downgrade-admin:{uuid4()}"
+    group_ref = "group:downgrade-admin"
+    engine = create_database_engine(migration_configuration)
+    mutations = (
+        (
+            "UPDATE organization_article_policy_default "
+            "SET default_version = 2 WHERE organization_id = :org",
+            "UPDATE organization_article_policy_default "
+            "SET default_version = 1 WHERE organization_id = :org",
+        ),
+        (
+            "INSERT INTO source_article_policy_default (organization_id, "
+            "source_ref, policy_kind, group_refs, default_version) VALUES "
+            "(:org, :source, 'private', ARRAY[]::text[], 2)",
+            "DELETE FROM source_article_policy_default WHERE organization_id = :org "
+            "AND source_ref = :source",
+        ),
+        (
+            "INSERT INTO article_explicit_policy_setting (organization_id, "
+            "source_ref, resource_ref, policy_kind, group_refs) VALUES "
+            "(:org, :source, :resource, 'private', ARRAY[]::text[])",
+            "DELETE FROM article_explicit_policy_setting WHERE organization_id = "
+            ":org AND resource_ref = :resource",
+        ),
+        (
+            "INSERT INTO article_access_group (organization_id, group_ref) "
+            "VALUES (:org, :group_ref)",
+            "DELETE FROM article_access_group WHERE organization_id = :org "
+            "AND group_ref = :group_ref",
+        ),
+    )
+    parameters = {
+        "org": organization_id,
+        "source": source_ref,
+        "resource": resource_ref,
+        "group_ref": group_ref,
+    }
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                text("INSERT INTO organization (organization_id) VALUES (:org)"),
+                parameters,
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO context_resource (organization_id, resource_ref, "
+                    "source_ref, active_revision_id, tombstoned) VALUES "
+                    "(:org, :resource, :source, NULL, false)"
+                ),
+                parameters,
+            )
+        for mutation, cleanup in mutations:
+            with engine.begin() as connection:
+                connection.execute(text(mutation), parameters)
+            with pytest.raises(RuntimeError, match="not safely representable"):
+                command.downgrade(alembic_configuration, "20260727_0040")
+            assert _revision_rows(migration_configuration) == [HEAD_REVISION]
+            with engine.begin() as connection:
+                connection.execute(text(cleanup), parameters)
+    finally:
+        command.upgrade(alembic_configuration, "head")
+        with engine.begin() as connection:
+            connection.execute(
+                text("DELETE FROM context_resource WHERE organization_id = :org"),
+                parameters,
+            )
+            connection.execute(
+                text("DELETE FROM organization WHERE organization_id = :org"),
+                parameters,
+            )
+        engine.dispose()
+
+
+def test_article_policy_downgrade_refuses_state_that_would_reauthorize_content(
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    """Rollback is atomic when ADR-0077 denial cannot survive legacy policy."""
+
+    alembic_configuration = Config(ROOT / "alembic.ini")
+    organization_id = uuid4()
+    source_ref = f"source:unsafe-downgrade:{uuid4()}"
+    resource_ref = f"resource:unsafe-downgrade:{uuid4()}"
+    principal_ref = f"principal:unsafe-downgrade:{uuid4()}"
+    engine = create_database_engine(migration_configuration)
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                text("INSERT INTO organization (organization_id) VALUES (:org)"),
+                {"org": organization_id},
+            )
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO context_resource (
+                        organization_id, resource_ref, source_ref,
+                        active_revision_id, tombstoned
+                    ) VALUES (:org, :resource, :source, NULL, false)
+                    """
+                ),
+                {
+                    "org": organization_id,
+                    "resource": resource_ref,
+                    "source": source_ref,
+                },
+            )
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO resource_access_policy (
+                        organization_id, resource_ref, principal_ref,
+                        access_version, access_state, revoked_at
+                    ) VALUES (:org, :resource, :principal, 1, 'allowed', NULL)
+                    """
+                ),
+                {
+                    "org": organization_id,
+                    "resource": resource_ref,
+                    "principal": principal_ref,
+                },
+            )
+            connection.execute(
+                text(
+                    """
+                    UPDATE article_access_policy
+                    SET policy_version = 2, policy_kind = NULL,
+                        group_refs = ARRAY[]::text[], published = false,
+                        source_observation_status = 'failed',
+                        source_observation_version = 2,
+                        fixed_at_policy_epoch = 2
+                    WHERE organization_id = :org AND resource_ref = :resource
+                    """
+                ),
+                {"org": organization_id, "resource": resource_ref},
+            )
+
+        with pytest.raises(RuntimeError, match="not safely representable"):
+            command.downgrade(alembic_configuration, "20260727_0040")
+
+        assert _revision_rows(migration_configuration) == [HEAD_REVISION]
+        with engine.connect() as connection:
+            policy = connection.execute(
+                text(
+                    "SELECT published, source_observation_status "
+                    "FROM article_access_policy "
+                    "WHERE organization_id = :org AND resource_ref = :resource"
+                ),
+                {"org": organization_id, "resource": resource_ref},
+            ).one()
+        assert tuple(policy) == (False, "failed")
+    finally:
+        command.upgrade(alembic_configuration, "head")
+        with engine.begin() as connection:
+            connection.execute(
+                text("DELETE FROM resource_access_policy WHERE organization_id = :org"),
+                {"org": organization_id},
+            )
+            connection.execute(
+                text("DELETE FROM context_resource WHERE organization_id = :org"),
+                {"org": organization_id},
+            )
+            connection.execute(
+                text("DELETE FROM organization WHERE organization_id = :org"),
+                {"org": organization_id},
+            )
+        engine.dispose()
+
+
+def test_article_policy_downgrade_restores_source_version_least_privilege(
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    """0041 must not leave its SourceVersion definer capability in 0040."""
+
+    alembic_configuration = Config(ROOT / "alembic.ini")
+    try:
+        command.downgrade(alembic_configuration, "20260727_0040")
+        engine = create_database_engine(migration_configuration)
+        try:
+            with engine.connect() as connection:
+                assert connection.execute(
+                    text(
+                        "SELECT has_table_privilege("
+                        "'context_engine_access_policy_definer', "
+                        "'public.source_version', 'SELECT')"
+                    )
+                ).scalar_one() is False
+        finally:
+            engine.dispose()
+    finally:
+        command.upgrade(alembic_configuration, "head")
+
+
+def test_article_policy_downgrade_waits_for_source_authority_writer(
+    tmp_path: Path,
+    migration_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+) -> None:
+    """0041 representability is serialized behind current SourceVersion state."""
+
+    alembic_configuration = Config(ROOT / "alembic.ini")
+    scenario = _prepare_file_import_scenario(
+        tmp_path,
+        migration_configuration,
+        guarded_control_engine,
+        issue_lease=False,
+    )
+    engine = create_database_engine(migration_configuration)
+    try:
+        with guarded_control_engine.connect() as writer:
+            writer_transaction = writer.begin()
+            try:
+                activated_version_id = uuid4()
+                assert writer.execute(
+                    text(
+                        "SELECT activated_version_id FROM public."
+                        "context_control_activate_file_change_feed("
+                        ":org, :source_id, :activated_version_id)"
+                    ),
+                    {
+                        "org": scenario.organization_id,
+                        "source_id": scenario.source_ref.value,
+                        "activated_version_id": activated_version_id,
+                    },
+                ).scalar_one() == activated_version_id
+                with ThreadPoolExecutor(max_workers=1) as executor:
+                    downgrade = executor.submit(
+                        command.downgrade,
+                        alembic_configuration,
+                        "20260727_0040",
+                    )
+                    waiting = False
+                    deadline = monotonic() + 5
+                    while monotonic() < deadline:
+                        with engine.connect() as observer:
+                            waiting = observer.execute(
+                                text(
+                                    "SELECT EXISTS (SELECT 1 FROM pg_locks "
+                                    "WHERE relation = 'context_source'::regclass "
+                                    "AND mode = 'AccessExclusiveLock' "
+                                    "AND granted IS FALSE)"
+                                )
+                            ).scalar_one()
+                        if waiting or downgrade.done():
+                            break
+                        sleep(0.01)
+                    observed_waiting = waiting
+                    observed_pending = not downgrade.done()
+                    writer_transaction.commit()
+                    downgrade.result(timeout=10)
+                    assert observed_waiting is True
+                    assert observed_pending is True
+            finally:
+                if writer_transaction.is_active:
+                    writer_transaction.rollback()
+        assert _revision_rows(migration_configuration) == ["20260727_0040"]
+    finally:
+        command.upgrade(alembic_configuration, "head")
+        engine.dispose()
+        _delete_file_import_scenario(
+            migration_configuration,
+            scenario.organization_id,
+        )
 
 
 def test_organization_isolation_revision_downgrades_and_reapplies_cleanly(
@@ -1064,9 +1755,12 @@ def test_file_delete_execution_revision_downgrades_only_while_empty(
     engine = create_database_engine(migration_configuration)
     try:
         with engine.connect() as connection:
-            assert connection.execute(
-                text("SELECT count(*) FROM file_delete_observation_execution")
-            ).scalar_one() == 0
+            assert (
+                connection.execute(
+                    text("SELECT count(*) FROM file_delete_observation_execution")
+                ).scalar_one()
+                == 0
+            )
     finally:
         engine.dispose()
     try:
@@ -1078,14 +1772,17 @@ def test_file_delete_execution_revision_downgrades_only_while_empty(
         engine = create_database_engine(migration_configuration)
         try:
             with engine.connect() as connection:
-                assert connection.execute(
-                    text(
-                        "SELECT has_function_privilege("
-                        "'context_engine_worker_lease_definer', "
-                        "'context_control_tombstone_file_resource("
-                        "uuid,uuid,text,text,bigint,uuid)', 'EXECUTE')"
-                    )
-                ).scalar_one() is False
+                assert (
+                    connection.execute(
+                        text(
+                            "SELECT has_function_privilege("
+                            "'context_engine_worker_lease_definer', "
+                            "'context_control_tombstone_file_resource("
+                            "uuid,uuid,text,text,bigint,uuid)', 'EXECUTE')"
+                        )
+                    ).scalar_one()
+                    is False
+                )
         finally:
             engine.dispose()
     finally:
@@ -1098,14 +1795,17 @@ def test_file_delete_execution_revision_downgrades_only_while_empty(
     engine = create_database_engine(migration_configuration)
     try:
         with engine.connect() as connection:
-            assert connection.execute(
-                text(
-                    "SELECT has_function_privilege("
-                    "'context_engine_worker_lease_definer', "
-                    "'context_control_tombstone_file_resource("
-                    "uuid,uuid,text,text,bigint,uuid)', 'EXECUTE')"
-                )
-            ).scalar_one() is True
+            assert (
+                connection.execute(
+                    text(
+                        "SELECT has_function_privilege("
+                        "'context_engine_worker_lease_definer', "
+                        "'context_control_tombstone_file_resource("
+                        "uuid,uuid,text,text,bigint,uuid)', 'EXECUTE')"
+                    )
+                ).scalar_one()
+                is True
+            )
     finally:
         engine.dispose()
 
@@ -1131,13 +1831,16 @@ def test_mixed_file_upsert_scheduling_revision_downgrades_and_reapplies_empty(
                 ).scalar_one()
                 assert "selected_upsert_count" not in prior
                 assert "change.change_kind <> 'upsert'" in prior
-                assert connection.execute(
-                    text(
-                        "SELECT has_table_privilege("
-                        "'context_engine_worker_lease_definer', "
-                        "'public.alembic_version', 'SELECT')"
-                    )
-                ).scalar_one() is False
+                assert (
+                    connection.execute(
+                        text(
+                            "SELECT has_table_privilege("
+                            "'context_engine_worker_lease_definer', "
+                            "'public.alembic_version', 'SELECT')"
+                        )
+                    ).scalar_one()
+                    is False
+                )
         finally:
             engine.dispose()
     finally:
@@ -1152,8 +1855,8 @@ def test_mixed_file_upsert_scheduling_revision_downgrades_and_reapplies_empty(
                     "SELECT pg_catalog.pg_get_functiondef("
                     "'public.context_control_schedule_file_change_page("
                     "uuid,uuid,uuid,text,text,uuid,bigint,uuid)'::regprocedure)"
-                    )
-                ).scalar_one()
+                )
+            ).scalar_one()
             assert "selected_upsert_count" in current
             assert "change.change_kind NOT IN ('upsert', 'delete')" in current
             assert current.count("change.change_kind = 'upsert'") == 4
@@ -1724,9 +2427,7 @@ def test_in_flight_old_scheduler_fails_closed_when_downgrade_wins_fence(
         with engine.connect() as blocker:
             blocker_transaction = blocker.begin()
             try:
-                blocker.execute(
-                    text("LOCK TABLE context_source IN ACCESS SHARE MODE")
-                )
+                blocker.execute(text("LOCK TABLE context_source IN ACCESS SHARE MODE"))
                 with ThreadPoolExecutor(max_workers=2) as executor:
                     pending_downgrade = executor.submit(
                         command.downgrade,
@@ -1816,8 +2517,8 @@ def test_in_flight_old_scheduler_fails_closed_when_downgrade_wins_fence(
                                           AND held.granted IS TRUE
                                     )
                                     """
-                                ),
-                                {"lock_key": migration_fence_key},
+                                    ),
+                                    {"lock_key": migration_fence_key},
                                 ).scalar_one()
                                 if scheduler_waiting:
                                     break
@@ -1833,14 +2534,17 @@ def test_in_flight_old_scheduler_fails_closed_when_downgrade_wins_fence(
                     blocker_transaction.rollback()
         assert _revision_rows(migration_configuration) == ["20260725_0031"]
         with engine.connect() as connection:
-            assert connection.execute(
-                text(
-                    "SELECT count(*) FROM file_acquisition "
-                    "WHERE organization_id = :organization_id "
-                    "AND change_page_ref IS NOT NULL"
-                ),
-                {"organization_id": scenario.organization_id},
-            ).scalar_one() == 0
+            assert (
+                connection.execute(
+                    text(
+                        "SELECT count(*) FROM file_acquisition "
+                        "WHERE organization_id = :organization_id "
+                        "AND change_page_ref IS NOT NULL"
+                    ),
+                    {"organization_id": scenario.organization_id},
+                ).scalar_one()
+                == 0
+            )
     finally:
         command.upgrade(alembic_configuration, "head")
         engine.dispose()
@@ -2364,9 +3068,7 @@ def test_direct_file_change_activation_revision_downgrades_and_reapplies(
     migration_configuration: DatabaseConfiguration,
 ) -> None:
     alembic_configuration = Config(ROOT / "alembic.ini")
-    regprocedure = (
-        "public.context_control_activate_file_change_feed(uuid, uuid, uuid)"
-    )
+    regprocedure = "public.context_control_activate_file_change_feed(uuid, uuid, uuid)"
 
     def definition() -> str:
         engine = create_database_engine(migration_configuration)
@@ -2375,8 +3077,7 @@ def test_direct_file_change_activation_revision_downgrades_and_reapplies(
                 return str(
                     connection.execute(
                         text(
-                            "SELECT pg_get_functiondef("
-                            f"'{regprocedure}'::regprocedure)"
+                            f"SELECT pg_get_functiondef('{regprocedure}'::regprocedure)"
                         )
                     ).scalar_one()
                 )
@@ -2409,15 +3110,18 @@ def test_pending_file_schedule_projection_revision_downgrades_and_reapplies(
         engine = create_database_engine(migration_configuration)
         try:
             with engine.connect() as connection:
-                assert connection.execute(
-                    text(
-                        """
+                assert (
+                    connection.execute(
+                        text(
+                            """
                         SELECT to_regprocedure(
                           'public.context_control_read_pending_file_change_schedules(uuid,uuid)'
                         ) IS NULL
                         """
-                    )
-                ).scalar_one() is True
+                        )
+                    ).scalar_one()
+                    is True
+                )
         finally:
             engine.dispose()
     finally:
@@ -2857,9 +3561,11 @@ def test_file_change_scheduling_downgrade_serializes_with_manual_import(
                                                 FROM pg_database
                                                 WHERE datname = current_database()
                                             )
-                                              AND relation = (
-                                                  'public.file_acquisition'::regclass
-                                              )
+                                                  AND relation IN (
+                                                      'public.context_source'::regclass,
+                                                      'public.source_version'::regclass,
+                                                      'public.file_acquisition'::regclass
+                                                  )
                                               AND mode = 'AccessExclusiveLock'
                                               AND granted IS FALSE
                                         )
@@ -3838,7 +4544,7 @@ def test_field_projection_downgrade_refuses_populated_content_atomically(
                     """
                 )
             ).scalar_one()
-        assert "resource_access_policy" in str(policy)
+            assert "article_access_policy" in str(policy)
         assert "membership_resource_field_right" in str(policy)
     finally:
         try:

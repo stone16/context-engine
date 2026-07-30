@@ -192,6 +192,11 @@ def _delete_scenarios(
                         "revision_publication_event",
                         "membership_resource_field_right",
                         "resource_access_policy",
+                        "article_access_policy",
+                        "article_source_acl_observation",
+                        "article_explicit_policy_setting",
+                        "article_access_group_membership",
+                        "article_access_group",
                         "context_fragment",
                         "file_revision_snapshot",
                         "file_resource_cleanup_intent",
@@ -204,11 +209,13 @@ def _delete_scenarios(
                         "file_source_delete_observation_page",
                         "file_source_change",
                         "file_source_change_page",
+                        "source_article_policy_default",
                         "context_source",
                         "source_version",
                         "organization_policy_epoch",
                         "service_principal",
                         "membership",
+                        "organization_article_policy_default",
                     ):
                         connection.execute(
                             text(

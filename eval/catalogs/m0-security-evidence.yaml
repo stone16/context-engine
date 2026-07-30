@@ -71,6 +71,11 @@
       "selector": "tests/integration/test_m0_security_gate_rls.py::test_all_manifest_tenant_tables_pass_live_non_owner_rls_audit"
     },
     {
+      "id": "PG-ARTICLE-ACCESS-RLS-141",
+      "layer": "postgres",
+      "selector": "tests/integration/test_article_access_policy_rls.py::test_article_policy_tables_force_rls_and_groups_authorize_at_article_atom"
+    },
+    {
       "id": "RUNTIME-TENANT-OWNERSHIP-001",
       "layer": "runtime",
       "selector": "tests/integration/test_runtime_authorized_evidence_integration.py::test_real_postgres_http_delivers_only_exact_authorized_evidence_bidirectionally"
@@ -189,6 +194,16 @@
       "id": "RUNTIME-REVOCATION-006",
       "layer": "runtime",
       "selector": "tests/integration/test_runtime_policy_epoch_integration.py::test_same_http_acquire_revokes_next_delivery_without_candidate_cleanup"
+    },
+    {
+      "id": "RUNTIME-ARTICLE-ACCESS-141",
+      "layer": "runtime",
+      "selector": "tests/integration/test_revocation_takes_effect_without_reindex.py::test_groups_membership_removal_refuses_next_resolve_under_current_membership"
+    },
+    {
+      "id": "PG-ARTICLE-GROUP-INTERSECTION-141",
+      "layer": "postgres",
+      "selector": "tests/integration/test_article_access_policy_rls.py::test_groups_floor_persists_exact_intersection_and_disjoint_groups_isolate"
     },
     {
       "id": "PROP-WORKER-LEASE-007",
@@ -611,6 +626,7 @@
         "postgres": [
           "PG-FILE-SOURCE-RLS-021",
           "PG-RLS-ALL-TENANT-TABLES",
+          "PG-ARTICLE-ACCESS-RLS-141",
           "PG-FILE-IMPORT-023",
           "PG-FILE-REPLACEMENT-026",
           "PG-FILE-RECOVERY-027",
@@ -653,6 +669,7 @@
         "postgres": [
           "PG-RLS-FAIL-CLOSED-003",
           "PG-RLS-ALL-TENANT-TABLES",
+          "PG-ARTICLE-ACCESS-RLS-141",
           "PG-FILE-IMPORT-023",
           "PG-FILE-REPLACEMENT-026",
           "PG-FILE-TOMBSTONE-028",
@@ -672,10 +689,13 @@
         ],
         "postgres": [
           "PG-SCOPE-INTERSECTION-004",
-          "PG-FIELD-PROJECTION-RLS-048"
+          "PG-FIELD-PROJECTION-RLS-048",
+          "PG-ARTICLE-ACCESS-RLS-141",
+          "PG-ARTICLE-GROUP-INTERSECTION-141"
         ],
         "runtime": [
-          "RUNTIME-SCOPE-INTERSECTION-004"
+          "RUNTIME-SCOPE-INTERSECTION-004",
+          "RUNTIME-ARTICLE-ACCESS-141"
         ]
       }
     },
@@ -687,6 +707,7 @@
         ],
         "postgres": [
           "PG-INDEX-NOT-AUTHORITY-005",
+          "PG-ARTICLE-ACCESS-RLS-141",
           "PG-FILE-IMPORT-023",
           "PG-FILE-REPLACEMENT-026",
           "PG-FILE-TOMBSTONE-028",
@@ -694,6 +715,7 @@
         ],
         "runtime": [
           "RUNTIME-INDEX-NOT-AUTHORITY-005",
+          "RUNTIME-ARTICLE-ACCESS-141",
           "RUNTIME-DOGFOOD-CARRIER-102",
           "RUNTIME-DOGFOOD-EPOCH-102"
         ]
@@ -714,6 +736,7 @@
         ],
         "runtime": [
           "RUNTIME-REVOCATION-006",
+          "RUNTIME-ARTICLE-ACCESS-141",
           "HTTP-FILE-DELETE-INVISIBLE-087"
         ]
       }

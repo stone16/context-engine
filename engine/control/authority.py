@@ -29,6 +29,8 @@ class ControlOperation(StrEnum):
     READ_SOURCE = "read_source"
     READ_SOURCE_PROGRESS = "read_source_progress"
     SCHEDULE_FILE_CHANGE_PAGE = "schedule_file_change_page"
+    SET_SOURCE_ARTICLE_POLICY_DEFAULT = "set_source_article_policy_default"
+    SET_TENANT_ARTICLE_POLICY_DEFAULT = "set_tenant_article_policy_default"
     TOMBSTONE_FILE_RESOURCE = "tombstone_file_resource"
 
 
@@ -63,15 +65,12 @@ class VerifiedControlOperatorIdentity:
             "authentication_binding_ref",
             "authority_ref",
         ):
-            _require_bounded_text(
-                f"control operator {name}", getattr(self, name), 256
-            )
+            _require_bounded_text(f"control operator {name}", getattr(self, name), 256)
         if (
             type(self.allowed_operations) is not frozenset
             or not self.allowed_operations
             or any(
-                type(value) is not ControlOperation
-                for value in self.allowed_operations
+                type(value) is not ControlOperation for value in self.allowed_operations
             )
         ):
             raise ValueError(

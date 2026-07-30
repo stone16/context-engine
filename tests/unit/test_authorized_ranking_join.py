@@ -55,6 +55,8 @@ def _projections(
                     policy_snapshot_ref="policy:authorized-ranking",
                     policy_epoch=1,
                     source_acl_decision_ref="sourceacl:authorized-ranking",
+                    source_acl_projection_ref="sourceacl_projection:ranking",
+                    source_acl_as_of=datetime(2026, 7, 29, tzinfo=UTC),
                 ),
             )
             for ordinal, candidate in enumerate(candidates)
@@ -96,9 +98,7 @@ def test_join_uses_exact_ref_discards_refused_and_assigns_neutral_rank() -> None
         )
         assert tuple(item.fused_rank for item in joined) == (1, 1)
         assert joined[1].rank_evidence is None
-        assert all(
-            item.projection.candidate_ref != refused for item in consumer_calls
-        )
+        assert all(item.projection.candidate_ref != refused for item in consumer_calls)
         assert "refused" not in repr(joined)
 
 
@@ -208,9 +208,13 @@ def test_tied_ranker_positions_have_a_stable_total_order() -> None:
                 )
             )
 
-    assert observed_orders == [
-        (canonical_first, canonical_second),
-    ] * 10
+    assert (
+        observed_orders
+        == [
+            (canonical_first, canonical_second),
+        ]
+        * 10
+    )
 
 
 def test_neutral_admission_is_neither_best_nor_worst_under_budget() -> None:
@@ -234,11 +238,7 @@ def test_neutral_admission_is_neither_best_nor_worst_under_budget() -> None:
             ranked_first,
             neutral,
         )
-        assert (
-            selected[0].fused_rank
-            < selected[1].fused_rank
-            < joined[2].fused_rank
-        )
+        assert selected[0].fused_rank < selected[1].fused_rank < joined[2].fused_rank
 
 
 def test_package_assembly_preserves_authorized_ranking_order() -> None:

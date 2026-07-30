@@ -8,6 +8,8 @@ from enum import StrEnum
 from typing import NoReturn
 from uuid import UUID
 
+from engine.source_acl import SourceAclEvidenceMode
+
 MAX_SOURCE_DISPLAY_NAME_LENGTH = 200
 MAX_SOURCE_TOKEN_LENGTH = 128
 
@@ -70,10 +72,6 @@ class SourceContentKind(StrEnum):
 
 class SourceResourceKind(StrEnum):
     MARKDOWN_DOCUMENT = "markdown_document"
-
-
-class SourceAclEvidenceMode(StrEnum):
-    MIRRORED = "mirrored"
 
 
 class CapabilityStatus(StrEnum):

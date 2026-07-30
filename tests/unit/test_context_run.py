@@ -251,6 +251,8 @@ def _authorized_package() -> ContextPackage:
         policy_snapshot_ref="policy_issue_19",
         policy_epoch=7,
         source_acl_decision_ref="source-acl-19",
+        source_acl_projection_ref="sourceacl_projection-19",
+        source_acl_as_of=FINALIZED_AT,
     )
     evidence = Evidence(
         evidence_ref=EVIDENCE_REF,

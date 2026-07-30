@@ -754,20 +754,18 @@ class SealedRuntimeSelector:
         if type(decision) is not AuthorizationDecision:
             raise TypeError("sealed selection requires AuthorizationDecision")
         if type(rank_evidence) is not tuple or any(
-            type(evidence) is not CandidateRankEvidence
-            for evidence in rank_evidence
+            type(evidence) is not CandidateRankEvidence for evidence in rank_evidence
         ):
             raise TypeError("sealed selection requires exact rank evidence")
         authority = _SELECTOR_AUTHORITIES.get(self)
         if type(authority) is not _SelectionAuthority:
             raise RuntimeConfigurationError("sealed selector authority is unavailable")
-        if (
-            type(decision._integrity_seal) is not bytes
-            or not _verify_selection_authority_seal(
-                authority,
-                decision._integrity_seal,
-                _decision_integrity_material(decision),
-            )
+        if type(
+            decision._integrity_seal
+        ) is not bytes or not _verify_selection_authority_seal(
+            authority,
+            decision._integrity_seal,
+            _decision_integrity_material(decision),
         ):
             raise ValueError("authorization decision integrity validation failed")
         selected = select_authorized_ranking(
@@ -794,9 +792,9 @@ class SealedRuntimeSelector:
         )
 
 
-_SELECTOR_AUTHORITIES: WeakKeyDictionary[
-    SealedRuntimeSelector, _SelectionAuthority
-] = WeakKeyDictionary()
+_SELECTOR_AUTHORITIES: WeakKeyDictionary[SealedRuntimeSelector, _SelectionAuthority] = (
+    WeakKeyDictionary()
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -937,9 +935,7 @@ class AuthorizationKernel:
             type(candidate) is not CandidateRef for candidate in candidate_refs
         ):
             raise TypeError("Kernel candidate_refs must be exact CandidateRef values")
-        _require_effective_scope_integrity(
-            preparation.policy_receipt.effective_scope
-        )
+        _require_effective_scope_integrity(preparation.policy_receipt.effective_scope)
         projections, projection_scope = self._authorize_and_project(
             invocation,
             preparation.policy_receipt,
@@ -1042,6 +1038,10 @@ class AuthorizationKernel:
                 resource_ref=request.anchor.candidate_ref.resource_ref,
                 revision_ref=request.anchor.candidate_ref.revision_ref,
                 fragment_ref=request.anchor.candidate_ref.fragment_ref,
+                source_acl_projection_ref=(
+                    request.anchor.lineage.source_acl_projection_ref
+                ),
+                source_acl_as_of=request.anchor.lineage.source_acl_as_of,
             ),
             request.before,
             request.after,
@@ -1057,9 +1057,7 @@ class AuthorizationKernel:
             raise TypeError("fragment window reader returned the wrong nominal type")
         read.__post_init__()
         if _fragment_window_read_snapshot(read) != authoritative_snapshot:
-            raise ValueError(
-                "fragment window reader failed authoritative verification"
-            )
+            raise ValueError("fragment window reader failed authoritative verification")
         anchor_ref = request.anchor.candidate_ref
         projections = tuple(
             _construct_inherited_authorized_projection(
@@ -1153,9 +1151,10 @@ class AuthorizationKernel:
         ):
             raise ValueError("sealed selection integrity validation failed")
         content = selection.content
-        if sum(
-            len(block.body.encode("utf-8")) for block in content.blocks
-        ) > budget_limits[0]:
+        if (
+            sum(len(block.body.encode("utf-8")) for block in content.blocks)
+            > budget_limits[0]
+        ):
             raise ValueError("sealed selection exceeds PackageBudget")
         _require_active_user_actor(invocation.user_actor)
         policy_receipt = decision.policy_receipt
@@ -1235,6 +1234,7 @@ class AuthorizationKernel:
             content=content,
             audit_receipt=audit_receipt,
         )
+
     def finalize_egress(
         self,
         *,
@@ -1319,6 +1319,8 @@ class AuthorizationKernel:
                         source_acl_decision_ref=(
                             provenance_receipt.source_acl_decision_ref
                         ),
+                        source_acl_projection_ref=locator.source_acl_projection_ref,
+                        source_acl_as_of=locator.source_acl_as_of,
                     ),
                 )
                 projections.append(projection)
@@ -1492,13 +1494,11 @@ class Runtime:
         }:
             raise RuntimeConfigurationError(
                 "acquire capability must be a server-owned Acquire capability"
-        )
-        self._dependencies = validated
-        self._kernel, self._selector = (
-            _construct_authorization_kernel_and_selector(
-                validated,
-                fragment_window_reader=selected_content_io.fragment_windows,
             )
+        self._dependencies = validated
+        self._kernel, self._selector = _construct_authorization_kernel_and_selector(
+            validated,
+            fragment_window_reader=selected_content_io.fragment_windows,
         )
         self._package_ttl_seconds = package_ttl_seconds
         self._server_budget = server_budget
@@ -1664,9 +1664,7 @@ class Runtime:
                     discovery_session = _construct_candidate_discovery_session(
                         projection_session,
                         discovery_request,
-                        effective_scope=(
-                            preparation.policy_receipt.effective_scope
-                        ),
+                        effective_scope=(preparation.policy_receipt.effective_scope),
                     )
                     discovered = self._content_io.index.discover(
                         request,

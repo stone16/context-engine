@@ -153,6 +153,8 @@ def locator(candidate: CandidateRef) -> MaterializedFragmentLocator:
         resource_ref=candidate.resource_ref,
         revision_ref=candidate.revision_ref,
         fragment_ref=candidate.fragment_ref,
+        source_acl_projection_ref="sourceacl_runtime-authorized",
+        source_acl_as_of=AS_OF,
     )
 
 

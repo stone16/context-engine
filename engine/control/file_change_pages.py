@@ -174,9 +174,7 @@ class FileChangeBaselineEntry:
             raise TypeError("File change baseline kind is invalid")
         if type(self.path) is not FileImportPath:
             raise TypeError("File change baseline path must be FileImportPath")
-        _require_sha256(
-            "File change baseline content identity", self.content_sha256
-        )
+        _require_sha256("File change baseline content identity", self.content_sha256)
         if type(self.content_length) is not int or self.content_length < 0:
             raise ValueError("File change baseline content length is invalid")
 

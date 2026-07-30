@@ -12,7 +12,7 @@ def clear_file_source_progress_projection(
 
     engine = create_database_engine(configuration)
     try:
-        with engine.begin() as connection:
+        with engine.connect() as connection:
             tables_exist = connection.execute(
                 text(
                     """
@@ -35,21 +35,39 @@ def clear_file_source_progress_projection(
                     """
                 )
             ).scalar_one()
-            connection.execute(
-                text(
-                    "ALTER TABLE file_source_publish_watermark "
-                    "DISABLE TRIGGER file_source_publish_watermark_immutable"
-                )
+        immutable_triggers = [
+            (
+                "file_source_publish_watermark",
+                "file_source_publish_watermark_immutable",
+            ),
+            (
+                "file_source_acquisition_checkpoint",
+                "file_source_acquisition_checkpoint_immutable",
+            ),
+        ]
+        if change_tables_exist:
+            immutable_triggers.extend(
+                [
+                    ("file_source_change", "file_source_change_immutable"),
+                    (
+                        "file_source_change_page",
+                        "file_source_change_page_immutable",
+                    ),
+                ]
             )
-            connection.execute(
-                text(
-                    "ALTER TABLE file_source_acquisition_checkpoint "
-                    "DISABLE TRIGGER file_source_acquisition_checkpoint_immutable"
+        with engine.begin() as connection:
+            for table_name, trigger_name in immutable_triggers:
+                connection.execute(
+                    text(f"ALTER TABLE {table_name} DISABLE TRIGGER {trigger_name}")
                 )
-            )
-            connection.execute(text("DELETE FROM file_source_publish_watermark"))
-            connection.execute(text("DELETE FROM file_source_acquisition_checkpoint"))
-            if change_tables_exist:
+        try:
+            with engine.begin() as connection:
+                connection.execute(text("DELETE FROM file_source_publish_watermark"))
+                connection.execute(
+                    text("DELETE FROM file_source_acquisition_checkpoint")
+                )
+                if not change_tables_exist:
+                    return
                 delete_observation_table_exists = connection.execute(
                     text(
                         "SELECT to_regclass("
@@ -57,18 +75,6 @@ def clear_file_source_progress_projection(
                         ") IS NOT NULL"
                     )
                 ).scalar_one()
-                connection.execute(
-                    text(
-                        "ALTER TABLE file_source_change "
-                        "DISABLE TRIGGER file_source_change_immutable"
-                    )
-                )
-                connection.execute(
-                    text(
-                        "ALTER TABLE file_source_change_page "
-                        "DISABLE TRIGGER file_source_change_page_immutable"
-                    )
-                )
                 scheduling_columns_exist = connection.execute(
                     text(
                         """
@@ -97,29 +103,13 @@ def clear_file_source_progress_projection(
                         )
                     connection.execute(text("DELETE FROM file_source_change"))
                     connection.execute(text("DELETE FROM file_source_change_page"))
-                connection.execute(
-                    text(
-                        "ALTER TABLE file_source_change_page "
-                        "ENABLE TRIGGER file_source_change_page_immutable"
+        finally:
+            with engine.begin() as connection:
+                for table_name, trigger_name in reversed(immutable_triggers):
+                    connection.execute(
+                        text(
+                            f"ALTER TABLE {table_name} ENABLE TRIGGER {trigger_name}"
+                        )
                     )
-                )
-                connection.execute(
-                    text(
-                        "ALTER TABLE file_source_change "
-                        "ENABLE TRIGGER file_source_change_immutable"
-                    )
-                )
-            connection.execute(
-                text(
-                    "ALTER TABLE file_source_acquisition_checkpoint "
-                    "ENABLE TRIGGER file_source_acquisition_checkpoint_immutable"
-                )
-            )
-            connection.execute(
-                text(
-                    "ALTER TABLE file_source_publish_watermark "
-                    "ENABLE TRIGGER file_source_publish_watermark_immutable"
-                )
-            )
     finally:
         engine.dispose()

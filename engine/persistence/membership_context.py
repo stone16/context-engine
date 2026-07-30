@@ -246,6 +246,8 @@ class _PostgreSQLMaterializedProjectionPort:
                         resource.source_ref,
                         resource.resource_ref,
                         access_policy.resource_ref IS NOT NULL AS principal_granted,
+                        article_policy.resource_ref IS NOT NULL
+                            AS article_policy_allowed,
                         EXISTS (
                             SELECT 1
                             FROM context_fragment AS fragment
@@ -309,6 +311,35 @@ class _PostgreSQLMaterializedProjectionPort:
                          'app.principal_ref'
                      )
                      AND access_policy.access_state = 'allowed'
+                    LEFT JOIN article_access_policy AS article_policy
+                      ON article_policy.organization_id = resource.organization_id
+                     AND article_policy.resource_ref = resource.resource_ref
+                     AND article_policy.published IS TRUE
+                     AND (
+                        article_policy.policy_kind = 'organization'
+                        OR (
+                            article_policy.policy_kind = 'private'
+                            AND access_policy.resource_ref IS NOT NULL
+                        )
+                        OR (
+                            article_policy.policy_kind = 'groups'
+                            AND EXISTS (
+                                SELECT 1
+                                FROM article_access_group_membership AS group_member
+                                WHERE group_member.organization_id =
+                                    article_policy.organization_id
+                                  AND group_member.group_ref = ANY(
+                                    article_policy.group_refs
+                                  )
+                                  AND group_member.membership_id = NULLIF(
+                                    current_setting('app.membership_id'), ''
+                                  )::uuid
+                                  AND group_member.membership_version = NULLIF(
+                                    current_setting('app.membership_version'), ''
+                                  )::bigint
+                            )
+                        )
+                     )
                     WHERE resource.tombstoned IS FALSE
                       AND resource.active_revision_id IS NOT NULL
                       AND resource.active_revision_id = ANY(
@@ -335,21 +366,32 @@ class _PostgreSQLMaterializedProjectionPort:
                     ),
                     row.membership_allowed is True,
                     row.principal_granted is True,
+                    row.article_policy_allowed is True,
                 )
                 for row in rows
             )
             organization_boundary = frozenset(
-                target for target, _membership, _principal in rows_with_targets
+                target
+                for target, _membership, _principal, _article in rows_with_targets
             )
             membership_rights = frozenset(
                 target
-                for target, membership, _principal in rows_with_targets
+                for target, membership, _principal, _article in rows_with_targets
                 if membership
             )
-            principal_grants = frozenset(
+            principal_or_article_grants = frozenset(
                 target
-                for target, _membership, principal in rows_with_targets
-                if principal
+                for target, _membership, principal, _article in rows_with_targets
+                # ADR-0077 makes the Article policy the content grant.  The
+                # legacy principal row remains only the PRIVATE policy's
+                # source fact and must not independently veto ORGANIZATION or
+                # GROUPS after the Article decision has been derived.
+                if principal or _article
+            )
+            article_access = frozenset(
+                target
+                for target, _membership, _principal, article in rows_with_targets
+                if article
             )
             # context_resource RLS already enforces the current File source
             # lifecycle. That visible set is the local Mirrored source-native
@@ -358,9 +400,9 @@ class _PostgreSQLMaterializedProjectionPort:
             return MaterializedScopeOperands(
                 organization_boundary=organization_boundary,
                 membership_rights=membership_rights,
-                principal_grants=principal_grants,
+                principal_grants=principal_or_article_grants,
                 source_native_acl=organization_boundary,
-                resource_acl=principal_grants,
+                resource_acl=article_access,
             )
         except (TypeError, ValueError):
             raise MaterializedScopeUnavailable(
@@ -521,7 +563,18 @@ class _PostgreSQLMaterializedProjectionPort:
                     resource.source_ref,
                     resource.resource_ref,
                     revision.revision_id,
-                    fragment.fragment_ref
+                    fragment.fragment_ref,
+                    'sourceacl_' || pg_catalog.encode(
+                        pg_catalog.sha256(pg_catalog.convert_to(
+                            article_policy.organization_id::text || ':' ||
+                            article_policy.resource_ref || ':' ||
+                            article_policy.policy_version::text || ':' ||
+                            COALESCE(article_policy.source_version_ref::text, ''),
+                            'UTF8'
+                        )),
+                        'hex'
+                    ) AS source_acl_projection_ref,
+                    article_policy.source_acl_as_of
                 FROM context_resource AS resource
                 JOIN context_revision AS revision
                   ON revision.organization_id = resource.organization_id
@@ -531,13 +584,12 @@ class _PostgreSQLMaterializedProjectionPort:
                   ON fragment.organization_id = revision.organization_id
                  AND fragment.resource_ref = revision.resource_ref
                  AND fragment.revision_id = revision.revision_id
-                JOIN resource_access_policy AS access_policy
-                  ON access_policy.organization_id = resource.organization_id
-                 AND access_policy.resource_ref = resource.resource_ref
-                 AND access_policy.principal_ref = current_setting(
-                     'app.principal_ref'
-                 )
-                 AND access_policy.access_state = 'allowed'
+                JOIN article_access_policy AS article_policy
+                  ON article_policy.organization_id = resource.organization_id
+                 AND article_policy.resource_ref = resource.resource_ref
+                 AND article_policy.published IS TRUE
+                 AND article_policy.source_observation_status = 'resolved'
+                 AND article_policy.source_acl_as_of IS NOT NULL
                 WHERE resource.organization_id = :organization_id
                   AND resource.source_ref = :source_ref
                   AND resource.resource_ref = :resource_ref
@@ -562,6 +614,8 @@ class _PostgreSQLMaterializedProjectionPort:
             resource_ref=row.resource_ref,
             revision_ref=str(row.revision_id),
             fragment_ref=row.fragment_ref,
+            source_acl_projection_ref=row.source_acl_projection_ref,
+            source_acl_as_of=row.source_acl_as_of,
         )
 
     def project(
@@ -630,13 +684,9 @@ class _PostgreSQLMaterializedProjectionPort:
                          current_setting('app.checked_at'), ''
                      )::timestamptz
                  )
-                JOIN resource_access_policy AS access_policy
-                  ON access_policy.organization_id = resource.organization_id
-                 AND access_policy.resource_ref = resource.resource_ref
-                 AND access_policy.principal_ref = current_setting(
-                     'app.principal_ref'
-                 )
-                 AND access_policy.access_state = 'allowed'
+                JOIN article_access_policy AS article_policy
+                  ON article_policy.organization_id = resource.organization_id
+                 AND article_policy.resource_ref = resource.resource_ref
                 JOIN membership_resource_field_right AS field_right
                   ON field_right.organization_id = fragment.organization_id
                  AND field_right.membership_id = actor_membership.membership_id
@@ -791,6 +841,8 @@ class _PostgreSQLMaterializedProjectionPort:
                 resource_ref=anchor.resource_ref,
                 revision_ref=anchor.revision_ref,
                 fragment_ref=fragment_ref,
+                source_acl_projection_ref=anchor.source_acl_projection_ref,
+                source_acl_as_of=anchor.source_acl_as_of,
             )
             projection = self.project(locator)
             if projection is not None:

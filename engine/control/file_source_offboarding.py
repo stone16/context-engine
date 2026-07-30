@@ -65,10 +65,7 @@ class FileSourceOffboarding:
             ("cancelled job count", self.cancelled_job_count),
             ("retained Resource count", self.retained_resource_count),
         ):
-            if (
-                type(value) is not int
-                or not 0 <= value <= MAX_OFFBOARDING_COUNT
-            ):
+            if type(value) is not int or not 0 <= value <= MAX_OFFBOARDING_COUNT:
                 raise ValueError(f"File source offboarding {name} is invalid")
         _require_utc(
             "File source offboarding security_completed_at",
