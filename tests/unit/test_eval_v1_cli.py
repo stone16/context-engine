@@ -9,6 +9,7 @@ from typing import cast
 
 import pytest
 
+from applications.eval_executor import TRACKED_RUN_SEAM_REF
 from applications.eval_v1 import main
 from engine.learning.eval_report import (
     CaseSecurityObservation,
@@ -23,6 +24,7 @@ from engine.learning.eval_run import (
 from engine.learning.golden import create_golden_lock, load_golden_set
 from engine.learning.golden_storage import GOLDEN_ROOT_ENV
 from engine.learning.thresholds import load_thresholds
+from tests.support.eval_seam import clean_responder, judgment_document, serving
 from tests.support.eval_security import harness_security_result
 from tests.support.golden import (
     golden_case,
@@ -138,6 +140,108 @@ def test_cli_caller_loaded_run_is_refused_without_harness_security_execution(
         if item["slice_name"] == "single_doc"
     )
     assert citation_single_doc["case_count"] == len(entries)
+
+
+def test_cli_execute_reaches_a_non_refused_report_through_an_executed_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entries = valid_composed_entries()
+    golden_path, lock_path, _run_path, output_path = _write_report_inputs(
+        tmp_path, entries
+    )
+    judgments_path = tmp_path / "judgments.json"
+    judgments_path.write_text(
+        json.dumps(judgment_document(entries)),
+        encoding="utf-8",
+    )
+
+    with serving(clean_responder(entries), monkeypatch):
+        main(
+            [
+                "execute",
+                "--golden-set",
+                str(golden_path),
+                "--lock",
+                str(lock_path),
+                "--judgments",
+                str(judgments_path),
+                "--output",
+                str(output_path),
+                "--generated-at",
+                "2026-07-29T12:00:00Z",
+            ]
+        )
+    report = json.loads(output_path.read_text(encoding="utf-8"))
+
+    assert report["status"] != "REFUSED"
+    assert report["status"] == "PENDING_PREREGISTRATION"
+    assert report["security"] == {
+        "missingContextFallbackCount": 0,
+        "observationState": "observed_clean",
+        "status": "pass",
+        "unauthorizedEvidenceCount": 0,
+        "wrongOrganizationEffectCount": 0,
+    }
+    assert report["run"] == {"executedSeamRef": TRACKED_RUN_SEAM_REF}
+    assert report["citation"]["status"] == "pass"
+    assert report["retrieval"]["macro_evidence_recall"] == 1.0
+
+
+def test_cli_report_of_the_same_corpus_still_refuses_a_caller_authored_run(
+    tmp_path: Path,
+) -> None:
+    entries = valid_composed_entries()
+    golden_path, lock_path, run_path, output_path = _write_report_inputs(
+        tmp_path, entries
+    )
+
+    _run_report(golden_path, lock_path, run_path, output_path)
+    report = json.loads(output_path.read_text(encoding="utf-8"))
+
+    assert report["status"] == "REFUSED"
+    assert report["run"] == {"executedSeamRef": None}
+    assert report["security"]["reason"] == "no_run_executor_security_observation"
+
+
+def test_cli_execute_refuses_judgments_outside_the_durable_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    durable_root = tmp_path / "durable"
+    outside_root = tmp_path / "outside"
+    durable_root.mkdir()
+    outside_root.mkdir()
+    monkeypatch.setenv(GOLDEN_ROOT_ENV, str(durable_root))
+    entries = valid_composed_entries()
+    golden_path, lock_path, _run_path, output_path = _write_report_inputs(
+        durable_root, entries
+    )
+    judgments_path = outside_root / "judgments.json"
+    judgments_path.write_text(
+        json.dumps(judgment_document(entries)),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SystemExit) as error:
+        main(
+            [
+                "execute",
+                "--golden-set",
+                str(golden_path),
+                "--lock",
+                str(lock_path),
+                "--judgments",
+                str(judgments_path),
+                "--output",
+                str(output_path),
+                "--generated-at",
+                "2026-07-29T12:00:00Z",
+            ]
+        )
+
+    assert error.value.code == 1
+    assert not output_path.exists()
 
 
 def test_cli_validate_refuses_pilot_without_lock(tmp_path: Path) -> None:

@@ -1,5 +1,5 @@
 ---
-name: adr-0087-bound-live-feishu-to-the-existing-private-bot-composition
+name: adr-0089-bound-live-feishu-to-the-existing-private-bot-composition
 version: "1.0.0"
 description: >
   Bound live private-audience Feishu event ingress and Sender calls to the
@@ -7,7 +7,7 @@ description: >
   authority.
 ---
 
-# 0087. Bound live Feishu to the existing private Bot composition
+# 0089. Bound live Feishu to the existing private Bot composition
 
 - Status: accepted
 - Date: 2026-07-30

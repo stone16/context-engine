@@ -292,6 +292,40 @@ class PostgreSQLControlStore:
                 "File source read database authority is unavailable"
             ) from None
 
+    def list_file_sources(
+        self,
+        call: TrustedControlCall,
+    ) -> tuple[SourceManifest, ...]:
+        """List active File sources inside the already trusted Organization."""
+
+        if type(call) is not TrustedControlCall:
+            raise SourceNotAvailable
+        try:
+            with self._engine.begin() as connection:
+                assert_control_role(connection)
+                _set_organization_context(connection, call.organization_id)
+                rows = tuple(
+                    connection.execute(
+                        text(
+                            _ACTIVE_SOURCE_SELECT
+                            + """
+                        WHERE source.organization_id = :organization_id
+                        ORDER BY source.source_id
+                        """
+                        ),
+                        {"organization_id": call.organization_id},
+                    ).mappings()
+                )
+                return tuple(
+                    self._manifest(cast(Mapping[str, object], row)) for row in rows
+                )
+        except SourceNotAvailable:
+            raise
+        except (DBAPIError, SQLAlchemyError, AssertionError):
+            raise SourceControlUnavailable(
+                "File source listing database authority is unavailable"
+            ) from None
+
     @staticmethod
     def _policy_parameters(setting: object) -> tuple[str | None, list[str]]:
         from engine.article_access_policy import ArticleAccessPolicySetting

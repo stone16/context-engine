@@ -3,7 +3,10 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
+from typing import cast
 from uuid import UUID
+
+import pytest
 
 from engine.runtime.authorized_ranking import (
     NEUTRAL_FUSED_RANK,
@@ -270,3 +273,132 @@ def test_package_assembly_preserves_authorized_ranking_order() -> None:
             "safe body 0",
             "safe body 1",
         )
+
+
+def _multi_rank(
+    candidate: CandidateRef,
+    positions: dict[str, int],
+    fused_rank: int,
+) -> CandidateRankEvidence:
+    return CandidateRankEvidence(
+        candidate_ref=candidate,
+        per_ranker=tuple(
+            RankerEvidence(ranker_ref=ranker_ref, position=position)
+            for ranker_ref, position in positions.items()
+        ),
+        fused_rank=fused_rank,
+    )
+
+
+def test_rerank_item_refuses_rank_evidence_bound_to_another_candidate() -> None:
+    allowed = _candidate("allowed")
+    other = _candidate("other")
+
+    with (
+        _projections(allowed) as (projection,),
+        pytest.raises(ValueError, match="exact CandidateRef"),
+    ):
+        AuthorizedRerankItem(projection, _rank(other, 1))
+
+
+def test_rerank_item_refuses_duck_typed_rank_evidence() -> None:
+    """A shape-compatible imposter must be refused on nominal type, not on fit."""
+
+    allowed = _candidate("allowed")
+
+    class _ImposterEvidence:
+        def __init__(self, candidate_ref: CandidateRef) -> None:
+            self.candidate_ref = candidate_ref
+            self.fused_rank = 1
+
+    with (
+        _projections(allowed) as (projection,),
+        pytest.raises(TypeError, match="wrong nominal type"),
+    ):
+        AuthorizedRerankItem(
+            projection,
+            cast("CandidateRankEvidence", _ImposterEvidence(allowed)),
+        )
+
+
+def test_join_refuses_two_rank_records_for_one_candidate() -> None:
+    """Last-wins would let a buggy fuser silently replace a candidate's rank."""
+
+    allowed = _candidate("allowed")
+
+    with (
+        _projections(allowed) as projections,
+        pytest.raises(ValueError, match="unique exact CandidateRef"),
+    ):
+        join_authorized_ranking(
+            projections,
+            (_rank(allowed, 1), _rank(allowed, 2)),
+        )
+
+
+def test_pre_kernel_fused_rank_cannot_influence_delivered_order() -> None:
+    """Only positions recomputed over admitted candidates may order delivery."""
+
+    first_by_position = _candidate("a-first-by-position")
+    second_by_position = _candidate("b-second-by-position")
+    inverted_pre_kernel_rank = (
+        _multi_rank(first_by_position, {"lexical": 1}, fused_rank=99),
+        _multi_rank(second_by_position, {"lexical": 2}, fused_rank=1),
+    )
+
+    with _projections(first_by_position, second_by_position) as projections:
+        joined = join_authorized_ranking(projections, inverted_pre_kernel_rank)
+
+        assert tuple(
+            item.projection.candidate_ref
+            for item in sorted(joined, key=lambda item: item.fused_rank)
+        ) == (first_by_position, second_by_position)
+
+
+def test_authorized_fusion_weights_reorder_only_admitted_candidates() -> None:
+    """#148's weighting has exactly one legal home: after authorization."""
+
+    lexical_favoured = _candidate("a-lexical-favoured")
+    vector_favoured = _candidate("b-vector-favoured")
+    refused = _candidate("refused")
+    evidence = (
+        _multi_rank(lexical_favoured, {"lexical": 1, "vector": 2}, fused_rank=1),
+        _multi_rank(vector_favoured, {"lexical": 2, "vector": 1}, fused_rank=2),
+        _multi_rank(refused, {"lexical": 1, "vector": 1}, fused_rank=1),
+    )
+
+    def _order(**weights: float) -> tuple[CandidateRef, ...]:
+        with _projections(lexical_favoured, vector_favoured) as projections:
+            joined = join_authorized_ranking(
+                projections,
+                evidence,
+                ranker_weights=dict(weights) or None,
+            )
+            return tuple(
+                item.projection.candidate_ref
+                for item in sorted(joined, key=lambda item: item.fused_rank)
+            )
+
+    assert _order() == (lexical_favoured, vector_favoured)
+    assert _order(lexical=1.0, vector=1.0) == (lexical_favoured, vector_favoured)
+    assert _order(lexical=1.0, vector=4.0) == (vector_favoured, lexical_favoured)
+
+
+def test_authorized_fusion_weights_must_be_server_owned_and_complete() -> None:
+    allowed = _candidate("allowed")
+    evidence = (_multi_rank(allowed, {"lexical": 1, "vector": 1}, fused_rank=1),)
+
+    with _projections(allowed) as projections:
+        with pytest.raises(ValueError, match="cover every admitted ranker"):
+            join_authorized_ranking(
+                projections,
+                evidence,
+                ranker_weights={"lexical": 1.0},
+            )
+        for weight in (0.0, -1.0, float("inf"), float("nan")):
+            with pytest.raises(ValueError, match="positive finite floats"):
+                join_authorized_ranking(
+                    projections,
+                    evidence,
+                    ranker_weights={"lexical": 1.0, "vector": weight},
+                )

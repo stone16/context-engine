@@ -66,7 +66,7 @@ delegation, RBAC, and every network-reachable operator surface remain
 | Provider polling, delete execution beyond ADR-0057 | See the File Provider ADRs for exact boundaries |
 | Streaming delivery | Explicit V1 non-goal — placeholder + edit instead |
 | Answer generation inside the engine | Permanent non-goal — generation always lives above the engine boundary |
-| Authoritative golden evaluation report | M1 computes retrieval/citation/answer metrics but deliberately reports `REFUSED` because no run executor can produce the required security observation; issue #160 owns that executor |
+| Authoritative golden evaluation report from a file | Only a run the executor performed itself through the tracked seam can attest security; a caller-authored run file keeps its metrics and still reports `REFUSED` |
 
 ### Bounded dogfood Runtime
 
@@ -138,6 +138,7 @@ Follow the ADR for its exact evidence boundary.
 | [0071](./docs/decisions/0071-compose-bounded-file-scan-cycles.md) | Compose a bounded local File scan from operation-exact accept and schedule calls with checkpoint idempotence |
 | [0072](./docs/decisions/0072-report-file-source-status-with-closed-refusals.md) | Report content-free File freshness and current unpublished paths using closed retained refusal categories |
 | [0073](./docs/decisions/0073-compose-explicit-release-candidates-from-current-corpus.md) | Compose and explicitly promote the exact current dogfood File corpus through ContextLearning |
+| [0086](./docs/decisions/0086-report-worker-batches-and-compose-source-wide-cycles.md) | Emit privacy-shaped worker batch progress and compose source-wide scan/status from existing exact Control calls |
 
 ADR-0065 extends the active File Provider boundary from a flat root to
 deterministic recursive discovery of canonical nested Markdown paths. Each
@@ -180,6 +181,14 @@ successful publication, and removal on the next complete scan. The worker's
 caller-visible refusal remains generic; no note content or compiler diagnostic
 is retained. This status is not Runtime authority and activates no
 `stale_evidence`, repair, retry, metrics, HTTP, watcher, or grammar surface.
+
+ADR-0086 adds tracked machine-readable progress for contiguous autonomous File
+dispatch batches, with opaque per-job attribution, aggregate counters, bounded
+in-flight observations, closed refusal categories, and idle-poll suppression.
+It also composes `scan-all` and source-wide `status` from one exact existing
+Source discovery call plus the independently consumed per-Source operations.
+It adds no `ControlOperation`, does not widen or reuse a WorkerLease, preserves
+all credential planes, and never promotes or activates a Release implicitly.
 
 ### Wire contract, SDK, and trusted delivery
 
@@ -426,13 +435,17 @@ not part of this activated tracer.
 
 ## Evidence and reporting
 
-Golden evaluation M1 validates and locks schema-v1 sets, computes deterministic
+Golden evaluation validates and locks schema-v1 sets, computes deterministic
 retrieval/citation metrics plus attributable answer metrics, evaluates slice
-floors, and renders report machinery. It does **not** activate an evaluation run
-executor or a production security-observation constructor. File-only reports
-therefore retain their metrics but emit `REFUSED` with
-`no_run_executor_security_observation`; issue #160 owns the executor needed for
-an authoritative clean or violating observation. The public-subset maintainer
+floors, and renders report machinery. One run executor privately owns the
+security-observation constructor: `context-engine-eval execute` replays every
+golden query through the recorded `dogfood-loopback-resolve-acquire-v1` seam and
+derives observed Evidence, refusal, and typed security events from the delivered
+ContextPackages, so an executed clean run reaches `observed_clean` and one
+observed violation forces whole-report `FAIL` at any score. The executor takes
+no caller-supplied transport, callback, or counter, and holds no publication
+authority. File-only reports keep their metrics and still emit `REFUSED` with
+`no_run_executor_security_observation`. The public-subset maintainer
 authority is a preparatory privacy check with no promotion effect.
 
 The private corpus is recoverable rather than merely stored once. A second

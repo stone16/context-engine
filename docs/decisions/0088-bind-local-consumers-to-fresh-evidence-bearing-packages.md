@@ -1,5 +1,5 @@
 ---
-name: adr-0086-bind-local-consumers-to-fresh-evidence-bearing-packages
+name: adr-0088-bind-local-consumers-to-fresh-evidence-bearing-packages
 version: "1.0.0"
 description: >
   Require each local read-only consumer question to acquire and render one
@@ -7,7 +7,7 @@ description: >
   persisted dogfood bearer.
 ---
 
-# 0086. Bind local consumers to fresh evidence-bearing Packages
+# 0088. Bind local consumers to fresh evidence-bearing Packages
 
 - Status: accepted
 - Date: 2026-07-30

@@ -9,8 +9,6 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
-from alembic import command
-from alembic.config import Config
 from sqlalchemy import Engine, text
 from sqlalchemy.exc import DBAPIError
 
@@ -37,6 +35,7 @@ from engine.persistence import (
     PostgreSQLControlStore,
     create_database_engine,
 )
+from tests.support.migrations import downgrade_revision
 
 pytestmark = pytest.mark.integration
 NOW = datetime(2026, 7, 22, 19, 30, tzinfo=UTC)
@@ -154,6 +153,44 @@ def _delete_disposable_file_change_organization(
                     connection.execute(
                         text(f"ALTER TABLE {table} ENABLE TRIGGER {trigger}")
                     )
+    finally:
+        engine.dispose()
+
+
+def _retains_v3_acquisition_lineage(
+    configuration: DatabaseConfiguration, organization_id: UUID
+) -> bool:
+    """Evaluate the 0028 guard's acquisition-lineage branch for one Organization.
+
+    The guard names the first whole-database blocker it finds, so the exact
+    blocker string is a function of everything the volume retains. What this
+    Organization proves is that its own v3 acquisition lineage is one.
+    """
+
+    engine = create_database_engine(configuration)
+    try:
+        with engine.connect() as connection:
+            return bool(
+                connection.execute(
+                    text(
+                        """
+                        SELECT EXISTS (
+                            SELECT 1
+                            FROM source_version AS version
+                            JOIN file_acquisition AS acquisition
+                              ON acquisition.organization_id =
+                                 version.organization_id
+                             AND acquisition.source_id = version.source_id
+                             AND acquisition.source_version_id = version.version_id
+                            WHERE version.organization_id = :organization_id
+                              AND version.capability_manifest ->>
+                                  'declarationVersion' = 'file-capabilities-v3'
+                        )
+                        """
+                    ),
+                    {"organization_id": organization_id},
+                ).scalar_one()
+            )
     finally:
         engine.dispose()
 
@@ -511,14 +548,12 @@ def test_control_atomically_activates_one_immutable_v3_file_source_version(
         before[3],
     )
 
+    assert _retains_v3_acquisition_lineage(migration_configuration, organization_id)
     with pytest.raises(
         RuntimeError,
-        match="no retained File acquisition lineage",
+        match="File change-feed downgrade requires no retained",
     ):
-        command.downgrade(
-            Config(Path(__file__).parents[2] / "alembic.ini"),
-            "20260724_0027",
-        )
+        downgrade_revision(migration_configuration, "20260725_0028")
 
 
 def test_file_source_tables_fail_closed_for_non_owner_role_matrix(

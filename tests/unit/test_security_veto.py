@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import importlib
+import inspect
+import pkgutil
+from collections.abc import Callable
 from pathlib import Path
+from types import ModuleType
 from typing import cast
 
 import pytest
@@ -200,3 +204,141 @@ def test_test_private_security_factory_is_never_imported_by_production() -> None
     ]
 
     assert importers == []
+
+
+_EXCLUDED_TREES = frozenset(
+    {".context-engine", ".git", ".venv", "node_modules", "tests", "third_party"}
+)
+_SECURITY_RESULT_TYPES = ("CaseSecurityObservation", "CaseSecurityViolation")
+
+
+def _production_sources() -> tuple[str, ...]:
+    repository_root = Path(__file__).resolve().parents[2]
+    sources = tuple(
+        sorted(
+            str(path.relative_to(repository_root))
+            for path in repository_root.rglob("*.py")
+            if not (_EXCLUDED_TREES & set(path.relative_to(repository_root).parts))
+        )
+    )
+    assert len(sources) > 100
+    return sources
+
+
+def _production_sources_containing(*markers: str) -> list[str]:
+    repository_root = Path(__file__).resolve().parents[2]
+    return [
+        source
+        for source in _production_sources()
+        if any(
+            marker in (repository_root / source).read_text(encoding="utf-8")
+            for marker in markers
+        )
+    ]
+
+
+def _production_modules() -> tuple[ModuleType, ...]:
+    modules: list[ModuleType] = []
+    for package_name in ("applications", "engine.learning", "eval"):
+        package = importlib.import_module(package_name)
+        modules.append(package)
+        modules.extend(
+            importlib.import_module(f"{package_name}.{info.name}")
+            for info in pkgutil.iter_modules(list(package.__path__))
+            if not info.name.startswith("_")
+        )
+    return tuple(modules)
+
+
+def _public_callables(
+    module: ModuleType,
+) -> tuple[tuple[str, Callable[..., object]], ...]:
+    return tuple(
+        (name, cast(Callable[..., object], value))
+        for name, value in vars(module).items()
+        if not name.startswith("_")
+        and callable(value)
+        and getattr(value, "__module__", None) == module.__name__
+    )
+
+
+def test_no_importable_production_path_constructs_a_clean_security_result() -> None:
+    producers = [
+        f"{module.__name__}.{name}"
+        for module in _production_modules()
+        for name, value in _public_callables(module)
+        if any(
+            marker in str(getattr(value, "__annotations__", {}).get("return", ""))
+            for marker in (*_SECURITY_RESULT_TYPES, "CaseSecurityResult")
+        )
+    ]
+
+    assert producers == ["engine.learning.eval_report.refused_security_observation"]
+    assert _production_sources_containing("_CaseSecurityViolationInput(") == [
+        "applications/eval_executor.py"
+    ]
+    assert _production_sources_containing(
+        "state=SecurityObservationState.OBSERVED_CLEAN"
+    ) == ["applications/eval_executor.py"]
+    assert _production_sources_containing(
+        "_CaseSecurityObservationInput",
+        "_CaseSecurityViolationInput",
+    ) == ["applications/eval_executor.py", "engine/learning/eval_report.py"]
+
+
+def test_the_run_executor_admits_no_caller_supplied_seam_counter_or_result() -> None:
+    executor = importlib.import_module("applications.eval_executor")
+    entry = inspect.signature(executor.execute_evaluation_report)
+
+    assert [
+        (name, str(parameter.annotation))
+        for name, parameter in entry.parameters.items()
+    ] == [
+        ("golden_set", "GoldenSet"),
+        ("judgments", "AnswerJudgments"),
+        ("thresholds", "EvaluationThresholds"),
+        ("generated_at", "datetime"),
+    ]
+    for name, value in _public_callables(executor):
+        annotations = [
+            str(parameter.annotation)
+            for parameter in inspect.signature(value).parameters.values()
+        ]
+        assert not [
+            annotation
+            for annotation in annotations
+            if any(
+                marker in annotation
+                for marker in (
+                    "Callable",
+                    "Caller",
+                    "Client",
+                    "Protocol",
+                    *_SECURITY_RESULT_TYPES,
+                )
+            )
+        ], name
+
+
+def test_the_run_executor_acquires_no_release_publication_authority() -> None:
+    repository_root = Path(__file__).resolve().parents[2]
+    source = (repository_root / "applications/eval_executor.py").read_text(
+        encoding="utf-8"
+    )
+    executor = importlib.import_module("applications.eval_executor")
+
+    for forbidden in (
+        "ContextLearning",
+        "ReleaseCandidate",
+        "ReleaseManifest",
+        "promote",
+        "promotion",
+        "rollback",
+    ):
+        assert forbidden not in source
+    assert not [
+        name
+        for name, value in vars(executor).items()
+        if "promotion" in str(getattr(value, "__module__", ""))
+        or "release" in str(getattr(value, "__module__", ""))
+    ]

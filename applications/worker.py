@@ -2,11 +2,11 @@
 
 import argparse
 import json
+import math
 import os
 import signal
 import threading
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
@@ -35,6 +35,12 @@ from applications.file_root_configuration import (
 )
 from applications.file_root_configuration import (
     required_environment as _required_environment,
+)
+from applications.worker_progress import (
+    FileBatchProgressReporter,
+    FileDispatchCycleResult,
+    FileDispatchFailureCategory,
+    opaque_file_job_ref,
 )
 from engine import BUILD_IDENTIFIER
 from engine.control import FileImportReceiver, FileRootRef, SourceRef
@@ -69,6 +75,7 @@ from engine.supply import (
 )
 
 _FILE_DISPATCH_POLL_SECONDS = 1.0
+_FILE_DISPATCH_PROGRESS_SECONDS = 1.0
 DEFAULT_WORKER_MAX_FILE_BYTES = _DEFAULT_WORKER_MAX_FILE_BYTES
 _file_dispatch_roots = _configured_file_roots
 _WORKER_EMBEDDING_PROVIDER_ENV = "CONTEXT_ENGINE_WORKER_EMBEDDING_PROVIDER"
@@ -103,36 +110,49 @@ class FileDispatchWorkerFactory(Protocol):
     def __call__(self, receiver: FileImportReceiver) -> FileDispatchWorker: ...
 
 
-@dataclass(frozen=True, slots=True)
-class FileDispatchCycleResult:
-    """Content-free process result for one autonomous dispatch cycle."""
-
-    outcome: str
-    status: str = field(default="complete", init=False)
-
-    def __post_init__(self) -> None:
-        if self.outcome not in {"dispatched", "no_work", "refused"}:
-            raise ValueError("File dispatch cycle outcome must remain closed")
-
-
 def dispatch_one_file_import(
     authority: FileDispatchAuthority,
     worker_factory: FileDispatchWorkerFactory,
+    *,
+    active_job_observer: Callable[[str], None] | None = None,
+    progress_interval_seconds: float = _FILE_DISPATCH_PROGRESS_SECONDS,
 ) -> FileDispatchCycleResult:
     """Claim and run at most one exact job without caller routing input."""
 
+    _require_progress_interval(progress_interval_seconds)
     claim = authority.claim()
     if type(claim) is FileDispatchNoWork:
         return FileDispatchCycleResult("no_work")
     if type(claim) is not FileDispatchLease:
         raise TypeError("File dispatch authority returned an invalid result")
+    job_ref = opaque_file_job_ref(claim.job_id)
+    progress = _ActiveFileJobProgress(
+        job_ref=job_ref,
+        observer=active_job_observer,
+        interval_seconds=progress_interval_seconds,
+    )
     try:
         worker_factory(FileImportReceiver(claim.service_principal_id)).run(
             claim.redemption
         )
-    except (FileImportRefused, WorkNotAvailable):
-        return FileDispatchCycleResult("refused")
-    return FileDispatchCycleResult("dispatched")
+    except FileImportRefused:
+        result = FileDispatchCycleResult(
+            "refused",
+            job_ref=job_ref,
+            reason_category=FileDispatchFailureCategory.FILE_IMPORT_REFUSED,
+        )
+    except WorkNotAvailable:
+        result = FileDispatchCycleResult(
+            "refused",
+            job_ref=job_ref,
+            reason_category=FileDispatchFailureCategory.WORKER_LEASE_REFUSED,
+        )
+    else:
+        result = FileDispatchCycleResult("dispatched", job_ref=job_ref)
+    finally:
+        progress.close()
+    progress.raise_if_failed()
+    return result
 
 
 def dispatch_file_imports_until_stopped(
@@ -140,15 +160,76 @@ def dispatch_file_imports_until_stopped(
     worker_factory: FileDispatchWorkerFactory,
     stop_event: threading.Event,
     outcome_observer: Callable[[FileDispatchCycleResult], None] | None = None,
+    *,
+    active_job_observer: Callable[[str], None] | None = None,
+    progress_interval_seconds: float = _FILE_DISPATCH_PROGRESS_SECONDS,
 ) -> None:
     """Run bounded single-job cycles until process shutdown is requested."""
 
     while not stop_event.is_set():
-        result = dispatch_one_file_import(authority, worker_factory)
+        result = dispatch_one_file_import(
+            authority,
+            worker_factory,
+            active_job_observer=active_job_observer,
+            progress_interval_seconds=progress_interval_seconds,
+        )
         if outcome_observer is not None:
             outcome_observer(result)
         if result.outcome == "no_work":
             stop_event.wait(_FILE_DISPATCH_POLL_SECONDS)
+
+
+class _ActiveFileJobProgress:
+    """Emit immediate and bounded in-flight observations for one claimed job."""
+
+    __slots__ = ("_errors", "_stop_event", "_thread")
+
+    def __init__(
+        self,
+        *,
+        job_ref: str,
+        observer: Callable[[str], None] | None,
+        interval_seconds: float,
+    ) -> None:
+        self._stop_event = threading.Event()
+        self._errors: list[Exception] = []
+        self._thread: threading.Thread | None = None
+        if observer is None:
+            return
+        observer(job_ref)
+
+        def emit_until_complete() -> None:
+            while not self._stop_event.wait(interval_seconds):
+                try:
+                    observer(job_ref)
+                except Exception as error:
+                    self._errors.append(error)
+                    self._stop_event.set()
+
+        self._thread = threading.Thread(
+            target=emit_until_complete,
+            name="file-dispatch-progress",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def close(self) -> None:
+        self._stop_event.set()
+        if self._thread is not None:
+            self._thread.join()
+
+    def raise_if_failed(self) -> None:
+        if self._errors:
+            raise FileImportUnavailable("File dispatch progress is unavailable")
+
+
+def _require_progress_interval(value: float) -> None:
+    if (
+        type(value) not in {float, int}
+        or not math.isfinite(value)
+        or not 0.01 <= value <= 60.0
+    ):
+        raise ValueError("File dispatch progress interval is unavailable")
 
 
 def complete_persistent_noop_job(
@@ -395,22 +476,15 @@ def _run_file_dispatch(*, single_cycle: bool) -> int:
                     ),
                     flush=True,
                 )
+                reporter = FileBatchProgressReporter(
+                    lambda rendered: print(rendered, flush=True)
+                )
                 dispatch_file_imports_until_stopped(
                     authority,
                     worker_factory,
                     stop_event,
-                    outcome_observer=lambda result: print(
-                        json.dumps(
-                            {
-                                "dispatch": "file.import",
-                                "outcome": result.outcome,
-                                "service": "context-engine-worker",
-                                "status": result.status,
-                            },
-                            sort_keys=True,
-                        ),
-                        flush=True,
-                    ),
+                    outcome_observer=reporter.observe_cycle,
+                    active_job_observer=reporter.job_active,
                 )
             finally:
                 signal.signal(signal.SIGINT, previous_sigint)

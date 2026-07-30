@@ -9,6 +9,10 @@ from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
 
+from applications.eval_executor import (
+    execute_evaluation_report,
+    load_answer_judgments,
+)
 from engine.learning.eval_run import (
     EvaluationRunUnavailable,
     build_evaluation_report,
@@ -143,6 +147,14 @@ def _parser() -> argparse.ArgumentParser:
     report.add_argument("--lineage-map", type=Path)
     report.add_argument("--output", required=True, type=Path)
     report.add_argument("--generated-at", required=True, type=_time)
+
+    execute = commands.add_parser("execute")
+    execute.add_argument("--golden-set", required=True, type=Path)
+    execute.add_argument("--lock", required=True, type=Path)
+    execute.add_argument("--judgments", required=True, type=Path)
+    execute.add_argument("--lineage-map", type=Path)
+    execute.add_argument("--output", required=True, type=Path)
+    execute.add_argument("--generated-at", required=True, type=_time)
     return parser
 
 
@@ -167,6 +179,9 @@ def main(argv: Sequence[str] | None = None) -> None:
         lineage_map_path = getattr(args, "lineage_map", None)
         if lineage_map_path is not None:
             require_durable_golden_path(lineage_map_path, root=durable_root)
+        judgments_path = getattr(args, "judgments", None)
+        if judgments_path is not None:
+            require_durable_golden_path(judgments_path, root=durable_root)
         if args.command == "validate":
             golden_set = load_golden_set(args.golden_set, lock_path=args.lock)
             print(
@@ -228,6 +243,25 @@ def main(argv: Sequence[str] | None = None) -> None:
                 generated_at=args.generated_at,
             )
             _write_report(args.output, report)
+            return
+        if args.command == "execute":
+            golden_set = load_golden_set(args.golden_set, lock_path=args.lock)
+            if lineage_map_path is not None:
+                require_resolved_lineage(
+                    detect_stale_lineage(
+                        golden_set,
+                        load_lineage_map(lineage_map_path),
+                    )
+                )
+            _write_report(
+                args.output,
+                execute_evaluation_report(
+                    golden_set,
+                    load_answer_judgments(args.judgments),
+                    load_thresholds(DEFAULT_THRESHOLDS_PATH),
+                    generated_at=args.generated_at,
+                ),
+            )
             return
     except (
         GoldenSetUnavailable,

@@ -20,6 +20,10 @@ from engine.supply.execution import (
     StagedArtifactSink,
     SupplyBridgeExecution,
     SupplyChangePage,
+    SupplyExecutionBoundExceeded,
+    SupplyExecutionBoundReason,
+    SupplyExecutionConfiguration,
+    SupplyStagedPageByteLimitExceeded,
     serialize_supply_change_page,
 )
 from engine.supply.jobs import (
@@ -587,6 +591,7 @@ class PostgreSQLSupplyExecutionBridge:
         "_identity",
         "_staged_sink",
         "_store",
+        "_configuration",
     )
 
     def __init__(
@@ -597,6 +602,7 @@ class PostgreSQLSupplyExecutionBridge:
         store: ConnectorCheckpointStore,
         staged_sink: StagedArtifactSink,
         *,
+        configuration: SupplyExecutionConfiguration | None = None,
         clock: Callable[[], datetime] = _utc_now,
     ) -> None:
         if type(codec) is not WorkerLeaseCodec:
@@ -605,11 +611,17 @@ class PostgreSQLSupplyExecutionBridge:
             raise TypeError("Supply bridge requires ServiceActor identity")
         if not callable(clock):
             raise TypeError("Supply bridge clock must be callable")
+        if (
+            configuration is not None
+            and type(configuration) is not SupplyExecutionConfiguration
+        ):
+            raise TypeError("Supply bridge requires SupplyExecutionConfiguration")
         self._engine = worker_engine
         self._codec = codec
         self._identity = identity
         self._store = store
         self._staged_sink = staged_sink
+        self._configuration = configuration or SupplyExecutionConfiguration()
         self._clock = clock
 
     def execute(
@@ -636,7 +648,14 @@ class PostgreSQLSupplyExecutionBridge:
             execution.binding,
             lease_claims=claims,
         )
+        accepted_page_count = 0
+        accepted_byte_count = 0
+        consecutive_no_progress_pages = 0
         while True:
+            if accepted_page_count >= self._configuration.page_limit:
+                raise SupplyExecutionBoundExceeded(
+                    SupplyExecutionBoundReason.PAGE_COUNT
+                )
             adapter.load_checkpoint(checkpoint)
             page = (
                 adapter.load(execution.binding)
@@ -645,6 +664,31 @@ class PostgreSQLSupplyExecutionBridge:
             )
             if type(page) is not SupplyChangePage or page.binding != execution.binding:
                 raise SupplyBridgeUnavailable("connector page binding is unavailable")
+            try:
+                page_byte_count = len(serialize_supply_change_page(page))
+            except SupplyStagedPageByteLimitExceeded:
+                raise SupplyExecutionBoundExceeded(
+                    SupplyExecutionBoundReason.PAGE_BYTES
+                ) from None
+            next_byte_count = accepted_byte_count + page_byte_count
+            if next_byte_count > self._configuration.cumulative_byte_limit:
+                raise SupplyExecutionBoundExceeded(
+                    SupplyExecutionBoundReason.CUMULATIVE_BYTES
+                )
+            made_no_progress = (
+                not page.terminal
+                and not page.documents
+                and not page.deleted_document_refs
+                and page.checkpoint_proposal == checkpoint
+            )
+            if (
+                made_no_progress
+                and consecutive_no_progress_pages
+                >= self._configuration.no_progress_page_limit
+            ):
+                raise SupplyExecutionBoundExceeded(
+                    SupplyExecutionBoundReason.NO_PROGRESS
+                )
             try:
                 with self._engine.begin() as connection:
                     assert_worker_role(connection)
@@ -660,6 +704,11 @@ class PostgreSQLSupplyExecutionBridge:
                     "Supply change-page acceptance is unavailable"
                 ) from None
             accepted.append(page.page_ref)
+            accepted_page_count += 1
+            accepted_byte_count = next_byte_count
+            consecutive_no_progress_pages = (
+                consecutive_no_progress_pages + 1 if made_no_progress else 0
+            )
             if page.terminal:
                 return SupplyBridgeExecutionResult(tuple(accepted))
             checkpoint = page.checkpoint_proposal

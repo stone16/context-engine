@@ -12,8 +12,8 @@ license-files = [
   "LICENSE",
   "NOTICE",
   "THIRD_PARTY_NOTICES.md",
-  "third_party/ragflow/LICENSE.upstream",
-  "third_party/ragflow/LICENSE.python-markdown",
+  "THIRD_PARTY_SBOM.cyclonedx.json",
+  "third_party/*/LICENSE*",
 ]
 requires-python = ">=3.13,<3.14"
 dependencies = [
@@ -69,6 +69,10 @@ packages = [
 "eval/golden/v1/schema.json" = "eval/golden/v1/schema.json"
 "eval/public-subset-governance.json" = "eval/public-subset-governance.json"
 "eval/thresholds/v1.json" = "eval/thresholds/v1.json"
+"LICENSE" = "LICENSE"
+"NOTICE" = "NOTICE"
+"THIRD_PARTY_NOTICES.md" = "THIRD_PARTY_NOTICES.md"
+"THIRD_PARTY_SBOM.cyclonedx.json" = "THIRD_PARTY_SBOM.cyclonedx.json"
 
 [tool.mypy]
 python_version = "3.13"
@@ -80,6 +84,7 @@ files = [
   "eval",
   "migrations",
   "scripts/provision_database_roles.py",
+  "scripts/third_party_governance.py",
   "scripts/wait_for_database.py",
   "tests",
 ]

@@ -55,6 +55,66 @@ def canonical_digest(value: object) -> str:
     return hashlib.sha256(canonical_json(value)).hexdigest()
 
 
+_RETAINED_LINEAGE_COUNT_FIELDS = (
+    "organizationCount",
+    "fileAcquisitionCount",
+    "fileSourceChangeCount",
+    "fileDeleteObservationExecutionCount",
+    "nestedRelativePathCount",
+)
+
+
+def _retained_lineage_failures(provenance: Mapping[str, object]) -> list[str]:
+    """Require a self-consistent record of how populated the volume was.
+
+    A reader must be able to tell a pass produced on a database that already
+    held File lineage from a pass produced only after a reset, so the
+    observation is part of the Security verdict rather than a comment beside it.
+    """
+
+    observed = provenance.get("retainedFileLineage")
+    if not isinstance(observed, Mapping):
+        return ["provenance retainedFileLineage is unavailable"]
+    failures: list[str] = []
+    counts: dict[str, int] = {}
+    for field in _RETAINED_LINEAGE_COUNT_FIELDS:
+        value = observed.get(field)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            failures.append(f"provenance retainedFileLineage {field} is invalid")
+            continue
+        counts[field] = value
+    for field in (
+        "observedBeforeExecution",
+        "populatedVolume",
+        "retainedNestedLineage",
+    ):
+        if not isinstance(observed.get(field), bool):
+            failures.append(f"provenance retainedFileLineage {field} is invalid")
+    if failures:
+        return failures
+    lineage_rows = (
+        counts["fileAcquisitionCount"]
+        + counts["fileSourceChangeCount"]
+        + counts["fileDeleteObservationExecutionCount"]
+    )
+    if observed.get("populatedVolume") is not (lineage_rows > 0):
+        failures.append(
+            "provenance retainedFileLineage populatedVolume contradicts its counts"
+        )
+    if observed.get("retainedNestedLineage") is not (
+        counts["nestedRelativePathCount"] > 0
+    ):
+        failures.append(
+            "provenance retainedFileLineage retainedNestedLineage "
+            "contradicts its counts"
+        )
+    if counts["nestedRelativePathCount"] > lineage_rows:
+        failures.append(
+            "provenance retainedFileLineage nested count exceeds its lineage rows"
+        )
+    return failures
+
+
 def _provenance_failures(provenance: Mapping[str, object]) -> list[str]:
     failures: list[str] = []
     commit = provenance.get("commit")
@@ -92,6 +152,7 @@ def _provenance_failures(provenance: Mapping[str, object]) -> list[str]:
         failures.append("provenance live database revision differs from Alembic head")
     if not isinstance(provenance.get("runnerVersion"), str):
         failures.append("provenance runner version is unavailable")
+    failures.extend(_retained_lineage_failures(provenance))
     return failures
 
 
