@@ -185,6 +185,9 @@ class _RedeemedFileImport:
     acquisition_id: UUID
     expected_content_sha256: str | None
     expected_content_length: int | None
+    ui_preview_digest: str | None
+    expected_fragment_digest: str | None
+    compiler_config_version: str | None
 
 
 def _rejection(token: WorkerLeaseToken) -> WorkNotAvailable:
@@ -312,6 +315,30 @@ class PostgreSQLFileImportWorker:
             with suppress(WorkNotAvailable):
                 self._fail(redemption.token, claims)
             raise FileImportRefused("File import is unavailable")
+        if redeemed.compiler_config_version is not None:
+            fragments = [
+                {
+                    "fragmentRef": fragment.fragment_ref,
+                    "text": fragment.contextual_text,
+                }
+                for fragment in outcome.fragments
+            ]
+            fragment_digest = sha256(
+                json.dumps(
+                    fragments,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ).encode("utf-8")
+            ).hexdigest()
+            if (
+                redeemed.ui_preview_digest is None
+                or redeemed.compiler_config_version != self._config.version
+                or redeemed.expected_fragment_digest != fragment_digest
+            ):
+                with suppress(WorkNotAvailable):
+                    self._fail(redemption.token, claims)
+                raise FileImportRefused("File import is unavailable")
         try:
             return self._publish(redemption.token, claims, redeemed, outcome)
         except FileImportInterrupted:
@@ -340,7 +367,13 @@ class PostgreSQLFileImportWorker:
                                to_jsonb(redeemed)->>'expected_content_sha256'
                                    AS expected_content_sha256,
                                (to_jsonb(redeemed)->>'expected_content_length')
-                                   ::bigint AS expected_content_length
+                                   ::bigint AS expected_content_length,
+                               to_jsonb(redeemed)->>'ui_preview_digest'
+                                   AS ui_preview_digest,
+                               to_jsonb(redeemed)->>'expected_fragment_digest'
+                                   AS expected_fragment_digest,
+                               to_jsonb(redeemed)->>'compiler_config_version'
+                                   AS compiler_config_version
                         FROM public.context_worker_redeem_file_import(
                             :organization_id, :job_id, :service_principal_id,
                             :source_ref, :lease_generation,
@@ -372,6 +405,9 @@ class PostgreSQLFileImportWorker:
                     acquisition_id=row.acquisition_id,
                     expected_content_sha256=expected_content_sha256,
                     expected_content_length=expected_content_length,
+                    ui_preview_digest=row.ui_preview_digest,
+                    expected_fragment_digest=row.expected_fragment_digest,
+                    compiler_config_version=row.compiler_config_version,
                 )
         except WorkNotAvailable:
             raise

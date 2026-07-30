@@ -68,6 +68,18 @@ from adapters.http.transport import (
     ResolveBodyLimitMiddleware,
     enforce_json_nesting,
 )
+from adapters.http.ui_api import (
+    ArticlePolicyPreviewWire,
+    ArticleWire,
+    FeedbackCapture,
+    FeedbackWire,
+    ImportPreviewWire,
+    PreviewConfirmWire,
+    RefusingUiApi,
+    UiApi,
+    UiApiUnavailable,
+    ui_actor,
+)
 from engine import BUILD_IDENTIFIER
 from engine.persistence.membership_context import (
     MembershipAuthorityUnavailable,
@@ -249,6 +261,8 @@ def create_app(
     request_id_factory: Callable[[], str] = _new_request_id,
     transport_profile: HttpTransportProfile = HTTP_TRANSPORT_PROFILE_V1,
     runtime_delivery_activation: _RuntimeDeliveryActivation | None = None,
+    ui_bearer_token: str | None = None,
+    ui_api: UiApi | None = None,
 ) -> FastAPI:
     """Construct API; the module-level composition remains reject-all."""
 
@@ -277,6 +291,7 @@ def create_app(
     )
     selected_scope_authority = scope_authority or MissingTrustedScopeAuthority()
     selected_route_policy = route_policy or AllowAuthenticatedResolveRoutePolicy()
+    selected_ui_api = ui_api or RefusingUiApi()
     bearer = HTTPBearer(
         scheme_name="ContextEngineBearer",
         bearerFormat="opaque",
@@ -289,6 +304,10 @@ def create_app(
         resolve_paths=RESOLVE_PATHS,
         invalid_response=INVALID_REQUEST_RESPONSE,
     )
+
+    from ui import install_ui
+
+    install_ui(app, bearer_token=ui_bearer_token)
 
     @app.exception_handler(TransportAuthenticationFailed)
     async def authentication_failed(
@@ -432,6 +451,245 @@ def create_app(
         if _is_runtime_delivery_active(runtime_delivery_activation):
             response["runtime_delivery"] = "ACTIVE"
         return response
+
+    @app.get("/v0/ui/profiles", include_in_schema=False)
+    def ui_profiles(
+        authentication: Annotated[
+            VerifiedAuthenticationContext,
+            Depends(verified_authentication),
+        ],
+    ) -> JSONResponse:
+        try:
+            document = selected_ui_api.profiles(ui_actor(authentication))
+            if type(document) is not dict:
+                raise UiApiUnavailable
+        except Exception:
+            return JSONResponse(
+                SERVICE_UNAVAILABLE_RESPONSE,
+                status_code=503,
+                headers={"Cache-Control": "no-store"},
+            )
+        return JSONResponse(
+            document,
+            status_code=200,
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @app.get("/v0/ui/overview", include_in_schema=False)
+    def ui_overview(
+        authentication: Annotated[
+            VerifiedAuthenticationContext,
+            Depends(verified_authentication),
+        ],
+    ) -> JSONResponse:
+        try:
+            document = selected_ui_api.overview(ui_actor(authentication))
+            if type(document) is not dict:
+                raise UiApiUnavailable
+        except Exception:
+            return JSONResponse(
+                SERVICE_UNAVAILABLE_RESPONSE,
+                status_code=503,
+                headers={"Cache-Control": "no-store"},
+            )
+        return JSONResponse(
+            document,
+            status_code=200,
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @app.post(
+        "/v0/ui/import/preview",
+        include_in_schema=False,
+        dependencies=[Depends(require_closed_json_transport)],
+    )
+    def ui_import_preview(
+        body: Annotated[ImportPreviewWire, Body()],
+        authentication: Annotated[
+            VerifiedAuthenticationContext,
+            Depends(verified_authentication),
+        ],
+    ) -> JSONResponse:
+        try:
+            document = selected_ui_api.preview_import(
+                ui_actor(authentication),
+                source_ref=body.sourceRef,
+                path=body.path,
+            )
+            if type(document) is not dict:
+                raise UiApiUnavailable
+        except Exception:
+            return JSONResponse(
+                SERVICE_UNAVAILABLE_RESPONSE,
+                status_code=503,
+                headers={"Cache-Control": "no-store"},
+            )
+        return JSONResponse(
+            document,
+            status_code=200,
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @app.post(
+        "/v0/ui/import/confirm",
+        include_in_schema=False,
+        dependencies=[Depends(require_closed_json_transport)],
+    )
+    def ui_import_confirm(
+        body: Annotated[PreviewConfirmWire, Body()],
+        authentication: Annotated[
+            VerifiedAuthenticationContext,
+            Depends(verified_authentication),
+        ],
+    ) -> JSONResponse:
+        try:
+            document = selected_ui_api.confirm_import(
+                ui_actor(authentication),
+                preview_token=body.previewToken,
+            )
+            if type(document) is not dict:
+                raise UiApiUnavailable
+        except Exception:
+            return JSONResponse(
+                SERVICE_UNAVAILABLE_RESPONSE,
+                status_code=503,
+                headers={"Cache-Control": "no-store"},
+            )
+        return JSONResponse(
+            document,
+            status_code=200,
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @app.post(
+        "/v0/ui/articles/view",
+        include_in_schema=False,
+        dependencies=[Depends(require_closed_json_transport)],
+    )
+    def ui_article_view(
+        body: Annotated[ArticleWire, Body()],
+        authentication: Annotated[
+            VerifiedAuthenticationContext,
+            Depends(verified_authentication),
+        ],
+    ) -> JSONResponse:
+        try:
+            document = selected_ui_api.article(
+                ui_actor(authentication),
+                resource_ref=body.resourceRef,
+            )
+            if type(document) is not dict:
+                raise UiApiUnavailable
+        except Exception:
+            return JSONResponse(
+                SERVICE_UNAVAILABLE_RESPONSE,
+                status_code=503,
+                headers={"Cache-Control": "no-store"},
+            )
+        return JSONResponse(
+            document,
+            status_code=200,
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @app.post(
+        "/v0/ui/articles/preview",
+        include_in_schema=False,
+        dependencies=[Depends(require_closed_json_transport)],
+    )
+    def ui_article_policy_preview(
+        body: Annotated[ArticlePolicyPreviewWire, Body()],
+        authentication: Annotated[
+            VerifiedAuthenticationContext,
+            Depends(verified_authentication),
+        ],
+    ) -> JSONResponse:
+        try:
+            document = selected_ui_api.preview_article_policy(
+                ui_actor(authentication),
+                resource_ref=body.resourceRef,
+                policy_kind=body.policyKind,
+                group_refs=tuple(body.groupRefs),
+            )
+            if type(document) is not dict:
+                raise UiApiUnavailable
+        except Exception:
+            return JSONResponse(
+                SERVICE_UNAVAILABLE_RESPONSE,
+                status_code=503,
+                headers={"Cache-Control": "no-store"},
+            )
+        return JSONResponse(
+            document,
+            status_code=200,
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @app.post(
+        "/v0/ui/articles/confirm",
+        include_in_schema=False,
+        dependencies=[Depends(require_closed_json_transport)],
+    )
+    def ui_article_policy_confirm(
+        body: Annotated[PreviewConfirmWire, Body()],
+        authentication: Annotated[
+            VerifiedAuthenticationContext,
+            Depends(verified_authentication),
+        ],
+    ) -> JSONResponse:
+        try:
+            document = selected_ui_api.confirm_article_policy(
+                ui_actor(authentication),
+                preview_token=body.previewToken,
+            )
+            if type(document) is not dict:
+                raise UiApiUnavailable
+        except Exception:
+            return JSONResponse(
+                SERVICE_UNAVAILABLE_RESPONSE,
+                status_code=503,
+                headers={"Cache-Control": "no-store"},
+            )
+        return JSONResponse(
+            document,
+            status_code=200,
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @app.post(
+        "/v0/ui/feedback",
+        include_in_schema=False,
+        dependencies=[Depends(require_closed_json_transport)],
+    )
+    def ui_feedback(
+        body: Annotated[FeedbackWire, Body()],
+        authentication: Annotated[
+            VerifiedAuthenticationContext,
+            Depends(verified_authentication),
+        ],
+    ) -> JSONResponse:
+        try:
+            document = selected_ui_api.capture_feedback(
+                ui_actor(authentication),
+                FeedbackCapture(
+                    run_ref=body.runRef,
+                    rating=body.rating,
+                    note=body.note,
+                ),
+            )
+            if type(document) is not dict:
+                raise UiApiUnavailable
+        except Exception:
+            return JSONResponse(
+                SERVICE_UNAVAILABLE_RESPONSE,
+                status_code=503,
+                headers={"Cache-Control": "no-store"},
+            )
+        return JSONResponse(
+            document,
+            status_code=200,
+            headers={"Cache-Control": "no-store"},
+        )
 
     @app.post(
         LEGACY_RESOLVE_PATH,

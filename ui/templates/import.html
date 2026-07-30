@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="page-heading">
+  <p class="eyebrow">Preview → explicit confirm</p>
+  <h1>Import Markdown</h1>
+  <p>The preview is compiled from the exact configured-root bytes. Nothing is
+     scheduled until confirmation, and the worker is bound to that byte identity.</p>
+</header>
+{% if receipt %}
+<section class="state" aria-labelledby="import-queued">
+  <h2 id="import-queued">Import queued</h2>
+  <p>Exact job <code>{{ receipt }}</code></p>
+  <p>Release promotion remains a separate operator path.</p>
+</section>
+{% elif preview %}
+<section aria-labelledby="preview-heading">
+  <p class="eyebrow">Not published · not queued</p>
+  <h2 id="preview-heading">Actual Fragment preview</h2>
+  <dl class="lineage">
+    <div><dt>Source</dt><dd><code>{{ preview.source_ref }}</code></dd></div>
+    <div><dt>Path</dt><dd><code>{{ preview.path }}</code></dd></div>
+    <div><dt>Compilation</dt><dd><code>{{ preview.compilation_digest }}</code></dd></div>
+    <div><dt>Fragment set</dt><dd><code>{{ preview.fragment_digest }}</code></dd></div>
+  </dl>
+  <ol class="hit-list">
+  {% for fragment in preview.fragments %}
+    <li class="evidence-block">
+      <h3><code>{{ fragment.fragment_ref }}</code></h3>
+      <div class="block-body">{{ fragment.text }}</div>
+    </li>
+  {% endfor %}
+  </ol>
+  <div class="button-row">
+    <form method="post" action="/ui/import/confirm">
+      <input type="hidden" name="previewToken" value="{{ preview.preview_token }}">
+      <button class="button button-primary" type="submit">Confirm exact import</button>
+    </form>
+    <a class="button button-secondary" href="/ui/import">Cancel</a>
+  </div>
+</section>
+{% else %}
+<form method="post" action="/ui/import/preview" class="work-form">
+  <label for="source-ref">Source UUID</label>
+  <input id="source-ref" name="sourceRef" maxlength="36" required>
+  <label for="path">Configured-root Markdown path</label>
+  <input id="path" name="path" maxlength="255" placeholder="handbook.md" required>
+  <button class="button button-primary" type="submit">Compile preview</button>
+</form>
+{% endif %}
+{% endblock %}

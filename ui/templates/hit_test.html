@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="page-heading">
+  <p class="eyebrow">Authorized diagnostics</p>
+  <h1>Retrieval Hit Test</h1>
+  <p>Only exact-authorized Fragments render. Refused candidates and their rank are
+     not part of this view.</p>
+</header>
+<form method="post" action="/ui/hit-test" class="work-form">
+  <label for="query">Query</label>
+  <textarea id="query" name="query" maxlength="2000" required>{{ query }}</textarea>
+  <button class="button button-primary" type="submit">Run Hit Test</button>
+</form>
+{% if result %}
+  <section aria-labelledby="hit-results">
+    <div class="section-heading">
+      <h2 id="hit-results">Authorized hits</h2>
+      <span class="status">{{ result.coverage_status }}</span>
+    </div>
+    {% if result.hits %}
+      <ol class="hit-list">
+      {% for hit in result.hits %}
+        <li>
+          <details class="evidence-block">
+            <summary>
+              <span>Authorized hit {{ hit.ordinal }}</span>
+              <span class="summary-action">View evidence lineage</span>
+            </summary>
+            <div class="block-body">{{ hit.body }}</div>
+            <dl class="lineage">
+              <div><dt>Evidence</dt><dd><code>{{ hit.evidence.evidence_ref }}</code></dd></div>
+              <div><dt>Article</dt><dd><code>{{ hit.evidence.resource_ref }}</code></dd></div>
+              <div><dt>Revision</dt><dd><code>{{ hit.evidence.revision_ref }}</code></dd></div>
+              <div><dt>Fragment</dt><dd><code>{{ hit.evidence.fragment_ref }}</code></dd></div>
+              <div><dt>Source</dt><dd><code>{{ hit.evidence.source_ref }}</code></dd></div>
+              <div><dt>Policy Epoch</dt><dd>{{ hit.evidence.policy_epoch }}</dd></div>
+            </dl>
+          </details>
+        </li>
+      {% endfor %}
+      </ol>
+    {% else %}
+      <div class="state state-empty">
+        <h3>No authorized evidence</h3>
+        <p>{{ result.coverage_reason or 'no_authorized_evidence' }}</p>
+      </div>
+    {% endif %}
+  </section>
+{% endif %}
+{% endblock %}

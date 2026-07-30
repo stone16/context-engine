@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="page-heading">
+  <p class="eyebrow">Release generation {{ current.release_generation }}</p>
+  <h1>Versioned profiles</h1>
+  <p>Exact profile identities make the active Release reproducible. This M1 view can
+     preview an embedding change; it cannot apply or publish one.</p>
+</header>
+<section aria-labelledby="active-profiles">
+  <h2 id="active-profiles">Active identities</h2>
+  <dl class="lineage profile-list">
+    <div><dt>Release</dt><dd><code>{{ current.release_manifest_ref }}</code></dd></div>
+    <div><dt>Content</dt><dd><code>{{ current.content_profile.profile_ref }}</code><br><code>{{ current.content_profile.digest }}</code></dd></div>
+    <div><dt>Embedding / index</dt><dd><code>{{ current.index_profile.profile_ref }}</code><br><code>{{ current.index_profile.digest }}</code></dd></div>
+    <div><dt>Runtime</dt><dd><code>{{ current.runtime_profile.profile_ref }}</code><br><code>{{ current.runtime_profile.digest }}</code></dd></div>
+  </dl>
+</section>
+<form method="post" action="/ui/profiles" class="work-form">
+  <h2>Preview embedding profile change</h2>
+  <label for="profile-ref">Proposed profile ref</label>
+  <input id="profile-ref" name="profileRef" maxlength="256" required>
+  <label for="profile-digest">Proposed profile digest</label>
+  <input id="profile-digest" name="digest" minlength="64" maxlength="64" pattern="[0-9a-f]{64}" required>
+  <button class="button button-primary" type="submit">Preview consequence</button>
+</form>
+{% if proposed %}
+<section class="state" aria-labelledby="reembed-title">
+  <p class="eyebrow">Consequence preview · not applied</p>
+  <h2 id="reembed-title">Re-embed required</h2>
+  <p>Changing <code>{{ current.index_profile.profile_ref }}</code> to
+     <code>{{ proposed.profile_ref }}</code> invalidates compatibility with the current
+     corpus. The full active corpus must be re-embedded and evaluated in a versioned
+     Release candidate.</p>
+  <p><strong>No profile change was applied.</strong> Release promotion remains outside
+     this UI.</p>
+</section>
+{% endif %}
+{% endblock %}

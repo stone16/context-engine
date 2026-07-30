@@ -967,6 +967,14 @@
             ],
             "using": "true",
             "withCheck": "true"
+          },
+          {
+            "name": "membership_ui_access_definer_select",
+            "command": "SELECT",
+            "roles": [
+              "context_engine_access_policy_definer"
+            ],
+            "using": "organization_id = NULLIF(current_setting('app.ui_actor_organization_id', true), '')::uuid AND user_id = NULLIF(current_setting('app.ui_actor_user_id', true), '')::uuid AND membership_id = NULLIF(current_setting('app.ui_actor_membership_id', true), '')::uuid AND membership_version = NULLIF(current_setting('app.ui_actor_membership_version', true), '')::bigint AND current_setting('app.ui_actor_mode', true) = 'article_policy_change'"
           }
         ]
       },
@@ -996,6 +1004,9 @@
         "context_engine_file_dispatch_definer": [
           "SELECT",
           "UPDATE status, valid_from, valid_until"
+        ],
+        "context_engine_access_policy_definer": [
+          "SELECT"
         ]
       },
       "partitions": [],
@@ -2913,6 +2924,14 @@
             ],
             "using": "true",
             "withCheck": "true"
+          },
+          {
+            "name": "context_run_ui_feedback_definer_select",
+            "command": "SELECT",
+            "roles": [
+              "context_engine_context_run_reader_definer"
+            ],
+            "using": "context_run.organization_id = NULLIF(current_setting('app.ui_feedback_organization_id', true), '')::uuid AND context_run.run_ref = current_setting('app.ui_feedback_run_ref', true) AND context_run.user_id = NULLIF(current_setting('app.ui_feedback_user_id', true), '')::uuid AND context_run.membership_id = NULLIF(current_setting('app.ui_feedback_membership_id', true), '')::uuid AND context_run.membership_version = NULLIF(current_setting('app.ui_feedback_membership_version', true), '')::bigint AND context_run.principal_ref = current_setting('app.ui_feedback_principal_ref', true) AND current_setting('app.ui_feedback_mode', true) = 'capture'"
           }
         ]
       },
@@ -2950,6 +2969,159 @@
         "DB-010",
         "OBS-004",
         "OBS-005",
+        "PG-TRACE-REDACTION-012"
+      ]
+    },
+    {
+      "name": "context_feedback",
+      "classification": "tenant_owned",
+      "nonOwnerEvidence": {
+        "evidenceId": "PG-TRACE-REDACTION-012",
+        "selector": {
+          "table": "context_feedback"
+        }
+      },
+      "purpose": "Evidence-only answer feedback bound to one exact same-Organization ContextRun and current Membership; it has no Release publication authority",
+      "organizationColumn": "organization_id",
+      "organizationInclusiveKeys": [
+        {
+          "name": "pk_context_feedback",
+          "kind": "primary_key",
+          "columns": [
+            "organization_id",
+            "feedback_ref"
+          ]
+        },
+        {
+          "name": "uq_context_feedback_actor_run",
+          "kind": "unique",
+          "columns": [
+            "organization_id",
+            "run_ref",
+            "membership_id",
+            "membership_version"
+          ]
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_context_feedback_membership_same_organization",
+          "columns": [
+            "organization_id",
+            "membership_id",
+            "membership_version"
+          ],
+          "references": {
+            "table": "membership",
+            "columns": [
+              "organization_id",
+              "membership_id",
+              "membership_version"
+            ]
+          },
+          "onDelete": "RESTRICT"
+        },
+        {
+          "name": "fk_context_feedback_run_same_organization",
+          "columns": [
+            "organization_id",
+            "run_ref"
+          ],
+          "references": {
+            "table": "context_run",
+            "columns": [
+              "organization_id",
+              "run_ref"
+            ]
+          },
+          "onDelete": "RESTRICT"
+        }
+      ],
+      "checkConstraints": [
+        {
+          "name": "ck_context_feedback_membership_version",
+          "expression": "membership_version BETWEEN 1 AND 9223372036854775807"
+        },
+        {
+          "name": "ck_context_feedback_note",
+          "expression": "note IS NULL OR (btrim(note) <> '' AND char_length(note) <= 1000)"
+        },
+        {
+          "name": "ck_context_feedback_rating",
+          "expression": "rating IN ('helpful', 'not_helpful')"
+        },
+        {
+          "name": "ck_context_feedback_ref",
+          "expression": "feedback_ref ~ '^fb_[0-9a-f]{64}$'"
+        },
+        {
+          "name": "ck_context_feedback_refs",
+          "expression": "btrim(run_ref) <> '' AND char_length(run_ref) <= 256 AND btrim(principal_ref) <> ''"
+        }
+      ],
+      "rowLevelSecurity": {
+        "enabled": true,
+        "forced": true,
+        "policies": [
+          {
+            "name": "context_feedback_migrator_administration",
+            "command": "ALL",
+            "roles": [
+              "context_engine_migrator"
+            ],
+            "using": "true",
+            "withCheck": "true"
+          },
+          {
+            "name": "context_feedback_ui_definer_insert",
+            "command": "INSERT",
+            "roles": [
+              "context_engine_context_run_reader_definer"
+            ],
+            "withCheck": "context_feedback.organization_id = NULLIF(current_setting('app.ui_feedback_organization_id', true), '')::uuid AND context_feedback.run_ref = current_setting('app.ui_feedback_run_ref', true) AND context_feedback.membership_id = NULLIF(current_setting('app.ui_feedback_membership_id', true), '')::uuid AND context_feedback.membership_version = NULLIF(current_setting('app.ui_feedback_membership_version', true), '')::bigint AND current_setting('app.ui_feedback_mode', true) = 'capture'"
+          },
+          {
+            "name": "context_feedback_ui_definer_select",
+            "command": "SELECT",
+            "roles": [
+              "context_engine_context_run_reader_definer"
+            ],
+            "using": "context_feedback.organization_id = NULLIF(current_setting('app.ui_feedback_organization_id', true), '')::uuid AND context_feedback.run_ref = current_setting('app.ui_feedback_run_ref', true) AND context_feedback.membership_id = NULLIF(current_setting('app.ui_feedback_membership_id', true), '')::uuid AND context_feedback.membership_version = NULLIF(current_setting('app.ui_feedback_membership_version', true), '')::bigint AND current_setting('app.ui_feedback_mode', true) = 'capture'"
+          }
+        ]
+      },
+      "functionOnlyMutation": {
+        "databaseFunction": "context_control_capture_context_feedback",
+        "role": "context_engine_control",
+        "definerRole": "context_engine_context_run_reader_definer",
+        "directTableMutationAllowed": false,
+        "releasePublicationAuthorityAllowed": false
+      },
+      "permittedOperations": {
+        "context_engine_control": [
+          "EXECUTE context_control_capture_context_feedback"
+        ],
+        "context_engine_context_run_reader_definer": [
+          "SELECT",
+          "INSERT"
+        ],
+        "context_engine_learning": [],
+        "context_engine_release_operator": [],
+        "context_engine_runtime": [],
+        "context_engine_worker": []
+      },
+      "partitions": [],
+      "securityInvariantIds": [
+        "TENANT-OWNERSHIP-001",
+        "TENANT-FK-002",
+        "RLS-FAIL-CLOSED-003",
+        "TRACE-REDACTION-012",
+        "RELEASE-OWNER-019"
+      ],
+      "negativeTestIds": [
+        "DB-001",
+        "DB-004",
+        "DB-008",
         "PG-TRACE-REDACTION-012"
       ]
     },
@@ -5956,7 +6128,7 @@
           "table": "article_explicit_policy_setting"
         }
       },
-      "purpose": "Trusted explicit first-ingest setting for one not-yet-created Article identity",
+      "purpose": "Trusted explicit first-ingest setting or preview-confirmed policy edit for one Article identity",
       "organizationColumn": "organization_id",
       "organizationInclusiveKeys": [
         {
@@ -5998,6 +6170,14 @@
         "forced": true,
         "policies": [
           {
+            "name": "article_explicit_policy_setting_access_definer_insert",
+            "command": "INSERT",
+            "roles": [
+              "context_engine_access_policy_definer"
+            ],
+            "withCheck": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"
+          },
+          {
             "name": "article_explicit_policy_setting_migrator_administration",
             "command": "ALL",
             "roles": [
@@ -6013,14 +6193,36 @@
               "context_engine_access_policy_definer"
             ],
             "using": "(organization_id = (NULLIF(current_setting('app.organization_id'::text, true), ''::text))::uuid)"
+          },
+          {
+            "name": "article_explicit_policy_setting_access_definer_update",
+            "command": "UPDATE",
+            "roles": [
+              "context_engine_access_policy_definer"
+            ],
+            "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid",
+            "withCheck": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"
           }
         ]
       },
+      "functionOnlyMutation": {
+        "databaseFunctions": [
+          "context_fix_article_access_policy",
+          "context_control_change_article_policy"
+        ],
+        "definerRole": "context_engine_access_policy_definer",
+        "directTableMutationAllowed": false
+      },
       "permittedOperations": {
         "context_engine_access_policy_definer": [
-          "SELECT"
+          "SELECT",
+          "INSERT",
+          "UPDATE"
         ],
-        "context_engine_control": [],
+        "context_engine_control": [
+          "EXECUTE context_control_read_article_policy",
+          "EXECUTE context_control_change_article_policy"
+        ],
         "context_engine_runtime": [],
         "context_engine_worker": []
       },
@@ -7553,7 +7755,7 @@
           "table": "file_acquisition"
         }
       },
-      "purpose": "Immutable trusted request to acquire one Markdown filename from one registered File Source version",
+      "purpose": "Immutable trusted request to acquire one Markdown filename from one registered File Source version, optionally bound to an exact UI fragment preview",
       "organizationColumn": "organization_id",
       "organizationInclusiveKeys": [
         {
@@ -7674,9 +7876,9 @@
           "name": "ck_file_acquisition_request_digest",
           "expression": "request_digest ~ '^[0-9a-f]{64}$'"
         },
-        {
-          "name": "ck_file_acquisition_change_observation",
-          "expression": "accepted page ref, ordinal, raw SHA-256, and raw length are either all absent for manual import or all valid and present"
+          {
+            "name": "ck_file_acquisition_change_observation",
+            "expression": "accepted change-page identity, UI preview identity, or legacy manual-import fields form exactly one valid acquisition shape"
         }
       ],
       "rowLevelSecurity": {
@@ -7730,6 +7932,7 @@
       "functionOnlyMutation": {
         "databaseFunctions": [
           "context_control_prepare_file_import",
+          "context_control_prepare_exact_file_import",
           "context_control_schedule_file_change_page"
         ],
         "role": "context_engine_control",
@@ -7739,6 +7942,7 @@
       "permittedOperations": {
         "context_engine_control": [
           "EXECUTE context_control_prepare_file_import",
+          "EXECUTE context_control_prepare_exact_file_import",
           "EXECUTE context_control_schedule_file_change_page",
           "EXECUTE context_control_read_pending_file_change_schedules",
           "EXECUTE context_control_read_file_source_status"

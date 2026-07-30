@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="page-heading">
+  <p class="eyebrow">ContextPackage · Citation closure</p>
+  <h1>Ask ContextEngine</h1>
+  <p>Every clean answer Block includes a resolvable Article → Revision → Fragment
+     citation. Incomplete lineage refuses the answer.</p>
+</header>
+<form method="post" action="/ui/ask" class="work-form">
+  <label for="query">Question</label>
+  <textarea id="query" name="query" maxlength="2000" required>{{ query }}</textarea>
+  <button class="button button-primary" type="submit">Ask</button>
+</form>
+{% if result %}
+  <section aria-labelledby="answer-blocks">
+    <div class="section-heading">
+      <h2 id="answer-blocks">Authorized answer context</h2>
+      <span class="status">{{ result.coverage_status }}</span>
+    </div>
+    {% if result.hits %}
+      <ol class="hit-list">
+      {% for hit in result.hits %}
+        <li>
+          <details class="evidence-block">
+            <summary>
+              <span>Answer Block {{ hit.ordinal }}</span>
+              <span class="summary-action">Flip to evidence</span>
+            </summary>
+            <div class="block-body">{{ hit.body }}</div>
+            <dl class="lineage">
+              <div><dt>Article</dt><dd><code>{{ hit.evidence.resource_ref }}</code></dd></div>
+              <div><dt>Revision</dt><dd><code>{{ hit.evidence.revision_ref }}</code></dd></div>
+              <div><dt>Fragment</dt><dd><code>{{ hit.evidence.fragment_ref }}</code></dd></div>
+              <div><dt>Evidence</dt><dd><code>{{ hit.evidence.evidence_ref }}</code></dd></div>
+              <div><dt>Citation</dt><dd><code>{{ hit.evidence.citation_open_ref }}</code></dd></div>
+            </dl>
+          </details>
+        </li>
+      {% endfor %}
+      </ol>
+    {% else %}
+      <div class="state state-empty">
+        <h3>No authorized evidence</h3>
+        <p>{{ result.coverage_reason or 'no_authorized_evidence' }}</p>
+      </div>
+    {% endif %}
+  </section>
+{% endif %}
+{% endblock %}

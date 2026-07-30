@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="page-heading">
+  <p class="eyebrow">Release generation {{ current.release_generation }}</p>
+  <h1>Operational overview</h1>
+  <p>Current Source health, ingest counts, and the exact promoted Release lineage.</p>
+</header>
+<section aria-labelledby="release-heading">
+  <h2 id="release-heading">Active Release</h2>
+  <dl class="lineage">
+    <div><dt>Generation</dt><dd>{{ current.release_generation }}</dd></div>
+    <div><dt>Manifest</dt><dd><code>{{ current.release_manifest_ref }}</code></dd></div>
+  </dl>
+</section>
+<section aria-labelledby="source-heading">
+  <h2 id="source-heading">Sources</h2>
+  {% if current.sources %}
+    <ul class="source-list">
+    {% for source in current.sources %}
+      <li class="evidence-block">
+        <div class="section-heading">
+          <h3>{{ source.display_name }}</h3>
+          <span class="status">{{ source.status }}</span>
+        </div>
+        <dl class="lineage">
+          <div><dt>Source</dt><dd><code>{{ source.source_ref }}</code></dd></div>
+          <div><dt>Active Articles</dt><dd>{{ source.active_resource_count }}</dd></div>
+          {% if source.refusal_categories %}
+          <div><dt>Refusal categories</dt><dd>{{ source.refusal_categories|join(', ') }}</dd></div>
+          {% endif %}
+        </dl>
+      </li>
+    {% endfor %}
+    </ul>
+  {% else %}
+    <div class="state state-empty">
+      <h3>No registered Sources</h3>
+      <p>This is a first-run state, not a successful health result.</p>
+    </div>
+  {% endif %}
+</section>
+{% endblock %}
