@@ -379,7 +379,7 @@ class _PostgreSQLMaterializedProjectionPort:
                 for target, membership, _principal, _article in rows_with_targets
                 if membership
             )
-            principal_grants = frozenset(
+            principal_or_article_grants = frozenset(
                 target
                 for target, _membership, principal, _article in rows_with_targets
                 # ADR-0077 makes the Article policy the content grant.  The
@@ -400,7 +400,7 @@ class _PostgreSQLMaterializedProjectionPort:
             return MaterializedScopeOperands(
                 organization_boundary=organization_boundary,
                 membership_rights=membership_rights,
-                principal_grants=principal_grants,
+                principal_grants=principal_or_article_grants,
                 source_native_acl=organization_boundary,
                 resource_acl=article_access,
             )
@@ -564,11 +564,15 @@ class _PostgreSQLMaterializedProjectionPort:
                     resource.resource_ref,
                     revision.revision_id,
                     fragment.fragment_ref,
-                    'sourceacl_' || md5(
-                        article_policy.organization_id::text || ':' ||
-                        article_policy.resource_ref || ':' ||
-                        article_policy.policy_version::text || ':' ||
-                        COALESCE(article_policy.source_version_ref::text, '')
+                    'sourceacl_' || pg_catalog.encode(
+                        pg_catalog.sha256(pg_catalog.convert_to(
+                            article_policy.organization_id::text || ':' ||
+                            article_policy.resource_ref || ':' ||
+                            article_policy.policy_version::text || ':' ||
+                            COALESCE(article_policy.source_version_ref::text, ''),
+                            'UTF8'
+                        )),
+                        'hex'
                     ) AS source_acl_projection_ref,
                     article_policy.source_acl_as_of
                 FROM context_resource AS resource

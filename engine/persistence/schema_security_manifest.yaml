@@ -5646,10 +5646,13 @@
       },
       "functionOnlyMutation": {
         "databaseFunctions": [
-          "context_control_set_tenant_article_policy_default",
+          "context_control_set_tenant_article_policy_default"
+        ],
+        "invokerTriggerFunctions": [
           "organization_initialize_article_policy_default"
         ],
         "definerRole": "context_engine_access_policy_definer",
+        "invokerRole": "context_engine_migrator",
         "directTableMutationAllowed": false
       },
       "permittedOperations": {

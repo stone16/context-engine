@@ -860,6 +860,13 @@ def test_content_tables_have_force_rls_and_least_privilege_grants(
                 assert "membership_resource_field_right" in normalized_policy
                 assert "field_right.field_ref = 'body'" in normalized_policy
                 assert "article_access_policy" in normalized_policy
+                assert (
+                    "article_policy.organization_id = "
+                    "context_fragment.organization_id"
+                ) in normalized_policy
+                assert (
+                    "article_policy.resource_ref = context_fragment.resource_ref"
+                ) in normalized_policy
             migrator_policy = policies[
                 (table_name, f"{table_name}_migrator_administration")
             ]

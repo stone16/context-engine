@@ -282,36 +282,49 @@ def apply_source_acl_floor(
 
     if type(local_resolution) is not ArticlePolicyResolution:
         raise TypeError("source ACL floor requires an Article policy resolution")
-    local_resolution.__post_init__()
+    try:
+        local_resolution.__post_init__()
+    except (TypeError, ValueError):
+        return ArticlePolicyResolution(None, ArticlePolicyResolutionRung.ISOLATION)
     if local_resolution.policy is None:
         return local_resolution
-    local = _validated_policy(
-        organization_id=organization_id,
-        setting=local_resolution.policy.setting,
-        version=local_resolution.policy.version,
-        group_directory=group_directory,
-    )
+    try:
+        local = _validated_policy(
+            organization_id=organization_id,
+            setting=local_resolution.policy.setting,
+            version=local_resolution.policy.version,
+            group_directory=group_directory,
+        )
+    except (TypeError, ValueError):
+        return ArticlePolicyResolution(None, ArticlePolicyResolutionRung.ISOLATION)
     if source_evidence is None or type(source_evidence) is not SourceAclEvidence:
         return ArticlePolicyResolution(None, ArticlePolicyResolutionRung.ISOLATION)
-    source_evidence.__post_init__()
+    try:
+        source_evidence.__post_init__()
+    except (TypeError, ValueError):
+        return ArticlePolicyResolution(None, ArticlePolicyResolutionRung.ISOLATION)
     if source_evidence.status is not AclObservationStatus.RESOLVED:
         return ArticlePolicyResolution(None, ArticlePolicyResolutionRung.ISOLATION)
     assert source_evidence.observed_policy is not None
-    source = _validated_policy(
-        organization_id=organization_id,
-        setting=source_evidence.observed_policy,
-        version=local.version,
-        group_directory=group_directory,
-    )
+    try:
+        source = _validated_policy(
+            organization_id=organization_id,
+            setting=source_evidence.observed_policy,
+            version=local.version,
+            group_directory=group_directory,
+        )
+    except (TypeError, ValueError):
+        return ArticlePolicyResolution(None, ArticlePolicyResolutionRung.ISOLATION)
     intersection = _intersect_policy_settings(local.setting, source.setting)
     if intersection is None:
         return ArticlePolicyResolution(None, ArticlePolicyResolutionRung.ISOLATION)
-    return ArticlePolicyResolution(
-        _validated_policy(
+    try:
+        policy = _validated_policy(
             organization_id=organization_id,
             setting=intersection,
             version=local.version,
             group_directory=group_directory,
-        ),
-        local_resolution.rung,
-    )
+        )
+    except (TypeError, ValueError):
+        return ArticlePolicyResolution(None, ArticlePolicyResolutionRung.ISOLATION)
+    return ArticlePolicyResolution(policy, local_resolution.rung)

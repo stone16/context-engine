@@ -1348,20 +1348,8 @@ def test_control_function_and_table_grants_seal_the_only_mutation_path(
             }
         assert definer_owned_namespaces == set()
         assert definer_owned_databases == set()
-        article_policy_commands = {
-            ("article_access_group", "SELECT"),
-            ("article_access_policy", "INSERT"),
-            ("article_access_policy", "SELECT"),
-            ("article_access_policy", "UPDATE"),
-            ("article_explicit_policy_setting", "SELECT"),
-            ("article_source_acl_observation", "INSERT"),
-            ("article_source_acl_observation", "SELECT"),
-            ("article_source_acl_observation", "UPDATE"),
-            ("organization_article_policy_default", "SELECT"),
-            ("organization_article_policy_default", "UPDATE"),
-            ("source_article_policy_default", "INSERT"),
-            ("source_article_policy_default", "SELECT"),
-            ("source_article_policy_default", "UPDATE"),
+        article_policy_commands = article_policy_definer_grants - {
+            ("source_version", "SELECT")
         }
         assert {
             (table, command, roles)

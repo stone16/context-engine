@@ -25,6 +25,22 @@ def table_entries(document: dict[str, Any]) -> dict[str, dict[str, Any]]:
     }
 
 
+def test_tenant_article_default_declares_its_distinct_write_authorities() -> None:
+    default = table_entries(manifest())["organization_article_policy_default"]
+
+    assert default["functionOnlyMutation"] == {
+        "databaseFunctions": [
+            "context_control_set_tenant_article_policy_default",
+        ],
+        "invokerTriggerFunctions": [
+            "organization_initialize_article_policy_default",
+        ],
+        "definerRole": "context_engine_access_policy_definer",
+        "invokerRole": "context_engine_migrator",
+        "directTableMutationAllowed": False,
+    }
+
+
 @pytest.mark.security_evidence(id="PROP-TENANT-OWNERSHIP-001", layer="property")
 def test_manifest_classifies_the_exact_current_release_schema() -> None:
     """PROP-TENANT-OWNERSHIP-001: no current table is left unclassified."""

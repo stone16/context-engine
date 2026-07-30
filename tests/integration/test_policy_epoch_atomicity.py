@@ -259,10 +259,34 @@ def test_source_version_activation_invalidates_an_inflight_article_delivery(
                     with engine.connect() as observer:
                         activation_waiting = observer.execute(
                             text(
-                                "SELECT EXISTS ("
-                                "SELECT 1 FROM pg_locks WHERE locktype = 'advisory' "
-                                "AND mode = 'ExclusiveLock' AND granted IS FALSE)"
-                            )
+                                """
+                                SELECT EXISTS (
+                                    SELECT 1 FROM pg_locks
+                                    WHERE locktype = 'advisory'
+                                      AND mode = 'ExclusiveLock'
+                                      AND granted IS FALSE
+                                      AND database = (
+                                        SELECT oid FROM pg_database
+                                        WHERE datname = current_database()
+                                      )
+                                      AND classid = (
+                                        (hashtextextended(:lock_key, 0) >> 32)
+                                        & 4294967295
+                                      )::oid
+                                      AND objid = (
+                                        hashtextextended(:lock_key, 0)
+                                        & 4294967295
+                                      )::oid
+                                      AND objsubid = 1
+                                )
+                                """
+                            ),
+                            {
+                                "lock_key": (
+                                    "context-engine.file-publication:"
+                                    f"{scenario.organization_id}"
+                                )
+                            },
                         ).scalar_one()
                     if activation_waiting or activation.done():
                         break
@@ -281,6 +305,7 @@ def test_source_version_activation_invalidates_an_inflight_article_delivery(
         ]
         assert package["evidence"]
         assert policy_epoch(engine, scenario.organization_id) == 2
+        assert read_count == 3
     finally:
         release_final_gate.set()
         with engine.begin() as connection:

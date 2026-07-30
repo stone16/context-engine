@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -522,6 +523,9 @@ def _seed_fixture(
                 "CAST(:organization_ids AS uuid[]))"
             ),
             {
+                # The File access trigger can synthesize these rows before the
+                # explicit fixture INSERT. Normalize every fixture Article so
+                # all runtime evidence shares the same deterministic ACL time.
                 "source_acl_as_of": RECEIVED_AT - timedelta(minutes=1),
                 "organization_ids": [
                     organization.organization_id for organization in organizations
@@ -594,6 +598,20 @@ def _cleanup_fixture(engine: Engine, fixture: RuntimeEvidenceFixture) -> None:
         )
     try:
         with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "DELETE FROM article_access_group_membership "
+                    "WHERE organization_id IN (:org_a_id, :org_b_id)"
+                ),
+                organizations,
+            )
+            connection.execute(
+                text(
+                    "DELETE FROM article_access_group "
+                    "WHERE organization_id IN (:org_a_id, :org_b_id)"
+                ),
+                organizations,
+            )
             connection.execute(
                 text(
                     "DELETE FROM article_access_policy "
@@ -914,6 +932,10 @@ def _assert_exact_authorized_http_resolve(
         .replace("+00:00", "Z"),
         "freshnessProfileRef": "file-source-access-current-transaction-v1",
     }
+    assert re.fullmatch(
+        r"sourceacl_[0-9a-f]{64}",
+        evidence["sourceAclEvidence"]["projectionRef"],
+    )
 
     response_text = response.text
     forbidden_values = (

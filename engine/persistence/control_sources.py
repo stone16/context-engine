@@ -360,9 +360,15 @@ class PostgreSQLControlStore:
         function_name: str,
         parameters: dict[str, object],
     ) -> object:
-        arguments = [":organization_id", *[f":{name}" for name in parameters]]
-        if "group_refs" in parameters:
-            arguments[-1] = "CAST(:group_refs AS text[])"
+        arguments = ["requested_organization_id => :organization_id"]
+        for name in parameters:
+            value = (
+                "CAST(:group_refs AS text[])"
+                if name == "group_refs"
+                else f":{name}"
+            )
+            database_name = name if name == "expected_version" else f"requested_{name}"
+            arguments.append(f"{database_name} => {value}")
         try:
             with self._engine.begin() as connection:
                 assert_control_role(connection)

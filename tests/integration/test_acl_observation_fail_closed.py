@@ -18,7 +18,11 @@ from tests.support.article_access_policy import (
 pytestmark = pytest.mark.integration
 
 
-def _is_isolated(engine: Engine, organization_id: object, resource_ref: str) -> bool:
+def _isolation_state(
+    engine: Engine,
+    organization_id: object,
+    resource_ref: str,
+) -> tuple[object, ...]:
     with engine.connect() as connection:
         row = connection.execute(
             text(
@@ -35,12 +39,7 @@ def _is_isolated(engine: Engine, organization_id: object, resource_ref: str) -> 
                 "resource_ref": resource_ref,
             },
         ).one()
-    return (
-        row.policy_kind is None
-        and row.group_refs == []
-        and row.published is False
-        and row.source_observation_status in {"missing", "failed", "unresolved_group"}
-    )
+    return tuple(row)
 
 
 @pytest.mark.parametrize("failure", ("missing", "failed", "unresolved_group"))
@@ -71,7 +70,12 @@ def test_missing_failed_or_unresolved_source_acl_observation_isolates(
             resource_ref=resource_ref,
         )
 
-        assert _is_isolated(engine, organization_id, resource_ref)
+        assert _isolation_state(engine, organization_id, resource_ref) == (
+            None,
+            [],
+            False,
+            failure,
+        )
         with engine.connect() as connection:
             observed_mode = connection.execute(
                 text(
@@ -89,6 +93,63 @@ def test_missing_failed_or_unresolved_source_acl_observation_isolates(
             ).scalar_one_or_none()
         assert observed_mode in {None, "mirrored"}
         assert observed_mode != "weak"
+    finally:
+        engine.dispose()
+        delete_article_policy_scenario(migration_configuration, organization_id)
+
+
+def test_missing_file_acl_declaration_isolates_without_aborting_ingestion(
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    engine = create_database_engine(migration_configuration)
+    organization_id = uuid4()
+    source_ref = str(uuid4())
+    resource_ref = f"resource:missing-file-acl-declaration:{uuid4()}"
+    try:
+        insert_organization(engine, organization_id)
+        set_tenant_default(engine, organization_id, "organization")
+        observe_source_acl(
+            engine,
+            organization_id=organization_id,
+            source_ref=source_ref,
+            resource_ref=resource_ref,
+        )
+
+        # UUID-backed sources require one current active SourceVersion whose
+        # declaration fixes Mirrored evidence. This Source has no authoritative
+        # declaration, so ingestion must commit an isolated Article, not abort.
+        ingest_article(
+            engine,
+            organization_id=organization_id,
+            source_ref=source_ref,
+            resource_ref=resource_ref,
+        )
+
+        with engine.connect() as connection:
+            state = connection.execute(
+                text(
+                    """
+                    SELECT local_policy_kind, policy_kind, published,
+                           resolution_rung, source_evidence_mode,
+                           source_observation_status
+                    FROM article_access_policy
+                    WHERE organization_id = :organization_id
+                      AND resource_ref = :resource_ref
+                    """
+                ),
+                {
+                    "organization_id": organization_id,
+                    "resource_ref": resource_ref,
+                },
+            ).one()
+        assert tuple(state) == (
+            "organization",
+            None,
+            False,
+            "tenant_default",
+            "mirrored",
+            "missing",
+        )
     finally:
         engine.dispose()
         delete_article_policy_scenario(migration_configuration, organization_id)

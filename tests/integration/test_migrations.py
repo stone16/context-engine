@@ -488,7 +488,7 @@ def test_article_policy_revision_backfills_legacy_access_and_reapplies_cleanly(
                     "private",
                     None,
                     False,
-                    "explicit_article",
+                    "tenant_default",
                     "mirrored",
                     "missing",
                     None,
@@ -1007,10 +1007,12 @@ def test_article_policy_downgrade_waits_for_source_authority_writer(
                         if waiting or downgrade.done():
                             break
                         sleep(0.01)
-                    assert waiting is True
-                    assert downgrade.done() is False
+                    observed_waiting = waiting
+                    observed_pending = not downgrade.done()
                     writer_transaction.commit()
                     downgrade.result(timeout=10)
+                    assert observed_waiting is True
+                    assert observed_pending is True
             finally:
                 if writer_transaction.is_active:
                     writer_transaction.rollback()

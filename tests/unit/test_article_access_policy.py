@@ -25,6 +25,28 @@ class GroupDirectory:
         }.get(group_ref)
 
 
+def test_policy_cannot_be_constructed_without_current_group_authority() -> None:
+    with pytest.raises(TypeError, match="requires current group authority"):
+        ArticleAccessPolicy(
+            organization_id=ORGANIZATION_ID,
+            kind=ArticleAccessPolicyKind.PRIVATE,
+            group_refs=frozenset(),
+            version=1,
+        )
+
+
+@pytest.mark.parametrize("version", (0, -1))
+def test_policy_version_must_be_positive(version: int) -> None:
+    with pytest.raises(ValueError, match="positive signed 64-bit"):
+        ArticleAccessPolicy.create(
+            organization_id=ORGANIZATION_ID,
+            kind=ArticleAccessPolicyKind.PRIVATE,
+            group_refs=frozenset(),
+            version=version,
+            group_directory=GroupDirectory(),
+        )
+
+
 def test_groups_policy_requires_at_least_one_group() -> None:
     with pytest.raises(ValueError, match="at least one"):
         ArticleAccessPolicy.create(

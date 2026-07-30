@@ -38,6 +38,11 @@ class GroupDirectory:
         return None
 
 
+class StaleGroupDirectory:
+    def resolve_organization_id(self, group_ref: GroupRef) -> UUID | None:
+        return None
+
+
 def _local_resolution(
     setting: ArticleAccessPolicySetting,
     rung: ArticlePolicyResolutionRung = ArticlePolicyResolutionRung.EXPLICIT_ARTICLE,
@@ -123,3 +128,50 @@ def test_source_acl_floor_retains_the_local_cascade_provenance() -> None:
     assert result.policy is not None
     assert result.policy.setting == GROUP_A
     assert result.rung is ArticlePolicyResolutionRung.SOURCE_DEFAULT
+
+
+@pytest.mark.parametrize(
+    ("local", "source"),
+    (
+        (GROUP_A, ORGANIZATION),
+        (ORGANIZATION, GROUP_A),
+    ),
+)
+def test_source_acl_floor_isolates_when_current_group_authority_is_stale(
+    local: ArticleAccessPolicySetting,
+    source: ArticleAccessPolicySetting,
+) -> None:
+    result = apply_source_acl_floor(
+        organization_id=ORGANIZATION_ID,
+        local_resolution=_local_resolution(local),
+        source_evidence=SourceAclEvidence(
+            status=AclObservationStatus.RESOLVED,
+            observed_policy=source,
+        ),
+        group_directory=StaleGroupDirectory(),
+    )
+
+    assert result == ArticlePolicyResolution(
+        None,
+        ArticlePolicyResolutionRung.ISOLATION,
+    )
+
+
+def test_source_acl_floor_rederives_a_mutated_local_resolution() -> None:
+    local_resolution = _local_resolution(GROUP_A)
+    object.__setattr__(local_resolution, "rung", "source_default")
+
+    result = apply_source_acl_floor(
+        organization_id=ORGANIZATION_ID,
+        local_resolution=local_resolution,
+        source_evidence=SourceAclEvidence(
+            status=AclObservationStatus.RESOLVED,
+            observed_policy=ORGANIZATION,
+        ),
+        group_directory=GroupDirectory(),
+    )
+
+    assert result == ArticlePolicyResolution(
+        None,
+        ArticlePolicyResolutionRung.ISOLATION,
+    )

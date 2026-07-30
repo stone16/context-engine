@@ -966,11 +966,15 @@ def upgrade() -> None:
             ELSE
                 declared_evidence_mode := 'mirrored';
             END IF;
-            IF declared_evidence_mode IS NULL
+            IF declared_evidence_mode IS DISTINCT FROM 'mirrored'
                OR (observation.resource_ref IS NOT NULL
                    AND observation.evidence_mode <> declared_evidence_mode)
             THEN
                 observation := NULL;
+                -- The active carrier in this milestone is Mirrored. Record the
+                -- required carrier while preserving the local proposal and its
+                -- cascade provenance; the missing observation isolates access.
+                declared_evidence_mode := 'mirrored';
             END IF;
             IF local_kind IS NOT NULL
                AND observation.observation_status = 'resolved'
@@ -1128,7 +1132,7 @@ def upgrade() -> None:
         )
         SELECT resource.organization_id, resource.resource_ref, 1,
                'private', ARRAY[]::text[], NULL, ARRAY[]::text[],
-               false, 'explicit_article', 'mirrored', 'missing', NULL,
+               false, 'tenant_default', 'mirrored', 'missing', NULL,
                NULL, NULL, NULL, epoch.policy_epoch
         FROM context_resource AS resource
         JOIN organization_policy_epoch AS epoch
@@ -1193,7 +1197,8 @@ def upgrade() -> None:
                 );
                 RETURN NULL;
             END IF;
-            IF OLD.access_state = 'allowed' AND NEW.access_state = 'revoked' THEN
+            IF TG_OP = 'UPDATE' AND OLD.access_state = 'allowed'
+               AND NEW.access_state = 'revoked' THEN
                 IF EXISTS (
                     SELECT 1
                     FROM public.resource_access_policy AS remaining_access

@@ -383,7 +383,11 @@ def test_article_policy_tables_force_rls_and_groups_authorize_at_article_atom(
                 savepoint = connection.begin_nested()
                 try:
                     with pytest.raises(DBAPIError, match="permission denied"):
-                        connection.execute(text(f"SELECT * FROM {table_name}"))
+                        connection.execute(
+                            text(
+                                f"SELECT * FROM {table_name}"  # noqa: S608 - fixed list
+                            )
+                        )
                 finally:
                     savepoint.rollback()
 

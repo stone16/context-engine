@@ -10,6 +10,8 @@ from tests.support.article_access_policy import (
     article_policy,
     fixed_policy_epoch,
     policy_epoch,
+    set_source_default,
+    set_tenant_default,
 )
 from tests.support.file_imports import (
     delete_file_import_scenario,
@@ -45,6 +47,14 @@ def test_reingestion_revision_replacement_and_default_changes_never_rewrite_poli
         fixed = article_policy(engine, scenario.organization_id, resource_ref)
         epoch_before = policy_epoch(engine, scenario.organization_id)
         fixed_epoch = fixed_policy_epoch(engine, scenario.organization_id, resource_ref)
+
+        set_source_default(
+            engine,
+            scenario.organization_id,
+            str(scenario.source_ref.value),
+            "organization",
+        )
+        set_tenant_default(engine, scenario.organization_id, "organization")
 
         repeat, repeat_token = prepare_repeat_file_import(
             scenario,

@@ -89,7 +89,7 @@ def test_next_http_resolve_refuses_after_revoke_without_index_rebuild(
             migration_engine.dispose()
 
 
-def test_source_acl_isolation_refuses_next_http_resolve_without_index_rebuild(
+def test_file_private_grant_revocation_refuses_without_index_rebuild(
     tmp_path: Path,
     guarded_control_engine: Engine,
     guarded_worker_engine: Engine,

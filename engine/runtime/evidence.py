@@ -204,7 +204,7 @@ def _projection_integrity_digest(
     projected_field_refs: tuple[str, ...],
     lineage: EvidenceLineage,
 ) -> str:
-    canonical = b"context-engine:authorized-projection:v2"
+    canonical = b"context-engine:authorized-projection:v3"
     canonical += _length_prefix(candidate_ref.organization_id.bytes)
     for value in (
         candidate_ref.source_ref,
@@ -469,7 +469,7 @@ def _lineage_canonical_bytes(lineage: EvidenceLineage) -> bytes:
 
 
 def _evidence_integrity_digest(evidence: Evidence) -> str:
-    canonical = b"context-engine:evidence-integrity:v2"
+    canonical = b"context-engine:evidence-integrity:v3"
     for value in (
         evidence.evidence_ref,
         evidence.source_ref,
@@ -635,7 +635,7 @@ def _candidate_sort_key(candidate_ref: CandidateRef) -> tuple[object, ...]:
 def _evidence_ref_for_projection(projection: AuthorizedProjection) -> str:
     candidate_ref = projection.candidate_ref
     lineage = projection.lineage
-    canonical = b"context-engine:evidence-ref:v2"
+    canonical = b"context-engine:evidence-ref:v3"
     canonical += _length_prefix(candidate_ref.organization_id.bytes)
     for value in (
         candidate_ref.source_ref,
