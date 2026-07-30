@@ -3585,35 +3585,95 @@ def test_file_scan_bound_acceptance_fails_closed_after_downgrade(
         ChangeLimit(2),
     )
     assert type(page) is ProviderOk
-    with authority.authorize(
-        opaque_credential="control-secret",
-        operation=ControlOperation.ACCEPT_FILE_CHANGE_PAGE,
-        request_id="bound-rollback-accept-at-head",
-    ) as call:
-        control.accept_file_change_page(call, page.value)
+    def accept_page() -> object:
+        with authority.authorize(
+            opaque_credential="control-secret",
+            operation=ControlOperation.ACCEPT_FILE_CHANGE_PAGE,
+            request_id="bound-rollback-accept-loses-fence",
+        ) as call:
+            return control.accept_file_change_page(call, page.value)
 
+    migration_engine = create_database_engine(migration_configuration)
     alembic_configuration = Config(ROOT / "alembic.ini")
+    fence = "context-engine.file-status-migration-fence"
     try:
-        command.downgrade(alembic_configuration, "20260730_0044")
-        with (
-            authority.authorize(
-                opaque_credential="control-secret",
-                operation=ControlOperation.ACCEPT_FILE_CHANGE_PAGE,
-                request_id="bound-rollback-replay-after-downgrade",
-            ) as call,
-            pytest.raises(SourceNotAvailable),
-        ):
-            control.accept_file_change_page(call, page.value)
+        with migration_engine.connect() as blocker:
+            transaction = blocker.begin()
+            try:
+                blocker.execute(text("LOCK TABLE context_source IN ACCESS SHARE MODE"))
+                with ThreadPoolExecutor(max_workers=2) as executor:
+                    pending_downgrade = executor.submit(
+                        command.downgrade,
+                        alembic_configuration,
+                        "20260730_0044",
+                    )
+                    with migration_engine.connect() as observer:
+                        deadline = monotonic() + 10
+                        while monotonic() < deadline:
+                            downgrade_holds_fence = observer.execute(
+                                text(
+                                    """
+                                    SELECT EXISTS (
+                                      SELECT 1 FROM pg_locks
+                                      WHERE locktype = 'advisory'
+                                        AND mode = 'ExclusiveLock'
+                                        AND granted IS TRUE
+                                        AND classid = ((
+                                          hashtextextended(:fence, 0) >> 32
+                                        ) & 4294967295)::oid
+                                        AND objid = (hashtextextended(:fence, 0)
+                                          & 4294967295)::oid
+                                        AND objsubid = 1
+                                    )
+                                    """
+                                ),
+                                {"fence": fence},
+                            ).scalar_one()
+                            if downgrade_holds_fence:
+                                break
+                            sleep(0.01)
+                    assert downgrade_holds_fence
+                    pending_accept = executor.submit(accept_page)
+                    with migration_engine.connect() as observer:
+                        deadline = monotonic() + 10
+                        while monotonic() < deadline:
+                            accept_waits_for_fence = observer.execute(
+                                text(
+                                    """
+                                    SELECT EXISTS (
+                                      SELECT 1 FROM pg_locks
+                                      WHERE locktype = 'advisory'
+                                        AND mode = 'ShareLock'
+                                        AND granted IS FALSE
+                                        AND classid = ((
+                                          hashtextextended(:fence, 0) >> 32
+                                        ) & 4294967295)::oid
+                                        AND objid = (hashtextextended(:fence, 0)
+                                          & 4294967295)::oid
+                                        AND objsubid = 1
+                                    )
+                                    """
+                                ),
+                                {"fence": fence},
+                            ).scalar_one()
+                            if accept_waits_for_fence:
+                                break
+                            sleep(0.01)
+                    assert accept_waits_for_fence
+                    transaction.commit()
+                    pending_downgrade.result(timeout=10)
+                    with pytest.raises(SourceNotAvailable):
+                        pending_accept.result(timeout=10)
+            finally:
+                if transaction.is_active:
+                    transaction.rollback()
     finally:
         command.upgrade(alembic_configuration, "head")
-        clear_file_source_progress_projection(
-            migration_configuration,
-            scenario.organization_id,
-        )
         _delete_file_import_scenario(
             migration_configuration,
             scenario.organization_id,
         )
+        migration_engine.dispose()
 
 
 def test_file_scan_bound_downgrade_observes_in_flight_refusal_report(
