@@ -298,6 +298,9 @@ MIGRATION_TEST_START_REVISIONS = {
     "test_file_source_status_revision_downgrades_and_reapplies_when_empty": (
         "20260727_0039"
     ),
+    "test_revision_link_graph_revision_downgrades_and_reapplies_when_empty": (
+        "20260731_0051"
+    ),
     "test_delivery_evidence_revision_downgrades_only_while_empty": "20260723_0019",
     "test_citation_open_revision_downgrades_only_while_empty": "20260724_0024",
     "test_model_egress_revision_downgrades_only_while_audit_is_empty": (
@@ -338,6 +341,7 @@ MIGRATION_TEST_HEAD_PRECONDITIONS = {
     "test_field_projection_downgrade_refuses_populated_content_atomically",
     "test_field_projection_downgrade_serializes_with_concurrent_fragment_insert",
     "test_feishu_subject_mapping_downgrade_serializes_with_source_writer",
+    "test_revision_link_graph_downgrade_refuses_retained_v3_state",
 }
 
 
@@ -3762,6 +3766,88 @@ def test_file_source_status_revision_downgrades_and_reapplies_when_empty(
             ).scalar_one() == [True, False, True, False, False]
     finally:
         engine.dispose()
+
+
+def test_revision_link_graph_revision_downgrades_and_reapplies_when_empty(
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    """Issue #151 installs and removes the empty graph contract exactly."""
+
+    alembic_configuration = Config(ROOT / "alembic.ini")
+    assert _revision_rows(migration_configuration) == ["20260731_0051"]
+    assert "revision_link_edge" not in _application_tables(migration_configuration)
+    try:
+        for _ in range(2):
+            command.upgrade(alembic_configuration, "head")
+            assert _revision_rows(migration_configuration) == [HEAD_REVISION]
+            assert "revision_link_edge" in _application_tables(
+                migration_configuration
+            )
+            engine = create_database_engine(migration_configuration)
+            try:
+                with engine.connect() as connection:
+                    assert connection.execute(
+                        text(
+                            """
+                            SELECT ARRAY[
+                              to_regprocedure(
+                                'public.context_runtime_resolve_one_hop_graph(uuid[],text[],text[],uuid[],text[],integer)'
+                              ) IS NOT NULL,
+                              to_regprocedure(
+                                'public.context_internal_revision_link_edges_match(uuid,text,uuid,jsonb)'
+                              ) IS NOT NULL
+                            ]
+                            """
+                        )
+                    ).scalar_one() == [True, True]
+            finally:
+                engine.dispose()
+            command.downgrade(alembic_configuration, "20260731_0051")
+            assert _revision_rows(migration_configuration) == ["20260731_0051"]
+            assert "revision_link_edge" not in _application_tables(
+                migration_configuration
+            )
+    finally:
+        command.upgrade(alembic_configuration, "head")
+    assert _revision_rows(migration_configuration) == [HEAD_REVISION]
+
+
+def test_revision_link_graph_downgrade_refuses_retained_v3_state(
+    tmp_path: Path,
+    migration_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+    guarded_worker_engine: Engine,
+) -> None:
+    """A retained rich Revision prevents loss of its graph semantics."""
+
+    scenario = _prepare_file_import_scenario(
+        tmp_path,
+        migration_configuration,
+        guarded_control_engine,
+        payload=b"# Synthetic retained graph\n\nLink [[adjacent]].\n",
+    )
+    assert scenario.token is not None
+    try:
+        _run_file_import(
+            scenario,
+            scenario.prepared,
+            scenario.token,
+            guarded_worker_engine,
+            config_version="markdown-config-v3",
+        )
+
+        with pytest.raises(
+            RuntimeError,
+            match="rich Markdown graph downgrade requires no retained v3 state",
+        ):
+            downgrade_revision(migration_configuration, "20260731_0052")
+
+        assert _revision_rows(migration_configuration) == [HEAD_REVISION]
+    finally:
+        _delete_file_import_scenario(
+            migration_configuration,
+            scenario.organization_id,
+        )
 
 
 def test_file_scan_bound_revision_downgrades_and_reapplies_when_default_only(

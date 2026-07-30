@@ -180,6 +180,7 @@ def test_post_init_role_provisioning_repairs_a_legacy_volume_idempotently(
             "CONTEXT_ENGINE_SECURITY_OPERATOR_PASSWORD"
         ],
         definer_role=probe_role("access_definer"),
+        graph_definer_role=probe_role("graph_definer"),
         worker_lease_definer_role=probe_role("worker_definer"),
         file_dispatch_definer_role=probe_role("dispatch_definer"),
         context_run_reader_definer_role=probe_role("reader_definer"),
@@ -200,6 +201,7 @@ def test_post_init_role_provisioning_repairs_a_legacy_volume_idempotently(
         contract.release_operator_role,
         contract.security_operator_role,
         contract.definer_role,
+        contract.graph_definer_role,
         contract.worker_lease_definer_role,
         contract.file_dispatch_definer_role,
         contract.context_run_reader_definer_role,

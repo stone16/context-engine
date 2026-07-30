@@ -619,6 +619,16 @@
       "id": "RUNTIME-LOCAL-OPERATOR-EXTERNAL-110",
       "layer": "runtime",
       "selector": "tests/unit/test_local_operator_authentication.py::test_dogfood_and_worker_credentials_are_rejected_by_both_planes"
+    },
+    {
+      "id": "PG-ONE-HOP-GRAPH-151",
+      "layer": "postgres",
+      "selector": "tests/integration/test_one_hop_graph_http_sdk.py::test_generated_sdk_one_hop_reauthorizes_and_leaves_no_denied_trace"
+    },
+    {
+      "id": "SDK-ONE-HOP-GRAPH-151",
+      "layer": "runtime",
+      "selector": "tests/integration/test_one_hop_graph_http_sdk.py::test_generated_sdk_one_hop_reauthorizes_and_leaves_no_denied_trace"
     }
   ],
   "invariantMappings": [
@@ -659,7 +669,8 @@
           "PG-FILE-REPLACEMENT-026",
           "PG-FILE-TOMBSTONE-028",
           "PG-FILE-PROGRESS-029",
-          "PG-FILE-SOURCE-OFFBOARD-030"
+          "PG-FILE-SOURCE-OFFBOARD-030",
+          "PG-ONE-HOP-GRAPH-151"
         ],
         "runtime": [
           "RUNTIME-TENANT-FK-002"
@@ -724,7 +735,8 @@
           "RUNTIME-INDEX-NOT-AUTHORITY-005",
           "RUNTIME-ARTICLE-ACCESS-141",
           "RUNTIME-DOGFOOD-CARRIER-102",
-          "RUNTIME-DOGFOOD-EPOCH-102"
+          "RUNTIME-DOGFOOD-EPOCH-102",
+          "SDK-ONE-HOP-GRAPH-151"
         ]
       }
     },

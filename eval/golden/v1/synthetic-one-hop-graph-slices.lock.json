@@ -1,0 +1,15 @@
+{
+  "activePilotDigest": "79bbbbdb6933f2bc27750af4a02e636efc2f4041f1f0419dcea5a6e1a8f790cb",
+  "goldenSetName": "synthetic-one-hop-graph-slices",
+  "history": [
+    {
+      "authority": "synthetic-maintainer",
+      "digest": "79bbbbdb6933f2bc27750af4a02e636efc2f4041f1f0419dcea5a6e1a8f790cb",
+      "entryDigest": "c08d3995d335b08c23bbf34260c5086bb5e7412c1416966276ff79327d76458d",
+      "previousEntryDigest": null,
+      "reason": "synthetic-issue-151-evaluation-slices",
+      "recordedAt": "2026-07-31T00:00:00.000000Z"
+    }
+  ],
+  "schemaVersion": "context-engine-golden-lock-v1"
+}

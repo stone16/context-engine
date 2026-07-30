@@ -1,0 +1,82 @@
+{
+  "schemaVersion": "context-engine-golden-set-v1",
+  "name": "synthetic-one-hop-graph-slices",
+  "synthetic": true,
+  "entries": [
+    {
+      "caseRef": "synthetic-adjacent-note",
+      "query": "synthetic-query-adjacent-note",
+      "expectedEvidence": [
+        {
+          "path": "synthetic/adjacent-note.md",
+          "sourceRef": "synthetic-source-graph",
+          "resourceRef": "synthetic-resource-adjacent",
+          "revisionRef": "synthetic-revision-adjacent",
+          "fragmentRef": "synthetic-fragment-adjacent"
+        }
+      ],
+      "expectedAnswer": "synthetic-answer-from-authorized-adjacent-note",
+      "requiredClaims": [
+        {
+          "claimRef": "synthetic-claim-adjacent-note",
+          "claim": "synthetic-claim-supported-by-authorized-adjacent-note",
+          "expectedEvidence": [
+            {
+              "sourceRef": "synthetic-source-graph",
+              "resourceRef": "synthetic-resource-adjacent",
+              "revisionRef": "synthetic-revision-adjacent",
+              "fragmentRef": "synthetic-fragment-adjacent"
+            }
+          ]
+        }
+      ],
+      "answerability": "answerable",
+      "slice": "cross_doc",
+      "partition": "pilot",
+      "topicCluster": "synthetic-topic-one-hop-graph",
+      "hardNegativeEvidence": []
+    },
+    {
+      "caseRef": "synthetic-multi-hop-bound",
+      "query": "synthetic-query-multi-hop-bound",
+      "expectedEvidence": [
+        {
+          "path": "synthetic/one-hop-note.md",
+          "sourceRef": "synthetic-source-graph",
+          "resourceRef": "synthetic-resource-one-hop",
+          "revisionRef": "synthetic-revision-one-hop",
+          "fragmentRef": "synthetic-fragment-one-hop"
+        }
+      ],
+      "expectedAnswer": "synthetic-answer-from-one-hop-note-only",
+      "requiredClaims": [
+        {
+          "claimRef": "synthetic-claim-one-hop-bound",
+          "claim": "synthetic-claim-supported-by-one-hop-note-only",
+          "expectedEvidence": [
+            {
+              "sourceRef": "synthetic-source-graph",
+              "resourceRef": "synthetic-resource-one-hop",
+              "revisionRef": "synthetic-revision-one-hop",
+              "fragmentRef": "synthetic-fragment-one-hop"
+            }
+          ]
+        }
+      ],
+      "answerability": "answerable",
+      "slice": "cross_doc",
+      "partition": "pilot",
+      "topicCluster": "synthetic-topic-one-hop-graph",
+      "hardNegativeEvidence": [
+        {
+          "path": "synthetic/two-hop-note.md",
+          "sourceRef": "synthetic-source-graph",
+          "resourceRef": "synthetic-resource-two-hop",
+          "revisionRef": "synthetic-revision-two-hop",
+          "fragmentRef": "synthetic-fragment-two-hop",
+          "topicCluster": "synthetic-topic-one-hop-graph"
+        }
+      ]
+    }
+  ]
+}

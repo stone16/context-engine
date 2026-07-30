@@ -13,6 +13,7 @@ _IGNORED_MODULES = frozenset(
     {
         "adapters.parsers.ragflow_markdown",
         "applications.compiler_runner",
+        "applications.leased_compiler_runner",
     }
 )
 _FORBIDDEN_MODULES = frozenset(
@@ -125,6 +126,17 @@ def test_no_production_module_imports_an_unleased_compiler_surface() -> None:
         production_roots=PRODUCTION_ROOTS,
         ignored_modules=_IGNORED_MODULES,
     ) == ()
+
+
+def test_leased_entry_imports_only_the_registered_raw_compiler_surface() -> None:
+    path = REPOSITORY_ROOT / "applications/leased_compiler_runner.py"
+    tree = ast.parse(path.read_bytes(), filename=str(path))
+
+    assert _forbidden_imports(
+        "applications.leased_compiler_runner",
+        tree,
+        is_package=False,
+    ) == frozenset({"adapters.parsers.ragflow_markdown.compile_rich_markdown"})
 
 
 def test_direct_production_import_gate_rejects_the_unleased_entry_point(

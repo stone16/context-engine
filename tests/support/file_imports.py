@@ -362,6 +362,7 @@ def delete_file_import_scenario(
 
     engine = create_database_engine(configuration)
     immutable_tables = (
+        ("revision_link_edge", "revision_link_edge_immutable"),
         ("file_source_publish_watermark", "file_source_publish_watermark_immutable"),
         (
             "file_source_acquisition_checkpoint",
@@ -414,6 +415,7 @@ def delete_file_import_scenario(
                     "file_revision_supersession",
                     "file_revision_replacement_plan",
                     "file_acquisition_result",
+                    "revision_link_edge",
                     "exact_phrase_candidate",
                     "revision_publication_event",
                     "membership_resource_field_right",

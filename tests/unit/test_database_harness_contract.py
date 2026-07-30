@@ -163,6 +163,7 @@ def test_harness_provisions_post_init_roles_before_readiness() -> None:
         'CONTEXT_RUN_READER_DEFINER_ROLE = "context_engine_context_run_reader_definer"'
     ) in configuration
     assert "ACCESS_POLICY_DEFINER_ROLE" in provisioner
+    assert "GRAPH_DEFINER_ROLE" in provisioner
     assert "IDENTITY_ROLE" in provisioner
     assert "contract.identity_role" in provisioner
     assert "contract.identity_password" in provisioner
