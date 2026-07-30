@@ -65,6 +65,7 @@ def test_vendored_bytes_match_complete_pinned_registration() -> None:
     assert re.fullmatch(r"[0-9a-f]{40}", commit)
     assert commit == PINNED_COMMIT
     assert registration["reuse_mode"] == "copy-patch"
+    assert registration["license"] == "MIT"
     assert registration["approval"] == (
         "https://github.com/stone16/context-engine/issues/126"
     )
@@ -83,7 +84,6 @@ def test_vendored_bytes_match_complete_pinned_registration() -> None:
         assert set(entry) == {
             "upstream_path",
             "vendored_path",
-            "upstream_sha256",
             "sha256",
         }
         upstream_path = entry["upstream_path"]
@@ -92,7 +92,6 @@ def test_vendored_bytes_match_complete_pinned_registration() -> None:
         assert isinstance(vendored_path, str)
         assert "ee" not in Path(upstream_path).parts
         assert "ee" not in Path(vendored_path).parts
-        assert entry["upstream_sha256"] == UPSTREAM_SHA256[upstream_path]
         expected_hash = entry["sha256"]
         assert isinstance(expected_hash, str)
         assert re.fullmatch(r"[0-9a-f]{64}", expected_hash)
@@ -113,11 +112,19 @@ def test_vendored_bytes_match_complete_pinned_registration() -> None:
         (REGISTRATION_ROOT / "LICENSE.upstream").read_bytes()
     ).hexdigest() == "d4847240794058c7ac3cfdf8e5d528fe8b0edf15b32a96612ecb9b3e182092b7"
     assert (REGISTRATION_ROOT / "MODIFICATIONS.md").is_file()
+    modifications = (REGISTRATION_ROOT / "MODIFICATIONS.md").read_text(
+        encoding="utf-8"
+    )
+    for upstream_path, upstream_sha256 in UPSTREAM_SHA256.items():
+        assert f"`{upstream_path}`" in modifications
+        assert f"`{upstream_sha256}`" in modifications
     assert (REGISTRATION_ROOT / "patches").is_dir()
     notices = (REPOSITORY_ROOT / "THIRD_PARTY_NOTICES.md").read_text(
         encoding="utf-8"
     )
-    assert "Onyx connector framework" in notices
+    assert "## onyx" in notices
+    assert f"- Commit: `{PINNED_COMMIT}`" in notices
+    assert "- License: MIT (`third_party/onyx/LICENSE.upstream`)" in notices
     sbom = json.loads(
         (REGISTRATION_ROOT / "sbom.cyclonedx.json").read_text(encoding="utf-8")
     )
