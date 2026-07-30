@@ -12,7 +12,7 @@ from engine.runtime.contracts import Acquire
 from engine.runtime.materialized import (
     CandidateDiscoverySession,
     VectorDiscoveryRequest,
-    _discover_materialized_candidates,
+    _candidate_discovery_ranker_candidates,
 )
 from engine.runtime.scope import CandidateDiscoveryScope
 from engine.supply import (
@@ -84,9 +84,7 @@ class PostgreSQLVectorCandidateIndex:
             query_embedding=query_embedding,
             limit=self._limit,
             source_refs=(
-                request.narrowing.source_refs
-                if request.narrowing is not None
-                else None
+                request.narrowing.source_refs if request.narrowing is not None else None
             ),
             resource_refs=(
                 request.narrowing.resource_refs
@@ -108,7 +106,10 @@ class PostgreSQLVectorCandidateIndex:
             raise TypeError(
                 "Vector candidate discovery requires CandidateDiscoveryScope"
             )
-        candidates = _discover_materialized_candidates(discovery_session)
+        candidates = _candidate_discovery_ranker_candidates(
+            discovery_session,
+            "vector",
+        )
         return CandidateQuery(
             ranked_lists=(
                 RankedCandidateList(
