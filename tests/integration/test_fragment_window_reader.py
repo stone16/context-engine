@@ -47,6 +47,8 @@ def _lineage() -> EvidenceLineage:
         policy_snapshot_ref="policy:fragment-window",
         policy_epoch=1,
         source_acl_decision_ref="sourceacl:fragment-window",
+        source_acl_projection_ref="sourceacl_projection:fragment-window",
+        source_acl_as_of=datetime(2026, 7, 29, 12, 0, tzinfo=UTC),
     )
 
 
@@ -210,9 +212,10 @@ def test_real_postgres_window_is_same_article_current_revision_only(
         finally:
             _close_authorization_kernel_scope(scope)
 
-        assert tuple(
-            projection.candidate_ref for projection in window.projections
-        ) == (article, neighbor)
+        assert tuple(projection.candidate_ref for projection in window.projections) == (
+            article,
+            neighbor,
+        )
         assert tuple(
             projection.projected_body for projection in window.projections
         ) == (

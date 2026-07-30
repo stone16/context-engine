@@ -142,8 +142,7 @@ def test_projection_session_is_nominal_lifetime_bound_and_nonserializable() -> N
         _locate_materialized_fragment(session, candidate())
 
 
-def test_locator_is_content_free_and_body_projection_is_a_separate_operation(
-) -> None:
+def test_locator_is_content_free_and_body_projection_is_a_separate_operation() -> None:
     scope = _open_materialized_projection_scope()
     port = RecordingProjectionPort()
     session = _construct_materialized_projection_session(
@@ -158,11 +157,11 @@ def test_locator_is_content_free_and_body_projection_is_a_separate_operation(
         "organization_id",
         "source_ref",
         "resource_ref",
-            "revision_ref",
-            "fragment_ref",
-            "source_acl_projection_ref",
-            "source_acl_as_of",
-        }
+        "revision_ref",
+        "fragment_ref",
+        "source_acl_projection_ref",
+        "source_acl_as_of",
+    }
     assert all(
         forbidden not in MaterializedFragmentLocator.__dataclass_fields__
         for forbidden in ("body", "content", "text", "snippet", "title", "path")

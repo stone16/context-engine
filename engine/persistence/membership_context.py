@@ -837,6 +837,8 @@ class _PostgreSQLMaterializedProjectionPort:
                 resource_ref=anchor.resource_ref,
                 revision_ref=anchor.revision_ref,
                 fragment_ref=fragment_ref,
+                source_acl_projection_ref=anchor.source_acl_projection_ref,
+                source_acl_as_of=anchor.source_acl_as_of,
             )
             projection = self.project(locator)
             if projection is not None:
