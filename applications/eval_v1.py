@@ -20,17 +20,27 @@ from engine.learning.golden import (
     load_golden_set,
     relock_golden_set,
 )
+from engine.learning.golden_storage import (
+    durable_golden_root,
+    require_durable_golden_path,
+)
 from engine.learning.governance import (
     PublicSubsetPromotionAuthority,
     _local_public_subset_promotion_authority,
     load_public_subset_governance,
+)
+from engine.learning.lineage import (
+    LineageMapUnavailable,
+    StaleGoldenLineage,
+    detect_stale_lineage,
+    load_lineage_map,
+    require_resolved_lineage,
 )
 from engine.learning.thresholds import DEFAULT_THRESHOLDS_PATH, load_thresholds
 
 PUBLIC_SUBSET_MAINTAINER_SECRET_ENV = (
     "CONTEXT_ENGINE_PUBLIC_SUBSET_MAINTAINER_SECRET"
 )
-GOLDEN_ROOT_ENV = "CONTEXT_ENGINE_GOLDEN_ROOT"
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 PUBLIC_SUBSET_GOVERNANCE_PATH = (
     REPOSITORY_ROOT / "eval/public-subset-governance.json"
@@ -93,55 +103,6 @@ def _require_ignored_output(path: Path) -> None:
         )
 
 
-def _durable_golden_root() -> Path:
-    try:
-        configured = os.environ[GOLDEN_ROOT_ENV]
-    except KeyError:
-        raise ValueError("durable golden root is unavailable") from None
-    if not configured or configured != configured.strip():
-        raise ValueError("durable golden root is unavailable")
-    root = Path(configured)
-    if (
-        not root.is_absolute()
-        or not root.is_dir()
-        or root.is_symlink()
-        or ".context-engine" in root.parts
-    ):
-        raise ValueError("durable golden root is unavailable")
-    resolved = root.resolve(strict=True)
-    if any(
-        (candidate / ".git").exists()
-        for candidate in (resolved, *resolved.parents)
-    ):
-        raise ValueError("durable golden root must be outside every git worktree")
-    return resolved
-
-
-def _require_durable_golden_path(
-    path: Path,
-    *,
-    root: Path,
-) -> None:
-    if (
-        not isinstance(path, Path)
-        or ".." in path.parts
-        or any(
-            candidate.is_symlink()
-            for candidate in (path, *path.parents)
-            if candidate.exists()
-        )
-    ):
-        raise ValueError("golden corpus path must stay under the durable root")
-    resolved = path.resolve(strict=False)
-    if (
-        not resolved.is_relative_to(root)
-        or resolved in (root, REPOSITORY_ROOT)
-        or resolved.is_relative_to(REPOSITORY_ROOT)
-        or ".context-engine" in resolved.parts
-    ):
-        raise ValueError("golden corpus path must stay under the durable root")
-
-
 def _time(value: str) -> datetime:
     try:
         return datetime.fromisoformat(value.replace("Z", "+00:00"))
@@ -170,10 +131,16 @@ def _parser() -> argparse.ArgumentParser:
     relock.add_argument("--reason", required=True)
     relock.add_argument("--recorded-at", required=True, type=_time)
 
+    lineage = commands.add_parser("lineage-check")
+    lineage.add_argument("--golden-set", required=True, type=Path)
+    lineage.add_argument("--lock", required=True, type=Path)
+    lineage.add_argument("--lineage-map", required=True, type=Path)
+
     report = commands.add_parser("report")
     report.add_argument("--golden-set", required=True, type=Path)
     report.add_argument("--lock", required=True, type=Path)
     report.add_argument("--run", required=True, type=Path)
+    report.add_argument("--lineage-map", type=Path)
     report.add_argument("--output", required=True, type=Path)
     report.add_argument("--generated-at", required=True, type=_time)
     return parser
@@ -194,9 +161,12 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser = _parser()
     args = parser.parse_args(argv)
     try:
-        durable_root = _durable_golden_root()
-        _require_durable_golden_path(args.golden_set, root=durable_root)
-        _require_durable_golden_path(args.lock, root=durable_root)
+        durable_root = durable_golden_root()
+        require_durable_golden_path(args.golden_set, root=durable_root)
+        require_durable_golden_path(args.lock, root=durable_root)
+        lineage_map_path = getattr(args, "lineage_map", None)
+        if lineage_map_path is not None:
+            require_durable_golden_path(lineage_map_path, root=durable_root)
         if args.command == "validate":
             golden_set = load_golden_set(args.golden_set, lock_path=args.lock)
             print(
@@ -229,8 +199,28 @@ def main(argv: Sequence[str] | None = None) -> None:
             )
             print(f"golden pilot re-locked: {args.lock}", flush=True)
             return
+        if args.command == "lineage-check":
+            golden_set = load_golden_set(args.golden_set, lock_path=args.lock)
+            resolution = detect_stale_lineage(
+                golden_set,
+                load_lineage_map(args.lineage_map),
+            )
+            require_resolved_lineage(resolution)
+            print(
+                f"golden lineage resolved: {resolution.resolved_case_count} cases "
+                f"mapDigest={resolution.map_digest}",
+                flush=True,
+            )
+            return
         if args.command == "report":
             golden_set = load_golden_set(args.golden_set, lock_path=args.lock)
+            if lineage_map_path is not None:
+                require_resolved_lineage(
+                    detect_stale_lineage(
+                        golden_set,
+                        load_lineage_map(lineage_map_path),
+                    )
+                )
             report = build_evaluation_report(
                 golden_set,
                 load_evaluation_run(args.run),
@@ -239,7 +229,13 @@ def main(argv: Sequence[str] | None = None) -> None:
             )
             _write_report(args.output, report)
             return
-    except (GoldenSetUnavailable, EvaluationRunUnavailable, ValueError) as error:
+    except (
+        GoldenSetUnavailable,
+        EvaluationRunUnavailable,
+        LineageMapUnavailable,
+        StaleGoldenLineage,
+        ValueError,
+    ) as error:
         parser.exit(1, f"golden v1 evaluation unavailable: {error}\n")
     raise AssertionError("closed parser returned an unknown command")
 

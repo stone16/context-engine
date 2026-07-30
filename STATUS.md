@@ -435,6 +435,17 @@ therefore retain their metrics but emit `REFUSED` with
 an authoritative clean or violating observation. The public-subset maintainer
 authority is a preparatory privacy check with no promotion effect.
 
+The private corpus is recoverable rather than merely stored once. A second
+configured durable root outside every worktree holds immutable staged-then-
+renamed snapshots carrying per-file and per-snapshot digests; verification
+refuses truncation, corruption, missing or unexpected content, and any file
+readable beyond its owner, and recovery refuses both an unverified snapshot and
+a non-empty destination. Expectation lineage that a Release promotion left
+unresolvable is reported as `stale_lineage` and refuses the report; it is never
+scored as a retrieval miss. This is proven on synthetic corpora and one
+executed recovery drill — the real maintainer corpus is still pending delivery
+(#103), so no claim is made about it.
+
 `make security-gate` discovers and executes only registered M0 security
 evidence, cross-checks the live PostgreSQL RLS inventory, and writes
 machine-readable raw evidence plus an independent release-gate report into the
