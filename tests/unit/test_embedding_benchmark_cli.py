@@ -282,7 +282,12 @@ def test_cli_reports_a_baseline_win_with_success_exit_status(
     output_path.unlink()
 
 
-def test_cli_refuses_a_missing_retrieval_judge() -> None:
+def test_cli_refuses_a_missing_retrieval_judge(monkeypatch: Any) -> None:
+    def missing(_module_name: str) -> Any:
+        raise ModuleNotFoundError
+
+    monkeypatch.setattr(importlib, "import_module", missing)
+
     with pytest.raises(BenchmarkUnavailable, match="judge is unavailable"):
         cli.load_retrieval_judge()
 

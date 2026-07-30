@@ -341,11 +341,11 @@ operator who can recompute a colocated digest. If the boundary changes to an
 untrusted caller or remote runner, signing returns as its own ADR. All benchmark
 JSON entry points reject out-of-range or non-finite numbers and bound document
 size, nesting, strings, and containers with a typed refusal. Retrieval scores
-are not implemented by this runner: it imports the one fixed judge
-factory owned by issue #129, which is solely responsible for case hit,
-macro/micro Evidence recall, and slice breakdowns. Until #129 lands, the real
-CLI deliberately fails closed with `retrieval judge is unavailable` rather
-than degrading to a second metric implementation.
+are provided through the one fixed adapter to the judge owned by issue #129,
+which is solely responsible for case hit, macro/micro Evidence recall, and
+slice breakdowns. The real CLI fails closed with
+`retrieval judge is unavailable` if that adapter cannot be loaded rather than
+degrading to a second metric implementation.
 
 The maintainer corpus is private and pending delivery to a durable,
 maintainer-controlled location outside disposable Git worktrees. Once available,
