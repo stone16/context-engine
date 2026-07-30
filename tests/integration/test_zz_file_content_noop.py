@@ -6,8 +6,6 @@ from pathlib import Path
 from uuid import UUID
 
 import pytest
-from alembic import command
-from alembic.config import Config
 from fastapi.testclient import TestClient
 from sqlalchemy import Engine, text
 from sqlalchemy.exc import IntegrityError
@@ -27,7 +25,6 @@ from engine.runtime.package_digest import QueryDigestKeyring
 from engine.supply import WorkNotAvailable
 from tests.integration.test_file_import_tracer import (
     MARKDOWN_FIXTURES,
-    ROOT,
     _ExactScopeAuthority,
     _OrganizationAuthority,
     _publication_effect_counts,
@@ -49,7 +46,7 @@ from tests.support.file_imports import (
     run_file_import as _run_file_import,
 )
 from tests.support.file_source_progress import clear_file_source_progress_projection
-from tests.support.migrations import HEAD_REVISION
+from tests.support.migrations import HEAD_REVISION, downgrade_revision
 from tests.support.releases import (
     clear_test_runtime_release,
     ensure_test_runtime_release,
@@ -278,12 +275,14 @@ def test_repeated_canonically_identical_file_import_is_an_auditable_noop(
             {"organization_id": scenario.organization_id},
         )
     clear_test_runtime_release(scenario.organization_id)
-    clear_file_source_progress_projection(migration_configuration)
+    clear_file_source_progress_projection(
+        migration_configuration, scenario.organization_id
+    )
     with pytest.raises(
         RuntimeError,
         match="File (?:recovery|replacement|no-op) downgrade requires",
     ):
-        command.downgrade(Config(ROOT / "alembic.ini"), "20260723_0012")
+        downgrade_revision(migration_configuration, "20260724_0013")
     with migration_engine.connect() as connection:
         assert (
             connection.execute(

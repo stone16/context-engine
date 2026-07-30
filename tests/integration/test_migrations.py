@@ -26,6 +26,9 @@ from engine.control import (
     ContextControl,
     ControlOperation,
     ControlOperatorAuthority,
+    FileChangeBaseline,
+    FileChangeBaselineEntry,
+    FileChangeBaselineRef,
     FileChangeControlProofs,
     FileChangeProviderProofs,
     FileChangeSource,
@@ -39,8 +42,12 @@ from engine.control import (
 )
 from engine.persistence import (
     DatabaseConfiguration,
+    HarnessDatabaseConfigurations,
     PostgreSQLControlStore,
     PostgreSQLWorkerLeaseIssuer,
+    assert_control_role,
+    assert_runtime_role,
+    assert_worker_role,
     create_database_engine,
 )
 from engine.persistence.membership_context import (
@@ -89,7 +96,11 @@ from tests.support.file_imports import (
     scenario_claims as _scenario_claims,
 )
 from tests.support.file_source_progress import clear_file_source_progress_projection
-from tests.support.migrations import HEAD_REVISION
+from tests.support.migrations import (
+    HEAD_REVISION,
+    downgrade_revision,
+    isolated_revision_database,
+)
 
 pytestmark = pytest.mark.integration
 ROOT = Path(__file__).parents[2]
@@ -174,19 +185,233 @@ ARTICLE_POLICY_TABLES = {
     "source_article_policy_default",
 }
 
+MIGRATION_TEST_START_REVISIONS = {
+    "test_empty_baseline_remains_a_reversible_historical_revision": "20260720_0001",
+    "test_article_policy_revision_backfills_legacy_access_and_reapplies_cleanly": (
+        "20260730_0042"
+    ),
+    "test_article_policy_revision_backfills_exact_file_acl_version_and_stales": (
+        "20260730_0042"
+    ),
+    "test_article_policy_downgrade_restores_source_version_least_privilege": (
+        "20260730_0042"
+    ),
+    "test_article_policy_downgrade_waits_for_source_authority_writer": (
+        "20260730_0042"
+    ),
+    "test_organization_isolation_revision_downgrades_and_reapplies_cleanly": (
+        "20260720_0002"
+    ),
+    "test_supply_execution_bridge_revision_downgrades_and_reapplies_cleanly": (
+        "20260729_0041"
+    ),
+    "test_membership_revision_downgrades_to_issue_8_and_reapplies_cleanly": (
+        "20260721_0003"
+    ),
+    "test_content_schema_revision_downgrades_to_membership_and_reapplies_cleanly": (
+        "20260721_0004"
+    ),
+    "test_policy_epoch_revision_downgrades_to_content_and_reapplies_cleanly": (
+        "20260721_0005"
+    ),
+    "test_worker_lease_revision_downgrades_to_policy_epoch_and_reapplies_cleanly": (
+        "20260722_0006"
+    ),
+    "test_decision_lineage_revision_downgrades_to_worker_lease_and_reapplies_cleanly": (
+        "20260722_0007"
+    ),
+    (
+        "test_field_projection_revision_downgrades_to_decision_lineage_"
+        "and_reapplies_cleanly"
+    ): (
+        "20260722_0008"
+    ),
+    "test_file_source_revision_downgrades_to_learning_release_and_reapplies_cleanly": (
+        "20260722_0010"
+    ),
+    "test_structural_markdown_revision_downgrades_and_reapplies_cleanly": (
+        "20260723_0012"
+    ),
+    "test_file_noop_revision_downgrades_and_reapplies_cleanly": "20260724_0013",
+    "test_file_replacement_revision_downgrades_and_reapplies_cleanly": (
+        "20260723_0014"
+    ),
+    "test_file_recovery_revision_downgrades_and_reapplies_cleanly": "20260723_0015",
+    "test_file_tombstone_revision_downgrades_and_reapplies_cleanly": "20260723_0016",
+    "test_file_progress_revision_downgrades_and_reapplies_cleanly": "20260723_0017",
+    "test_file_source_offboarding_revision_downgrades_and_reapplies_cleanly": (
+        "20260723_0018"
+    ),
+    "test_file_change_feed_revision_downgrades_and_reapplies_cleanly": (
+        "20260725_0028"
+    ),
+    "test_file_delete_observation_revision_owns_atomic_read_volatility": (
+        "20260725_0030"
+    ),
+    "test_file_delete_execution_revision_downgrades_only_while_empty": (
+        "20260725_0031"
+    ),
+    "test_mixed_file_upsert_scheduling_revision_downgrades_and_reapplies_empty": (
+        "20260725_0032"
+    ),
+    "test_file_dispatch_revision_downgrades_and_reapplies_empty": "20260725_0033",
+    "test_file_reclaim_revision_downgrades_and_reapplies_empty": "20260726_0034",
+    "test_file_change_scheduling_revision_downgrades_and_reapplies_cleanly": (
+        "20260725_0029"
+    ),
+    "test_recursive_file_path_revision_downgrades_and_reapplies_when_empty": (
+        "20260726_0035"
+    ),
+    "test_fragment_embedding_revision_downgrades_and_reapplies_when_empty": (
+        "20260726_0036"
+    ),
+    "test_direct_file_change_activation_revision_downgrades_and_reapplies": (
+        "20260727_0037"
+    ),
+    "test_pending_file_schedule_projection_revision_downgrades_and_reapplies": (
+        "20260727_0038"
+    ),
+    "test_file_source_status_revision_downgrades_and_reapplies_when_empty": (
+        "20260727_0039"
+    ),
+    "test_delivery_evidence_revision_downgrades_only_while_empty": "20260723_0019",
+    "test_citation_open_revision_downgrades_only_while_empty": "20260724_0024",
+    "test_model_egress_revision_downgrades_only_while_audit_is_empty": (
+        "20260724_0025"
+    ),
+    "test_structural_snapshot_constraint_rejects_missing_json_bindings": (
+        "20260723_0012"
+    ),
+    "test_in_flight_old_scheduler_fails_closed_when_downgrade_wins_fence": (
+        "20260725_0032"
+    ),
+    "test_fragment_embedding_revision_preserves_retained_fragments": (
+        "20260726_0036"
+    ),
+    "test_empty_content_downgrade_preserves_v2_context_run_history": (
+        "20260722_0008"
+    ),
+}
+
+MIGRATION_TEST_HEAD_PRECONDITIONS = {
+    "test_article_policy_downgrade_rejects_every_deferred_admin_state",
+    "test_article_policy_downgrade_refuses_state_that_would_reauthorize_content",
+    "test_file_reclaim_revision_refuses_retained_higher_generation",
+    "test_mixed_file_upsert_downgrade_waits_for_in_flight_scheduler",
+    "test_file_delete_observation_revision_refuses_accepted_baseline_downgrade",
+    "test_file_delete_observation_revision_refuses_retained_action_ticket",
+    "test_file_change_scheduling_revision_refuses_downgrade_with_new_manual_path",
+    "test_file_source_status_downgrade_observes_in_flight_compilation_refusal",
+    "test_recursive_file_path_revision_refuses_retained_nested_lineage",
+    "test_file_change_scheduling_downgrade_serializes_with_manual_import",
+    "test_citation_open_revision_refuses_downgrade_with_retained_lineage",
+    "test_file_source_offboarding_refuses_downgrade_with_committed_intent",
+    "test_file_progress_refuses_downgrade_and_preserves_refs",
+    "test_file_tombstone_revision_refuses_downgrade_with_committed_intent",
+    "test_recovery_upgrade_adopts_an_existing_ready_replacement",
+    "test_openapi_v0_revision_refuses_downgrade_with_v3_context_run_history",
+    "test_field_projection_downgrade_refuses_populated_content_atomically",
+    "test_field_projection_downgrade_serializes_with_concurrent_fragment_insert",
+}
+
+
+@pytest.fixture
+def migration_test_database(
+    request: pytest.FixtureRequest,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Iterator[HarnessDatabaseConfigurations]:
+    test_name = request.node.name
+    if test_name in MIGRATION_TEST_START_REVISIONS:
+        revision = MIGRATION_TEST_START_REVISIONS[test_name]
+    elif test_name in MIGRATION_TEST_HEAD_PRECONDITIONS:
+        revision = HEAD_REVISION
+    else:
+        raise AssertionError(
+            f"migration test has no revision precondition: {test_name}"
+        )
+    with isolated_revision_database(revision) as configurations:
+        for configuration in (
+            configurations.migration,
+            configurations.control,
+            configurations.identity,
+            configurations.egress,
+            configurations.action,
+            configurations.runtime,
+            configurations.worker,
+            configurations.scheduler,
+            configurations.learning,
+            configurations.release_operator,
+            configurations.operator,
+            configurations.security_test,
+        ):
+            monkeypatch.setenv(
+                configuration.purpose.environment_variable,
+                configuration.url.render_as_string(hide_password=False),
+            )
+        yield configurations
+
+
+@pytest.fixture
+def migration_configuration(
+    migration_test_database: HarnessDatabaseConfigurations,
+) -> DatabaseConfiguration:
+    return migration_test_database.migration
+
+
+@pytest.fixture
+def guarded_control_engine(
+    migration_test_database: HarnessDatabaseConfigurations,
+) -> Iterator[Engine]:
+    engine = create_database_engine(migration_test_database.control)
+    try:
+        with engine.connect() as connection:
+            assert_control_role(connection)
+        yield engine
+    finally:
+        engine.dispose()
+
+
+@pytest.fixture
+def guarded_worker_engine(
+    migration_test_database: HarnessDatabaseConfigurations,
+) -> Iterator[Engine]:
+    engine = create_database_engine(migration_test_database.worker)
+    try:
+        with engine.connect() as connection:
+            assert_worker_role(connection)
+        yield engine
+    finally:
+        engine.dispose()
+
+
+@pytest.fixture
+def guarded_runtime_engine(
+    migration_test_database: HarnessDatabaseConfigurations,
+) -> Iterator[Engine]:
+    engine = create_database_engine(migration_test_database.security_test)
+    try:
+        with engine.connect() as connection:
+            assert_runtime_role(connection)
+        yield engine
+    finally:
+        engine.dispose()
+
 
 @pytest.fixture(autouse=True)
-def isolated_migration_progress_projection(
-    migration_configuration: DatabaseConfiguration,
+def clear_openapi_v0_test_release_after_each_test(
+    migration_test_database: HarnessDatabaseConfigurations,
 ) -> Iterator[None]:
-    """Give destructive migration compatibility checks an empty projection."""
+    """The disposable revision database is the complete per-test cleanup."""
 
-    clear_file_source_progress_projection(migration_configuration)
-    try:
-        yield
-    finally:
-        if _revision_rows(migration_configuration) == [HEAD_REVISION]:
-            clear_file_source_progress_projection(migration_configuration)
+    del migration_test_database
+    yield
+
+
+@pytest.fixture(autouse=True)
+def migrated_database() -> Iterator[None]:
+    """The revision-specific database fixture owns migration setup."""
+
+    yield
 
 
 def _delete_issue_27_upgrade_fixture(
@@ -375,8 +600,8 @@ def test_article_policy_revision_backfills_legacy_access_and_reapplies_cleanly(
     source_ref = f"source:article-backfill:{uuid4()}"
 
     try:
-        command.downgrade(alembic_configuration, "20260727_0040")
-        assert _revision_rows(migration_configuration) == ["20260727_0040"]
+        command.downgrade(alembic_configuration, "20260729_0041")
+        assert _revision_rows(migration_configuration) == ["20260729_0041"]
         assert ARTICLE_POLICY_TABLES.isdisjoint(
             _application_tables(migration_configuration)
         )
@@ -505,7 +730,7 @@ def test_article_policy_revision_backfills_legacy_access_and_reapplies_cleanly(
                 )
             ]
             if pass_number == 1:
-                command.downgrade(alembic_configuration, "20260727_0040")
+                command.downgrade(alembic_configuration, "20260729_0041")
                 assert ARTICLE_POLICY_TABLES.isdisjoint(
                     _application_tables(migration_configuration)
                 )
@@ -557,7 +782,7 @@ def test_article_policy_revision_backfills_exact_file_acl_version_and_stales(
     )
 
     try:
-        command.downgrade(alembic_configuration, "20260727_0040")
+        command.downgrade(alembic_configuration, "20260729_0041")
         engine = create_database_engine(migration_configuration)
         try:
             with engine.begin() as connection:
@@ -747,7 +972,7 @@ def test_article_policy_revision_backfills_exact_file_acl_version_and_stales(
                 ).scalar_one() is False
 
             with pytest.raises(RuntimeError, match="not safely representable"):
-                command.downgrade(alembic_configuration, "20260727_0040")
+                downgrade_revision(migration_configuration, "20260730_0042")
         finally:
             engine.dispose()
     finally:
@@ -818,7 +1043,7 @@ def test_article_policy_downgrade_rejects_every_deferred_admin_state(
             with engine.begin() as connection:
                 connection.execute(text(mutation), parameters)
             with pytest.raises(RuntimeError, match="not safely representable"):
-                command.downgrade(alembic_configuration, "20260727_0040")
+                downgrade_revision(migration_configuration, "20260730_0042")
             assert _revision_rows(migration_configuration) == [HEAD_REVISION]
             with engine.begin() as connection:
                 connection.execute(text(cleanup), parameters)
@@ -899,7 +1124,7 @@ def test_article_policy_downgrade_refuses_state_that_would_reauthorize_content(
             )
 
         with pytest.raises(RuntimeError, match="not safely representable"):
-            command.downgrade(alembic_configuration, "20260727_0040")
+            downgrade_revision(migration_configuration, "20260730_0042")
 
         assert _revision_rows(migration_configuration) == [HEAD_REVISION]
         with engine.connect() as connection:
@@ -937,7 +1162,7 @@ def test_article_policy_downgrade_restores_source_version_least_privilege(
 
     alembic_configuration = Config(ROOT / "alembic.ini")
     try:
-        command.downgrade(alembic_configuration, "20260727_0040")
+        command.downgrade(alembic_configuration, "20260729_0041")
         engine = create_database_engine(migration_configuration)
         try:
             with engine.connect() as connection:
@@ -990,7 +1215,7 @@ def test_article_policy_downgrade_waits_for_source_authority_writer(
                     downgrade = executor.submit(
                         command.downgrade,
                         alembic_configuration,
-                        "20260727_0040",
+                        "20260729_0041",
                     )
                     waiting = False
                     deadline = monotonic() + 5
@@ -1016,7 +1241,7 @@ def test_article_policy_downgrade_waits_for_source_authority_writer(
             finally:
                 if writer_transaction.is_active:
                     writer_transaction.rollback()
-        assert _revision_rows(migration_configuration) == ["20260727_0040"]
+        assert _revision_rows(migration_configuration) == ["20260729_0041"]
     finally:
         command.upgrade(alembic_configuration, "head")
         engine.dispose()
@@ -2016,7 +2241,7 @@ def test_file_reclaim_revision_refuses_retained_higher_generation(
             RuntimeError,
             match="automatic File reclaim downgrade requires no retained",
         ):
-            command.downgrade(Config(ROOT / "alembic.ini"), "20260725_0033")
+            downgrade_revision(migration_configuration, "20260726_0034")
         assert _revision_rows(migration_configuration) == [HEAD_REVISION]
         with engine.connect() as connection:
             assert connection.execute(
@@ -2227,9 +2452,9 @@ def test_mixed_file_upsert_downgrade_waits_for_in_flight_scheduler(
                                 sleep(0.01)
                         assert scheduler_waiting
                         pending_downgrade = executor.submit(
-                            command.downgrade,
-                            alembic_configuration,
-                            "20260725_0031",
+                            downgrade_revision,
+                            migration_configuration,
+                            "20260725_0032",
                         )
                         with engine.connect() as observer:
                             deadline = monotonic() + 10
@@ -2370,22 +2595,34 @@ def test_in_flight_old_scheduler_fails_closed_when_downgrade_wins_fence(
         operation=ControlOperation.ACCEPT_FILE_CHANGE_PAGE,
         request_id="mixed-downgrade-losing-accept-baseline",
     ) as call:
-        control.accept_file_change_page(call, baseline.value)
-    with authority.authorize(
-        opaque_credential="control-secret",
-        operation=ControlOperation.READ_SOURCE_PROGRESS,
-        request_id="mixed-downgrade-losing-read-baseline",
-    ) as call:
-        progress = control.read_file_source_progress(call, scenario.source_ref)
-    assert progress.complete_change_baseline is not None
+        accepted_baseline = control.accept_file_change_page(call, baseline.value)
+    complete_baseline = FileChangeBaseline(
+        reference=FileChangeBaselineRef(
+            source_version_ref=accepted_baseline.source_version_ref,
+            scan_ref=accepted_baseline.scan_ref,
+            scan_epoch=accepted_baseline.scan_epoch,
+            page_ref=accepted_baseline.page_ref,
+            checkpoint_ref=accepted_baseline.checkpoint_ref,
+            sequence=accepted_baseline.sequence,
+        ),
+        entries=tuple(
+            FileChangeBaselineEntry(
+                kind=change.kind,
+                path=change.path,
+                content_sha256=change.content_sha256,
+                content_length=change.content_length,
+            )
+            for change in baseline.value.changes
+        ),
+    )
     (scenario.root / "handbook.md").write_bytes(NEW_MARKDOWN)
     (scenario.root / "removed.md").unlink()
     mixed = provider.read_changes(
         FileChangeSource(
             scenario.organization_id,
             v4.active_version,
-            scan_head=progress.change_scan_head,
-            complete_baseline=progress.complete_change_baseline,
+            scan_head=accepted_baseline.scan_head,
+            complete_baseline=complete_baseline,
         ),
         InitialScan(),
         ChangeLimit(2),
@@ -2627,12 +2864,11 @@ def test_file_delete_observation_revision_refuses_accepted_baseline_downgrade(
     ) as call:
         accepted = control.accept_file_change_page(call, page.value)
 
-    alembic_configuration = Config(ROOT / "alembic.ini")
     with pytest.raises(
         RuntimeError,
         match="requires no accepted v4 page",
     ):
-        command.downgrade(alembic_configuration, "20260725_0029")
+        downgrade_revision(migration_configuration, "20260725_0030")
     assert _revision_rows(migration_configuration) == [HEAD_REVISION]
     engine = create_database_engine(migration_configuration)
     try:
@@ -2814,7 +3050,7 @@ def test_file_delete_observation_revision_refuses_retained_action_ticket(
             RuntimeError,
             match="requires no v4 ActionTicket lineage",
         ):
-            command.downgrade(Config(ROOT / "alembic.ini"), "20260725_0029")
+            downgrade_revision(migration_configuration, "20260725_0030")
         assert _revision_rows(migration_configuration) == [HEAD_REVISION]
         with engine.connect() as connection:
             retained = connection.execute(
@@ -2999,7 +3235,7 @@ def test_file_change_scheduling_revision_refuses_downgrade_with_new_manual_path(
             RuntimeError,
             match="newer manual File import paths",
         ):
-            command.downgrade(alembic_configuration, "20260725_0028")
+            downgrade_revision(migration_configuration, "20260725_0029")
         assert _revision_rows(migration_configuration) == [HEAD_REVISION]
         engine = create_database_engine(migration_configuration)
         try:
@@ -3333,9 +3569,9 @@ def test_file_source_status_downgrade_observes_in_flight_compilation_refusal(
                             sleep(0.01)
                     assert worker_holds_fence
                     pending_downgrade = executor.submit(
-                        command.downgrade,
-                        Config(ROOT / "alembic.ini"),
-                        "20260727_0038",
+                        downgrade_revision,
+                        migration_configuration,
+                        "20260727_0039",
                     )
                     with migration_engine.connect() as observer:
                         deadline = monotonic() + 10
@@ -3481,7 +3717,7 @@ def test_recursive_file_path_revision_refuses_retained_nested_lineage(
             RuntimeError,
             match="requires no retained nested lineage",
         ):
-            command.downgrade(alembic_configuration, "20260726_0034")
+            downgrade_revision(migration_configuration, "20260726_0035")
         assert _revision_rows(migration_configuration) == [HEAD_REVISION]
     finally:
         command.upgrade(alembic_configuration, "head")
@@ -3541,9 +3777,9 @@ def test_file_change_scheduling_downgrade_serializes_with_manual_import(
                 )
                 with ThreadPoolExecutor(max_workers=1) as executor:
                     pending_downgrade = executor.submit(
-                        command.downgrade,
-                        alembic_configuration,
-                        "20260725_0028",
+                        downgrade_revision,
+                        migration_configuration,
+                        "20260725_0029",
                     )
                     downgrade_waiting = False
                     try:
@@ -3723,7 +3959,7 @@ def test_citation_open_revision_refuses_downgrade_with_retained_lineage(
             )
 
         with pytest.raises(SQLAlchemyError):
-            command.downgrade(Config(ROOT / "alembic.ini"), "20260724_0023")
+            downgrade_revision(migration_configuration, "20260724_0024")
         assert _revision_rows(migration_configuration) == [HEAD_REVISION]
         with engine.connect() as connection:
             assert (
@@ -3786,9 +4022,8 @@ def test_file_source_offboarding_refuses_downgrade_with_committed_intent(
         issue_lease=False,
     )
     committed = _offboard(scenario, guarded_control_engine)
-    alembic_configuration = Config(ROOT / "alembic.ini")
     with pytest.raises(SQLAlchemyError):
-        command.downgrade(alembic_configuration, "20260723_0017")
+        downgrade_revision(migration_configuration, "20260723_0018")
 
     assert _revision_rows(migration_configuration) == [HEAD_REVISION]
     migration_engine = create_database_engine(migration_configuration)
@@ -3930,7 +4165,7 @@ def test_file_progress_refuses_downgrade_and_preserves_refs(
             RuntimeError,
             match="requires empty progress streams",
         ):
-            command.downgrade(alembic_configuration, "20260723_0016")
+            downgrade_revision(migration_configuration, "20260723_0017")
         assert _revision_rows(migration_configuration) == [HEAD_REVISION]
         assert progress_refs() == before
     finally:
@@ -3970,10 +4205,8 @@ def test_file_tombstone_revision_refuses_downgrade_with_committed_intent(
         event_sequence=1,
     )
 
-    clear_file_source_progress_projection(migration_configuration)
-    alembic_configuration = Config(ROOT / "alembic.ini")
     with pytest.raises(SQLAlchemyError):
-        command.downgrade(alembic_configuration, "20260723_0015")
+        downgrade_revision(migration_configuration, "20260723_0016")
 
     assert _revision_rows(migration_configuration) == [HEAD_REVISION]
     migration_engine = create_database_engine(migration_configuration)
@@ -4052,7 +4285,9 @@ def test_recovery_upgrade_adopts_an_existing_ready_replacement(
     resource_ref = initial.candidate_ref.resource_ref
     alembic_configuration = Config(ROOT / "alembic.ini")
     try:
-        clear_file_source_progress_projection(migration_configuration)
+        clear_file_source_progress_projection(
+            migration_configuration, scenario.organization_id
+        )
         command.downgrade(alembic_configuration, "20260723_0014")
         with guarded_worker_engine.begin() as connection:
             redeemed = connection.execute(
@@ -4376,7 +4611,7 @@ def test_openapi_v0_revision_refuses_downgrade_with_v3_context_run_history(
             )
 
         with pytest.raises(SQLAlchemyError, match="v3 ContextRun lineage exists"):
-            command.downgrade(alembic_configuration, "20260723_0020")
+            downgrade_revision(migration_configuration, "20260723_0021")
         assert _revision_rows(migration_configuration) == [HEAD_REVISION]
     finally:
         if _revision_rows(migration_configuration) != [HEAD_REVISION]:
@@ -4509,7 +4744,7 @@ def test_field_projection_downgrade_refuses_populated_content_atomically(
             RuntimeError,
             match="downgrade requires an empty content schema",
         ):
-            command.downgrade(alembic_configuration, "20260722_0007")
+            downgrade_revision(migration_configuration, "20260722_0008")
 
         assert _revision_rows(migration_configuration) == [HEAD_REVISION]
         with engine.connect() as connection:
@@ -4613,9 +4848,6 @@ def test_field_projection_downgrade_serializes_with_concurrent_fragment_insert(
         "resource_ref": resource_ref,
         "fragment_ref": fragment_ref,
     }
-    # Exercise the Issue #48 downgrade directly. Later reversible revisions
-    # have their own lock graphs and must not obscure the lock being observed.
-    command.downgrade(alembic_configuration, "20260722_0008")
     engine = create_database_engine(migration_configuration)
     try:
         with engine.begin() as connection:
@@ -4673,9 +4905,9 @@ def test_field_projection_downgrade_serializes_with_concurrent_fragment_insert(
                 )
                 with ThreadPoolExecutor(max_workers=1) as executor:
                     pending_downgrade = executor.submit(
-                        command.downgrade,
-                        alembic_configuration,
-                        "20260722_0007",
+                        downgrade_revision,
+                        migration_configuration,
+                        "20260722_0008",
                     )
                     downgrade_waiting = False
                     try:
@@ -4718,7 +4950,7 @@ def test_field_projection_downgrade_serializes_with_concurrent_fragment_insert(
                 if publisher_transaction.is_active:
                     publisher_transaction.rollback()
 
-        assert _revision_rows(migration_configuration) == ["20260722_0008"]
+        assert _revision_rows(migration_configuration) == [HEAD_REVISION]
         with engine.connect() as connection:
             assert (
                 connection.execute(
