@@ -91,6 +91,22 @@ def complete_provenance(*, commit: str = "a" * 40) -> dict[str, object]:
         "configurationDigest": digest,
         "alembicHead": "head-one",
         "liveDatabaseRevision": "head-one",
+        "retainedFileLineage": retained_file_lineage(),
+    }
+
+
+def retained_file_lineage(
+    *, nested: int = 0, acquisitions: int = 0
+) -> dict[str, object]:
+    return {
+        "observedBeforeExecution": True,
+        "organizationCount": 0,
+        "fileAcquisitionCount": acquisitions,
+        "fileSourceChangeCount": 0,
+        "fileDeleteObservationExecutionCount": 0,
+        "nestedRelativePathCount": nested,
+        "populatedVolume": acquisitions > 0,
+        "retainedNestedLineage": nested > 0,
     }
 
 
@@ -559,6 +575,19 @@ def test_release_report_surfaces_rls_failure_reason(
         lambda provenance: provenance.update(commit="unavailable"),
         lambda provenance: provenance.update(contentStateDigest="unavailable"),
         lambda provenance: provenance.update(liveDatabaseRevision="old-head"),
+        lambda provenance: provenance.pop("retainedFileLineage"),
+        lambda provenance: provenance.update(
+            retainedFileLineage={
+                **retained_file_lineage(nested=3, acquisitions=3),
+                "retainedNestedLineage": False,
+            }
+        ),
+        lambda provenance: provenance.update(
+            retainedFileLineage={
+                **retained_file_lineage(acquisitions=2),
+                "populatedVolume": False,
+            }
+        ),
     ],
 )
 def test_release_report_fails_closed_when_required_provenance_is_unavailable(
@@ -648,10 +677,14 @@ def test_provenance_has_exact_nonsecret_config_migration_and_fixture_digests(
         {"fixtures": [{"id": "ACCEPT-001", "secret": "not-a-secret"}]},
         selectors=("tests/test_gate_sample.py::test_fixture",),
         live_database_revision="head_one",
+        retained_file_lineage=retained_file_lineage(nested=4, acquisitions=9),
     )
 
     assert provenance["alembicHead"] == "head_one"
     assert provenance["liveDatabaseRevision"] == "head_one"
+    assert provenance["retainedFileLineage"] == retained_file_lineage(
+        nested=4, acquisitions=9
+    )
     assert provenance["trackedDirty"] == "unavailable"
     assert len(cast(str, provenance["fixtureDigest"])) == 64
     assert len(cast(str, provenance["configurationDigest"])) == 64
@@ -847,6 +880,10 @@ def test_gate_fails_before_pytest_when_live_revision_differs_from_head(
         "scripts.security_gate.runner._live_database_revision",
         lambda _environment: "old",
     )
+    monkeypatch.setattr(
+        "scripts.security_gate.runner._retained_file_lineage",
+        lambda _environment: retained_file_lineage(),
+    )
     paths = GatePaths(
         repository_root=tmp_path,
         catalog=tmp_path / "catalog.json",
@@ -888,6 +925,10 @@ def test_gate_scrubs_ambient_pytest_control_variables(
     monkeypatch.setattr(
         "scripts.security_gate.runner._live_database_revision",
         lambda _environment: "head",
+    )
+    monkeypatch.setattr(
+        "scripts.security_gate.runner._retained_file_lineage",
+        lambda _environment: retained_file_lineage(),
     )
 
     def executor(
@@ -935,6 +976,10 @@ def test_gate_rejects_stale_or_spoofed_raw_execution(
     monkeypatch.setattr(
         "scripts.security_gate.runner._live_database_revision",
         lambda _environment: "head",
+    )
+    monkeypatch.setattr(
+        "scripts.security_gate.runner._retained_file_lineage",
+        lambda _environment: retained_file_lineage(),
     )
 
     def executor(
@@ -990,6 +1035,10 @@ def test_post_pytest_failure_preserves_the_valid_raw_execution(
     monkeypatch.setattr(
         "scripts.security_gate.runner._live_database_revision",
         lambda _environment: "head",
+    )
+    monkeypatch.setattr(
+        "scripts.security_gate.runner._retained_file_lineage",
+        lambda _environment: retained_file_lineage(),
     )
 
     def executor(
