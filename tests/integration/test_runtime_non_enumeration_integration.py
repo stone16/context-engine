@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 from httpx import Response
 from sqlalchemy import Engine, text
 
+from adapters.exact_phrase import PostgreSQLExactPhraseCandidateIndex
 from adapters.http.app import create_app
 from engine.persistence import (
     DatabaseConfiguration,
@@ -33,6 +34,7 @@ from engine.runtime.context_run import (
 )
 from engine.runtime.contracts import Acquire, Resolved
 from engine.runtime.evidence import CandidateRef
+from engine.runtime.materialized import ExactPhraseDiscoveryRequest
 from engine.runtime.package_digest import QueryDigestKeyring
 from tests.integration.test_runtime_authorized_evidence_integration import (
     ExactScopeAuthority,
@@ -130,6 +132,17 @@ class SequencedCandidateIndex:
     ) -> None:
         self.rankings = rankings
         self.calls: list[Acquire] = []
+
+    def prepare_discovery(
+        self,
+        request: Acquire,
+        *,
+        effective_scope: object,
+    ) -> ExactPhraseDiscoveryRequest:
+        return PostgreSQLExactPhraseCandidateIndex().prepare_discovery(
+            request,
+            effective_scope=effective_scope,  # type: ignore[arg-type]
+        )
 
     def discover(
         self,

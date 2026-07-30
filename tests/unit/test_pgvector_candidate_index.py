@@ -209,28 +209,14 @@ def test_vector_index_applies_request_narrowing_before_ann_limit() -> None:
 
 def test_vector_index_genericizes_query_embedding_failure_before_database_io() -> None:
     port = _RecordingPort((_candidate(),))
-    scope = _open_materialized_projection_scope()
-    session = _construct_materialized_projection_session(
-        authority_scope=scope,
-        port=cast(MaterializedProjectionPort, port),
-    )
-    discovery_session = _construct_candidate_discovery_session(
-        session,
-        None,
-        effective_scope=_effective_scope(),
-    )
-    try:
-        with pytest.raises(
-            VectorCandidateIndexUnavailable,
-            match="Vector candidate discovery is unavailable",
-        ) as failure:
-            PostgreSQLVectorCandidateIndex(_UnavailableProvider()).prepare_discovery(
-                Acquire(need=ContextNeed(query="semantic query")),
-                effective_scope=_discovery_scope(),
-            )
-    finally:
-        _close_candidate_discovery_session(discovery_session)
-        _close_materialized_projection_scope(scope)
+    with pytest.raises(
+        VectorCandidateIndexUnavailable,
+        match="Vector candidate discovery is unavailable",
+    ) as failure:
+        PostgreSQLVectorCandidateIndex(_UnavailableProvider()).prepare_discovery(
+            Acquire(need=ContextNeed(query="semantic query")),
+            effective_scope=_discovery_scope(),
+        )
 
     assert failure.value.__cause__ is None
     assert port.calls == []

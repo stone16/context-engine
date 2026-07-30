@@ -71,6 +71,7 @@ from engine.runtime.delivery_evidence import (
 from engine.runtime.evidence import CandidateRef
 from engine.runtime.materialized import (
     CandidateDiscoverySession,
+    ExactPhraseDiscoveryRequest,
     _close_candidate_discovery_session,
     _close_materialized_projection_scope,
     _construct_candidate_discovery_session,
@@ -307,6 +308,17 @@ class _ExactThenReplayCandidateIndex:
     def __init__(self, replay: CandidateRef) -> None:
         self.exact = PostgreSQLExactPhraseCandidateIndex()
         self.replay = replay
+
+    def prepare_discovery(
+        self,
+        request: Acquire,
+        *,
+        effective_scope: CandidateDiscoveryScope,
+    ) -> ExactPhraseDiscoveryRequest:
+        return self.exact.prepare_discovery(
+            request,
+            effective_scope=effective_scope,
+        )
 
     def discover(
         self,

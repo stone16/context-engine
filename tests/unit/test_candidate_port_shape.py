@@ -18,7 +18,10 @@ from engine.runtime.candidate_ranking import (
 from engine.runtime.content_io import CandidateIndex
 from engine.runtime.contracts import Acquire, ContextNeed
 from engine.runtime.evidence import CandidateRef
-from engine.runtime.materialized import CandidateDiscoverySession
+from engine.runtime.materialized import (
+    CandidateDiscoveryRequest,
+    CandidateDiscoverySession,
+)
 from engine.runtime.scope import CandidateDiscoveryScope
 
 ROOT = Path(__file__).parents[2]
@@ -137,6 +140,10 @@ def test_exactly_one_candidate_discovery_protocol_extends_existing_seam() -> Non
         (Path("engine/runtime/content_io.py"), "CandidateIndex")
     ]
     assert get_type_hints(CandidateIndex.discover)["return"] is CandidateQuery
+    assert (
+        get_type_hints(CandidateIndex.prepare_discovery)["return"]
+        == CandidateDiscoveryRequest
+    )
     assert get_type_hints(PostgreSQLExactPhraseCandidateIndex.discover)[
         "return"
     ] is CandidateQuery

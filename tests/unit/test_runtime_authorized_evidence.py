@@ -40,7 +40,11 @@ from engine.runtime.construction import (
     _OpaqueReferenceIssuer,
     required_kernel_dependencies,
 )
-from engine.runtime.content_io import CandidateIndex
+from engine.runtime.content_io import (
+    CandidateIndex,
+    CandidateIndexUnavailable,
+    exact_phrase_digest,
+)
 from engine.runtime.contracts import (
     Acquire,
     CitationNotAvailable,
@@ -61,6 +65,7 @@ from engine.runtime.invocation import (
     _construct_authenticated_http_invocation,
 )
 from engine.runtime.materialized import (
+    ExactPhraseDiscoveryRequest,
     MaterializedFieldValue,
     MaterializedFragmentLocator,
     MaterializedFragmentProjection,
@@ -156,6 +161,15 @@ class HostileCandidateIndex:
         self.ranked = ranked
         self.calls = 0
 
+    def prepare_discovery(
+        self,
+        request: Acquire,
+        *,
+        effective_scope: object,
+    ) -> ExactPhraseDiscoveryRequest:
+        del effective_scope
+        return ExactPhraseDiscoveryRequest(exact_phrase_digest(request.need.query))
+
     def discover(
         self,
         request: Acquire,
@@ -176,6 +190,17 @@ class HostileCandidateIndex:
                 ),
             )
         )
+
+
+class UnavailableCandidateIndex(HostileCandidateIndex):
+    def prepare_discovery(
+        self,
+        request: Acquire,
+        *,
+        effective_scope: object,
+    ) -> ExactPhraseDiscoveryRequest:
+        del request, effective_scope
+        raise CandidateIndexUnavailable("candidate preparation is unavailable")
 
 
 class RecordingMaterializedPort:
@@ -578,6 +603,48 @@ def test_hostile_candidate_order_delivers_only_exact_authorized_evidence(
         wrong_organization_effect_count=wrong_organization_effect_count,
         missing_context_fallback_count=missing_context_fallback_count,
     )
+
+
+def test_discovery_preparation_failure_is_distinct_from_a_valid_empty_query() -> None:
+    port = RecordingMaterializedPort()
+    unavailable = Runtime(
+        required_kernel_dependencies(),
+        candidate_index=cast(CandidateIndex, UnavailableCandidateIndex(())),
+        clock=lambda: AS_OF,
+        query_digest_keyring=TEST_QUERY_DIGEST_KEYRING,
+    )
+    empty = Runtime(
+        required_kernel_dependencies(),
+        candidate_index=cast(CandidateIndex, HostileCandidateIndex(())),
+        clock=lambda: AS_OF,
+        query_digest_keyring=TEST_QUERY_DIGEST_KEYRING,
+    )
+
+    with (
+        trusted_operands(port) as (invocation, delivery),
+        pytest.raises(
+            CandidateIndexUnavailable,
+            match="candidate preparation is unavailable",
+        ),
+    ):
+        unavailable.resolve(
+            invocation,
+            delivery,
+            Acquire(need=ContextNeed(query="unavailable discovery")),
+        )
+
+    with trusted_operands(port) as (invocation, delivery):
+        outcome = empty.resolve(
+            invocation,
+            delivery,
+            Acquire(need=ContextNeed(query="valid empty discovery")),
+        )
+
+    assert type(outcome) is Resolved
+    assert outcome.package.blocks == ()
+    assert outcome.package.evidence == ()
+    assert outcome.package.coverage.status == "empty"
+    assert outcome.package.coverage.reason == "no_authorized_evidence"
 
 
 def test_citation_open_redeems_only_lineage_then_reauthorizes_exact_candidate() -> None:

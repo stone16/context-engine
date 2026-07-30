@@ -1464,10 +1464,6 @@ class Runtime:
         selected_content_io = content_io or prohibited_empty_path_content_io()
         if type(selected_content_io) is not RuntimeContentIo:
             raise RuntimeConfigurationError("content_io must be RuntimeContentIo")
-        if candidate_index is not None and not callable(
-            getattr(candidate_index, "discover", None)
-        ):
-            raise RuntimeConfigurationError("candidate_index is incomplete")
         if (
             content_io is not None
             and candidate_index is not None
@@ -1482,6 +1478,11 @@ class Runtime:
                 provider=selected_content_io.provider,
                 source_content=selected_content_io.source_content,
             )
+        if any(
+            not callable(getattr(selected_content_io.index, method_name, None))
+            for method_name in ("prepare_discovery", "discover")
+        ):
+            raise RuntimeConfigurationError("candidate_index is incomplete")
         if type(
             acquire_capability
         ) is not RuntimeCapability or acquire_capability not in {
@@ -1653,18 +1654,9 @@ class Runtime:
                 discovery_scope = candidate_discovery_scope(
                     preparation.policy_receipt.effective_scope
                 )
-                prepare_discovery = getattr(
-                    self._content_io.index,
-                    "prepare_discovery",
-                    None,
-                )
-                discovery_request = (
-                    prepare_discovery(
-                        request,
-                        effective_scope=discovery_scope,
-                    )
-                    if callable(prepare_discovery)
-                    else None
+                discovery_request = self._content_io.index.prepare_discovery(
+                    request,
+                    effective_scope=discovery_scope,
                 )
                 _require_candidate_discovery_scope_integrity(discovery_scope)
                 discovery_session: CandidateDiscoverySession | None = None

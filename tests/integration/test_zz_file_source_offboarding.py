@@ -13,6 +13,7 @@ import pytest
 from sqlalchemy import Engine, text
 from sqlalchemy.exc import SQLAlchemyError
 
+from adapters.exact_phrase import PostgreSQLExactPhraseCandidateIndex
 from adapters.http.scope_authority import (
     MissingTrustedScopeAuthority,
     ScopeAuthorityIdentity,
@@ -51,7 +52,10 @@ from engine.runtime.contracts import Acquire
 from engine.runtime.delivery import _construct_direct_delivery_context
 from engine.runtime.evidence import CandidateRef
 from engine.runtime.invocation import _construct_authenticated_http_invocation
-from engine.runtime.materialized import CandidateDiscoverySession
+from engine.runtime.materialized import (
+    CandidateDiscoverySession,
+    ExactPhraseDiscoveryRequest,
+)
 from engine.runtime.organization import (
     _construct_existing_http_organization_verification,
 )
@@ -102,6 +106,17 @@ pytestmark = pytest.mark.integration
 class _ReplayCandidateIndex:
     def __init__(self, candidate: CandidateRef) -> None:
         self.candidate = candidate
+
+    def prepare_discovery(
+        self,
+        request: Acquire,
+        *,
+        effective_scope: CandidateDiscoveryScope,
+    ) -> ExactPhraseDiscoveryRequest:
+        return PostgreSQLExactPhraseCandidateIndex().prepare_discovery(
+            request,
+            effective_scope=effective_scope,
+        )
 
     def discover(
         self,

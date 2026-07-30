@@ -8,6 +8,7 @@ from engine.runtime.candidate_ranking import CandidateQuery
 from engine.runtime.contracts import Acquire
 from engine.runtime.fragment_window import FragmentWindowReader
 from engine.runtime.materialized import (
+    CandidateDiscoveryRequest,
     CandidateDiscoverySession,
 )
 from engine.runtime.scope import CandidateDiscoveryScope
@@ -36,6 +37,13 @@ def exact_phrase_digest(value: str) -> str:
 
 class CandidateIndex(Protocol):
     """Content-free candidate discovery seam; never an authorization source."""
+
+    def prepare_discovery(
+        self,
+        request: Acquire,
+        *,
+        effective_scope: CandidateDiscoveryScope,
+    ) -> CandidateDiscoveryRequest: ...
 
     def discover(
         self,
@@ -78,9 +86,9 @@ class _ProhibitedCandidateIndex:
         request: Acquire,
         *,
         effective_scope: CandidateDiscoveryScope,
-    ) -> None:
+    ) -> CandidateDiscoveryRequest:
         del request, effective_scope
-        return None
+        raise RuntimeError("candidate index is prohibited on the empty Package path")
 
     def discover(
         self,

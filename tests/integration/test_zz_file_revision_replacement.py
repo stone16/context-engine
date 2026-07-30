@@ -28,7 +28,10 @@ from engine.runtime.candidate_ranking import CandidateQuery
 from engine.runtime.construction import Runtime, required_kernel_dependencies
 from engine.runtime.content_io import CandidateIndex, exact_phrase_digest
 from engine.runtime.contracts import Acquire
-from engine.runtime.materialized import CandidateDiscoverySession
+from engine.runtime.materialized import (
+    CandidateDiscoverySession,
+    ExactPhraseDiscoveryRequest,
+)
 from engine.runtime.package_digest import QueryDigestKeyring
 from engine.runtime.scope import CandidateDiscoveryScope
 from engine.supply import (
@@ -300,7 +303,7 @@ class _BlockingCandidateIndex:
         request: Acquire,
         *,
         effective_scope: CandidateDiscoveryScope,
-    ) -> object:
+    ) -> ExactPhraseDiscoveryRequest:
         return self._inner.prepare_discovery(
             request,
             effective_scope=effective_scope,

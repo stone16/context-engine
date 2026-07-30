@@ -16,6 +16,7 @@ from sqlalchemy import Engine, text
 from sqlalchemy.exc import OperationalError
 
 import engine.persistence.membership_context as membership_context_module
+from adapters.exact_phrase import PostgreSQLExactPhraseCandidateIndex
 from adapters.http.app import create_app
 from adapters.http.authentication import (
     AuthenticationRejected,
@@ -43,6 +44,7 @@ from engine.runtime.context_run import (
 )
 from engine.runtime.contracts import Acquire
 from engine.runtime.evidence import CandidateRef
+from engine.runtime.materialized import ExactPhraseDiscoveryRequest
 from engine.runtime.organization import (
     ExistingOrganizationVerification,
     _construct_existing_http_organization_verification,
@@ -188,6 +190,17 @@ class SameContentFreeCandidateIndex:
         self.candidate = candidate
         self.calls: list[Acquire] = []
         self.returned_candidates: list[CandidateRef] = []
+
+    def prepare_discovery(
+        self,
+        request: Acquire,
+        *,
+        effective_scope: object,
+    ) -> ExactPhraseDiscoveryRequest:
+        return PostgreSQLExactPhraseCandidateIndex().prepare_discovery(
+            request,
+            effective_scope=effective_scope,  # type: ignore[arg-type]
+        )
 
     def discover(
         self,

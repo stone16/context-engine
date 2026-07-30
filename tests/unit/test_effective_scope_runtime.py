@@ -8,6 +8,7 @@ from uuid import UUID
 
 import pytest
 
+from adapters.exact_phrase import PostgreSQLExactPhraseCandidateIndex
 from engine.runtime.actor import (
     _close_membership_authority_scope,
     _construct_current_membership_verification,
@@ -25,6 +26,7 @@ from engine.runtime.invocation import (
     AuthenticatedInvocation,
     _construct_authenticated_http_invocation,
 )
+from engine.runtime.materialized import ExactPhraseDiscoveryRequest
 from engine.runtime.organization import (
     _construct_existing_http_organization_verification,
 )
@@ -64,6 +66,17 @@ ALL_TARGETS = ScopeSet(frozenset({TARGET_A, TARGET_B}))
 class ContentIoSpy:
     def __init__(self) -> None:
         self.calls = 0
+
+    def prepare_discovery(
+        self,
+        request: Acquire,
+        *,
+        effective_scope: object,
+    ) -> ExactPhraseDiscoveryRequest:
+        return PostgreSQLExactPhraseCandidateIndex().prepare_discovery(
+            request,
+            effective_scope=effective_scope,  # type: ignore[arg-type]
+        )
 
     def discover(
         self,

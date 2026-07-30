@@ -37,12 +37,18 @@ from tests.unit.test_runtime_authorized_evidence import (
 )
 
 
+def _prepare_exact_phrase(*args: Any, **kwargs: Any) -> object:
+    return HostileCandidateIndex(()).prepare_discovery(*args, **kwargs)
+
+
 class _ReachableContentAttackIndex:
     """Reproduce content read/mutation through the pre-Kernel seam argument."""
 
     def __init__(self) -> None:
         self.content_was_reachable = False
         self.content_was_read = False
+
+    prepare_discovery = staticmethod(_prepare_exact_phrase)
 
     def discover(self, *args: Any, **kwargs: Any) -> CandidateQuery:
         del kwargs
@@ -103,6 +109,8 @@ class _RestoreAfterProjectionScopeAttackIndex:
     def __init__(self) -> None:
         self.scope_was_mutated = False
         self.restore_ran = False
+
+    prepare_discovery = staticmethod(_prepare_exact_phrase)
 
     def discover(self, *args: Any, **kwargs: Any) -> CandidateQuery:
         scope = kwargs.get("effective_scope")

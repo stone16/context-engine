@@ -19,6 +19,7 @@ from engine.runtime.scope import (
 )
 
 __all__ = [
+    "CandidateDiscoveryRequest",
     "CandidateDiscoverySession",
     "ExactPhraseDiscoveryRequest",
     "MaterializedFieldValue",
@@ -481,7 +482,7 @@ def _construct_materialized_projection_session(
 
 def _construct_candidate_discovery_session(
     session: MaterializedProjectionSession,
-    request: CandidateDiscoveryRequest | None,
+    request: CandidateDiscoveryRequest,
     *,
     effective_scope: EffectiveScope,
 ) -> CandidateDiscoverySession:
@@ -491,9 +492,7 @@ def _construct_candidate_discovery_session(
     from engine.runtime.scope import _require_effective_scope_integrity
 
     _require_effective_scope_integrity(effective_scope)
-    if request is None:
-        candidates: tuple[CandidateRef, ...] = ()
-    elif type(request) is ExactPhraseDiscoveryRequest:
+    if type(request) is ExactPhraseDiscoveryRequest:
         discover_exact_phrase = getattr(
             session._port,
             "discover_exact_phrase",

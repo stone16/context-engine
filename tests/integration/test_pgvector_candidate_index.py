@@ -31,7 +31,10 @@ from engine.runtime.construction import Runtime, required_kernel_dependencies
 from engine.runtime.content_io import CandidateIndex
 from engine.runtime.contracts import Acquire
 from engine.runtime.evidence import CandidateRef
-from engine.runtime.materialized import CandidateDiscoverySession
+from engine.runtime.materialized import (
+    CandidateDiscoverySession,
+    VectorDiscoveryRequest,
+)
 from engine.runtime.package_digest import QueryDigestKeyring
 from engine.runtime.scope import CandidateDiscoveryScope, EffectiveScope, ScopeTarget
 from engine.supply import EmbeddingProfile, EmbeddingProviderUnavailable
@@ -79,7 +82,7 @@ class _RecordingVectorCandidateIndex:
         request: Acquire,
         *,
         effective_scope: CandidateDiscoveryScope,
-    ) -> object:
+    ) -> VectorDiscoveryRequest:
         return self.inner.prepare_discovery(
             request,
             effective_scope=effective_scope,
@@ -113,7 +116,7 @@ class _BlockingVectorCandidateIndex:
         request: Acquire,
         *,
         effective_scope: CandidateDiscoveryScope,
-    ) -> object:
+    ) -> VectorDiscoveryRequest:
         return self.inner.prepare_discovery(
             request,
             effective_scope=effective_scope,

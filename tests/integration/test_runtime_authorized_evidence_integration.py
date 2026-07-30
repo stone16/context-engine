@@ -11,6 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import Engine, text
 
+from adapters.exact_phrase import PostgreSQLExactPhraseCandidateIndex
 from adapters.http.app import create_app
 from adapters.http.authentication import (
     AuthenticationRejected,
@@ -33,6 +34,7 @@ from engine.runtime.content_io import CandidateIndex
 from engine.runtime.context_run import ContextRunOutcome
 from engine.runtime.contracts import Acquire
 from engine.runtime.evidence import CandidateRef
+from engine.runtime.materialized import ExactPhraseDiscoveryRequest
 from engine.runtime.organization import (
     ExistingOrganizationVerification,
     _construct_existing_http_organization_verification,
@@ -198,6 +200,17 @@ class HostileCandidateIndex:
             fixture.authorized,
         )
         self.calls: list[Acquire] = []
+
+    def prepare_discovery(
+        self,
+        request: Acquire,
+        *,
+        effective_scope: object,
+    ) -> ExactPhraseDiscoveryRequest:
+        return PostgreSQLExactPhraseCandidateIndex().prepare_discovery(
+            request,
+            effective_scope=effective_scope,  # type: ignore[arg-type]
+        )
 
     def discover(
         self,
