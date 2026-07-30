@@ -77,7 +77,7 @@ make install
 make db-up                       # worktree-scoped compose project
 set -a; source .context-engine/database.env; source <secrets env>; set +a
 uv run context-engine-control migrate            # → 20260727_0040
-make security-gate               # any volume state; see finding 2 and ADR-0085
+make security-gate               # any volume state; see finding 2 and ADR-0087
 uv run context-engine-dogfood-seed \
   --organization-id "$CONTEXT_ENGINE_DOGFOOD_ORGANIZATION_ID" \
   --user-id "$CONTEXT_ENGINE_DOGFOOD_USER_ID" \
@@ -157,7 +157,7 @@ eval README forbids inventing entries.
    **raw Obsidian ingestion remains UNPROVEN**. The v1 three-line shape also
    forces whole-note flattening: every published note is one
    `fragment:paragraph:1`, so citation granularity is the entire note.
-2. **Security gate was corpus-sensitive — fixed by ADR-0085.** With the dogfood
+2. **Security gate was corpus-sensitive — fixed by ADR-0087.** With the dogfood
    corpus in the harness database, 4 of 164 gate tests failed: the registered
    evidence drove Alembic through a multi-revision downgrade chain, so with
    nested File lineage from another Organization retained, the recursive-path

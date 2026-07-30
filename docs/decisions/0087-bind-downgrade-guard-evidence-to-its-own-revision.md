@@ -1,5 +1,5 @@
 ---
-name: adr-0085-bind-downgrade-guard-evidence-to-its-own-revision
+name: adr-0087-bind-downgrade-guard-evidence-to-its-own-revision
 version: "1.0.0"
 description: >
   Bind registered downgrade-guard evidence to its own revision step and record
@@ -7,7 +7,7 @@ description: >
   that asserts a migration refusal. Not for changing what any guard protects.
 ---
 
-# 0085. Bind downgrade-guard evidence to its own revision
+# 0087. Bind downgrade-guard evidence to its own revision
 
 - Status: accepted
 - Date: 2026-07-30
