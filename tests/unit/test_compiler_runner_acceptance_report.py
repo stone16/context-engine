@@ -237,6 +237,14 @@ def test_acceptance_corpus_matches_file_provider_markdown_directory_rules(
 ) -> None:
     corpus = tmp_path / "corpus"
     corpus.mkdir()
+    lowercase_directory = corpus / "bare-lowercase"
+    lowercase_directory.mkdir()
+    bare_lowercase = lowercase_directory / ".md"
+    bare_lowercase.write_text("# Bare lowercase\n", encoding="utf-8")
+    uppercase_directory = corpus / "bare-uppercase"
+    uppercase_directory.mkdir()
+    bare_uppercase = uppercase_directory / ".MD"
+    bare_uppercase.write_text("# Bare uppercase\n", encoding="utf-8")
     included = corpus / "included.MD"
     included.write_text("# Included\n", encoding="utf-8")
     ordinary = corpus / "ordinary.md"
@@ -251,7 +259,13 @@ def test_acceptance_corpus_matches_file_provider_markdown_directory_rules(
 
     discovered = compiler_runner._safe_markdown_files(corpus)
 
-    assert discovered == (included, ordinary, target)
+    assert discovered == (
+        bare_lowercase,
+        bare_uppercase,
+        included,
+        ordinary,
+        target,
+    )
 
 
 def test_acceptance_corpus_root_must_not_be_a_symlink(tmp_path: Path) -> None:
@@ -260,7 +274,7 @@ def test_acceptance_corpus_root_must_not_be_a_symlink(tmp_path: Path) -> None:
     linked_root = tmp_path / "linked-root"
     linked_root.symlink_to(corpus, target_is_directory=True)
 
-    with pytest.raises(ValueError, match="non-symlink directory"):
+    with pytest.raises(SystemExit, match="non-symlink directory"):
         compiler_runner._safe_markdown_files(linked_root)
 
 
@@ -273,7 +287,7 @@ def test_acceptance_output_must_resolve_beneath_its_state_directory(
     state_directory.mkdir()
     escaped_output = state_directory / ".." / "report.json"
 
-    with pytest.raises(ValueError, match="under .context-engine"):
+    with pytest.raises(SystemExit, match="under .context-engine"):
         compiler_runner._write_acceptance_report(
             corpus,
             escaped_output,

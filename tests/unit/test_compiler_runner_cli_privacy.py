@@ -5,9 +5,12 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 REPOSITORY_ROOT = Path(__file__).parents[2]
 _MACHINE_ABSOLUTE_PATH_PATTERNS = (
     re.compile(r"(?<![:A-Za-z0-9_])/(?:[^\s/]+/)*[^\s/]+"),
+    re.compile(r"(?<![A-Za-z0-9_])[A-Za-z]:/(?:[^\s/]+/)*[^\s/]+"),
     re.compile(r"(?<![A-Za-z0-9_])[A-Za-z]:\\(?:[^\s\\]+\\)*[^\s\\]+"),
     re.compile(r"(?<!\\)\\\\[^\\\r\n]+\\[^\\\r\n]+"),
 )
@@ -39,6 +42,7 @@ def _assert_process_output_is_private(
 def test_machine_absolute_path_guard_recognizes_platform_path_shapes() -> None:
     canaries = (
         "/private-machine/repository/app.py",
+        "C:/" + "Users" + "/person/repository/app.py",
         "C:\\Users\\person\\repository\\app.py",
         "\\\\server\\share\\repository\\app.py",
     )
@@ -50,6 +54,18 @@ def test_machine_absolute_path_guard_recognizes_platform_path_shapes() -> None:
         )
         for canary in canaries
     )
+
+
+def test_process_output_privacy_assertion_rejects_a_planted_leak() -> None:
+    completed = subprocess.CompletedProcess(
+        args=(),
+        returncode=1,
+        stdout="C:/" + "Users" + "/person/repository/app.py\n",
+        stderr="",
+    )
+
+    with pytest.raises(AssertionError):
+        _assert_process_output_is_private(completed)
 
 
 def test_acceptance_cli_success_output_has_no_machine_local_absolute_path(
@@ -93,15 +109,32 @@ def test_five_acceptance_cli_operator_errors_and_uncaught_exceptions_are_private
     state_directory = tmp_path / ".context-engine"
     state_directory.mkdir()
     operator_errors = (
-        ("--root", str(tmp_path / "missing")),
-        ("--root", str(root_file)),
-        ("--root", str(corpus), "--output", str(tmp_path / "report.json")),
-        ("--root", str(corpus), "--token-ceiling", "0"),
-        ("--root", str(corpus), "--output", str(state_directory)),
+        (
+            ("--root", str(tmp_path / "missing")),
+            "acceptance root must be a non-symlink directory",
+        ),
+        (
+            ("--root", str(root_file)),
+            "acceptance root must be a non-symlink directory",
+        ),
+        (
+            ("--root", str(corpus), "--output", str(tmp_path / "report.json")),
+            "acceptance reports must be written under .context-engine",
+        ),
+        (
+            ("--root", str(corpus), "--token-ceiling", "0"),
+            "rich Markdown token ceiling must be positive",
+        ),
+        (
+            ("--root", str(corpus), "--output", str(state_directory)),
+            "acceptance reports must be written under .context-engine",
+        ),
     )
 
-    for arguments in operator_errors:
+    for arguments, expected_message in operator_errors:
         completed = _run_acceptance_cli("--acceptance-report", *arguments)
 
         assert completed.returncode != 0
+        assert completed.stdout == ""
+        assert completed.stderr == f"{expected_message}\n"
         _assert_process_output_is_private(completed)

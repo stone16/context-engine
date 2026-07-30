@@ -243,13 +243,13 @@ _CONSTRUCT_PATTERNS: Final[dict[str, re.Pattern[str]]] = {
 
 def _safe_markdown_files(root: Path) -> tuple[Path, ...]:
     if root.is_symlink() or not root.is_dir():
-        raise ValueError("acceptance root must be a non-symlink directory")
+        raise SystemExit("acceptance root must be a non-symlink directory")
     return tuple(
         sorted(
             (
                 path
                 for path in root.rglob("*", recurse_symlinks=False)
-                if path.suffix.casefold() == ".md"
+                if path.name.casefold().endswith(".md")
                 and not path.is_symlink()
                 and path.is_file()
             ),
@@ -346,7 +346,7 @@ def _write_acceptance_report(
             ".context-engine"
         )
     except ValueError:
-        raise ValueError(
+        raise SystemExit(
             "acceptance reports must be written under .context-engine"
         ) from None
     state_directory = Path(*output.parts[: state_index + 1]).resolve()
@@ -354,7 +354,7 @@ def _write_acceptance_report(
     if resolved_output == state_directory or not resolved_output.is_relative_to(
         state_directory
     ):
-        raise ValueError("acceptance reports must be written under .context-engine")
+        raise SystemExit("acceptance reports must be written under .context-engine")
     report = _acceptance_report(
         root,
         token_ceiling,
@@ -381,6 +381,8 @@ def main() -> None:
     if args.acceptance_report:
         if args.root is None:
             raise SystemExit("--acceptance-report requires --root")
+        if cast(int, args.token_ceiling) < 1:
+            raise SystemExit("rich Markdown token ceiling must be positive")
         _write_acceptance_report(
             cast(Path, args.root),
             cast(Path, args.output),
