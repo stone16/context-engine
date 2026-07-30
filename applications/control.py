@@ -5,10 +5,13 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import UUID, uuid4
+
+from sqlalchemy import Engine
 
 from applications.file_root_configuration import file_roots
 from applications.file_scan import FileScanReport, scan_file_source
@@ -45,6 +48,7 @@ _OPERATOR_SUBCOMMANDS = frozenset(
         "activate-change-feed",
         "activate-delete-observations",
         "scan",
+        "scan-all",
         "status",
     }
 )
@@ -72,12 +76,27 @@ def _parser() -> argparse.ArgumentParser:
             "activate-delete-observations",
             "activate one File source delete-observation capability",
         ),
-        ("scan", "scan one registered File source and schedule changed upserts"),
-        ("status", "report one registered File source's operational status"),
     ):
         source_command = subcommands.add_parser(name, help=help_text)
         _organization_argument(source_command)
         source_command.add_argument("--source-ref", required=True)
+    scan = subcommands.add_parser(
+        "scan",
+        help="scan one registered File source and schedule changed upserts",
+    )
+    _organization_argument(scan)
+    scan.add_argument("--source-ref", required=True)
+    scan_all = subcommands.add_parser(
+        "scan-all",
+        help="scan every registered File source without caller source routing",
+    )
+    _organization_argument(scan_all)
+    status = subcommands.add_parser(
+        "status",
+        help="report one or every registered File source's operational status",
+    )
+    _organization_argument(status)
+    status.add_argument("--source-ref")
     promote = subcommands.add_parser(
         "promote-release",
         help="evaluate and promote the exact current dogfood File corpus",
@@ -125,7 +144,11 @@ def main(argv: Sequence[str] | None = None) -> None:
         parser.error("unknown operation")
     try:
         outcome = _run_operator_subcommand(arguments)
-        if type(outcome) is FileScanReport:
+        if type(outcome) is MultiSourceScanReport:
+            rendered = _multi_scan_report_json(outcome)
+        elif type(outcome) is MultiSourceStatusReport:
+            rendered = _multi_status_json(outcome)
+        elif type(outcome) is FileScanReport:
             rendered = _scan_report_json(outcome)
         elif type(outcome) is FileSourceProgress:
             rendered = _status_json(outcome)
@@ -149,7 +172,13 @@ def local_operator_authorities() -> LocalOperatorAuthorities | None:
 
 def _run_operator_subcommand(
     arguments: argparse.Namespace,
-) -> SourceManifest | FileScanReport | FileSourceProgress:
+) -> (
+    SourceManifest
+    | FileScanReport
+    | FileSourceProgress
+    | MultiSourceScanReport
+    | MultiSourceStatusReport
+):
     authorities = local_operator_authorities()
     if authorities is None:
         raise SourceNotAvailable
@@ -162,8 +191,30 @@ def _run_operator_subcommand(
         return datetime.now(UTC)
 
     try:
-        if arguments.subcommand == "scan":
+        if arguments.subcommand in {"scan", "scan-all"}:
             with file_roots() as roots:
+                if arguments.subcommand == "scan-all":
+                    manifests = _list_sources(
+                        organization_id=organization_id,
+                        authorities=authorities,
+                        opaque_credential=opaque_credential,
+                        engine=engine,
+                        clock=clock,
+                    )
+                    return MultiSourceScanReport(
+                        tuple(
+                            scan_file_source(
+                                organization_id=organization_id,
+                                source_ref=manifest.source_ref,
+                                authority=authorities.control,
+                                opaque_credential=opaque_credential,
+                                engine=engine,
+                                clock=clock,
+                                roots=roots,
+                            )
+                            for manifest in manifests
+                        )
+                    )
                 return scan_file_source(
                     organization_id=organization_id,
                     source_ref=SourceRef(UUID(arguments.source_ref)),
@@ -179,6 +230,24 @@ def _run_operator_subcommand(
             authority=authorities.control,
             clock=clock,
         )
+        if arguments.subcommand == "status" and arguments.source_ref is None:
+            manifests = _list_sources_with_control(
+                control=control,
+                organization_id=organization_id,
+                authorities=authorities,
+                opaque_credential=opaque_credential,
+            )
+            progress = tuple(
+                _read_status(
+                    control=control,
+                    organization_id=organization_id,
+                    source_ref=manifest.source_ref,
+                    authorities=authorities,
+                    opaque_credential=opaque_credential,
+                )
+                for manifest in manifests
+            )
+            return MultiSourceStatusReport(progress)
         with authorities.control.authorize(
             opaque_credential=opaque_credential,
             operation=operation,
@@ -213,6 +282,94 @@ def _run_operator_subcommand(
             raise SourceNotAvailable
     finally:
         engine.dispose()
+
+
+@dataclass(frozen=True, slots=True)
+class MultiSourceScanReport:
+    """One content-free aggregate over discovered active File sources."""
+
+    sources: tuple[FileScanReport, ...]
+
+    def __post_init__(self) -> None:
+        if type(self.sources) is not tuple or any(
+            type(report) is not FileScanReport for report in self.sources
+        ):
+            raise SourceNotAvailable
+        refs = tuple(report.source_ref.value for report in self.sources)
+        if refs != tuple(sorted(refs)) or len(refs) != len(set(refs)):
+            raise SourceNotAvailable
+
+
+@dataclass(frozen=True, slots=True)
+class MultiSourceStatusReport:
+    """One content-free status snapshot for discovered active File sources."""
+
+    sources: tuple[FileSourceProgress, ...]
+
+    def __post_init__(self) -> None:
+        if type(self.sources) is not tuple or any(
+            type(progress) is not FileSourceProgress for progress in self.sources
+        ):
+            raise SourceNotAvailable
+        refs = tuple(progress.source_ref.value for progress in self.sources)
+        if refs != tuple(sorted(refs)) or len(refs) != len(set(refs)):
+            raise SourceNotAvailable
+
+
+def _list_sources(
+    *,
+    organization_id: UUID,
+    authorities: LocalOperatorAuthorities,
+    opaque_credential: str,
+    engine: Engine,
+    clock: Callable[[], datetime],
+) -> tuple[SourceManifest, ...]:
+    control = ContextControl(
+        store=PostgreSQLControlStore(engine, clock=clock),
+        authority=authorities.control,
+        clock=clock,
+    )
+    return _list_sources_with_control(
+        control=control,
+        organization_id=organization_id,
+        authorities=authorities,
+        opaque_credential=opaque_credential,
+    )
+
+
+def _list_sources_with_control(
+    *,
+    control: ContextControl,
+    organization_id: UUID,
+    authorities: LocalOperatorAuthorities,
+    opaque_credential: str,
+) -> tuple[SourceManifest, ...]:
+    with authorities.control.authorize(
+        opaque_credential=opaque_credential,
+        operation=ControlOperation.READ_SOURCE,
+        request_id=f"local-list-sources-{uuid4().hex}",
+    ) as call:
+        if call.organization_id != organization_id:
+            raise SourceNotAvailable
+        return control.list_sources(call)
+
+
+def _read_status(
+    *,
+    control: ContextControl,
+    organization_id: UUID,
+    source_ref: SourceRef,
+    authorities: LocalOperatorAuthorities,
+    opaque_credential: str,
+) -> FileSourceProgress:
+    with authorities.control.authorize(
+        opaque_credential=opaque_credential,
+        operation=ControlOperation.READ_SOURCE_PROGRESS,
+        request_id=f"local-status-{uuid4().hex}",
+    ) as call:
+        if call.organization_id != organization_id:
+            raise SourceNotAvailable
+        return control.read_file_source_progress(call, source_ref)
 
 
 def _operation(subcommand: str) -> ControlOperation:
@@ -254,14 +411,50 @@ def _scan_report_json(report: FileScanReport) -> str:
     if type(report) is not FileScanReport:
         raise SourceNotAvailable
     return json.dumps(
+        _scan_report_document(report),
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+
+
+def _scan_report_document(report: FileScanReport) -> dict[str, object]:
+    if type(report) is not FileScanReport:
+        raise SourceNotAvailable
+    return {
+        "advancedCursor": report.advanced_cursor,
+        "changesAccepted": report.changes_accepted,
+        "compilationRefusals": report.compilation_refusals,
+        "deletesObserved": report.deletes_observed,
+        "importsScheduled": report.imports_scheduled,
+        "pathsObserved": report.paths_observed,
+        "sourceRef": str(report.source_ref.value),
+    }
+
+
+def _multi_scan_report_json(report: MultiSourceScanReport) -> str:
+    if type(report) is not MultiSourceScanReport:
+        raise SourceNotAvailable
+    return json.dumps(
         {
-            "advancedCursor": report.advanced_cursor,
-            "changesAccepted": report.changes_accepted,
-            "compilationRefusals": report.compilation_refusals,
-            "deletesObserved": report.deletes_observed,
-            "importsScheduled": report.imports_scheduled,
-            "pathsObserved": report.paths_observed,
-            "sourceRef": str(report.source_ref.value),
+            "sources": [_scan_report_document(source) for source in report.sources],
+            "summary": {
+                "changesAccepted": sum(
+                    source.changes_accepted for source in report.sources
+                ),
+                "compilationRefusals": sum(
+                    source.compilation_refusals for source in report.sources
+                ),
+                "deletesObserved": sum(
+                    source.deletes_observed for source in report.sources
+                ),
+                "importsScheduled": sum(
+                    source.imports_scheduled for source in report.sources
+                ),
+                "pathsObserved": sum(
+                    source.paths_observed for source in report.sources
+                ),
+                "sourceCount": len(report.sources),
+            },
         },
         separators=(",", ":"),
         sort_keys=True,
@@ -273,13 +466,22 @@ def _status_json(progress: FileSourceProgress) -> str:
 
     if type(progress) is not FileSourceProgress or progress.status is None:
         raise SourceNotAvailable
+    return json.dumps(
+        _status_document(progress),
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+
+
+def _status_document(progress: FileSourceProgress) -> dict[str, object]:
+    if type(progress) is not FileSourceProgress or progress.status is None:
+        raise SourceNotAvailable
     status = progress.status
     checkpoint = progress.acquisition_checkpoint
     watermark = progress.publish_watermark
     head = progress.change_scan_head
     baseline = progress.complete_change_baseline
-    return json.dumps(
-        {
+    return {
             "acquisitionCheckpoint": (
                 None
                 if checkpoint is None
@@ -333,6 +535,29 @@ def _status_json(progress: FileSourceProgress) -> str:
                 for refusal in status.refusals
             ],
             "sourceRef": str(progress.source_ref.value),
+        }
+
+
+def _multi_status_json(report: MultiSourceStatusReport) -> str:
+    if type(report) is not MultiSourceStatusReport:
+        raise SourceNotAvailable
+    documents = [_status_document(source) for source in report.sources]
+    return json.dumps(
+        {
+            "sources": documents,
+            "summary": {
+                "activeResourceCount": sum(
+                    source.status.active_resource_count
+                    for source in report.sources
+                    if source.status is not None
+                ),
+                "refusalCount": sum(
+                    len(source.status.refusals)
+                    for source in report.sources
+                    if source.status is not None
+                ),
+                "sourceCount": len(report.sources),
+            },
         },
         separators=(",", ":"),
         sort_keys=True,

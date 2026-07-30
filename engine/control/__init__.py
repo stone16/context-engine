@@ -96,6 +96,7 @@ from engine.control.module import (
     ArticlePolicyDefaultStorePort,
     ContextControl,
     ControlStorePort,
+    SourceListingStorePort,
 )
 from engine.source_acl import SourceAclEvidenceMode
 
@@ -168,6 +169,7 @@ __all__ = [
     "SourceChange",
     "SourceContentKind",
     "SourceKind",
+    "SourceListingStorePort",
     "SourceManifest",
     "SourceMode",
     "SourceNotAvailable",
