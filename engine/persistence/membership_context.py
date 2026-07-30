@@ -210,6 +210,52 @@ _VECTOR_CANDIDATE_SQL = """
     LIMIT :limit
 """
 
+_FTS_CANDIDATE_SQL = """
+    WITH query AS (
+        SELECT websearch_to_tsquery('simple'::regconfig, :query_text) AS value
+    )
+    SELECT
+        resource.organization_id,
+        resource.source_ref,
+        fragment.resource_ref,
+        fragment.revision_id,
+        fragment.fragment_ref
+    FROM context_fragment AS fragment
+    JOIN context_resource AS resource
+      ON resource.organization_id = fragment.organization_id
+     AND resource.resource_ref = fragment.resource_ref
+     AND resource.active_revision_id = fragment.revision_id
+     AND resource.tombstoned IS FALSE
+    CROSS JOIN query
+    WHERE fragment.search_vector @@ query.value
+      AND EXISTS (
+        SELECT 1
+        FROM unnest(
+            CAST(:scope_resource_organization_ids AS uuid[]),
+            CAST(:scope_resource_source_refs AS text[]),
+            CAST(:scope_resource_refs AS text[])
+        ) AS resource_scope(organization_id, source_ref, resource_ref)
+        WHERE resource_scope.organization_id = resource.organization_id
+          AND resource_scope.source_ref = resource.source_ref
+          AND resource_scope.resource_ref = fragment.resource_ref
+      )
+      AND (
+        CAST(:source_refs AS text[]) IS NULL
+        OR resource.source_ref = ANY(CAST(:source_refs AS text[]))
+      )
+      AND (
+        CAST(:resource_refs AS text[]) IS NULL
+        OR fragment.resource_ref = ANY(CAST(:resource_refs AS text[]))
+      )
+    ORDER BY
+        ts_rank_cd(fragment.search_vector, query.value) DESC,
+        resource.source_ref,
+        fragment.resource_ref,
+        fragment.revision_id,
+        fragment.fragment_ref
+    LIMIT :limit
+"""
+
 
 class _PostgreSQLMaterializedProjectionPort:
     """Two-stage Fragment reads on the owning current-UserActor transaction."""
@@ -467,6 +513,63 @@ class _PostgreSQLMaterializedProjectionPort:
         for row in rows:
             if type(row.revision_id) is not UUID:
                 raise TypeError("vector discovery returned invalid revision lineage")
+            candidates.append(
+                CandidateRef(
+                    organization_id=row.organization_id,
+                    source_ref=row.source_ref,
+                    resource_ref=row.resource_ref,
+                    revision_ref=str(row.revision_id),
+                    fragment_ref=row.fragment_ref,
+                )
+            )
+        return tuple(candidates)
+
+    def discover_fts(
+        self,
+        query_text: str,
+        limit: int,
+        source_refs: tuple[str, ...] | None,
+        resource_refs: tuple[str, ...] | None,
+        effective_targets: frozenset[ScopeTarget],
+    ) -> tuple[CandidateRef, ...]:
+        resource_targets = tuple(
+            sorted(
+                (
+                    target
+                    for target in effective_targets
+                    if target.resource_ref is not None
+                ),
+                key=lambda target: (
+                    target.organization_id.bytes,
+                    target.source_ref,
+                    target.resource_ref or "",
+                ),
+            )
+        )
+        rows = self._connection.execute(
+            text(_FTS_CANDIDATE_SQL),
+            {
+                "query_text": query_text,
+                "limit": limit,
+                "source_refs": list(source_refs) if source_refs is not None else None,
+                "resource_refs": (
+                    list(resource_refs) if resource_refs is not None else None
+                ),
+                "scope_resource_organization_ids": [
+                    target.organization_id for target in resource_targets
+                ],
+                "scope_resource_source_refs": [
+                    target.source_ref for target in resource_targets
+                ],
+                "scope_resource_refs": [
+                    target.resource_ref for target in resource_targets
+                ],
+            },
+        )
+        candidates: list[CandidateRef] = []
+        for row in rows:
+            if type(row.revision_id) is not UUID:
+                raise TypeError("FTS discovery returned invalid revision lineage")
             candidates.append(
                 CandidateRef(
                     organization_id=row.organization_id,

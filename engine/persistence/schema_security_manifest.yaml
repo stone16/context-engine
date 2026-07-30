@@ -1,5 +1,5 @@
 {
-  "manifestVersion": "39.0.0",
+  "manifestVersion": "40.0.0",
   "controlOperations": [
     {
       "name": "register_file_source",
@@ -6282,6 +6282,20 @@
         "fields": {
           "content": "must_be_null",
           "valuesTable": "context_fragment_field"
+        }
+      },
+      "retrievalIndexes": {
+        "fullText": {
+          "column": "search_vector",
+          "maintenance": "stored generated column in the Fragment publication transaction",
+          "textSearchConfiguration": "simple",
+          "index": "ix_context_fragment_search_vector_gin",
+          "authorizationRole": "candidate removal only; never a grant"
+        },
+        "vector": {
+          "column": "embedding",
+          "index": "ix_context_fragment_embedding_hnsw",
+          "authorizationRole": "candidate removal only; never a grant"
         }
       },
       "rowLevelSecurity": {
