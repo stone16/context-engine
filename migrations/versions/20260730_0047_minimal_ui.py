@@ -1,7 +1,7 @@
 """Add proof-bound Minimal UI projections and evidence capture.
 
-Revision ID: 20260730_0044
-Revises: 20260730_0043
+Revision ID: 20260730_0047
+Revises: 20260730_0046
 Create Date: 2026-07-30
 """
 
@@ -13,8 +13,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision: str = "20260730_0044"
-down_revision: str | None = "20260730_0043"
+revision: str = "20260730_0047"
+down_revision: str | None = "20260730_0046"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
