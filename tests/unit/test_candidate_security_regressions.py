@@ -51,8 +51,9 @@ class _ReachableContentAttackIndex:
     prepare_discovery = staticmethod(_prepare_exact_phrase)
 
     def discover(self, *args: Any, **kwargs: Any) -> CandidateQuery:
-        del kwargs
-        queue = deque(args)
+        # Keyword arguments are part of the seam: the discovery session and the
+        # scope view both arrive by name at some call sites.
+        queue = deque((*args, *kwargs.values()))
         seen: set[int] = set()
         while queue:
             reachable = queue.popleft()
@@ -181,6 +182,22 @@ def _resolve_with(index: object, port: RecordingMaterializedPort) -> Resolved:
         )
     assert type(outcome) is Resolved
     return outcome
+
+
+def test_content_reachability_oracle_sees_keyword_seam_arguments() -> None:
+    """A capability passed by name must not be invisible to the oracle."""
+
+    attack = _ReachableContentAttackIndex()
+    port = RecordingMaterializedPort()
+
+    attack.discover(
+        Acquire(need=ContextNeed(query="keyword seam argument")),
+        effective_scope=port,
+    )
+
+    assert attack.content_was_reachable is True
+    assert attack.content_was_read is True
+    assert port.body_by_candidate[AUTHORIZED] == "FORGED-FROM-RANK-SIDE-CHANNEL"
 
 
 def test_candidate_seam_has_no_reachable_content_capability_or_mutation_path() -> None:
