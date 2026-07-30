@@ -8,7 +8,7 @@
 - **Audience + first-three-second feeling:** ContextEngine maintainer/operator;
   calm, precise, trustworthy, austere. `[answered by maintainer, 2026-07-30]`
 - **Signature moment:** Activating any rendered content Block reveals its exact
-  Article → Revision → Fragment lineage, Evidence reference, and visibility rung.
+  Article → Revision → Fragment lineage, Evidence reference, and Policy Epoch.
   **Kind:** interaction. `[answered by maintainer, 2026-07-30]`
 
 ## Shape
@@ -24,6 +24,9 @@
   `[inferred from issue #130 and AGENTS.md]`
 - **Content source:** Real ContextPackage, Control, and Release data from the public
   HTTP seam; no fabricated records, proof, or metrics. `[answered by issue #130]`
+- **Visibility inspection:** The Article inspector shows the effective resolution
+  rung because visibility is an Article/Control projection, not a ContextPackage
+  Evidence field. `[inferred from the frozen public contracts]`
 - **SEO vs conversion:** Neither; safe task completion and inspectable evidence win.
   `[inferred from the local operator scope]`
 - **Languages / regions:** English, locale-neutral identifiers and timestamps.

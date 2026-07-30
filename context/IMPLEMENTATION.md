@@ -2,8 +2,8 @@
 
 ## Stack
 
-- Python 3.13, FastAPI/Starlette, Jinja2 server-side templates, and static semantic
-  CSS in the existing API process.
+- The repository Python runtime pinned by `pyproject.toml`, FastAPI/Starlette,
+  Jinja2 server-side templates, and static semantic CSS in the existing API process.
 - Small progressive-enhancement JavaScript is allowed only for evidence disclosure
   ergonomics; native HTML behavior remains the functional baseline.
 - No Node/TypeScript UI package, frontend build system, HTMX runtime dependency, or
@@ -14,7 +14,7 @@
 ```text
 ui/                 presentation, public HTTP client, templates, static assets
 adapters/http/      API composition and public backing routes
-tests/unit/ui/      fast presentation/public-seam behavior
+tests/unit/         fast presentation/public-seam behavior in focused UI test modules
 tests/integration/  real PostgreSQL public HTTP/UI security behavior
 ```
 
@@ -39,7 +39,8 @@ Repository completion uses the sequential verification contract in root `AGENTS.
 - [ ] Seven job routes work over the public seam inside the existing API process.
 - [ ] `ui/` has no import or dependency on `engine/`.
 - [ ] Evidence flip works with keyboard and native HTML fallback.
-- [ ] Loading, empty, refusal/error, success, and partial states are reachable.
+- [ ] Browser-native navigation provides loading feedback; returned documents make
+  empty, refusal/error, success, and mixed-source partial states reachable.
 - [ ] Below-sm, below-md, and below-lg rules from `DESIGN.md` hold.
 - [ ] No placeholder/fabricated content or remote asset dependency.
 - [ ] `make ui-build`, `make ui-test`, lint, typecheck, unit, integration, and security

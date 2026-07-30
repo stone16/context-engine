@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from importlib.metadata import version
 
+import pytest
 from fastapi.testclient import TestClient
 
 from adapters.http.app import create_app
@@ -102,3 +104,73 @@ def test_missing_session_refuses_every_route_load() -> None:
         assert response.status_code == 401, path
         assert "session_unavailable" in response.text, path
         assert "No authorized evidence" not in response.text, path
+
+
+def test_application_shell_surfaces_the_package_build_identity() -> None:
+    response = TestClient(create_app()).get("/ui/login")
+
+    assert response.status_code == 200
+    assert f"Build <code>{version('context-engine')}</code>" in response.text
+
+
+@pytest.mark.parametrize(
+    ("path", "content", "safe_values", "secret_values"),
+    (
+        (
+            "/ui/import/preview",
+            "sourceRef=11111111-1111-4111-8111-111111111111"
+            "&path=docs%2Fguide.md&controlCredential=import-control-secret",
+            ("Source", "11111111-1111-4111-8111-111111111111", "Path", "docs/guide.md"),
+            ("import-control-secret",),
+        ),
+        (
+            "/ui/articles/preview",
+            "resourceRef=article%3Ahandbook&policyKind=groups"
+            "&groupRefs=group%3Aeng%2Cgroup%3Aops"
+            "&controlCredential=article-control-secret",
+            (
+                "Article",
+                "article:handbook",
+                "Policy",
+                "groups",
+                "Groups",
+                "group:eng, group:ops",
+            ),
+            ("article-control-secret",),
+        ),
+        (
+            "/ui/profiles",
+            "profileRef=embedding%3Aproposed&digest=" + "a" * 64,
+            ("Profile", "embedding:proposed", "Digest", "a" * 64),
+            (),
+        ),
+        (
+            "/ui/feedback",
+            "runRef=run%3Aauthorized&rating=not_helpful&note=private+operator+note",
+            ("ContextRun", "run:authorized", "Rating", "not helpful"),
+            ("private operator note",),
+        ),
+    ),
+)
+def test_safe_non_secret_form_values_survive_refusal(
+    path: str,
+    content: str,
+    safe_values: tuple[str, ...],
+    secret_values: tuple[str, ...],
+) -> None:
+    credential = "configured-session"
+    client = TestClient(create_app(ui_bearer_token=credential))
+    authenticate_ui(client, credential)
+
+    response = client.post(
+        path,
+        content=content,
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+    )
+
+    assert response.status_code in {401, 403}
+    assert "Submitted non-secret input" in response.text
+    for value in safe_values:
+        assert value in response.text
+    for value in (*secret_values, credential):
+        assert value not in response.text

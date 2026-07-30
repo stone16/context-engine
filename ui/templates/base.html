@@ -29,6 +29,9 @@
     <main id="main" tabindex="-1">
       {% block content %}{% endblock %}
     </main>
-    <footer>Server-rendered through the public HTTP seam.</footer>
+    <footer>
+      Server-rendered through the public HTTP seam.
+      Build <code>{{ build_identifier }}</code>
+    </footer>
   </body>
 </html>

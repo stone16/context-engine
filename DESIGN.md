@@ -49,7 +49,7 @@ The console feels like a flight-recorder evidence docket: exact labels, bounded
 facts, restrained rules, and no decorative urgency. The governing rule is that
 security state must be legible without becoming enumerable. **Signature:** the
 evidence flip—activating a content Block replaces the reading emphasis with its
-Article → Revision → Fragment lineage, single Evidence ref, and visibility rung.
+Article → Revision → Fragment lineage, single Evidence ref, and Policy Epoch.
 Everything else stays conventional and quiet.
 
 ## Colors
@@ -98,8 +98,10 @@ the same corner family.
   list. Missing or inconsistent lineage flags/refuses the Block instead.
 - `refusal-state` always names a tenant-safe category and one recovery action. It is
   never represented as an empty list, blank table, toast-only error, or spinner.
-- Loading, authorized-empty, partial, refusal, and success are real server-rendered
-  components with stable headings; they never infer facts the response did not carry.
+- Full-page submission uses the browser's native navigation/loading state. The
+  returned document renders authorized-empty, refusal, or success with stable
+  headings; mixed per-source health records are the explicit partial state. None
+  infer facts the public response did not carry.
 
 ## Do's and Don'ts
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hmac
+from importlib.metadata import version as distribution_version
 from pathlib import Path
 from typing import Final
 from urllib.parse import parse_qs
@@ -35,6 +36,7 @@ from ui.views import (
 UI_ROOT: Final = Path(__file__).resolve().parent
 MAX_FORM_BYTES: Final = 8_192
 MAX_QUERY_CHARACTERS: Final = 2_000
+UI_BUILD_IDENTIFIER: Final = distribution_version("context-engine")
 _UI_PATHS: Final = frozenset(
     {
         "/ui",
@@ -59,7 +61,7 @@ def _html(
     response = templates.TemplateResponse(
         request=request,
         name=template,
-        context=context,
+        context={**context, "build_identifier": UI_BUILD_IDENTIFIER},
         status_code=status_code,
     )
     response.headers["Cache-Control"] = "no-store"
@@ -73,16 +75,22 @@ def _refusal(
     category: str,
     status_code: int,
     query: str = "",
+    submitted: tuple[tuple[str, str], ...] = (),
     active_page: str = "hit-test",
     return_path: str = "/ui/hit-test",
 ) -> HTMLResponse:
+    safe_submission = submitted
+    if query:
+        safe_submission = (
+            ("Question" if active_page == "ask" else "Query", query),
+        )
     return _html(
         request,
         "refusal.html",
         {
             "active_page": active_page,
             "category": category,
-            "query": query,
+            "submitted": safe_submission,
             "title": "Request refused",
             "return_label": (
                 "Authenticate"
@@ -95,6 +103,12 @@ def _refusal(
         },
         status_code=status_code,
     )
+
+
+def _safe_submission(
+    *fields: tuple[str, str | None],
+) -> tuple[tuple[str, str], ...]:
+    return tuple((label, value) for label, value in fields if value is not None)
 
 
 async def _session_refusal(
@@ -343,6 +357,10 @@ def install_ui(app: FastAPI, *, bearer_token: str | None) -> None:
         control_credential = (
             None if fields is None else fields.get("controlCredential")
         )
+        submitted = _safe_submission(
+            ("Source", source_ref),
+            ("Path", path),
+        )
         if (
             fields is None
             or set(fields) != {"sourceRef", "path", "controlCredential"}
@@ -362,6 +380,7 @@ def install_ui(app: FastAPI, *, bearer_token: str | None) -> None:
                 request,
                 category="invalid_request",
                 status_code=422,
+                submitted=submitted,
                 active_page="import",
                 return_path="/ui/import",
             )
@@ -378,6 +397,7 @@ def install_ui(app: FastAPI, *, bearer_token: str | None) -> None:
                 request,
                 category=outcome.category,
                 status_code=outcome.status_code,
+                submitted=submitted,
                 active_page="import",
                 return_path="/ui/import",
             )
@@ -388,6 +408,7 @@ def install_ui(app: FastAPI, *, bearer_token: str | None) -> None:
                 request,
                 category="import_preview_unavailable",
                 status_code=503,
+                submitted=submitted,
                 active_page="import",
                 return_path="/ui/import",
             )
@@ -575,6 +596,11 @@ def install_ui(app: FastAPI, *, bearer_token: str | None) -> None:
             if raw_groups is None or not raw_groups
             else [value.strip() for value in raw_groups.split(",")]
         )
+        submitted = _safe_submission(
+            ("Article", resource_ref),
+            ("Policy", policy_kind),
+            ("Groups", ", ".join(group_refs) if group_refs else None),
+        )
         if (
             fields is None
             or set(fields)
@@ -595,6 +621,7 @@ def install_ui(app: FastAPI, *, bearer_token: str | None) -> None:
                 request,
                 category="invalid_request",
                 status_code=422,
+                submitted=submitted,
                 active_page="articles",
                 return_path="/ui/articles",
             )
@@ -615,6 +642,7 @@ def install_ui(app: FastAPI, *, bearer_token: str | None) -> None:
                 request,
                 category=outcome.category,
                 status_code=outcome.status_code,
+                submitted=submitted,
                 active_page="articles",
                 return_path="/ui/articles",
             )
@@ -638,6 +666,7 @@ def install_ui(app: FastAPI, *, bearer_token: str | None) -> None:
                 request,
                 category="article_preview_unavailable",
                 status_code=503,
+                submitted=submitted,
                 active_page="articles",
                 return_path="/ui/articles",
             )
@@ -941,6 +970,10 @@ def install_ui(app: FastAPI, *, bearer_token: str | None) -> None:
         fields = await _urlencoded_form(request, maximum_fields=2)
         profile_ref = None if fields is None else fields.get("profileRef")
         digest = None if fields is None else fields.get("digest")
+        submitted = _safe_submission(
+            ("Profile", profile_ref),
+            ("Digest", digest),
+        )
         if (
             fields is None
             or set(fields) != {"profileRef", "digest"}
@@ -956,6 +989,7 @@ def install_ui(app: FastAPI, *, bearer_token: str | None) -> None:
                 request,
                 category="invalid_request",
                 status_code=422,
+                submitted=submitted,
                 active_page="profiles",
                 return_path="/ui/profiles",
             )
@@ -970,6 +1004,7 @@ def install_ui(app: FastAPI, *, bearer_token: str | None) -> None:
                 request,
                 category=outcome.category,
                 status_code=outcome.status_code,
+                submitted=submitted,
                 active_page="profiles",
                 return_path="/ui/profiles",
             )
@@ -980,6 +1015,7 @@ def install_ui(app: FastAPI, *, bearer_token: str | None) -> None:
                 request,
                 category="profile_projection_unavailable",
                 status_code=503,
+                submitted=submitted,
                 active_page="profiles",
                 return_path="/ui/profiles",
             )
@@ -1028,6 +1064,10 @@ def install_ui(app: FastAPI, *, bearer_token: str | None) -> None:
         rating = None if fields is None else fields.get("rating")
         note_value = None if fields is None else fields.get("note")
         note = note_value if note_value else None
+        submitted = _safe_submission(
+            ("ContextRun", run_ref),
+            ("Rating", rating.replace("_", " ") if rating is not None else None),
+        )
         if (
             fields is None
             or set(fields) != {"runRef", "rating", "note"}
@@ -1042,6 +1082,7 @@ def install_ui(app: FastAPI, *, bearer_token: str | None) -> None:
                 request,
                 category="invalid_request",
                 status_code=422,
+                submitted=submitted,
                 active_page="feedback",
                 return_path="/ui/feedback",
             )
@@ -1057,6 +1098,7 @@ def install_ui(app: FastAPI, *, bearer_token: str | None) -> None:
                 request,
                 category=outcome.category,
                 status_code=outcome.status_code,
+                submitted=submitted,
                 active_page="feedback",
                 return_path="/ui/feedback",
             )
@@ -1067,6 +1109,7 @@ def install_ui(app: FastAPI, *, bearer_token: str | None) -> None:
                 request,
                 category="feedback_unavailable",
                 status_code=503,
+                submitted=submitted,
                 active_page="feedback",
                 return_path="/ui/feedback",
             )

@@ -5,7 +5,8 @@
 - [ ] Calm, precise, trustworthy, and austere in default, empty, and refusal states.
 - [ ] Boldness is spent only on the evidence-flip interaction.
 - [ ] Information hierarchy uses spacing and weight, not decorative color or cards.
-- [ ] Hover, focus, active, disabled, empty, refusal, partial, and success are covered.
+- [ ] Hover, focus, active, disabled, empty, refusal, mixed-source partial, and
+  success are covered; browser-native navigation supplies full-page loading feedback.
 - [ ] No gradients, glass, glow, fake dashboard, invented metrics, or dramatic errors.
 
 ## Security and domain

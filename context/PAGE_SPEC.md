@@ -6,8 +6,10 @@
   general administration canvas.
 - **Section order:** skip link → product/header state → primary navigation → page
   title/context → one primary work surface → safe status/refusal → footer.
-- **States:** Every data surface has loading, authorized empty, refusal/error,
-  success, and partial/degraded variants. Refusal never reuses empty styling or copy.
+- **States:** Full-page submissions use browser-native navigation/loading. Returned
+  documents distinguish authorized empty, refusal/error, and success; the source
+  overview expresses partial/degraded operation through mixed per-source statuses.
+  Refusal never reuses empty styling or copy.
 - **Data strategy:** Server-side render from public HTTP responses; `Cache-Control:
   no-store`; no optimistic security or publication state.
 - **Responsive:** Below `lg`, navigation becomes a wrapped top rail; below `md`,
