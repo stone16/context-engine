@@ -725,6 +725,7 @@ class StagedArtifactSink(Protocol):
         self,
         connection: Connection,
         page: SupplyChangePage,
+        serialized_page: bytes,
         *,
         lease_claims: WorkerLeaseClaims,
     ) -> None: ...
