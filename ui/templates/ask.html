@@ -45,6 +45,20 @@
         <p>{{ result.coverage_reason or 'no_authorized_evidence' }}</p>
       </div>
     {% endif %}
+    {% if result.hits %}
+      <form method="post" action="/ui/feedback" class="work-form">
+        <h3>Was this answer context helpful?</h3>
+        <input type="hidden" name="runRef" value="{{ result.run_ref }}">
+        <fieldset>
+          <legend>Rating</legend>
+          <label><input type="radio" name="rating" value="helpful" required> Helpful</label>
+          <label><input type="radio" name="rating" value="not_helpful" required> Not helpful</label>
+        </fieldset>
+        <label for="answer-feedback-note">Note <span>(optional)</span></label>
+        <textarea id="answer-feedback-note" name="note" maxlength="1000"></textarea>
+        <button class="button button-primary" type="submit">Record answer feedback</button>
+      </form>
+    {% endif %}
   </section>
 {% endif %}
 {% endblock %}

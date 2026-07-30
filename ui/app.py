@@ -989,7 +989,14 @@ def install_ui(app: FastAPI, *, bearer_token: str | None) -> None:
             {
                 "active_page": "profiles",
                 "current": current,
-                "proposed": {"profile_ref": profile_ref, "digest": digest},
+                "proposed": {
+                    "profile_ref": profile_ref,
+                    "digest": digest,
+                    "reembed_required": (
+                        profile_ref != current.index_profile.profile_ref
+                        or digest != current.index_profile.digest
+                    ),
+                },
                 "title": "Versioned profiles",
             },
         )

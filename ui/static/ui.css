@@ -65,8 +65,9 @@ fieldset input { min-height: auto; }
 .profile-list { margin-bottom: 48px; }
 .button { align-items: center; border: 0; border-radius: 5px; display: inline-flex; font: 600 15px/1 var(--font-sans); justify-content: center; min-height: 44px; padding: 0 20px; text-decoration: none; width: fit-content; }
 .button-primary { background: var(--primary); color: var(--primary-foreground); }
-.button-primary:hover { background: var(--foreground); color: var(--background); }
+.button-primary:hover, .button-primary:active { background: var(--foreground); color: var(--background); }
 .button-secondary { background: var(--secondary); color: var(--secondary-foreground); }
+button:disabled, .button[aria-disabled="true"] { background: var(--muted); color: var(--muted-foreground); cursor: not-allowed; }
 .section-heading { align-items: baseline; display: flex; gap: 16px; justify-content: space-between; }
 .status { background: var(--secondary); border-radius: 9999px; color: var(--secondary-foreground); font: 500 13px/1 var(--font-mono); padding: 8px 10px; }
 .hit-list { list-style: none; margin: 0; padding: 0; }
@@ -75,6 +76,7 @@ fieldset input { min-height: auto; }
 .button-row form { margin: 0; }
 .evidence-block, .state { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); margin-top: 16px; padding: 24px; }
 .evidence-block summary { cursor: pointer; display: flex; font-weight: 600; gap: 16px; justify-content: space-between; min-height: 44px; }
+.evidence-block details[open] { background: var(--muted); border-radius: 5px; padding: 12px; }
 .summary-action { color: var(--primary); font-size: 14px; }
 .block-body { max-width: 72ch; padding: 24px 0; white-space: pre-wrap; }
 .lineage, .state dl { border-top: 1px solid var(--border); margin: 0; }

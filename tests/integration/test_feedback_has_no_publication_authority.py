@@ -50,7 +50,6 @@ def test_feedback_has_no_publication_authority(
     lineage_identity: LineageIdentity,
     migration_configuration: DatabaseConfiguration,
     guarded_runtime_engine: Engine,
-    guarded_control_engine: Engine,
 ) -> None:
     migration_engine = create_database_engine(migration_configuration)
     try:
@@ -69,8 +68,9 @@ def test_feedback_has_no_publication_authority(
                 ui_bearer_token=TOKEN,
                 ui_api=PostgreSQLUiApi(
                     PostgreSQLMembershipAuthority(guarded_runtime_engine),
-                    guarded_control_engine,
+                    None,
                     preview_key=b"f" * 32,
+                    feedback_engine=guarded_runtime_engine,
                     clock=lambda: datetime.now(UTC),
                 ),
             )
@@ -106,11 +106,39 @@ def test_feedback_has_no_publication_authority(
                 ),
                 {"organization_id": lineage_identity.organization_id},
             ).scalar_one()
+            privileges = tuple(
+                connection.execute(
+                    text(
+                        """
+                        SELECT
+                            has_function_privilege(
+                                'context_engine_runtime',
+                                'context_runtime_capture_context_feedback'
+                                '(uuid,text,text,uuid,uuid,bigint,text,text,text)',
+                                'EXECUTE'
+                            ),
+                            has_function_privilege(
+                                'context_engine_control',
+                                'context_runtime_capture_context_feedback'
+                                '(uuid,text,text,uuid,uuid,bigint,text,text,text)',
+                                'EXECUTE'
+                            ),
+                            has_function_privilege(
+                                'context_engine_release_operator',
+                                'context_runtime_capture_context_feedback'
+                                '(uuid,text,text,uuid,uuid,bigint,text,text,text)',
+                                'EXECUTE'
+                            )
+                        """
+                    )
+                ).one()
+            )
         assert tuple(feedback) == (
             lineage_identity.run_ref,
             "helpful",
             "Lineage was clear",
         )
         assert release_count_after == release_count_before
+        assert privileges == (True, False, False)
     finally:
         migration_engine.dispose()

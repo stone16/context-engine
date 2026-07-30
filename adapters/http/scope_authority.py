@@ -163,13 +163,13 @@ class MissingTrustedScopeAuthority:
 
 
 class DogfoodFileScopeAuthority:
-    """Bound one local dogfood Agent/purpose to current File projection facts."""
+    """Bind one local dogfood Agent and closed purposes to File projection facts."""
 
     __slots__ = (
         "_agent_version_ref",
         "_organization_id",
         "_principal_ref",
-        "_purpose",
+        "_purposes",
     )
 
     def __init__(
@@ -178,21 +178,29 @@ class DogfoodFileScopeAuthority:
         organization_id: UUID,
         principal_ref: str,
         agent_version_ref: str,
-        purpose: str,
+        purposes: frozenset[str],
     ) -> None:
         if type(organization_id) is not UUID:
             raise TypeError("dogfood scope Organization must be UUID")
         for field_name, value in (
             ("principal_ref", principal_ref),
             ("agent_version_ref", agent_version_ref),
-            ("purpose", purpose),
         ):
             if type(value) is not str or not value or value.isspace():
                 raise ValueError(f"dogfood scope {field_name} must be non-empty")
+        if (
+            type(purposes) is not frozenset
+            or not purposes
+            or any(
+                type(purpose) is not str or not purpose or purpose.isspace()
+                for purpose in purposes
+            )
+        ):
+            raise ValueError("dogfood scope purposes must be a non-empty closed set")
         self._organization_id = organization_id
         self._principal_ref = principal_ref
         self._agent_version_ref = agent_version_ref
-        self._purpose = purpose
+        self._purposes = purposes
 
     @contextmanager
     def current_scope(
@@ -205,7 +213,7 @@ class DogfoodFileScopeAuthority:
             identity.organization_id != self._organization_id
             or identity.principal_ref != self._principal_ref
             or identity.agent_version_ref != self._agent_version_ref
-            or identity.purpose != self._purpose
+            or identity.purpose not in self._purposes
             or identity.materialized_projection_session is None
             or identity.active_runtime_release is None
             or identity.active_runtime_release.organization_id

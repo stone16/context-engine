@@ -10,6 +10,7 @@ def _answer_document(*, citation_open_ref: str | None) -> dict[str, object]:
     return {
         "kind": "resolved",
         "package": {
+            "runRef": "run_authorized-answer",
             "coverage": {"status": "sufficient"},
             "blocks": [
                 {
@@ -46,6 +47,7 @@ def test_citation_lineage_resolvable() -> None:
     assert answer.hits[0].evidence.revision_ref.startswith("11111111-")
     assert answer.hits[0].evidence.fragment_ref == "fragment:introduction"
     assert answer.hits[0].evidence.citation_open_ref == "cor_authorized"
+    assert answer.run_ref == "run_authorized-answer"
 
 
 @pytest.mark.parametrize("citation_open_ref", [None, "", " "])

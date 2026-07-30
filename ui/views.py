@@ -38,6 +38,7 @@ class HitView:
 
 @dataclass(frozen=True, slots=True)
 class HitTestView:
+    run_ref: str
     query: str
     coverage_status: str
     coverage_reason: str | None
@@ -174,6 +175,7 @@ def hit_test_view(document: dict[str, object], *, query: str) -> HitTestView:
     if coverage_status == "empty" and hits:
         raise PublicDocumentInvalid
     return HitTestView(
+        run_ref=_required_text(package, "runRef"),
         query=query,
         coverage_status=coverage_status,
         coverage_reason=coverage_reason_value,

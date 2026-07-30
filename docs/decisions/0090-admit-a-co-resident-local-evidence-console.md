@@ -57,7 +57,9 @@ of activation, rollback, and promotion.
    File import, Article-policy read, and preview-bound Article-policy change.
    Exact current Membership is additionally rechecked for the acting audience.
    No release-operator credential or `ContextLearning.promote` capability is
-   reachable from the UI.
+   reachable from the UI. Feedback is not a Control operation: it persists only
+   through a Runtime-role function that rechecks the current Membership and exact
+   actor-owned ContextRun, and that role has no Release publication authority.
 6. Hit Test renders only Blocks and Evidence from the post-Kernel
    `ContextPackage`. Candidate rank evidence and optional ranker scores remain
    outside the Package by ADR-0076; the UI states that score is not exposed by

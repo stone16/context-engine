@@ -50,3 +50,26 @@ def test_profile_change_surfaces_reembed() -> None:
     assert "embedding-v3" in response.text
     assert "Apply" not in response.text
     assert "Confirm" not in response.text
+
+
+def test_current_embedding_profile_does_not_claim_reembed() -> None:
+    fixture = _new_fixture().org_a
+    client = TestClient(
+        create_app(
+            authenticator=SeededAuthenticator(fixture, token="profile-token"),
+            ui_bearer_token="profile-token",
+            ui_api=_ProfileApi(),
+        )
+    )
+    authenticate_ui(client, "profile-token")
+
+    response = client.post(
+        "/ui/profiles",
+        content=f"profileRef=embedding-v2&digest={'2' * 64}",
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+    )
+
+    assert response.status_code == 200
+    assert "Profile already active" in response.text
+    assert "No re-embed or Release change is required" in response.text
+    assert "Re-embed required" not in response.text

@@ -25,6 +25,7 @@
 </form>
 {% if proposed %}
 <section class="state" aria-labelledby="reembed-title">
+  {% if proposed.reembed_required %}
   <p class="eyebrow">Consequence preview · not applied</p>
   <h2 id="reembed-title">Re-embed required</h2>
   <p>Changing <code>{{ current.index_profile.profile_ref }}</code> to
@@ -33,6 +34,12 @@
      Release candidate.</p>
   <p><strong>No profile change was applied.</strong> Release promotion remains outside
      this UI.</p>
+  {% else %}
+  <p class="eyebrow">No-op preview</p>
+  <h2 id="reembed-title">Profile already active</h2>
+  <p>The proposed profile ref and digest exactly match the active index profile.
+     No re-embed or Release change is required.</p>
+  {% endif %}
 </section>
 {% endif %}
 {% endblock %}

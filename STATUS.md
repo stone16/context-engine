@@ -47,8 +47,11 @@ grants one Control operation per call. ADR-0073 adds one explicit local
 candidate from the exact current File corpus and still delegates activation
 only to `ContextLearning.evaluate` and `ContextLearning.promote`. Production
 operator authentication, multiple operators, durable role assignment,
-delegation, RBAC, and every network-reachable operator surface remain
-`NOT_ACTIVE`. The following are known, designed, and deliberately not active:
+delegation, RBAC, and every production or non-loopback operator surface remain
+`NOT_ACTIVE`. ADR-0083 separately activates one loopback-only, server-rendered
+Evidence Console inside the API process; its Control-backed jobs require the
+same separate exact-operation local Control credential. The following are known,
+designed, and deliberately not active:
 
 | Capability | Note |
 |---|---|
@@ -58,7 +61,7 @@ delegation, RBAC, and every network-reachable operator surface remain
 | General / multi-user Source and Resource ACLs | Dogfood uses current mirrored File access plus Membership field rights only; source-native and multi-user authorities remain absent |
 | General content retrieval | Only the loopback File pgvector dogfood `Acquire` carrier is active |
 | Local consumer expansion | The repo-local Claude Code skill is active only as a single-question display consumer; pi and MCP remain `NOT_ACTIVE` |
-| `Continue` / dogfood `OpenCitation` carriers | The bounded dogfood composition keeps both unavailable; other accepted ADRs own their narrower citation carriers |
+| `Continue` carrier | The bounded dogfood composition keeps Continue unavailable; its private File `OpenCitation` carrier is active for UI citation closure |
 | Federated discovery, source-native authorization | Deterministic refusal only |
 | Runtime model-inference carriers (`rewrite`, `rerank`, `select`) | The governed port is implemented, but no carrier is active until its consuming issue proves the exact profile and grant path, passes the resolve-owned shared `PackageBudgetMeter`, and publishes that meter's cumulative usage in the final package; real provider network calls remain `NOT_ACTIVE` |
 | Live Feishu / Slack / Google Docs connectors | See [PLAN.md](./PLAN.md) milestones M4 / M6 / M7 |
@@ -80,7 +83,7 @@ delegation, RBAC, and every network-reachable operator surface remain
 `RUNTIME-DOGFOOD-EPOCH-102` are registered release-veto evidence. The default
 application remains reject-all and reports `NOT_ACTIVE`. Production
 authentication, a second human, network exposure beyond the maintainer machine,
-group/public audience, dogfood `OpenCitation`, `Continue`, hybrid retrieval, non-File providers, and
+group/public audience, `Continue`, hybrid retrieval, non-File providers, and
 external query embeddings remain `NOT_ACTIVE`.
 
 ### Repo-local Claude Code consumer
@@ -97,6 +100,16 @@ closed local refusals. Candidate capture contains no corpus path or Package
 content. This activates no pi consumer, MCP Adapter, `Continue`, dogfood
 `OpenCitation`, IM delivery, channel egress, or external effect.
 
+### Co-resident local Evidence Console
+
+| ADR | Activates |
+|---|---|
+| [0090](./docs/decisions/0090-admit-a-co-resident-local-evidence-console.md) | Explicitly authenticated server-rendered loopback UI, private File citation reopening, and separately Control-authorized source/import/Article jobs through schema-hidden typed HTTP carriers while OpenAPI v0 remains frozen |
+
+Feedback persists through the current Runtime identity and exact ContextRun
+binding, with no Control or release-publication authority. Numeric Hit Test scores
+remain unavailable because the public rank-free `ContextPackage` intentionally
+contains no pre-authorization rank evidence.
 ### Bounded local Release promotion
 
 | ADR | Activates |

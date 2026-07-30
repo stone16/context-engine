@@ -55,7 +55,7 @@
 - **States:** Authorized empty is one result category; refusal is visually and
   semantically distinct but equally calm.
 
-## Page: `/ui/articles/{resourceRef}`
+## Page: `/ui/articles`
 
 - **Goal:** Explain one effective Article policy/rung and require preview + confirm
   for any existing-Article change.

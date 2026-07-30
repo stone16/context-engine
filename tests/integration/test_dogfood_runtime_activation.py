@@ -190,6 +190,18 @@ def _delete(
     migration_configuration: DatabaseConfiguration,
     organization_id: UUID,
 ) -> None:
+    engine = create_database_engine(migration_configuration)
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "DELETE FROM citation_open_locator "
+                    "WHERE organization_id = :organization_id"
+                ),
+                {"organization_id": organization_id},
+            )
+    finally:
+        engine.dispose()
     clear_test_runtime_release(organization_id)
     delete_file_import_scenario(migration_configuration, organization_id)
 
@@ -569,6 +581,20 @@ def test_dogfood_secret_and_membership_fail_closed_without_secret_retention(
     successful = _resolve(client)
     assert successful.status_code == 200
     assert successful.json()["package"]["evidence"]
+    citation_ref = successful.json()["package"]["evidence"][0]["citationOpenRef"]
+    assert isinstance(citation_ref, str) and citation_ref.startswith("cor_")
+    opened = client.post(
+        "/v0/resolve",
+        headers={
+            "Authorization": f"Bearer {SECRET}",
+            "X-Context-Request-Id": "dogfood-open-citation",
+        },
+        json={"kind": "open_citation", "citationOpenRef": citation_ref},
+    )
+    assert opened.status_code == 200
+    assert opened.json()["package"]["evidence"][0]["resourceRef"] == (
+        successful.json()["package"]["evidence"][0]["resourceRef"]
+    )
 
     with caplog.at_level(logging.DEBUG):
         responses = (

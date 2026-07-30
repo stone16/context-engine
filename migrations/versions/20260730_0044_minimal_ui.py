@@ -20,6 +20,7 @@ depends_on: str | Sequence[str] | None = None
 
 _MIGRATOR = "context_engine_migrator"
 _CONTROL = "context_engine_control"
+_RUNTIME = "context_engine_runtime"
 _WORKER_DEFINER = "context_engine_worker_lease_definer"
 _ACCESS_DEFINER = "context_engine_access_policy_definer"
 _RUN_READER_DEFINER = "context_engine_context_run_reader_definer"
@@ -35,13 +36,30 @@ _CHANGE_ARTICLE = "context_control_change_article_policy"
 _CHANGE_ARTICLE_SIGNATURE = (
     "(uuid,text,bigint,bigint,text,text[],text,uuid,uuid,bigint)"
 )
-_CAPTURE_FEEDBACK = "context_control_capture_context_feedback"
+_CAPTURE_FEEDBACK = "context_runtime_capture_context_feedback"
 _CAPTURE_FEEDBACK_SIGNATURE = "(uuid,text,text,uuid,uuid,bigint,text,text,text)"
 _REDEEM = "context_worker_redeem_file_import"
 _REDEEM_SIGNATURE = (
     "(uuid,uuid,uuid,text,bigint,bigint,bytea,timestamp with time zone,"
     "timestamp with time zone)"
 )
+_FILE_OPERATION_FENCES = (
+    "context-engine.file-change-scheduling-migration-fence",
+    "context-engine.file-dispatch-migration-fence",
+    "context-engine.file-status-migration-fence",
+)
+
+
+def _join_file_operation_fences() -> None:
+    connection = op.get_bind()
+    for migration_fence in _FILE_OPERATION_FENCES:
+        connection.execute(
+            sa.text(
+                "SELECT pg_catalog.pg_advisory_xact_lock("
+                "pg_catalog.hashtextextended(:migration_fence, 0))"
+            ),
+            {"migration_fence": migration_fence},
+        )
 
 
 def _replace_redeem_ui_fields(*, install: bool) -> None:
@@ -652,9 +670,30 @@ def _create_feedback() -> None:
         "CREATE POLICY context_run_ui_feedback_definer_select ON context_run "
         f"FOR SELECT TO {_RUN_READER_DEFINER} USING ({run_context})"
     )
+    feedback_membership_context = """
+        membership.organization_id = NULLIF(
+            current_setting('app.ui_feedback_organization_id', true), ''
+        )::uuid
+        AND membership.user_id = NULLIF(
+            current_setting('app.ui_feedback_user_id', true), ''
+        )::uuid
+        AND membership.membership_id = NULLIF(
+            current_setting('app.ui_feedback_membership_id', true), ''
+        )::uuid
+        AND membership.membership_version = NULLIF(
+            current_setting('app.ui_feedback_membership_version', true), ''
+        )::bigint
+        AND current_setting('app.ui_feedback_mode', true) = 'capture'
+    """
+    op.execute(
+        "CREATE POLICY membership_ui_feedback_definer_select ON membership "
+        f"FOR SELECT TO {_RUN_READER_DEFINER} "
+        f"USING ({feedback_membership_context})"
+    )
     op.execute(
         f"GRANT SELECT, INSERT ON TABLE context_feedback TO {_RUN_READER_DEFINER}"
     )
+    op.execute(f"GRANT SELECT ON TABLE membership TO {_RUN_READER_DEFINER}")
     op.execute(
         f"""
         CREATE FUNCTION public.{_CAPTURE_FEEDBACK}(
@@ -668,9 +707,19 @@ def _create_feedback() -> None:
         SET search_path = pg_catalog SET row_security = on AS $function$
         DECLARE recorded_ref text;
         BEGIN
-            IF SESSION_USER <> '{_CONTROL}'
+            IF SESSION_USER <> '{_RUNTIME}'
                OR NULLIF(current_setting('app.organization_id', true), '')::uuid
                     IS DISTINCT FROM requested_organization_id
+               OR current_setting('app.actor_kind', true) <> 'user'
+               OR NULLIF(current_setting('app.user_id', true), '')::uuid
+                    IS DISTINCT FROM requested_user_id
+               OR NULLIF(current_setting('app.membership_id', true), '')::uuid
+                    IS DISTINCT FROM requested_membership_id
+               OR NULLIF(
+                    current_setting('app.membership_version', true), ''
+                  )::bigint IS DISTINCT FROM requested_membership_version
+               OR current_setting('app.principal_ref', true)
+                    IS DISTINCT FROM requested_principal_ref
                OR requested_feedback_ref !~ '^fb_[0-9a-f]{{64}}$'
                OR requested_rating NOT IN ('helpful','not_helpful')
                OR requested_membership_version NOT BETWEEN 1 AND {_MAX}
@@ -702,6 +751,23 @@ def _create_feedback() -> None:
             PERFORM pg_catalog.set_config(
                 'app.ui_feedback_principal_ref', requested_principal_ref, true
             );
+            IF NOT EXISTS (
+                SELECT 1 FROM public.membership AS actor_membership
+                WHERE actor_membership.organization_id =
+                        requested_organization_id
+                  AND actor_membership.user_id = requested_user_id
+                  AND actor_membership.membership_id = requested_membership_id
+                  AND actor_membership.membership_version =
+                        requested_membership_version
+                  AND actor_membership.status = 'active'
+                  AND actor_membership.valid_from <=
+                        pg_catalog.clock_timestamp()
+                  AND (
+                        actor_membership.valid_until IS NULL
+                        OR actor_membership.valid_until >
+                            pg_catalog.clock_timestamp()
+                  )
+            ) THEN RETURN NULL; END IF;
             IF NOT EXISTS (
                 SELECT 1 FROM public.context_run AS run
                 WHERE run.organization_id = requested_organization_id
@@ -740,7 +806,7 @@ def _create_feedback() -> None:
     )
     op.execute(
         f"GRANT EXECUTE ON FUNCTION public.{_CAPTURE_FEEDBACK}"
-        f"{_CAPTURE_FEEDBACK_SIGNATURE} TO {_CONTROL}"
+        f"{_CAPTURE_FEEDBACK_SIGNATURE} TO {_RUNTIME}"
     )
     op.execute(f"GRANT CREATE ON SCHEMA public TO {_RUN_READER_DEFINER}")
     op.execute(
@@ -753,6 +819,7 @@ def _create_feedback() -> None:
 def upgrade() -> None:
     """Add exact confirmation, Article edit, and evidence-only feedback."""
 
+    _join_file_operation_fences()
     op.add_column("file_acquisition", sa.Column("ui_preview_digest", sa.Text()))
     op.add_column("file_acquisition", sa.Column("expected_fragment_digest", sa.Text()))
     op.add_column("file_acquisition", sa.Column("compiler_config_version", sa.Text()))
@@ -788,7 +855,11 @@ def upgrade() -> None:
 def downgrade() -> None:
     """Remove the M1 UI-specific persistence seams."""
 
+    _join_file_operation_fences()
+    op.execute("LOCK TABLE file_acquisition IN ACCESS EXCLUSIVE MODE")
     op.execute(f"DROP FUNCTION public.{_CAPTURE_FEEDBACK}{_CAPTURE_FEEDBACK_SIGNATURE}")
+    op.execute(f"REVOKE SELECT ON TABLE membership FROM {_RUN_READER_DEFINER}")
+    op.execute("DROP POLICY membership_ui_feedback_definer_select ON membership")
     op.execute("DROP POLICY context_run_ui_feedback_definer_select ON context_run")
     op.drop_table("context_feedback")
     for name, signature in (

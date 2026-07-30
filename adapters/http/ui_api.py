@@ -34,7 +34,7 @@ from engine.persistence.membership_context import (
     MembershipNotCurrent,
     PostgreSQLMembershipAuthority,
 )
-from engine.persistence.role_guard import assert_control_role
+from engine.persistence.role_guard import assert_control_role, assert_runtime_role
 from engine.runtime.actor import CurrentMembershipVerification
 from engine.supply import (
     ACTIVE_FILE_IMPORT_MARKDOWN_CONFIG_VERSION,
@@ -453,9 +453,10 @@ class PostgreSQLUiApi:
     def __init__(
         self,
         membership_authority: PostgreSQLMembershipAuthority,
-        control_engine: Engine,
+        control_engine: Engine | None,
         *,
         preview_key: bytes,
+        feedback_engine: Engine | None = None,
         control_gate: MinimalUiControlGate | None = None,
         roots: FileRootRegistry | None = None,
         file_import_service_principal_id: UUID | None = None,
@@ -463,8 +464,10 @@ class PostgreSQLUiApi:
     ) -> None:
         if type(membership_authority) is not PostgreSQLMembershipAuthority:
             raise TypeError("UI requires the PostgreSQL Membership authority")
-        if not isinstance(control_engine, Engine):
-            raise TypeError("UI requires a Control database engine")
+        if control_engine is not None and not isinstance(control_engine, Engine):
+            raise TypeError("UI Control database engine is invalid")
+        if feedback_engine is not None and not isinstance(feedback_engine, Engine):
+            raise TypeError("UI feedback database engine is invalid")
         if roots is not None and type(roots) is not FileRootRegistry:
             raise TypeError("UI File roots have the wrong nominal type")
         if (
@@ -474,6 +477,7 @@ class PostgreSQLUiApi:
             raise TypeError("UI File receiver must be UUID")
         self._membership_authority = membership_authority
         self._control_engine = control_engine
+        self._feedback_engine = feedback_engine
         self._control_gate = control_gate
         self._roots = roots
         self._receiver_id = file_import_service_principal_id
@@ -505,8 +509,11 @@ class PostgreSQLUiApi:
 
     @contextmanager
     def _control(self, actor: UiActor) -> Iterator[Any]:
+        engine = self._control_engine
+        if engine is None:
+            raise UiApiUnavailable
         try:
-            with self._control_engine.begin() as connection:
+            with engine.begin() as connection:
                 assert_control_role(connection)
                 observed = connection.execute(
                     text(
@@ -516,6 +523,53 @@ class PostgreSQLUiApi:
                     {"organization_id": str(actor.organization_id)},
                 ).scalar_one()
                 if observed != str(actor.organization_id):
+                    raise UiApiUnavailable
+                yield connection
+        except UiApiUnavailable:
+            raise
+        except (AssertionError, SQLAlchemyError):
+            raise UiApiUnavailable from None
+
+    @contextmanager
+    def _feedback(self, actor: UiActor) -> Iterator[Any]:
+        engine = self._feedback_engine
+        if engine is None:
+            raise UiApiUnavailable
+        expected = {
+            "actor_kind": "user",
+            "membership_id": str(actor.membership_id),
+            "membership_version": str(actor.membership_version),
+            "organization_id": str(actor.organization_id),
+            "principal_ref": actor.principal_ref,
+            "user_id": str(actor.user_id),
+        }
+        try:
+            with engine.begin() as connection:
+                assert_runtime_role(connection)
+                observed = dict(
+                    connection.execute(
+                        text(
+                            """
+                            SELECT
+                                set_config('app.actor_kind', 'user', true)
+                                    AS actor_kind,
+                                set_config('app.membership_id',
+                                    :membership_id, true) AS membership_id,
+                                set_config('app.membership_version',
+                                    :membership_version, true)
+                                    AS membership_version,
+                                set_config('app.organization_id',
+                                    :organization_id, true) AS organization_id,
+                                set_config('app.principal_ref',
+                                    :principal_ref, true) AS principal_ref,
+                                set_config('app.user_id', :user_id, true)
+                                    AS user_id
+                            """
+                        ),
+                        expected,
+                    ).mappings().one()
+                )
+                if observed != expected:
                     raise UiApiUnavailable
                 yield connection
         except UiApiUnavailable:
@@ -983,11 +1037,11 @@ class PostgreSQLUiApi:
                 _FEEDBACK_DOMAIN + actor.organization_id.bytes + entropy
             ).hexdigest()
         )
-        with self._verified(actor), self._control(actor) as connection:
+        with self._verified(actor), self._feedback(actor) as connection:
             recorded = connection.execute(
                 text(
                     """
-                    SELECT context_control_capture_context_feedback(
+                    SELECT context_runtime_capture_context_feedback(
                         :organization_id, :feedback_ref, :run_ref,
                         :user_id, :membership_id, :membership_version,
                         :principal_ref, :rating, :note

@@ -975,6 +975,14 @@
               "context_engine_access_policy_definer"
             ],
             "using": "organization_id = NULLIF(current_setting('app.ui_actor_organization_id', true), '')::uuid AND user_id = NULLIF(current_setting('app.ui_actor_user_id', true), '')::uuid AND membership_id = NULLIF(current_setting('app.ui_actor_membership_id', true), '')::uuid AND membership_version = NULLIF(current_setting('app.ui_actor_membership_version', true), '')::bigint AND current_setting('app.ui_actor_mode', true) = 'article_policy_change'"
+          },
+          {
+            "name": "membership_ui_feedback_definer_select",
+            "command": "SELECT",
+            "roles": [
+              "context_engine_context_run_reader_definer"
+            ],
+            "using": "organization_id = NULLIF(current_setting('app.ui_feedback_organization_id', true), '')::uuid AND user_id = NULLIF(current_setting('app.ui_feedback_user_id', true), '')::uuid AND membership_id = NULLIF(current_setting('app.ui_feedback_membership_id', true), '')::uuid AND membership_version = NULLIF(current_setting('app.ui_feedback_membership_version', true), '')::bigint AND current_setting('app.ui_feedback_mode', true) = 'capture'"
           }
         ]
       },
@@ -1006,6 +1014,9 @@
           "UPDATE status, valid_from, valid_until"
         ],
         "context_engine_access_policy_definer": [
+          "SELECT"
+        ],
+        "context_engine_context_run_reader_definer": [
           "SELECT"
         ]
       },
@@ -3091,23 +3102,23 @@
         ]
       },
       "functionOnlyMutation": {
-        "databaseFunction": "context_control_capture_context_feedback",
-        "role": "context_engine_control",
+        "databaseFunction": "context_runtime_capture_context_feedback",
+        "role": "context_engine_runtime",
         "definerRole": "context_engine_context_run_reader_definer",
         "directTableMutationAllowed": false,
         "releasePublicationAuthorityAllowed": false
       },
       "permittedOperations": {
-        "context_engine_control": [
-          "EXECUTE context_control_capture_context_feedback"
-        ],
+        "context_engine_control": [],
         "context_engine_context_run_reader_definer": [
           "SELECT",
           "INSERT"
         ],
         "context_engine_learning": [],
         "context_engine_release_operator": [],
-        "context_engine_runtime": [],
+        "context_engine_runtime": [
+          "EXECUTE context_runtime_capture_context_feedback"
+        ],
         "context_engine_worker": []
       },
       "partitions": [],

@@ -272,8 +272,7 @@ def access_fixture(
                 )
                 connection.execute(
                     text(
-                        "DELETE FROM user_account "
-                        "WHERE user_id IN (:user_a, :user_b)"
+                        "DELETE FROM user_account WHERE user_id IN (:user_a, :user_b)"
                     ),
                     {"user_a": fixture.user_a, "user_b": fixture.user_b},
                 )
@@ -532,12 +531,15 @@ def test_rejected_access_change_rolls_back_epoch_and_policy_together(
                 {"organization_id": access_fixture.organization_a},
             ).scalar_one() == (2 if failure == "already-revoked" else 1)
         if expected_state is not None:
-            assert _state(
-                migration_engine,
-                access_fixture.organization_a,
-                access_fixture.resource_a_one,
-                access_fixture.principal_a,
-            ) == expected_state
+            assert (
+                _state(
+                    migration_engine,
+                    access_fixture.organization_a,
+                    access_fixture.resource_a_one,
+                    access_fixture.principal_a,
+                )
+                == expected_state
+            )
     finally:
         control_engine.dispose()
         migration_engine.dispose()
@@ -687,14 +689,17 @@ def test_same_organization_concurrent_revocations_have_no_lost_epoch_bump(
         ),
     )
     try:
-        with migration_engine.connect() as lock_connection, psycopg.connect(
-            host="127.0.0.1",
-            port=int(os.environ["CONTEXT_ENGINE_POSTGRES_PORT"]),
-            dbname=os.environ["POSTGRES_DB"],
-            user=os.environ["POSTGRES_USER"],
-            password=os.environ["POSTGRES_PASSWORD"],
-            autocommit=True,
-        ) as observer_connection:
+        with (
+            migration_engine.connect() as lock_connection,
+            psycopg.connect(
+                host="127.0.0.1",
+                port=int(os.environ["CONTEXT_ENGINE_POSTGRES_PORT"]),
+                dbname=os.environ["POSTGRES_DB"],
+                user=os.environ["POSTGRES_USER"],
+                password=os.environ["POSTGRES_PASSWORD"],
+                autocommit=True,
+            ) as observer_connection,
+        ):
             lock_transaction = lock_connection.begin()
             try:
                 lock_connection.execute(
@@ -732,9 +737,7 @@ def test_same_organization_concurrent_revocations_have_no_lost_epoch_bump(
                             break
                         sleep(0.01)
                     lock_transaction.commit()
-                    epochs = tuple(
-                        future.result(timeout=10) for future in futures
-                    )
+                    epochs = tuple(future.result(timeout=10) for future in futures)
             finally:
                 if lock_transaction.is_active:
                     lock_transaction.rollback()
@@ -801,13 +804,15 @@ def test_runtime_can_read_own_epoch_and_grant_but_cannot_mutate_them(
                 text("SELECT set_config(:name, :value, true)"),
                 {"name": name, "value": value},
             )
-        assert connection.execute(
-            text("SELECT policy_epoch FROM organization_policy_epoch")
-        ).scalar_one() == 1
+        assert (
+            connection.execute(
+                text("SELECT policy_epoch FROM organization_policy_epoch")
+            ).scalar_one()
+            == 1
+        )
         assert connection.execute(
             text(
-                "SELECT resource_ref FROM resource_access_policy "
-                "ORDER BY resource_ref"
+                "SELECT resource_ref FROM resource_access_policy ORDER BY resource_ref"
             )
         ).scalars().all() == sorted(
             [access_fixture.resource_a_one, access_fixture.resource_a_two]
@@ -832,9 +837,7 @@ def test_control_role_cannot_bypass_atomic_operation_with_direct_dml(
         with control_engine.begin() as connection:
             connection.execute(
                 text(
-                    "SELECT set_config("
-                    "'app.organization_id', :organization_id, true"
-                    ")"
+                    "SELECT set_config('app.organization_id', :organization_id, true)"
                 ),
                 {"organization_id": str(access_fixture.organization_a)},
             )
@@ -869,9 +872,7 @@ def test_control_operation_rejects_a_cross_organization_session_binding(
         ):
             connection.execute(
                 text(
-                    "SELECT set_config("
-                    "'app.organization_id', :organization_id, true"
-                    ")"
+                    "SELECT set_config('app.organization_id', :organization_id, true)"
                 ),
                 {"organization_id": str(access_fixture.organization_b)},
             )
@@ -1234,7 +1235,9 @@ def test_control_function_and_table_grants_seal_the_only_mutation_path(
             ("article_access_policy", "INSERT"),
             ("article_access_policy", "SELECT"),
             ("article_access_policy", "UPDATE"),
+            ("article_explicit_policy_setting", "INSERT"),
             ("article_explicit_policy_setting", "SELECT"),
+            ("article_explicit_policy_setting", "UPDATE"),
             ("article_source_acl_observation", "INSERT"),
             ("article_source_acl_observation", "SELECT"),
             ("article_source_acl_observation", "UPDATE"),
@@ -1261,6 +1264,7 @@ def test_control_function_and_table_grants_seal_the_only_mutation_path(
             (ACCESS_POLICY_DEFINER_ROLE, "file_resource_cleanup_intent", "SELECT"),
             (ACCESS_POLICY_DEFINER_ROLE, "file_source_cleanup_intent", "INSERT"),
             (ACCESS_POLICY_DEFINER_ROLE, "file_source_cleanup_intent", "SELECT"),
+            (ACCESS_POLICY_DEFINER_ROLE, "membership", "SELECT"),
             (ACCESS_POLICY_DEFINER_ROLE, "organization_policy_epoch", "SELECT"),
             (ACCESS_POLICY_DEFINER_ROLE, "organization_policy_epoch", "UPDATE"),
             (ACCESS_POLICY_DEFINER_ROLE, "resource_access_policy", "SELECT"),
@@ -1309,6 +1313,19 @@ def test_control_function_and_table_grants_seal_the_only_mutation_path(
                 "requested_policy_kind text, requested_group_refs text[]",
             ),
             (
+                "context_control_read_article_policy",
+                "requested_organization_id uuid, requested_resource_ref text",
+            ),
+            (
+                "context_control_change_article_policy",
+                "requested_organization_id uuid, requested_resource_ref text, "
+                "expected_policy_version bigint, expected_policy_epoch bigint, "
+                "requested_policy_kind text, requested_group_refs text[], "
+                "requested_preview_digest text, requested_user_id uuid, "
+                "requested_membership_id uuid, "
+                "requested_membership_version bigint",
+            ),
+            (
                 "context_fix_article_access_policy",
                 "requested_organization_id uuid, requested_resource_ref text",
             ),
@@ -1354,26 +1371,25 @@ def test_control_function_and_table_grants_seal_the_only_mutation_path(
                 "requested_organization_id uuid, requested_source_id uuid, "
                 "requested_cleanup_intent_id uuid",
             ),
-                (
-                    "public",
-                    "context_runtime_file_source_lifecycle_allows",
-                    "requested_organization_id uuid, requested_source_ref text",
-                ),
-                (
-                    "public",
-                    "context_runtime_article_source_version_allows",
-                    "requested_organization_id uuid, requested_resource_ref text, "
-                    "expected_source_version_ref uuid",
-                ),
-            }
+            (
+                "public",
+                "context_runtime_file_source_lifecycle_allows",
+                "requested_organization_id uuid, requested_source_ref text",
+            ),
+            (
+                "public",
+                "context_runtime_article_source_version_allows",
+                "requested_organization_id uuid, requested_resource_ref text, "
+                "expected_source_version_ref uuid",
+            ),
+        }
         assert definer_owned_namespaces == set()
         assert definer_owned_databases == set()
         article_policy_commands = article_policy_definer_grants - {
             ("source_version", "SELECT")
         }
         assert {
-            (table, command, roles)
-            for table, command, roles, _, _ in definer_policies
+            (table, command, roles) for table, command, roles, _, _ in definer_policies
         } == {
             (table_name, command, (ACCESS_POLICY_DEFINER_ROLE,))
             for table_name, command in article_policy_commands
@@ -1401,6 +1417,11 @@ def test_control_function_and_table_grants_seal_the_only_mutation_path(
             (
                 "bulk_article_policy_change_audit",
                 "INSERT",
+                (ACCESS_POLICY_DEFINER_ROLE,),
+            ),
+            (
+                "membership",
+                "SELECT",
                 (ACCESS_POLICY_DEFINER_ROLE,),
             ),
             (
@@ -1455,7 +1476,7 @@ def test_control_function_and_table_grants_seal_the_only_mutation_path(
             ),
             ("source_version", "SELECT", (ACCESS_POLICY_DEFINER_ROLE,)),
         }
-        for _, command, _, using_expression, check_expression in definer_policies:
+        for table, command, _, using_expression, check_expression in definer_policies:
             if command == "SELECT":
                 assert check_expression is None
                 tenant_expression = using_expression
@@ -1466,6 +1487,16 @@ def test_control_function_and_table_grants_seal_the_only_mutation_path(
                 assert using_expression == check_expression
                 tenant_expression = using_expression
             assert tenant_expression is not None
-            assert "app.organization_id" in tenant_expression
+            if table == "membership":
+                for required_fragment in (
+                    "app.ui_actor_organization_id",
+                    "app.ui_actor_user_id",
+                    "app.ui_actor_membership_id",
+                    "app.ui_actor_membership_version",
+                    "article_policy_change",
+                ):
+                    assert required_fragment in tenant_expression
+            else:
+                assert "app.organization_id" in tenant_expression
     finally:
         migration_engine.dispose()

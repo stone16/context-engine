@@ -42,6 +42,7 @@ from engine.persistence.membership_context import (
     MembershipNotCurrent,
 )
 from engine.runtime import Runtime
+from engine.runtime.citation import PRIVATE_FILE_CITATION_OPEN_PROFILE
 from engine.runtime.construction import required_kernel_dependencies
 from engine.runtime.package_digest import QueryDigestKeyring
 from engine.runtime.release_lineage import (
@@ -213,18 +214,10 @@ def create_dogfood_app(
         environment,
     )
     runtime_engine = create_database_engine(database_configuration)
-    try:
-        control_engine = create_database_engine(
-            load_database_configuration(DatabasePurpose.CONTROL_PLANE, environment)
-        )
-    except DatabaseConfigurationError:
-        runtime_engine.dispose()
-        raise DogfoodConfigurationUnavailable(
-            "dogfood API configuration is unavailable"
-        ) from None
     runtime = Runtime(
         required_kernel_dependencies(),
         candidate_index=PostgreSQLVectorCandidateIndex(DeterministicEmbeddingTwin()),
+        citation_profile=PRIVATE_FILE_CITATION_OPEN_PROFILE,
         query_digest_keyring=configuration.query_digest_keyring(),
     )
     membership_authority = PostgreSQLMembershipAuthority(runtime_engine)
@@ -255,7 +248,6 @@ def create_dogfood_app(
                 )
     except DogfoodConfigurationUnavailable:
         runtime_engine.dispose()
-        control_engine.dispose()
         raise
     except (
         ActiveReleaseUnavailable,
@@ -263,18 +255,20 @@ def create_dogfood_app(
         MembershipNotCurrent,
     ):
         runtime_engine.dispose()
-        control_engine.dispose()
         raise DogfoodConfigurationUnavailable(
             "dogfood API configuration is unavailable"
         ) from None
 
     from adapters.http.app import (
+        DIRECT_ACQUIRE_PURPOSE,
+        DIRECT_CITATION_PURPOSE,
         _construct_runtime_delivery_activation,
         create_app,
     )
     from adapters.http.ui_api import PostgreSQLUiApi
 
     roots = None
+    control_engine = None
     control_authority = None
     control_gate = None
 
@@ -282,21 +276,36 @@ def create_dogfood_app(
         return datetime.now(UTC)
 
     try:
-        if environment.get(WORKER_FILE_ROOTS_ENV) is not None:
-            roots = file_roots(environment)
-        raw_receiver = environment.get(DOGFOOD_FILE_IMPORT_RECEIVER_ENV)
-        receiver_id = None if raw_receiver is None else UUID(raw_receiver)
-        if environment.get(CONTROL_OPERATOR_SECRET_ENV) is not None:
-            operator_configuration = LocalOperatorConfiguration.load(environment)
-            if operator_configuration is None:
-                raise LocalOperatorConfigurationUnavailable
+        operator_configuration = (
+            LocalOperatorConfiguration.load(environment)
+            if environment.get(CONTROL_OPERATOR_SECRET_ENV) is not None
+            else None
+        )
+        receiver_id = None
+        if operator_configuration is not None:
+            control_engine = create_database_engine(
+                load_database_configuration(
+                    DatabasePurpose.CONTROL_PLANE,
+                    environment,
+                )
+            )
+            if environment.get(WORKER_FILE_ROOTS_ENV) is not None:
+                roots = file_roots(environment)
+            raw_receiver = environment.get(DOGFOOD_FILE_IMPORT_RECEIVER_ENV)
+            receiver_id = None if raw_receiver is None else UUID(raw_receiver)
             control_authority = operator_configuration.authorities(
                 clock=ui_clock
             ).control
             control_gate = MinimalUiControlGate(control_authority, clock=ui_clock)
-    except (LocalOperatorConfigurationUnavailable, TypeError, ValueError):
+    except (
+        DatabaseConfigurationError,
+        LocalOperatorConfigurationUnavailable,
+        TypeError,
+        ValueError,
+    ):
         runtime_engine.dispose()
-        control_engine.dispose()
+        if control_engine is not None:
+            control_engine.dispose()
         if roots is not None:
             roots.close()
         raise DogfoodConfigurationUnavailable(
@@ -316,7 +325,9 @@ def create_dogfood_app(
             organization_id=configuration.organization_id,
             principal_ref=configuration.principal_ref,
             agent_version_ref=configuration.agent_version_ref,
-            purpose="context.answer",
+            purposes=frozenset(
+                {DIRECT_ACQUIRE_PURPOSE, DIRECT_CITATION_PURPOSE}
+            ),
         ),
         runtime=runtime,
         runtime_delivery_activation=_construct_runtime_delivery_activation(),
@@ -325,6 +336,7 @@ def create_dogfood_app(
         ui_api=PostgreSQLUiApi(
             membership_authority,
             control_engine,
+            feedback_engine=runtime_engine,
             preview_key=sha256(
                 _UI_PREVIEW_DERIVATION_DOMAIN + configuration.secret.encode("utf-8")
             ).digest(),
@@ -335,7 +347,8 @@ def create_dogfood_app(
         ),
     )
     app.add_event_handler("shutdown", runtime_engine.dispose)
-    app.add_event_handler("shutdown", control_engine.dispose)
+    if control_engine is not None:
+        app.add_event_handler("shutdown", control_engine.dispose)
     if roots is not None:
         app.add_event_handler("shutdown", roots.close)
     return app

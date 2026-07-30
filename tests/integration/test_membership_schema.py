@@ -13,9 +13,11 @@ from sqlalchemy.exc import DBAPIError, IntegrityError
 
 from engine.persistence import DatabaseConfiguration, create_database_engine
 from engine.persistence.configuration import (
+    ACCESS_POLICY_DEFINER_ROLE,
     ACTION_EXECUTE_DEFINER_ROLE,
     ACTION_PREPARE_DEFINER_ROLE,
     CITATION_DEFINER_ROLE,
+    CONTEXT_RUN_READER_DEFINER_ROLE,
     DELIVERY_EVIDENCE_DEFINER_ROLE,
     EGRESS_GRANT_DEFINER_ROLE,
     FILE_DISPATCH_DEFINER_ROLE,
@@ -228,9 +230,12 @@ def test_runtime_membership_rls_is_bidirectional_and_exact(
             assert membership_rows(connection) == [
                 (organization_id, membership_id, user_id)
             ]
-            assert connection.execute(
-                text("SELECT count(*) FROM organization_record")
-            ).scalar_one() == 1
+            assert (
+                connection.execute(
+                    text("SELECT count(*) FROM organization_record")
+                ).scalar_one()
+                == 1
+            )
 
     with user_actor_connection(
         guarded_runtime_engine,
@@ -239,9 +244,12 @@ def test_runtime_membership_rls_is_bidirectional_and_exact(
         membership_id=identities.membership_b,
     ) as connection:
         assert membership_rows(connection) == []
-        assert connection.execute(
-            text("SELECT count(*) FROM organization_record")
-        ).scalar_one() == 0
+        assert (
+            connection.execute(
+                text("SELECT count(*) FROM organization_record")
+            ).scalar_one()
+            == 0
+        )
 
 
 @pytest.mark.parametrize(
@@ -299,9 +307,12 @@ def test_status_version_and_validity_fail_closed_at_the_database_seam(
             membership_id=identities.membership_a,
         ) as connection:
             assert membership_rows(connection) == []
-            assert connection.execute(
-                text("SELECT count(*) FROM organization_record")
-            ).scalar_one() == 0
+            assert (
+                connection.execute(
+                    text("SELECT count(*) FROM organization_record")
+                ).scalar_one()
+                == 0
+            )
     finally:
         migration_engine.dispose()
 
@@ -317,9 +328,12 @@ def test_organization_only_and_user_only_context_have_no_tenant_rights(
             {"value": str(identities.organization_a)},
         )
         assert membership_rows(connection) == []
-        assert connection.execute(
-            text("SELECT count(*) FROM organization_record")
-        ).scalar_one() == 0
+        assert (
+            connection.execute(
+                text("SELECT count(*) FROM organization_record")
+            ).scalar_one()
+            == 0
+        )
         with pytest.raises(DBAPIError, match="current UserActor Membership"):
             connection.execute(
                 text(
@@ -342,9 +356,12 @@ def test_organization_only_and_user_only_context_have_no_tenant_rights(
         membership_id=uuid4(),
     ) as connection:
         assert membership_rows(connection) == []
-        assert connection.execute(
-            text("SELECT count(*) FROM organization_record")
-        ).scalar_one() == 0
+        assert (
+            connection.execute(
+                text("SELECT count(*) FROM organization_record")
+            ).scalar_one()
+            == 0
+        )
         with pytest.raises(DBAPIError, match="current UserActor Membership"):
             connection.execute(
                 text(
@@ -361,17 +378,18 @@ def test_organization_only_and_user_only_context_have_no_tenant_rights(
             )
 
     with guarded_runtime_engine.begin() as connection:
-        connection.execute(
-            text("SELECT set_config('app.actor_kind', 'user', true)")
-        )
+        connection.execute(text("SELECT set_config('app.actor_kind', 'user', true)"))
         connection.execute(
             text("SELECT set_config('app.user_id', :value, true)"),
             {"value": str(identities.user_a)},
         )
         assert membership_rows(connection) == []
-        assert connection.execute(
-            text("SELECT count(*) FROM organization_record")
-        ).scalar_one() == 0
+        assert (
+            connection.execute(
+                text("SELECT count(*) FROM organization_record")
+            ).scalar_one()
+            == 0
+        )
 
 
 def test_global_user_and_membership_constraints_reject_orphans_and_invalid_rows(
@@ -474,8 +492,10 @@ def test_runtime_worker_and_public_grants_are_least_privilege(
                                   :egress_grant_definer_role,
                                   :action_prepare_definer_role,
                                   :action_execute_definer_role,
-                                  :citation_definer_role,
-                                  :file_dispatch_definer_role
+                                      :citation_definer_role,
+                                      :access_policy_definer_role,
+                                      :context_run_reader_definer_role,
+                                      :file_dispatch_definer_role
                           )
                         """
                     ),
@@ -489,6 +509,10 @@ def test_runtime_worker_and_public_grants_are_least_privilege(
                         "action_prepare_definer_role": ACTION_PREPARE_DEFINER_ROLE,
                         "action_execute_definer_role": ACTION_EXECUTE_DEFINER_ROLE,
                         "citation_definer_role": CITATION_DEFINER_ROLE,
+                        "access_policy_definer_role": ACCESS_POLICY_DEFINER_ROLE,
+                        "context_run_reader_definer_role": (
+                            CONTEXT_RUN_READER_DEFINER_ROLE
+                        ),
                         "file_dispatch_definer_role": FILE_DISPATCH_DEFINER_ROLE,
                     },
                 )
@@ -553,6 +577,8 @@ def test_runtime_worker_and_public_grants_are_least_privilege(
             (ACTION_PREPARE_DEFINER_ROLE, "membership", "SELECT"),
             (ACTION_EXECUTE_DEFINER_ROLE, "membership", "SELECT"),
             (CITATION_DEFINER_ROLE, "membership", "SELECT"),
+            (ACCESS_POLICY_DEFINER_ROLE, "membership", "SELECT"),
+            (CONTEXT_RUN_READER_DEFINER_ROLE, "membership", "SELECT"),
             (FILE_DISPATCH_DEFINER_ROLE, "membership", "SELECT"),
         }
         assert dispatch_update_columns == {"status", "valid_from", "valid_until"}
@@ -567,6 +593,8 @@ def test_runtime_worker_and_public_grants_are_least_privilege(
             "membership_file_dispatch_definer_select",
             "membership_file_dispatch_definer_update",
             "membership_citation_definer_select",
+            "membership_ui_access_definer_select",
+            "membership_ui_feedback_definer_select",
             "membership_migrator_administration",
         }
         runtime_policy = policies["membership_current_user_actor"]
@@ -651,6 +679,33 @@ def test_runtime_worker_and_public_grants_are_least_privilege(
             None,
         )
 
+        for policy_name, role, mode in (
+            (
+                "membership_ui_access_definer_select",
+                ACCESS_POLICY_DEFINER_ROLE,
+                "article_policy_change",
+            ),
+            (
+                "membership_ui_feedback_definer_select",
+                CONTEXT_RUN_READER_DEFINER_ROLE,
+                "capture",
+            ),
+        ):
+            policy = policies[policy_name]
+            assert policy[:3] == ("PERMISSIVE", (role,), "SELECT")
+            assert policy[3] is not None
+            assert policy[4] is None
+            normalized = str(policy[3]).lower()
+            for required_fragment in (
+                "app.ui_",
+                "organization_id",
+                "user_id",
+                "membership_id",
+                "membership_version",
+                mode,
+            ):
+                assert required_fragment in normalized
+
         migrator_policy = policies["membership_migrator_administration"]
         assert migrator_policy[:3] == (
             "PERMISSIVE",
@@ -679,11 +734,17 @@ def test_runtime_worker_and_public_grants_are_least_privilege(
         assert constraints["uq_membership_organization_id_version"].lower() == (
             "unique (organization_id, membership_id, membership_version)"
         )
-        assert constraints["fk_membership_organization"].lower().startswith(
-            "foreign key (organization_id) references organization(organization_id)"
+        assert (
+            constraints["fk_membership_organization"]
+            .lower()
+            .startswith(
+                "foreign key (organization_id) references organization(organization_id)"
+            )
         )
-        assert constraints["fk_membership_user_account"].lower().startswith(
-            "foreign key (user_id) references user_account(user_id)"
+        assert (
+            constraints["fk_membership_user_account"]
+            .lower()
+            .startswith("foreign key (user_id) references user_account(user_id)")
         )
     finally:
         engine.dispose()
@@ -723,9 +784,12 @@ def test_invalid_actor_mutations_hide_existing_rows_and_produce_zero_effects(
                     {"name": name, "value": value},
                 )
             assert membership_rows(connection) == []
-            assert connection.execute(
-                text("SELECT count(*) FROM organization_record")
-            ).scalar_one() == 0
+            assert (
+                connection.execute(
+                    text("SELECT count(*) FROM organization_record")
+                ).scalar_one()
+                == 0
+            )
             with pytest.raises(DBAPIError, match="current UserActor Membership"):
                 connection.execute(
                     text(
