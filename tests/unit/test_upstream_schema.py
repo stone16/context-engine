@@ -22,42 +22,39 @@ def test_valid_registration_passes(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    ("mutation", "reason"),
+    "replacement",
     [
-        (('license = "MIT"\n', ""), "license"),
-        (
-            (
-                "0123456789abcdef0123456789abcdef01234567",
-                "main",
-            ),
-            "commit",
-        ),
-        (
-            (
-                'excluded_paths = ["src/private"]',
-                'excluded_paths = ["src/example.py"]',
-            ),
-            "both copied and excluded",
-        ),
+        pytest.param("main", id="branch"),
+        pytest.param("v1.0.0", id="tag"),
+        pytest.param("0123456", id="short-sha"),
     ],
 )
-def test_malformed_registration_fails_distinctly(
-    tmp_path: Path, mutation: tuple[str, str], reason: str
-) -> None:
-    registration = write_fixture_tree(tmp_path, SCHEMA)
-    _replace(registration, *mutation)
-    with pytest.raises(GovernanceError, match=reason):
-        validate_tree(tmp_path)
-
-
-def test_short_sha_is_rejected(tmp_path: Path) -> None:
+def test_non_pinned_commit_is_rejected(tmp_path: Path, replacement: str) -> None:
     registration = write_fixture_tree(tmp_path, SCHEMA)
     _replace(
         registration,
         "0123456789abcdef0123456789abcdef01234567",
-        "0123456",
+        replacement,
     )
     with pytest.raises(GovernanceError, match="commit"):
+        validate_tree(tmp_path)
+
+
+def test_missing_required_field_is_rejected(tmp_path: Path) -> None:
+    registration = write_fixture_tree(tmp_path, SCHEMA)
+    _replace(registration, 'license = "MIT"\n', "")
+    with pytest.raises(GovernanceError, match="license"):
+        validate_tree(tmp_path)
+
+
+def test_path_listed_as_copied_and_excluded_is_rejected(tmp_path: Path) -> None:
+    registration = write_fixture_tree(tmp_path, SCHEMA)
+    _replace(
+        registration,
+        'excluded_paths = ["src/private"]',
+        'excluded_paths = ["src/example.py"]',
+    )
+    with pytest.raises(GovernanceError, match="both copied and excluded"):
         validate_tree(tmp_path)
 
 

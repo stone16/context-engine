@@ -255,7 +255,7 @@ def test_ci_runs_and_retains_the_single_m0_security_gate_contract() -> None:
     assert (
         "check: build lint typecheck openapi-check sdk-check sdk-build sdk-test "
         "sdk-pack action-build action-test bot-build bot-test test catalog smoke "
-        "integration security-gate"
+        "integration security-gate third-party-artifacts"
         in makefile.splitlines()
     )
     assert "actions/upload-artifact@v4" in workflow

@@ -29,7 +29,9 @@
     "README.md",
     "LICENSE",
     "NOTICE",
-    "THIRD_PARTY_NOTICES.md"
+    "THIRD_PARTY_NOTICES.md",
+    "governance",
+    "third_party"
   ],
   "scripts": {
     "verify:runtime": "node scripts/verify-runtime.mjs",
