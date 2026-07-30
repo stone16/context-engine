@@ -148,6 +148,7 @@ HEAD_TABLES = [
     "supply_connector_accepted_page",
     "supply_connector_checkpoint",
     "supply_connector_job",
+    "supply_connector_lease_event",
     "supply_connector_staged_page",
     "user_account",
     "worker_noop_job",
