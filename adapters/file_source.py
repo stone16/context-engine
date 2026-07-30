@@ -613,20 +613,20 @@ class FileChangeProvider:
             or capabilities.read_changes is not CapabilityStatus.AVAILABLE
         ):
             return ProviderUnsupported("readChanges")
-        selection_prefix = self._registry._curated_subtree_prefix(
-            source.source_version.root_ref
-        )
-        if (
-            selection_prefix is not None
-            and source.complete_baseline is not None
-            and any(
-                entry.kind is FileChangeKind.UPSERT
-                and not entry.path.value.startswith(selection_prefix)
-                for entry in source.complete_baseline.entries
-            )
-        ):
-            return ProviderGenericDenied()
         try:
+            selection_prefix = self._registry._curated_subtree_prefix(
+                source.source_version.root_ref
+            )
+            if (
+                selection_prefix is not None
+                and source.complete_baseline is not None
+                and any(
+                    entry.kind is FileChangeKind.UPSERT
+                    and not entry.path.value.startswith(selection_prefix)
+                    for entry in source.complete_baseline.entries
+                )
+            ):
+                return ProviderGenericDenied()
             observed = tuple(
                 _ObservedFile(
                     path=path,
