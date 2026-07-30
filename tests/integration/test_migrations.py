@@ -299,6 +299,8 @@ MIGRATION_TEST_START_REVISIONS = {
 MIGRATION_TEST_HEAD_PRECONDITIONS = {
     "test_article_policy_downgrade_rejects_every_deferred_admin_state",
     "test_article_policy_downgrade_refuses_state_that_would_reauthorize_content",
+    "test_file_scan_bound_revision_downgrades_and_reapplies_when_default_only",
+    "test_file_scan_bound_downgrade_observes_in_flight_refusal_report",
     "test_file_reclaim_revision_refuses_retained_higher_generation",
     "test_mixed_file_upsert_downgrade_waits_for_in_flight_scheduler",
     "test_file_delete_observation_revision_refuses_accepted_baseline_downgrade",
@@ -3482,8 +3484,8 @@ def test_file_scan_bound_revision_downgrades_and_reapplies_when_default_only(
 
     alembic_configuration = Config(ROOT / "alembic.ini")
     try:
-        command.downgrade(alembic_configuration, "20260730_0043")
-        assert _revision_rows(migration_configuration) == ["20260730_0043"]
+        command.downgrade(alembic_configuration, "20260730_0044")
+        assert _revision_rows(migration_configuration) == ["20260730_0044"]
         engine = create_database_engine(migration_configuration)
         try:
             with engine.connect() as connection:
@@ -3660,7 +3662,7 @@ def test_file_scan_bound_downgrade_observes_in_flight_refusal_report(
                     pending_downgrade = executor.submit(
                         command.downgrade,
                         Config(ROOT / "alembic.ini"),
-                        "20260730_0043",
+                        "20260730_0044",
                     )
                     transaction.commit()
                     assert pending_report.result(timeout=10) == "scan_bound_exceeded"
