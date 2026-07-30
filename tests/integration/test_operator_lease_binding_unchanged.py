@@ -8,6 +8,7 @@ import pytest
 from sqlalchemy import Engine, text
 
 from adapters.embeddings import DeterministicEmbeddingTwin
+from applications.worker import dispatch_one_file_import
 from engine.control import FileImportReceiver, FileRootRef
 from engine.persistence import (
     DatabaseConfiguration,
@@ -49,9 +50,7 @@ def test_batch_convenience_preserves_exact_wrong_job_and_expiry_rejection(
     )
     source_ref = _register_activated_source(organization_id, environment)
     _scan(organization_id, source_ref, environment)
-    codec = WorkerLeaseCodec(
-        WorkerLeaseKeyring(active_version=1, keys={1: WORKER_KEY})
-    )
+    codec = WorkerLeaseCodec(WorkerLeaseKeyring(active_version=1, keys={1: WORKER_KEY}))
     authority = PostgreSQLFileDispatchAuthority(
         guarded_scheduler_engine,
         codec,
@@ -59,6 +58,7 @@ def test_batch_convenience_preserves_exact_wrong_job_and_expiry_rejection(
     )
     claim = authority.claim()
     assert type(claim) is FileDispatchLease
+    exact_claim = claim
     assert claim.organization_id == organization_id
     assert claim.source_ref.value == source_ref
     roots = file_root_registry(FileRootRef("operator-scan-root"), root)
@@ -108,3 +108,49 @@ def test_batch_convenience_preserves_exact_wrong_job_and_expiry_rejection(
     finally:
         migration_engine.dispose()
     assert tuple(snapshot) == ("leased", 0)
+
+    exact_roots = file_root_registry(FileRootRef("operator-scan-root"), root)
+
+    class ExactClaimAuthority:
+        def claim(self) -> FileDispatchLease:
+            return exact_claim
+
+    class ExactWorkerFactory:
+        def __call__(
+            self,
+            receiver: FileImportReceiver,
+        ) -> PostgreSQLFileImportWorker:
+            assert receiver == FileImportReceiver(exact_claim.service_principal_id)
+            return PostgreSQLFileImportWorker(
+                guarded_worker_engine,
+                codec,
+                receiver,
+                exact_roots,
+                MarkdownCompilerConfig("markdown-config-v1"),
+                embedding_provider=DeterministicEmbeddingTwin(),
+                clock=lambda: exact_claim.issued_at,
+            )
+
+    try:
+        exact = dispatch_one_file_import(
+            ExactClaimAuthority(),
+            ExactWorkerFactory(),
+        )
+    finally:
+        exact_roots.close()
+    assert exact.outcome == "dispatched"
+    assert exact.reason_category is None
+
+    final_engine = create_database_engine(migration_configuration)
+    try:
+        with final_engine.connect() as connection:
+            final_snapshot = connection.execute(
+                text(
+                    "SELECT state, effect_count FROM file_import_job "
+                    "WHERE organization_id = :organization_id AND job_id = :job_id"
+                ),
+                {"organization_id": organization_id, "job_id": claim.job_id},
+            ).one()
+    finally:
+        final_engine.dispose()
+    assert tuple(final_snapshot) == ("completed", 1)

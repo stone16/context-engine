@@ -5,6 +5,7 @@ from dataclasses import fields
 from pathlib import Path
 from uuid import UUID
 
+import pytest
 from jsonschema import Draft202012Validator
 
 from applications.worker_progress import (
@@ -13,6 +14,7 @@ from applications.worker_progress import (
     FileDispatchCycleResult,
     FileDispatchFailureCategory,
     opaque_file_job_ref,
+    validate_worker_batch_progress_document,
 )
 
 ROOT = Path(__file__).parents[2]
@@ -46,6 +48,10 @@ def test_batch_progress_records_validate_against_the_tracked_closed_schema() -> 
 
     assert schema["$id"].endswith("worker-batch-progress-v1.schema.json")
     assert schema["additionalProperties"] is False
+    assert schema["x-context-engine-invariants"] == [
+        "failed <= processed <= total",
+        "phase == complete implies processed == total",
+    ]
     assert schema["properties"]["reasonCategory"]["enum"] == [
         "file_import_refused",
         "worker_lease_refused",
@@ -58,6 +64,7 @@ def test_batch_progress_records_validate_against_the_tracked_closed_schema() -> 
     ]
     for document in documents:
         validator.validate(document)
+        validate_worker_batch_progress_document(document)
         assert document["schemaVersion"] == BATCH_PROGRESS_SCHEMA_VERSION
         assert set(document) == {
             "batchRef",
@@ -84,8 +91,9 @@ def test_batch_progress_records_validate_against_the_tracked_closed_schema() -> 
     }
 
 
-def test_progress_contract_has_no_content_path_title_excerpt_or_identity_field(
-) -> None:
+def test_progress_contract_has_no_content_path_title_excerpt_or_identity_field() -> (
+    None
+):
     forbidden_field_fragments = {
         "content",
         "credential",
@@ -117,6 +125,23 @@ def test_progress_contract_has_no_content_path_title_excerpt_or_identity_field(
     )
     assert all(value not in rendered for value in adversarial_values)
     assert len(opaque_file_job_ref(raw_job_id)) == 64
+
+
+@pytest.mark.parametrize(
+    "counter_updates",
+    [
+        {"failed": 2, "processed": 1, "total": 1},
+        {"failed": 0, "processed": 2, "total": 1},
+        {"failed": 0, "processed": 0, "total": 1},
+    ],
+)
+def test_tracked_counter_invariants_reject_adversarial_documents(
+    counter_updates: dict[str, int],
+) -> None:
+    document = _documents()[-1] | counter_updates
+
+    with pytest.raises(ValueError, match="counter"):
+        validate_worker_batch_progress_document(document)
 
 
 def test_idle_polls_emit_no_chatter_after_one_batch_summary() -> None:

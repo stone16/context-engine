@@ -88,12 +88,12 @@ def _parser() -> argparse.ArgumentParser:
     scan.add_argument("--source-ref", required=True)
     scan_all = subcommands.add_parser(
         "scan-all",
-        help="scan every registered File source without caller source routing",
+        help="scan every active registered File source without caller source routing",
     )
     _organization_argument(scan_all)
     status = subcommands.add_parser(
         "status",
-        help="report one or every registered File source's operational status",
+        help="report one or every active registered File source's status",
     )
     _organization_argument(status)
     status.add_argument("--source-ref")
@@ -481,67 +481,68 @@ def _status_document(progress: FileSourceProgress) -> dict[str, object]:
     watermark = progress.publish_watermark
     head = progress.change_scan_head
     baseline = progress.complete_change_baseline
-    return {
-            "acquisitionCheckpoint": (
-                None
-                if checkpoint is None
-                else {
-                    "acceptedAt": _timestamp(checkpoint.accepted_at),
-                    "changeKind": checkpoint.change_kind.value,
-                    "checkpointRef": checkpoint.checkpoint_ref,
-                    "sequence": checkpoint.sequence,
-                }
-            ),
-            "activeResourceCount": status.active_resource_count,
-            "changeScanHead": (
-                None
-                if head is None
-                else {
-                    "checkpointRef": head.checkpoint_ref,
-                    "complete": head.complete,
-                    "pageLimit": head.page_limit,
-                    "pageRef": head.page_ref,
-                    "scanEpoch": str(head.scan_epoch),
-                    "scanRef": head.scan_ref,
-                    "sequence": head.sequence,
-                    "sourceVersionRef": str(head.source_version_ref),
-                }
-            ),
-            "completeChangeBaselineSize": (
-                0 if baseline is None else len(baseline.entries)
-            ),
-            "lastSuccessfulAcquisition": (
-                {"state": "never"}
-                if status.last_successful_acquisition_at is None
-                else {
-                    "ageSeconds": status.last_successful_acquisition_age_seconds,
-                    "at": _timestamp(status.last_successful_acquisition_at),
-                    "state": "succeeded",
-                }
-            ),
-            "publishWatermark": (
-                None
-                if watermark is None
-                else {
-                    "changeKind": watermark.change_kind.value,
-                    "outcome": watermark.outcome.value,
-                    "publishedAt": _timestamp(watermark.published_at),
-                    "sequence": watermark.sequence,
-                    "watermarkRef": watermark.watermark_ref,
-                }
-            ),
-            "refusals": [
-                {"category": refusal.category.value, "path": refusal.path}
-                for refusal in status.refusals
-            ],
-            "sourceRef": str(progress.source_ref.value),
+    last_successful_acquisition: dict[str, object] = (
+        {"state": "never"}
+        if status.last_successful_acquisition_at is None
+        else {
+            "ageSeconds": status.last_successful_acquisition_age_seconds,
+            "at": _timestamp(status.last_successful_acquisition_at),
+            "state": "succeeded",
         }
+    )
+    return {
+        "acquisitionCheckpoint": (
+            None
+            if checkpoint is None
+            else {
+                "acceptedAt": _timestamp(checkpoint.accepted_at),
+                "changeKind": checkpoint.change_kind.value,
+                "checkpointRef": checkpoint.checkpoint_ref,
+                "sequence": checkpoint.sequence,
+            }
+        ),
+        "activeResourceCount": status.active_resource_count,
+        "changeScanHead": (
+            None
+            if head is None
+            else {
+                "checkpointRef": head.checkpoint_ref,
+                "complete": head.complete,
+                "pageLimit": head.page_limit,
+                "pageRef": head.page_ref,
+                "scanEpoch": str(head.scan_epoch),
+                "scanRef": head.scan_ref,
+                "sequence": head.sequence,
+                "sourceVersionRef": str(head.source_version_ref),
+            }
+        ),
+        "completeChangeBaselineSize": (
+            0 if baseline is None else len(baseline.entries)
+        ),
+        "lastSuccessfulAcquisition": last_successful_acquisition,
+        "publishWatermark": (
+            None
+            if watermark is None
+            else {
+                "changeKind": watermark.change_kind.value,
+                "outcome": watermark.outcome.value,
+                "publishedAt": _timestamp(watermark.published_at),
+                "sequence": watermark.sequence,
+                "watermarkRef": watermark.watermark_ref,
+            }
+        ),
+        "refusals": [
+            {"category": refusal.category.value, "path": refusal.path}
+            for refusal in status.refusals
+        ],
+        "sourceRef": str(progress.source_ref.value),
+    }
 
 
 def _multi_status_json(report: MultiSourceStatusReport) -> str:
     if type(report) is not MultiSourceStatusReport:
         raise SourceNotAvailable
-    documents = [_status_document(source) for source in report.sources]
+    documents = [_multi_status_document(source) for source in report.sources]
     return json.dumps(
         {
             "sources": documents,
@@ -562,6 +563,23 @@ def _multi_status_json(report: MultiSourceStatusReport) -> str:
         separators=(",", ":"),
         sort_keys=True,
     )
+
+
+def _multi_status_document(progress: FileSourceProgress) -> dict[str, object]:
+    """Aggregate refusal categories without expanding path-bearing status."""
+
+    if type(progress) is not FileSourceProgress or progress.status is None:
+        raise SourceNotAvailable
+    document = _status_document(progress)
+    category_counts: dict[str, int] = {}
+    for refusal in progress.status.refusals:
+        category = refusal.category.value
+        category_counts[category] = category_counts.get(category, 0) + 1
+    document["refusals"] = [
+        {"category": category, "count": count}
+        for category, count in sorted(category_counts.items())
+    ]
+    return document
 
 
 def _timestamp(value: datetime) -> str:

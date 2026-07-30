@@ -2,6 +2,11 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://context-engine.invalid/contracts/worker-batch-progress-v1.schema.json",
   "title": "ContextEngine worker batch progress v1",
+  "$comment": "JSON Schema 2020-12 cannot express numeric relations between sibling properties. Consumers must additionally enforce the tracked x-context-engine-invariants; applications.worker_progress.validate_worker_batch_progress_document is the reference validator.",
+  "x-context-engine-invariants": [
+    "failed <= processed <= total",
+    "phase == complete implies processed == total"
+  ],
   "type": "object",
   "additionalProperties": false,
   "required": [

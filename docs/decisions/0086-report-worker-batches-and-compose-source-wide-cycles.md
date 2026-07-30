@@ -62,7 +62,8 @@ call, then the existing operation-exact read, progress, accept, and schedule
 calls independently for each Source. `context-engine-control status` without a
 `--source-ref` consumes discovery followed by one independently authorized
 `READ_SOURCE_PROGRESS` call per Source. The source-specific forms remain
-available.
+available. Source-wide status aggregates current refusal categories per Source
+and never expands the path-bearing single-Source status projection.
 
 Neither source-wide command calls ContextLearning, constructs a release
 candidate, or promotes a Release. Promotion remains the separate explicit

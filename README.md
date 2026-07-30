@@ -383,6 +383,8 @@ exact existing `read_source` call, then runs the same operation-exact bounded
 scan for each. Source-wide `status` independently consumes one
 `read_source_progress` call per discovered source. Neither command changes the
 six-variable operator opt-in, widens a WorkerLease, or promotes a Release.
+Source-wide status aggregates refusal categories and counts without rendering
+the path-bearing single-source refusal projection.
 The fresh before/after ceremony audit is recorded in
 [`worker batch progress and operator ceremony measurement`](./docs/design/2026-07-30-worker-batch-progress-ceremony-measurement.md).
 It does not repair or retry work, expose diagnostics, or participate in Runtime

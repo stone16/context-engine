@@ -9,6 +9,7 @@ import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
+from typing import cast
 from uuid import UUID
 
 BATCH_PROGRESS_SCHEMA_VERSION = "context-engine-worker-batch-progress-v1"
@@ -76,7 +77,9 @@ class WorkerBatchProgress:
             raise ValueError("worker batch counters are inconsistent")
         if self.phase == "complete":
             if self.processed != self.total:
-                raise ValueError("complete worker batch must account for every job")
+                raise ValueError(
+                    "complete worker batch counters must account for every job"
+                )
             if any(
                 value is not None
                 for value in (
@@ -243,8 +246,82 @@ def opaque_file_job_ref(job_id: UUID) -> str:
     return hashlib.sha256(_OPAQUE_FILE_JOB_DOMAIN + job_id.bytes).hexdigest()
 
 
+def validate_worker_batch_progress_document(
+    value: object,
+) -> WorkerBatchProgress:
+    """Validate the tracked shape plus its relational counter invariants."""
+
+    if type(value) is not dict:
+        raise ValueError("worker batch progress document must be an object")
+    document = cast(dict[str, object], value)
+    expected_keys = {
+        "batchRef",
+        "currentJobRef",
+        "failed",
+        "outcome",
+        "phase",
+        "processed",
+        "reasonCategory",
+        "schemaVersion",
+        "total",
+    }
+    if set(document) != expected_keys:
+        raise ValueError("worker batch progress document fields are invalid")
+    if document["schemaVersion"] != BATCH_PROGRESS_SCHEMA_VERSION:
+        raise ValueError("worker batch progress schema version is invalid")
+    reason_value = document["reasonCategory"]
+    if reason_value is None:
+        reason = None
+    elif type(reason_value) is str:
+        try:
+            reason = FileDispatchFailureCategory(reason_value)
+        except ValueError:
+            raise ValueError("worker batch failure category is invalid") from None
+    else:
+        raise ValueError("worker batch failure category is invalid")
+    progress = WorkerBatchProgress(
+        batch_ref=_document_string(document, "batchRef"),
+        phase=_document_string(document, "phase"),
+        processed=_document_integer(document, "processed"),
+        total=_document_integer(document, "total"),
+        failed=_document_integer(document, "failed"),
+        current_job_ref=_document_optional_string(document, "currentJobRef"),
+        outcome=_document_optional_string(document, "outcome"),
+        reason_category=reason,
+    )
+    if progress.document() != document:
+        raise ValueError("worker batch progress document is not canonical")
+    return progress
+
+
 def _fresh_batch_ref() -> str:
     return secrets.token_hex(32)
+
+
+def _document_string(document: dict[str, object], name: str) -> str:
+    value = document[name]
+    if type(value) is not str:
+        raise ValueError("worker batch progress document field is invalid")
+    return value
+
+
+def _document_optional_string(
+    document: dict[str, object],
+    name: str,
+) -> str | None:
+    value = document[name]
+    if value is None:
+        return None
+    if type(value) is not str:
+        raise ValueError("worker batch progress document field is invalid")
+    return value
+
+
+def _document_integer(document: dict[str, object], name: str) -> int:
+    value = document[name]
+    if type(value) is not int:
+        raise ValueError("worker batch progress document field is invalid")
+    return value
 
 
 def _require_opaque_ref(name: str, value: object) -> str:
