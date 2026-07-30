@@ -1,5 +1,5 @@
 ---
-name: adr-0084-bound-candidate-submission-and-weight-fusion-after-authorization
+name: adr-0083-bound-candidate-submission-and-weight-fusion-after-authorization
 version: "1.0.0"
 description: >
   Bound both directions of the replaceable candidate-discovery seam with one
@@ -9,7 +9,7 @@ description: >
   authorization, projection, or PackageBudget semantics.
 ---
 
-# 0084. Bound candidate submission and weight fusion after authorization
+# 0083. Bound candidate submission and weight fusion after authorization
 
 - Status: accepted
 - Date: 2026-07-30
