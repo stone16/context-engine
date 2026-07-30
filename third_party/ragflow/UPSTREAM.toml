@@ -1,0 +1,18 @@
+repository = "https://github.com/infiniflow/ragflow.git"
+commit = "4391e03886b996201f3b8818f671b19eb24d0f7b"
+source_paths = ["deepdoc/parser/markdown_parser.py"]
+excluded_paths = [
+  "deepdoc/parser/__init__.py",
+  "rag/app/naive.py",
+  "rag/nlp",
+]
+reuse_mode = "copy-patch"
+approval = "https://github.com/stone16/context-engine/issues/124"
+nested_dependencies = [
+  { name = "Python-Markdown", version = "3.6", license = "BSD-3-Clause", license_path = "third_party/ragflow/LICENSE.python-markdown" },
+]
+
+[[files]]
+upstream_path = "deepdoc/parser/markdown_parser.py"
+vendored_path = "third_party/ragflow/deepdoc/parser/markdown_parser.py"
+sha256 = "94c8e2515d05e141fcf65e10336ceca7f9116e54b31a668637ba3f901943cb66"

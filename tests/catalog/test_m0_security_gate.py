@@ -656,6 +656,18 @@ def test_provenance_has_exact_nonsecret_config_migration_and_fixture_digests(
     assert len(cast(str, provenance["fixtureDigest"])) == 64
     assert len(cast(str, provenance["configurationDigest"])) == 64
     assert "database.env" not in json.dumps(provenance)
+    assert provenance["executionCommand"] == [
+        "python",
+        "-m",
+        "pytest",
+        "-p",
+        "scripts.security_gate.pytest_plugin",
+        "--security-gate-raw",
+        ".context-engine/security-gate/raw-evidence.json",
+        "--strict-markers",
+        "--strict-config",
+        "tests/test_gate_sample.py::test_fixture",
+    ]
 
 
 def test_git_state_hashes_staged_unstaged_and_untracked_nonignored_content(

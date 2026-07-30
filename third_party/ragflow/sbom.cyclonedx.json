@@ -1,0 +1,50 @@
+{
+  "bomFormat": "CycloneDX",
+  "metadata": {
+    "component": {
+      "bom-ref": "context-engine:third-party:ragflow",
+      "name": "ContextEngine registered RAGFlow subtree",
+      "type": "library"
+    },
+    "properties": [
+      {
+        "name": "context-engine:sbom:scope",
+        "value": "third_party/ragflow"
+      },
+      {
+        "name": "context-engine:sbom:artifact-wide",
+        "value": "false"
+      }
+    ]
+  },
+  "components": [
+    {
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "name": "RAGFlow Markdown parser",
+      "purl": "pkg:github/infiniflow/ragflow@4391e03886b996201f3b8818f671b19eb24d0f7b#deepdoc/parser/markdown_parser.py",
+      "type": "library",
+      "version": "4391e03886b996201f3b8818f671b19eb24d0f7b"
+    },
+    {
+      "licenses": [
+        {
+          "license": {
+            "id": "BSD-3-Clause"
+          }
+        }
+      ],
+      "name": "Python-Markdown",
+      "purl": "pkg:pypi/markdown@3.6",
+      "type": "library",
+      "version": "3.6"
+    }
+  ],
+  "specVersion": "1.6",
+  "version": 1
+}

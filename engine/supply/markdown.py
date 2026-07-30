@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from enum import StrEnum
@@ -12,16 +13,32 @@ import rfc8785
 
 MARKDOWN_COMPILER_V1_VERSION: Final = "context-engine-markdown-v1"
 MARKDOWN_COMPILER_VERSION: Final = "context-engine-markdown-v2"
+MARKDOWN_COMPILER_V3_VERSION: Final = "context-engine-markdown-v3"
 ACTIVE_FILE_IMPORT_MARKDOWN_CONFIG_VERSION: Final = "markdown-config-v1"
 MARKDOWN_CANONICALIZATION_V1_PROFILE: Final = "markdown-heading-paragraph-v1"
 MARKDOWN_CANONICALIZATION_PROFILE: Final = "markdown-structural-units-v2"
 MARKDOWN_CONTENT_HASH_PROFILE: Final = "sha256-canonical-utf8-v1"
 MARKDOWN_COMPILATION_DIGEST_V1_PROFILE: Final = "rfc8785-sha256-v1"
 MARKDOWN_COMPILATION_DIGEST_PROFILE: Final = "rfc8785-sha256-v2"
+MARKDOWN_RICH_CANONICALIZATION_PROFILE: Final = "markdown-rich-structural-v3"
+MARKDOWN_RICH_COMPILATION_DIGEST_PROFILE: Final = "rfc8785-sha256-v3"
 MARKDOWN_CODE_LANGUAGE_MAX_LENGTH: Final = 64
+MARKDOWN_RICH_TOKEN_CEILING: Final = 2048
 _COMPILATION_DIGEST_V1_DOMAIN: Final = b"context-engine.markdown-compilation.v1\x00"
 _COMPILATION_DIGEST_DOMAIN: Final = b"context-engine.markdown-compilation.v2\x00"
+_COMPILATION_DIGEST_V3_DOMAIN: Final = b"context-engine.markdown-compilation.v3\x00"
 _MAX_VERSION_LENGTH: Final = 128
+
+
+def is_markdown_control_character(character: str) -> bool:
+    """Return whether one character is outside the closed Markdown grammar."""
+
+    if type(character) is not str or len(character) != 1:
+        raise TypeError("Markdown control classification requires one character")
+    codepoint = ord(character)
+    return (codepoint < 0x20 and character not in "\t\n\r") or (
+        0x7F <= codepoint <= 0x9F
+    )
 
 
 def _require_version(value: object) -> str:
@@ -54,9 +71,17 @@ class MarkdownCompilerConfig:
     """Explicit representation-affecting compiler configuration identity."""
 
     version: str
+    token_ceiling: int | None = None
 
     def __post_init__(self) -> None:
         _require_version(self.version)
+        if self.version == "markdown-config-v3":
+            if self.token_ceiling is None:
+                object.__setattr__(self, "token_ceiling", MARKDOWN_RICH_TOKEN_CEILING)
+            elif type(self.token_ceiling) is not int or self.token_ceiling < 1:
+                raise ValueError("rich Markdown token ceiling must be positive")
+        elif self.token_ceiling is not None:
+            raise ValueError("only rich Markdown config records a token ceiling")
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,7 +103,7 @@ class SourcePoint:
 
 @dataclass(frozen=True, slots=True)
 class SourceSpan:
-    """End-exclusive source span over canonical normalized UTF-8 text."""
+    """End-exclusive source span over the compiler's UTF-8 representation."""
 
     start: SourcePoint
     end: SourcePoint
@@ -147,12 +172,7 @@ class ParsedSection:
     def __post_init__(self) -> None:
         if type(self.kind) is not SectionKind:
             raise TypeError("parsed section kind must be SectionKind")
-        if (
-            type(self.text) is not str
-            or not self.text
-            or self.text.isspace()
-            or self.text != self.text.strip()
-        ):
+        if type(self.text) is not str or not self.text or self.text.isspace():
             raise ValueError("parsed section text must be exact nonblank text")
         if type(self.path) is not StructuralPath:
             raise TypeError("parsed section path must be StructuralPath")
@@ -188,9 +208,8 @@ class ParsedSection:
         if self.kind is SectionKind.TABLE:
             if not self.table_header or not self.table_rows:
                 raise ValueError("table sections require a header and rows")
-            width = len(self.table_header)
-            if width < 1 or any(len(row) != width for row in self.table_rows):
-                raise ValueError("table rows must match the header width")
+            if len(self.table_header) < 1:
+                raise ValueError("table header must carry at least one cell")
             if any(
                 type(cell) is not str or not cell or cell.isspace()
                 for row in (self.table_header, *self.table_rows)
@@ -279,6 +298,7 @@ class CompilationProvenance:
     canonicalization_profile: str = MARKDOWN_CANONICALIZATION_V1_PROFILE
     content_hash_profile: str = MARKDOWN_CONTENT_HASH_PROFILE
     compilation_digest_profile: str = MARKDOWN_COMPILATION_DIGEST_V1_PROFILE
+    token_ceiling: int | None = None
 
     def __post_init__(self) -> None:
         _require_version(self.compiler_version)
@@ -293,14 +313,34 @@ class CompilationProvenance:
                 MARKDOWN_COMPILATION_DIGEST_V1_PROFILE,
             ),
             (MARKDOWN_CANONICALIZATION_PROFILE, MARKDOWN_COMPILATION_DIGEST_PROFILE),
+            (
+                MARKDOWN_RICH_CANONICALIZATION_PROFILE,
+                MARKDOWN_RICH_COMPILATION_DIGEST_PROFILE,
+            ),
         }:
             raise ValueError("Markdown canonicalization and digest profiles must match")
         if self.content_hash_profile != MARKDOWN_CONTENT_HASH_PROFILE:
             raise ValueError("content hash profile must use the active version")
+        if self.is_rich_v3:
+            if (
+                self.compiler_version != MARKDOWN_COMPILER_V3_VERSION
+                or self.config_version != "markdown-config-v3"
+            ):
+                raise ValueError(
+                    "rich provenance identity requires the v3 compiler and config"
+                )
+            if type(self.token_ceiling) is not int or self.token_ceiling < 1:
+                raise ValueError("rich provenance requires a positive token ceiling")
+        elif self.token_ceiling is not None:
+            raise ValueError("only rich provenance records a token ceiling")
 
     @property
     def is_structural_v2(self) -> bool:
         return self.canonicalization_profile == MARKDOWN_CANONICALIZATION_PROFILE
+
+    @property
+    def is_rich_v3(self) -> bool:
+        return self.canonicalization_profile == MARKDOWN_RICH_CANONICALIZATION_PROFILE
 
 
 @dataclass(frozen=True, slots=True)
@@ -316,10 +356,8 @@ class ParsedDocument:
     warnings: tuple[CompilationWarning, ...] = ()
 
     def __post_init__(self) -> None:
-        if type(self.canonical_text) is not str or not self.canonical_text.endswith(
-            "\n"
-        ):
-            raise ValueError("parsed document requires final-newline canonical text")
+        if type(self.canonical_text) is not str or not self.canonical_text:
+            raise ValueError("parsed document requires nonempty canonical text")
         if type(self.sections) is not tuple or any(
             type(section) is not ParsedSection for section in self.sections
         ):
@@ -332,13 +370,23 @@ class ParsedDocument:
         _require_sha256("compilation digest", self.compilation_digest)
         if type(self.provenance) is not CompilationProvenance:
             raise TypeError("parsed document provenance must be CompilationProvenance")
+        if not self.provenance.is_rich_v3 and not self.canonical_text.endswith("\n"):
+            raise ValueError("parsed document requires final-newline canonical text")
         if type(self.warnings) is not tuple or any(
             type(warning) is not CompilationWarning for warning in self.warnings
         ):
             raise TypeError("parsed document warnings must be typed immutable values")
         if self.warnings:
             raise ValueError("the active Markdown compiler emits no warnings")
-        if self.provenance.is_structural_v2:
+        if self.provenance.is_rich_v3:
+            assert self.provenance.token_ceiling is not None
+            _validate_rich_content(
+                self.canonical_text,
+                self.sections,
+                self.fragments,
+                self.provenance.token_ceiling,
+            )
+        elif self.provenance.is_structural_v2:
             _validate_structural_content(
                 self.canonical_text,
                 self.sections,
@@ -426,6 +474,37 @@ class ParsedDocument:
             fragments=fragments,
         )
 
+    @classmethod
+    def rich_v3(
+        cls,
+        *,
+        canonical_text: str,
+        sections: tuple[ParsedSection, ...],
+        fragments: tuple[CompiledFragment, ...],
+        provenance: CompilationProvenance,
+    ) -> ParsedDocument:
+        """Build one self-validating rich Markdown compilation result."""
+
+        if cls is not ParsedDocument or not provenance.is_rich_v3:
+            raise TypeError("rich ParsedDocument construction requires v3 provenance")
+        content_hash = sha256(canonical_text.encode("utf-8")).hexdigest()
+        compilation_digest = _compilation_digest(
+            canonical_text=canonical_text,
+            sections=sections,
+            fragments=fragments,
+            content_hash=content_hash,
+            provenance=provenance,
+            warnings=(),
+        )
+        return ParsedDocument(
+            canonical_text=canonical_text,
+            sections=sections,
+            content_hash=content_hash,
+            compilation_digest=compilation_digest,
+            provenance=provenance,
+            fragments=fragments,
+        )
+
 
 class CompilationFailureCode(StrEnum):
     INVALID_UTF8 = "invalid_utf8"
@@ -472,6 +551,39 @@ _EMPHASIS_PATTERN: Final = re.compile(
     r"(?<![\w_])__(?=\S)(?:(?!__).)*\S__(?![\w_])|"
     r"(?<!\*)\*(?=\S)(?:[^*\n]*\S)?\*(?!\*)|"
     r"(?<![\w_])_(?=\S)(?:[^_\n]*\S)?_(?![\w_]))"
+)
+_RICH_ATX_HEADING_PATTERN: Final = re.compile(
+    r"^ {0,3}(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$"
+)
+_RICH_SETEXT_PATTERN: Final = re.compile(r"^ {0,3}(=+|-+)[ \t]*$")
+_RICH_LIST_ITEM_PATTERN: Final = re.compile(
+    r"^([ \t]*)(?:[-+*]|[0-9]+[.)])[ \t]+(.+)$"
+)
+_RICH_FENCE_PATTERN: Final = re.compile(
+    r"^[ \t]{0,3}(?P<fence>`{3,}|~{3,})(?:.*)$"
+)
+_RICH_WIKILINK_PATTERN: Final = re.compile(r"!?\[\[[^]\r\n]+]]")
+_RICH_FOOTNOTE_PATTERN: Final = re.compile(r"\[\^[^]\r\n]+](?::)?")
+_RICH_INLINE_MATH_PATTERN: Final = re.compile(
+    r"(?<!\\)\$(?!\s).+?(?<!\s)(?<!\\)\$"
+)
+_RICH_INLINE_CODE_PATTERN: Final = re.compile(r"`+[^`\r\n]+?`+")
+_RICH_AUTOLINK_PATTERN: Final = re.compile(
+    r"<https?://[^>\s]+>",
+    re.IGNORECASE,
+)
+_RICH_INLINE_LINK_PATTERN: Final = re.compile(
+    r"!?\[[^]\r\n]*]\([^()\r\n]+\)"
+)
+_RICH_REFERENCE_LINK_PATTERN: Final = re.compile(
+    r"(?:!?\[[^]\r\n]*]\[[^]\r\n]*]|\[[^]\r\n]+]:[ \t]*\S+)"
+)
+_RICH_STRIKETHROUGH_PATTERN: Final = re.compile(r"~~(?=\S).+?(?<=\S)~~")
+_RICH_ANGLE_LITERAL_PATTERN: Final = re.compile(r"<[^<>\r\n]+>")
+_RICH_HTML_OPEN_PATTERN: Final = re.compile(
+    r"^ {0,3}<(?P<tag>section|div|details|summary|table|thead|tbody|tr|"
+    r"th|td|p|ul|ol|li)\b[^>]*>",
+    re.IGNORECASE,
 )
 
 
@@ -523,6 +635,31 @@ def unsupported_markdown_construct(
     if inspected.endswith(("  ", "\\")):
         return UnsupportedConstruct.HARD_BREAK
     return None
+
+
+def unsupported_rich_markdown_inline(line: str) -> UnsupportedConstruct | None:
+    """Classify inline syntax outside the accepted rich-v3 grammar."""
+
+    if type(line) is not str:
+        raise TypeError("rich Markdown inline classification requires exact text")
+    masked = line.rstrip(" \t")
+    if masked.endswith("\\"):
+        masked = masked[:-1] + "x"
+    for pattern in (
+        _RICH_WIKILINK_PATTERN,
+        _RICH_FOOTNOTE_PATTERN,
+        _RICH_INLINE_MATH_PATTERN,
+        _RICH_INLINE_CODE_PATTERN,
+        _EMPHASIS_PATTERN,
+        _RICH_AUTOLINK_PATTERN,
+        _RICH_INLINE_LINK_PATTERN,
+        _RICH_REFERENCE_LINK_PATTERN,
+        _RICH_STRIKETHROUGH_PATTERN,
+        _RICH_ANGLE_LITERAL_PATTERN,
+    ):
+        masked = pattern.sub(lambda match: "x" * len(match.group()), masked)
+    construct = unsupported_markdown_construct(masked, supported_heading=False)
+    return None if construct is UnsupportedConstruct.LIST else construct
 
 
 @dataclass(frozen=True, slots=True)
@@ -649,7 +786,11 @@ def _compilation_document(
             for warning in warnings
         ],
     }
-    if provenance.is_structural_v2:
+    if provenance.is_rich_v3:
+        provenance_value = document["provenance"]
+        assert isinstance(provenance_value, dict)
+        provenance_value["tokenCeiling"] = provenance.token_ceiling
+    if provenance.is_structural_v2 or provenance.is_rich_v3:
         document["fragments"] = [
             _fragment_document(fragment) for fragment in fragments
         ]
@@ -684,11 +825,12 @@ def _compilation_digest(
         provenance=provenance,
         warnings=warnings,
     )
-    domain = (
-        _COMPILATION_DIGEST_DOMAIN
-        if provenance.is_structural_v2
-        else _COMPILATION_DIGEST_V1_DOMAIN
-    )
+    if provenance.is_rich_v3:
+        domain = _COMPILATION_DIGEST_V3_DOMAIN
+    elif provenance.is_structural_v2:
+        domain = _COMPILATION_DIGEST_DOMAIN
+    else:
+        domain = _COMPILATION_DIGEST_V1_DOMAIN
     return sha256(domain + rfc8785.dumps(cast(Any, document))).hexdigest()
 
 
@@ -740,6 +882,520 @@ def _expected_search_phrases(
     else:
         values = (source_text,)
     return tuple(dict.fromkeys(values))
+
+
+def _expected_rich_search_phrases(
+    section: ParsedSection,
+    source_text: str,
+) -> tuple[str, ...]:
+    return tuple(dict.fromkeys((source_text, section.text)))
+
+
+def _rich_table_cells(line: str) -> tuple[str, ...]:
+    stripped = line.strip()
+    if stripped.startswith("|"):
+        stripped = stripped[1:]
+    if stripped.endswith("|"):
+        stripped = stripped[:-1]
+    return tuple(cell.strip() for cell in stripped.split("|"))
+
+
+def _rich_table_source_ranges(source: str) -> tuple[tuple[int, int], ...]:
+    raw_lines = source.splitlines(keepends=True) or (source,)
+    lines: list[str] = []
+    starts: list[int] = []
+    offset = 0
+    for index, raw_line in enumerate(raw_lines):
+        content = raw_line.removesuffix("\n").removesuffix("\r")
+        bom_width = 1 if index == 0 and content.startswith("\ufeff") else 0
+        lines.append(content[bom_width:])
+        starts.append(offset + bom_width)
+        offset += len(raw_line)
+    ranges: list[tuple[int, int]] = []
+    index = 0
+    while index + 1 < len(lines):
+        header = _rich_table_cells(lines[index])
+        separator = _rich_table_cells(lines[index + 1])
+        if (
+            "|" not in lines[index]
+            or len(header) < 2
+            or not any(header)
+            or len(separator) < 2
+            or not all(
+                re.fullmatch(r":?-+:?", cell.replace(" ", "")) is not None
+                for cell in separator
+            )
+        ):
+            index += 1
+            continue
+        end = index + 2
+        while end < len(lines) and "|" in lines[end]:
+            end += 1
+        ranges.append(
+            (
+                starts[index],
+                starts[end - 1] + len(lines[end - 1]),
+            )
+        )
+        index = end
+    return tuple(ranges)
+
+
+@dataclass(frozen=True, slots=True)
+class _RichSourceBlock:
+    kind: SectionKind
+    start: int
+    end: int
+    indivisible: bool = False
+    heading_level: int | None = None
+    heading_text: str | None = None
+
+
+def _rich_source_line_layout(source: str) -> tuple[list[str], list[int]]:
+    raw_lines = source.splitlines(keepends=True) or [source]
+    lines: list[str] = []
+    starts: list[int] = []
+    offset = 0
+    for index, raw_line in enumerate(raw_lines):
+        content = raw_line.removesuffix("\n").removesuffix("\r")
+        bom_width = 1 if index == 0 and content.startswith("\ufeff") else 0
+        lines.append(content[bom_width:])
+        starts.append(offset + bom_width)
+        offset += len(raw_line)
+    return lines, starts
+
+
+def _rich_source_line_end(
+    lines: list[str], starts: list[int], index: int
+) -> int:
+    return starts[index] + len(lines[index])
+
+
+def _rich_table_starts_at(lines: list[str], index: int) -> bool:
+    if index + 1 >= len(lines) or "|" not in lines[index]:
+        return False
+    header = _rich_table_cells(lines[index])
+    separator = _rich_table_cells(lines[index + 1])
+    return (
+        len(header) >= 2
+        and any(header)
+        and len(separator) >= 2
+        and all(
+            re.fullmatch(r":?-+:?", cell.replace(" ", "")) is not None
+            for cell in separator
+        )
+    )
+
+
+def _rich_source_blocks(source: str) -> tuple[_RichSourceBlock, ...]:
+    """Independently derive v3 block boundaries from the canonical source."""
+
+    lines, starts = _rich_source_line_layout(source)
+    blocks: list[_RichSourceBlock] = []
+    index = 0
+    if lines and lines[0] == "---":
+        closing = next(
+            (
+                candidate
+                for candidate in range(1, len(lines))
+                if lines[candidate] == "---"
+            ),
+            None,
+        )
+        first_payload_line = next(
+            (line for line in lines[1:closing] if line.strip()),
+            None,
+        ) if closing is not None else None
+        mapping_payload = (
+            first_payload_line is not None
+            and re.fullmatch(
+                r"^[ \t]*(?:[A-Za-z0-9_.-]+|\"[^\"\r\n]+\"|'[^'\r\n]+')"
+                r"[ \t]*:[ \t]*(?:.*)?$",
+                first_payload_line,
+            )
+            is not None
+        )
+        sequence_payload = (
+            first_payload_line is not None
+            and re.fullmatch(r"^[ \t]*-[ \t]+\S.*$", first_payload_line)
+            is not None
+        )
+        if closing is not None and (mapping_payload or sequence_payload):
+            blocks.append(
+                _RichSourceBlock(
+                    kind=SectionKind.PARAGRAPH,
+                    start=starts[0],
+                    end=_rich_source_line_end(lines, starts, closing),
+                )
+            )
+            index = closing + 1
+
+    while index < len(lines):
+        line = lines[index]
+        if not line.strip():
+            index += 1
+            continue
+        atx = _RICH_ATX_HEADING_PATTERN.fullmatch(line)
+        if atx is not None:
+            blocks.append(
+                _RichSourceBlock(
+                    kind=SectionKind.HEADING,
+                    start=starts[index],
+                    end=_rich_source_line_end(lines, starts, index),
+                    heading_level=len(atx.group(1)),
+                    heading_text=atx.group(2).strip(),
+                )
+            )
+            index += 1
+            continue
+        fence = _RICH_FENCE_PATTERN.match(line)
+        if fence is not None:
+            marker = fence.group("fence")
+            closing = index + 1
+            while closing < len(lines) and re.fullmatch(
+                rf"[ \t]{{0,3}}{re.escape(marker[0])}{{{len(marker)},}}[ \t]*",
+                lines[closing],
+            ) is None:
+                closing += 1
+            if closing >= len(lines):
+                language = line.lstrip()[len(marker) :].strip()
+                if not language and any(
+                    candidate.strip() for candidate in lines[index + 1 :]
+                ):
+                    blocks.append(
+                        _RichSourceBlock(
+                            kind=SectionKind.PARAGRAPH,
+                            start=starts[index],
+                            end=_rich_source_line_end(lines, starts, len(lines) - 1),
+                        )
+                    )
+                    index = len(lines)
+                    continue
+                raise ValueError("rich fenced source must match the closed grammar")
+            blocks.append(
+                _RichSourceBlock(
+                    kind=SectionKind.FENCED_CODE,
+                    start=starts[index],
+                    end=_rich_source_line_end(lines, starts, closing),
+                    indivisible=True,
+                )
+            )
+            index = closing + 1
+            continue
+        if _THEMATIC_BREAK_PATTERN.fullmatch(line) is not None:
+            blocks.append(
+                _RichSourceBlock(
+                    kind=SectionKind.PARAGRAPH,
+                    start=starts[index],
+                    end=_rich_source_line_end(lines, starts, index),
+                )
+            )
+            index += 1
+            continue
+        if index + 1 < len(lines) and _RICH_SETEXT_PATTERN.fullmatch(
+            lines[index + 1]
+        ):
+            underline = lines[index + 1].lstrip()
+            blocks.append(
+                _RichSourceBlock(
+                    kind=SectionKind.HEADING,
+                    start=starts[index],
+                    end=_rich_source_line_end(lines, starts, index + 1),
+                    heading_level=1 if underline.startswith("=") else 2,
+                    heading_text=line.strip(),
+                )
+            )
+            index += 2
+            continue
+        if _rich_table_starts_at(lines, index):
+            end = index + 2
+            while end < len(lines) and "|" in lines[end]:
+                end += 1
+            header = _rich_table_cells(lines[index])
+            separator = _rich_table_cells(lines[index + 1])
+            rows = tuple(
+                _rich_table_cells(candidate)
+                for candidate in lines[index + 2 : end]
+            )
+            valid = (
+                bool(rows)
+                and len(header) >= 2
+                and len(separator) == len(header)
+                and all(
+                    len(row) == len(header) and all(row)
+                    for row in (header, *rows)
+                )
+            )
+            blocks.append(
+                _RichSourceBlock(
+                    kind=SectionKind.TABLE if valid else SectionKind.PARAGRAPH,
+                    start=starts[index],
+                    end=_rich_source_line_end(lines, starts, end - 1),
+                    indivisible=not valid,
+                )
+            )
+            index = end
+            continue
+        if _RICH_LIST_ITEM_PATTERN.fullmatch(line) is not None:
+            end = index + 1
+            while end < len(lines):
+                candidate = lines[end]
+                if _RICH_LIST_ITEM_PATTERN.fullmatch(candidate) is not None:
+                    end += 1
+                    continue
+                if candidate.strip() and candidate.startswith((" ", "\t")):
+                    end += 1
+                    continue
+                break
+            blocks.append(
+                _RichSourceBlock(
+                    kind=SectionKind.LIST,
+                    start=starts[index],
+                    end=_rich_source_line_end(lines, starts, end - 1),
+                    indivisible=True,
+                )
+            )
+            index = end
+            continue
+        if line.lstrip().startswith("<"):
+            if _RICH_ANGLE_LITERAL_PATTERN.fullmatch(line.strip()) is not None:
+                end = index + 1
+            else:
+                end = index + 1
+                while end < len(lines) and lines[end].strip():
+                    end += 1
+            blocks.append(
+                _RichSourceBlock(
+                    kind=SectionKind.PARAGRAPH,
+                    start=starts[index],
+                    end=_rich_source_line_end(lines, starts, end - 1),
+                )
+            )
+            index = end
+            continue
+        if line.lstrip().startswith(">"):
+            end = index + 1
+            while end < len(lines) and lines[end].lstrip().startswith(">"):
+                end += 1
+            blocks.append(
+                _RichSourceBlock(
+                    kind=SectionKind.PARAGRAPH,
+                    start=starts[index],
+                    end=_rich_source_line_end(lines, starts, end - 1),
+                )
+            )
+            index = end
+            continue
+        end = index + 1
+        while end < len(lines) and lines[end].strip():
+            if (
+                _RICH_ATX_HEADING_PATTERN.fullmatch(lines[end]) is not None
+                or _RICH_FENCE_PATTERN.match(lines[end]) is not None
+                or _RICH_LIST_ITEM_PATTERN.fullmatch(lines[end]) is not None
+                or lines[end].lstrip().startswith((">", "<"))
+                or _THEMATIC_BREAK_PATTERN.fullmatch(lines[end]) is not None
+                or _rich_table_starts_at(lines, end)
+            ):
+                break
+            end += 1
+        blocks.append(
+            _RichSourceBlock(
+                kind=SectionKind.PARAGRAPH,
+                start=starts[index],
+                end=_rich_source_line_end(lines, starts, end - 1),
+            )
+        )
+        index = end
+    return tuple(blocks)
+
+
+def _expected_rich_fragment_layout(
+    canonical_text: str,
+    token_ceiling: int,
+) -> tuple[tuple[SectionKind, int, int], ...]:
+    expected: list[tuple[SectionKind, int, int]] = []
+    headings: list[tuple[int, str]] = []
+    for block in _rich_source_blocks(canonical_text):
+        if block.kind is SectionKind.HEADING:
+            assert block.heading_level is not None
+            headings = [
+                heading for heading in headings if heading[0] < block.heading_level
+            ]
+        source = canonical_text[block.start : block.end]
+        ancestry = "\n\n".join(
+            f"{'#' * level} {text}" for level, text in headings
+        )
+        capacity = token_ceiling - len(re.findall(r"\S+", ancestry))
+        indivisible = block.indivisible or block.kind in {
+            SectionKind.HEADING,
+            SectionKind.LIST,
+            SectionKind.FENCED_CODE,
+            SectionKind.TABLE,
+        }
+        ranges: tuple[tuple[int, int], ...]
+        if indivisible:
+            if len(re.findall(r"\S+", source)) > capacity:
+                raise ValueError("rich indivisible source exceeds its ceiling")
+            ranges = ((0, len(source)),)
+        else:
+            tokens = tuple(re.finditer(r"\S+", source))
+            if not tokens or capacity < 1:
+                raise ValueError("rich paragraph cannot fit its ceiling")
+            ranges = tuple(
+                (
+                    tokens[index].start(),
+                    tokens[min(index + capacity, len(tokens)) - 1].end(),
+                )
+                for index in range(0, len(tokens), capacity)
+            )
+        for relative_start, relative_end in ranges:
+            start = len(canonical_text[: block.start + relative_start].encode("utf-8"))
+            end = len(canonical_text[: block.start + relative_end].encode("utf-8"))
+            expected.append((block.kind, start, end))
+        if block.kind is SectionKind.HEADING:
+            assert block.heading_level is not None and block.heading_text is not None
+            headings.append((block.heading_level, block.heading_text))
+    return tuple(expected)
+
+
+def _expected_rich_section_kind(source: str) -> SectionKind:
+    lines = source.splitlines()
+    if len(lines) >= 2 and lines[0] == "---" and lines[-1] == "---":
+        return SectionKind.PARAGRAPH
+    if len(lines) == 1 and _THEMATIC_BREAK_PATTERN.fullmatch(lines[0]) is not None:
+        return SectionKind.PARAGRAPH
+    if (
+        _RICH_ATX_HEADING_PATTERN.fullmatch(source) is not None
+        or len(lines) == 2
+        and _RICH_SETEXT_PATTERN.fullmatch(lines[1]) is not None
+    ):
+        return SectionKind.HEADING
+    fence = _RICH_FENCE_PATTERN.match(lines[0]) if lines else None
+    if fence is not None and len(lines) >= 3:
+        marker = fence.group("fence")
+        if re.fullmatch(
+            rf"[ \t]{{0,3}}{re.escape(marker[0])}{{{len(marker)},}}[ \t]*",
+            lines[-1],
+        ):
+            return SectionKind.FENCED_CODE
+    if lines and _RICH_LIST_ITEM_PATTERN.fullmatch(lines[0]) is not None:
+        return SectionKind.LIST
+    table_ranges = _rich_table_source_ranges(source)
+    if table_ranges == ((0, len(source)),):
+        header_cells = _rich_table_cells(lines[0])
+        separator_cells = _rich_table_cells(lines[1])
+        header_width = len(header_cells)
+        source_rows = tuple(_rich_table_cells(line) for line in lines[2:])
+        if (
+            source_rows
+            and header_width >= 2
+            and len(separator_cells) == header_width
+            and all(header_cells)
+            and all(len(row) == header_width and all(row) for row in source_rows)
+        ):
+            return SectionKind.TABLE
+    return SectionKind.PARAGRAPH
+
+
+def _validate_rich_closed_grammar(section: ParsedSection, source: str) -> None:
+    if section.kind is not _expected_rich_section_kind(source):
+        raise ValueError("rich section kind must match its source grammar")
+    lines = source.splitlines()
+    metadata_valid = True
+    if section.kind is SectionKind.LIST:
+        item_matches = tuple(
+            match
+            for line in lines
+            if (match := _RICH_LIST_ITEM_PATTERN.fullmatch(line)) is not None
+        )
+        metadata_valid = (
+            bool(item_matches)
+            and section.list_ordered
+            is (re.match(r"[0-9]+[.)]", lines[0].lstrip()) is not None)
+            and section.list_items
+            == tuple(match.group(2).rstrip(" \t") for match in item_matches)
+        )
+    elif section.kind is SectionKind.FENCED_CODE:
+        fence = _RICH_FENCE_PATTERN.match(lines[0]) if lines else None
+        assert fence is not None
+        marker = fence.group("fence")
+        expected_language = lines[0].lstrip()[len(marker) :].strip() or None
+        expected_body = "\n".join(lines[1:-1])
+        metadata_valid = (
+            section.code_language == expected_language
+            and section.code_body == expected_body
+        )
+    elif section.kind is SectionKind.TABLE:
+        cells = tuple(_rich_table_cells(line) for line in lines)
+        metadata_valid = (
+            len(cells) >= 3
+            and section.table_header == cells[0]
+            and section.table_rows == cells[2:]
+        )
+    if not metadata_valid:
+        raise ValueError("rich section metadata must match its source grammar")
+    if section.kind is SectionKind.FENCED_CODE:
+        return
+    if len(lines) >= 2 and lines[0] == "---" and lines[-1] == "---":
+        return
+    html_open = _RICH_HTML_OPEN_PATTERN.match(lines[0]) if lines else None
+    if (
+        html_open is not None
+        and re.search(
+            rf"</{html_open.group('tag')}[ \t]*>",
+            source,
+            re.IGNORECASE,
+        )
+    ):
+        return
+    if (
+        section.kind is SectionKind.PARAGRAPH
+        and len(lines) == 1
+        and _THEMATIC_BREAK_PATTERN.fullmatch(lines[0]) is not None
+    ):
+        return
+    if (
+        section.kind is SectionKind.PARAGRAPH
+        and lines
+        and _RICH_FENCE_PATTERN.match(lines[0]) is not None
+    ):
+        marker = _RICH_FENCE_PATTERN.match(lines[0])
+        assert marker is not None
+        fence_text = marker.group("fence")
+        language = lines[0].lstrip()[len(fence_text) :].strip()
+        if language or not any(line.strip() for line in lines[1:]):
+            raise ValueError("rich section source must match the closed grammar")
+        return
+    if (
+        section.kind is SectionKind.PARAGRAPH
+        and _rich_table_source_ranges(source) == ((0, len(source)),)
+    ):
+        if any(
+            unsupported_rich_markdown_inline(line) is not None
+            for line in lines
+        ):
+            raise ValueError("rich section source must match the closed grammar")
+        return
+    for line in lines:
+        inspected = line
+        if section.kind is SectionKind.HEADING:
+            match = _RICH_ATX_HEADING_PATTERN.fullmatch(line)
+            if match is not None:
+                inspected = match.group(2).strip()
+            elif _RICH_SETEXT_PATTERN.fullmatch(line) is not None:
+                continue
+        elif section.kind is SectionKind.LIST:
+            match = _RICH_LIST_ITEM_PATTERN.fullmatch(line)
+            if match is not None:
+                inspected = match.group(2)
+            elif line.startswith((" ", "\t")):
+                inspected = line.lstrip()
+        elif line.lstrip().startswith(">"):
+            inspected = line.lstrip()[1:].lstrip()
+            if inspected.startswith("[!"):
+                inspected = _RICH_FOOTNOTE_PATTERN.sub("x", inspected, count=1)
+        if unsupported_rich_markdown_inline(inspected) is not None:
+            raise ValueError("rich section source must match the closed grammar")
 
 
 def _validate_section_source(section: ParsedSection, source_text: str) -> None:
@@ -928,6 +1584,163 @@ def _validate_structural_content(
         raise ValueError("structural sections cannot omit trailing canonical content")
 
 
+def _validate_rich_content(
+    canonical_text: str,
+    sections: tuple[ParsedSection, ...],
+    fragments: tuple[CompiledFragment, ...],
+    token_ceiling: int,
+) -> None:
+    if not sections or not fragments or len(sections) != len(fragments):
+        raise ValueError("rich Markdown requires one Fragment per parsed section")
+    if any(is_markdown_control_character(character) for character in canonical_text):
+        raise ValueError("rich Markdown cannot contain a control character")
+    canonical_bytes = canonical_text.encode("utf-8")
+    prior_end = 0
+    refs: set[str] = set()
+    headings: list[ParsedSection] = []
+    counters: dict[tuple[tuple[str, ...], SectionKind], int] = {}
+    kind_ordinals: dict[SectionKind, int] = {}
+    for table_start_character, table_end_character in _rich_table_source_ranges(
+        canonical_text
+    ):
+        table_start = len(
+            canonical_text[:table_start_character].encode("utf-8")
+        )
+        table_end = len(canonical_text[:table_end_character].encode("utf-8"))
+        overlapping_sections = tuple(
+            section
+            for section in sections
+            if section.position.start.byte_offset < table_end
+            and section.position.end.byte_offset > table_start
+        )
+        if (
+            len(overlapping_sections) != 1
+            or overlapping_sections[0].position.start.byte_offset != table_start
+            or overlapping_sections[0].position.end.byte_offset != table_end
+        ):
+            raise ValueError("rich table source must remain atomic")
+    expected_layout = tuple(
+        (start, end)
+        for _, start, end in _expected_rich_fragment_layout(
+            canonical_text, token_ceiling
+        )
+    )
+    actual_layout = tuple(
+        (
+            section.position.start.byte_offset,
+            section.position.end.byte_offset,
+        )
+        for section in sections
+    )
+    if actual_layout != expected_layout:
+        raise ValueError("rich block splitting must be exact")
+    for section, fragment in zip(sections, fragments, strict=True):
+        if (
+            fragment.kind is not section.kind
+            or fragment.path != section.path
+            or fragment.position != section.position
+            or fragment.fragment_ref in refs
+            or section.position.start.byte_offset < prior_end
+        ):
+            raise ValueError("rich Fragment lineage must match source order")
+        if _expected_rich_point(
+            canonical_text, section.position.start.byte_offset
+        ) != (
+            section.position.start
+        ) or _expected_rich_point(
+            canonical_text, section.position.end.byte_offset
+        ) != (
+            section.position.end
+        ):
+            raise ValueError("rich source coordinates must match UTF-8 offsets")
+        source = canonical_bytes[
+            section.position.start.byte_offset : section.position.end.byte_offset
+        ].decode("utf-8")
+        if source != fragment.source_text:
+            raise ValueError("rich Fragment source text must match its span")
+        if section.text != source and section.kind is not SectionKind.HEADING:
+            raise ValueError("rich section text must match its span")
+        _validate_rich_closed_grammar(section, source)
+        if section.kind is SectionKind.HEADING:
+            assert section.level is not None
+            heading_lines = source.splitlines()
+            setext = (
+                len(heading_lines) == 2
+                and re.fullmatch(r"^ {0,3}(=+|-+)[ \t]*$", heading_lines[1])
+                is not None
+            )
+            atx = re.fullmatch(
+                r"^ {0,3}(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$",
+                source,
+            )
+            expected_heading_text = (
+                heading_lines[0].strip()
+                if setext
+                else atx.group(2).strip()
+                if atx is not None
+                else None
+            )
+            expected_level = (
+                1
+                if setext and heading_lines[1].lstrip().startswith("=")
+                else 2
+                if setext
+                else len(atx.group(1))
+                if atx is not None
+                else None
+            )
+            if section.text != expected_heading_text or section.level != expected_level:
+                raise ValueError("rich heading metadata must match its source")
+            headings = [
+                heading
+                for heading in headings
+                if heading.level is not None and heading.level < section.level
+            ]
+        parents = tuple(headings)
+        parent_path = parents[-1].path.segments if parents else ("document",)
+        counter_key = (parent_path, section.kind)
+        counters[counter_key] = counters.get(counter_key, 0) + 1
+        expected_path = StructuralPath(
+            parent_path + (f"{section.kind.value}[{counters[counter_key]}]",)
+        )
+        kind_ordinals[section.kind] = kind_ordinals.get(section.kind, 0) + 1
+        expected_ref = f"fragment:{section.kind.value}:{kind_ordinals[section.kind]}"
+        if (
+            section.path != expected_path
+            or fragment.parent_headings != parents
+            or fragment.fragment_ref != expected_ref
+            or fragment.search_phrases
+            != _expected_rich_search_phrases(section, source)
+        ):
+            raise ValueError("rich Fragment derivation must be exact")
+        omitted = canonical_bytes[
+            prior_end : section.position.start.byte_offset
+        ]
+        if any(byte not in b" \t\r\n\xef\xbb\xbf" for byte in omitted):
+            raise ValueError("rich sections cannot omit non-whitespace source")
+        if fragment.contextual_text != _expected_contextual_text(fragment):
+            raise ValueError("rich Fragment context must be exact heading ancestry")
+        if len(re.findall(r"\S+", fragment.contextual_text)) > token_ceiling:
+            raise ValueError("rich Fragment exceeds its provenance-bound ceiling")
+        if section.kind is SectionKind.HEADING:
+            headings.append(section)
+        refs.add(fragment.fragment_ref)
+        prior_end = section.position.end.byte_offset
+    if any(byte not in b" \t\r\n" for byte in canonical_bytes[prior_end:]):
+        raise ValueError("rich sections cannot omit trailing source")
+
+
+def _expected_rich_point(source_text: str, byte_offset: int) -> SourcePoint:
+    prefix = source_text.encode("utf-8")[:byte_offset].decode("utf-8")
+    logical = prefix.replace("\r\n", "\n").replace("\r", "\n")
+    last_newline = logical.rfind("\n")
+    return SourcePoint(
+        line=logical.count("\n") + 1,
+        column=len(logical[last_newline + 1 :]) + 1,
+        byte_offset=byte_offset,
+    )
+
+
 def _validate_issue_22_content(
     canonical_text: str,
     sections: tuple[ParsedSection, ...],
@@ -987,3 +1800,128 @@ def canonicalize_parsed_document(document: ParsedDocument) -> bytes:
     canonical = _document_without_digest(document)
     canonical["compilationDigest"] = document.compilation_digest
     return rfc8785.dumps(cast(Any, canonical))
+
+
+def _source_point_from_document(value: object) -> SourcePoint:
+    if type(value) is not dict:
+        raise ValueError("source point document must be an object")
+    document = cast(dict[str, object], value)
+    if set(document) != {"line", "column", "byteOffset"}:
+        raise ValueError("source point document has unexpected fields")
+    return SourcePoint(
+        line=cast(int, document["line"]),
+        column=cast(int, document["column"]),
+        byte_offset=cast(int, document["byteOffset"]),
+    )
+
+
+def _source_span_from_document(value: object) -> SourceSpan:
+    if type(value) is not dict:
+        raise ValueError("source span document must be an object")
+    document = cast(dict[str, object], value)
+    if set(document) != {"start", "end"}:
+        raise ValueError("source span document has unexpected fields")
+    return SourceSpan(
+        start=_source_point_from_document(document["start"]),
+        end=_source_point_from_document(document["end"]),
+    )
+
+
+def _section_from_document(value: object) -> ParsedSection:
+    if type(value) is not dict:
+        raise ValueError("section document must be an object")
+    document = cast(dict[str, object], value)
+    kind = SectionKind(cast(str, document["kind"]))
+    path = StructuralPath(tuple(cast(list[str], document["path"])))
+    return ParsedSection(
+        kind=kind,
+        text=cast(str, document["text"]),
+        path=path,
+        position=_source_span_from_document(document["position"]),
+        level=cast(int | None, document.get("level")),
+        list_ordered=cast(bool | None, document.get("ordered")),
+        list_items=tuple(cast(list[str], document.get("items", []))),
+        code_language=cast(str | None, document.get("language")),
+        code_body=cast(str | None, document.get("code")),
+        table_header=tuple(cast(list[str], document.get("header", []))),
+        table_rows=tuple(
+            tuple(row) for row in cast(list[list[str]], document.get("rows", []))
+        ),
+    )
+
+
+def _fragment_from_document(
+    value: object,
+    heading_by_key: dict[tuple[str, ...], ParsedSection],
+) -> CompiledFragment:
+    if type(value) is not dict:
+        raise ValueError("Fragment document must be an object")
+    document = cast(dict[str, object], value)
+    parents: list[ParsedSection] = []
+    for parent_value in cast(list[object], document["parentHeadings"]):
+        if type(parent_value) is not dict:
+            raise ValueError("parent heading document must be an object")
+        parent = cast(dict[str, object], parent_value)
+        key = tuple(cast(list[str], parent["path"]))
+        heading = heading_by_key.get(key)
+        if heading is None:
+            raise ValueError("Fragment parent heading must name a parsed section")
+        parents.append(heading)
+    return CompiledFragment(
+        fragment_ref=cast(str, document["fragmentRef"]),
+        kind=SectionKind(cast(str, document["kind"])),
+        path=StructuralPath(tuple(cast(list[str], document["path"]))),
+        position=_source_span_from_document(document["position"]),
+        source_text=cast(str, document["sourceText"]),
+        contextual_text=cast(str, document["contextualText"]),
+        parent_headings=tuple(parents),
+        search_phrases=tuple(cast(list[str], document["searchPhrases"])),
+    )
+
+
+def deserialize_parsed_document(payload: bytes) -> ParsedDocument:
+    """Deserialize runner bytes into the existing self-validating contract."""
+
+    if type(payload) is not bytes:
+        raise TypeError("parsed document payload must be exact bytes")
+    raw = json.loads(payload)
+    if type(raw) is not dict:
+        raise ValueError("parsed document payload must contain one object")
+    document = cast(dict[str, object], raw)
+    provenance_value = document["provenance"]
+    if type(provenance_value) is not dict:
+        raise ValueError("parsed document provenance must be an object")
+    provenance_document = cast(dict[str, object], provenance_value)
+    provenance = CompilationProvenance(
+        compiler_version=cast(str, provenance_document["compilerVersion"]),
+        config_version=cast(str, provenance_document["configVersion"]),
+        canonicalization_profile=cast(
+            str, provenance_document["canonicalizationProfile"]
+        ),
+        content_hash_profile=cast(str, provenance_document["contentHashProfile"]),
+        compilation_digest_profile=cast(
+            str, provenance_document["compilationDigestProfile"]
+        ),
+        token_ceiling=cast(int | None, provenance_document.get("tokenCeiling")),
+    )
+    sections = tuple(
+        _section_from_document(value)
+        for value in cast(list[object], document["sections"])
+    )
+    heading_by_key = {
+        section.path.segments: section
+        for section in sections
+        if section.kind is SectionKind.HEADING
+    }
+    fragments = tuple(
+        _fragment_from_document(value, heading_by_key)
+        for value in cast(list[object], document.get("fragments", []))
+    )
+    return ParsedDocument(
+        canonical_text=cast(str, document["canonicalText"]),
+        sections=sections,
+        content_hash=cast(str, document["contentHash"]),
+        compilation_digest=cast(str, document["compilationDigest"]),
+        provenance=provenance,
+        fragments=fragments,
+    )

@@ -260,10 +260,31 @@ def build_pytest_command(
     )
 
 
+def _report_execution_command(
+    selectors: Sequence[str],
+) -> list[str]:
+    """Describe gate execution without retaining machine-local absolute paths."""
+
+    return list(
+        build_pytest_command(
+            selectors,
+            raw_path=Path(".context-engine/security-gate") / RAW_ARTIFACT_NAME,
+            python_executable="python",
+        )
+    )
+
+
 def _execute_pytest(
     command: Sequence[str], *, cwd: Path, env: Mapping[str, str]
 ) -> int:
-    return subprocess.run(command, cwd=cwd, env=env, check=False).returncode
+    return subprocess.run(
+        command,
+        cwd=cwd,
+        env=env,
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    ).returncode
 
 
 def _audit_rls(
@@ -450,12 +471,7 @@ def _provenance(
     return {
         "runnerVersion": RUNNER_VERSION,
         **_git_state(paths.repository_root),
-        "executionCommand": list(
-            build_pytest_command(
-                selectors,
-                raw_path=paths.output_directory / RAW_ARTIFACT_NAME,
-            )
-        ),
+        "executionCommand": _report_execution_command(selectors),
         "catalogDigest": _file_digest(paths.catalog),
         "fixtureDigest": canonical_digest(fixtures),
         "catalogSchemaDigest": _file_digest(paths.catalog_schema),
@@ -536,12 +552,7 @@ def _best_effort_provenance(
     if live_database_revision is not None:
         provenance["liveDatabaseRevision"] = live_database_revision
     if selectors:
-        provenance["executionCommand"] = list(
-            build_pytest_command(
-                selectors,
-                raw_path=paths.output_directory / RAW_ARTIFACT_NAME,
-            )
-        )
+        provenance["executionCommand"] = _report_execution_command(selectors)
     configuration_fields = {
         field: provenance[field]
         for field in (

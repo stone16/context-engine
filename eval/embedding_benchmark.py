@@ -882,7 +882,7 @@ def _validate_report(document: object, schema: object) -> None:
 
 
 def validate_json_schema_document(value: object, schema: object) -> None:
-    """Validate documents against the tracked schema vocabulary used by eval."""
+    """Validate documents against the tracked schema vocabulary used by reports."""
 
     _validate_bounded_json_value(value)
     _validate_bounded_json_value(schema)
@@ -928,7 +928,10 @@ def _validate_json_schema(
             raise BenchmarkUnavailable("benchmark report schema is unavailable")
         properties = _object(schema.get("properties", {}))
         additional = schema.get("additionalProperties", True)
+        property_names = schema.get("propertyNames")
         for key, item in document.items():
+            if property_names is not None:
+                _validate_json_schema(key, _object(property_names), root)
             child_schema = properties.get(key)
             if child_schema is not None:
                 _validate_json_schema(item, _object(child_schema), root)

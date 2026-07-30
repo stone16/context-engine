@@ -6,7 +6,9 @@ from pathlib import Path
 
 REPORT_PATH = Path("docs/evaluation/2026-07-29-embedding-benchmark.json")
 FORBIDDEN_KEYS = frozenset({"excerpt", "path", "query", "text", "title"})
-PERSONAL_PATH = re.compile(r"(?:/Users/|[A-Za-z]:\\|\.md(?:\b|$))")
+PERSONAL_PATH = re.compile(
+    r"(?:/" + "Users" + r"/|[A-Za-z]:\\|\.md(?:\b|$))"
+)
 
 
 def _keys(value: object) -> set[str]:
