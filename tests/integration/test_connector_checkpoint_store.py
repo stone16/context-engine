@@ -33,6 +33,7 @@ from engine.supply.execution import (
     StagedArtifactSink,
     SupplyBridgeExecution,
     SupplyChangePage,
+    SupplyDocumentDeleteObservation,
     SupplyDocumentEnvelope,
     serialize_supply_change_page,
 )
@@ -321,6 +322,8 @@ def _page(
     )
     acl = SourceAclObservation(
         organization_id=scenario.organization_id,
+        observed_at=datetime(2026, 7, 30, 8, ordinal, tzinfo=UTC),
+        policy_epoch=ordinal,
         evidence_class=SourceAclEvidenceClass.MIRRORED,
         evidence_payload=f"synthetic-acl-{ordinal}".encode(),
     )
@@ -338,7 +341,12 @@ def _page(
                 acl_observation=acl,
             ),
         ),
-        deleted_document_refs=(),
+        deleted_document_refs=(
+            SupplyDocumentDeleteObservation(
+                document_ref=f"document:deleted:{ordinal}",
+                acl_observation=acl,
+            ),
+        ),
         checkpoint_proposal=f"opaque-checkpoint-{ordinal}".encode(),
         terminal=terminal,
     )
@@ -504,6 +512,8 @@ def test_staged_payload_round_trip_preserves_every_emitted_page_fact(
     binding = scenario.execution.binding
     acl = SourceAclObservation(
         organization_id=scenario.organization_id,
+        observed_at=datetime(2026, 7, 30, 8, 15, 30, 123456, tzinfo=UTC),
+        policy_epoch=41,
         evidence_class=SourceAclEvidenceClass.LIVE,
         evidence_payload=b"\x00synthetic-live-acl\xff",
     )
@@ -522,7 +532,18 @@ def test_staged_payload_round_trip_preserves_every_emitted_page_fact(
                 metadata=(("language", "zh-CN"), ("source_revision", "r:7")),
             ),
         ),
-        deleted_document_refs=("document:deleted",),
+        deleted_document_refs=(
+            SupplyDocumentDeleteObservation(
+                document_ref="document:deleted",
+                acl_observation=SourceAclObservation(
+                    organization_id=scenario.organization_id,
+                    observed_at=datetime(2026, 7, 30, 8, 16, tzinfo=UTC),
+                    policy_epoch=42,
+                    evidence_class=SourceAclEvidenceClass.MIRRORED,
+                    evidence_payload=b"synthetic-deleted-acl",
+                ),
+            ),
+        ),
         checkpoint_proposal=b"\x00opaque-checkpoint\xff",
         terminal=True,
     )
@@ -548,7 +569,21 @@ def test_staged_payload_round_trip_preserves_every_emitted_page_fact(
         "checkpoint_proposal": base64.b64encode(page.checkpoint_proposal).decode(
             "ascii"
         ),
-        "deleted_document_refs": ["document:deleted"],
+        "deleted_document_refs": [
+            {
+                "acl_observation": {
+                    "evidence_class": "mirrored",
+                    "evidence_payload": base64.b64encode(
+                        b"synthetic-deleted-acl"
+                    ).decode("ascii"),
+                    "observed_at": "2026-07-30T08:16:00+00:00",
+                    "organization_id": str(scenario.organization_id),
+                    "policy_epoch": 42,
+                    "source_lacks_stronger_acl": None,
+                },
+                "document_ref": "document:deleted",
+            }
+        ],
         "documents": [
             {
                 "acl_observation": {
@@ -556,7 +591,9 @@ def test_staged_payload_round_trip_preserves_every_emitted_page_fact(
                     "evidence_payload": base64.b64encode(
                         b"\x00synthetic-live-acl\xff"
                     ).decode("ascii"),
+                    "observed_at": "2026-07-30T08:15:30.123456+00:00",
                     "organization_id": str(scenario.organization_id),
+                    "policy_epoch": 41,
                     "source_lacks_stronger_acl": None,
                 },
                 "content": base64.b64encode(b"\x00# Synthetic payload\n\xff").decode(
@@ -592,6 +629,19 @@ def test_staged_payload_round_trip_preserves_every_emitted_page_fact(
             ("documents", 0, "acl_observation", "organization_id"),
             lambda: str(uuid4()),
         ),
+        (
+            (
+                "deleted_document_refs",
+                0,
+                "acl_observation",
+                "organization_id",
+            ),
+            lambda: str(uuid4()),
+        ),
+        (
+            ("deleted_document_refs", 0),
+            lambda: {"document_ref": "document:deleted:malformed"},
+        ),
     ],
 )
 def test_atomic_acceptance_refuses_payload_outside_the_exact_binding(
@@ -600,7 +650,7 @@ def test_atomic_acceptance_refuses_payload_outside_the_exact_binding(
     guarded_control_engine: Engine,
     guarded_worker_engine: Engine,
     mutated_path: tuple[str | int, ...],
-    mutated_value: Callable[[], str],
+    mutated_value: Callable[[], object],
 ) -> None:
     scenario = _seed_scenario(migration_configuration, guarded_control_engine)
     scenarios.append(scenario)
