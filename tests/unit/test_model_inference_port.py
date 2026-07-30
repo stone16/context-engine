@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import hashlib
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import asdict, fields, replace
@@ -9,12 +10,14 @@ from inspect import signature
 from pathlib import Path
 from subprocess import run
 from sys import executable
+from threading import Event
+from time import perf_counter
 from typing import Any, cast, get_type_hints
 from uuid import UUID
 
 import pytest
 
-from engine.runtime.budget import PackageBudget, PackageBudgetMeter
+from engine.runtime.budget import BudgetUsage, PackageBudget, PackageBudgetMeter
 from engine.runtime.egress import (
     ChannelEgressGrant,
     EgressGrantRedemption,
@@ -215,6 +218,49 @@ def test_rewrite_uses_explicit_profile_redeems_then_charges_budget() -> None:
     assert budget.usage.tokens > 0
     assert budget.usage.provider_calls == 1
     assert traces == [result.receipt]
+
+
+def test_shared_resolve_meter_preserves_prior_usage_and_accumulates_inference() -> None:
+    prior_usage = BudgetUsage(
+        tokens=17,
+        provider_calls=0,
+        cost_microunits=0,
+        elapsed_ms=3,
+    )
+    budget = PackageBudgetMeter(
+        PackageBudget(
+            max_tokens=1_000,
+            max_provider_calls=2,
+            max_cost_microunits=2_000,
+            max_elapsed_ms=1_000,
+        ),
+        initial_usage=prior_usage,
+    )
+    port = ModelInferencePort(
+        profiles=_registered_profiles(),
+        authority=_AcceptingAuthority(),
+        gateway=lambda _payload, *, timeout_ms: b'{"rewrites":["metered"]}',
+        trace_observer=lambda _receipt: None,
+        monotonic_ms=iter((100, 105)).__next__,
+    )
+
+    result = port.rewrite(
+        RewriteModelRequest(profile=_profile(), query="shared resolve budget"),
+        grant=ModelEgressGrant("egrm_" + "e" * 64),
+        egress=_egress(),
+        budget=budget,
+    )
+
+    assert budget.usage == BudgetUsage(
+        tokens=prior_usage.tokens + result.receipt.budget_usage.tokens,
+        provider_calls=(
+            prior_usage.provider_calls + result.receipt.budget_usage.provider_calls
+        ),
+        cost_microunits=(
+            prior_usage.cost_microunits + result.receipt.budget_usage.cost_microunits
+        ),
+        elapsed_ms=prior_usage.elapsed_ms + result.receipt.budget_usage.elapsed_ms,
+    )
 
 
 def test_rerank_accepts_only_authorized_projection_and_returns_validated_order() -> (
@@ -621,6 +667,159 @@ def test_provider_failures_collapse_to_one_content_free_availability_category(
     assert traces[0].outcome_category is ModelInferenceOutcomeCategory.UNAVAILABLE
     assert traces[0].output_digest is None
     assert "provider detail" not in repr(traces[0])
+
+
+def test_hanging_gateway_is_cut_off_by_the_profile_deadline() -> None:
+    entered = Event()
+    release = Event()
+    profile = replace(
+        _profile(),
+        timeout_ms=20,
+        maximum_elapsed_ms=50,
+    )
+
+    def gateway(payload: bytes, *, timeout_ms: int) -> bytes:
+        del payload, timeout_ms
+        entered.set()
+        release.wait(timeout=2)
+        return b'{"rewrites":["late"]}'
+
+    port = ModelInferencePort(
+        profiles=(profile,),
+        authority=_AcceptingAuthority(),
+        gateway=gateway,
+        trace_observer=lambda _receipt: None,
+        monotonic_ms=lambda: 100,
+    )
+    budget = _budget()
+    started = perf_counter()
+    try:
+        with pytest.raises(ModelInferenceUnavailable, match="is unavailable"):
+            port.rewrite(
+                RewriteModelRequest(profile=profile, query="bounded caller"),
+                grant=ModelEgressGrant("egrm_" + "f" * 64),
+                egress=_egress(),
+                budget=budget,
+            )
+    finally:
+        release.set()
+
+    assert entered.is_set()
+    assert perf_counter() - started < 0.5
+    assert budget.usage.provider_calls == 1
+
+
+def test_redeemed_payload_snapshot_resists_reentrant_request_mutation() -> None:
+    request = RewriteModelRequest(profile=_profile(), query="exact bytes")
+    original_payload = request._payload
+    binding = _egress()
+    redemptions: list[EgressGrantRedemption] = []
+
+    class _MutatingAuthority:
+        def redeem(self, redemption: EgressGrantRedemption) -> bool:
+            redemptions.append(redemption)
+            object.__setattr__(request, "_payload", b"mutated after redemption")
+            object.__setattr__(request.profile, "timeout_ms", 1)
+            object.__setattr__(binding, "package_digest", "4" * 64)
+            return True
+
+    provider_payloads: list[bytes] = []
+
+    def gateway(payload: bytes, *, timeout_ms: int) -> bytes:
+        assert timeout_ms == 250
+        provider_payloads.append(payload)
+        return b'{"rewrites":["snapshotted"]}'
+
+    port = ModelInferencePort(
+        profiles=_registered_profiles(),
+        authority=_MutatingAuthority(),
+        gateway=gateway,
+        trace_observer=lambda _receipt: None,
+        monotonic_ms=iter((100, 101)).__next__,
+    )
+
+    result = port.rewrite(
+        request,
+        grant=ModelEgressGrant("egrm_" + "0" * 64),
+        egress=binding,
+        budget=_budget(),
+    )
+
+    assert result.rewrites == ("snapshotted",)
+    assert provider_payloads == [original_payload]
+    assert len(redemptions) == 1
+    assert (
+        redemptions[0].payload_digest
+        == hashlib.sha256(
+            b"context-engine.model-inference.v1\x00" + original_payload
+        ).hexdigest()
+    )
+    assert redemptions[0].package_digest == "2" * 64
+
+
+def test_invalid_egress_snapshot_refuses_without_leaking_a_budget_reservation() -> None:
+    authority = _AcceptingAuthority()
+    provider_bytes = 0
+
+    def gateway(payload: bytes, *, timeout_ms: int) -> bytes:
+        nonlocal provider_bytes
+        del timeout_ms
+        provider_bytes += len(payload)
+        return b'{"rewrites":["must not run"]}'
+
+    port = ModelInferencePort(
+        profiles=_registered_profiles(),
+        authority=authority,
+        gateway=gateway,
+        trace_observer=lambda _receipt: None,
+        monotonic_ms=lambda: 100,
+    )
+    binding = _egress()
+    object.__setattr__(binding, "audience_digest", "invalid")
+    budget = _budget()
+
+    with pytest.raises(ModelInferenceUnavailable, match="is unavailable") as refusal:
+        port.rewrite(
+            RewriteModelRequest(profile=_profile(), query="invalid binding"),
+            grant=ModelEgressGrant("egrm_" + "6" * 64),
+            egress=binding,
+            budget=budget,
+        )
+
+    assert authority.calls == []
+    assert provider_bytes == 0
+    assert budget.usage == BudgetUsage(0, 0, 0, 0)
+    assert refusal.value.receipt is not None
+    assert refusal.value.receipt.budget_usage == BudgetUsage(0, 0, 0, 0)
+
+
+def test_trace_sink_failure_keeps_a_restricted_receipt_on_generic_outcome() -> None:
+    def reject_trace(_receipt: ModelInferenceTraceReceipt) -> None:
+        raise RuntimeError("private trace sink detail")
+
+    port = ModelInferencePort(
+        profiles=_registered_profiles(),
+        authority=_AcceptingAuthority(),
+        gateway=lambda _payload, *, timeout_ms: b'{"rewrites":["completed"]}',
+        trace_observer=reject_trace,
+        monotonic_ms=iter((100, 101)).__next__,
+    )
+
+    with pytest.raises(ModelInferenceUnavailable) as refusal:
+        port.rewrite(
+            RewriteModelRequest(profile=_profile(), query="trace this"),
+            grant=ModelEgressGrant("egrm_" + "7" * 64),
+            egress=_egress(),
+            budget=_budget(),
+        )
+
+    assert str(refusal.value) == "model inference is unavailable"
+    receipt = refusal.value.receipt
+    assert receipt is not None
+    assert receipt.outcome_category is ModelInferenceOutcomeCategory.UNAVAILABLE
+    assert receipt.output_digest is None
+    assert receipt.budget_usage.provider_calls == 1
+    assert "private trace sink detail" not in repr(receipt)
 
 
 def test_trace_receipt_is_digest_only_with_bounded_usage_and_profile_lineage() -> None:

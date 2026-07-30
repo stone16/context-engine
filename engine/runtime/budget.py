@@ -69,7 +69,12 @@ class _PackageBudgetReservation:
 
 
 class PackageBudgetMeter:
-    """Atomically reserve and charge usage against one effective PackageBudget."""
+    """The shared resolve ledger for atomic PackageBudget reservations and charges.
+
+    Every stage in one resolve must receive the same instance, and final package
+    construction must publish this meter's cumulative ``usage``. A stage-local
+    replacement would bypass the effective ceiling and lose usage provenance.
+    """
 
     __slots__ = ("_budget", "_lock", "_reserved", "_usage")
 

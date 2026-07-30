@@ -8,6 +8,7 @@ from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass, field
 from enum import StrEnum
+from threading import Event, Thread
 from typing import Any, Final, Protocol, TypeVar, cast
 from uuid import UUID
 
@@ -82,7 +83,13 @@ class ModelInferenceOutcomeCategory(StrEnum):
 class ModelInferenceUnavailable(RuntimeError):
     """One content-free availability category for every port refusal."""
 
-    def __init__(self) -> None:
+    __slots__ = ("receipt",)
+
+    def __init__(
+        self,
+        receipt: ModelInferenceTraceReceipt | None = None,
+    ) -> None:
+        self.receipt = receipt
         super().__init__("model inference is unavailable")
 
 
@@ -272,6 +279,48 @@ def _require_profile_integrity(profile: ModelInferenceProfile) -> None:
         raise ValueError("model inference profile integrity is invalid")
 
 
+def _snapshot_profile(profile: ModelInferenceProfile) -> ModelInferenceProfile:
+    """Copy a validated server profile so later caller mutation cannot change a hop."""
+
+    _require_profile_integrity(profile)
+    integrity_digest = profile._integrity_digest
+    egress = profile.egress_profile
+    snapshot = ModelInferenceProfile(
+        profile_ref=profile.profile_ref,
+        profile_version=profile.profile_version,
+        operation=profile.operation,
+        egress_profile=ModelEgressProfile(
+            profile_ref=egress.profile_ref,
+            retention_policy_ref=egress.retention_policy_ref,
+            sensitivity_policy_ref=egress.sensitivity_policy_ref,
+            issuer_ref=egress.issuer_ref,
+            consumer_ref=egress.consumer_ref,
+            provider_ref=egress.provider_ref,
+            model_ref=egress.model_ref,
+            region_ref=egress.region_ref,
+            maximum_ttl=egress.maximum_ttl,
+        ),
+        tokenizer_ref=profile.tokenizer_ref,
+        maximum_input_tokens=profile.maximum_input_tokens,
+        maximum_output_tokens=profile.maximum_output_tokens,
+        maximum_input_items=profile.maximum_input_items,
+        maximum_output_items=profile.maximum_output_items,
+        maximum_provider_calls=profile.maximum_provider_calls,
+        maximum_cost_microunits=profile.maximum_cost_microunits,
+        maximum_elapsed_ms=profile.maximum_elapsed_ms,
+        timeout_ms=profile.timeout_ms,
+        retry_policy=ModelInferenceRetryPolicy(
+            maximum_attempts=profile.retry_policy.maximum_attempts,
+            backoff_ms=profile.retry_policy.backoff_ms,
+        ),
+        input_token_cost_microunits=profile.input_token_cost_microunits,
+        output_token_cost_microunits=profile.output_token_cost_microunits,
+    )
+    if snapshot._integrity_digest != integrity_digest:
+        raise ValueError("model inference profile changed while being validated")
+    return snapshot
+
+
 @dataclass(frozen=True, slots=True)
 class ModelInferenceEgressBinding:
     """Exact trusted grant bindings needed for one Runtime inference hop."""
@@ -291,17 +340,44 @@ class ModelInferenceEgressBinding:
         _require_positive_integer("policy_epoch", self.policy_epoch)
 
 
-def _rewrite_payload(profile: ModelInferenceProfile, query: str) -> bytes:
+def _snapshot_egress_binding(
+    binding: ModelInferenceEgressBinding,
+) -> ModelInferenceEgressBinding:
+    if type(binding) is not ModelInferenceEgressBinding:
+        raise TypeError("model inference requires ModelInferenceEgressBinding")
+    return ModelInferenceEgressBinding(
+        organization_id=binding.organization_id,
+        package_digest=binding.package_digest,
+        purpose=binding.purpose,
+        audience_digest=binding.audience_digest,
+        policy_epoch=binding.policy_epoch,
+    )
+
+
+def _model_payload(
+    *,
+    operation: ModelInferenceOperation,
+    profile: ModelInferenceProfile,
+    input_document: dict[str, object],
+) -> bytes:
     return rfc8785.dumps(
         cast(
             Any,
             {
-                "input": {"query": query},
-                "operation": ModelInferenceOperation.REWRITE.value,
+                "input": input_document,
+                "operation": operation.value,
                 "profileRef": profile.profile_ref,
                 "profileVersion": profile.profile_version,
             },
         )
+    )
+
+
+def _rewrite_payload(profile: ModelInferenceProfile, query: str) -> bytes:
+    return _model_payload(
+        operation=ModelInferenceOperation.REWRITE,
+        profile=profile,
+        input_document={"query": query},
     )
 
 
@@ -311,56 +387,62 @@ def _projection_payload(
     profile: ModelInferenceProfile,
     query: str,
     projections: tuple[AuthorizedProjection, ...],
+    maximum_items: int | None = None,
 ) -> bytes:
-    return rfc8785.dumps(
-        cast(
-            Any,
+    input_document: dict[str, object] = {
+        "items": [
             {
-                "input": {
-                    "items": [
-                        {
-                            "body": projection.projected_body,
-                            "projectedFieldRefs": projection.projected_field_refs,
-                        }
-                        for projection in projections
-                    ],
-                    "query": query,
-                },
-                "operation": operation.value,
-                "profileRef": profile.profile_ref,
-                "profileVersion": profile.profile_version,
-            },
-        )
+                "body": projection.projected_body,
+                "projectedFieldRefs": projection.projected_field_refs,
+            }
+            for projection in projections
+        ],
+        "query": query,
+    }
+    if maximum_items is not None:
+        input_document["maximumItems"] = maximum_items
+    return _model_payload(
+        operation=operation,
+        profile=profile,
+        input_document=input_document,
     )
 
 
-def _select_payload(
+@dataclass(frozen=True, slots=True)
+class _RequestSnapshot:
+    """Immutable execution facts sealed before budget or egress state changes."""
+
+    operation: ModelInferenceOperation
+    profile: ModelInferenceProfile
+    payload: bytes = field(repr=False)
+    payload_digest: str
+    input_items: int
+    projections: tuple[AuthorizedProjection, ...] = field(default=(), repr=False)
+    maximum_items: int | None = None
+
+
+def _seal_request_snapshot(
     *,
+    operation: ModelInferenceOperation,
     profile: ModelInferenceProfile,
-    query: str,
-    projections: tuple[AuthorizedProjection, ...],
-    maximum_items: int,
-) -> bytes:
-    return rfc8785.dumps(
-        cast(
-            Any,
-            {
-                "input": {
-                    "items": [
-                        {
-                            "body": projection.projected_body,
-                            "projectedFieldRefs": projection.projected_field_refs,
-                        }
-                        for projection in projections
-                    ],
-                    "maximumItems": maximum_items,
-                    "query": query,
-                },
-                "operation": ModelInferenceOperation.SELECT.value,
-                "profileRef": profile.profile_ref,
-                "profileVersion": profile.profile_version,
-            },
-        )
+    payload: bytes,
+    stored_payload: object,
+    stored_digest: object,
+    input_items: int,
+    projections: tuple[AuthorizedProjection, ...] = (),
+    maximum_items: int | None = None,
+) -> _RequestSnapshot:
+    payload_digest = hashlib.sha256(_DIGEST_DOMAIN + payload).hexdigest()
+    if stored_payload != payload or stored_digest != payload_digest:
+        raise ValueError("model inference request integrity is invalid")
+    return _RequestSnapshot(
+        operation=operation,
+        profile=profile,
+        payload=payload,
+        payload_digest=payload_digest,
+        input_items=input_items,
+        projections=projections,
+        maximum_items=maximum_items,
     )
 
 
@@ -384,6 +466,19 @@ class RewriteModelRequest:
             self,
             "payload_digest",
             hashlib.sha256(_DIGEST_DOMAIN + payload).hexdigest(),
+        )
+
+    def _snapshot(self, profile: ModelInferenceProfile) -> _RequestSnapshot:
+        if profile.operation is not ModelInferenceOperation.REWRITE:
+            raise ValueError("rewrite requires a rewrite profile")
+        query = _require_nonblank("rewrite query", self.query)
+        return _seal_request_snapshot(
+            operation=ModelInferenceOperation.REWRITE,
+            profile=profile,
+            payload=_rewrite_payload(profile, query),
+            stored_payload=self._payload,
+            stored_digest=self.payload_digest,
+            input_items=1,
         )
 
 
@@ -419,6 +514,30 @@ class RerankModelRequest:
             hashlib.sha256(_DIGEST_DOMAIN + payload).hexdigest(),
         )
 
+    def _snapshot(self, profile: ModelInferenceProfile) -> _RequestSnapshot:
+        if profile.operation is not ModelInferenceOperation.RERANK:
+            raise ValueError("rerank requires a rerank profile")
+        query = _require_nonblank("rerank query", self.query)
+        projections = self.projections
+        if type(projections) is not tuple or not projections:
+            raise TypeError("rerank requires AuthorizedProjection inputs")
+        for projection in projections:
+            _require_active_authorized_projection(projection)
+        return _seal_request_snapshot(
+            operation=ModelInferenceOperation.RERANK,
+            profile=profile,
+            payload=_projection_payload(
+                operation=ModelInferenceOperation.RERANK,
+                profile=profile,
+                query=query,
+                projections=projections,
+            ),
+            stored_payload=self._payload,
+            stored_digest=self.payload_digest,
+            input_items=len(projections),
+            projections=projections,
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class SelectModelRequest:
@@ -443,7 +562,8 @@ class SelectModelRequest:
         _require_positive_integer("select maximum_items", self.maximum_items)
         if self.maximum_items > self.profile.maximum_output_items:
             raise ValueError("select maximum_items exceeds its profile")
-        payload = _select_payload(
+        payload = _projection_payload(
+            operation=ModelInferenceOperation.SELECT,
             profile=self.profile,
             query=self.query,
             projections=self.projections,
@@ -454,6 +574,38 @@ class SelectModelRequest:
             self,
             "payload_digest",
             hashlib.sha256(_DIGEST_DOMAIN + payload).hexdigest(),
+        )
+
+    def _snapshot(self, profile: ModelInferenceProfile) -> _RequestSnapshot:
+        if profile.operation is not ModelInferenceOperation.SELECT:
+            raise ValueError("select requires a select profile")
+        query = _require_nonblank("select query", self.query)
+        projections = self.projections
+        if type(projections) is not tuple or not projections:
+            raise TypeError("select requires AuthorizedProjection inputs")
+        for projection in projections:
+            _require_active_authorized_projection(projection)
+        maximum_items = _require_positive_integer(
+            "select maximum_items",
+            self.maximum_items,
+        )
+        if maximum_items > profile.maximum_output_items:
+            raise ValueError("select maximum_items exceeds its profile")
+        return _seal_request_snapshot(
+            operation=ModelInferenceOperation.SELECT,
+            profile=profile,
+            payload=_projection_payload(
+                operation=ModelInferenceOperation.SELECT,
+                profile=profile,
+                query=query,
+                projections=projections,
+                maximum_items=maximum_items,
+            ),
+            stored_payload=self._payload,
+            stored_digest=self.payload_digest,
+            input_items=len(projections),
+            projections=projections,
+            maximum_items=maximum_items,
         )
 
 
@@ -544,6 +696,51 @@ def _parse_closed_document(raw_output: bytes) -> dict[str, object]:
 _ParsedOutput = TypeVar("_ParsedOutput")
 
 
+@dataclass(frozen=True, slots=True)
+class _TraceContext:
+    operation: ModelInferenceOperation
+    profile_ref: str
+    profile_version: int
+    input_digest: str
+
+
+_REQUEST_OPERATIONS: Final[dict[type[object], ModelInferenceOperation]] = {
+    RewriteModelRequest: ModelInferenceOperation.REWRITE,
+    RerankModelRequest: ModelInferenceOperation.RERANK,
+    SelectModelRequest: ModelInferenceOperation.SELECT,
+}
+
+
+def _request_operation(request: object) -> ModelInferenceOperation:
+    operation = _REQUEST_OPERATIONS.get(type(request))
+    if operation is None:
+        raise TypeError("model inference request has the wrong nominal type")
+    return operation
+
+
+def _fallback_trace_context(request: _InferenceRequest) -> _TraceContext:
+    operation = _request_operation(request)
+    try:
+        _require_profile_integrity(request.profile)
+        if request.profile.operation is not operation:
+            raise ValueError("model inference request operation changed")
+        profile_ref = request.profile.profile_ref
+        profile_version = request.profile.profile_version
+    except (AttributeError, TypeError, ValueError):
+        profile_ref = _UNAVAILABLE_PROFILE_REF
+        profile_version = 1
+    raw_payload = getattr(request, "_payload", None)
+    input_digest = hashlib.sha256(
+        _DIGEST_DOMAIN + (raw_payload if type(raw_payload) is bytes else b"invalid")
+    ).hexdigest()
+    return _TraceContext(
+        operation=operation,
+        profile_ref=profile_ref,
+        profile_version=profile_version,
+        input_digest=input_digest,
+    )
+
+
 class ModelInferencePort:
     """Sole governed entry point for Runtime rewrite, rerank, and select calls."""
 
@@ -570,11 +767,15 @@ class ModelInferencePort:
             tuple[ModelInferenceOperation, str, int], ModelInferenceProfile
         ] = {}
         for profile in profiles:
-            _require_profile_integrity(profile)
-            key = (profile.operation, profile.profile_ref, profile.profile_version)
+            snapshot = _snapshot_profile(profile)
+            key = (
+                snapshot.operation,
+                snapshot.profile_ref,
+                snapshot.profile_version,
+            )
             if key in registered:
                 raise ValueError("model inference profile lineage must be unique")
-            registered[key] = profile
+            registered[key] = snapshot
         if not callable(getattr(authority, "redeem", None)):
             raise TypeError("model inference redemption authority is incomplete")
         for field_name, value in (
@@ -592,73 +793,56 @@ class ModelInferencePort:
 
     def _emit_unavailable(
         self,
-        request: _InferenceRequest,
+        trace_context: _TraceContext,
         usage: BudgetUsage,
     ) -> None:
-        operation = self._request_operation(request)
-        try:
-            _require_profile_integrity(request.profile)
-            if request.profile.operation is not operation:
-                raise ValueError("model inference request operation changed")
-            profile_ref = request.profile.profile_ref
-            profile_version = request.profile.profile_version
-        except (AttributeError, TypeError, ValueError):
-            profile_ref = _UNAVAILABLE_PROFILE_REF
-            profile_version = 1
-        raw_payload = getattr(request, "_payload", None)
-        input_digest = (
-            hashlib.sha256(_DIGEST_DOMAIN + raw_payload).hexdigest()
-            if type(raw_payload) is bytes
-            else hashlib.sha256(_DIGEST_DOMAIN + b"invalid").hexdigest()
-        )
         receipt = ModelInferenceTraceReceipt(
-            operation=operation,
+            operation=trace_context.operation,
             outcome_category=ModelInferenceOutcomeCategory.UNAVAILABLE,
-            profile_ref=profile_ref,
-            profile_version=profile_version,
-            input_digest=input_digest,
+            profile_ref=trace_context.profile_ref,
+            profile_version=trace_context.profile_version,
+            input_digest=trace_context.input_digest,
             output_digest=None,
             budget_usage=usage,
         )
         with suppress(Exception):
             self._trace_observer(receipt)
-        raise ModelInferenceUnavailable
+        raise ModelInferenceUnavailable(receipt)
 
-    @staticmethod
-    def _request_operation(request: _InferenceRequest) -> ModelInferenceOperation:
-        if type(request) is RewriteModelRequest:
-            return ModelInferenceOperation.REWRITE
-        if type(request) is RerankModelRequest:
-            return ModelInferenceOperation.RERANK
-        if type(request) is SelectModelRequest:
-            return ModelInferenceOperation.SELECT
-        raise TypeError("model inference request has the wrong nominal type")
-
-    @staticmethod
-    def _request_payload(
-        request: _InferenceRequest,
+    def _call_gateway_bounded(
+        self,
+        payload: bytes,
+        *,
+        timeout_ms: int,
     ) -> bytes:
-        if type(request) is RewriteModelRequest:
-            return _rewrite_payload(request.profile, request.query)
-        if type(request) is RerankModelRequest:
-            for projection in request.projections:
-                _require_active_authorized_projection(projection)
-            return _projection_payload(
-                operation=ModelInferenceOperation.RERANK,
-                profile=request.profile,
-                query=request.query,
-                projections=request.projections,
-            )
-        if type(request) is SelectModelRequest:
-            for projection in request.projections:
-                _require_active_authorized_projection(projection)
-            return _select_payload(
-                profile=request.profile,
-                query=request.query,
-                projections=request.projections,
-                maximum_items=request.maximum_items,
-            )
-        raise TypeError("model inference request has the wrong nominal type")
+        """Return within the profile deadline even if an injected gateway hangs."""
+
+        finished = Event()
+        outputs: list[bytes] = []
+        failed: list[bool] = []
+
+        def invoke() -> None:
+            try:
+                output = self._gateway(payload, timeout_ms=timeout_ms)
+                if type(output) is bytes:
+                    outputs.append(output)
+                else:
+                    failed.append(True)
+            except Exception:
+                failed.append(True)
+            finally:
+                finished.set()
+
+        Thread(
+            target=invoke,
+            name="context-engine-model-inference",
+            daemon=True,
+        ).start()
+        if not finished.wait(timeout_ms / 1_000):
+            raise TimeoutError("model gateway exceeded its profile")
+        if failed or len(outputs) != 1:
+            raise ValueError("model gateway is unavailable")
+        return outputs[0]
 
     def _execute(
         self,
@@ -667,120 +851,113 @@ class ModelInferencePort:
         grant: ModelEgressGrant,
         egress: ModelInferenceEgressBinding,
         budget: PackageBudgetMeter,
-        parse_output: Callable[[bytes], _ParsedOutput],
+        parse_output: Callable[[bytes, _RequestSnapshot], _ParsedOutput],
     ) -> tuple[_ParsedOutput, ModelInferenceTraceReceipt]:
         """Run the shared budget -> redeem -> provider -> trace pipeline."""
 
         if type(budget) is not PackageBudgetMeter:
             raise TypeError("model inference requires PackageBudgetMeter")
         empty = BudgetUsage(0, 0, 0, 0)
+        trace_context = _fallback_trace_context(request)
         try:
-            _require_profile_integrity(request.profile)
-            profile_key = (
-                request.profile.operation,
-                request.profile.profile_ref,
-                request.profile.profile_version,
+            operation = _request_operation(request)
+            profile = _snapshot_profile(request.profile)
+            snapshot = request._snapshot(profile)
+            if snapshot.operation is not operation:
+                raise ValueError("model inference request operation changed")
+            trace_context = _TraceContext(
+                operation=snapshot.operation,
+                profile_ref=snapshot.profile.profile_ref,
+                profile_version=snapshot.profile.profile_version,
+                input_digest=snapshot.payload_digest,
             )
-            if self._profiles.get(profile_key) != request.profile:
+            profile_key = (
+                snapshot.operation,
+                snapshot.profile.profile_ref,
+                snapshot.profile.profile_version,
+            )
+            if self._profiles.get(profile_key) != snapshot.profile:
                 raise ValueError("model inference profile is not registered")
-            payload = self._request_payload(request)
-            if (
-                payload != request._payload
-                or hashlib.sha256(_DIGEST_DOMAIN + payload).hexdigest()
-                != request.payload_digest
-            ):
-                raise ValueError("model inference request integrity is invalid")
             if type(grant) is not ModelEgressGrant:
-                self._emit_unavailable(request, empty)
-            if type(egress) is not ModelInferenceEgressBinding:
-                self._emit_unavailable(request, empty)
-            if type(request) is RewriteModelRequest:
-                input_items = 1
-            elif (
-                type(request) is RerankModelRequest
-                or type(request) is SelectModelRequest
-            ):
-                input_items = len(request.projections)
-            else:
-                raise TypeError("model inference request has the wrong nominal type")
-            input_tokens = len(payload)
+                self._emit_unavailable(trace_context, empty)
+            grant_snapshot = ModelEgressGrant(grant.value)
+            egress_snapshot = _snapshot_egress_binding(egress)
+            redemption = EgressGrantRedemption.for_model(
+                grant=grant_snapshot,
+                organization_id=egress_snapshot.organization_id,
+                package_digest=egress_snapshot.package_digest,
+                payload_digest=snapshot.payload_digest,
+                purpose=egress_snapshot.purpose,
+                audience_digest=egress_snapshot.audience_digest,
+                policy_epoch=egress_snapshot.policy_epoch,
+                profile=snapshot.profile.egress_profile,
+            )
+            input_tokens = len(snapshot.payload)
             if (
-                input_tokens > request.profile.maximum_input_tokens
-                or input_items > request.profile.maximum_input_items
+                input_tokens > snapshot.profile.maximum_input_tokens
+                or snapshot.input_items > snapshot.profile.maximum_input_items
             ):
-                self._emit_unavailable(request, empty)
+                self._emit_unavailable(trace_context, empty)
             maximum = BudgetUsage(
-                tokens=input_tokens + request.profile.maximum_output_tokens,
+                tokens=input_tokens + snapshot.profile.maximum_output_tokens,
                 provider_calls=1,
                 cost_microunits=(
-                    input_tokens * request.profile.input_token_cost_microunits
-                    + request.profile.maximum_output_tokens
-                    * request.profile.output_token_cost_microunits
+                    input_tokens * snapshot.profile.input_token_cost_microunits
+                    + snapshot.profile.maximum_output_tokens
+                    * snapshot.profile.output_token_cost_microunits
                 ),
-                elapsed_ms=request.profile.maximum_elapsed_ms,
+                elapsed_ms=snapshot.profile.maximum_elapsed_ms,
             )
             reservation = budget._reserve(maximum)
         except ModelInferenceUnavailable:
             raise
         except (PackageBudgetExceeded, TypeError, ValueError):
-            self._emit_unavailable(request, empty)
+            self._emit_unavailable(trace_context, empty)
 
-        redemption = EgressGrantRedemption.for_model(
-            grant=grant,
-            organization_id=egress.organization_id,
-            package_digest=egress.package_digest,
-            payload_digest=request.payload_digest,
-            purpose=egress.purpose,
-            audience_digest=egress.audience_digest,
-            policy_epoch=egress.policy_epoch,
-            profile=request.profile.egress_profile,
-        )
         try:
             started_ms = self._monotonic_ms()
             accepted = self._authority.redeem(redemption)
         except Exception:
             budget._cancel(reservation)
-            self._emit_unavailable(request, empty)
+            self._emit_unavailable(trace_context, empty)
         if accepted is not True:
             budget._cancel(reservation)
-            self._emit_unavailable(request, empty)
+            self._emit_unavailable(trace_context, empty)
 
         try:
-            raw_output = self._gateway(
-                request._payload,
-                timeout_ms=request.profile.timeout_ms,
+            raw_output = self._call_gateway_bounded(
+                snapshot.payload,
+                timeout_ms=snapshot.profile.timeout_ms,
             )
             finished_ms = self._monotonic_ms()
-            if type(raw_output) is not bytes:
-                raise ValueError("model gateway output must be bytes")
             elapsed_ms = finished_ms - started_ms
             if (
                 elapsed_ms < 0
-                or elapsed_ms > request.profile.timeout_ms
-                or len(raw_output) > request.profile.maximum_output_tokens
+                or elapsed_ms > snapshot.profile.timeout_ms
+                or len(raw_output) > snapshot.profile.maximum_output_tokens
             ):
                 raise ValueError("model gateway exceeded its profile")
-            parsed = parse_output(raw_output)
+            parsed = parse_output(raw_output, snapshot)
             actual = BudgetUsage(
                 tokens=input_tokens + len(raw_output),
                 provider_calls=1,
                 cost_microunits=(
-                    input_tokens * request.profile.input_token_cost_microunits
-                    + len(raw_output) * request.profile.output_token_cost_microunits
+                    input_tokens * snapshot.profile.input_token_cost_microunits
+                    + len(raw_output) * snapshot.profile.output_token_cost_microunits
                 ),
                 elapsed_ms=elapsed_ms,
             )
             budget._commit(reservation, actual)
         except Exception:
             budget._commit(reservation, maximum)
-            self._emit_unavailable(request, maximum)
+            self._emit_unavailable(trace_context, maximum)
 
         receipt = ModelInferenceTraceReceipt(
-            operation=request.profile.operation,
+            operation=snapshot.operation,
             outcome_category=ModelInferenceOutcomeCategory.SUCCEEDED,
-            profile_ref=request.profile.profile_ref,
-            profile_version=request.profile.profile_version,
-            input_digest=request.payload_digest,
+            profile_ref=snapshot.profile.profile_ref,
+            profile_version=snapshot.profile.profile_version,
+            input_digest=snapshot.payload_digest,
             output_digest=hashlib.sha256(
                 _OUTPUT_DIGEST_DOMAIN + raw_output
             ).hexdigest(),
@@ -789,7 +966,7 @@ class ModelInferencePort:
         try:
             self._trace_observer(receipt)
         except Exception:
-            raise ModelInferenceUnavailable from None
+            self._emit_unavailable(trace_context, actual)
         return parsed, receipt
 
     def rewrite(
@@ -805,14 +982,17 @@ class ModelInferencePort:
         if type(request) is not RewriteModelRequest:
             raise TypeError("rewrite requires RewriteModelRequest")
 
-        def parse(raw_output: bytes) -> tuple[str, ...]:
+        def parse(
+            raw_output: bytes,
+            snapshot: _RequestSnapshot,
+        ) -> tuple[str, ...]:
             document = _parse_closed_document(raw_output)
             if set(document) != {"rewrites"}:
                 raise ValueError("rewrite output has the wrong shape")
             raw_rewrites = document["rewrites"]
             if (
                 type(raw_rewrites) is not list
-                or not 1 <= len(raw_rewrites) <= request.profile.maximum_output_items
+                or not 1 <= len(raw_rewrites) <= snapshot.profile.maximum_output_items
                 or any(
                     type(value) is not str or not value or value.isspace()
                     for value in raw_rewrites
@@ -843,18 +1023,23 @@ class ModelInferencePort:
         if type(request) is not RerankModelRequest:
             raise TypeError("rerank requires RerankModelRequest")
 
-        def parse(raw_output: bytes) -> tuple[AuthorizedProjection, ...]:
+        def parse(
+            raw_output: bytes,
+            snapshot: _RequestSnapshot,
+        ) -> tuple[AuthorizedProjection, ...]:
             document = _parse_closed_document(raw_output)
             if set(document) != {"order"} or type(document["order"]) is not list:
                 raise ValueError("rerank output has the wrong shape")
             order = document["order"]
-            expected = list(range(len(request.projections)))
+            expected = list(range(len(snapshot.projections)))
             if (
                 any(type(index) is not int for index in order)
                 or sorted(cast(list[int], order)) != expected
             ):
                 raise ValueError("rerank output must be one exact permutation")
-            return tuple(request.projections[index] for index in cast(list[int], order))
+            return tuple(
+                snapshot.projections[index] for index in cast(list[int], order)
+            )
 
         parsed, receipt = self._execute(
             request,
@@ -881,23 +1066,28 @@ class ModelInferencePort:
         if type(request) is not SelectModelRequest:
             raise TypeError("select requires SelectModelRequest")
 
-        def parse(raw_output: bytes) -> tuple[AuthorizedProjection, ...]:
+        def parse(
+            raw_output: bytes,
+            snapshot: _RequestSnapshot,
+        ) -> tuple[AuthorizedProjection, ...]:
             document = _parse_closed_document(raw_output)
             if set(document) != {"selected"} or type(document["selected"]) is not list:
                 raise ValueError("select output has the wrong shape")
             selected = cast(list[object], document["selected"])
+            if snapshot.maximum_items is None:
+                raise ValueError("select maximum_items is unavailable")
             if (
-                len(selected) > request.maximum_items
+                len(selected) > snapshot.maximum_items
                 or any(type(index) is not int for index in selected)
                 or len(cast(list[int], selected)) != len(set(cast(list[int], selected)))
                 or any(
-                    not 0 <= index < len(request.projections)
+                    not 0 <= index < len(snapshot.projections)
                     for index in cast(list[int], selected)
                 )
             ):
                 raise ValueError("select output must be a bounded unique subset")
             return tuple(
-                request.projections[index] for index in cast(list[int], selected)
+                snapshot.projections[index] for index in cast(list[int], selected)
             )
 
         parsed, receipt = self._execute(
