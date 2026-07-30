@@ -7,7 +7,7 @@ from uuid import UUID
 
 import pytest
 
-from applications.control import local_operator_authorities
+from applications.control import local_control_operator_authority
 from applications.operator_authentication import (
     CONTROL_OPERATOR_OPERATIONS_ENV,
     CONTROL_OPERATOR_SECRET_ENV,
@@ -16,6 +16,7 @@ from applications.operator_authentication import (
     RELEASE_OPERATOR_SECRET_ENV,
     WORKER_SECRET_ENV,
     LocalControlOperatorAuthenticator,
+    LocalControlOperatorConfiguration,
     LocalOperatorAuthorities,
     LocalOperatorConfiguration,
     LocalOperatorConfigurationUnavailable,
@@ -71,7 +72,7 @@ def test_operator_configuration_is_absent_by_default_and_partial_values_fail_clo
     for name in environment():
         monkeypatch.delenv(name, raising=False)
     assert LocalOperatorConfiguration.load({}) is None
-    assert local_operator_authorities() is None
+    assert local_control_operator_authority() is None
 
     for missing_name in environment():
         partial = environment()
@@ -91,6 +92,26 @@ def test_operator_configuration_is_absent_by_default_and_partial_values_fail_clo
     assert CONTROL_SECRET not in repr(_configuration())
     assert RELEASE_SECRET not in repr(_configuration())
 
+
+def test_routine_control_configuration_does_not_require_release_secrets() -> None:
+    projected = {
+        name: value
+        for name, value in environment().items()
+        if name
+        in {
+            OPERATOR_ORGANIZATION_ENV,
+            CONTROL_OPERATOR_SECRET_ENV,
+            CONTROL_OPERATOR_OPERATIONS_ENV,
+        }
+    }
+
+    configuration = LocalControlOperatorConfiguration.load(projected)
+
+    assert configuration is not None
+    assert configuration.organization_id == ORGANIZATION_ID
+    assert RELEASE_OPERATOR_SECRET_ENV not in projected
+    assert DOGFOOD_SECRET_ENV not in projected
+    assert WORKER_SECRET_ENV not in projected
 
 def test_control_operations_are_an_exact_enumerated_set() -> None:
     configuration = _configuration()
