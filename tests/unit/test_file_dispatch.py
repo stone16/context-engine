@@ -15,7 +15,6 @@ from sqlalchemy.exc import SQLAlchemyError
 from adapters.embeddings import DeterministicEmbeddingTwin, ExternalEmbeddingProvider
 from applications.worker import (
     DEFAULT_WORKER_MAX_FILE_BYTES,
-    FileDispatchCycleResult,
     _embedding_provider,
     _file_dispatch_roots,
     _file_read_limits,
@@ -24,6 +23,7 @@ from applications.worker import (
     dispatch_one_file_import,
 )
 from applications.worker_progress import (
+    FileDispatchCycleResult,
     FileDispatchFailureCategory,
     opaque_file_job_ref,
 )
