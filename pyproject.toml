@@ -47,6 +47,7 @@ context-engine-dogfood-seed = "applications.dogfood:main"
 context-engine-dogfood-eval = "applications.dogfood_evaluation:main"
 context-engine-embedding-benchmark = "applications.embedding_benchmark:main"
 context-engine-eval = "applications.eval_v1:main"
+context-engine-golden-backup = "applications.golden_backup:main"
 context-engine-worker = "applications.worker:main"
 
 [project.optional-dependencies]

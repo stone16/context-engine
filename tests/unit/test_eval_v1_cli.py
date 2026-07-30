@@ -9,7 +9,7 @@ from typing import cast
 
 import pytest
 
-from applications.eval_v1 import GOLDEN_ROOT_ENV, main
+from applications.eval_v1 import main
 from engine.learning.eval_report import (
     CaseSecurityObservation,
     SecurityObservationState,
@@ -21,6 +21,7 @@ from engine.learning.eval_run import (
     load_evaluation_run,
 )
 from engine.learning.golden import create_golden_lock, load_golden_set
+from engine.learning.golden_storage import GOLDEN_ROOT_ENV
 from engine.learning.thresholds import load_thresholds
 from tests.support.eval_security import harness_security_result
 from tests.support.golden import (
