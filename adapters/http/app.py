@@ -121,6 +121,7 @@ from engine.runtime.egress import (
 from engine.runtime.invocation import (
     _construct_authenticated_http_invocation,
 )
+from engine.runtime.model_inference import ModelInferenceUnavailable
 from engine.runtime.package_digest import QueryDigestKeyring
 from engine.runtime.policy_epoch import PolicyEpochAuthorityUnavailable
 from engine.runtime.release_lineage import ActiveReleaseUnavailable
@@ -300,10 +301,11 @@ def create_app(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+    @app.exception_handler(ModelInferenceUnavailable)
     @app.exception_handler(TrustedAuthorityUnavailable)
-    async def trusted_authority_unavailable(
+    async def service_unavailable(
         request: Request,
-        error: TrustedAuthorityUnavailable,
+        error: TrustedAuthorityUnavailable | ModelInferenceUnavailable,
     ) -> JSONResponse:
         del request, error
         return JSONResponse(SERVICE_UNAVAILABLE_RESPONSE, status_code=503)
