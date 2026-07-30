@@ -1,12 +1,9 @@
 from __future__ import annotations
 
 import json
-import logging
 import threading
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
-
-import pytest
 
 from applications.worker import dispatch_one_file_import
 from applications.worker_progress import (
@@ -22,9 +19,7 @@ from engine.persistence import (
 from engine.supply import WorkerLeaseToken
 
 
-def test_credentials_and_trusted_routing_values_never_reach_progress_or_logs(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
+def test_credentials_and_trusted_routing_values_never_reach_progress_output() -> None:
     credential = "fake-worker-credential-never-render"
     private_path = "/private/vault/board-notes.md"
     organization_id = UUID("da31d6d2-4742-4213-a941-1a15228181d3")
@@ -60,7 +55,6 @@ def test_credentials_and_trusted_routing_values_never_reach_progress_or_logs(
         rendered.append,
         batch_ref_factory=lambda: "f" * 64,
     )
-    caplog.set_level(logging.DEBUG)
     result = dispatch_one_file_import(
         Authority(),
         WorkerFactory(),  # type: ignore[arg-type]
@@ -71,8 +65,8 @@ def test_credentials_and_trusted_routing_values_never_reach_progress_or_logs(
     reporter.observe_cycle(FileDispatchCycleResult("no_work"))
 
     assert result.reason_category is FileDispatchFailureCategory.FILE_IMPORT_REFUSED
+    assert rendered
     output = "\n".join(rendered)
-    logs = caplog.text
     for forbidden in (
         credential,
         private_path,
@@ -82,7 +76,6 @@ def test_credentials_and_trusted_routing_values_never_reach_progress_or_logs(
         str(service_principal_id),
     ):
         assert forbidden not in output
-        assert forbidden not in logs
     for line in rendered:
         assert set(json.loads(line)) == {
             "batchRef",

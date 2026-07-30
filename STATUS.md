@@ -188,6 +188,10 @@ dispatch batches, with opaque per-job attribution, aggregate counters, bounded
 in-flight observations, closed refusal categories, and idle-poll suppression.
 It also composes `scan-all` and source-wide `status` from one exact existing
 Source discovery call plus the independently consumed per-Source operations.
+Source discovery intentionally adds active-Source enumeration for a
+`READ_SOURCE` operator. `scan-all` reports a closed source-local refusal and
+continues later independently durable cycles; bare `status` requires
+`READ_SOURCE` before its per-Source `READ_SOURCE_PROGRESS` calls.
 It adds no `ControlOperation`, does not widen or reuse a WorkerLease, preserves
 all credential planes, and never promotes or activates a Release implicitly.
 

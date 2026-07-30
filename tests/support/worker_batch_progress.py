@@ -30,6 +30,7 @@ from engine.supply import MarkdownCompilerConfig, WorkerLeaseCodec, WorkerLeaseK
 class BatchProgressCapture:
     documents: tuple[dict[str, object], ...]
     emitted_at: tuple[float, ...]
+    job_completed_at: tuple[float, ...]
 
 
 class _StopOnIdleAuthority:
@@ -62,6 +63,22 @@ class _DelayedWorker:
         return self._worker.run(redemption)  # type: ignore[arg-type]
 
 
+class _CompletionObservedWorker:
+    def __init__(
+        self,
+        worker: PostgreSQLFileImportWorker | _DelayedWorker,
+        completed_at: list[float],
+    ) -> None:
+        self._worker = worker
+        self._completed_at = completed_at
+
+    def run(self, redemption: object) -> object:
+        try:
+            return self._worker.run(redemption)  # type: ignore[arg-type]
+        finally:
+            self._completed_at.append(monotonic())
+
+
 def run_scheduled_file_batch(
     *,
     scheduler_engine: Engine,
@@ -83,6 +100,7 @@ def run_scheduled_file_batch(
     stop_event = threading.Event()
     rendered: list[str] = []
     emitted_at: list[float] = []
+    job_completed_at: list[float] = []
 
     def emit(value: str) -> None:
         emitted_at.append(monotonic())
@@ -103,9 +121,10 @@ def run_scheduled_file_batch(
             embedding_provider=DeterministicEmbeddingTwin(),
             clock=lambda: _worker_database_time(worker_engine),
         )
+        prepared_worker: PostgreSQLFileImportWorker | _DelayedWorker = worker
         if job_delay_seconds:
-            return _DelayedWorker(worker, job_delay_seconds)
-        return worker
+            prepared_worker = _DelayedWorker(worker, job_delay_seconds)
+        return _CompletionObservedWorker(prepared_worker, job_completed_at)
 
     dispatch_file_imports_until_stopped(
         _StopOnIdleAuthority(authority, stop_event),
@@ -120,6 +139,7 @@ def run_scheduled_file_batch(
             cast(dict[str, object], json.loads(value)) for value in rendered
         ),
         emitted_at=tuple(emitted_at),
+        job_completed_at=tuple(job_completed_at),
     )
 
 

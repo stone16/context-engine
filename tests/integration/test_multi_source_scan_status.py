@@ -198,8 +198,10 @@ def test_scan_all_and_status_discover_every_active_source_without_source_args(
             "deletesObserved": 0,
             "importsScheduled": 3,
             "pathsObserved": 3,
+            "refusalCount": 0,
             "sourceCount": 2,
         }
+        assert scan["refusals"] == []
         scan_sources = cast(list[dict[str, object]], scan["sources"])
         status_sources = cast(list[dict[str, object]], status["sources"])
         expected_refs = sorted((str(first_source), str(second_source)))
@@ -252,3 +254,101 @@ def test_scan_all_and_status_discover_every_active_source_without_source_args(
                 )
         finally:
             migration_engine.dispose()
+
+
+def test_scan_all_reports_one_refusal_and_continues_with_later_sources(
+    file_scan_scenario: tuple[UUID, UUID, UUID, Path, dict[str, str]],
+) -> None:
+    organization_id, _membership_id, _receiver_id, first_root, environment = (
+        file_scan_scenario
+    )
+    roots = {
+        "operator-scan-root": first_root,
+        "operator-scan-root-two": first_root.parent / "operator-scan-root-two",
+        "operator-scan-root-three": first_root.parent / "operator-scan-root-three",
+    }
+    for index, root in enumerate(roots.values(), start=1):
+        root.mkdir(exist_ok=True)
+        (root / f"source-{index}.md").write_text(
+            f"# Source {index}\n\nContinue after a bounded refusal.\n",
+            encoding="utf-8",
+        )
+    environment["CONTEXT_ENGINE_WORKER_FILE_ROOTS_JSON"] = json.dumps(
+        {root_ref: str(root) for root_ref, root in roots.items()}
+    )
+    source_roots = {
+        _register_activated(
+            organization_id=organization_id,
+            root_ref=root_ref,
+            idempotency_key=f"continue-scan-{index}",
+            environment=environment,
+        ): root_ref
+        for index, root_ref in enumerate(roots, start=1)
+    }
+    ordered_refs = sorted(source_roots)
+    refusing_ref = ordered_refs[1]
+    environment["CONTEXT_ENGINE_WORKER_FILE_ROOTS_JSON"] = json.dumps(
+        {
+            root_ref: str(roots[root_ref])
+            for source_ref, root_ref in source_roots.items()
+            if source_ref != refusing_ref
+        }
+    )
+
+    completed = _control(
+        ["scan-all", "--organization-id", str(organization_id)],
+        environment=environment,
+    )
+
+    report = cast(dict[str, object], json.loads(completed.stdout))
+    successful_sources = cast(list[dict[str, object]], report["sources"])
+    refusals = cast(list[dict[str, object]], report["refusals"])
+    assert [source["sourceRef"] for source in successful_sources] == [
+        str(ordered_refs[0]),
+        str(ordered_refs[2]),
+    ]
+    assert refusals == [
+        {
+            "reasonCategory": "operation_refused",
+            "sourceRef": str(refusing_ref),
+        }
+    ]
+    assert report["summary"] == {
+        "changesAccepted": 2,
+        "compilationRefusals": 0,
+        "deletesObserved": 0,
+        "importsScheduled": 2,
+        "pathsObserved": 2,
+        "refusalCount": 1,
+        "sourceCount": 3,
+    }
+
+
+def test_scan_all_keeps_shared_configuration_failure_command_fatal(
+    file_scan_scenario: tuple[UUID, UUID, UUID, Path, dict[str, str]],
+) -> None:
+    organization_id, _membership_id, _receiver_id, root, environment = (
+        file_scan_scenario
+    )
+    (root / "configured.md").write_text(
+        "# Configured\n\nShared configuration must fail the whole command.\n",
+        encoding="utf-8",
+    )
+    _register_activated(
+        organization_id=organization_id,
+        root_ref="operator-scan-root",
+        idempotency_key="scan-all-shared-configuration",
+        environment=environment,
+    )
+    absent_configuration = environment.copy()
+    del absent_configuration["CONTEXT_ENGINE_FILE_CHANGE_PROVIDER_SIGNING_KEY_HEX"]
+
+    refused = _control(
+        ["scan-all", "--organization-id", str(organization_id)],
+        environment=absent_configuration,
+        check=False,
+    )
+
+    assert refused.returncode != 0
+    assert refused.stdout == ""
+    assert refused.stderr == "context-engine-control: operation refused\n"

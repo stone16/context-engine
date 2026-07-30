@@ -1,6 +1,6 @@
 ---
 name: adr-0086-report-worker-batches-and-compose-source-wide-cycles
-version: "1.0.0"
+version: "1.0.1"
 description: >
   Report privacy-shaped File dispatch batches and let the local operator scan
   or inspect every active File source without caller-copied Source references.
@@ -81,17 +81,25 @@ unchanged.
 - Adding another registered active File source changes neither the recurring
   scan command nor the recurring status command and requires no copied
   `SourceRef`.
-- Source discovery reveals the same active manifests already available one at
-  a time under `READ_SOURCE`; disabled Source history remains absent.
-- Multi-source scan is still a sequence of independently durable bounded
-  cycles, not one cross-Source transaction. A refusal terminates the command
-  generically; broader cross-Source recovery policy remains inactive.
+- Source discovery adds enumeration: an operator with `READ_SOURCE` can list
+  every active manifest without already knowing any `SourceRef`, whereas the
+  source-specific read requires one. This wider discovery capability is
+  intentional for the local source-wide commands; disabled Source history
+  remains absent.
+- Multi-source scan is a sequence of independently durable bounded cycles, not
+  one cross-Source transaction. A source-local generic refusal is reported
+  with its already-discovered `SourceRef` and the closed
+  `operation_refused` category, and later Sources continue. This prevents a
+  later refusal from hiding earlier completed Source cycles. Totals cover only
+  completed cycles. Only a source-scoped capability, provider, or file-identity
+  refusal is continued; discovery, authorization, configuration, database, or
+  process setup failure still refuses the whole command.
 - Metrics, HTTP progress, dead-letter transitions, automatic promotion, and
   production operator administration remain inactive.
 
 ## Revisit trigger
 
 Revisit before promising a precomputed queue total, exposing progress outside
-the local process stream, reporting a new failure category, continuing a
-source-wide scan after one Source refuses, listing disabled Source history, or
+the local process stream, reporting another failure category, adding retry or
+repair policy after a source-wide refusal, listing disabled Source history, or
 adding any automatic Release action.

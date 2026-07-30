@@ -6,15 +6,20 @@ import argparse
 import json
 import os
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from enum import StrEnum
 from pathlib import Path
 from uuid import UUID, uuid4
 
 from sqlalchemy import Engine
 
 from applications.file_root_configuration import file_roots
-from applications.file_scan import FileScanReport, scan_file_source
+from applications.file_scan import (
+    FileScanReport,
+    SourceScanRefused,
+    scan_file_source,
+)
 from applications.operator_authentication import (
     CONTROL_OPERATOR_SECRET_ENV,
     LocalControlOperatorConfiguration,
@@ -202,20 +207,24 @@ def _run_operator_subcommand(
                         engine=engine,
                         clock=clock,
                     )
-                    return MultiSourceScanReport(
-                        tuple(
-                            scan_file_source(
-                                organization_id=organization_id,
-                                source_ref=manifest.source_ref,
-                                authority=authority,
-                                opaque_credential=opaque_credential,
-                                engine=engine,
-                                clock=clock,
-                                roots=roots,
+                    outcomes: list[FileScanReport | SourceScanRefusal] = []
+                    for manifest in manifests:
+                        try:
+                            outcome: FileScanReport | SourceScanRefusal = (
+                                scan_file_source(
+                                    organization_id=organization_id,
+                                    source_ref=manifest.source_ref,
+                                    authority=authority,
+                                    opaque_credential=opaque_credential,
+                                    engine=engine,
+                                    clock=clock,
+                                    roots=roots,
+                                )
                             )
-                            for manifest in manifests
-                        )
-                    )
+                        except SourceScanRefused:
+                            outcome = SourceScanRefusal(manifest.source_ref)
+                        outcomes.append(outcome)
+                    return MultiSourceScanReport(tuple(outcomes))
                 return scan_file_source(
                     organization_id=organization_id,
                     source_ref=SourceRef(UUID(arguments.source_ref)),
@@ -285,18 +294,43 @@ def _run_operator_subcommand(
         engine.dispose()
 
 
+class SourceScanFailureCategory(StrEnum):
+    """Closed, content-free reason for one Source scan refusal."""
+
+    OPERATION_REFUSED = "operation_refused"
+
+
+@dataclass(frozen=True, slots=True)
+class SourceScanRefusal:
+    """One content-free refusal from an independently bounded Source scan."""
+
+    source_ref: SourceRef
+    reason_category: SourceScanFailureCategory = field(
+        default=SourceScanFailureCategory.OPERATION_REFUSED,
+        init=False,
+    )
+
+    def __post_init__(self) -> None:
+        if (
+            type(self.source_ref) is not SourceRef
+            or self.reason_category is not SourceScanFailureCategory.OPERATION_REFUSED
+        ):
+            raise SourceNotAvailable
+
+
 @dataclass(frozen=True, slots=True)
 class MultiSourceScanReport:
     """One content-free aggregate over discovered active File sources."""
 
-    sources: tuple[FileScanReport, ...]
+    outcomes: tuple[FileScanReport | SourceScanRefusal, ...]
 
     def __post_init__(self) -> None:
-        if type(self.sources) is not tuple or any(
-            type(report) is not FileScanReport for report in self.sources
+        if type(self.outcomes) is not tuple or any(
+            type(outcome) not in {FileScanReport, SourceScanRefusal}
+            for outcome in self.outcomes
         ):
             raise SourceNotAvailable
-        refs = tuple(report.source_ref.value for report in self.sources)
+        refs = tuple(outcome.source_ref.value for outcome in self.outcomes)
         if refs != tuple(sorted(refs)) or len(refs) != len(set(refs)):
             raise SourceNotAvailable
 
@@ -435,26 +469,40 @@ def _scan_report_document(report: FileScanReport) -> dict[str, object]:
 def _multi_scan_report_json(report: MultiSourceScanReport) -> str:
     if type(report) is not MultiSourceScanReport:
         raise SourceNotAvailable
+    sources = tuple(
+        outcome for outcome in report.outcomes if type(outcome) is FileScanReport
+    )
+    refusals = tuple(
+        outcome for outcome in report.outcomes if type(outcome) is SourceScanRefusal
+    )
     return json.dumps(
         {
-            "sources": [_scan_report_document(source) for source in report.sources],
+            "refusals": [
+                {
+                    "reasonCategory": refusal.reason_category.value,
+                    "sourceRef": str(refusal.source_ref.value),
+                }
+                for refusal in refusals
+            ],
+            "sources": [_scan_report_document(source) for source in sources],
             "summary": {
                 "changesAccepted": sum(
-                    source.changes_accepted for source in report.sources
+                    source.changes_accepted for source in sources
                 ),
                 "compilationRefusals": sum(
-                    source.compilation_refusals for source in report.sources
+                    source.compilation_refusals for source in sources
                 ),
                 "deletesObserved": sum(
-                    source.deletes_observed for source in report.sources
+                    source.deletes_observed for source in sources
                 ),
                 "importsScheduled": sum(
-                    source.imports_scheduled for source in report.sources
+                    source.imports_scheduled for source in sources
                 ),
                 "pathsObserved": sum(
-                    source.paths_observed for source in report.sources
+                    source.paths_observed for source in sources
                 ),
-                "sourceCount": len(report.sources),
+                "refusalCount": len(refusals),
+                "sourceCount": len(report.outcomes),
             },
         },
         separators=(",", ":"),
@@ -475,6 +523,21 @@ def _status_json(progress: FileSourceProgress) -> str:
 
 
 def _status_document(progress: FileSourceProgress) -> dict[str, object]:
+    if type(progress) is not FileSourceProgress or progress.status is None:
+        raise SourceNotAvailable
+    return _status_document_with_refusals(
+        progress,
+        [
+            {"category": refusal.category.value, "path": refusal.path}
+            for refusal in progress.status.refusals
+        ],
+    )
+
+
+def _status_document_with_refusals(
+    progress: FileSourceProgress,
+    refusals: list[dict[str, object]],
+) -> dict[str, object]:
     if type(progress) is not FileSourceProgress or progress.status is None:
         raise SourceNotAvailable
     status = progress.status
@@ -532,10 +595,7 @@ def _status_document(progress: FileSourceProgress) -> dict[str, object]:
                 "watermarkRef": watermark.watermark_ref,
             }
         ),
-        "refusals": [
-            {"category": refusal.category.value, "path": refusal.path}
-            for refusal in status.refusals
-        ],
+        "refusals": refusals,
         "sourceRef": str(progress.source_ref.value),
     }
 
@@ -571,16 +631,17 @@ def _multi_status_document(progress: FileSourceProgress) -> dict[str, object]:
 
     if type(progress) is not FileSourceProgress or progress.status is None:
         raise SourceNotAvailable
-    document = _status_document(progress)
     category_counts: dict[str, int] = {}
     for refusal in progress.status.refusals:
         category = refusal.category.value
         category_counts[category] = category_counts.get(category, 0) + 1
-    document["refusals"] = [
-        {"category": category, "count": count}
-        for category, count in sorted(category_counts.items())
-    ]
-    return document
+    return _status_document_with_refusals(
+        progress,
+        [
+            {"category": category, "count": count}
+            for category, count in sorted(category_counts.items())
+        ],
+    )
 
 
 def _timestamp(value: datetime) -> str:

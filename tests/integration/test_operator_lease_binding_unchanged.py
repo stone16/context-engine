@@ -9,11 +9,11 @@ from sqlalchemy import Engine, text
 
 from adapters.embeddings import DeterministicEmbeddingTwin
 from applications.worker import dispatch_one_file_import
+from applications.worker_progress import FileDispatchFailureCategory
 from engine.control import FileImportReceiver, FileRootRef
 from engine.persistence import (
     DatabaseConfiguration,
     FileDispatchLease,
-    FileImportLeaseRedemption,
     PostgreSQLFileDispatchAuthority,
     PostgreSQLFileImportWorker,
     create_database_engine,
@@ -63,23 +63,48 @@ def test_batch_convenience_preserves_exact_wrong_job_and_expiry_rejection(
     assert claim.source_ref.value == source_ref
     roots = file_root_registry(FileRootRef("operator-scan-root"), root)
     try:
-        wrong_job_worker = PostgreSQLFileImportWorker(
-            guarded_worker_engine,
-            codec,
-            FileImportReceiver(claim.service_principal_id),
-            roots,
-            MarkdownCompilerConfig("markdown-config-v1"),
-            embedding_provider=DeterministicEmbeddingTwin(),
-            clock=lambda: claim.issued_at,
-        )
-        wrong_job = FileImportLeaseRedemption(
+        wrong_job_claim = FileDispatchLease(
             claim.token,
             claim.organization_id,
             uuid4(),
             claim.source_ref,
+            claim.service_principal_id,
+            claim.lease_generation,
+            claim.issued_at,
+            claim.expires_at,
         )
-        with pytest.raises(WorkNotAvailable):
-            wrong_job_worker.run(wrong_job)
+
+        class WrongJobAuthority:
+            def claim(self) -> FileDispatchLease:
+                return wrong_job_claim
+
+        class WrongJobWorkerFactory:
+            def __call__(
+                self,
+                receiver: FileImportReceiver,
+            ) -> PostgreSQLFileImportWorker:
+                assert receiver == FileImportReceiver(
+                    exact_claim.service_principal_id
+                )
+                return PostgreSQLFileImportWorker(
+                    guarded_worker_engine,
+                    codec,
+                    receiver,
+                    roots,
+                    MarkdownCompilerConfig("markdown-config-v1"),
+                    embedding_provider=DeterministicEmbeddingTwin(),
+                    clock=lambda: exact_claim.issued_at,
+                )
+
+        wrong_job = dispatch_one_file_import(
+            WrongJobAuthority(),
+            WrongJobWorkerFactory(),
+        )
+        assert wrong_job.outcome == "refused"
+        assert (
+            wrong_job.reason_category
+            is FileDispatchFailureCategory.WORKER_LEASE_REFUSED
+        )
 
         expired_worker = PostgreSQLFileImportWorker(
             guarded_worker_engine,

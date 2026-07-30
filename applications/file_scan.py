@@ -79,6 +79,10 @@ class FileScanReport:
     advanced_cursor: str | None
 
 
+class SourceScanRefused(SourceNotAvailable):
+    """One Source cannot complete its independently bounded scan cycle."""
+
+
 def scan_file_source(
     *,
     organization_id: UUID,
@@ -125,7 +129,7 @@ def scan_file_source(
         manifest.active_version.capabilities
         is not FILE_DELETE_OBSERVATION_CAPABILITY_MANIFEST
     ):
-        raise SourceNotAvailable
+        raise SourceScanRefused
     progress = _read_progress(
         control=control,
         authority=authority,
@@ -185,7 +189,7 @@ def scan_file_source(
             ChangeLimit(FILE_SCAN_PAGE_LIMIT),
         )
         if type(proposed) is not ProviderOk:
-            raise SourceNotAvailable
+            raise SourceScanRefused
         page = proposed.value
         if page.page_limit != FILE_SCAN_PAGE_LIMIT:
             raise SourceNotAvailable
@@ -480,15 +484,18 @@ def _compilation_refused(
     expected_sha256: str,
     expected_length: int,
 ) -> int:
-    payload = roots.read(
-        manifest.active_version.root_ref,
-        FileImportPath(path),
-    )
+    try:
+        payload = roots.read(
+            manifest.active_version.root_ref,
+            FileImportPath(path),
+        )
+    except LookupError:
+        raise SourceScanRefused from None
     if (
         len(payload) != expected_length
         or hashlib.sha256(payload).hexdigest() != expected_sha256
     ):
-        raise SourceNotAvailable
+        raise SourceScanRefused
     outcome = compile_markdown(
         payload,
         MarkdownCompilerConfig(ACTIVE_FILE_IMPORT_MARKDOWN_CONFIG_VERSION),
