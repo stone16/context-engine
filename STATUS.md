@@ -64,8 +64,8 @@ designed, and deliberately not active:
 | `Continue` carrier | The bounded dogfood composition keeps Continue unavailable; its private File `OpenCitation` carrier is active for UI citation closure |
 | Federated discovery, source-native authorization | Deterministic refusal only |
 | Runtime model-inference carriers (`rewrite`, `rerank`, `select`) | The governed port is implemented, but no carrier is active until its consuming issue proves the exact profile and grant path, passes the resolve-owned shared `PackageBudgetMeter`, and publishes that meter's cumulative usage in the final package; real provider network calls remain `NOT_ACTIVE` |
-| Live Feishu / Slack / Google Docs connectors | See [PLAN.md](./PLAN.md) milestones M4 / M6 / M7 |
-| Group-chat delivery, compensating deletes | M5 |
+| Live Feishu credentials/network, Slack, Google Docs, and issue #127 Feishu ingestion connectors | Issue #133 activates only twin-bounded downstream private-event verification and exact Sender-effect conformance; live network and ingestion remain separate gates |
+| Group/public delivery, compensating deletes | The Feishu delivery profile is asker-private only; wider audience and compensation remain `NOT_ACTIVE` |
 | MCP ingress | Held `NOT_ACTIVE` until a real caller exists |
 | Worker dead-letter transition / operator requeue | ADR-0060 adds bounded reclaim only; generation four is left untouched after expiry |
 | Provider polling, delete execution beyond ADR-0057 | See the File Provider ADRs for exact boundaries |
@@ -410,6 +410,26 @@ terminal state and introduces no fourth process type.
 
 Live Feishu, real models and Senders, group chat, compensating deletes,
 `Continue`, and MCP all remain `NOT_ACTIVE`.
+
+### Issue #133 — bounded private Feishu delivery conformance
+
+Activates a production-shaped but network-free replacement for the two
+provider-facing twins inside the existing `BotDelivery + ActionPlane` process.
+The versioned event verifier binds one configured application, provider tenant,
+Organization, consumer, private destination, current asker mapping, exact event
+kind/request/purpose, HMAC envelope, trusted lifetime, and one-shot event ID
+before it can mint a nominal turn or select one opaque `DeliveryEvidenceRef`.
+The exact Sender twin remains callable only by `ActionPlane.perform`; it observes
+the operation, destination, payload digest, ticket-derived provider idempotency,
+and durable provider attempt without making a network call.
+
+This activation is **twin-bounded conformance**, not live Feishu. Feishu
+credentials and network calls, real model providers, group/public audience,
+`Continue`, compensation/delete, automatic reconciliation, multiple Feishu
+tenants or Bot instances, MCP, pi, and issue #127 ingestion remain
+`NOT_ACTIVE`. Channel `EgressGrant` remains preflight-only and cannot substitute
+for trusted identity or an `ActionTicket`; the generated-answer flow uses no
+channel grant.
 
 ### HTTP exact-authorized Evidence tracer
 
