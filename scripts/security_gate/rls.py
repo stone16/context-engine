@@ -63,6 +63,7 @@ NON_OWNER_EVIDENCE_BY_TABLE: Mapping[str, str] = {
     "supply_connector_accepted_page": "PG-SUPPLY-BRIDGE-125",
     "supply_connector_checkpoint": "PG-SUPPLY-BRIDGE-125",
     "supply_connector_job": "PG-SUPPLY-BRIDGE-125",
+    "supply_connector_lease_event": "PG-SUPPLY-BRIDGE-125",
     "supply_connector_staged_page": "PG-SUPPLY-BRIDGE-125",
     "worker_noop_job": "PG-WORKER-LEASE-007",
     "context_fragment_field": "PG-FIELD-PROJECTION-RLS-048",

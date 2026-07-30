@@ -303,6 +303,43 @@
       "atomicWrites": ["supply_connector_job"]
     },
     {
+      "name": "redeem_supply_connector_lease",
+      "databaseFunction": "context_supply_redeem_connector_lease",
+      "role": "context_engine_worker",
+      "definerRole": "context_engine_worker_lease_definer",
+      "directTableMutationAllowed": false,
+      "databaseOwnedTime": true,
+      "oneShotByLeaseGenerationAndIdempotencyKey": true,
+      "fixedReceiver": {
+        "databaseRole": "context_engine_worker",
+        "workload": "supply.connector",
+        "workerAudience": "context-engine-connector-runner",
+        "operation": "connector.execute"
+      },
+      "atomicWrites": ["supply_connector_job"]
+    },
+    {
+      "name": "preempt_supply_connector_lease",
+      "databaseFunction": "context_supply_preempt_connector_lease",
+      "role": "context_engine_control",
+      "definerRole": "context_engine_worker_lease_definer",
+      "directTableMutationAllowed": false,
+      "databaseOwnedTime": true,
+      "explicitOperatorIntent": true,
+      "requiresReasonDigest": true,
+      "onlyPreemptsUnexpiredRunningLease": true,
+      "fixedReceiver": {
+        "databaseRole": "context_engine_control",
+        "workload": "supply.connector",
+        "workerAudience": "context-engine-connector-runner",
+        "operation": "connector.execute"
+      },
+      "atomicWrites": [
+        "supply_connector_job",
+        "supply_connector_lease_event"
+      ]
+    },
+    {
       "name": "accept_supply_connector_page",
       "databaseFunction": "context_supply_accept_connector_page",
       "role": "context_engine_worker",
@@ -311,7 +348,7 @@
       "databaseOwnedTime": true,
       "checkpointOpaque": true,
       "checkpointCommitRule": "accepted page lineage and checkpoint advance commit in one transaction",
-      "redeemsIdempotencyKeyOnTerminalPage": true,
+      "requiresPriorOneShotRedemption": true,
       "fixedReceiver": {
         "databaseRole": "context_engine_worker",
         "workload": "supply.connector",
@@ -3923,19 +3960,48 @@
         {"name": "ck_supply_connector_job_service_actor", "expression": "workload = 'supply.connector' AND worker_audience = 'context-engine-connector-runner' AND actor_kind = 'service' AND operation = 'connector.execute'"},
         {"name": "ck_supply_connector_job_state", "expression": "state IN ('available', 'leased', 'running', 'completed')"},
         {"name": "ck_supply_connector_job_lease_generation", "expression": "lease_generation >= 0 AND lease_generation <= 9223372036854775807"},
-        {"name": "ck_supply_connector_job_lease_state", "expression": "available has no ActorContext or lease; leased/running has exact policy epoch, idempotency key, source/operation allowed sets, expiry, and current lease; completed records exact one-time redemption"}
+        {"name": "ck_supply_connector_job_lease_state", "expression": "available has no ActorContext or lease; leased has one unredeemed exact lease; running records its one-shot redeemed_at while preserving the full ActorContext; completed preserves redemption and terminal completion ordering"}
       ],
       "rowLevelSecurity": {"enabled": true, "forced": true, "policies": [
         {"name": "supply_connector_job_migrator_administration", "command": "ALL", "roles": ["context_engine_migrator"], "using": "true", "withCheck": "true"},
         {"name": "supply_connector_job_supply_definer_select", "command": "SELECT", "roles": ["context_engine_worker_lease_definer"], "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid AND worker_job_id = NULLIF(current_setting('app.worker_job_id', true), '')::uuid"},
         {"name": "supply_connector_job_supply_definer_update", "command": "UPDATE", "roles": ["context_engine_worker_lease_definer"], "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid AND worker_job_id = NULLIF(current_setting('app.worker_job_id', true), '')::uuid", "withCheck": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid AND worker_job_id = NULLIF(current_setting('app.worker_job_id', true), '')::uuid"}
       ]},
-      "functionOnlyMutation": {"databaseFunctions": ["context_supply_issue_connector_lease", "context_supply_accept_connector_page"], "definerRole": "context_engine_worker_lease_definer", "directTableMutationAllowed": false},
-      "permittedOperations": {"context_engine_control": ["EXECUTE context_supply_issue_connector_lease"], "context_engine_runtime": [], "context_engine_worker": ["EXECUTE context_supply_load_connector_checkpoint", "EXECUTE context_supply_accept_connector_page"], "context_engine_worker_lease_definer": ["SELECT", "UPDATE"]},
+      "functionOnlyMutation": {"databaseFunctions": ["context_supply_issue_connector_lease", "context_supply_preempt_connector_lease", "context_supply_redeem_connector_lease", "context_supply_accept_connector_page"], "definerRole": "context_engine_worker_lease_definer", "directTableMutationAllowed": false},
+      "permittedOperations": {"context_engine_control": ["EXECUTE context_supply_issue_connector_lease", "EXECUTE context_supply_preempt_connector_lease"], "context_engine_runtime": [], "context_engine_worker": ["EXECUTE context_supply_redeem_connector_lease", "EXECUTE context_supply_load_connector_checkpoint", "EXECUTE context_supply_accept_connector_page"], "context_engine_worker_lease_definer": ["SELECT", "UPDATE"]},
       "retention": {"sourceContent": "none", "checkpoint": "none", "authority": "content-free exact-job lineage"},
       "partitions": [],
       "securityInvariantIds": ["TENANT-OWNERSHIP-001", "TENANT-FK-002", "RLS-FAIL-CLOSED-003", "WORKER-LEASE-007"],
       "negativeTestIds": ["DB-001", "DB-004", "DB-008", "JOB-001", "WORKER-LEASE-007", "PG-SUPPLY-BRIDGE-125"]
+    },
+    {
+      "name": "supply_connector_lease_event",
+      "classification": "tenant_owned",
+      "nonOwnerEvidence": {"evidenceId": "PG-SUPPLY-BRIDGE-125", "selector": {"table": "supply_connector_lease_event"}},
+      "purpose": "Immutable content-free audit of explicit operator preemption of one live connector WorkerLease",
+      "organizationColumn": "organization_id",
+      "organizationInclusiveKeys": [
+        {"name": "pk_supply_connector_lease_event", "kind": "primary_key", "columns": ["organization_id", "worker_job_id", "replacement_lease_generation"]}
+      ],
+      "foreignKeys": [
+        {"name": "fk_supply_connector_lease_event_job_exact", "columns": ["organization_id", "worker_job_id"], "references": {"table": "supply_connector_job", "columns": ["organization_id", "worker_job_id"]}}
+      ],
+      "checkConstraints": [
+        {"name": "ck_supply_connector_lease_event_type", "expression": "event_type is operator_preempted"},
+        {"name": "ck_supply_connector_lease_event_generations", "expression": "replacement generation is exactly prior generation plus one"},
+        {"name": "ck_supply_connector_lease_event_reason_digest", "expression": "reason_digest is lowercase SHA-256"}
+      ],
+      "rowLevelSecurity": {"enabled": true, "forced": true, "policies": [
+        {"name": "supply_connector_lease_event_migrator_administration", "command": "ALL", "roles": ["context_engine_migrator"], "using": "true", "withCheck": "true"},
+        {"name": "supply_connector_lease_event_supply_definer_insert", "command": "INSERT", "roles": ["context_engine_worker_lease_definer"], "withCheck": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid AND worker_job_id = NULLIF(current_setting('app.worker_job_id', true), '')::uuid"},
+        {"name": "supply_connector_lease_event_supply_definer_select", "command": "SELECT", "roles": ["context_engine_worker_lease_definer"], "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid AND worker_job_id = NULLIF(current_setting('app.worker_job_id', true), '')::uuid"}
+      ]},
+      "functionOnlyMutation": {"databaseFunction": "context_supply_preempt_connector_lease", "role": "context_engine_control", "definerRole": "context_engine_worker_lease_definer", "directTableMutationAllowed": false},
+      "permittedOperations": {"context_engine_control": ["EXECUTE context_supply_preempt_connector_lease"], "context_engine_runtime": [], "context_engine_worker": [], "context_engine_worker_lease_definer": ["SELECT", "INSERT"]},
+      "retention": {"sourceContent": "none", "authority": "digest-only operator intent and generation lineage"},
+      "partitions": [],
+      "securityInvariantIds": ["TENANT-OWNERSHIP-001", "TENANT-FK-002", "RLS-FAIL-CLOSED-003", "WORKER-LEASE-007"],
+      "negativeTestIds": ["DB-001", "DB-004", "DB-008", "PG-SUPPLY-BRIDGE-125"]
     },
     {
       "name": "supply_connector_staged_page",

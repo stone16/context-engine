@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import wait as wait_for_futures
 from dataclasses import fields, replace
 from datetime import UTC, datetime, timedelta
+from threading import Barrier, Lock
 from uuid import uuid4
 
 import pytest
@@ -13,13 +16,18 @@ from engine.persistence import (
     DatabaseConfiguration,
     PostgreSQLConnectorCheckpointStore,
     PostgreSQLStagedArtifactSink,
+    PostgreSQLSupplyBridgeLeaseIssuer,
     PostgreSQLSupplyExecutionBridge,
     SupplyBridgeExecutionIdentity,
+    SupplyBridgeLeaseIssueRequest,
+    SupplyBridgeLeasePreemptionRequest,
     SupplyBridgeUnavailable,
     create_database_engine,
 )
 from engine.supply.execution import (
+    ConnectorCheckpointBinding,
     SupplyBridgeExecution,
+    SupplyChangePage,
     serialize_supply_change_page,
 )
 from engine.supply.jobs import (
@@ -41,6 +49,7 @@ from tests.integration.test_connector_checkpoint_store import (
 pytestmark = pytest.mark.integration
 scenarios = _checkpoint_scenarios
 MUTATED_SOURCE_VERSION_ID = uuid4()
+PREEMPTION_REASON_DIGEST = "a" * 64
 
 
 def _bridge(
@@ -102,6 +111,7 @@ def test_absent_expired_or_wrong_job_worker_lease_refuses_work_and_has_no_user_p
     scenario = _seed_scenario(migration_configuration, guarded_control_engine)
     scenarios.append(scenario)
     claims = _claims(scenario)
+    assert claims.lease_generation is not None
     policy_epoch = claims.policy_epoch
     actor_expiry = claims.service_actor_expires_at
     assert policy_epoch is not None
@@ -502,6 +512,274 @@ def test_replayed_redeemed_lease_has_zero_second_effect(
         engine.dispose()
 
 
+def test_nonterminal_redeemed_lease_cannot_reenter_connector_operation(
+    scenarios: list[_Scenario],
+    migration_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+    guarded_worker_engine: Engine,
+) -> None:
+    scenario = _seed_scenario(migration_configuration, guarded_control_engine)
+    scenarios.append(scenario)
+    bridge = _bridge(scenario, guarded_worker_engine)
+    pages = (_page(scenario, 1, terminal=False), _page(scenario, 2, terminal=True))
+
+    class _InterruptAfterFirstPage(_TwoPageAdapter):
+        def poll(self, binding: ConnectorCheckpointBinding) -> SupplyChangePage:
+            del binding
+            raise RuntimeError("runner interrupted after first accepted page")
+
+    with pytest.raises(RuntimeError, match="runner interrupted"):
+        bridge.execute(scenario.execution, _InterruptAfterFirstPage(pages))
+
+    replay_adapter = _TwoPageAdapter(pages)
+    with pytest.raises(WorkNotAvailable, match="^work not available$"):
+        bridge.execute(scenario.execution, replay_adapter)
+
+    assert replay_adapter.loaded_checkpoints == []
+    assert replay_adapter.emitted_pages == []
+
+
+def test_two_concurrent_connector_lease_redemptions_enter_adapter_once(
+    scenarios: list[_Scenario],
+    migration_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+    guarded_worker_engine: Engine,
+) -> None:
+    scenario = _seed_scenario(migration_configuration, guarded_control_engine)
+    scenarios.append(scenario)
+    barrier = Barrier(2)
+    effect_lock = Lock()
+    effect_count = 0
+    page = _page(scenario, 1, terminal=True)
+
+    class _CountingAdapter(_TwoPageAdapter):
+        def load(self, binding: ConnectorCheckpointBinding) -> SupplyChangePage:
+            nonlocal effect_count
+            with effect_lock:
+                effect_count += 1
+            return super().load(binding)
+
+    def execute_once() -> str:
+        adapter = _CountingAdapter((page,))
+        barrier.wait(timeout=5)
+        try:
+            _bridge(scenario, guarded_worker_engine).execute(
+                scenario.execution,
+                adapter,
+            )
+        except WorkNotAvailable:
+            return "rejected"
+        return "completed"
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(execute_once) for _ in range(2)]
+        done, pending = wait_for_futures(futures, timeout=10)
+
+    assert not pending
+    assert sorted(future.result() for future in done) == ["completed", "rejected"]
+    assert effect_count == 1
+
+
+def test_ordinary_issue_refuses_unexpired_running_lease(
+    scenarios: list[_Scenario],
+    migration_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+    guarded_worker_engine: Engine,
+) -> None:
+    scenario = _seed_scenario(migration_configuration, guarded_control_engine)
+    scenarios.append(scenario)
+    claims = _claims(scenario)
+    assert claims.lease_generation is not None
+    store = PostgreSQLConnectorCheckpointStore(guarded_worker_engine)
+    assert (
+        store.redeem_for_execution(
+            scenario.execution.binding,
+            lease_claims=claims,
+        )
+        is None
+    )
+
+    with pytest.raises(WorkNotAvailable, match="^work not available$"):
+        PostgreSQLSupplyBridgeLeaseIssuer(
+            guarded_control_engine,
+            scenario.codec,
+        ).issue(
+            SupplyBridgeLeaseIssueRequest(
+                organization_id=scenario.organization_id,
+                source_id=scenario.source_id,
+                source_version_id=scenario.source_version_id,
+                worker_job_id=scenario.job_id,
+                service_principal_id=scenario.service_principal_id,
+            )
+        )
+
+
+def test_ordinary_issue_reclaims_expired_running_lease(
+    scenarios: list[_Scenario],
+    migration_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+    guarded_worker_engine: Engine,
+) -> None:
+    scenario = _seed_scenario(migration_configuration, guarded_control_engine)
+    scenarios.append(scenario)
+    claims = _claims(scenario)
+    assert claims.lease_generation is not None
+    store = PostgreSQLConnectorCheckpointStore(guarded_worker_engine)
+    assert (
+        store.redeem_for_execution(
+            scenario.execution.binding,
+            lease_claims=claims,
+        )
+        is None
+    )
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.begin() as connection:
+            connection.execute(
+                text(
+                    """
+                    UPDATE supply_connector_job
+                    SET lease_issued_at = lease_issued_at - interval '2 hours',
+                        lease_expires_at = lease_expires_at - interval '2 hours',
+                        service_actor_expires_at =
+                            service_actor_expires_at - interval '2 hours',
+                        redeemed_at = redeemed_at - interval '2 hours'
+                    WHERE organization_id = :organization_id
+                      AND worker_job_id = :worker_job_id
+                    """
+                ),
+                {
+                    "organization_id": scenario.organization_id,
+                    "worker_job_id": scenario.job_id,
+                },
+            )
+    finally:
+        migration_engine.dispose()
+
+    reclaimed = PostgreSQLSupplyBridgeLeaseIssuer(
+        guarded_control_engine,
+        scenario.codec,
+    ).issue(
+        SupplyBridgeLeaseIssueRequest(
+            organization_id=scenario.organization_id,
+            source_id=scenario.source_id,
+            source_version_id=scenario.source_version_id,
+            worker_job_id=scenario.job_id,
+            service_principal_id=scenario.service_principal_id,
+        )
+    )
+    reclaimed_claims = scenario.codec.verify(
+        reclaimed,
+        expected_organization_id=scenario.organization_id,
+        expected_job_id=scenario.job_id,
+        expected_service_principal_id=scenario.service_principal_id,
+        expected_workload="supply.connector",
+        expected_operation="connector.execute",
+        expected_worker_audience="context-engine-connector-runner",
+        expected_source_version_ref=str(scenario.source_version_id),
+        now=datetime.now(UTC).replace(microsecond=0),
+    )
+    assert reclaimed_claims.lease_generation == claims.lease_generation + 1
+
+
+def test_explicit_preemption_is_audited_and_stale_worker_accept_fails_closed(
+    scenarios: list[_Scenario],
+    migration_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+    guarded_worker_engine: Engine,
+) -> None:
+    scenario = _seed_scenario(migration_configuration, guarded_control_engine)
+    scenarios.append(scenario)
+    old_claims = _claims(scenario)
+    assert old_claims.lease_generation is not None
+    store = PostgreSQLConnectorCheckpointStore(guarded_worker_engine)
+    assert (
+        store.redeem_for_execution(
+            scenario.execution.binding,
+            lease_claims=old_claims,
+        )
+        is None
+    )
+
+    preempted_token = PostgreSQLSupplyBridgeLeaseIssuer(
+        guarded_control_engine,
+        scenario.codec,
+    ).preempt(
+        SupplyBridgeLeasePreemptionRequest(
+            organization_id=scenario.organization_id,
+            source_id=scenario.source_id,
+            source_version_id=scenario.source_version_id,
+            worker_job_id=scenario.job_id,
+            service_principal_id=scenario.service_principal_id,
+            reason_digest=PREEMPTION_REASON_DIGEST,
+        )
+    )
+    preempted_claims = scenario.codec.verify(
+        preempted_token,
+        expected_organization_id=scenario.organization_id,
+        expected_job_id=scenario.job_id,
+        expected_service_principal_id=scenario.service_principal_id,
+        expected_workload="supply.connector",
+        expected_operation="connector.execute",
+        expected_worker_audience="context-engine-connector-runner",
+        expected_source_version_ref=str(scenario.source_version_id),
+        now=datetime.now(UTC).replace(microsecond=0),
+    )
+    assert preempted_claims.lease_generation == old_claims.lease_generation + 1
+
+    stale_page = _page(scenario, 1, terminal=False)
+    with (
+        pytest.raises(WorkNotAvailable, match="^work not available$"),
+        guarded_worker_engine.begin() as connection,
+    ):
+        PostgreSQLStagedArtifactSink(guarded_worker_engine).accept_change_page(
+            connection,
+            stale_page,
+            lease_claims=old_claims,
+        )
+
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.connect() as connection:
+            event = connection.execute(
+                text(
+                    """
+                    SELECT event_type, prior_lease_generation,
+                           replacement_lease_generation, reason_digest
+                    FROM supply_connector_lease_event
+                    WHERE organization_id = :organization_id
+                      AND worker_job_id = :worker_job_id
+                    """
+                ),
+                {
+                    "organization_id": scenario.organization_id,
+                    "worker_job_id": scenario.job_id,
+                },
+            ).one()
+            accepted_count = connection.execute(
+                text(
+                    """
+                    SELECT count(*) FROM supply_connector_accepted_page
+                    WHERE organization_id = :organization_id
+                      AND worker_job_id = :worker_job_id
+                    """
+                ),
+                {
+                    "organization_id": scenario.organization_id,
+                    "worker_job_id": scenario.job_id,
+                },
+            ).scalar_one()
+    finally:
+        migration_engine.dispose()
+    assert tuple(event) == (
+        "operator_preempted",
+        old_claims.lease_generation,
+        preempted_claims.lease_generation,
+        PREEMPTION_REASON_DIGEST,
+    )
+    assert accepted_count == 0
+
+
 def test_security_definer_issue_function_refuses_wrong_caller_role(
     scenarios: list[_Scenario],
     migration_configuration: DatabaseConfiguration,
@@ -531,6 +809,30 @@ def test_security_definer_issue_function_refuses_wrong_caller_role(
                 "job": scenario.job_id,
                 "principal": scenario.service_principal_id,
                 "nonce": generate_worker_lease_nonce(),
+            },
+        ).all()
+
+    with (
+        pytest.raises(ProgrammingError, match="permission denied for function"),
+        guarded_worker_engine.begin() as connection,
+    ):
+        connection.execute(
+            text(
+                """
+                SELECT * FROM context_supply_preempt_connector_lease(
+                    :org, :source, :version, :job, :principal,
+                    1, :nonce, 60, :reason_digest
+                )
+                """
+            ),
+            {
+                "org": scenario.organization_id,
+                "source": scenario.source_id,
+                "version": scenario.source_version_id,
+                "job": scenario.job_id,
+                "principal": scenario.service_principal_id,
+                "nonce": generate_worker_lease_nonce(),
+                "reason_digest": PREEMPTION_REASON_DIGEST,
             },
         ).all()
 
@@ -583,6 +885,10 @@ def test_security_definer_worker_function_refuses_mutated_actor_context_claim(
 @pytest.mark.parametrize(
     ("function_name", "function_arguments"),
     [
+        (
+            "context_supply_redeem_connector_lease",
+            "",
+        ),
         (
             "context_supply_load_staged_connector_page",
             ":page_ref, ",
@@ -665,6 +971,13 @@ def test_worker_actor_context_is_transaction_local_and_pool_checkout_is_clean(
         "app.worker_lease_idempotency_key",
     )
     try:
+        assert (
+            PostgreSQLConnectorCheckpointStore(engine).redeem_for_execution(
+                page.binding,
+                lease_claims=claims,
+            )
+            is None
+        )
         with engine.connect() as connection:
             transaction = connection.begin()
             PostgreSQLStagedArtifactSink(engine).accept_change_page(

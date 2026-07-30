@@ -152,38 +152,41 @@ class SourceAclObservation:
     source_lacks_stronger_acl: str | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
-        _require_uuid("ACL observation Organization", self.organization_id)
-        if type(self.evidence_class) is not SourceAclEvidenceClass:
-            raise TypeError("ACL observation evidence_class must be closed")
-        if self.evidence_payload is not None:
-            _require_bytes(
-                "ACL observation evidence payload",
-                self.evidence_payload,
-                maximum_length=_MAX_EVIDENCE_BYTES,
-            )
-        if self.source_lacks_stronger_acl is not None and (
-            type(self.source_lacks_stronger_acl) is not str
-            or not self.source_lacks_stronger_acl
-            or self.source_lacks_stronger_acl.isspace()
-            or self.source_lacks_stronger_acl != self.source_lacks_stronger_acl.strip()
-            or len(self.source_lacks_stronger_acl) > _MAX_REASON_LENGTH
-        ):
-            raise ValueError("Weak ACL evidence requires a bounded justification")
-        if self.evidence_class in {
-            SourceAclEvidenceClass.LIVE,
-            SourceAclEvidenceClass.MIRRORED,
-        }:
-            if self.evidence_payload is None:
-                raise ValueError("Live and Mirrored ACL evidence require a payload")
-            if self.source_lacks_stronger_acl is not None:
-                raise ValueError("Strong ACL evidence cannot claim Weak justification")
-        elif (
-            self.evidence_payload is not None or self.source_lacks_stronger_acl is None
-        ):
-            raise ValueError(
-                "Weak ACL evidence requires explicit source-lacks-stronger-ACL "
-                "justification and no strong evidence payload"
-            )
+        _validate_source_acl_observation(self)
+
+
+def _validate_source_acl_observation(observation: SourceAclObservation) -> None:
+    _require_uuid("ACL observation Organization", observation.organization_id)
+    if type(observation.evidence_class) is not SourceAclEvidenceClass:
+        raise TypeError("ACL observation evidence_class must be closed")
+    if observation.evidence_payload is not None:
+        _require_bytes(
+            "ACL observation evidence payload",
+            observation.evidence_payload,
+            maximum_length=_MAX_EVIDENCE_BYTES,
+        )
+    justification = observation.source_lacks_stronger_acl
+    if justification is not None and (
+        type(justification) is not str
+        or not justification
+        or justification.isspace()
+        or justification != justification.strip()
+        or len(justification) > _MAX_REASON_LENGTH
+    ):
+        raise ValueError("Weak ACL evidence requires a bounded justification")
+    if observation.evidence_class in {
+        SourceAclEvidenceClass.LIVE,
+        SourceAclEvidenceClass.MIRRORED,
+    }:
+        if observation.evidence_payload is None:
+            raise ValueError("Live and Mirrored ACL evidence require a payload")
+        if justification is not None:
+            raise ValueError("Strong ACL evidence cannot claim Weak justification")
+    elif observation.evidence_payload is not None or justification is None:
+        raise ValueError(
+            "Weak ACL evidence requires explicit source-lacks-stronger-ACL "
+            "justification and no strong evidence payload"
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -200,21 +203,28 @@ class SupplyDocumentEnvelope:
     metadata: tuple[tuple[str, str], ...] = field(default=(), repr=False)
 
     def __post_init__(self) -> None:
-        _require_uuid("document Organization", self.organization_id)
-        _require_uuid("document SourceVersion", self.source_version_id)
-        _require_uuid("document WorkerJob", self.worker_job_id)
-        _require_ref("document_ref", self.document_ref)
-        _require_bytes(
-            "document content",
-            self.content,
-            maximum_length=_MAX_CONTENT_BYTES,
-        )
-        _require_ref("document content_type", self.content_type)
-        if type(self.acl_observation) is not SourceAclObservation:
-            raise TypeError("document acl_observation must be SourceAclObservation")
-        if self.acl_observation.organization_id != self.organization_id:
-            raise ValueError("document and ACL observation Organization must match")
-        _require_metadata(self.metadata)
+        _validate_supply_document_envelope(self)
+
+
+def _validate_supply_document_envelope(
+    envelope: SupplyDocumentEnvelope,
+) -> None:
+    _require_uuid("document Organization", envelope.organization_id)
+    _require_uuid("document SourceVersion", envelope.source_version_id)
+    _require_uuid("document WorkerJob", envelope.worker_job_id)
+    _require_ref("document_ref", envelope.document_ref)
+    _require_bytes(
+        "document content",
+        envelope.content,
+        maximum_length=_MAX_CONTENT_BYTES,
+    )
+    _require_ref("document content_type", envelope.content_type)
+    if type(envelope.acl_observation) is not SourceAclObservation:
+        raise TypeError("document acl_observation must be SourceAclObservation")
+    _validate_source_acl_observation(envelope.acl_observation)
+    if envelope.acl_observation.organization_id != envelope.organization_id:
+        raise ValueError("document and ACL observation Organization must match")
+    _require_metadata(envelope.metadata)
 
 
 @dataclass(frozen=True, slots=True)
@@ -248,40 +258,43 @@ class SupplyChangePage:
     terminal: bool = False
 
     def __post_init__(self) -> None:
-        if type(self.binding) is not ConnectorCheckpointBinding:
-            raise TypeError("change page requires exact binding")
-        _require_ref("change page_ref", self.page_ref)
-        if type(self.documents) is not tuple or any(
-            type(document) is not SupplyDocumentEnvelope for document in self.documents
-        ):
-            raise TypeError("change page documents must be an exact envelope tuple")
-        for document in self.documents:
-            if (
-                document.organization_id != self.binding.organization_id
-                or document.source_version_id != self.binding.source_version_id
-                or document.worker_job_id != self.binding.worker_job_id
-            ):
-                raise ValueError("change page document exact binding must match")
-        if type(self.deleted_document_refs) is not tuple:
-            raise TypeError("deleted document refs must be an exact tuple")
-        for document_ref in self.deleted_document_refs:
-            _require_ref("deleted document_ref", document_ref)
-        emitted_refs = tuple(document.document_ref for document in self.documents)
+        _validate_supply_change_page(self)
+
+
+def _validate_supply_change_page(page: SupplyChangePage) -> None:
+    if type(page.binding) is not ConnectorCheckpointBinding:
+        raise TypeError("change page requires exact binding")
+    _require_ref("change page_ref", page.page_ref)
+    if type(page.documents) is not tuple or any(
+        type(document) is not SupplyDocumentEnvelope for document in page.documents
+    ):
+        raise TypeError("change page documents must be an exact envelope tuple")
+    for document in page.documents:
+        _validate_supply_document_envelope(document)
         if (
-            len(emitted_refs) != len(set(emitted_refs))
-            or len(self.deleted_document_refs) != len(set(self.deleted_document_refs))
-            or set(emitted_refs).intersection(self.deleted_document_refs)
+            document.organization_id != page.binding.organization_id
+            or document.source_version_id != page.binding.source_version_id
+            or document.worker_job_id != page.binding.worker_job_id
         ):
-            raise ValueError(
-                "change page document identities must be disjoint and unique"
-            )
-        _require_bytes(
-            "change page checkpoint proposal",
-            self.checkpoint_proposal,
-            maximum_length=_MAX_CHECKPOINT_BYTES,
-        )
-        if type(self.terminal) is not bool:
-            raise TypeError("change page terminal must be bool")
+            raise ValueError("change page document exact binding must match")
+    if type(page.deleted_document_refs) is not tuple:
+        raise TypeError("deleted document refs must be an exact tuple")
+    for document_ref in page.deleted_document_refs:
+        _require_ref("deleted document_ref", document_ref)
+    emitted_refs = tuple(document.document_ref for document in page.documents)
+    if (
+        len(emitted_refs) != len(set(emitted_refs))
+        or len(page.deleted_document_refs) != len(set(page.deleted_document_refs))
+        or set(emitted_refs).intersection(page.deleted_document_refs)
+    ):
+        raise ValueError("change page document identities must be disjoint and unique")
+    _require_bytes(
+        "change page checkpoint proposal",
+        page.checkpoint_proposal,
+        maximum_length=_MAX_CHECKPOINT_BYTES,
+    )
+    if type(page.terminal) is not bool:
+        raise TypeError("change page terminal must be bool")
 
 
 @dataclass(frozen=True, slots=True)
@@ -308,6 +321,7 @@ def serialize_supply_change_page(page: SupplyChangePage) -> bytes:
 
     if type(page) is not SupplyChangePage:
         raise TypeError("staged serialization requires SupplyChangePage")
+    _validate_supply_change_page(page)
     document = {
         "binding": {
             "organization_id": str(page.binding.organization_id),
@@ -419,7 +433,7 @@ class ConnectorCheckpointStore(Protocol):
         lease_claims: WorkerLeaseClaims,
     ) -> bytes | None: ...
 
-    def load_for_execution(
+    def redeem_for_execution(
         self,
         binding: ConnectorCheckpointBinding,
         *,

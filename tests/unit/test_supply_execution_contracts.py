@@ -17,6 +17,7 @@ from engine.supply.execution import (
     StagedArtifact,
     SupplyChangePage,
     SupplyDocumentEnvelope,
+    serialize_supply_change_page,
 )
 
 ORGANIZATION_ID = UUID("0198fb91-e6e2-75ea-a174-912597825765")
@@ -163,6 +164,66 @@ def test_document_envelope_rejects_cross_binding_acl_observation() -> None:
                 organization_id=UUID("0198fb94-57ab-710b-b03d-3e29149ae95a")
             )
         )
+
+
+@pytest.mark.parametrize(
+    ("field_name", "foreign_value"),
+    [
+        ("organization_id", UUID("0198fb94-57ab-710b-b03d-3e29149ae95a")),
+        ("source_version_id", UUID("0198fb94-6cba-7e4b-a84b-fc65f19e2270")),
+        ("worker_job_id", UUID("0198fb94-7f40-7de2-bfce-56814a428277")),
+    ],
+)
+def test_change_page_rejects_document_outside_its_exact_binding(
+    field_name: str,
+    foreign_value: UUID,
+) -> None:
+    overrides: dict[str, object] = {field_name: foreign_value}
+    if field_name == "organization_id":
+        overrides["acl_observation"] = _acl(organization_id=foreign_value)
+    with pytest.raises(ValueError, match="document exact binding must match"):
+        _page(documents=(_envelope(**overrides),))
+
+
+@pytest.mark.parametrize(
+    ("target", "field_name", "invalid"),
+    [
+        ("document", "organization_id", UUID("0198fb94-57ab-710b-b03d-3e29149ae95a")),
+        (
+            "document",
+            "source_version_id",
+            UUID("0198fb94-6cba-7e4b-a84b-fc65f19e2270"),
+        ),
+        ("document", "worker_job_id", UUID("0198fb94-7f40-7de2-bfce-56814a428277")),
+        ("document", "content", b""),
+        ("acl", "organization_id", UUID("0198fb94-57ab-710b-b03d-3e29149ae95a")),
+        ("acl", "evidence_class", SourceAclEvidenceClass.WEAK),
+        ("acl", "evidence_payload", None),
+    ],
+)
+def test_staged_serialization_revalidates_every_nested_claim(
+    target: str,
+    field_name: str,
+    invalid: object,
+) -> None:
+    page = _page()
+    envelope = page.documents[0]
+    mutated = envelope if target == "document" else envelope.acl_observation
+    object.__setattr__(mutated, field_name, invalid)
+
+    with pytest.raises((TypeError, ValueError)):
+        serialize_supply_change_page(page)
+
+
+def test_staged_serialization_refuses_unjustified_weak_acl_downgrade() -> None:
+    page = _page()
+    observation = page.documents[0].acl_observation
+    object.__setattr__(observation, "evidence_class", SourceAclEvidenceClass.WEAK)
+    object.__setattr__(observation, "evidence_payload", None)
+    object.__setattr__(observation, "source_lacks_stronger_acl", None)
+
+    with pytest.raises(ValueError, match="Weak ACL evidence requires explicit"):
+        serialize_supply_change_page(page)
 
 
 @pytest.mark.parametrize(

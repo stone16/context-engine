@@ -19,6 +19,7 @@ from engine.persistence import (
     PostgreSQLSupplyExecutionBridge,
     SupplyBridgeExecutionIdentity,
     SupplyBridgeLeaseIssueRequest,
+    SupplyBridgeLeasePreemptionRequest,
     create_database_engine,
 )
 from engine.supply import WorkerLeaseCodec, WorkerLeaseKeyring
@@ -35,7 +36,7 @@ from engine.supply.execution import (
     SupplyDocumentEnvelope,
     serialize_supply_change_page,
 )
-from engine.supply.jobs import WorkerLeaseClaims
+from engine.supply.jobs import WorkerLeaseClaims, WorkNotAvailable
 
 pytestmark = pytest.mark.integration
 SIGNING_KEY = bytes(range(32))
@@ -411,6 +412,7 @@ def scenarios(
                     "supply_connector_checkpoint",
                     "supply_connector_accepted_page",
                     "supply_connector_staged_page",
+                    "supply_connector_lease_event",
                     "supply_connector_job",
                 ):
                     connection.execute(
@@ -583,6 +585,13 @@ def test_staged_payload_round_trip_preserves_every_emitted_page_fact(
         (("binding", "source_version_id"), lambda: str(uuid4())),
         (("binding", "worker_job_id"), lambda: str(uuid4())),
         (("page_ref",), lambda: "page:mismatched-payload-ref"),
+        (("documents", 0, "organization_id"), lambda: str(uuid4())),
+        (("documents", 0, "source_version_id"), lambda: str(uuid4())),
+        (("documents", 0, "worker_job_id"), lambda: str(uuid4())),
+        (
+            ("documents", 0, "acl_observation", "organization_id"),
+            lambda: str(uuid4()),
+        ),
     ],
 )
 def test_atomic_acceptance_refuses_payload_outside_the_exact_binding(
@@ -590,13 +599,15 @@ def test_atomic_acceptance_refuses_payload_outside_the_exact_binding(
     migration_configuration: DatabaseConfiguration,
     guarded_control_engine: Engine,
     guarded_worker_engine: Engine,
-    mutated_path: tuple[str, ...],
+    mutated_path: tuple[str | int, ...],
     mutated_value: Callable[[], str],
 ) -> None:
     scenario = _seed_scenario(migration_configuration, guarded_control_engine)
     scenarios.append(scenario)
     page = _page(scenario, 1, terminal=False)
     claims = _claims(scenario)
+    store = PostgreSQLConnectorCheckpointStore(guarded_worker_engine)
+    assert store.redeem_for_execution(page.binding, lease_claims=claims) is None
     payload = json.loads(serialize_supply_change_page(page))
     target = payload
     for path_element in mutated_path[:-1]:
@@ -645,7 +656,6 @@ def test_atomic_acceptance_refuses_payload_outside_the_exact_binding(
         ).one_or_none()
 
     assert row is None
-    store = PostgreSQLConnectorCheckpointStore(guarded_worker_engine)
     assert store.load(page.binding, lease_claims=claims) is None
     assert (
         PostgreSQLStagedArtifactSink(guarded_worker_engine).load(
@@ -655,6 +665,68 @@ def test_atomic_acceptance_refuses_payload_outside_the_exact_binding(
         )
         is None
     )
+
+
+def test_atomic_acceptance_refuses_unjustified_weak_acl_payload(
+    scenarios: list[_Scenario],
+    migration_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+    guarded_worker_engine: Engine,
+) -> None:
+    scenario = _seed_scenario(migration_configuration, guarded_control_engine)
+    scenarios.append(scenario)
+    page = _page(scenario, 1, terminal=False)
+    claims = _claims(scenario)
+    store = PostgreSQLConnectorCheckpointStore(guarded_worker_engine)
+    assert store.redeem_for_execution(page.binding, lease_claims=claims) is None
+    payload = json.loads(serialize_supply_change_page(page))
+    observation = payload["documents"][0]["acl_observation"]
+    observation["evidence_class"] = "weak"
+    observation["evidence_payload"] = None
+    observation["source_lacks_stronger_acl"] = None
+    mutated_payload = json.dumps(
+        payload,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("ascii")
+
+    with guarded_worker_engine.begin() as connection:
+        row = connection.execute(
+            text(
+                """
+                SELECT accepted_ordinal
+                FROM public.context_supply_accept_connector_page(
+                    :organization_id, :source_version_id, :worker_job_id,
+                    :service_principal_id, :page_ref, :page_payload,
+                    :lease_generation, :signing_key_version, :nonce,
+                    :issued_at, :expires_at, :policy_epoch,
+                    :idempotency_key, :allowed_source_version_ids,
+                    :allowed_operations, :service_actor_expires_at
+                )
+                """
+            ),
+            {
+                "organization_id": scenario.organization_id,
+                "source_version_id": scenario.source_version_id,
+                "worker_job_id": scenario.job_id,
+                "service_principal_id": scenario.service_principal_id,
+                "page_ref": page.page_ref,
+                "page_payload": mutated_payload,
+                "lease_generation": claims.lease_generation,
+                "signing_key_version": claims.signing_key_version,
+                "nonce": claims.nonce,
+                "issued_at": claims.issued_at,
+                "expires_at": claims.expires_at,
+                "policy_epoch": claims.policy_epoch,
+                "idempotency_key": claims.idempotency_key,
+                "allowed_source_version_ids": [scenario.source_version_id],
+                "allowed_operations": ["connector.execute"],
+                "service_actor_expires_at": claims.service_actor_expires_at,
+            },
+        ).one_or_none()
+
+    assert row is None
 
 
 def test_checkpoint_comes_only_from_page_and_no_stage_mutator_exists(
@@ -766,9 +838,35 @@ def test_rollback_leaves_prior_checkpoint_and_resume_reemits_exact_page(
         )
         is None
     )
+    replay_adapter = _TwoPageAdapter(pages)
+    with pytest.raises(WorkNotAvailable, match="^work not available$"):
+        _bridge(scenario, guarded_worker_engine, durable_store).execute(
+            scenario.execution,
+            replay_adapter,
+        )
+    assert replay_adapter.loaded_checkpoints == []
+    assert replay_adapter.emitted_pages == []
+
+    resumed_token = PostgreSQLSupplyBridgeLeaseIssuer(
+        guarded_control_engine,
+        scenario.codec,
+    ).preempt(
+        SupplyBridgeLeasePreemptionRequest(
+            organization_id=scenario.organization_id,
+            source_id=scenario.source_id,
+            source_version_id=scenario.source_version_id,
+            worker_job_id=scenario.job_id,
+            service_principal_id=scenario.service_principal_id,
+            reason_digest="b" * 64,
+        )
+    )
+    resumed_scenario = replace(
+        scenario,
+        execution=replace(scenario.execution, worker_lease=resumed_token),
+    )
     resumed_adapter = _TwoPageAdapter(pages)
-    resumed = _bridge(scenario, guarded_worker_engine, durable_store).execute(
-        scenario.execution,
+    resumed = _bridge(resumed_scenario, guarded_worker_engine, durable_store).execute(
+        resumed_scenario.execution,
         resumed_adapter,
     )
     assert resumed.accepted_page_refs == ("page:2",)
@@ -778,7 +876,7 @@ def test_rollback_leaves_prior_checkpoint_and_resume_reemits_exact_page(
     resumed_artifact = durable_sink.load(
         pages[1].binding,
         pages[1].page_ref,
-        lease_claims=_claims(scenario),
+        lease_claims=_claims(resumed_scenario),
     )
     assert resumed_artifact is not None
     assert resumed_artifact.payload == serialize_supply_change_page(pages[1])
@@ -857,6 +955,7 @@ def test_supply_bridge_tables_are_force_rls_function_only_and_exactly_bound(
     for engine in (guarded_worker_engine, guarded_runtime_engine):
         for table in (
             "supply_connector_job",
+            "supply_connector_lease_event",
             "supply_connector_accepted_page",
             "supply_connector_checkpoint",
             "supply_connector_staged_page",

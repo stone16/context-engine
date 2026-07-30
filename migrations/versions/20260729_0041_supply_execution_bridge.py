@@ -30,6 +30,7 @@ _FILE_OPERATION_FENCES = (
 )
 _TABLES = (
     "supply_connector_job",
+    "supply_connector_lease_event",
     "supply_connector_staged_page",
     "supply_connector_accepted_page",
     "supply_connector_checkpoint",
@@ -172,7 +173,7 @@ def _create_tables() -> None:
             "AND allowed_operations IS NULL "
             "AND service_actor_expires_at IS NULL AND redeemed_at IS NULL "
             "AND completed_at IS NULL) OR "
-            "(state IN ('leased', 'running') AND lease_generation > 0 "
+            "(state = 'leased' AND lease_generation > 0 "
             "AND signing_key_version > 0 "
             "AND octet_length(lease_nonce_digest) = 32 "
             "AND lease_issued_at IS NOT NULL "
@@ -184,6 +185,19 @@ def _create_tables() -> None:
             "AND service_actor_expires_at >= lease_expires_at "
             "AND redeemed_at IS NULL "
             "AND completed_at IS NULL) OR "
+            "(state = 'running' AND lease_generation > 0 "
+            "AND signing_key_version > 0 "
+            "AND octet_length(lease_nonce_digest) = 32 "
+            "AND lease_issued_at IS NOT NULL "
+            "AND lease_expires_at > lease_issued_at "
+            "AND policy_epoch > 0 "
+            "AND idempotency_key ~ '^[0-9a-f]{64}$' "
+            "AND allowed_source_version_ids = ARRAY[source_version_id] "
+            "AND allowed_operations = ARRAY['connector.execute']::text[] "
+            "AND service_actor_expires_at >= lease_expires_at "
+            "AND redeemed_at IS NOT NULL "
+            "AND redeemed_at >= lease_issued_at "
+            "AND completed_at IS NULL) OR "
             "(state = 'completed' AND lease_generation > 0 "
             "AND signing_key_version > 0 "
             "AND octet_length(lease_nonce_digest) = 32 "
@@ -194,9 +208,47 @@ def _create_tables() -> None:
             "AND allowed_source_version_ids = ARRAY[source_version_id] "
             "AND allowed_operations = ARRAY['connector.execute']::text[] "
             "AND service_actor_expires_at >= lease_expires_at "
-            "AND redeemed_at = completed_at "
-            "AND completed_at >= lease_issued_at)",
+            "AND redeemed_at IS NOT NULL "
+            "AND completed_at >= redeemed_at "
+            "AND redeemed_at >= lease_issued_at)",
             name="ck_supply_connector_job_lease_state",
+        ),
+    )
+    op.create_table(
+        "supply_connector_lease_event",
+        sa.Column("organization_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("worker_job_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("event_type", sa.Text(), nullable=False),
+        sa.Column("prior_lease_generation", sa.BigInteger(), nullable=False),
+        sa.Column("replacement_lease_generation", sa.BigInteger(), nullable=False),
+        sa.Column("reason_digest", sa.Text(), nullable=False),
+        sa.Column("occurred_at", sa.DateTime(timezone=True), nullable=False),
+        sa.PrimaryKeyConstraint(
+            "organization_id",
+            "worker_job_id",
+            "replacement_lease_generation",
+            name="pk_supply_connector_lease_event",
+        ),
+        sa.ForeignKeyConstraint(
+            ["organization_id", "worker_job_id"],
+            [
+                "supply_connector_job.organization_id",
+                "supply_connector_job.worker_job_id",
+            ],
+            name="fk_supply_connector_lease_event_job_exact",
+        ),
+        sa.CheckConstraint(
+            "event_type = 'operator_preempted'",
+            name="ck_supply_connector_lease_event_type",
+        ),
+        sa.CheckConstraint(
+            "prior_lease_generation > 0 "
+            "AND replacement_lease_generation = prior_lease_generation + 1",
+            name="ck_supply_connector_lease_event_generations",
+        ),
+        sa.CheckConstraint(
+            "reason_digest ~ '^[0-9a-f]{64}$'",
+            name="ck_supply_connector_lease_event_reason_digest",
         ),
     )
     op.create_table(
@@ -485,7 +537,13 @@ def _create_functions() -> None:
                AND job.worker_audience = '{_AUDIENCE}'
                AND job.actor_kind = 'service'
                AND job.operation = '{_OPERATION}'
-               AND job.state = 'available'
+               AND (
+                    job.state = 'available'
+                    OR (
+                        job.state = 'running'
+                        AND job.lease_expires_at <= now_at
+                    )
+               )
                AND epoch.organization_id = job.organization_id
                AND EXISTS (
                    SELECT 1 FROM public.service_principal AS actor
@@ -506,6 +564,150 @@ def _create_functions() -> None:
              RETURNING job.lease_issued_at, job.lease_expires_at,
                        job.lease_generation, job.policy_epoch,
                        job.idempotency_key, job.service_actor_expires_at;
+        END;
+        $function$
+        """
+    )
+    op.execute(
+        f"""
+        CREATE FUNCTION public.context_supply_preempt_connector_lease(
+            requested_organization_id uuid,
+            requested_source_id uuid,
+            requested_source_version_id uuid,
+            requested_worker_job_id uuid,
+            requested_service_principal_id uuid,
+            requested_signing_key_version bigint,
+            requested_nonce bytea,
+            requested_lease_ttl_seconds integer,
+            requested_reason_digest text
+        ) RETURNS TABLE (
+            issued_at timestamptz,
+            expires_at timestamptz,
+            lease_generation bigint,
+            policy_epoch bigint,
+            idempotency_key text,
+            service_actor_expires_at timestamptz
+        )
+        LANGUAGE plpgsql SECURITY DEFINER
+        SET search_path = pg_catalog, public
+        AS $function$
+        DECLARE now_at timestamptz := date_trunc('second', clock_timestamp());
+        DECLARE prior_generation bigint;
+        BEGIN
+            IF session_user <> '{_CONTROL}'
+               OR requested_organization_id IS NULL
+               OR requested_source_id IS NULL
+               OR requested_source_version_id IS NULL
+               OR requested_worker_job_id IS NULL
+               OR requested_service_principal_id IS NULL
+               OR requested_signing_key_version <= 0
+               OR octet_length(requested_nonce) <> 32
+               OR requested_lease_ttl_seconds NOT BETWEEN 1 AND 3600
+               OR requested_reason_digest !~ '^[0-9a-f]{{64}}$' THEN
+                RETURN;
+            END IF;
+            PERFORM set_config(
+                'app.organization_id', requested_organization_id::text, true
+            );
+            PERFORM set_config(
+                'app.worker_job_id', requested_worker_job_id::text, true
+            );
+            SELECT job.lease_generation INTO prior_generation
+              FROM public.supply_connector_job AS job
+              JOIN public.organization_policy_epoch AS epoch
+                ON epoch.organization_id = job.organization_id
+             WHERE job.organization_id = requested_organization_id
+               AND job.source_id = requested_source_id
+               AND job.source_version_id = requested_source_version_id
+               AND job.worker_job_id = requested_worker_job_id
+               AND job.service_principal_id = requested_service_principal_id
+               AND job.workload = '{_WORKLOAD}'
+               AND job.worker_audience = '{_AUDIENCE}'
+               AND job.actor_kind = 'service'
+               AND job.operation = '{_OPERATION}'
+               AND job.state = 'running'
+               AND job.lease_expires_at > now_at
+               AND EXISTS (
+                   SELECT 1 FROM public.service_principal AS actor
+                   WHERE actor.organization_id = job.organization_id
+                     AND actor.service_principal_id = job.service_principal_id
+                     AND actor.workload = job.workload
+                     AND actor.worker_audience = job.worker_audience
+                     AND actor.operation = job.operation
+                     AND actor.enabled IS TRUE
+               )
+               AND EXISTS (
+                   SELECT 1 FROM public.context_source AS source
+                   WHERE source.organization_id = job.organization_id
+                     AND source.source_id = job.source_id
+                     AND source.active_version_id = job.source_version_id
+                     AND source.lifecycle_state = 'active'
+               )
+             FOR UPDATE OF job;
+            IF NOT FOUND THEN RETURN; END IF;
+
+            RETURN QUERY
+            WITH replacement AS (
+                UPDATE public.supply_connector_job AS job
+                   SET state = 'leased',
+                       lease_generation = prior_generation + 1,
+                       signing_key_version = requested_signing_key_version,
+                       lease_nonce_digest = digest(requested_nonce, 'sha256'),
+                       lease_issued_at = now_at,
+                       lease_expires_at = now_at + make_interval(
+                           secs => requested_lease_ttl_seconds
+                       ),
+                       policy_epoch = epoch.policy_epoch,
+                       idempotency_key = encode(
+                           digest(
+                               requested_organization_id::text || ':' ||
+                               requested_worker_job_id::text || ':' ||
+                               (prior_generation + 1)::text,
+                               'sha256'
+                           ),
+                           'hex'
+                       ),
+                       allowed_source_version_ids = ARRAY[
+                           requested_source_version_id
+                       ],
+                       allowed_operations = ARRAY[
+                           'connector.execute'
+                       ]::text[],
+                       service_actor_expires_at = now_at + make_interval(
+                           secs => requested_lease_ttl_seconds
+                       ),
+                       redeemed_at = NULL,
+                       completed_at = NULL
+                  FROM public.organization_policy_epoch AS epoch
+                 WHERE job.organization_id = requested_organization_id
+                   AND job.worker_job_id = requested_worker_job_id
+                   AND job.lease_generation = prior_generation
+                   AND job.state = 'running'
+                   AND epoch.organization_id = job.organization_id
+                 RETURNING job.lease_issued_at AS issued_at,
+                           job.lease_expires_at AS expires_at,
+                           job.lease_generation, job.policy_epoch,
+                           job.idempotency_key, job.service_actor_expires_at
+            ), recorded AS (
+                INSERT INTO public.supply_connector_lease_event (
+                    organization_id, worker_job_id, event_type,
+                    prior_lease_generation, replacement_lease_generation,
+                    reason_digest, occurred_at
+                )
+                SELECT requested_organization_id, requested_worker_job_id,
+                       'operator_preempted', prior_generation,
+                       replacement.lease_generation,
+                       requested_reason_digest, now_at
+                  FROM replacement
+                RETURNING replacement_lease_generation
+            )
+            SELECT replacement.issued_at, replacement.expires_at,
+                   replacement.lease_generation, replacement.policy_epoch,
+                   replacement.idempotency_key,
+                   replacement.service_actor_expires_at
+              FROM replacement
+              JOIN recorded ON recorded.replacement_lease_generation =
+                               replacement.lease_generation;
         END;
         $function$
         """
@@ -596,8 +798,60 @@ def _create_functions() -> None:
                AND staged.source_version_id = job.source_version_id
                AND staged.worker_job_id = job.worker_job_id
              WHERE {verification}
-               AND job.state IN ('leased', 'running', 'completed')
+               AND job.state IN ('running', 'completed')
                AND staged.page_ref = requested_page_ref;
+        END;
+        $function$
+        """
+    )
+    op.execute(
+        f"""
+        CREATE FUNCTION public.context_supply_redeem_connector_lease(
+            requested_organization_id uuid,
+            requested_source_version_id uuid,
+            requested_worker_job_id uuid,
+            requested_service_principal_id uuid,
+            requested_lease_generation bigint,
+            requested_signing_key_version bigint,
+            requested_nonce bytea,
+            requested_issued_at timestamptz,
+            requested_expires_at timestamptz,
+            requested_policy_epoch bigint,
+            requested_idempotency_key text,
+            requested_allowed_source_version_ids uuid[],
+            requested_allowed_operations text[],
+            requested_service_actor_expires_at timestamptz
+        ) RETURNS TABLE (opaque_checkpoint bytea, job_state text)
+        LANGUAGE plpgsql SECURITY DEFINER
+        SET search_path = pg_catalog, public
+        AS $function$
+        DECLARE redeemed_at_now timestamptz := clock_timestamp();
+        BEGIN
+            IF session_user <> '{_WORKER}' THEN RETURN; END IF;
+            PERFORM set_config(
+                'app.organization_id', requested_organization_id::text, true
+            );
+            PERFORM set_config(
+                'app.worker_job_id', requested_worker_job_id::text, true
+            );
+            {actor_context}
+            RETURN QUERY
+            WITH redeemed AS (
+                UPDATE public.supply_connector_job AS job
+                   SET state = 'running', redeemed_at = redeemed_at_now
+                 WHERE {verification}
+                   AND job.state = 'leased'
+                   AND job.redeemed_at IS NULL
+                 RETURNING job.organization_id, job.source_id,
+                           job.source_version_id, job.worker_job_id, job.state
+            )
+            SELECT checkpoint.opaque_checkpoint, redeemed.state
+              FROM redeemed
+              LEFT JOIN public.supply_connector_checkpoint AS checkpoint
+                ON checkpoint.organization_id = redeemed.organization_id
+               AND checkpoint.source_id = redeemed.source_id
+               AND checkpoint.source_version_id = redeemed.source_version_id
+               AND checkpoint.worker_job_id = redeemed.worker_job_id;
         END;
         $function$
         """
@@ -634,14 +888,14 @@ def _create_functions() -> None:
             {actor_context}
             RETURN QUERY
             SELECT checkpoint.opaque_checkpoint, job.state
-              FROM public.supply_connector_job AS job
+             FROM public.supply_connector_job AS job
               LEFT JOIN public.supply_connector_checkpoint AS checkpoint
                 ON checkpoint.organization_id = job.organization_id
                AND checkpoint.source_id = job.source_id
                AND checkpoint.source_version_id = job.source_version_id
                AND checkpoint.worker_job_id = job.worker_job_id
              WHERE {verification}
-               AND job.state IN ('leased', 'running', 'completed');
+               AND job.state IN ('running', 'completed');
         END;
         $function$
         """
@@ -677,6 +931,8 @@ def _create_functions() -> None:
         DECLARE staged_checkpoint_digest bytea;
         DECLARE staged_terminal boolean;
         DECLARE payload_document jsonb;
+        DECLARE payload_envelope jsonb;
+        DECLARE payload_acl jsonb;
         DECLARE now_at timestamptz := clock_timestamp();
         BEGIN
             IF session_user <> '{_WORKER}'
@@ -691,15 +947,79 @@ def _create_functions() -> None:
                 payload_document := convert_from(
                     requested_page_payload, 'UTF8'
                 )::jsonb;
-                IF payload_document->'binding'->>'organization_id'
-                        <> requested_organization_id::text
+                IF jsonb_typeof(payload_document) IS DISTINCT FROM 'object'
+                   OR payload_document->'binding'->>'organization_id'
+                        IS DISTINCT FROM requested_organization_id::text
                    OR payload_document->'binding'->>'source_version_id'
-                        <> requested_source_version_id::text
+                        IS DISTINCT FROM requested_source_version_id::text
                    OR payload_document->'binding'->>'worker_job_id'
-                        <> requested_worker_job_id::text
-                   OR payload_document->>'page_ref' <> requested_page_ref
-                   OR jsonb_typeof(payload_document->'terminal') <> 'boolean'
+                        IS DISTINCT FROM requested_worker_job_id::text
+                   OR payload_document->>'page_ref'
+                        IS DISTINCT FROM requested_page_ref
+                   OR jsonb_typeof(payload_document->'terminal')
+                        IS DISTINCT FROM 'boolean'
+                   OR jsonb_typeof(payload_document->'documents')
+                        IS DISTINCT FROM 'array'
+                   OR jsonb_typeof(payload_document->'deleted_document_refs')
+                        IS DISTINCT FROM 'array'
                 THEN RETURN; END IF;
+                FOR payload_envelope IN
+                    SELECT value
+                    FROM jsonb_array_elements(payload_document->'documents')
+                LOOP
+                    payload_acl := payload_envelope->'acl_observation';
+                    IF jsonb_typeof(payload_envelope)
+                            IS DISTINCT FROM 'object'
+                       OR payload_envelope->>'organization_id'
+                            IS DISTINCT FROM requested_organization_id::text
+                       OR payload_envelope->>'source_version_id'
+                            IS DISTINCT FROM requested_source_version_id::text
+                       OR payload_envelope->>'worker_job_id'
+                            IS DISTINCT FROM requested_worker_job_id::text
+                       OR jsonb_typeof(payload_acl) IS DISTINCT FROM 'object'
+                       OR payload_acl->>'organization_id'
+                            IS DISTINCT FROM requested_organization_id::text
+                       OR payload_acl->>'evidence_class' IS NULL
+                       OR payload_acl->>'evidence_class'
+                            NOT IN ('live', 'mirrored', 'weak')
+                       OR (
+                            payload_acl->>'evidence_class' IN ('live', 'mirrored')
+                            AND (
+                                jsonb_typeof(payload_acl->'evidence_payload')
+                                    IS DISTINCT FROM 'string'
+                                OR octet_length(
+                                    decode(
+                                        payload_acl->>'evidence_payload',
+                                        'base64'
+                                    )
+                                ) NOT BETWEEN 1 AND 1048576
+                                OR payload_acl->'source_lacks_stronger_acl'
+                                    IS DISTINCT FROM 'null'::jsonb
+                            )
+                       )
+                       OR (
+                            payload_acl->>'evidence_class' = 'weak'
+                            AND (
+                                payload_acl->'evidence_payload'
+                                    IS DISTINCT FROM 'null'::jsonb
+                                OR jsonb_typeof(
+                                    payload_acl->'source_lacks_stronger_acl'
+                                ) IS DISTINCT FROM 'string'
+                                OR btrim(
+                                    payload_acl->>'source_lacks_stronger_acl'
+                                ) = ''
+                                OR payload_acl->>'source_lacks_stronger_acl'
+                                    <> btrim(
+                                        payload_acl->>
+                                            'source_lacks_stronger_acl'
+                                    )
+                                OR char_length(
+                                    payload_acl->>'source_lacks_stronger_acl'
+                                ) > 512
+                            )
+                       )
+                    THEN RETURN; END IF;
+                END LOOP;
                 staged_checkpoint := decode(
                     payload_document->>'checkpoint_proposal', 'base64'
                 );
@@ -725,7 +1045,8 @@ def _create_functions() -> None:
             SELECT job.* INTO job_row
               FROM public.supply_connector_job AS job
              WHERE {verification}
-               AND job.state IN ('leased', 'running')
+               AND job.state = 'running'
+               AND job.redeemed_at IS NOT NULL
              FOR UPDATE OF job;
             IF NOT FOUND THEN RETURN; END IF;
 
@@ -804,9 +1125,7 @@ def _create_functions() -> None:
                    completed_at = CASE
                        WHEN staged_terminal THEN now_at ELSE NULL
                    END,
-                   redeemed_at = CASE
-                       WHEN staged_terminal THEN now_at ELSE NULL
-                   END
+                   redeemed_at = job.redeemed_at
              WHERE job.organization_id = requested_organization_id
                AND job.worker_job_id = requested_worker_job_id;
             RETURN QUERY SELECT ordinal;
@@ -875,6 +1194,7 @@ def upgrade() -> None:
     )
     _create_tables()
     _secure_table("supply_connector_job", write_commands=("UPDATE",))
+    _secure_table("supply_connector_lease_event", write_commands=("INSERT",))
     _secure_table("supply_connector_staged_page", write_commands=("INSERT",))
     _secure_table("supply_connector_accepted_page", write_commands=("INSERT",))
     _secure_table(
@@ -882,6 +1202,9 @@ def upgrade() -> None:
         write_commands=("INSERT", "UPDATE"),
     )
     op.execute(f"GRANT SELECT, UPDATE ON TABLE supply_connector_job TO {_DEFINER}")
+    op.execute(
+        f"GRANT SELECT, INSERT ON TABLE supply_connector_lease_event TO {_DEFINER}"
+    )
     op.execute(f"GRANT SELECT ON TABLE organization_policy_epoch TO {_DEFINER}")
     op.execute(
         f"GRANT SELECT, INSERT ON TABLE supply_connector_staged_page TO {_DEFINER}"
@@ -898,8 +1221,18 @@ def upgrade() -> None:
         "public.context_supply_issue_connector_lease"
         "(uuid,uuid,uuid,uuid,uuid,bigint,bytea,integer)"
     )
+    preempt_signature = (
+        "public.context_supply_preempt_connector_lease"
+        "(uuid,uuid,uuid,uuid,uuid,bigint,bytea,integer,text)"
+    )
     load_signature = (
         "public.context_supply_load_connector_checkpoint"
+        "(uuid,uuid,uuid,uuid,bigint,bigint,bytea,timestamp with time zone,"
+        "timestamp with time zone,bigint,text,uuid[],text[],"
+        "timestamp with time zone)"
+    )
+    redeem_signature = (
+        "public.context_supply_redeem_connector_lease"
         "(uuid,uuid,uuid,uuid,bigint,bigint,bytea,timestamp with time zone,"
         "timestamp with time zone,bigint,text,uuid[],text[],"
         "timestamp with time zone)"
@@ -918,6 +1251,8 @@ def upgrade() -> None:
     )
     signatures = (
         issue_signature,
+        preempt_signature,
+        redeem_signature,
         load_signature,
         load_staged_signature,
         accept_signature,
@@ -929,6 +1264,8 @@ def upgrade() -> None:
         op.execute(f"ALTER FUNCTION {signature} OWNER TO {_DEFINER}")
     op.execute(f"SET LOCAL ROLE {_DEFINER}")
     op.execute(f"GRANT EXECUTE ON FUNCTION {issue_signature} TO {_CONTROL}")
+    op.execute(f"GRANT EXECUTE ON FUNCTION {preempt_signature} TO {_CONTROL}")
+    op.execute(f"GRANT EXECUTE ON FUNCTION {redeem_signature} TO {_WORKER}")
     op.execute(f"GRANT EXECUTE ON FUNCTION {load_signature} TO {_WORKER}")
     op.execute(f"GRANT EXECUTE ON FUNCTION {load_staged_signature} TO {_WORKER}")
     op.execute(f"GRANT EXECUTE ON FUNCTION {accept_signature} TO {_WORKER}")
@@ -946,6 +1283,16 @@ def downgrade() -> None:
         "(uuid,uuid,uuid,uuid,text,bytea,bigint,bigint,bytea,"
         "timestamp with time zone,timestamp with time zone,bigint,text,"
         "uuid[],text[],timestamp with time zone)"
+    )
+    op.execute(
+        "DROP FUNCTION public.context_supply_preempt_connector_lease"
+        "(uuid,uuid,uuid,uuid,uuid,bigint,bytea,integer,text)"
+    )
+    op.execute(
+        "DROP FUNCTION public.context_supply_redeem_connector_lease"
+        "(uuid,uuid,uuid,uuid,bigint,bigint,bytea,timestamp with time zone,"
+        "timestamp with time zone,bigint,text,uuid[],text[],"
+        "timestamp with time zone)"
     )
     op.execute(
         "DROP FUNCTION public.context_supply_load_staged_connector_page"

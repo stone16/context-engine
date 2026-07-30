@@ -50,6 +50,16 @@ def _require_uuid(field_name: str, value: object) -> UUID:
     return value
 
 
+def _require_sha256(field_name: str, value: object) -> str:
+    if (
+        type(value) is not str
+        or len(value) != 64
+        or any(character not in "0123456789abcdef" for character in value)
+    ):
+        raise ValueError(f"{field_name} must be lowercase SHA-256")
+    return value
+
+
 def _rejection(token: WorkerLeaseToken) -> WorkNotAvailable:
     return WorkNotAvailable(
         WorkerLeaseRejectionAuditReceipt(lease_digest=worker_lease_digest(token))
@@ -72,6 +82,17 @@ class SupplyBridgeLeaseIssueRequest:
         _require_uuid("Supply bridge SourceVersion", self.source_version_id)
         _require_uuid("Supply bridge WorkerJob", self.worker_job_id)
         _require_uuid("Supply bridge ServiceActor", self.service_principal_id)
+
+
+@dataclass(frozen=True, slots=True)
+class SupplyBridgeLeasePreemptionRequest(SupplyBridgeLeaseIssueRequest):
+    """Explicit operator intent to replace one still-live connector lease."""
+
+    reason_digest: str = field(repr=False)
+
+    def __post_init__(self) -> None:
+        SupplyBridgeLeaseIssueRequest.__post_init__(self)
+        _require_sha256("Supply bridge preemption reason digest", self.reason_digest)
 
 
 @dataclass(frozen=True, slots=True)
@@ -181,23 +202,61 @@ class PostgreSQLSupplyBridgeLeaseIssuer:
     def issue(self, request: SupplyBridgeLeaseIssueRequest) -> WorkerLeaseToken:
         if type(request) is not SupplyBridgeLeaseIssueRequest:
             raise TypeError("Supply bridge lease issuance requires an exact request")
+        return self._issue(request)
+
+    def preempt(
+        self,
+        request: SupplyBridgeLeasePreemptionRequest,
+    ) -> WorkerLeaseToken:
+        if type(request) is not SupplyBridgeLeasePreemptionRequest:
+            raise TypeError(
+                "Supply bridge preemption requires explicit operator intent"
+            )
+        return self._issue(
+            request,
+            reason_digest=request.reason_digest,
+        )
+
+    def _issue(
+        self,
+        request: SupplyBridgeLeaseIssueRequest,
+        *,
+        reason_digest: str | None = None,
+    ) -> WorkerLeaseToken:
         nonce = generate_worker_lease_nonce()
+        statement = (
+            text(
+                """
+                SELECT issued_at, expires_at, lease_generation,
+                       policy_epoch, idempotency_key,
+                       service_actor_expires_at
+                FROM public.context_supply_issue_connector_lease(
+                    :organization_id, :source_id, :source_version_id,
+                    :worker_job_id, :service_principal_id,
+                    :signing_key_version, :nonce, :lease_ttl_seconds
+                )
+                """
+            )
+            if reason_digest is None
+            else text(
+                """
+                SELECT issued_at, expires_at, lease_generation,
+                       policy_epoch, idempotency_key,
+                       service_actor_expires_at
+                FROM public.context_supply_preempt_connector_lease(
+                    :organization_id, :source_id, :source_version_id,
+                    :worker_job_id, :service_principal_id,
+                    :signing_key_version, :nonce, :lease_ttl_seconds,
+                    :reason_digest
+                )
+                """
+            )
+        )
         try:
             with self._control_engine.begin() as connection:
                 assert_control_role(connection)
                 row = connection.execute(
-                    text(
-                        """
-                        SELECT issued_at, expires_at, lease_generation,
-                               policy_epoch, idempotency_key,
-                               service_actor_expires_at
-                        FROM public.context_supply_issue_connector_lease(
-                            :organization_id, :source_id, :source_version_id,
-                            :worker_job_id, :service_principal_id,
-                            :signing_key_version, :nonce, :lease_ttl_seconds
-                        )
-                        """
-                    ),
+                    statement,
                     {
                         "organization_id": request.organization_id,
                         "source_id": request.source_id,
@@ -207,6 +266,7 @@ class PostgreSQLSupplyBridgeLeaseIssuer:
                         "signing_key_version": self._codec.active_signing_key_version,
                         "nonce": nonce,
                         "lease_ttl_seconds": self._lease_ttl_seconds,
+                        "reason_digest": reason_digest,
                     },
                 ).one_or_none()
                 if row is None:
@@ -278,7 +338,7 @@ class PostgreSQLConnectorCheckpointStore:
         except SQLAlchemyError:
             raise SupplyBridgeUnavailable("checkpoint load is unavailable") from None
 
-    def load_for_execution(
+    def redeem_for_execution(
         self,
         binding: ConnectorCheckpointBinding,
         *,
@@ -291,14 +351,31 @@ class PostgreSQLConnectorCheckpointStore:
         try:
             with self._worker_engine.begin() as connection:
                 assert_worker_role(connection)
-                checkpoint, job_state = self._load_on_connection(
-                    connection, binding, lease_claims
-                )
-                if job_state not in {"leased", "running"}:
+                row = connection.execute(
+                    text(
+                        """
+                        SELECT opaque_checkpoint, job_state
+                        FROM public.context_supply_redeem_connector_lease(
+                            :organization_id, :source_version_id, :worker_job_id,
+                            :service_principal_id, :lease_generation,
+                            :signing_key_version, :nonce, :issued_at, :expires_at,
+                            :policy_epoch, :idempotency_key,
+                            :allowed_source_version_refs, :allowed_operations,
+                            :service_actor_expires_at
+                        )
+                        """
+                    ),
+                    _lease_parameters(binding, lease_claims),
+                ).one_or_none()
+                if row is None or row.job_state != "running":
                     raise _rejection(
                         WorkerLeaseToken("unavailable.unavailable.unavailable")
                     )
-                return checkpoint
+                return (
+                    bytes(row.opaque_checkpoint)
+                    if row.opaque_checkpoint is not None
+                    else None
+                )
         except WorkNotAvailable:
             raise
         except AssertionError:
@@ -555,7 +632,7 @@ class PostgreSQLSupplyExecutionBridge:
         ):
             raise TypeError("Supply bridge requires ConnectorAdapter")
         accepted: list[str] = []
-        checkpoint = self._store.load_for_execution(
+        checkpoint = self._store.redeem_for_execution(
             execution.binding,
             lease_claims=claims,
         )
@@ -598,5 +675,6 @@ __all__ = [
     "SupplyBridgeExecutionIdentity",
     "SupplyBridgeExecutionResult",
     "SupplyBridgeLeaseIssueRequest",
+    "SupplyBridgeLeasePreemptionRequest",
     "SupplyBridgeUnavailable",
 ]

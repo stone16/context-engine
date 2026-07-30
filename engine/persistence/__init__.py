@@ -90,6 +90,7 @@ from engine.persistence.supply_execution import (
     SupplyBridgeExecutionIdentity,
     SupplyBridgeExecutionResult,
     SupplyBridgeLeaseIssueRequest,
+    SupplyBridgeLeasePreemptionRequest,
     SupplyBridgeUnavailable,
 )
 from engine.persistence.tenant_context import (
@@ -193,6 +194,7 @@ __all__ = [
     "SupplyBridgeExecutionIdentity",
     "SupplyBridgeExecutionResult",
     "SupplyBridgeLeaseIssueRequest",
+    "SupplyBridgeLeasePreemptionRequest",
     "SupplyBridgeUnavailable",
     "assert_runtime_role",
     "assert_release_operator_role",
