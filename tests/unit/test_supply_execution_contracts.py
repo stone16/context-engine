@@ -7,6 +7,12 @@ from uuid import UUID
 import pytest
 
 from engine.supply.execution import (
+    DEFAULT_SUPPLY_EXECUTION_CUMULATIVE_BYTE_LIMIT,
+    DEFAULT_SUPPLY_EXECUTION_NO_PROGRESS_PAGE_LIMIT,
+    DEFAULT_SUPPLY_EXECUTION_PAGE_LIMIT,
+    MAX_SUPPLY_EXECUTION_CUMULATIVE_BYTE_LIMIT,
+    MAX_SUPPLY_EXECUTION_NO_PROGRESS_PAGE_LIMIT,
+    MAX_SUPPLY_EXECUTION_PAGE_LIMIT,
     ConnectorCheckpointBinding,
     ConnectorCheckpointProposal,
     ConnectorFailure,
@@ -18,6 +24,7 @@ from engine.supply.execution import (
     SupplyChangePage,
     SupplyDocumentDeleteObservation,
     SupplyDocumentEnvelope,
+    SupplyExecutionConfiguration,
     serialize_supply_change_page,
 )
 
@@ -124,6 +131,71 @@ def _failure(**overrides: object) -> ConnectorFailure:
     return ConnectorFailure(**values)  # type: ignore[arg-type]
 
 
+def test_supply_execution_configuration_defaults_cover_post_acl_growth_pages() -> None:
+    configuration = SupplyExecutionConfiguration()
+
+    assert configuration.page_limit == DEFAULT_SUPPLY_EXECUTION_PAGE_LIMIT == 1024
+    assert (
+        configuration.cumulative_byte_limit
+        == DEFAULT_SUPPLY_EXECUTION_CUMULATIVE_BYTE_LIMIT
+    )
+    assert DEFAULT_SUPPLY_EXECUTION_CUMULATIVE_BYTE_LIMIT == 16 * 256 * 1024 * 1024
+    assert (
+        configuration.no_progress_page_limit
+        == DEFAULT_SUPPLY_EXECUTION_NO_PROGRESS_PAGE_LIMIT
+    )
+    assert DEFAULT_SUPPLY_EXECUTION_NO_PROGRESS_PAGE_LIMIT == 3
+    assert MAX_SUPPLY_EXECUTION_PAGE_LIMIT == 65536
+    assert MAX_SUPPLY_EXECUTION_CUMULATIVE_BYTE_LIMIT == 256 * 256 * 1024 * 1024
+    assert MAX_SUPPLY_EXECUTION_NO_PROGRESS_PAGE_LIMIT == 64
+
+
+@pytest.mark.parametrize(
+    ("field_name", "invalid"),
+    [
+        ("page_limit", 0),
+        ("page_limit", -1),
+        ("page_limit", MAX_SUPPLY_EXECUTION_PAGE_LIMIT + 1),
+        ("page_limit", True),
+        ("cumulative_byte_limit", 0),
+        ("cumulative_byte_limit", -1),
+        (
+            "cumulative_byte_limit",
+            MAX_SUPPLY_EXECUTION_CUMULATIVE_BYTE_LIMIT + 1,
+        ),
+        ("cumulative_byte_limit", True),
+        ("no_progress_page_limit", 0),
+        ("no_progress_page_limit", -1),
+        (
+            "no_progress_page_limit",
+            MAX_SUPPLY_EXECUTION_NO_PROGRESS_PAGE_LIMIT + 1,
+        ),
+        ("no_progress_page_limit", True),
+    ],
+)
+def test_supply_execution_configuration_rejects_invalid_limits_immediately(
+    field_name: str,
+    invalid: object,
+) -> None:
+    values: dict[str, object] = {
+        "page_limit": DEFAULT_SUPPLY_EXECUTION_PAGE_LIMIT,
+        "cumulative_byte_limit": DEFAULT_SUPPLY_EXECUTION_CUMULATIVE_BYTE_LIMIT,
+        "no_progress_page_limit": DEFAULT_SUPPLY_EXECUTION_NO_PROGRESS_PAGE_LIMIT,
+    }
+    values[field_name] = invalid
+
+    with pytest.raises(ValueError, match="outside the closed bounds"):
+        SupplyExecutionConfiguration(**values)  # type: ignore[arg-type]
+
+
+def test_supply_execution_configuration_is_frozen_and_slotted() -> None:
+    configuration = SupplyExecutionConfiguration()
+
+    assert not hasattr(configuration, "__dict__")
+    with pytest.raises(FrozenInstanceError):
+        configuration.page_limit = 1  # type: ignore[misc]
+
+
 @pytest.mark.parametrize(
     ("factory", "field_name", "invalid"),
     [
@@ -193,9 +265,7 @@ def test_change_page_rejects_cross_binding_delete_observation() -> None:
             deleted_document_refs=(
                 _delete(
                     acl_observation=_acl(
-                        organization_id=UUID(
-                            "0198fb94-57ab-710b-b03d-3e29149ae95a"
-                        )
+                        organization_id=UUID("0198fb94-57ab-710b-b03d-3e29149ae95a")
                     )
                 ),
             )
