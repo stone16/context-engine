@@ -111,6 +111,26 @@ def test_recursive_path_guard_remains_whole_database() -> None:
     assert "organization_id" not in source
 
 
+def test_change_feed_guard_keeps_every_blocker_branch() -> None:
+    """Restore the discrimination the 0028 prefix assertion cannot carry.
+
+    Revision 0028 names only the first whole-database blocker it finds, so
+    matching the exact string made the assertion corpus-sensitive again while
+    matching the prefix leaves a deleted branch undetectable: with the
+    acquisition-lineage predicate false everywhere, branch 1 still refuses and
+    the prefix still matches. Pin the branch structure at source level instead.
+    """
+
+    source = _migration_source("20260725_0028")
+    for blocker in (
+        "accepted page stream",
+        "File acquisition lineage",
+        "File source cleanup lineage",
+        "ActionTicket lineage",
+    ):
+        assert f"THEN '{blocker}'" in source
+
+
 def test_v3_activation_still_binds_its_blocker_to_its_own_organization() -> None:
     """The one multi-branch guard keeps naming the tenant it proves."""
 
