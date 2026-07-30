@@ -1299,9 +1299,9 @@ def test_bulk_article_policy_revision_downgrades_and_reapplies_when_audit_empty(
 ) -> None:
     configuration = Config(ROOT / "alembic.ini")
 
-    command.downgrade(configuration, "20260730_0043")
+    command.downgrade(configuration, "20260730_0045")
     try:
-        assert _revision_rows(migration_configuration) == ["20260730_0043"]
+        assert _revision_rows(migration_configuration) == ["20260730_0045"]
         assert "bulk_article_policy_change_audit" not in _application_tables(
             migration_configuration
         )

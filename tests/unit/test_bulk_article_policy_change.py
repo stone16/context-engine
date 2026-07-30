@@ -247,7 +247,7 @@ def test_bulk_function_is_the_only_historical_article_policy_mutation_path() -> 
         Path(__file__).parents[2]
         / "migrations"
         / "versions"
-        / "20260730_0044_bulk_article_policy_change.py"
+        / "20260730_0046_bulk_article_policy_change.py"
     )
     source = migration.read_text(encoding="utf-8")
 
