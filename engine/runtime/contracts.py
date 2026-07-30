@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import Literal
 
-from engine.runtime.budget import PackageBudget, PackageBudgetRequest
+from engine.runtime.budget import BudgetUsage, PackageBudget, PackageBudgetRequest
 from engine.runtime.delivery import (
     DeliveryConstructionProvenance,
     TrustedDeliveryContext,
@@ -194,24 +194,6 @@ class OpenCitation:
     def __post_init__(self) -> None:
         if type(self.citation_open_ref) is not CitationOpenRef:
             raise TypeError("citation_open_ref must be CitationOpenRef")
-
-
-@dataclass(frozen=True, slots=True)
-class BudgetUsage:
-    """Exact resources consumed while assembling one package."""
-
-    tokens: int
-    provider_calls: int
-    cost_microunits: int
-    elapsed_ms: int
-
-    def __post_init__(self) -> None:
-        for usage_field in fields(self):
-            value = getattr(self, usage_field.name)
-            if type(value) is not int or value < 0:
-                raise ValueError(
-                    f"{usage_field.name} must be a non-negative exact integer"
-                )
 
 
 class CoverageStatus(StrEnum):

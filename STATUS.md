@@ -59,6 +59,7 @@ delegation, RBAC, and every network-reachable operator surface remain
 | General content retrieval | Only the loopback File pgvector dogfood `Acquire` carrier is active |
 | `Continue` / dogfood `OpenCitation` carriers | The bounded dogfood composition keeps both unavailable; other accepted ADRs own their narrower citation carriers |
 | Federated discovery, source-native authorization | Deterministic refusal only |
+| Runtime model-inference carriers (`rewrite`, `rerank`, `select`) | The governed port is implemented, but no carrier is active until its consuming issue proves the exact profile, budget propagation, and grant path; real provider network calls remain `NOT_ACTIVE` |
 | Live Feishu / Slack / Google Docs connectors | See [PLAN.md](./PLAN.md) milestones M4 / M6 / M7 |
 | Group-chat delivery, compensating deletes | M5 |
 | MCP ingress | Held `NOT_ACTIVE` until a real caller exists |
