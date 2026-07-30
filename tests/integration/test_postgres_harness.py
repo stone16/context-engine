@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
+from uuid import uuid4
 
 import psycopg
 import pytest
-from alembic import command
-from alembic.config import Config
+from psycopg import sql
 from sqlalchemy import Engine, text
 from sqlalchemy.exc import ProgrammingError
 
@@ -17,23 +16,15 @@ from engine.persistence import (
     create_database_engine,
 )
 from engine.persistence.configuration import (
-    ACCESS_POLICY_DEFINER_ROLE,
-    ACTION_EXECUTE_DEFINER_ROLE,
-    ACTION_PREPARE_DEFINER_ROLE,
     ACTION_ROLE,
-    CITATION_DEFINER_ROLE,
     CONTEXT_RUN_READER_DEFINER_ROLE,
     CONTROL_ROLE,
-    DELIVERY_EVIDENCE_DEFINER_ROLE,
-    EGRESS_GRANT_DEFINER_ROLE,
     EGRESS_ROLE,
-    FILE_DISPATCH_DEFINER_ROLE,
     IDENTITY_ROLE,
     LEARNING_ROLE,
     MIGRATOR_ROLE,
     OPERATOR_ROLE,
     RELEASE_DEFINER_ROLE,
-    RELEASE_OPERATOR_ROLE,
     RUNTIME_ROLE,
     SCHEDULER_ROLE,
     WORKER_LEASE_DEFINER_ROLE,
@@ -44,10 +35,8 @@ from scripts.provision_database_roles import (
     RoleProvisioningContract,
     provision_security_roles,
 )
-from tests.support.file_source_progress import clear_file_source_progress_projection
 
 pytestmark = pytest.mark.integration
-ROOT = Path(__file__).parents[2]
 
 
 def role_attributes(engine: Engine) -> tuple[object, ...]:
@@ -155,66 +144,84 @@ def test_all_login_roles_have_reviewed_capabilities(
 
 
 def test_post_init_role_provisioning_repairs_a_legacy_volume_idempotently(
-    migration_configuration: DatabaseConfiguration,
     guarded_control_engine: Engine,
     guarded_learning_engine: Engine,
     guarded_operator_engine: Engine,
-    guarded_action_engine: Engine,
-    identity_configuration: DatabaseConfiguration,
-    egress_configuration: DatabaseConfiguration,
-    action_configuration: DatabaseConfiguration,
 ) -> None:
+    probe_prefix = f"ce_probe_{uuid4().hex[:8]}"
+
+    def probe_role(name: str) -> str:
+        return f"{probe_prefix}_{name}"
+
     contract = RoleProvisioningContract(
         database_name=os.environ["POSTGRES_DB"],
         bootstrap_role=os.environ["POSTGRES_USER"],
         bootstrap_password=os.environ["POSTGRES_PASSWORD"],
         postgres_port=int(os.environ["CONTEXT_ENGINE_POSTGRES_PORT"]),
         migrator_role=MIGRATOR_ROLE,
-        control_role=CONTROL_ROLE,
+        control_role=probe_role("control"),
         control_password=os.environ["CONTEXT_ENGINE_CONTROL_PASSWORD"],
-        identity_role=IDENTITY_ROLE,
+        identity_role=probe_role("identity"),
         identity_password=os.environ["CONTEXT_ENGINE_IDENTITY_PASSWORD"],
-        egress_role=EGRESS_ROLE,
+        egress_role=probe_role("egress"),
         egress_password=os.environ["CONTEXT_ENGINE_EGRESS_PASSWORD"],
-        action_role=ACTION_ROLE,
+        action_role=probe_role("action"),
         action_password=os.environ["CONTEXT_ENGINE_ACTION_PASSWORD"],
-        scheduler_role=SCHEDULER_ROLE,
+        scheduler_role=probe_role("scheduler"),
         scheduler_password=os.environ["CONTEXT_ENGINE_SCHEDULER_PASSWORD"],
-        learning_role=LEARNING_ROLE,
+        learning_role=probe_role("learning"),
         learning_password=os.environ["CONTEXT_ENGINE_LEARNING_PASSWORD"],
-        release_operator_role=RELEASE_OPERATOR_ROLE,
+        release_operator_role=probe_role("release_operator"),
         release_operator_password=os.environ[
             "CONTEXT_ENGINE_RELEASE_OPERATOR_PASSWORD"
         ],
-        security_operator_role=OPERATOR_ROLE,
+        security_operator_role=probe_role("security_operator"),
         security_operator_password=os.environ[
             "CONTEXT_ENGINE_SECURITY_OPERATOR_PASSWORD"
         ],
-        definer_role=ACCESS_POLICY_DEFINER_ROLE,
-        worker_lease_definer_role=WORKER_LEASE_DEFINER_ROLE,
-        file_dispatch_definer_role=FILE_DISPATCH_DEFINER_ROLE,
-        context_run_reader_definer_role=CONTEXT_RUN_READER_DEFINER_ROLE,
-        release_definer_role=RELEASE_DEFINER_ROLE,
-        delivery_evidence_definer_role=DELIVERY_EVIDENCE_DEFINER_ROLE,
-        citation_definer_role=CITATION_DEFINER_ROLE,
-        egress_grant_definer_role=EGRESS_GRANT_DEFINER_ROLE,
-        action_prepare_definer_role=ACTION_PREPARE_DEFINER_ROLE,
-        action_execute_definer_role=ACTION_EXECUTE_DEFINER_ROLE,
+        definer_role=probe_role("access_definer"),
+        worker_lease_definer_role=probe_role("worker_definer"),
+        file_dispatch_definer_role=probe_role("dispatch_definer"),
+        context_run_reader_definer_role=probe_role("reader_definer"),
+        release_definer_role=probe_role("release_definer"),
+        delivery_evidence_definer_role=probe_role("delivery_definer"),
+        citation_definer_role=probe_role("citation_definer"),
+        egress_grant_definer_role=probe_role("egress_definer"),
+        action_prepare_definer_role=probe_role("prepare_definer"),
+        action_execute_definer_role=probe_role("execute_definer"),
     )
-    alembic_configuration = Config(ROOT / "alembic.ini")
-    try:
-        identity_engine = create_database_engine(identity_configuration)
-        egress_engine = create_database_engine(egress_configuration)
-        action_engine = create_database_engine(action_configuration)
-        guarded_control_engine.dispose()
-        guarded_learning_engine.dispose()
-        guarded_operator_engine.dispose()
-        guarded_action_engine.dispose()
-        identity_engine.dispose()
-        egress_engine.dispose()
-        action_engine.dispose()
-        clear_file_source_progress_projection(migration_configuration)
-        command.downgrade(alembic_configuration, "20260721_0004")
+    probe_roles = (
+        contract.control_role,
+        contract.identity_role,
+        contract.egress_role,
+        contract.action_role,
+        contract.scheduler_role,
+        contract.learning_role,
+        contract.release_operator_role,
+        contract.security_operator_role,
+        contract.definer_role,
+        contract.worker_lease_definer_role,
+        contract.file_dispatch_definer_role,
+        contract.context_run_reader_definer_role,
+        contract.release_definer_role,
+        contract.delivery_evidence_definer_role,
+        contract.citation_definer_role,
+        contract.egress_grant_definer_role,
+        contract.action_prepare_definer_role,
+        contract.action_execute_definer_role,
+    )
+    login_credentials = {
+        contract.control_role: contract.control_password,
+        contract.identity_role: contract.identity_password,
+        contract.egress_role: contract.egress_password,
+        contract.action_role: contract.action_password,
+        contract.scheduler_role: contract.scheduler_password,
+        contract.learning_role: contract.learning_password,
+        contract.release_operator_role: contract.release_operator_password,
+        contract.security_operator_role: contract.security_operator_password,
+    }
+
+    def drop_probe_roles() -> None:
         with psycopg.connect(
             host="127.0.0.1",
             port=contract.postgres_port,
@@ -222,71 +229,50 @@ def test_post_init_role_provisioning_repairs_a_legacy_volume_idempotently(
             user=contract.bootstrap_role,
             password=contract.bootstrap_password,
         ) as bootstrap_connection:
-            bootstrap_connection.execute(
-                f"REVOKE {ACCESS_POLICY_DEFINER_ROLE} FROM {MIGRATOR_ROLE}"
+            existing_roles = tuple(
+                row[0]
+                for row in bootstrap_connection.execute(
+                    "SELECT rolname FROM pg_roles WHERE rolname = ANY(%s)",
+                    (list(probe_roles),),
+                )
             )
-            for role_name in (
-                ACCESS_POLICY_DEFINER_ROLE,
-                WORKER_LEASE_DEFINER_ROLE,
-                FILE_DISPATCH_DEFINER_ROLE,
-                CONTEXT_RUN_READER_DEFINER_ROLE,
-                DELIVERY_EVIDENCE_DEFINER_ROLE,
-                CITATION_DEFINER_ROLE,
-                EGRESS_GRANT_DEFINER_ROLE,
-                ACTION_PREPARE_DEFINER_ROLE,
-                ACTION_EXECUTE_DEFINER_ROLE,
-                RELEASE_DEFINER_ROLE,
-                CONTROL_ROLE,
-                IDENTITY_ROLE,
-                EGRESS_ROLE,
-                ACTION_ROLE,
-                LEARNING_ROLE,
-                OPERATOR_ROLE,
-            ):
-                bootstrap_connection.execute(f"DROP OWNED BY {role_name}")
-                bootstrap_connection.execute(f"DROP ROLE {role_name}")
-            bootstrap_connection.commit()
+            for role_name in existing_roles:
+                bootstrap_connection.execute(
+                    sql.SQL("DROP OWNED BY {}").format(sql.Identifier(role_name))
+                )
+            for role_name in reversed(existing_roles):
+                bootstrap_connection.execute(
+                    sql.SQL("DROP ROLE {}").format(sql.Identifier(role_name))
+                )
+
+    try:
+        with psycopg.connect(
+            host="127.0.0.1",
+            port=contract.postgres_port,
+            dbname=contract.database_name,
+            user=contract.bootstrap_role,
+            password=contract.bootstrap_password,
+        ) as bootstrap_connection:
             missing_roles = bootstrap_connection.execute(
                 """
                 SELECT count(*)
                 FROM pg_roles
-                WHERE rolname IN (
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s
-                )
+                WHERE rolname = ANY(%s)
                 """,
-                (
-                    CONTROL_ROLE,
-                    ACCESS_POLICY_DEFINER_ROLE,
-                    WORKER_LEASE_DEFINER_ROLE,
-                    FILE_DISPATCH_DEFINER_ROLE,
-                    CONTEXT_RUN_READER_DEFINER_ROLE,
-                    DELIVERY_EVIDENCE_DEFINER_ROLE,
-                    RELEASE_DEFINER_ROLE,
-                    OPERATOR_ROLE,
-                    LEARNING_ROLE,
-                    IDENTITY_ROLE,
-                    EGRESS_ROLE,
-                    EGRESS_GRANT_DEFINER_ROLE,
-                    ACTION_ROLE,
-                    ACTION_PREPARE_DEFINER_ROLE,
-                    ACTION_EXECUTE_DEFINER_ROLE,
-                    CITATION_DEFINER_ROLE,
-                ),
+                (list(probe_roles),),
             ).fetchone()
             assert missing_roles == (0,)
 
             provision_security_roles(bootstrap_connection, contract)
-            bootstrap_connection.commit()
             bootstrap_connection.execute(
-                f"GRANT {CONTROL_ROLE} TO {ACTION_EXECUTE_DEFINER_ROLE}"
+                f"GRANT {contract.control_role} TO "
+                f"{contract.action_execute_definer_role}"
             )
             bootstrap_connection.execute(
-                f"GRANT {ACTION_EXECUTE_DEFINER_ROLE} TO {ACTION_ROLE}"
+                f"GRANT {contract.action_execute_definer_role} TO "
+                f"{contract.action_role}"
             )
-            bootstrap_connection.commit()
             provision_security_roles(bootstrap_connection, contract)
-            bootstrap_connection.commit()
             facts = bootstrap_connection.execute(
                 """
                 SELECT
@@ -408,14 +394,14 @@ def test_post_init_role_provisioning_repairs_a_legacy_volume_idempotently(
                   AND migrator.rolname = %s
                 """,
                 (
-                    CONTROL_ROLE,
-                    OPERATOR_ROLE,
-                    ACCESS_POLICY_DEFINER_ROLE,
-                    WORKER_LEASE_DEFINER_ROLE,
-                    CONTEXT_RUN_READER_DEFINER_ROLE,
-                    CITATION_DEFINER_ROLE,
-                    ACTION_EXECUTE_DEFINER_ROLE,
-                    MIGRATOR_ROLE,
+                    contract.control_role,
+                    contract.security_operator_role,
+                    contract.definer_role,
+                    contract.worker_lease_definer_role,
+                    contract.context_run_reader_definer_role,
+                    contract.citation_definer_role,
+                    contract.action_execute_definer_role,
+                    contract.migrator_role,
                 ),
             ).fetchone()
             assert facts == (
@@ -507,7 +493,7 @@ def test_post_init_role_provisioning_repairs_a_legacy_volume_idempotently(
                 WHERE dispatch.rolname = %s
                   AND migrator.rolname = %s
                 """,
-                (FILE_DISPATCH_DEFINER_ROLE, MIGRATOR_ROLE),
+                (contract.file_dispatch_definer_role, contract.migrator_role),
             ).fetchone()
             assert dispatch_facts == (
                 False,
@@ -546,7 +532,11 @@ def test_post_init_role_provisioning_repairs_a_legacy_volume_idempotently(
                   AND release_definer.rolname = %s
                   AND migrator.rolname = %s
                 """,
-                (LEARNING_ROLE, RELEASE_DEFINER_ROLE, MIGRATOR_ROLE),
+                (
+                    contract.learning_role,
+                    contract.release_definer_role,
+                    contract.migrator_role,
+                ),
             ).fetchone()
             assert learning_facts == (
                 True,
@@ -559,17 +549,22 @@ def test_post_init_role_provisioning_repairs_a_legacy_volume_idempotently(
                 False,
                 True,
             )
+            bootstrap_connection.commit()
 
-        command.upgrade(alembic_configuration, "head")
-        assert role_attributes(guarded_control_engine)[0] == CONTROL_ROLE
-        assert role_attributes(guarded_learning_engine)[0] == LEARNING_ROLE
-        with guarded_operator_engine.connect() as connection:
-            assert_security_operator_role(connection)
-    finally:
-        guarded_control_engine.dispose()
-        guarded_learning_engine.dispose()
-        guarded_operator_engine.dispose()
-        guarded_action_engine.dispose()
+        for role_name, password in login_credentials.items():
+            with psycopg.connect(
+                host="127.0.0.1",
+                port=contract.postgres_port,
+                dbname=contract.database_name,
+                user=role_name,
+                password=password,
+                connect_timeout=5,
+            ) as role_connection:
+                assert role_connection.execute(
+                    "SELECT current_user"
+                ).fetchone() == (role_name,)
+
+        drop_probe_roles()
         with psycopg.connect(
             host="127.0.0.1",
             port=contract.postgres_port,
@@ -577,8 +572,20 @@ def test_post_init_role_provisioning_repairs_a_legacy_volume_idempotently(
             user=contract.bootstrap_role,
             password=contract.bootstrap_password,
         ) as bootstrap_connection:
-            provision_security_roles(bootstrap_connection, contract)
-        command.upgrade(alembic_configuration, "head")
+            remaining_probe_roles = bootstrap_connection.execute(
+                "SELECT count(*) FROM pg_roles WHERE rolname = ANY(%s)",
+                (list(probe_roles),),
+            ).fetchone()
+        assert remaining_probe_roles == (0,)
+        assert role_attributes(guarded_control_engine)[0] == CONTROL_ROLE
+        assert role_attributes(guarded_learning_engine)[0] == LEARNING_ROLE
+        with guarded_operator_engine.connect() as connection:
+            assert_security_operator_role(connection)
+    finally:
+        drop_probe_roles()
+        guarded_control_engine.dispose()
+        guarded_learning_engine.dispose()
+        guarded_operator_engine.dispose()
 
 
 def test_context_run_reader_definer_role_has_only_its_exact_set_membership(

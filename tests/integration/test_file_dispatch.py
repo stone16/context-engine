@@ -76,7 +76,7 @@ from tests.integration.test_z_egress_grant_file import (
     _unused_port,
     _wait_for_tcp,
 )
-from tests.support.migrations import HEAD_REVISION
+from tests.support.migrations import HEAD_REVISION, downgrade_revision
 from tests.support.releases import (
     clear_test_runtime_release,
     ensure_test_runtime_release,
@@ -2250,9 +2250,9 @@ def test_file_reclaim_downgrade_waits_for_real_in_flight_scheduler(
                             sleep(0.01)
                     assert scheduler_waiting
                     pending_downgrade = executor.submit(
-                        command.downgrade,
-                        alembic_configuration,
-                        "20260725_0033",
+                        downgrade_revision,
+                        migration_configuration,
+                        "20260726_0034",
                     )
                     with migration_engine.connect() as observer:
                         deadline = monotonic() + 10
@@ -2317,7 +2317,7 @@ def test_file_reclaim_downgrade_waits_for_real_in_flight_scheduler(
                 connection.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                == "20260725_0033"
+                == HEAD_REVISION
             )
     finally:
         command.upgrade(alembic_configuration, "head")

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from uuid import UUID
+
 from sqlalchemy import text
 
 from engine.persistence import DatabaseConfiguration, create_database_engine
@@ -7,8 +9,9 @@ from engine.persistence import DatabaseConfiguration, create_database_engine
 
 def clear_file_source_progress_projection(
     configuration: DatabaseConfiguration,
+    organization_id: UUID,
 ) -> None:
-    """Clear only disposable Issue #29 projections for migration tests."""
+    """Clear one Organization's disposable Issue #29 test projections."""
 
     engine = create_database_engine(configuration)
     try:
@@ -62,9 +65,19 @@ def clear_file_source_progress_projection(
                 )
         try:
             with engine.begin() as connection:
-                connection.execute(text("DELETE FROM file_source_publish_watermark"))
                 connection.execute(
-                    text("DELETE FROM file_source_acquisition_checkpoint")
+                    text(
+                        "DELETE FROM file_source_publish_watermark "
+                        "WHERE organization_id = :organization_id"
+                    ),
+                    {"organization_id": organization_id},
+                )
+                connection.execute(
+                    text(
+                        "DELETE FROM file_source_acquisition_checkpoint "
+                        "WHERE organization_id = :organization_id"
+                    ),
+                    {"organization_id": organization_id},
                 )
                 if not change_tables_exist:
                     return
@@ -92,17 +105,35 @@ def clear_file_source_progress_projection(
                     and connection.execute(
                         text(
                             "SELECT EXISTS (SELECT 1 FROM file_acquisition "
-                            "WHERE change_page_ref IS NOT NULL)"
-                        )
+                            "WHERE organization_id = :organization_id "
+                            "AND change_page_ref IS NOT NULL)"
+                        ),
+                        {"organization_id": organization_id},
                     ).scalar_one()
                 )
                 if not scheduled_acquisitions_exist:
                     if delete_observation_table_exists:
                         connection.execute(
-                            text("DELETE FROM file_source_delete_observation_page")
+                            text(
+                                "DELETE FROM file_source_delete_observation_page "
+                                "WHERE organization_id = :organization_id"
+                            ),
+                            {"organization_id": organization_id},
                         )
-                    connection.execute(text("DELETE FROM file_source_change"))
-                    connection.execute(text("DELETE FROM file_source_change_page"))
+                    connection.execute(
+                        text(
+                            "DELETE FROM file_source_change "
+                            "WHERE organization_id = :organization_id"
+                        ),
+                        {"organization_id": organization_id},
+                    )
+                    connection.execute(
+                        text(
+                            "DELETE FROM file_source_change_page "
+                            "WHERE organization_id = :organization_id"
+                        ),
+                        {"organization_id": organization_id},
+                    )
         finally:
             with engine.begin() as connection:
                 for table_name, trigger_name in reversed(immutable_triggers):

@@ -13,8 +13,6 @@ from time import monotonic, sleep
 from uuid import UUID, uuid4
 
 import pytest
-from alembic import command
-from alembic.config import Config
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi.testclient import TestClient
 from sqlalchemy import Connection, Engine, event, text
@@ -93,7 +91,6 @@ from tests.support.releases import (
 )
 
 pytestmark = pytest.mark.integration
-ROOT = Path(__file__).parents[2]
 NOW = datetime(2026, 7, 24, 12, 0, tzinfo=UTC)
 PROVIDER_KEY = Ed25519PrivateKey.from_private_bytes(bytes(range(32)))
 CHECKPOINT_KEY = Ed25519PrivateKey.from_private_bytes(bytes(range(32, 64)))
@@ -5649,7 +5646,7 @@ def test_file_change_page_accepts_the_minimal_public_markdown_filename(
         RuntimeError,
         match="requires no retained",
     ):
-        command.downgrade(Config(ROOT / "alembic.ini"), "20260724_0027")
+        downgrade_revision(migration_configuration, "20260725_0028")
     migration_engine = create_database_engine(migration_configuration)
     try:
         with migration_engine.connect() as connection:

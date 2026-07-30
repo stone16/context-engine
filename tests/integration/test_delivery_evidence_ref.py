@@ -3,12 +3,9 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
-from pathlib import Path
 from uuid import uuid4
 
 import pytest
-from alembic import command
-from alembic.config import Config
 from sqlalchemy import Engine, text
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
@@ -32,10 +29,10 @@ from engine.runtime.delivery_evidence import (
     private_delivery_audience_digest,
     redeem_private_delivery_evidence,
 )
+from tests.support.migrations import downgrade_revision
 
 pytestmark = pytest.mark.integration
 NOW = datetime.now(UTC).replace(microsecond=0)
-ROOT = Path(__file__).parents[2]
 
 
 def _delete_delivery_evidence(
@@ -170,7 +167,7 @@ def test_identity_issues_digest_only_and_runtime_redeems_one_stable_private_requ
             SQLAlchemyError,
             match="cannot downgrade with delivery evidence rows",
         ):
-            command.downgrade(Config(ROOT / "alembic.ini"), "20260723_0018")
+            downgrade_revision(migration_configuration, "20260723_0019")
     finally:
         _delete_delivery_evidence(migration_engine, organization_id)
         migration_engine.dispose()

@@ -9,8 +9,6 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
-from alembic import command
-from alembic.config import Config
 from fastapi.testclient import TestClient
 from sqlalchemy import Engine, text
 from sqlalchemy.engine import Connection
@@ -117,7 +115,7 @@ from tests.support.file_imports import (
     scenario_claims,
 )
 from tests.support.file_source_progress import clear_file_source_progress_projection
-from tests.support.migrations import HEAD_REVISION
+from tests.support.migrations import HEAD_REVISION, downgrade_revision
 from tests.support.releases import (
     clear_test_runtime_release,
     ensure_test_runtime_release,
@@ -125,7 +123,6 @@ from tests.support.releases import (
 
 pytestmark = pytest.mark.integration
 MARKDOWN_FIXTURES = Path(__file__).parents[1] / "fixtures/markdown"
-ROOT = Path(__file__).parents[2]
 
 # Backward-compatible private aliases for helpers that remain local to this
 # module; cross-module consumers import the public support names directly.
@@ -1310,12 +1307,14 @@ def _assert_structural_file_import_returns_coherent_authorized_units_over_http(
             {"organization_id": scenario.organization_id},
         )
     clear_test_runtime_release(scenario.organization_id)
-    clear_file_source_progress_projection(migration_configuration)
+    clear_file_source_progress_projection(
+        migration_configuration, scenario.organization_id
+    )
     with pytest.raises(
         RuntimeError,
         match="structural Markdown downgrade requires no v2 snapshots",
     ):
-        command.downgrade(Config(ROOT / "alembic.ini"), "20260722_0011")
+        downgrade_revision(migration_configuration, "20260723_0012")
     with migration_engine.connect() as connection:
         assert (
             connection.execute(
