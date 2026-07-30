@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 import applications.compiler_runner as compiler_runner
+from eval._compiler_acceptance import acceptance_context
 from eval.embedding_benchmark import (
     BenchmarkUnavailable,
     validate_json_schema_document,
@@ -277,7 +278,7 @@ def test_acceptance_output_must_resolve_beneath_its_state_directory(
             corpus,
             escaped_output,
             2048,
-            acceptance_context=compiler_runner.acceptance_context(),
+            acceptance_context=acceptance_context(),
         )
 
     assert not (tmp_path / "report.json").exists()

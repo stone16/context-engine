@@ -10,7 +10,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path, PurePath
-from typing import Final, Protocol, cast
+from typing import Final, Never, Protocol, cast
 
 from adapters.parsers.ragflow_markdown import compile_rich_markdown, rich_token_count
 from engine.supply import (
@@ -46,7 +46,7 @@ class _AcceptanceEntryPoint(Protocol):
 
 
 class _PrivacySafeArgumentParser(argparse.ArgumentParser):
-    def error(self, message: str) -> None:
+    def error(self, message: str) -> Never:
         raise SystemExit("compiler runner arguments are invalid")
 
 
