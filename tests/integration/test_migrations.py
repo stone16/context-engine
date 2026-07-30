@@ -301,6 +301,7 @@ MIGRATION_TEST_START_REVISIONS = {
 MIGRATION_TEST_HEAD_PRECONDITIONS = {
     "test_article_policy_downgrade_rejects_every_deferred_admin_state",
     "test_article_policy_downgrade_refuses_state_that_would_reauthorize_content",
+    "test_bulk_article_policy_revision_downgrades_and_reapplies_when_audit_empty",
     "test_file_scan_bound_acceptance_fails_closed_after_downgrade",
     "test_file_scan_bound_revision_downgrades_and_reapplies_when_default_only",
     "test_file_scan_bound_downgrade_observes_in_flight_refusal_report",
