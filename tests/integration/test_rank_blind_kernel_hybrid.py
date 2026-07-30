@@ -184,11 +184,11 @@ def _resolve(
     permutation: int,
 ) -> dict[str, object]:
     active = fixture.org_a
-    token = f"hybrid-rank-blind-token:{permutation}"
-    request_id = f"request:hybrid-rank-blind:{permutation}"
-    runtime = Runtime(
-        required_kernel_dependencies(),
-        candidate_index=cast(
+    return _resolve_with_index(
+        active,
+        guarded_runtime_engine,
+        query_digest_keyring,
+        index=cast(
             CandidateIndex,
             _PermutedHybridEvidenceIndex(
                 active,
@@ -196,6 +196,25 @@ def _resolve(
                 permutation=permutation,
             ),
         ),
+        variant=f"rank-blind:{permutation}",
+        query="hybrid rank blind",
+    )
+
+
+def _resolve_with_index(
+    active: OrganizationEvidenceFixture,
+    guarded_runtime_engine: Engine,
+    query_digest_keyring: QueryDigestKeyring,
+    *,
+    index: CandidateIndex,
+    variant: str,
+    query: str,
+) -> dict[str, object]:
+    token = f"hybrid-token:{variant}"
+    request_id = f"request:hybrid:{variant}"
+    runtime = Runtime(
+        required_kernel_dependencies(),
+        candidate_index=index,
         candidate_submission_limit=128,
         ranker_weights=HYBRID_RANKER_WEIGHTS,
         clock=lambda: RECEIVED_AT,
@@ -218,7 +237,7 @@ def _resolve(
             "Authorization": f"Bearer {token}",
             "X-Context-Request-Id": request_id,
         },
-        json={"kind": "acquire", "need": {"query": "hybrid rank blind"}},
+        json={"kind": "acquire", "need": {"query": query}},
     )
     assert response.status_code == 200
     return cast(dict[str, object], response.json()["package"])
@@ -234,11 +253,11 @@ def _resolve_refusal_variant(
 ) -> dict[str, object]:
     active = fixture.org_a
     variant = "with-refused" if include_refused else "without-refused"
-    token = f"hybrid-refusal-token:{variant}"
-    request_id = f"request:hybrid-refusal:{variant}"
-    runtime = Runtime(
-        required_kernel_dependencies(),
-        candidate_index=cast(
+    return _resolve_with_index(
+        active,
+        guarded_runtime_engine,
+        query_digest_keyring,
+        index=cast(
             CandidateIndex,
             _RefusalVariantHybridEvidenceIndex(
                 active.authorized,
@@ -247,32 +266,9 @@ def _resolve_refusal_variant(
                 include_refused=include_refused,
             ),
         ),
-        candidate_submission_limit=128,
-        ranker_weights=HYBRID_RANKER_WEIGHTS,
-        clock=lambda: RECEIVED_AT,
-        query_digest_keyring=query_digest_keyring,
+        variant=f"refusal:{variant}",
+        query="hybrid refusal invariant",
     )
-    client = TestClient(
-        create_app(
-            authenticator=SeededAuthenticator(active, token=token),
-            organization_authority=SeededOrganizationAuthority(active.organization_id),
-            membership_authority=PostgreSQLMembershipAuthority(guarded_runtime_engine),
-            scope_authority=ExactScopeAuthority(active.authorized),
-            runtime=runtime,
-            clock=lambda: RECEIVED_AT,
-            request_id_factory=lambda: request_id,
-        )
-    )
-    response = client.post(
-        "/v0/resolve",
-        headers={
-            "Authorization": f"Bearer {token}",
-            "X-Context-Request-Id": request_id,
-        },
-        json={"kind": "acquire", "need": {"query": "hybrid refusal invariant"}},
-    )
-    assert response.status_code == 200
-    return cast(dict[str, object], response.json()["package"])
 
 
 def _seed_second_admitted_fragment(
