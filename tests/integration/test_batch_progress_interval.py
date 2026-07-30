@@ -63,6 +63,8 @@ def test_progress_is_emitted_during_real_work_at_the_bounded_interval(
     assert len(active_indices) >= 3
     assert max(active_indices) < completed_index
     active_times = [capture.emitted_at[index] for index in active_indices]
+    assert len(capture.job_completed_at) == 1
+    assert active_times[0] < capture.job_completed_at[0]
     assert all(
         later - earlier <= 0.09
         for earlier, later in zip(active_times, active_times[1:], strict=False)

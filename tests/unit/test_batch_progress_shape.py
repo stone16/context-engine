@@ -6,7 +6,7 @@ from pathlib import Path
 from uuid import UUID
 
 import pytest
-from jsonschema import Draft202012Validator
+from jsonschema import Draft202012Validator, ValidationError
 
 from applications.worker_progress import (
     BATCH_PROGRESS_SCHEMA_VERSION,
@@ -142,6 +142,44 @@ def test_tracked_counter_invariants_reject_adversarial_documents(
 
     with pytest.raises(ValueError, match="counter"):
         validate_worker_batch_progress_document(document)
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "negative_count",
+        "unknown_key",
+        "missing_key",
+        "wrong_type",
+        "bad_schema_version",
+    ],
+)
+def test_reference_validator_rejects_malformed_documents(case: str) -> None:
+    document = _documents()[-1]
+    if case == "negative_count":
+        document["failed"] = -1
+    elif case == "unknown_key":
+        document["unexpected"] = None
+    elif case == "missing_key":
+        del document["outcome"]
+    elif case == "wrong_type":
+        document["processed"] = "1"
+    elif case == "bad_schema_version":
+        document["schemaVersion"] = "context-engine-worker-batch-progress-v2"
+    else:  # pragma: no cover - closed test cases
+        raise AssertionError("unknown adversarial case")
+
+    with pytest.raises(ValueError):
+        validate_worker_batch_progress_document(document)
+
+
+def test_json_schema_validator_rejects_an_invalid_document() -> None:
+    schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+    validator = Draft202012Validator(schema)
+    document = _documents()[-1] | {"total": -1}
+
+    with pytest.raises(ValidationError):
+        validator.validate(document)
 
 
 def test_idle_polls_emit_no_chatter_after_one_batch_summary() -> None:
