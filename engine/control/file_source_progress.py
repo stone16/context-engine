@@ -14,6 +14,7 @@ from engine.control.contracts import (
     _require_token,
     _require_utc,
 )
+from engine.control.file_change_pages import MAX_CONFIGURED_FILE_CHANGE_BASELINE_SIZE
 
 if TYPE_CHECKING:
     from engine.control.file_change_pages import FileChangeBaseline, FileChangeScanHead
@@ -44,6 +45,12 @@ class FileCompilationRefusalCategory(StrEnum):
     INVALID_UTF8 = "invalid_utf8"
     UNSUPPORTED_CONSTRUCT = "unsupported_construct"
     UNSUPPORTED_DOCUMENT_SHAPE = "unsupported_document_shape"
+
+
+class FileScanRefusalCategory(StrEnum):
+    """Closed content-free scan-level conditions retained for operations."""
+
+    SCAN_BOUND_EXCEEDED = "scan_bound_exceeded"
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,6 +90,8 @@ class FileSourceStatus:
     last_successful_acquisition_at: datetime | None
     last_successful_acquisition_age_seconds: int | None
     refusals: tuple[FileCompilationRefusal, ...] = ()
+    scan_refusal_category: FileScanRefusalCategory | None = None
+    scan_refusal_bound: int | None = None
 
     def __post_init__(self) -> None:
         _require_utc("File Source status observed_at", self.observed_at)
@@ -113,6 +122,17 @@ class FileSourceStatus:
             raise ValueError("File Source refusal paths require canonical order")
         if len(paths) != len(set(paths)):
             raise ValueError("File Source refusal paths must be unique")
+        if self.scan_refusal_category is None:
+            if self.scan_refusal_bound is not None:
+                raise ValueError("File Source absent scan refusal cannot have a bound")
+        elif (
+            type(self.scan_refusal_category) is not FileScanRefusalCategory
+            or type(self.scan_refusal_bound) is not int
+            or not 1
+            <= self.scan_refusal_bound
+            <= MAX_CONFIGURED_FILE_CHANGE_BASELINE_SIZE
+        ):
+            raise ValueError("File Source scan refusal is invalid")
 
 
 def _require_sequence(name: str, value: object) -> int:

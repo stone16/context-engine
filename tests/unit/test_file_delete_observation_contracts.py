@@ -27,8 +27,8 @@ from engine.control import (
     FileImportPath,
     FileRootRef,
     InitialScan,
-    ProviderGenericDenied,
     ProviderOk,
+    ProviderScanBoundExceeded,
     SourceChange,
     SourceManifest,
     SourceRef,
@@ -350,7 +350,9 @@ def test_oversized_mixed_diff_is_denied_before_first_page(
 
     outcome = provider.read_changes(source, InitialScan(), ChangeLimit(1))
 
-    assert type(outcome) is ProviderGenericDenied
+    assert outcome == ProviderScanBoundExceeded(
+        scan_bound=MAX_FILE_CHANGE_BASELINE_SIZE
+    )
 
 
 def test_completed_delete_scan_replays_its_original_parent_baseline(

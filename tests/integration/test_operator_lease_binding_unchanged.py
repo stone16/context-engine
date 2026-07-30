@@ -6,8 +6,12 @@ from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import Engine, text
+from sqlalchemy.exc import DBAPIError
 
 from adapters.embeddings import DeterministicEmbeddingTwin
+from applications.file_root_configuration import (
+    WORKER_MAX_FILE_CHANGE_BASELINE_SIZE_ENV,
+)
 from applications.worker import dispatch_one_file_import
 from applications.worker_progress import FileDispatchFailureCategory
 from engine.control import FileImportReceiver, FileRootRef
@@ -28,10 +32,13 @@ from tests.integration.test_file_scan_operator_process import (
     _register_activated_source,
     _scan,
 )
+from tests.integration.test_file_scan_operator_process import (
+    file_scan_scenario as _file_scan_scenario,
+)
 from tests.support.worker_batch_progress import file_root_registry
 
+file_scan_scenario = _file_scan_scenario
 pytestmark = pytest.mark.integration
-pytest_plugins = ("tests.integration.test_file_scan_operator_process",)
 WORKER_KEY = bytes.fromhex("ab" * 32)
 
 
@@ -49,7 +56,8 @@ def test_batch_convenience_preserves_exact_wrong_job_and_expiry_rejection(
         encoding="utf-8",
     )
     source_ref = _register_activated_source(organization_id, environment)
-    _scan(organization_id, source_ref, environment)
+    raised = environment | {WORKER_MAX_FILE_CHANGE_BASELINE_SIZE_ENV: "15000"}
+    assert _scan(organization_id, source_ref, raised)["scanBound"] == 15_000
     codec = WorkerLeaseCodec(WorkerLeaseKeyring(active_version=1, keys={1: WORKER_KEY}))
     authority = PostgreSQLFileDispatchAuthority(
         guarded_scheduler_engine,
@@ -61,6 +69,18 @@ def test_batch_convenience_preserves_exact_wrong_job_and_expiry_rejection(
     exact_claim = claim
     assert claim.organization_id == organization_id
     assert claim.source_ref.value == source_ref
+    with (
+        guarded_worker_engine.connect() as connection,
+        pytest.raises(DBAPIError),
+    ):
+        connection.execute(
+            text(
+                "SELECT count(*) FROM file_import_job "
+                "WHERE organization_id = :organization_id "
+                "AND job_id = :job_id"
+            ),
+            {"organization_id": organization_id, "job_id": claim.job_id},
+        ).scalar_one()
     roots = file_root_registry(FileRootRef("operator-scan-root"), root)
     try:
         wrong_job_claim = FileDispatchLease(

@@ -42,6 +42,7 @@ from engine.control import (
     FileSourceProgress,
     InitialScan,
     ProviderOk,
+    ProviderScanBoundExceeded,
     ScheduledFileChangePage,
     ScheduleFileChangePage,
     SourceManifest,
@@ -77,6 +78,7 @@ class FileScanReport:
     deletes_observed: int
     compilation_refusals: int
     advanced_cursor: str | None
+    scan_bound: int
 
 
 class SourceScanRefused(SourceNotAvailable):
@@ -188,6 +190,20 @@ def scan_file_source(
             cursor,
             ChangeLimit(FILE_SCAN_PAGE_LIMIT),
         )
+        if type(proposed) is ProviderScanBoundExceeded:
+            with authority.authorize(
+                opaque_credential=opaque_credential,
+                operation=ControlOperation.ACCEPT_FILE_CHANGE_PAGE,
+                request_id=f"local-scan-bound-refusal-{uuid4().hex}",
+            ) as call:
+                if call.organization_id != organization_id:
+                    raise SourceNotAvailable
+                control.report_file_scan_bound_refusal(
+                    call,
+                    source_ref,
+                    proposed.scan_bound,
+                )
+            raise SourceNotAvailable
         if type(proposed) is not ProviderOk:
             raise SourceScanRefused
         page = proposed.value
@@ -201,6 +217,14 @@ def scan_file_source(
             baseline = source.complete_baseline
             if baseline is None:  # pragma: no cover - proven by the predicate
                 raise SourceNotAvailable
+            with authority.authorize(
+                opaque_credential=opaque_credential,
+                operation=ControlOperation.ACCEPT_FILE_CHANGE_PAGE,
+                request_id=f"local-scan-bound-clear-{uuid4().hex}",
+            ) as call:
+                if call.organization_id != organization_id:
+                    raise SourceNotAvailable
+                control.clear_file_scan_bound_refusal(call, source_ref)
             return FileScanReport(
                 source_ref=source_ref,
                 paths_observed=sum(
@@ -211,6 +235,7 @@ def scan_file_source(
                 deletes_observed=0,
                 compilation_refusals=compilation_refusals,
                 advanced_cursor=baseline.reference.checkpoint_ref,
+                scan_bound=baseline.reference.scan_bound,
             )
         observed = tuple(page.changes)
         for change in observed:
@@ -277,6 +302,7 @@ def scan_file_source(
         deletes_observed=deletes_observed,
         compilation_refusals=compilation_refusals,
         advanced_cursor=advanced_cursor,
+        scan_bound=roots._limits.max_baseline_entries,
     )
 
 
@@ -463,6 +489,7 @@ def _replays_complete_baseline(
             head.page_ref,
             head.checkpoint_ref,
             head.sequence,
+            head.scan_bound,
         )
         == (
             reference.source_version_ref,
@@ -471,6 +498,7 @@ def _replays_complete_baseline(
             reference.page_ref,
             reference.checkpoint_ref,
             reference.sequence,
+            reference.scan_bound,
         )
         and scan_ref == reference.scan_ref
         and scan_epoch == reference.scan_epoch

@@ -35,6 +35,8 @@ from engine.control.contracts import (
     SourceVersion,
 )
 from engine.control.file_change_pages import (
+    DEFAULT_FILE_CHANGE_BASELINE_SIZE,
+    MAX_CONFIGURED_FILE_CHANGE_BASELINE_SIZE,
     MAX_FILE_CHANGE_BASELINE_SIZE,
     MAX_FILE_CHANGE_PAGE_SIZE,
     AcceptedChangePage,
@@ -56,6 +58,7 @@ from engine.control.file_change_pages import (
     ProviderInvalidCheckpoint,
     ProviderOk,
     ProviderRetryableUnavailable,
+    ProviderScanBoundExceeded,
     ProviderUnsupported,
     SourceChange,
     VerifiedChangePage,
@@ -84,6 +87,7 @@ from engine.control.file_source_offboarding import (
 from engine.control.file_source_progress import (
     FileCompilationRefusal,
     FileCompilationRefusalCategory,
+    FileScanRefusalCategory,
     FileSourceAcquisitionCheckpoint,
     FileSourceChangeKind,
     FileSourceProgress,
@@ -101,6 +105,8 @@ from engine.control.module import (
 from engine.source_acl import SourceAclEvidenceMode
 
 __all__ = [
+    "DEFAULT_FILE_CHANGE_BASELINE_SIZE",
+    "MAX_CONFIGURED_FILE_CHANGE_BASELINE_SIZE",
     "MAX_FILE_CHANGE_BASELINE_SIZE",
     "MAX_FILE_CHANGE_PAGE_SIZE",
     "AcceptedChangePage",
@@ -142,6 +148,7 @@ __all__ = [
     "FileSourceAcquisitionCheckpoint",
     "FileSourceChangeKind",
     "FileSourceProgress",
+    "FileScanRefusalCategory",
     "FileSourceCleanupState",
     "FileSourceOffboarding",
     "FileSourcePublishOutcome",
@@ -163,6 +170,7 @@ __all__ = [
     "ProviderInvalidCheckpoint",
     "ProviderOk",
     "ProviderRetryableUnavailable",
+    "ProviderScanBoundExceeded",
     "ProviderUnsupported",
     "SourceAclEvidenceMode",
     "SourceControlUnavailable",

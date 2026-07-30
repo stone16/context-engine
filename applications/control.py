@@ -462,6 +462,7 @@ def _scan_report_document(report: FileScanReport) -> dict[str, object]:
         "deletesObserved": report.deletes_observed,
         "importsScheduled": report.imports_scheduled,
         "pathsObserved": report.paths_observed,
+        "scanBound": report.scan_bound,
         "sourceRef": str(report.source_ref.value),
     }
 
@@ -502,6 +503,9 @@ def _multi_scan_report_json(report: MultiSourceScanReport) -> str:
                     source.paths_observed for source in sources
                 ),
                 "refusalCount": len(refusals),
+                "scanBounds": sorted(
+                    {source.scan_bound for source in sources}
+                ),
                 "sourceCount": len(report.outcomes),
             },
         },
@@ -577,11 +581,15 @@ def _status_document_with_refusals(
                 "scanEpoch": str(head.scan_epoch),
                 "scanRef": head.scan_ref,
                 "sequence": head.sequence,
+                "scanBound": head.scan_bound,
                 "sourceVersionRef": str(head.source_version_ref),
             }
         ),
         "completeChangeBaselineSize": (
             0 if baseline is None else len(baseline.entries)
+        ),
+        "completeChangeBaselineScanBound": (
+            None if baseline is None else baseline.reference.scan_bound
         ),
         "lastSuccessfulAcquisition": last_successful_acquisition,
         "publishWatermark": (
@@ -596,6 +604,14 @@ def _status_document_with_refusals(
             }
         ),
         "refusals": refusals,
+        "scanRefusal": (
+            None
+            if status.scan_refusal_category is None
+            else {
+                "category": status.scan_refusal_category.value,
+                "scanBound": status.scan_refusal_bound,
+            }
+        ),
         "sourceRef": str(progress.source_ref.value),
     }
 

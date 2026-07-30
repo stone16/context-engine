@@ -34,8 +34,11 @@ from engine.control import (
     FileChangeSource,
     FileImportAudience,
     FileImportPath,
+    FileImportReceiver,
+    FileRootRef,
     InitialScan,
     ProviderOk,
+    RegisterFileSource,
     ScheduledFileChangePage,
     ScheduleFileChangePage,
     SourceNotAvailable,
@@ -3470,6 +3473,224 @@ def test_file_source_status_revision_downgrades_and_reapplies_when_empty(
             ).scalar_one() == [True, False, True, False, False]
     finally:
         engine.dispose()
+
+
+def test_file_scan_bound_revision_downgrades_and_reapplies_when_default_only(
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    """Issue #135 removes provenance only when no non-default fact is retained."""
+
+    alembic_configuration = Config(ROOT / "alembic.ini")
+    try:
+        command.downgrade(alembic_configuration, "20260730_0043")
+        assert _revision_rows(migration_configuration) == ["20260730_0043"]
+        engine = create_database_engine(migration_configuration)
+        try:
+            with engine.connect() as connection:
+                assert connection.execute(
+                    text(
+                        """
+                        SELECT ARRAY[
+                          to_regprocedure(
+                            'public.context_control_accept_bounded_file_delete_observation_page(uuid,uuid,uuid,text,uuid,smallint,text,text,text,bigint,uuid,jsonb,boolean,integer,jsonb)'
+                          ) IS NULL,
+                          to_regprocedure(
+                            'public.context_control_report_file_scan_bound_refusal(uuid,uuid,integer)'
+                          ) IS NULL,
+                          NOT EXISTS (
+                            SELECT 1 FROM information_schema.columns
+                            WHERE table_schema = 'public'
+                              AND table_name = 'file_source_change_page'
+                              AND column_name = 'scan_bound'
+                          )
+                        ]
+                        """
+                    )
+                ).scalar_one() == [True, True, True]
+        finally:
+            engine.dispose()
+    finally:
+        command.upgrade(alembic_configuration, "head")
+
+    assert _revision_rows(migration_configuration) == [HEAD_REVISION]
+
+
+def test_file_scan_bound_downgrade_observes_in_flight_refusal_report(
+    migration_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+) -> None:
+    """The exclusive status fence cannot discard a concurrent bound refusal."""
+
+    organization_id, user_id, membership_id, receiver_id = (
+        uuid4(),
+        uuid4(),
+        uuid4(),
+        uuid4(),
+    )
+    migration_engine = create_database_engine(migration_configuration)
+    with migration_engine.begin() as connection:
+        connection.execute(
+            text("INSERT INTO organization (organization_id) VALUES (:org)"),
+            {"org": organization_id},
+        )
+        connection.execute(
+            text("INSERT INTO user_account (user_id) VALUES (:user)"),
+            {"user": user_id},
+        )
+        connection.execute(
+            text(
+                """
+                INSERT INTO membership (
+                    organization_id, membership_id, user_id, status,
+                    membership_version, valid_from
+                ) VALUES (:org, :membership, :user, 'active', 1, :now)
+                """
+            ),
+            {
+                "org": organization_id,
+                "membership": membership_id,
+                "user": user_id,
+                "now": NOW - timedelta(days=1),
+            },
+        )
+        connection.execute(
+            text(
+                """
+                INSERT INTO service_principal (
+                    organization_id, service_principal_id, workload,
+                    worker_audience, operation, enabled
+                ) VALUES (
+                    :org, :receiver, 'supply.file-import',
+                    'context-engine-worker', 'file.import', true
+                )
+                """
+            ),
+            {"org": organization_id, "receiver": receiver_id},
+        )
+    authority = ControlOperatorAuthority(
+        _ControlAuthenticator(organization_id),
+        call_ttl=timedelta(minutes=5),
+        clock=lambda: NOW,
+    )
+    control = ContextControl(
+        store=PostgreSQLControlStore(
+            guarded_control_engine,
+            clock=lambda: NOW,
+            file_import_receiver=FileImportReceiver(receiver_id),
+        ),
+        authority=authority,
+        clock=lambda: NOW,
+    )
+    with authority.authorize(
+        opaque_credential="control-secret",
+        operation=ControlOperation.REGISTER_SOURCE,
+        request_id="register-bound-race-source",
+    ) as call:
+        source = control.register_source(
+            call,
+            RegisterFileSource(
+                "Bound race source",
+                FileRootRef("bound-race-root"),
+                "bound-race-source",
+            ),
+        )
+    fence = "context-engine.file-status-migration-fence"
+
+    def report_refusal() -> object:
+        with guarded_control_engine.begin() as connection:
+            return connection.execute(
+                text(
+                    "SELECT * FROM public."
+                    "context_control_report_file_scan_bound_refusal("
+                    ":organization_id, :source_id, 10000)"
+                ),
+                {
+                    "organization_id": organization_id,
+                    "source_id": source.source_ref.value,
+                },
+            ).one()
+
+    try:
+        with migration_engine.connect() as blocker:
+            transaction = blocker.begin()
+            try:
+                blocker.execute(
+                    text(
+                        "SELECT 1 FROM context_source "
+                        "WHERE organization_id = :organization_id "
+                        "AND source_id = :source_id FOR UPDATE"
+                    ),
+                    {
+                        "organization_id": organization_id,
+                        "source_id": source.source_ref.value,
+                    },
+                )
+                with ThreadPoolExecutor(max_workers=2) as executor:
+                    pending_report = executor.submit(report_refusal)
+                    worker_holds_fence = False
+                    with migration_engine.connect() as observer:
+                        deadline = monotonic() + 10
+                        while monotonic() < deadline:
+                            worker_holds_fence = observer.execute(
+                                text(
+                                    """
+                                    SELECT EXISTS (
+                                      SELECT 1 FROM pg_locks
+                                      WHERE locktype = 'advisory'
+                                        AND mode = 'ShareLock'
+                                        AND granted IS TRUE
+                                        AND classid = ((
+                                          hashtextextended(:fence, 0) >> 32
+                                        ) & 4294967295)::oid
+                                        AND objid = (hashtextextended(:fence, 0)
+                                          & 4294967295)::oid
+                                        AND objsubid = 1
+                                    )
+                                    """
+                                ),
+                                {"fence": fence},
+                            ).scalar_one()
+                            if worker_holds_fence:
+                                break
+                            sleep(0.01)
+                    assert worker_holds_fence
+                    pending_downgrade = executor.submit(
+                        command.downgrade,
+                        Config(ROOT / "alembic.ini"),
+                        "20260730_0043",
+                    )
+                    transaction.commit()
+                    assert pending_report.result(timeout=10)[0] == (
+                        "scan_bound_exceeded"
+                    )
+                    with pytest.raises(
+                        RuntimeError,
+                        match="default-only retained provenance",
+                    ):
+                        pending_downgrade.result(timeout=10)
+            finally:
+                if transaction.is_active:
+                    transaction.rollback()
+        assert _revision_rows(migration_configuration) == [HEAD_REVISION]
+    finally:
+        with migration_engine.begin() as connection:
+            connection.execute(
+                text(
+                    "UPDATE context_source SET file_scan_refusal_category = NULL, "
+                    "file_scan_refusal_bound = NULL "
+                    "WHERE organization_id = :organization_id "
+                    "AND source_id = :source_id"
+                ),
+                {
+                    "organization_id": organization_id,
+                    "source_id": source.source_ref.value,
+                },
+            )
+        _delete_file_import_scenario(
+            migration_configuration,
+            organization_id,
+        )
+        migration_engine.dispose()
 
 
 def test_file_source_status_downgrade_observes_in_flight_compilation_refusal(

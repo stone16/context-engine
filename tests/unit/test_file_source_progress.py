@@ -480,6 +480,7 @@ def test_database_baseline_projection_restores_global_canonical_path_order() -> 
         "baseline_page_ref": "4" * 64,
         "baseline_checkpoint_ref": "facp_" + "5" * 64,
         "baseline_sequence": 2,
+        "baseline_scan_bound": 10_000,
         "baseline_parent_scan_epoch": None,
     }
     rows = tuple(

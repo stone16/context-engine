@@ -19,9 +19,10 @@ import rfc8785
 
 from engine._opaque import decode_base64url, encode_base64url
 from engine.control import (
+    DEFAULT_FILE_CHANGE_BASELINE_SIZE,
     FILE_CHANGE_CAPABILITY_MANIFEST,
     FILE_DELETE_OBSERVATION_CAPABILITY_MANIFEST,
-    MAX_FILE_CHANGE_BASELINE_SIZE,
+    MAX_CONFIGURED_FILE_CHANGE_BASELINE_SIZE,
     CapabilityStatus,
     ChangeCursor,
     ChangeLimit,
@@ -39,6 +40,7 @@ from engine.control import (
     ProviderInvalidCheckpoint,
     ProviderOk,
     ProviderRetryableUnavailable,
+    ProviderScanBoundExceeded,
     ProviderUnsupported,
     SourceChange,
 )
@@ -65,6 +67,7 @@ class FileReadLimits:
     """Server-owned hard ceiling for one acquired File payload."""
 
     max_file_bytes: int
+    max_baseline_entries: int = DEFAULT_FILE_CHANGE_BASELINE_SIZE
 
     def __post_init__(self) -> None:
         if (
@@ -72,6 +75,13 @@ class FileReadLimits:
             or not 1 <= self.max_file_bytes <= MAX_CONFIGURED_FILE_BYTES
         ):
             raise ValueError("File byte ceiling must be a bounded positive integer")
+        if (
+            type(self.max_baseline_entries) is not int
+            or not 1
+            <= self.max_baseline_entries
+            <= MAX_CONFIGURED_FILE_CHANGE_BASELINE_SIZE
+        ):
+            raise ValueError("File scan bound must be a bounded positive integer")
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,6 +90,11 @@ class _AnchoredRoot:
 
     display_path: Path
     descriptor: int
+    curated_subtree: tuple[str, ...] | None
+
+
+class _FileScanBoundExceeded(LookupError):
+    """Internal traversal signal for the configured all-or-none scan fence."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -136,11 +151,20 @@ class FileRootRegistry:
         roots: Mapping[FileRootRef, Path],
         *,
         limits: FileReadLimits,
+        curated_subtrees: Mapping[FileRootRef, str] | None = None,
     ) -> None:
         if not isinstance(roots, Mapping) or not roots:
             raise ValueError("File root registry requires explicit bindings")
         if type(limits) is not FileReadLimits:
             raise TypeError("File root registry requires FileReadLimits")
+        selections = {} if curated_subtrees is None else curated_subtrees
+        if not isinstance(selections, Mapping) or any(
+            type(root_ref) is not FileRootRef
+            or root_ref not in roots
+            or not _canonical_relative_directory(value)
+            for root_ref, value in selections.items()
+        ):
+            raise ValueError("File curated subtrees require canonical root bindings")
         copied: dict[FileRootRef, _AnchoredRoot] = {}
         try:
             for root_ref, root_path in roots.items():
@@ -156,7 +180,12 @@ class FileRootRegistry:
                     raise ValueError(
                         "File root must be an existing non-symlink directory"
                     ) from None
-                copied[root_ref] = _AnchoredRoot(display_path, descriptor)
+                selection = selections.get(root_ref)
+                copied[root_ref] = _AnchoredRoot(
+                    display_path,
+                    descriptor,
+                    None if selection is None else tuple(selection.split("/")),
+                )
         except Exception:
             for root in copied.values():
                 os.close(root.descriptor)
@@ -266,18 +295,49 @@ class FileRootRegistry:
             raise LookupError("File root is not configured")
         observed: list[tuple[FileImportPath, bytes]] = []
         snapshots: dict[str, tuple[_DirectoryEntry, ...]] = {}
-        self._observe_directory(
-            anchored.descriptor,
-            relative_prefix="",
-            observed=observed,
-            snapshots=snapshots,
-        )
-        self._revalidate_directory_tree(
-            anchored.descriptor,
-            relative_prefix="",
-            snapshots=snapshots,
-        )
+        descriptor = os.dup(anchored.descriptor)
+        relative_prefix = ""
+        try:
+            for component in anchored.curated_subtree or ():
+                try:
+                    child = os.open(
+                        component,
+                        _DIRECTORY_OPEN_FLAGS,
+                        dir_fd=descriptor,
+                    )
+                except OSError:
+                    raise LookupError(
+                        "File curated subtree is not available"
+                    ) from None
+                os.close(descriptor)
+                descriptor = child
+                relative_prefix = (
+                    f"{relative_prefix}/{component}"
+                    if relative_prefix
+                    else component
+                )
+            self._observe_directory(
+                descriptor,
+                relative_prefix=relative_prefix,
+                observed=observed,
+                snapshots=snapshots,
+            )
+            self._revalidate_directory_tree(
+                descriptor,
+                relative_prefix=relative_prefix,
+                snapshots=snapshots,
+            )
+        finally:
+            os.close(descriptor)
         return tuple(sorted(observed, key=lambda item: item[0].value.encode("utf-8")))
+
+    def _curated_subtree_prefix(self, root_ref: FileRootRef) -> str | None:
+        anchored = self._roots.get(root_ref)
+        if anchored is None:
+            raise LookupError("File root is not configured")
+        if anchored.curated_subtree is None:
+            return None
+        return "/".join(anchored.curated_subtree) + "/"
 
     def _observe_directory(
         self,
@@ -342,8 +402,8 @@ class FileRootRegistry:
             ):
                 raise RuntimeError("File root observation is unstable")
             observed.append((path, payload))
-            if len(observed) > MAX_FILE_CHANGE_BASELINE_SIZE:
-                raise LookupError("File root exceeds the configured scan bound")
+            if len(observed) > self._limits.max_baseline_entries:
+                raise _FileScanBoundExceeded
         if _directory_snapshot(descriptor, relative_prefix) != initial:
             raise RuntimeError("File root observation is unstable")
 
@@ -470,6 +530,20 @@ def _safe_directory_component(name: object) -> bool:
     )
 
 
+def _canonical_relative_directory(value: object) -> bool:
+    """Return whether configuration names one nonempty root-relative directory."""
+
+    return (
+        type(value) is str
+        and bool(value)
+        and value == value.strip()
+        and not value.startswith("/")
+        and "\\" not in value
+        and all(component not in {"", ".", ".."} for component in value.split("/"))
+        and not any(ord(character) < 0x20 for character in value)
+    )
+
+
 _CURSOR_DOMAIN = "context-engine.file-change-cursor.v1"
 _SCAN_DOMAIN = b"context-engine.file-change-scan.v1\x00"
 
@@ -539,6 +613,19 @@ class FileChangeProvider:
             or capabilities.read_changes is not CapabilityStatus.AVAILABLE
         ):
             return ProviderUnsupported("readChanges")
+        selection_prefix = self._registry._curated_subtree_prefix(
+            source.source_version.root_ref
+        )
+        if (
+            selection_prefix is not None
+            and source.complete_baseline is not None
+            and any(
+                entry.kind is FileChangeKind.UPSERT
+                and not entry.path.value.startswith(selection_prefix)
+                for entry in source.complete_baseline.entries
+            )
+        ):
+            return ProviderGenericDenied()
         try:
             observed = tuple(
                 _ObservedFile(
@@ -550,14 +637,25 @@ class FileChangeProvider:
                     source.source_version.root_ref
                 )
             )
+        except _FileScanBoundExceeded:
+            return ProviderScanBoundExceeded(
+                scan_bound=self._registry._limits.max_baseline_entries
+            )
         except LookupError:
             return ProviderGenericDenied()
         except RuntimeError:
             return ProviderRetryableUnavailable(timedelta(seconds=1))
         changes, baseline_ref = self._changes(source, observed)
-        if len(changes) > MAX_FILE_CHANGE_BASELINE_SIZE:
-            return ProviderGenericDenied()
-        scan_ref = self._scan_ref(source, changes, baseline_ref)
+        if len(changes) > self._registry._limits.max_baseline_entries:
+            return ProviderScanBoundExceeded(
+                scan_bound=self._registry._limits.max_baseline_entries
+            )
+        scan_ref = self._scan_ref(
+            source,
+            changes,
+            baseline_ref,
+            scan_bound=self._registry._limits.max_baseline_entries,
+        )
         requested_limit = limit
         if (
             type(cursor) is InitialScan
@@ -594,6 +692,7 @@ class FileChangeProvider:
                 scan_epoch=scan_epoch,
                 limit=requested_limit,
                 observed_count=len(changes),
+                scan_bound=self._registry._limits.max_baseline_entries,
             ):
                 return ProviderInvalidCheckpoint()
             offset = cast(int, claims["offset"])
@@ -644,6 +743,7 @@ class FileChangeProvider:
             complete=complete,
             provider_proof="A" * 86,
             capability_version=capabilities.declaration_version,
+            scan_bound=self._registry._limits.max_baseline_entries,
         )
         return ProviderOk(
             replace(unsigned, provider_proof=self._proofs._seal_page(unsigned))
@@ -750,11 +850,14 @@ class FileChangeProvider:
         source: FileChangeSource,
         observed: tuple[_ObservedChange, ...],
         baseline_ref: FileChangeBaselineRef | None,
+        *,
+        scan_bound: int = DEFAULT_FILE_CHANGE_BASELINE_SIZE,
     ) -> str:
         document: dict[str, object] = {
             "organizationId": str(source.organization_id),
             "sourceId": str(source.source_version.source_ref.value),
             "sourceVersionId": str(source.source_version.version_ref),
+            "scanBound": scan_bound,
             "entries": [
                 {
                     "contentLength": item.content_length,
@@ -783,6 +886,7 @@ class FileChangeProvider:
                     "scanEpoch": str(baseline_ref.scan_epoch),
                     "scanRef": baseline_ref.scan_ref,
                     "sequence": baseline_ref.sequence,
+                    "scanBound": baseline_ref.scan_bound,
                     "sourceVersionId": str(baseline_ref.source_version_ref),
                 }
             )
@@ -839,6 +943,7 @@ class FileChangeProvider:
             "organizationId": str(source.organization_id),
             "scanEpoch": str(scan_epoch),
             "scanRef": scan_ref,
+            "scanBound": self._registry._limits.max_baseline_entries,
             "sourceId": str(source.source_version.source_ref.value),
             "sourceVersionId": str(source.source_version.version_ref),
             "version": 1,
@@ -870,6 +975,7 @@ class FileChangeProvider:
                     "organizationId",
                     "scanEpoch",
                     "scanRef",
+                    "scanBound",
                     "sourceId",
                     "sourceVersionId",
                     "version",
@@ -889,6 +995,7 @@ class FileChangeProvider:
         scan_epoch: UUID,
         limit: ChangeLimit,
         observed_count: int,
+        scan_bound: int,
     ) -> bool:
         offset = claims.get("offset")
         return (
@@ -898,6 +1005,7 @@ class FileChangeProvider:
             and claims.get("sourceId") == str(source.source_version.source_ref.value)
             and claims.get("sourceVersionId") == str(source.source_version.version_ref)
             and claims.get("scanRef") == scan_ref
+            and claims.get("scanBound") == scan_bound
             and claims.get("scanEpoch") == str(scan_epoch)
             and claims.get("limit") == limit.value
             and type(offset) is int

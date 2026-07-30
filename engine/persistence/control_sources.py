@@ -35,6 +35,7 @@ from engine.control import (
     FileImportPath,
     FileResourceTombstone,
     FileRootRef,
+    FileScanRefusalCategory,
     FileSourceAcquisitionCheckpoint,
     FileSourceChangeKind,
     FileSourceCleanupState,
@@ -596,12 +597,14 @@ class PostgreSQLControlStore:
                     == FILE_DELETE_OBSERVATION_CAPABILITY_MANIFEST.declaration_version
                 )
                 function_name = (
-                    "context_control_accept_file_delete_observation_page"
+                    "context_control_accept_bounded_file_delete_observation_page"
                     if delete_observations
                     else "context_control_accept_file_change_page"
                 )
                 baseline_argument = (
-                    ", CAST(:baseline AS jsonb)" if delete_observations else ""
+                    ", :scan_bound, CAST(:baseline AS jsonb)"
+                    if delete_observations
+                    else ""
                 )
                 row = connection.execute(
                     text(
@@ -636,6 +639,7 @@ class PostgreSQLControlStore:
                             "utf-8"
                         ),
                         "complete": value.complete,
+                        "scan_bound": value.scan_bound,
                         "baseline": (
                             None
                             if baseline_document is None
@@ -681,12 +685,89 @@ class PostgreSQLControlStore:
                 complete=row.complete,
                 next_cursor=next_cursor,
                 accepted_at=row.accepted_at,
+                scan_bound=(
+                    row.scan_bound if delete_observations else value.scan_bound
+                ),
             )
         except SourceNotAvailable:
             raise
         except (DBAPIError, SQLAlchemyError, AssertionError, TypeError, ValueError):
             raise SourceControlUnavailable(
                 "File change page database authority is unavailable"
+            ) from None
+
+    def report_file_scan_bound_refusal(
+        self,
+        call: TrustedControlCall,
+        source_ref: SourceRef,
+        scan_bound: int,
+    ) -> None:
+        """Persist one closed scan-bound condition on the active File source."""
+
+        if (
+            type(call) is not TrustedControlCall
+            or type(source_ref) is not SourceRef
+            or type(scan_bound) is not int
+        ):
+            raise SourceNotAvailable
+        try:
+            with self._engine.begin() as connection:
+                assert_control_role(connection)
+                row = connection.execute(
+                    text(
+                        "SELECT * FROM public."
+                        "context_control_report_file_scan_bound_refusal("
+                        ":organization_id, :source_id, :scan_bound)"
+                    ),
+                    {
+                        "organization_id": call.organization_id,
+                        "source_id": source_ref.value,
+                        "scan_bound": scan_bound,
+                    },
+                ).one_or_none()
+                if (
+                    row is None
+                    or row.refusal_category != "scan_bound_exceeded"
+                    or row.scan_bound != scan_bound
+                ):
+                    raise SourceNotAvailable
+        except SourceNotAvailable:
+            raise
+        except (DBAPIError, SQLAlchemyError, AssertionError, TypeError, ValueError):
+            raise SourceControlUnavailable(
+                "File scan bound refusal database authority is unavailable"
+            ) from None
+
+    def clear_file_scan_bound_refusal(
+        self,
+        call: TrustedControlCall,
+        source_ref: SourceRef,
+    ) -> None:
+        """Clear one retained bound condition after complete revalidation."""
+
+        if type(call) is not TrustedControlCall or type(source_ref) is not SourceRef:
+            raise SourceNotAvailable
+        try:
+            with self._engine.begin() as connection:
+                assert_control_role(connection)
+                row = connection.execute(
+                    text(
+                        "SELECT * FROM public."
+                        "context_control_clear_file_scan_bound_refusal("
+                        ":organization_id, :source_id)"
+                    ),
+                    {
+                        "organization_id": call.organization_id,
+                        "source_id": source_ref.value,
+                    },
+                ).one_or_none()
+                if row is None or row.cleared is not True:
+                    raise SourceNotAvailable
+        except SourceNotAvailable:
+            raise
+        except (DBAPIError, SQLAlchemyError, AssertionError, TypeError, ValueError):
+            raise SourceControlUnavailable(
+                "File scan bound refusal clear database authority is unavailable"
             ) from None
 
     def offboard_file_source(
@@ -953,6 +1034,11 @@ class PostgreSQLControlStore:
                                     context_control_read_file_source_status(
                                         :organization_id, :source_id
                                     )
+                            ), scan_bound_status AS MATERIALIZED (
+                                SELECT * FROM public.
+                                    context_control_read_file_scan_bound_status(
+                                        :organization_id, :source_id
+                                    )
                             ), status AS MATERIALIZED (
                                 SELECT max(status_observed_at)
                                            AS status_observed_at,
@@ -976,11 +1062,13 @@ class PostgreSQLControlStore:
                                        ) AS refusal_documents
                                 FROM status_rows
                             )
-                            SELECT progress.*, baseline.*, pending.*, status.*
+                            SELECT progress.*, baseline.*, pending.*, status.*,
+                                   scan_bound_status.*
                             FROM progress
                             LEFT JOIN baseline ON true
                             CROSS JOIN pending
                             CROSS JOIN status
+                            CROSS JOIN scan_bound_status
                             """
                         ),
                         {
@@ -1064,6 +1152,7 @@ class PostgreSQLControlStore:
                             checkpoint_ref=row["change_checkpoint_ref"],
                             sequence=row["change_sequence"],
                             complete=row["change_complete"],
+                            scan_bound=row["head_scan_bound"],
                         )
                     ),
                     complete_change_baseline=self._complete_change_baseline(
@@ -1104,6 +1193,12 @@ class PostgreSQLControlStore:
                             )
                             for document in refusal_documents
                         ),
+                        scan_refusal_category=(
+                            None
+                            if row["refusal_category"] is None
+                            else FileScanRefusalCategory(row["refusal_category"])
+                        ),
+                        scan_refusal_bound=row["refusal_scan_bound"],
                     ),
                 )
         except SourceNotAvailable:
@@ -1139,6 +1234,7 @@ class PostgreSQLControlStore:
                     row["baseline_parent_checkpoint_ref"],
                 ),
                 sequence=cast(int, row["baseline_parent_sequence"]),
+                scan_bound=cast(int, row["baseline_parent_scan_bound"]),
             )
         )
         reference = FileChangeBaselineRef(
@@ -1148,6 +1244,7 @@ class PostgreSQLControlStore:
             page_ref=cast(str, row["baseline_page_ref"]),
             checkpoint_ref=cast(str, row["baseline_checkpoint_ref"]),
             sequence=cast(int, row["baseline_sequence"]),
+            scan_bound=cast(int, row["baseline_scan_bound"]),
             comparison_baseline_ref=comparison_reference,
         )
         entries: list[FileChangeBaselineEntry] = []

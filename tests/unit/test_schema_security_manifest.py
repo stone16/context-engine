@@ -870,6 +870,7 @@ def test_issue_21_file_source_manifest_is_closed_and_role_separated() -> None:
         "context_control_read_file_source_progress",
         "context_control_read_pending_file_change_schedules",
         "context_control_read_file_source_status",
+        "context_control_read_file_scan_bound_status",
     ]
     assert "file_source_change_page" in progress_read["reads"]
     assert "file_source_delete_observation_page" in progress_read["reads"]
@@ -984,10 +985,13 @@ def test_issue_21_file_source_manifest_is_closed_and_role_separated() -> None:
             "INSERT",
             "EXECUTE context_control_activate_file_change_feed",
             "EXECUTE context_control_activate_file_delete_observations",
-            "EXECUTE context_control_read_pending_file_change_schedules",
-            "EXECUTE context_control_read_file_source_status",
-            "EXECUTE context_control_offboard_file_source",
-        ],
+                "EXECUTE context_control_read_pending_file_change_schedules",
+                "EXECUTE context_control_read_file_source_status",
+                "EXECUTE context_control_offboard_file_source",
+                "EXECUTE context_control_report_file_scan_bound_refusal",
+                "EXECUTE context_control_clear_file_scan_bound_refusal",
+                "EXECUTE context_control_read_file_scan_bound_status",
+            ],
         "context_engine_learning": [],
         "context_engine_release_operator": [
             "EXECUTE context_release_observe_candidate_snapshot"
@@ -995,7 +999,13 @@ def test_issue_21_file_source_manifest_is_closed_and_role_separated() -> None:
         "context_engine_runtime": [],
         "context_engine_security_operator": [],
         "context_engine_worker": [],
-        "context_engine_worker_lease_definer": ["SELECT", "UPDATE"],
+        "context_engine_worker_lease_definer": [
+            "SELECT",
+            (
+                "UPDATE active_version_id, file_scan_refusal_category, "
+                "file_scan_refusal_bound"
+            ),
+        ],
         "context_engine_action_prepare_definer": ["SELECT"],
         "context_engine_action_execute_definer": ["SELECT"],
         "context_engine_file_dispatch_definer": [

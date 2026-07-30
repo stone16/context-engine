@@ -40,7 +40,7 @@ _BASELINE_SIGNATURE = "(uuid, uuid)"
 _PROGRESS = "context_control_read_file_source_progress"
 _PROGRESS_SIGNATURE = "(uuid, uuid)"
 _CAPABILITY_TRIGGER = "context_file_change_require_capability_binding"
-_MAX_BASELINE_ENTRIES = 10_000
+_MAX_BASELINE_ENTRIES = 15_000
 
 _V1 = """{"aclEvidenceMode":"mirrored","authorizeAndProject":"unavailable","batchLimits":"unavailable","checkpoint":"unavailable","checkpointSemantics":"unavailable","consistencyGuarantees":"unavailable","contentKinds":["markdown"],"cursorSemantics":"unavailable","declarationVersion":"file-capabilities-v1","deletion":"unavailable","describeCapabilities":"unavailable","discover":"unavailable","fileSourceAccess":"unavailable","freshness":"unavailable","ingestionJobs":"unavailable","projectionFields":[],"readChanges":"unavailable","resourceKinds":["markdown_document"],"sourceMode":"materialized"}"""
 _V2 = """{"aclEvidenceMode":"mirrored","authorizeAndProject":"unavailable","batchLimits":"unavailable","checkpoint":"unavailable","checkpointSemantics":"unavailable","consistencyGuarantees":"unavailable","contentKinds":["markdown"],"cursorSemantics":"unavailable","declarationVersion":"file-capabilities-v2","deletion":"unavailable","describeCapabilities":"unavailable","discover":"unavailable","fileSourceAccess":"available","freshness":"unavailable","ingestionJobs":"available","projectionFields":[],"readChanges":"unavailable","resourceKinds":["markdown_document"],"sourceMode":"materialized"}"""
