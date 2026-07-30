@@ -10,7 +10,7 @@ from engine.runtime.candidate_ranking import (
     RankedCandidateList,
 )
 from engine.runtime.evidence import CandidateRef
-from engine.runtime.prekernel_fusion import weighted_fuse_candidates
+from engine.runtime.prekernel_fusion import fuse_candidate_evidence
 
 ROOT = Path(__file__).parents[2]
 
@@ -48,16 +48,13 @@ def test_weighted_fusion_deduplicates_by_exact_candidate_ref_only() -> None:
         )
     )
 
-    fused = weighted_fuse_candidates(
-        query,
-        ranker_weights={"lexical": 2.0, "vector": 1.0},
-    )
+    fused = fuse_candidate_evidence(query)
 
-    assert fused.candidate_refs == (shared, lexical_only, vector_only)
+    assert fused.candidate_refs == (shared, vector_only, lexical_only)
     assert tuple(item.candidate_ref for item in fused.rank_evidence) == (
         shared,
-        lexical_only,
         vector_only,
+        lexical_only,
     )
     assert fused.rank_evidence[0].fused_rank == 1
     assert tuple(item.ranker_ref for item in fused.rank_evidence[0].per_ranker) == (
@@ -84,7 +81,6 @@ def test_fusion_module_has_only_the_exact_content_free_import() -> None:
     assert imports == {
         "engine.runtime.candidate_ranking",
         "engine.runtime.evidence",
-        "math",
     }
     assert imported_names == {
         "CandidateQuery",
@@ -92,7 +88,7 @@ def test_fusion_module_has_only_the_exact_content_free_import() -> None:
         "FusedCandidates",
         "RankerEvidence",
         "CandidateRef",
-        "isfinite",
+        "_candidate_sort_key",
     }
     assert not {
         "AuthorizedProjection",
@@ -103,9 +99,7 @@ def test_fusion_module_has_only_the_exact_content_free_import() -> None:
     }.intersection(imported_names)
 
 
-def test_runtime_does_not_activate_the_deferred_multi_ranker_weighting_policy() -> None:
-    """Issue #148, not the port seam, owns production fusion weights."""
-
+def test_runtime_activates_content_free_fusion_without_pre_kernel_weights() -> None:
     path = ROOT / "engine/runtime/construction.py"
     tree = ast.parse(path.read_text())
     imported_names = {
@@ -115,4 +109,5 @@ def test_runtime_does_not_activate_the_deferred_multi_ranker_weighting_policy() 
         for alias in node.names
     }
 
+    assert "fuse_candidate_evidence" in imported_names
     assert "weighted_fuse_candidates" not in imported_names

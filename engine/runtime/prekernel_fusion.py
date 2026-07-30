@@ -1,6 +1,4 @@
-"""Generic weighted fusion and exact-ref dedupe before authorization."""
-
-from math import isfinite
+"""Content-free reciprocal-rank evidence carriage before authorization."""
 
 from engine.runtime.candidate_ranking import (
     CandidateQuery,
@@ -8,48 +6,32 @@ from engine.runtime.candidate_ranking import (
     FusedCandidates,
     RankerEvidence,
 )
-from engine.runtime.evidence import CandidateRef
+from engine.runtime.evidence import CandidateRef, _candidate_sort_key
 
 
-def weighted_fuse_candidates(
-    query: CandidateQuery,
-    *,
-    ranker_weights: dict[str, float],
-) -> FusedCandidates:
-    """Fuse opaque refs using caller-owned weights and reciprocal positions."""
+def fuse_candidate_evidence(query: CandidateQuery) -> FusedCandidates:
+    """Deduplicate exact refs and carry uniform provisional RRF evidence.
+
+    The provisional fused rank is inert. Server-owned weights are applied only
+    after authorization, where positions are compacted over admitted candidates.
+    """
 
     if type(query) is not CandidateQuery:
         raise TypeError("fusion requires CandidateQuery")
-    expected_rankers = {ranked_list.ranker_ref for ranked_list in query.ranked_lists}
-    if type(ranker_weights) is not dict or set(ranker_weights) != expected_rankers:
-        raise ValueError("fusion weights must cover the exact ranker identities")
-    if any(
-        type(weight) not in {int, float}
-        or type(weight) is bool
-        or not isfinite(weight)
-        or weight <= 0.0
-        for weight in ranker_weights.values()
-    ):
-        raise ValueError("fusion weights must be positive finite floats")
-
-    accumulated: dict[CandidateRef, float] = {}
+    query.__post_init__()
+    reciprocal_scores: dict[CandidateRef, float] = {}
     evidence_by_ref: dict[CandidateRef, list[RankerEvidence]] = {}
-    first_seen: dict[CandidateRef, int] = {}
-    next_seen = 0
     for ranked_list in query.ranked_lists:
-        weight = ranker_weights[ranked_list.ranker_ref]
+        ranked_list.__post_init__()
+        seen_by_ranker: set[CandidateRef] = set()
         for position, ranked in enumerate(ranked_list.candidates, start=1):
+            ranked.__post_init__()
             candidate_ref = ranked.candidate_ref
-            existing_rankers = {
-                item.ranker_ref for item in evidence_by_ref.get(candidate_ref, ())
-            }
-            if ranked_list.ranker_ref in existing_rankers:
+            if candidate_ref in seen_by_ranker:
                 continue
-            if candidate_ref not in first_seen:
-                first_seen[candidate_ref] = next_seen
-                next_seen += 1
-            accumulated[candidate_ref] = accumulated.get(candidate_ref, 0.0) + (
-                weight / position
+            seen_by_ranker.add(candidate_ref)
+            reciprocal_scores[candidate_ref] = (
+                reciprocal_scores.get(candidate_ref, 0.0) + 1.0 / position
             )
             evidence_by_ref.setdefault(candidate_ref, []).append(
                 RankerEvidence(
@@ -60,19 +42,21 @@ def weighted_fuse_candidates(
             )
     ordered = tuple(
         sorted(
-            accumulated,
+            reciprocal_scores,
             key=lambda candidate_ref: (
-                -accumulated[candidate_ref],
-                first_seen[candidate_ref],
+                -reciprocal_scores[candidate_ref],
+                _candidate_sort_key(candidate_ref),
             ),
         )
     )
-    rank_evidence = tuple(
-        CandidateRankEvidence(
-            candidate_ref=candidate_ref,
-            per_ranker=tuple(evidence_by_ref[candidate_ref]),
-            fused_rank=fused_rank,
-        )
-        for fused_rank, candidate_ref in enumerate(ordered, start=1)
+    return FusedCandidates(
+        candidate_refs=ordered,
+        rank_evidence=tuple(
+            CandidateRankEvidence(
+                candidate_ref=candidate_ref,
+                per_ranker=tuple(evidence_by_ref[candidate_ref]),
+                fused_rank=fused_rank,
+            )
+            for fused_rank, candidate_ref in enumerate(ordered, start=1)
+        ),
     )
-    return FusedCandidates(candidate_refs=ordered, rank_evidence=rank_evidence)

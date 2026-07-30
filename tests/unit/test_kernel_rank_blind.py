@@ -19,7 +19,6 @@ from engine.runtime.candidate_ranking import (
     RankedCandidate,
     RankedCandidateList,
     RankerEvidence,
-    preserve_single_ranker_candidates,
 )
 from engine.runtime.construction import (
     DEFAULT_SERVER_PACKAGE_BUDGET,
@@ -35,7 +34,7 @@ from engine.runtime.construction import (
 from engine.runtime.content_io import CandidateIndex
 from engine.runtime.contracts import Acquire, ContextNeed
 from engine.runtime.evidence import CandidateRef
-from engine.runtime.prekernel_fusion import weighted_fuse_candidates
+from engine.runtime.prekernel_fusion import fuse_candidate_evidence
 from tests.unit.test_runtime_authorized_evidence import (
     AS_OF,
     AUTHORIZED,
@@ -55,9 +54,8 @@ RANK_TYPES = (
 )
 RANK_CALLABLES = (
     join_authorized_ranking,
-    preserve_single_ranker_candidates,
     select_authorized_ranking,
-    weighted_fuse_candidates,
+    fuse_candidate_evidence,
 )
 
 
@@ -274,8 +272,7 @@ def test_kernel_accepts_sorted_refs_but_no_rank_or_discovery_dependency() -> Non
     assert hints["candidate_refs"] == "tuple[CandidateRef, ...]"
     assert all("rank" not in name.lower() for name in signature.parameters)
     assert all(
-        value not in {CandidateRankEvidence, CandidateIndex}
-        for value in hints.values()
+        value not in {CandidateRankEvidence, CandidateIndex} for value in hints.values()
     )
     for method_name, method in inspect.getmembers(
         AuthorizationKernel,
@@ -288,8 +285,7 @@ def test_kernel_accepts_sorted_refs_but_no_rank_or_discovery_dependency() -> Non
             for name, annotation in method_hints.items()
         )
     assert all(
-        "rank" not in item.name.lower()
-        for item in fields(SealedPackageSelection)
+        "rank" not in item.name.lower() for item in fields(SealedPackageSelection)
     )
 
 
@@ -337,9 +333,9 @@ def test_permuting_rank_evidence_cannot_change_kernel_decision() -> None:
 
         assert decisions[0] is not decisions[1]
         assert snapshots[0] == snapshots[1]
-        assert tuple(
-            item.candidate_ref for item in decisions[0].projections
-        ) == (AUTHORIZED,)
+        assert tuple(item.candidate_ref for item in decisions[0].projections) == (
+            AUTHORIZED,
+        )
         for decision in decisions:
             _close_authorization_decision(decision)
 

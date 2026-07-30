@@ -58,6 +58,25 @@ def _authorized_ranker_weights(
     }
 
 
+@dataclass(frozen=True, slots=True)
+class RankerWeights:
+    """Tracked server-owned retrieval weights, never request input."""
+
+    values: dict[str, float] | None = field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        if self.values is None:
+            return
+        if type(self.values) is not dict or not self.values:
+            raise ValueError("ranker weights require a nonempty exact mapping")
+        validated = _authorized_ranker_weights(self.values, frozenset(self.values))
+        object.__setattr__(self, "values", validated)
+
+
+UNIFORM_RANKER_WEIGHTS: Final = RankerWeights()
+HYBRID_RANKER_WEIGHTS: Final = RankerWeights({"fts": 1.0, "vector": 1.0})
+
+
 @dataclass(frozen=True, slots=True, init=False)
 class AuthorizedRerankItem:
     """Content-bearing relevance input constructible only from a projection."""
@@ -167,9 +186,7 @@ def join_authorized_ranking(
             per_ranker=tuple(
                 RankerEvidence(
                     ranker_ref=ranker.ranker_ref,
-                    position=compacted_positions[
-                        (candidate_ref, ranker.ranker_ref)
-                    ],
+                    position=compacted_positions[(candidate_ref, ranker.ranker_ref)],
                     score=ranker.score,
                 )
                 for ranker in admitted.per_ranker
