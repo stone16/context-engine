@@ -57,6 +57,7 @@ delegation, RBAC, and every network-reachable operator surface remain
 | Durable general Principal / Agent grants | The default scope authority returns seven missing operands; dogfood separately carries the bounded current File operands and binds one configured Agent/purpose to the Release ceiling only |
 | General / multi-user Source and Resource ACLs | Dogfood uses current mirrored File access plus Membership field rights only; source-native and multi-user authorities remain absent |
 | General content retrieval | Only the loopback File pgvector dogfood `Acquire` carrier is active |
+| Local consumer expansion | The repo-local Claude Code skill is active only as a single-question display consumer; pi and MCP remain `NOT_ACTIVE` |
 | `Continue` / dogfood `OpenCitation` carriers | The bounded dogfood composition keeps both unavailable; other accepted ADRs own their narrower citation carriers |
 | Federated discovery, source-native authorization | Deterministic refusal only |
 | Runtime model-inference carriers (`rewrite`, `rerank`, `select`) | The governed port is implemented, but no carrier is active until its consuming issue proves the exact profile and grant path, passes the resolve-owned shared `PackageBudgetMeter`, and publishes that meter's cumulative usage in the final package; real provider network calls remain `NOT_ACTIVE` |
@@ -81,6 +82,20 @@ application remains reject-all and reports `NOT_ACTIVE`. Production
 authentication, a second human, network exposure beyond the maintainer machine,
 group/public audience, dogfood `OpenCitation`, `Continue`, hybrid retrieval, non-File providers, and
 external query embeddings remain `NOT_ACTIVE`.
+
+### Repo-local Claude Code consumer
+
+| ADR | Activates |
+|---|---|
+| [0088](./docs/decisions/0088-bind-local-consumers-to-fresh-evidence-bearing-packages.md) | One repo-local Claude Code skill that performs one fresh loopback `Acquire` per question, rejects expired or malformed Packages, retains each Block's exact Evidence ref, and captures question-only golden-set candidates under the configured durable private root |
+
+The consumer takes a question only through standard input, generates the request
+id internally, and reads the bearer only through the existing environment-held
+caller configuration. It renders no Package past `expiresAt`; unavailable,
+empty, expired, malformed, and secret-exclusion outcomes are distinguishable
+closed local refusals. Candidate capture contains no corpus path or Package
+content. This activates no pi consumer, MCP Adapter, `Continue`, dogfood
+`OpenCitation`, IM delivery, channel egress, or external effect.
 
 ### Bounded local Release promotion
 
