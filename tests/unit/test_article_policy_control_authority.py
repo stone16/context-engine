@@ -163,12 +163,15 @@ def test_article_policy_change_rederives_tamper_evidence_before_store(
     assert store.calls == 0
 
 
-def test_article_policy_control_surface_is_narrowed_to_future_defaults() -> None:
+def test_article_policy_control_surface_has_defaults_and_one_bulk_change_ceremony(
+) -> None:
     assert {
         operation
         for operation in ControlOperation
         if "article" in operation.value
     } == {
+        ControlOperation.COMMIT_BULK_ARTICLE_POLICY_CHANGE,
+        ControlOperation.PREVIEW_BULK_ARTICLE_POLICY_CHANGE,
         ControlOperation.SET_SOURCE_ARTICLE_POLICY_DEFAULT,
         ControlOperation.SET_TENANT_ARTICLE_POLICY_DEFAULT,
     }

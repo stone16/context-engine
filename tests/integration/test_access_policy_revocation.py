@@ -1249,6 +1249,11 @@ def test_control_function_and_table_grants_seal_the_only_mutation_path(
             (ACCESS_POLICY_DEFINER_ROLE, table_name, privilege)
             for table_name, privilege in article_policy_definer_grants
         } | {
+            (
+                ACCESS_POLICY_DEFINER_ROLE,
+                "bulk_article_policy_change_audit",
+                "INSERT",
+            ),
             (ACCESS_POLICY_DEFINER_ROLE, "context_resource", "SELECT"),
             (ACCESS_POLICY_DEFINER_ROLE, "context_source", "SELECT"),
             (ACCESS_POLICY_DEFINER_ROLE, "file_import_job", "SELECT"),
@@ -1316,6 +1321,21 @@ def test_control_function_and_table_grants_seal_the_only_mutation_path(
         } | {
             (
                 "public",
+                "context_control_preview_bulk_article_policy_change",
+                "requested_organization_id uuid, requested_resource_refs text[], "
+                "requested_policy_kind text, requested_group_refs text[]",
+            ),
+            (
+                "public",
+                "context_control_bulk_change_article_policy",
+                "requested_organization_id uuid, requested_resource_refs text[], "
+                "expected_policy_versions bigint[], requested_policy_kind text, "
+                "requested_group_refs text[], requested_preview_digest text, "
+                "requested_operator_ref text, requested_authority_ref text, "
+                "requested_request_id text",
+            ),
+            (
+                "public",
                 "context_control_revoke_resource_access",
                 "requested_organization_id uuid, requested_resource_ref text, "
                 "requested_principal_ref text, expected_access_version bigint",
@@ -1376,6 +1396,11 @@ def test_control_function_and_table_grants_seal_the_only_mutation_path(
             (
                 "resource_access_policy",
                 "UPDATE",
+                (ACCESS_POLICY_DEFINER_ROLE,),
+            ),
+            (
+                "bulk_article_policy_change_audit",
+                "INSERT",
                 (ACCESS_POLICY_DEFINER_ROLE,),
             ),
             (

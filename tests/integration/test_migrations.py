@@ -122,6 +122,7 @@ HEAD_TABLES = [
     "article_access_policy",
     "article_explicit_policy_setting",
     "article_source_acl_observation",
+    "bulk_article_policy_change_audit",
     "citation_open_locator",
     "context_fragment",
     "context_fragment_field",
@@ -184,6 +185,7 @@ ARTICLE_POLICY_TABLES = {
     "article_access_policy",
     "article_explicit_policy_setting",
     "article_source_acl_observation",
+    "bulk_article_policy_change_audit",
     "organization_article_policy_default",
     "source_article_policy_default",
 }
@@ -299,6 +301,7 @@ MIGRATION_TEST_START_REVISIONS = {
 MIGRATION_TEST_HEAD_PRECONDITIONS = {
     "test_article_policy_downgrade_rejects_every_deferred_admin_state",
     "test_article_policy_downgrade_refuses_state_that_would_reauthorize_content",
+    "test_bulk_article_policy_revision_downgrades_and_reapplies_when_audit_empty",
     "test_file_scan_bound_acceptance_fails_closed_after_downgrade",
     "test_file_scan_bound_revision_downgrades_and_reapplies_when_default_only",
     "test_file_scan_bound_downgrade_observes_in_flight_refusal_report",
@@ -1288,6 +1291,23 @@ def test_supply_execution_bridge_revision_downgrades_and_reapplies_cleanly(
         assert "supply_connector_checkpoint" not in application_tables
     finally:
         command.upgrade(alembic_configuration, "head")
+
+    assert _revision_rows(migration_configuration) == [HEAD_REVISION]
+
+
+def test_bulk_article_policy_revision_downgrades_and_reapplies_when_audit_empty(
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    configuration = Config(ROOT / "alembic.ini")
+
+    command.downgrade(configuration, "20260730_0045")
+    try:
+        assert _revision_rows(migration_configuration) == ["20260730_0045"]
+        assert "bulk_article_policy_change_audit" not in _application_tables(
+            migration_configuration
+        )
+    finally:
+        command.upgrade(configuration, "head")
 
     assert _revision_rows(migration_configuration) == [HEAD_REVISION]
     assert _application_tables(migration_configuration) == HEAD_TABLES

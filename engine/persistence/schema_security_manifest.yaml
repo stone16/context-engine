@@ -135,6 +135,35 @@
       ]
     },
     {
+      "name": "preview_bulk_article_policy_change",
+      "databaseFunction": "context_control_preview_bulk_article_policy_change",
+      "role": "context_engine_control",
+      "definerRole": "context_engine_access_policy_definer",
+      "directTableMutationAllowed": false,
+      "trustedOrganizationSource": "TrustedControlCall",
+      "contentBearing": false,
+      "nonEnumerating": true,
+      "reads": [
+        "article_access_group",
+        "article_access_policy"
+      ]
+    },
+    {
+      "name": "commit_bulk_article_policy_change",
+      "databaseFunction": "context_control_bulk_change_article_policy",
+      "role": "context_engine_control",
+      "definerRole": "context_engine_access_policy_definer",
+      "directTableMutationAllowed": false,
+      "trustedOrganizationSource": "TrustedControlCall",
+      "previewDigestBound": true,
+      "sourceAclFloor": "mirrored resolved evidence may narrow but never widen",
+      "atomicWrites": [
+        "article_access_policy",
+        "organization_policy_epoch",
+        "bulk_article_policy_change_audit"
+      ]
+    },
+    {
       "name": "tombstone_file_resource",
       "databaseFunction": "context_control_tombstone_file_resource",
       "role": "context_engine_control",
@@ -2612,6 +2641,112 @@
         "DB-009",
         "DB-010",
         "PG-REVOCATION-006"
+      ]
+    },
+    {
+      "name": "bulk_article_policy_change_audit",
+      "classification": "tenant_owned",
+      "nonOwnerEvidence": {
+        "evidenceId": "PG-BULK-ARTICLE-POLICY-132",
+        "selector": {
+          "table": "bulk_article_policy_change_audit"
+        }
+      },
+      "purpose": "Content-free audit lineage for one confirmed historical Article policy selection committed with one Organization Policy Epoch",
+      "organizationColumn": "organization_id",
+      "organizationInclusiveKeys": [
+        {
+          "name": "pk_bulk_article_policy_change_audit",
+          "kind": "primary_key",
+          "columns": [
+            "organization_id",
+            "audit_ref"
+          ]
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_bulk_article_policy_change_audit_organization",
+          "columns": [
+            "organization_id"
+          ],
+          "references": {
+            "table": "organization",
+            "columns": [
+              "organization_id"
+            ]
+          },
+          "onDelete": "CASCADE"
+        }
+      ],
+      "checkConstraints": [
+        {
+          "name": "ck_bulk_article_policy_change_audit_epoch",
+          "expression": "policy_epoch BETWEEN 2 AND 9223372036854775807"
+        },
+        {
+          "name": "ck_bulk_article_policy_change_audit_count",
+          "expression": "article_count BETWEEN 1 AND 1000"
+        },
+        {
+          "name": "ck_bulk_article_policy_change_audit_digests",
+          "expression": "preview, target policy, operator, authority, and request values are lowercase SHA-256 digests"
+        },
+        {
+          "name": "ck_bulk_article_policy_change_audit_reason",
+          "expression": "reason_category = 'operator_confirmed_visibility_change'"
+        }
+      ],
+      "rowLevelSecurity": {
+        "enabled": true,
+        "forced": true,
+        "policies": [
+          {
+            "name": "bulk_article_policy_change_audit_access_definer_insert",
+            "command": "INSERT",
+            "roles": [
+              "context_engine_access_policy_definer"
+            ],
+            "withCheck": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"
+          },
+          {
+            "name": "bulk_article_policy_change_audit_migrator_administration",
+            "command": "ALL",
+            "roles": [
+              "context_engine_migrator"
+            ],
+            "using": "true",
+            "withCheck": "true"
+          }
+        ]
+      },
+      "functionOnlyMutation": {
+        "databaseFunctions": [
+          "context_control_bulk_change_article_policy"
+        ],
+        "definerRole": "context_engine_access_policy_definer",
+        "directTableMutationAllowed": false
+      },
+      "permittedOperations": {
+        "context_engine_access_policy_definer": [
+          "INSERT"
+        ],
+        "context_engine_control": [],
+        "context_engine_runtime": [],
+        "context_engine_worker": []
+      },
+      "partitions": [],
+      "securityInvariantIds": [
+        "TENANT-OWNERSHIP-001",
+        "TENANT-FK-002",
+        "RLS-FAIL-CLOSED-003",
+        "REVOCATION-006"
+      ],
+      "negativeTestIds": [
+        "DB-001",
+        "DB-004",
+        "DB-008",
+        "PG-BULK-ARTICLE-POLICY-132"
       ]
     },
     {

@@ -76,6 +76,11 @@
       "selector": "tests/integration/test_article_access_policy_rls.py::test_article_policy_tables_force_rls_and_groups_authorize_at_article_atom"
     },
     {
+      "id": "PG-BULK-ARTICLE-POLICY-132",
+      "layer": "postgres",
+      "selector": "tests/integration/test_bulk_article_policy_change.py::test_cross_organization_selection_is_non_enumerating_and_changes_neither_org"
+    },
+    {
       "id": "RUNTIME-TENANT-OWNERSHIP-001",
       "layer": "runtime",
       "selector": "tests/integration/test_runtime_authorized_evidence_integration.py::test_real_postgres_http_delivers_only_exact_authorized_evidence_bidirectionally"
@@ -627,6 +632,7 @@
           "PG-FILE-SOURCE-RLS-021",
           "PG-RLS-ALL-TENANT-TABLES",
           "PG-ARTICLE-ACCESS-RLS-141",
+          "PG-BULK-ARTICLE-POLICY-132",
           "PG-FILE-IMPORT-023",
           "PG-FILE-REPLACEMENT-026",
           "PG-FILE-RECOVERY-027",
@@ -670,6 +676,7 @@
           "PG-RLS-FAIL-CLOSED-003",
           "PG-RLS-ALL-TENANT-TABLES",
           "PG-ARTICLE-ACCESS-RLS-141",
+          "PG-BULK-ARTICLE-POLICY-132",
           "PG-FILE-IMPORT-023",
           "PG-FILE-REPLACEMENT-026",
           "PG-FILE-TOMBSTONE-028",
@@ -729,6 +736,7 @@
         ],
         "postgres": [
           "PG-REVOCATION-006",
+          "PG-BULK-ARTICLE-POLICY-132",
           "PG-FILE-TOMBSTONE-028",
           "PG-FILE-SOURCE-OFFBOARD-030",
           "PG-FILE-DELETE-EXECUTE-087",

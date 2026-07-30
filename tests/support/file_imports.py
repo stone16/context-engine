@@ -69,6 +69,8 @@ class ControlAuthenticator:
             allowed_operations=frozenset(
                 {
                     ControlOperation.REGISTER_SOURCE,
+                    ControlOperation.PREVIEW_BULK_ARTICLE_POLICY_CHANGE,
+                    ControlOperation.COMMIT_BULK_ARTICLE_POLICY_CHANGE,
                     ControlOperation.READ_SOURCE,
                     ControlOperation.READ_SOURCE_PROGRESS,
                     ControlOperation.ACTIVATE_FILE_CHANGE_FEED,
