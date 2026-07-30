@@ -86,7 +86,7 @@ from tests.integration.test_file_import_tracer import (
     _OrganizationAuthority,
     _RuntimeAuthenticator,
 )
-from tests.support.migrations import HEAD_REVISION
+from tests.support.migrations import HEAD_REVISION, downgrade_revision
 from tests.support.releases import (
     clear_test_runtime_release,
     ensure_test_runtime_release,
@@ -1150,7 +1150,7 @@ def test_control_executes_a_nonterminal_current_delete_observation(
         )
 
     with pytest.raises(SQLAlchemyError, match="cannot downgrade with File delete"):
-        command.downgrade(Config(ROOT / "alembic.ini"), "20260725_0030")
+        downgrade_revision(migration_configuration, "20260725_0031")
     migration_engine = create_database_engine(migration_configuration)
     try:
         with migration_engine.connect() as connection:
@@ -1661,7 +1661,7 @@ def test_control_schedules_only_the_upserts_from_a_current_mixed_file_page(
         RuntimeError,
         match="mixed File upsert scheduling downgrade requires no retained",
     ):
-        command.downgrade(Config(ROOT / "alembic.ini"), "20260725_0031")
+        downgrade_revision(migration_configuration, "20260725_0032")
     migration_engine = create_database_engine(migration_configuration)
     try:
         with migration_engine.connect() as connection:
@@ -3222,7 +3222,7 @@ def test_control_atomically_schedules_exact_accepted_file_upserts(
         RuntimeError,
         match="requires no retained accepted-change acquisition lineage",
     ):
-        command.downgrade(Config(ROOT / "alembic.ini"), "20260725_0028")
+        downgrade_revision(migration_configuration, "20260725_0029")
     migration_engine = create_database_engine(migration_configuration)
     try:
         with migration_engine.connect() as connection:
