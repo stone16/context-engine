@@ -91,7 +91,10 @@ def join_authorized_ranking(
             )
     for ranker_ref, entries in by_ranker.items():
         for compacted, (candidate_ref, _position) in enumerate(
-            sorted(entries, key=lambda value: (value[1], value[0])),
+            sorted(
+                entries,
+                key=lambda value: (value[1], _candidate_sort_key(value[0])),
+            ),
             start=1,
         ):
             compacted_positions[(candidate_ref, ranker_ref)] = compacted

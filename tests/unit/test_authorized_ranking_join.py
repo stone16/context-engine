@@ -184,6 +184,35 @@ def test_refused_candidate_positions_cannot_change_authorized_selection() -> Non
         ) == tuple(item.projection.candidate_ref for item in selected_with)
 
 
+def test_tied_ranker_positions_have_a_stable_total_order() -> None:
+    canonical_first = _candidate("a-tied")
+    canonical_second = _candidate("z-tied")
+    tied_evidence = (
+        _rank(canonical_second, 1),
+        _rank(canonical_first, 1),
+    )
+    observed_orders: list[tuple[CandidateRef, ...]] = []
+
+    for run in range(10):
+        input_order = (
+            (canonical_first, canonical_second)
+            if run % 2 == 0
+            else (canonical_second, canonical_first)
+        )
+        with _projections(*input_order) as projections:
+            joined = join_authorized_ranking(projections, tied_evidence)
+            observed_orders.append(
+                tuple(
+                    item.projection.candidate_ref
+                    for item in sorted(joined, key=lambda item: item.fused_rank)
+                )
+            )
+
+    assert observed_orders == [
+        (canonical_first, canonical_second),
+    ] * 10
+
+
 def test_neutral_admission_is_neither_best_nor_worst_under_budget() -> None:
     ranked_first = _candidate("ranked-first")
     neutral = _candidate("neutral")
