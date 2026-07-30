@@ -50,13 +50,19 @@ chain reaches first.
    rolls the transaction back unconditionally. It never drives a multi-revision
    chain to reach a guard.
 2. No guard is deleted, tenant-scoped, relaxed, or narrowed to obtain this. The
-   whole-database recursive-path guard keeps its exact semantics and is itself
-   registered evidence that it still refuses on retained nested lineage.
+   whole-database recursive-path guard keeps its exact semantics, and that it
+   still refuses on retained nested lineage is proved by integration evidence
+   under `make integration`, not by the M0 registry: no registered selector
+   asserts that guard, and adding one is an ADR-0034 registry change with its
+   own invariant and fixture mapping obligations rather than a side effect of
+   this repair.
 3. Where a guard selects among several whole-database blockers and names only
    the first, the assertion pairs the guard's refusal contract with the
    guard's own blocker predicate evaluated for the Organization under test.
    Naming a blocker that another tenant's retained rows can displace is not
-   evidence about the property under test.
+   evidence about the property under test. Because that pairing can no longer
+   detect a deleted branch, the guard's blocker branch structure is pinned at
+   source level alongside it.
 4. The gate records, before it executes any registered selector, the retained
    File lineage it observed: Organization, `file_acquisition`,
    `file_source_change`, `file_delete_observation_execution`, and nested-path
@@ -91,6 +97,9 @@ Counts and booleans carry no tenant content.
   without resetting the database.
 - New evidence that asserts a downgrade refusal must name the revision that owns
   the guard. Reaching a guard through a chain is a corpus-sensitivity defect.
+- A guard whose refusal message is asserted by prefix rather than in full owes a
+  source-level pin of its blocker branches, because the prefix alone cannot tell
+  a deleted branch from a displaced one.
 - Gate artifacts gain one provenance object. A run that cannot observe the
   retained lineage fails Security rather than reporting an unqualified pass.
 - The synthetic multi-Organization corpus used by this evidence is tracked test
