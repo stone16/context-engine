@@ -1,6 +1,8 @@
 import { spawnSync } from "node:child_process";
+import { createHmac } from "node:crypto";
 
 import { ContextEngineResolveClient } from "@context-engine/resolve-sdk";
+import canonicalize from "canonicalize";
 
 function required(name) {
   const value = process.env[name];
@@ -37,6 +39,7 @@ function binding({
     policyEpoch: Number(process.env.CE_BOT_BINDING_POLICY_EPOCH ?? "1"),
     purpose,
     ...(question === undefined ? {} : { question }),
+    providerAskerId: "feishu-user:file-tracer",
     requestId,
     userId: required("CE_BOT_USER_ID"),
   };
@@ -97,29 +100,77 @@ const citationFixture = binding({
   turnRef: "live-citation",
 });
 
+const feishuVerificationKey = Buffer.alloc(32, 0x45);
+const feishuSenderCredential = Buffer.alloc(32, 0x46);
+function answerEvent(fixture, eventId) {
+  const issuedAt = new Date();
+  const event = {
+    applicationId: "feishu-app:file-tracer",
+    askerProviderId: fixture.providerAskerId,
+    consumerRef: fixture.consumerRef,
+    destinationKind: "p2p",
+    destinationRef: fixture.destinationRef,
+    eventId,
+    eventKind: "im.message.receive_v1",
+    expiresAt: new Date(issuedAt.getTime() + 60_000).toISOString(),
+    issuedAt: issuedAt.toISOString(),
+    kind: "question",
+    organizationId: fixture.organizationId,
+    providerTenantKey: "feishu-tenant:file-tracer",
+    purpose: "context.answer",
+    question: fixture.question,
+    requestId: fixture.requestId,
+    requestKind: "acquire",
+    turnRef: fixture.turnRef,
+  };
+  return {
+    event,
+    kind: "answer",
+  };
+}
 const answerEvents = [
-  {
-    eventVerificationRef: finalizeFixture.eventVerificationRef,
-    kind: "answer",
-    question: finalizeFixture.question,
-    turnRef: finalizeFixture.turnRef,
-  },
-  {
-    eventVerificationRef: followupFixture.eventVerificationRef,
-    kind: "answer",
-    question: followupFixture.question,
-    turnRef: followupFixture.turnRef,
-  },
+  answerEvent(finalizeFixture, "feishu-event:live-finalize"),
+  answerEvent(followupFixture, "feishu-event:live-followup"),
 ];
 if (process.env.CE_BOT_EVENT_MODE === "unbound_identity") {
-  answerEvents[0].eventVerificationRef = "unbound:event-verification";
+  answerEvents[0].event.askerProviderId = "feishu-user:unbound";
 }
+for (const envelope of answerEvents) {
+  envelope.event.signature = createHmac("sha256", feishuVerificationKey)
+    .update(Buffer.from("context-engine.private-feishu-event.v1\0"))
+    .update(canonicalize(envelope.event))
+    .digest("hex");
+}
+const citationIssuedAt = new Date();
+const citationUnsigned = {
+  applicationId: "feishu-app:file-tracer",
+  askerProviderId: citationFixture.providerAskerId,
+  citationOpenRef,
+  consumerRef: citationFixture.consumerRef,
+  destinationKind: "p2p",
+  destinationRef: citationFixture.destinationRef,
+  eventId: "feishu-event:live-citation",
+  eventKind: "card.action.trigger_v1",
+  expiresAt: new Date(citationIssuedAt.getTime() + 60_000).toISOString(),
+  issuedAt: citationIssuedAt.toISOString(),
+  kind: "citation_open",
+  openRef: citationFixture.openRef,
+  organizationId: citationFixture.organizationId,
+  providerTenantKey: "feishu-tenant:file-tracer",
+  purpose: "citation.open",
+  requestId: citationFixture.requestId,
+  requestKind: "open_citation",
+};
 const citationEvent = {
-    citationOpenRef,
-    eventVerificationRef: citationFixture.eventVerificationRef,
-    kind: "open_citation",
-    openRef: citationFixture.openRef,
-  };
+  event: {
+    ...citationUnsigned,
+    signature: createHmac("sha256", feishuVerificationKey)
+      .update(Buffer.from("context-engine.private-feishu-event.v1\0"))
+      .update(canonicalize(citationUnsigned))
+      .digest("hex"),
+  },
+  kind: "open_citation",
+};
 const events = mode === "answer_only"
   ? answerEvents
   : mode === "finalize_only"
@@ -135,6 +186,22 @@ const completed = spawnSync(process.execPath, [botMain.pathname], {
     ...process.env,
     CONTEXT_ENGINE_BOT_ACTION_DATABASE_URL: required("CE_BOT_ACTION_DATABASE_URL"),
     CONTEXT_ENGINE_BOT_ACTION_SIGNING_KEY_HEX: "71".repeat(32),
+    CONTEXT_ENGINE_BOT_FEISHU_EVENT_PROFILE_JSON: JSON.stringify({
+      applicationId: "feishu-app:file-tracer",
+      askerMappings: [{
+        membershipId: required("CE_BOT_MEMBERSHIP_ID"),
+        membershipVersion: 1,
+        providerAskerId: "feishu-user:file-tracer",
+        userId: required("CE_BOT_USER_ID"),
+      }],
+      consumerRef: "consumer:file-tracer",
+      maximumAgeSeconds: 300,
+      maximumFutureSkewSeconds: 5,
+      maximumLifetimeSeconds: 300,
+      providerTenantKey: "feishu-tenant:file-tracer",
+    }),
+    CONTEXT_ENGINE_BOT_FEISHU_SENDER_CREDENTIAL_HEX: feishuSenderCredential.toString("hex"),
+    CONTEXT_ENGINE_BOT_FEISHU_VERIFICATION_KEY_HEX: feishuVerificationKey.toString("hex"),
     CONTEXT_ENGINE_BOT_MODEL_EGRESS_DATABASE_URL: required("CE_BOT_EGRESS_DATABASE_URL"),
     CONTEXT_ENGINE_BOT_ORGANIZATION_ID: required("CE_BOT_ORGANIZATION_ID"),
     CONTEXT_ENGINE_BOT_SDK_AUTHENTICATION: required("CE_BOT_SDK_AUTHENTICATION"),
@@ -160,6 +227,8 @@ const secretValues = [
   required("CE_BOT_EGRESS_DATABASE_URL"),
   required("CE_BOT_SDK_AUTHENTICATION"),
   "71".repeat(32),
+  feishuSenderCredential.toString("hex"),
+  feishuVerificationKey.toString("hex"),
   ...[finalizeFixture, followupFixture, citationFixture]
     .map((fixture) => fixture.deliveryEvidenceRef),
 ];

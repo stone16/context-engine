@@ -5,6 +5,7 @@ import {
   AuthorizedModelInput,
   DeterministicModelGatewayTwin,
   ModelGenerationBoundary,
+  PrivateFeishuEventIngressTwin,
   PrivateModelGatewayProfile,
   createPrivateModelGenerationBoundary,
   privateModelGatewayProfileV1,
@@ -81,6 +82,10 @@ const input = prepareAuthorizedModelInput({
   profile,
 });
 assert.equal(input instanceof AuthorizedModelInput, true);
+assert.throws(
+  () => new PrivateFeishuEventIngressTwin({}),
+  /invalid field set/,
+);
 const gateway = new DeterministicModelGatewayTwin({
   citations: [evidenceRef],
   costMicrounits: 2,

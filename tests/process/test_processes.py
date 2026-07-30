@@ -382,6 +382,7 @@ def test_bot_completes_test_lifecycle_without_configuration() -> None:
 
     assert json.loads(completed.stdout) == {
         "delivery": "private-file-twin",
+        "feishu": "private-event-and-sender-twins",
         "processTopology": "BotDelivery + ActionPlane",
         "service": "context-engine-bot",
         "status": "test-complete",
@@ -425,6 +426,14 @@ def test_api_worker_and_bot_are_exactly_three_independent_processes() -> None:
                 "postgresql://context_engine_action:unused@127.0.0.1/context_engine"
             ),
             "CONTEXT_ENGINE_BOT_ACTION_SIGNING_KEY_HEX": "7" * 64,
+            "CONTEXT_ENGINE_BOT_FEISHU_EVENT_PROFILE_JSON": (
+                '{"applicationId":"feishu-app:process","askerMappings":[],'
+                '"consumerRef":"consumer:file-tracer","maximumAgeSeconds":300,'
+                '"maximumFutureSkewSeconds":5,"maximumLifetimeSeconds":300,'
+                '"providerTenantKey":"feishu-tenant:process"}'
+            ),
+            "CONTEXT_ENGINE_BOT_FEISHU_SENDER_CREDENTIAL_HEX": "8" * 64,
+            "CONTEXT_ENGINE_BOT_FEISHU_VERIFICATION_KEY_HEX": "9" * 64,
             "CONTEXT_ENGINE_BOT_MODEL_EGRESS_DATABASE_URL": (
                 "postgresql://context_engine_egress:unused@127.0.0.1/context_engine"
             ),
@@ -452,6 +461,7 @@ def test_api_worker_and_bot_are_exactly_three_independent_processes() -> None:
         assert worker_ready["service"] == "context-engine-worker"
         assert bot_ready == {
             "delivery": "private-file-twin",
+            "feishu": "private-event-and-sender-twins",
             "processTopology": "BotDelivery + ActionPlane",
             "service": "context-engine-bot",
             "status": "ready",

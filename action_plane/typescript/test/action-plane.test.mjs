@@ -7,6 +7,7 @@ import {
   CreatePlaceholderActionTicket,
   createTrustedActionReconciliation,
   DeterministicPrivateSenderTwin,
+  ExactPrivateFeishuSenderTwin,
   FinalizeReplyActionTicket,
   PrivateActionPrepareProfile,
 } from "../dist/index.js";
@@ -500,6 +501,62 @@ test("ActionPlane rejects arbitrary or inherited Sender implementations", () => 
     }),
     /deterministic private Sender twin/,
   );
+});
+
+test("ADR-0089 exact Feishu Sender is sealed, redacted, and twin-bounded", () => {
+  const credential = Buffer.from("sender-provider-secret-never-rendered");
+  const sender = new ExactPrivateFeishuSenderTwin({
+    applicationId: "feishu-app:private-bot",
+    credential,
+    destinationRef: exactFacts.destinationRef,
+    mode: "applied",
+    providerTenantKey: "feishu-tenant:private-bot",
+  });
+  assert.equal(String(sender), "<ExactPrivateFeishuSenderTwin redacted>");
+  assert.equal(String(sender).includes(credential.toString("utf8")), false);
+  assert.throws(() => JSON.stringify(sender), /not serializable/);
+  assert.doesNotThrow(() => new ActionPlane({ database: { query: async () => ({ rows: [] }) }, keyring, profile, sender }));
+  class InheritedFeishuSender extends ExactPrivateFeishuSenderTwin {}
+  assert.throws(
+    () => new ActionPlane({
+      database: { query: async () => ({ rows: [] }) },
+      keyring,
+      profile,
+      sender: new InheritedFeishuSender({
+        applicationId: "feishu-app:private-bot",
+        credential,
+        destinationRef: exactFacts.destinationRef,
+        mode: "applied",
+        providerTenantKey: "feishu-tenant:private-bot",
+      }),
+    }),
+    /sealed deterministic private Sender twin/,
+  );
+});
+
+test("ADR-0089 channel preflight grant cannot substitute for one ActionTicket", async () => {
+  const sender = new ExactPrivateFeishuSenderTwin({
+    applicationId: "feishu-app:private-bot",
+    credential: Buffer.from("sender-provider-secret-never-rendered"),
+    destinationRef: exactFacts.destinationRef,
+    mode: "applied",
+    providerTenantKey: "feishu-tenant:private-bot",
+  });
+  const plane = new ActionPlane({
+    database: { query: async () => ({ rows: [] }) },
+    keyring,
+    profile,
+    sender,
+  });
+  assert.deepEqual(
+    await plane.perform(
+      { text: "A channel grant is preflight-only." },
+      { kind: "channel", value: `egrc_${"a".repeat(64)}` },
+    ),
+    { effectCount: 0, kind: "rejected", reasonCategory: "not_available" },
+  );
+  assert.equal(sender.callCount, 0);
+  assert.equal(sender.effectCount, 0);
 });
 
 test("exported ticket nominal types cannot mint effect authority", () => {
