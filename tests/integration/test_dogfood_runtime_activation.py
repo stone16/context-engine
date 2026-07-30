@@ -2,9 +2,13 @@ from __future__ import annotations
 
 import logging
 import subprocess
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
+from datetime import UTC, datetime
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from threading import Event
+from threading import Event, Thread
 from typing import Any, cast
 from uuid import UUID, uuid4
 
@@ -36,12 +40,29 @@ from adapters.http.dogfood import (
 from adapters.pgvector import DEFAULT_VECTOR_CANDIDATE_LIMIT
 from applications.api import main as api_main
 from applications.dogfood_evaluation import (
+    DOGFOOD_BASE_URL_ENV,
     EvidenceIdentity,
     GoldenCase,
     GoldenExpectation,
     GoldenSet,
     evaluate_golden_set,
 )
+from applications.eval_executor import (
+    TRACKED_RUN_SEAM_REF,
+    AnswerJudgments,
+    CaseAnswerJudgment,
+    execute_evaluation_report,
+)
+from engine.learning.eval_run import ObservedClaim
+from engine.learning.golden import (
+    EvidenceExpectation,
+    EvidenceLineage,
+    RequiredClaim,
+)
+from engine.learning.golden import GoldenCase as GoldenCaseV1
+from engine.learning.golden import GoldenSet as GoldenSetV1
+from engine.learning.judges import AnswerJudgeProfile
+from engine.learning.thresholds import DEFAULT_THRESHOLDS_PATH, load_thresholds
 from engine.persistence import (
     DatabaseConfiguration,
     PostgreSQLAccessPolicyControl,
@@ -994,3 +1015,186 @@ def test_dogfood_seed_cli_rolls_back_when_file_import_receiver_conflicts(
                 {"user_id": user_id},
             )
         engine.dispose()
+
+
+@contextmanager
+def _bridged_seam(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Iterator[None]:
+    """Expose the composed dogfood app on a real loopback socket."""
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            length = int(self.headers["Content-Length"])
+            forwarded = client.post(
+                self.path,
+                headers={
+                    "Authorization": self.headers["Authorization"],
+                    "Content-Type": "application/json",
+                    "X-Context-Request-Id": self.headers["X-Context-Request-Id"],
+                },
+                content=self.rfile.read(length),
+            )
+            body = forwarded.content
+            self.send_response(forwarded.status_code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format: str, *args: Any) -> None:
+            del format, args
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = Thread(target=server.serve_forever)
+    thread.start()
+    monkeypatch.setenv(DOGFOOD_SECRET_ENV, SECRET)
+    monkeypatch.setenv(
+        DOGFOOD_BASE_URL_ENV,
+        f"http://127.0.0.1:{server.server_port}",
+    )
+    try:
+        yield
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+
+
+def _executed_golden_set(target: CandidateRef) -> tuple[GoldenSetV1, EvidenceLineage]:
+    lineage = EvidenceLineage(
+        source_ref=target.source_ref,
+        resource_ref=target.resource_ref,
+        revision_ref=target.revision_ref,
+        fragment_ref=target.fragment_ref,
+    )
+    return (
+        GoldenSetV1(
+            name="integration-executed-golden-v1",
+            synthetic=True,
+            cases=(
+                GoldenCaseV1(
+                    case_ref="integration-executed-run",
+                    query=QUERY,
+                    expected_evidence=(
+                        EvidenceExpectation(path="handbook.md", lineage=lineage),
+                    ),
+                    expected_answer="synthetic-expected-answer",
+                    required_claims=(
+                        RequiredClaim(
+                            claim_ref="claim-integration-executed-run",
+                            claim="synthetic-required-claim",
+                            expected_evidence=(lineage,),
+                        ),
+                    ),
+                    answerability="answerable",
+                    slice_name="single_doc",
+                    partition="dev",
+                    topic_cluster="synthetic-topic-a",
+                    hard_negative_evidence=(),
+                ),
+            ),
+        ),
+        lineage,
+    )
+
+
+def _executed_judgments(lineage: EvidenceLineage) -> AnswerJudgments:
+    return AnswerJudgments(
+        answer_judge_profile=AnswerJudgeProfile(
+            model_ref="integration-blind-judge-model",
+            profile_ref="integration-answer-judge-v1",
+        ),
+        cases=(
+            CaseAnswerJudgment(
+                case_ref="integration-executed-run",
+                blind_score=2,
+                critical_contradiction=False,
+                claims=(
+                    ObservedClaim(
+                        claim_ref="claim-integration-executed-run",
+                        cited_evidence=(lineage,),
+                    ),
+                ),
+            ),
+        ),
+    )
+
+
+def test_executed_run_observes_a_clean_report_from_the_real_runtime(
+    request: pytest.FixtureRequest,
+    tmp_path: Path,
+    migration_configuration: DatabaseConfiguration,
+    runtime_configuration: DatabaseConfiguration,
+    control_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+    guarded_worker_engine: Engine,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scenario, user_id, target = _publish(
+        request,
+        tmp_path,
+        migration_configuration,
+        guarded_control_engine,
+        guarded_worker_engine,
+    )
+    configuration = _configuration(scenario, user_id)
+    client = TestClient(
+        create_dogfood_app(
+            configuration,
+            _environment(configuration, runtime_configuration),
+            host="127.0.0.1",
+        )
+    )
+    golden_set, lineage = _executed_golden_set(target)
+    judgments = _executed_judgments(lineage)
+    thresholds = load_thresholds(DEFAULT_THRESHOLDS_PATH)
+
+    with _bridged_seam(client, monkeypatch):
+        report = execute_evaluation_report(
+            golden_set,
+            judgments,
+            thresholds,
+            generated_at=datetime(2026, 7, 30, 12, tzinfo=UTC),
+        )
+
+        assert report["security"] == {
+            "missingContextFallbackCount": 0,
+            "observationState": "observed_clean",
+            "status": "pass",
+            "unauthorizedEvidenceCount": 0,
+            "wrongOrganizationEffectCount": 0,
+        }
+        assert report["status"] == "PENDING_PREREGISTRATION"
+        assert report["run"] == {"executedSeamRef": TRACKED_RUN_SEAM_REF}
+        assert cast(dict[str, Any], report["retrieval"])["macro_evidence_recall"] == 1.0
+        assert cast(dict[str, Any], report["citation"])["status"] == "pass"
+
+        control_engine = create_database_engine(control_configuration)
+        try:
+            PostgreSQLAccessPolicyControl(control_engine).change_access(
+                ResourceAccessRevocation(
+                    organization_id=scenario.organization_id,
+                    resource_ref=target.resource_ref,
+                    principal_ref="principal:file-reader",
+                    expected_access_version=1,
+                )
+            )
+        finally:
+            control_engine.dispose()
+        regressed = execute_evaluation_report(
+            golden_set,
+            judgments,
+            thresholds,
+            generated_at=datetime(2026, 7, 30, 12, 5, tzinfo=UTC),
+        )
+
+    regressed_security = cast(dict[str, Any], regressed["security"])
+    regressed_answer = cast(dict[str, Any], regressed["answer"])
+    assert regressed_security["observationState"] == "observed_clean"
+    assert regressed_security["status"] == "pass"
+    assert cast(dict[str, Any], regressed["retrieval"])["macro_evidence_recall"] == 0.0
+    assert cast(dict[str, Any], regressed["citation"])["status"] == "fail"
+    assert regressed_answer["cases"][0]["refused"] is True
+    assert regressed_answer["cases"][0]["normalized_score"] == 0.0
