@@ -1,0 +1,66 @@
+{
+  "bomFormat": "CycloneDX",
+  "components": [
+    {
+      "bom-ref": "context-engine:third-party:ragflow",
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/infiniflow/ragflow.git#4391e03886b996201f3b8818f671b19eb24d0f7b"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "name": "ragflow",
+      "properties": [
+        {
+          "name": "context-engine:scope",
+          "value": "third_party/ragflow"
+        },
+        {
+          "name": "context-engine:file-sha256",
+          "value": "third_party/ragflow/deepdoc/parser/markdown_parser.py=94c8e2515d05e141fcf65e10336ceca7f9116e54b31a668637ba3f901943cb66"
+        }
+      ],
+      "type": "library",
+      "version": "4391e03886b996201f3b8818f671b19eb24d0f7b"
+    },
+    {
+      "bom-ref": "context-engine:third-party:ragflow:nested:Python-Markdown@3.6",
+      "licenses": [
+        {
+          "license": {
+            "id": "BSD-3-Clause"
+          }
+        }
+      ],
+      "name": "Python-Markdown",
+      "properties": [
+        {
+          "name": "context-engine:license-path",
+          "value": "third_party/ragflow/LICENSE.python-markdown"
+        },
+        {
+          "name": "context-engine:parent-subtree",
+          "value": "third_party/ragflow"
+        }
+      ],
+      "type": "library",
+      "version": "3.6"
+    }
+  ],
+  "metadata": {
+    "component": {
+      "bom-ref": "context-engine:source-tree",
+      "name": "context-engine",
+      "type": "application"
+    }
+  },
+  "specVersion": "1.6",
+  "version": 1
+}
