@@ -44,7 +44,9 @@ from engine.supply import (
     validate_embedding_batch,
     worker_lease_digest,
 )
+from engine.supply.compiler_runner import compile_in_leased_compiler_runner
 from engine.supply.jobs import _require_utc
+from engine.supply.link_graph import extract_revision_links
 
 _CONCURRENT_PUBLICATION_WAIT_SECONDS = 5.0
 _CONCURRENT_PUBLICATION_POLL_SECONDS = 0.01
@@ -296,7 +298,11 @@ class PostgreSQLFileImportWorker:
                 or sha256(source).hexdigest() != redeemed.expected_content_sha256
             ):
                 raise LookupError("accepted File observation changed")
-            outcome = compile_markdown(source, self._config)
+            outcome = (
+                compile_in_leased_compiler_runner(source, self._config)
+                if self._config.version == "markdown-config-v3"
+                else compile_markdown(source, self._config)
+            )
         except LookupError:
             with suppress(WorkNotAvailable):
                 self._fail(redemption.token, claims)
@@ -427,10 +433,21 @@ class PostgreSQLFileImportWorker:
             raise _rejection(token)
         requested_revision_id = self._uuid_factory()
         resource_ref = _resource_ref(redeemed.source_ref, redeemed.path)
-        if document.provenance.is_structural_v2:
+        if document.provenance.is_structural_v2 or document.provenance.is_rich_v3:
             raw_compilation_document = json.loads(
                 canonicalize_parsed_document(document).decode("utf-8")
             )
+            if document.provenance.is_rich_v3:
+                raw_compilation_document["revisionLinks"] = [
+                    {
+                        "kind": link.kind.value,
+                        "targetPath": link.target_path,
+                    }
+                    for link in extract_revision_links(
+                        document,
+                        source_path=redeemed.path.value,
+                    )
+                ]
             compilation_document: str | None = json.dumps(
                 raw_compilation_document,
                 ensure_ascii=False,

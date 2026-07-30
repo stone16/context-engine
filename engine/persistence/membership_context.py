@@ -65,6 +65,7 @@ from engine.runtime.materialized import (
     MaterializedFragmentProjection,
     MaterializedFragmentWindowItem,
     MaterializedFragmentWindowRead,
+    MaterializedOneHopCandidate,
     MaterializedProjectionKind,
     MaterializedProjectionSession,
     MaterializedPublicationTrace,
@@ -1017,6 +1018,67 @@ class _PostgreSQLMaterializedProjectionPort:
         return MaterializedFragmentWindowRead(
             items=tuple(items),
             reauthorization_refs=reauthorization_refs,
+        )
+
+    def discover_one_hop(
+        self,
+        anchors: tuple[CandidateRef, ...],
+        limit: int,
+    ) -> tuple[MaterializedOneHopCandidate, ...]:
+        """Read outgoing and backlink locators from current Revision edges."""
+
+        if type(anchors) is not tuple or any(
+            type(anchor) is not CandidateRef for anchor in anchors
+        ):
+            raise TypeError("one-hop discovery requires exact anchors")
+        if type(limit) is not int or not 1 <= limit <= 64:
+            raise ValueError("one-hop discovery requires a bounded limit")
+        if not anchors:
+            return ()
+        rows = self._connection.execute(
+            text(
+                """
+                SELECT *
+                FROM public.context_runtime_resolve_one_hop_graph(
+                    CAST(:organization_ids AS uuid[]),
+                    CAST(:source_refs AS text[]),
+                    CAST(:resource_refs AS text[]),
+                    CAST(:revision_ids AS uuid[]),
+                    CAST(:fragment_refs AS text[]),
+                    :limit
+                )
+                """
+            ),
+            {
+                "organization_ids": [anchor.organization_id for anchor in anchors],
+                "source_refs": [anchor.source_ref for anchor in anchors],
+                "resource_refs": [anchor.resource_ref for anchor in anchors],
+                "revision_ids": [
+                    _canonical_candidate_revision(anchor.revision_ref)
+                    for anchor in anchors
+                ],
+                "fragment_refs": [anchor.fragment_ref for anchor in anchors],
+                "limit": limit,
+            },
+        )
+        return tuple(
+            MaterializedOneHopCandidate(
+                anchor_ref=CandidateRef(
+                    organization_id=row.anchor_organization_id,
+                    source_ref=row.anchor_source_ref,
+                    resource_ref=row.anchor_resource_ref,
+                    revision_ref=str(row.anchor_revision_id),
+                    fragment_ref=row.anchor_fragment_ref,
+                ),
+                candidate_ref=CandidateRef(
+                    organization_id=row.organization_id,
+                    source_ref=row.source_ref,
+                    resource_ref=row.resource_ref,
+                    revision_ref=str(row.revision_id),
+                    fragment_ref=row.fragment_ref,
+                ),
+            )
+            for row in rows
         )
 
 

@@ -25,6 +25,7 @@ from engine.persistence.configuration import (
     EGRESS_GRANT_DEFINER_ROLE,
     EGRESS_ROLE,
     FILE_DISPATCH_DEFINER_ROLE,
+    GRAPH_DEFINER_ROLE,
     IDENTITY_ROLE,
     LEARNING_ROLE,
     MIGRATOR_ROLE,
@@ -64,6 +65,7 @@ class RoleProvisioningContract:
     security_operator_role: str
     security_operator_password: str
     definer_role: str
+    graph_definer_role: str
     worker_lease_definer_role: str
     file_dispatch_definer_role: str
     context_run_reader_definer_role: str
@@ -88,6 +90,7 @@ class RoleProvisioningContract:
             "release_operator_role",
             "security_operator_role",
             "definer_role",
+            "graph_definer_role",
             "worker_lease_definer_role",
             "file_dispatch_definer_role",
             "context_run_reader_definer_role",
@@ -112,6 +115,7 @@ class RoleProvisioningContract:
             self.release_operator_role,
             self.security_operator_role,
             self.definer_role,
+            self.graph_definer_role,
             self.worker_lease_definer_role,
             self.file_dispatch_definer_role,
             self.context_run_reader_definer_role,
@@ -122,7 +126,7 @@ class RoleProvisioningContract:
             self.action_prepare_definer_role,
             self.action_execute_definer_role,
         }
-        if len(security_roles) != 19:
+        if len(security_roles) != 20:
             raise ValueError("provisioned database roles must be distinct")
         if type(self.postgres_port) is not int or not 1 <= self.postgres_port <= 65535:
             raise ValueError("postgres_port must be a valid TCP port")
@@ -231,6 +235,7 @@ def _contract_from_environment(
             "CONTEXT_ENGINE_SECURITY_OPERATOR_PASSWORD"
         ],
         definer_role=ACCESS_POLICY_DEFINER_ROLE,
+        graph_definer_role=GRAPH_DEFINER_ROLE,
         worker_lease_definer_role=WORKER_LEASE_DEFINER_ROLE,
         file_dispatch_definer_role=FILE_DISPATCH_DEFINER_ROLE,
         context_run_reader_definer_role=CONTEXT_RUN_READER_DEFINER_ROLE,
@@ -354,6 +359,7 @@ def provision_security_roles(
     _create_role_if_missing(connection, contract.release_operator_role)
     _create_role_if_missing(connection, contract.security_operator_role)
     _create_role_if_missing(connection, contract.definer_role)
+    _create_role_if_missing(connection, contract.graph_definer_role)
     _create_role_if_missing(connection, contract.worker_lease_definer_role)
     _create_role_if_missing(connection, contract.file_dispatch_definer_role)
     _create_role_if_missing(connection, contract.context_run_reader_definer_role)
@@ -491,6 +497,12 @@ def provision_security_roles(
         sql.SQL(
             "ALTER ROLE {} WITH NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE "
             "NOINHERIT NOREPLICATION NOBYPASSRLS"
+        ).format(sql.Identifier(contract.graph_definer_role))
+    )
+    connection.execute(
+        sql.SQL(
+            "ALTER ROLE {} WITH NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE "
+            "NOINHERIT NOREPLICATION NOBYPASSRLS"
         ).format(sql.Identifier(contract.worker_lease_definer_role))
     )
     connection.execute(
@@ -521,6 +533,7 @@ def provision_security_roles(
     _revoke_roles_granted_to(connection, contract.release_operator_role)
     _revoke_roles_granted_to(connection, contract.security_operator_role)
     _revoke_roles_granted_to(connection, contract.definer_role)
+    _revoke_roles_granted_to(connection, contract.graph_definer_role)
     _revoke_roles_granted_to(connection, contract.worker_lease_definer_role)
     _revoke_roles_granted_to(connection, contract.file_dispatch_definer_role)
     _revoke_roles_granted_to(connection, contract.context_run_reader_definer_role)
@@ -539,6 +552,7 @@ def provision_security_roles(
     _revoke_members_of(connection, contract.release_operator_role)
     _revoke_members_of(connection, contract.security_operator_role)
     _revoke_members_of(connection, contract.definer_role)
+    _revoke_members_of(connection, contract.graph_definer_role)
     _revoke_members_of(connection, contract.worker_lease_definer_role)
     _revoke_members_of(connection, contract.file_dispatch_definer_role)
     _revoke_members_of(connection, contract.context_run_reader_definer_role)
@@ -551,6 +565,12 @@ def provision_security_roles(
     connection.execute(
         sql.SQL("GRANT {} TO {} WITH ADMIN FALSE, INHERIT FALSE, SET TRUE").format(
             sql.Identifier(contract.definer_role),
+            sql.Identifier(contract.migrator_role),
+        )
+    )
+    connection.execute(
+        sql.SQL("GRANT {} TO {} WITH ADMIN FALSE, INHERIT FALSE, SET TRUE").format(
+            sql.Identifier(contract.graph_definer_role),
             sql.Identifier(contract.migrator_role),
         )
     )
@@ -619,6 +639,7 @@ def provision_security_roles(
         contract.release_operator_role,
         contract.security_operator_role,
         contract.definer_role,
+        contract.graph_definer_role,
         contract.worker_lease_definer_role,
         contract.file_dispatch_definer_role,
         contract.context_run_reader_definer_role,

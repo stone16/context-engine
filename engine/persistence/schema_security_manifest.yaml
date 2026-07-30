@@ -1,5 +1,5 @@
 {
-  "manifestVersion": "42.0.0",
+  "manifestVersion": "43.0.0",
   "controlOperations": [
     {
       "name": "register_file_source",
@@ -526,7 +526,8 @@
       "name": "publish_file_import",
       "versionedDatabaseFunctions": {
         "markdown-config-v1": "context_worker_publish_file_import_v2",
-        "markdown-config-v2": "context_worker_publish_structural_file_import_v2"
+        "markdown-config-v2": "context_worker_publish_structural_file_import_v2",
+        "markdown-config-v3": "context_worker_prepare_file_publication"
       },
       "role": "context_engine_worker",
       "definerRole": "context_engine_worker_lease_definer",
@@ -553,6 +554,7 @@
         "context_resource",
         "context_revision",
         "file_revision_snapshot",
+        "revision_link_edge",
         "context_fragment",
         "revision_publication_event",
         "exact_phrase_candidate",
@@ -996,6 +998,14 @@
             "using": "(organization_id = (NULLIF(current_setting('app.organization_id'::text, true), ''::text))::uuid)"
           },
           {
+            "name": "membership_graph_definer_select",
+            "command": "SELECT",
+            "roles": [
+              "context_engine_graph_definer"
+            ],
+            "using": "(organization_id = (NULLIF(current_setting('app.organization_id'::text, true), ''::text))::uuid)"
+          },
+          {
             "name": "membership_migrator_administration",
             "command": "ALL",
             "roles": [
@@ -1054,6 +1064,9 @@
         ],
         "context_engine_context_run_reader_definer": [
           "SELECT"
+        ],
+        "context_engine_graph_definer": [
+          "SELECT organization_id, user_id, membership_id, membership_version, status, valid_from, valid_until"
         ]
       },
       "partitions": [],
@@ -2149,6 +2162,14 @@
             "withCheck": "(organization_id = (NULLIF(current_setting('app.organization_id'::text, true), ''::text))::uuid)"
           },
           {
+            "name": "context_resource_graph_definer_select",
+            "command": "SELECT",
+            "roles": [
+              "context_engine_graph_definer"
+            ],
+            "using": "(organization_id = (NULLIF(current_setting('app.organization_id'::text, true), ''::text))::uuid)"
+          },
+          {
             "name": "context_resource_file_import_definer_select",
             "command": "SELECT",
             "roles": [
@@ -2228,6 +2249,9 @@
         "context_engine_learning": [],
         "context_engine_release_operator": [
           "EXECUTE context_release_observe_candidate_snapshot"
+        ],
+        "context_engine_graph_definer": [
+          "SELECT organization_id, source_ref, resource_ref, active_revision_id, tombstoned"
         ]
       },
       "partitions": [],
@@ -6898,6 +6922,14 @@
             "withCheck": "(organization_id = (NULLIF(current_setting('app.organization_id'::text, true), ''::text))::uuid)"
           },
           {
+            "name": "context_fragment_graph_definer_select",
+            "command": "SELECT",
+            "roles": [
+              "context_engine_graph_definer"
+            ],
+            "using": "(organization_id = (NULLIF(current_setting('app.organization_id'::text, true), ''::text))::uuid)"
+          },
+          {
             "name": "context_fragment_file_noop_definer_select",
             "command": "SELECT",
             "roles": [
@@ -6943,6 +6975,9 @@
         ],
         "context_engine_citation_definer": [
           "SELECT"
+        ],
+        "context_engine_graph_definer": [
+          "SELECT organization_id, resource_ref, revision_id, fragment_ref, ordinal"
         ]
       },
       "partitions": [],
@@ -8141,6 +8176,14 @@
               "context_engine_file_dispatch_definer"
             ],
             "using": "true"
+          },
+          {
+            "name": "file_acquisition_graph_definer_select",
+            "command": "SELECT",
+            "roles": [
+              "context_engine_graph_definer"
+            ],
+            "using": "(organization_id = (NULLIF(current_setting('app.organization_id'::text, true), ''::text))::uuid)"
           }
         ]
       },
@@ -8176,6 +8219,9 @@
         "context_engine_worker_lease_definer": [
           "SELECT",
           "INSERT"
+        ],
+        "context_engine_graph_definer": [
+          "SELECT organization_id, source_id, acquisition_id, relative_path"
         ]
       },
       "partitions": [],
@@ -9274,6 +9320,14 @@
               "context_engine_worker_lease_definer"
             ],
             "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"
+          },
+          {
+            "name": "file_revision_snapshot_graph_definer_select",
+            "command": "SELECT",
+            "roles": [
+              "context_engine_graph_definer"
+            ],
+            "using": "(organization_id = (NULLIF(current_setting('app.organization_id'::text, true), ''::text))::uuid)"
           }
         ]
       },
@@ -9302,6 +9356,9 @@
         "context_engine_worker_lease_definer": [
           "SELECT",
           "INSERT"
+        ],
+        "context_engine_graph_definer": [
+          "SELECT organization_id, acquisition_id, resource_ref, revision_id"
         ]
       },
       "partitions": [],
@@ -9316,6 +9373,150 @@
         "DB-004",
         "DB-008",
         "WORKER-LEASE-007"
+      ]
+    },
+    {
+      "name": "revision_link_edge",
+      "classification": "tenant_owned",
+      "nonOwnerEvidence": {
+        "evidenceId": "PG-ONE-HOP-GRAPH-151",
+        "selector": {
+          "table": "revision_link_edge"
+        }
+      },
+      "purpose": "Immutable content-free outgoing Revision link structure; carries no content, Article authorization, Fragment ACL, or delivery decision",
+      "organizationColumn": "organization_id",
+      "organizationInclusiveKeys": [
+        {
+          "name": "pk_revision_link_edge",
+          "kind": "primary_key",
+          "columns": [
+            "organization_id",
+            "source_resource_ref",
+            "source_revision_id",
+            "ordinal"
+          ]
+        },
+        {
+          "name": "uq_revision_link_edge_target",
+          "kind": "unique",
+          "columns": [
+            "organization_id",
+            "source_resource_ref",
+            "source_revision_id",
+            "target_path"
+          ]
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_revision_link_edge_revision_same_organization",
+          "columns": [
+            "organization_id",
+            "source_resource_ref",
+            "source_revision_id"
+          ],
+          "references": {
+            "table": "context_revision",
+            "columns": [
+              "organization_id",
+              "resource_ref",
+              "revision_id"
+            ]
+          }
+        }
+      ],
+      "checkConstraints": [
+        {
+          "name": "ck_revision_link_edge_ordinal",
+          "expression": "ordinal >= 0"
+        },
+        {
+          "name": "ck_revision_link_edge_kind",
+          "expression": "link_kind IN ('wikilink', 'embed', 'markdown_link')"
+        },
+        {
+          "name": "ck_revision_link_edge_target_path",
+          "expression": "target_path is one bounded canonical Markdown path with no empty, dot, dot-dot, or backslash component"
+        }
+      ],
+      "rowLevelSecurity": {
+        "enabled": true,
+        "forced": true,
+        "policies": [
+          {
+            "name": "revision_link_edge_graph_select",
+            "command": "SELECT",
+            "roles": [
+              "context_engine_graph_definer"
+            ],
+            "using": "(organization_id = (NULLIF(current_setting('app.organization_id'::text, true), ''::text))::uuid)"
+          },
+          {
+            "name": "revision_link_edge_migrator_administration",
+            "command": "ALL",
+            "roles": [
+              "context_engine_migrator"
+            ],
+            "using": "true",
+            "withCheck": "true"
+          },
+          {
+            "name": "revision_link_edge_worker_insert",
+            "command": "INSERT",
+            "roles": [
+              "context_engine_worker_lease_definer"
+            ],
+            "withCheck": "(organization_id = (NULLIF(current_setting('app.organization_id'::text, true), ''::text))::uuid)"
+          }
+        ]
+      },
+      "immutableRows": {
+        "trigger": "revision_link_edge_immutable",
+        "function": "context_content_reject_mutation",
+        "events": [
+          "UPDATE",
+          "DELETE"
+        ],
+        "sqlstate": "55000"
+      },
+      "functionOnlyMutation": {
+        "databaseFunction": "context_worker_prepare_file_publication",
+        "definerRole": "context_engine_worker_lease_definer",
+        "directTableMutationAllowed": false
+      },
+      "permittedOperations": {
+        "context_engine_runtime": [
+          "EXECUTE context_runtime_resolve_one_hop_graph"
+        ],
+        "context_engine_worker": [
+          "EXECUTE context_worker_prepare_file_publication"
+        ],
+        "context_engine_worker_lease_definer": [
+          "INSERT"
+        ],
+        "context_engine_graph_definer": [
+          "SELECT"
+        ]
+      },
+      "retention": {
+        "sourceContent": "none",
+        "authorizationDecision": "none",
+        "oldRevisionBackfill": "none"
+      },
+      "partitions": [],
+      "securityInvariantIds": [
+        "TENANT-OWNERSHIP-001",
+        "TENANT-FK-002",
+        "RLS-FAIL-CLOSED-003",
+        "INDEX-NOT-AUTHORITY-005"
+      ],
+      "negativeTestIds": [
+        "DB-001",
+        "DB-004",
+        "DB-008",
+        "PG-ONE-HOP-GRAPH-151",
+        "SDK-ONE-HOP-GRAPH-151"
       ]
     },
     {

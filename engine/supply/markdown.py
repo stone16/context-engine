@@ -14,7 +14,7 @@ import rfc8785
 MARKDOWN_COMPILER_V1_VERSION: Final = "context-engine-markdown-v1"
 MARKDOWN_COMPILER_VERSION: Final = "context-engine-markdown-v2"
 MARKDOWN_COMPILER_V3_VERSION: Final = "context-engine-markdown-v3"
-ACTIVE_FILE_IMPORT_MARKDOWN_CONFIG_VERSION: Final = "markdown-config-v1"
+ACTIVE_FILE_IMPORT_MARKDOWN_CONFIG_VERSION: Final = "markdown-config-v3"
 MARKDOWN_CANONICALIZATION_V1_PROFILE: Final = "markdown-heading-paragraph-v1"
 MARKDOWN_CANONICALIZATION_PROFILE: Final = "markdown-structural-units-v2"
 MARKDOWN_CONTENT_HASH_PROFILE: Final = "sha256-canonical-utf8-v1"

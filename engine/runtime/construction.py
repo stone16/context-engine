@@ -19,6 +19,7 @@ from engine.runtime.authorized_ranking import (
     UNIFORM_RANKER_WEIGHTS,
     RankerWeights,
     join_authorized_ranking,
+    rank_authorized_one_hop,
     select_authorized_ranking,
 )
 from engine.runtime.budget import PackageBudget, effective_package_budget
@@ -121,9 +122,11 @@ from engine.runtime.invocation import AuthenticatedInvocation
 from engine.runtime.materialized import (
     CandidateDiscoverySession,
     MaterializedFragmentLocator,
+    MaterializedOneHopCandidate,
     MaterializedProjectionSession,
     _close_candidate_discovery_session,
     _construct_candidate_discovery_session,
+    _discover_materialized_one_hop,
     _locate_materialized_fragment,
     _project_materialized_fragment,
     _read_materialized_fragment_window,
@@ -231,6 +234,10 @@ class AuthorizationDecision:
     provenance_receipt: DecisionProvenanceReceipt
     projections: tuple[AuthorizedProjection, ...]
     _projection_scope: _AuthorizationKernelScope | None = field(repr=False)
+    expanded_candidate_refs: frozenset[CandidateRef] = field(
+        default_factory=frozenset,
+        repr=False,
+    )
     _effective_budget_limits: tuple[int, int, int, int] = field(
         init=False,
         repr=False,
@@ -662,6 +669,18 @@ def _decision_integrity_snapshot(decision: AuthorizationDecision) -> tuple[objec
         policy.effective_scope.digest,
         tuple(getattr(provenance, item.name) for item in fields(provenance)),
         projections,
+        tuple(
+            sorted(
+                (
+                    candidate.organization_id.bytes,
+                    candidate.source_ref,
+                    candidate.resource_ref,
+                    candidate.revision_ref,
+                    candidate.fragment_ref,
+                )
+                for candidate in decision.expanded_candidate_refs
+            )
+        ),
     )
 
 
@@ -776,9 +795,18 @@ class SealedRuntimeSelector:
             _decision_integrity_material(decision),
         ):
             raise ValueError("authorization decision integrity validation failed")
+        ranked_refs = frozenset(
+            evidence.candidate_ref for evidence in rank_evidence
+        )
+        eligible_projections = tuple(
+            projection
+            for projection in decision.projections
+            if projection.candidate_ref not in decision.expanded_candidate_refs
+            or projection.candidate_ref in ranked_refs
+        )
         selected = select_authorized_ranking(
             join_authorized_ranking(
-                decision.projections,
+                eligible_projections,
                 rank_evidence,
                 ranker_weights=(
                     ranker_weights.values if ranker_weights is not None else None
@@ -973,6 +1001,95 @@ class AuthorizationKernel:
             ),
         )
         return decision
+
+    def authorize_one_hop(
+        self,
+        invocation: AuthenticatedInvocation,
+        preparation: PreparedAcquireAuthorization,
+        decision: AuthorizationDecision,
+        candidates: tuple[MaterializedOneHopCandidate, ...],
+        *,
+        projection_session: MaterializedProjectionSession,
+    ) -> AuthorizationDecision:
+        """Admit inherited and cross-Article graph candidates through the Kernel."""
+
+        if type(preparation) is not PreparedAcquireAuthorization:
+            raise TypeError("Kernel graph expansion requires prepared authorization")
+        if type(decision) is not AuthorizationDecision:
+            raise TypeError("Kernel graph expansion requires AuthorizationDecision")
+        if type(candidates) is not tuple or any(
+            type(candidate) is not MaterializedOneHopCandidate
+            for candidate in candidates
+        ):
+            raise TypeError("Kernel graph expansion requires exact graph candidates")
+        anchors = {
+            projection.candidate_ref: projection for projection in decision.projections
+        }
+        inherited: list[AuthorizedProjection] = []
+        reauthorization_refs: list[CandidateRef] = []
+        for candidate in candidates:
+            anchor = anchors.get(candidate.anchor_ref)
+            if anchor is None:
+                raise ValueError("graph candidate is not rooted in this decision")
+            candidate_ref = candidate.candidate_ref
+            anchor_ref = candidate.anchor_ref
+            same_article = (
+                candidate_ref.organization_id == anchor_ref.organization_id
+                and candidate_ref.source_ref == anchor_ref.source_ref
+                and candidate_ref.resource_ref == anchor_ref.resource_ref
+            )
+            if not same_article:
+                reauthorization_refs.append(candidate_ref)
+                continue
+            if candidate_ref.revision_ref != anchor_ref.revision_ref:
+                continue
+            locator = _locate_materialized_fragment(
+                projection_session,
+                candidate_ref,
+            )
+            if locator is None or not _locator_matches_candidate(
+                locator,
+                candidate_ref,
+            ):
+                continue
+            projection = _project_materialized_fragment(
+                projection_session,
+                locator,
+            )
+            if projection is None:
+                continue
+            inherited.append(
+                _construct_inherited_authorized_projection(
+                    anchor=anchor,
+                    candidate_ref=candidate_ref,
+                    body=projection.rendered_body,
+                    projected_field_refs=projection.projected_field_refs,
+                )
+            )
+        reauthorized, _scope = self._authorize_and_project(
+            invocation,
+            preparation.policy_receipt,
+            preparation.provenance_receipt,
+            tuple(reauthorization_refs),
+            projection_session,
+            kernel_scope=decision._projection_scope,
+        )
+        expanded = replace(
+            decision,
+            projections=decision.projections + tuple(inherited) + reauthorized,
+            expanded_candidate_refs=frozenset(
+                projection.candidate_ref for projection in (*inherited, *reauthorized)
+            ),
+        )
+        object.__setattr__(
+            expanded,
+            "_integrity_seal",
+            _issue_selection_authority_seal(
+                _kernel_selection_authority(self),
+                _decision_integrity_material(expanded),
+            ),
+        )
+        return expanded
 
     def authorize_open_citation(
         self,
@@ -1282,6 +1399,8 @@ class AuthorizationKernel:
         provenance_receipt: DecisionProvenanceReceipt,
         candidates: tuple[CandidateRef, ...],
         projection_session: MaterializedProjectionSession | None,
+        *,
+        kernel_scope: _AuthorizationKernelScope | None = None,
     ) -> tuple[tuple[AuthorizedProjection, ...], _AuthorizationKernelScope | None]:
         if not candidates or not policy_receipt.effective_scope.targets:
             return (), None
@@ -1290,7 +1409,8 @@ class AuthorizationKernel:
                 "candidate discovery requires same-transaction projection session"
             )
 
-        kernel_scope = _open_authorization_kernel_scope()
+        selected_kernel_scope = kernel_scope or _open_authorization_kernel_scope()
+        owns_scope = kernel_scope is None
         try:
             projections = []
             ordered_candidates = sorted(
@@ -1321,7 +1441,7 @@ class AuthorizationKernel:
                 if field_projection is None:
                     continue
                 projection = _construct_authorized_projection(
-                    kernel_scope=kernel_scope,
+                    kernel_scope=selected_kernel_scope,
                     candidate_ref=candidate,
                     body=field_projection.rendered_body,
                     projected_field_refs=(field_projection.projected_field_refs),
@@ -1344,9 +1464,10 @@ class AuthorizationKernel:
                     ),
                 )
                 projections.append(projection)
-            return tuple(projections), kernel_scope
+            return tuple(projections), selected_kernel_scope
         except BaseException:
-            _close_authorization_kernel_scope(kernel_scope)
+            if owns_scope:
+                _close_authorization_kernel_scope(selected_kernel_scope)
             raise
 
 
@@ -1730,6 +1851,40 @@ class Runtime:
                     invocation.user_actor.materialized_projection_session
                 ),
             )
+            projection_session = invocation.user_actor.materialized_projection_session
+            if projection_session is not None and decision.projections:
+                one_hop = _discover_materialized_one_hop(
+                    projection_session,
+                    decision.projections,
+                    min(64, self._candidate_submission_limit),
+                )
+                main_candidate_refs = set(candidate_refs)
+                one_hop = tuple(
+                    item
+                    for item in one_hop
+                    if item.candidate_ref not in main_candidate_refs
+                )
+                if one_hop:
+                    main_projection_count = len(decision.projections)
+                    decision = self._kernel.authorize_one_hop(
+                        invocation,
+                        preparation,
+                        decision,
+                        one_hop,
+                        projection_session=projection_session,
+                    )
+                    graph_evidence = rank_authorized_one_hop(
+                        request.need.query,
+                        tuple(
+                            projection
+                            for projection in decision.projections[
+                                main_projection_count:
+                            ]
+                            if projection.candidate_ref
+                            in decision.expanded_candidate_refs
+                        ),
+                    )
+                    rank_evidence = rank_evidence + graph_evidence
         else:
             assert isinstance(request, OpenCitation)
             citation_session = invocation.user_actor.citation_open_session
