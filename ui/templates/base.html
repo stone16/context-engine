@@ -20,6 +20,11 @@
         <a{% if active_page == 'profiles' %} aria-current="page"{% endif %} href="/ui/profiles">Profiles</a>
         <a{% if active_page == 'feedback' %} aria-current="page"{% endif %} href="/ui/feedback">Feedback</a>
       </nav>
+      {% if active_page %}
+      <form class="logout" method="post" action="/ui/logout">
+        <button type="submit">End session</button>
+      </form>
+      {% endif %}
     </header>
     <main id="main" tabindex="-1">
       {% block content %}{% endblock %}

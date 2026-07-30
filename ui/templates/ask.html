@@ -20,19 +20,20 @@
     {% if result.hits %}
       <ol class="hit-list">
       {% for hit in result.hits %}
-        <li>
-          <details class="evidence-block">
+        <li class="evidence-block">
+          <h3>Answer Block {{ hit.ordinal }}</h3>
+          <div class="block-body">{{ hit.body }}</div>
+          <details>
             <summary>
-              <span>Answer Block {{ hit.ordinal }}</span>
               <span class="summary-action">Flip to evidence</span>
             </summary>
-            <div class="block-body">{{ hit.body }}</div>
             <dl class="lineage">
               <div><dt>Article</dt><dd><code>{{ hit.evidence.resource_ref }}</code></dd></div>
               <div><dt>Revision</dt><dd><code>{{ hit.evidence.revision_ref }}</code></dd></div>
               <div><dt>Fragment</dt><dd><code>{{ hit.evidence.fragment_ref }}</code></dd></div>
               <div><dt>Evidence</dt><dd><code>{{ hit.evidence.evidence_ref }}</code></dd></div>
               <div><dt>Citation</dt><dd><code>{{ hit.evidence.citation_open_ref }}</code></dd></div>
+              <div><dt>Policy Epoch</dt><dd>{{ hit.evidence.policy_epoch }}</dd></div>
             </dl>
           </details>
         </li>

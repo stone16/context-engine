@@ -2,16 +2,25 @@
 
 from __future__ import annotations
 
+import hmac
 from pathlib import Path
 from typing import Final
 from urllib.parse import parse_qs
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from ui.public_http import PublicHttpRefusal, request_public_json, resolve_query
+from ui.public_http import (
+    UI_SESSION_COOKIE,
+    UI_SESSION_TTL,
+    PublicHttpRefusal,
+    issue_ui_session,
+    open_citation,
+    request_public_json,
+    resolve_query,
+)
 from ui.views import (
     PublicDocumentInvalid,
     article_view,
@@ -20,11 +29,23 @@ from ui.views import (
     import_preview_view,
     overview_view,
     profiles_view,
+    verify_citation_lineage,
 )
 
 UI_ROOT: Final = Path(__file__).resolve().parent
 MAX_FORM_BYTES: Final = 8_192
 MAX_QUERY_CHARACTERS: Final = 2_000
+_UI_PATHS: Final = frozenset(
+    {
+        "/ui",
+        "/ui/articles",
+        "/ui/ask",
+        "/ui/feedback",
+        "/ui/hit-test",
+        "/ui/import",
+        "/ui/profiles",
+    }
+)
 templates = Jinja2Templates(directory=UI_ROOT / "templates")
 
 
@@ -63,9 +84,40 @@ def _refusal(
             "category": category,
             "query": query,
             "title": "Request refused",
-            "return_path": return_path,
+            "return_label": (
+                "Authenticate"
+                if category == "session_unavailable"
+                else "Return to form"
+            ),
+            "return_path": (
+                "/ui/login" if category == "session_unavailable" else return_path
+            ),
         },
         status_code=status_code,
+    )
+
+
+async def _session_refusal(
+    request: Request,
+    *,
+    bearer_token: str | None,
+    active_page: str,
+    return_path: str,
+) -> HTMLResponse | None:
+    outcome = await request_public_json(
+        request,
+        bearer_token=bearer_token,
+        method="GET",
+        path="/v0/ui/session",
+    )
+    if not isinstance(outcome, PublicHttpRefusal):
+        return None
+    return _refusal(
+        request,
+        category=outcome.category,
+        status_code=outcome.status_code,
+        active_page=active_page,
+        return_path=return_path,
     )
 
 
@@ -129,13 +181,106 @@ def install_ui(app: FastAPI, *, bearer_token: str | None) -> None:
         name="ui-static",
     )
 
+    @app.get("/ui/login", include_in_schema=False, response_class=HTMLResponse)
+    async def login_form(request: Request) -> HTMLResponse:
+        return _html(
+            request,
+            "login.html",
+            {
+                "active_page": "",
+                "next_path": "/ui",
+                "title": "Authenticate",
+            },
+        )
+
+    @app.post("/ui/login", include_in_schema=False, response_model=None)
+    async def login(request: Request) -> HTMLResponse | RedirectResponse:
+        fields = await _urlencoded_form(request, maximum_fields=2)
+        credential = None if fields is None else fields.get("credential")
+        next_path = "/ui" if fields is None else fields.get("next", "/ui")
+        if (
+            fields is None
+            or set(fields) != {"credential", "next"}
+            or credential is None
+            or bearer_token is None
+            or not hmac.compare_digest(credential, bearer_token)
+            or next_path not in _UI_PATHS
+        ):
+            return _refusal(
+                request,
+                category="session_unavailable",
+                status_code=401,
+                active_page="",
+                return_path="/ui/login",
+            )
+        response = RedirectResponse(next_path, status_code=303)
+        response.set_cookie(
+            UI_SESSION_COOKIE,
+            issue_ui_session(bearer_token),
+            httponly=True,
+            max_age=int(UI_SESSION_TTL.total_seconds()),
+            path="/ui",
+            samesite="strict",
+            secure=request.url.scheme == "https",
+        )
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @app.post("/ui/logout", include_in_schema=False)
+    async def logout(request: Request) -> RedirectResponse:
+        del request
+        response = RedirectResponse("/ui/login", status_code=303)
+        response.delete_cookie(UI_SESSION_COOKIE, path="/ui")
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
     @app.get("/ui", include_in_schema=False, response_class=HTMLResponse)
     async def overview(request: Request) -> HTMLResponse:
+        refusal = await _session_refusal(
+            request,
+            bearer_token=bearer_token,
+            active_page="overview",
+            return_path="/ui",
+        )
+        if refusal is not None:
+            return refusal
+        return _html(
+            request,
+            "overview.html",
+            {
+                "active_page": "overview",
+                "current": None,
+                "title": "Operational overview",
+            },
+        )
+
+    @app.post("/ui/overview", include_in_schema=False, response_class=HTMLResponse)
+    async def load_overview(request: Request) -> HTMLResponse:
+        fields = await _urlencoded_form(request, maximum_fields=1)
+        control_credential = (
+            None if fields is None else fields.get("controlCredential")
+        )
+        if (
+            fields is None
+            or set(fields) != {"controlCredential"}
+            or control_credential is None
+            or not control_credential
+            or control_credential.isspace()
+            or len(control_credential) > 4096
+        ):
+            return _refusal(
+                request,
+                category="control_authority_unavailable",
+                status_code=401,
+                active_page="overview",
+                return_path="/ui",
+            )
         outcome = await request_public_json(
             request,
             bearer_token=bearer_token,
             method="GET",
             path="/v0/ui/overview",
+            control_credential=control_credential,
         )
         if isinstance(outcome, PublicHttpRefusal):
             return _refusal(
@@ -167,6 +312,14 @@ def install_ui(app: FastAPI, *, bearer_token: str | None) -> None:
 
     @app.get("/ui/import", include_in_schema=False, response_class=HTMLResponse)
     async def import_form(request: Request) -> HTMLResponse:
+        refusal = await _session_refusal(
+            request,
+            bearer_token=bearer_token,
+            active_page="import",
+            return_path="/ui/import",
+        )
+        if refusal is not None:
+            return refusal
         return _html(
             request,
             "import.html",
@@ -184,12 +337,15 @@ def install_ui(app: FastAPI, *, bearer_token: str | None) -> None:
         response_class=HTMLResponse,
     )
     async def preview_import(request: Request) -> HTMLResponse:
-        fields = await _urlencoded_form(request, maximum_fields=2)
+        fields = await _urlencoded_form(request, maximum_fields=3)
         source_ref = None if fields is None else fields.get("sourceRef")
         path = None if fields is None else fields.get("path")
+        control_credential = (
+            None if fields is None else fields.get("controlCredential")
+        )
         if (
             fields is None
-            or set(fields) != {"sourceRef", "path"}
+            or set(fields) != {"sourceRef", "path", "controlCredential"}
             or source_ref is None
             or not source_ref
             or len(source_ref) > 36
@@ -197,6 +353,10 @@ def install_ui(app: FastAPI, *, bearer_token: str | None) -> None:
             or not path
             or path.isspace()
             or len(path) > 255
+            or control_credential is None
+            or not control_credential
+            or control_credential.isspace()
+            or len(control_credential) > 4096
         ):
             return _refusal(
                 request,
@@ -211,6 +371,7 @@ def install_ui(app: FastAPI, *, bearer_token: str | None) -> None:
             method="POST",
             path="/v0/ui/import/preview",
             body={"sourceRef": source_ref, "path": path},
+            control_credential=control_credential,
         )
         if isinstance(outcome, PublicHttpRefusal):
             return _refusal(
@@ -247,14 +408,21 @@ def install_ui(app: FastAPI, *, bearer_token: str | None) -> None:
         response_class=HTMLResponse,
     )
     async def confirm_import(request: Request) -> HTMLResponse:
-        fields = await _urlencoded_form(request, maximum_fields=1)
+        fields = await _urlencoded_form(request, maximum_fields=2)
         preview_token = None if fields is None else fields.get("previewToken")
+        control_credential = (
+            None if fields is None else fields.get("controlCredential")
+        )
         if (
             fields is None
-            or set(fields) != {"previewToken"}
+            or set(fields) != {"previewToken", "controlCredential"}
             or preview_token is None
             or not preview_token
             or len(preview_token) > 4096
+            or control_credential is None
+            or not control_credential
+            or control_credential.isspace()
+            or len(control_credential) > 4096
         ):
             return _refusal(
                 request,
@@ -269,6 +437,7 @@ def install_ui(app: FastAPI, *, bearer_token: str | None) -> None:
             method="POST",
             path="/v0/ui/import/confirm",
             body={"previewToken": preview_token},
+            control_credential=control_credential,
         )
         if isinstance(outcome, PublicHttpRefusal):
             return _refusal(
@@ -300,6 +469,14 @@ def install_ui(app: FastAPI, *, bearer_token: str | None) -> None:
 
     @app.get("/ui/articles", include_in_schema=False, response_class=HTMLResponse)
     async def article_form(request: Request) -> HTMLResponse:
+        refusal = await _session_refusal(
+            request,
+            bearer_token=bearer_token,
+            active_page="articles",
+            return_path="/ui/articles",
+        )
+        if refusal is not None:
+            return refusal
         return _html(
             request,
             "articles.html",
@@ -318,15 +495,22 @@ def install_ui(app: FastAPI, *, bearer_token: str | None) -> None:
         response_class=HTMLResponse,
     )
     async def view_article(request: Request) -> HTMLResponse:
-        fields = await _urlencoded_form(request, maximum_fields=1)
+        fields = await _urlencoded_form(request, maximum_fields=2)
         resource_ref = None if fields is None else fields.get("resourceRef")
+        control_credential = (
+            None if fields is None else fields.get("controlCredential")
+        )
         if (
             fields is None
-            or set(fields) != {"resourceRef"}
+            or set(fields) != {"resourceRef", "controlCredential"}
             or resource_ref is None
             or not resource_ref
             or resource_ref.isspace()
             or len(resource_ref) > 512
+            or control_credential is None
+            or not control_credential
+            or control_credential.isspace()
+            or len(control_credential) > 4096
         ):
             return _refusal(
                 request,
@@ -341,6 +525,7 @@ def install_ui(app: FastAPI, *, bearer_token: str | None) -> None:
             method="POST",
             path="/v0/ui/articles/view",
             body={"resourceRef": resource_ref},
+            control_credential=control_credential,
         )
         if isinstance(outcome, PublicHttpRefusal):
             return _refusal(
@@ -378,10 +563,13 @@ def install_ui(app: FastAPI, *, bearer_token: str | None) -> None:
         response_class=HTMLResponse,
     )
     async def preview_article_policy(request: Request) -> HTMLResponse:
-        fields = await _urlencoded_form(request, maximum_fields=3)
+        fields = await _urlencoded_form(request, maximum_fields=4)
         resource_ref = None if fields is None else fields.get("resourceRef")
         policy_kind = None if fields is None else fields.get("policyKind")
         raw_groups = None if fields is None else fields.get("groupRefs")
+        control_credential = (
+            None if fields is None else fields.get("controlCredential")
+        )
         group_refs = (
             []
             if raw_groups is None or not raw_groups
@@ -389,7 +577,8 @@ def install_ui(app: FastAPI, *, bearer_token: str | None) -> None:
         )
         if (
             fields is None
-            or set(fields) != {"resourceRef", "policyKind", "groupRefs"}
+            or set(fields)
+            != {"resourceRef", "policyKind", "groupRefs", "controlCredential"}
             or resource_ref is None
             or not resource_ref
             or resource_ref.isspace()
@@ -397,6 +586,10 @@ def install_ui(app: FastAPI, *, bearer_token: str | None) -> None:
             or policy_kind not in {"private", "organization", "groups"}
             or any(not value or len(value) > 256 for value in group_refs)
             or (policy_kind == "groups") != bool(group_refs)
+            or control_credential is None
+            or not control_credential
+            or control_credential.isspace()
+            or len(control_credential) > 4096
         ):
             return _refusal(
                 request,
@@ -415,6 +608,7 @@ def install_ui(app: FastAPI, *, bearer_token: str | None) -> None:
                 "policyKind": policy_kind,
                 "groupRefs": group_refs,
             },
+            control_credential=control_credential,
         )
         if isinstance(outcome, PublicHttpRefusal):
             return _refusal(
@@ -469,14 +663,21 @@ def install_ui(app: FastAPI, *, bearer_token: str | None) -> None:
         response_class=HTMLResponse,
     )
     async def confirm_article_policy(request: Request) -> HTMLResponse:
-        fields = await _urlencoded_form(request, maximum_fields=1)
+        fields = await _urlencoded_form(request, maximum_fields=2)
         preview_token = None if fields is None else fields.get("previewToken")
+        control_credential = (
+            None if fields is None else fields.get("controlCredential")
+        )
         if (
             fields is None
-            or set(fields) != {"previewToken"}
+            or set(fields) != {"previewToken", "controlCredential"}
             or preview_token is None
             or not preview_token
             or len(preview_token) > 4096
+            or control_credential is None
+            or not control_credential
+            or control_credential.isspace()
+            or len(control_credential) > 4096
         ):
             return _refusal(
                 request,
@@ -491,6 +692,7 @@ def install_ui(app: FastAPI, *, bearer_token: str | None) -> None:
             method="POST",
             path="/v0/ui/articles/confirm",
             body={"previewToken": preview_token},
+            control_credential=control_credential,
         )
         if isinstance(outcome, PublicHttpRefusal):
             return _refusal(
@@ -531,6 +733,14 @@ def install_ui(app: FastAPI, *, bearer_token: str | None) -> None:
 
     @app.get("/ui/hit-test", include_in_schema=False, response_class=HTMLResponse)
     async def hit_test_form(request: Request) -> HTMLResponse:
+        refusal = await _session_refusal(
+            request,
+            bearer_token=bearer_token,
+            active_page="hit-test",
+            return_path="/ui/hit-test",
+        )
+        if refusal is not None:
+            return refusal
         return _html(
             request,
             "hit_test.html",
@@ -544,6 +754,14 @@ def install_ui(app: FastAPI, *, bearer_token: str | None) -> None:
 
     @app.get("/ui/ask", include_in_schema=False, response_class=HTMLResponse)
     async def ask_form(request: Request) -> HTMLResponse:
+        refusal = await _session_refusal(
+            request,
+            bearer_token=bearer_token,
+            active_page="ask",
+            return_path="/ui/ask",
+        )
+        if refusal is not None:
+            return refusal
         return _html(
             request,
             "ask.html",
@@ -581,11 +799,49 @@ def install_ui(app: FastAPI, *, bearer_token: str | None) -> None:
                 return_path="/ui/ask",
             )
         try:
-            result = ask_view(outcome, query=query)
+            pending = ask_view(outcome, query=query)
         except PublicDocumentInvalid:
             return _refusal(
                 request,
                 category="citation_lineage_unavailable",
+                status_code=503,
+                query=query,
+                active_page="ask",
+                return_path="/ui/ask",
+            )
+        opened: dict[str, dict[str, object]] = {}
+        for hit in pending.hits:
+            locator = hit.evidence.citation_open_ref
+            if locator is None:
+                return _refusal(
+                    request,
+                    category="citation_unavailable",
+                    status_code=503,
+                    query=query,
+                    active_page="ask",
+                    return_path="/ui/ask",
+                )
+            citation = await open_citation(
+                request,
+                bearer_token=bearer_token,
+                citation_open_ref=locator,
+            )
+            if isinstance(citation, PublicHttpRefusal):
+                return _refusal(
+                    request,
+                    category="citation_unavailable",
+                    status_code=citation.status_code,
+                    query=query,
+                    active_page="ask",
+                    return_path="/ui/ask",
+                )
+            opened[locator] = citation
+        try:
+            result = verify_citation_lineage(pending, opened)
+        except PublicDocumentInvalid:
+            return _refusal(
+                request,
+                category="citation_unavailable",
                 status_code=503,
                 query=query,
                 active_page="ask",
@@ -740,6 +996,14 @@ def install_ui(app: FastAPI, *, bearer_token: str | None) -> None:
 
     @app.get("/ui/feedback", include_in_schema=False, response_class=HTMLResponse)
     async def feedback_form(request: Request) -> HTMLResponse:
+        refusal = await _session_refusal(
+            request,
+            bearer_token=bearer_token,
+            active_page="feedback",
+            return_path="/ui/feedback",
+        )
+        if refusal is not None:
+            return refusal
         return _html(
             request,
             "feedback.html",

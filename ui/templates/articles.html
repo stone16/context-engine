@@ -19,6 +19,8 @@
 <form method="post" action="/ui/articles/view" class="work-form">
   <label for="resource-ref">Exact Article ref</label>
   <input id="resource-ref" name="resourceRef" maxlength="512" required>
+  <label for="article-read-control-credential">Control operator credential</label>
+  <input id="article-read-control-credential" name="controlCredential" type="password" required autocomplete="off">
   <button class="button button-primary" type="submit">View visibility</button>
 </form>
 {% endif %}
@@ -49,12 +51,11 @@
   <div class="button-row">
     <form method="post" action="/ui/articles/confirm">
       <input type="hidden" name="previewToken" value="{{ change.preview_token }}">
+      <label for="article-confirm-control-credential">Control operator credential</label>
+      <input id="article-confirm-control-credential" name="controlCredential" type="password" required autocomplete="off">
       <button class="button button-primary" type="submit">Confirm and advance epoch</button>
     </form>
-    <form method="post" action="/ui/articles/view">
-      <input type="hidden" name="resourceRef" value="{{ article.resource_ref }}">
-      <button class="button button-secondary" type="submit">Cancel</button>
-    </form>
+    <a class="button button-secondary" href="/ui/articles">Cancel</a>
   </div>
 </section>
 {% else %}
@@ -69,6 +70,8 @@
   </select>
   <label for="group-refs">Group refs <span>(comma-separated; Groups only)</span></label>
   <input id="group-refs" name="groupRefs" maxlength="2048">
+  <label for="article-change-control-credential">Control operator credential</label>
+  <input id="article-change-control-credential" name="controlCredential" type="password" required autocomplete="off">
   <button class="button button-primary" type="submit">Preview change</button>
 </form>
 {% endif %}

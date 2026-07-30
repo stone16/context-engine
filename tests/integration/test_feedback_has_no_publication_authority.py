@@ -21,6 +21,7 @@ from tests.integration.test_context_run_schema import (
 from tests.integration.test_context_run_schema import (
     lineage_identity as _lineage_identity,
 )
+from tests.support.ui import authenticate_ui
 
 pytestmark = pytest.mark.integration
 TOKEN = "ui-feedback-evidence-token"
@@ -74,6 +75,7 @@ def test_feedback_has_no_publication_authority(
                 ),
             )
         )
+        authenticate_ui(client, TOKEN)
 
         response = client.post(
             "/ui/feedback",

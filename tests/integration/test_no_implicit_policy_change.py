@@ -11,6 +11,7 @@ from sqlalchemy import Engine, text
 from adapters.http.app import create_app
 from adapters.http.authentication import VerifiedAuthenticationContext
 from adapters.http.ui_api import PostgreSQLUiApi
+from engine.control import ControlOperation
 from engine.persistence import (
     DatabaseConfiguration,
     PostgreSQLMembershipAuthority,
@@ -25,9 +26,11 @@ from tests.support.article_access_policy import (
     set_tenant_default,
 )
 from tests.support.file_imports import NOW
+from tests.support.ui import authenticate_ui, ui_control_authority
 
 pytestmark = pytest.mark.integration
 TOKEN = "ui-policy-confirm-token"
+CONTROL_TOKEN = "ui-policy-control-token"
 
 
 class _Authenticator:
@@ -103,6 +106,17 @@ def test_no_implicit_policy_change(
             source_ref=source_ref,
             resource_ref=resource_ref,
         )
+        control_authority, control_gate = ui_control_authority(
+            organization_id=organization_id,
+            credential=CONTROL_TOKEN,
+            operations=frozenset(
+                {
+                    ControlOperation.READ_ARTICLE_POLICY,
+                    ControlOperation.CHANGE_ARTICLE_POLICY,
+                }
+            ),
+            clock=lambda: NOW,
+        )
         client = TestClient(
             create_app(
                 authenticator=_Authenticator(
@@ -111,35 +125,43 @@ def test_no_implicit_policy_change(
                     membership_id,
                 ),
                 ui_bearer_token=TOKEN,
+                ui_control_authority=control_authority,
                 ui_api=PostgreSQLUiApi(
                     PostgreSQLMembershipAuthority(guarded_runtime_engine),
                     guarded_control_engine,
                     preview_key=b"p" * 32,
+                    control_gate=control_gate,
                     clock=lambda: NOW,
                 ),
             )
         )
+        authenticate_ui(client, TOKEN)
         before = _policy_state(migration_engine, organization_id, resource_ref)
 
         viewed = client.post(
             "/ui/articles/view",
-            content=f"resourceRef={resource_ref}",
+            content=f"resourceRef={resource_ref}&controlCredential={CONTROL_TOKEN}",
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
         previewed = client.post(
             "/ui/articles/preview",
-            content=(f"resourceRef={resource_ref}&policyKind=organization&groupRefs="),
+            content=(
+                f"resourceRef={resource_ref}&policyKind=organization&groupRefs=&"
+                f"controlCredential={CONTROL_TOKEN}"
+            ),
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
         assert viewed.status_code == 200
         assert previewed.status_code == 200
+        assert CONTROL_TOKEN not in viewed.text
+        assert CONTROL_TOKEN not in previewed.text
         assert "Preview · no historical change yet" in previewed.text
         assert _policy_state(migration_engine, organization_id, resource_ref) == before
         assert policy_epoch(migration_engine, organization_id) == before[1]
 
         cancelled = client.post(
             "/ui/articles/view",
-            content=f"resourceRef={resource_ref}",
+            content=f"resourceRef={resource_ref}&controlCredential={CONTROL_TOKEN}",
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
         assert cancelled.status_code == 200
@@ -152,17 +174,22 @@ def test_no_implicit_policy_change(
         assert match is not None
         confirmed = client.post(
             "/ui/articles/confirm",
-            content=f"previewToken={match.group(1)}",
+            content=(
+                f"previewToken={match.group(1)}&controlCredential={CONTROL_TOKEN}"
+            ),
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
         assert confirmed.status_code == 200
         assert "Article policy changed" in confirmed.text
+        assert CONTROL_TOKEN not in confirmed.text
         after = _policy_state(migration_engine, organization_id, resource_ref)
         assert after == (before[0] + 1, before[1] + 1, "organization")
 
         replay = client.post(
             "/ui/articles/confirm",
-            content=f"previewToken={match.group(1)}",
+            content=(
+                f"previewToken={match.group(1)}&controlCredential={CONTROL_TOKEN}"
+            ),
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
         assert replay.status_code == 503

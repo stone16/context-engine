@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from ui.views import PublicDocumentInvalid, ask_view
+from ui.views import PublicDocumentInvalid, ask_view, verify_citation_lineage
 
 
 def _answer_document(*, citation_open_ref: str | None) -> dict[str, object]:
@@ -34,9 +34,12 @@ def _answer_document(*, citation_open_ref: str | None) -> dict[str, object]:
 
 
 def test_citation_lineage_resolvable() -> None:
-    answer = ask_view(
-        _answer_document(citation_open_ref="cor_authorized"),
-        query="What changed?",
+    answer = verify_citation_lineage(
+        ask_view(
+            _answer_document(citation_open_ref="cor_authorized"),
+            query="What changed?",
+        ),
+        {"cor_authorized": _answer_document(citation_open_ref="cor_authorized")},
     )
 
     assert answer.hits[0].evidence.resource_ref == "article:handbook"
@@ -54,3 +57,13 @@ def test_unresolvable_citation_never_becomes_a_clean_answer(
             _answer_document(citation_open_ref=citation_open_ref),
             query="What changed?",
         )
+
+
+def test_nonblank_but_unresolvable_locator_is_refused() -> None:
+    answer = ask_view(
+        _answer_document(citation_open_ref="cor_missing"),
+        query="What changed?",
+    )
+
+    with pytest.raises(PublicDocumentInvalid):
+        verify_citation_lineage(answer, {})

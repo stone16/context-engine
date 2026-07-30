@@ -21,7 +21,13 @@ from sqlalchemy.exc import SQLAlchemyError
 from adapters.file_source import FileRootRegistry
 from adapters.http.authentication import VerifiedAuthenticationContext
 from adapters.parsers.markdown import compile_markdown
-from engine.control import FileImportPath, FileRootRef
+from engine.control import (
+    ControlOperation,
+    FileImportPath,
+    FileRootRef,
+    MinimalUiControlGate,
+    TrustedControlCall,
+)
 from engine.persistence.membership_context import (
     MembershipAuthorityUnavailable,
     MembershipIdentity,
@@ -118,16 +124,135 @@ class ArticlePolicyPreviewWire(ArticleWire):
     groupRefs: list[str] = Field(default_factory=list, max_length=100)
 
 
+class UiSessionResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    state: Literal["active"]
+
+
+class UiProfileIdentityResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    profileRef: str = Field(strict=True, min_length=1, max_length=512)
+    digest: str = Field(strict=True, pattern=r"^[0-9a-f]{64}$")
+
+
+class UiProfilesResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    releaseGeneration: int = Field(strict=True, ge=1)
+    releaseManifestRef: str = Field(strict=True, min_length=1, max_length=512)
+    contentProfile: UiProfileIdentityResponse
+    indexProfile: UiProfileIdentityResponse
+    runtimeProfile: UiProfileIdentityResponse
+
+
+class UiSourceHealthResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    activeResourceCount: int = Field(strict=True, ge=0)
+    displayName: str = Field(strict=True, min_length=1, max_length=200)
+    lastSuccessfulAcquisitionAgeSeconds: int | None = Field(
+        default=None, strict=True, ge=0
+    )
+    refusalCategories: list[str] = Field(max_length=100)
+    sourceRef: str = Field(strict=True, min_length=1, max_length=512)
+    status: Literal["ready", "refused", "waiting_first_success"]
+
+
+class UiOverviewResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    releaseGeneration: int = Field(strict=True, ge=1)
+    releaseManifestRef: str = Field(strict=True, min_length=1, max_length=512)
+    sources: list[UiSourceHealthResponse]
+
+
+class UiImportFragmentResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    fragmentRef: str = Field(strict=True, min_length=1, max_length=512)
+    text: str = Field(strict=True, min_length=1)
+
+
+class UiImportPreviewResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    compilationDigest: str = Field(strict=True, pattern=r"^[0-9a-f]{64}$")
+    fragmentDigest: str = Field(strict=True, pattern=r"^[0-9a-f]{64}$")
+    fragments: list[UiImportFragmentResponse] = Field(min_length=1)
+    path: str = Field(strict=True, min_length=1, max_length=255)
+    previewToken: str = Field(strict=True, min_length=1, max_length=4096)
+    sourceRef: str = Field(strict=True, min_length=1, max_length=512)
+
+
+class UiImportConfirmResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    jobRef: str = Field(strict=True, min_length=1, max_length=512)
+    state: Literal["queued"]
+
+
+class UiArticleResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    effectiveGroupRefs: list[str] = Field(max_length=100)
+    effectivePolicyKind: Literal["private", "organization", "groups"] | None
+    localGroupRefs: list[str] = Field(max_length=100)
+    localPolicyKind: Literal["private", "organization", "groups"] | None
+    policyEpoch: int = Field(strict=True, ge=1)
+    policyVersion: int = Field(strict=True, ge=1)
+    published: bool = Field(strict=True)
+    resolutionRung: Literal[
+        "explicit_article", "source_default", "tenant_default", "isolation"
+    ]
+    resourceRef: str = Field(strict=True, min_length=1, max_length=512)
+    sourceRef: str = Field(strict=True, min_length=1, max_length=512)
+
+
+class UiArticlePolicyProposalResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    groupRefs: list[str] = Field(max_length=100)
+    policyKind: Literal["private", "organization", "groups"]
+
+
+class UiArticlePolicyPreviewResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    current: UiArticleResponse
+    proposed: UiArticlePolicyProposalResponse
+    previewToken: str = Field(strict=True, min_length=1, max_length=4096)
+
+
+class UiArticlePolicyConfirmResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    policyEpoch: int = Field(strict=True, ge=1)
+    policyVersion: int = Field(strict=True, ge=1)
+    state: Literal["changed"]
+
+
+class UiFeedbackResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    feedbackRef: str = Field(strict=True, min_length=1, max_length=512)
+    state: Literal["recorded"]
+
+
 class UiApi(Protocol):
     """Narrow backing seam; methods return only closed public JSON documents."""
 
-    def overview(self, actor: UiActor) -> dict[str, object]: ...
+    def overview(
+        self, actor: UiActor, control_call: TrustedControlCall
+    ) -> dict[str, object]: ...
 
     def profiles(self, actor: UiActor) -> dict[str, object]: ...
 
     def preview_import(
         self,
         actor: UiActor,
+        control_call: TrustedControlCall,
         *,
         source_ref: UUID,
         path: str,
@@ -136,15 +261,23 @@ class UiApi(Protocol):
     def confirm_import(
         self,
         actor: UiActor,
+        control_call: TrustedControlCall,
         *,
         preview_token: str,
     ) -> dict[str, object]: ...
 
-    def article(self, actor: UiActor, *, resource_ref: str) -> dict[str, object]: ...
+    def article(
+        self,
+        actor: UiActor,
+        control_call: TrustedControlCall,
+        *,
+        resource_ref: str,
+    ) -> dict[str, object]: ...
 
     def preview_article_policy(
         self,
         actor: UiActor,
+        control_call: TrustedControlCall,
         *,
         resource_ref: str,
         policy_kind: str,
@@ -154,6 +287,7 @@ class UiApi(Protocol):
     def confirm_article_policy(
         self,
         actor: UiActor,
+        control_call: TrustedControlCall,
         *,
         preview_token: str,
     ) -> dict[str, object]: ...
@@ -166,8 +300,10 @@ class UiApi(Protocol):
 
 
 class RefusingUiApi:
-    def overview(self, actor: UiActor) -> dict[str, object]:
-        del actor
+    def overview(
+        self, actor: UiActor, control_call: TrustedControlCall
+    ) -> dict[str, object]:
+        del actor, control_call
         raise UiApiUnavailable
 
     def profiles(self, actor: UiActor) -> dict[str, object]:
@@ -175,36 +311,56 @@ class RefusingUiApi:
         raise UiApiUnavailable
 
     def preview_import(
-        self, actor: UiActor, *, source_ref: UUID, path: str
+        self,
+        actor: UiActor,
+        control_call: TrustedControlCall,
+        *,
+        source_ref: UUID,
+        path: str,
     ) -> dict[str, object]:
-        del actor, source_ref, path
+        del actor, control_call, source_ref, path
         raise UiApiUnavailable
 
     def confirm_import(
-        self, actor: UiActor, *, preview_token: str
+        self,
+        actor: UiActor,
+        control_call: TrustedControlCall,
+        *,
+        preview_token: str,
     ) -> dict[str, object]:
-        del actor, preview_token
+        del actor, control_call, preview_token
         raise UiApiUnavailable
 
-    def article(self, actor: UiActor, *, resource_ref: str) -> dict[str, object]:
-        del actor, resource_ref
+    def article(
+        self,
+        actor: UiActor,
+        control_call: TrustedControlCall,
+        *,
+        resource_ref: str,
+    ) -> dict[str, object]:
+        del actor, control_call, resource_ref
         raise UiApiUnavailable
 
     def preview_article_policy(
         self,
         actor: UiActor,
+        control_call: TrustedControlCall,
         *,
         resource_ref: str,
         policy_kind: str,
         group_refs: tuple[str, ...],
     ) -> dict[str, object]:
-        del actor, resource_ref, policy_kind, group_refs
+        del actor, control_call, resource_ref, policy_kind, group_refs
         raise UiApiUnavailable
 
     def confirm_article_policy(
-        self, actor: UiActor, *, preview_token: str
+        self,
+        actor: UiActor,
+        control_call: TrustedControlCall,
+        *,
+        preview_token: str,
     ) -> dict[str, object]:
-        del actor, preview_token
+        del actor, control_call, preview_token
         raise UiApiUnavailable
 
     def capture_feedback(
@@ -300,6 +456,7 @@ class PostgreSQLUiApi:
         control_engine: Engine,
         *,
         preview_key: bytes,
+        control_gate: MinimalUiControlGate | None = None,
         roots: FileRootRegistry | None = None,
         file_import_service_principal_id: UUID | None = None,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
@@ -317,6 +474,7 @@ class PostgreSQLUiApi:
             raise TypeError("UI File receiver must be UUID")
         self._membership_authority = membership_authority
         self._control_engine = control_engine
+        self._control_gate = control_gate
         self._roots = roots
         self._receiver_id = file_import_service_principal_id
         self._clock = clock
@@ -365,7 +523,30 @@ class PostgreSQLUiApi:
         except (AssertionError, SQLAlchemyError):
             raise UiApiUnavailable from None
 
-    def overview(self, actor: UiActor) -> dict[str, object]:
+    def _consume_control(
+        self,
+        actor: UiActor,
+        control_call: TrustedControlCall,
+        operation: ControlOperation,
+    ) -> None:
+        gate = self._control_gate
+        if gate is None:
+            raise UiApiUnavailable
+        try:
+            gate.consume(
+                control_call,
+                organization_id=actor.organization_id,
+                operation=operation,
+            )
+        except Exception:
+            raise UiApiUnavailable from None
+
+    def overview(
+        self, actor: UiActor, control_call: TrustedControlCall
+    ) -> dict[str, object]:
+        self._consume_control(
+            actor, control_call, ControlOperation.READ_SOURCE_PROGRESS
+        )
         with self._verified(actor) as verification:
             release = verification.active_runtime_release
             if release is None:
@@ -426,6 +607,9 @@ class PostgreSQLUiApi:
                         {
                             "activeResourceCount": first["active_resource_count"],
                             "displayName": source["display_name"],
+                            "lastSuccessfulAcquisitionAgeSeconds": first[
+                                "last_successful_acquisition_age_seconds"
+                            ],
                             "refusalCategories": categories,
                             "sourceRef": str(source["source_id"]),
                             "status": status,
@@ -462,10 +646,12 @@ class PostgreSQLUiApi:
     def preview_import(
         self,
         actor: UiActor,
+        control_call: TrustedControlCall,
         *,
         source_ref: UUID,
         path: str,
     ) -> dict[str, object]:
+        self._consume_control(actor, control_call, ControlOperation.IMPORT_FILE)
         roots = self._roots
         if roots is None or self._receiver_id is None:
             raise UiApiUnavailable
@@ -540,9 +726,11 @@ class PostgreSQLUiApi:
     def confirm_import(
         self,
         actor: UiActor,
+        control_call: TrustedControlCall,
         *,
         preview_token: str,
     ) -> dict[str, object]:
+        self._consume_control(actor, control_call, ControlOperation.IMPORT_FILE)
         receiver_id = self._receiver_id
         if receiver_id is None:
             raise UiApiUnavailable
@@ -623,7 +811,17 @@ class PostgreSQLUiApi:
             raise UiApiUnavailable
         return {"jobRef": str(row["job_id"]), "state": "queued"}
 
-    def article(self, actor: UiActor, *, resource_ref: str) -> dict[str, object]:
+    def article(
+        self,
+        actor: UiActor,
+        control_call: TrustedControlCall,
+        *,
+        resource_ref: str,
+    ) -> dict[str, object]:
+        self._consume_control(actor, control_call, ControlOperation.READ_ARTICLE_POLICY)
+        return self._article(actor, resource_ref=resource_ref)
+
+    def _article(self, actor: UiActor, *, resource_ref: str) -> dict[str, object]:
         if (
             type(resource_ref) is not str
             or not resource_ref
@@ -653,11 +851,15 @@ class PostgreSQLUiApi:
     def preview_article_policy(
         self,
         actor: UiActor,
+        control_call: TrustedControlCall,
         *,
         resource_ref: str,
         policy_kind: str,
         group_refs: tuple[str, ...],
     ) -> dict[str, object]:
+        self._consume_control(
+            actor, control_call, ControlOperation.CHANGE_ARTICLE_POLICY
+        )
         if policy_kind not in {"private", "organization", "groups"}:
             raise UiApiUnavailable
         normalized = tuple(sorted(set(group_refs)))
@@ -673,7 +875,7 @@ class PostgreSQLUiApi:
             )
         ):
             raise UiApiUnavailable
-        current = self.article(actor, resource_ref=resource_ref)
+        current = self._article(actor, resource_ref=resource_ref)
         payload = {
             "expectedPolicyEpoch": current["policyEpoch"],
             "expectedPolicyVersion": current["policyVersion"],
@@ -694,9 +896,13 @@ class PostgreSQLUiApi:
     def confirm_article_policy(
         self,
         actor: UiActor,
+        control_call: TrustedControlCall,
         *,
         preview_token: str,
     ) -> dict[str, object]:
+        self._consume_control(
+            actor, control_call, ControlOperation.CHANGE_ARTICLE_POLICY
+        )
         payload = self._preview_codec.verify(
             preview_token,
             kind="article_policy",

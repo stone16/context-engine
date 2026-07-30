@@ -23,6 +23,12 @@ from applications.file_root_configuration import (
     WORKER_FILE_ROOTS_ENV,
     file_roots,
 )
+from applications.operator_authentication import (
+    CONTROL_OPERATOR_SECRET_ENV,
+    LocalOperatorConfiguration,
+    LocalOperatorConfigurationUnavailable,
+)
+from engine.control import MinimalUiControlGate
 from engine.persistence import (
     DatabaseConfigurationError,
     DatabasePurpose,
@@ -269,12 +275,26 @@ def create_dogfood_app(
     from adapters.http.ui_api import PostgreSQLUiApi
 
     roots = None
+    control_authority = None
+    control_gate = None
+
+    def ui_clock() -> datetime:
+        return datetime.now(UTC)
+
     try:
         if environment.get(WORKER_FILE_ROOTS_ENV) is not None:
             roots = file_roots(environment)
         raw_receiver = environment.get(DOGFOOD_FILE_IMPORT_RECEIVER_ENV)
         receiver_id = None if raw_receiver is None else UUID(raw_receiver)
-    except (TypeError, ValueError):
+        if environment.get(CONTROL_OPERATOR_SECRET_ENV) is not None:
+            operator_configuration = LocalOperatorConfiguration.load(environment)
+            if operator_configuration is None:
+                raise LocalOperatorConfigurationUnavailable
+            control_authority = operator_configuration.authorities(
+                clock=ui_clock
+            ).control
+            control_gate = MinimalUiControlGate(control_authority, clock=ui_clock)
+    except (LocalOperatorConfigurationUnavailable, TypeError, ValueError):
         runtime_engine.dispose()
         control_engine.dispose()
         if roots is not None:
@@ -301,14 +321,17 @@ def create_dogfood_app(
         runtime=runtime,
         runtime_delivery_activation=_construct_runtime_delivery_activation(),
         ui_bearer_token=configuration.secret,
+        ui_control_authority=control_authority,
         ui_api=PostgreSQLUiApi(
             membership_authority,
             control_engine,
             preview_key=sha256(
                 _UI_PREVIEW_DERIVATION_DOMAIN + configuration.secret.encode("utf-8")
             ).digest(),
+            control_gate=control_gate,
             roots=roots,
             file_import_service_principal_id=receiver_id,
+            clock=ui_clock,
         ),
     )
     app.add_event_handler("shutdown", runtime_engine.dispose)

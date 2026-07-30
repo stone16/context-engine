@@ -33,6 +33,7 @@ class HitView:
     ordinal: int
     body: str
     evidence: EvidenceView
+    score_status: str = "not_exposed_by_rank_free_public_contract"
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,6 +65,7 @@ class SourceHealthView:
     display_name: str
     status: str
     active_resource_count: int
+    last_successful_acquisition_age_seconds: int | None
     refusal_categories: tuple[str, ...]
 
 
@@ -193,6 +195,38 @@ def ask_view(document: dict[str, object], *, query: str) -> HitTestView:
     return view
 
 
+def verify_citation_lineage(
+    answer: HitTestView,
+    opened: dict[str, dict[str, object]],
+) -> HitTestView:
+    """Require every locator to resolve to the exact rendered Article lineage."""
+
+    expected_refs = {
+        hit.evidence.citation_open_ref
+        for hit in answer.hits
+        if hit.evidence.citation_open_ref is not None
+    }
+    if set(opened) != expected_refs:
+        raise PublicDocumentInvalid
+    for hit in answer.hits:
+        locator = hit.evidence.citation_open_ref
+        if locator is None:
+            raise PublicDocumentInvalid
+        resolved = hit_test_view(opened[locator], query=answer.query)
+        if len(resolved.hits) != 1:
+            raise PublicDocumentInvalid
+        evidence = resolved.hits[0].evidence
+        if (
+            evidence.source_ref != hit.evidence.source_ref
+            or evidence.resource_ref != hit.evidence.resource_ref
+            or evidence.revision_ref != hit.evidence.revision_ref
+            or evidence.fragment_ref != hit.evidence.fragment_ref
+            or evidence.policy_epoch != hit.evidence.policy_epoch
+        ):
+            raise PublicDocumentInvalid
+    return answer
+
+
 def _profile_identity(document: object) -> ProfileIdentityView:
     if type(document) is not dict:
         raise PublicDocumentInvalid
@@ -226,11 +260,13 @@ def overview_view(document: dict[str, object]) -> OverviewView:
         if type(item) is not dict:
             raise PublicDocumentInvalid
         count = item.get("activeResourceCount")
+        age = item.get("lastSuccessfulAcquisitionAgeSeconds")
         categories = item.get("refusalCategories")
         status = _required_text(item, "status")
         if (
             type(count) is not int
             or count < 0
+            or (age is not None and (type(age) is not int or age < 0))
             or type(categories) is not list
             or any(type(category) is not str or not category for category in categories)
             or status not in {"ready", "refused", "waiting_first_success"}
@@ -242,6 +278,7 @@ def overview_view(document: dict[str, object]) -> OverviewView:
                 display_name=_required_text(item, "displayName"),
                 status=status,
                 active_resource_count=count,
+                last_successful_acquisition_age_seconds=age,
                 refusal_categories=tuple(categories),
             )
         )

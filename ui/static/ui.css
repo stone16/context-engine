@@ -47,16 +47,19 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
 nav { display: flex; flex-wrap: wrap; gap: 8px 20px; margin-top: 16px; }
 nav a { color: var(--muted-foreground); min-height: 44px; padding: 8px 0; }
 nav a[aria-current="page"] { color: var(--foreground); text-decoration-thickness: 2px; }
+.logout { margin-top: 20px; }
+.logout button { background: var(--secondary); color: var(--secondary-foreground); }
 main { margin: 0 auto; max-width: 1120px; padding: 64px 24px; }
 footer { border-top: 1px solid var(--border); color: var(--muted-foreground); padding: 24px; }
 .page-heading { max-width: 72ch; margin-bottom: 40px; }
 .eyebrow { color: var(--muted-foreground); font: 500 13px/1.4 var(--font-mono); margin: 0 0 8px; }
 h1 { font-size: clamp(2rem, 5vw, 2.375rem); letter-spacing: -0.02em; line-height: 1.12; margin: 0; }
 h2, h3 { line-height: 1.25; }
-.work-form { display: grid; gap: 12px; max-width: 760px; margin-bottom: 48px; }
+.work-form, .work-surface { display: grid; gap: 12px; max-width: 760px; margin-bottom: 48px; }
 label { font-weight: 600; }
 textarea { background: var(--card); border: 1px solid var(--border); border-radius: 5px; color: var(--foreground); font: inherit; min-height: 112px; padding: 12px; resize: vertical; }
 input, select { background: var(--card); border: 1px solid var(--border); border-radius: 5px; color: var(--foreground); font: inherit; min-height: 44px; padding: 8px 12px; }
+button { border: 0; border-radius: 5px; cursor: pointer; font: 600 15px/1 var(--font-sans); min-height: 44px; padding: 0 20px; }
 fieldset { border: 1px solid var(--border); border-radius: 5px; display: grid; gap: 8px; margin: 0; padding: 16px; }
 fieldset input { min-height: auto; }
 .profile-list { margin-bottom: 48px; }
@@ -79,8 +82,17 @@ fieldset input { min-height: auto; }
 dt { color: var(--muted-foreground); }
 dd { margin: 0; min-width: 0; }
 code { font: 13px/1.55 var(--font-mono); overflow-wrap: anywhere; }
+.submitted-input { font: 13px/1.55 var(--font-mono); overflow-wrap: anywhere; white-space: pre-wrap; }
 .state { background: var(--muted); max-width: 760px; }
 .state h1, .state h2, .state h3 { margin-top: 0; }
+
+@media (min-width: 1024px) {
+  body { display: grid; grid-template-columns: 240px minmax(0, 1fr); grid-template-rows: minmax(100vh, auto) auto; }
+  .site-header { border-bottom: 0; border-right: 1px solid var(--border); grid-column: 1; grid-row: 1 / 3; }
+  nav { flex-direction: column; }
+  main { grid-column: 2; grid-row: 1; width: 100%; }
+  footer { grid-column: 2; grid-row: 2; }
+}
 
 @media (max-width: 767px) {
   main { padding: 40px 16px; }

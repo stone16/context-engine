@@ -33,6 +33,8 @@
   <div class="button-row">
     <form method="post" action="/ui/import/confirm">
       <input type="hidden" name="previewToken" value="{{ preview.preview_token }}">
+      <label for="confirm-control-credential">Control operator credential</label>
+      <input id="confirm-control-credential" name="controlCredential" type="password" required autocomplete="off">
       <button class="button button-primary" type="submit">Confirm exact import</button>
     </form>
     <a class="button button-secondary" href="/ui/import">Cancel</a>
@@ -44,6 +46,8 @@
   <input id="source-ref" name="sourceRef" maxlength="36" required>
   <label for="path">Configured-root Markdown path</label>
   <input id="path" name="path" maxlength="255" placeholder="handbook.md" required>
+  <label for="import-control-credential">Control operator credential</label>
+  <input id="import-control-credential" name="controlCredential" type="password" required autocomplete="off">
   <button class="button button-primary" type="submit">Compile preview</button>
 </form>
 {% endif %}

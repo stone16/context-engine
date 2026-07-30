@@ -11,6 +11,7 @@ from tests.integration.test_runtime_authorized_evidence_integration import (
     SeededAuthenticator,
     _new_fixture,
 )
+from tests.support.ui import authenticate_ui
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 
@@ -32,13 +33,15 @@ class _FeedbackApi(RefusingUiApi):
 def test_feedback_has_no_publication_authority() -> None:
     fixture = _new_fixture().org_a
     api = _FeedbackApi()
-    response = TestClient(
+    client = TestClient(
         create_app(
             authenticator=SeededAuthenticator(fixture, token="feedback-token"),
             ui_bearer_token="feedback-token",
             ui_api=api,
         )
-    ).post(
+    )
+    authenticate_ui(client, "feedback-token")
+    response = client.post(
         "/ui/feedback",
         content="runRef=run_authorized&rating=helpful&note=Clear+lineage",
         headers={"Content-Type": "application/x-www-form-urlencoded"},

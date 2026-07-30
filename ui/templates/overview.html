@@ -1,10 +1,11 @@
 {% extends "base.html" %}
 {% block content %}
 <header class="page-heading">
-  <p class="eyebrow">Release generation {{ current.release_generation }}</p>
+  <p class="eyebrow">{% if current %}Release generation {{ current.release_generation }}{% else %}Control-authorized operational evidence{% endif %}</p>
   <h1>Operational overview</h1>
   <p>Current Source health, ingest counts, and the exact promoted Release lineage.</p>
 </header>
+{% if current %}
 <section aria-labelledby="release-heading">
   <h2 id="release-heading">Active Release</h2>
   <dl class="lineage">
@@ -25,6 +26,7 @@
         <dl class="lineage">
           <div><dt>Source</dt><dd><code>{{ source.source_ref }}</code></dd></div>
           <div><dt>Active Articles</dt><dd>{{ source.active_resource_count }}</dd></div>
+          <div><dt>Last success age</dt><dd>{% if source.last_successful_acquisition_age_seconds is not none %}{{ source.last_successful_acquisition_age_seconds }} seconds{% else %}never{% endif %}</dd></div>
           {% if source.refusal_categories %}
           <div><dt>Refusal categories</dt><dd>{{ source.refusal_categories|join(', ') }}</dd></div>
           {% endif %}
@@ -39,4 +41,11 @@
     </div>
   {% endif %}
 </section>
+{% else %}
+<form method="post" action="/ui/overview" class="work-form">
+  <label for="control-credential">Control operator credential</label>
+  <input id="control-credential" name="controlCredential" type="password" required autocomplete="off">
+  <button class="button button-primary" type="submit">Load current evidence</button>
+</form>
+{% endif %}
 {% endblock %}

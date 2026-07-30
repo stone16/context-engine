@@ -13,7 +13,7 @@ from adapters.http.app import create_app
 from adapters.http.authentication import VerifiedAuthenticationContext
 from adapters.http.ui_api import PostgreSQLUiApi
 from adapters.parsers.markdown import compile_markdown
-from engine.control import PreparedFileImport
+from engine.control import ControlOperation, PreparedFileImport
 from engine.persistence import (
     DatabaseConfiguration,
     PostgreSQLMembershipAuthority,
@@ -28,9 +28,11 @@ from tests.support.file_imports import (
     prepare_file_import_scenario,
     run_file_import,
 )
+from tests.support.ui import authenticate_ui, ui_control_authority
 
 pytestmark = pytest.mark.integration
 TOKEN = "ui-import-confirm-token"
+CONTROL_TOKEN = "ui-import-control-token"
 
 
 class _Authenticator:
@@ -83,10 +85,17 @@ def test_import_preview_requires_confirm(
                     "membership_id": scenario.membership_id,
                 },
             ).scalar_one()
+        control_authority, control_gate = ui_control_authority(
+            organization_id=scenario.organization_id,
+            credential=CONTROL_TOKEN,
+            operations=frozenset({ControlOperation.IMPORT_FILE}),
+            clock=lambda: NOW,
+        )
         api = PostgreSQLUiApi(
             PostgreSQLMembershipAuthority(guarded_runtime_engine),
             guarded_control_engine,
             preview_key=b"i" * 32,
+            control_gate=control_gate,
             roots=roots,
             file_import_service_principal_id=scenario.receiver.service_principal_id,
             clock=lambda: NOW,
@@ -95,19 +104,25 @@ def test_import_preview_requires_confirm(
             create_app(
                 authenticator=_Authenticator(scenario, user_id),
                 ui_bearer_token=TOKEN,
+                ui_control_authority=control_authority,
                 ui_api=api,
             )
         )
+        authenticate_ui(client, TOKEN)
 
         preview = client.post(
             "/ui/import/preview",
-            content=(f"sourceRef={scenario.source_ref.value}&path=handbook.md"),
+            content=(
+                f"sourceRef={scenario.source_ref.value}&path=handbook.md&"
+                f"controlCredential={CONTROL_TOKEN}"
+            ),
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
 
         assert preview.status_code == 200
         assert "Actual Fragment preview" in preview.text
         assert "ContextEngine delivers context." in preview.text
+        assert CONTROL_TOKEN not in preview.text
         match = re.search(
             r'name="previewToken" value="([A-Za-z0-9_.-]+)"',
             preview.text,
@@ -137,11 +152,14 @@ def test_import_preview_requires_confirm(
 
         confirmed = client.post(
             "/ui/import/confirm",
-            content=f"previewToken={preview_token}",
+            content=(
+                f"previewToken={preview_token}&controlCredential={CONTROL_TOKEN}"
+            ),
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
         assert confirmed.status_code == 200
         assert "Import queued" in confirmed.text
+        assert CONTROL_TOKEN not in confirmed.text
         job_match = re.search(r"Exact job <code>([0-9a-f-]+)</code>", confirmed.text)
         assert job_match is not None
         job_id = job_match.group(1)

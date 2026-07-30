@@ -13,6 +13,7 @@ from fastapi.exception_handlers import http_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from pydantic import BaseModel
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from adapters.http.authentication import (
@@ -78,9 +79,25 @@ from adapters.http.ui_api import (
     RefusingUiApi,
     UiApi,
     UiApiUnavailable,
+    UiArticlePolicyConfirmResponse,
+    UiArticlePolicyPreviewResponse,
+    UiArticleResponse,
+    UiFeedbackResponse,
+    UiImportConfirmResponse,
+    UiImportPreviewResponse,
+    UiOverviewResponse,
+    UiProfilesResponse,
+    UiSessionResponse,
     ui_actor,
 )
 from engine import BUILD_IDENTIFIER
+from engine.control import (
+    ControlOperation,
+    ControlOperatorAuthenticationRejected,
+    ControlOperatorAuthority,
+    ControlOperatorAuthorityUnavailable,
+    TrustedControlCall,
+)
 from engine.persistence.membership_context import (
     MembershipAuthorityUnavailable,
     MembershipIdentity,
@@ -262,6 +279,7 @@ def create_app(
     transport_profile: HttpTransportProfile = HTTP_TRANSPORT_PROFILE_V1,
     runtime_delivery_activation: _RuntimeDeliveryActivation | None = None,
     ui_bearer_token: str | None = None,
+    ui_control_authority: ControlOperatorAuthority | None = None,
     ui_api: UiApi | None = None,
 ) -> FastAPI:
     """Construct API; the module-level composition remains reject-all."""
@@ -292,6 +310,10 @@ def create_app(
     selected_scope_authority = scope_authority or MissingTrustedScopeAuthority()
     selected_route_policy = route_policy or AllowAuthenticatedResolveRoutePolicy()
     selected_ui_api = ui_api or RefusingUiApi()
+    if ui_control_authority is not None and type(ui_control_authority) is not (
+        ControlOperatorAuthority
+    ):
+        raise TypeError("UI Control authority has the wrong nominal type")
     bearer = HTTPBearer(
         scheme_name="ContextEngineBearer",
         bearerFormat="opaque",
@@ -308,6 +330,52 @@ def create_app(
     from ui import install_ui
 
     install_ui(app, bearer_token=ui_bearer_token)
+
+    def execute_ui_control(
+        *,
+        credential: str | None,
+        operation: ControlOperation,
+        invoke: Callable[[TrustedControlCall], dict[str, object]],
+        document_type: type[BaseModel],
+    ) -> JSONResponse:
+        authority = ui_control_authority
+        try:
+            if authority is None or credential is None:
+                raise ControlOperatorAuthenticationRejected
+            with authority.authorize(
+                opaque_credential=credential,
+                operation=operation,
+                request_id=f"ui-control-{uuid4().hex}",
+            ) as call:
+                raw_document = invoke(call)
+            if type(raw_document) is not dict:
+                raise UiApiUnavailable
+            document = document_type.model_validate(raw_document).model_dump(
+                mode="json"
+            )
+        except ControlOperatorAuthenticationRejected:
+            return JSONResponse(
+                AUTHENTICATION_FAILED_RESPONSE,
+                status_code=401,
+                headers={"Cache-Control": "no-store"},
+            )
+        except (ControlOperatorAuthorityUnavailable, UiApiUnavailable):
+            return JSONResponse(
+                SERVICE_UNAVAILABLE_RESPONSE,
+                status_code=503,
+                headers={"Cache-Control": "no-store"},
+            )
+        except Exception:
+            return JSONResponse(
+                SERVICE_UNAVAILABLE_RESPONSE,
+                status_code=503,
+                headers={"Cache-Control": "no-store"},
+            )
+        return JSONResponse(
+            document,
+            status_code=200,
+            headers={"Cache-Control": "no-store"},
+        )
 
     @app.exception_handler(TransportAuthenticationFailed)
     async def authentication_failed(
@@ -452,7 +520,25 @@ def create_app(
             response["runtime_delivery"] = "ACTIVE"
         return response
 
-    @app.get("/v0/ui/profiles", include_in_schema=False)
+    @app.get(
+        "/v0/ui/session",
+        include_in_schema=False,
+        response_model=UiSessionResponse,
+    )
+    def ui_session(
+        authentication: Annotated[
+            VerifiedAuthenticationContext,
+            Depends(verified_authentication),
+        ],
+    ) -> dict[str, str]:
+        del authentication
+        return {"state": "active"}
+
+    @app.get(
+        "/v0/ui/profiles",
+        include_in_schema=False,
+        response_model=UiProfilesResponse,
+    )
     def ui_profiles(
         authentication: Annotated[
             VerifiedAuthenticationContext,
@@ -460,9 +546,12 @@ def create_app(
         ],
     ) -> JSONResponse:
         try:
-            document = selected_ui_api.profiles(ui_actor(authentication))
-            if type(document) is not dict:
+            raw_document = selected_ui_api.profiles(ui_actor(authentication))
+            if type(raw_document) is not dict:
                 raise UiApiUnavailable
+            document = UiProfilesResponse.model_validate(raw_document).model_dump(
+                mode="json"
+            )
         except Exception:
             return JSONResponse(
                 SERVICE_UNAVAILABLE_RESPONSE,
@@ -475,32 +564,34 @@ def create_app(
             headers={"Cache-Control": "no-store"},
         )
 
-    @app.get("/v0/ui/overview", include_in_schema=False)
+    @app.get(
+        "/v0/ui/overview",
+        include_in_schema=False,
+        response_model=UiOverviewResponse,
+    )
     def ui_overview(
         authentication: Annotated[
             VerifiedAuthenticationContext,
             Depends(verified_authentication),
         ],
+        control_credential: Annotated[
+            str | None,
+            Header(alias="X-Context-Control-Credential", max_length=4096),
+        ] = None,
     ) -> JSONResponse:
-        try:
-            document = selected_ui_api.overview(ui_actor(authentication))
-            if type(document) is not dict:
-                raise UiApiUnavailable
-        except Exception:
-            return JSONResponse(
-                SERVICE_UNAVAILABLE_RESPONSE,
-                status_code=503,
-                headers={"Cache-Control": "no-store"},
-            )
-        return JSONResponse(
-            document,
-            status_code=200,
-            headers={"Cache-Control": "no-store"},
+        return execute_ui_control(
+            credential=control_credential,
+            operation=ControlOperation.READ_SOURCE_PROGRESS,
+            invoke=lambda call: selected_ui_api.overview(
+                ui_actor(authentication), call
+            ),
+            document_type=UiOverviewResponse,
         )
 
     @app.post(
         "/v0/ui/import/preview",
         include_in_schema=False,
+        response_model=UiImportPreviewResponse,
         dependencies=[Depends(require_closed_json_transport)],
     )
     def ui_import_preview(
@@ -509,30 +600,27 @@ def create_app(
             VerifiedAuthenticationContext,
             Depends(verified_authentication),
         ],
+        control_credential: Annotated[
+            str | None,
+            Header(alias="X-Context-Control-Credential", max_length=4096),
+        ] = None,
     ) -> JSONResponse:
-        try:
-            document = selected_ui_api.preview_import(
+        return execute_ui_control(
+            credential=control_credential,
+            operation=ControlOperation.IMPORT_FILE,
+            invoke=lambda call: selected_ui_api.preview_import(
                 ui_actor(authentication),
+                call,
                 source_ref=body.sourceRef,
                 path=body.path,
-            )
-            if type(document) is not dict:
-                raise UiApiUnavailable
-        except Exception:
-            return JSONResponse(
-                SERVICE_UNAVAILABLE_RESPONSE,
-                status_code=503,
-                headers={"Cache-Control": "no-store"},
-            )
-        return JSONResponse(
-            document,
-            status_code=200,
-            headers={"Cache-Control": "no-store"},
+            ),
+            document_type=UiImportPreviewResponse,
         )
 
     @app.post(
         "/v0/ui/import/confirm",
         include_in_schema=False,
+        response_model=UiImportConfirmResponse,
         dependencies=[Depends(require_closed_json_transport)],
     )
     def ui_import_confirm(
@@ -541,29 +629,26 @@ def create_app(
             VerifiedAuthenticationContext,
             Depends(verified_authentication),
         ],
+        control_credential: Annotated[
+            str | None,
+            Header(alias="X-Context-Control-Credential", max_length=4096),
+        ] = None,
     ) -> JSONResponse:
-        try:
-            document = selected_ui_api.confirm_import(
+        return execute_ui_control(
+            credential=control_credential,
+            operation=ControlOperation.IMPORT_FILE,
+            invoke=lambda call: selected_ui_api.confirm_import(
                 ui_actor(authentication),
+                call,
                 preview_token=body.previewToken,
-            )
-            if type(document) is not dict:
-                raise UiApiUnavailable
-        except Exception:
-            return JSONResponse(
-                SERVICE_UNAVAILABLE_RESPONSE,
-                status_code=503,
-                headers={"Cache-Control": "no-store"},
-            )
-        return JSONResponse(
-            document,
-            status_code=200,
-            headers={"Cache-Control": "no-store"},
+            ),
+            document_type=UiImportConfirmResponse,
         )
 
     @app.post(
         "/v0/ui/articles/view",
         include_in_schema=False,
+        response_model=UiArticleResponse,
         dependencies=[Depends(require_closed_json_transport)],
     )
     def ui_article_view(
@@ -572,29 +657,26 @@ def create_app(
             VerifiedAuthenticationContext,
             Depends(verified_authentication),
         ],
+        control_credential: Annotated[
+            str | None,
+            Header(alias="X-Context-Control-Credential", max_length=4096),
+        ] = None,
     ) -> JSONResponse:
-        try:
-            document = selected_ui_api.article(
+        return execute_ui_control(
+            credential=control_credential,
+            operation=ControlOperation.READ_ARTICLE_POLICY,
+            invoke=lambda call: selected_ui_api.article(
                 ui_actor(authentication),
+                call,
                 resource_ref=body.resourceRef,
-            )
-            if type(document) is not dict:
-                raise UiApiUnavailable
-        except Exception:
-            return JSONResponse(
-                SERVICE_UNAVAILABLE_RESPONSE,
-                status_code=503,
-                headers={"Cache-Control": "no-store"},
-            )
-        return JSONResponse(
-            document,
-            status_code=200,
-            headers={"Cache-Control": "no-store"},
+            ),
+            document_type=UiArticleResponse,
         )
 
     @app.post(
         "/v0/ui/articles/preview",
         include_in_schema=False,
+        response_model=UiArticlePolicyPreviewResponse,
         dependencies=[Depends(require_closed_json_transport)],
     )
     def ui_article_policy_preview(
@@ -603,31 +685,28 @@ def create_app(
             VerifiedAuthenticationContext,
             Depends(verified_authentication),
         ],
+        control_credential: Annotated[
+            str | None,
+            Header(alias="X-Context-Control-Credential", max_length=4096),
+        ] = None,
     ) -> JSONResponse:
-        try:
-            document = selected_ui_api.preview_article_policy(
+        return execute_ui_control(
+            credential=control_credential,
+            operation=ControlOperation.CHANGE_ARTICLE_POLICY,
+            invoke=lambda call: selected_ui_api.preview_article_policy(
                 ui_actor(authentication),
+                call,
                 resource_ref=body.resourceRef,
                 policy_kind=body.policyKind,
                 group_refs=tuple(body.groupRefs),
-            )
-            if type(document) is not dict:
-                raise UiApiUnavailable
-        except Exception:
-            return JSONResponse(
-                SERVICE_UNAVAILABLE_RESPONSE,
-                status_code=503,
-                headers={"Cache-Control": "no-store"},
-            )
-        return JSONResponse(
-            document,
-            status_code=200,
-            headers={"Cache-Control": "no-store"},
+            ),
+            document_type=UiArticlePolicyPreviewResponse,
         )
 
     @app.post(
         "/v0/ui/articles/confirm",
         include_in_schema=False,
+        response_model=UiArticlePolicyConfirmResponse,
         dependencies=[Depends(require_closed_json_transport)],
     )
     def ui_article_policy_confirm(
@@ -636,29 +715,26 @@ def create_app(
             VerifiedAuthenticationContext,
             Depends(verified_authentication),
         ],
+        control_credential: Annotated[
+            str | None,
+            Header(alias="X-Context-Control-Credential", max_length=4096),
+        ] = None,
     ) -> JSONResponse:
-        try:
-            document = selected_ui_api.confirm_article_policy(
+        return execute_ui_control(
+            credential=control_credential,
+            operation=ControlOperation.CHANGE_ARTICLE_POLICY,
+            invoke=lambda call: selected_ui_api.confirm_article_policy(
                 ui_actor(authentication),
+                call,
                 preview_token=body.previewToken,
-            )
-            if type(document) is not dict:
-                raise UiApiUnavailable
-        except Exception:
-            return JSONResponse(
-                SERVICE_UNAVAILABLE_RESPONSE,
-                status_code=503,
-                headers={"Cache-Control": "no-store"},
-            )
-        return JSONResponse(
-            document,
-            status_code=200,
-            headers={"Cache-Control": "no-store"},
+            ),
+            document_type=UiArticlePolicyConfirmResponse,
         )
 
     @app.post(
         "/v0/ui/feedback",
         include_in_schema=False,
+        response_model=UiFeedbackResponse,
         dependencies=[Depends(require_closed_json_transport)],
     )
     def ui_feedback(
@@ -669,7 +745,7 @@ def create_app(
         ],
     ) -> JSONResponse:
         try:
-            document = selected_ui_api.capture_feedback(
+            raw_document = selected_ui_api.capture_feedback(
                 ui_actor(authentication),
                 FeedbackCapture(
                     run_ref=body.runRef,
@@ -677,8 +753,11 @@ def create_app(
                     note=body.note,
                 ),
             )
-            if type(document) is not dict:
+            if type(raw_document) is not dict:
                 raise UiApiUnavailable
+            document = UiFeedbackResponse.model_validate(raw_document).model_dump(
+                mode="json"
+            )
         except Exception:
             return JSONResponse(
                 SERVICE_UNAVAILABLE_RESPONSE,

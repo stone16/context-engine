@@ -10,6 +10,7 @@ from sqlalchemy import Engine, text
 from adapters.http.app import create_app
 from adapters.http.authentication import VerifiedAuthenticationContext
 from adapters.http.ui_api import PostgreSQLUiApi
+from engine.control import ControlOperation
 from engine.persistence import (
     DatabaseConfiguration,
     PostgreSQLMembershipAuthority,
@@ -24,9 +25,11 @@ from tests.support.article_access_policy import (
     set_tenant_default,
 )
 from tests.support.file_imports import NOW
+from tests.support.ui import authenticate_ui, ui_control_authority
 
 pytestmark = pytest.mark.integration
 TOKEN = "ui-visibility-token"
+CONTROL_TOKEN = "ui-visibility-control-token"
 
 
 class _Authenticator:
@@ -143,10 +146,17 @@ def test_visibility_view_shows_rung(
             source_ref=isolation_source,
             resource_ref=isolation_resource,
         )
+        control_authority, control_gate = ui_control_authority(
+            organization_id=organization_id,
+            credential=CONTROL_TOKEN,
+            operations=frozenset({ControlOperation.READ_ARTICLE_POLICY}),
+            clock=lambda: NOW,
+        )
         api = PostgreSQLUiApi(
             PostgreSQLMembershipAuthority(guarded_runtime_engine),
             guarded_control_engine,
             preview_key=b"v" * 32,
+            control_gate=control_gate,
             clock=lambda: NOW,
         )
         client = TestClient(
@@ -157,17 +167,22 @@ def test_visibility_view_shows_rung(
                     membership_id=membership_id,
                 ),
                 ui_bearer_token=TOKEN,
+                ui_control_authority=control_authority,
                 ui_api=api,
             )
         )
+        authenticate_ui(client, TOKEN)
 
         for expected_rung, (_, resource_ref) in articles.items():
             response = client.post(
                 "/ui/articles/view",
-                content=f"resourceRef={resource_ref}",
+                content=(
+                    f"resourceRef={resource_ref}&controlCredential={CONTROL_TOKEN}"
+                ),
                 headers={"Content-Type": "application/x-www-form-urlencoded"},
             )
             assert response.status_code == 200
+            assert CONTROL_TOKEN not in response.text
             assert f'<span class="status">{expected_rung}</span>' in response.text
             assert resource_ref in response.text
             assert ("Effective policy</dt><dd>isolation" in response.text) is (

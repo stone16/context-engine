@@ -8,6 +8,7 @@ from tests.integration.test_runtime_authorized_evidence_integration import (
     SeededAuthenticator,
     _new_fixture,
 )
+from tests.support.ui import authenticate_ui
 
 
 class _ProfileApi(RefusingUiApi):
@@ -21,6 +22,7 @@ class _ProfileApi(RefusingUiApi):
             "runtimeProfile": {"profileRef": "runtime-v4", "digest": "3" * 64},
         }
 
+
 def test_profile_change_surfaces_reembed() -> None:
     fixture = _new_fixture().org_a
     client = TestClient(
@@ -30,6 +32,7 @@ def test_profile_change_surfaces_reembed() -> None:
             ui_api=_ProfileApi(),
         )
     )
+    authenticate_ui(client, "profile-token")
 
     response = client.post(
         "/ui/profiles",
