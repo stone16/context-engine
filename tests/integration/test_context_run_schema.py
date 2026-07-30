@@ -109,6 +109,13 @@ def lineage_identity(
         with engine.begin() as connection:
             connection.execute(
                 text(
+                    "DELETE FROM context_feedback "
+                    "WHERE organization_id = :organization_id"
+                ),
+                {"organization_id": identity.organization_id},
+            )
+            connection.execute(
+                text(
                     "DELETE FROM decision_audit "
                     "WHERE organization_id = :organization_id"
                 ),

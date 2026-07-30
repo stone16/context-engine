@@ -115,6 +115,7 @@ def _configuration(
 def _environment(
     configuration: DogfoodConfiguration,
     runtime_configuration: DatabaseConfiguration,
+    control_configuration: DatabaseConfiguration,
 ) -> dict[str, str]:
     return {
         DOGFOOD_COMPOSITION_ENV: DOGFOOD_COMPOSITION_VALUE,
@@ -131,6 +132,10 @@ def _environment(
         "CONTEXT_ENGINE_RUNTIME_ROLE": runtime_configuration.expected_role,
         "CONTEXT_ENGINE_RUNTIME_DATABASE_URL": (
             runtime_configuration.url.render_as_string(hide_password=False)
+        ),
+        "CONTEXT_ENGINE_CONTROL_ROLE": control_configuration.expected_role,
+        "CONTEXT_ENGINE_CONTROL_DATABASE_URL": (
+            control_configuration.url.render_as_string(hide_password=False)
         ),
     }
 
@@ -362,6 +367,7 @@ def test_dogfood_served_composition_delivers_release_scoped_file_evidence_before
     tmp_path: Path,
     migration_configuration: DatabaseConfiguration,
     runtime_configuration: DatabaseConfiguration,
+    control_configuration: DatabaseConfiguration,
     guarded_control_engine: Engine,
     guarded_worker_engine: Engine,
     monkeypatch: pytest.MonkeyPatch,
@@ -384,7 +390,11 @@ def test_dogfood_served_composition_delivers_release_scoped_file_evidence_before
     )
     configuration = _configuration(scenario, user_id)
     served: dict[str, object] = {}
-    for name, value in _environment(configuration, runtime_configuration).items():
+    for name, value in _environment(
+        configuration,
+        runtime_configuration,
+        control_configuration,
+    ).items():
         monkeypatch.setenv(name, value)
 
     def observe(app: object, **kwargs: object) -> None:
@@ -418,6 +428,7 @@ def test_dogfood_rejects_an_active_release_with_an_unbound_embedding_profile(
     tmp_path: Path,
     migration_configuration: DatabaseConfiguration,
     runtime_configuration: DatabaseConfiguration,
+    control_configuration: DatabaseConfiguration,
     guarded_control_engine: Engine,
     guarded_worker_engine: Engine,
 ) -> None:
@@ -433,7 +444,11 @@ def test_dogfood_rejects_an_active_release_with_an_unbound_embedding_profile(
 
     with pytest.raises(DogfoodConfigurationUnavailable):
         create_served_app(
-            _environment(configuration, runtime_configuration),
+            _environment(
+                configuration,
+                runtime_configuration,
+                control_configuration,
+            ),
             host="127.0.0.1",
         )
 
@@ -458,7 +473,11 @@ def test_dogfood_evaluator_scores_real_public_resolve_evidence(
     client = TestClient(
         create_dogfood_app(
             configuration,
-            _environment(configuration, runtime_configuration),
+            _environment(
+                configuration,
+                runtime_configuration,
+                control_configuration,
+            ),
             host="127.0.0.1",
         )
     )
@@ -523,6 +542,7 @@ def test_dogfood_secret_and_membership_fail_closed_without_secret_retention(
     tmp_path: Path,
     migration_configuration: DatabaseConfiguration,
     runtime_configuration: DatabaseConfiguration,
+    control_configuration: DatabaseConfiguration,
     guarded_control_engine: Engine,
     guarded_worker_engine: Engine,
     caplog: pytest.LogCaptureFixture,
@@ -538,7 +558,11 @@ def test_dogfood_secret_and_membership_fail_closed_without_secret_retention(
     client = TestClient(
         create_dogfood_app(
             configuration,
-            _environment(configuration, runtime_configuration),
+            _environment(
+                configuration,
+                runtime_configuration,
+                control_configuration,
+            ),
             host="127.0.0.1",
         )
     )
@@ -642,7 +666,11 @@ def test_dogfood_mid_resolve_policy_epoch_change_vetoes_stale_evidence(
     client = TestClient(
         create_dogfood_app(
             configuration,
-            _environment(configuration, runtime_configuration),
+            _environment(
+                configuration,
+                runtime_configuration,
+                control_configuration,
+            ),
             host="127.0.0.1",
         )
     )

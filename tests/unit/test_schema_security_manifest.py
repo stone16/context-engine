@@ -68,6 +68,7 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
         "bulk_article_policy_change_audit",
         "context_fragment",
         "context_fragment_field",
+        "context_feedback",
         "context_resource",
         "context_revision",
         "context_run",

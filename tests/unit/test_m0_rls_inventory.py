@@ -31,6 +31,7 @@ TENANT_TABLES = {
     "citation_open_locator",
     "context_fragment",
     "context_fragment_field",
+    "context_feedback",
     "context_resource",
     "context_revision",
     "context_run",

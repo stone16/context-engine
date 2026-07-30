@@ -1,0 +1,56 @@
+from __future__ import annotations
+
+import pytest
+
+from ui.views import PublicDocumentInvalid, ask_view
+
+
+def _answer_document(*, citation_open_ref: str | None) -> dict[str, object]:
+    evidence_ref = "ev_" + "a" * 64
+    return {
+        "kind": "resolved",
+        "package": {
+            "coverage": {"status": "sufficient"},
+            "blocks": [
+                {
+                    "blockId": "block_" + "a" * 64,
+                    "text": "Authorized answer context.",
+                    "evidenceRefs": [evidence_ref],
+                }
+            ],
+            "evidence": [
+                {
+                    "evidenceRef": evidence_ref,
+                    "sourceRef": "source:file",
+                    "resourceRef": "article:handbook",
+                    "revisionRef": "11111111-1111-1111-1111-111111111111",
+                    "fragmentRef": "fragment:introduction",
+                    "policyEpoch": 3,
+                    "citationOpenRef": citation_open_ref,
+                }
+            ],
+        },
+    }
+
+
+def test_citation_lineage_resolvable() -> None:
+    answer = ask_view(
+        _answer_document(citation_open_ref="cor_authorized"),
+        query="What changed?",
+    )
+
+    assert answer.hits[0].evidence.resource_ref == "article:handbook"
+    assert answer.hits[0].evidence.revision_ref.startswith("11111111-")
+    assert answer.hits[0].evidence.fragment_ref == "fragment:introduction"
+    assert answer.hits[0].evidence.citation_open_ref == "cor_authorized"
+
+
+@pytest.mark.parametrize("citation_open_ref", [None, "", " "])
+def test_unresolvable_citation_never_becomes_a_clean_answer(
+    citation_open_ref: str | None,
+) -> None:
+    with pytest.raises(PublicDocumentInvalid):
+        ask_view(
+            _answer_document(citation_open_ref=citation_open_ref),
+            query="What changed?",
+        )

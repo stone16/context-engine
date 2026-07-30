@@ -236,7 +236,8 @@ def test_ci_runs_the_same_make_database_contract_as_local() -> None:
     assert "make db-down" in workflow
     assert (
         "check: build lint typecheck openapi-check sdk-check sdk-build sdk-test "
-        "sdk-pack action-build action-test bot-build bot-test test catalog smoke "
+        "sdk-pack action-build action-test bot-build bot-test ui-build ui-test "
+        "test catalog smoke "
         "integration security-gate" in makefile
     )
     assert "./scripts/database_harness.sh integration" in makefile
@@ -254,7 +255,8 @@ def test_ci_runs_and_retains_the_single_m0_security_gate_contract() -> None:
     )
     assert (
         "check: build lint typecheck openapi-check sdk-check sdk-build sdk-test "
-        "sdk-pack action-build action-test bot-build bot-test test catalog smoke "
+        "sdk-pack action-build action-test bot-build bot-test ui-build ui-test "
+        "test catalog smoke "
         "integration security-gate third-party-artifacts"
         in makefile.splitlines()
     )
