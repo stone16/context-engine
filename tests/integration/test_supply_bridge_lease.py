@@ -735,6 +735,7 @@ def test_explicit_preemption_is_audited_and_stale_worker_accept_fails_closed(
         PostgreSQLStagedArtifactSink(guarded_worker_engine).accept_change_page(
             connection,
             stale_page,
+            serialize_supply_change_page(stale_page),
             lease_claims=old_claims,
         )
 
@@ -983,6 +984,7 @@ def test_worker_actor_context_is_transaction_local_and_pool_checkout_is_clean(
             PostgreSQLStagedArtifactSink(engine).accept_change_page(
                 connection,
                 page,
+                serialize_supply_change_page(page),
                 lease_claims=claims,
             )
             backend_pid = connection.execute(

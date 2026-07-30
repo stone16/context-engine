@@ -44,13 +44,19 @@ class _FailSecondAcceptance(StagedArtifactSink):
         self,
         connection: Connection,
         page: SupplyChangePage,
+        serialized_page: bytes,
         *,
         lease_claims: WorkerLeaseClaims,
     ) -> None:
         self._calls += 1
         if self._calls == 2:
             raise RuntimeError("injected failure before atomic acceptance")
-        self._inner.accept_change_page(connection, page, lease_claims=lease_claims)
+        self._inner.accept_change_page(
+            connection,
+            page,
+            serialized_page,
+            lease_claims=lease_claims,
+        )
 
     def load(
         self,

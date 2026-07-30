@@ -11,6 +11,7 @@ import pytest
 from sqlalchemy import Connection, Engine, text
 from sqlalchemy.exc import ProgrammingError
 
+import engine.persistence.supply_execution as supply_execution_persistence
 import engine.supply.execution as supply_execution_contracts
 from engine.persistence import (
     DatabaseConfiguration,
@@ -155,6 +156,7 @@ class _FailBeforeAtomicAcceptance(StagedArtifactSink):
         self,
         connection: Connection,
         page: SupplyChangePage,
+        serialized_page: bytes,
         *,
         lease_claims: WorkerLeaseClaims,
     ) -> None:
@@ -163,6 +165,7 @@ class _FailBeforeAtomicAcceptance(StagedArtifactSink):
         self._inner.accept_change_page(
             connection,
             page,
+            serialized_page,
             lease_claims=lease_claims,
         )
 
@@ -189,12 +192,14 @@ class _FailAfterAtomicAcceptance(StagedArtifactSink):
         self,
         connection: Connection,
         page: SupplyChangePage,
+        serialized_page: bytes,
         *,
         lease_claims: WorkerLeaseClaims,
     ) -> None:
         self._inner.accept_change_page(
             connection,
             page,
+            serialized_page,
             lease_claims=lease_claims,
         )
         if page.page_ref == self._page_ref:
@@ -557,6 +562,53 @@ def test_checkpoint_advances_only_with_durably_accepted_change_pages(
             ).scalars().all() == ["page:1", "page:2"]
     finally:
         migration_engine.dispose()
+
+
+def test_execute_serializes_each_accepted_page_once_and_stores_bound_bytes(
+    scenarios: list[_Scenario],
+    migration_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+    guarded_worker_engine: Engine,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scenario = _seed_scenario(migration_configuration, guarded_control_engine)
+    scenarios.append(scenario)
+    pages = (_page(scenario, 1, terminal=False), _page(scenario, 2, terminal=True))
+    expected_payloads = tuple(serialize_supply_change_page(page) for page in pages)
+    serialized_pages: list[SupplyChangePage] = []
+
+    def record_serialization(page: SupplyChangePage) -> bytes:
+        serialized_pages.append(page)
+        return serialize_supply_change_page(page)
+
+    monkeypatch.setattr(
+        supply_execution_persistence,
+        "serialize_supply_change_page",
+        record_serialization,
+    )
+    store = PostgreSQLConnectorCheckpointStore(guarded_worker_engine)
+    staged_sink = PostgreSQLStagedArtifactSink(guarded_worker_engine)
+
+    result = _bridge(
+        scenario,
+        guarded_worker_engine,
+        store,
+        staged_sink,
+        SupplyExecutionConfiguration(
+            cumulative_byte_limit=sum(map(len, expected_payloads))
+        ),
+    ).execute(scenario.execution, _TwoPageAdapter(pages))
+
+    assert result.accepted_page_refs == ("page:1", "page:2")
+    assert serialized_pages == list(pages)
+    for page, expected_payload in zip(pages, expected_payloads, strict=True):
+        artifact = staged_sink.load(
+            page.binding,
+            page.page_ref,
+            lease_claims=_claims(scenario),
+        )
+        assert artifact is not None
+        assert artifact.payload == expected_payload
 
 
 def test_page_bound_stops_before_polling_or_advancing_past_accepted_page(

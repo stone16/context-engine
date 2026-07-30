@@ -433,6 +433,7 @@ class PostgreSQLStagedArtifactSink:
         self,
         connection: Connection,
         page: SupplyChangePage,
+        serialized_page: bytes,
         *,
         lease_claims: WorkerLeaseClaims,
     ) -> None:
@@ -440,9 +441,10 @@ class PostgreSQLStagedArtifactSink:
             raise TypeError("page acceptance requires caller transaction")
         if type(page) is not SupplyChangePage:
             raise TypeError("page acceptance requires SupplyChangePage")
+        if type(serialized_page) is not bytes:
+            raise TypeError("page acceptance requires serialized page bytes")
         if type(lease_claims) is not WorkerLeaseClaims:
             raise TypeError("page acceptance requires verified WorkerLease claims")
-        payload = serialize_supply_change_page(page)
         row = connection.execute(
             text(
                 """
@@ -460,7 +462,7 @@ class PostgreSQLStagedArtifactSink:
             {
                 **_lease_parameters(page.binding, lease_claims),
                 "page_ref": page.page_ref,
-                "page_payload": payload,
+                "page_payload": serialized_page,
             },
         ).one_or_none()
         if row is None or type(row.accepted_ordinal) is not int:
@@ -665,11 +667,12 @@ class PostgreSQLSupplyExecutionBridge:
             if type(page) is not SupplyChangePage or page.binding != execution.binding:
                 raise SupplyBridgeUnavailable("connector page binding is unavailable")
             try:
-                page_byte_count = len(serialize_supply_change_page(page))
+                serialized_page = serialize_supply_change_page(page)
             except SupplyStagedPageByteLimitExceeded:
                 raise SupplyExecutionBoundExceeded(
                     SupplyExecutionBoundReason.PAGE_BYTES
                 ) from None
+            page_byte_count = len(serialized_page)
             next_byte_count = accepted_byte_count + page_byte_count
             if next_byte_count > self._configuration.cumulative_byte_limit:
                 raise SupplyExecutionBoundExceeded(
@@ -695,6 +698,7 @@ class PostgreSQLSupplyExecutionBridge:
                     self._staged_sink.accept_change_page(
                         connection,
                         page,
+                        serialized_page,
                         lease_claims=claims,
                     )
             except (WorkNotAvailable, RuntimeError):
