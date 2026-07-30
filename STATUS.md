@@ -66,7 +66,7 @@ delegation, RBAC, and every network-reachable operator surface remain
 | Provider polling, delete execution beyond ADR-0057 | See the File Provider ADRs for exact boundaries |
 | Streaming delivery | Explicit V1 non-goal — placeholder + edit instead |
 | Answer generation inside the engine | Permanent non-goal — generation always lives above the engine boundary |
-| Authoritative golden evaluation report | M1 computes retrieval/citation/answer metrics but deliberately reports `REFUSED` because no run executor can produce the required security observation; issue #160 owns that executor |
+| Authoritative golden evaluation report from a file | Only a run the executor performed itself through the tracked seam can attest security; a caller-authored run file keeps its metrics and still reports `REFUSED` |
 
 ### Bounded dogfood Runtime
 
@@ -435,13 +435,17 @@ not part of this activated tracer.
 
 ## Evidence and reporting
 
-Golden evaluation M1 validates and locks schema-v1 sets, computes deterministic
+Golden evaluation validates and locks schema-v1 sets, computes deterministic
 retrieval/citation metrics plus attributable answer metrics, evaluates slice
-floors, and renders report machinery. It does **not** activate an evaluation run
-executor or a production security-observation constructor. File-only reports
-therefore retain their metrics but emit `REFUSED` with
-`no_run_executor_security_observation`; issue #160 owns the executor needed for
-an authoritative clean or violating observation. The public-subset maintainer
+floors, and renders report machinery. One run executor privately owns the
+security-observation constructor: `context-engine-eval execute` replays every
+golden query through the recorded `dogfood-loopback-resolve-acquire-v1` seam and
+derives observed Evidence, refusal, and typed security events from the delivered
+ContextPackages, so an executed clean run reaches `observed_clean` and one
+observed violation forces whole-report `FAIL` at any score. The executor takes
+no caller-supplied transport, callback, or counter, and holds no publication
+authority. File-only reports keep their metrics and still emit `REFUSED` with
+`no_run_executor_security_observation`. The public-subset maintainer
 authority is a preparatory privacy check with no promotion effect.
 
 The private corpus is recoverable rather than merely stored once. A second

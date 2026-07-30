@@ -146,9 +146,11 @@ After **every** Release promotion, run these steps before evaluating anything:
      --generated-at "$GENERATED_AT"
    ```
 
-M1 captures this map rather than resolving refs against a live index, because
-it ships no evaluation run executor; issue #160 owns the executor that will
-replace the captured map with a live check.
+The map stays captured rather than derived from a live index. The run executor
+replays queries through a deliberately non-enumerating seam, so it observes
+which Evidence one resolve delivered but cannot ask whether an expectation's
+Revision still resolves. Replacing the captured map with a live check needs a
+seam that can answer that question.
 
 ## Sanitized public subset
 
@@ -245,43 +247,125 @@ Threshold and security-result types reject subclassing, and their normal
 constructors require private module-owned construction inputs. These seals
 prevent accident and misuse through supported paths: callers cannot choose a
 threshold document, omit a calibration event for active values, obtain `PASS`
-from non-tracked thresholds, or mint an observed-clean result through the CLI
-or another supported entry point. They are not unforgeable or tamper-proof
+from non-tracked thresholds, inject a run seam, or mint an observed-clean
+result through the CLI or another supported entry point. They are not
+unforgeable or tamper-proof
 against an in-process adversary deliberately using `object.__new__`, importing
-private module objects, mutating instances, or monkeypatching code. M1's single
+private module objects, mutating instances, monkeypatching code, or standing up
+a counterfeit Runtime on the configured loopback address. The single
 trusted local operator threat model does not include such an adversary.
 
 Security never waits for calibration. Any unauthorized Evidence,
 wrong-Organization effect, or missing-context fallback forces the entire report
-to `FAIL`, regardless of every quality score or sample count. These totals are
-must eventually be derived as an in-process run executor invokes a case and
-records its typed hard-oracle events. M1 deliberately ships no such executor and
-no production observation-minting helper; issue #160 owns the future executor
-and its private construction boundary. Consequently, M1 cannot attest a clean
-run. Caller-authored or reloaded JSON can establish neither clean counters nor a
-violation. `not_observed`, an absent field, malformed evidence, and any
-serialized claim of `observed` render the overall report `REFUSED` with reason
+to `FAIL`, regardless of every quality score or sample count. Those totals are
+derived by the run executor from typed hard-oracle events it observed itself
+(see the `execute` command below). Caller-authored or reloaded JSON can
+establish neither clean counters nor a violation. `not_observed`, an absent
+field, malformed evidence, and any serialized claim of `observed` render the
+overall report `REFUSED` with reason
 `no_run_executor_security_observation`, while retrieval, citation, and answer
 metrics still compute normally. This refusal is a deliberate typed precondition
 outcome, not a transient error or score failure. The closed non-violation states
-remain `observed_clean`, `not_observed`, and `malformed`; once #160 supplies the
-real executor, one observed violation remains an absolute `FAIL` veto independent
-of thresholds and slices.
+remain `observed_clean`, `not_observed`, and `malformed`, and one observed
+violation is an absolute `FAIL` veto independent of thresholds and slices.
 
 If evaluation later accepts untrusted callers, becomes multi-tenant, or moves
 to a remote runner, the supported-path trust boundary above is no longer
-sufficient. That change requires its own ADR and threat model; issue #160
-already tracks the executor that will own observation construction.
+sufficient. That change requires its own ADR and threat model.
+
+## Executed report
+
+`execute` is the only command that can produce a non-refused report, because it
+is the only one that runs the cases. It replays every golden query through the
+tracked run seam — `dogfood-loopback-resolve-acquire-v1`, the frozen resolve
+caller over the active loopback dogfood composition (ADR-0068) — and derives
+from each delivered ContextPackage what a run establishes: the observed Evidence
+lineage, whether the Runtime refused, and the typed security events. The seam is
+composed from the process environment inside the executor, so the command takes
+no transport, callback, or counter, and `observed_clean` cannot exist without
+responses the executor fetched itself.
+
+The executor observes three hard oracles. Delivered Evidence that does not carry
+its complete enclosing decision binding — lineage, projected fields,
+`sourceAclEvidence` kind, and a matching `decisionRef`, `policyEpoch`,
+`policySnapshotRef`, `purpose`, `authorizationAsOf`, and `runRef` — is
+`unauthorized_evidence`. Content that is not grounded in delivered Evidence, or
+a Package whose coverage disagrees with what it delivered, is
+`missing_context_fallback`. A resolve delivered under a different audience
+binding than the rest of the run, or under none, is
+`wrong_organization_effect`. What the seam cannot see is stated rather than
+guessed: the public wire is non-enumerating, so no Organization identifier is
+visible and audience-binding consistency is the observable form of the third
+oracle. An unreachable seam, a structurally unusable response, or a coverage
+state this seam does not produce refuses the whole run rather than scoring it.
+
+Refusal is observed rather than declared: an evidence-free Package means the
+Runtime refused. That fail-closed refusal is a quality signal, never a security
+event, so revoking access to an expected Resource collapses recall and scores
+the answer layer as an incorrect refusal while the run stays `observed_clean`.
+
+Because the seam delivers a ContextPackage and not a generated answer, the blind
+answer layer still comes from a judge. `--judgments` takes a closed
+`context-engine-eval-judgment-v1` document holding only judge output — blind
+score, critical contradiction, and produced claims — and is refused if it
+carries an `observedEvidence`, `refused`, `securityObservation`, or counter
+field, because those are what the run observes. It lives beside the corpus in
+the durable root and is never tracked:
+
+```json
+{
+  "schemaVersion": "context-engine-eval-judgment-v1",
+  "answerJudge": {"modelRef": "...", "profileRef": "..."},
+  "cases": [
+    {
+      "caseRef": "...",
+      "blindScore": 2,
+      "criticalContradiction": false,
+      "claims": [
+        {
+          "claimRef": "...",
+          "citedEvidence": [
+            {
+              "sourceRef": "...",
+              "resourceRef": "...",
+              "revisionRef": "...",
+              "fragmentRef": "..."
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
+```
+
+The command reads the seam destination and bearer from
+`CONTEXT_ENGINE_DOGFOOD_BASE_URL` and `CONTEXT_ENGINE_DOGFOOD_SECRET`, the same
+loopback contract the dogfood caller uses, and refuses a golden set that retains
+that bearer value anywhere.
+
+```bash
+uv run context-engine-eval execute \
+  --golden-set "$GOLDEN_SET" \
+  --lock "$GOLDEN_LOCK" \
+  --judgments "$EVAL_JUDGMENTS" \
+  --lineage-map "$GOLDEN_LINEAGE_MAP" \
+  --output .context-engine/eval/golden-v1-report.json \
+  --generated-at "$GENERATED_AT"
+```
+
+The executor produces reports and nothing else. It holds no ReleaseManifest
+activation, promotion, or rollback authority, and acquires none by running.
 
 ## Offline report
 
-The CLI consumes a locked v1 set and a closed per-case observation document. It
-requires the observation `caseRef` set to exactly equal the golden set, records
-the blind judge model/profile identity, and refuses partial runs. Serialized
-input cannot establish the security precondition, so the file-only command
-emits `REFUSED` for `no_run_executor_security_observation`. An authoritative
-non-refused report is unavailable in M1 and requires the actual run executor
-tracked by issue #160 to carry its results in-process into report assembly.
+The `report` command consumes a locked v1 set and a closed per-case observation
+document. It requires the observation `caseRef` set to exactly equal the golden
+set, records the blind judge model/profile identity, and refuses partial runs.
+Serialized input cannot establish the security precondition, so this file-only
+command emits `REFUSED` for `no_run_executor_security_observation` no matter how
+its metrics score. Every report records which seam produced it under
+`run.executedSeamRef`; a file-only report records `null`.
 Report output must remain
 within a real ignored `.context-engine/` directory; path traversal and symlink
 escapes are refused.
@@ -295,11 +379,11 @@ uv run context-engine-eval report \
   --generated-at "$GENERATED_AT"
 ```
 
-The report exposes per-case hit/miss, exact `evidenceRecall` over the complete
+Both commands expose per-case hit/miss, exact `evidenceRecall` over the complete
 authorized Package, and case pass rate. Package Evidence has no relevance-rank
 contract, so this version does not report recall@k. Quality is `measured`;
-Reliability and Budget remain `not-evaluated`. This report does not modify or
-feed the release-gate report, and there is no CI threshold.
+Reliability and Budget remain `not-evaluated`. Neither report modifies or
+feeds the release-gate report, and there is no CI threshold.
 
 ## Offline embedding comparison
 

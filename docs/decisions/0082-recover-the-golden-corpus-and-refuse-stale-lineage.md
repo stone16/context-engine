@@ -1,6 +1,6 @@
 ---
 name: adr-0082-recover-the-golden-corpus-and-refuse-stale-lineage
-version: "1.0.0"
+version: "1.0.1"
 description: >
   Keep the private golden corpus recoverable through a second durable root and
   refuse stale expectation lineage instead of scoring it. Use when backing up,
@@ -95,13 +95,15 @@ degrades in between.
   operator who deliberately rewrites both a snapshot and its manifest can
   produce a self-consistent backup, exactly as `eval/README.md` already states
   for the co-located lock chain. No signing or keyring boundary is added.
-- The lineage map is captured, not derived from a live index, because M1 ships
-  no evaluation run executor. Issue #160 owns that executor.
+- The lineage map is captured, not derived from a live index. ADR-0080's run
+  executor replays queries through a deliberately non-enumerating seam, so it
+  observes what one resolve delivered but cannot ask whether an expectation's
+  Revision still resolves.
 
 ## Revisit trigger
 
-Revisit when the run executor from issue #160 can resolve expectation lineage
-against the live index, which would replace the captured map with a live check.
+Revisit when a run seam can resolve expectation lineage against the live index,
+which would replace the captured map with a live check.
 Revisit sooner if evaluation gains an untrusted caller or a remote runner, or
 if a corpus large enough to make whole-root snapshots impractical arrives; any
 revision must keep recovery verifiable and must not let unresolvable lineage

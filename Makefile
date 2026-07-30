@@ -1,4 +1,4 @@
-.PHONY: install build lint typecheck test catalog third-party-check third-party-artifacts security-gate smoke db-up db-down db-reset integration dogfood-eval eval-v1 openapi-generate openapi-check openapi-breaking-check sdk-generate sdk-check sdk-build sdk-test sdk-pack action-typecheck action-build action-test bot-typecheck bot-build bot-test check
+.PHONY: install build lint typecheck test catalog third-party-check third-party-artifacts security-gate smoke db-up db-down db-reset integration dogfood-eval eval-v1 eval-v1-execute openapi-generate openapi-check openapi-breaking-check sdk-generate sdk-check sdk-build sdk-test sdk-pack action-typecheck action-build action-test bot-typecheck bot-build bot-test check
 
 install:
 	uv sync --frozen
@@ -58,6 +58,14 @@ eval-v1:
 		--golden-set "$(GOLDEN_SET)" \
 		--lock "$(GOLDEN_LOCK)" \
 		--run "$(EVAL_RUN)" \
+		--output .context-engine/eval/golden-v1-report.json \
+		--generated-at "$(GENERATED_AT)"
+
+eval-v1-execute:
+	uv run context-engine-eval execute \
+		--golden-set "$(GOLDEN_SET)" \
+		--lock "$(GOLDEN_LOCK)" \
+		--judgments "$(EVAL_JUDGMENTS)" \
 		--output .context-engine/eval/golden-v1-report.json \
 		--generated-at "$(GENERATED_AT)"
 
