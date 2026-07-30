@@ -10,6 +10,10 @@ def write_fixture_tree(root: Path, schema_source: Path) -> Path:
     (root / "schemas/third-party-upstream.schema.json").write_bytes(
         schema_source.read_bytes()
     )
+    (root / "schemas/third-party-artifact-exemptions.schema.json").write_bytes(
+        (schema_source.parent / "third-party-artifact-exemptions.schema.json")
+        .read_bytes()
+    )
     subtree = root / "third_party/example"
     (subtree / "src").mkdir(parents=True)
     (subtree / "patches").mkdir()
@@ -20,6 +24,10 @@ def write_fixture_tree(root: Path, schema_source: Path) -> Path:
     (subtree / "MODIFICATIONS.md").write_text("# No modifications\n", encoding="utf-8")
     (subtree / "patches/.gitkeep").write_bytes(b"")
     (subtree / "sbom.cyclonedx.json").write_text("{}\n", encoding="utf-8")
+    (root / "third_party/ARTIFACT_EXEMPTIONS.toml").write_text(
+        "schema_version = 1\nexemptions = []\n",
+        encoding="utf-8",
+    )
     registration = f'''repository = "https://example.invalid/upstream.git"
 commit = "0123456789abcdef0123456789abcdef01234567"
 source_paths = ["src/example.py"]

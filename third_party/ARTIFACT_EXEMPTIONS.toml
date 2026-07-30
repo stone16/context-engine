@@ -1,0 +1,7 @@
+schema_version = 1
+
+[[exemptions]]
+record_type = "EXEMPTION"
+artifact_kind = "container"
+disposition = "not-produced-by-maintainer-decision"
+approval_reference = "stone16/context-engine#142 maintainer decision 2026-07-30"

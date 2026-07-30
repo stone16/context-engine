@@ -15,13 +15,17 @@ import zipfile
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from jsonschema import Draft202012Validator, FormatChecker
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 THIRD_PARTY_ROOT = REPOSITORY_ROOT / "third_party"
 SCHEMA_PATH = REPOSITORY_ROOT / "schemas/third-party-upstream.schema.json"
+ARTIFACT_EXEMPTIONS_RELATIVE_PATH = Path("third_party/ARTIFACT_EXEMPTIONS.toml")
+ARTIFACT_EXEMPTIONS_SCHEMA_RELATIVE_PATH = Path(
+    "schemas/third-party-artifact-exemptions.schema.json"
+)
 NOTICES_PATH = REPOSITORY_ROOT / "THIRD_PARTY_NOTICES.md"
 SBOM_PATH = REPOSITORY_ROOT / "THIRD_PARTY_SBOM.cyclonedx.json"
 COMMIT_PATTERN = re.compile(r"^[0-9a-f]{40}$")
@@ -55,10 +59,59 @@ class ArtifactStatus:
     artifact: Path | None
     passed: bool
     detail: str
+    exempted: bool = False
+
+
+@dataclass(frozen=True)
+class ArtifactExemption:
+    kind: ArtifactKind
+    approval_reference: str
 
 
 def _load_json(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _schema_errors(data: Any, schema_path: Path) -> list[Any]:
+    schema = _load_json(schema_path)
+    Draft202012Validator.check_schema(schema)
+    validator = Draft202012Validator(schema, format_checker=FormatChecker())
+    return sorted(validator.iter_errors(data), key=lambda item: list(item.path))
+
+
+def _raise_schema_error(errors: Sequence[Any], *, document_path: Path) -> None:
+    if not errors:
+        return
+    error = errors[0]
+    location = ".".join(str(part) for part in error.absolute_path) or "<root>"
+    raise GovernanceError(
+        f"{document_path}: schema violation at {location}: {error.message}"
+    )
+
+
+def load_artifact_exemptions(
+    root: Path = REPOSITORY_ROOT,
+) -> dict[ArtifactKind, ArtifactExemption]:
+    path = root / ARTIFACT_EXEMPTIONS_RELATIVE_PATH
+    schema_path = root / ARTIFACT_EXEMPTIONS_SCHEMA_RELATIVE_PATH
+    if not path.is_file():
+        raise GovernanceError(f"artifact exemptions: required policy missing: {path}")
+    try:
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
+        raise GovernanceError(f"{path}: invalid TOML: {error}") from error
+    _raise_schema_error(_schema_errors(data, schema_path), document_path=path)
+
+    exemptions: dict[ArtifactKind, ArtifactExemption] = {}
+    for record in data["exemptions"]:
+        kind = cast(ArtifactKind, record["artifact_kind"])
+        if kind in exemptions:
+            raise GovernanceError(f"{path}: duplicate exemption for {kind}")
+        exemptions[kind] = ArtifactExemption(
+            kind=kind,
+            approval_reference=record["approval_reference"],
+        )
+    return exemptions
 
 
 def discover_registrations(root: Path = REPOSITORY_ROOT) -> tuple[Registration, ...]:
@@ -93,18 +146,10 @@ def validate_schema(
     registration: Registration,
     schema_path: Path = SCHEMA_PATH,
 ) -> None:
-    schema = _load_json(schema_path)
-    Draft202012Validator.check_schema(schema)
-    validator = Draft202012Validator(schema, format_checker=FormatChecker())
-    errors = sorted(
-        validator.iter_errors(registration.data), key=lambda item: list(item.path)
+    _raise_schema_error(
+        _schema_errors(registration.data, schema_path),
+        document_path=registration.path,
     )
-    if errors:
-        error = errors[0]
-        location = ".".join(str(part) for part in error.absolute_path) or "<root>"
-        raise GovernanceError(
-            f"{registration.path}: schema violation at {location}: {error.message}"
-        )
 
 
 def _contains(parent: PurePosixPath, child: PurePosixPath) -> bool:
@@ -221,6 +266,7 @@ def validate_registration(
 
 
 def validate_tree(root: Path = REPOSITORY_ROOT) -> tuple[Registration, ...]:
+    load_artifact_exemptions(root)
     registrations = discover_registrations(root)
     claimed: set[Path] = set()
     for registration in registrations:
@@ -442,9 +488,20 @@ def inspect_artifact(
     registrations: Sequence[Registration],
     *,
     root: Path = REPOSITORY_ROOT,
+    exemption: ArtifactExemption | None = None,
 ) -> ArtifactStatus:
-    if artifact is None or not artifact.is_file():
+    if artifact is None:
+        if exemption is not None:
+            return ArtifactStatus(
+                kind,
+                artifact,
+                True,
+                "maintainer decision",
+                exempted=True,
+            )
         return ArtifactStatus(kind, artifact, False, "artifact kind not produced")
+    if not artifact.is_file():
+        return ArtifactStatus(kind, artifact, False, "artifact path does not exist")
     try:
         members = _archive_members(artifact, kind)
     except (OSError, tarfile.TarError, zipfile.BadZipFile) as error:
@@ -487,11 +544,30 @@ def inspect_all_artifacts(
     registrations: Sequence[Registration],
     *,
     root: Path = REPOSITORY_ROOT,
+    exemptions: Mapping[ArtifactKind, ArtifactExemption] | None = None,
 ) -> tuple[ArtifactStatus, ...]:
+    exemptions = exemptions or {}
     return tuple(
-        inspect_artifact(kind, artifacts.get(kind), registrations, root=root)
+        inspect_artifact(
+            kind,
+            artifacts.get(kind),
+            registrations,
+            root=root,
+            exemption=exemptions.get(kind),
+        )
         for kind in ARTIFACT_KINDS
     )
+
+
+def report_artifact_statuses(statuses: Sequence[ArtifactStatus]) -> int:
+    for status in statuses:
+        if status.exempted:
+            print(f"{status.kind}: NOT_PRODUCED (maintainer decision)")
+            continue
+        label = "PASS" if status.passed else "FAIL"
+        artifact = str(status.artifact) if status.artifact is not None else "<absent>"
+        print(f"{status.kind}: {label} — {status.detail} ({artifact})")
+    return 0 if all(status.passed for status in statuses) else 1
 
 
 def _only_artifact(paths: Iterable[Path]) -> Path | None:
@@ -537,14 +613,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             or _only_artifact((REPOSITORY_ROOT / ".context-engine/sdk").glob("*.tgz")),
             "container": args.container,
         }
-        statuses = inspect_all_artifacts(artifact_paths, registrations)
-        for status in statuses:
-            label = "PASS" if status.passed else "FAIL"
-            artifact = (
-                str(status.artifact) if status.artifact is not None else "<absent>"
-            )
-            print(f"{status.kind}: {label} — {status.detail} ({artifact})")
-        return 0 if all(status.passed for status in statuses) else 1
+        exemptions = load_artifact_exemptions()
+        statuses = inspect_all_artifacts(
+            artifact_paths,
+            registrations,
+            exemptions=exemptions,
+        )
+        return report_artifact_statuses(statuses)
     except (GovernanceError, OSError, json.JSONDecodeError) as error:
         print(f"third-party governance: FAIL — {error}", file=sys.stderr)
         return 1
