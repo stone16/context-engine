@@ -15,6 +15,7 @@ from uuid import UUID
 from sqlalchemy import Engine, text
 from sqlalchemy.exc import SQLAlchemyError
 
+from adapters.connectors.file import FileConnectorProcessAdapter
 from adapters.embeddings import (
     DeterministicEmbeddingTwin,
     ExternalEmbeddingConfiguration,
@@ -51,8 +52,12 @@ from engine.persistence import (
     FileImportLeaseRedemption,
     FileImportRefused,
     FileImportUnavailable,
+    PostgreSQLConnectorCheckpointStore,
     PostgreSQLFileDispatchAuthority,
     PostgreSQLFileImportWorker,
+    PostgreSQLStagedArtifactSink,
+    PostgreSQLSupplyExecutionBridge,
+    SupplyBridgeExecutionIdentity,
     create_database_engine,
     load_database_configuration,
 )
@@ -66,8 +71,11 @@ from engine.runtime.construction import required_kernel_dependencies
 from engine.supply import (
     ACTIVE_FILE_IMPORT_MARKDOWN_CONFIG_VERSION,
     CONTEXT_FRAGMENT_EMBEDDING_DIMENSION,
+    SUPPLY_CONNECTOR_WORKER_LEASE_OPERATION,
     EmbeddingProvider,
     MarkdownCompilerConfig,
+    SupplyBridgeExecution,
+    SupplyExecutionConfiguration,
     WorkerLeaseCodec,
     WorkerLeaseKeyring,
     WorkerLeaseToken,
@@ -80,6 +88,7 @@ DEFAULT_WORKER_MAX_FILE_BYTES = _DEFAULT_WORKER_MAX_FILE_BYTES
 _file_dispatch_roots = _configured_file_roots
 _WORKER_EMBEDDING_PROVIDER_ENV = "CONTEXT_ENGINE_WORKER_EMBEDDING_PROVIDER"
 _WORKER_EMBEDDING_DIMENSION_ENV = "CONTEXT_ENGINE_WORKER_EMBEDDING_DIMENSION"
+_SUPPLY_CONNECTOR_EXECUTION_CONFIGURATION = SupplyExecutionConfiguration()
 
 
 def _file_read_limits() -> FileReadLimits:
@@ -375,6 +384,106 @@ def _run_one_file_import() -> int:
         engine.dispose()
 
 
+def _run_one_file_connector_job() -> int:
+    """Execute one exact leased File connector job through the Supply bridge."""
+
+    codec = WorkerLeaseCodec(
+        WorkerLeaseKeyring(active_version=1, keys={1: _worker_signing_key()})
+    )
+    engine = create_database_engine(
+        load_database_configuration(DatabasePurpose.SUPPLY_WORKER)
+    )
+    organization_id = UUID(
+        _required_environment("CONTEXT_ENGINE_WORKER_ORGANIZATION_ID")
+    )
+    source_version_id = UUID(
+        _required_environment("CONTEXT_ENGINE_WORKER_SOURCE_VERSION_ID")
+    )
+    worker_job_id = UUID(_required_environment("CONTEXT_ENGINE_WORKER_JOB_ID"))
+    service_principal_id = UUID(
+        _required_environment("CONTEXT_ENGINE_WORKER_SERVICE_PRINCIPAL_ID")
+    )
+    worker_lease = WorkerLeaseToken(
+        _required_environment("CONTEXT_ENGINE_WORKER_LEASE_TOKEN")
+    )
+    root_ref = FileRootRef(
+        _required_environment("CONTEXT_ENGINE_WORKER_FILE_ROOT_REF")
+    )
+    root_path = Path(_required_environment("CONTEXT_ENGINE_WORKER_FILE_ROOT_PATH"))
+    try:
+        checked_at = _worker_database_time(engine)
+        claims = codec.verify(
+            worker_lease,
+            expected_organization_id=organization_id,
+            expected_job_id=worker_job_id,
+            expected_service_principal_id=service_principal_id,
+            expected_workload="supply.connector",
+            expected_operation=SUPPLY_CONNECTOR_WORKER_LEASE_OPERATION,
+            expected_worker_audience="context-engine-connector-runner",
+            expected_source_version_ref=str(source_version_id),
+            now=checked_at,
+        )
+        if (
+            claims.policy_epoch is None
+            or claims.idempotency_key is None
+            or claims.allowed_source_version_refs is None
+            or claims.allowed_operations is None
+            or claims.service_actor_expires_at is None
+        ):
+            raise FileImportUnavailable("Connector execution identity is unavailable")
+        execution = SupplyBridgeExecution(
+            organization_id=organization_id,
+            source_version_id=source_version_id,
+            worker_job_id=worker_job_id,
+            worker_lease=worker_lease,
+        )
+        result = PostgreSQLSupplyExecutionBridge(
+            engine,
+            codec,
+            SupplyBridgeExecutionIdentity(
+                organization_id=organization_id,
+                service_principal_id=service_principal_id,
+                allowed_source_version_ids=tuple(
+                    UUID(value) for value in claims.allowed_source_version_refs
+                ),
+                allowed_operations=claims.allowed_operations,
+                policy_epoch=claims.policy_epoch,
+                idempotency_key=claims.idempotency_key,
+                expires_at=claims.service_actor_expires_at,
+            ),
+            PostgreSQLConnectorCheckpointStore(engine),
+            PostgreSQLStagedArtifactSink(engine),
+            configuration=_SUPPLY_CONNECTOR_EXECUTION_CONFIGURATION,
+            clock=lambda: _worker_database_time(engine),
+        ).execute(
+            execution,
+            FileConnectorProcessAdapter(
+                root_ref,
+                root_path,
+                policy_epoch=claims.policy_epoch,
+                worker_lease=worker_lease,
+                service_principal_id=service_principal_id,
+                idempotency_key=claims.idempotency_key,
+                service_actor_expires_at=claims.service_actor_expires_at,
+            ),
+        )
+        print(
+            json.dumps(
+                {
+                    "acceptedPageCount": len(result.accepted_page_refs),
+                    "jobBehavior": "connector.execute",
+                    "service": "context-engine-worker",
+                    "status": "complete",
+                },
+                sort_keys=True,
+            ),
+            flush=True,
+        )
+        return 0
+    finally:
+        engine.dispose()
+
+
 def _worker_signing_key() -> bytes:
     signing_key_hex = _required_environment(
         "CONTEXT_ENGINE_WORKER_LEASE_SIGNING_KEY_HEX"
@@ -502,7 +611,10 @@ def run(
     run_file_job: bool = False,
     dispatch_file_once: bool = False,
     dispatch_files: bool = False,
+    run_file_connector_job: bool = False,
 ) -> int:
+    if run_file_connector_job:
+        return _run_one_file_connector_job()
     if dispatch_file_once:
         return _run_file_dispatch(single_cycle=True)
     if dispatch_files:
@@ -536,6 +648,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="complete the deterministic no-op lifecycle and exit",
     )
     parser.add_argument(
+        "--run-file-connector-job",
+        action="store_true",
+        help="consume one exact leased File connector job and exit",
+    )
+    parser.add_argument(
         "--run-file-job",
         action="store_true",
         help="consume one exact configured FileImport WorkerLease and exit",
@@ -557,6 +674,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.run_file_job,
             args.dispatch_file_once,
             args.dispatch_files,
+            args.run_file_connector_job,
         )
     )
     if selected_modes > 1:
@@ -566,6 +684,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         run_file_job=args.run_file_job,
         dispatch_file_once=args.dispatch_file_once,
         dispatch_files=args.dispatch_files,
+        run_file_connector_job=args.run_file_connector_job,
     )
 
 

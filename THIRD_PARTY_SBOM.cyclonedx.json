@@ -2,6 +2,47 @@
   "bomFormat": "CycloneDX",
   "components": [
     {
+      "bom-ref": "context-engine:third-party:onyx",
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/onyx-dot-app/onyx.git#2fb3dd10493b3883870fa8adced5b1a0e114feff"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "name": "onyx",
+      "properties": [
+        {
+          "name": "context-engine:scope",
+          "value": "third_party/onyx"
+        },
+        {
+          "name": "context-engine:file-sha256",
+          "value": "third_party/onyx/connectors/interfaces.py=6a9f3f753972d2036c9fe90d4a394b4cd22b325e92e00a01a550d7f8cc94f87f"
+        },
+        {
+          "name": "context-engine:file-sha256",
+          "value": "third_party/onyx/connectors/connector_runner.py=b650097cb44b1f56a07f80befa7ca6123771ab7244db77bb5637305c92b834de"
+        },
+        {
+          "name": "context-engine:file-sha256",
+          "value": "third_party/onyx/connectors/models.py=e3b95634e689457be8dbb99a253c26924143a0d59ac5bd5fb7629b57c3f06454"
+        },
+        {
+          "name": "context-engine:file-sha256",
+          "value": "third_party/onyx/connectors/registry.py=b134c07f20959ed44802c1fc753f9c0a8e5a9388134f4bc57b4bcc5ba4166618"
+        }
+      ],
+      "type": "library",
+      "version": "2fb3dd10493b3883870fa8adced5b1a0e114feff"
+    },
+    {
       "bom-ref": "context-engine:third-party:ragflow",
       "externalReferences": [
         {

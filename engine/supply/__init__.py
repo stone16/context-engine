@@ -42,6 +42,7 @@ from engine.supply.execution import (
     SupplyExecutionBoundReason,
     SupplyExecutionConfiguration,
     SupplyStagedPageByteLimitExceeded,
+    deserialize_supply_change_page,
     serialize_supply_change_page,
 )
 from engine.supply.jobs import (
@@ -161,6 +162,7 @@ __all__ = [
     "SupplyExecutionBoundReason",
     "SupplyExecutionConfiguration",
     "SupplyStagedPageByteLimitExceeded",
+    "deserialize_supply_change_page",
     "serialize_supply_change_page",
     "UnsupportedConstruct",
     "WorkNotAvailable",

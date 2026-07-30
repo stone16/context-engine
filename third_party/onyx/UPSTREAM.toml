@@ -1,0 +1,37 @@
+repository = "https://github.com/onyx-dot-app/onyx.git"
+commit = "2fb3dd10493b3883870fa8adced5b1a0e114feff"
+source_paths = [
+  "backend/onyx/connectors/interfaces.py",
+  "backend/onyx/connectors/connector_runner.py",
+  "backend/onyx/connectors/models.py",
+  "backend/onyx/connectors/registry.py",
+]
+excluded_paths = [
+  "backend/ee",
+  "web/src/app/ee",
+  "web/src/ee",
+  "backend/onyx/connectors/file/connector.py",
+]
+reuse_mode = "copy-patch"
+approval = "https://github.com/stone16/context-engine/issues/126"
+license = "MIT"
+
+[[files]]
+upstream_path = "backend/onyx/connectors/interfaces.py"
+vendored_path = "third_party/onyx/connectors/interfaces.py"
+sha256 = "6a9f3f753972d2036c9fe90d4a394b4cd22b325e92e00a01a550d7f8cc94f87f"
+
+[[files]]
+upstream_path = "backend/onyx/connectors/connector_runner.py"
+vendored_path = "third_party/onyx/connectors/connector_runner.py"
+sha256 = "b650097cb44b1f56a07f80befa7ca6123771ab7244db77bb5637305c92b834de"
+
+[[files]]
+upstream_path = "backend/onyx/connectors/models.py"
+vendored_path = "third_party/onyx/connectors/models.py"
+sha256 = "e3b95634e689457be8dbb99a253c26924143a0d59ac5bd5fb7629b57c3f06454"
+
+[[files]]
+upstream_path = "backend/onyx/connectors/registry.py"
+vendored_path = "third_party/onyx/connectors/registry.py"
+sha256 = "b134c07f20959ed44802c1fc753f9c0a8e5a9388134f4bc57b4bcc5ba4166618"
