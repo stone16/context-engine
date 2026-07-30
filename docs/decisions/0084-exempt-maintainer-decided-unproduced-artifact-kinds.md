@@ -7,7 +7,7 @@ description: >
   checks for produced artifacts.
 ---
 
-# 0083. Exempt maintainer-decided unproduced artifact kinds
+# 0084. Exempt maintainer-decided unproduced artifact kinds
 
 - Status: accepted
 - Date: 2026-07-30
