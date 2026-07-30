@@ -30,7 +30,7 @@ def _manifest() -> dict[str, object]:
 def test_all_manifest_tenant_tables_pass_live_non_owner_rls_audit(
     guarded_runtime_engine: Engine,
 ) -> None:
-    """PG-RLS-ALL-TENANT-TABLES: the live denominator is exactly 67/67."""
+    """PG-RLS-ALL-TENANT-TABLES: the live denominator is exactly 68/68."""
 
     with guarded_runtime_engine.connect() as connection:
         report = audit_live_rls(
@@ -41,13 +41,13 @@ def test_all_manifest_tenant_tables_pass_live_non_owner_rls_audit(
 
     assert report["passed"] is True
     assert report["denominator"] == {
-        "allTables": 70,
-        "tenantOwned": 67,
+        "allTables": 71,
+        "tenantOwned": 68,
         "global": 3,
     }
     assert report["coverage"] == {
-        "numerator": 67,
-        "denominator": 67,
+        "numerator": 68,
+        "denominator": 68,
         "percent": 100.0,
     }
     assert report["failures"] == []
@@ -111,8 +111,8 @@ def test_no_force_row_level_security_mutation_fails_and_rolls_back(
         )
     assert restored["passed"] is True
     assert restored["coverage"] == {
-        "numerator": 67,
-        "denominator": 67,
+        "numerator": 68,
+        "denominator": 68,
         "percent": 100.0,
     }
 
