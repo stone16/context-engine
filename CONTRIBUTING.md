@@ -85,6 +85,14 @@ make integration   # real-PostgreSQL integration/security harness
 make security-gate # M0 security veto gate
 ```
 
+Run `make typecheck` and `make test` sequentially, never concurrently.
+`tests/unit/test_bot_delivery_model_egress_contract.py` invokes
+`npm run build`, which writes the same TypeScript build tree that
+`make typecheck` reads through `tsc`; overlap can therefore produce a spurious
+test failure. A single non-reproducible `test_egress_grant` failure is
+watch-only: do not treat it as a known defect without a fresh reproduction,
+and split a recurrence into its own issue with that evidence.
+
 When you are done, stop the harness:
 
 ```bash
