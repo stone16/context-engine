@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import os
 import subprocess
 import sys
 from collections.abc import Callable
@@ -262,6 +263,11 @@ class FileConnectorProcessAdapter:
                 input=request,
                 capture_output=True,
                 check=False,
+                env={
+                    "PATH": os.defpath,
+                    "PYTHONPATH": os.pathsep.join(sys.path),
+                    "PYTHONUTF8": "1",
+                },
                 timeout=30.0,
             )
         except Exception:

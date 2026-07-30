@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import ast
+import os
+import sys
 from dataclasses import fields
 from datetime import UTC, datetime
 from pathlib import Path
@@ -44,31 +46,29 @@ def test_runner_request_is_one_explicit_job_without_ambient_connector_credential
 
 
 def test_runner_has_no_independent_database_index_or_write_surface() -> None:
-    adapter_tree = ast.parse(
-        RUNNER_PATHS[1].read_bytes(),
-        filename=str(RUNNER_PATHS[1]),
-    )
     imports: set[str] = set()
     forbidden_calls: set[str] = set()
-    for node in ast.walk(adapter_tree):
-        if isinstance(node, ast.Import):
-            imports.update(alias.name.partition(".")[0] for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.level == 0:
-            assert node.module is not None
-            imports.add(node.module.partition(".")[0])
-        elif (
-            isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Attribute)
-            and node.func.attr
-            in {
-                "mkdir",
-                "open",
-                "write_bytes",
-                "write_text",
-                "unlink",
-            }
-        ):
-            forbidden_calls.add(node.func.attr)
+    for path in RUNNER_PATHS:
+        tree = ast.parse(path.read_bytes(), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                imports.update(alias.name.partition(".")[0] for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.level == 0:
+                assert node.module is not None
+                imports.add(node.module.partition(".")[0])
+            elif (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr
+                in {
+                    "mkdir",
+                    "open",
+                    "write_bytes",
+                    "write_text",
+                    "unlink",
+                }
+            ):
+                forbidden_calls.add(node.func.attr)
 
     assert imports.isdisjoint({"alembic", "celery", "psycopg", "redis", "sqlalchemy"})
     assert not forbidden_calls
@@ -116,3 +116,46 @@ def test_process_adapter_rejects_malformed_child_output(
 
     with pytest.raises(RuntimeError, match="output is unavailable"):
         adapter.load(ConnectorCheckpointBinding(uuid4(), uuid4(), uuid4()))
+
+
+def test_process_adapter_scrubs_parent_environment_from_runner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class EmptyPageResult:
+        returncode = 2
+        stdout = b""
+        stderr = b""
+
+    captured: dict[str, object] = {}
+
+    def recording_run(*args: object, **kwargs: object) -> EmptyPageResult:
+        captured.update(kwargs)
+        return EmptyPageResult()
+
+    monkeypatch.setenv(
+        "CONTEXT_ENGINE_WORKER_DATABASE_URL",
+        "postgresql+psycopg://secret.invalid/context-engine",
+    )
+    monkeypatch.setattr("adapters.connectors.file.subprocess.run", recording_run)
+    adapter = FileConnectorProcessAdapter(
+        FileRootRef("synthetic-root"),
+        Path("/synthetic/root"),
+        policy_epoch=1,
+        worker_lease=WorkerLeaseToken("synthetic.opaque.lease"),
+        service_principal_id=UUID("00000000-0000-4000-8000-000000000001"),
+        idempotency_key="0" * 64,
+        service_actor_expires_at=datetime(2026, 7, 30, 9, tzinfo=UTC),
+    )
+    adapter.load_checkpoint(None)
+
+    with pytest.raises(RuntimeError, match="process is unavailable"):
+        adapter.load(ConnectorCheckpointBinding(uuid4(), uuid4(), uuid4()))
+
+    assert captured["env"] == {
+        "PATH": os.defpath,
+        "PYTHONPATH": os.pathsep.join(sys.path),
+        "PYTHONUTF8": "1",
+    }
+    environment = captured["env"]
+    assert isinstance(environment, dict)
+    assert "CONTEXT_ENGINE_WORKER_DATABASE_URL" not in environment
