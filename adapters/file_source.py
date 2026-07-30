@@ -178,6 +178,14 @@ class FileRootRegistry:
         payload, _metadata = self._read_regular(root_ref, path)
         return payload
 
+    def observe_markdown_files(
+        self,
+        root_ref: FileRootRef,
+    ) -> tuple[tuple[FileImportPath, bytes], ...]:
+        """Expose the one anchored acquisition truth to admitted File consumers."""
+
+        return self._observe_markdown_files(root_ref)
+
     def _read_regular(
         self, root_ref: FileRootRef, path: FileImportPath
     ) -> tuple[bytes, os.stat_result]:

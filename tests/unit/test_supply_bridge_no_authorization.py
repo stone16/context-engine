@@ -119,15 +119,32 @@ def test_acl_observation_is_not_consumed_as_authorization_outside_kernel() -> No
     forbidden_consumers: list[str] = []
     definition_path = ROOT / "engine" / "supply" / "execution.py"
     public_reexport_path = ROOT / "engine" / "supply" / "__init__.py"
+    evidence_producer_paths = {ROOT / "adapters" / "connectors" / "file.py"}
 
     for path in _production_python_files():
-        if path in {definition_path, public_reexport_path}:
+        if path in {definition_path, public_reexport_path} | evidence_producer_paths:
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         if _consumes_acl_observation(tree):
             forbidden_consumers.append(str(path.relative_to(ROOT)))
 
     assert forbidden_consumers == []
+
+
+def test_registered_supply_adapter_only_constructs_acl_evidence() -> None:
+    path = ROOT / "adapters" / "connectors" / "file.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    calls = {
+        node.func.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    names = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
+
+    assert "SourceAclObservation" in calls
+    assert "AuthorizationKernel" not in names
+    assert "AuthorizedProjection" not in names
+    assert not {"authorize", "grant", "resolve"}.intersection(calls)
 
 
 def test_acl_observation_module_cannot_construct_runtime_authority() -> None:

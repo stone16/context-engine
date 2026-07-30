@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import json
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import StrEnum
-from typing import Final, Protocol
+from typing import Final, Protocol, cast
 from uuid import UUID
 
 from sqlalchemy import Connection
@@ -480,6 +481,160 @@ def serialize_supply_change_page(page: SupplyChangePage) -> bytes:
     return payload
 
 
+def deserialize_supply_change_page(payload: bytes) -> SupplyChangePage:
+    """Parse one runner response back into exact engine-owned contracts."""
+
+    _require_bytes(
+        "serialized staged page",
+        payload,
+        maximum_length=_MAX_STAGED_PAGE_BYTES,
+    )
+    try:
+        decoded = json.loads(payload)
+        if type(decoded) is not dict:
+            raise ValueError
+        document = cast(dict[str, object], decoded)
+        if set(document) != {
+            "binding",
+            "checkpoint_proposal",
+            "deleted_document_refs",
+            "documents",
+            "page_ref",
+            "terminal",
+        }:
+            raise ValueError
+        binding_document = _exact_dict(
+            document["binding"],
+            {"organization_id", "source_version_id", "worker_job_id"},
+        )
+        binding = ConnectorCheckpointBinding(
+            organization_id=UUID(cast(str, binding_document["organization_id"])),
+            source_version_id=UUID(
+                cast(str, binding_document["source_version_id"])
+            ),
+            worker_job_id=UUID(cast(str, binding_document["worker_job_id"])),
+        )
+        raw_documents = document["documents"]
+        raw_deletes = document["deleted_document_refs"]
+        if type(raw_documents) is not list or type(raw_deletes) is not list:
+            raise ValueError
+        page = SupplyChangePage(
+            binding=binding,
+            page_ref=cast(str, document["page_ref"]),
+            documents=tuple(
+                _deserialize_supply_document_envelope(value)
+                for value in raw_documents
+            ),
+            deleted_document_refs=tuple(
+                _deserialize_supply_delete_observation(value)
+                for value in raw_deletes
+            ),
+            checkpoint_proposal=base64.b64decode(
+                cast(str, document["checkpoint_proposal"]),
+                validate=True,
+            ),
+            terminal=cast(bool, document["terminal"]),
+        )
+        _validate_supply_change_page(page)
+        return page
+    except (
+        KeyError,
+        binascii.Error,
+        TypeError,
+        ValueError,
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+    ):
+        raise ValueError("serialized Supply change page is unavailable") from None
+
+
+def _exact_dict(value: object, keys: set[str]) -> dict[str, object]:
+    if type(value) is not dict or set(value) != keys:
+        raise ValueError
+    return cast(dict[str, object], value)
+
+
+def _deserialize_supply_document_envelope(
+    value: object,
+) -> SupplyDocumentEnvelope:
+    document = _exact_dict(
+        value,
+        {
+            "acl_observation",
+            "content",
+            "content_type",
+            "document_ref",
+            "metadata",
+            "organization_id",
+            "source_version_id",
+            "worker_job_id",
+        },
+    )
+    metadata = document["metadata"]
+    if type(metadata) is not list:
+        raise ValueError
+    if any(type(item) is not list or len(item) != 2 for item in metadata):
+        raise ValueError
+    return SupplyDocumentEnvelope(
+        organization_id=UUID(cast(str, document["organization_id"])),
+        source_version_id=UUID(cast(str, document["source_version_id"])),
+        worker_job_id=UUID(cast(str, document["worker_job_id"])),
+        document_ref=cast(str, document["document_ref"]),
+        content=base64.b64decode(cast(str, document["content"]), validate=True),
+        content_type=cast(str, document["content_type"]),
+        acl_observation=_deserialize_source_acl_observation(
+            document["acl_observation"]
+        ),
+        metadata=tuple(
+            (cast(str, item[0]), cast(str, item[1]))
+            for item in metadata
+        ),
+    )
+
+
+def _deserialize_supply_delete_observation(
+    value: object,
+) -> SupplyDocumentDeleteObservation:
+    document = _exact_dict(value, {"acl_observation", "document_ref"})
+    return SupplyDocumentDeleteObservation(
+        document_ref=cast(str, document["document_ref"]),
+        acl_observation=_deserialize_source_acl_observation(
+            document["acl_observation"]
+        ),
+    )
+
+
+def _deserialize_source_acl_observation(value: object) -> SourceAclObservation:
+    document = _exact_dict(
+        value,
+        {
+            "evidence_class",
+            "evidence_payload",
+            "observed_at",
+            "organization_id",
+            "policy_epoch",
+            "source_lacks_stronger_acl",
+        },
+    )
+    evidence_payload = document["evidence_payload"]
+    if evidence_payload is not None:
+        evidence_payload = base64.b64decode(
+            cast(str, evidence_payload),
+            validate=True,
+        )
+    return SourceAclObservation(
+        organization_id=UUID(cast(str, document["organization_id"])),
+        observed_at=datetime.fromisoformat(cast(str, document["observed_at"])),
+        policy_epoch=cast(int, document["policy_epoch"]),
+        evidence_class=SourceAclEvidenceClass(cast(str, document["evidence_class"])),
+        evidence_payload=evidence_payload,
+        source_lacks_stronger_acl=cast(
+            str | None,
+            document["source_lacks_stronger_acl"],
+        ),
+    )
+
+
 def _serialize_source_acl_observation(
     observation: SourceAclObservation,
 ) -> dict[str, object]:
@@ -618,5 +773,6 @@ __all__ = [
     "SupplyExecutionBoundReason",
     "SupplyExecutionConfiguration",
     "SupplyStagedPageByteLimitExceeded",
+    "deserialize_supply_change_page",
     "serialize_supply_change_page",
 ]

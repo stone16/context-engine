@@ -1,0 +1,31 @@
+{
+  "bomFormat": "CycloneDX",
+  "metadata": {
+    "component": {
+      "bom-ref": "context-engine:third-party:onyx",
+      "name": "ContextEngine registered Onyx connector subtree",
+      "type": "library"
+    },
+    "properties": [
+      {
+        "name": "context-engine:sbom:scope",
+        "value": "third_party/onyx"
+      },
+      {
+        "name": "context-engine:sbom:artifact-wide",
+        "value": "false"
+      }
+    ]
+  },
+  "components": [
+    {
+      "licenses": [{"license": {"id": "MIT"}}],
+      "name": "Onyx connector framework",
+      "purl": "pkg:github/onyx-dot-app/onyx@2fb3dd10493b3883870fa8adced5b1a0e114feff#backend/onyx/connectors",
+      "type": "library",
+      "version": "2fb3dd10493b3883870fa8adced5b1a0e114feff"
+    }
+  ],
+  "specVersion": "1.6",
+  "version": 1
+}
