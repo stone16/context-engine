@@ -414,6 +414,8 @@ def test_weak_acl_observation_requires_and_retains_honest_justification() -> Non
         ("observed_at", None),
         ("observed_at", datetime(2026, 7, 29, 16, 30)),
         ("policy_epoch", None),
+        ("policy_epoch", True),
+        ("policy_epoch", -1),
         ("policy_epoch", 0),
         ("policy_epoch", 2**63),
         ("evidence_class", None),

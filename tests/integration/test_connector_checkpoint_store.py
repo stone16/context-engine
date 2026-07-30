@@ -341,7 +341,12 @@ def _page(
                 acl_observation=acl,
             ),
         ),
-        deleted_document_refs=(),
+        deleted_document_refs=(
+            SupplyDocumentDeleteObservation(
+                document_ref=f"document:deleted:{ordinal}",
+                acl_observation=acl,
+            ),
+        ),
         checkpoint_proposal=f"opaque-checkpoint-{ordinal}".encode(),
         terminal=terminal,
     )
@@ -624,6 +629,19 @@ def test_staged_payload_round_trip_preserves_every_emitted_page_fact(
             ("documents", 0, "acl_observation", "organization_id"),
             lambda: str(uuid4()),
         ),
+        (
+            (
+                "deleted_document_refs",
+                0,
+                "acl_observation",
+                "organization_id",
+            ),
+            lambda: str(uuid4()),
+        ),
+        (
+            ("deleted_document_refs", 0),
+            lambda: {"document_ref": "document:deleted:malformed"},
+        ),
     ],
 )
 def test_atomic_acceptance_refuses_payload_outside_the_exact_binding(
@@ -632,7 +650,7 @@ def test_atomic_acceptance_refuses_payload_outside_the_exact_binding(
     guarded_control_engine: Engine,
     guarded_worker_engine: Engine,
     mutated_path: tuple[str | int, ...],
-    mutated_value: Callable[[], str],
+    mutated_value: Callable[[], object],
 ) -> None:
     scenario = _seed_scenario(migration_configuration, guarded_control_engine)
     scenarios.append(scenario)
