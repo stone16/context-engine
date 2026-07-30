@@ -928,12 +928,13 @@ interface ActionPlaneOptions {
   readonly profile: PrivateActionPrepareProfile;
   readonly providerAttemptRefFactory?: () => string;
   readonly receiptRefFactory?: () => string;
-  readonly sender?: DeterministicPrivateSenderTwin;
+  readonly sender?: DeterministicPrivateSenderTwin | ExactPrivateFeishuSenderTwin;
   readonly ticketRefFactory?: () => string;
 }
 
 interface SenderEffect {
   readonly destinationRef: string;
+  readonly providerIdempotencyKey: string;
   readonly operation: ActionOperation;
   readonly payload: EffectPayload;
   readonly providerAttemptRef: string;
@@ -1022,6 +1023,164 @@ export class DeterministicPrivateSenderTwin implements PrivateSender {
 }
 
 Object.freeze(DeterministicPrivateSenderTwin.prototype);
+
+interface ExactPrivateFeishuSenderTwinOptions {
+  readonly applicationId: string;
+  readonly clock?: () => Date;
+  readonly credential: Uint8Array;
+  readonly destinationRef?: string;
+  readonly mode: "ambiguous" | "applied" | "rejected";
+  readonly providerTenantKey: string;
+}
+
+interface ExactPrivateFeishuSenderState {
+  readonly applicationIdDigest: string;
+  readonly clock: () => Date;
+  readonly destinationRef: string | undefined;
+  readonly mode: "ambiguous" | "applied" | "rejected";
+  readonly providerTenantDigest: string;
+}
+
+export interface FeishuSenderObservation {
+  readonly destinationRef: string;
+  readonly operation: ActionOperation;
+  readonly payloadDigest: string;
+  readonly providerAttemptRef: string;
+  readonly providerIdempotencyDigest: string;
+}
+
+const exactPrivateFeishuSenderStates = new WeakMap<
+  ExactPrivateFeishuSenderTwin,
+  ExactPrivateFeishuSenderState
+>();
+const exactPrivateFeishuSenderObservations = new WeakMap<
+  ExactPrivateFeishuSenderTwin,
+  FeishuSenderObservation[]
+>();
+
+/**
+ * Network-free conformance replacement for the provider-facing Feishu Sender.
+ * Its credential is accepted only as process-held bytes and is not retained;
+ * live provider requests remain deliberately inactive.
+ */
+export class ExactPrivateFeishuSenderTwin implements PrivateSender {
+  #callCount = 0;
+  #effectCount = 0;
+
+  constructor(options: ExactPrivateFeishuSenderTwinOptions) {
+    const record = requireExactKeys(
+      "exact private Feishu Sender twin",
+      options,
+      ["applicationId", "credential", "mode", "providerTenantKey"]
+        .concat(options.destinationRef === undefined ? [] : ["destinationRef"])
+        .concat(options.clock === undefined ? [] : ["clock"]),
+    );
+    const applicationId = requireRef("Feishu application", record.applicationId);
+    const providerTenantKey = requireRef("Feishu provider tenant", record.providerTenantKey);
+    const destinationRef = record.destinationRef === undefined
+      ? undefined
+      : requireRef("private Feishu destination", record.destinationRef);
+    if (destinationRef !== undefined && !destinationRef.startsWith("private-chat:")) {
+      throw new TypeError("Feishu Sender requires one private destination");
+    }
+    if (!(record.credential instanceof Uint8Array) || record.credential.byteLength < 32) {
+      throw new TypeError("Feishu Sender configuration is not available");
+    }
+    if (!(record.mode === "ambiguous" || record.mode === "applied" || record.mode === "rejected")) {
+      throw new TypeError("Feishu Sender twin mode is outside the closed union");
+    }
+    if (record.clock !== undefined && typeof record.clock !== "function") {
+      throw new TypeError("Feishu Sender clock is invalid");
+    }
+    exactPrivateFeishuSenderStates.set(this, Object.freeze({
+      applicationIdDigest: sha256Hex(`${ACTION_BINDING_DOMAIN}feishu-app\0`, applicationId),
+      clock: (record.clock as (() => Date) | undefined) ?? (() => new Date()),
+      destinationRef,
+      mode: record.mode,
+      providerTenantDigest: sha256Hex(
+        `${ACTION_BINDING_DOMAIN}feishu-tenant\0`,
+        providerTenantKey,
+      ),
+    }));
+    exactPrivateFeishuSenderObservations.set(this, []);
+    trustedPrivateSenderTwins.add(this);
+    Object.freeze(this);
+  }
+
+  get callCount(): number {
+    return this.#callCount;
+  }
+
+  get effectCount(): number {
+    return this.#effectCount;
+  }
+
+  observations(): readonly FeishuSenderObservation[] {
+    return Object.freeze([...(exactPrivateFeishuSenderObservations.get(this) ?? [])]);
+  }
+
+  async send(effect: SenderEffect): Promise<SenderOutcome> {
+    this.#callCount += 1;
+    const state = exactPrivateFeishuSenderStates.get(this);
+    if (state === undefined) return { kind: "rejected" };
+    let observation: FeishuSenderObservation;
+    try {
+      const destinationRef = requireRef("private Feishu destination", effect.destinationRef);
+      const providerIdempotencyKey = requireRef(
+        "Feishu provider idempotency key",
+        effect.providerIdempotencyKey,
+      );
+      if (
+        !destinationRef.startsWith("private-chat:")
+        || (state.destinationRef !== undefined && destinationRef !== state.destinationRef)
+        || !providerIdempotencyKey.startsWith("act_")
+        || !PROVIDER_ATTEMPT_PATTERN.test(effect.providerAttemptRef)
+      ) {
+        return { kind: "rejected" };
+      }
+      const payloadDigest = actionPayloadDigest(effect.operation, effect.payload);
+      observation = Object.freeze({
+        destinationRef,
+        operation: effect.operation,
+        payloadDigest,
+        providerAttemptRef: effect.providerAttemptRef,
+        providerIdempotencyDigest: sha256Hex(
+          `${ACTION_BINDING_DOMAIN}feishu-idempotency\0`,
+          providerIdempotencyKey,
+        ),
+      });
+    } catch {
+      return { kind: "rejected" };
+    }
+    if (state.mode === "rejected") return { kind: "rejected" };
+    exactPrivateFeishuSenderObservations.get(this)?.push(observation);
+    this.#effectCount += 1;
+    if (state.mode === "ambiguous") return { kind: "ambiguous" };
+    return {
+      appliedAt: requireDate("Feishu Sender applied-at", state.clock()),
+      kind: "applied",
+      providerEffectDigest: sha256Hex(
+        `${ACTION_BINDING_DOMAIN}feishu-provider-effect\0`,
+        state.applicationIdDigest,
+        state.providerTenantDigest,
+        observation.providerAttemptRef,
+        observation.operation,
+        observation.payloadDigest,
+        observation.providerIdempotencyDigest,
+      ),
+    };
+  }
+
+  toJSON(): never {
+    throw new TypeError("Feishu Sender configuration is not serializable");
+  }
+
+  toString(): string {
+    return "<ExactPrivateFeishuSenderTwin redacted>";
+  }
+}
+
+Object.freeze(ExactPrivateFeishuSenderTwin.prototype);
 
 export interface ActionReceipt {
   readonly appliedAt: string;
@@ -1249,7 +1408,7 @@ export class ActionPlane {
   readonly #profile: Readonly<ProfileOptions>;
   readonly #providerAttemptRefFactory: () => string;
   readonly #receiptRefFactory: () => string;
-  readonly #sender: DeterministicPrivateSenderTwin | undefined;
+  readonly #sender: DeterministicPrivateSenderTwin | ExactPrivateFeishuSenderTwin | undefined;
   readonly #ticketRefFactory: () => string;
 
   constructor(options: ActionPlaneOptions) {
@@ -1270,12 +1429,15 @@ export class ActionPlane {
       options.sender !== undefined
       && (
         !trustedPrivateSenderTwins.has(options.sender)
-        || Object.getPrototypeOf(options.sender) !== DeterministicPrivateSenderTwin.prototype
+        || (
+          Object.getPrototypeOf(options.sender) !== DeterministicPrivateSenderTwin.prototype
+          && Object.getPrototypeOf(options.sender) !== ExactPrivateFeishuSenderTwin.prototype
+        )
       )
     ) {
-      throw new TypeError("Issue #68 permits only the deterministic private Sender twin");
+      throw new TypeError("ActionPlane permits only one sealed deterministic private Sender twin");
     }
-    this.#sender = options.sender as DeterministicPrivateSenderTwin | undefined;
+    this.#sender = options.sender;
     this.#ticketRefFactory = options.ticketRefFactory ?? (() => `act_${randomBytes(16).toString("hex")}`);
     Object.freeze(this);
   }
@@ -1608,6 +1770,7 @@ export class ActionPlane {
         try {
           senderOutcome = await this.#sender.send({
             destinationRef,
+            providerIdempotencyKey: claims.ticketRef,
             operation: claims.operation,
             payload: validatedPayload,
             providerAttemptRef,
