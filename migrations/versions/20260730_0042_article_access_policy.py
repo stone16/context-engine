@@ -1,7 +1,7 @@
 """Fix versioned Article access policy at first ingestion.
 
-Revision ID: 20260730_0041
-Revises: 20260727_0040
+Revision ID: 20260730_0042
+Revises: 20260729_0041
 Create Date: 2026-07-30
 """
 
@@ -11,8 +11,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision: str = "20260730_0041"
-down_revision: str | None = "20260727_0040"
+revision: str = "20260730_0042"
+down_revision: str | None = "20260729_0041"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

@@ -216,6 +216,11 @@
       "selector": "tests/integration/test_worker_lease.py::test_wrong_organization_cannot_affect_same_job_identifier_in_another_tenant"
     },
     {
+      "id": "PG-SUPPLY-BRIDGE-125",
+      "layer": "postgres",
+      "selector": "tests/integration/test_connector_checkpoint_store.py::test_supply_bridge_tables_are_force_rls_function_only_and_exactly_bound"
+    },
+    {
       "id": "RUNTIME-WORKER-LEASE-007",
       "layer": "runtime",
       "selector": "tests/integration/test_worker_lease.py::test_valid_lease_completes_once_through_worker_application_and_replay_is_zero"
@@ -744,6 +749,7 @@
         ],
         "postgres": [
           "PG-WORKER-LEASE-007",
+          "PG-SUPPLY-BRIDGE-125",
           "PG-FILE-IMPORT-023",
           "PG-FILE-REPLACEMENT-026",
           "PG-FILE-RECOVERY-027",

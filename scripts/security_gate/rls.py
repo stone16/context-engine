@@ -67,6 +67,11 @@ NON_OWNER_EVIDENCE_BY_TABLE: Mapping[str, str] = {
     "service_principal": "PG-WORKER-LEASE-007",
     "source_version": "PG-FILE-SOURCE-RLS-021",
     "source_article_policy_default": "PG-ARTICLE-ACCESS-RLS-141",
+    "supply_connector_accepted_page": "PG-SUPPLY-BRIDGE-125",
+    "supply_connector_checkpoint": "PG-SUPPLY-BRIDGE-125",
+    "supply_connector_job": "PG-SUPPLY-BRIDGE-125",
+    "supply_connector_lease_event": "PG-SUPPLY-BRIDGE-125",
+    "supply_connector_staged_page": "PG-SUPPLY-BRIDGE-125",
     "worker_noop_job": "PG-WORKER-LEASE-007",
     "context_fragment_field": "PG-FIELD-PROJECTION-RLS-048",
     "membership_resource_field_right": "PG-FIELD-PROJECTION-RLS-048",
@@ -76,7 +81,7 @@ NON_OWNER_EVIDENCE_BY_TABLE: Mapping[str, str] = {
     "release_operator_grant": "PG-RELEASE-OWNER-019",
     "active_release_manifest": "PG-RELEASE-OWNER-019",
     "release_promotion_audit": "PG-RELEASE-OWNER-019",
-    "revision_publication_event": "PG-FILE-IMPORT-023",
+    "revision_publication_event": "PG-ARTICLE-ACCESS-RLS-141",
 }
 
 _SQL_TOKEN = re.compile(
