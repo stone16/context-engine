@@ -163,15 +163,17 @@ def test_article_policy_change_rederives_tamper_evidence_before_store(
     assert store.calls == 0
 
 
-def test_article_policy_control_surface_has_defaults_and_one_bulk_change_ceremony(
+def test_article_policy_control_surface_has_defaults_bulk_ceremony_and_ui_actions(
 ) -> None:
     assert {
         operation
         for operation in ControlOperation
         if "article" in operation.value
     } == {
+        ControlOperation.CHANGE_ARTICLE_POLICY,
         ControlOperation.COMMIT_BULK_ARTICLE_POLICY_CHANGE,
         ControlOperation.PREVIEW_BULK_ARTICLE_POLICY_CHANGE,
+        ControlOperation.READ_ARTICLE_POLICY,
         ControlOperation.SET_SOURCE_ARTICLE_POLICY_DEFAULT,
         ControlOperation.SET_TENANT_ARTICLE_POLICY_DEFAULT,
     }
@@ -179,6 +181,6 @@ def test_article_policy_control_surface_has_defaults_and_one_bulk_change_ceremon
         "observe_article_source_acl",
         "register_article_access_group",
         "set_article_access_group_membership",
-        "set_explicit_article_policy",
+        "bulk_change_article_policy",
     ):
         assert not hasattr(ContextControl, deferred_surface)
