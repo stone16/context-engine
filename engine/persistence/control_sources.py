@@ -71,7 +71,7 @@ from engine.supply import (
 )
 
 _REGISTRATION_OPERATION = "register_source"
-_FILE_SCAN_BOUND_MIGRATION_FENCE = "context-engine.file-status-migration-fence"
+_FILE_STATUS_MIGRATION_FENCE = "context-engine.file-status-migration-fence"
 _BOUNDED_FILE_DELETE_ACCEPT = (
     "public.context_control_accept_bounded_file_delete_observation_page"
     "(uuid,uuid,uuid,text,uuid,smallint,text,text,text,bigint,uuid,jsonb,"
@@ -619,7 +619,7 @@ class PostgreSQLControlStore:
                             "SELECT pg_catalog.pg_advisory_xact_lock_shared("
                             "pg_catalog.hashtextextended(:fence, 0))"
                         ),
-                        {"fence": _FILE_SCAN_BOUND_MIGRATION_FENCE},
+                        {"fence": _FILE_STATUS_MIGRATION_FENCE},
                     )
                     with self._file_delete_accept_generation_lock:
                         generation = self._file_delete_accept_generation
