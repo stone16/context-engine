@@ -10,7 +10,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path, PurePath
-from typing import Final, Protocol, cast
+from typing import Final, Never, Protocol, cast
 
 from adapters.parsers.ragflow_markdown import compile_rich_markdown, rich_token_count
 from engine.supply import (
@@ -43,6 +43,11 @@ class _AcceptanceEntryPoint(Protocol):
         *,
         acceptance_context: _AcceptanceContext,
     ) -> CompilationOutcome: ...
+
+
+class _PrivacySafeArgumentParser(argparse.ArgumentParser):
+    def error(self, message: str) -> Never:
+        raise SystemExit("compiler runner arguments are invalid")
 
 
 def _boundary_failure() -> CompilationFailure:
@@ -202,7 +207,7 @@ def _emit(
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = _PrivacySafeArgumentParser(description=__doc__)
     parser.add_argument("--compile", action="store_true")
     parser.add_argument("--config", default="markdown-config-v3")
     parser.add_argument(
@@ -237,11 +242,17 @@ _CONSTRUCT_PATTERNS: Final[dict[str, re.Pattern[str]]] = {
 
 
 def _safe_markdown_files(root: Path) -> tuple[Path, ...]:
-    if not root.is_dir():
-        raise ValueError("acceptance root must be a directory")
+    if root.is_symlink() or not root.is_dir():
+        raise SystemExit("acceptance root must be a non-symlink directory")
     return tuple(
         sorted(
-            (path for path in root.rglob("*.md") if path.is_file()),
+            (
+                path
+                for path in root.rglob("*", recurse_symlinks=False)
+                if path.name.casefold().endswith(".md")
+                and not path.is_symlink()
+                and path.is_file()
+            ),
             key=lambda path: PurePath(*path.relative_to(root).parts).as_posix(),
         )
     )
@@ -330,16 +341,28 @@ def _write_acceptance_report(
     *,
     acceptance_context: _AcceptanceContext,
 ) -> None:
-    if ".context-engine" not in output.parts:
-        raise ValueError("acceptance reports must be written under .context-engine")
+    try:
+        state_index = len(output.parts) - 1 - output.parts[::-1].index(
+            ".context-engine"
+        )
+    except ValueError:
+        raise SystemExit(
+            "acceptance reports must be written under .context-engine"
+        ) from None
+    state_directory = Path(*output.parts[: state_index + 1]).resolve()
+    resolved_output = output.resolve()
+    if resolved_output == state_directory or not resolved_output.is_relative_to(
+        state_directory
+    ):
+        raise SystemExit("acceptance reports must be written under .context-engine")
     report = _acceptance_report(
         root,
         token_ceiling,
         acceptance_context=acceptance_context,
     )
     serialized = json.dumps(report, sort_keys=True, separators=(",", ":")) + "\n"
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(serialized, encoding="utf-8")
+    resolved_output.parent.mkdir(parents=True, exist_ok=True)
+    resolved_output.write_text(serialized, encoding="utf-8")
     sys.stdout.write(serialized)
 
 
@@ -358,6 +381,8 @@ def main() -> None:
     if args.acceptance_report:
         if args.root is None:
             raise SystemExit("--acceptance-report requires --root")
+        if cast(int, args.token_ceiling) < 1:
+            raise SystemExit("rich Markdown token ceiling must be positive")
         _write_acceptance_report(
             cast(Path, args.root),
             cast(Path, args.output),
@@ -368,5 +393,12 @@ def main() -> None:
     raise SystemExit("one runner operation is required")
 
 
+def _privacy_safe_main() -> None:
+    try:
+        main()
+    except Exception:
+        raise SystemExit("compiler runner operation failed") from None
+
+
 if __name__ == "__main__":
-    main()
+    _privacy_safe_main()

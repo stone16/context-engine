@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 import applications.compiler_runner as compiler_runner
+from eval._compiler_acceptance import acceptance_context
 from eval.embedding_benchmark import (
     BenchmarkUnavailable,
     validate_json_schema_document,
@@ -229,6 +230,72 @@ def test_acceptance_report_is_count_only_deterministic_and_written_under_ignore(
     assert "refused.md" not in first_bytes.decode("utf-8")
     assert first_bytes == output.read_bytes()
     assert first.stdout == second.stdout
+
+
+def test_acceptance_corpus_matches_file_provider_markdown_directory_rules(
+    tmp_path: Path,
+) -> None:
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    lowercase_directory = corpus / "bare-lowercase"
+    lowercase_directory.mkdir()
+    bare_lowercase = lowercase_directory / ".md"
+    bare_lowercase.write_text("# Bare lowercase\n", encoding="utf-8")
+    uppercase_directory = corpus / "bare-uppercase"
+    uppercase_directory.mkdir()
+    bare_uppercase = uppercase_directory / ".MD"
+    bare_uppercase.write_text("# Bare uppercase\n", encoding="utf-8")
+    included = corpus / "included.MD"
+    included.write_text("# Included\n", encoding="utf-8")
+    ordinary = corpus / "ordinary.md"
+    ordinary.write_text("# Ordinary\n", encoding="utf-8")
+    target = corpus / "target.md"
+    target.write_text("# Target\n", encoding="utf-8")
+    (corpus / "linked.md").symlink_to(target)
+    external = tmp_path / "external"
+    external.mkdir()
+    (external / "outside.md").write_text("# Outside\n", encoding="utf-8")
+    (corpus / "linked-directory").symlink_to(external, target_is_directory=True)
+
+    discovered = compiler_runner._safe_markdown_files(corpus)
+
+    assert discovered == (
+        bare_lowercase,
+        bare_uppercase,
+        included,
+        ordinary,
+        target,
+    )
+
+
+def test_acceptance_corpus_root_must_not_be_a_symlink(tmp_path: Path) -> None:
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    linked_root = tmp_path / "linked-root"
+    linked_root.symlink_to(corpus, target_is_directory=True)
+
+    with pytest.raises(SystemExit, match="non-symlink directory"):
+        compiler_runner._safe_markdown_files(linked_root)
+
+
+def test_acceptance_output_must_resolve_beneath_its_state_directory(
+    tmp_path: Path,
+) -> None:
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    state_directory = tmp_path / ".context-engine"
+    state_directory.mkdir()
+    escaped_output = state_directory / ".." / "report.json"
+
+    with pytest.raises(SystemExit, match="under .context-engine"):
+        compiler_runner._write_acceptance_report(
+            corpus,
+            escaped_output,
+            2048,
+            acceptance_context=acceptance_context(),
+        )
+
+    assert not (tmp_path / "report.json").exists()
 
 
 @pytest.mark.parametrize(
