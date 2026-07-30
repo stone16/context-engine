@@ -262,7 +262,13 @@ def _acceptance_report(
     histogram = {name: 0 for name in _CONSTRUCT_PATTERNS}
     refusal_histogram: dict[str, int] = {}
     for path in _safe_markdown_files(root):
-        source = path.read_bytes()
+        try:
+            source = path.read_bytes()
+        except OSError:
+            refused += 1
+            category = CompilationFailureCode.UNSUPPORTED_DOCUMENT_SHAPE.value
+            refusal_histogram[category] = refusal_histogram.get(category, 0) + 1
+            continue
         try:
             inspected = source.removeprefix(b"\xef\xbb\xbf").decode("utf-8")
         except UnicodeDecodeError:

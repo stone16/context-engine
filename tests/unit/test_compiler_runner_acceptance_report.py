@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+import applications.compiler_runner as compiler_runner
 from eval.embedding_benchmark import (
     BenchmarkUnavailable,
     validate_json_schema_document,
@@ -228,3 +229,69 @@ def test_acceptance_report_is_count_only_deterministic_and_written_under_ignore(
     assert "refused.md" not in first_bytes.decode("utf-8")
     assert first_bytes == output.read_bytes()
     assert first.stdout == second.stdout
+
+
+@pytest.mark.parametrize(
+    "failure_kind",
+    ("io", "permission", "vanished", "directory"),
+)
+def test_acceptance_cli_error_paths_emit_only_counted_private_safe_outcomes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    failure_kind: str,
+) -> None:
+    corpus = tmp_path / _SYNTHETIC_PRIVATE_ROOT_FRAGMENT
+    corpus.mkdir()
+    note = corpus / "private-note-canary.md"
+    if failure_kind == "directory":
+        note.mkdir()
+    elif failure_kind != "vanished":
+        note.write_text("# Synthetic\n", encoding="utf-8")
+    output = tmp_path / ".context-engine/compiler-runner-acceptance.json"
+    monkeypatch.setattr(
+        compiler_runner,
+        "_safe_markdown_files",
+        lambda root: (note,),
+    )
+    original_read_bytes = Path.read_bytes
+
+    def read_bytes(path: Path) -> bytes:
+        if path != note:
+            return original_read_bytes(path)
+        if failure_kind == "io":
+            raise OSError(5, "synthetic I/O failure", str(path))
+        if failure_kind == "permission":
+            raise PermissionError(13, "synthetic permission failure", str(path))
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", read_bytes)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "compiler-runner",
+            "--acceptance-report",
+            "--root",
+            str(corpus),
+            "--output",
+            str(output),
+        ],
+    )
+
+    compiler_runner.main()
+
+    captured = capsys.readouterr()
+    emitted = captured.out + captured.err
+    report = json.loads(output.read_text(encoding="utf-8"))
+    assert report["documents"] == {
+        "accepted": 0,
+        "acceptanceRate": "0.000000",
+        "refused": 1,
+        "total": 1,
+    }
+    assert report["refusalHistogram"] == {"unsupported_document_shape": 1}
+    assert captured.err == ""
+    assert not _contains_private_location(emitted)
+    assert str(tmp_path) not in emitted
+    assert note.name not in emitted
