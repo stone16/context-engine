@@ -195,9 +195,12 @@ _SNAPSHOT_MATCH_ANCHOR = """\
                       AND ("""
 _SNAPSHOT_MATCH_GRAPH = """\
                       AND snapshot.compilation_document IS NOT DISTINCT FROM requested_compilation_document
-                      AND public.context_internal_revision_link_edges_match(
-                          requested_organization_id, requested_resource_ref,
-                          snapshot.revision_id, requested_compilation_document
+                      AND (
+                          snapshot.compiler_version <> 'context-engine-markdown-v3'
+                          OR public.context_internal_revision_link_edges_match(
+                              requested_organization_id, requested_resource_ref,
+                              snapshot.revision_id, requested_compilation_document
+                          )
                       )
                       AND ("""
 _ACQUIRE_SNAPSHOT_MATCH_ANCHOR = """\
@@ -207,9 +210,12 @@ _ACQUIRE_SNAPSHOT_MATCH_ANCHOR = """\
 _ACQUIRE_SNAPSHOT_MATCH_GRAPH = """\
                       AND snapshot.compilation_document IS NOT DISTINCT FROM
                           requested_compilation_document
-                      AND public.context_internal_revision_link_edges_match(
-                          requested_organization_id, requested_resource_ref,
-                          snapshot.revision_id, requested_compilation_document
+                      AND (
+                          snapshot.compiler_version <> 'context-engine-markdown-v3'
+                          OR public.context_internal_revision_link_edges_match(
+                              requested_organization_id, requested_resource_ref,
+                              snapshot.revision_id, requested_compilation_document
+                          )
                       )
                       AND ("""
 

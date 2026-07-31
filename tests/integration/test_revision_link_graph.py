@@ -133,6 +133,12 @@ def test_rich_file_publication_persists_exact_immutable_revision_links(
             ("membership", "user_id"),
             ("membership", "valid_from"),
             ("membership", "valid_until"),
+            ("revision_link_edge", "link_kind"),
+            ("revision_link_edge", "ordinal"),
+            ("revision_link_edge", "organization_id"),
+            ("revision_link_edge", "source_resource_ref"),
+            ("revision_link_edge", "source_revision_id"),
+            ("revision_link_edge", "target_path"),
         )
 
         repeated, repeated_token = prepare_repeat_file_import(

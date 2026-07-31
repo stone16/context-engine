@@ -246,9 +246,9 @@ def test_generated_sdk_one_hop_reauthorizes_and_leaves_no_denied_trace(
             guarded_worker_engine,
             path="denied.md",
             payload=(
-                b"# Synthetic denied\n\n"
+                f"# {DENIED_MARKER}\n\n".encode()
                 + b"\n\n".join(
-                    f"{DENIED_MARKER} {QUERY} fragment {index}.".encode()
+                    f"{QUERY} fragment {index}.".encode()
                     for index in range(65)
                 )
                 + b"\n"
