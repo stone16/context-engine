@@ -1,5 +1,5 @@
 ---
-name: adr-0091-activate-leased-rich-markdown-and-revision-link-graph
+name: adr-0093-activate-leased-rich-markdown-and-revision-link-graph
 version: "1.0.0"
 description: >
   Activate rich Markdown v3 behind the exact File-import WorkerLease, persist
@@ -7,7 +7,7 @@ description: >
   hop into post-authorization ranking.
 ---
 
-# 0091. Activate leased rich Markdown and the Revision link graph
+# 0093. Activate leased rich Markdown and the Revision link graph
 
 - Status: accepted
 - Date: 2026-07-31

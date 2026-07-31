@@ -1,8 +1,8 @@
 # ruff: noqa: E501
 """Activate leased rich Markdown and immutable Revision link edges.
 
-Revision ID: 20260731_0045
-Revises: 20260730_0044
+Revision ID: 20260731_0052
+Revises: 20260731_0051
 Create Date: 2026-07-31
 """
 
@@ -12,8 +12,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision: str = "20260731_0045"
-down_revision: str | None = "20260730_0044"
+revision: str = "20260731_0052"
+down_revision: str | None = "20260731_0051"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
