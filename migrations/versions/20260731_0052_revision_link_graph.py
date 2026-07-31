@@ -22,6 +22,11 @@ _RUNTIME = "context_engine_runtime"
 _WORKER = "context_engine_worker"
 _WORKER_DEFINER = "context_engine_worker_lease_definer"
 _GRAPH_DEFINER = "context_engine_graph_definer"
+_EXACT_IMPORT = (
+    "context_control_prepare_exact_file_import"
+    "(uuid,uuid,uuid,uuid,uuid,text,text,uuid,uuid,bigint,text,text,uuid,"
+    "text,bigint,text,text,text)"
+)
 _ACQUIRE = (
     "context_worker_acquire_file_publication"
     "(uuid,uuid,uuid,text,text,uuid,text,text,text,text,text,jsonb,jsonb,"
@@ -218,6 +223,11 @@ _ACQUIRE_SNAPSHOT_MATCH_GRAPH = """\
                           )
                       )
                       AND ("""
+_EXACT_IMPORT_V1_ONLY = "requested_compiler_config_version <> 'markdown-config-v1'"
+_EXACT_IMPORT_ACTIVE = (
+    "requested_compiler_config_version NOT IN "
+    "('markdown-config-v1', 'markdown-config-v3')"
+)
 
 
 def _definition(regprocedure: str) -> str:
@@ -612,6 +622,34 @@ def upgrade() -> None:
         _INDEX,
         ((_SNAPSHOT_MATCH_ANCHOR, _SNAPSHOT_MATCH_GRAPH),),
     )
+    _replace(
+        _EXACT_IMPORT,
+        ((_EXACT_IMPORT_V1_ONLY, _EXACT_IMPORT_ACTIVE),),
+    )
+    op.drop_constraint(
+        "ck_file_acquisition_change_observation",
+        "file_acquisition",
+        type_="check",
+    )
+    op.create_check_constraint(
+        "ck_file_acquisition_change_observation",
+        "file_acquisition",
+        "((change_page_ref IS NULL AND change_ordinal IS NULL "
+        "AND expected_content_sha256 IS NULL AND expected_content_length IS NULL "
+        "AND ui_preview_digest IS NULL AND expected_fragment_digest IS NULL "
+        "AND compiler_config_version IS NULL) OR "
+        "(change_page_ref IS NOT NULL AND change_ordinal BETWEEN 1 AND 100 "
+        "AND expected_content_sha256 ~ '^[0-9a-f]{64}$' "
+        "AND expected_content_length >= 0 AND ui_preview_digest IS NULL "
+        "AND expected_fragment_digest IS NULL AND compiler_config_version IS NULL) OR "
+        "(change_page_ref IS NULL AND change_ordinal IS NULL "
+        "AND expected_content_sha256 ~ '^[0-9a-f]{64}$' "
+        "AND expected_content_length >= 0 "
+        "AND ui_preview_digest ~ '^[0-9a-f]{64}$' "
+        "AND expected_fragment_digest ~ '^[0-9a-f]{64}$' "
+        "AND compiler_config_version IN "
+        "('markdown-config-v1', 'markdown-config-v3')))"
+    )
 
 
 def downgrade() -> None:
@@ -629,6 +667,33 @@ def downgrade() -> None:
         raise RuntimeError(
             "rich Markdown graph downgrade requires no retained v3 state"
         )
+    op.drop_constraint(
+        "ck_file_acquisition_change_observation",
+        "file_acquisition",
+        type_="check",
+    )
+    op.create_check_constraint(
+        "ck_file_acquisition_change_observation",
+        "file_acquisition",
+        "((change_page_ref IS NULL AND change_ordinal IS NULL "
+        "AND expected_content_sha256 IS NULL AND expected_content_length IS NULL "
+        "AND ui_preview_digest IS NULL AND expected_fragment_digest IS NULL "
+        "AND compiler_config_version IS NULL) OR "
+        "(change_page_ref IS NOT NULL AND change_ordinal BETWEEN 1 AND 100 "
+        "AND expected_content_sha256 ~ '^[0-9a-f]{64}$' "
+        "AND expected_content_length >= 0 AND ui_preview_digest IS NULL "
+        "AND expected_fragment_digest IS NULL AND compiler_config_version IS NULL) OR "
+        "(change_page_ref IS NULL AND change_ordinal IS NULL "
+        "AND expected_content_sha256 ~ '^[0-9a-f]{64}$' "
+        "AND expected_content_length >= 0 "
+        "AND ui_preview_digest ~ '^[0-9a-f]{64}$' "
+        "AND expected_fragment_digest ~ '^[0-9a-f]{64}$' "
+        "AND compiler_config_version = 'markdown-config-v1'))"
+    )
+    _replace(
+        _EXACT_IMPORT,
+        ((_EXACT_IMPORT_ACTIVE, _EXACT_IMPORT_V1_ONLY),),
+    )
     _replace(
         _INDEX,
         ((_SNAPSHOT_MATCH_GRAPH, _SNAPSHOT_MATCH_ANCHOR),),

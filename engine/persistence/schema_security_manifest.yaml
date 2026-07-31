@@ -8137,7 +8137,7 @@
         },
           {
             "name": "ck_file_acquisition_change_observation",
-            "expression": "accepted change-page identity, UI preview identity, or legacy manual-import fields form exactly one valid acquisition shape"
+            "expression": "accepted change-page identity, active v1/v3 UI preview identity, or legacy manual-import fields form exactly one valid acquisition shape"
         }
       ],
       "rowLevelSecurity": {

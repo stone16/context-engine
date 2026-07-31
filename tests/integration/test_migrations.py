@@ -218,9 +218,6 @@ MIGRATION_TEST_START_REVISIONS = {
     "test_feishu_acl_revisions_downgrade_and_reapply_when_empty": (
         "20260731_0048"
     ),
-    "test_feishu_subject_mapping_revision_refuses_retained_authority": (
-        "20260731_0051"
-    ),
     "test_file_scan_bound_acceptance_fails_closed_after_downgrade": (
         "20260730_0047"
     ),
@@ -342,6 +339,7 @@ MIGRATION_TEST_HEAD_PRECONDITIONS = {
     "test_field_projection_downgrade_refuses_populated_content_atomically",
     "test_field_projection_downgrade_serializes_with_concurrent_fragment_insert",
     "test_feishu_subject_mapping_downgrade_serializes_with_source_writer",
+    "test_feishu_subject_mapping_revision_refuses_retained_authority",
     "test_revision_link_graph_downgrade_refuses_retained_v3_state",
 }
 

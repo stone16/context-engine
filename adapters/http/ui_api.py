@@ -21,6 +21,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from adapters.file_source import FileRootRegistry
 from adapters.http.authentication import VerifiedAuthenticationContext
 from adapters.parsers.markdown import compile_markdown
+from adapters.parsers.ragflow_markdown import compile_rich_markdown
 from engine.control import (
     ControlOperation,
     FileImportPath,
@@ -737,9 +738,13 @@ class PostgreSQLUiApi:
             raise UiApiUnavailable
         try:
             raw = roots.read(FileRootRef(root_ref), import_path)
-            outcome = compile_markdown(
-                raw,
-                MarkdownCompilerConfig(ACTIVE_FILE_IMPORT_MARKDOWN_CONFIG_VERSION),
+            config = MarkdownCompilerConfig(
+                ACTIVE_FILE_IMPORT_MARKDOWN_CONFIG_VERSION
+            )
+            outcome = (
+                compile_rich_markdown(raw, config)
+                if config.version == "markdown-config-v3"
+                else compile_markdown(raw, config)
             )
         except (LookupError, RuntimeError, TypeError, ValueError):
             raise UiApiUnavailable from None
