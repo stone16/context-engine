@@ -310,6 +310,78 @@ def insert_context_run(
     release_generation: int | None = None,
     authorized_citation_lineage: tuple[dict[str, str], ...] | None = None,
 ) -> None:
+    current_columns = set(
+        connection.execute(
+            text(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_schema = 'public' AND table_name = 'context_run'"
+            )
+        ).scalars()
+    )
+    feedback_lineage_columns = {
+        "package_ref",
+        "release_ref",
+        "release_generation",
+        "authorized_citation_lineage",
+    }
+    if feedback_lineage_columns.isdisjoint(current_columns):
+        connection.execute(
+            text(
+                """
+                INSERT INTO context_run (
+                    organization_id, run_ref, decision_ref,
+                    user_id, membership_id, membership_version,
+                    principal_ref, agent_version_ref,
+                    authenticated_application_ref, authentication_binding_ref,
+                    request_id, purpose, policy_snapshot_ref, policy_epoch,
+                    effective_scope_digest, query_digest_profile,
+                    query_digest_key_version, query_digest, outcome,
+                    package_digest_profile, package_digest,
+                    package_retention_mode, authorized_evidence_refs,
+                    effective_max_tokens, effective_max_provider_calls,
+                    effective_max_cost_microunits, effective_max_elapsed_ms,
+                    usage_tokens, usage_provider_calls,
+                    usage_cost_microunits, usage_elapsed_ms,
+                    accepted_at, finalized_at, package_as_of, package_expires_at
+                ) VALUES (
+                    :organization_id, :run_ref, :decision_ref,
+                    :user_id, :membership_id, 1,
+                    'principal:issue-19', 'agent:issue-19',
+                    'application:issue-19', 'binding:issue-19',
+                    'request:issue-19', 'answer', :policy_snapshot_ref, :policy_epoch,
+                    :effective_scope_digest, 'context-query-json-hmac-sha256-v1',
+                    1, :query_digest, :outcome,
+                    'context-package-canonical-json-v1', :package_digest,
+                    'digest_only', CAST(:authorized_evidence_refs AS jsonb),
+                    1000, 8, 100000, 5000,
+                    0, 0, 0, 0,
+                    :accepted_at, :finalized_at, :package_as_of,
+                    :package_expires_at
+                )
+                """
+            ),
+            {
+                "organization_id": identity.organization_id,
+                "run_ref": identity.run_ref,
+                "decision_ref": identity.decision_ref,
+                "user_id": identity.user_id,
+                "membership_id": identity.membership_id,
+                "effective_scope_digest": "a" * 64,
+                "query_digest": "b" * 64,
+                "package_digest": "c" * 64,
+                "authorized_evidence_refs": json.dumps(authorized_evidence_refs),
+                "outcome": outcome,
+                "policy_snapshot_ref": policy_snapshot_ref,
+                "policy_epoch": policy_epoch,
+                "accepted_at": ACCEPTED_AT,
+                "finalized_at": finalized_at,
+                "package_as_of": finalized_at,
+                "package_expires_at": finalized_at + timedelta(minutes=5),
+            },
+        )
+        return
+    if not feedback_lineage_columns.issubset(current_columns):
+        raise AssertionError("context_run feedback lineage schema is partial")
     connection.execute(
         text(
             """
