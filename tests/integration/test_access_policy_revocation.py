@@ -1100,10 +1100,11 @@ def test_control_function_and_table_grants_seal_the_only_mutation_path(
                         SELECT tablename, cmd, roles, qual, with_check
                         FROM pg_policies
                         WHERE schemaname = 'public'
-                          AND (
-                              policyname LIKE '%access_policy_definer_%'
-                              OR policyname LIKE '%_access_definer_%'
-                          )
+                              AND (
+                                  policyname LIKE '%access_policy_definer_%'
+                                  OR policyname LIKE '%_access_definer_%'
+                                  OR policyname LIKE '%_feishu_acl_definer_%'
+                              )
                         """
                     )
                 )
@@ -1268,7 +1269,20 @@ def test_control_function_and_table_grants_seal_the_only_mutation_path(
             (ACCESS_POLICY_DEFINER_ROLE, "organization_policy_epoch", "SELECT"),
             (ACCESS_POLICY_DEFINER_ROLE, "organization_policy_epoch", "UPDATE"),
             (ACCESS_POLICY_DEFINER_ROLE, "resource_access_policy", "SELECT"),
+            (ACCESS_POLICY_DEFINER_ROLE, "resource_access_policy", "INSERT"),
             (ACCESS_POLICY_DEFINER_ROLE, "resource_access_policy", "UPDATE"),
+            (ACCESS_POLICY_DEFINER_ROLE, "feishu_subject_mapping", "SELECT"),
+            (
+                ACCESS_POLICY_DEFINER_ROLE,
+                "supply_connector_accepted_page",
+                "SELECT",
+            ),
+            (ACCESS_POLICY_DEFINER_ROLE, "supply_connector_job", "SELECT"),
+            (
+                ACCESS_POLICY_DEFINER_ROLE,
+                "supply_connector_staged_page",
+                "SELECT",
+            ),
             (CONTROL_ROLE, "source_version", "INSERT"),
             (CONTROL_ROLE, "source_version", "SELECT"),
             (RUNTIME_ROLE, "article_access_group_membership", "SELECT"),
@@ -1359,6 +1373,21 @@ def test_control_function_and_table_grants_seal_the_only_mutation_path(
             ),
             (
                 "public",
+                "context_control_apply_feishu_acl_observation",
+                "requested_organization_id uuid, "
+                "requested_source_version_id uuid, "
+                "requested_worker_job_id uuid, requested_page_ref text, "
+                "requested_document_ref text, "
+                "requested_delete_observation boolean",
+            ),
+            (
+                "public",
+                "context_feishu_verify_acl_artifact",
+                "requested_organization_id uuid, requested_source_id uuid, "
+                "artifact jsonb",
+            ),
+            (
+                "public",
                 "context_control_tombstone_file_resource",
                 "requested_organization_id uuid, requested_source_id uuid, "
                 "requested_resource_ref text, requested_event_ref text, "
@@ -1397,6 +1426,11 @@ def test_control_function_and_table_grants_seal_the_only_mutation_path(
             (
                 "organization_policy_epoch",
                 "SELECT",
+                (ACCESS_POLICY_DEFINER_ROLE,),
+            ),
+            (
+                "resource_access_policy",
+                "INSERT",
                 (ACCESS_POLICY_DEFINER_ROLE,),
             ),
             (
@@ -1450,6 +1484,11 @@ def test_control_function_and_table_grants_seal_the_only_mutation_path(
                 (ACCESS_POLICY_DEFINER_ROLE,),
             ),
             (
+                "feishu_subject_mapping",
+                "SELECT",
+                (ACCESS_POLICY_DEFINER_ROLE,),
+            ),
+            (
                 "context_source",
                 "UPDATE",
                 (ACCESS_POLICY_DEFINER_ROLE,),
@@ -1475,6 +1514,21 @@ def test_control_function_and_table_grants_seal_the_only_mutation_path(
                 (ACCESS_POLICY_DEFINER_ROLE,),
             ),
             ("source_version", "SELECT", (ACCESS_POLICY_DEFINER_ROLE,)),
+            (
+                "supply_connector_accepted_page",
+                "SELECT",
+                (ACCESS_POLICY_DEFINER_ROLE,),
+            ),
+            (
+                "supply_connector_job",
+                "SELECT",
+                (ACCESS_POLICY_DEFINER_ROLE,),
+            ),
+            (
+                "supply_connector_staged_page",
+                "SELECT",
+                (ACCESS_POLICY_DEFINER_ROLE,),
+            ),
         }
         for table, command, _, using_expression, check_expression in definer_policies:
             if command == "SELECT":

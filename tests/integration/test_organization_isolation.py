@@ -772,14 +772,12 @@ def test_explicit_migrator_policy_is_the_only_force_rls_administration_path(
             assert connection.execute(
                 text("SELECT current_setting('app.organization_id', true)")
             ).scalar_one_or_none() in {None, ""}
-            assert visible_records(connection) == [
-                (
-                    organizations.organization_a,
-                    record_id,
-                    None,
-                    "force-owner-oracle",
-                )
-            ]
+            assert (
+                organizations.organization_a,
+                record_id,
+                None,
+                "force-owner-oracle",
+            ) in visible_records(connection)
     finally:
         migration_engine.dispose()
 

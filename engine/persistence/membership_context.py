@@ -84,6 +84,11 @@ from engine.runtime.policy_epoch import (
 )
 from engine.runtime.release_lineage import ActiveRuntimeRelease
 from engine.runtime.scope import ScopeTarget
+from engine.runtime.source_acl import (
+    FEISHU_DOCS_ACL_FRESHNESS_PROFILE_REF,
+    FEISHU_DOCS_MIRRORED_ACL_MAX_AGE,
+    FILE_SOURCE_ACL_FRESHNESS_PROFILE_REF,
+)
 
 
 class MembershipNotCurrent(Exception):
@@ -362,6 +367,16 @@ class _PostgreSQLMaterializedProjectionPort:
                      AND article_policy.resource_ref = resource.resource_ref
                      AND article_policy.published IS TRUE
                      AND (
+                        article_policy.source_policy_epoch IS NULL
+                        OR article_policy.source_acl_as_of
+                           + pg_catalog.make_interval(
+                               secs => :feishu_max_age_seconds
+                           )
+                           >= NULLIF(
+                               current_setting('app.checked_at', true), ''
+                           )::timestamptz
+                     )
+                     AND (
                         article_policy.policy_kind = 'organization'
                         OR (
                             article_policy.policy_kind = 'private'
@@ -396,7 +411,12 @@ class _PostgreSQLMaterializedProjectionPort:
                              resource.resource_ref
                     """
                 ),
-                {"active_revision_ids": list(active_revision_ids)},
+                {
+                    "active_revision_ids": list(active_revision_ids),
+                    "feishu_max_age_seconds": int(
+                        FEISHU_DOCS_MIRRORED_ACL_MAX_AGE.total_seconds()
+                    ),
+                },
             )
         except SQLAlchemyError:
             raise MaterializedScopeUnavailable(
@@ -677,7 +697,12 @@ class _PostgreSQLMaterializedProjectionPort:
                         )),
                         'hex'
                     ) AS source_acl_projection_ref,
-                    article_policy.source_acl_as_of
+                    article_policy.source_acl_as_of,
+                    CASE
+                        WHEN article_policy.source_policy_epoch IS NOT NULL
+                        THEN :feishu_freshness_profile_ref
+                        ELSE :file_freshness_profile_ref
+                    END AS source_acl_freshness_profile_ref
                 FROM context_resource AS resource
                 JOIN context_revision AS revision
                   ON revision.organization_id = resource.organization_id
@@ -693,6 +718,16 @@ class _PostgreSQLMaterializedProjectionPort:
                  AND article_policy.published IS TRUE
                  AND article_policy.source_observation_status = 'resolved'
                  AND article_policy.source_acl_as_of IS NOT NULL
+                 AND (
+                    article_policy.source_policy_epoch IS NULL
+                    OR article_policy.source_acl_as_of
+                       + pg_catalog.make_interval(
+                           secs => :feishu_max_age_seconds
+                       )
+                       >= NULLIF(
+                           current_setting('app.checked_at', true), ''
+                       )::timestamptz
+                 )
                 WHERE resource.organization_id = :organization_id
                   AND resource.source_ref = :source_ref
                   AND resource.resource_ref = :resource_ref
@@ -707,6 +742,15 @@ class _PostgreSQLMaterializedProjectionPort:
                 "resource_ref": candidate_ref.resource_ref,
                 "revision_id": revision_id,
                 "fragment_ref": candidate_ref.fragment_ref,
+                "feishu_freshness_profile_ref": (
+                    FEISHU_DOCS_ACL_FRESHNESS_PROFILE_REF
+                ),
+                "file_freshness_profile_ref": (
+                    FILE_SOURCE_ACL_FRESHNESS_PROFILE_REF
+                ),
+                "feishu_max_age_seconds": int(
+                    FEISHU_DOCS_MIRRORED_ACL_MAX_AGE.total_seconds()
+                ),
             },
         ).one_or_none()
         if row is None:
@@ -719,6 +763,9 @@ class _PostgreSQLMaterializedProjectionPort:
             fragment_ref=row.fragment_ref,
             source_acl_projection_ref=row.source_acl_projection_ref,
             source_acl_as_of=row.source_acl_as_of,
+            source_acl_freshness_profile_ref=(
+                row.source_acl_freshness_profile_ref
+            ),
         )
 
     def project(
@@ -946,6 +993,9 @@ class _PostgreSQLMaterializedProjectionPort:
                 fragment_ref=fragment_ref,
                 source_acl_projection_ref=anchor.source_acl_projection_ref,
                 source_acl_as_of=anchor.source_acl_as_of,
+                source_acl_freshness_profile_ref=(
+                    anchor.source_acl_freshness_profile_ref
+                ),
             )
             projection = self.project(locator)
             if projection is not None:

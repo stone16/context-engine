@@ -16,6 +16,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from sqlalchemy import Engine, text
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
+from adapters.connectors.feishu import FEISHU_DOCS_CAPABILITY_MANIFEST_JSON
 from adapters.file_source import FileChangeProvider, FileReadLimits, FileRootRegistry
 from adapters.parsers.markdown import compile_markdown
 from engine.control import (
@@ -137,6 +138,7 @@ HEAD_TABLES = [
     "egress_audit",
     "egress_grant",
     "exact_phrase_candidate",
+    "feishu_subject_mapping",
     "file_acquisition",
     "file_acquisition_result",
     "file_delete_observation_execution",
@@ -187,6 +189,7 @@ ARTICLE_POLICY_TABLES = {
     "article_explicit_policy_setting",
     "article_source_acl_observation",
     "bulk_article_policy_change_audit",
+    "feishu_subject_mapping",
     "organization_article_policy_default",
     "source_article_policy_default",
 }
@@ -210,6 +213,21 @@ MIGRATION_TEST_START_REVISIONS = {
     ),
     "test_supply_execution_bridge_revision_downgrades_and_reapplies_cleanly": (
         "20260729_0041"
+    ),
+    "test_feishu_acl_revisions_downgrade_and_reapply_when_empty": (
+        "20260731_0048"
+    ),
+    "test_feishu_subject_mapping_revision_refuses_retained_authority": (
+        "20260731_0051"
+    ),
+    "test_file_scan_bound_acceptance_fails_closed_after_downgrade": (
+        "20260730_0047"
+    ),
+    "test_file_scan_bound_revision_downgrades_and_reapplies_when_default_only": (
+        "20260730_0047"
+    ),
+    "test_file_scan_bound_downgrade_observes_in_flight_refusal_report": (
+        "20260730_0047"
     ),
     "test_membership_revision_downgrades_to_issue_8_and_reapplies_cleanly": (
         "20260721_0003"
@@ -303,9 +321,6 @@ MIGRATION_TEST_HEAD_PRECONDITIONS = {
     "test_article_policy_downgrade_rejects_every_deferred_admin_state",
     "test_article_policy_downgrade_refuses_state_that_would_reauthorize_content",
     "test_bulk_article_policy_revision_downgrades_and_reapplies_when_audit_empty",
-    "test_file_scan_bound_acceptance_fails_closed_after_downgrade",
-    "test_file_scan_bound_revision_downgrades_and_reapplies_when_default_only",
-    "test_file_scan_bound_downgrade_observes_in_flight_refusal_report",
     "test_file_reclaim_revision_refuses_retained_higher_generation",
     "test_mixed_file_upsert_downgrade_waits_for_in_flight_scheduler",
     "test_file_delete_observation_revision_refuses_accepted_baseline_downgrade",
@@ -322,6 +337,7 @@ MIGRATION_TEST_HEAD_PRECONDITIONS = {
     "test_openapi_v0_revision_refuses_downgrade_with_v3_context_run_history",
     "test_field_projection_downgrade_refuses_populated_content_atomically",
     "test_field_projection_downgrade_serializes_with_concurrent_fragment_insert",
+    "test_feishu_subject_mapping_downgrade_serializes_with_source_writer",
 }
 
 
@@ -330,7 +346,7 @@ def migration_test_database(
     request: pytest.FixtureRequest,
     monkeypatch: pytest.MonkeyPatch,
 ) -> Iterator[HarnessDatabaseConfigurations]:
-    test_name = request.node.name
+    test_name = request.node.name.partition("[")[0]
     if test_name in MIGRATION_TEST_START_REVISIONS:
         revision = MIGRATION_TEST_START_REVISIONS[test_name]
     elif test_name in MIGRATION_TEST_HEAD_PRECONDITIONS:
@@ -1313,6 +1329,254 @@ def test_bulk_article_policy_revision_downgrades_and_reapplies_when_audit_empty(
 
     assert _revision_rows(migration_configuration) == [HEAD_REVISION]
     assert _application_tables(migration_configuration) == HEAD_TABLES
+
+
+def test_feishu_acl_revisions_downgrade_and_reapply_when_empty(
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    alembic_configuration = Config(ROOT / "alembic.ini")
+
+    command.upgrade(alembic_configuration, "head")
+    assert _revision_rows(migration_configuration) == [HEAD_REVISION]
+    try:
+        command.downgrade(alembic_configuration, "20260731_0048")
+        assert _revision_rows(migration_configuration) == ["20260731_0048"]
+        engine = create_database_engine(migration_configuration)
+        try:
+            with engine.connect() as connection:
+                source_constraints = set(
+                    connection.execute(
+                        text(
+                            "SELECT conname FROM pg_constraint "
+                            "WHERE conrelid IN "
+                            "('context_source'::regclass, 'source_version'::regclass)"
+                        )
+                    ).scalars()
+                )
+                trigger_definition = connection.execute(
+                    text(
+                        "SELECT pg_get_functiondef("
+                        "'article_access_policy_fix_from_file_access_grant()'::regprocedure)"
+                    )
+                ).scalar_one()
+            assert "ck_context_source_kind_file" in source_constraints
+            assert "ck_source_version_kind_file" in source_constraints
+            assert "ck_source_version_file_capabilities" in source_constraints
+            assert "source.source_kind = 'file'" not in trigger_definition
+        finally:
+            engine.dispose()
+    finally:
+        command.upgrade(alembic_configuration, "head")
+
+    assert _revision_rows(migration_configuration) == [HEAD_REVISION]
+    engine = create_database_engine(migration_configuration)
+    try:
+        with engine.connect() as connection:
+            source_constraints = set(
+                connection.execute(
+                    text(
+                        "SELECT conname FROM pg_constraint "
+                        "WHERE conrelid IN "
+                        "('context_source'::regclass, 'source_version'::regclass)"
+                    )
+                ).scalars()
+            )
+            trigger_definition = connection.execute(
+                text(
+                    "SELECT pg_get_functiondef("
+                    "'article_access_policy_fix_from_file_access_grant()'::regprocedure)"
+                )
+            ).scalar_one()
+        assert "ck_context_source_kind" in source_constraints
+        assert "ck_source_version_kind" in source_constraints
+        assert "ck_source_version_capabilities" in source_constraints
+        assert "source.source_kind = 'file'" in trigger_definition
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.parametrize("retain_mapping", [False, True])
+def test_feishu_subject_mapping_revision_refuses_retained_authority(
+    migration_configuration: DatabaseConfiguration,
+    retain_mapping: bool,
+) -> None:
+    organization_id = uuid4()
+    source_id = uuid4()
+    version_id = uuid4()
+    engine = create_database_engine(migration_configuration)
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                text("INSERT INTO organization (organization_id) VALUES (:org)"),
+                {"org": organization_id},
+            )
+            connection.execute(text("SET CONSTRAINTS ALL DEFERRED"))
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO context_source (
+                        organization_id, source_id, source_kind, display_name,
+                        active_version_id, registration_operation,
+                        idempotency_key, registration_digest, lifecycle_state,
+                        created_at
+                    ) VALUES (
+                        :org, :source, 'feishu_docs', 'Synthetic Feishu',
+                        :version, 'register_source', :idempotency,
+                        :digest, 'active', statement_timestamp()
+                    )
+                    """
+                ),
+                {
+                    "org": organization_id,
+                    "source": source_id,
+                    "version": version_id,
+                    "idempotency": f"feishu-mapping-{source_id}",
+                    "digest": "a" * 64,
+                },
+            )
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO source_version (
+                        organization_id, source_id, version_id, source_kind,
+                        root_ref, capability_manifest, created_at
+                    ) VALUES (
+                        :org, :source, :version, 'feishu_docs', 'feishu-root',
+                        CAST(:capabilities AS jsonb), statement_timestamp()
+                    )
+                    """
+                ),
+                {
+                    "org": organization_id,
+                    "source": source_id,
+                    "version": version_id,
+                    "capabilities": FEISHU_DOCS_CAPABILITY_MANIFEST_JSON,
+                },
+            )
+            if retain_mapping:
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO feishu_subject_mapping (
+                            organization_id, source_id, subject_kind,
+                            external_ref, local_ref, mapping_version
+                        ) VALUES (:org, :source, 'identity',
+                                  'external:test', 'principal:test', 1)
+                        """
+                    ),
+                    {"org": organization_id, "source": source_id},
+                )
+        with pytest.raises(
+            SQLAlchemyError,
+            match="retained Feishu authorization state",
+        ):
+            downgrade_revision(migration_configuration, "20260731_0051")
+        assert _revision_rows(migration_configuration) == [HEAD_REVISION]
+    finally:
+        engine.dispose()
+
+
+def test_feishu_subject_mapping_downgrade_serializes_with_source_writer(
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    """0051 cannot miss Feishu authority committed during its decision."""
+
+    organization_id = uuid4()
+    source_id = uuid4()
+    version_id = uuid4()
+    parameters = {
+        "org": organization_id,
+        "source": source_id,
+        "version": version_id,
+        "idempotency": f"feishu-downgrade-race-{source_id}",
+        "digest": "b" * 64,
+        "capabilities": FEISHU_DOCS_CAPABILITY_MANIFEST_JSON,
+    }
+    engine = create_database_engine(migration_configuration)
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                text("INSERT INTO organization (organization_id) VALUES (:org)"),
+                parameters,
+            )
+        with engine.connect() as writer:
+            writer_transaction = writer.begin()
+            try:
+                writer.execute(text("SET CONSTRAINTS ALL DEFERRED"))
+                writer.execute(
+                    text(
+                        """
+                        INSERT INTO context_source (
+                            organization_id, source_id, source_kind, display_name,
+                            active_version_id, registration_operation,
+                            idempotency_key, registration_digest, lifecycle_state,
+                            created_at
+                        ) VALUES (
+                            :org, :source, 'feishu_docs', 'Synthetic Feishu',
+                            :version, 'register_source', :idempotency,
+                            :digest, 'active', statement_timestamp()
+                        )
+                        """
+                    ),
+                    parameters,
+                )
+                writer.execute(
+                    text(
+                        """
+                        INSERT INTO source_version (
+                            organization_id, source_id, version_id, source_kind,
+                            root_ref, capability_manifest, created_at
+                        ) VALUES (
+                            :org, :source, :version, 'feishu_docs', 'feishu-root',
+                            CAST(:capabilities AS jsonb), statement_timestamp()
+                        )
+                        """
+                    ),
+                    parameters,
+                )
+                with ThreadPoolExecutor(max_workers=1) as executor:
+                    pending_downgrade = executor.submit(
+                        downgrade_revision,
+                        migration_configuration,
+                        "20260731_0051",
+                    )
+                    downgrade_waiting = False
+                    with engine.connect() as observer:
+                        deadline = monotonic() + 10
+                        while monotonic() < deadline:
+                            downgrade_waiting = observer.execute(
+                                text(
+                                    """
+                                    SELECT EXISTS (
+                                        SELECT 1 FROM pg_locks
+                                        WHERE database = (
+                                            SELECT oid FROM pg_database
+                                            WHERE datname = current_database()
+                                        )
+                                          AND relation = 'context_source'::regclass
+                                          AND mode = 'AccessExclusiveLock'
+                                          AND granted IS FALSE
+                                    )
+                                    """
+                                )
+                            ).scalar_one()
+                            if downgrade_waiting or pending_downgrade.done():
+                                break
+                            sleep(0.01)
+                    assert downgrade_waiting is True
+                    assert pending_downgrade.done() is False
+                    writer_transaction.commit()
+                    with pytest.raises(
+                        SQLAlchemyError,
+                        match="retained Feishu authorization state",
+                    ):
+                        pending_downgrade.result(timeout=10)
+            finally:
+                if writer_transaction.is_active:
+                    writer_transaction.rollback()
+        assert _revision_rows(migration_configuration) == [HEAD_REVISION]
+    finally:
+        engine.dispose()
 
 
 def test_membership_revision_downgrades_to_issue_8_and_reapplies_cleanly(
@@ -3855,7 +4119,7 @@ def test_file_scan_bound_downgrade_observes_in_flight_refusal_report(
             finally:
                 if transaction.is_active:
                     transaction.rollback()
-        assert _revision_rows(migration_configuration) == [HEAD_REVISION]
+        assert _revision_rows(migration_configuration) == ["20260730_0047"]
     finally:
         with migration_engine.begin() as connection:
             connection.execute(

@@ -161,6 +161,7 @@ def test_locator_is_content_free_and_body_projection_is_a_separate_operation() -
         "fragment_ref",
         "source_acl_projection_ref",
         "source_acl_as_of",
+        "source_acl_freshness_profile_ref",
     }
     assert all(
         forbidden not in MaterializedFragmentLocator.__dataclass_fields__

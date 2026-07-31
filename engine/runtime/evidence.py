@@ -10,6 +10,8 @@ from hashlib import sha256
 from typing import TYPE_CHECKING, Final, NoReturn
 from uuid import UUID
 
+from engine.runtime.source_acl import FILE_SOURCE_ACL_FRESHNESS_PROFILE_REF
+
 if TYPE_CHECKING:
     from engine.runtime.contracts import CitationOpenRef
 
@@ -128,6 +130,10 @@ class EvidenceLineage:
     source_acl_decision_ref: str = field(repr=False)
     source_acl_projection_ref: str = field(repr=False)
     source_acl_as_of: datetime = field(repr=False)
+    source_acl_freshness_profile_ref: str = field(
+        default=FILE_SOURCE_ACL_FRESHNESS_PROFILE_REF,
+        repr=False,
+    )
 
     def __post_init__(self) -> None:
         for field_name in (
@@ -138,6 +144,7 @@ class EvidenceLineage:
             "policy_snapshot_ref",
             "source_acl_decision_ref",
             "source_acl_projection_ref",
+            "source_acl_freshness_profile_ref",
         ):
             _require_opaque_ref(
                 f"Evidence lineage {field_name}",
@@ -204,7 +211,7 @@ def _projection_integrity_digest(
     projected_field_refs: tuple[str, ...],
     lineage: EvidenceLineage,
 ) -> str:
-    canonical = b"context-engine:authorized-projection:v3"
+    canonical = b"context-engine:authorized-projection:v4"
     canonical += _length_prefix(candidate_ref.organization_id.bytes)
     for value in (
         candidate_ref.source_ref,
@@ -222,6 +229,7 @@ def _projection_integrity_digest(
         lineage.source_acl_decision_ref,
         lineage.source_acl_projection_ref,
         lineage.source_acl_as_of.isoformat(timespec="microseconds"),
+        lineage.source_acl_freshness_profile_ref,
     ):
         canonical += _encode_text(value)
     for field_ref in projected_field_refs:
@@ -463,13 +471,14 @@ def _lineage_canonical_bytes(lineage: EvidenceLineage) -> bytes:
         lineage.source_acl_decision_ref,
         lineage.source_acl_projection_ref,
         lineage.source_acl_as_of.isoformat(timespec="microseconds"),
+        lineage.source_acl_freshness_profile_ref,
     ):
         canonical += _encode_text(value)
     return canonical
 
 
 def _evidence_integrity_digest(evidence: Evidence) -> str:
-    canonical = b"context-engine:evidence-integrity:v3"
+    canonical = b"context-engine:evidence-integrity:v4"
     for value in (
         evidence.evidence_ref,
         evidence.source_ref,
@@ -635,7 +644,7 @@ def _candidate_sort_key(candidate_ref: CandidateRef) -> tuple[object, ...]:
 def _evidence_ref_for_projection(projection: AuthorizedProjection) -> str:
     candidate_ref = projection.candidate_ref
     lineage = projection.lineage
-    canonical = b"context-engine:evidence-ref:v3"
+    canonical = b"context-engine:evidence-ref:v4"
     canonical += _length_prefix(candidate_ref.organization_id.bytes)
     for value in (
         candidate_ref.source_ref,
@@ -653,6 +662,7 @@ def _evidence_ref_for_projection(projection: AuthorizedProjection) -> str:
         lineage.source_acl_decision_ref,
         lineage.source_acl_projection_ref,
         lineage.source_acl_as_of.isoformat(timespec="microseconds"),
+        lineage.source_acl_freshness_profile_ref,
     ):
         canonical += _encode_text(value)
     for field_ref in projection.projected_field_refs:

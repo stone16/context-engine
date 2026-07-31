@@ -141,7 +141,7 @@ class AclObservationStatus(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class SourceAclEvidence:
-    """One locally managed File Mirrored ACL observation."""
+    """One locally managed Mirrored ACL observation from an admitted source."""
 
     status: AclObservationStatus
     observed_policy: ArticleAccessPolicySetting | None = None
@@ -153,7 +153,7 @@ class SourceAclEvidence:
         if type(self.mode) is not SourceAclEvidenceMode:
             raise TypeError("source ACL evidence mode must be closed")
         if self.mode is not SourceAclEvidenceMode.MIRRORED:
-            raise ValueError("only the File Mirrored ACL carrier is active")
+            raise ValueError("only the Mirrored ACL carrier is active")
         if self.status is AclObservationStatus.RESOLVED:
             if type(self.observed_policy) is not ArticleAccessPolicySetting:
                 raise ValueError("resolved source ACL requires an observed policy")

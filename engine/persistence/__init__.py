@@ -50,6 +50,11 @@ from engine.persistence.delivery_evidence import (
 )
 from engine.persistence.egress import PostgreSQLEgressGrantRedemptionAuthority
 from engine.persistence.feedback import PostgreSQLFeedbackInbox
+from engine.persistence.feishu_acl import (
+    FeishuAclControlUnavailable,
+    FeishuAclObservationNotAvailable,
+    PostgreSQLFeishuAclControl,
+)
 from engine.persistence.file_imports import (
     FileImportInterrupted,
     FileImportLeaseRedemption,
@@ -154,6 +159,7 @@ __all__ = [
     "PostgreSQLContextRunReader",
     "PostgreSQLCitationOpenRetentionPort",
     "PostgreSQLControlStore",
+    "PostgreSQLFeishuAclControl",
     "PostgreSQLDeliveryEvidenceIssuerPort",
     "PostgreSQLDeliveryEvidenceRetentionPort",
     "PostgreSQLEgressGrantRedemptionAuthority",
@@ -164,6 +170,8 @@ __all__ = [
     "PostgreSQLFileDispatchAuthority",
     "FileImportInterrupted",
     "FileImportUnavailable",
+    "FeishuAclControlUnavailable",
+    "FeishuAclObservationNotAvailable",
     "FilePublicationBoundary",
     "PostgreSQLFileImportWorker",
     "PostgreSQLFeedbackInbox",

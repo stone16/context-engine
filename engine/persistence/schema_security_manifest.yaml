@@ -1,5 +1,5 @@
 {
-  "manifestVersion": "41.0.0",
+  "manifestVersion": "42.0.0",
   "controlOperations": [
     {
       "name": "register_file_source",
@@ -379,6 +379,11 @@
       "directTableMutationAllowed": false,
       "databaseOwnedTime": true,
       "checkpointOpaque": true,
+      "aclFreshnessReconciliation": "runner policy_epoch must not exceed the lease-bound authoritative epoch; runner observed_at must not exceed database acceptance time; accepted values remain provenance only",
+      "deleteEntryAllowlist": [
+        "acl_observation",
+        "document_ref"
+      ],
       "checkpointCommitRule": "accepted page lineage and checkpoint advance commit in one transaction",
       "requiresPriorOneShotRedemption": true,
       "fixedReceiver": {
@@ -392,6 +397,37 @@
         "supply_connector_accepted_page",
         "supply_connector_checkpoint",
         "supply_connector_job"
+      ]
+    },
+    {
+      "name": "apply_feishu_acl_observation",
+      "databaseFunction": "context_control_apply_feishu_acl_observation",
+      "role": "context_engine_control",
+      "definerRole": "context_engine_access_policy_definer",
+      "directTableMutationAllowed": false,
+      "trustedOrganizationSource": "TrustedControlCall",
+      "acceptedArtifactLocator": [
+        "organization_id",
+        "source_version_id",
+        "worker_job_id",
+        "page_ref",
+        "document_ref",
+        "delete_observation"
+      ],
+      "sourceAclEvidenceMode": "mirrored",
+      "sourceAclFloor": "source permissions intersect the fixed local Article policy; missing, failed, stale, or unresolved evidence isolates",
+      "artifactVerifierDatabaseFunction": "context_feishu_verify_acl_artifact",
+      "subjectMappingAuthority": "engine-owned feishu_subject_mapping plus article_access_group; runner mapping claims are reproducibility inputs only",
+      "runnerMappingClaimsAuthorityAllowed": false,
+      "databaseOwnedPolicyEpoch": true,
+      "runtimeAuthorityAllowed": false,
+      "indexAuthorityAllowed": false,
+      "atomicWrites": [
+        "article_source_acl_observation",
+        "article_access_policy",
+        "resource_access_policy",
+        "context_resource",
+        "organization_policy_epoch"
       ]
     },
     {
@@ -1564,7 +1600,7 @@
           "table": "context_source"
         }
       },
-      "purpose": "Stable Organization-owned File source identity, active immutable SourceVersion pointer, and terminal disabled lifecycle",
+      "purpose": "Stable Organization-owned File or twin-only Feishu Docs source identity, active immutable SourceVersion pointer, and terminal disabled lifecycle",
       "organizationColumn": "organization_id",
       "organizationInclusiveKeys": [
         {
@@ -1639,8 +1675,8 @@
       ],
       "checkConstraints": [
         {
-          "name": "ck_context_source_kind_file",
-          "expression": "source_kind = 'file'"
+          "name": "ck_context_source_kind",
+          "expression": "source_kind IN ('file', 'feishu_docs')"
         },
         {
           "name": "ck_context_source_registration_operation",
@@ -1685,7 +1721,7 @@
             "roles": [
               "context_engine_control"
             ],
-            "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"
+            "using": "(organization_id = (NULLIF(current_setting('app.organization_id'::text, true), ''::text))::uuid)"
           },
           {
             "name": "context_source_migrator_administration",
@@ -1839,7 +1875,7 @@
           "table": "source_version"
         }
       },
-      "purpose": "Immutable Organization-owned File source configuration and exact capability declaration",
+      "purpose": "Immutable Organization-owned File or twin-only Feishu Docs source configuration and exact capability declaration",
       "organizationColumn": "organization_id",
       "organizationInclusiveKeys": [
         {
@@ -1872,16 +1908,16 @@
       ],
       "checkConstraints": [
         {
-          "name": "ck_source_version_kind_file",
-          "expression": "source_kind = 'file'"
+          "name": "ck_source_version_kind",
+          "expression": "source_kind IN ('file', 'feishu_docs')"
         },
         {
           "name": "ck_source_version_logical_root_ref",
           "expression": "root_ref ~ '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$' AND root_ref NOT IN ('.', '..')"
         },
         {
-          "name": "ck_source_version_file_capabilities",
-          "expression": "materialized mirrored markdown only: exact file-capabilities-v1 and file-capabilities-v2 keep batchLimits/checkpoint/checkpointSemantics/cursorSemantics/describeCapabilities/readChanges unavailable; exact file-capabilities-v3 makes those dimensions available; exact file-capabilities-v4 additionally makes deleteObservations available while consistencyGuarantees/freshness/discover/authorizeAndProject/deletion remain unavailable, resourceKinds = [markdown_document], projectionFields = [] and ingestionJobs/fileSourceAccess remain available"
+          "name": "ck_source_version_capabilities",
+          "expression": "materialized mirrored markdown only: exact file-capabilities-v1 and file-capabilities-v2 keep batchLimits/checkpoint/checkpointSemantics/cursorSemantics/describeCapabilities/readChanges unavailable; exact file-capabilities-v3 makes those dimensions available; exact file-capabilities-v4 additionally makes deleteObservations available while consistencyGuarantees/freshness/discover/authorizeAndProject/deletion remain unavailable and ingestionJobs/fileSourceAccess remain available; exact feishu-docs-capabilities-v1 admits batchLimits/checkpoint/checkpointSemantics/cursorSemantics/describeCapabilities/readChanges/deleteObservations/freshness while consistencyGuarantees/deletion/discover/authorizeAndProject/fileSourceAccess remain unavailable, liveNetwork = not_active, resourceKinds = [markdown_document], projectionFields = []"
         }
       ],
       "rowLevelSecurity": {
@@ -2152,7 +2188,8 @@
         "databaseFunctions": [
           "context_worker_prepare_file_publication",
           "context_worker_activate_recoverable_file_publication",
-          "context_control_tombstone_file_resource"
+          "context_control_tombstone_file_resource",
+          "context_control_apply_feishu_acl_observation"
         ],
         "definerRoles": [
           "context_engine_worker_lease_definer",
@@ -2167,6 +2204,7 @@
         ],
         "context_engine_control": [
           "EXECUTE context_control_tombstone_file_resource",
+          "EXECUTE context_control_apply_feishu_acl_observation",
           "EXECUTE context_control_read_file_source_status"
         ],
         "context_engine_runtime": [
@@ -2450,6 +2488,16 @@
           }
         ]
       },
+      "functionOnlyMutation": {
+        "databaseFunctions": [
+          "context_control_revoke_resource_access",
+          "context_control_tombstone_file_resource",
+          "context_control_apply_feishu_acl_observation",
+          "context_control_offboard_file_source"
+        ],
+        "definerRole": "context_engine_access_policy_definer",
+        "directTableMutationAllowed": false
+      },
       "permittedOperations": {
         "context_engine_access_policy_definer": [
           "SELECT",
@@ -2458,6 +2506,7 @@
         "context_engine_control": [
           "EXECUTE change_resource_access",
           "EXECUTE context_control_tombstone_file_resource",
+          "EXECUTE context_control_apply_feishu_acl_observation",
           "EXECUTE context_control_offboard_file_source"
         ],
         "context_engine_delivery_evidence_definer": [
@@ -2608,6 +2657,14 @@
             "withCheck": "resource_access_policy.organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"
           },
           {
+            "name": "resource_access_policy_feishu_acl_definer_insert",
+            "command": "INSERT",
+            "roles": [
+              "context_engine_access_policy_definer"
+            ],
+            "withCheck": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"
+          },
+          {
             "name": "resource_access_policy_file_import_definer_insert",
             "command": "INSERT",
             "roles": [
@@ -2626,17 +2683,26 @@
         ]
       },
       "functionOnlyMutation": {
-        "databaseFunction": "context_worker_prepare_file_publication",
-        "definerRole": "context_engine_worker_lease_definer",
+        "databaseFunctions": [
+          "context_worker_prepare_file_publication",
+          "context_control_revoke_resource_access",
+          "context_control_apply_feishu_acl_observation"
+        ],
+        "definerRoles": [
+          "context_engine_worker_lease_definer",
+          "context_engine_access_policy_definer"
+        ],
         "directTableMutationAllowed": false
       },
       "permittedOperations": {
         "context_engine_access_policy_definer": [
           "SELECT",
+          "INSERT",
           "UPDATE"
         ],
         "context_engine_control": [
-          "EXECUTE change_resource_access"
+          "EXECUTE change_resource_access",
+          "EXECUTE context_control_apply_feishu_acl_observation"
         ],
         "context_engine_runtime": [
           "SELECT"
@@ -5430,11 +5496,12 @@
       ],
       "rowLevelSecurity": {"enabled": true, "forced": true, "policies": [
         {"name": "supply_connector_job_migrator_administration", "command": "ALL", "roles": ["context_engine_migrator"], "using": "true", "withCheck": "true"},
+        {"name": "supply_connector_job_feishu_acl_definer_select", "command": "SELECT", "roles": ["context_engine_access_policy_definer"], "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"},
         {"name": "supply_connector_job_supply_definer_select", "command": "SELECT", "roles": ["context_engine_worker_lease_definer"], "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid AND worker_job_id = NULLIF(current_setting('app.worker_job_id', true), '')::uuid"},
         {"name": "supply_connector_job_supply_definer_update", "command": "UPDATE", "roles": ["context_engine_worker_lease_definer"], "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid AND worker_job_id = NULLIF(current_setting('app.worker_job_id', true), '')::uuid", "withCheck": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid AND worker_job_id = NULLIF(current_setting('app.worker_job_id', true), '')::uuid"}
       ]},
       "functionOnlyMutation": {"databaseFunctions": ["context_supply_issue_connector_lease", "context_supply_preempt_connector_lease", "context_supply_redeem_connector_lease", "context_supply_accept_connector_page"], "definerRole": "context_engine_worker_lease_definer", "directTableMutationAllowed": false},
-      "permittedOperations": {"context_engine_control": ["EXECUTE context_supply_issue_connector_lease", "EXECUTE context_supply_preempt_connector_lease"], "context_engine_runtime": [], "context_engine_worker": ["EXECUTE context_supply_redeem_connector_lease", "EXECUTE context_supply_load_connector_checkpoint", "EXECUTE context_supply_accept_connector_page"], "context_engine_worker_lease_definer": ["SELECT", "UPDATE"]},
+      "permittedOperations": {"context_engine_access_policy_definer": ["SELECT"], "context_engine_control": ["EXECUTE context_supply_issue_connector_lease", "EXECUTE context_supply_preempt_connector_lease"], "context_engine_runtime": [], "context_engine_worker": ["EXECUTE context_supply_redeem_connector_lease", "EXECUTE context_supply_load_connector_checkpoint", "EXECUTE context_supply_accept_connector_page"], "context_engine_worker_lease_definer": ["SELECT", "UPDATE"]},
       "retention": {"sourceContent": "none", "checkpoint": "none", "authority": "content-free exact-job lineage"},
       "partitions": [],
       "securityInvariantIds": ["TENANT-OWNERSHIP-001", "TENANT-FK-002", "RLS-FAIL-CLOSED-003", "WORKER-LEASE-007"],
@@ -5490,11 +5557,12 @@
       ],
       "rowLevelSecurity": {"enabled": true, "forced": true, "policies": [
         {"name": "supply_connector_staged_page_migrator_administration", "command": "ALL", "roles": ["context_engine_migrator"], "using": "true", "withCheck": "true"},
+        {"name": "supply_connector_staged_page_feishu_acl_definer_select", "command": "SELECT", "roles": ["context_engine_access_policy_definer"], "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"},
         {"name": "supply_connector_staged_page_supply_definer_insert", "command": "INSERT", "roles": ["context_engine_worker_lease_definer"], "withCheck": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid AND worker_job_id = NULLIF(current_setting('app.worker_job_id', true), '')::uuid"},
         {"name": "supply_connector_staged_page_supply_definer_select", "command": "SELECT", "roles": ["context_engine_worker_lease_definer"], "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid AND worker_job_id = NULLIF(current_setting('app.worker_job_id', true), '')::uuid"}
       ]},
       "functionOnlyMutation": {"databaseFunction": "context_supply_accept_connector_page", "role": "context_engine_worker", "definerRole": "context_engine_worker_lease_definer", "directTableMutationAllowed": false},
-      "permittedOperations": {"context_engine_control": [], "context_engine_runtime": [], "context_engine_worker": ["EXECUTE context_supply_accept_connector_page", "EXECUTE context_supply_load_staged_connector_page"], "context_engine_worker_lease_definer": ["SELECT", "INSERT"]},
+      "permittedOperations": {"context_engine_access_policy_definer": ["SELECT"], "context_engine_control": [], "context_engine_runtime": [], "context_engine_worker": ["EXECUTE context_supply_accept_connector_page", "EXECUTE context_supply_load_staged_connector_page"], "context_engine_worker_lease_definer": ["SELECT", "INSERT"]},
       "retention": {"class": "supply_staging", "corpusPublished": false, "payload": "byte-exact complete emitted page", "checkpointCommitTogether": true},
       "partitions": [],
       "securityInvariantIds": ["TENANT-OWNERSHIP-001", "TENANT-FK-002", "RLS-FAIL-CLOSED-003", "WORKER-LEASE-007"],
@@ -5522,11 +5590,12 @@
       ],
       "rowLevelSecurity": {"enabled": true, "forced": true, "policies": [
         {"name": "supply_connector_accepted_page_migrator_administration", "command": "ALL", "roles": ["context_engine_migrator"], "using": "true", "withCheck": "true"},
+        {"name": "supply_connector_accepted_page_feishu_acl_definer_select", "command": "SELECT", "roles": ["context_engine_access_policy_definer"], "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"},
         {"name": "supply_connector_accepted_page_supply_definer_insert", "command": "INSERT", "roles": ["context_engine_worker_lease_definer"], "withCheck": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid AND worker_job_id = NULLIF(current_setting('app.worker_job_id', true), '')::uuid"},
         {"name": "supply_connector_accepted_page_supply_definer_select", "command": "SELECT", "roles": ["context_engine_worker_lease_definer"], "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid AND worker_job_id = NULLIF(current_setting('app.worker_job_id', true), '')::uuid"}
       ]},
       "functionOnlyMutation": {"databaseFunction": "context_supply_accept_connector_page", "role": "context_engine_worker", "definerRole": "context_engine_worker_lease_definer", "directTableMutationAllowed": false},
-      "permittedOperations": {"context_engine_control": [], "context_engine_runtime": [], "context_engine_worker": ["EXECUTE context_supply_accept_connector_page"], "context_engine_worker_lease_definer": ["SELECT", "INSERT"]},
+      "permittedOperations": {"context_engine_access_policy_definer": ["SELECT"], "context_engine_control": [], "context_engine_runtime": [], "context_engine_worker": ["EXECUTE context_supply_accept_connector_page"], "context_engine_worker_lease_definer": ["SELECT", "INSERT"]},
       "retention": {"sourceContent": "none", "checkpoint": "sha256 digest only", "page": "opaque reference only"},
       "partitions": [],
       "securityInvariantIds": ["TENANT-OWNERSHIP-001", "TENANT-FK-002", "RLS-FAIL-CLOSED-003", "WORKER-LEASE-007"],
@@ -5724,6 +5793,111 @@
         "JOB-001",
         "JOB-005",
         "WORKER-LEASE-007"
+      ]
+    },
+    {
+      "name": "feishu_subject_mapping",
+      "classification": "tenant_owned",
+      "nonOwnerEvidence": {
+        "evidenceId": "PG-ARTICLE-ACCESS-RLS-141",
+        "selector": {
+          "table": "feishu_subject_mapping"
+        }
+      },
+      "purpose": "Engine-owned external Feishu identity and group mapping authority consulted before accepted runner observations can grant local delivery access",
+      "organizationColumn": "organization_id",
+      "organizationInclusiveKeys": [
+        {
+          "name": "pk_feishu_subject_mapping",
+          "kind": "primary_key",
+          "columns": [
+            "organization_id",
+            "source_id",
+            "subject_kind",
+            "external_ref"
+          ]
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_feishu_subject_mapping_source",
+          "columns": [
+            "organization_id",
+            "source_id"
+          ],
+          "references": {
+            "table": "context_source",
+            "columns": [
+              "organization_id",
+              "source_id"
+            ]
+          },
+          "onDelete": "CASCADE"
+        }
+      ],
+      "checkConstraints": [
+        {
+          "name": "ck_feishu_subject_mapping_kind",
+          "expression": "subject_kind IN ('identity', 'group')"
+        },
+        {
+          "name": "ck_feishu_subject_mapping_refs",
+          "expression": "external_ref and local_ref are 1..256 trimmed non-whitespace references"
+        },
+        {
+          "name": "ck_feishu_subject_mapping_version",
+          "expression": "mapping_version BETWEEN 1 AND 9223372036854775807"
+        }
+      ],
+      "rowLevelSecurity": {
+        "enabled": true,
+        "forced": true,
+        "policies": [
+          {
+            "name": "feishu_subject_mapping_migrator_administration",
+            "command": "ALL",
+            "roles": [
+              "context_engine_migrator"
+            ],
+            "using": "true",
+            "withCheck": "true"
+          },
+          {
+            "name": "feishu_subject_mapping_access_definer_select",
+            "command": "SELECT",
+            "roles": [
+              "context_engine_access_policy_definer"
+            ],
+            "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"
+          }
+        ]
+      },
+      "functionOnlyMutation": {
+        "databaseFunctions": [],
+        "directTableMutationAllowed": false,
+        "activationState": "twin fixtures are seeded only by the migration test authority; no live mapping administration carrier is active"
+      },
+      "permittedOperations": {
+        "context_engine_access_policy_definer": [
+          "SELECT",
+          "EXECUTE context_feishu_verify_acl_artifact"
+        ],
+        "context_engine_control": [],
+        "context_engine_runtime": [],
+        "context_engine_worker": []
+      },
+      "partitions": [],
+      "securityInvariantIds": [
+        "TENANT-OWNERSHIP-001",
+        "TENANT-FK-002",
+        "RLS-FAIL-CLOSED-003",
+        "SCOPE-INTERSECTION-004"
+      ],
+      "negativeTestIds": [
+        "DB-001",
+        "DB-004",
+        "DB-008",
+        "PG-ARTICLE-ACCESS-RLS-141"
       ]
     },
     {
@@ -6347,7 +6521,11 @@
         },
         {
           "name": "ck_article_source_acl_observation_mirrored_evidence",
-          "expression": "legacy observations carry no SourceVersion evidence; File Mirrored observations bind source_id/source_version_ref/acl_as_of with zero declared lag"
+          "expression": "legacy observations carry no SourceVersion evidence; File and Feishu Docs Mirrored observations bind source_id/source_version_ref/acl_as_of with zero declared lag"
+        },
+        {
+          "name": "ck_article_source_acl_observation_source_epoch",
+          "expression": "source_policy_epoch IS NULL OR source_policy_epoch BETWEEN 1 AND 9223372036854775807"
         }
       ],
       "rowLevelSecurity": {
@@ -6392,7 +6570,8 @@
       },
       "functionOnlyMutation": {
         "databaseFunctions": [
-          "article_access_policy_fix_from_file_access_grant"
+          "article_access_policy_fix_from_file_access_grant",
+          "context_control_apply_feishu_acl_observation"
         ],
         "definerRole": "context_engine_access_policy_definer",
         "directTableMutationAllowed": false
@@ -6403,7 +6582,9 @@
           "INSERT",
           "UPDATE"
         ],
-        "context_engine_control": [],
+        "context_engine_control": [
+          "EXECUTE context_control_apply_feishu_acl_observation"
+        ],
         "context_engine_runtime": [],
         "context_engine_worker": []
       },
@@ -6490,7 +6671,11 @@
         },
         {
           "name": "ck_article_access_policy_mirrored_evidence",
-          "expression": "legacy policies carry no SourceVersion evidence; File Mirrored policies bind source_version_ref/source_acl_as_of with zero declared lag"
+          "expression": "legacy policies carry no SourceVersion evidence; File and Feishu Docs Mirrored policies bind source_version_ref/source_acl_as_of with zero declared lag"
+        },
+        {
+          "name": "ck_article_access_policy_source_epoch",
+          "expression": "source_policy_epoch IS NULL OR source_policy_epoch BETWEEN 1 AND 9223372036854775807"
         }
       ],
       "rowLevelSecurity": {
@@ -6544,7 +6729,8 @@
       "functionOnlyMutation": {
         "databaseFunctions": [
           "context_fix_article_access_policy",
-          "article_access_policy_fix_from_file_access_grant"
+          "article_access_policy_fix_from_file_access_grant",
+          "context_control_apply_feishu_acl_observation"
         ],
         "definerRole": "context_engine_access_policy_definer",
         "directTableMutationAllowed": false
@@ -6555,7 +6741,9 @@
           "INSERT",
           "UPDATE"
         ],
-        "context_engine_control": [],
+        "context_engine_control": [
+          "EXECUTE context_control_apply_feishu_acl_observation"
+        ],
         "context_engine_runtime": [
           "SELECT"
         ],

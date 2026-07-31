@@ -226,6 +226,8 @@ def _seed_scenario(
     source_id: UUID | None = None,
     source_version_id: UUID | None = None,
     job_id: UUID | None = None,
+    source_kind: str = "file",
+    capability_manifest: str | None = None,
 ) -> _Scenario:
     organization_id = uuid4()
     source_id = source_id or uuid4()
@@ -247,7 +249,7 @@ def _seed_scenario(
                         registration_operation, idempotency_key,
                         registration_digest, active_version_id, created_at
                     ) VALUES (
-                        :org, :source, 'Synthetic connector source', 'file',
+                        :org, :source, 'Synthetic connector source', :source_kind,
                         'register_source', :idempotency_key, :digest,
                         :version, clock_timestamp()
                     )
@@ -256,6 +258,7 @@ def _seed_scenario(
                 {
                     "org": organization_id,
                     "source": source_id,
+                    "source_kind": source_kind,
                     "version": source_version_id,
                     "idempotency_key": f"connector-{source_id.hex}",
                     "digest": source_id.hex * 2,
@@ -268,7 +271,7 @@ def _seed_scenario(
                         organization_id, source_id, version_id, source_kind,
                         root_ref, capability_manifest, created_at
                     ) VALUES (
-                        :org, :source, :version, 'file', :root,
+                        :org, :source, :version, :source_kind, :root,
                         CAST(:manifest AS jsonb), clock_timestamp()
                     )
                     """
@@ -278,7 +281,8 @@ def _seed_scenario(
                     "source": source_id,
                     "version": source_version_id,
                     "root": f"connector-{source_id.hex}",
-                    "manifest": (
+                    "source_kind": source_kind,
+                    "manifest": capability_manifest or (
                         '{"aclEvidenceMode":"mirrored",'
                         '"authorizeAndProject":"unavailable",'
                         '"batchLimits":"unavailable","checkpoint":"unavailable",'
@@ -376,6 +380,8 @@ def _page(
     *,
     terminal: bool,
 ) -> SupplyChangePage:
+    claims = _claims(scenario)
+    assert claims.policy_epoch is not None
     binding = ConnectorCheckpointBinding(
         organization_id=scenario.organization_id,
         source_version_id=scenario.source_version_id,
@@ -384,7 +390,7 @@ def _page(
     acl = SourceAclObservation(
         organization_id=scenario.organization_id,
         observed_at=datetime(2026, 7, 30, 8, ordinal, tzinfo=UTC),
-        policy_epoch=ordinal,
+        policy_epoch=claims.policy_epoch,
         evidence_class=SourceAclEvidenceClass.MIRRORED,
         evidence_payload=f"synthetic-acl-{ordinal}".encode(),
     )
@@ -931,11 +937,13 @@ def test_staged_payload_round_trip_preserves_every_emitted_page_fact(
 ) -> None:
     scenario = _seed_scenario(migration_configuration, guarded_control_engine)
     scenarios.append(scenario)
+    claims = _claims(scenario)
+    assert claims.policy_epoch is not None
     binding = scenario.execution.binding
     acl = SourceAclObservation(
         organization_id=scenario.organization_id,
         observed_at=datetime(2026, 7, 30, 8, 15, 30, 123456, tzinfo=UTC),
-        policy_epoch=41,
+        policy_epoch=claims.policy_epoch,
         evidence_class=SourceAclEvidenceClass.LIVE,
         evidence_payload=b"\x00synthetic-live-acl\xff",
     )
@@ -960,7 +968,7 @@ def test_staged_payload_round_trip_preserves_every_emitted_page_fact(
                 acl_observation=SourceAclObservation(
                     organization_id=scenario.organization_id,
                     observed_at=datetime(2026, 7, 30, 8, 16, tzinfo=UTC),
-                    policy_epoch=42,
+                    policy_epoch=claims.policy_epoch,
                     evidence_class=SourceAclEvidenceClass.MIRRORED,
                     evidence_payload=b"synthetic-deleted-acl",
                 ),
@@ -1000,7 +1008,7 @@ def test_staged_payload_round_trip_preserves_every_emitted_page_fact(
                     ).decode("ascii"),
                     "observed_at": "2026-07-30T08:16:00+00:00",
                     "organization_id": str(scenario.organization_id),
-                    "policy_epoch": 42,
+                    "policy_epoch": claims.policy_epoch,
                     "source_lacks_stronger_acl": None,
                 },
                 "document_ref": "document:deleted",
@@ -1015,7 +1023,7 @@ def test_staged_payload_round_trip_preserves_every_emitted_page_fact(
                     ).decode("ascii"),
                     "observed_at": "2026-07-30T08:15:30.123456+00:00",
                     "organization_id": str(scenario.organization_id),
-                    "policy_epoch": 41,
+                    "policy_epoch": claims.policy_epoch,
                     "source_lacks_stronger_acl": None,
                 },
                 "content": base64.b64encode(b"\x00# Synthetic payload\n\xff").decode(
@@ -1218,6 +1226,151 @@ def test_atomic_acceptance_refuses_unjustified_weak_acl_payload(
         )
         is None
     )
+
+
+@pytest.mark.parametrize(
+    ("observation_path", "field_name", "mutated_value"),
+    [
+        (
+            ("documents", 0, "acl_observation"),
+            "policy_epoch",
+            lambda claims: claims.policy_epoch + 1,
+        ),
+        (
+            ("deleted_document_refs", 0, "acl_observation"),
+            "policy_epoch",
+            lambda claims: claims.policy_epoch + 1,
+        ),
+        (
+            ("documents", 0, "acl_observation"),
+            "observed_at",
+            lambda _claims: "9999-12-31T23:59:59+00:00",
+        ),
+        (
+            ("deleted_document_refs", 0, "acl_observation"),
+            "observed_at",
+            lambda _claims: "9999-12-31T23:59:59+00:00",
+        ),
+        (
+            ("documents", 0, "acl_observation"),
+            "policy_epoch",
+            lambda _claims: 10**100,
+        ),
+        (
+            ("deleted_document_refs", 0, "acl_observation"),
+            "policy_epoch",
+            lambda _claims: 10**100,
+        ),
+        (
+            ("documents", 0, "acl_observation"),
+            "observed_at",
+            lambda _claims: "2026-07-30T08:15:30",
+        ),
+        (
+            ("deleted_document_refs", 0, "acl_observation"),
+            "observed_at",
+            lambda _claims: "2026-07-30T08:15:30",
+        ),
+    ],
+)
+def test_atomic_acceptance_refuses_acl_freshness_ahead_of_lease_authority(
+    scenarios: list[_Scenario],
+    migration_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+    guarded_worker_engine: Engine,
+    observation_path: tuple[str | int, ...],
+    field_name: str,
+    mutated_value: Callable[[WorkerLeaseClaims], object],
+) -> None:
+    scenario = _seed_scenario(migration_configuration, guarded_control_engine)
+    scenarios.append(scenario)
+    page = _page(scenario, 1, terminal=False)
+    claims = _claims(scenario)
+    store = PostgreSQLConnectorCheckpointStore(guarded_worker_engine)
+    assert store.redeem_for_execution(page.binding, lease_claims=claims) is None
+    payload = json.loads(serialize_supply_change_page(page))
+    observation = payload
+    for path_element in observation_path:
+        observation = observation[path_element]
+    observation[field_name] = mutated_value(claims)
+    mutated_payload = json.dumps(
+        payload,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("ascii")
+
+    with guarded_worker_engine.begin() as connection:
+        row = connection.execute(
+            text(
+                """
+                SELECT accepted_ordinal
+                FROM public.context_supply_accept_connector_page(
+                    :organization_id, :source_version_id, :worker_job_id,
+                    :service_principal_id, :page_ref, :page_payload,
+                    :lease_generation, :signing_key_version, :nonce,
+                    :issued_at, :expires_at, :policy_epoch,
+                    :idempotency_key, :allowed_source_version_ids,
+                    :allowed_operations, :service_actor_expires_at
+                )
+                """
+            ),
+            {
+                "organization_id": scenario.organization_id,
+                "source_version_id": scenario.source_version_id,
+                "worker_job_id": scenario.job_id,
+                "service_principal_id": scenario.service_principal_id,
+                "page_ref": page.page_ref,
+                "page_payload": mutated_payload,
+                "lease_generation": claims.lease_generation,
+                "signing_key_version": claims.signing_key_version,
+                "nonce": claims.nonce,
+                "issued_at": claims.issued_at,
+                "expires_at": claims.expires_at,
+                "policy_epoch": claims.policy_epoch,
+                "idempotency_key": claims.idempotency_key,
+                "allowed_source_version_ids": [scenario.source_version_id],
+                "allowed_operations": ["connector.execute"],
+                "service_actor_expires_at": claims.service_actor_expires_at,
+            },
+        ).one_or_none()
+
+    assert row is None
+    assert store.load(page.binding, lease_claims=claims) is None
+
+
+def test_atomic_acceptance_keeps_older_acl_epoch_as_non_authoritative_provenance(
+    scenarios: list[_Scenario],
+    migration_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+    guarded_worker_engine: Engine,
+) -> None:
+    scenario = _seed_scenario(migration_configuration, guarded_control_engine)
+    scenarios.append(scenario)
+    claims = _claims(scenario)
+    assert claims.policy_epoch is not None
+    older_observation = replace(
+        _page(scenario, 1, terminal=True).documents[0].acl_observation,
+        policy_epoch=max(1, claims.policy_epoch - 1),
+    )
+    page = replace(
+        _page(scenario, 1, terminal=True),
+        documents=(
+            replace(
+                _page(scenario, 1, terminal=True).documents[0],
+                acl_observation=older_observation,
+            ),
+        ),
+        deleted_document_refs=(),
+    )
+
+    result = _bridge(
+        scenario,
+        guarded_worker_engine,
+        PostgreSQLConnectorCheckpointStore(guarded_worker_engine),
+    ).execute(scenario.execution, _TwoPageAdapter((page,)))
+
+    assert result.accepted_page_refs == (page.page_ref,)
 
 
 def test_checkpoint_comes_only_from_page_and_no_stage_mutator_exists(

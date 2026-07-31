@@ -58,7 +58,7 @@ designed, and deliberately not active:
 | Production authentication (OAuth / JWT) | Module-level default application is reject-all across all three production authorities (authentication, Organization, Membership) |
 | Production operator authentication / admin API | The opt-in local operator composition is one fixed identity per plane, local-process-only, and never a production ancestor |
 | Durable general Principal / Agent grants | The default scope authority returns seven missing operands; dogfood separately carries the bounded current File operands and binds one configured Agent/purpose to the Release ceiling only |
-| General / multi-user Source and Resource ACLs | Dogfood uses current mirrored File access plus Membership field rights only; source-native and multi-user authorities remain absent |
+| General / multi-user Source and Resource ACLs | Dogfood uses current mirrored File access plus Membership field rights. A separate deterministic Feishu twin proves bounded source-native Article ACL ingestion, but no live or general administration carrier is active |
 | General content retrieval | Only the loopback File pgvector dogfood `Acquire` carrier is active |
 | Local consumer expansion | The repo-local Claude Code skill is active only as a single-question display consumer; pi and MCP remain `NOT_ACTIVE` |
 | `Continue` carrier | The bounded dogfood composition keeps Continue unavailable; its private File `OpenCitation` carrier is active for UI citation closure |
@@ -168,6 +168,8 @@ Follow the ADR for its exact evidence boundary.
 | [0072](./docs/decisions/0072-report-file-source-status-with-closed-refusals.md) | Report content-free File freshness and current unpublished paths using closed retained refusal categories |
 | [0073](./docs/decisions/0073-compose-explicit-release-candidates-from-current-corpus.md) | Compose and explicitly promote the exact current dogfood File corpus through ContextLearning |
 | [0086](./docs/decisions/0086-report-worker-batches-and-compose-source-wide-cycles.md) | Emit privacy-shaped worker batch progress and compose source-wide scan/status from existing exact Control calls |
+| [0091](./docs/decisions/0091-reconcile-connector-acl-freshness-at-acceptance.md) | Admit the credential-free Feishu Docs twin through the leased connector runner, preserve lease-reconciled ACL freshness provenance, and atomically isolate or fix one Article ACL with a database Policy Epoch advance |
+| [0092](./docs/decisions/0092-authorize-feishu-subjects-and-bound-mirrored-freshness.md) | Recompute Feishu subject grants from engine-owned mappings, bind artifacts to exact Articles, and expire Mirrored Feishu evidence under one closed five-minute Runtime profile |
 
 ADR-0065 extends the active File Provider boundary from a flat root to
 deterministic recursive discovery of canonical nested Markdown paths. Each
@@ -222,6 +224,21 @@ continues later independently durable cycles; bare `status` requires
 `READ_SOURCE` before its per-Source `READ_SOURCE_PROGRESS` calls.
 It adds no `ControlOperation`, does not widen or reuse a WorkerLease, preserves
 all credential planes, and never promotes or activates a Release implicitly.
+
+ADR-0091 and ADR-0092 add an offline-only Feishu Docs Supply carrier. The deterministic twin
+runs in the ContextEngine-owned connector-runner subprocess, emits accepted
+ChangePages for synthetic documents and deletes, and carries Mirrored Article ACL
+observations with nested-group flattening. The database recomputes local identity
+and group grants from engine-owned mappings, binds each artifact to its exact
+Article, isolates unresolved, failed, or forged claims, and commits every accepted
+observation with one Policy Epoch advance. Runtime refuses Feishu mirrors more than
+five minutes old using the trusted request transaction time without rebuilding the
+index. The exact Room-A oracle suite and real-PostgreSQL tests require no network or
+credentials.
+
+This does **not** activate a live Feishu client, tenant credentials, external
+network calls, production subject-mapping administration, or Feishu delivery.
+Those surfaces remain `NOT_ACTIVE`.
 
 ### Wire contract, SDK, and trusted delivery
 

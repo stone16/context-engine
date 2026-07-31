@@ -205,6 +205,7 @@ def test_article_policy_tables_force_rls_and_groups_authorize_at_article_atom(
         "article_access_policy",
         "article_explicit_policy_setting",
         "article_source_acl_observation",
+        "feishu_subject_mapping",
         "organization_article_policy_default",
         "source_article_policy_default",
     }
