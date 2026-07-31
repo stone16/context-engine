@@ -21,7 +21,6 @@ from sqlalchemy.exc import SQLAlchemyError
 from adapters.file_source import FileRootRegistry
 from adapters.http.authentication import VerifiedAuthenticationContext
 from adapters.parsers.markdown import compile_markdown
-from adapters.parsers.ragflow_markdown import compile_rich_markdown
 from engine.control import (
     ControlOperation,
     FileImportPath,
@@ -38,7 +37,6 @@ from engine.persistence.membership_context import (
 from engine.persistence.role_guard import assert_control_role, assert_runtime_role
 from engine.runtime.actor import CurrentMembershipVerification
 from engine.supply import (
-    ACTIVE_FILE_IMPORT_MARKDOWN_CONFIG_VERSION,
     CompilationFailure,
     MarkdownCompilerConfig,
     ParsedDocument,
@@ -738,13 +736,9 @@ class PostgreSQLUiApi:
             raise UiApiUnavailable
         try:
             raw = roots.read(FileRootRef(root_ref), import_path)
-            config = MarkdownCompilerConfig(
-                ACTIVE_FILE_IMPORT_MARKDOWN_CONFIG_VERSION
-            )
-            outcome = (
-                compile_rich_markdown(raw, config)
-                if config.version == "markdown-config-v3"
-                else compile_markdown(raw, config)
+            outcome = compile_markdown(
+                raw,
+                MarkdownCompilerConfig("markdown-config-v1"),
             )
         except (LookupError, RuntimeError, TypeError, ValueError):
             raise UiApiUnavailable from None
@@ -766,7 +760,7 @@ class PostgreSQLUiApi:
             ).encode("utf-8")
         ).hexdigest()
         payload: dict[str, object] = {
-            "configVersion": ACTIVE_FILE_IMPORT_MARKDOWN_CONFIG_VERSION,
+            "configVersion": "markdown-config-v1",
             "contentLength": len(raw),
             "contentSha256": hashlib.sha256(raw).hexdigest(),
             "fragmentDigest": fragment_digest,
@@ -810,7 +804,7 @@ class PostgreSQLUiApi:
                 or len(fragment_digest) != 64
                 or type(content_length) is not int
                 or content_length < 0
-                or config_version != ACTIVE_FILE_IMPORT_MARKDOWN_CONFIG_VERSION
+                or config_version != "markdown-config-v1"
             ):
                 raise ValueError
         except (KeyError, TypeError, ValueError):

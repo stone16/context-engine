@@ -40,7 +40,11 @@ ADR-0075 requires.
 
 1. `markdown-config-v3` becomes the active File-import Markdown configuration.
    V1 and v2 remain frozen compatibility representations; existing Revisions
-   are not reinterpreted or backfilled.
+   are not reinterpreted or backfilled. The co-resident local evidence console's
+   existing exact preview flow remains pinned to v1 because it has no
+   WorkerLease authority to select the v3 child. A later leased preview design
+   may replace that compatibility path. The worker honors a redeemed, exact
+   v1 preview binding only for that flow; all unbound imports use active v3.
 2. A File import redeems and durably verifies its exact WorkerLease before
    selecting the rich compiler subprocess. The child is a pure transform that
    receives source bytes, the closed configuration version, and token ceiling

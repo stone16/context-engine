@@ -12,7 +12,7 @@ from adapters.file_source import FileReadLimits, FileRootRegistry
 from adapters.http.app import create_app
 from adapters.http.authentication import VerifiedAuthenticationContext
 from adapters.http.ui_api import PostgreSQLUiApi
-from adapters.parsers.ragflow_markdown import compile_rich_markdown
+from adapters.parsers.markdown import compile_markdown
 from engine.control import ControlOperation, PreparedFileImport
 from engine.persistence import (
     DatabaseConfiguration,
@@ -188,7 +188,7 @@ def test_import_preview_requires_confirm(
             ).one()
         assert exact.expected_content_sha256 is not None
         assert exact.expected_fragment_digest is not None
-        assert exact.compiler_config_version == "markdown-config-v3"
+        assert exact.compiler_config_version == "markdown-config-v1"
         prepared = PreparedFileImport(
             organization_id=scenario.organization_id,
             job_id=(exact_job_id := UUID(job_id)),
@@ -207,9 +207,9 @@ def test_import_preview_requires_confirm(
             guarded_worker_engine,
             config_version="markdown-config-v3",
         )
-        expected = compile_rich_markdown(
+        expected = compile_markdown(
             (scenario.root / "handbook.md").read_bytes(),
-            MarkdownCompilerConfig("markdown-config-v3"),
+            MarkdownCompilerConfig("markdown-config-v1"),
         )
         assert type(expected) is ParsedDocument
         assert exact_job_id == prepared.job_id

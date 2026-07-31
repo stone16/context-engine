@@ -298,10 +298,13 @@ class PostgreSQLFileImportWorker:
                 or sha256(source).hexdigest() != redeemed.expected_content_sha256
             ):
                 raise LookupError("accepted File observation changed")
+            compiler_config = self._config
+            if redeemed.compiler_config_version == "markdown-config-v1":
+                compiler_config = MarkdownCompilerConfig("markdown-config-v1")
             outcome = (
-                compile_in_leased_compiler_runner(source, self._config)
-                if self._config.version == "markdown-config-v3"
-                else compile_markdown(source, self._config)
+                compile_in_leased_compiler_runner(source, compiler_config)
+                if compiler_config.version == "markdown-config-v3"
+                else compile_markdown(source, compiler_config)
             )
         except LookupError:
             with suppress(WorkNotAvailable):
@@ -339,7 +342,7 @@ class PostgreSQLFileImportWorker:
             ).hexdigest()
             if (
                 redeemed.ui_preview_digest is None
-                or redeemed.compiler_config_version != self._config.version
+                or redeemed.compiler_config_version != compiler_config.version
                 or redeemed.expected_fragment_digest != fragment_digest
             ):
                 with suppress(WorkNotAvailable):
