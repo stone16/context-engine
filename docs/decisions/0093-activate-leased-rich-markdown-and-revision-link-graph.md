@@ -44,13 +44,12 @@ ADR-0075 requires.
    exact preview flow remains pinned to v1 because it has no durable import job
    or WorkerLease redemption authority with which to select the v3 child. Issue
    #203 ships the compatibility resolution: when v1's closed refusal is exactly
-   `LINK_OR_IMAGE`, or the exact source contains recognized rich wikilink or
-   embed syntax that v1 treats as plain text, the console returns a content-free
-   actionable handoff to the existing source `scan` plus independent worker-
-   dispatch path; every other compilation refusal remains generically
-   unavailable. The worker honors a redeemed, exact v1 preview binding only for
-   the console's successful v1 preview/confirm flow; all scan-scheduled imports
-   use active v3.
+   `LINK_OR_IMAGE`, or the exact source contains any accepted rich link syntax
+   not classified as such by v1, the console returns a content-free actionable
+   handoff to the existing source `scan` plus independent worker-dispatch path;
+   every other compilation refusal remains generically unavailable. The worker
+   honors a redeemed, exact v1 preview binding only for the console's successful
+   v1 preview/confirm flow; all scan-scheduled imports use active v3.
 2. A File import redeems and durably verifies its exact WorkerLease before
    selecting the rich compiler subprocess. The child is a pure transform that
    receives source bytes, the closed configuration version, and token ceiling
