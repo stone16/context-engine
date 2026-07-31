@@ -154,13 +154,16 @@ def test_rendered_templates_pass_the_platform_plist_validator(
     for name, content in rendered.items():
         plist = tmp_path / name
         plist.write_text(content, encoding="utf-8")
-        completed = subprocess.run(
-            ("plutil", "-lint", str(plist)),
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        assert completed.returncode == 0, completed.stdout + completed.stderr
+        # Platform-independent validation: plistlib refuses malformed plists.
+        plistlib.loads(plist.read_bytes())
+        if shutil.which("plutil") is not None:
+            completed = subprocess.run(
+                ("plutil", "-lint", str(plist)),
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            assert completed.returncode == 0, completed.stdout + completed.stderr
 
 
 def test_writing_the_same_render_twice_is_idempotent(tmp_path: Path) -> None:
