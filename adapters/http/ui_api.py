@@ -7,7 +7,6 @@ import binascii
 import hashlib
 import hmac
 import json
-import re
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -48,10 +47,10 @@ from engine.supply import (
     MarkdownCompilerConfig,
     ParsedDocument,
     UnsupportedConstruct,
+    contains_rich_markdown_link,
 )
 
 _PREVIEW_TTL: Final = timedelta(minutes=10)
-_RICH_WIKILINK_PATTERN: Final = re.compile(r"!?\[\[[^]\r\n]+]]")
 _FILE_CAPABILITY_MANIFESTS: Final = {
     manifest.declaration_version: manifest
     for manifest in (
@@ -66,7 +65,7 @@ _FEEDBACK_DOMAIN: Final = b"context-engine.ui-feedback.v1\x00"
 _MAX_SIGNED_BIGINT: Final = (1 << 63) - 1
 
 
-def _contains_rich_wikilink(source: bytes) -> bool:
+def _contains_rich_markdown_link(source: bytes) -> bool:
     try:
         decoded = source.removeprefix(b"\xef\xbb\xbf").decode(
             "utf-8",
@@ -74,7 +73,7 @@ def _contains_rich_wikilink(source: bytes) -> bool:
         )
     except UnicodeDecodeError:
         return False
-    return _RICH_WIKILINK_PATTERN.search(decoded) is not None
+    return contains_rich_markdown_link(decoded)
 
 
 class UiApiUnavailable(RuntimeError):
@@ -813,7 +812,7 @@ class PostgreSQLUiApi:
                 and outcome.code is CompilationFailureCode.UNSUPPORTED_CONSTRUCT
                 and outcome.construct is UnsupportedConstruct.LINK_OR_IMAGE
             )
-            or _contains_rich_wikilink(raw)
+            or _contains_rich_markdown_link(raw)
         )
         if requires_scan_handoff:
             source_arguments = (

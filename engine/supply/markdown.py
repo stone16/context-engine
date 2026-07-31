@@ -587,6 +587,22 @@ _RICH_HTML_OPEN_PATTERN: Final = re.compile(
 )
 
 
+def contains_rich_markdown_link(source: str) -> bool:
+    """Return whether exact UTF-8 text contains syntax accepted as a rich link."""
+
+    if type(source) is not str:
+        raise TypeError("rich Markdown link detection requires exact text")
+    return any(
+        pattern.search(source) is not None
+        for pattern in (
+            _RICH_WIKILINK_PATTERN,
+            _RICH_AUTOLINK_PATTERN,
+            _RICH_INLINE_LINK_PATTERN,
+            _RICH_REFERENCE_LINK_PATTERN,
+        )
+    )
+
+
 def unsupported_markdown_construct(
     line: str,
     *,
