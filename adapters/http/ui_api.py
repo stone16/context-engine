@@ -7,6 +7,7 @@ import binascii
 import hashlib
 import hmac
 import json
+import re
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -22,6 +23,11 @@ from adapters.file_source import FileRootRegistry
 from adapters.http.authentication import VerifiedAuthenticationContext
 from adapters.parsers.markdown import compile_markdown
 from engine.control import (
+    FILE_CAPABILITY_MANIFEST,
+    FILE_CHANGE_CAPABILITY_MANIFEST,
+    FILE_DELETE_OBSERVATION_CAPABILITY_MANIFEST,
+    FILE_IMPORT_CAPABILITY_MANIFEST,
+    CapabilityStatus,
     ControlOperation,
     FileImportPath,
     FileRootRef,
@@ -45,9 +51,30 @@ from engine.supply import (
 )
 
 _PREVIEW_TTL: Final = timedelta(minutes=10)
+_RICH_WIKILINK_PATTERN: Final = re.compile(r"!?\[\[[^]\r\n]+]]")
+_FILE_CAPABILITY_MANIFESTS: Final = {
+    manifest.declaration_version: manifest
+    for manifest in (
+        FILE_CAPABILITY_MANIFEST,
+        FILE_IMPORT_CAPABILITY_MANIFEST,
+        FILE_CHANGE_CAPABILITY_MANIFEST,
+        FILE_DELETE_OBSERVATION_CAPABILITY_MANIFEST,
+    )
+}
 _PREVIEW_DOMAIN: Final = b"context-engine.ui-preview.v1\x00"
 _FEEDBACK_DOMAIN: Final = b"context-engine.ui-feedback.v1\x00"
 _MAX_SIGNED_BIGINT: Final = (1 << 63) - 1
+
+
+def _contains_rich_wikilink(source: bytes) -> bool:
+    try:
+        decoded = source.removeprefix(b"\xef\xbb\xbf").decode(
+            "utf-8",
+            errors="strict",
+        )
+    except UnicodeDecodeError:
+        return False
+    return _RICH_WIKILINK_PATTERN.search(decoded) is not None
 
 
 class UiApiUnavailable(RuntimeError):
@@ -767,17 +794,11 @@ class PostgreSQLUiApi:
         if (
             source is None
             or type(source["root_ref"]) is not str
-            or source["declaration_version"]
-            not in {
-                "file-capabilities-v1",
-                "file-capabilities-v2",
-                "file-capabilities-v3",
-                "file-capabilities-v4",
-            }
+            or source["declaration_version"] not in _FILE_CAPABILITY_MANIFESTS
         ):
             raise UiApiUnavailable
         root_ref = source["root_ref"]
-        declaration_version = source["declaration_version"]
+        capabilities = _FILE_CAPABILITY_MANIFESTS[source["declaration_version"]]
         try:
             raw = roots.read(FileRootRef(root_ref), import_path)
             outcome = compile_markdown(
@@ -786,43 +807,43 @@ class PostgreSQLUiApi:
             )
         except (LookupError, RuntimeError, TypeError, ValueError):
             raise UiApiUnavailable from None
-        if type(outcome) is CompilationFailure:
-            if (
-                outcome.code is CompilationFailureCode.UNSUPPORTED_CONSTRUCT
+        requires_scan_handoff = (
+            (
+                type(outcome) is CompilationFailure
+                and outcome.code is CompilationFailureCode.UNSUPPORTED_CONSTRUCT
                 and outcome.construct is UnsupportedConstruct.LINK_OR_IMAGE
-            ):
-                source_arguments = (
-                    "--organization-id "
-                    '"$CONTEXT_ENGINE_OPERATOR_ORGANIZATION_ID" '
-                    f'--source-ref "{source_ref}"'
+            )
+            or _contains_rich_wikilink(raw)
+        )
+        if requires_scan_handoff:
+            source_arguments = (
+                "--organization-id "
+                '"$CONTEXT_ENGINE_OPERATOR_ORGANIZATION_ID" '
+                f'--source-ref "{source_ref}"'
+            )
+            prerequisite_commands: list[str] = []
+            if capabilities.read_changes is not CapabilityStatus.AVAILABLE:
+                prerequisite_commands.append(
+                    "uv run context-engine-control activate-change-feed "
+                    + source_arguments
                 )
-                prerequisite_commands: list[str] = []
-                if declaration_version in {
-                    "file-capabilities-v1",
-                    "file-capabilities-v2",
-                }:
-                    prerequisite_commands.append(
-                        "uv run context-engine-control activate-change-feed "
-                        + source_arguments
-                    )
-                if declaration_version != "file-capabilities-v4":
-                    prerequisite_commands.append(
-                        "uv run context-engine-control "
-                        "activate-delete-observations " + source_arguments
-                    )
-                return {
-                    "kind": "scan_handoff",
-                    "path": import_path.value,
-                    "prerequisiteCommands": prerequisite_commands,
-                    "reason": "rich_markdown_requires_leased_worker",
-                    "scanCommand": (
-                        "uv run context-engine-control scan " + source_arguments
-                    ),
-                    "sourceRef": str(source_ref),
-                    "workerCommand": (
-                        "uv run context-engine-worker --dispatch-file-once"
-                    ),
-                }
+            if capabilities.delete_observations is not CapabilityStatus.AVAILABLE:
+                prerequisite_commands.append(
+                    "uv run context-engine-control activate-delete-observations "
+                    + source_arguments
+                )
+            return {
+                "kind": "scan_handoff",
+                "path": import_path.value,
+                "prerequisiteCommands": prerequisite_commands,
+                "reason": "rich_markdown_requires_leased_worker",
+                "scanCommand": (
+                    "uv run context-engine-control scan " + source_arguments
+                ),
+                "sourceRef": str(source_ref),
+                "workerCommand": "uv run context-engine-worker --dispatch-file-once",
+            }
+        if type(outcome) is CompilationFailure:
             raise UiApiUnavailable
         if type(outcome) is not ParsedDocument:
             raise UiApiUnavailable
