@@ -46,33 +46,23 @@ class OneHopMaterializedPort(RecordingMaterializedPort):
         super().__init__()
         self.candidates = candidates
         self.graph_calls: list[
-            tuple[tuple[CandidateRef, ...], tuple[ScopeTarget, ...], int]
+            tuple[tuple[CandidateRef, ...], int, int]
         ] = []
 
     def discover_one_hop(
         self,
         anchors: tuple[CandidateRef, ...],
-        eligible_articles: tuple[ScopeTarget, ...],
         limit: int,
+        offset: int,
     ) -> tuple[MaterializedOneHopCandidate, ...]:
-        self.graph_calls.append((anchors, eligible_articles, limit))
-        eligible = {
-            (target.organization_id, target.source_ref, target.resource_ref)
-            for target in eligible_articles
-        }
+        self.graph_calls.append((anchors, limit, offset))
         return tuple(
             MaterializedOneHopCandidate(
                 anchor_ref=anchors[0],
                 candidate_ref=candidate,
             )
-            for candidate in self.candidates
-            if (
-                candidate.organization_id,
-                candidate.source_ref,
-                candidate.resource_ref,
-            )
-            in eligible
-        )[:limit]
+            for candidate in self.candidates[offset : offset + limit]
+        )
 
 
 def _allow_articles(invocation: object, *candidates: CandidateRef) -> None:
@@ -117,26 +107,14 @@ def test_one_hop_runs_only_from_authorized_main_results_and_reauthorizes() -> No
         )
 
     assert type(outcome) is Resolved
-    assert port.graph_calls == [
-        (
-            (AUTHORIZED,),
-            (
-                ScopeTarget(
-                    AUTHORIZED.organization_id,
-                    AUTHORIZED.source_ref,
-                    AUTHORIZED.resource_ref,
-                ),
-            ),
-            64,
-        )
-    ]
+    assert port.graph_calls == [((AUTHORIZED,), 64, 0)]
     assert [block.body for block in outcome.package.blocks] == ["A-safe"]
     assert locator(AUTHORIZED_SECOND) not in port.body_calls
     assert locator(DENIED) not in port.body_calls
 
 
-def test_denied_neighbours_cannot_consume_the_authorized_expansion_bound() -> None:
-    denied_neighbours = tuple(
+def test_refused_neighbours_cannot_consume_the_authorized_expansion_bound() -> None:
+    scope_refused = tuple(
         CandidateRef(
             organization_id=AUTHORIZED.organization_id,
             source_ref=AUTHORIZED.source_ref,
@@ -144,10 +122,22 @@ def test_denied_neighbours_cannot_consume_the_authorized_expansion_bound() -> No
             revision_ref=f"{index + 10:08x}-0000-4000-8000-000000000000",
             fragment_ref=f"fragment:denied-{index:03d}",
         )
-        for index in range(64)
+        for index in range(32)
+    )
+    projection_refused = tuple(
+        CandidateRef(
+            organization_id=AUTHORIZED.organization_id,
+            source_ref=AUTHORIZED.source_ref,
+            resource_ref=f"resource:projection-refused-{index:03d}",
+            revision_ref=f"{index + 100:08x}-0000-4000-8000-000000000000",
+            fragment_ref=f"fragment:projection-refused-{index:03d}",
+        )
+        for index in range(32)
     )
     index = HostileCandidateIndex((AUTHORIZED,))
-    port = OneHopMaterializedPort((*denied_neighbours, AUTHORIZED_SECOND))
+    port = OneHopMaterializedPort(
+        (*scope_refused, *projection_refused, AUTHORIZED_SECOND)
+    )
     runtime = Runtime(
         required_kernel_dependencies(),
         candidate_index=cast(CandidateIndex, index),
@@ -157,7 +147,7 @@ def test_denied_neighbours_cannot_consume_the_authorized_expansion_bound() -> No
     )
 
     with trusted_operands(port) as (invocation, delivery):
-        _allow_articles(invocation, AUTHORIZED, AUTHORIZED_SECOND)
+        _allow_articles(invocation, AUTHORIZED, *projection_refused, AUTHORIZED_SECOND)
         outcome = runtime.resolve(
             invocation,
             delivery,
@@ -167,9 +157,15 @@ def test_denied_neighbours_cannot_consume_the_authorized_expansion_bound() -> No
     assert type(outcome) is Resolved
     assert "Z-safe" in repr(outcome)
     assert all(
-        locator(candidate) not in port.body_calls for candidate in denied_neighbours
+        locator(candidate) not in port.body_calls for candidate in scope_refused
     )
-    assert port.graph_calls[0][2] == 64
+    assert all(
+        locator(candidate) in port.body_calls for candidate in projection_refused
+    )
+    assert port.graph_calls == [
+        ((AUTHORIZED,), 64, 0),
+        ((AUTHORIZED,), 64, 64),
+    ]
 
 
 def test_authorized_expansion_competes_and_is_not_auto_included() -> None:

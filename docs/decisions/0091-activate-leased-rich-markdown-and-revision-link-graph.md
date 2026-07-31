@@ -90,11 +90,12 @@ ADR-0075 requires.
    Expanded projections without graph rank evidence are ineligible for selection
    rather than neutrally appended. Refused candidates supply neither projection
    nor rank evidence and therefore cannot affect order, coverage, gaps,
-   sufficiency, ContextRun, or DecisionAudit. Before applying the 64-candidate
-   graph bound, the resolver intersects graph locators with the exact Article
-   targets from the Kernel-prepared effective scope; every returned cross-Article
-   locator still traverses the unchanged Kernel independently. This prefilter is
-   an opacity and work bound, not an authorization decision.
+   sufficiency, ContextRun, or DecisionAudit. The resolver reads deterministic
+   pages of at most 64 graph locators and sends every cross-Article locator
+   through the unchanged Kernel. It continues until the one-hop graph is
+   exhausted or 64 expanded candidates have been authorized, so refused
+   locators can increase only internal work and cannot consume the authorized
+   expansion bound.
 10. The graph SQL is owned by a NOLOGIN, NOINHERIT least-privilege definer. It
     may select only Organization-scoped graph and locator tables under FORCE
     RLS. Runtime may execute the bounded resolver but receives no direct graph
@@ -126,8 +127,9 @@ an executable process boundary rather than a naming convention.
   lineage, but the graph itself grants no access and exposes no content.
 - A denied neighbour is indistinguishable from an absent or irrelevant
   neighbour in tenant-visible delivery and authorized-only retained lineage.
-- One graph call is bounded to 64 current-scope candidates and is never
-  recursively applied; out-of-scope neighbours cannot consume the bound.
+- Each graph read is bounded to 64 candidates, and the authorized expansion set
+  is bounded to 64. Reads are never recursively applied; refused neighbours
+  cannot consume the authorized bound.
 - Existing databases gain one FORCE-RLS tenant table and one least-privilege
   graph definer role; the security manifest and executable evidence denominator
   include both.

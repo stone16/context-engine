@@ -308,9 +308,8 @@ def _create_graph_functions() -> None:
         CREATE FUNCTION public.context_runtime_resolve_one_hop_graph(
             requested_organization_ids uuid[], requested_source_refs text[],
             requested_resource_refs text[], requested_revision_ids uuid[],
-            requested_fragment_refs text[], eligible_organization_ids uuid[],
-            eligible_source_refs text[], eligible_resource_refs text[],
-            requested_limit integer
+            requested_fragment_refs text[], requested_limit integer,
+            requested_offset integer
         ) RETURNS TABLE (
             anchor_organization_id uuid, anchor_source_ref text,
             anchor_resource_ref text, anchor_revision_id uuid,
@@ -323,8 +322,9 @@ def _create_graph_functions() -> None:
             IF SESSION_USER <> '{_RUNTIME}'
                OR requested_limit IS NULL
                OR requested_limit NOT BETWEEN 1 AND 64
+               OR requested_offset IS NULL
+               OR requested_offset < 0
                OR cardinality(requested_organization_ids) = 0
-               OR cardinality(eligible_organization_ids) = 0
                OR cardinality(requested_organization_ids)
                     IS DISTINCT FROM cardinality(requested_source_refs)
                OR cardinality(requested_organization_ids)
@@ -333,18 +333,8 @@ def _create_graph_functions() -> None:
                     IS DISTINCT FROM cardinality(requested_revision_ids)
                OR cardinality(requested_organization_ids)
                     IS DISTINCT FROM cardinality(requested_fragment_refs)
-               OR cardinality(eligible_organization_ids)
-                    IS DISTINCT FROM cardinality(eligible_source_refs)
-               OR cardinality(eligible_organization_ids)
-                    IS DISTINCT FROM cardinality(eligible_resource_refs)
                OR EXISTS (
                     SELECT 1 FROM unnest(requested_organization_ids) AS item(value)
-                    WHERE item.value IS DISTINCT FROM NULLIF(
-                        current_setting('app.organization_id', true), ''
-                    )::uuid
-               )
-               OR EXISTS (
-                    SELECT 1 FROM unnest(eligible_organization_ids) AS item(value)
                     WHERE item.value IS DISTINCT FROM NULLIF(
                         current_setting('app.organization_id', true), ''
                     )::uuid
@@ -386,11 +376,6 @@ def _create_graph_functions() -> None:
                     organization_id, source_ref, resource_ref,
                     revision_id, fragment_ref
                 )
-            ), eligible_articles AS (
-                SELECT * FROM unnest(
-                    eligible_organization_ids, eligible_source_refs,
-                    eligible_resource_refs
-                ) AS eligible(organization_id, source_ref, resource_ref)
             ), expanded AS (
                 SELECT anchor.organization_id AS anchor_organization_id,
                        anchor.source_ref AS anchor_source_ref,
@@ -421,10 +406,6 @@ def _create_graph_functions() -> None:
                  AND target.resource_ref = target_snapshot.resource_ref
                  AND target.active_revision_id = target_snapshot.revision_id
                  AND target.tombstoned IS FALSE
-                JOIN eligible_articles AS eligible
-                  ON eligible.organization_id = target.organization_id
-                 AND eligible.source_ref = target.source_ref
-                 AND eligible.resource_ref = target.resource_ref
                 JOIN public.context_fragment AS fragment
                   ON fragment.organization_id = target.organization_id
                  AND fragment.resource_ref = target.resource_ref
@@ -455,10 +436,6 @@ def _create_graph_functions() -> None:
                  AND backlink.resource_ref = edge.source_resource_ref
                  AND backlink.active_revision_id = edge.source_revision_id
                  AND backlink.tombstoned IS FALSE
-                JOIN eligible_articles AS eligible
-                  ON eligible.organization_id = backlink.organization_id
-                 AND eligible.source_ref = backlink.source_ref
-                 AND eligible.resource_ref = backlink.resource_ref
                 JOIN public.context_fragment AS fragment
                   ON fragment.organization_id = backlink.organization_id
                  AND fragment.resource_ref = backlink.resource_ref
@@ -495,7 +472,7 @@ def _create_graph_functions() -> None:
                      deduplicated.fragment_ordinal,
                      deduplicated.source_ref, deduplicated.resource_ref,
                      deduplicated.revision_id, deduplicated.fragment_ref
-            LIMIT requested_limit;
+            LIMIT requested_limit OFFSET requested_offset;
         END; $function$
         """
     )
@@ -503,7 +480,7 @@ def _create_graph_functions() -> None:
     op.execute(f"REVOKE CREATE ON SCHEMA public FROM {_GRAPH_DEFINER}")
     for signature in (
         "context_internal_revision_link_edges_match(uuid,text,uuid,jsonb)",
-        "context_runtime_resolve_one_hop_graph(uuid[],text[],text[],uuid[],text[],uuid[],text[],text[],integer)",
+        "context_runtime_resolve_one_hop_graph(uuid[],text[],text[],uuid[],text[],integer,integer)",
     ):
         op.execute(f"REVOKE ALL ON FUNCTION public.{signature} FROM PUBLIC")
     op.execute(
@@ -514,7 +491,7 @@ def _create_graph_functions() -> None:
     op.execute(
         "GRANT EXECUTE ON FUNCTION public."
         "context_runtime_resolve_one_hop_graph"
-        "(uuid[],text[],text[],uuid[],text[],uuid[],text[],text[],integer) "
+        "(uuid[],text[],text[],uuid[],text[],integer,integer) "
         f"TO {_RUNTIME}"
     )
 
@@ -691,7 +668,7 @@ def downgrade() -> None:
     )
     op.execute(
         "DROP FUNCTION public.context_runtime_resolve_one_hop_graph"
-        "(uuid[],text[],text[],uuid[],text[],uuid[],text[],text[],integer)"
+        "(uuid[],text[],text[],uuid[],text[],integer,integer)"
     )
     op.execute(
         "DROP FUNCTION public.context_internal_revision_link_edges_match"

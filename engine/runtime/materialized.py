@@ -370,8 +370,8 @@ class _MaterializedOneHopPort(Protocol):
     def discover_one_hop(
         self,
         anchors: tuple[CandidateRef, ...],
-        eligible_articles: tuple[ScopeTarget, ...],
         limit: int,
+        offset: int,
     ) -> tuple[MaterializedOneHopCandidate, ...]: ...
 
 
@@ -909,8 +909,8 @@ def _project_materialized_fragment(
 def _discover_materialized_one_hop(
     session: MaterializedProjectionSession,
     anchors: tuple[AuthorizedProjection, ...],
-    eligible_articles: tuple[ScopeTarget, ...],
     limit: int,
+    offset: int,
 ) -> tuple[MaterializedOneHopCandidate, ...]:
     """Generate one content-free graph hop from exact authorized anchors only."""
 
@@ -921,23 +921,20 @@ def _discover_materialized_one_hop(
         type(anchor) is not AuthorizedProjection for anchor in anchors
     ):
         raise TypeError("one-hop expansion requires authorized projections")
-    if type(eligible_articles) is not tuple or any(
-        type(target) is not ScopeTarget or target.resource_ref is None
-        for target in eligible_articles
-    ):
-        raise TypeError("one-hop expansion requires exact eligible Articles")
     if type(limit) is not int or not 1 <= limit <= 64:
         raise ValueError("one-hop expansion requires a bounded limit")
+    if type(offset) is not int or offset < 0:
+        raise ValueError("one-hop expansion requires a nonnegative offset")
     for anchor in anchors:
         _require_active_authorized_projection(anchor)
-    if not anchors or not eligible_articles:
+    if not anchors:
         return ()
     if not isinstance(session._port, _MaterializedOneHopPort):
         return ()
     discovered = session._port.discover_one_hop(
         tuple(anchor.candidate_ref for anchor in anchors),
-        eligible_articles,
         limit,
+        offset,
     )
     if (
         type(discovered) is not tuple

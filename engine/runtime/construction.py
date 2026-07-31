@@ -1857,41 +1857,35 @@ class Runtime:
                 main_projections = decision.projections
                 main_candidate_refs = set(candidate_refs)
                 graph_limit = min(64, self._candidate_submission_limit)
-                eligible_articles = tuple(
-                    sorted(
-                        (
-                            target
-                            for target in (
-                                preparation.policy_receipt.effective_scope.targets
-                            )
-                            if target.resource_ref is not None
-                        ),
-                        key=lambda target: (
-                            target.organization_id.bytes,
-                            target.source_ref,
-                            target.resource_ref or "",
-                        ),
+                graph_offset = 0
+                while len(decision.expanded_candidate_refs) < graph_limit:
+                    page_limit = graph_limit - len(
+                        decision.expanded_candidate_refs
                     )
-                )
-                one_hop = _discover_materialized_one_hop(
-                    projection_session,
-                    main_projections,
-                    eligible_articles,
-                    graph_limit,
-                )
-                one_hop = tuple(
-                    item
-                    for item in one_hop
-                    if item.candidate_ref not in main_candidate_refs
-                )
-                if one_hop:
-                    decision = self._kernel.authorize_one_hop(
-                        invocation,
-                        preparation,
-                        decision,
-                        one_hop,
-                        projection_session=projection_session,
+                    one_hop_page = _discover_materialized_one_hop(
+                        projection_session,
+                        main_projections,
+                        page_limit,
+                        graph_offset,
                     )
+                    if not one_hop_page:
+                        break
+                    graph_offset += len(one_hop_page)
+                    one_hop = tuple(
+                        item
+                        for item in one_hop_page
+                        if item.candidate_ref not in main_candidate_refs
+                    )
+                    if one_hop:
+                        decision = self._kernel.authorize_one_hop(
+                            invocation,
+                            preparation,
+                            decision,
+                            one_hop,
+                            projection_session=projection_session,
+                        )
+                    if len(one_hop_page) < page_limit:
+                        break
                 if decision.expanded_candidate_refs:
                     graph_evidence = rank_authorized_one_hop(
                         request.need.query,
