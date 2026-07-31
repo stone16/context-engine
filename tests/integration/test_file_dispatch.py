@@ -50,6 +50,7 @@ from engine.persistence import (
 from engine.runtime.construction import Runtime, required_kernel_dependencies
 from engine.runtime.package_digest import QueryDigestKeyring
 from engine.supply import (
+    ACTIVE_FILE_IMPORT_MARKDOWN_CONFIG_VERSION,
     MarkdownCompilerConfig,
     WorkerLeaseCodec,
     WorkerLeaseKeyring,
@@ -1323,7 +1324,7 @@ def test_scheduler_recovers_interrupted_publication_and_stales_old_lease(
             codec,
             FileImportReceiver(first.service_principal_id),
             roots,
-            MarkdownCompilerConfig("markdown-config-v1"),
+            MarkdownCompilerConfig(ACTIVE_FILE_IMPORT_MARKDOWN_CONFIG_VERSION),
             embedding_provider=DeterministicEmbeddingTwin(),
             clock=lambda: first.issued_at,
             interrupt_after=boundary,
@@ -1369,7 +1370,7 @@ def test_scheduler_recovers_interrupted_publication_and_stales_old_lease(
             codec,
             FileImportReceiver(first.service_principal_id),
             roots,
-            MarkdownCompilerConfig("markdown-config-v1"),
+            MarkdownCompilerConfig(ACTIVE_FILE_IMPORT_MARKDOWN_CONFIG_VERSION),
             embedding_provider=DeterministicEmbeddingTwin(),
             clock=lambda: first.issued_at,
         )
@@ -1393,7 +1394,8 @@ def test_scheduler_recovers_interrupted_publication_and_stales_old_lease(
                 text(
                     "SELECT source_ref, resource_ref, CAST(revision_id AS text) "
                     "AS revision_ref FROM exact_phrase_candidate WHERE "
-                    "organization_id = :organization_id"
+                    "organization_id = :organization_id AND "
+                    "fragment_ref = 'fragment:paragraph:1'"
                 ),
                 {"organization_id": organization_id},
             ).one()
@@ -1455,7 +1457,7 @@ def test_scheduler_recovers_interrupted_publication_and_stales_old_lease(
             blocks = cast(list[dict[str, object]], package["blocks"])
             evidence = cast(list[dict[str, object]], package["evidence"])
             assert [block["text"] for block in blocks] == [
-                "ContextEngine delivers context."
+                "# Resume\n\nContextEngine delivers context.",
             ]
             assert len(evidence) == 1
             assert evidence[0]["revisionRef"] == candidate.revision_ref
@@ -1551,7 +1553,7 @@ def test_autonomous_replacement_reclaim_is_all_old_then_all_new_over_sdk(
         codec,
         receiver,
         roots,
-        MarkdownCompilerConfig("markdown-config-v1"),
+        MarkdownCompilerConfig(ACTIVE_FILE_IMPORT_MARKDOWN_CONFIG_VERSION),
         embedding_provider=DeterministicEmbeddingTwin(),
         clock=lambda: old_claim.issued_at,
     ).run(old_claim.redemption)
@@ -1605,7 +1607,7 @@ def test_autonomous_replacement_reclaim_is_all_old_then_all_new_over_sdk(
             codec,
             receiver,
             roots,
-            MarkdownCompilerConfig("markdown-config-v1"),
+            MarkdownCompilerConfig(ACTIVE_FILE_IMPORT_MARKDOWN_CONFIG_VERSION),
             embedding_provider=DeterministicEmbeddingTwin(),
             clock=lambda: new_claim.issued_at,
             interrupt_after=FilePublicationBoundary.INDEXED,
@@ -1627,7 +1629,8 @@ def test_autonomous_replacement_reclaim_is_all_old_then_all_new_over_sdk(
                 text(
                     "SELECT source_ref, resource_ref FROM exact_phrase_candidate "
                     "WHERE organization_id = :organization_id AND "
-                    "revision_id = :revision_id"
+                    "revision_id = :revision_id AND "
+                    "fragment_ref = 'fragment:paragraph:1'"
                 ),
                 {
                     "organization_id": organization_id,
@@ -2622,7 +2625,8 @@ def test_independent_worker_process_dispatches_and_publishes_one_job(
                     "SELECT source_ref, resource_ref, "
                     "CAST(revision_id AS text) AS revision_ref "
                     "FROM exact_phrase_candidate "
-                    "WHERE organization_id = :organization_id"
+                    "WHERE organization_id = :organization_id AND "
+                    "fragment_ref = 'fragment:paragraph:1'"
                 ),
                 {"organization_id": organization_id},
             ).one()
@@ -2695,7 +2699,9 @@ def test_independent_worker_process_dispatches_and_publishes_one_job(
         authorized = resolve_for(organization_id, user_id, membership_id)
         authorized_package = cast(dict[str, object], authorized["package"])
         authorized_blocks = cast(list[dict[str, object]], authorized_package["blocks"])
-        assert authorized_blocks[0]["text"] == ("ContextEngine delivers context.")
+        assert authorized_blocks[0]["text"] == (
+            "# Process\n\nContextEngine delivers context."
+        )
 
         other_root = tmp_path / "other-root"
         other_root.mkdir()

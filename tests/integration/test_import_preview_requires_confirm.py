@@ -205,6 +205,7 @@ def test_import_preview_requires_confirm(
             prepared,
             token,
             guarded_worker_engine,
+            config_version="markdown-config-v3",
         )
         expected = compile_markdown(
             (scenario.root / "handbook.md").read_bytes(),

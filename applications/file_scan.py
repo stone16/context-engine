@@ -14,7 +14,6 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from sqlalchemy import Engine
 
 from adapters.file_source import FileChangeProvider, FileRootRegistry
-from adapters.parsers.markdown import compile_markdown
 from applications.file_root_configuration import required_environment
 from applications.operator_authentication import (
     CONTROL_OPERATOR_SECRET_ENV,
@@ -50,11 +49,6 @@ from engine.control import (
     SourceRef,
 )
 from engine.persistence import PostgreSQLControlStore
-from engine.supply import (
-    ACTIVE_FILE_IMPORT_MARKDOWN_CONFIG_VERSION,
-    CompilationFailure,
-    MarkdownCompilerConfig,
-)
 
 PROVIDER_SIGNING_KEY_ENV = "CONTEXT_ENGINE_FILE_CHANGE_PROVIDER_SIGNING_KEY_HEX"
 CHECKPOINT_SIGNING_KEY_ENV = "CONTEXT_ENGINE_FILE_CHANGE_CHECKPOINT_SIGNING_KEY_HEX"
@@ -76,7 +70,6 @@ class FileScanReport:
     changes_accepted: int
     imports_scheduled: int
     deletes_observed: int
-    compilation_refusals: int
     advanced_cursor: str | None
     scan_bound: int
 
@@ -140,7 +133,6 @@ def scan_file_source(
         source_ref=source_ref,
     )
     imports_scheduled = 0
-    compilation_refusals = 0
     reconciled_page_refs: set[str] = set()
     for pending in progress.pending_change_schedules:
         scheduled = _schedule_page(
@@ -154,16 +146,14 @@ def scan_file_source(
             audience=audience,
         )
         imports_scheduled += len(scheduled.changes)
-        compilation_refusals += sum(
-            _compilation_refused(
+        for scheduled_change in scheduled.changes:
+            _verify_accepted_content_identity(
                 roots,
                 manifest,
-                change.path.value,
-                change.content_sha256,
-                change.content_length,
+                scheduled_change.path.value,
+                scheduled_change.content_sha256,
+                scheduled_change.content_length,
             )
-            for change in scheduled.changes
-        )
         reconciled_page_refs.add(pending.page_ref)
     source = FileChangeSource(
         organization_id,
@@ -233,7 +223,6 @@ def scan_file_source(
                 changes_accepted=0,
                 imports_scheduled=imports_scheduled,
                 deletes_observed=0,
-                compilation_refusals=compilation_refusals,
                 advanced_cursor=baseline.reference.checkpoint_ref,
                 scan_bound=baseline.reference.scan_bound,
             )
@@ -279,16 +268,14 @@ def scan_file_source(
                 in {candidate.path.value for candidate in novel_upserts}
             }
             imports_scheduled += len(scheduled_changes)
-            compilation_refusals += sum(
-                _compilation_refused(
+            for path, scheduled_change in scheduled_changes.items():
+                _verify_accepted_content_identity(
                     roots,
                     manifest,
                     path,
-                    change.content_sha256,
-                    change.content_length,
+                    scheduled_change.content_sha256,
+                    scheduled_change.content_length,
                 )
-                for path, change in scheduled_changes.items()
-            )
         advanced_cursor = accepted.checkpoint_ref
         if accepted.next_cursor is None:
             break
@@ -300,7 +287,6 @@ def scan_file_source(
         changes_accepted=changes_accepted,
         imports_scheduled=imports_scheduled,
         deletes_observed=deletes_observed,
-        compilation_refusals=compilation_refusals,
         advanced_cursor=advanced_cursor,
         scan_bound=roots._limits.max_baseline_entries,
     )
@@ -505,13 +491,13 @@ def _replays_complete_baseline(
     )
 
 
-def _compilation_refused(
+def _verify_accepted_content_identity(
     roots: FileRootRegistry,
     manifest: SourceManifest,
     path: str,
     expected_sha256: str,
     expected_length: int,
-) -> int:
+) -> None:
     try:
         payload = roots.read(
             manifest.active_version.root_ref,
@@ -524,8 +510,6 @@ def _compilation_refused(
         or hashlib.sha256(payload).hexdigest() != expected_sha256
     ):
         raise SourceScanRefused
-    outcome = compile_markdown(
-        payload,
-        MarkdownCompilerConfig(ACTIVE_FILE_IMPORT_MARKDOWN_CONFIG_VERSION),
-    )
-    return int(type(outcome) is CompilationFailure)
+    # Production rich compilation is owned by the exact leased Supply worker.
+    # Scan retains only the accepted-byte identity preflight and cannot invoke
+    # or predict the runner's durable refusal classification.

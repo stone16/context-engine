@@ -81,8 +81,8 @@ def test_bound_refusal_never_turns_an_unobserved_path_into_a_delete(
     source_ref = _register_activated_source(organization_id, environment)
     _scan(organization_id, source_ref, environment)
     assert [_worker(environment)["outcome"] for _ in range(3)] == [
-        "refused",
-        "refused",
+        "dispatched",
+        "dispatched",
         "no_work",
     ]
 

@@ -8,7 +8,7 @@ from uuid import uuid4
 import pytest
 
 from adapters.file_source import FileReadLimits, FileRootRegistry
-from applications.file_scan import _compilation_refused
+from applications.file_scan import _verify_accepted_content_identity
 from engine.control import FileRootRef, SourceManifest, SourceNotAvailable, SourceRef
 
 
@@ -23,7 +23,7 @@ def _manifest(root_ref: FileRootRef) -> SourceManifest:
     )
 
 
-def test_scan_preflight_compiles_only_the_exact_accepted_file_identity(
+def test_scan_preflight_verifies_only_the_exact_accepted_file_identity(
     tmp_path: Path,
 ) -> None:
     root_ref = FileRootRef("scan-preflight-root")
@@ -37,20 +37,17 @@ def test_scan_preflight_compiles_only_the_exact_accepted_file_identity(
         {root_ref: root},
         limits=FileReadLimits(max_file_bytes=1_048_576),
     ) as roots:
-        assert (
-            _compilation_refused(
-                roots,
-                _manifest(root_ref),
-                "note.md",
-                hashlib.sha256(accepted).hexdigest(),
-                len(accepted),
-            )
-            == 0
+        _verify_accepted_content_identity(
+            roots,
+            _manifest(root_ref),
+            "note.md",
+            hashlib.sha256(accepted).hexdigest(),
+            len(accepted),
         )
 
         target.write_bytes(b"# Changed\n\nDifferent bytes.\n")
         with pytest.raises(SourceNotAvailable):
-            _compilation_refused(
+            _verify_accepted_content_identity(
                 roots,
                 _manifest(root_ref),
                 "note.md",

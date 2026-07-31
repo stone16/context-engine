@@ -200,7 +200,6 @@ def test_scan_all_and_status_discover_every_active_source_without_source_args(
         assert "--source-ref" not in status_arguments
         assert scan["summary"] == {
             "changesAccepted": 3,
-            "compilationRefusals": 1,
             "deletesObserved": 0,
             "importsScheduled": 3,
             "pathsObserved": 3,
@@ -322,7 +321,6 @@ def test_scan_all_reports_one_refusal_and_continues_with_later_sources(
     ]
     assert report["summary"] == {
         "changesAccepted": 2,
-        "compilationRefusals": 0,
         "deletesObserved": 0,
         "importsScheduled": 2,
         "pathsObserved": 2,

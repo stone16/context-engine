@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 from dataclasses import dataclass, field
 from math import isfinite
@@ -20,7 +21,9 @@ __all__ = [
     "NEUTRAL_FUSED_RANK",
     "UNIFORM_RANKER_WEIGHT",
     "AuthorizedRerankItem",
+    "GRAPH_RANKER_REF",
     "join_authorized_ranking",
+    "rank_authorized_one_hop",
     "select_authorized_ranking",
 ]
 
@@ -74,7 +77,59 @@ class RankerWeights:
 
 
 UNIFORM_RANKER_WEIGHTS: Final = RankerWeights()
-HYBRID_RANKER_WEIGHTS: Final = RankerWeights({"fts": 1.0, "vector": 1.0})
+GRAPH_RANKER_REF: Final = "graph"
+HYBRID_RANKER_WEIGHTS: Final = RankerWeights(
+    {"fts": 1.0, "vector": 1.0, GRAPH_RANKER_REF: 1.0}
+)
+_RELEVANCE_TOKEN = re.compile(r"[\w]+", re.UNICODE)
+
+
+def rank_authorized_one_hop(
+    query_text: str,
+    projections: tuple[AuthorizedProjection, ...],
+) -> tuple[CandidateRankEvidence, ...]:
+    """Rank only already-authorized graph projections by lexical relevance."""
+
+    if type(query_text) is not str or not query_text or query_text.isspace():
+        raise ValueError("authorized graph ranking requires a nonblank query")
+    if type(projections) is not tuple or any(
+        type(projection) is not AuthorizedProjection for projection in projections
+    ):
+        raise TypeError("authorized graph ranking requires exact projections")
+    query_tokens = frozenset(_RELEVANCE_TOKEN.findall(query_text.casefold()))
+    if not query_tokens:
+        return ()
+    scored: list[tuple[AuthorizedProjection, float]] = []
+    for projection in projections:
+        _require_active_authorized_projection(projection)
+        body_tokens = frozenset(
+            _RELEVANCE_TOKEN.findall(projection.projected_body.casefold())
+        )
+        overlap = len(query_tokens & body_tokens)
+        score = overlap / len(query_tokens)
+        if score > 0.5:
+            scored.append((projection, score))
+    ordered = sorted(
+        scored,
+        key=lambda item: (
+            -item[1],
+            _candidate_sort_key(item[0].candidate_ref),
+        ),
+    )
+    return tuple(
+        CandidateRankEvidence(
+            candidate_ref=projection.candidate_ref,
+            per_ranker=(
+                RankerEvidence(
+                    ranker_ref=GRAPH_RANKER_REF,
+                    position=position,
+                    score=score,
+                ),
+            ),
+            fused_rank=position,
+        )
+        for position, (projection, score) in enumerate(ordered, start=1)
+    )
 
 
 @dataclass(frozen=True, slots=True, init=False)

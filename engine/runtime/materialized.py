@@ -13,6 +13,7 @@ from engine.runtime.candidate_ranking import (
 from engine.runtime.evidence import (
     MAX_PROJECTED_FIELD_REF_LENGTH,
     MAX_PROJECTED_FIELD_REFS,
+    AuthorizedProjection,
     CandidateRef,
     validate_projected_field_refs,
 )
@@ -307,6 +308,21 @@ class MaterializedFragmentWindowRead:
             )
 
 
+@dataclass(frozen=True, slots=True)
+class MaterializedOneHopCandidate:
+    """One content-free graph candidate retaining its authorized root."""
+
+    anchor_ref: CandidateRef = field(repr=False)
+    candidate_ref: CandidateRef = field(repr=False)
+
+    def __post_init__(self) -> None:
+        if (
+            type(self.anchor_ref) is not CandidateRef
+            or type(self.candidate_ref) is not CandidateRef
+        ):
+            raise TypeError("one-hop graph lineage requires exact CandidateRef values")
+
+
 class MaterializedProjectionPort(Protocol):
     """Narrow operations executed by the owning current database transaction."""
 
@@ -347,6 +363,16 @@ class _MaterializedFragmentWindowPort(Protocol):
         after: int,
         expansion_candidates: tuple[CandidateRef, ...],
     ) -> MaterializedFragmentWindowRead: ...
+
+
+@runtime_checkable
+class _MaterializedOneHopPort(Protocol):
+    def discover_one_hop(
+        self,
+        anchors: tuple[CandidateRef, ...],
+        limit: int,
+        offset: int,
+    ) -> tuple[MaterializedOneHopCandidate, ...]: ...
 
 
 class _MaterializedProjectionScope:
@@ -878,6 +904,52 @@ def _project_materialized_fragment(
         raise TypeError("materialized projection port returned the wrong nominal type")
     projection.__post_init__()
     return projection
+
+
+def _discover_materialized_one_hop(
+    session: MaterializedProjectionSession,
+    anchors: tuple[AuthorizedProjection, ...],
+    limit: int,
+    offset: int,
+) -> tuple[MaterializedOneHopCandidate, ...]:
+    """Generate one content-free graph hop from exact authorized anchors only."""
+
+    from engine.runtime.evidence import _require_active_authorized_projection
+
+    _require_active_materialized_projection_session(session)
+    if type(anchors) is not tuple or any(
+        type(anchor) is not AuthorizedProjection for anchor in anchors
+    ):
+        raise TypeError("one-hop expansion requires authorized projections")
+    if type(limit) is not int or not 1 <= limit <= 64:
+        raise ValueError("one-hop expansion requires a bounded limit")
+    if type(offset) is not int or offset < 0:
+        raise ValueError("one-hop expansion requires a nonnegative offset")
+    for anchor in anchors:
+        _require_active_authorized_projection(anchor)
+    if not anchors:
+        return ()
+    if not isinstance(session._port, _MaterializedOneHopPort):
+        return ()
+    discovered = session._port.discover_one_hop(
+        tuple(anchor.candidate_ref for anchor in anchors),
+        limit,
+        offset,
+    )
+    if (
+        type(discovered) is not tuple
+        or len(discovered) > limit
+        or any(type(item) is not MaterializedOneHopCandidate for item in discovered)
+    ):
+        raise TypeError("one-hop expansion must return bounded ranked refs")
+    anchor_refs = {anchor.candidate_ref for anchor in anchors}
+    if any(item.anchor_ref not in anchor_refs for item in discovered):
+        raise ValueError("one-hop expansion roots must be authorized anchors")
+    if any(item.candidate_ref in anchor_refs for item in discovered):
+        raise ValueError("one-hop expansion cannot return an anchor")
+    if len({item.candidate_ref for item in discovered}) != len(discovered):
+        raise ValueError("one-hop expansion candidates must be unique")
+    return discovered
 
 
 def _read_materialized_fragment_window(

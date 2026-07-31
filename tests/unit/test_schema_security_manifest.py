@@ -121,7 +121,7 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
     document = manifest()
     tables = table_entries(document)
 
-    assert document["manifestVersion"] == "42.0.0"
+    assert document["manifestVersion"] == "43.0.0"
     assert set(tables) == {
         "active_release_manifest",
         "action_delivery_attempt",
@@ -184,6 +184,7 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
         "release_operator_grant",
         "release_promotion_audit",
         "revision_publication_event",
+        "revision_link_edge",
         "resource_access_policy",
         "service_principal",
         "source_version",
@@ -395,6 +396,7 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
         "file_source_cleanup_intent",
         "file_source_publish_watermark",
         "revision_publication_event",
+        "revision_link_edge",
     ):
         assert tables[file_import_table]["classification"] == "tenant_owned"
     for release_table in (
@@ -432,6 +434,7 @@ def test_issue_24_structural_markdown_contract_is_versioned_and_function_only() 
     assert operation["versionedDatabaseFunctions"] == {
         "markdown-config-v1": "context_worker_publish_file_import_v2",
         "markdown-config-v2": "context_worker_publish_structural_file_import_v2",
+        "markdown-config-v3": "context_worker_prepare_file_publication",
     }
     snapshot = entries["file_revision_snapshot"]
     contract = snapshot["versionedCompilationContract"]
@@ -476,6 +479,71 @@ def test_issue_24_structural_markdown_contract_is_versioned_and_function_only() 
     assert entries["context_fragment"]["permittedOperations"][
         "context_engine_worker"
     ] == ["EXECUTE context_worker_prepare_file_publication"]
+
+
+def test_issue_151_revision_graph_is_content_free_and_function_only() -> None:
+    entries = table_entries(manifest())
+    edge = entries["revision_link_edge"]
+
+    assert edge["classification"] == "tenant_owned"
+    assert edge["nonOwnerEvidence"] == {
+        "evidenceId": "PG-ONE-HOP-GRAPH-151",
+        "selector": {"table": "revision_link_edge"},
+    }
+    assert edge["foreignKeys"] == [
+        {
+            "name": "fk_revision_link_edge_revision_same_organization",
+            "columns": [
+                "organization_id",
+                "source_resource_ref",
+                "source_revision_id",
+            ],
+            "references": {
+                "table": "context_revision",
+                "columns": ["organization_id", "resource_ref", "revision_id"],
+            },
+        }
+    ]
+    assert edge["retention"] == {
+        "sourceContent": "none",
+        "authorizationDecision": "none",
+        "oldRevisionBackfill": "none",
+    }
+    assert edge["immutableRows"]["events"] == ["UPDATE", "DELETE"]
+    assert edge["functionOnlyMutation"] == {
+        "databaseFunction": "context_worker_prepare_file_publication",
+        "definerRole": "context_engine_worker_lease_definer",
+        "directTableMutationAllowed": False,
+    }
+    assert edge["permittedOperations"] == {
+        "context_engine_runtime": [
+            "EXECUTE context_runtime_resolve_one_hop_graph"
+        ],
+        "context_engine_worker": [
+            "EXECUTE context_worker_prepare_file_publication"
+        ],
+        "context_engine_worker_lease_definer": ["INSERT"],
+        "context_engine_graph_definer": ["SELECT"],
+    }
+    for table_name in (
+        "membership",
+        "context_resource",
+        "context_fragment",
+        "file_acquisition",
+        "file_revision_snapshot",
+    ):
+        entry = entries[table_name]
+        operations = entry["permittedOperations"]["context_engine_graph_definer"]
+        assert len(operations) == 1
+        assert operations[0].startswith("SELECT ")
+        assert "content" not in operations[0]
+        policy = next(
+            policy
+            for policy in entry["rowLevelSecurity"]["policies"]
+            if policy["roles"] == ["context_engine_graph_definer"]
+        )
+        assert policy["command"] == "SELECT"
+        assert "app.organization_id" in policy["using"]
 
 
 def test_issue_25_file_noop_contract_is_tenant_scoped_and_function_only() -> None:
@@ -1668,6 +1736,10 @@ def test_membership_manifest_requires_exact_user_actor_and_read_only_runtime() -
             "SELECT",
             "UPDATE status, valid_from, valid_until",
         ],
+        "context_engine_graph_definer": [
+            "SELECT organization_id, user_id, membership_id, membership_version, "
+            "status, valid_from, valid_until"
+        ],
     }
 
     rls = entry["rowLevelSecurity"]
@@ -1935,6 +2007,15 @@ def test_content_manifest_preserves_lineage_visibility_and_immutability() -> Non
             ]
         if entry["name"] in {"context_resource", "context_fragment"}:
             expected_operations["context_engine_citation_definer"] = ["SELECT"]
+            expected_operations["context_engine_graph_definer"] = [
+                (
+                    "SELECT organization_id, source_ref, resource_ref, "
+                    "active_revision_id, tombstoned"
+                    if entry["name"] == "context_resource"
+                    else "SELECT organization_id, resource_ref, revision_id, "
+                    "fragment_ref, ordinal"
+                )
+            ]
         assert entry["permittedOperations"] == expected_operations
         rls = entry["rowLevelSecurity"]
         assert rls["enabled"] is True

@@ -362,6 +362,7 @@ def delete_file_import_scenario(
 
     engine = create_database_engine(configuration)
     immutable_tables = (
+        ("revision_link_edge", "revision_link_edge_immutable"),
         ("file_source_publish_watermark", "file_source_publish_watermark_immutable"),
         (
             "file_source_acquisition_checkpoint",
@@ -382,7 +383,20 @@ def delete_file_import_scenario(
     )
     try:
         with engine.begin() as connection:
-            for table, trigger in immutable_tables:
+            existing_tables = frozenset(
+                connection.execute(
+                    text(
+                        "SELECT tablename FROM pg_tables "
+                        "WHERE schemaname = 'public'"
+                    )
+                ).scalars()
+            )
+            active_immutable_tables = tuple(
+                (table, trigger)
+                for table, trigger in immutable_tables
+                if table in existing_tables
+            )
+            for table, trigger in active_immutable_tables:
                 connection.execute(
                     text(f"ALTER TABLE {table} DISABLE TRIGGER {trigger}")
                 )
@@ -414,6 +428,7 @@ def delete_file_import_scenario(
                     "file_revision_supersession",
                     "file_revision_replacement_plan",
                     "file_acquisition_result",
+                    "revision_link_edge",
                     "exact_phrase_candidate",
                     "revision_publication_event",
                     "membership_resource_field_right",
@@ -430,6 +445,8 @@ def delete_file_import_scenario(
                     "service_principal",
                     "membership",
                 ):
+                    if table not in existing_tables:
+                        continue
                     connection.execute(
                         text(
                             f"DELETE FROM {table} "  # noqa: S608
@@ -456,7 +473,7 @@ def delete_file_import_scenario(
                 )
         finally:
             with engine.begin() as connection:
-                for table, trigger in reversed(immutable_tables):
+                for table, trigger in reversed(active_immutable_tables):
                     connection.execute(
                         text(f"ALTER TABLE {table} ENABLE TRIGGER {trigger}")
                     )

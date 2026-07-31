@@ -85,6 +85,7 @@ NON_OWNER_EVIDENCE_BY_TABLE: Mapping[str, str] = {
     "active_release_manifest": "PG-RELEASE-OWNER-019",
     "release_promotion_audit": "PG-RELEASE-OWNER-019",
     "revision_publication_event": "PG-ARTICLE-ACCESS-RLS-141",
+    "revision_link_edge": "PG-ONE-HOP-GRAPH-151",
 }
 
 _SQL_TOKEN = re.compile(

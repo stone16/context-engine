@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final, NoReturn, cast
 
-from engine.learning.golden import validate_golden_document_schema
+from engine.learning.golden import load_golden_set, validate_golden_document_schema
 
 PUBLIC_SUBSET_GOVERNANCE_VERSION: Final = (
     "context-engine-public-subset-governance-v1"
@@ -239,7 +239,22 @@ def assert_tracked_golden_tree_is_synthetic(root: Path) -> None:
                     f"tracked golden schema path is unavailable: {path.name}"
                 )
             continue
-        if path.suffix != ".json" or path.name.endswith(".lock.json"):
+        if path.name.endswith(".lock.json"):
+            golden_path = path.with_name(
+                path.name.removesuffix(".lock.json") + ".json"
+            )
+            try:
+                load_golden_set(
+                    golden_path,
+                    lock_path=path,
+                    validate_set_composition=False,
+                )
+            except RuntimeError as error:
+                raise ValueError(
+                    f"tracked golden lock is invalid: {path.name}: {error}"
+                ) from None
+            continue
+        if path.suffix != ".json":
             raise ValueError(f"tracked golden file is not synthetic JSON: {path.name}")
         try:
             document = json.loads(path.read_text(encoding="utf-8"))

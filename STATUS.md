@@ -170,6 +170,7 @@ Follow the ADR for its exact evidence boundary.
 | [0086](./docs/decisions/0086-report-worker-batches-and-compose-source-wide-cycles.md) | Emit privacy-shaped worker batch progress and compose source-wide scan/status from existing exact Control calls |
 | [0091](./docs/decisions/0091-reconcile-connector-acl-freshness-at-acceptance.md) | Admit the credential-free Feishu Docs twin through the leased connector runner, preserve lease-reconciled ACL freshness provenance, and atomically isolate or fix one Article ACL with a database Policy Epoch advance |
 | [0092](./docs/decisions/0092-authorize-feishu-subjects-and-bound-mirrored-freshness.md) | Recompute Feishu subject grants from engine-owned mappings, bind artifacts to exact Articles, and expire Mirrored Feishu evidence under one closed five-minute Runtime profile |
+| [0093](./docs/decisions/0093-activate-leased-rich-markdown-and-revision-link-graph.md) | Activate lease-selected rich Markdown v3 publication and one bounded authorized Revision-graph hop |
 
 ADR-0065 extends the active File Provider boundary from a flat root to
 deterministic recursive discovery of canonical nested Markdown paths. Each
@@ -197,8 +198,8 @@ bounded File scan over an explicitly configured anchored root, accept every new
 provider page, schedule only changed upserts, reconcile accepted current-scan
 upsert pages missing durable jobs, and hand those jobs to the existing
 autonomous worker. Real-PostgreSQL fixture evidence covers exact unchanged
-replay, interrupted scheduling recovery, one-note addition, aggregate
-compilation refusal, delete observation without delete execution, and
+replay, interrupted scheduling recovery, one-note addition, delete observation
+without delete execution, and
 384-dimensional Fragment publication. This does not claim that the maintainer's
 private corpus has run; it activates no watcher, alternate publisher, new
 tombstone authority, or network operation.
@@ -239,6 +240,17 @@ credentials.
 This does **not** activate a live Feishu client, tenant credentials, external
 network calls, production subject-mapping administration, or Feishu delivery.
 Those surfaces remain `NOT_ACTIVE`.
+
+ADR-0093 activates the exact File-import worker's rich Markdown v3 compiler
+subprocess and immutable content-free Revision link edges. Runtime follows one
+outgoing or backlink hop only from authorized main-path projections, verifies
+same-Article/current-Revision lineage before inheritance, re-authorizes every
+cross-Article candidate through the unchanged Kernel, and admits only relevant
+authorized neighbours into the existing ranking competition. Registered
+PostgreSQL and generated-SDK evidence proves a denied neighbour leaves no
+tenant-visible or retained decision trace. Recursive graph traversal,
+historical edge backfill, external-URI expansion, and graph-carried authority
+remain `NOT_ACTIVE`.
 
 ### Wire contract, SDK, and trusted delivery
 

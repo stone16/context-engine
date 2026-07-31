@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
@@ -10,6 +11,7 @@ from applications.eval_v1 import (
     PUBLIC_SUBSET_MAINTAINER_SECRET_ENV,
     load_local_public_subset_promotion_authority,
 )
+from engine.learning.golden import create_golden_lock, load_golden_set
 from engine.learning.governance import (
     PublicSubsetPromotionAuthority,
     PublicSubsetPromotionRejected,
@@ -44,6 +46,41 @@ def test_feedback_intake_fixture_is_wholly_synthetic() -> None:
     assert fixture["synthetic"] is True
     assert fixture["entries"][0]["caseRef"].startswith("synthetic-")
     assert fixture["entries"][0]["query"].startswith("synthetic-")
+
+
+def test_tracked_synthetic_fixture_lock_must_match_its_sibling_set(
+    tmp_path: Path,
+) -> None:
+    golden_root = tmp_path / "golden"
+    golden_root.mkdir()
+    golden_path = golden_root / "synthetic-slices.json"
+    lock_path = golden_root / "synthetic-slices.lock.json"
+    document = golden_document(valid_composed_entries()[:1])
+    entries = cast(list[dict[str, object]], document["entries"])
+    entries[0]["caseRef"] = "synthetic-case"
+    claims = cast(list[dict[str, object]], entries[0]["requiredClaims"])
+    claims[0]["claimRef"] = "synthetic-claim"
+    entries[0]["partition"] = "pilot"
+    golden_path.write_text(json.dumps(document), encoding="utf-8")
+    golden_set = load_golden_set(
+        golden_path,
+        validate_set_composition=False,
+        allow_unlocked_pilot_for_initial_lock=True,
+    )
+    create_golden_lock(
+        golden_set,
+        lock_path,
+        authority="synthetic-maintainer",
+        reason="synthetic-fixture-lock",
+        recorded_at=datetime(2026, 7, 31, tzinfo=UTC),
+    )
+
+    assert_tracked_golden_tree_is_synthetic(golden_root)
+
+    entries[0]["expectedAnswer"] = "synthetic-edited-answer"
+    golden_path.write_text(json.dumps(document), encoding="utf-8")
+    with pytest.raises(ValueError, match="tracked golden lock is invalid"):
+        assert_tracked_golden_tree_is_synthetic(golden_root)
 
 
 def test_personal_or_non_placeholder_tracked_case_is_refused(tmp_path: Path) -> None:
