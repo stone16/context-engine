@@ -92,6 +92,21 @@ def test_curation_workflow_does_not_export_release_authority() -> None:
         assert not any(hasattr(module, name) for name in FORBIDDEN_AUTHORITY_SYMBOLS)
 
 
+def test_release_owner_package_does_not_export_curation_workflow() -> None:
+    import engine.learning as learning_package
+
+    for name in (
+        "CurationCandidate",
+        "EvaluationCaseIntake",
+        "FeedbackEvidence",
+        "TriageCategory",
+        "admit_evaluation_case",
+        "build_curation_candidate",
+        "compare_release_evaluations",
+    ):
+        assert not hasattr(learning_package, name)
+
+
 def test_all_current_release_manifests_still_require_curation_off() -> None:
     profile = CurationProfileRef.off(
         profile_ref="curation-off-v0",
