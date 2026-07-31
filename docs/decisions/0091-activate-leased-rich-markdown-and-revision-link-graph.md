@@ -79,12 +79,17 @@ ADR-0075 requires.
    enters the unchanged `AuthorizationKernel` authorization and projection path
    with the original prepared policy and current UserActor transaction.
 9. Only authorized expanded projections may be read for relevance. A bounded
-   server-owned lexical graph ranker emits rank evidence for relevant expanded
-   projections, and that evidence joins ADR-0083's authorized fusion order with
-   the main-path evidence. Expanded projections without graph rank evidence are
-   ineligible for selection rather than neutrally appended. Refused candidates
-   supply neither projection nor rank evidence and therefore cannot affect
-   order, coverage, gaps, sufficiency, ContextRun, or DecisionAudit.
+   server-owned lexical graph ranker emits rank evidence only when a strict
+   majority of the distinct query tokens occur in the projection, and that
+   evidence joins ADR-0083's authorized fusion order with the main-path evidence.
+   Expanded projections without graph rank evidence are ineligible for selection
+   rather than neutrally appended. Refused candidates supply neither projection
+   nor rank evidence and therefore cannot affect order, coverage, gaps,
+   sufficiency, ContextRun, or DecisionAudit. Before applying the 64-candidate
+   graph bound, the resolver intersects graph locators with the exact Article
+   targets from the Kernel-prepared effective scope; every returned cross-Article
+   locator still traverses the unchanged Kernel independently. This prefilter is
+   an opacity and work bound, not an authorization decision.
 10. The graph SQL is owned by a NOLOGIN, NOINHERIT least-privilege definer. It
     may select only Organization-scoped graph and locator tables under FORCE
     RLS. Runtime may execute the bounded resolver but receives no direct graph
@@ -116,7 +121,8 @@ an executable process boundary rather than a naming convention.
   lineage, but the graph itself grants no access and exposes no content.
 - A denied neighbour is indistinguishable from an absent or irrelevant
   neighbour in tenant-visible delivery and authorized-only retained lineage.
-- One graph call is bounded to 64 candidates and is never recursively applied.
+- One graph call is bounded to 64 current-scope candidates and is never
+  recursively applied; out-of-scope neighbours cannot consume the bound.
 - Existing databases gain one FORCE-RLS tenant table and one least-privilege
   graph definer role; the security manifest and executable evidence denominator
   include both.

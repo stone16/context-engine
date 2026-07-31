@@ -3791,7 +3791,7 @@ def test_revision_link_graph_revision_downgrades_and_reapplies_when_empty(
                             """
                             SELECT ARRAY[
                               to_regprocedure(
-                                'public.context_runtime_resolve_one_hop_graph(uuid[],text[],text[],uuid[],text[],integer)'
+                                'public.context_runtime_resolve_one_hop_graph(uuid[],text[],text[],uuid[],text[],uuid[],text[],text[],integer)'
                               ) IS NOT NULL,
                               to_regprocedure(
                                 'public.context_internal_revision_link_edges_match(uuid,text,uuid,jsonb)'

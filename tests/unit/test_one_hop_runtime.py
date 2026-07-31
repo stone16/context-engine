@@ -45,21 +45,34 @@ class OneHopMaterializedPort(RecordingMaterializedPort):
     ) -> None:
         super().__init__()
         self.candidates = candidates
-        self.graph_calls: list[tuple[tuple[CandidateRef, ...], int]] = []
+        self.graph_calls: list[
+            tuple[tuple[CandidateRef, ...], tuple[ScopeTarget, ...], int]
+        ] = []
 
     def discover_one_hop(
         self,
         anchors: tuple[CandidateRef, ...],
+        eligible_articles: tuple[ScopeTarget, ...],
         limit: int,
     ) -> tuple[MaterializedOneHopCandidate, ...]:
-        self.graph_calls.append((anchors, limit))
+        self.graph_calls.append((anchors, eligible_articles, limit))
+        eligible = {
+            (target.organization_id, target.source_ref, target.resource_ref)
+            for target in eligible_articles
+        }
         return tuple(
             MaterializedOneHopCandidate(
                 anchor_ref=anchors[0],
                 candidate_ref=candidate,
             )
             for candidate in self.candidates
-        )
+            if (
+                candidate.organization_id,
+                candidate.source_ref,
+                candidate.resource_ref,
+            )
+            in eligible
+        )[:limit]
 
 
 def _allow_articles(invocation: object, *candidates: CandidateRef) -> None:
@@ -104,10 +117,59 @@ def test_one_hop_runs_only_from_authorized_main_results_and_reauthorizes() -> No
         )
 
     assert type(outcome) is Resolved
-    assert port.graph_calls == [((AUTHORIZED,), 64)]
+    assert port.graph_calls == [
+        (
+            (AUTHORIZED,),
+            (
+                ScopeTarget(
+                    AUTHORIZED.organization_id,
+                    AUTHORIZED.source_ref,
+                    AUTHORIZED.resource_ref,
+                ),
+            ),
+            64,
+        )
+    ]
     assert [block.body for block in outcome.package.blocks] == ["A-safe"]
     assert locator(AUTHORIZED_SECOND) not in port.body_calls
     assert locator(DENIED) not in port.body_calls
+
+
+def test_denied_neighbours_cannot_consume_the_authorized_expansion_bound() -> None:
+    denied_neighbours = tuple(
+        CandidateRef(
+            organization_id=AUTHORIZED.organization_id,
+            source_ref=AUTHORIZED.source_ref,
+            resource_ref=f"resource:denied-{index:03d}",
+            revision_ref=f"{index + 10:08x}-0000-4000-8000-000000000000",
+            fragment_ref=f"fragment:denied-{index:03d}",
+        )
+        for index in range(64)
+    )
+    index = HostileCandidateIndex((AUTHORIZED,))
+    port = OneHopMaterializedPort((*denied_neighbours, AUTHORIZED_SECOND))
+    runtime = Runtime(
+        required_kernel_dependencies(),
+        candidate_index=cast(CandidateIndex, index),
+        ranker_weights=RankerWeights({"hostile": 1.0, "graph": 2.0}),
+        clock=lambda: AS_OF,
+        query_digest_keyring=TEST_QUERY_DIGEST_KEYRING,
+    )
+
+    with trusted_operands(port) as (invocation, delivery):
+        _allow_articles(invocation, AUTHORIZED, AUTHORIZED_SECOND)
+        outcome = runtime.resolve(
+            invocation,
+            delivery,
+            Acquire(need=ContextNeed(query="Z safe")),
+        )
+
+    assert type(outcome) is Resolved
+    assert "Z-safe" in repr(outcome)
+    assert all(
+        locator(candidate) not in port.body_calls for candidate in denied_neighbours
+    )
+    assert port.graph_calls[0][2] == 64
 
 
 def test_authorized_expansion_competes_and_is_not_auto_included() -> None:
@@ -143,7 +205,32 @@ def test_authorized_expansion_competes_and_is_not_auto_included() -> None:
     assert "A-safe" not in repr(outcome)
 
 
-def test_irrelevant_authorized_expansion_is_not_selected_at_neutral_rank() -> None:
+def test_weakly_relevant_authorized_expansion_is_not_selected() -> None:
+    index = HostileCandidateIndex((AUTHORIZED,))
+    port = OneHopMaterializedPort((AUTHORIZED_SECOND,))
+    port.body_by_candidate[AUTHORIZED_SECOND] = "weak graph signal"
+    runtime = Runtime(
+        required_kernel_dependencies(),
+        candidate_index=cast(CandidateIndex, index),
+        clock=lambda: AS_OF,
+        query_digest_keyring=TEST_QUERY_DIGEST_KEYRING,
+    )
+
+    with trusted_operands(port) as (invocation, delivery):
+        _allow_articles(invocation, AUTHORIZED, AUTHORIZED_SECOND)
+        outcome = runtime.resolve(
+            invocation,
+            delivery,
+            Acquire(need=ContextNeed(query="weak unrelated query terms")),
+        )
+
+    assert type(outcome) is Resolved
+    assert [block.body for block in outcome.package.blocks] == ["A-safe"]
+    assert locator(AUTHORIZED_SECOND) in port.body_calls
+    assert "weak graph signal" not in repr(outcome)
+
+
+def test_tokenless_query_cannot_auto_include_an_authorized_expansion() -> None:
     index = HostileCandidateIndex((AUTHORIZED,))
     port = OneHopMaterializedPort((AUTHORIZED_SECOND,))
     runtime = Runtime(
@@ -158,7 +245,7 @@ def test_irrelevant_authorized_expansion_is_not_selected_at_neutral_rank() -> No
         outcome = runtime.resolve(
             invocation,
             delivery,
-            Acquire(need=ContextNeed(query="no lexical overlap")),
+            Acquire(need=ContextNeed(query="---")),
         )
 
     assert type(outcome) is Resolved

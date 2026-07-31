@@ -1023,6 +1023,7 @@ class _PostgreSQLMaterializedProjectionPort:
     def discover_one_hop(
         self,
         anchors: tuple[CandidateRef, ...],
+        eligible_articles: tuple[ScopeTarget, ...],
         limit: int,
     ) -> tuple[MaterializedOneHopCandidate, ...]:
         """Read outgoing and backlink locators from current Revision edges."""
@@ -1031,9 +1032,14 @@ class _PostgreSQLMaterializedProjectionPort:
             type(anchor) is not CandidateRef for anchor in anchors
         ):
             raise TypeError("one-hop discovery requires exact anchors")
+        if type(eligible_articles) is not tuple or any(
+            type(target) is not ScopeTarget or target.resource_ref is None
+            for target in eligible_articles
+        ):
+            raise TypeError("one-hop discovery requires exact eligible Articles")
         if type(limit) is not int or not 1 <= limit <= 64:
             raise ValueError("one-hop discovery requires a bounded limit")
-        if not anchors:
+        if not anchors or not eligible_articles:
             return ()
         rows = self._connection.execute(
             text(
@@ -1045,6 +1051,9 @@ class _PostgreSQLMaterializedProjectionPort:
                     CAST(:resource_refs AS text[]),
                     CAST(:revision_ids AS uuid[]),
                     CAST(:fragment_refs AS text[]),
+                    CAST(:eligible_organization_ids AS uuid[]),
+                    CAST(:eligible_source_refs AS text[]),
+                    CAST(:eligible_resource_refs AS text[]),
                     :limit
                 )
                 """
@@ -1058,6 +1067,15 @@ class _PostgreSQLMaterializedProjectionPort:
                     for anchor in anchors
                 ],
                 "fragment_refs": [anchor.fragment_ref for anchor in anchors],
+                "eligible_organization_ids": [
+                    target.organization_id for target in eligible_articles
+                ],
+                "eligible_source_refs": [
+                    target.source_ref for target in eligible_articles
+                ],
+                "eligible_resource_refs": [
+                    target.resource_ref for target in eligible_articles
+                ],
                 "limit": limit,
             },
         )

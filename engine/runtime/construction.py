@@ -1077,7 +1077,8 @@ class AuthorizationKernel:
         expanded = replace(
             decision,
             projections=decision.projections + tuple(inherited) + reauthorized,
-            expanded_candidate_refs=frozenset(
+            expanded_candidate_refs=decision.expanded_candidate_refs
+            | frozenset(
                 projection.candidate_ref for projection in (*inherited, *reauthorized)
             ),
         )
@@ -1853,19 +1854,37 @@ class Runtime:
             )
             projection_session = invocation.user_actor.materialized_projection_session
             if projection_session is not None and decision.projections:
+                main_projections = decision.projections
+                main_candidate_refs = set(candidate_refs)
+                graph_limit = min(64, self._candidate_submission_limit)
+                eligible_articles = tuple(
+                    sorted(
+                        (
+                            target
+                            for target in (
+                                preparation.policy_receipt.effective_scope.targets
+                            )
+                            if target.resource_ref is not None
+                        ),
+                        key=lambda target: (
+                            target.organization_id.bytes,
+                            target.source_ref,
+                            target.resource_ref or "",
+                        ),
+                    )
+                )
                 one_hop = _discover_materialized_one_hop(
                     projection_session,
-                    decision.projections,
-                    min(64, self._candidate_submission_limit),
+                    main_projections,
+                    eligible_articles,
+                    graph_limit,
                 )
-                main_candidate_refs = set(candidate_refs)
                 one_hop = tuple(
                     item
                     for item in one_hop
                     if item.candidate_ref not in main_candidate_refs
                 )
                 if one_hop:
-                    main_projection_count = len(decision.projections)
                     decision = self._kernel.authorize_one_hop(
                         invocation,
                         preparation,
@@ -1873,13 +1892,12 @@ class Runtime:
                         one_hop,
                         projection_session=projection_session,
                     )
+                if decision.expanded_candidate_refs:
                     graph_evidence = rank_authorized_one_hop(
                         request.need.query,
                         tuple(
                             projection
-                            for projection in decision.projections[
-                                main_projection_count:
-                            ]
+                            for projection in decision.projections
                             if projection.candidate_ref
                             in decision.expanded_candidate_refs
                         ),

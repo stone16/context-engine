@@ -97,6 +97,8 @@ def rank_authorized_one_hop(
     ):
         raise TypeError("authorized graph ranking requires exact projections")
     query_tokens = frozenset(_RELEVANCE_TOKEN.findall(query_text.casefold()))
+    if not query_tokens:
+        return ()
     scored: list[tuple[AuthorizedProjection, float]] = []
     for projection in projections:
         _require_active_authorized_projection(projection)
@@ -104,8 +106,9 @@ def rank_authorized_one_hop(
             _RELEVANCE_TOKEN.findall(projection.projected_body.casefold())
         )
         overlap = len(query_tokens & body_tokens)
-        if overlap:
-            scored.append((projection, overlap / len(query_tokens)))
+        score = overlap / len(query_tokens)
+        if score > 0.5:
+            scored.append((projection, score))
     ordered = sorted(
         scored,
         key=lambda item: (

@@ -245,7 +245,14 @@ def test_generated_sdk_one_hop_reauthorizes_and_leaves_no_denied_trace(
             guarded_control_engine,
             guarded_worker_engine,
             path="denied.md",
-            payload=f"# Synthetic denied\n\n{DENIED_MARKER} {QUERY}.\n".encode(),
+            payload=(
+                b"# Synthetic denied\n\n"
+                + b"\n\n".join(
+                    f"{DENIED_MARKER} {QUERY} fragment {index}.".encode()
+                    for index in range(65)
+                )
+                + b"\n"
+            ),
         )
         two_hop = _publish_path(
             scenario,
@@ -270,6 +277,17 @@ def test_generated_sdk_one_hop_reauthorizes_and_leaves_no_denied_trace(
             ),
         )
         with migration_engine.connect() as connection:
+            denied_fragment_count = connection.execute(
+                text(
+                    "SELECT count(*) FROM context_fragment "
+                    "WHERE organization_id = :organization_id "
+                    "AND resource_ref = :resource_ref"
+                ),
+                {
+                    "organization_id": scenario.organization_id,
+                    "resource_ref": denied.resource_ref,
+                },
+            ).scalar_one()
             user_id = connection.execute(
                 text(
                     "SELECT user_id FROM membership "
@@ -281,6 +299,7 @@ def test_generated_sdk_one_hop_reauthorizes_and_leaves_no_denied_trace(
                     "membership_id": scenario.membership_id,
                 },
             ).scalar_one()
+        assert denied_fragment_count > 64
 
         observed: list[object] = []
         app = create_app(
