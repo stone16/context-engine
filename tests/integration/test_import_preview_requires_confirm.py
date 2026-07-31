@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import re
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -131,6 +132,7 @@ def _ui_import_scenario(
         b"# Handbook\n\nRead [the private note](private-runbook.md).\n",
         b"# Handbook\n\nRead [[private-runbook]].\n",
         b"# Handbook\n\nEmbed ![[private-runbook]].\n",
+        b"# Handbook\n\nFirst paragraph.\n\nRead [[private-runbook]].\n",
     ],
 )
 def test_link_bearing_import_preview_hands_off_to_the_leased_scan_path(
@@ -166,11 +168,26 @@ def test_link_bearing_import_preview_hands_off_to_the_leased_scan_path(
 
         assert response.status_code == 200
         assert "Rich Markdown requires the leased scan path" in response.text
-        assert "context-engine-control scan" in response.text
         assert str(scenario.source_ref.value) in response.text
-        assert "activate-change-feed" in response.text
-        assert "activate-delete-observations" in response.text
-        assert "context-engine-worker --dispatch-file-once" in response.text
+        source_arguments = (
+            '--organization-id "$CONTEXT_ENGINE_OPERATOR_ORGANIZATION_ID" '
+            f'--source-ref "{scenario.source_ref.value}"'
+        )
+        rendered_commands = tuple(
+            html.unescape(command)
+            for command in re.findall(
+                r'<div class="block-body"><code>([^<]+)</code></div>',
+                response.text,
+            )
+        )
+        assert rendered_commands == (
+            "uv run context-engine-control activate-change-feed "
+            + source_arguments,
+            "uv run context-engine-control activate-delete-observations "
+            + source_arguments,
+            "uv run context-engine-control scan " + source_arguments,
+            "uv run context-engine-worker --dispatch-file-once",
+        )
         assert "until it reports" in response.text
         assert "no_work" in response.text
         assert "previewToken" not in response.text
@@ -206,7 +223,7 @@ def test_malformed_import_refusal_stays_content_free_without_scan_handoff(
         migration_configuration=migration_configuration,
         guarded_control_engine=guarded_control_engine,
         guarded_runtime_engine=guarded_runtime_engine,
-        payload=b"# Handbook\n\n\xffprivate malformed body\n",
+        payload=b"# Handbook\n\n[[private-runbook]]\xffprivate malformed body\n",
     ) as (scenario, client, _migration_engine):
         response = client.post(
             "/ui/import/preview",

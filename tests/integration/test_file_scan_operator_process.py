@@ -668,7 +668,7 @@ def test_scan_handoff_publishes_link_bearing_note_through_leased_worker(
         file_scan_scenario
     )
     (root / "linked.md").write_text(
-        "# Linked note\n\nRead [the runbook](runbook.md).\n",
+        "# Linked note\n\nRead [[runbook]].\n",
         encoding="utf-8",
     )
     source_ref = _register_activated_source(organization_id, environment)
@@ -703,7 +703,7 @@ def test_scan_handoff_publishes_link_bearing_note_through_leased_worker(
         assert snapshot._tuple() == (
             "context-engine-markdown-v3",
             "markdown-config-v3",
-            [{"kind": "markdown_link", "targetPath": "runbook.md"}],
+            [{"kind": "wikilink", "targetPath": "runbook.md"}],
         )
     finally:
         engine.dispose()
