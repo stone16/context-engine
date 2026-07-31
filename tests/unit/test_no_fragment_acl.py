@@ -121,6 +121,7 @@ def _is_fragment_permission_field(class_name: str, field_name: str) -> bool:
     article_decision_provenance = field_name in {
         "source_acl_as_of",
         "source_acl_projection_ref",
+        "source_acl_freshness_profile_ref",
     }
     fragment_permission_named = "fragment" in field_name.lower() and permission_named
     return (

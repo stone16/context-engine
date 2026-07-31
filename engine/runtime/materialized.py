@@ -22,6 +22,7 @@ from engine.runtime.scope import (
     ScopeTarget,
     _require_candidate_discovery_scope_integrity,
 )
+from engine.runtime.source_acl import FILE_SOURCE_ACL_FRESHNESS_PROFILE_REF
 
 __all__ = [
     "CandidateDiscoveryRequest",
@@ -230,6 +231,10 @@ class MaterializedFragmentLocator:
     fragment_ref: str = field(repr=False)
     source_acl_projection_ref: str = field(repr=False)
     source_acl_as_of: datetime = field(repr=False)
+    source_acl_freshness_profile_ref: str = field(
+        default=FILE_SOURCE_ACL_FRESHNESS_PROFILE_REF,
+        repr=False,
+    )
 
     def __post_init__(self) -> None:
         if type(self.organization_id) is not UUID:
@@ -240,6 +245,7 @@ class MaterializedFragmentLocator:
             "revision_ref",
             "fragment_ref",
             "source_acl_projection_ref",
+            "source_acl_freshness_profile_ref",
         ):
             _require_nonblank_ref(
                 f"materialized {field_name}",

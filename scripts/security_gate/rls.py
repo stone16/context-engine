@@ -22,6 +22,7 @@ NON_OWNER_EVIDENCE_BY_TABLE: Mapping[str, str] = {
     "article_explicit_policy_setting": "PG-ARTICLE-ACCESS-RLS-141",
     "article_source_acl_observation": "PG-ARTICLE-ACCESS-RLS-141",
     "bulk_article_policy_change_audit": "PG-BULK-ARTICLE-POLICY-132",
+    "feishu_subject_mapping": "PG-ARTICLE-ACCESS-RLS-141",
     "action_delivery_attempt": "PG-ACTION-PREPARE-067",
     "action_perform_audit": "PG-ACTION-PERFORM-068",
     "action_prepare_audit": "PG-ACTION-PREPARE-067",

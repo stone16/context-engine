@@ -8,6 +8,45 @@ import pytest
 from engine.supply.execution import SourceAclObservation
 
 ROOT = Path(__file__).parents[2]
+_AUTHORITY_SYMBOLS = {
+    "AuthorizationKernel",
+    "AuthorizedProjection",
+    "authorize",
+    "grant",
+    "resolve",
+}
+
+
+def _import_aliases(tree: ast.AST) -> dict[str, str]:
+    aliases: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                aliases[alias.asname or alias.name] = alias.name
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                local_name = alias.asname or alias.name.split(".", 1)[0]
+                aliases[local_name] = alias.name.rsplit(".", 1)[-1]
+    return aliases
+
+
+def _symbol_name(node: ast.expr, aliases: dict[str, str]) -> str | None:
+    if isinstance(node, ast.Name):
+        return aliases.get(node.id, node.id)
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    return None
+
+
+def _authority_symbols(tree: ast.AST) -> set[str]:
+    aliases = _import_aliases(tree)
+    referenced = {
+        symbol
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Name | ast.Attribute)
+        if (symbol := _symbol_name(node, aliases)) is not None
+    }
+    return referenced.intersection(_AUTHORITY_SYMBOLS)
 
 
 def _consumes_acl_observation(tree: ast.AST) -> bool:
@@ -101,6 +140,30 @@ def test_acl_usage_scanner_detects_direct_module_and_type_consumption(
     assert _consumes_acl_observation(ast.parse(source))
 
 
+@pytest.mark.parametrize(
+    "source, expected_symbol",
+    [
+        ("kernel.authorize()", "authorize"),
+        ("authority.grant()", "grant"),
+        ("runtime.resolve()", "resolve"),
+        (
+            "import engine.runtime as runtime\nruntime.AuthorizationKernel()",
+            "AuthorizationKernel",
+        ),
+        (
+            "from engine.runtime.evidence import "
+            "AuthorizedProjection as Projection\nProjection()",
+            "AuthorizedProjection",
+        ),
+    ],
+)
+def test_adapter_authority_scanner_detects_attributes_and_import_aliases(
+    source: str,
+    expected_symbol: str,
+) -> None:
+    assert expected_symbol in _authority_symbols(ast.parse(source))
+
+
 def _production_python_files() -> tuple[Path, ...]:
     return tuple(
         path
@@ -119,7 +182,10 @@ def test_acl_observation_is_not_consumed_as_authorization_outside_kernel() -> No
     forbidden_consumers: list[str] = []
     definition_path = ROOT / "engine" / "supply" / "execution.py"
     public_reexport_path = ROOT / "engine" / "supply" / "__init__.py"
-    evidence_producer_paths = {ROOT / "adapters" / "connectors" / "file.py"}
+    evidence_producer_paths = {
+        ROOT / "adapters" / "connectors" / connector
+        for connector in ("feishu.py", "file.py")
+    }
 
     for path in _production_python_files():
         if path in {definition_path, public_reexport_path} | evidence_producer_paths:
@@ -131,20 +197,22 @@ def test_acl_observation_is_not_consumed_as_authorization_outside_kernel() -> No
     assert forbidden_consumers == []
 
 
-def test_registered_supply_adapter_only_constructs_acl_evidence() -> None:
-    path = ROOT / "adapters" / "connectors" / "file.py"
+@pytest.mark.parametrize("connector", ["feishu.py", "file.py"])
+def test_registered_supply_adapter_only_constructs_acl_evidence(
+    connector: str,
+) -> None:
+    path = ROOT / "adapters" / "connectors" / connector
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    calls = {
-        node.func.id
+    aliases = _import_aliases(tree)
+    called_symbols = {
+        symbol
         for node in ast.walk(tree)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        if isinstance(node, ast.Call)
+        if (symbol := _symbol_name(node.func, aliases)) is not None
     }
-    names = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
 
-    assert "SourceAclObservation" in calls
-    assert "AuthorizationKernel" not in names
-    assert "AuthorizedProjection" not in names
-    assert not {"authorize", "grant", "resolve"}.intersection(calls)
+    assert "SourceAclObservation" in called_symbols
+    assert _authority_symbols(tree) == set()
 
 
 def test_acl_observation_module_cannot_construct_runtime_authority() -> None:

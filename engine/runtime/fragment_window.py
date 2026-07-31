@@ -126,6 +126,7 @@ def _fragment_window_read_snapshot(
                 item.locator.fragment_ref,
                 item.locator.source_acl_projection_ref,
                 item.locator.source_acl_as_of.isoformat(timespec="microseconds"),
+                item.locator.source_acl_freshness_profile_ref,
                 item.projection.kind.value,
                 tuple(
                     (

@@ -41,6 +41,10 @@ from engine.control.contracts import (
     SourceResourceKind,
     SourceVersion,
 )
+from engine.control.feishu_acl import (
+    AppliedFeishuAclObservation,
+    ApplyFeishuAclObservation,
+)
 from engine.control.file_change_pages import (
     DEFAULT_FILE_CHANGE_BASELINE_SIZE,
     MAX_CONFIGURED_FILE_CHANGE_BASELINE_SIZE,
@@ -122,6 +126,8 @@ __all__ = [
     "AcceptedChangePage",
     "ActivateFileChangeFeed",
     "ActivateFileDeleteObservations",
+    "AppliedFeishuAclObservation",
+    "ApplyFeishuAclObservation",
     "ArticlePolicyDefaultStorePort",
     "BulkArticlePolicyChange",
     "BulkArticlePolicyConfirmation",

@@ -1056,6 +1056,9 @@ class AuthorizationKernel:
                     request.anchor.lineage.source_acl_projection_ref
                 ),
                 source_acl_as_of=request.anchor.lineage.source_acl_as_of,
+                source_acl_freshness_profile_ref=(
+                    request.anchor.lineage.source_acl_freshness_profile_ref
+                ),
             ),
             request.before,
             request.after,
@@ -1335,6 +1338,9 @@ class AuthorizationKernel:
                         ),
                         source_acl_projection_ref=locator.source_acl_projection_ref,
                         source_acl_as_of=locator.source_acl_as_of,
+                        source_acl_freshness_profile_ref=(
+                            locator.source_acl_freshness_profile_ref
+                        ),
                     ),
                 )
                 projections.append(projection)

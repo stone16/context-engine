@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 from threading import Event, Lock
 from typing import cast
 from uuid import UUID
@@ -50,6 +51,7 @@ def _client(
     guarded_runtime_engine: Engine,
     index: CandidateIndex,
     query_digest_keyring: QueryDigestKeyring,
+    now: datetime = RECEIVED_AT,
 ) -> TestClient:
     return TestClient(
         create_app(
@@ -60,10 +62,10 @@ def _client(
             runtime=Runtime(
                 required_kernel_dependencies(),
                 candidate_index=index,
-                clock=lambda: RECEIVED_AT,
+                clock=lambda: now,
                 query_digest_keyring=query_digest_keyring,
             ),
-            clock=lambda: RECEIVED_AT,
+            clock=lambda: now,
             request_id_factory=lambda: REQUEST_ID,
         )
     )

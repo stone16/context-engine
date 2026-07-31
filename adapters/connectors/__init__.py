@@ -1,5 +1,6 @@
 """ContextEngine-owned connector adapters."""
 
+from adapters.connectors.feishu import FeishuDocsConnectorAdapter
 from adapters.connectors.file import (
     FileConnectorAdapter,
     FileConnectorProcessAdapter,
@@ -11,5 +12,6 @@ __all__ = [
     "FileConnectorAdapter",
     "FileConnectorProcessAdapter",
     "FileRootVaultSource",
+    "FeishuDocsConnectorAdapter",
     "PermissionObservationFailed",
 ]

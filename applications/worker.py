@@ -15,6 +15,7 @@ from uuid import UUID
 from sqlalchemy import Engine, text
 from sqlalchemy.exc import SQLAlchemyError
 
+from adapters.connectors.feishu import FeishuConnectorProcessAdapter
 from adapters.connectors.file import FileConnectorProcessAdapter
 from adapters.embeddings import (
     DeterministicEmbeddingTwin,
@@ -387,8 +388,8 @@ def _run_one_file_import() -> int:
         engine.dispose()
 
 
-def _run_one_file_connector_job() -> int:
-    """Execute one exact leased File connector job through the Supply bridge."""
+def _run_one_connector_job(*, feishu_twin: bool = False) -> int:
+    """Execute one exact leased connector job through the Supply bridge."""
 
     codec = WorkerLeaseCodec(
         WorkerLeaseKeyring(active_version=1, keys={1: _worker_signing_key()})
@@ -409,10 +410,6 @@ def _run_one_file_connector_job() -> int:
     worker_lease = WorkerLeaseToken(
         _required_environment("CONTEXT_ENGINE_WORKER_LEASE_TOKEN")
     )
-    root_ref = FileRootRef(
-        _required_environment("CONTEXT_ENGINE_WORKER_FILE_ROOT_REF")
-    )
-    root_path = Path(_required_environment("CONTEXT_ENGINE_WORKER_FILE_ROOT_PATH"))
     try:
         checked_at = _worker_database_time(engine)
         claims = codec.verify(
@@ -440,6 +437,32 @@ def _run_one_file_connector_job() -> int:
             worker_job_id=worker_job_id,
             worker_lease=worker_lease,
         )
+        adapter = (
+            FeishuConnectorProcessAdapter(
+                Path(
+                    _required_environment(
+                        "CONTEXT_ENGINE_WORKER_FEISHU_TWIN_FIXTURE_PATH"
+                    )
+                ).read_bytes(),
+                policy_epoch=claims.policy_epoch,
+                worker_lease=worker_lease,
+                service_principal_id=service_principal_id,
+                idempotency_key=claims.idempotency_key,
+                service_actor_expires_at=claims.service_actor_expires_at,
+            )
+            if feishu_twin
+            else FileConnectorProcessAdapter(
+                FileRootRef(
+                    _required_environment("CONTEXT_ENGINE_WORKER_FILE_ROOT_REF")
+                ),
+                Path(_required_environment("CONTEXT_ENGINE_WORKER_FILE_ROOT_PATH")),
+                policy_epoch=claims.policy_epoch,
+                worker_lease=worker_lease,
+                service_principal_id=service_principal_id,
+                idempotency_key=claims.idempotency_key,
+                service_actor_expires_at=claims.service_actor_expires_at,
+            )
+        )
         result = PostgreSQLSupplyExecutionBridge(
             engine,
             codec,
@@ -460,15 +483,7 @@ def _run_one_file_connector_job() -> int:
             clock=lambda: _worker_database_time(engine),
         ).execute(
             execution,
-            FileConnectorProcessAdapter(
-                root_ref,
-                root_path,
-                policy_epoch=claims.policy_epoch,
-                worker_lease=worker_lease,
-                service_principal_id=service_principal_id,
-                idempotency_key=claims.idempotency_key,
-                service_actor_expires_at=claims.service_actor_expires_at,
-            ),
+            adapter,
         )
         print(
             json.dumps(
@@ -616,9 +631,12 @@ def run(
     dispatch_file_once: bool = False,
     dispatch_files: bool = False,
     run_file_connector_job: bool = False,
+    run_feishu_twin_connector_job: bool = False,
 ) -> int:
+    if run_feishu_twin_connector_job:
+        return _run_one_connector_job(feishu_twin=True)
     if run_file_connector_job:
-        return _run_one_file_connector_job()
+        return _run_one_connector_job()
     if dispatch_file_once:
         return _run_file_dispatch(single_cycle=True)
     if dispatch_files:
@@ -657,6 +675,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="consume one exact leased File connector job and exit",
     )
     parser.add_argument(
+        "--run-feishu-twin-connector-job",
+        action="store_true",
+        help="consume one exact leased deterministic Feishu twin connector job",
+    )
+    parser.add_argument(
         "--run-file-job",
         action="store_true",
         help="consume one exact configured FileImport WorkerLease and exit",
@@ -679,6 +702,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.dispatch_file_once,
             args.dispatch_files,
             args.run_file_connector_job,
+            args.run_feishu_twin_connector_job,
         )
     )
     if selected_modes > 1:
@@ -689,6 +713,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         dispatch_file_once=args.dispatch_file_once,
         dispatch_files=args.dispatch_files,
         run_file_connector_job=args.run_file_connector_job,
+        run_feishu_twin_connector_job=args.run_feishu_twin_connector_job,
     )
 
 

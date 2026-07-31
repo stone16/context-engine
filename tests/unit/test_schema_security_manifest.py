@@ -41,6 +41,79 @@ def test_tenant_article_default_declares_its_distinct_write_authorities() -> Non
     }
 
 
+def test_feishu_acl_control_declares_exact_atomic_authorities() -> None:
+    document = manifest()
+    tables = table_entries(document)
+    operation = next(
+        item
+        for item in document["controlOperations"]
+        if item["name"] == "apply_feishu_acl_observation"
+    )
+
+    assert operation["databaseFunction"] == (
+        "context_control_apply_feishu_acl_observation"
+    )
+    assert operation["acceptedArtifactLocator"] == [
+        "organization_id",
+        "source_version_id",
+        "worker_job_id",
+        "page_ref",
+        "document_ref",
+        "delete_observation",
+    ]
+    assert operation["sourceAclEvidenceMode"] == "mirrored"
+    assert operation["artifactVerifierDatabaseFunction"] == (
+        "context_feishu_verify_acl_artifact"
+    )
+    assert operation["runnerMappingClaimsAuthorityAllowed"] is False
+    assert "feishu_subject_mapping" in operation["subjectMappingAuthority"]
+    assert operation["databaseOwnedPolicyEpoch"] is True
+    assert operation["runtimeAuthorityAllowed"] is False
+    assert operation["indexAuthorityAllowed"] is False
+    assert operation["atomicWrites"] == [
+        "article_source_acl_observation",
+        "article_access_policy",
+        "resource_access_policy",
+        "context_resource",
+        "organization_policy_epoch",
+    ]
+    for table_name in (
+        "supply_connector_job",
+        "supply_connector_staged_page",
+        "supply_connector_accepted_page",
+    ):
+        policies = tables[table_name]["rowLevelSecurity"]["policies"]
+        assert any(
+            policy["name"].endswith("_feishu_acl_definer_select")
+            and policy["roles"] == ["context_engine_access_policy_definer"]
+            for policy in policies
+        )
+    for table_name in (
+        "article_source_acl_observation",
+        "article_access_policy",
+        "resource_access_policy",
+        "context_resource",
+        "organization_policy_epoch",
+    ):
+        mutation = tables[table_name]["functionOnlyMutation"]
+        assert "context_control_apply_feishu_acl_observation" in mutation[
+            "databaseFunctions"
+        ]
+
+    acceptance = next(
+        item
+        for item in document["controlOperations"]
+        if item["name"] == "accept_supply_connector_page"
+    )
+    assert "lease-bound authoritative epoch" in acceptance[
+        "aclFreshnessReconciliation"
+    ]
+    assert acceptance["deleteEntryAllowlist"] == [
+        "acl_observation",
+        "document_ref",
+    ]
+
+
 @pytest.mark.security_evidence(id="PROP-TENANT-OWNERSHIP-001", layer="property")
 def test_manifest_classifies_the_exact_current_release_schema() -> None:
     """PROP-TENANT-OWNERSHIP-001: no current table is left unclassified."""
@@ -48,7 +121,7 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
     document = manifest()
     tables = table_entries(document)
 
-    assert document["manifestVersion"] == "41.0.0"
+    assert document["manifestVersion"] == "42.0.0"
     assert set(tables) == {
         "active_release_manifest",
         "action_delivery_attempt",
@@ -98,6 +171,7 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
         "file_revision_snapshot",
         "file_revision_replacement_plan",
         "file_revision_supersession",
+        "feishu_subject_mapping",
         "membership",
         "membership_resource_field_right",
         "organization",
@@ -206,6 +280,14 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
     assert tables["worker_noop_job"]["classification"] == "tenant_owned"
     assert tables["context_source"]["classification"] == "tenant_owned"
     assert tables["source_version"]["classification"] == "tenant_owned"
+    assert tables["feishu_subject_mapping"]["classification"] == "tenant_owned"
+    mapping = tables["feishu_subject_mapping"]
+    assert mapping["permittedOperations"]["context_engine_worker"] == []
+    assert mapping["permittedOperations"]["context_engine_runtime"] == []
+    assert mapping["permittedOperations"][
+        "context_engine_access_policy_definer"
+    ] == ["SELECT", "EXECUTE context_feishu_verify_acl_artifact"]
+    assert mapping["functionOnlyMutation"]["directTableMutationAllowed"] is False
     assert tables["supply_connector_job"]["classification"] == "tenant_owned"
     assert tables["supply_connector_staged_page"]["classification"] == ("tenant_owned")
     assert tables["supply_connector_accepted_page"]["classification"] == (
@@ -808,10 +890,22 @@ def test_issue_21_file_source_manifest_is_closed_and_role_separated() -> None:
         "events": ["UPDATE", "DELETE"],
         "sqlstate": "55000",
     }
+    source_kind_constraint = next(
+        constraint
+        for constraint in source["checkConstraints"]
+        if constraint["name"] == "ck_context_source_kind"
+    )
+    assert "feishu_docs" in source_kind_constraint["expression"]
+    version_kind_constraint = next(
+        constraint
+        for constraint in version["checkConstraints"]
+        if constraint["name"] == "ck_source_version_kind"
+    )
+    assert "feishu_docs" in version_kind_constraint["expression"]
     capability_constraint = next(
         constraint
         for constraint in version["checkConstraints"]
-        if constraint["name"] == "ck_source_version_file_capabilities"
+        if constraint["name"] == "ck_source_version_capabilities"
     )
     assert "materialized" in capability_constraint["expression"]
     assert "markdown" in capability_constraint["expression"]
@@ -848,6 +942,8 @@ def test_issue_21_file_source_manifest_is_closed_and_role_separated() -> None:
         in capability_constraint["expression"]
     )
     assert "deleteObservations available" in capability_constraint["expression"]
+    assert "feishu-docs-capabilities-v1" in capability_constraint["expression"]
+    assert "liveNetwork = not_active" in capability_constraint["expression"]
 
     page = entries["file_source_change_page"]
     change = entries["file_source_change"]
@@ -1829,6 +1925,7 @@ def test_content_manifest_preserves_lineage_visibility_and_immutability() -> Non
             ]
             expected_operations["context_engine_control"] = [
                 "EXECUTE context_control_tombstone_file_resource",
+                "EXECUTE context_control_apply_feishu_acl_observation",
                 "EXECUTE context_control_read_file_source_status",
             ]
             expected_operations["context_engine_release_definer"] = ["SELECT"]
@@ -2144,9 +2241,20 @@ def test_policy_epoch_manifest_seals_runtime_reads_and_control_mutation() -> Non
                 "EXECUTE context_control_tombstone_file_resource"
             )
             expected_operations["context_engine_control"].append(
+                "EXECUTE context_control_apply_feishu_acl_observation"
+            )
+            expected_operations["context_engine_control"].append(
                 "EXECUTE context_control_offboard_file_source"
             )
         if entry["name"] == "resource_access_policy":
+            expected_operations["context_engine_access_policy_definer"] = [
+                "SELECT",
+                "INSERT",
+                "UPDATE",
+            ]
+            expected_operations["context_engine_control"].append(
+                "EXECUTE context_control_apply_feishu_acl_observation"
+            )
             expected_operations["context_engine_worker"] = [
                 "EXECUTE context_worker_prepare_file_publication"
             ]
@@ -2175,10 +2283,10 @@ def test_policy_epoch_manifest_seals_runtime_reads_and_control_mutation() -> Non
             for policy in rls["policies"]
             if policy["roles"] == ["context_engine_access_policy_definer"]
         ]
-        assert {policy["command"] for policy in definer_policies} == {
-            "SELECT",
-            "UPDATE",
-        }
+        expected_commands = {"SELECT", "UPDATE"}
+        if entry["name"] == "resource_access_policy":
+            expected_commands.add("INSERT")
+        assert {policy["command"] for policy in definer_policies} == expected_commands
         select_policy = next(
             policy for policy in definer_policies if policy["command"] == "SELECT"
         )
@@ -2188,7 +2296,8 @@ def test_policy_epoch_manifest_seals_runtime_reads_and_control_mutation() -> Non
         assert "withCheck" not in select_policy
         assert update_policy["using"] == update_policy["withCheck"]
         assert all(
-            "app.organization_id" in policy["using"] for policy in definer_policies
+            "app.organization_id" in policy.get("using", policy.get("withCheck", ""))
+            for policy in definer_policies
         )
 
     change_access = next(

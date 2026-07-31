@@ -428,7 +428,7 @@ def context_package_digest_document(package: ContextPackage) -> dict[str, object
                     "projectionRef": item.lineage.source_acl_projection_ref,
                     "aclAsOf": _wire_datetime(item.lineage.source_acl_as_of),
                     "freshnessProfileRef": (
-                        "file-source-access-current-transaction-v1"
+                        item.lineage.source_acl_freshness_profile_ref
                     ),
                 },
             }
