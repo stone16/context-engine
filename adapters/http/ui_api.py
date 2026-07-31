@@ -193,6 +193,7 @@ class UiImportScanHandoffResponse(BaseModel):
 
     kind: Literal["scan_handoff"]
     path: str = Field(strict=True, min_length=1, max_length=255)
+    prerequisiteCommands: list[str] = Field(max_length=2)
     reason: Literal["rich_markdown_requires_leased_worker"]
     scanCommand: str = Field(strict=True, min_length=1, max_length=1024)
     sourceRef: str = Field(strict=True, min_length=1, max_length=512)
@@ -737,27 +738,46 @@ class PostgreSQLUiApi:
         except (TypeError, ValueError):
             raise UiApiUnavailable from None
         with self._verified(actor), self._control(actor) as connection:
-            root_ref = connection.execute(
-                text(
-                    """
-                    SELECT version.root_ref
-                    FROM context_source AS source
-                    JOIN source_version AS version
-                      ON version.organization_id = source.organization_id
-                     AND version.source_id = source.source_id
-                     AND version.version_id = source.active_version_id
-                    WHERE source.organization_id = :organization_id
-                      AND source.source_id = :source_id
-                      AND source.lifecycle_state = 'active'
-                    """
-                ),
-                {
-                    "organization_id": actor.organization_id,
-                    "source_id": source_ref,
-                },
-            ).scalar_one_or_none()
-        if type(root_ref) is not str:
+            source = (
+                connection.execute(
+                    text(
+                        """
+                        SELECT version.root_ref,
+                               version.capability_manifest
+                                      ->>'declarationVersion'
+                                      AS declaration_version
+                        FROM context_source AS source
+                        JOIN source_version AS version
+                          ON version.organization_id = source.organization_id
+                         AND version.source_id = source.source_id
+                         AND version.version_id = source.active_version_id
+                        WHERE source.organization_id = :organization_id
+                          AND source.source_id = :source_id
+                          AND source.lifecycle_state = 'active'
+                        """
+                    ),
+                    {
+                        "organization_id": actor.organization_id,
+                        "source_id": source_ref,
+                    },
+                )
+                .mappings()
+                .one_or_none()
+            )
+        if (
+            source is None
+            or type(source["root_ref"]) is not str
+            or source["declaration_version"]
+            not in {
+                "file-capabilities-v1",
+                "file-capabilities-v2",
+                "file-capabilities-v3",
+                "file-capabilities-v4",
+            }
+        ):
             raise UiApiUnavailable
+        root_ref = source["root_ref"]
+        declaration_version = source["declaration_version"]
         try:
             raw = roots.read(FileRootRef(root_ref), import_path)
             outcome = compile_markdown(
@@ -771,14 +791,32 @@ class PostgreSQLUiApi:
                 outcome.code is CompilationFailureCode.UNSUPPORTED_CONSTRUCT
                 and outcome.construct is UnsupportedConstruct.LINK_OR_IMAGE
             ):
+                source_arguments = (
+                    "--organization-id "
+                    '"$CONTEXT_ENGINE_OPERATOR_ORGANIZATION_ID" '
+                    f'--source-ref "{source_ref}"'
+                )
+                prerequisite_commands: list[str] = []
+                if declaration_version in {
+                    "file-capabilities-v1",
+                    "file-capabilities-v2",
+                }:
+                    prerequisite_commands.append(
+                        "uv run context-engine-control activate-change-feed "
+                        + source_arguments
+                    )
+                if declaration_version != "file-capabilities-v4":
+                    prerequisite_commands.append(
+                        "uv run context-engine-control "
+                        "activate-delete-observations " + source_arguments
+                    )
                 return {
                     "kind": "scan_handoff",
                     "path": import_path.value,
+                    "prerequisiteCommands": prerequisite_commands,
                     "reason": "rich_markdown_requires_leased_worker",
                     "scanCommand": (
-                        "uv run context-engine-control scan --organization-id "
-                        '"$CONTEXT_ENGINE_OPERATOR_ORGANIZATION_ID" '
-                        f'--source-ref "{source_ref}"'
+                        "uv run context-engine-control scan " + source_arguments
                     ),
                     "sourceRef": str(source_ref),
                     "workerCommand": (

@@ -18,19 +18,28 @@
   <h2 id="scan-handoff-heading">Rich Markdown requires the leased scan path</h2>
   <p>This note uses links or images that the console cannot compile in-process.
      Scan the registered source, then let the independent Supply worker redeem
-     each exact File-import WorkerLease and compile rich Markdown v3.</p>
+     each exact File-import WorkerLease and compile the active rich Markdown
+     configuration.</p>
   <dl class="lineage">
     <div><dt>Source</dt><dd><code>{{ handoff.source_ref }}</code></dd></div>
     <div><dt>Path</dt><dd><code>{{ handoff.path }}</code></dd></div>
   </dl>
   <ol class="hit-list">
+    {% for command in handoff.prerequisite_commands %}
     <li class="evidence-block">
-      <h3>1. Scan and schedule changed notes</h3>
+      <h3>{{ loop.index }}. Activate the required scan capability</h3>
+      <div class="block-body"><code>{{ command }}</code></div>
+    </li>
+    {% endfor %}
+    <li class="evidence-block">
+      <h3>Scan and schedule changed notes</h3>
       <div class="block-body"><code>{{ handoff.scan_command }}</code></div>
     </li>
     <li class="evidence-block">
-      <h3>2. Dispatch the leased worker</h3>
+      <h3>Drain the leased worker queue</h3>
       <div class="block-body"><code>{{ handoff.worker_command }}</code></div>
+      <p>Repeat this command until it reports <code>no_work</code>. Each cycle
+         claims at most one server-selected exact job.</p>
     </li>
   </ol>
   <a class="button button-secondary" href="/ui/import">Return to import</a>

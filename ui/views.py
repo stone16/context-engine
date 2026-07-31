@@ -97,6 +97,7 @@ class ImportPreviewView:
 class ImportScanHandoffView:
     source_ref: str
     path: str
+    prerequisite_commands: tuple[str, ...]
     scan_command: str
     worker_command: str
 
@@ -304,11 +305,21 @@ def import_preview_view(
 ) -> ImportPreviewView | ImportScanHandoffView:
     kind = document.get("kind")
     if kind == "scan_handoff":
-        if document.get("reason") != "rich_markdown_requires_leased_worker":
+        prerequisite_commands = document.get("prerequisiteCommands")
+        if (
+            document.get("reason") != "rich_markdown_requires_leased_worker"
+            or type(prerequisite_commands) is not list
+            or len(prerequisite_commands) > 2
+            or any(
+                type(command) is not str or not command or command.isspace()
+                for command in prerequisite_commands
+            )
+        ):
             raise PublicDocumentInvalid
         return ImportScanHandoffView(
             source_ref=_required_text(document, "sourceRef"),
             path=_required_text(document, "path"),
+            prerequisite_commands=tuple(prerequisite_commands),
             scan_command=_required_text(document, "scanCommand"),
             worker_command=_required_text(document, "workerCommand"),
         )
