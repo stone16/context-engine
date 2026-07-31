@@ -13,8 +13,6 @@ from engine.supply.markdown import (
     CompilationFailureCode,
     CompilationOutcome,
     MarkdownCompilerConfig,
-    SourcePoint,
-    UnsupportedConstruct,
     deserialize_parsed_document,
 )
 
@@ -33,24 +31,11 @@ def _failure_from_document(value: object) -> CompilationFailure:
     if type(value) is not dict:
         raise ValueError("runner failure must be an object")
     document = cast(dict[str, object], value)
-    position_value = document["position"]
-    position = None
-    if type(position_value) is dict:
-        point = cast(dict[str, object], position_value)
-        position = SourcePoint(
-            line=cast(int, point["line"]),
-            column=cast(int, point["column"]),
-            byte_offset=cast(int, point["byteOffset"]),
-        )
-    construct_value = document["construct"]
+    if set(document) != {"code"}:
+        raise ValueError("runner failure must contain only its closed category")
     return CompilationFailure(
         code=CompilationFailureCode(cast(str, document["code"])),
-        position=position,
-        construct=(
-            UnsupportedConstruct(cast(str, construct_value))
-            if construct_value is not None
-            else None
-        ),
+        position=None,
     )
 
 

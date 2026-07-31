@@ -12,7 +12,6 @@ from engine.supply import (
     CompilationFailureCode,
     MarkdownCompilerConfig,
     ParsedDocument,
-    UnsupportedConstruct,
 )
 
 CONFIG = MarkdownCompilerConfig(version="markdown-config-v3")
@@ -119,7 +118,7 @@ def test_leased_runner_timeout_is_one_typed_failure(
     _assert_boundary_failure(outcome)
 
 
-def test_leased_runner_preserves_closed_compiler_refusal() -> None:
+def test_leased_runner_preserves_only_the_closed_compiler_refusal_category() -> None:
     outcome = compiler_runner.compile_in_leased_compiler_runner(
         b"# T\n\n&amp;\n",
         CONFIG,
@@ -127,5 +126,29 @@ def test_leased_runner_preserves_closed_compiler_refusal() -> None:
 
     assert type(outcome) is CompilationFailure
     assert outcome.code is CompilationFailureCode.UNSUPPORTED_CONSTRUCT
-    assert outcome.construct is UnsupportedConstruct.ENTITY
-    assert outcome.position is not None
+    assert outcome.construct is None
+    assert outcome.position is None
+
+
+def test_leased_runner_rejects_refusal_details_beyond_the_closed_category(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    completed = subprocess.CompletedProcess(
+        [],
+        0,
+        stdout=json.dumps(
+            {
+                "outcome": "failure",
+                "failure": {
+                    "code": "unsupported_construct",
+                    "construct": "entity",
+                },
+            }
+        ).encode(),
+        stderr=b"",
+    )
+    monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: completed)
+
+    _assert_boundary_failure(
+        compiler_runner.compile_in_leased_compiler_runner(b"# T\n", CONFIG)
+    )

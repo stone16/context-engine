@@ -32,19 +32,7 @@ def _boundary_failure() -> CompilationFailure:
 
 
 def _failure_document(failure: CompilationFailure) -> dict[str, object]:
-    return {
-        "code": failure.code.value,
-        "construct": failure.construct.value if failure.construct is not None else None,
-        "position": (
-            {
-                "line": failure.position.line,
-                "column": failure.position.column,
-                "byteOffset": failure.position.byte_offset,
-            }
-            if failure.position is not None
-            else None
-        ),
-    }
+    return {"code": failure.code.value}
 
 
 def _emit(outcome: CompilationOutcome) -> None:

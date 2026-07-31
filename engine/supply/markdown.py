@@ -676,6 +676,8 @@ class CompilationFailure:
         if self.position is not None and type(self.position) is not SourcePoint:
             raise TypeError("compilation failure position must be SourcePoint or None")
         if self.code is CompilationFailureCode.UNSUPPORTED_CONSTRUCT:
+            if self.construct is None and self.position is None:
+                return
             if type(self.construct) is not UnsupportedConstruct:
                 raise ValueError(
                     "unsupported construct failure must name its construct"
