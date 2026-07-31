@@ -222,6 +222,44 @@ uv run context-engine-eval validate \
 The shell variables above deliberately point to the operator's durable private
 storage; no worktree-local default is provided.
 
+## Feedback triage and governed case intake
+
+Captured feedback becomes a curation proposal only after the Learning database
+role resolves its Organization and feedback reference through the narrow inbox
+function. That trusted projection binds the item to its exact ContextRun,
+ContextPackage reference and digest, generation-bound Release reference, and
+complete citation Evidence lineage. Missing or partial binding refuses the item;
+the workflow never substitutes a DecisionAudit denial or denied object detail.
+Triage uses only the closed `source`, `visibility`, `retrieval`, `assembly`, and
+`evaluation` categories.
+
+`context-engine-eval feedback-candidate` accepts the feedback locator plus one
+private v1 case from either the durable corpus root or an ignored
+`.context-engine/` directory and writes only a mode-0600 `CurationCandidate`
+under the same two private storage boundaries. Its terminal output contains a
+digest, never an input or output path. Caller-authored feedback projections are
+not accepted. A reviewed candidate's dev case enters the durable corpus with
+`context-engine-eval feedback-intake`; the command verifies the candidate digest
+and existing pilot lock, validates the new case, proves the locked pilot digest
+is unchanged, then replaces the corpus atomically. A pilot case is refused here:
+admitting or changing pilot cases still requires the explicit existing `relock`
+ceremony. Any fixture tracked under `eval/golden/` remains subject to the stricter
+placeholder-only privacy scan.
+
+Authoritative evaluation reports that ran with a lineage map now record the
+exact `release.releaseRef` established by that map. `compare-releases` accepts
+only tracked-threshold reports with executor-observed security and a resolved
+lineage check over the same golden digest, then renders per-layer/per-slice
+counts, scores, and deltas. `REFUSED` and `NON_AUTHORITATIVE` reports are rejected.
+While thresholds are pending preregistration, the same slice observations may be
+reported only with `PENDING_PREREGISTRATION` status and without a verdict.
+
+This workflow owns no scheduler, ReleaseManifest operation, active pointer,
+rollback, promotion call, or release-operator grant surface. It produces only
+candidates and reports; every current manifest continues to select
+`curation_off`, and publication remains the explicit ContextLearning promotion
+transaction described by ADR-0033.
+
 ## Layers, floors, and thresholds
 
 Retrieval reports case hit plus macro- and micro-averaged Evidence recall.

@@ -1090,8 +1090,9 @@ class _PostgreSQLContextRunPersistencePort:
                 request_id, purpose, policy_snapshot_ref, policy_epoch,
                 effective_scope_digest, query_digest_profile,
                 query_digest_key_version, query_digest, outcome,
-                package_digest_profile, package_digest,
-                package_retention_mode, authorized_evidence_refs,
+                package_ref, package_digest_profile, package_digest,
+                release_ref, release_generation, package_retention_mode,
+                authorized_evidence_refs, authorized_citation_lineage,
                 effective_max_tokens, effective_max_provider_calls,
                 effective_max_cost_microunits, effective_max_elapsed_ms,
                 usage_tokens, usage_provider_calls,
@@ -1105,8 +1106,9 @@ class _PostgreSQLContextRunPersistencePort:
                 :request_id, :purpose, :policy_snapshot_ref, :policy_epoch,
                 :effective_scope_digest, :query_digest_profile,
                 :query_digest_key_version, :query_digest, :outcome,
-                :package_digest_profile, :package_digest,
-                :package_retention_mode, :authorized_evidence_refs,
+                :package_ref, :package_digest_profile, :package_digest,
+                :release_ref, :release_generation, :package_retention_mode,
+                :authorized_evidence_refs, :authorized_citation_lineage,
                 :effective_max_tokens, :effective_max_provider_calls,
                 :effective_max_cost_microunits, :effective_max_elapsed_ms,
                 :usage_tokens, :usage_provider_calls,
@@ -1119,7 +1121,8 @@ class _PostgreSQLContextRunPersistencePort:
             bindparam(
                 "authorized_evidence_refs",
                 type_=postgresql.JSONB(),
-            )
+            ),
+            bindparam("authorized_citation_lineage", type_=postgresql.JSONB()),
         )
         self._connection.execute(
             insert_run,

@@ -1,5 +1,9 @@
 """Public ContextLearning contracts and sole release owner."""
 
+from engine.learning.comparison import (
+    EvaluationComparisonUnavailable,
+    compare_release_evaluations,
+)
 from engine.learning.contracts import (
     ContentProfileRef,
     CurationMode,
@@ -9,6 +13,14 @@ from engine.learning.contracts import (
     RuntimeProfileRef,
     release_manifest_lineage_document,
     verify_release_manifest,
+)
+from engine.learning.curation_candidate import (
+    CurationCandidate,
+    CurationCandidateUnavailable,
+    EvaluationCaseIntake,
+    build_curation_candidate,
+    curation_candidate_case,
+    curation_candidate_document,
 )
 from engine.learning.evaluation import (
     RELEASE_EVALUATION_DIGEST_PROFILE,
@@ -29,6 +41,18 @@ from engine.learning.evaluation import (
     verify_release_candidate,
     verify_release_evaluation,
 )
+from engine.learning.feedback import (
+    FeedbackBinding,
+    FeedbackBindingUnavailable,
+    FeedbackCitation,
+    FeedbackEvidence,
+    TriageCategory,
+    TriagedFeedback,
+    bind_captured_feedback,
+    load_feedback_evidence,
+    triage_feedback,
+)
+from engine.learning.golden_intake import GoldenIntakeReceipt, admit_evaluation_case
 from engine.learning.module import ContextLearning
 from engine.learning.promotion import (
     PromotionAuthorizationRequest,
@@ -52,11 +76,20 @@ from engine.learning.promotion import (
 __all__ = [
     "ContentProfileRef",
     "ContextLearning",
+    "CurationCandidate",
+    "CurationCandidateUnavailable",
     "CurationMode",
     "CurationProfileRef",
+    "EvaluationCaseIntake",
+    "EvaluationComparisonUnavailable",
+    "FeedbackBinding",
+    "FeedbackBindingUnavailable",
+    "FeedbackCitation",
+    "FeedbackEvidence",
     "Gate",
     "GateEvidence",
     "GateStatus",
+    "GoldenIntakeReceipt",
     "IndexProfileRef",
     "PromotionAuthorizationRequest",
     "PromotionCallProvenance",
@@ -82,13 +115,23 @@ __all__ = [
     "ReleaseStorePort",
     "RuntimeProfileRef",
     "TrustedPromotionCall",
+    "TriageCategory",
+    "TriagedFeedback",
     "VerifiedReleaseOperatorIdentity",
+    "admit_evaluation_case",
+    "bind_captured_feedback",
+    "build_curation_candidate",
     "candidate_document",
+    "compare_release_evaluations",
+    "curation_candidate_case",
+    "curation_candidate_document",
     "evaluation_document",
     "evaluate_candidate",
+    "load_feedback_evidence",
     "promotion_call_document",
     "release_authority_digest",
     "release_manifest_lineage_document",
+    "triage_feedback",
     "verify_release_candidate",
     "verify_release_evaluation",
     "verify_release_manifest",

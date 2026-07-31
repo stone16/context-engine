@@ -8,20 +8,40 @@ import os
 from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
+from typing import cast
+from uuid import UUID
 
+from engine.learning.comparison import (
+    EvaluationComparisonUnavailable,
+    compare_release_evaluations,
+)
+from engine.learning.curation_candidate import (
+    CurationCandidateUnavailable,
+    EvaluationCaseIntake,
+    build_curation_candidate,
+    curation_candidate_document,
+)
 from engine.learning.eval_run import (
     EvaluationRunUnavailable,
+    bind_evaluation_report_to_release,
     build_evaluation_report,
     load_evaluation_run,
-    record_lineage_check,
+)
+from engine.learning.feedback import (
+    FeedbackBindingUnavailable,
+    FeedbackEvidence,
+    TriageCategory,
+    triage_feedback,
 )
 from engine.learning.golden import (
     GoldenSet,
     GoldenSetUnavailable,
     create_golden_lock,
+    load_golden_case,
     load_golden_set,
     relock_golden_set,
 )
+from engine.learning.golden_intake import admit_evaluation_case
 from engine.learning.golden_storage import (
     durable_golden_root,
     require_durable_golden_path,
@@ -40,6 +60,12 @@ from engine.learning.lineage import (
     require_resolved_lineage,
 )
 from engine.learning.thresholds import DEFAULT_THRESHOLDS_PATH, load_thresholds
+from engine.persistence import (
+    DatabasePurpose,
+    PostgreSQLFeedbackInbox,
+    create_database_engine,
+    load_database_configuration,
+)
 
 PUBLIC_SUBSET_MAINTAINER_SECRET_ENV = (
     "CONTEXT_ENGINE_PUBLIC_SUBSET_MAINTAINER_SECRET"
@@ -154,6 +180,24 @@ def _parser() -> argparse.ArgumentParser:
     execute.add_argument("--lineage-map", type=Path)
     execute.add_argument("--output", required=True, type=Path)
     execute.add_argument("--generated-at", required=True, type=_time)
+
+    candidate = commands.add_parser("feedback-candidate")
+    candidate.add_argument("--organization-id", required=True, type=UUID)
+    candidate.add_argument("--feedback-ref", required=True)
+    candidate.add_argument("--category", required=True, choices=tuple(TriageCategory))
+    candidate.add_argument("--case", required=True, type=Path)
+    candidate.add_argument("--output", required=True, type=Path)
+    candidate.add_argument("--proposed-at", required=True, type=_time)
+
+    intake = commands.add_parser("feedback-intake")
+    intake.add_argument("--candidate", required=True, type=Path)
+    intake.add_argument("--golden-set", required=True, type=Path)
+    intake.add_argument("--lock", required=True, type=Path)
+
+    compare = commands.add_parser("compare-releases")
+    compare.add_argument("--active-report", required=True, type=Path)
+    compare.add_argument("--candidate-report", required=True, type=Path)
+    compare.add_argument("--output", required=True, type=Path)
     return parser
 
 
@@ -166,6 +210,82 @@ def _write_report(path: Path, report: dict[str, object]) -> None:
         encoding="utf-8",
     )
     print(f"golden v1 report written: digest={report['reportDigest']}", flush=True)
+
+
+def _load_json(path: Path, name: str) -> object:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, ValueError):
+        raise ValueError(f"{name} is unavailable") from None
+
+
+def _write_json(path: Path, document: dict[str, object]) -> None:
+    try:
+        _require_ignored_output(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _require_ignored_output(path)
+        path.write_text(
+            json.dumps(document, ensure_ascii=False, indent=2, sort_keys=True)
+            + "\n",
+            encoding="utf-8",
+        )
+    except OSError:
+        raise ValueError("evaluation output is unavailable") from None
+
+
+def _require_private_candidate_path(path: Path) -> None:
+    try:
+        _require_ignored_output(path)
+    except ValueError:
+        root = durable_golden_root()
+        require_durable_golden_path(path, root=root)
+
+
+def _write_private_candidate(path: Path, document: dict[str, object]) -> None:
+    try:
+        _require_private_candidate_path(path)
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        os.chmod(path.parent, 0o700)
+        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        descriptor = os.open(path, flags, 0o600)
+        try:
+            os.fchmod(descriptor, 0o600)
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                descriptor = -1
+                handle.write(
+                    json.dumps(
+                        document,
+                        ensure_ascii=False,
+                        indent=2,
+                        sort_keys=True,
+                    )
+                    + "\n"
+                )
+                handle.flush()
+                os.fsync(handle.fileno())
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
+    except OSError:
+        raise ValueError("curation candidate output is unavailable") from None
+
+
+def _captured_feedback(
+    organization_id: UUID,
+    feedback_ref: str,
+) -> FeedbackEvidence:
+    engine = create_database_engine(
+        load_database_configuration(DatabasePurpose.LEARNING)
+    )
+    try:
+        return PostgreSQLFeedbackInbox(engine).find_exact(
+            organization_id,
+            feedback_ref,
+        )
+    finally:
+        engine.dispose()
 
 
 def _resolved_lineage_check(
@@ -188,16 +308,65 @@ def _record_lineage_check(
 ) -> dict[str, object]:
     if lineage_check is None:
         return report
-    return record_lineage_check(report, lineage_check)
+    return bind_evaluation_report_to_release(report, lineage_check)
 
 
 def main(argv: Sequence[str] | None = None) -> None:
     parser = _parser()
     args = parser.parse_args(argv)
     try:
+        if args.command == "feedback-candidate":
+            _require_private_candidate_path(args.case)
+            case_document = _load_json(args.case, "evaluation case intake")
+            candidate = build_curation_candidate(
+                triage_feedback(
+                    _captured_feedback(args.organization_id, args.feedback_ref),
+                    TriageCategory(args.category),
+                ),
+                EvaluationCaseIntake(
+                    case=load_golden_case(case_document),
+                    synthetic=False,
+                ),
+                proposed_at=args.proposed_at,
+            )
+            _write_private_candidate(
+                args.output,
+                curation_candidate_document(candidate),
+            )
+            print(
+                f"curation candidate written: digest={candidate.candidate_digest}",
+                flush=True,
+            )
+            return
+        if args.command == "compare-releases":
+            comparison = compare_release_evaluations(
+                _load_json(args.active_report, "active evaluation report"),
+                _load_json(args.candidate_report, "candidate evaluation report"),
+            )
+            _write_json(args.output, comparison)
+            slices = cast(list[object], comparison["slices"])
+            print(
+                "release evaluation comparison written: "
+                f"slices={len(slices)}",
+                flush=True,
+            )
+            return
         durable_root = durable_golden_root()
         require_durable_golden_path(args.golden_set, root=durable_root)
         require_durable_golden_path(args.lock, root=durable_root)
+        if args.command == "feedback-intake":
+            _require_private_candidate_path(args.candidate)
+            receipt = admit_evaluation_case(
+                args.candidate,
+                golden_path=args.golden_set,
+                lock_path=args.lock,
+            )
+            print(
+                "golden v1 feedback case admitted: "
+                f"cases={receipt.case_count} digest={receipt.golden_digest}",
+                flush=True,
+            )
+            return
         lineage_map_path = getattr(args, "lineage_map", None)
         if lineage_map_path is not None:
             require_durable_golden_path(lineage_map_path, root=durable_root)
@@ -293,7 +462,10 @@ def main(argv: Sequence[str] | None = None) -> None:
             return
     except (
         GoldenSetUnavailable,
+        CurationCandidateUnavailable,
         EvaluationRunUnavailable,
+        EvaluationComparisonUnavailable,
+        FeedbackBindingUnavailable,
         LineageMapUnavailable,
         StaleGoldenLineage,
         ValueError,

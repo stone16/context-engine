@@ -379,6 +379,20 @@ def _case(value: object) -> GoldenCase:
     )
 
 
+def load_golden_case(document: object) -> GoldenCase:
+    """Load one strict v1 case for governed intake without relaxing the schema."""
+
+    wrapper = {
+        "entries": [document],
+        "name": "synthetic-feedback-intake",
+        "schemaVersion": GOLDEN_SET_SCHEMA_VERSION,
+        "synthetic": True,
+    }
+    validated = _validate_schema(wrapper, DEFAULT_GOLDEN_SCHEMA_PATH)
+    entries = cast(list[object], validated["entries"])
+    return _case(entries[0])
+
+
 def validate_composition(golden_set: GoldenSet) -> None:
     """Enforce every counted dev/pilot composition floor as a hard failure."""
 

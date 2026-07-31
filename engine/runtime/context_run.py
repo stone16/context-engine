@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import StrEnum
+from re import fullmatch
 from typing import TYPE_CHECKING, Final, NoReturn, Protocol, cast
 from uuid import UUID
 
@@ -98,10 +99,14 @@ class ContextRunRecord:
     query_digest_key_version: int = field(repr=False)
     query_digest: str = field(repr=False)
     outcome: ContextRunOutcome
+    package_ref: str
     package_digest_profile: str
     package_digest: str
+    release_ref: str
+    release_generation: int
     package_retention_mode: str
     authorized_evidence_refs: tuple[str, ...]
+    authorized_citation_lineage: tuple[dict[str, str], ...] = field(repr=False)
     effective_max_tokens: int
     effective_max_provider_calls: int
     effective_max_cost_microunits: int
@@ -149,6 +154,15 @@ class ContextRunRecord:
             raise TypeError("ContextRun outcome must be ContextRunOutcome")
         if self.package_digest_profile != PACKAGE_DIGEST_PROFILE:
             raise ValueError("ContextRun package digest profile is not active")
+        if fullmatch(r"pkg_[0-9a-f]{32}", self.package_ref) is None:
+            raise ValueError("ContextRun package_ref must use the closed format")
+        if fullmatch(r"rel_[0-9a-f]{64}", self.release_ref) is None:
+            raise ValueError("ContextRun release_ref must use the closed format")
+        if (
+            type(self.release_generation) is not int
+            or not 1 <= self.release_generation <= MAX_SIGNED_BIGINT
+        ):
+            raise ValueError("ContextRun release generation must be positive")
         if self.package_retention_mode != PACKAGE_RETENTION_MODE:
             raise ValueError("ContextRun Package retention must remain digest_only")
         if type(self.authorized_evidence_refs) is not tuple:
@@ -167,6 +181,39 @@ class ContextRunRecord:
             self.authorized_evidence_refs
         ):
             raise ValueError("ContextRun authorized Evidence refs must be unique")
+        if type(self.authorized_citation_lineage) is not tuple:
+            raise TypeError("ContextRun citation lineage must be a tuple")
+        expected_citation_fields = frozenset(
+            {
+                "evidenceRef",
+                "fragmentRef",
+                "resourceRef",
+                "revisionRef",
+                "sourceRef",
+            }
+        )
+        if any(
+            type(value) is not dict
+            or frozenset(value) != expected_citation_fields
+            or value["evidenceRef"] not in self.authorized_evidence_refs
+            or any(type(item) is not str or not item for item in value.values())
+            for value in self.authorized_citation_lineage
+        ):
+            raise ValueError("ContextRun citation lineage requires exact Evidence")
+        citation_evidence_refs = tuple(
+            value["evidenceRef"] for value in self.authorized_citation_lineage
+        )
+        if (
+            citation_evidence_refs != self.authorized_evidence_refs
+            or len(self.authorized_citation_lineage)
+            != len(
+                {
+                    tuple(sorted(value.items()))
+                    for value in self.authorized_citation_lineage
+                }
+            )
+        ):
+            raise ValueError("ContextRun citation lineage must be exact and unique")
         if self.outcome is ContextRunOutcome.DELIVERED_EMPTY:
             if self.authorized_evidence_refs:
                 raise ValueError("empty ContextRun cannot contain Evidence refs")
@@ -391,10 +438,12 @@ def build_context_run_records(
     final_effective_scope: EffectiveScope,
     effective_budget: PackageBudget,
     keyring: QueryDigestKeyring,
+    active_release: object,
 ) -> tuple[ContextRunRecord, DecisionAuditRecord | None]:
     """Project one finalized Package into safe durable lineage."""
 
     from engine.runtime.invocation import AuthenticatedInvocation
+    from engine.runtime.release_lineage import ActiveRuntimeRelease
     from engine.runtime.scope import (
         OMITTED_REQUEST_NARROWING,
         EffectiveScope,
@@ -408,9 +457,13 @@ def build_context_run_records(
         raise TypeError("ContextRun projection requires Acquire or OpenCitation")
     if type(package) is not ContextPackage:
         raise TypeError("ContextRun projection requires ContextPackage")
-    active_release = invocation.user_actor.active_runtime_release
-    if active_release is None:
+    if type(active_release) is not ActiveRuntimeRelease:
+        raise TypeError("ContextRun projection requires ActiveRuntimeRelease")
+    invocation_release = invocation.user_actor.active_runtime_release
+    if invocation_release is None:
         raise ValueError("ContextRun requires an active Runtime release")
+    if active_release != invocation_release:
+        raise ValueError("ContextRun requires the invocation's exact Runtime release")
     if type(final_effective_scope) is not EffectiveScope:
         raise TypeError("ContextRun projection requires final EffectiveScope")
     if type(effective_budget) is not PackageBudget:
@@ -532,9 +585,22 @@ def build_context_run_records(
         query_digest=query_receipt.value,
         outcome=outcome,
         package_digest_profile=PACKAGE_DIGEST_PROFILE,
+        package_ref=package.package_id,
         package_digest=package.package_digest,
+        release_ref=active_release.manifest_ref,
+        release_generation=active_release.active_generation,
         package_retention_mode=PACKAGE_RETENTION_MODE,
         authorized_evidence_refs=tuple(item.evidence_ref for item in package.evidence),
+        authorized_citation_lineage=tuple(
+            {
+                "evidenceRef": item.evidence_ref,
+                "fragmentRef": item.fragment_ref,
+                "resourceRef": item.resource_ref,
+                "revisionRef": item.revision_ref,
+                "sourceRef": item.source_ref,
+            }
+            for item in package.evidence
+        ),
         effective_max_tokens=effective_budget.max_tokens,
         effective_max_provider_calls=effective_budget.max_provider_calls,
         effective_max_cost_microunits=effective_budget.max_cost_microunits,

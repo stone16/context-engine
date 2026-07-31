@@ -33,6 +33,19 @@ def test_tracked_golden_tree_contains_only_placeholder_synthetic_cases() -> None
     assert_tracked_golden_tree_is_synthetic(REPOSITORY_ROOT / "eval/golden")
 
 
+def test_feedback_intake_fixture_is_wholly_synthetic() -> None:
+    fixture = json.loads(
+        (
+            REPOSITORY_ROOT
+            / "eval/golden/v1/synthetic-feedback-intake.json"
+        ).read_text(encoding="utf-8")
+    )
+
+    assert fixture["synthetic"] is True
+    assert fixture["entries"][0]["caseRef"].startswith("synthetic-")
+    assert fixture["entries"][0]["query"].startswith("synthetic-")
+
+
 def test_personal_or_non_placeholder_tracked_case_is_refused(tmp_path: Path) -> None:
     golden_root = tmp_path / "golden"
     golden_root.mkdir()

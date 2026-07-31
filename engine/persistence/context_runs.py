@@ -266,10 +266,16 @@ class ContextRunView:
     query_digest_key_version: int = field(repr=False)
     query_digest: str = field(repr=False)
     outcome: ContextRunOutcome
+    package_ref: str | None
     package_digest_profile: str
     package_digest: str
+    release_ref: str | None
+    release_generation: int | None
     package_retention_mode: str
     authorized_evidence_refs: tuple[str, ...]
+    authorized_citation_lineage: tuple[dict[str, str], ...] | None = field(
+        repr=False
+    )
     effective_max_tokens: int
     effective_max_provider_calls: int
     effective_max_cost_microunits: int
@@ -473,10 +479,18 @@ class PostgreSQLContextRunReader:
             query_digest_key_version=values["query_digest_key_version"],
             query_digest=values["query_digest"],
             outcome=ContextRunOutcome(values["outcome"]),
+            package_ref=values["package_ref"],
             package_digest_profile=values["package_digest_profile"],
             package_digest=values["package_digest"],
+            release_ref=values["release_ref"],
+            release_generation=values["release_generation"],
             package_retention_mode=values["package_retention_mode"],
             authorized_evidence_refs=tuple(values["authorized_evidence_refs"]),
+            authorized_citation_lineage=(
+                tuple(dict(value) for value in values["authorized_citation_lineage"])
+                if values["authorized_citation_lineage"] is not None
+                else None
+            ),
             effective_max_tokens=values["effective_max_tokens"],
             effective_max_provider_calls=values["effective_max_provider_calls"],
             effective_max_cost_microunits=values["effective_max_cost_microunits"],

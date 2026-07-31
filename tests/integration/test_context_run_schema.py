@@ -305,6 +305,10 @@ def insert_context_run(
     policy_snapshot_ref: str = POLICY_SNAPSHOT_REF,
     policy_epoch: int = 1,
     finalized_at: datetime = ACCEPTED_AT,
+    package_ref: str | None = None,
+    release_ref: str | None = None,
+    release_generation: int | None = None,
+    authorized_citation_lineage: tuple[dict[str, str], ...] | None = None,
 ) -> None:
     connection.execute(
         text(
@@ -317,8 +321,9 @@ def insert_context_run(
                 request_id, purpose, policy_snapshot_ref, policy_epoch,
                 effective_scope_digest, query_digest_profile,
                 query_digest_key_version, query_digest, outcome,
-                package_digest_profile, package_digest,
-                package_retention_mode, authorized_evidence_refs,
+                package_ref, package_digest_profile, package_digest,
+                release_ref, release_generation, package_retention_mode,
+                authorized_evidence_refs, authorized_citation_lineage,
                 effective_max_tokens, effective_max_provider_calls,
                 effective_max_cost_microunits, effective_max_elapsed_ms,
                 usage_tokens, usage_provider_calls,
@@ -332,8 +337,10 @@ def insert_context_run(
                 'request:issue-19', 'answer', :policy_snapshot_ref, :policy_epoch,
                 :effective_scope_digest, 'context-query-json-hmac-sha256-v1',
                 1, :query_digest, :outcome,
-                'context-package-canonical-json-v1', :package_digest,
-                'digest_only', CAST(:authorized_evidence_refs AS jsonb),
+                :package_ref, 'context-package-canonical-json-v1', :package_digest,
+                :release_ref, :release_generation, 'digest_only',
+                CAST(:authorized_evidence_refs AS jsonb),
+                CAST(:authorized_citation_lineage AS jsonb),
                 1000, 8, 100000, 5000,
                 0, 0, 0, 0,
                 :accepted_at, :finalized_at, :package_as_of,
@@ -351,6 +358,14 @@ def insert_context_run(
             "query_digest": "b" * 64,
             "package_digest": "c" * 64,
             "authorized_evidence_refs": json.dumps(authorized_evidence_refs),
+            "authorized_citation_lineage": (
+                json.dumps(authorized_citation_lineage)
+                if authorized_citation_lineage is not None
+                else None
+            ),
+            "package_ref": package_ref,
+            "release_ref": release_ref,
+            "release_generation": release_generation,
             "outcome": outcome,
             "policy_snapshot_ref": policy_snapshot_ref,
             "policy_epoch": policy_epoch,

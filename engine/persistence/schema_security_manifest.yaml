@@ -1,5 +1,5 @@
 {
-  "manifestVersion": "40.0.0",
+  "manifestVersion": "41.0.0",
   "controlOperations": [
     {
       "name": "register_file_source",
@@ -2780,7 +2780,7 @@
           "table": "context_run"
         }
       },
-      "purpose": "Authorized-only durable lineage for one finalized ContextPackage delivery; package and query bodies are never retained",
+      "purpose": "Authorized-only durable lineage for one finalized ContextPackage delivery, including exact Package, generation-bound Release, and citation identity for governed feedback intake; package and query bodies are never retained",
       "organizationColumn": "organization_id",
       "organizationInclusiveKeys": [
         {
@@ -2905,6 +2905,10 @@
         {
           "name": "ck_context_run_timestamp_order",
           "expression": "finalized_at >= accepted_at AND package_as_of = finalized_at AND package_expires_at > package_as_of"
+        },
+        {
+          "name": "ck_context_run_feedback_lineage_complete",
+          "expression": "Legacy rows carry no feedback lineage; current rows bind a closed Package ref, generation-bound Release ref, positive generation, and an exact five-field citation object for every authorized Evidence ref"
         }
       ],
       "rowLevelSecurity": {
@@ -2943,6 +2947,14 @@
               "context_engine_context_run_reader_definer"
             ],
             "using": "context_run.organization_id = NULLIF(current_setting('app.ui_feedback_organization_id', true), '')::uuid AND context_run.run_ref = current_setting('app.ui_feedback_run_ref', true) AND context_run.user_id = NULLIF(current_setting('app.ui_feedback_user_id', true), '')::uuid AND context_run.membership_id = NULLIF(current_setting('app.ui_feedback_membership_id', true), '')::uuid AND context_run.membership_version = NULLIF(current_setting('app.ui_feedback_membership_version', true), '')::bigint AND context_run.principal_ref = current_setting('app.ui_feedback_principal_ref', true) AND current_setting('app.ui_feedback_mode', true) = 'capture'"
+          },
+          {
+            "name": "context_run_learning_feedback_definer_select",
+            "command": "SELECT",
+            "roles": [
+              "context_engine_context_run_reader_definer"
+            ],
+            "using": "context_run.organization_id = NULLIF(current_setting('app.learning_feedback_organization_id', true), '')::uuid AND current_setting('app.learning_feedback_mode', true) = 'read' AND EXISTS (SELECT 1 FROM public.context_feedback AS feedback WHERE feedback.organization_id = context_run.organization_id AND feedback.run_ref = context_run.run_ref AND feedback.feedback_ref = current_setting('app.learning_feedback_ref', true))"
           }
         ]
       },
@@ -2955,6 +2967,9 @@
         ],
         "context_engine_context_run_reader_definer": [
           "SELECT"
+        ],
+        "context_engine_learning": [
+          "EXECUTE context_learning_read_feedback_evidence"
         ],
         "context_engine_worker": [],
         "context_engine_control": [
@@ -2992,7 +3007,7 @@
           "table": "context_feedback"
         }
       },
-      "purpose": "Evidence-only answer feedback bound to one exact same-Organization ContextRun and current Membership; it has no Release publication authority",
+      "purpose": "Evidence-only answer feedback bound to one exact same-Organization ContextRun and current Membership; Learning receives only an exact authorized Package, generation-bound Release, and citation projection, with no Release publication authority",
       "organizationColumn": "organization_id",
       "organizationInclusiveKeys": [
         {
@@ -3098,6 +3113,14 @@
               "context_engine_context_run_reader_definer"
             ],
             "using": "context_feedback.organization_id = NULLIF(current_setting('app.ui_feedback_organization_id', true), '')::uuid AND context_feedback.run_ref = current_setting('app.ui_feedback_run_ref', true) AND context_feedback.membership_id = NULLIF(current_setting('app.ui_feedback_membership_id', true), '')::uuid AND context_feedback.membership_version = NULLIF(current_setting('app.ui_feedback_membership_version', true), '')::bigint AND current_setting('app.ui_feedback_mode', true) = 'capture'"
+          },
+          {
+            "name": "context_feedback_learning_definer_select",
+            "command": "SELECT",
+            "roles": [
+              "context_engine_context_run_reader_definer"
+            ],
+            "using": "context_feedback.organization_id = NULLIF(current_setting('app.learning_feedback_organization_id', true), '')::uuid AND context_feedback.feedback_ref = current_setting('app.learning_feedback_ref', true) AND current_setting('app.learning_feedback_mode', true) = 'read'"
           }
         ]
       },
@@ -3114,7 +3137,9 @@
           "SELECT",
           "INSERT"
         ],
-        "context_engine_learning": [],
+        "context_engine_learning": [
+          "EXECUTE context_learning_read_feedback_evidence"
+        ],
         "context_engine_release_operator": [],
         "context_engine_runtime": [
           "EXECUTE context_runtime_capture_context_feedback"
