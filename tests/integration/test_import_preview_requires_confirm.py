@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import html
 import re
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from uuid import UUID
 
@@ -54,17 +57,20 @@ class _Authenticator:
         )
 
 
-def test_import_preview_requires_confirm(
+@contextmanager
+def _ui_import_scenario(
+    *,
     tmp_path: Path,
     migration_configuration: DatabaseConfiguration,
     guarded_control_engine: Engine,
     guarded_runtime_engine: Engine,
-    guarded_worker_engine: Engine,
-) -> None:
+    payload: bytes,
+) -> Iterator[tuple[FileImportScenario, TestClient, Engine]]:
     scenario = prepare_file_import_scenario(
         tmp_path,
         migration_configuration,
         guarded_control_engine,
+        payload=payload,
         issue_lease=False,
     )
     migration_engine = create_database_engine(migration_configuration)
@@ -91,25 +97,167 @@ def test_import_preview_requires_confirm(
             operations=frozenset({ControlOperation.IMPORT_FILE}),
             clock=lambda: NOW,
         )
-        api = PostgreSQLUiApi(
-            PostgreSQLMembershipAuthority(guarded_runtime_engine),
-            guarded_control_engine,
-            preview_key=b"i" * 32,
-            control_gate=control_gate,
-            roots=roots,
-            file_import_service_principal_id=scenario.receiver.service_principal_id,
-            clock=lambda: NOW,
-        )
         client = TestClient(
             create_app(
                 authenticator=_Authenticator(scenario, user_id),
                 ui_bearer_token=TOKEN,
                 ui_control_authority=control_authority,
-                ui_api=api,
+                ui_api=PostgreSQLUiApi(
+                    PostgreSQLMembershipAuthority(guarded_runtime_engine),
+                    guarded_control_engine,
+                    preview_key=b"i" * 32,
+                    control_gate=control_gate,
+                    roots=roots,
+                    file_import_service_principal_id=(
+                        scenario.receiver.service_principal_id
+                    ),
+                    clock=lambda: NOW,
+                ),
             )
         )
         authenticate_ui(client, TOKEN)
+        yield scenario, client, migration_engine
+    finally:
+        roots.close()
+        migration_engine.dispose()
+        delete_file_import_scenario(
+            migration_configuration,
+            scenario.organization_id,
+        )
 
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        b"# Handbook\n\nRead [the private note](private-runbook.md).\n",
+        b"# Handbook\n\nRead [[private-runbook]].\n",
+        b"# Handbook\n\nEmbed ![[private-runbook]].\n",
+        b"# Handbook\n\nRead <https://private.invalid/runbook>.\n",
+        b"# Handbook\n\nFirst paragraph.\n\nRead [[private-runbook]].\n",
+    ],
+)
+def test_link_bearing_import_preview_hands_off_to_the_leased_scan_path(
+    tmp_path: Path,
+    migration_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+    guarded_runtime_engine: Engine,
+    payload: bytes,
+) -> None:
+    with _ui_import_scenario(
+        tmp_path=tmp_path,
+        migration_configuration=migration_configuration,
+        guarded_control_engine=guarded_control_engine,
+        guarded_runtime_engine=guarded_runtime_engine,
+        payload=payload,
+    ) as (scenario, client, migration_engine):
+        with migration_engine.connect() as connection:
+            job_count_before = connection.execute(
+                text(
+                    "SELECT count(*) FROM file_import_job "
+                    "WHERE organization_id = :organization_id"
+                ),
+                {"organization_id": scenario.organization_id},
+            ).scalar_one()
+        response = client.post(
+            "/ui/import/preview",
+            content=(
+                f"sourceRef={scenario.source_ref.value}&path=handbook.md&"
+                f"controlCredential={CONTROL_TOKEN}"
+            ),
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+
+        assert response.status_code == 200
+        assert "Rich Markdown requires the leased scan path" in response.text
+        assert str(scenario.source_ref.value) in response.text
+        source_arguments = (
+            '--organization-id "$CONTEXT_ENGINE_OPERATOR_ORGANIZATION_ID" '
+            f'--source-ref "{scenario.source_ref.value}"'
+        )
+        rendered_commands = tuple(
+            html.unescape(command)
+            for command in re.findall(
+                r'<div class="block-body"><code>([^<]+)</code></div>',
+                response.text,
+            )
+        )
+        assert rendered_commands == (
+            "uv run context-engine-control activate-change-feed "
+            + source_arguments,
+            "uv run context-engine-control activate-delete-observations "
+            + source_arguments,
+            "uv run context-engine-control scan " + source_arguments,
+            "uv run context-engine-worker --dispatch-file-once",
+        )
+        assert "until it reports" in response.text
+        assert "no_work" in response.text
+        assert "previewToken" not in response.text
+        assert "private-runbook" not in response.text
+        assert CONTROL_TOKEN not in response.text
+        with migration_engine.connect() as connection:
+            job_count = connection.execute(
+                text(
+                    "SELECT count(*) FROM file_import_job "
+                    "WHERE organization_id = :organization_id"
+                ),
+                {"organization_id": scenario.organization_id},
+            ).scalar_one()
+            published_count = connection.execute(
+                text(
+                    "SELECT count(*) FROM context_resource "
+                    "WHERE organization_id = :organization_id"
+                ),
+                {"organization_id": scenario.organization_id},
+            ).scalar_one()
+        assert job_count == job_count_before
+        assert published_count == 0
+
+
+def test_malformed_import_refusal_stays_content_free_without_scan_handoff(
+    tmp_path: Path,
+    migration_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+    guarded_runtime_engine: Engine,
+) -> None:
+    with _ui_import_scenario(
+        tmp_path=tmp_path,
+        migration_configuration=migration_configuration,
+        guarded_control_engine=guarded_control_engine,
+        guarded_runtime_engine=guarded_runtime_engine,
+        payload=b"# Handbook\n\n[[private-runbook]]\xffprivate malformed body\n",
+    ) as (scenario, client, _migration_engine):
+        response = client.post(
+            "/ui/import/preview",
+            content=(
+                f"sourceRef={scenario.source_ref.value}&path=handbook.md&"
+                f"controlCredential={CONTROL_TOKEN}"
+            ),
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+
+        assert response.status_code == 503
+        assert "Request refused" in response.text
+        assert "provider_unavailable" in response.text
+        assert "private malformed body" not in response.text
+        assert "context-engine-control scan" not in response.text
+        assert "previewToken" not in response.text
+        assert CONTROL_TOKEN not in response.text
+
+
+def test_import_preview_requires_confirm(
+    tmp_path: Path,
+    migration_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+    guarded_runtime_engine: Engine,
+    guarded_worker_engine: Engine,
+) -> None:
+    with _ui_import_scenario(
+        tmp_path=tmp_path,
+        migration_configuration=migration_configuration,
+        guarded_control_engine=guarded_control_engine,
+        guarded_runtime_engine=guarded_runtime_engine,
+        payload=b"# Handbook\n\nContextEngine delivers context.\n",
+    ) as (scenario, client, migration_engine):
         preview = client.post(
             "/ui/import/preview",
             content=(
@@ -216,10 +364,3 @@ def test_import_preview_requires_confirm(
         assert tuple(
             candidate.fragment_ref for candidate in published.candidate_refs
         ) == tuple(fragment.fragment_ref for fragment in expected.fragments)
-    finally:
-        roots.close()
-        migration_engine.dispose()
-        delete_file_import_scenario(
-            migration_configuration,
-            scenario.organization_id,
-        )

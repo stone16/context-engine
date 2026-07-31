@@ -31,11 +31,30 @@ from engine.supply import (
     StructuralPath,
     UnsupportedConstruct,
     canonicalize_parsed_document,
+    contains_rich_markdown_link,
 )
 
 FIXTURES = Path(__file__).parents[1] / "fixtures/markdown"
 CONFIG = MarkdownCompilerConfig(version="markdown-config-v1")
 STRUCTURAL_CONFIG = MarkdownCompilerConfig(version="markdown-config-v2")
+
+
+@pytest.mark.parametrize(
+    "source",
+    (
+        "Read [[runbook]].",
+        "Embed ![[runbook]].",
+        "Read [runbook](runbook.md).",
+        "Read [runbook][target].\n[target]: runbook.md",
+        "Read <https://example.invalid/runbook>.",
+    ),
+)
+def test_rich_link_detection_uses_the_accepted_inline_grammar(source: str) -> None:
+    assert contains_rich_markdown_link(source)
+
+
+def test_rich_link_detection_ignores_plain_text() -> None:
+    assert not contains_rich_markdown_link("Plain text only.")
 
 
 def _hex_fixture(name: str) -> bytes:

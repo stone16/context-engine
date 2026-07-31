@@ -11,10 +11,10 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from typing import Any, Final, Literal, Protocol, cast
+from typing import Annotated, Any, Final, Literal, Protocol, cast
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, RootModel
 from sqlalchemy import Engine, text
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -22,6 +22,11 @@ from adapters.file_source import FileRootRegistry
 from adapters.http.authentication import VerifiedAuthenticationContext
 from adapters.parsers.markdown import compile_markdown
 from engine.control import (
+    FILE_CAPABILITY_MANIFEST,
+    FILE_CHANGE_CAPABILITY_MANIFEST,
+    FILE_DELETE_OBSERVATION_CAPABILITY_MANIFEST,
+    FILE_IMPORT_CAPABILITY_MANIFEST,
+    CapabilityStatus,
     ControlOperation,
     FileImportPath,
     FileRootRef,
@@ -38,14 +43,37 @@ from engine.persistence.role_guard import assert_control_role, assert_runtime_ro
 from engine.runtime.actor import CurrentMembershipVerification
 from engine.supply import (
     CompilationFailure,
+    CompilationFailureCode,
     MarkdownCompilerConfig,
     ParsedDocument,
+    UnsupportedConstruct,
+    contains_rich_markdown_link,
 )
 
 _PREVIEW_TTL: Final = timedelta(minutes=10)
+_FILE_CAPABILITY_MANIFESTS: Final = {
+    manifest.declaration_version: manifest
+    for manifest in (
+        FILE_CAPABILITY_MANIFEST,
+        FILE_IMPORT_CAPABILITY_MANIFEST,
+        FILE_CHANGE_CAPABILITY_MANIFEST,
+        FILE_DELETE_OBSERVATION_CAPABILITY_MANIFEST,
+    )
+}
 _PREVIEW_DOMAIN: Final = b"context-engine.ui-preview.v1\x00"
 _FEEDBACK_DOMAIN: Final = b"context-engine.ui-feedback.v1\x00"
 _MAX_SIGNED_BIGINT: Final = (1 << 63) - 1
+
+
+def _contains_rich_markdown_link(source: bytes) -> bool:
+    try:
+        decoded = source.removeprefix(b"\xef\xbb\xbf").decode(
+            "utf-8",
+            errors="strict",
+        )
+    except UnicodeDecodeError:
+        return False
+    return contains_rich_markdown_link(decoded)
 
 
 class UiApiUnavailable(RuntimeError):
@@ -177,12 +205,35 @@ class UiImportFragmentResponse(BaseModel):
 class UiImportPreviewResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    kind: Literal["preview_ready"]
     compilationDigest: str = Field(strict=True, pattern=r"^[0-9a-f]{64}$")
     fragmentDigest: str = Field(strict=True, pattern=r"^[0-9a-f]{64}$")
     fragments: list[UiImportFragmentResponse] = Field(min_length=1)
     path: str = Field(strict=True, min_length=1, max_length=255)
     previewToken: str = Field(strict=True, min_length=1, max_length=4096)
     sourceRef: str = Field(strict=True, min_length=1, max_length=512)
+
+
+class UiImportScanHandoffResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["scan_handoff"]
+    path: str = Field(strict=True, min_length=1, max_length=255)
+    prerequisiteCommands: list[str] = Field(max_length=2)
+    reason: Literal["rich_markdown_requires_leased_worker"]
+    scanCommand: str = Field(strict=True, min_length=1, max_length=1024)
+    sourceRef: str = Field(strict=True, min_length=1, max_length=512)
+    workerCommand: str = Field(strict=True, min_length=1, max_length=1024)
+
+
+type UiImportPreviewOutcome = Annotated[
+    UiImportPreviewResponse | UiImportScanHandoffResponse,
+    Field(discriminator="kind"),
+]
+
+
+class UiImportPreviewOutcomeResponse(RootModel[UiImportPreviewOutcome]):
+    pass
 
 
 class UiImportConfirmResponse(BaseModel):
@@ -713,27 +764,40 @@ class PostgreSQLUiApi:
         except (TypeError, ValueError):
             raise UiApiUnavailable from None
         with self._verified(actor), self._control(actor) as connection:
-            root_ref = connection.execute(
-                text(
-                    """
-                    SELECT version.root_ref
-                    FROM context_source AS source
-                    JOIN source_version AS version
-                      ON version.organization_id = source.organization_id
-                     AND version.source_id = source.source_id
-                     AND version.version_id = source.active_version_id
-                    WHERE source.organization_id = :organization_id
-                      AND source.source_id = :source_id
-                      AND source.lifecycle_state = 'active'
-                    """
-                ),
-                {
-                    "organization_id": actor.organization_id,
-                    "source_id": source_ref,
-                },
-            ).scalar_one_or_none()
-        if type(root_ref) is not str:
+            source = (
+                connection.execute(
+                    text(
+                        """
+                        SELECT version.root_ref,
+                               version.capability_manifest
+                                      ->>'declarationVersion'
+                                      AS declaration_version
+                        FROM context_source AS source
+                        JOIN source_version AS version
+                          ON version.organization_id = source.organization_id
+                         AND version.source_id = source.source_id
+                         AND version.version_id = source.active_version_id
+                        WHERE source.organization_id = :organization_id
+                          AND source.source_id = :source_id
+                          AND source.lifecycle_state = 'active'
+                        """
+                    ),
+                    {
+                        "organization_id": actor.organization_id,
+                        "source_id": source_ref,
+                    },
+                )
+                .mappings()
+                .one_or_none()
+            )
+        if (
+            source is None
+            or type(source["root_ref"]) is not str
+            or source["declaration_version"] not in _FILE_CAPABILITY_MANIFESTS
+        ):
             raise UiApiUnavailable
+        root_ref = source["root_ref"]
+        capabilities = _FILE_CAPABILITY_MANIFESTS[source["declaration_version"]]
         try:
             raw = roots.read(FileRootRef(root_ref), import_path)
             outcome = compile_markdown(
@@ -742,7 +806,45 @@ class PostgreSQLUiApi:
             )
         except (LookupError, RuntimeError, TypeError, ValueError):
             raise UiApiUnavailable from None
-        if type(outcome) is CompilationFailure or type(outcome) is not ParsedDocument:
+        requires_scan_handoff = (
+            (
+                type(outcome) is CompilationFailure
+                and outcome.code is CompilationFailureCode.UNSUPPORTED_CONSTRUCT
+                and outcome.construct is UnsupportedConstruct.LINK_OR_IMAGE
+            )
+            or _contains_rich_markdown_link(raw)
+        )
+        if requires_scan_handoff:
+            source_arguments = (
+                "--organization-id "
+                '"$CONTEXT_ENGINE_OPERATOR_ORGANIZATION_ID" '
+                f'--source-ref "{source_ref}"'
+            )
+            prerequisite_commands: list[str] = []
+            if capabilities.read_changes is not CapabilityStatus.AVAILABLE:
+                prerequisite_commands.append(
+                    "uv run context-engine-control activate-change-feed "
+                    + source_arguments
+                )
+            if capabilities.delete_observations is not CapabilityStatus.AVAILABLE:
+                prerequisite_commands.append(
+                    "uv run context-engine-control activate-delete-observations "
+                    + source_arguments
+                )
+            return {
+                "kind": "scan_handoff",
+                "path": import_path.value,
+                "prerequisiteCommands": prerequisite_commands,
+                "reason": "rich_markdown_requires_leased_worker",
+                "scanCommand": (
+                    "uv run context-engine-control scan " + source_arguments
+                ),
+                "sourceRef": str(source_ref),
+                "workerCommand": "uv run context-engine-worker --dispatch-file-once",
+            }
+        if type(outcome) is CompilationFailure:
+            raise UiApiUnavailable
+        if type(outcome) is not ParsedDocument:
             raise UiApiUnavailable
         fragments = [
             {
@@ -768,6 +870,7 @@ class PostgreSQLUiApi:
             "sourceRef": str(source_ref),
         }
         return {
+            "kind": "preview_ready",
             "compilationDigest": outcome.compilation_digest,
             "fragmentDigest": fragment_digest,
             "fragments": fragments,
