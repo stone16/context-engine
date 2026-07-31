@@ -138,6 +138,14 @@ def test_link_bearing_import_preview_hands_off_to_the_leased_scan_path(
         guarded_runtime_engine=guarded_runtime_engine,
         payload=b"# Handbook\n\nRead [the private runbook](runbook.md).\n",
     ) as (scenario, client, migration_engine):
+        with migration_engine.connect() as connection:
+            job_count_before = connection.execute(
+                text(
+                    "SELECT count(*) FROM file_import_job "
+                    "WHERE organization_id = :organization_id"
+                ),
+                {"organization_id": scenario.organization_id},
+            ).scalar_one()
         response = client.post(
             "/ui/import/preview",
             content=(
@@ -151,7 +159,11 @@ def test_link_bearing_import_preview_hands_off_to_the_leased_scan_path(
         assert "Rich Markdown requires the leased scan path" in response.text
         assert "context-engine-control scan" in response.text
         assert str(scenario.source_ref.value) in response.text
+        assert "activate-change-feed" in response.text
+        assert "activate-delete-observations" in response.text
         assert "context-engine-worker --dispatch-file-once" in response.text
+        assert "until it reports" in response.text
+        assert "no_work" in response.text
         assert "previewToken" not in response.text
         assert "the private runbook" not in response.text
         assert "runbook.md" not in response.text
@@ -171,7 +183,7 @@ def test_link_bearing_import_preview_hands_off_to_the_leased_scan_path(
                 ),
                 {"organization_id": scenario.organization_id},
             ).scalar_one()
-        assert job_count == 1
+        assert job_count == job_count_before
         assert published_count == 0
 
 

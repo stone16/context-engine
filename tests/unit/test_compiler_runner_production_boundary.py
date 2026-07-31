@@ -23,6 +23,7 @@ _FORBIDDEN_MODULES = frozenset(
         "eval._compiler_acceptance",
     }
 )
+_LEASED_RUNNER_MODULE = "engine.supply.compiler_runner"
 
 
 def _module_name(repository_root: Path, path: Path) -> str:
@@ -115,6 +116,34 @@ def _production_import_violations(
     return tuple(sorted(violations))
 
 
+def _leased_runner_imports(
+    repository_root: Path,
+) -> tuple[tuple[str, str], ...]:
+    imports: set[tuple[str, str]] = set()
+    for root_name in PRODUCTION_ROOTS:
+        for path in (repository_root / root_name).rglob("*.py"):
+            tree = ast.parse(path.read_bytes(), filename=str(path))
+            relative = path.relative_to(repository_root).as_posix()
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    imports.update(
+                        (relative, alias.name)
+                        for alias in node.names
+                        if alias.name == _LEASED_RUNNER_MODULE
+                        or alias.name.startswith(f"{_LEASED_RUNNER_MODULE}.")
+                    )
+                elif (
+                    isinstance(node, ast.ImportFrom)
+                    and node.level == 0
+                    and node.module == _LEASED_RUNNER_MODULE
+                ):
+                    imports.update(
+                        (relative, f"{_LEASED_RUNNER_MODULE}.{alias.name}")
+                        for alias in node.names
+                    )
+    return tuple(sorted(imports))
+
+
 def test_unleased_subprocess_helper_is_explicitly_local_only() -> None:
     assert not hasattr(compiler_runner, "compile_in_compiler_runner")
     assert hasattr(compiler_runner, "compile_in_local_compiler_runner")
@@ -126,6 +155,15 @@ def test_no_production_module_imports_an_unleased_compiler_surface() -> None:
         production_roots=PRODUCTION_ROOTS,
         ignored_modules=_IGNORED_MODULES,
     ) == ()
+
+
+def test_only_the_file_import_worker_can_select_the_leased_compiler() -> None:
+    assert _leased_runner_imports(REPOSITORY_ROOT) == (
+        (
+            "engine/persistence/file_imports.py",
+            "engine.supply.compiler_runner.compile_in_leased_compiler_runner",
+        ),
+    )
 
 
 def test_leased_entry_imports_only_the_registered_raw_compiler_surface() -> None:

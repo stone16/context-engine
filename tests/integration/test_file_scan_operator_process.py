@@ -144,6 +144,26 @@ def file_scan_scenario(
         }
         yield organization_id, membership_id, receiver_id, root, environment
     finally:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "ALTER TABLE revision_link_edge "
+                    "DISABLE TRIGGER revision_link_edge_immutable"
+                )
+            )
+            connection.execute(
+                text(
+                    "DELETE FROM revision_link_edge "
+                    "WHERE organization_id = :organization_id"
+                ),
+                {"organization_id": organization_id},
+            )
+            connection.execute(
+                text(
+                    "ALTER TABLE revision_link_edge "
+                    "ENABLE TRIGGER revision_link_edge_immutable"
+                )
+            )
         engine.dispose()
         _SCENARIOS.remove(scenarios)
         _delete_scenarios(migration_configuration, scenarios)
@@ -636,6 +656,55 @@ def test_scan_process_schedules_only_changed_upserts_and_existing_worker_consume
                 ).one()
             )
         assert unchanged_counts == (3, 2)
+    finally:
+        engine.dispose()
+
+
+def test_scan_handoff_publishes_link_bearing_note_through_leased_worker(
+    migration_configuration: DatabaseConfiguration,
+    file_scan_scenario: tuple[UUID, UUID, UUID, Path, dict[str, str]],
+) -> None:
+    organization_id, _membership_id, _receiver_id, root, environment = (
+        file_scan_scenario
+    )
+    (root / "linked.md").write_text(
+        "# Linked note\n\nRead [the runbook](runbook.md).\n",
+        encoding="utf-8",
+    )
+    source_ref = _register_activated_source(organization_id, environment)
+
+    scanned = _scan(organization_id, source_ref, environment)
+    outcomes = [_worker(environment)["outcome"], _worker(environment)["outcome"]]
+
+    assert scanned["importsScheduled"] == 1
+    assert outcomes == ["dispatched", "no_work"]
+    engine = create_database_engine(migration_configuration)
+    try:
+        with engine.connect() as connection:
+            snapshot = connection.execute(
+                text(
+                    """
+                    SELECT snapshot.compiler_version, snapshot.config_version,
+                           snapshot.compilation_document->'revisionLinks'
+                    FROM file_revision_snapshot AS snapshot
+                    JOIN file_acquisition AS acquisition
+                      ON acquisition.organization_id = snapshot.organization_id
+                     AND acquisition.acquisition_id = snapshot.acquisition_id
+                    WHERE snapshot.organization_id = :organization_id
+                      AND acquisition.source_id = :source_id
+                      AND acquisition.relative_path = 'linked.md'
+                    """
+                ),
+                {
+                    "organization_id": organization_id,
+                    "source_id": source_ref,
+                },
+            ).one()
+        assert snapshot._tuple() == (
+            "context-engine-markdown-v3",
+            "markdown-config-v3",
+            [{"kind": "markdown_link", "targetPath": "runbook.md"}],
+        )
     finally:
         engine.dispose()
 
