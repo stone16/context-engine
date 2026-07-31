@@ -7,6 +7,7 @@ from adapters.http.app import create_app
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 UI_ROOT = REPOSITORY_ROOT / "ui"
+UI_API = REPOSITORY_ROOT / "adapters" / "http" / "ui_api.py"
 
 
 def _absolute_import_roots(path: Path) -> set[str]:
@@ -48,3 +49,15 @@ def test_every_ui_backing_carrier_is_an_http_route() -> None:
         "/v0/ui/articles/confirm",
         "/v0/ui/feedback",
     } <= http_paths
+
+
+def test_console_never_compiles_rich_markdown_in_process() -> None:
+    """V3 remains selectable only after exact WorkerLease redemption."""
+
+    source = UI_API.read_text(encoding="utf-8")
+    imports = _absolute_import_roots(UI_API)
+
+    assert "markdown-config-v3" not in source
+    assert "compile_rich_markdown" not in source
+    assert "compile_in_leased_compiler_runner" not in source
+    assert "applications" not in imports
