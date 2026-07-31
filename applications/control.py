@@ -574,7 +574,6 @@ def _scan_report_document(report: FileScanReport) -> dict[str, object]:
     return {
         "advancedCursor": report.advanced_cursor,
         "changesAccepted": report.changes_accepted,
-        "compilationRefusals": report.compilation_refusals,
         "deletesObserved": report.deletes_observed,
         "importsScheduled": report.imports_scheduled,
         "pathsObserved": report.paths_observed,
@@ -605,9 +604,6 @@ def _multi_scan_report_json(report: MultiSourceScanReport) -> str:
             "summary": {
                 "changesAccepted": sum(
                     source.changes_accepted for source in sources
-                ),
-                "compilationRefusals": sum(
-                    source.compilation_refusals for source in sources
                 ),
                 "deletesObserved": sum(
                     source.deletes_observed for source in sources

@@ -423,7 +423,6 @@ def test_scan_process_schedules_only_changed_upserts_and_existing_worker_consume
     assert first == {
         "advancedCursor": first["advancedCursor"],
         "changesAccepted": 2,
-        "compilationRefusals": 1,
         "deletesObserved": 0,
         "importsScheduled": 2,
         "pathsObserved": 2,
@@ -464,7 +463,6 @@ def test_scan_process_schedules_only_changed_upserts_and_existing_worker_consume
         assert unchanged == {
             "advancedCursor": first["advancedCursor"],
             "changesAccepted": 0,
-            "compilationRefusals": 0,
             "deletesObserved": 0,
             "importsScheduled": 0,
             "pathsObserved": 2,
@@ -488,7 +486,6 @@ def test_scan_process_schedules_only_changed_upserts_and_existing_worker_consume
         assert changed == {
             "advancedCursor": changed["advancedCursor"],
             "changesAccepted": 1,
-            "compilationRefusals": 0,
             "deletesObserved": 0,
             "importsScheduled": 1,
             "pathsObserved": 3,
@@ -565,7 +562,6 @@ def test_scan_process_schedules_only_changed_upserts_and_existing_worker_consume
         assert deleted == {
             "advancedCursor": deleted["advancedCursor"],
             "changesAccepted": 1,
-            "compilationRefusals": 0,
             "deletesObserved": 1,
             "importsScheduled": 0,
             "pathsObserved": 2,
@@ -618,7 +614,6 @@ def test_scan_process_schedules_only_changed_upserts_and_existing_worker_consume
         assert unchanged_after_delete == {
             "advancedCursor": deleted["advancedCursor"],
             "changesAccepted": 0,
-            "compilationRefusals": 0,
             "deletesObserved": 0,
             "importsScheduled": 0,
             "pathsObserved": 2,
@@ -723,7 +718,6 @@ def test_scan_process_recovers_a_complete_accepted_page_missing_its_schedule(
         assert recovered == {
             "advancedCursor": recovered["advancedCursor"],
             "changesAccepted": 0,
-            "compilationRefusals": 0,
             "deletesObserved": 0,
             "importsScheduled": 1,
             "pathsObserved": 1,

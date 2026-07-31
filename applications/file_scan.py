@@ -70,7 +70,6 @@ class FileScanReport:
     changes_accepted: int
     imports_scheduled: int
     deletes_observed: int
-    compilation_refusals: int
     advanced_cursor: str | None
     scan_bound: int
 
@@ -134,7 +133,6 @@ def scan_file_source(
         source_ref=source_ref,
     )
     imports_scheduled = 0
-    compilation_refusals = 0
     reconciled_page_refs: set[str] = set()
     for pending in progress.pending_change_schedules:
         scheduled = _schedule_page(
@@ -225,7 +223,6 @@ def scan_file_source(
                 changes_accepted=0,
                 imports_scheduled=imports_scheduled,
                 deletes_observed=0,
-                compilation_refusals=compilation_refusals,
                 advanced_cursor=baseline.reference.checkpoint_ref,
                 scan_bound=baseline.reference.scan_bound,
             )
@@ -290,7 +287,6 @@ def scan_file_source(
         changes_accepted=changes_accepted,
         imports_scheduled=imports_scheduled,
         deletes_observed=deletes_observed,
-        compilation_refusals=compilation_refusals,
         advanced_cursor=advanced_cursor,
         scan_bound=roots._limits.max_baseline_entries,
     )

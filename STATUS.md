@@ -198,8 +198,8 @@ bounded File scan over an explicitly configured anchored root, accept every new
 provider page, schedule only changed upserts, reconcile accepted current-scan
 upsert pages missing durable jobs, and hand those jobs to the existing
 autonomous worker. Real-PostgreSQL fixture evidence covers exact unchanged
-replay, interrupted scheduling recovery, one-note addition, aggregate
-compilation refusal, delete observation without delete execution, and
+replay, interrupted scheduling recovery, one-note addition, delete observation
+without delete execution, and
 384-dimensional Fragment publication. This does not claim that the maintainer's
 private corpus has run; it activates no watcher, alternate publisher, new
 tombstone authority, or network operation.
