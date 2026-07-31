@@ -12,6 +12,29 @@
   <p>Exact job <code>{{ receipt }}</code></p>
   <p>Release promotion remains a separate operator path.</p>
 </section>
+{% elif handoff %}
+<section class="state" aria-labelledby="scan-handoff-heading">
+  <p class="eyebrow">Lease boundary preserved · not queued</p>
+  <h2 id="scan-handoff-heading">Rich Markdown requires the leased scan path</h2>
+  <p>This note uses links or images that the console cannot compile in-process.
+     Scan the registered source, then let the independent Supply worker redeem
+     each exact File-import WorkerLease and compile rich Markdown v3.</p>
+  <dl class="lineage">
+    <div><dt>Source</dt><dd><code>{{ handoff.source_ref }}</code></dd></div>
+    <div><dt>Path</dt><dd><code>{{ handoff.path }}</code></dd></div>
+  </dl>
+  <ol class="hit-list">
+    <li class="evidence-block">
+      <h3>1. Scan and schedule changed notes</h3>
+      <div class="block-body"><code>{{ handoff.scan_command }}</code></div>
+    </li>
+    <li class="evidence-block">
+      <h3>2. Dispatch the leased worker</h3>
+      <div class="block-body"><code>{{ handoff.worker_command }}</code></div>
+    </li>
+  </ol>
+  <a class="button button-secondary" href="/ui/import">Return to import</a>
+</section>
 {% elif preview %}
 <section aria-labelledby="preview-heading">
   <p class="eyebrow">Not published · not queued</p>

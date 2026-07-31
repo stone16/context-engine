@@ -94,6 +94,14 @@ class ImportPreviewView:
 
 
 @dataclass(frozen=True, slots=True)
+class ImportScanHandoffView:
+    source_ref: str
+    path: str
+    scan_command: str
+    worker_command: str
+
+
+@dataclass(frozen=True, slots=True)
 class ArticleView:
     resource_ref: str
     source_ref: str
@@ -291,7 +299,21 @@ def overview_view(document: dict[str, object]) -> OverviewView:
     )
 
 
-def import_preview_view(document: dict[str, object]) -> ImportPreviewView:
+def import_preview_view(
+    document: dict[str, object],
+) -> ImportPreviewView | ImportScanHandoffView:
+    kind = document.get("kind")
+    if kind == "scan_handoff":
+        if document.get("reason") != "rich_markdown_requires_leased_worker":
+            raise PublicDocumentInvalid
+        return ImportScanHandoffView(
+            source_ref=_required_text(document, "sourceRef"),
+            path=_required_text(document, "path"),
+            scan_command=_required_text(document, "scanCommand"),
+            worker_command=_required_text(document, "workerCommand"),
+        )
+    if kind != "preview_ready":
+        raise PublicDocumentInvalid
     raw_fragments = document.get("fragments")
     if type(raw_fragments) is not list or not raw_fragments:
         raise PublicDocumentInvalid

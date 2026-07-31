@@ -23,6 +23,7 @@ from ui.public_http import (
     resolve_query,
 )
 from ui.views import (
+    ImportScanHandoffView,
     PublicDocumentInvalid,
     article_view,
     ask_view,
@@ -339,6 +340,7 @@ def install_ui(app: FastAPI, *, bearer_token: str | None) -> None:
             "import.html",
             {
                 "active_page": "import",
+                "handoff": None,
                 "preview": None,
                 "receipt": None,
                 "title": "Import Markdown",
@@ -402,7 +404,7 @@ def install_ui(app: FastAPI, *, bearer_token: str | None) -> None:
                 return_path="/ui/import",
             )
         try:
-            preview = import_preview_view(outcome)
+            preview_outcome = import_preview_view(outcome)
         except PublicDocumentInvalid:
             return _refusal(
                 request,
@@ -412,11 +414,18 @@ def install_ui(app: FastAPI, *, bearer_token: str | None) -> None:
                 active_page="import",
                 return_path="/ui/import",
             )
+        handoff = (
+            preview_outcome
+            if isinstance(preview_outcome, ImportScanHandoffView)
+            else None
+        )
+        preview = None if handoff is not None else preview_outcome
         return _html(
             request,
             "import.html",
             {
                 "active_page": "import",
+                "handoff": handoff,
                 "preview": preview,
                 "receipt": None,
                 "title": "Import Markdown",
@@ -482,6 +491,7 @@ def install_ui(app: FastAPI, *, bearer_token: str | None) -> None:
             "import.html",
             {
                 "active_page": "import",
+                "handoff": None,
                 "preview": None,
                 "receipt": job_ref,
                 "title": "Import Markdown",

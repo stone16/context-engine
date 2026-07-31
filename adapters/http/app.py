@@ -84,7 +84,7 @@ from adapters.http.ui_api import (
     UiArticleResponse,
     UiFeedbackResponse,
     UiImportConfirmResponse,
-    UiImportPreviewResponse,
+    UiImportPreviewOutcomeResponse,
     UiOverviewResponse,
     UiProfilesResponse,
     UiSessionResponse,
@@ -591,7 +591,7 @@ def create_app(
     @app.post(
         "/v0/ui/import/preview",
         include_in_schema=False,
-        response_model=UiImportPreviewResponse,
+        response_model=UiImportPreviewOutcomeResponse,
         dependencies=[Depends(require_closed_json_transport)],
     )
     def ui_import_preview(
@@ -614,7 +614,7 @@ def create_app(
                 source_ref=body.sourceRef,
                 path=body.path,
             ),
-            document_type=UiImportPreviewResponse,
+            document_type=UiImportPreviewOutcomeResponse,
         )
 
     @app.post(

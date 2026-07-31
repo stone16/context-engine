@@ -11,10 +11,10 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from typing import Any, Final, Literal, Protocol, cast
+from typing import Annotated, Any, Final, Literal, Protocol, cast
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, RootModel
 from sqlalchemy import Engine, text
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -38,8 +38,10 @@ from engine.persistence.role_guard import assert_control_role, assert_runtime_ro
 from engine.runtime.actor import CurrentMembershipVerification
 from engine.supply import (
     CompilationFailure,
+    CompilationFailureCode,
     MarkdownCompilerConfig,
     ParsedDocument,
+    UnsupportedConstruct,
 )
 
 _PREVIEW_TTL: Final = timedelta(minutes=10)
@@ -177,12 +179,34 @@ class UiImportFragmentResponse(BaseModel):
 class UiImportPreviewResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    kind: Literal["preview_ready"]
     compilationDigest: str = Field(strict=True, pattern=r"^[0-9a-f]{64}$")
     fragmentDigest: str = Field(strict=True, pattern=r"^[0-9a-f]{64}$")
     fragments: list[UiImportFragmentResponse] = Field(min_length=1)
     path: str = Field(strict=True, min_length=1, max_length=255)
     previewToken: str = Field(strict=True, min_length=1, max_length=4096)
     sourceRef: str = Field(strict=True, min_length=1, max_length=512)
+
+
+class UiImportScanHandoffResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["scan_handoff"]
+    path: str = Field(strict=True, min_length=1, max_length=255)
+    reason: Literal["rich_markdown_requires_leased_worker"]
+    scanCommand: str = Field(strict=True, min_length=1, max_length=1024)
+    sourceRef: str = Field(strict=True, min_length=1, max_length=512)
+    workerCommand: str = Field(strict=True, min_length=1, max_length=1024)
+
+
+type UiImportPreviewOutcome = Annotated[
+    UiImportPreviewResponse | UiImportScanHandoffResponse,
+    Field(discriminator="kind"),
+]
+
+
+class UiImportPreviewOutcomeResponse(RootModel[UiImportPreviewOutcome]):
+    pass
 
 
 class UiImportConfirmResponse(BaseModel):
@@ -742,7 +766,27 @@ class PostgreSQLUiApi:
             )
         except (LookupError, RuntimeError, TypeError, ValueError):
             raise UiApiUnavailable from None
-        if type(outcome) is CompilationFailure or type(outcome) is not ParsedDocument:
+        if type(outcome) is CompilationFailure:
+            if (
+                outcome.code is CompilationFailureCode.UNSUPPORTED_CONSTRUCT
+                and outcome.construct is UnsupportedConstruct.LINK_OR_IMAGE
+            ):
+                return {
+                    "kind": "scan_handoff",
+                    "path": import_path.value,
+                    "reason": "rich_markdown_requires_leased_worker",
+                    "scanCommand": (
+                        "uv run context-engine-control scan --organization-id "
+                        '"$CONTEXT_ENGINE_OPERATOR_ORGANIZATION_ID" '
+                        f'--source-ref "{source_ref}"'
+                    ),
+                    "sourceRef": str(source_ref),
+                    "workerCommand": (
+                        "uv run context-engine-worker --dispatch-file-once"
+                    ),
+                }
+            raise UiApiUnavailable
+        if type(outcome) is not ParsedDocument:
             raise UiApiUnavailable
         fragments = [
             {
@@ -768,6 +812,7 @@ class PostgreSQLUiApi:
             "sourceRef": str(source_ref),
         }
         return {
+            "kind": "preview_ready",
             "compilationDigest": outcome.compilation_digest,
             "fragmentDigest": fragment_digest,
             "fragments": fragments,
