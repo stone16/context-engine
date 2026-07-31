@@ -11,7 +11,8 @@ description: >
 
 - Status: accepted
 - Date: 2026-07-31
-- Refines: ADR-0038, ADR-0075, ADR-0076, ADR-0077, ADR-0079, ADR-0083
+- Refines: ADR-0038, ADR-0071, ADR-0075, ADR-0076, ADR-0077, ADR-0079,
+  ADR-0083
 
 ## Context
 
@@ -50,7 +51,11 @@ ADR-0075 requires.
    compiler refusal retains only its closed refusal category.
 3. The File scanner verifies the accepted byte identity and schedules work but
    does not compile or predict a refusal. Durable compilation and refusal
-   classification belong to the exact leased Supply worker.
+   classification belong to the exact leased Supply worker. This retires
+   ADR-0071's `compilationRefusals` scan-report field and aggregate because a
+   scanner that no longer compiles cannot measure either value honestly;
+   worker-observed refusal categories remain in the separate worker and status
+   contracts.
 4. Link extraction is a deterministic ContextEngine-owned derivation over
    validated rich-v3 section source. It recognizes local wikilinks, embeds,
    inline links, and reference links; masks inline and fenced code; resolves
