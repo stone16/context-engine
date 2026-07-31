@@ -11,6 +11,7 @@ export {
 
 export {
   BotDelivery,
+  PrivateFeishuEventIngressTwin,
   PrivateDeliveryAuditBoundary,
   VerifiedCitationOpen,
   VerifiedQuestionTurn,
@@ -39,6 +40,9 @@ export type {
   DeliveryReceipt,
   DeliveryReconciliationRequired,
   IdentityNotBound,
+  PrivateFeishuAskerMapping,
+  PrivateFeishuCitationEvent,
+  PrivateFeishuQuestionEvent,
   VerifyCitationOpenInput,
   VerifyQuestionTurnInput,
 } from "./private-delivery.js";

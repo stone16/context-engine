@@ -3,7 +3,7 @@
 import {
   ActionPlane,
   ActionTicketKeyring,
-  DeterministicPrivateSenderTwin,
+  ExactPrivateFeishuSenderTwin,
   PrivateActionPrepareProfile,
 } from "@context-engine/action-plane";
 import { ContextEngineResolveClient } from "@context-engine/resolve-sdk";
@@ -17,9 +17,8 @@ import {
 } from "./index.js";
 import {
   BotDelivery,
+  PrivateFeishuEventIngressTwin,
   PrivateFeishuIdentityTwin,
-  VerifiedCitationOpen,
-  VerifiedQuestionTurn,
   createPrivateDeliveryAuditBoundary,
   type PrivateCitationOpenFixture,
   type PrivateQuestionTurnFixture,
@@ -29,9 +28,27 @@ const { Pool } = pg;
 const SERVICE = "context-engine-bot";
 const PROCESS_TOPOLOGY = "BotDelivery + ActionPlane";
 
+interface PrivateFeishuEventProfileConfig {
+  readonly applicationId: string;
+  readonly askerMappings: readonly {
+    readonly membershipId: string;
+    readonly membershipVersion: number;
+    readonly providerAskerId: string;
+    readonly userId: string;
+  }[];
+  readonly consumerRef: string;
+  readonly maximumAgeSeconds: number;
+  readonly maximumFutureSkewSeconds: number;
+  readonly maximumLifetimeSeconds: number;
+  readonly providerTenantKey: string;
+}
+
 interface BotApplicationConfig {
   readonly actionDatabaseUrl: string;
   readonly actionSigningKey: Buffer;
+  readonly feishuEventProfile: PrivateFeishuEventProfileConfig;
+  readonly feishuSenderCredential: Buffer;
+  readonly feishuVerificationKey: Buffer;
   readonly modelEgressDatabaseUrl: string;
   readonly organizationId: string;
   readonly sdkAuthentication: string;
@@ -109,6 +126,40 @@ function loadTwinBindings(environment: NodeJS.ProcessEnv): {
   };
 }
 
+function loadFeishuEventProfile(
+  environment: NodeJS.ProcessEnv,
+): PrivateFeishuEventProfileConfig {
+  let document: unknown;
+  try {
+    document = JSON.parse(
+      requiredEnvironment(environment, "CONTEXT_ENGINE_BOT_FEISHU_EVENT_PROFILE_JSON"),
+    );
+  } catch {
+    throw new TypeError("Bot application configuration is not available");
+  }
+  const record = exactEventKeys(document, [
+    "applicationId",
+    "askerMappings",
+    "consumerRef",
+    "maximumAgeSeconds",
+    "maximumFutureSkewSeconds",
+    "maximumLifetimeSeconds",
+    "providerTenantKey",
+  ]);
+  if (record === undefined || !Array.isArray(record.askerMappings)) {
+    throw new TypeError("Bot application configuration is not available");
+  }
+  return Object.freeze(record as unknown as PrivateFeishuEventProfileConfig);
+}
+
+function secretBytes(environment: NodeJS.ProcessEnv, name: string): Buffer {
+  const value = requiredEnvironment(environment, name);
+  if (!/^[0-9a-f]{64,}$/.test(value) || value.length % 2 !== 0) {
+    throw new TypeError("Bot application configuration is not available");
+  }
+  return Buffer.from(value, "hex");
+}
+
 function requireProcessOwnedOrganization(
   bindings: ReturnType<typeof loadTwinBindings>,
   organizationId: string,
@@ -142,6 +193,21 @@ export function loadBotApplicationConfig(
     throw new TypeError("Bot application configuration is not available");
   }
   requireProcessOwnedOrganization(twinBindings, organizationId);
+  const feishuEventProfile = loadFeishuEventProfile(environment);
+  if (
+    [...twinBindings.questionTurns, ...twinBindings.citationOpens].some((eventBinding) =>
+      eventBinding.consumerRef !== feishuEventProfile.consumerRef
+      || eventBinding.organizationId !== organizationId
+      || !feishuEventProfile.askerMappings.some((mapping) =>
+        mapping.providerAskerId === eventBinding.providerAskerId
+        && mapping.membershipId === eventBinding.membershipId
+        && mapping.membershipVersion === eventBinding.membershipVersion
+        && mapping.userId === eventBinding.userId
+      )
+    )
+  ) {
+    throw new TypeError("Bot application configuration is not available");
+  }
   const signingKeyHex = requiredEnvironment(
     environment,
     "CONTEXT_ENGINE_BOT_ACTION_SIGNING_KEY_HEX",
@@ -155,6 +221,15 @@ export function loadBotApplicationConfig(
       "context_engine_action",
     ),
     actionSigningKey: Buffer.from(signingKeyHex, "hex"),
+    feishuEventProfile,
+    feishuSenderCredential: secretBytes(
+      environment,
+      "CONTEXT_ENGINE_BOT_FEISHU_SENDER_CREDENTIAL_HEX",
+    ),
+    feishuVerificationKey: secretBytes(
+      environment,
+      "CONTEXT_ENGINE_BOT_FEISHU_VERIFICATION_KEY_HEX",
+    ),
     modelEgressDatabaseUrl: requireDatabaseRole(
       requiredEnvironment(environment, "CONTEXT_ENGINE_BOT_MODEL_EGRESS_DATABASE_URL"),
       "context_engine_egress",
@@ -196,7 +271,6 @@ function exactEventKeys(
 
 async function dispatchTwinEvent(
   delivery: BotDelivery,
-  identityTwin: PrivateFeishuIdentityTwin,
   line: string,
 ): Promise<Readonly<Record<string, unknown>>> {
   if (Buffer.byteLength(line, "utf8") > 65_536) {
@@ -212,32 +286,16 @@ async function dispatchTwinEvent(
     ? (value as Readonly<Record<string, unknown>>).kind
     : undefined;
   if (kind === "answer") {
-    const event = exactEventKeys(
-      value,
-      ["eventVerificationRef", "kind", "question", "turnRef"],
-    );
+    const envelope = exactEventKeys(value, ["event", "kind"]);
+    const event = envelope?.event;
     if (event === undefined) return { kind: "delivery_not_available" };
-    const turn = identityTwin.verifyQuestionTurn({
-      eventVerificationRef: event.eventVerificationRef as string,
-      question: event.question as string,
-      turnRef: event.turnRef as string,
-    });
-    if (!(turn instanceof VerifiedQuestionTurn)) return { kind: "delivery_not_available" };
-    return await delivery.answer(turn) as unknown as Readonly<Record<string, unknown>>;
+    return await delivery.answerFeishuEvent(event as never) as unknown as Readonly<Record<string, unknown>>;
   }
   if (kind === "open_citation") {
-    const event = exactEventKeys(
-      value,
-      ["citationOpenRef", "eventVerificationRef", "kind", "openRef"],
-    );
+    const envelope = exactEventKeys(value, ["event", "kind"]);
+    const event = envelope?.event;
     if (event === undefined) return { kind: "citation_not_available" };
-    const open = identityTwin.verifyCitationOpen({
-      citationOpenRef: event.citationOpenRef as string,
-      eventVerificationRef: event.eventVerificationRef as string,
-      openRef: event.openRef as string,
-    });
-    if (!(open instanceof VerifiedCitationOpen)) return { kind: "citation_not_available" };
-    const outcome = await delivery.openCitation(open);
+    const outcome = await delivery.openFeishuCitationEvent(event as never);
     return outcome.kind === "opened"
       ? {
           kind: "opened",
@@ -265,10 +323,21 @@ async function runApplication(config: BotApplicationConfig): Promise<void> {
     profile: modelProfile,
     text: config.twinModelMode === "invalid_output" ? "" : config.twinAnswer,
   });
-  const sender = new DeterministicPrivateSenderTwin({ mode: config.twinSenderMode });
   const identityTwin = new PrivateFeishuIdentityTwin({
     citationOpens: config.twinCitationOpens,
     questionTurns: config.twinQuestionTurns,
+  });
+  const eventIngress = new PrivateFeishuEventIngressTwin({
+    ...config.feishuEventProfile,
+    identityTwin,
+    organizationId: config.organizationId,
+    verificationKey: config.feishuVerificationKey,
+  });
+  const sender = new ExactPrivateFeishuSenderTwin({
+    applicationId: config.feishuEventProfile.applicationId,
+    credential: config.feishuSenderCredential,
+    mode: config.twinSenderMode,
+    providerTenantKey: config.feishuEventProfile.providerTenantKey,
   });
   const delivery = new BotDelivery({
     actionPlane: new ActionPlane({
@@ -279,8 +348,9 @@ async function runApplication(config: BotApplicationConfig): Promise<void> {
       }),
       profile: new PrivateActionPrepareProfile({
         approvalTier: "preapproved_private_delivery_v1",
-        authenticatedServiceRef: "application:file-tracer",
-        consumerRef: "consumer:file-tracer",
+        authenticatedServiceRef: config.twinQuestionTurns[0]?.authenticatedServiceRef
+          ?? "application:file-tracer",
+        consumerRef: config.feishuEventProfile.consumerRef,
         maximumPayloadBytes: 4_096,
         organizationId: config.organizationId,
         profileRef: "private-action-prepare-v1",
@@ -299,6 +369,7 @@ async function runApplication(config: BotApplicationConfig): Promise<void> {
       authentication: config.sdkAuthentication,
       baseUrl: config.sdkBaseUrl,
     }),
+    eventIngress,
     identityTwin,
     modelBoundary: createPrivateModelGenerationBoundary({
       databaseUrl: config.modelEgressDatabaseUrl,
@@ -311,6 +382,7 @@ async function runApplication(config: BotApplicationConfig): Promise<void> {
 
   process.stdout.write(`${JSON.stringify({
     delivery: "private-file-twin",
+    feishu: "private-event-and-sender-twins",
     processTopology: PROCESS_TOPOLOGY,
     service: SERVICE,
     status: "ready",
@@ -319,7 +391,7 @@ async function runApplication(config: BotApplicationConfig): Promise<void> {
   const consume = (async (): Promise<void> => {
     for await (const line of lines) {
       if (line.length === 0) continue;
-      const outcome = await dispatchTwinEvent(delivery, identityTwin, line);
+      const outcome = await dispatchTwinEvent(delivery, line);
       process.stdout.write(`${JSON.stringify({
         gateway: { callCount: gateway.callCount, outboundBytes: gateway.outboundBytes },
         outcome,
@@ -340,6 +412,7 @@ async function main(): Promise<void> {
   if (process.argv.slice(2).includes("--test-mode")) {
     process.stdout.write(`${JSON.stringify({
       delivery: "private-file-twin",
+      feishu: "private-event-and-sender-twins",
       processTopology: PROCESS_TOPOLOGY,
       service: SERVICE,
       status: "test-complete",

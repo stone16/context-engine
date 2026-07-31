@@ -34,6 +34,18 @@ Citation events use a separate exact current evidence binding through the same
 SDK. Live Feishu/model/Sender providers, streaming, group delivery,
 compensation/delete, Continue, and MCP remain inactive.
 
+Issue #133 adds the ADR-0089 provider-facing conformance replacements without
+adding a process or alternate composition. `PrivateFeishuEventIngressTwin`
+accepts one bounded signed question or citation envelope and verifies application, provider
+tenant, Organization, consumer, event/request kind, trusted lifetime, private
+destination, exact asker-to-User/Membership mapping, and replay state before a
+nominal turn and its configured opaque evidence reference are reachable. The
+sealed `ExactPrivateFeishuSenderTwin` is reachable only through
+`ActionPlane.perform` and consumes one exact operation, payload, destination,
+ticket-derived provider idempotency key, and durable provider attempt. Both are
+network-free twins; live Feishu credentials and network calls remain
+`NOT_ACTIVE` pending provider-conformance evidence.
+
 The installed package root intentionally does not export the process-private
 identity twin constructor or its fixture shapes. The shipped Bot binary loads
 the deterministic binding document from its credential/configuration boundary,
@@ -44,14 +56,16 @@ EgressGrant bearer.
 
 The process configuration contract consists of the generated-SDK base URL and
 authentication, dedicated action and egress database URLs, action signing key,
-Organization ID, deterministic answer/citation settings, and one closed twin
-binding document. Environment variable names are defined and validated in
+Organization ID, deterministic answer/citation settings, one closed twin
+binding document, one closed Feishu verification profile, and process-held
+verification/Sender secret bytes. Environment variable names are defined and validated in
 `src/main.ts`; live values belong only in the ignored generated database/config
-sources and must never be committed. The twin binding document has exactly
+sources and must never be committed, rendered, logged, or placed in an event,
+Package, effect payload, receipt, or audit record. The twin binding document has exactly
 `questionTurns` and `citationOpens` arrays. Stdin accepts exactly an `answer`
-event (`kind`, `turnRef`, `eventVerificationRef`, `question`) or an
-`open_citation` event (`kind`, `openRef`, `eventVerificationRef`,
-`citationOpenRef`) per line. A normal startup emits one readiness record; each
+envelope (`kind`, `event`) whose event is the closed signed private-question
+shape, or an `open_citation` envelope whose event is the closed signed
+private-citation shape. A normal startup emits one readiness record; each
 line then emits one body/bearer-free outcome and deterministic counter record.
 The deterministic process also accepts closed `generated | invalid_output`
 model and `applied | rejected | ambiguous` Sender twin modes; they are bounded

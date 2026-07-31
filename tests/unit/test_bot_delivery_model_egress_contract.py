@@ -58,6 +58,6 @@ def test_typescript_model_egress_is_closed_pinned_and_zero_byte_on_denial() -> N
             timeout=30,
         )
         assert completed.returncode == 0, completed.stdout + completed.stderr
-    assert "tests 17" in completed.stdout
-    assert "pass 17" in completed.stdout
+    assert "tests 25" in completed.stdout
+    assert "pass 25" in completed.stdout
     assert "fail 0" in completed.stdout

@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import { test } from "node:test";
 
 import {
   ActionPlane,
   ActionTicketKeyring,
   DeterministicPrivateSenderTwin,
+  ExactPrivateFeishuSenderTwin,
   PrivateActionPrepareProfile,
 } from "@context-engine/action-plane";
 import { ContextEngineResolveClient } from "@context-engine/resolve-sdk";
@@ -15,6 +16,7 @@ import pg from "pg";
 import {
   BotDelivery,
   DeterministicModelGatewayTwin,
+  PrivateFeishuEventIngressTwin,
   VerifiedCitationOpen,
   VerifiedQuestionTurn,
   createPrivateDeliveryAuditBoundary,
@@ -37,6 +39,8 @@ const grantValues = [
   `egrm_${"4".repeat(64)}`,
   `egrm_${"5".repeat(64)}`,
 ];
+const feishuVerificationKey = Buffer.alloc(32, 0x45);
+const feishuEventDomain = Buffer.from("context-engine.private-feishu-event.v1\0");
 
 function contextPackage(purpose, sequence) {
   const evidence = {
@@ -108,10 +112,93 @@ function questionFixture(turnRef, deliveryEvidenceRef, finalEffect, requestId, q
     policyEpoch: 7,
     purpose: "context.answer",
     question,
+    providerAskerId: "feishu-user:42",
     requestId,
     turnRef,
     userId,
   };
+}
+
+function signedFeishuQuestionEvent(overrides = {}, key = feishuVerificationKey) {
+  const unsigned = {
+    applicationId: "feishu-app:private-bot",
+    askerProviderId: "feishu-user:42",
+    consumerRef: "consumer:private-bot",
+    destinationKind: "p2p",
+    destinationRef: "private-chat:42",
+    eventId: "feishu-event:answer-1",
+    eventKind: "im.message.receive_v1",
+    expiresAt: new Date(now.getTime() + 60_000).toISOString(),
+    issuedAt: now.toISOString(),
+    kind: "question",
+    organizationId,
+    providerTenantKey: "feishu-tenant:private-bot",
+    purpose: "context.answer",
+    question: "What does ContextEngine deliver?",
+    requestId: "bot-answer-1",
+    requestKind: "acquire",
+    turnRef: "turn-finalize",
+    ...overrides,
+  };
+  return {
+    ...unsigned,
+    signature: createHmac("sha256", key)
+      .update(feishuEventDomain)
+      .update(canonicalize(unsigned))
+      .digest("hex"),
+  };
+}
+
+function signedFeishuCitationEvent(overrides = {}, key = feishuVerificationKey) {
+  const unsigned = {
+    applicationId: "feishu-app:private-bot",
+    askerProviderId: "feishu-user:42",
+    citationOpenRef,
+    consumerRef: "consumer:private-bot",
+    destinationKind: "p2p",
+    destinationRef: "private-chat:42",
+    eventId: "feishu-event:citation-1",
+    eventKind: "card.action.trigger_v1",
+    expiresAt: new Date(now.getTime() + 60_000).toISOString(),
+    issuedAt: now.toISOString(),
+    kind: "citation_open",
+    openRef: "citation-open-1",
+    organizationId,
+    providerTenantKey: "feishu-tenant:private-bot",
+    purpose: "citation.open",
+    requestId: "bot-citation-request-1",
+    requestKind: "open_citation",
+    ...overrides,
+  };
+  return {
+    ...unsigned,
+    signature: createHmac("sha256", key)
+      .update(feishuEventDomain)
+      .update(canonicalize(unsigned))
+      .digest("hex"),
+  };
+}
+
+function feishuIngress(identityTwin, overrides = {}) {
+  return new PrivateFeishuEventIngressTwin({
+    applicationId: "feishu-app:private-bot",
+    askerMappings: [{
+      membershipId,
+      membershipVersion: 7,
+      providerAskerId: "feishu-user:42",
+      userId,
+    }],
+    clock: () => now,
+    consumerRef: "consumer:private-bot",
+    identityTwin,
+    maximumAgeSeconds: 120,
+    maximumFutureSkewSeconds: 5,
+    maximumLifetimeSeconds: 120,
+    organizationId,
+    providerTenantKey: "feishu-tenant:private-bot",
+    verificationKey: feishuVerificationKey,
+    ...overrides,
+  });
 }
 
 function citationFixture(deliveryEvidenceRef) {
@@ -130,6 +217,7 @@ function citationFixture(deliveryEvidenceRef) {
     organizationId,
     policyEpoch: 7,
     purpose: "citation.open",
+    providerAskerId: "feishu-user:42",
     requestId: "bot-citation-request-1",
     userId,
   };
@@ -272,7 +360,7 @@ function configuredDelivery(options = {}) {
   pg.Pool.prototype.end = async function end() {};
 
   const action = actionDatabase();
-  const sender = new DeterministicPrivateSenderTwin({
+  const sender = options.sender ?? new DeterministicPrivateSenderTwin({
     mode: options.senderMode ?? "applied",
   });
   const actionPlane = new ActionPlane({
@@ -301,11 +389,15 @@ function configuredDelivery(options = {}) {
   ];
   const citationOpens = [citationFixture(`der_${"8".repeat(64)}`)];
   const identityTwin = new PrivateFeishuIdentityTwin({ citationOpens, questionTurns });
+  const eventIngress = options.feishuIngressOptions === undefined
+    ? undefined
+    : feishuIngress(identityTwin, options.feishuIngressOptions);
   const auditBoundary = createPrivateDeliveryAuditBoundary({
     databaseUrl: "postgresql://context_engine_action:unused@127.0.0.1/action-unit",
     organizationId,
   });
   let deliveryAttempt = 1;
+  const deliveryAttempts = [];
   let auditRef = 1;
   const delivery = new BotDelivery({
     actionPlane,
@@ -315,8 +407,12 @@ function configuredDelivery(options = {}) {
       baseUrl: "https://context-engine.invalid",
     }),
     clock: () => now,
-    deliveryAttemptRefFactory: () =>
-      `dla_${(deliveryAttempt++).toString(16).padStart(32, "0")}`,
+    deliveryAttemptRefFactory: () => {
+      const value = `dla_${(deliveryAttempt++).toString(16).padStart(32, "0")}`;
+      deliveryAttempts.push(value);
+      return value;
+    },
+    ...(eventIngress === undefined ? {} : { eventIngress }),
     identityTwin,
     modelBoundary: createPrivateModelGenerationBoundary({
       databaseUrl: "postgresql://context_engine_egress:unused@127.0.0.1/model-unit",
@@ -333,6 +429,8 @@ function configuredDelivery(options = {}) {
     auditRecords,
     citationOpens,
     delivery,
+    deliveryAttempts,
+    eventIngress,
     gateway,
     identityTwin,
     questionTurns,
@@ -466,6 +564,197 @@ test("unbound inputs and unavailable citation are generic before model or Sender
     assert.equal(fixture.requests.length, 0);
     assert.throws(() => new VerifiedQuestionTurn(), /identity-adapter constructed/);
     assert.throws(() => new VerifiedCitationOpen(), /identity-adapter constructed/);
+  } finally {
+    await fixture.delivery.close();
+    fixture.restore();
+  }
+});
+
+test("ADR-0089 valid private event mints one nominal turn and one opaque evidence issuance", async () => {
+  const fixture = configuredDelivery({ feishuIngressOptions: {} });
+  const ingress = fixture.eventIngress;
+  try {
+    const outcome = await fixture.delivery.answerFeishuEvent(signedFeishuQuestionEvent());
+    assert.equal(ingress.acceptedEventCount, 1);
+    assert.equal(ingress.evidenceIssuanceCount, 1);
+    assert.equal(ingress.verifiedTurnCount, 1);
+    assert.deepEqual(outcome, {
+      deliveryAttemptRef: `dla_${"1".padStart(32, "0")}`,
+      finalStatus: "finalized",
+      kind: "delivered",
+      operationReceiptRefs: {
+        final: `acr_${(31).toString(16).padStart(32, "0")}`,
+        placeholder: `acr_${(30).toString(16).padStart(32, "0")}`,
+      },
+      packageDigest: contextPackage("context.answer", 1).packageDigest,
+      restrictedAuditRef: `bda_${"1".padStart(32, "0")}`,
+    });
+    assert.deepEqual(Object.keys(fixture.requests[0].body).sort(), ["kind", "need"]);
+    assert.equal(JSON.stringify(fixture.requests[0].body).includes("feishu-"), false);
+    assert.equal(
+      fixture.requests[0].headers["x-context-delivery-evidence-ref"],
+      fixture.questionTurns[0].deliveryEvidenceRef,
+    );
+  } finally {
+    await fixture.delivery.close();
+    fixture.restore();
+  }
+});
+
+test("ADR-0089 invalid events are generic before every trusted mint point", async () => {
+  const poisonedSecret = Buffer.from("provider-secret-material-must-not-leak");
+  const cases = [
+    ["forged signature", {}, Buffer.alloc(32, 0x66)],
+    ["envelope integrity", { question: "tampered after signing" }, undefined, true],
+    ["expired", { expiresAt: new Date(now.getTime() - 1).toISOString() }],
+    ["stale", { issuedAt: new Date(now.getTime() - 121_000).toISOString() }],
+    ["future", { issuedAt: new Date(now.getTime() + 6_000).toISOString() }],
+    ["wrong application", { applicationId: "feishu-app:wrong" }],
+    ["wrong tenant", { providerTenantKey: "feishu-tenant:wrong" }],
+    ["wrong Organization", { organizationId: "c938bc5b-16d4-49f1-befd-75ce8f15cf73" }],
+    ["wrong asker", { askerProviderId: "feishu-user:wrong" }],
+    ["wrong consumer", { consumerRef: "consumer:wrong" }],
+    ["wrong purpose", { purpose: "citation.open" }],
+    ["wrong request", { requestId: "bot-answer-wrong" }],
+    ["wrong request kind", { requestKind: "continue" }],
+    ["wrong event kind", { eventKind: "im.message.recalled_v1" }],
+    ["group destination", { destinationKind: "group" }],
+    ["wrong destination", { destinationRef: "private-chat:wrong" }],
+    ["question contains secret", { question: poisonedSecret.toString("utf8") }],
+  ];
+  for (const [name, mutation, key, tamperAfterSigning] of cases) {
+    const fixture = configuredDelivery({
+      feishuIngressOptions: {
+        verificationKey: name === "question contains secret"
+          ? poisonedSecret
+          : feishuVerificationKey,
+      },
+    });
+    const ingress = fixture.eventIngress;
+    try {
+      let event = signedFeishuQuestionEvent(
+        tamperAfterSigning ? {} : mutation,
+        key ?? (name === "question contains secret" ? poisonedSecret : feishuVerificationKey),
+      );
+      if (tamperAfterSigning) event = { ...event, ...mutation };
+      assert.deepEqual(
+        await fixture.delivery.answerFeishuEvent(event),
+        { kind: "delivery_not_available" },
+        name,
+      );
+      assert.deepEqual({
+        acceptedEvents: ingress.acceptedEventCount,
+        actionTickets: fixture.action.prepares.length,
+        deliveryAttempts: fixture.deliveryAttempts.length,
+        evidenceIssuances: ingress.evidenceIssuanceCount,
+        externalEffects: fixture.sender.effectCount,
+        modelBytes: fixture.gateway.outboundBytes,
+        providerAttempts: fixture.sender.callCount,
+        trustedDeliveryContexts: fixture.requests.length,
+        trustedEffectIntents: fixture.action.prepares.length,
+        trustedTurns: ingress.verifiedTurnCount,
+      }, {
+        acceptedEvents: 0,
+        actionTickets: 0,
+        deliveryAttempts: 0,
+        evidenceIssuances: 0,
+        externalEffects: 0,
+        modelBytes: 0,
+        providerAttempts: 0,
+        trustedDeliveryContexts: 0,
+        trustedEffectIntents: 0,
+        trustedTurns: 0,
+      }, name);
+      const rendered = [String(ingress), assert.throws(() => JSON.stringify(ingress))?.message]
+        .join("\n");
+      assert.equal(rendered.includes(poisonedSecret.toString("utf8")), false, name);
+    } finally {
+      await fixture.delivery.close();
+      fixture.restore();
+    }
+  }
+});
+
+test("ADR-0089 event replay is refused before a second mint or any delivery authority", async () => {
+  const questionTurns = [questionFixture(
+    "turn-finalize",
+    `der_${"6".repeat(64)}`,
+    "finalize_reply",
+    "bot-answer-1",
+    "What does ContextEngine deliver?",
+  )];
+  const identityTwin = new PrivateFeishuIdentityTwin({ citationOpens: [], questionTurns });
+  const ingress = feishuIngress(identityTwin);
+  const event = signedFeishuQuestionEvent();
+  assert.equal(ingress.verifyQuestionEvent(event) instanceof VerifiedQuestionTurn, true);
+  assert.deepEqual(ingress.verifyQuestionEvent(event), { kind: "identity_not_bound" });
+  assert.equal(ingress.evidenceIssuanceCount, 1);
+  assert.equal(ingress.verifiedTurnCount, 1);
+});
+
+test("ADR-0089 malformed and duplicate event identities mint no authority", async () => {
+  for (const [name, mutation] of [
+    ["empty event id", { eventId: "" }],
+    ["extra envelope field", { unexpected: "field" }],
+  ]) {
+    const fixture = configuredDelivery();
+    const ingress = feishuIngress(fixture.identityTwin);
+    try {
+      assert.deepEqual(ingress.verifyQuestionEvent(signedFeishuQuestionEvent(mutation)), {
+        kind: "identity_not_bound",
+      }, name);
+      assert.equal(ingress.evidenceIssuanceCount, 0, name);
+      assert.equal(ingress.verifiedTurnCount, 0, name);
+      assert.equal(fixture.action.prepares.length, 0, name);
+      assert.equal(fixture.sender.callCount, 0, name);
+    } finally {
+      await fixture.delivery.close();
+      fixture.restore();
+    }
+  }
+});
+
+test("ADR-0089 mismatched Membership mapping cannot mint a verified turn", async () => {
+  const fixture = configuredDelivery();
+  const ingress = feishuIngress(fixture.identityTwin, {
+    askerMappings: [{
+      membershipId,
+      membershipVersion: 8,
+      providerAskerId: "feishu-user:42",
+      userId,
+    }],
+  });
+  try {
+    assert.deepEqual(ingress.verifyQuestionEvent(signedFeishuQuestionEvent()), {
+      kind: "identity_not_bound",
+    });
+    assert.equal(ingress.evidenceIssuanceCount, 0);
+    assert.equal(ingress.verifiedTurnCount, 0);
+  } finally {
+    await fixture.delivery.close();
+    fixture.restore();
+  }
+});
+
+test("ADR-0089 citation open uses the same authenticated private event boundary", async () => {
+  const fixture = configuredDelivery({ feishuIngressOptions: {} });
+  try {
+    const opened = await fixture.delivery.openFeishuCitationEvent(
+      signedFeishuCitationEvent(),
+    );
+    assert.equal(opened.kind, "opened");
+    assert.equal(fixture.eventIngress.evidenceIssuanceCount, 1);
+    assert.equal(fixture.eventIngress.verifiedCitationCount, 1);
+    assert.deepEqual(Object.keys(fixture.requests[0].body).sort(), [
+      "citationOpenRef",
+      "kind",
+    ]);
+    assert.equal(JSON.stringify(fixture.requests[0].body).includes("feishu-"), false);
+    assert.deepEqual(
+      await fixture.delivery.openFeishuCitationEvent(signedFeishuCitationEvent()),
+      { kind: "citation_not_available" },
+    );
+    assert.equal(fixture.requests.length, 1);
   } finally {
     await fixture.delivery.close();
     fixture.restore();
@@ -625,5 +914,68 @@ test("Sender rejection is zero-effect and ambiguity preserves the original recon
       await fixture.delivery.close();
       fixture.restore();
     }
+  }
+});
+
+test("ADR-0089 exact Feishu Sender receives distinct exact placeholder and final effects", async () => {
+  const sender = new ExactPrivateFeishuSenderTwin({
+    applicationId: "feishu-app:private-bot",
+    clock: () => now,
+    credential: Buffer.from("sender-provider-secret-never-rendered"),
+    destinationRef: "private-chat:42",
+    mode: "applied",
+    providerTenantKey: "feishu-tenant:private-bot",
+  });
+  const fixture = configuredDelivery({ sender });
+  try {
+    const turn = fixture.identityTwin.verifyQuestionTurn({
+      eventVerificationRef: fixture.questionTurns[0].eventVerificationRef,
+      question: fixture.questionTurns[0].question,
+      turnRef: fixture.questionTurns[0].turnRef,
+    });
+    const outcome = await fixture.delivery.answer(turn);
+    assert.equal(outcome.kind, "delivered");
+    assert.equal(sender.callCount, 2);
+    assert.equal(sender.effectCount, 2);
+    const effects = sender.observations();
+    assert.deepEqual(effects.map((effect) => effect.operation), [
+      "create_placeholder",
+      "finalize_reply",
+    ]);
+    assert.equal(new Set(effects.map((effect) => effect.payloadDigest)).size, 2);
+    assert.equal(new Set(effects.map((effect) => effect.providerIdempotencyDigest)).size, 2);
+    assert.equal(new Set(effects.map((effect) => effect.providerAttemptRef)).size, 2);
+    assert.equal(JSON.stringify(effects).includes("sender-provider-secret"), false);
+  } finally {
+    await fixture.delivery.close();
+    fixture.restore();
+  }
+});
+
+test("ADR-0089 ambiguous Feishu Sender preserves original attempt without replacement authority", async () => {
+  const sender = new ExactPrivateFeishuSenderTwin({
+    applicationId: "feishu-app:private-bot",
+    credential: Buffer.from("sender-provider-secret-never-rendered"),
+    destinationRef: "private-chat:42",
+    mode: "ambiguous",
+    providerTenantKey: "feishu-tenant:private-bot",
+  });
+  const fixture = configuredDelivery({ sender });
+  try {
+    const turn = fixture.identityTwin.verifyQuestionTurn({
+      eventVerificationRef: fixture.questionTurns[0].eventVerificationRef,
+      question: fixture.questionTurns[0].question,
+      turnRef: fixture.questionTurns[0].turnRef,
+    });
+    const original = await fixture.delivery.answer(turn);
+    assert.equal(original.kind, "delivery_reconciliation_required");
+    assert.equal(sender.callCount, 1);
+    assert.equal(sender.effectCount, 1);
+    assert.deepEqual(await fixture.delivery.answer(turn), original);
+    assert.equal(sender.callCount, 1);
+    assert.equal(fixture.action.prepares.length, 1);
+  } finally {
+    await fixture.delivery.close();
+    fixture.restore();
   }
 });
