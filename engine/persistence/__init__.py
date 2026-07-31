@@ -49,6 +49,7 @@ from engine.persistence.delivery_evidence import (
     PostgreSQLDeliveryEvidenceRetentionPort,
 )
 from engine.persistence.egress import PostgreSQLEgressGrantRedemptionAuthority
+from engine.persistence.feedback import PostgreSQLFeedbackInbox
 from engine.persistence.file_imports import (
     FileImportInterrupted,
     FileImportLeaseRedemption,
@@ -165,6 +166,7 @@ __all__ = [
     "FileImportUnavailable",
     "FilePublicationBoundary",
     "PostgreSQLFileImportWorker",
+    "PostgreSQLFeedbackInbox",
     "PublishedFileImport",
     "VerifiedContextRunOperatorIdentity",
     "ResourceAccessRevocation",

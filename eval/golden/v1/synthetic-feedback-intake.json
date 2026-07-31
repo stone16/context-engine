@@ -1,0 +1,19 @@
+{
+  "entries": [
+    {
+      "answerability": "unanswerable",
+      "caseRef": "synthetic-feedback-evaluation-case",
+      "expectedAnswer": "synthetic-feedback-refusal-answer",
+      "expectedEvidence": [],
+      "hardNegativeEvidence": [],
+      "partition": "dev",
+      "query": "synthetic-feedback-evaluation-query",
+      "requiredClaims": [],
+      "slice": "single_doc",
+      "topicCluster": "synthetic-feedback-topic"
+    }
+  ],
+  "name": "synthetic-feedback-intake-fixture",
+  "schemaVersion": "context-engine-golden-set-v1",
+  "synthetic": true
+}

@@ -313,6 +313,19 @@ def record_lineage_check(
     return updated
 
 
+def bind_evaluation_report_to_release(
+    report: dict[str, object],
+    lineage_check: LineageResolutionReport,
+) -> dict[str, object]:
+    """Bind an evaluated corpus to the exact Release its lineage map names."""
+
+    updated = record_lineage_check(report, lineage_check)
+    updated["release"] = {"releaseRef": lineage_check.release_ref}
+    updated.pop("reportDigest", None)
+    updated["reportDigest"] = _report_digest(updated)
+    return updated
+
+
 def build_evaluation_report(
     golden_set: GoldenSet,
     run: EvaluationRun,

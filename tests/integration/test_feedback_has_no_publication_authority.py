@@ -54,7 +54,23 @@ def test_feedback_has_no_publication_authority(
     migration_engine = create_database_engine(migration_configuration)
     try:
         with migration_engine.begin() as connection:
-            insert_context_run(connection, lineage_identity)
+            citation = {
+                "evidenceRef": "ev_" + "6" * 64,
+                "fragmentRef": "synthetic-fragment-feedback",
+                "resourceRef": "synthetic-resource-feedback",
+                "revisionRef": "synthetic-revision-feedback",
+                "sourceRef": "synthetic-source-feedback",
+            }
+            insert_context_run(
+                connection,
+                lineage_identity,
+                outcome="delivered_authorized",
+                authorized_evidence_refs=(citation["evidenceRef"],),
+                package_ref="pkg_" + "2" * 32,
+                release_ref="rel_" + "4" * 64,
+                release_generation=7,
+                authorized_citation_lineage=(citation,),
+            )
             release_count_before = connection.execute(
                 text(
                     "SELECT count(*) FROM active_release_manifest "
@@ -128,6 +144,30 @@ def test_feedback_has_no_publication_authority(
                                 'context_runtime_capture_context_feedback'
                                 '(uuid,text,text,uuid,uuid,bigint,text,text,text)',
                                 'EXECUTE'
+                            ),
+                            has_function_privilege(
+                                'context_engine_learning',
+                                'context_learning_read_feedback_evidence'
+                                '(uuid,text)',
+                                'EXECUTE'
+                            ),
+                            has_function_privilege(
+                                'context_engine_runtime',
+                                'context_learning_read_feedback_evidence'
+                                '(uuid,text)',
+                                'EXECUTE'
+                            ),
+                            has_function_privilege(
+                                'context_engine_control',
+                                'context_learning_read_feedback_evidence'
+                                '(uuid,text)',
+                                'EXECUTE'
+                            ),
+                            has_function_privilege(
+                                'context_engine_release_operator',
+                                'context_learning_read_feedback_evidence'
+                                '(uuid,text)',
+                                'EXECUTE'
                             )
                         """
                     )
@@ -139,6 +179,65 @@ def test_feedback_has_no_publication_authority(
             "Lineage was clear",
         )
         assert release_count_after == release_count_before
-        assert privileges == (True, False, False)
+        assert privileges == (True, False, False, True, False, False, False)
     finally:
         migration_engine.dispose()
+
+
+def test_feedback_workflow_roles_cannot_issue_or_mutate_release_authority(
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    engine = create_database_engine(migration_configuration)
+    try:
+        with engine.connect() as connection:
+            privileges = {
+                (row.role_name, row.relation_name, row.privilege_name)
+                for row in connection.execute(
+                    text(
+                        """
+                        SELECT role_name, relation_name, privilege_name
+                        FROM (
+                            VALUES
+                            ('context_engine_learning',
+                             'release_operator_grant', 'INSERT'),
+                            ('context_engine_learning',
+                             'release_operator_grant', 'UPDATE'),
+                            ('context_engine_learning',
+                             'active_release_manifest', 'INSERT'),
+                            ('context_engine_learning',
+                             'active_release_manifest', 'UPDATE'),
+                            ('context_engine_runtime',
+                             'release_operator_grant', 'INSERT'),
+                            ('context_engine_control',
+                             'release_operator_grant', 'INSERT')
+                        ) AS requested(
+                            role_name, relation_name, privilege_name
+                        )
+                        WHERE has_table_privilege(
+                            role_name,
+                            'public.' || relation_name,
+                            privilege_name
+                        )
+                        """
+                    )
+                )
+            }
+            promotion_execute = connection.execute(
+                text(
+                    """
+                    SELECT count(*)
+                    FROM information_schema.routine_privileges
+                    WHERE routine_schema = 'public'
+                      AND routine_name = 'context_learning_promote_release'
+                      AND grantee IN (
+                          'context_engine_runtime', 'context_engine_control'
+                      )
+                      AND privilege_type = 'EXECUTE'
+                    """
+                )
+            ).scalar_one()
+    finally:
+        engine.dispose()
+
+    assert privileges == set()
+    assert promotion_execute == 0

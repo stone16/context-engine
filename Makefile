@@ -58,6 +58,7 @@ eval-v1:
 		--golden-set "$(GOLDEN_SET)" \
 		--lock "$(GOLDEN_LOCK)" \
 		--run "$(EVAL_RUN)" \
+		$(if $(GOLDEN_LINEAGE_MAP),--lineage-map "$(GOLDEN_LINEAGE_MAP)",) \
 		--output .context-engine/eval/golden-v1-report.json \
 		--generated-at "$(GENERATED_AT)"
 
@@ -66,6 +67,7 @@ eval-v1-execute:
 		--golden-set "$(GOLDEN_SET)" \
 		--lock "$(GOLDEN_LOCK)" \
 		--judgments "$(EVAL_JUDGMENTS)" \
+		$(if $(GOLDEN_LINEAGE_MAP),--lineage-map "$(GOLDEN_LINEAGE_MAP)",) \
 		--output .context-engine/eval/golden-v1-report.json \
 		--generated-at "$(GENERATED_AT)"
 

@@ -1,4 +1,4 @@
-"""Public ContextLearning contracts and sole release owner."""
+"""Public ContextLearning release contracts and sole release owner."""
 
 from engine.learning.contracts import (
     ContentProfileRef,

@@ -62,6 +62,7 @@ from engine.runtime.policy_epoch import (
     _observe_current_policy_epoch,
     _open_policy_epoch_authority_scope,
 )
+from engine.runtime.release_lineage import ActiveRuntimeRelease
 from engine.runtime.scope import EffectiveScope, ScopeSet, ScopeTarget
 from engine.runtime.scope_authority import (
     _close_scope_authority_scope,
@@ -184,6 +185,12 @@ def _trusted_invocation() -> Iterator[AuthenticatedInvocation]:
         _close_scope_authority_scope(scope_authority_scope)
         _close_policy_epoch_authority_scope(policy_epoch_scope)
         _close_membership_authority_scope(membership_scope)
+
+
+def _invocation_release(invocation: AuthenticatedInvocation) -> ActiveRuntimeRelease:
+    release = invocation.user_actor.active_runtime_release
+    assert release is not None
+    return release
 
 
 def _provenance() -> DecisionProvenanceReceipt:
@@ -314,9 +321,21 @@ def _run(**changes: object) -> ContextRunRecord:
         "query_digest": "2" * 64,
         "outcome": ContextRunOutcome.DELIVERED_AUTHORIZED,
         "package_digest_profile": PACKAGE_DIGEST_PROFILE,
+        "package_ref": ORGANIZATION_REF,
         "package_digest": "3" * 64,
+        "release_ref": active_runtime_release(ORGANIZATION_ID).manifest_ref,
+        "release_generation": 1,
         "package_retention_mode": PACKAGE_RETENTION_MODE,
         "authorized_evidence_refs": (EVIDENCE_REF,),
+        "authorized_citation_lineage": (
+            {
+                "evidenceRef": EVIDENCE_REF,
+                "fragmentRef": "fragment-authorized",
+                "resourceRef": "resource-authorized",
+                "revisionRef": "revision-authorized",
+                "sourceRef": "source-authorized",
+            },
+        ),
         "effective_max_tokens": 1_000,
         "effective_max_provider_calls": 8,
         "effective_max_cost_microunits": 25_000,
@@ -338,6 +357,7 @@ def _empty_run() -> ContextRunRecord:
     return _run(
         outcome=ContextRunOutcome.DELIVERED_EMPTY,
         authorized_evidence_refs=(),
+        authorized_citation_lineage=(),
         usage_tokens=0,
         usage_provider_calls=0,
         usage_cost_microunits=0,
@@ -383,6 +403,7 @@ def test_projection_builds_complete_authorized_and_empty_final_records() -> None
             final_effective_scope=FINAL_EFFECTIVE_SCOPE,
             effective_budget=EFFECTIVE_BUDGET,
             keyring=QUERY_KEYRING,
+            active_release=_invocation_release(invocation),
         )
         empty, empty_audit = build_context_run_records(
             invocation=invocation,
@@ -392,9 +413,25 @@ def test_projection_builds_complete_authorized_and_empty_final_records() -> None
             final_effective_scope=FINAL_EFFECTIVE_SCOPE,
             effective_budget=EFFECTIVE_BUDGET,
             keyring=QUERY_KEYRING,
+            active_release=_invocation_release(invocation),
         )
 
     assert authorized.outcome is ContextRunOutcome.DELIVERED_AUTHORIZED
+    assert authorized.package_ref == _authorized_package().package_id
+    assert (
+        authorized.release_ref
+        == active_runtime_release(ORGANIZATION_ID).manifest_ref
+    )
+    assert authorized.release_generation == 1
+    assert authorized.authorized_citation_lineage == (
+        {
+            "evidenceRef": EVIDENCE_REF,
+            "fragmentRef": "fragment-authorized",
+            "resourceRef": "resource-authorized",
+            "revisionRef": "revision-authorized",
+            "sourceRef": "source-authorized",
+        },
+    )
     assert authorized.authorized_evidence_refs == (EVIDENCE_REF,)
     assert authorized.package_digest == _authorized_package().package_digest
     assert authorized.query_digest != request.need.query
@@ -438,6 +475,7 @@ def test_projection_rejects_final_scope_outside_original_or_empty_scope() -> Non
             final_effective_scope=unrelated_scope,
             effective_budget=EFFECTIVE_BUDGET,
             keyring=QUERY_KEYRING,
+            active_release=_invocation_release(invocation),
         )
 
 
@@ -459,6 +497,7 @@ def test_projection_rejects_evidence_after_final_scope_veto() -> None:
             final_effective_scope=empty_scope,
             effective_budget=EFFECTIVE_BUDGET,
             keyring=QUERY_KEYRING,
+            active_release=_invocation_release(invocation),
         )
 
 
@@ -497,6 +536,7 @@ def test_projection_rejects_provenance_not_bound_to_invocation_or_package(
             final_effective_scope=FINAL_EFFECTIVE_SCOPE,
             effective_budget=EFFECTIVE_BUDGET,
             keyring=QUERY_KEYRING,
+            active_release=_invocation_release(invocation),
         )
 
 
@@ -544,6 +584,7 @@ def test_projection_rejects_evidence_lineage_not_bound_to_provenance(
             final_effective_scope=FINAL_EFFECTIVE_SCOPE,
             effective_budget=EFFECTIVE_BUDGET,
             keyring=QUERY_KEYRING,
+            active_release=_invocation_release(invocation),
         )
 
 
@@ -568,6 +609,7 @@ def test_projection_rejects_package_purpose_or_time_not_bound_to_invocation() ->
                     final_effective_scope=FINAL_EFFECTIVE_SCOPE,
                     effective_budget=EFFECTIVE_BUDGET,
                     keyring=QUERY_KEYRING,
+                    active_release=_invocation_release(invocation),
                 )
 
 
@@ -587,6 +629,7 @@ def test_projection_rejects_package_altered_after_digest_creation() -> None:
             final_effective_scope=FINAL_EFFECTIVE_SCOPE,
             effective_budget=EFFECTIVE_BUDGET,
             keyring=QUERY_KEYRING,
+            active_release=_invocation_release(invocation),
         )
 
 

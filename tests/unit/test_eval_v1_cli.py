@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import stat
 import subprocess
 import sys
 from dataclasses import replace
@@ -10,6 +11,7 @@ from typing import cast
 
 import pytest
 
+import applications.eval_v1 as eval_cli
 from applications.eval_executor import TRACKED_RUN_SEAM_REF
 from applications.eval_v1 import main
 from engine.learning.eval_report import (
@@ -22,6 +24,7 @@ from engine.learning.eval_run import (
     build_evaluation_report,
     load_evaluation_run,
 )
+from engine.learning.feedback import feedback_evidence_from_document
 from engine.learning.golden import create_golden_lock, load_golden_set
 from engine.learning.golden_storage import GOLDEN_ROOT_ENV
 from engine.learning.thresholds import load_thresholds
@@ -184,6 +187,7 @@ def test_cli_report_records_resolved_lineage_check_counts(tmp_path: Path) -> Non
         "staleCaseCount": 0,
         "totalCaseCount": len(entries),
     }
+    assert report["release"] == {"releaseRef": "synthetic-release-v1"}
 
 
 def test_cli_success_output_never_discloses_an_absolute_corpus_path(
@@ -253,6 +257,92 @@ def test_importing_cli_does_not_eagerly_import_the_run_executor() -> None:
     assert completed.returncode == 0, completed.stderr
 
 
+def test_feedback_candidate_cli_emits_only_a_path_free_candidate(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    feedback_path = tmp_path / "feedback.json"
+    case_path = tmp_path / ".context-engine/eval/case.json"
+    output_path = tmp_path / ".context-engine/eval/candidate.json"
+    case_path.parent.mkdir(parents=True)
+    feedback_path.write_text(
+        json.dumps(
+            {
+                "citations": [
+                    {
+                        "evidenceRef": "ev_" + "6" * 64,
+                        "fragmentRef": "synthetic-fragment-feedback",
+                        "resourceRef": "synthetic-resource-feedback",
+                        "revisionRef": "synthetic-revision-feedback",
+                        "sourceRef": "synthetic-source-feedback",
+                    }
+                ],
+                "feedbackRef": "fb_" + "5" * 64,
+                "note": "synthetic-feedback-note",
+                "organizationId": "00000000-0000-4000-8000-000000000152",
+                "packageDigest": "3" * 64,
+                "packageRef": "pkg_" + "2" * 32,
+                "rating": "not_helpful",
+                "recordedAt": "2026-07-31T00:00:00Z",
+                "releaseGeneration": 7,
+                "releaseRef": "rel_" + "4" * 64,
+                "runRef": "run_" + "1" * 32,
+                "schemaVersion": "context-engine-feedback-evidence-v1",
+            }
+        ),
+        encoding="utf-8",
+    )
+    case = golden_case(
+        "synthetic-feedback-case",
+        answerability="unanswerable",
+    )
+    case["hardNegativeEvidence"] = []
+    case_path.write_text(json.dumps(case), encoding="utf-8")
+    captured = feedback_evidence_from_document(
+        json.loads(feedback_path.read_text(encoding="utf-8"))
+    )
+    monkeypatch.setattr(eval_cli, "_captured_feedback", lambda *args: captured)
+
+    main(
+        [
+            "feedback-candidate",
+            "--organization-id",
+            "00000000-0000-4000-8000-000000000152",
+            "--feedback-ref",
+            "fb_" + "5" * 64,
+            "--category",
+            "retrieval",
+            "--case",
+            str(case_path),
+            "--output",
+            str(output_path),
+            "--proposed-at",
+            "2026-07-31T01:00:00Z",
+        ]
+    )
+
+    document = json.loads(output_path.read_text(encoding="utf-8"))
+    output = capsys.readouterr().out
+    assert document["schemaVersion"] == "context-engine-curation-candidate-v1"
+    assert document["category"] == "retrieval"
+    assert set(document) == {
+        "baseReleaseGeneration",
+        "baseReleaseRef",
+        "candidateDigest",
+        "candidateRef",
+        "category",
+        "evaluationCase",
+        "feedbackBinding",
+        "feedbackRef",
+        "proposedAt",
+        "schemaVersion",
+    }
+    assert str(tmp_path) not in output
+    assert "curation candidate written: digest=" in output
+    assert stat.S_IMODE(output_path.stat().st_mode) == 0o600
+
+
 def test_cli_execute_reaches_a_non_refused_report_through_an_executed_run(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -299,6 +389,7 @@ def test_cli_execute_reaches_a_non_refused_report_through_an_executed_run(
         "staleCaseCount": 0,
         "totalCaseCount": len(entries),
     }
+    assert report["release"] == {"releaseRef": "synthetic-release-v1"}
     assert report["security"] == {
         "missingContextFallbackCount": 0,
         "observationState": "observed_clean",

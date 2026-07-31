@@ -48,7 +48,7 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
     document = manifest()
     tables = table_entries(document)
 
-    assert document["manifestVersion"] == "40.0.0"
+    assert document["manifestVersion"] == "41.0.0"
     assert set(tables) == {
         "active_release_manifest",
         "action_delivery_attempt",
@@ -1122,6 +1122,7 @@ def test_issue_19_lineage_manifest_is_closed_and_role_separated() -> None:
         "ck_context_run_budget_usage_within_ceiling",
         "ck_context_run_outcome_evidence_consistency",
         "ck_context_run_timestamp_order",
+        "ck_context_run_feedback_lineage_complete",
     }
     expressions = " ".join(
         constraint["expression"] for constraint in run["checkConstraints"]
@@ -1181,13 +1182,20 @@ def test_issue_19_lineage_manifest_is_closed_and_role_separated() -> None:
             "EXECUTE read_context_run_by_operator_ticket"
         ],
         "context_engine_context_run_reader_definer": ["SELECT"],
+        "context_engine_learning": [
+            "EXECUTE context_learning_read_feedback_evidence"
+        ],
         "context_engine_worker": [],
         "context_engine_control": [
             "EXECUTE issue_context_run_operator_read_ticket",
             "EXECUTE revoke_context_run_operator_read_ticket",
         ],
     }
-    assert audit["permittedOperations"] == run["permittedOperations"]
+    assert audit["permittedOperations"] == {
+        key: value
+        for key, value in run["permittedOperations"].items()
+        if key != "context_engine_learning"
+    }
     for entry in (run, audit):
         rls = entry["rowLevelSecurity"]
         assert rls["enabled"] is True

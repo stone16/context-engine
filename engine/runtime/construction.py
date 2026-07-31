@@ -1871,6 +1871,7 @@ class Runtime:
             final_effective_scope=policy_receipt.effective_scope,
             effective_budget=decision.effective_budget,
             keyring=self._query_digest_keyring,
+            active_release=active_release,
         )
         persist_context_run(
             persistence_session,
