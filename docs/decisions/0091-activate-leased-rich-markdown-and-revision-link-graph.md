@@ -45,7 +45,10 @@ ADR-0075 requires.
    selecting the rich compiler subprocess. The child is a pure transform that
    receives source bytes, the closed configuration version, and token ceiling
    only. It receives an empty environment and no lease, Organization, actor,
-   service-principal, database, filesystem, network, or persistence authority.
+   service-principal, database connection, filesystem path, network endpoint, or
+   persistence interface. The child still executes under the parent operating-
+   system identity and imports its installed code, so this boundary does not
+   claim an OS sandbox or remove ambient filesystem and network capabilities.
    Timeout, crash, malformed output, invalid deserialization, and unexpected
    runner outcomes become one content-free typed boundary failure. A valid
    compiler refusal retains only its closed refusal category.
@@ -116,8 +119,10 @@ expanded content only after projection gives neighbours a chance to compete
 without making expansion an inclusion rule.
 
 Retiring scanner compilation assigns one durable owner to compilation outcome.
-The empty child environment makes the runner's lack of lease or actor authority
-an executable process boundary rather than a naming convention.
+The empty child environment plus the data-only protocol makes the runner's lack
+of lease, actor, database, source-path, and endpoint authority an executable
+process boundary rather than a naming convention; it is process separation, not
+an operating-system sandbox.
 
 ## Consequences
 
@@ -142,5 +147,7 @@ Revisit before adding a second hop, accepting an external URI or non-Markdown
 target, deriving edges from unvalidated or historical content, changing edge
 retention, adding per-edge or Fragment ACL data, authorizing from graph/index
 hints, moving graph relevance before authorization, making expansion automatic
-inclusion, or giving the compiler child lease, actor, persistence, filesystem,
-or network authority.
+inclusion, or giving the compiler child lease, actor, database, persistence, or
+external-service coordinates. Introducing an OS sandbox is a separate hardening
+choice that requires a portable runner contract and executable platform
+evidence.
