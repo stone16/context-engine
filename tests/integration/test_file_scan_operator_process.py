@@ -293,7 +293,7 @@ def test_status_reports_progress_freshness_and_current_compilation_refusals(
     )
     (root / "good.md").write_text("# Good\n\nPublished.\n", encoding="utf-8")
     (root / "refused.md").write_text(
-        "# Refused\n\n> category only\n",
+        "# Refused\n\n&amp;\n",
         encoding="utf-8",
     )
     source_ref = _register_activated_source(organization_id, environment)
@@ -365,7 +365,7 @@ def test_status_reports_progress_freshness_and_current_compilation_refusals(
                 {"organization_id": organization_id, "source_id": source_ref},
             ).one()
         assert retained._tuple() == ("refused.md", "unsupported_construct")
-        assert "category only" not in repr(retained._tuple())
+        assert "&amp;" not in repr(retained._tuple())
     finally:
         engine.dispose()
     successful = cast(dict[str, object], after_workers["lastSuccessfulAcquisition"])
@@ -376,7 +376,7 @@ def test_status_reports_progress_freshness_and_current_compilation_refusals(
     assert after_workers["publishWatermark"] is not None
 
     (root / "good.md").write_text(
-        "# Good changed\n\n> current content is refused\n",
+        "# Good changed\n\n&amp;\n",
         encoding="utf-8",
     )
     _scan(organization_id, source_ref, environment)
@@ -413,7 +413,7 @@ def test_scan_process_schedules_only_changed_upserts_and_existing_worker_consume
     )
     (root / "a.md").write_text("# A\n\nFirst note.\n", encoding="utf-8")
     (root / "refused.md").write_text(
-        "# Refused\n\n> blockquotes remain unsupported\n",
+        "# Refused\n\n&amp;\n",
         encoding="utf-8",
     )
     source_ref = _register_activated_source(organization_id, environment)
@@ -457,7 +457,7 @@ def test_scan_process_schedules_only_changed_upserts_and_existing_worker_consume
                     {"org": organization_id},
                 ).one()
             )
-        assert first_snapshot == (2, 1, 1)
+        assert first_snapshot == (2, 2, 2)
 
         unchanged = _scan(organization_id, source_ref, environment)
         assert unchanged == {
@@ -523,7 +523,7 @@ def test_scan_process_schedules_only_changed_upserts_and_existing_worker_consume
                     {"org": organization_id},
                 ).one()
             )
-        assert final_snapshot == (2, 2)
+        assert final_snapshot == (4, 4)
 
         with engine.connect() as connection:
             delete_effects_before = tuple(
@@ -741,7 +741,7 @@ def test_scan_process_recovers_a_complete_accepted_page_missing_its_schedule(
                     ),
                     {"org": organization_id, "source": source_ref},
                 ).one()
-            ) == (1, 1)
+            ) == (1, 2)
     finally:
         engine.dispose()
 

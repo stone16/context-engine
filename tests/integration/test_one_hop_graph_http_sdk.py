@@ -2,15 +2,16 @@ from __future__ import annotations
 
 import json
 import os
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import Thread
-from typing import cast
+from typing import Any, cast
 
 import pytest
 from sqlalchemy import Engine, text
+from starlette.types import ASGIApp
 from uvicorn import Config, Server
 
 from adapters.http.app import create_app
@@ -186,6 +187,83 @@ def _publish_path(
     )
 
 
+def _resolve_with_installed_sdk(
+    app: ASGIApp,
+    consumer_root: Path,
+    *,
+    request_id: str,
+) -> dict[str, Any]:
+    server = Server(
+        Config(
+            app,
+            host="127.0.0.1",
+            port=(port := _unused_port()),
+            log_level="warning",
+            lifespan="off",
+        )
+    )
+    thread = Thread(target=server.run, daemon=True)
+    thread.start()
+    try:
+        _wait_for_tcp(port)
+        completed = _run_sdk_process(
+            ["node", "live-empty-consumer.mjs"],
+            cwd=consumer_root,
+            env={
+                **os.environ,
+                "CONTEXT_ENGINE_SDK_BASE_URL": f"http://127.0.0.1:{port}",
+                "CONTEXT_ENGINE_SDK_QUERY": QUERY,
+                "CONTEXT_ENGINE_SDK_REQUEST_ID": request_id,
+                "CONTEXT_ENGINE_SDK_TEST_AUTHENTICATION": "synthetic-sdk-token",
+            },
+        )
+        document = json.loads(completed.stdout)
+        assert isinstance(document, dict)
+        return cast(dict[str, Any], document)
+    finally:
+        server.should_exit = True
+        thread.join(timeout=10)
+        assert not thread.is_alive()
+
+
+def _normalized_tenant_visible_bytes(
+    document: dict[str, Any],
+    *,
+    root_revision_ref: str,
+) -> bytes:
+    normalized = json.loads(json.dumps(document))
+    package = normalized["package"]
+    for field in (
+        "asOf",
+        "decisionRef",
+        "expiresAt",
+        "packageDigest",
+        "packageId",
+        "policySnapshotRef",
+        "releaseManifestRef",
+        "runRef",
+    ):
+        package[field] = f"<{field}>"
+    for block in package["blocks"]:
+        block["blockId"] = "<blockId>"
+        block["evidenceRefs"] = ["<evidenceRef>"]
+    for evidence in package["evidence"]:
+        evidence["authorizationAsOf"] = "<authorizationAsOf>"
+        evidence["decisionRef"] = "<decisionRef>"
+        evidence["evidenceRef"] = "<evidenceRef>"
+        evidence["policyEpoch"] = "<policyEpoch>"
+        evidence["policySnapshotRef"] = "<policySnapshotRef>"
+        evidence["runRef"] = "<runRef>"
+        if evidence["revisionRef"] == root_revision_ref:
+            evidence["revisionRef"] = "<rootRevisionRef>"
+    package["policyEpoch"] = "<policyEpoch>"
+    return json.dumps(
+        normalized,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+
+
 @pytest.mark.security_evidence(id="SDK-ONE-HOP-GRAPH-151", layer="runtime")
 @pytest.mark.security_evidence(id="PG-ONE-HOP-GRAPH-151", layer="postgres")
 def test_generated_sdk_one_hop_reauthorizes_and_leaves_no_denied_trace(
@@ -202,13 +280,12 @@ def test_generated_sdk_one_hop_reauthorizes_and_leaves_no_denied_trace(
         guarded_control_engine,
         payload=(
             b"# Synthetic root\n\n"
-            b"Main anchor links [[adjacent]] and [[denied]].\n"
+            b"Main anchor content.\n\n"
+            b"Graph links [[adjacent]] and [[denied]].\n"
         ),
     )
     assert scenario.token is not None
     migration_engine = create_database_engine(migration_configuration)
-    server: Server | None = None
-    server_thread: Thread | None = None
     try:
         root = _paragraph(
             run_file_import(
@@ -301,60 +378,49 @@ def test_generated_sdk_one_hop_reauthorizes_and_leaves_no_denied_trace(
             ).scalar_one()
         assert denied_fragment_count > 64
 
-        observed: list[object] = []
-        app = create_app(
-            authenticator=_RuntimeAuthenticator(
-                scenario.organization_id,
-                user_id,
-                scenario.membership_id,
-                token="synthetic-sdk-token",
-            ),
-            organization_authority=_OrganizationAuthority(),
-            membership_authority=PostgreSQLMembershipAuthority(
-                guarded_runtime_engine
-            ),
-            scope_authority=_ArticleScopeAuthority((root, adjacent, backlink, two_hop)),
-            runtime=Runtime(
-                required_kernel_dependencies(),
-                candidate_index=cast(CandidateIndex, _RootOnlyCandidateIndex(root)),
-                ranker_weights=RankerWeights(
-                    {"synthetic_main": 1.0, "graph": 2.0}
+        def application_for(
+            selected_root: CandidateRef,
+            observer: Callable[[object], None],
+        ) -> ASGIApp:
+            return create_app(
+                authenticator=_RuntimeAuthenticator(
+                    scenario.organization_id,
+                    user_id,
+                    scenario.membership_id,
+                    token="synthetic-sdk-token",
                 ),
+                organization_authority=_OrganizationAuthority(),
+                membership_authority=PostgreSQLMembershipAuthority(
+                    guarded_runtime_engine
+                ),
+                scope_authority=_ArticleScopeAuthority(
+                    (selected_root, adjacent, backlink, two_hop)
+                ),
+                runtime=Runtime(
+                    required_kernel_dependencies(),
+                    candidate_index=cast(
+                        CandidateIndex,
+                        _RootOnlyCandidateIndex(selected_root),
+                    ),
+                    ranker_weights=RankerWeights(
+                        {"synthetic_main": 1.0, "graph": 2.0}
+                    ),
+                    clock=lambda: datetime.now(UTC).replace(microsecond=0),
+                    query_digest_keyring=query_digest_keyring,
+                ),
+                resolution_observer=observer,
                 clock=lambda: datetime.now(UTC).replace(microsecond=0),
-                query_digest_keyring=query_digest_keyring,
-            ),
-            resolution_observer=observed.append,
-            clock=lambda: datetime.now(UTC).replace(microsecond=0),
-        )
-        port = _unused_port()
-        server = Server(
-            Config(
-                app,
-                host="127.0.0.1",
-                port=port,
-                log_level="warning",
-                lifespan="off",
             )
-        )
-        server_thread = Thread(target=server.run, daemon=True)
-        server_thread.start()
-        _wait_for_tcp(port)
 
         consumer_root = tmp_path / "installed-one-hop-sdk"
         consumer_root.mkdir()
         _pack_and_install_resolve_sdk(consumer_root)
-        completed = _run_sdk_process(
-            ["node", "live-empty-consumer.mjs"],
-            cwd=consumer_root,
-            env={
-                **os.environ,
-                "CONTEXT_ENGINE_SDK_BASE_URL": f"http://127.0.0.1:{port}",
-                "CONTEXT_ENGINE_SDK_QUERY": QUERY,
-                "CONTEXT_ENGINE_SDK_REQUEST_ID": "synthetic-one-hop-sdk",
-                "CONTEXT_ENGINE_SDK_TEST_AUTHENTICATION": "synthetic-sdk-token",
-            },
+        observed: list[object] = []
+        document = _resolve_with_installed_sdk(
+            application_for(root, observed.append),
+            consumer_root,
+            request_id="synthetic-one-hop-sdk-denied-neighbour",
         )
-        document = json.loads(completed.stdout)
         package = document["package"]
         serialized = json.dumps(document, sort_keys=True)
 
@@ -388,10 +454,9 @@ def test_generated_sdk_one_hop_reauthorizes_and_leaves_no_denied_trace(
         assert TWO_HOP_MARKER not in serialized
         assert package["gaps"] == []
         assert package["coverage"] == {"status": "sufficient"}
-
-        decision_ref = package["decisionRef"]
+        denied_decision_ref = package["decisionRef"]
         with migration_engine.connect() as connection:
-            run = connection.execute(
+            denied_run = connection.execute(
                 text(
                     """
                     SELECT authorized_evidence_refs, outcome
@@ -402,10 +467,10 @@ def test_generated_sdk_one_hop_reauthorizes_and_leaves_no_denied_trace(
                 ),
                 {
                     "organization_id": scenario.organization_id,
-                    "decision_ref": decision_ref,
+                    "decision_ref": denied_decision_ref,
                 },
             ).one()
-            audits = connection.execute(
+            denied_audits = connection.execute(
                 text(
                     """
                     SELECT count(*) FROM decision_audit
@@ -415,22 +480,111 @@ def test_generated_sdk_one_hop_reauthorizes_and_leaves_no_denied_trace(
                 ),
                 {
                     "organization_id": scenario.organization_id,
-                    "decision_ref": decision_ref,
+                    "decision_ref": denied_decision_ref,
                 },
             ).scalar_one()
-        assert run.outcome == "delivered_authorized"
-        assert tuple(run.authorized_evidence_refs) == tuple(
+        assert denied_run.outcome == "delivered_authorized"
+        assert tuple(denied_run.authorized_evidence_refs) == tuple(
             item["evidenceRef"] for item in package["evidence"]
         )
-        assert audits == 0
+        assert denied_audits == 0
+
+        scenario.root.joinpath("handbook.md").write_bytes(
+            b"# Synthetic root\n\n"
+            b"Main anchor content.\n\n"
+            b"Graph links [[adjacent]].\n"
+        )
+        replacement_prepared, replacement_token = prepare_repeat_file_import(
+            scenario,
+            guarded_control_engine,
+            idempotency_key="synthetic-one-hop-without-denied-edge",
+        )
+        root_without_denied = _paragraph(
+            run_file_import(
+                scenario,
+                replacement_prepared,
+                replacement_token,
+                guarded_worker_engine,
+                config_version="markdown-config-v3",
+            )
+        )
+        clear_test_runtime_release(scenario.organization_id)
+        ensure_test_runtime_release(
+            scenario.organization_id,
+            active_revision_refs=tuple(
+                sorted(
+                    {
+                        root_without_denied.revision_ref,
+                        adjacent.revision_ref,
+                        backlink.revision_ref,
+                        denied.revision_ref,
+                        two_hop.revision_ref,
+                    }
+                )
+            ),
+        )
+        baseline_observed: list[object] = []
+        baseline = _resolve_with_installed_sdk(
+            application_for(root_without_denied, baseline_observed.append),
+            consumer_root,
+            request_id="synthetic-one-hop-sdk-no-denied-neighbour",
+        )
+        denied_visible = _normalized_tenant_visible_bytes(
+            document,
+            root_revision_ref=root.revision_ref,
+        )
+        baseline_visible = _normalized_tenant_visible_bytes(
+            baseline,
+            root_revision_ref=root_without_denied.revision_ref,
+        )
+        assert denied_visible == baseline_visible
+        assert [
+            (item["resourceRef"], item["fragmentRef"])
+            for item in package["evidence"]
+        ] == [
+            (item["resourceRef"], item["fragmentRef"])
+            for item in baseline["package"]["evidence"]
+        ]
+
+        baseline_decision_ref = baseline["package"]["decisionRef"]
+        with migration_engine.connect() as connection:
+            baseline_run = connection.execute(
+                text(
+                    """
+                    SELECT authorized_evidence_refs, outcome
+                    FROM context_run
+                    WHERE organization_id = :organization_id
+                      AND decision_ref = :decision_ref
+                    """
+                ),
+                {
+                    "organization_id": scenario.organization_id,
+                    "decision_ref": baseline_decision_ref,
+                },
+            ).one()
+            baseline_audits = connection.execute(
+                text(
+                    """
+                    SELECT count(*) FROM decision_audit
+                    WHERE organization_id = :organization_id
+                      AND decision_ref = :decision_ref
+                    """
+                ),
+                {
+                    "organization_id": scenario.organization_id,
+                    "decision_ref": baseline_decision_ref,
+                },
+            ).scalar_one()
+        assert baseline_run.outcome == "delivered_authorized"
+        assert tuple(baseline_run.authorized_evidence_refs) == tuple(
+            item["evidenceRef"] for item in baseline["package"]["evidence"]
+        )
+        assert baseline_audits == 0
         assert len(observed) == 1
+        assert len(baseline_observed) == 1
         assert DENIED_MARKER not in repr(observed[0])
         assert denied.resource_ref not in repr(observed[0])
     finally:
-        if server is not None:
-            server.should_exit = True
-        if server_thread is not None:
-            server_thread.join(timeout=10)
         clear_test_runtime_release(scenario.organization_id)
         migration_engine.dispose()
         delete_file_import_scenario(

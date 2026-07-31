@@ -21,6 +21,7 @@ from engine.persistence.configuration import (
     DELIVERY_EVIDENCE_DEFINER_ROLE,
     EGRESS_GRANT_DEFINER_ROLE,
     FILE_DISPATCH_DEFINER_ROLE,
+    GRAPH_DEFINER_ROLE,
     RUNTIME_ROLE,
     WORKER_LEASE_DEFINER_ROLE,
     WORKER_ROLE,
@@ -595,6 +596,7 @@ def test_runtime_worker_and_public_grants_are_least_privilege(
             "membership_citation_definer_select",
             "membership_ui_access_definer_select",
             "membership_ui_feedback_definer_select",
+            "membership_graph_definer_select",
             "membership_migrator_administration",
         }
         runtime_policy = policies["membership_current_user_actor"]
@@ -646,6 +648,15 @@ def test_runtime_worker_and_public_grants_are_least_privilege(
             "true",
             "true",
         )
+        graph_policy = policies["membership_graph_definer_select"]
+        assert graph_policy[:3] == (
+            "PERMISSIVE",
+            (GRAPH_DEFINER_ROLE,),
+            "SELECT",
+        )
+        assert graph_policy[3] is not None
+        assert graph_policy[4] is None
+        assert "app.organization_id" in str(graph_policy[3]).lower()
 
         delivery_evidence_policy = policies[
             "membership_delivery_evidence_definer_select"

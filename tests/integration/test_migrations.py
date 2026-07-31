@@ -170,6 +170,7 @@ HEAD_TABLES = [
     "release_operator_grant",
     "release_promotion_audit",
     "resource_access_policy",
+    "revision_link_edge",
     "revision_publication_event",
     "service_principal",
     "source_article_policy_default",

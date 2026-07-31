@@ -957,7 +957,7 @@ def test_file_http_package_redeems_exact_model_grant_before_gateway_bytes(
 
         assert response.status_code == 200
         assert response.json()["package"]["blocks"][0]["text"] == (
-            "ContextEngine delivers context."
+            "# Handbook\n\nContextEngine delivers context."
         )
         wire_grant = response.json()["egressGrant"]
         assert wire_grant["kind"] == "model"
@@ -1146,7 +1146,7 @@ def test_file_http_citation_is_not_consumed_by_denied_reader(
     assert reopened.status_code == 200
     assert reopened.json()["kind"] == "resolved"
     assert reopened.json()["package"]["blocks"][0]["text"] == (
-        "ContextEngine delivers context."
+        "# Handbook\n\nContextEngine delivers context."
     )
     assert citation_ref not in json.dumps(reopened.json())
     assert citation_ref not in repr(observed)
