@@ -125,18 +125,27 @@ def _ui_import_scenario(
         )
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [
+        b"# Handbook\n\nRead [the private note](private-runbook.md).\n",
+        b"# Handbook\n\nRead [[private-runbook]].\n",
+        b"# Handbook\n\nEmbed ![[private-runbook]].\n",
+    ],
+)
 def test_link_bearing_import_preview_hands_off_to_the_leased_scan_path(
     tmp_path: Path,
     migration_configuration: DatabaseConfiguration,
     guarded_control_engine: Engine,
     guarded_runtime_engine: Engine,
+    payload: bytes,
 ) -> None:
     with _ui_import_scenario(
         tmp_path=tmp_path,
         migration_configuration=migration_configuration,
         guarded_control_engine=guarded_control_engine,
         guarded_runtime_engine=guarded_runtime_engine,
-        payload=b"# Handbook\n\nRead [the private runbook](runbook.md).\n",
+        payload=payload,
     ) as (scenario, client, migration_engine):
         with migration_engine.connect() as connection:
             job_count_before = connection.execute(
@@ -165,8 +174,7 @@ def test_link_bearing_import_preview_hands_off_to_the_leased_scan_path(
         assert "until it reports" in response.text
         assert "no_work" in response.text
         assert "previewToken" not in response.text
-        assert "the private runbook" not in response.text
-        assert "runbook.md" not in response.text
+        assert "private-runbook" not in response.text
         assert CONTROL_TOKEN not in response.text
         with migration_engine.connect() as connection:
             job_count = connection.execute(
