@@ -132,6 +132,7 @@ def _ui_import_scenario(
         b"# Handbook\n\nRead [the private note](private-runbook.md).\n",
         b"# Handbook\n\nRead [[private-runbook]].\n",
         b"# Handbook\n\nEmbed ![[private-runbook]].\n",
+        b"# Handbook\n\nRead <https://private.invalid/runbook>.\n",
         b"# Handbook\n\nFirst paragraph.\n\nRead [[private-runbook]].\n",
     ],
 )
