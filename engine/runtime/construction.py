@@ -10,7 +10,7 @@ from hmac import compare_digest
 from hmac import new as new_hmac
 from secrets import token_bytes
 from threading import Lock
-from typing import Literal, overload
+from typing import Final, Literal, overload
 from uuid import UUID
 from weakref import WeakKeyDictionary
 
@@ -158,6 +158,24 @@ from engine.runtime.trusted_inputs import _validate_trusted_invocation_and_deliv
 
 class RuntimeConfigurationError(RuntimeError):
     """Raised when the sealed Runtime composition is incomplete or invalid."""
+
+
+DEFAULT_ONE_HOP_SCANNED_PAGE_LIMIT: Final = 16
+MAX_ONE_HOP_SCANNED_PAGE_CEILING: Final = 64
+
+
+def _require_one_hop_scanned_page_limit(limit: object) -> int:
+    """Validate one corpus-independent graph examination bound."""
+
+    if (
+        type(limit) is not int
+        or not 1 <= limit <= MAX_ONE_HOP_SCANNED_PAGE_CEILING
+    ):
+        raise ValueError(
+            "one-hop scanned page limit must be a positive exact integer within "
+            "the server ceiling"
+        )
+    return limit
 
 
 def _package_budget_limits(budget: PackageBudget) -> tuple[int, int, int, int]:
@@ -1028,6 +1046,10 @@ class AuthorizationKernel:
         inherited: list[AuthorizedProjection] = []
         reauthorization_refs: list[CandidateRef] = []
         for candidate in candidates:
+            if candidate.anchor_ref in decision.expanded_candidate_refs:
+                raise ValueError(
+                    "graph expansion cannot use an expanded candidate as an anchor"
+                )
             anchor = anchors.get(candidate.anchor_ref)
             if anchor is None:
                 raise ValueError("graph candidate is not rooted in this decision")
@@ -1593,6 +1615,7 @@ class Runtime:
         content_io: RuntimeContentIo | None = None,
         candidate_index: CandidateIndex | None = None,
         candidate_submission_limit: int = DEFAULT_CANDIDATE_SUBMISSION_LIMIT,
+        one_hop_scanned_page_limit: int = DEFAULT_ONE_HOP_SCANNED_PAGE_LIMIT,
         ranker_weights: RankerWeights = UNIFORM_RANKER_WEIGHTS,
         acquire_capability: RuntimeCapability = (
             RuntimeCapability.MATERIALIZED_ACQUIRE
@@ -1635,6 +1658,12 @@ class Runtime:
             raise RuntimeConfigurationError(
                 "candidate submission limit must be a server-owned positive bound"
             ) from error
+        try:
+            _require_one_hop_scanned_page_limit(one_hop_scanned_page_limit)
+        except ValueError as error:
+            raise RuntimeConfigurationError(
+                "one-hop scanned page limit must be a server-owned positive bound"
+            ) from error
         if type(
             acquire_capability
         ) is not RuntimeCapability or acquire_capability not in {
@@ -1655,6 +1684,7 @@ class Runtime:
         self._content_io = selected_content_io
         self._candidate_discovery_enabled = candidate_index is not None
         self._candidate_submission_limit = candidate_submission_limit
+        self._one_hop_scanned_page_limit = one_hop_scanned_page_limit
         if type(ranker_weights) is not RankerWeights:
             raise RuntimeConfigurationError("ranker weights must be server-owned")
         self._ranker_weights = ranker_weights
@@ -1858,7 +1888,11 @@ class Runtime:
                 main_candidate_refs = set(candidate_refs)
                 graph_limit = min(64, self._candidate_submission_limit)
                 graph_offset = 0
-                while len(decision.expanded_candidate_refs) < graph_limit:
+                scanned_pages = 0
+                while (
+                    len(decision.expanded_candidate_refs) < graph_limit
+                    and scanned_pages < self._one_hop_scanned_page_limit
+                ):
                     page_limit = graph_limit - len(
                         decision.expanded_candidate_refs
                     )
@@ -1868,6 +1902,7 @@ class Runtime:
                         page_limit,
                         graph_offset,
                     )
+                    scanned_pages += 1
                     if not one_hop_page:
                         break
                     graph_offset += len(one_hop_page)

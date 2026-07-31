@@ -96,9 +96,13 @@ ADR-0075 requires.
    sufficiency, ContextRun, or DecisionAudit. The resolver reads deterministic
    pages of at most 64 graph locators and sends every cross-Article locator
    through the unchanged Kernel. It continues until the one-hop graph is
-   exhausted or 64 expanded candidates have been authorized, so refused
-   locators can increase only internal work and cannot consume the authorized
-   expansion bound.
+   exhausted, 64 expanded candidates have been authorized, or the configured
+   `one_hop_scanned_page_limit` is reached. That page limit is a server-owned,
+   corpus-independent, refusal-outcome-independent bound validated at Runtime
+   composition against `MAX_ONE_HOP_SCANNED_PAGE_CEILING`; reaching it ends
+   expansion without an error, count, gap, or other tenant-visible distinction.
+   Refused locators therefore consume neither the authorized expansion bound nor
+   unbounded graph examination work.
 10. The graph SQL is owned by a NOLOGIN, NOINHERIT least-privilege definer. It
     may select only Organization-scoped graph and locator tables under FORCE
     RLS. Runtime may execute the bounded resolver but receives no direct graph
@@ -132,9 +136,11 @@ an operating-system sandbox.
   lineage, but the graph itself grants no access and exposes no content.
 - A denied neighbour is indistinguishable from an absent or irrelevant
   neighbour in tenant-visible delivery and authorized-only retained lineage.
-- Each graph read is bounded to 64 candidates, and the authorized expansion set
-  is bounded to 64. Reads are never recursively applied; refused neighbours
-  cannot consume the authorized bound.
+- Each graph read and the authorized expansion set are bounded to 64, and the
+  number of graph pages examined in one resolve is independently bounded by the
+  validated server-owned scanned-page ceiling. Reads are never recursively
+  applied; refused neighbours cannot consume the authorized bound or extend
+  graph examination past that same request-wide page ceiling.
 - Existing databases gain one FORCE-RLS tenant table and one least-privilege
   graph definer role; the security manifest and executable evidence denominator
   include both.
@@ -147,7 +153,8 @@ Revisit before adding a second hop, accepting an external URI or non-Markdown
 target, deriving edges from unvalidated or historical content, changing edge
 retention, adding per-edge or Fragment ACL data, authorizing from graph/index
 hints, moving graph relevance before authorization, making expansion automatic
-inclusion, or giving the compiler child lease, actor, database, persistence, or
-external-service coordinates. Introducing an OS sandbox is a separate hardening
-choice that requires a portable runner contract and executable platform
-evidence.
+inclusion, increasing the scanned-page hard ceiling, making the examination bound
+depend on corpus or refusal outcomes, or giving the compiler child lease, actor,
+database, persistence, or external-service coordinates. Introducing an OS
+sandbox is a separate hardening choice that requires a portable runner contract
+and executable platform evidence.

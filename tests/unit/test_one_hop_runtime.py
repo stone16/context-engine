@@ -2,13 +2,26 @@ from __future__ import annotations
 
 from typing import cast
 
+import pytest
+
 from engine.runtime.authorized_ranking import RankerWeights
 from engine.runtime.budget import PackageBudget
-from engine.runtime.construction import Runtime, required_kernel_dependencies
+from engine.runtime.construction import (
+    DEFAULT_SERVER_PACKAGE_BUDGET,
+    MAX_ONE_HOP_SCANNED_PAGE_CEILING,
+    Runtime,
+    RuntimeConfigurationError,
+    _construct_authorization_kernel_and_selector,
+    _OpaqueReferenceIssuer,
+    required_kernel_dependencies,
+)
 from engine.runtime.content_io import CandidateIndex
 from engine.runtime.contracts import Acquire, ContextNeed, Resolved
 from engine.runtime.evidence import CandidateRef
-from engine.runtime.materialized import MaterializedOneHopCandidate
+from engine.runtime.materialized import (
+    MaterializedOneHopCandidate,
+    MaterializedProjectionSession,
+)
 from engine.runtime.scope import ScopeSet, ScopeTarget
 from tests.support.context_run import TEST_QUERY_DIGEST_KEYRING
 from tests.unit.test_runtime_authorized_evidence import (
@@ -89,6 +102,42 @@ def _allow_articles(invocation: object, *candidates: CandidateRef) -> None:
         object.__setattr__(snapshot, operand_name, allowed)
 
 
+def _graph_ref(ordinal: int) -> CandidateRef:
+    return CandidateRef(
+        organization_id=AUTHORIZED.organization_id,
+        source_ref=AUTHORIZED.source_ref,
+        resource_ref=f"resource:graph-{ordinal:03d}",
+        revision_ref=f"{ordinal + 500:08x}-0000-4000-8000-000000000000",
+        fragment_ref=f"fragment:graph-{ordinal:03d}",
+    )
+
+
+def _normalized_tenant_surface(outcome: Resolved) -> tuple[object, ...]:
+    package = outcome.package
+    return (
+        outcome.kind,
+        package.purpose,
+        package.audience_digest,
+        package.ttl_seconds,
+        tuple(block.body for block in package.blocks),
+        tuple(
+            (
+                item.source_ref,
+                item.resource_ref,
+                item.revision_ref,
+                item.fragment_ref,
+                item.projected_field_refs,
+            )
+            for item in package.evidence
+        ),
+        package.gaps,
+        package.budget_usage,
+        package.coverage,
+        outcome.effective_budget,
+        outcome.scope_decision,
+    )
+
+
 def test_one_hop_runs_only_from_authorized_main_results_and_reauthorizes() -> None:
     index = HostileCandidateIndex((AUTHORIZED, DENIED))
     port = OneHopMaterializedPort()
@@ -111,6 +160,146 @@ def test_one_hop_runs_only_from_authorized_main_results_and_reauthorizes() -> No
     assert [block.body for block in outcome.package.blocks] == ["A-safe"]
     assert locator(AUTHORIZED_SECOND) not in port.body_calls
     assert locator(DENIED) not in port.body_calls
+
+
+def test_every_one_hop_page_stays_anchored_to_main_path_projections() -> None:
+    index = HostileCandidateIndex((AUTHORIZED,))
+    refused = tuple(_graph_ref(ordinal) for ordinal in range(64))
+    port = OneHopMaterializedPort((AUTHORIZED_SECOND, *refused))
+    runtime = Runtime(
+        required_kernel_dependencies(),
+        candidate_index=cast(CandidateIndex, index),
+        clock=lambda: AS_OF,
+        query_digest_keyring=TEST_QUERY_DIGEST_KEYRING,
+    )
+
+    with trusted_operands(port) as (invocation, delivery):
+        _allow_articles(invocation, AUTHORIZED, AUTHORIZED_SECOND)
+        runtime.resolve(
+            invocation,
+            delivery,
+            Acquire(need=ContextNeed(query="main-path-only graph anchors")),
+        )
+
+    assert [anchors for anchors, _limit, _offset in port.graph_calls] == [
+        (AUTHORIZED,),
+        (AUTHORIZED,),
+    ]
+
+
+def test_kernel_refuses_an_expanded_candidate_as_a_later_anchor() -> None:
+    kernel, _selector = _construct_authorization_kernel_and_selector(
+        required_kernel_dependencies()
+    )
+    port = OneHopMaterializedPort()
+    with trusted_operands(port) as (invocation, delivery):
+        _allow_articles(invocation, AUTHORIZED, AUTHORIZED_SECOND)
+        projection_session = invocation.user_actor.materialized_projection_session
+        assert type(projection_session) is MaterializedProjectionSession
+        preparation = kernel.prepare_acquire(
+            invocation,
+            delivery,
+            Acquire(need=ContextNeed(query="structural one-hop guard")),
+            server_budget=DEFAULT_SERVER_PACKAGE_BUDGET,
+            as_of=AS_OF,
+            reference_issuer=_OpaqueReferenceIssuer(),
+        )
+        decision = kernel.authorize_acquire(
+            invocation,
+            preparation,
+            (AUTHORIZED,),
+            projection_session=projection_session,
+        )
+        expanded = kernel.authorize_one_hop(
+            invocation,
+            preparation,
+            decision,
+            (MaterializedOneHopCandidate(AUTHORIZED, AUTHORIZED_SECOND),),
+            projection_session=projection_session,
+        )
+
+        with pytest.raises(ValueError, match="expanded candidate as an anchor"):
+            kernel.authorize_one_hop(
+                invocation,
+                preparation,
+                expanded,
+                (MaterializedOneHopCandidate(AUTHORIZED_SECOND, DENIED),),
+                projection_session=projection_session,
+            )
+
+
+def test_one_hop_scans_no_more_than_the_server_owned_page_limit() -> None:
+    index = HostileCandidateIndex((AUTHORIZED,))
+    port = OneHopMaterializedPort(tuple(_graph_ref(index) for index in range(129)))
+    runtime = Runtime(
+        required_kernel_dependencies(),
+        candidate_index=cast(CandidateIndex, index),
+        one_hop_scanned_page_limit=2,
+        clock=lambda: AS_OF,
+        query_digest_keyring=TEST_QUERY_DIGEST_KEYRING,
+    )
+
+    with trusted_operands(port) as (invocation, delivery):
+        outcome = runtime.resolve(
+            invocation,
+            delivery,
+            Acquire(need=ContextNeed(query="bounded graph pages")),
+        )
+
+    assert type(outcome) is Resolved
+    assert port.graph_calls == [
+        ((AUTHORIZED,), 64, 0),
+        ((AUTHORIZED,), 64, 64),
+    ]
+
+
+def test_page_ceiling_hit_matches_no_more_neighbours_on_tenant_surface() -> None:
+    def resolve(port: OneHopMaterializedPort) -> Resolved:
+        runtime = Runtime(
+            required_kernel_dependencies(),
+            candidate_index=cast(CandidateIndex, HostileCandidateIndex((AUTHORIZED,))),
+            one_hop_scanned_page_limit=1,
+            clock=lambda: AS_OF,
+            query_digest_keyring=TEST_QUERY_DIGEST_KEYRING,
+        )
+        with trusted_operands(port) as (invocation, delivery):
+            outcome = runtime.resolve(
+                invocation,
+                delivery,
+                Acquire(need=ContextNeed(query="opaque graph ceiling")),
+            )
+        assert type(outcome) is Resolved
+        return outcome
+
+    bound_hit_port = OneHopMaterializedPort(
+        tuple(_graph_ref(index) for index in range(64))
+    )
+    exhausted_port = OneHopMaterializedPort(())
+
+    bound_hit = resolve(bound_hit_port)
+    exhausted = resolve(exhausted_port)
+
+    assert bound_hit_port.graph_calls == [((AUTHORIZED,), 64, 0)]
+    assert exhausted_port.graph_calls == [((AUTHORIZED,), 64, 0)]
+    assert _normalized_tenant_surface(bound_hit) == _normalized_tenant_surface(
+        exhausted
+    )
+
+
+@pytest.mark.parametrize(
+    "limit",
+    (0, -1, MAX_ONE_HOP_SCANNED_PAGE_CEILING + 1, True),
+)
+def test_one_hop_scanned_page_limit_is_validated_at_configuration_time(
+    limit: object,
+) -> None:
+    with pytest.raises(RuntimeConfigurationError, match="scanned page limit"):
+        Runtime(
+            required_kernel_dependencies(),
+            candidate_index=cast(CandidateIndex, HostileCandidateIndex((AUTHORIZED,))),
+            one_hop_scanned_page_limit=limit,  # type: ignore[arg-type]
+            query_digest_keyring=TEST_QUERY_DIGEST_KEYRING,
+        )
 
 
 def test_refused_neighbours_cannot_consume_the_authorized_expansion_bound() -> None:
