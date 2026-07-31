@@ -204,3 +204,6 @@ touched:
 - [0091 — Reconcile connector ACL freshness at Supply acceptance](0091-reconcile-connector-acl-freshness-at-acceptance.md)
 - [0092 — Authorize Feishu subjects and bound Mirrored freshness](0092-authorize-feishu-subjects-and-bound-mirrored-freshness.md)
 - [0093 — Activate leased rich Markdown and the Revision link graph](0093-activate-leased-rich-markdown-and-revision-link-graph.md)
+- [0094 — Admit a format-neutral parsed document family](0094-admit-a-format-neutral-parsed-document-family.md)
+- [0095 — Bridge Runtime rerank through one internal pre-rerank Package](0095-bridge-runtime-rerank-through-one-internal-package.md)
+- [0096 — Bind Package token accounting to a release tokenizer](0096-bind-package-token-accounting-to-release-tokenizer.md)
