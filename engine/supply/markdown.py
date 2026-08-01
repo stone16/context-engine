@@ -585,6 +585,33 @@ _RICH_HTML_OPEN_PATTERN: Final = re.compile(
     r"th|td|p|ul|ol|li)\b[^>]*>",
     re.IGNORECASE,
 )
+_ACCEPTED_RICH_MARKDOWN_CONSTRUCT_PATTERNS: Final = {
+    UnsupportedConstruct.EMPHASIS: (_EMPHASIS_PATTERN,),
+    UnsupportedConstruct.INLINE_CODE: (_RICH_INLINE_CODE_PATTERN,),
+    UnsupportedConstruct.LINK_OR_IMAGE: (
+        _RICH_WIKILINK_PATTERN,
+        _RICH_AUTOLINK_PATTERN,
+        _RICH_INLINE_LINK_PATTERN,
+        _RICH_REFERENCE_LINK_PATTERN,
+    ),
+    UnsupportedConstruct.STRIKETHROUGH: (_RICH_STRIKETHROUGH_PATTERN,),
+}
+
+
+def contains_accepted_rich_markdown_construct(
+    source: str,
+    construct: UnsupportedConstruct,
+) -> bool:
+    """Return whether exact text contains the named accepted rich syntax."""
+
+    if type(source) is not str:
+        raise TypeError("rich Markdown construct detection requires exact text")
+    if type(construct) is not UnsupportedConstruct:
+        raise TypeError("rich Markdown construct detection requires a closed construct")
+    return any(
+        pattern.search(source) is not None
+        for pattern in _ACCEPTED_RICH_MARKDOWN_CONSTRUCT_PATTERNS.get(construct, ())
+    )
 
 
 def contains_rich_markdown_link(source: str) -> bool:
@@ -592,37 +619,10 @@ def contains_rich_markdown_link(source: str) -> bool:
 
     if type(source) is not str:
         raise TypeError("rich Markdown link detection requires exact text")
-    return any(
-        pattern.search(source) is not None
-        for pattern in (
-            _RICH_WIKILINK_PATTERN,
-            _RICH_AUTOLINK_PATTERN,
-            _RICH_INLINE_LINK_PATTERN,
-            _RICH_REFERENCE_LINK_PATTERN,
-        )
+    return contains_accepted_rich_markdown_construct(
+        source,
+        UnsupportedConstruct.LINK_OR_IMAGE,
     )
-
-
-def contains_accepted_rich_markdown_construct(
-    source: str,
-    construct: UnsupportedConstruct,
-) -> bool:
-    """Return whether exact text contains the named v3-only inline syntax."""
-
-    if type(source) is not str:
-        raise TypeError("rich Markdown construct detection requires exact text")
-    if type(construct) is not UnsupportedConstruct:
-        raise TypeError("rich Markdown construct detection requires a closed construct")
-    patterns = {
-        UnsupportedConstruct.EMPHASIS: _EMPHASIS_PATTERN,
-        UnsupportedConstruct.INLINE_CODE: _RICH_INLINE_CODE_PATTERN,
-        UnsupportedConstruct.STRIKETHROUGH: _RICH_STRIKETHROUGH_PATTERN,
-    }
-    try:
-        pattern = patterns[construct]
-    except KeyError:
-        raise ValueError("construct has no accepted v3-only inline syntax") from None
-    return pattern.search(source) is not None
 
 
 def unsupported_markdown_construct(
