@@ -276,6 +276,46 @@ def test_malformed_import_refusal_stays_content_free_without_scan_handoff(
         assert CONTROL_TOKEN not in response.text
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [
+        b"# Handbook\n\n*Accepted*\n\n- item one\n  > quoted\n",
+        b"# Handbook\n\n*Accepted*\n\n- item one\n  # heading\n",
+        b"# Handbook\n\n*Accepted*\n\n> Quoted\n---\n",
+    ],
+)
+def test_v3_refused_block_construct_stays_content_free_without_scan_handoff(
+    tmp_path: Path,
+    migration_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+    guarded_runtime_engine: Engine,
+    payload: bytes,
+) -> None:
+    with _ui_import_scenario(
+        tmp_path=tmp_path,
+        migration_configuration=migration_configuration,
+        guarded_control_engine=guarded_control_engine,
+        guarded_runtime_engine=guarded_runtime_engine,
+        payload=payload,
+    ) as (scenario, client, _migration_engine):
+        response = client.post(
+            "/ui/import/preview",
+            content=(
+                f"sourceRef={scenario.source_ref.value}&path=handbook.md&"
+                f"controlCredential={CONTROL_TOKEN}"
+            ),
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+
+        assert response.status_code == 503
+        assert "Request refused" in response.text
+        assert "provider_unavailable" in response.text
+        assert "Rich Markdown requires the leased scan path" not in response.text
+        assert "context-engine-control scan" not in response.text
+        assert "previewToken" not in response.text
+        assert CONTROL_TOKEN not in response.text
+
+
 def test_import_preview_requires_confirm(
     tmp_path: Path,
     migration_configuration: DatabaseConfiguration,

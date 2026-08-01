@@ -20,6 +20,8 @@ from engine.supply import (
     SourcePoint,
     SourceSpan,
     StructuralPath,
+    UnsupportedConstruct,
+    contains_only_accepted_rich_markdown_inline,
 )
 
 FIXTURES = Path(__file__).parents[1] / "fixtures/markdown"
@@ -48,6 +50,70 @@ def test_tracked_rich_construct_corpus_compiles_all_or_nothing(fixture: str) -> 
     assert not isinstance(outcome, CompilationFailure)
     assert type(outcome) is ParsedDocument
     assert outcome.fragments
+
+
+@pytest.mark.parametrize(
+    ("source", "construct"),
+    (
+        (
+            b"# Handbook\n\nRead [the private note](private-runbook.md).\n",
+            UnsupportedConstruct.LINK_OR_IMAGE,
+        ),
+        (
+            b"# Handbook\n\nRead [[private-runbook]].\n",
+            UnsupportedConstruct.LINK_OR_IMAGE,
+        ),
+        (
+            b"# Handbook\n\nEmbed ![[private-runbook]].\n",
+            UnsupportedConstruct.LINK_OR_IMAGE,
+        ),
+        (
+            b"# Handbook\n\nRead <https://private.invalid/runbook>.\n",
+            UnsupportedConstruct.LINK_OR_IMAGE,
+        ),
+        (
+            b"# Handbook\n\nFirst paragraph.\n\nRead [[private-runbook]].\n",
+            UnsupportedConstruct.LINK_OR_IMAGE,
+        ),
+        (
+            b"# Handbook\n\n- Read [[private-runbook]].\n",
+            UnsupportedConstruct.LINK_OR_IMAGE,
+        ),
+        (
+            b"# Handbook\n\nOnly *emphasis*.\n",
+            UnsupportedConstruct.EMPHASIS,
+        ),
+        (
+            b"# Handbook\n\nOnly `inline code`.\n",
+            UnsupportedConstruct.INLINE_CODE,
+        ),
+        (
+            b"# Handbook\n\nOnly ~~strikethrough~~.\n",
+            UnsupportedConstruct.STRIKETHROUGH,
+        ),
+        (
+            b"# Handbook\n\n*Accepted*\n\n<section>\n",
+            UnsupportedConstruct.EMPHASIS,
+        ),
+        (
+            b"# Handbook\n\nOnly *emphasis*.\n\n---\n",
+            UnsupportedConstruct.EMPHASIS,
+        ),
+        (
+            b"*Emphasized heading*\n---\n",
+            UnsupportedConstruct.EMPHASIS,
+        ),
+    ),
+)
+def test_preview_handoff_predicate_implies_rich_compiler_acceptance(
+    source: bytes,
+    construct: UnsupportedConstruct,
+) -> None:
+    assert contains_only_accepted_rich_markdown_inline(
+        source.decode("utf-8"),
+        construct,
+    )
+    assert type(compile_rich_markdown(source, CONFIG)) is ParsedDocument
 
 
 @pytest.mark.parametrize("fixture", RICH_FIXTURES)
@@ -780,6 +846,50 @@ def test_rich_constructor_rejects_unlisted_construct_in_nested_context(
                     source_text=forged_source,
                     contextual_text=forged_source,
                     search_phrases=(forged_source,),
+                ),
+            ),
+            provenance=compiled.provenance,
+        )
+
+
+@pytest.mark.parametrize(
+    ("original", "forged_source", "section_text"),
+    (
+        (b"- item one\n  ordinary\n", "- item one\n  > quoted", None),
+        (b"- item one\n  continued\n", "- item one\n  # heading", None),
+        (b"Plainxxx\n---\n", "> Quoted\n---", "> Quoted"),
+    ),
+)
+def test_rich_constructor_rejects_block_construct_hidden_by_section_kind(
+    original: bytes,
+    forged_source: str,
+    section_text: str | None,
+) -> None:
+    compiled = compile_rich_markdown(original, CONFIG)
+    assert type(compiled) is ParsedDocument
+    section = compiled.sections[0]
+    fragment = compiled.fragments[0]
+    assert len(forged_source.encode()) == fragment.position.end.byte_offset
+
+    with pytest.raises(ValueError, match="closed grammar"):
+        ParsedDocument.rich_v3(
+            canonical_text=f"{forged_source}\n",
+            sections=(
+                replace(
+                    section,
+                    text=forged_source if section_text is None else section_text,
+                ),
+            ),
+            fragments=(
+                replace(
+                    fragment,
+                    source_text=forged_source,
+                    contextual_text=forged_source,
+                    search_phrases=(
+                        (forged_source,)
+                        if section_text is None
+                        else (forged_source, section_text)
+                    ),
                 ),
             ),
             provenance=compiled.provenance,
