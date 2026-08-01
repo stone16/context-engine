@@ -94,6 +94,7 @@ from engine.supply.markdown import (
     contains_accepted_rich_markdown_construct,
     contains_rich_markdown_link,
     deserialize_parsed_document,
+    mask_accepted_rich_markdown_inline,
 )
 
 __all__ = [
@@ -179,6 +180,7 @@ __all__ = [
     "contains_accepted_rich_markdown_construct",
     "contains_rich_markdown_link",
     "deserialize_parsed_document",
+    "mask_accepted_rich_markdown_inline",
     "worker_lease_digest",
     "worker_lease_nonce_digest",
     "validate_embedding_batch",

@@ -141,8 +141,9 @@ an operating-system sandbox.
 
 ## Consequences
 
-- Rich File notes accepted by v3 can now publish without changing v1/v2 bytes or
-  historical Revision meaning.
+- File notes containing accepted rich links or v3-only emphasis, inline code,
+  and strikethrough can now publish without changing v1/v2 bytes or historical
+  Revision meaning.
 - Outgoing links and backlinks are reproducible from immutable v3 Revision
   lineage, but the graph itself grants no access and exposes no content.
 - A denied neighbour is indistinguishable from an absent or irrelevant

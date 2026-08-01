@@ -625,6 +625,22 @@ def contains_rich_markdown_link(source: str) -> bool:
     )
 
 
+def mask_accepted_rich_markdown_inline(source: str) -> str:
+    """Mask the accepted non-link inline syntax while preserving source shape."""
+
+    if type(source) is not str:
+        raise TypeError("rich Markdown inline masking requires exact text")
+    masked = source
+    for construct in (
+        UnsupportedConstruct.INLINE_CODE,
+        UnsupportedConstruct.EMPHASIS,
+        UnsupportedConstruct.STRIKETHROUGH,
+    ):
+        for pattern in _ACCEPTED_RICH_MARKDOWN_CONSTRUCT_PATTERNS[construct]:
+            masked = pattern.sub(lambda match: "x" * len(match.group()), masked)
+    return masked
+
+
 def unsupported_markdown_construct(
     line: str,
     *,

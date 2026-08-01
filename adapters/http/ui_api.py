@@ -48,6 +48,7 @@ from engine.supply import (
     ParsedDocument,
     UnsupportedConstruct,
     contains_accepted_rich_markdown_construct,
+    mask_accepted_rich_markdown_inline,
 )
 
 _PREVIEW_TTL: Final = timedelta(minutes=10)
@@ -65,18 +66,40 @@ _FEEDBACK_DOMAIN: Final = b"context-engine.ui-feedback.v1\x00"
 _MAX_SIGNED_BIGINT: Final = (1 << 63) - 1
 
 
-def _contains_accepted_rich_markdown_construct(
-    source: bytes,
-    construct: UnsupportedConstruct,
-) -> bool:
+def _decode_rich_markdown(source: bytes) -> str | None:
     try:
-        decoded = source.removeprefix(b"\xef\xbb\xbf").decode(
+        return source.removeprefix(b"\xef\xbb\xbf").decode(
             "utf-8",
             errors="strict",
         )
     except UnicodeDecodeError:
+        return None
+
+
+def _contains_accepted_rich_markdown_construct(
+    source: bytes,
+    construct: UnsupportedConstruct,
+) -> bool:
+    decoded = _decode_rich_markdown(source)
+    if decoded is None:
         return False
     return contains_accepted_rich_markdown_construct(decoded, construct)
+
+
+def _contains_only_accepted_rich_markdown_inline(
+    source: bytes,
+    construct: UnsupportedConstruct,
+) -> bool:
+    decoded = _decode_rich_markdown(source)
+    if decoded is None:
+        return False
+    if not contains_accepted_rich_markdown_construct(decoded, construct):
+        return False
+    masked_outcome = compile_markdown(
+        mask_accepted_rich_markdown_inline(decoded).encode("utf-8"),
+        MarkdownCompilerConfig("markdown-config-v1"),
+    )
+    return type(masked_outcome) is ParsedDocument
 
 
 class UiApiUnavailable(RuntimeError):
@@ -818,13 +841,16 @@ class PostgreSQLUiApi:
             and outcome.code is CompilationFailureCode.UNSUPPORTED_CONSTRUCT
             and outcome.construct is not None
         ):
-            requires_scan_handoff = (
-                requires_scan_handoff
-                or _contains_accepted_rich_markdown_construct(
-                    raw,
-                    outcome.construct,
+            if outcome.construct is UnsupportedConstruct.LINK_OR_IMAGE:
+                requires_scan_handoff = True
+            else:
+                requires_scan_handoff = (
+                    requires_scan_handoff
+                    or _contains_only_accepted_rich_markdown_inline(
+                        raw,
+                        outcome.construct,
+                    )
                 )
-            )
         if requires_scan_handoff:
             source_arguments = (
                 "--organization-id "
