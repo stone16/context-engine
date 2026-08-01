@@ -134,9 +134,12 @@ def _ui_import_scenario(
         b"# Handbook\n\nEmbed ![[private-runbook]].\n",
         b"# Handbook\n\nRead <https://private.invalid/runbook>.\n",
         b"# Handbook\n\nFirst paragraph.\n\nRead [[private-runbook]].\n",
+        b"# Handbook\n\nOnly *emphasis*.\n",
+        b"# Handbook\n\nOnly `inline code`.\n",
+        b"# Handbook\n\nOnly ~~strikethrough~~.\n",
     ],
 )
-def test_link_bearing_import_preview_hands_off_to_the_leased_scan_path(
+def test_v3_only_import_preview_hands_off_to_the_leased_scan_path(
     tmp_path: Path,
     migration_configuration: DatabaseConfiguration,
     guarded_control_engine: Engine,
@@ -213,18 +216,27 @@ def test_link_bearing_import_preview_hands_off_to_the_leased_scan_path(
         assert published_count == 0
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [
+        b"# Handbook\n\n[[private-runbook]]\xffprivate malformed body\n",
+        b"# Handbook\n\nOnly `private malformed body.\n",
+        b"# Handbook\n\nOnly ~~private malformed body.\n",
+    ],
+)
 def test_malformed_import_refusal_stays_content_free_without_scan_handoff(
     tmp_path: Path,
     migration_configuration: DatabaseConfiguration,
     guarded_control_engine: Engine,
     guarded_runtime_engine: Engine,
+    payload: bytes,
 ) -> None:
     with _ui_import_scenario(
         tmp_path=tmp_path,
         migration_configuration=migration_configuration,
         guarded_control_engine=guarded_control_engine,
         guarded_runtime_engine=guarded_runtime_engine,
-        payload=b"# Handbook\n\n[[private-runbook]]\xffprivate malformed body\n",
+        payload=payload,
     ) as (scenario, client, _migration_engine):
         response = client.post(
             "/ui/import/preview",
