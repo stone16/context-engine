@@ -603,6 +603,28 @@ def contains_rich_markdown_link(source: str) -> bool:
     )
 
 
+def contains_accepted_rich_markdown_construct(
+    source: str,
+    construct: UnsupportedConstruct,
+) -> bool:
+    """Return whether exact text contains the named v3-only inline syntax."""
+
+    if type(source) is not str:
+        raise TypeError("rich Markdown construct detection requires exact text")
+    if type(construct) is not UnsupportedConstruct:
+        raise TypeError("rich Markdown construct detection requires a closed construct")
+    patterns = {
+        UnsupportedConstruct.EMPHASIS: _EMPHASIS_PATTERN,
+        UnsupportedConstruct.INLINE_CODE: _RICH_INLINE_CODE_PATTERN,
+        UnsupportedConstruct.STRIKETHROUGH: _RICH_STRIKETHROUGH_PATTERN,
+    }
+    try:
+        pattern = patterns[construct]
+    except KeyError:
+        raise ValueError("construct has no accepted v3-only inline syntax") from None
+    return pattern.search(source) is not None
+
+
 def unsupported_markdown_construct(
     line: str,
     *,

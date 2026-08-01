@@ -47,6 +47,7 @@ from engine.supply import (
     MarkdownCompilerConfig,
     ParsedDocument,
     UnsupportedConstruct,
+    contains_accepted_rich_markdown_construct,
     contains_rich_markdown_link,
 )
 
@@ -74,6 +75,20 @@ def _contains_rich_markdown_link(source: bytes) -> bool:
     except UnicodeDecodeError:
         return False
     return contains_rich_markdown_link(decoded)
+
+
+def _contains_accepted_rich_markdown_construct(
+    source: bytes,
+    construct: UnsupportedConstruct,
+) -> bool:
+    try:
+        decoded = source.removeprefix(b"\xef\xbb\xbf").decode(
+            "utf-8",
+            errors="strict",
+        )
+    except UnicodeDecodeError:
+        return False
+    return contains_accepted_rich_markdown_construct(decoded, construct)
 
 
 class UiApiUnavailable(RuntimeError):
@@ -806,14 +821,23 @@ class PostgreSQLUiApi:
             )
         except (LookupError, RuntimeError, TypeError, ValueError):
             raise UiApiUnavailable from None
-        requires_scan_handoff = (
-            (
-                type(outcome) is CompilationFailure
-                and outcome.code is CompilationFailureCode.UNSUPPORTED_CONSTRUCT
-                and outcome.construct is UnsupportedConstruct.LINK_OR_IMAGE
-            )
-            or _contains_rich_markdown_link(raw)
-        )
+        requires_scan_handoff = _contains_rich_markdown_link(raw)
+        if (
+            type(outcome) is CompilationFailure
+            and outcome.code is CompilationFailureCode.UNSUPPORTED_CONSTRUCT
+            and outcome.construct is not None
+        ):
+            if outcome.construct is UnsupportedConstruct.LINK_OR_IMAGE:
+                requires_scan_handoff = True
+            elif outcome.construct in {
+                UnsupportedConstruct.EMPHASIS,
+                UnsupportedConstruct.INLINE_CODE,
+                UnsupportedConstruct.STRIKETHROUGH,
+            }:
+                requires_scan_handoff = _contains_accepted_rich_markdown_construct(
+                    raw,
+                    outcome.construct,
+                )
         if requires_scan_handoff:
             source_arguments = (
                 "--organization-id "
