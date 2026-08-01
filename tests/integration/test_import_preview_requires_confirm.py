@@ -138,6 +138,7 @@ def _ui_import_scenario(
         b"# Handbook\n\nOnly *emphasis*.\n",
         b"# Handbook\n\nOnly `inline code`.\n",
         b"# Handbook\n\nOnly ~~strikethrough~~.\n",
+        b"# Handbook\n\n*Accepted*\n\n<section>\n",
         b"# Handbook\n\nOnly *emphasis*.\n\n---\n",
         b"*Emphasized heading*\n---\n",
     ],
