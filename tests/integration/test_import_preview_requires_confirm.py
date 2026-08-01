@@ -283,6 +283,10 @@ def test_malformed_import_refusal_stays_content_free_without_scan_handoff(
         b"# Handbook\n\n*Accepted*\n\n- item one\n  # heading\n",
         b"# Handbook\n\n*Accepted*\n\n- item one\n  ```text\n  body\n  ```\n",
         b"# Handbook\n\n*Accepted*\n\n> Quoted\n---\n",
+        (
+            b"# Handbook\n\n[Accepted](note.md)\n\n<div>body</div>\n"
+            b"| A | B |\n| --- | --- |\n| x | y |\n"
+        ),
     ],
 )
 def test_v3_refused_block_construct_stays_content_free_without_scan_handoff(

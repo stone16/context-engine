@@ -713,6 +713,7 @@ def contains_only_accepted_rich_markdown_inline(
     fence: str | None = None
     fence_body_has_content = False
     list_open = False
+    html_block_open = False
     previous_line: str | None = None
     for line in source.splitlines():
         marker = _RICH_FENCE_PATTERN.match(line)
@@ -745,6 +746,17 @@ def contains_only_accepted_rich_markdown_inline(
             continue
         if not line.strip():
             list_open = False
+            html_block_open = False
+            previous_line = line
+            continue
+        if html_block_open:
+            if (
+                previous_line is not None
+                and "|" in line
+                and "|" in previous_line
+                and _RICH_SETEXT_PATTERN.fullmatch(line) is None
+            ):
+                return False
             previous_line = line
             continue
         if _RICH_SETEXT_PATTERN.fullmatch(line) is not None:
@@ -774,6 +786,7 @@ def contains_only_accepted_rich_markdown_inline(
                 continue
             if not _has_closed_rich_html_block(line, source):
                 return False
+            html_block_open = True
             previous_line = line
             continue
         inspected = _rich_markdown_inline_payload(line)

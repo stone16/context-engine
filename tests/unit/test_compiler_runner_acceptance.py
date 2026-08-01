@@ -116,6 +116,19 @@ def test_preview_handoff_predicate_implies_rich_compiler_acceptance(
     assert type(compile_rich_markdown(source, CONFIG)) is ParsedDocument
 
 
+def test_preview_handoff_predicate_rejects_v3_refused_block_adjacency() -> None:
+    source = (
+        b"# Handbook\n\n[Accepted](note.md)\n\n<div>body</div>\n"
+        b"| A | B |\n| --- | --- |\n| x | y |\n"
+    )
+
+    assert not contains_only_accepted_rich_markdown_inline(
+        source.decode("utf-8"),
+        UnsupportedConstruct.LINK_OR_IMAGE,
+    )
+    assert type(compile_rich_markdown(source, CONFIG)) is CompilationFailure
+
+
 @pytest.mark.parametrize("fixture", RICH_FIXTURES)
 def test_every_fragment_span_round_trips_to_exact_original_utf8(
     fixture: str,
