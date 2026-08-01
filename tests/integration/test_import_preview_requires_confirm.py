@@ -228,6 +228,9 @@ def test_v3_only_import_preview_hands_off_to_the_leased_scan_path(
         b"# Handbook\n\n~~Accepted~~ plus `private malformed body.\n",
         b"# Handbook\n\n[Accepted](note.md) plus ~~private malformed body.\n",
         b"# Handbook\n\n[[Accepted]] plus `private malformed body.\n",
+        b"# Handbook\n\n- [Accepted](note.md) plus `private malformed body.\n",
+        b"# Handbook\n\n> [[Accepted]] plus `private malformed body.\n",
+        b"# Handbook\n\n## [Accepted](note.md) plus `private malformed body.\n",
     ],
 )
 def test_malformed_import_refusal_stays_content_free_without_scan_handoff(
