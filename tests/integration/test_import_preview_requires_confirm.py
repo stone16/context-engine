@@ -23,7 +23,11 @@ from engine.persistence import (
     PostgreSQLWorkerLeaseIssuer,
     create_database_engine,
 )
-from engine.supply import MarkdownCompilerConfig, ParsedDocument
+from engine.supply import (
+    MARKDOWN_RICH_TOKEN_CEILING,
+    MarkdownCompilerConfig,
+    ParsedDocument,
+)
 from tests.support.file_imports import (
     NOW,
     FileImportScenario,
@@ -76,7 +80,7 @@ def _ui_import_scenario(
     migration_engine = create_database_engine(migration_configuration)
     roots = FileRootRegistry(
         {scenario.root_ref: scenario.root},
-        limits=FileReadLimits(max_file_bytes=4096),
+        limits=FileReadLimits(max_file_bytes=8192),
     )
     try:
         with migration_engine.connect() as connection:
@@ -295,6 +299,16 @@ def test_malformed_import_refusal_stays_content_free_without_scan_handoff(
         ),
         b'# Handbook\n\n[Accepted](note.md)\n\n<div title="\x00">body</div>\n',
         b"# Handbook\n\n[Accepted](note.md)\n\n<literal\x00value>\n",
+        (
+            b"# Handbook\n\n[Accepted](note.md)\n\n- "
+            + b"x " * (MARKDOWN_RICH_TOKEN_CEILING + 1)
+            + b"\n"
+        ),
+        (
+            b"# Handbook\n\n[Accepted](note.md)\n\n| A | B |\n| --- | --- |\n| "
+            + b"x " * (MARKDOWN_RICH_TOKEN_CEILING + 1)
+            + b"| y |\n"
+        ),
     ],
 )
 def test_v3_refused_block_construct_stays_content_free_without_scan_handoff(

@@ -10,6 +10,7 @@ from engine.supply import (
     MARKDOWN_COMPILER_V3_VERSION,
     MARKDOWN_RICH_CANONICALIZATION_PROFILE,
     MARKDOWN_RICH_COMPILATION_DIGEST_PROFILE,
+    MARKDOWN_RICH_TOKEN_CEILING,
     CompilationFailure,
     CompilationProvenance,
     CompiledFragment,
@@ -145,9 +146,21 @@ def test_preview_handoff_predicate_implies_rich_compiler_acceptance(
             b"# Handbook\n\n[Accepted](note.md)\n\n<literal\x00value>\n",
             UnsupportedConstruct.LINK_OR_IMAGE,
         ),
+        (
+            b"# Handbook\n\n[Accepted](note.md)\n\n- "
+            + b"x " * (MARKDOWN_RICH_TOKEN_CEILING + 1)
+            + b"\n",
+            UnsupportedConstruct.LINK_OR_IMAGE,
+        ),
+        (
+            b"# Handbook\n\n[Accepted](note.md)\n\n| A | B |\n| --- | --- |\n| "
+            + b"x " * (MARKDOWN_RICH_TOKEN_CEILING + 1)
+            + b"| y |\n",
+            UnsupportedConstruct.LINK_OR_IMAGE,
+        ),
     ),
 )
-def test_preview_handoff_predicate_rejects_v3_refused_block_adjacency(
+def test_preview_handoff_predicate_rejects_v3_refused_document_shape(
     source: bytes,
     construct: UnsupportedConstruct,
 ) -> None:

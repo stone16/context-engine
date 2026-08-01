@@ -28,6 +28,7 @@ _COMPILATION_DIGEST_V1_DOMAIN: Final = b"context-engine.markdown-compilation.v1\
 _COMPILATION_DIGEST_DOMAIN: Final = b"context-engine.markdown-compilation.v2\x00"
 _COMPILATION_DIGEST_V3_DOMAIN: Final = b"context-engine.markdown-compilation.v3\x00"
 _MAX_VERSION_LENGTH: Final = 128
+_RICH_TOKEN_PATTERN: Final = re.compile(r"\S+")
 
 
 def is_markdown_control_character(character: str) -> bool:
@@ -39,6 +40,14 @@ def is_markdown_control_character(character: str) -> bool:
     return (codepoint < 0x20 and character not in "\t\n\r") or (
         0x7F <= codepoint <= 0x9F
     )
+
+
+def rich_markdown_token_count(value: str) -> int:
+    """Count deterministic representation tokens for the v3 hard bound."""
+
+    if type(value) is not str:
+        raise TypeError("rich Markdown token counting requires exact text")
+    return sum(1 for _ in _RICH_TOKEN_PATTERN.finditer(value))
 
 
 def _require_version(value: object) -> str:
@@ -806,7 +815,13 @@ def contains_only_accepted_rich_markdown_inline(
         if unsupported_rich_markdown_inline(inspected) is not None:
             return False
         previous_line = line
-    return fence is None
+    if fence is not None:
+        return False
+    try:
+        _expected_rich_fragment_layout(source, MARKDOWN_RICH_TOKEN_CEILING)
+    except ValueError:
+        return False
+    return True
 
 
 def _rich_markdown_inline_payload(line: str) -> str:
@@ -1396,7 +1411,7 @@ def _expected_rich_fragment_layout(
         ancestry = "\n\n".join(
             f"{'#' * level} {text}" for level, text in headings
         )
-        capacity = token_ceiling - len(re.findall(r"\S+", ancestry))
+        capacity = token_ceiling - rich_markdown_token_count(ancestry)
         indivisible = block.indivisible or block.kind in {
             SectionKind.HEADING,
             SectionKind.LIST,
@@ -1405,7 +1420,7 @@ def _expected_rich_fragment_layout(
         }
         ranges: tuple[tuple[int, int], ...]
         if indivisible:
-            if len(re.findall(r"\S+", source)) > capacity:
+            if rich_markdown_token_count(source) > capacity:
                 raise ValueError("rich indivisible source exceeds its ceiling")
             ranges = ((0, len(source)),)
         else:
