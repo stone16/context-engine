@@ -1,6 +1,6 @@
 ---
 name: adr-0093-activate-leased-rich-markdown-and-revision-link-graph
-version: "1.0.2"
+version: "1.0.3"
 description: >
   Activate rich Markdown v3 behind the exact File-import WorkerLease, persist
   immutable content-free Revision link edges, and admit one authorized graph
@@ -141,9 +141,9 @@ an operating-system sandbox.
 
 ## Consequences
 
-- File notes containing accepted rich links or v3-only emphasis, inline code,
-  and strikethrough can now publish without changing v1/v2 bytes or historical
-  Revision meaning.
+- File notes whose frozen-v1 preview outcome satisfies the closed accepted
+  rich-link, emphasis, inline-code, or strikethrough handoff checks can now
+  publish without changing v1/v2 bytes or historical Revision meaning.
 - Outgoing links and backlinks are reproducible from immutable v3 Revision
   lineage, but the graph itself grants no access and exposes no content.
 - A denied neighbour is indistinguishable from an absent or irrelevant
