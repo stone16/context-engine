@@ -713,9 +713,13 @@ def contains_only_accepted_rich_markdown_inline(
     fence: str | None = None
     fence_body_has_content = False
     list_open = False
-    html_block_open = False
     previous_line: str | None = None
-    for line in source.splitlines():
+    lines = source.splitlines()
+    html_block_end = -1
+    for index, line in enumerate(lines):
+        if index <= html_block_end:
+            previous_line = line
+            continue
         marker = _RICH_FENCE_PATTERN.match(line)
         if (
             fence is None
@@ -746,17 +750,6 @@ def contains_only_accepted_rich_markdown_inline(
             continue
         if not line.strip():
             list_open = False
-            html_block_open = False
-            previous_line = line
-            continue
-        if html_block_open:
-            if (
-                previous_line is not None
-                and "|" in line
-                and "|" in previous_line
-                and _RICH_SETEXT_PATTERN.fullmatch(line) is None
-            ):
-                return False
             previous_line = line
             continue
         if _RICH_SETEXT_PATTERN.fullmatch(line) is not None:
@@ -784,9 +777,27 @@ def contains_only_accepted_rich_markdown_inline(
         if stripped.startswith("<"):
             if _RICH_ANGLE_LITERAL_PATTERN.fullmatch(stripped) is not None:
                 continue
-            if not _has_closed_rich_html_block(line, source):
+            html_block_end = index
+            while (
+                html_block_end + 1 < len(lines)
+                and lines[html_block_end + 1].strip()
+            ):
+                html_block_end += 1
+            html_block_lines = lines[index : html_block_end + 1]
+            if not _has_closed_rich_html_block(
+                line,
+                "\n".join(html_block_lines),
+            ):
                 return False
-            html_block_open = True
+            if any(
+                unsupported_rich_markdown_inline(candidate) is not None
+                for candidate in html_block_lines[1:]
+            ):
+                return False
+            html_block_source = "\n".join(html_block_lines)
+            table_ranges = _rich_table_source_ranges(html_block_source)
+            if table_ranges and table_ranges != ((0, len(html_block_source)),):
+                return False
             previous_line = line
             continue
         inspected = _rich_markdown_inline_payload(line)

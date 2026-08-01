@@ -116,15 +116,37 @@ def test_preview_handoff_predicate_implies_rich_compiler_acceptance(
     assert type(compile_rich_markdown(source, CONFIG)) is ParsedDocument
 
 
-def test_preview_handoff_predicate_rejects_v3_refused_block_adjacency() -> None:
-    source = (
-        b"# Handbook\n\n[Accepted](note.md)\n\n<div>body</div>\n"
-        b"| A | B |\n| --- | --- |\n| x | y |\n"
-    )
+@pytest.mark.parametrize(
+    ("source", "construct"),
+    (
+        (
+            b"# Handbook\n\n[Accepted](note.md)\n\n<div>body</div>\n"
+            b"| A | B |\n| --- | --- |\n| x | y |\n",
+            UnsupportedConstruct.LINK_OR_IMAGE,
+        ),
+        (
+            b"# Handbook\n\n*Accepted*\n\n<div>body</div>\n---\n##\n",
+            UnsupportedConstruct.EMPHASIS,
+        ),
+        (
+            b"# Handbook\n\n[Accepted](note.md)\n\n</div>\n<div>unclosed\n",
+            UnsupportedConstruct.LINK_OR_IMAGE,
+        ),
+        (
+            b"# Handbook\n\n[Accepted](note.md)\n\n<div>unclosed\n\n"
+            b"```html\n</div>\n```\n",
+            UnsupportedConstruct.LINK_OR_IMAGE,
+        ),
+    ),
+)
+def test_preview_handoff_predicate_rejects_v3_refused_block_adjacency(
+    source: bytes,
+    construct: UnsupportedConstruct,
+) -> None:
 
     assert not contains_only_accepted_rich_markdown_inline(
         source.decode("utf-8"),
-        UnsupportedConstruct.LINK_OR_IMAGE,
+        construct,
     )
     assert type(compile_rich_markdown(source, CONFIG)) is CompilationFailure
 
