@@ -732,6 +732,11 @@ def contains_only_accepted_rich_markdown_inline(
         if fence is not None:
             fence_body_has_content = fence_body_has_content or bool(line.strip())
             continue
+        if (
+            _THEMATIC_BREAK_PATTERN.fullmatch(line) is not None
+            or _RICH_SETEXT_PATTERN.fullmatch(line) is not None
+        ):
+            continue
         inspected = _rich_markdown_inline_payload(line)
         if unsupported_rich_markdown_inline(inspected) is not None:
             return False
