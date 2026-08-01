@@ -716,6 +716,13 @@ def contains_only_accepted_rich_markdown_inline(
     previous_line: str | None = None
     for line in source.splitlines():
         marker = _RICH_FENCE_PATTERN.match(line)
+        if (
+            fence is None
+            and list_open
+            and line.startswith((" ", "\t"))
+            and marker is not None
+        ):
+            return False
         if marker is not None:
             candidate = marker.group("fence")
             if fence is None:
