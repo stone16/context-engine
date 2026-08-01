@@ -47,8 +47,7 @@ from engine.supply import (
     MarkdownCompilerConfig,
     ParsedDocument,
     UnsupportedConstruct,
-    contains_accepted_rich_markdown_construct,
-    mask_accepted_rich_markdown_inline,
+    contains_only_accepted_rich_markdown_inline,
 )
 
 _PREVIEW_TTL: Final = timedelta(minutes=10)
@@ -76,16 +75,6 @@ def _decode_rich_markdown(source: bytes) -> str | None:
         return None
 
 
-def _contains_accepted_rich_markdown_construct(
-    source: bytes,
-    construct: UnsupportedConstruct,
-) -> bool:
-    decoded = _decode_rich_markdown(source)
-    if decoded is None:
-        return False
-    return contains_accepted_rich_markdown_construct(decoded, construct)
-
-
 def _contains_only_accepted_rich_markdown_inline(
     source: bytes,
     construct: UnsupportedConstruct,
@@ -93,13 +82,7 @@ def _contains_only_accepted_rich_markdown_inline(
     decoded = _decode_rich_markdown(source)
     if decoded is None:
         return False
-    if not contains_accepted_rich_markdown_construct(decoded, construct):
-        return False
-    masked_outcome = compile_markdown(
-        mask_accepted_rich_markdown_inline(decoded).encode("utf-8"),
-        MarkdownCompilerConfig("markdown-config-v1"),
-    )
-    return type(masked_outcome) is ParsedDocument
+    return contains_only_accepted_rich_markdown_inline(decoded, construct)
 
 
 class UiApiUnavailable(RuntimeError):
@@ -832,7 +815,7 @@ class PostgreSQLUiApi:
             )
         except (LookupError, RuntimeError, TypeError, ValueError):
             raise UiApiUnavailable from None
-        requires_scan_handoff = _contains_accepted_rich_markdown_construct(
+        requires_scan_handoff = _contains_only_accepted_rich_markdown_inline(
             raw,
             UnsupportedConstruct.LINK_OR_IMAGE,
         )
@@ -841,16 +824,13 @@ class PostgreSQLUiApi:
             and outcome.code is CompilationFailureCode.UNSUPPORTED_CONSTRUCT
             and outcome.construct is not None
         ):
-            if outcome.construct is UnsupportedConstruct.LINK_OR_IMAGE:
-                requires_scan_handoff = True
-            else:
-                requires_scan_handoff = (
-                    requires_scan_handoff
-                    or _contains_only_accepted_rich_markdown_inline(
-                        raw,
-                        outcome.construct,
-                    )
+            requires_scan_handoff = (
+                requires_scan_handoff
+                or _contains_only_accepted_rich_markdown_inline(
+                    raw,
+                    outcome.construct,
                 )
+            )
         if requires_scan_handoff:
             source_arguments = (
                 "--organization-id "

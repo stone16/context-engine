@@ -625,22 +625,6 @@ def contains_rich_markdown_link(source: str) -> bool:
     )
 
 
-def mask_accepted_rich_markdown_inline(source: str) -> str:
-    """Mask the accepted non-link inline syntax while preserving source shape."""
-
-    if type(source) is not str:
-        raise TypeError("rich Markdown inline masking requires exact text")
-    masked = source
-    for construct in (
-        UnsupportedConstruct.INLINE_CODE,
-        UnsupportedConstruct.EMPHASIS,
-        UnsupportedConstruct.STRIKETHROUGH,
-    ):
-        for pattern in _ACCEPTED_RICH_MARKDOWN_CONSTRUCT_PATTERNS[construct]:
-            masked = pattern.sub(lambda match: "x" * len(match.group()), masked)
-    return masked
-
-
 def unsupported_markdown_construct(
     line: str,
     *,
@@ -714,6 +698,40 @@ def unsupported_rich_markdown_inline(line: str) -> UnsupportedConstruct | None:
         masked = pattern.sub(lambda match: "x" * len(match.group()), masked)
     construct = unsupported_markdown_construct(masked, supported_heading=False)
     return None if construct is UnsupportedConstruct.LIST else construct
+
+
+def contains_only_accepted_rich_markdown_inline(
+    source: str,
+    construct: UnsupportedConstruct,
+) -> bool:
+    """Return whether one accepted construct has no malformed inline peer."""
+
+    if type(source) is not str:
+        raise TypeError("rich Markdown inline validation requires exact text")
+    if not contains_accepted_rich_markdown_construct(source, construct):
+        return False
+    structural = {
+        UnsupportedConstruct.BLOCKQUOTE,
+        UnsupportedConstruct.CODE_BLOCK,
+        UnsupportedConstruct.FRONTMATTER_OR_RULE,
+        UnsupportedConstruct.NESTED_HEADING,
+    }
+    fence: str | None = None
+    for line in source.splitlines():
+        marker = _RICH_FENCE_PATTERN.match(line)
+        if marker is not None:
+            candidate = marker.group("fence")
+            if fence is None:
+                fence = candidate
+            elif candidate[0] == fence[0] and len(candidate) >= len(fence):
+                fence = None
+            continue
+        if fence is not None:
+            continue
+        refusal = unsupported_rich_markdown_inline(line)
+        if refusal is not None and refusal not in structural:
+            return False
+    return fence is None
 
 
 @dataclass(frozen=True, slots=True)
