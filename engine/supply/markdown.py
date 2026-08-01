@@ -710,12 +710,6 @@ def contains_only_accepted_rich_markdown_inline(
         raise TypeError("rich Markdown inline validation requires exact text")
     if not contains_accepted_rich_markdown_construct(source, construct):
         return False
-    structural = {
-        UnsupportedConstruct.BLOCKQUOTE,
-        UnsupportedConstruct.CODE_BLOCK,
-        UnsupportedConstruct.FRONTMATTER_OR_RULE,
-        UnsupportedConstruct.NESTED_HEADING,
-    }
     fence: str | None = None
     for line in source.splitlines():
         marker = _RICH_FENCE_PATTERN.match(line)
@@ -728,8 +722,14 @@ def contains_only_accepted_rich_markdown_inline(
             continue
         if fence is not None:
             continue
-        refusal = unsupported_rich_markdown_inline(line)
-        if refusal is not None and refusal not in structural:
+        inspected = line
+        if (heading := _RICH_ATX_HEADING_PATTERN.fullmatch(line)) is not None:
+            inspected = heading.group(2).strip()
+        elif (item := _RICH_LIST_ITEM_PATTERN.fullmatch(line)) is not None:
+            inspected = item.group(2)
+        elif line.lstrip().startswith(">"):
+            inspected = line.lstrip()[1:].lstrip()
+        if unsupported_rich_markdown_inline(inspected) is not None:
             return False
     return fence is None
 
