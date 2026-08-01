@@ -737,6 +737,19 @@ def contains_only_accepted_rich_markdown_inline(
             or _RICH_SETEXT_PATTERN.fullmatch(line) is not None
         ):
             continue
+        stripped = line.strip()
+        if stripped.startswith("<"):
+            html_open = _RICH_HTML_OPEN_PATTERN.match(line)
+            if html_open is not None:
+                if re.search(
+                    rf"</{re.escape(html_open.group('tag'))}[ \t]*>",
+                    source,
+                    re.IGNORECASE,
+                ) is None:
+                    return False
+                continue
+            if _RICH_ANGLE_LITERAL_PATTERN.fullmatch(stripped) is None:
+                return False
         inspected = _rich_markdown_inline_payload(line)
         if unsupported_rich_markdown_inline(inspected) is not None:
             return False
