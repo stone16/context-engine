@@ -3,7 +3,9 @@ name: adr-0048-generated-typescript-sdk-facade
 version: "1.0.0"
 description: >
   Generate the TypeScript resolve contract from OpenAPI v0 and expose it only
-  through a narrow metadata-safe facade and package export map.
+  through a narrow metadata-safe facade and package export map. Use when
+  generating or exposing the TypeScript Runtime SDK. Not for handwritten wire
+  schemas, raw generated transports, or arbitrary caller headers.
 ---
 
 # 0048. Generate the TypeScript SDK behind a closed facade

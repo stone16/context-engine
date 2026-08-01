@@ -5,6 +5,7 @@ description: >
   Record that PostgreSQL 17 is the non-pluggable authorization truth store:
   composite FKs to Organization, FORCE RLS, non-owner runtime role, fail closed
   on missing tenant context. Use when reviewing schema, storage, or cache design.
+  Not for making index or cache filters authorization authorities.
 ---
 
 # 0007. PostgreSQL is the authorization truth store

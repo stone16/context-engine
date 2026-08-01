@@ -3,7 +3,9 @@ name: adr-0033-organization-release-promotion-owner
 version: "1.0.0"
 description: >
   Make Organization-owned immutable release lineage and one generation-bound
-  ContextLearning promotion transaction the only release publication path.
+  ContextLearning promotion transaction the only release publication path. Use
+  when activating, promoting, or rolling back an Organization release. Not for
+  direct application DML or publication by Control, Curation, or evaluators.
 ---
 
 # 0033. Promote Organization releases through one Learning owner

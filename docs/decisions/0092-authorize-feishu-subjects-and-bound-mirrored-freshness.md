@@ -4,7 +4,10 @@ version: "1.0.0"
 description: >
   Treat runner-emitted Feishu subject claims as reproducibility inputs, derive
   Article grants from engine-owned mappings, and expire Mirrored Feishu ACL
-  evidence after one closed five-minute Runtime freshness profile.
+  evidence after one closed five-minute Runtime freshness profile. Use when
+  deriving Feishu Article grants or validating Mirrored ACL freshness. Not for
+  runner-authored grants, Weak fallback, or retained access after observation
+  failure.
 ---
 
 # 0092. Authorize Feishu subjects and bound Mirrored freshness

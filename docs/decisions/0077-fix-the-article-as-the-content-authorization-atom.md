@@ -4,7 +4,9 @@ version: "1.0.0"
 description: >
   Make the Article (ContextResource) the only content authorization atom with
   a versioned access policy and a tenant/source default-visibility cascade
-  fixed at first ingestion; Fragments never carry independent ACLs.
+  fixed at first ingestion; Fragments never carry independent ACLs. Use when
+  authorizing Article content or expanding within a Revision. Not for Fragment
+  ACLs or cross-Article expansion without a new Article authorization decision.
 ---
 
 # 0077. Fix the Article as the content authorization atom

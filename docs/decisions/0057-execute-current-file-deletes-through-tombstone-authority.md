@@ -4,6 +4,8 @@ version: "1.0.0"
 description: >
   Execute one exact current File delete observation through the existing
   tombstone authority while preserving provider and Runtime trust boundaries.
+  Use when executing a deletion observed in the current complete File scan. Not
+  for provider deletion authority, caller-authored effects, or stale scans.
 ---
 
 # 0057. Execute current File deletes through tombstone authority

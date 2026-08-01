@@ -3,7 +3,9 @@ name: adr-0085-bound-supply-connector-executions
 version: "1.0.0"
 description: >
   Bound each Supply connector execution by validated page, cumulative-byte,
-  and no-progress limits before accepting additional source observations.
+  and no-progress limits before accepting additional source observations. Use
+  when executing or accepting a Supply connector page. Not for accepting data
+  after a page, byte, or no-progress boundary is exhausted.
 ---
 
 # 0085. Bound Supply connector executions before acceptance

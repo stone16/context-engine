@@ -5,9 +5,9 @@ description: >
   Bind Package token accounting to a ReleaseManifest-fixed tokenizer profile
   and one resolve-owned cumulative budget meter (tokens, provider calls, cost,
   elapsed) published in the final Package and ContextRun, through a reviewed
-  new contract version that never mutates frozen v0. Use before activating any
-  model-backed Runtime carrier (rewrite, rerank, select). Not an activation of
-  those carriers and not a tokenizer vendor choice.
+  new contract version that never mutates frozen v0. Use when preparing to
+  activate a model-backed Runtime carrier (rewrite, rerank, select). Not for
+  activating those carriers or choosing a tokenizer vendor.
 ---
 
 # 0096. Bind Package token accounting to a release tokenizer

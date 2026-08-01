@@ -4,6 +4,8 @@ version: "1.0.0"
 description: >
   Activate one loopback-only, single-Membership File pgvector Acquire carrier
   with deterministic twin embeddings and EffectiveScope reduction before LIMIT.
+  Use when running the explicit loopback dogfood Acquire carrier. Not for
+  production authentication, remote ingress, group delivery, or external models.
 ---
 
 # 0068. Activate the loopback dogfood Runtime

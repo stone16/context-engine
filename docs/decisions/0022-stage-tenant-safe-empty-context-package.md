@@ -3,7 +3,9 @@ name: adr-0022-stage-tenant-safe-empty-context-package
 version: "1.1.0"
 description: >
   Activate the first evidence-free Runtime outcome without manufacturing later
-  Membership, policy-epoch, release, audit, or egress authority.
+  Membership, policy-epoch, release, audit, or egress authority. Use when
+  implementing the first tenant-safe empty Package. Not for adding Evidence or
+  fabricating deferred policy, release, audit, or egress lineage.
 ---
 
 # 0022. Stage the tenant-safe empty ContextPackage

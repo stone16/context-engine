@@ -3,7 +3,9 @@ name: adr-0051-reauthorize-opaque-citation-opens
 version: "1.0.0"
 description: >
   Issue digest-only multi-use citation locators after authorized projection and
-  reauthorize every open through the sealed Runtime Kernel.
+  reauthorize every open through the sealed Runtime Kernel. Use when issuing or
+  opening an opaque citation locator. Not for bearer authority, prior-decision
+  reuse, or content access before current exact reauthorization.
 ---
 
 # 0051. Reauthorize every opaque citation open

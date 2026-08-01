@@ -4,6 +4,8 @@ version: "1.0.0"
 description: >
   Recover one interrupted File publication from stable acquired, prepared, or
   ready state using a higher-generation lease and immutable transition audit.
+  Use when recovering an interrupted File publication at a recorded durable
+  state. Not for guessing unrecorded progress or mutating transition history.
 ---
 
 # 0041. Recover File publication by durable boundary

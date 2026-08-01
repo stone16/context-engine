@@ -5,7 +5,8 @@ description: >
   Record the process topology: a modular-monolith engine API plus an independent
   worker, and one justified Bot delivery application process from M2; no
   premature engine microservice split. Use when proposing service extraction or
-  new processes.
+  new processes. Not for adding a process boundary without measured isolation or
+  performance evidence.
 ---
 
 # 0008. Modular monolith + independent worker

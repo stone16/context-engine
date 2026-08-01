@@ -3,7 +3,9 @@ name: adr-0066-embed-fragments-before-publication
 version: "1.0.0"
 description: >
   Persist fixed-dimension pgvector embeddings with newly prepared Fragments
-  through an explicit external provider or deterministic CI twin.
+  through an explicit external provider or deterministic CI twin. Use when
+  embedding newly prepared Fragments before activation. Not for query-time
+  retrieval, backfill authority, implicit twin fallback, or vector authorization.
 ---
 
 # 0066. Embed Fragments before publication

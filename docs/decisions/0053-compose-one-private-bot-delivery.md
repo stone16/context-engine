@@ -3,7 +3,9 @@ name: adr-0053-compose-one-private-bot-delivery
 version: "1.0.0"
 description: >
   Compose one independent private File-backed BotDelivery application from the
-  generated SDK, controlled model boundary, and co-resident ActionPlane.
+  generated SDK, controlled model boundary, and co-resident ActionPlane. Use
+  when composing the first private File-backed Bot application. Not for engine
+  imports, caller-authored trust, shared effect tickets, or retained answers.
 ---
 
 # 0053. Compose one private File-backed Bot delivery

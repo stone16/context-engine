@@ -3,7 +3,9 @@ name: adr-0046-bind-egress-to-one-exact-package-hop
 version: "1.0.0"
 description: >
   Issue and atomically redeem a digest-only EgressGrant for exactly one
-  audience-bound ContextPackage model or channel boundary.
+  audience-bound ContextPackage model or channel boundary. Use when authorizing
+  one model or channel egress hop. Not for arbitrary content, cross-hop grant
+  reuse, or treating Package construction as disclosure authority.
 ---
 
 # 0046. Bind egress to one exact Package hop

@@ -3,7 +3,9 @@ name: adr-0079-compile-rich-markdown-in-an-owned-runner
 version: "1.0.0"
 description: >
   Add an explicit rich-Markdown v3 representation behind a pure owned
-  compiler-runner while keeping frozen v1/v2 publication inactive.
+  compiler-runner while keeping frozen v1/v2 publication inactive. Use when
+  implementing rich Markdown compilation in the owned runner. Not for mutating
+  frozen representations or activating publication beyond this decision.
 ---
 
 # 0079. Compile rich Markdown in an owned runner

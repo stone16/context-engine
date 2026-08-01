@@ -4,6 +4,8 @@ version: "1.0.0"
 description: >
   Activate the first signed one-shot WorkerLease only for a persistent no-op
   durable job while preserving the complete Supply lease carrier as deferred.
+  Use when exercising the first persistent WorkerLease boundary. Not for ambient
+  worker identity or claiming the full Supply carrier is active.
 ---
 
 # 0029. Bound the first WorkerLease to persistent no-op jobs

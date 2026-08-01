@@ -4,6 +4,8 @@ version: "1.0.0"
 description: >
   Disable one File ContextSource atomically with its Organization Policy Epoch,
   cancel outstanding work, and retain a durable asynchronous-cleanup intent.
+  Use when terminally offboarding an entire File Source before cleanup. Not for
+  tombstoning one Resource while its Source remains active.
 ---
 
 # 0044. Disable File sources before cleanup

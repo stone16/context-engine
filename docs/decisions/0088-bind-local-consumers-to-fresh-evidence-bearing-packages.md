@@ -4,7 +4,9 @@ version: "1.0.0"
 description: >
   Require each local read-only consumer question to acquire and render one
   fresh expiring loopback Package with intact Block/Evidence lineage and no
-  persisted dogfood bearer.
+  persisted dogfood bearer. Use when a local read-only consumer answers one
+  question from authorized context. Not for Package reuse, post-expiry use,
+  stripped Evidence lineage, or persisted consumer secrets.
 ---
 
 # 0088. Bind local consumers to fresh evidence-bearing Packages

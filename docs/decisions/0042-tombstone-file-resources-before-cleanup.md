@@ -4,6 +4,8 @@ version: "1.0.0"
 description: >
   Make one published File Resource synchronously ineligible, advance its
   Organization Policy Epoch, and retain a durable asynchronous-cleanup intent.
+  Use when making one already-published File Resource invisible before physical
+  cleanup. Not for terminally disabling its entire File Source.
 ---
 
 # 0042. Tombstone File Resources before cleanup

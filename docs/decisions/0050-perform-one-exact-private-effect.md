@@ -4,6 +4,8 @@ version: "1.0.0"
 description: >
   Perform one prepared private effect through an exact one-shot PostgreSQL
   state machine, immutable receipt replay, and original-attempt reconciliation.
+  Use when performing an already-prepared private effect. Not for retrying
+  ambiguity under a new identity or mutating provider receipts.
 ---
 
 # 0050. Perform one exact private effect under one provider attempt

@@ -5,7 +5,9 @@ description: >
   Allow one explicitly configured local operator composition that maps
   separately held secrets to one Control operator identity and one release
   operator identity, while no operator authority exists by default and no
-  operator operation becomes network-reachable.
+  operator operation becomes network-reachable. Use when configuring local
+  Control or release-operator authority. Not for network-reachable operators,
+  shared secrets, or authority in the default composition.
 ---
 
 # 0069. Admit an explicit local operator composition

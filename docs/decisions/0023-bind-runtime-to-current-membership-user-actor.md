@@ -4,7 +4,9 @@ version: "1.0.0"
 description: >
   Bind online Runtime Acquire to one current Membership, a complete
   transaction-local UserActor, and a nominal proof that remains live through
-  ContextPackage construction.
+  ContextPackage construction. Use when binding Runtime work to a current
+  Membership and UserActor transaction. Not for Organization-only access,
+  default Memberships, or proof reuse outside the authority transaction.
 ---
 
 # 0023. Bind Runtime to a current Membership-backed UserActor

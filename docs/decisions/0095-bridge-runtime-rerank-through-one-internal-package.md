@@ -2,14 +2,12 @@
 name: adr-0095-bridge-runtime-rerank-through-one-internal-package
 version: "1.0.0"
 description: >
-  Bridge Runtime model-backed rerank to the ADR-0052 Package-derived model
-  input rule through one internal, undelivered, audience-bound pre-rerank
-  ContextPackage, keeping one nominal AuthorizedModelInput contract with one
-  constructor per authorized process composition and at most one caller-visible
-  grant per resolve. Use when implementing the authorized rerank carrier
-  (ADR-0075 lift 5) or any future Runtime-internal model inference. Not an
-  activation of the rerank carrier and not a relaxation of ADR-0012, ADR-0046,
-  or ADR-0052 outside the exact carve-outs recorded here.
+  Bridge Runtime model-backed rerank through one internal, undelivered,
+  audience-bound pre-rerank ContextPackage, one nominal AuthorizedModelInput,
+  and the mandatory internal EgressGate with its one-shot model grant. Use when
+  implementing authorized rerank or other Runtime-internal model inference. Not
+  for activating rerank, exposing internal grants or Packages, or relaxing
+  sealed authorization and egress outside this exact bridge.
 ---
 
 # 0095. Bridge Runtime rerank through one internal pre-rerank Package

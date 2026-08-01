@@ -4,7 +4,9 @@ version: "1.2.1"
 description: >
   Record the decision that IM bot answering lives in a separate trusted Bot
   application containing the BotDelivery Module, not inside the engine and not
-  as another transport.
+  as another transport. Use when deciding where BotDelivery or an IM transport
+  belongs. Not for adding generation, planning, or channel effects to the
+  engine.
 ---
 
 # 0002. BotDelivery lives outside the engine

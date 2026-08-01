@@ -4,7 +4,9 @@ version: "1.0.0"
 description: >
   Let the explicit local release operator assemble a candidate from one exact
   Release-operator-owned observation of the current active File corpus and release
-  base, while preserving ContextLearning as the sole publication owner.
+  base, while preserving ContextLearning as the sole publication owner. Use
+  when assembling an explicit Release candidate from current active File
+  content. Not for promotion by the operator or publication outside Learning.
 ---
 
 # 0073. Compose explicit Release candidates from the current corpus

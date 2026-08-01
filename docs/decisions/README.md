@@ -6,6 +6,24 @@ decisions. [`CONTEXT.md`](../../CONTEXT.md) owns terminology; the
 owns integrated implementation detail. An ADR fixes one boundary and names the
 evidence required to reopen it.
 
+## Authoring frontmatter
+
+[ADR-0097](0097-require-routing-clauses-in-agent-facing-frontmatter.md) applies
+the repository's uniform description rule to every agent-facing document class.
+Start a new ADR with this skeleton and replace each placeholder with language
+derived from that ADR's own Decision:
+
+```yaml
+---
+name: adr-NNNN-action-led-name
+version: "1.0.0"
+description: >
+  Record the decision-specific fixed choice. Use when the decision-specific
+  boundary is being implemented or reviewed. Not for the decision-specific
+  shortcut, exclusion, or deferred capability.
+---
+```
+
 ## Implementation boundary baseline
 
 Read these ADRs before implementation. Together they define the allowed process
@@ -14,6 +32,7 @@ kernel, capability separation, and publication visibility model.
 
 | Boundary | Accepted ADR | Fixed choice | Prohibited shortcut |
 |---|---|---|---|
+| Agent-facing frontmatter | [0097 — Require routing clauses in agent-facing frontmatter](0097-require-routing-clauses-in-agent-facing-frontmatter.md) | Every frontmatter description is action-led, bounded, English-only, and carries decision-specific `Use when ...` and `Not for ...` routing | Document-class exceptions, generic triggers, or routing language that changes the document's decision without a refining ADR |
 | Engine output | [0006 — Engine delivers context, not answers](0006-engine-delivers-context-not-answers.md) | The online engine boundary ends at `ContextPackage` | Generation, planning, or external effects inside ContextEngine |
 | Bot caller | [0002 — BotDelivery outside the engine](0002-bot-gateway-outside-engine.md) | BotDelivery is an external caller in a trusted Bot application process | Treating IM as a Runtime transport or importing engine internals |
 | Process shape | [0008 — Modular monolith plus worker](0008-modular-monolith-plus-worker.md) | API and independent Supply worker share one domain package; M2 adds the Bot application | Premature engine microservices or ambient worker identity |
@@ -210,3 +229,4 @@ touched:
 - [0094 — Admit a format-neutral parsed document family](0094-admit-a-format-neutral-parsed-document-family.md)
 - [0095 — Bridge Runtime rerank through one internal pre-rerank Package](0095-bridge-runtime-rerank-through-one-internal-package.md)
 - [0096 — Bind Package token accounting to a release tokenizer](0096-bind-package-token-accounting-to-release-tokenizer.md)
+- [0097 — Require routing clauses in agent-facing frontmatter](0097-require-routing-clauses-in-agent-facing-frontmatter.md)

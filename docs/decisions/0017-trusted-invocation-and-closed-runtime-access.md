@@ -3,7 +3,9 @@ name: adr-0017-trusted-invocation-and-closed-runtime-access
 version: "1.0.0"
 description: >
   Fix trusted invocation construction and the closed HTTP, generated SDK, and
-  optionally activated MCP access set over one Runtime contract.
+  optionally activated MCP access set over one Runtime contract. Use when
+  adding Runtime ingress or constructing trusted invocation facts. Not for
+  direct Runtime access or caller-authored identity, ACL, or audience facts.
 ---
 
 # 0017. Trusted invocation and closed Runtime access surfaces

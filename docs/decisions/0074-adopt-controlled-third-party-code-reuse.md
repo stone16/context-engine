@@ -4,7 +4,9 @@ version: "1.0.0"
 description: >
   Replace the absolute zero-copy rule with license-tiered, registered,
   pinned-commit third-party reuse, keeping clean-room discipline for every
-  restricted source region.
+  restricted source region. Use when proposing, importing, or shipping
+  third-party code. Not for unregistered copies, floating provenance, or reuse
+  from clean-room-only source regions.
 ---
 
 # 0074. Adopt controlled third-party code reuse

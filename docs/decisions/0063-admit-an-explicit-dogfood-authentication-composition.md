@@ -5,7 +5,9 @@ description: >
   Allow one explicitly configured local trust composition that maps a
   locally held secret to one seeded Membership-backed UserActor, while the
   default composition stays reject-all and the full authorization chain
-  remains untouched.
+  remains untouched. Use when configuring local dogfood authentication for one
+  seeded Membership. Not for production identity, default-allow behavior, or
+  bypassing the full authorization chain.
 ---
 
 # 0063. Admit an explicit dogfood authentication composition

@@ -6,8 +6,8 @@ description: >
   locators, a closed structural-kind vocabulary including FIGURE, and explicit
   versioned format profiles, so DOCX and PDF compilation can be built without
   disguising their provenance as Markdown byte spans. Use when adding a
-  non-Markdown compiler or changing publication provenance contracts. Not an
-  approval of any third-party copy or of PDF model activation.
+  non-Markdown compiler or changing publication provenance contracts. Not for
+  approving third-party code reuse or activating a PDF model.
 ---
 
 # 0094. Admit a format-neutral parsed document family

@@ -4,7 +4,9 @@ version: "1.0.2"
 description: >
   Seal Runtime ordering so content-free CandidateRef values become
   AuthorizedProjection values before content-bearing relevance, assembly, or
-  model work.
+  model work. Use when modifying candidate discovery, authorization,
+  projection, reranking, or assembly. Not for bypassing the Kernel or exposing
+  content to a pre-authorization stage.
 ---
 
 # 0012. Seal authorization and projection before content-bearing relevance

@@ -4,7 +4,9 @@ version: "1.1.0"
 description: >
   Record the V1 retrieval index choice: Postgres FTS + pgvector + deterministic
   fusion, external index engines only when a real corpus violates latency or
-  recall SLOs. Use when proposing Elasticsearch/dedicated vector DBs.
+  recall SLOs. Use when proposing Elasticsearch/dedicated vector DBs. Not for
+  replacing authorization truth or adding an external index before measured SLO
+  evidence.
 ---
 
 # 0009. pgvector-first retrieval index

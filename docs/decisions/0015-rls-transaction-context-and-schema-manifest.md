@@ -3,7 +3,9 @@ name: adr-0015-rls-transaction-context-and-schema-manifest
 version: "1.0.0"
 description: >
   Define transaction-local tenant context, runtime role constraints, and an
-  all-table schema security manifest for PostgreSQL RLS.
+  all-table schema security manifest for PostgreSQL RLS. Use when adding tables,
+  RLS policies, roles, or transaction-scoped actor context. Not for
+  Organization-only access or owner-role isolation tests.
 ---
 
 # 0015. RLS uses transaction-local context and an all-table security manifest

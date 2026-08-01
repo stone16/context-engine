@@ -4,7 +4,9 @@ version: "1.0.0"
 description: >
   Dissolve the standalone contract-kit milestone: connector contract ownership
   moves to the Supply execution seam, deterministic twins become a per-connector
-  test obligation, and the Slack-first proving order is abolished.
+  test obligation, and the Slack-first proving order is abolished. Use when
+  defining a connector contract or deterministic twin obligation. Not for a
+  standalone contract-kit milestone or a mandatory Slack-first rollout.
 ---
 
 # 0078. Narrow the contract-kit gate to per-connector twins

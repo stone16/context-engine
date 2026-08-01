@@ -3,7 +3,9 @@ name: adr-0072-report-file-source-status-with-closed-refusals
 version: "1.0.0"
 description: >
   Expose content-free File source operational status and retain only a closed
-  compilation-refusal category for currently observed unpublished paths.
+  compilation-refusal category for currently observed unpublished paths. Use
+  when reporting File Source progress or current compilation refusals. Not for
+  content, retained diagnostics, Runtime authority, or provider-health claims.
 ---
 
 # 0072. Report File source status with closed refusals

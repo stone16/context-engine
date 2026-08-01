@@ -4,7 +4,9 @@ version: "1.0.0"
 description: >
   Join the frozen security authority to exact executable evidence, live RLS
   inventory, and provenance-bearing release artifacts without inventing
-  product behavior or aggregate scoring.
+  product behavior or aggregate scoring. Use when registering or executing M0
+  release-gate security evidence. Not for security scoring or inventing product
+  semantics to satisfy a gate.
 ---
 
 # 0034. Execute the M0 security veto from registered evidence

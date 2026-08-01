@@ -3,7 +3,9 @@ name: adr-0067-discover-vector-candidates-in-the-current-runtime-transaction
 version: "1.0.0"
 description: >
   Embed Acquire queries with the publication-compatible profile and discover
-  bounded content-free pgvector candidates in the retained UserActor transaction.
+  bounded content-free pgvector candidates in the retained UserActor
+  transaction. Use when performing vector candidate discovery for Acquire. Not
+  for second connections, content-bearing candidates, or rank as authorization.
 ---
 
 # 0067. Discover vector candidates in the current Runtime transaction

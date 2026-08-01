@@ -4,7 +4,8 @@ version: "1.1.0"
 description: >
   Record the revocation mechanism: synchronous Policy Epoch bump invalidates the
   next request immediately; index/cache/blob cleanup is asynchronous. Use when
-  designing any permission change, offboarding, or cache invalidation path.
+  designing any permission change, offboarding, or cache invalidation path. Not
+  for delaying revocation until asynchronous cleanup completes.
 ---
 
 # 0010. Revocation = synchronous epoch bump, asynchronous cleanup

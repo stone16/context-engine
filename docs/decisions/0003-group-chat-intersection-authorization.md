@@ -4,7 +4,9 @@ version: "1.2.0"
 description: >
   Record the group-chat authorization semantics for IM bots: public replies are
   authorized against the asker's scope intersected with all group members' scopes.
-  Use when designing or reviewing any bot reply path or audience decision.
+  Use when designing or reviewing any bot reply path or audience decision. Not
+  for asker-private replies or authorization computed from caller-supplied
+  group facts.
 ---
 
 # 0003. Group-chat replies use asker ∩ all-members intersection

@@ -3,7 +3,9 @@ name: adr-0013-trusted-delivery-egress-and-capability-taxonomy
 version: "1.0.1"
 description: >
   Put group audience facts, egress, citation, continuation, and write effects
-  into explicit trusted types and deep delivery/action Modules.
+  into explicit trusted types and deep delivery/action Modules. Use when
+  defining trusted delivery inputs, egress, citations, continuation, or effects.
+  Not for caller-manufactured trust facts or collapsed capability types.
 ---
 
 # 0013. Trusted delivery context, egress grants, and distinct capabilities

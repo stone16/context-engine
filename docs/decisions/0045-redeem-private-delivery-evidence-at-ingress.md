@@ -3,7 +3,9 @@ name: adr-0045-redeem-private-delivery-evidence-at-ingress
 version: "1.0.0"
 description: >
   Issue and redeem digest-only, request-bound private DeliveryEvidenceRef values
-  through dedicated identity and Runtime database capabilities before content work.
+  through dedicated identity and Runtime database capabilities before content
+  work. Use when constructing private TrustedDeliveryContext at ingress. Not for
+  raw trusted facts in a wire body or application-role evidence minting.
 ---
 
 # 0045. Redeem private delivery evidence at ingress

@@ -4,6 +4,8 @@ version: "1.0.0"
 description: >
   Activate one trusted Markdown File import through an exact durable WorkerLease,
   atomic immutable publication, and a content-free exact-phrase CandidateIndex.
+  Use when executing the first leased Markdown File import. Not for ambient
+  worker identity, broad ingestion, or content-bearing candidate discovery.
 ---
 
 # 0037. Publish the first File through an exact WorkerLease

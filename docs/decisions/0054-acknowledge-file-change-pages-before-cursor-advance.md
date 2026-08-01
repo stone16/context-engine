@@ -3,7 +3,9 @@ name: adr-0054-acknowledge-file-change-pages-before-cursor-advance
 version: "1.0.0"
 description: >
   Activate bounded File readChanges while keeping provider proposals distinct
-  from Control-accepted acquisition checkpoints.
+  from Control-accepted acquisition checkpoints. Use when accepting a provider
+  File change page and advancing its cursor. Not for provider-observation cursor
+  advance, partial page acceptance, or Runtime authority from progress.
 ---
 
 # 0054. Acknowledge File change pages before cursor advance

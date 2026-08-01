@@ -3,7 +3,9 @@ name: adr-0016-implementation-authority-and-vertical-slice-roadmap
 version: "1.1.0"
 description: >
   Make the concise current implementation design authoritative and deliver the
-  program as testable vertical slices with a separate launch gate.
+  program as testable vertical slices with a separate launch gate. Use when
+  selecting implementation authority or ordering delivery slices. Not for
+  silently replacing accepted design or merging launch gates into build work.
 ---
 
 # 0016. One implementation authority and a tracer-bullet roadmap

@@ -3,7 +3,9 @@ name: adr-0018-immutable-revision-publication
 version: "1.0.0"
 description: >
   Fix the ContextResource to immutable ContextRevision to ContextFragment model
-  and atomic active-pointer publication semantics.
+  and atomic active-pointer publication semantics. Use when publishing content
+  or changing Revision and Fragment lineage. Not for in-place content mutation
+  or cleanup-defined visibility.
 ---
 
 # 0018. Publish immutable ContextRevisions through one atomic active pointer

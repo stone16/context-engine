@@ -4,6 +4,8 @@ version: "1.0.0"
 description: >
   Detect vanished shallow File paths from one exact complete baseline while
   keeping deletion execution, Runtime visibility, and audience authority closed.
+  Use when detecting paths absent from a complete shallow File baseline. Not for
+  executing tombstones, changing visibility, or granting audience authority.
 ---
 
 # 0056. Detect File deletions without tombstone authority

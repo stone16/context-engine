@@ -3,7 +3,9 @@ name: adr-0052-gate-model-generation-by-package
 version: "1.0.0"
 description: >
   Permit private BotDelivery generation only from one current audience-bound
-  ContextPackage and an exactly matching one-shot model EgressGrant.
+  ContextPackage and an exactly matching one-shot model EgressGrant. Use when
+  generating a private answer from authorized context. Not for arbitrary prompt
+  context, multiple Packages, invented citations, or effect intents.
 ---
 
 # 0052. Gate model generation by one authorized Package

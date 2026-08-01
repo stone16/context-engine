@@ -3,7 +3,9 @@ name: adr-0049-prepare-one-exact-private-effect
 version: "1.0.0"
 description: >
   Prepare one operation-specific private ActionTicket through a digest-only,
-  FORCE-RLS, function-only PostgreSQL authority without invoking Sender.
+  FORCE-RLS, function-only PostgreSQL authority without invoking Sender. Use
+  when preparing one exact private ActionPlane effect. Not for invoking Sender,
+  issuing a generic ticket, or accepting wire-derived intent.
 ---
 
 # 0049. Prepare one exact private effect before Sender

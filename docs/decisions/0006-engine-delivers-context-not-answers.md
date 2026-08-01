@@ -5,6 +5,8 @@ description: >
   Record the engine boundary: the only online deliverable is the ContextPackage;
   generation, planning, and write tools live in upper Agent Runtime applications.
   Use when tempted to add answer generation or action execution to the engine.
+  Not for BotDelivery generation or ActionPlane effects that consume a Package
+  outside the engine.
 ---
 
 # 0006. The engine delivers context, not answers

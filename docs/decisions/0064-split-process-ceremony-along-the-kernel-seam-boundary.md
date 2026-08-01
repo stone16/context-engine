@@ -4,7 +4,9 @@ version: "1.0.0"
 description: >
   Keep full evidence ceremony for changes that touch sealed authorization
   surfaces, and run seam-side product work with a lighter process, using the
-  architecture's existing kernel-versus-seam boundary as the lane test.
+  architecture's existing kernel-versus-seam boundary as the lane test. Use
+  when choosing the evidence lane for a change. Not for weakening ceremony on
+  sealed authorization surfaces or treating seam work as security-neutral.
 ---
 
 # 0064. Split process ceremony along the kernel-seam boundary
