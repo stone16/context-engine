@@ -331,7 +331,7 @@ def load_dataset(path: Path) -> BenchmarkDataset:
         documents = tuple(
             BenchmarkDocument(
                 document_ref=_text(document["documentRef"]),
-                text=_text(document["text"]),
+                text=_document_text(document["text"]),
             )
             for value in raw_documents
             for document in [cast(dict[str, object], value)]
@@ -377,6 +377,12 @@ def dataset_content_digest(document: object) -> str:
 
 def _text(value: object) -> str:
     if type(value) is not str or not value or value != value.strip():
+        raise BenchmarkUnavailable("benchmark dataset is unavailable")
+    return value
+
+
+def _document_text(value: object) -> str:
+    if type(value) is not str or not value.strip():
         raise BenchmarkUnavailable("benchmark dataset is unavailable")
     return value
 

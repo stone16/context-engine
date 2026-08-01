@@ -124,7 +124,8 @@ class BenchmarkDocument:
 
     def __post_init__(self) -> None:
         _require_nonblank("benchmark document_ref", self.document_ref)
-        _require_nonblank("benchmark document text", self.text)
+        if type(self.text) is not str or not self.text.strip():
+            raise BenchmarkUnavailable("benchmark document text is unavailable")
 
 
 @dataclass(frozen=True, slots=True)
@@ -949,7 +950,7 @@ def _validate_json_schema(
         if type(minimum_length) is not int or len(value) < minimum_length:
             raise BenchmarkUnavailable("benchmark report schema is unavailable")
         if pattern is not None and (
-            type(pattern) is not str or re.fullmatch(pattern, value) is None
+            type(pattern) is not str or re.search(pattern, value) is None
         ):
             raise BenchmarkUnavailable("benchmark report schema is unavailable")
     elif expected_type == "integer":

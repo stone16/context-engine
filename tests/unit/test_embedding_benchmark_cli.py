@@ -145,6 +145,34 @@ def test_locked_document_accepted_by_schema_is_accepted_by_loader(
     assert dataset.locked is True
 
 
+def test_loader_accepts_multiline_markdown_document_text(tmp_path: Path) -> None:
+    path = tmp_path / "dataset.json"
+    _write_dataset(path)
+    document = json.loads(path.read_text(encoding="utf-8"))
+    document["documents"][0]["text"] = "# Heading\n\nA real Markdown paragraph."
+    unlocked = {key: value for key, value in document.items() if key != "lock"}
+    document["lock"]["contentDigest"] = cli.dataset_content_digest(unlocked)
+    path.write_text(json.dumps(document), encoding="utf-8")
+
+    dataset = cli.load_dataset(path)
+
+    assert dataset.documents[0].text == "# Heading\n\nA real Markdown paragraph."
+
+
+def test_loader_preserves_a_markdown_terminal_newline(tmp_path: Path) -> None:
+    path = tmp_path / "dataset.json"
+    _write_dataset(path)
+    document = json.loads(path.read_text(encoding="utf-8"))
+    document["documents"][0]["text"] = "# Heading\n"
+    unlocked = {key: value for key, value in document.items() if key != "lock"}
+    document["lock"]["contentDigest"] = cli.dataset_content_digest(unlocked)
+    path.write_text(json.dumps(document), encoding="utf-8")
+
+    dataset = cli.load_dataset(path)
+
+    assert dataset.documents[0].text == "# Heading\n"
+
+
 def test_loader_treats_the_supplied_schema_as_its_only_shape_authority(
     tmp_path: Path,
     monkeypatch: Any,
