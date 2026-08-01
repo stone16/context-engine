@@ -4,7 +4,9 @@ version: "1.0.1"
 description: >
   Activate rich Markdown v3 behind the exact File-import WorkerLease, persist
   immutable content-free Revision link edges, and admit one authorized graph
-  hop into post-authorization ranking.
+  hop into post-authorization ranking. Use when publishing rich Markdown link
+  lineage or ranking one authorized graph hop. Not for link edges as authority,
+  content-bearing pre-Kernel graphs, or unreauthorized cross-Article content.
 ---
 
 # 0093. Activate leased rich Markdown and the Revision link graph

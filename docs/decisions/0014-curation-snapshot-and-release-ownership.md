@@ -3,7 +3,9 @@ name: adr-0014-curation-snapshot-and-release-ownership
 version: "1.0.1"
 description: >
   Publish post-Revision curation through its own immutable snapshot and give
-  ReleaseManifest promotion one Module owner.
+  ReleaseManifest promotion one Module owner. Use when changing curation
+  snapshots or ReleaseManifest publication ownership. Not for letting Control,
+  evaluators, or Curation publish a release.
 ---
 
 # 0014. Curation has an independent snapshot and release owner

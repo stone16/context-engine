@@ -3,7 +3,9 @@ name: adr-0021-stage-http-authentication-before-provider-selection
 version: "1.0.0"
 description: >
   Automate the HTTP trusted-invocation boundary without selecting or implying
-  a production identity provider or activating Runtime delivery.
+  a production identity provider or activating Runtime delivery. Use when
+  wiring the staged HTTP authentication boundary. Not for choosing a production
+  identity provider or treating test authentication as production trust.
 ---
 
 # 0021. Stage HTTP authentication before identity-provider selection

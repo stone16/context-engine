@@ -4,7 +4,9 @@ version: "1.0.0"
 description: >
   Refine distribution-completeness checks so a maintainer-decided unproduced
   artifact kind is explicit and schema-validated without weakening evidence
-  checks for produced artifacts.
+  checks for produced artifacts. Use when a maintainer explicitly declares an
+  artifact kind unproduced. Not for skipping attribution, license, notice, or
+  SBOM evidence for an artifact that is produced.
 ---
 
 # 0084. Exempt maintainer-decided unproduced artifact kinds

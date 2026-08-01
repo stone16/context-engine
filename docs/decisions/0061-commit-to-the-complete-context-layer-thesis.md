@@ -4,7 +4,9 @@ version: "1.0.0"
 description: >
   Fix the product thesis as one complete context layer with two context
   families, and defer the structured acquisition family behind an explicit
-  boundary instead of forcing it into snapshot publication semantics.
+  boundary instead of forcing it into snapshot publication semantics. Use when
+  evaluating the product thesis or placement of a context family. Not for
+  collapsing structured acquisition into snapshot publication semantics.
 ---
 
 # 0061. Commit to the complete context layer thesis

@@ -3,7 +3,9 @@ name: adr-0026-normalize-no-authorized-evidence
 version: "1.2.0"
 description: >
   Make denied, cross-Organization, and nonexistent Acquire candidates share one
-  externally indistinguishable no-authorized-Evidence outcome.
+  externally indistinguishable no-authorized-Evidence outcome. Use when handling
+  a candidate that yields no authorized Evidence. Not for existence-specific
+  responses, denied counts, or unproven timing-equivalence claims.
 ---
 
 # 0026. Normalize every no-authorized-Evidence Acquire outcome

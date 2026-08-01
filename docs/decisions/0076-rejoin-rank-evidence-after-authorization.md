@@ -4,7 +4,9 @@ version: "1.0.0"
 description: >
   Add an authorized ranking stage that joins pre-Kernel rank evidence back onto
   successful projections by exact CandidateRef, while the Kernel itself stays
-  rank-blind and rank never becomes part of an authorization grant.
+  rank-blind and rank never becomes part of an authorization grant. Use when
+  reranking successful projections with pre-Kernel rank evidence. Not for
+  rank-aware authorization or rank evidence that cannot rejoin exactly.
 ---
 
 # 0076. Rejoin rank evidence after authorization

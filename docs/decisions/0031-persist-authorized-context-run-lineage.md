@@ -3,7 +3,9 @@ name: adr-0031-persist-authorized-context-run-lineage
 version: "1.0.0"
 description: >
   Persist one final authorized-only ContextRun and a separately restricted,
-  redacted audit category before returning each successful Acquire Package.
+  redacted audit category before returning each successful Acquire Package. Use
+  when persisting Runtime delivery lineage or denial audit categories. Not for
+  retaining raw queries, Packages, denied identifiers, or denied counts.
 ---
 
 # 0031. Persist authorized-only ContextRun lineage before delivery

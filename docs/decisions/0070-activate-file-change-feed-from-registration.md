@@ -4,7 +4,9 @@ version: "1.0.0"
 description: >
   Permit the existing change-feed Control operation to advance either a
   registered v1 or import-enabled v2 File source to the same immutable v3
-  capability manifest.
+  capability manifest. Use when advancing a registered File Source into the
+  existing change-feed capability. Not for a second feed protocol, new provider
+  semantics, or caller-authored capability manifests.
 ---
 
 # 0070. Activate a File change feed from registration

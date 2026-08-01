@@ -4,7 +4,9 @@ version: "1.0.0"
 description: >
   Register one Organization-owned File ContextSource and immutable first
   SourceVersion through a trusted ContextControl call without activating File
-  acquisition or a new wire API.
+  acquisition or a new wire API. Use when creating the first trusted File Source
+  registration. Not for acquiring File content or introducing another public
+  transport.
 ---
 
 # 0035. Register File sources through one trusted ContextControl transaction

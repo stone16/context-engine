@@ -1,7 +1,7 @@
 ---
-version: alpha
+version: "1.0.0"
 name: ContextEngine Evidence Console
-description: A flight-recorder evidence docket: exact, quiet, and built for inspection.
+description: Define the exact, quiet flight-recorder visual language for the Evidence Console. Use when creating or reviewing its user-facing interface and components. Not for backend architecture, security authority, or non-UI documentation.
 colors:
   background: "oklch(0.985 0.004 225)"
   foreground: "oklch(0.205 0.012 225)"

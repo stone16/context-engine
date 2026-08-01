@@ -3,7 +3,9 @@ name: adr-0032-membership-field-projection-rights
 version: "1.0.0"
 description: >
   Intersect exact Resource authorization with current Membership/version field
-  rights before structured Fragment values leave PostgreSQL.
+  rights before structured Fragment values leave PostgreSQL. Use when projecting
+  structured fields after exact Resource authorization. Not for caller-selected
+  fields or Python-side filtering of private values.
 ---
 
 # 0032. Bind materialized fields to current Membership projection rights

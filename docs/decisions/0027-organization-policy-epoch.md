@@ -4,6 +4,8 @@ version: "1.2.0"
 description: >
   Select an Organization-level Policy Epoch for the first Acquire revocation
   slice and freeze its atomic mutation and final-delivery validation boundary.
+  Use when implementing Organization-wide revocation or final delivery checks.
+  Not for cleanup-defined revocation or caller-authored epochs.
 ---
 
 # 0027. Organization Policy Epoch is the V0 revocation boundary

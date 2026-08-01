@@ -5,6 +5,8 @@ description: >
   Record the language/stack decision: Python 3.13 + FastAPI/Pydantic +
   SQLAlchemy/Alembic + PostgreSQL 17 + pgvector, with evidence-based revisit
   triggers. Use when questioning the stack choice or proposing a replacement.
+  Not for changing one dependency without revisiting the accepted stack
+  boundary.
 ---
 
 # 0005. Python 3.13 stack; revisit on falsifiable stack risk

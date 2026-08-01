@@ -4,7 +4,9 @@ version: "1.0.0"
 description: >
   Compose one operator-invoked File acquisition cycle from separate exact
   read, accept, and schedule Control calls while preserving checkpoint
-  idempotence.
+  idempotence. Use when composing an operator-invoked File scan cycle. Not for
+  autonomous polling, collapsed Control operations, or checkpoint advancement
+  without exact accept-and-schedule results.
 ---
 
 # 0071. Compose bounded File scan cycles

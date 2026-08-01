@@ -3,7 +3,9 @@ name: adr-0025-current-transaction-materialized-projection
 version: "1.0.0"
 description: >
   Bind the first exact-authorized PostgreSQL Fragment projection to the current
-  UserActor transaction and keep content behind the sealed Kernel.
+  UserActor transaction and keep content behind the sealed Kernel. Use when
+  materializing an authorized candidate into Evidence. Not for second hydration
+  transactions or any body read before exact authorization.
 ---
 
 # 0025. Bind materialized projection to the current Runtime transaction

@@ -4,6 +4,8 @@ version: "1.0.0"
 description: >
   Bind accepted File observations to existing import jobs without inventing an
   audience or allowing later filesystem bytes to replace checkpoint lineage.
+  Use when scheduling accepted File observations for import. Not for inventing
+  audience authority or substituting later bytes for accepted lineage.
 ---
 
 # 0055. Schedule accepted File observations explicitly

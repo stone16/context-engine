@@ -4,7 +4,9 @@ version: "1.0.0"
 description: >
   Reuse Onyx capabilities as vendored code behind ContextEngine-owned runners
   and three keystone seams, never as a deployed second product, keeping exactly
-  one Tenant/ACL/storage/index/revocation truth.
+  one Tenant/ACL/storage/index/revocation truth. Use when adapting an Onyx
+  capability behind an owned runner or keystone seam. Not for deploying Onyx or
+  adding a second tenant, ACL, persistence, index, or revocation authority.
 ---
 
 # 0075. Reuse Onyx capabilities through owned runners and seams

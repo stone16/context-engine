@@ -3,7 +3,9 @@ name: adr-0091-reconcile-connector-acl-freshness-at-acceptance
 version: "1.0.0"
 description: >
   Treat connector ACL timestamps and epochs as observations by reconciling them
-  with the exact WorkerLease and database clock before page acceptance.
+  with the exact WorkerLease and database clock before page acceptance. Use
+  when accepting connector ACL observations under a WorkerLease. Not for
+  runner-authored time authority, stale leases, or unchecked ACL epochs.
 ---
 
 # 0091. Reconcile connector ACL freshness at Supply acceptance

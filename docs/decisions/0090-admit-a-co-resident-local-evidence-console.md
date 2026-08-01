@@ -4,7 +4,9 @@ version: "1.0.0"
 description: >
   Admit one explicitly authenticated server-rendered evidence console inside
   the existing API process while preserving the public HTTP, Runtime, Control,
-  and release-publication authority boundaries.
+  and release-publication authority boundaries. Use when implementing the local
+  evidence console inside API ingress. Not for anonymous access, direct UI-to-
+  engine calls, Membership-as-Control, or feedback publication authority.
 ---
 
 # 0090. Admit a co-resident local evidence console

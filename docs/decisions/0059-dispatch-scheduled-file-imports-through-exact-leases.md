@@ -3,7 +3,9 @@ name: adr-0059-dispatch-scheduled-file-imports-through-exact-leases
 version: "1.0.0"
 description: >
   Let the independent Supply worker select first-attempt scheduled File imports
-  without caller tenant routing or broader Control authority.
+  without caller tenant routing or broader Control authority. Use when claiming
+  the oldest scheduled first-attempt File import. Not for caller-selected
+  routing, retry or reclaim, or a second queue.
 ---
 
 # 0059. Dispatch scheduled File imports through exact leases

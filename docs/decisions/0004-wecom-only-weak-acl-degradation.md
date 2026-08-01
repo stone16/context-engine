@@ -5,7 +5,8 @@ description: >
   Record that the WeChat connector targets WeCom (企业微信) only, personal WeChat is
   out of scope, and the weak-ACL-source degradation semantics become a first-class
   standard. Use when scoping any messaging-source connector or a source without
-  native ACLs.
+  native ACLs. Not for treating a failed stronger ACL check as Weak evidence or
+  supporting personal WeChat.
 ---
 
 # 0004. WeCom only; weak-ACL degradation is a first-class standard

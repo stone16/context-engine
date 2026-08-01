@@ -4,7 +4,9 @@ version: "1.0.0"
 description: >
   Activate the first EffectiveScope oracle as a finite intersection over typed
   Organization/Source/Resource targets, with seven required trusted operands
-  and optional RequestNarrowing as an explicit identity-or-filter input.
+  and optional RequestNarrowing as an explicit identity-or-filter input. Use
+  when changing EffectiveScope operands or RequestNarrowing. Not for treating a
+  missing operand as unrestricted or caller input as a trusted grant.
 ---
 
 # 0024. Model the first EffectiveScope as finite target intersection

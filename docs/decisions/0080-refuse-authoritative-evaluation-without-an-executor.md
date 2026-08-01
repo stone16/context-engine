@@ -4,7 +4,9 @@ version: "1.1.0"
 description: >
   Keep golden evaluation fail-closed: only a run the executor performed itself
   through the tracked Runtime seam can attest security, serialized observations
-  never can, and the executor privately owns that construction boundary.
+  never can, and the executor privately owns that construction boundary. Use
+  when deciding whether a golden evaluation run may attest security. Not for
+  treating serialized observations or caller-constructed runs as authoritative.
 ---
 
 # 0080. Refuse authoritative evaluation without an executor

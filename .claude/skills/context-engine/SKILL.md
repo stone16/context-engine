@@ -1,6 +1,6 @@
 ---
 name: context-engine
-description: Acquire fresh authorized maintainer context from ContextEngine for questions about this repository, its design decisions, implementation history, and private working corpus. Use when answering would benefit from the maintainer's real notes or repository corpus rather than only the checked-out files.
+description: Acquire fresh authorized maintainer context from ContextEngine for questions about this repository, its design decisions, implementation history, and private working corpus. Use when answering would benefit from the maintainer's real notes or repository corpus rather than only the checked-out files. Not for reusing an earlier Package, bypassing a refusal, or replacing checked-out repository authority.
 ---
 
 # Acquire ContextEngine context

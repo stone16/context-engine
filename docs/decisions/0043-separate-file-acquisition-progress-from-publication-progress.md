@@ -3,7 +3,9 @@ name: adr-0043-separate-file-acquisition-progress-from-publication-progress
 version: "1.0.0"
 description: >
   Persist source-scoped accepted-change checkpoints separately from contiguous
-  Runtime-visibility publication watermarks.
+  Runtime-visibility publication watermarks. Use when reporting accepted versus
+  visibly published File progress. Not for one ambiguous checkpoint or Runtime
+  authorization from operational watermarks.
 ---
 
 # 0043. Separate File acquisition progress from publication progress

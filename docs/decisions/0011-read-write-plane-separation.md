@@ -4,7 +4,8 @@ version: "1.2.1"
 description: >
   Record the separation of context reads from action writes: ContextAccessTicket
   and ActionTicket share an identity chain but different audiences and are never
-  interchangeable. Use when adding any side-effectful capability.
+  interchangeable. Use when adding any side-effectful capability. Not for using
+  read authority or a ContextAccessTicket to perform an effect.
 ---
 
 # 0011. Context read / Action write plane separation

@@ -3,7 +3,9 @@ name: adr-0040-stage-and-atomically-activate-file-replacements
 version: "1.0.0"
 description: >
   Stage one complete changed File Revision behind the old active pointer, then
-  atomically activate it with immutable supersession lineage.
+  atomically activate it with immutable supersession lineage. Use when replacing
+  an active File Revision. Not for exposing staged content or mixing old and new
+  visibility across the activation boundary.
 ---
 
 # 0040. Stage and atomically activate File replacements

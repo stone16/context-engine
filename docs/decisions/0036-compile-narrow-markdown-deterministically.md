@@ -4,6 +4,8 @@ version: "1.0.0"
 description: >
   Fix the first pure Markdown compiler to one heading-plus-paragraph shape,
   canonical normalized text, end-exclusive positions, and versioned digests.
+  Use when implementing or testing the first narrow Markdown compiler. Not for
+  rich Markdown structures or inferred source positions.
 ---
 
 # 0036. Compile the first Markdown shape from canonical bytes

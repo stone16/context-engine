@@ -4,7 +4,9 @@ version: "1.0.0"
 description: >
   Bound live private-audience Feishu event ingress and Sender calls to the
   existing BotDelivery composition without adding trust, effect, or ingestion
-  authority.
+  authority. Use when replacing private BotDelivery twins with verified Feishu
+  ingress or Sender effects. Not for new trust, group delivery, ingestion
+  authority, or another process.
 ---
 
 # 0089. Bound live Feishu to the existing private Bot composition

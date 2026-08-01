@@ -4,6 +4,8 @@ version: "1.0.0"
 description: >
   Classify unchanged File acquisitions before publication by a tenant-scoped
   canonical content identity and serialize concurrent decisions in PostgreSQL.
+  Use when deciding whether an acquired File changed. Not for path-only identity
+  or unsynchronized concurrent publication decisions.
 ---
 
 # 0039. Deduplicate unchanged File acquisitions before publication

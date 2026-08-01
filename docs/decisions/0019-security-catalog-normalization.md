@@ -3,7 +3,9 @@ name: adr-0019-security-catalog-normalization
 version: "1.0.0"
 description: >
   Normalize the release security catalog to fifteen stable invariant IDs and
-  distinguish canonical acceptance scenarios from derived evidence cases.
+  distinguish canonical acceptance scenarios from derived evidence cases. Use
+  when adding release invariants or executable security evidence. Not for
+  aliases, aggregate security scores, or inflated scenario counts.
 ---
 
 # 0019. Normalize the release security catalog to fifteen stable IDs

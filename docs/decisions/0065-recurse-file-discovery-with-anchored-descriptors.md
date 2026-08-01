@@ -3,7 +3,9 @@ name: adr-0065-recurse-file-discovery-with-anchored-descriptors
 version: "1.0.0"
 description: >
   Expand File discovery to canonical nested Markdown paths through anchored
-  no-follow descriptors and one server-owned bounded byte ceiling.
+  no-follow descriptors and one server-owned bounded byte ceiling. Use when
+  discovering nested Markdown Files. Not for symlink traversal, unbounded reads,
+  caller-owned limits, or non-Markdown discovery.
 ---
 
 # 0065. Recurse File discovery with anchored descriptors

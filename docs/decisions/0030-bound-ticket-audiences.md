@@ -4,7 +4,9 @@ version: "1.0.0"
 description: >
   Activate distinct signed ContextAccessTicket and ActionTicket protocol
   boundaries only for one synthetic Provider read and one synthetic channel
-  no-op while preserving the production carriers as deferred.
+  no-op while preserving the production carriers as deferred. Use when defining
+  read-versus-action ticket audiences. Not for cross-plane ticket reuse or
+  treating the synthetic operations as production carriers.
 ---
 
 # 0030. Bound the first ticket audiences to synthetic effects

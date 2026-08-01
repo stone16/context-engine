@@ -4,7 +4,9 @@ version: "1.0.0"
 description: >
   Order the roadmap by the maintainer's own real workloads instead of a fixed
   connector sequence, and require every capability investment to be pulled by
-  an observed need rather than built breadth-first.
+  an observed need rather than built breadth-first. Use when ordering roadmap
+  work or justifying a new capability investment. Not for breadth-first
+  connector expansion without an observed maintainer workload.
 ---
 
 # 0062. Pull development through dogfood workloads

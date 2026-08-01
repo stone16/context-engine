@@ -3,7 +3,9 @@ name: adr-0047-openapi-v0-runtime-bridge
 version: "1.0.0"
 description: >
   Freeze one public OpenAPI v0 resolve contract while keeping the provisional
-  v1 route as a hidden transport bridge to the same sealed Runtime path.
+  v1 route as a hidden transport bridge to the same sealed Runtime path. Use
+  when changing the public resolve contract or its hidden bridge. Not for a
+  second authorization composition or in-place mutation of frozen v0 artifacts.
 ---
 
 # 0047. Freeze OpenAPI v0 through one sealed Runtime path

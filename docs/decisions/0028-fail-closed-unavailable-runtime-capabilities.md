@@ -3,7 +3,9 @@ name: adr-0028-fail-closed-unavailable-runtime-capabilities
 version: "1.0.0"
 description: >
   Close the Runtime request union and activate deterministic M0 refusals for
-  declared operations whose real production carriers do not yet exist.
+  declared operations whose real production carriers do not yet exist. Use when
+  declaring or handling an unavailable Runtime operation. Not for fake empty
+  success or caller-authored capability plans.
 ---
 
 # 0028. Unavailable Runtime capabilities fail closed before content I/O

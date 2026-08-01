@@ -3,7 +3,9 @@ name: adr-0060-reclaim-expired-file-imports-with-bounded-retries
 version: "1.0.0"
 description: >
   Reclaim expired scheduler-owned File imports with database-timed bounded
-  backoff while preserving the existing exact WorkerLease recovery path.
+  backoff while preserving the existing exact WorkerLease recovery path. Use
+  when reclaiming expired scheduled File work. Not for retrying terminal
+  failure, dead-letter authority, caller-owned timing, or a new queue.
 ---
 
 # 0060. Reclaim expired File imports with bounded retries

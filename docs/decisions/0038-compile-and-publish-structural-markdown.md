@@ -3,7 +3,9 @@ name: adr-0038-compile-and-publish-structural-markdown
 version: "1.0.0"
 description: >
   Version Markdown compilation so logical structural units retain exact source
-  provenance and same-Fragment heading ancestry through atomic publication.
+  provenance and same-Fragment heading ancestry through atomic publication. Use
+  when compiling structural Markdown into publishable Fragments. Not for losing
+  exact source spans or publishing a partially prepared Revision.
 ---
 
 # 0038. Compile and publish structural Markdown units

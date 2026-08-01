@@ -3,7 +3,9 @@ name: adr-0020-stage-organization-rls-before-actor-context
 version: "1.0.0"
 description: >
   Bound the first Organization RLS proof without activating an incomplete
-  request or worker ActorContext protocol.
+  request or worker ActorContext protocol. Use when proving the initial
+  Organization RLS slice before actor semantics exist. Not for activating an
+  incomplete request or worker identity model.
 ---
 
 # 0020. Stage the Organization RLS proof before ActorContext activation

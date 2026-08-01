@@ -4,6 +4,8 @@ version: "1.0.1"
 description: >
   Report privacy-shaped File dispatch batches and let the local operator scan
   or inspect every active File source without caller-copied Source references.
+  Use when reporting worker batches or composing a source-wide local cycle. Not
+  for caller-selected Source routing or content-bearing operational reports.
 ---
 
 # 0086. Report worker batches and compose source-wide cycles

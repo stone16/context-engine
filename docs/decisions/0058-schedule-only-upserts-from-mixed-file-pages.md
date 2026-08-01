@@ -3,7 +3,9 @@ name: adr-0058-schedule-only-upserts-from-mixed-file-pages
 version: "1.0.0"
 description: >
   Reuse explicit File page scheduling for the upsert projection of one current
-  mixed page without granting the scheduler delete or tombstone authority.
+  mixed page without granting the scheduler delete or tombstone authority. Use
+  when scheduling upserts from a validated mixed File page. Not for scheduling
+  its deletes or granting the scheduler tombstone authority.
 ---
 
 # 0058. Schedule only upserts from mixed File pages
