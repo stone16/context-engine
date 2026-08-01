@@ -712,6 +712,8 @@ def contains_only_accepted_rich_markdown_inline(
         return False
     fence: str | None = None
     fence_body_has_content = False
+    list_open = False
+    previous_line: str | None = None
     for line in source.splitlines():
         marker = _RICH_FENCE_PATTERN.match(line)
         if marker is not None:
@@ -728,25 +730,49 @@ def contains_only_accepted_rich_markdown_inline(
                 if not fence_body_has_content:
                     return False
                 fence = None
+            previous_line = line
             continue
         if fence is not None:
             fence_body_has_content = fence_body_has_content or bool(line.strip())
+            previous_line = line
             continue
-        if (
-            _THEMATIC_BREAK_PATTERN.fullmatch(line) is not None
-            or _RICH_SETEXT_PATTERN.fullmatch(line) is not None
-        ):
+        if not line.strip():
+            list_open = False
+            previous_line = line
             continue
+        if _RICH_SETEXT_PATTERN.fullmatch(line) is not None:
+            if (
+                previous_line is not None
+                and previous_line.strip()
+                and unsupported_rich_markdown_inline(previous_line.strip()) is not None
+            ):
+                return False
+            list_open = False
+            previous_line = line
+            continue
+        if _THEMATIC_BREAK_PATTERN.fullmatch(line) is not None:
+            list_open = False
+            previous_line = line
+            continue
+        list_item = _RICH_LIST_ITEM_PATTERN.fullmatch(line)
+        if list_open and line.startswith((" ", "\t")) and list_item is None:
+            if unsupported_rich_markdown_inline(line.lstrip()) is not None:
+                return False
+            previous_line = line
+            continue
+        list_open = list_item is not None
         stripped = line.strip()
         if stripped.startswith("<"):
             if _RICH_ANGLE_LITERAL_PATTERN.fullmatch(stripped) is not None:
                 continue
             if not _has_closed_rich_html_block(line, source):
                 return False
+            previous_line = line
             continue
         inspected = _rich_markdown_inline_payload(line)
         if unsupported_rich_markdown_inline(inspected) is not None:
             return False
+        previous_line = line
     return fence is None
 
 
@@ -1481,14 +1507,23 @@ def _validate_rich_closed_grammar(section: ParsedSection, source: str) -> None:
             raise ValueError("rich section source must match the closed grammar")
         return
     for line in lines:
-        if (
-            section.kind is SectionKind.HEADING
-            and _RICH_SETEXT_PATTERN.fullmatch(line) is not None
-        ):
-            continue
-        inspected = _rich_markdown_inline_payload(line)
-        if section.kind is SectionKind.LIST and line.startswith((" ", "\t")):
-            inspected = inspected.lstrip()
+        inspected = line
+        if section.kind is SectionKind.HEADING:
+            match = _RICH_ATX_HEADING_PATTERN.fullmatch(line)
+            if match is not None:
+                inspected = match.group(2).strip()
+            elif _RICH_SETEXT_PATTERN.fullmatch(line) is not None:
+                continue
+        elif section.kind is SectionKind.LIST:
+            match = _RICH_LIST_ITEM_PATTERN.fullmatch(line)
+            if match is not None:
+                inspected = match.group(2)
+            elif line.startswith((" ", "\t")):
+                inspected = line.lstrip()
+        elif line.lstrip().startswith(">"):
+            inspected = line.lstrip()[1:].lstrip()
+            if inspected.startswith("[!"):
+                inspected = _RICH_FOOTNOTE_PATTERN.sub("x", inspected, count=1)
         if unsupported_rich_markdown_inline(inspected) is not None:
             raise ValueError("rich section source must match the closed grammar")
 
