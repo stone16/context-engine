@@ -134,6 +134,7 @@ def _ui_import_scenario(
         b"# Handbook\n\nEmbed ![[private-runbook]].\n",
         b"# Handbook\n\nRead <https://private.invalid/runbook>.\n",
         b"# Handbook\n\nFirst paragraph.\n\nRead [[private-runbook]].\n",
+        b"# Handbook\n\n- Read [[private-runbook]].\n",
         b"# Handbook\n\nOnly *emphasis*.\n",
         b"# Handbook\n\nOnly `inline code`.\n",
         b"# Handbook\n\nOnly ~~strikethrough~~.\n",
@@ -225,6 +226,8 @@ def test_v3_only_import_preview_hands_off_to_the_leased_scan_path(
         b"# Handbook\n\n*Accepted* plus ~~private malformed body.\n",
         b"# Handbook\n\n`Accepted` plus ~~private malformed body.\n",
         b"# Handbook\n\n~~Accepted~~ plus `private malformed body.\n",
+        b"# Handbook\n\n[Accepted](note.md) plus ~~private malformed body.\n",
+        b"# Handbook\n\n[[Accepted]] plus `private malformed body.\n",
     ],
 )
 def test_malformed_import_refusal_stays_content_free_without_scan_handoff(

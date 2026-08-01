@@ -32,8 +32,8 @@ from engine.supply import (
     UnsupportedConstruct,
     canonicalize_parsed_document,
     contains_accepted_rich_markdown_construct,
+    contains_only_accepted_rich_markdown_inline,
     contains_rich_markdown_link,
-    mask_accepted_rich_markdown_inline,
 )
 
 FIXTURES = Path(__file__).parents[1] / "fixtures/markdown"
@@ -99,10 +99,12 @@ def test_rich_construct_detection_rejects_malformed_inline_syntax(
     assert not contains_accepted_rich_markdown_construct(source, construct)
 
 
-def test_rich_inline_mask_preserves_malformed_constructs_for_v1_refusal() -> None:
-    assert mask_accepted_rich_markdown_inline(
-        "*Accepted* and `accepted` but ~~malformed."
-    ) == "xxxxxxxxxx and xxxxxxxxxx but ~~malformed."
+def test_rich_inline_validation_rejects_an_accepted_construct_with_malformed_peer(
+) -> None:
+    assert not contains_only_accepted_rich_markdown_inline(
+        "*Accepted* and `accepted` but ~~malformed.",
+        UnsupportedConstruct.EMPHASIS,
+    )
 
 
 def _hex_fixture(name: str) -> bytes:
