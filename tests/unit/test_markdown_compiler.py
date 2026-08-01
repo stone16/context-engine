@@ -31,6 +31,8 @@ from engine.supply import (
     StructuralPath,
     UnsupportedConstruct,
     canonicalize_parsed_document,
+    contains_accepted_rich_markdown_construct,
+    contains_only_accepted_rich_markdown_inline,
     contains_rich_markdown_link,
 )
 
@@ -53,8 +55,56 @@ def test_rich_link_detection_uses_the_accepted_inline_grammar(source: str) -> No
     assert contains_rich_markdown_link(source)
 
 
-def test_rich_link_detection_ignores_plain_text() -> None:
-    assert not contains_rich_markdown_link("Plain text only.")
+@pytest.mark.parametrize(
+    "source",
+    (
+        "Plain text only.",
+        "- [ ] todo",
+        "- [x] done",
+        "see [1] for details",
+        "array[0]",
+        "[not a link",
+    ),
+)
+def test_rich_link_detection_rejects_bracketed_non_links(source: str) -> None:
+    assert not contains_rich_markdown_link(source)
+
+
+@pytest.mark.parametrize(
+    ("source", "construct"),
+    (
+        ("Only *emphasis*.", UnsupportedConstruct.EMPHASIS),
+        ("Only `inline code`.", UnsupportedConstruct.INLINE_CODE),
+        ("Only ~~strikethrough~~.", UnsupportedConstruct.STRIKETHROUGH),
+    ),
+)
+def test_rich_construct_detection_recognizes_accepted_v3_inline_syntax(
+    source: str,
+    construct: UnsupportedConstruct,
+) -> None:
+    assert contains_accepted_rich_markdown_construct(source, construct)
+
+
+@pytest.mark.parametrize(
+    ("source", "construct"),
+    (
+        ("Only `unclosed.", UnsupportedConstruct.INLINE_CODE),
+        ("Only ~~unclosed.", UnsupportedConstruct.STRIKETHROUGH),
+    ),
+)
+def test_rich_construct_detection_rejects_malformed_inline_syntax(
+    source: str,
+    construct: UnsupportedConstruct,
+) -> None:
+    assert not contains_accepted_rich_markdown_construct(source, construct)
+
+
+def test_rich_inline_validation_rejects_an_accepted_construct_with_malformed_peer(
+) -> None:
+    assert not contains_only_accepted_rich_markdown_inline(
+        "*Accepted* and `accepted` but ~~malformed.",
+        UnsupportedConstruct.EMPHASIS,
+    )
 
 
 def _hex_fixture(name: str) -> bytes:

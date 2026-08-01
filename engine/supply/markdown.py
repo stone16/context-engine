@@ -28,6 +28,7 @@ _COMPILATION_DIGEST_V1_DOMAIN: Final = b"context-engine.markdown-compilation.v1\
 _COMPILATION_DIGEST_DOMAIN: Final = b"context-engine.markdown-compilation.v2\x00"
 _COMPILATION_DIGEST_V3_DOMAIN: Final = b"context-engine.markdown-compilation.v3\x00"
 _MAX_VERSION_LENGTH: Final = 128
+_RICH_TOKEN_PATTERN: Final = re.compile(r"\S+")
 
 
 def is_markdown_control_character(character: str) -> bool:
@@ -39,6 +40,14 @@ def is_markdown_control_character(character: str) -> bool:
     return (codepoint < 0x20 and character not in "\t\n\r") or (
         0x7F <= codepoint <= 0x9F
     )
+
+
+def rich_markdown_token_count(value: str) -> int:
+    """Count deterministic representation tokens for the v3 hard bound."""
+
+    if type(value) is not str:
+        raise TypeError("rich Markdown token counting requires exact text")
+    return sum(1 for _ in _RICH_TOKEN_PATTERN.finditer(value))
 
 
 def _require_version(value: object) -> str:
@@ -585,6 +594,33 @@ _RICH_HTML_OPEN_PATTERN: Final = re.compile(
     r"th|td|p|ul|ol|li)\b[^>]*>",
     re.IGNORECASE,
 )
+_ACCEPTED_RICH_MARKDOWN_CONSTRUCT_PATTERNS: Final = {
+    UnsupportedConstruct.EMPHASIS: (_EMPHASIS_PATTERN,),
+    UnsupportedConstruct.INLINE_CODE: (_RICH_INLINE_CODE_PATTERN,),
+    UnsupportedConstruct.LINK_OR_IMAGE: (
+        _RICH_WIKILINK_PATTERN,
+        _RICH_AUTOLINK_PATTERN,
+        _RICH_INLINE_LINK_PATTERN,
+        _RICH_REFERENCE_LINK_PATTERN,
+    ),
+    UnsupportedConstruct.STRIKETHROUGH: (_RICH_STRIKETHROUGH_PATTERN,),
+}
+
+
+def contains_accepted_rich_markdown_construct(
+    source: str,
+    construct: UnsupportedConstruct,
+) -> bool:
+    """Return whether exact text contains the named accepted rich syntax."""
+
+    if type(source) is not str:
+        raise TypeError("rich Markdown construct detection requires exact text")
+    if type(construct) is not UnsupportedConstruct:
+        raise TypeError("rich Markdown construct detection requires a closed construct")
+    return any(
+        pattern.search(source) is not None
+        for pattern in _ACCEPTED_RICH_MARKDOWN_CONSTRUCT_PATTERNS.get(construct, ())
+    )
 
 
 def contains_rich_markdown_link(source: str) -> bool:
@@ -592,14 +628,9 @@ def contains_rich_markdown_link(source: str) -> bool:
 
     if type(source) is not str:
         raise TypeError("rich Markdown link detection requires exact text")
-    return any(
-        pattern.search(source) is not None
-        for pattern in (
-            _RICH_WIKILINK_PATTERN,
-            _RICH_AUTOLINK_PATTERN,
-            _RICH_INLINE_LINK_PATTERN,
-            _RICH_REFERENCE_LINK_PATTERN,
-        )
+    return contains_accepted_rich_markdown_construct(
+        source,
+        UnsupportedConstruct.LINK_OR_IMAGE,
     )
 
 
@@ -676,6 +707,143 @@ def unsupported_rich_markdown_inline(line: str) -> UnsupportedConstruct | None:
         masked = pattern.sub(lambda match: "x" * len(match.group()), masked)
     construct = unsupported_markdown_construct(masked, supported_heading=False)
     return None if construct is UnsupportedConstruct.LIST else construct
+
+
+def contains_only_accepted_rich_markdown_inline(
+    source: str,
+    construct: UnsupportedConstruct,
+) -> bool:
+    """Return whether one accepted construct has no malformed inline peer."""
+
+    if type(source) is not str:
+        raise TypeError("rich Markdown inline validation requires exact text")
+    if not contains_accepted_rich_markdown_construct(source, construct):
+        return False
+    if any(is_markdown_control_character(character) for character in source):
+        return False
+    fence: str | None = None
+    fence_body_has_content = False
+    list_open = False
+    previous_line: str | None = None
+    lines = source.splitlines()
+    html_block_end = -1
+    for index, line in enumerate(lines):
+        if index <= html_block_end:
+            previous_line = line
+            continue
+        marker = _RICH_FENCE_PATTERN.match(line)
+        if (
+            fence is None
+            and list_open
+            and line.startswith((" ", "\t"))
+            and marker is not None
+        ):
+            return False
+        if marker is not None:
+            candidate = marker.group("fence")
+            if fence is None:
+                fence = candidate
+                language = line.lstrip()[len(candidate) :].strip()
+                if len(language) > MARKDOWN_CODE_LANGUAGE_MAX_LENGTH or any(
+                    character.isspace() for character in language
+                ):
+                    return False
+                fence_body_has_content = False
+            elif candidate[0] == fence[0] and len(candidate) >= len(fence):
+                if not fence_body_has_content:
+                    return False
+                fence = None
+            previous_line = line
+            continue
+        if fence is not None:
+            fence_body_has_content = fence_body_has_content or bool(line.strip())
+            previous_line = line
+            continue
+        if not line.strip():
+            list_open = False
+            previous_line = line
+            continue
+        if _RICH_SETEXT_PATTERN.fullmatch(line) is not None:
+            if (
+                previous_line is not None
+                and previous_line.strip()
+                and unsupported_rich_markdown_inline(previous_line.strip()) is not None
+            ):
+                return False
+            list_open = False
+            previous_line = line
+            continue
+        if _THEMATIC_BREAK_PATTERN.fullmatch(line) is not None:
+            list_open = False
+            previous_line = line
+            continue
+        list_item = _RICH_LIST_ITEM_PATTERN.fullmatch(line)
+        if list_open and line.startswith((" ", "\t")) and list_item is None:
+            if unsupported_rich_markdown_inline(line.lstrip()) is not None:
+                return False
+            previous_line = line
+            continue
+        list_open = list_item is not None
+        stripped = line.strip()
+        if stripped.startswith("<"):
+            if _RICH_ANGLE_LITERAL_PATTERN.fullmatch(stripped) is not None:
+                continue
+            html_block_end = index
+            while (
+                html_block_end + 1 < len(lines)
+                and lines[html_block_end + 1].strip()
+            ):
+                html_block_end += 1
+            html_block_lines = lines[index : html_block_end + 1]
+            if not _has_closed_rich_html_block(
+                line,
+                "\n".join(html_block_lines),
+            ):
+                return False
+            if any(
+                unsupported_rich_markdown_inline(candidate) is not None
+                for candidate in html_block_lines[1:]
+            ):
+                return False
+            html_block_source = "\n".join(html_block_lines)
+            table_ranges = _rich_table_source_ranges(html_block_source)
+            if table_ranges and table_ranges != ((0, len(html_block_source)),):
+                return False
+            previous_line = line
+            continue
+        inspected = _rich_markdown_inline_payload(line)
+        if unsupported_rich_markdown_inline(inspected) is not None:
+            return False
+        previous_line = line
+    if fence is not None:
+        return False
+    try:
+        _expected_rich_fragment_layout(source, MARKDOWN_RICH_TOKEN_CEILING)
+    except ValueError:
+        return False
+    return True
+
+
+def _rich_markdown_inline_payload(line: str) -> str:
+    inspected = line
+    if (heading := _RICH_ATX_HEADING_PATTERN.fullmatch(line)) is not None:
+        inspected = heading.group(2).strip()
+    elif (item := _RICH_LIST_ITEM_PATTERN.fullmatch(line)) is not None:
+        inspected = item.group(2)
+    elif line.lstrip().startswith(">"):
+        inspected = line.lstrip()[1:].lstrip()
+        if inspected.startswith("[!"):
+            inspected = _RICH_FOOTNOTE_PATTERN.sub("x", inspected, count=1)
+    return inspected
+
+
+def _has_closed_rich_html_block(line: str, source: str) -> bool:
+    html_open = _RICH_HTML_OPEN_PATTERN.match(line)
+    return html_open is not None and re.search(
+        rf"</{re.escape(html_open.group('tag'))}[ \t]*>",
+        source,
+        re.IGNORECASE,
+    ) is not None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1243,7 +1411,7 @@ def _expected_rich_fragment_layout(
         ancestry = "\n\n".join(
             f"{'#' * level} {text}" for level, text in headings
         )
-        capacity = token_ceiling - len(re.findall(r"\S+", ancestry))
+        capacity = token_ceiling - rich_markdown_token_count(ancestry)
         indivisible = block.indivisible or block.kind in {
             SectionKind.HEADING,
             SectionKind.LIST,
@@ -1252,7 +1420,7 @@ def _expected_rich_fragment_layout(
         }
         ranges: tuple[tuple[int, int], ...]
         if indivisible:
-            if len(re.findall(r"\S+", source)) > capacity:
+            if rich_markdown_token_count(source) > capacity:
                 raise ValueError("rich indivisible source exceeds its ceiling")
             ranges = ((0, len(source)),)
         else:
@@ -1356,15 +1524,7 @@ def _validate_rich_closed_grammar(section: ParsedSection, source: str) -> None:
         return
     if len(lines) >= 2 and lines[0] == "---" and lines[-1] == "---":
         return
-    html_open = _RICH_HTML_OPEN_PATTERN.match(lines[0]) if lines else None
-    if (
-        html_open is not None
-        and re.search(
-            rf"</{html_open.group('tag')}[ \t]*>",
-            source,
-            re.IGNORECASE,
-        )
-    ):
+    if lines and _has_closed_rich_html_block(lines[0], source):
         return
     if (
         section.kind is SectionKind.PARAGRAPH

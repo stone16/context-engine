@@ -25,6 +25,7 @@ from engine.supply.markdown import (
     StructuralPath,
     UnsupportedConstruct,
     is_markdown_control_character,
+    rich_markdown_token_count,
     unsupported_rich_markdown_inline,
 )
 from third_party.ragflow.deepdoc.parser.markdown_parser import MarkdownElementExtractor
@@ -83,9 +84,7 @@ class _ElementExtractor(Protocol):
 def rich_token_count(value: str) -> int:
     """Count deterministic representation tokens for the v3 hard bound."""
 
-    if type(value) is not str:
-        raise TypeError("rich Markdown token counting requires exact text")
-    return sum(1 for _ in _TOKEN.finditer(value))
+    return rich_markdown_token_count(value)
 
 
 def _failure(

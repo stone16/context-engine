@@ -23,7 +23,11 @@ from engine.persistence import (
     PostgreSQLWorkerLeaseIssuer,
     create_database_engine,
 )
-from engine.supply import MarkdownCompilerConfig, ParsedDocument
+from engine.supply import (
+    MARKDOWN_RICH_TOKEN_CEILING,
+    MarkdownCompilerConfig,
+    ParsedDocument,
+)
 from tests.support.file_imports import (
     NOW,
     FileImportScenario,
@@ -76,7 +80,7 @@ def _ui_import_scenario(
     migration_engine = create_database_engine(migration_configuration)
     roots = FileRootRegistry(
         {scenario.root_ref: scenario.root},
-        limits=FileReadLimits(max_file_bytes=4096),
+        limits=FileReadLimits(max_file_bytes=8192),
     )
     try:
         with migration_engine.connect() as connection:
@@ -134,9 +138,16 @@ def _ui_import_scenario(
         b"# Handbook\n\nEmbed ![[private-runbook]].\n",
         b"# Handbook\n\nRead <https://private.invalid/runbook>.\n",
         b"# Handbook\n\nFirst paragraph.\n\nRead [[private-runbook]].\n",
+        b"# Handbook\n\n- Read [[private-runbook]].\n",
+        b"# Handbook\n\nOnly *emphasis*.\n",
+        b"# Handbook\n\nOnly `inline code`.\n",
+        b"# Handbook\n\nOnly ~~strikethrough~~.\n",
+        b"# Handbook\n\n*Accepted*\n\n<section>\n",
+        b"# Handbook\n\nOnly *emphasis*.\n\n---\n",
+        b"*Emphasized heading*\n---\n",
     ],
 )
-def test_link_bearing_import_preview_hands_off_to_the_leased_scan_path(
+def test_v3_only_import_preview_hands_off_to_the_leased_scan_path(
     tmp_path: Path,
     migration_configuration: DatabaseConfiguration,
     guarded_control_engine: Engine,
@@ -213,18 +224,43 @@ def test_link_bearing_import_preview_hands_off_to_the_leased_scan_path(
         assert published_count == 0
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [
+        b"# Handbook\n\n[[private-runbook]]\xffprivate malformed body\n",
+        b"# Handbook\n\nOnly `private malformed body.\n",
+        b"# Handbook\n\nOnly ~~private malformed body.\n",
+        b"# Handbook\n\n*Accepted* plus ~~private malformed body.\n",
+        b"# Handbook\n\n`Accepted` plus ~~private malformed body.\n",
+        b"# Handbook\n\n~~Accepted~~ plus `private malformed body.\n",
+        b"# Handbook\n\n[Accepted](note.md) plus ~~private malformed body.\n",
+        b"# Handbook\n\n[[Accepted]] plus `private malformed body.\n",
+        b"# Handbook\n\n- [Accepted](note.md) plus `private malformed body.\n",
+        b"# Handbook\n\n> [[Accepted]] plus `private malformed body.\n",
+        b"# Handbook\n\n## [Accepted](note.md) plus `private malformed body.\n",
+        (
+            b"# Handbook\n\n[Accepted](note.md)\n\n```"
+            + b"x" * 65
+            + b"\nbody\n```\n"
+        ),
+        b"# Handbook\n\n[Accepted](note.md)\n\n```text\n\n```\n",
+        b"# Handbook\n\n*Accepted*\n\n<private malformed body\n",
+        b"# Handbook\n\n*Accepted*\n\n<div>unclosed\n",
+    ],
+)
 def test_malformed_import_refusal_stays_content_free_without_scan_handoff(
     tmp_path: Path,
     migration_configuration: DatabaseConfiguration,
     guarded_control_engine: Engine,
     guarded_runtime_engine: Engine,
+    payload: bytes,
 ) -> None:
     with _ui_import_scenario(
         tmp_path=tmp_path,
         migration_configuration=migration_configuration,
         guarded_control_engine=guarded_control_engine,
         guarded_runtime_engine=guarded_runtime_engine,
-        payload=b"# Handbook\n\n[[private-runbook]]\xffprivate malformed body\n",
+        payload=payload,
     ) as (scenario, client, _migration_engine):
         response = client.post(
             "/ui/import/preview",
@@ -239,6 +275,69 @@ def test_malformed_import_refusal_stays_content_free_without_scan_handoff(
         assert "Request refused" in response.text
         assert "provider_unavailable" in response.text
         assert "private malformed body" not in response.text
+        assert "context-engine-control scan" not in response.text
+        assert "previewToken" not in response.text
+        assert CONTROL_TOKEN not in response.text
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        b"# Handbook\n\n*Accepted*\n\n- item one\n  > quoted\n",
+        b"# Handbook\n\n*Accepted*\n\n- item one\n  # heading\n",
+        b"# Handbook\n\n*Accepted*\n\n- item one\n  ```text\n  body\n  ```\n",
+        b"# Handbook\n\n*Accepted*\n\n> Quoted\n---\n",
+        (
+            b"# Handbook\n\n[Accepted](note.md)\n\n<div>body</div>\n"
+            b"| A | B |\n| --- | --- |\n| x | y |\n"
+        ),
+        b"# Handbook\n\n*Accepted*\n\n<div>body</div>\n---\n##\n",
+        b"# Handbook\n\n[Accepted](note.md)\n\n</div>\n<div>unclosed\n",
+        (
+            b"# Handbook\n\n[Accepted](note.md)\n\n<div>unclosed\n\n"
+            b"```html\n</div>\n```\n"
+        ),
+        b'# Handbook\n\n[Accepted](note.md)\n\n<div title="\x00">body</div>\n',
+        b"# Handbook\n\n[Accepted](note.md)\n\n<literal\x00value>\n",
+        (
+            b"# Handbook\n\n[Accepted](note.md)\n\n- "
+            + b"x " * (MARKDOWN_RICH_TOKEN_CEILING + 1)
+            + b"\n"
+        ),
+        (
+            b"# Handbook\n\n[Accepted](note.md)\n\n| A | B |\n| --- | --- |\n| "
+            + b"x " * (MARKDOWN_RICH_TOKEN_CEILING + 1)
+            + b"| y |\n"
+        ),
+    ],
+)
+def test_v3_refused_block_construct_stays_content_free_without_scan_handoff(
+    tmp_path: Path,
+    migration_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+    guarded_runtime_engine: Engine,
+    payload: bytes,
+) -> None:
+    with _ui_import_scenario(
+        tmp_path=tmp_path,
+        migration_configuration=migration_configuration,
+        guarded_control_engine=guarded_control_engine,
+        guarded_runtime_engine=guarded_runtime_engine,
+        payload=payload,
+    ) as (scenario, client, _migration_engine):
+        response = client.post(
+            "/ui/import/preview",
+            content=(
+                f"sourceRef={scenario.source_ref.value}&path=handbook.md&"
+                f"controlCredential={CONTROL_TOKEN}"
+            ),
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+
+        assert response.status_code == 503
+        assert "Request refused" in response.text
+        assert "provider_unavailable" in response.text
+        assert "Rich Markdown requires the leased scan path" not in response.text
         assert "context-engine-control scan" not in response.text
         assert "previewToken" not in response.text
         assert CONTROL_TOKEN not in response.text

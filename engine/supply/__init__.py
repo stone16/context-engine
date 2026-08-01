@@ -91,6 +91,8 @@ from engine.supply.markdown import (
     StructuralPath,
     UnsupportedConstruct,
     canonicalize_parsed_document,
+    contains_accepted_rich_markdown_construct,
+    contains_only_accepted_rich_markdown_inline,
     contains_rich_markdown_link,
     deserialize_parsed_document,
 )
@@ -175,6 +177,8 @@ __all__ = [
     "WorkerLeaseToken",
     "generate_worker_lease_nonce",
     "canonicalize_parsed_document",
+    "contains_accepted_rich_markdown_construct",
+    "contains_only_accepted_rich_markdown_inline",
     "contains_rich_markdown_link",
     "deserialize_parsed_document",
     "worker_lease_digest",
