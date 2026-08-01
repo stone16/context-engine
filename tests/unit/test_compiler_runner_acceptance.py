@@ -137,6 +137,14 @@ def test_preview_handoff_predicate_implies_rich_compiler_acceptance(
             b"```html\n</div>\n```\n",
             UnsupportedConstruct.LINK_OR_IMAGE,
         ),
+        (
+            b'# Handbook\n\n[Accepted](note.md)\n\n<div title="\x00">body</div>\n',
+            UnsupportedConstruct.LINK_OR_IMAGE,
+        ),
+        (
+            b"# Handbook\n\n[Accepted](note.md)\n\n<literal\x00value>\n",
+            UnsupportedConstruct.LINK_OR_IMAGE,
+        ),
     ),
 )
 def test_preview_handoff_predicate_rejects_v3_refused_block_adjacency(

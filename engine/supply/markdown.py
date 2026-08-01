@@ -710,6 +710,8 @@ def contains_only_accepted_rich_markdown_inline(
         raise TypeError("rich Markdown inline validation requires exact text")
     if not contains_accepted_rich_markdown_construct(source, construct):
         return False
+    if any(is_markdown_control_character(character) for character in source):
+        return False
     fence: str | None = None
     fence_body_has_content = False
     list_open = False
