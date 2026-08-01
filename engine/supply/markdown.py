@@ -711,27 +711,44 @@ def contains_only_accepted_rich_markdown_inline(
     if not contains_accepted_rich_markdown_construct(source, construct):
         return False
     fence: str | None = None
+    fence_body_has_content = False
     for line in source.splitlines():
         marker = _RICH_FENCE_PATTERN.match(line)
         if marker is not None:
             candidate = marker.group("fence")
             if fence is None:
                 fence = candidate
+                language = line.lstrip()[len(candidate) :].strip()
+                if len(language) > MARKDOWN_CODE_LANGUAGE_MAX_LENGTH or any(
+                    character.isspace() for character in language
+                ):
+                    return False
+                fence_body_has_content = False
             elif candidate[0] == fence[0] and len(candidate) >= len(fence):
+                if not fence_body_has_content:
+                    return False
                 fence = None
             continue
         if fence is not None:
+            fence_body_has_content = fence_body_has_content or bool(line.strip())
             continue
-        inspected = line
-        if (heading := _RICH_ATX_HEADING_PATTERN.fullmatch(line)) is not None:
-            inspected = heading.group(2).strip()
-        elif (item := _RICH_LIST_ITEM_PATTERN.fullmatch(line)) is not None:
-            inspected = item.group(2)
-        elif line.lstrip().startswith(">"):
-            inspected = line.lstrip()[1:].lstrip()
+        inspected = _rich_markdown_inline_payload(line)
         if unsupported_rich_markdown_inline(inspected) is not None:
             return False
     return fence is None
+
+
+def _rich_markdown_inline_payload(line: str) -> str:
+    inspected = line
+    if (heading := _RICH_ATX_HEADING_PATTERN.fullmatch(line)) is not None:
+        inspected = heading.group(2).strip()
+    elif (item := _RICH_LIST_ITEM_PATTERN.fullmatch(line)) is not None:
+        inspected = item.group(2)
+    elif line.lstrip().startswith(">"):
+        inspected = line.lstrip()[1:].lstrip()
+        if inspected.startswith("[!"):
+            inspected = _RICH_FOOTNOTE_PATTERN.sub("x", inspected, count=1)
+    return inspected
 
 
 @dataclass(frozen=True, slots=True)
@@ -1451,23 +1468,14 @@ def _validate_rich_closed_grammar(section: ParsedSection, source: str) -> None:
             raise ValueError("rich section source must match the closed grammar")
         return
     for line in lines:
-        inspected = line
-        if section.kind is SectionKind.HEADING:
-            match = _RICH_ATX_HEADING_PATTERN.fullmatch(line)
-            if match is not None:
-                inspected = match.group(2).strip()
-            elif _RICH_SETEXT_PATTERN.fullmatch(line) is not None:
-                continue
-        elif section.kind is SectionKind.LIST:
-            match = _RICH_LIST_ITEM_PATTERN.fullmatch(line)
-            if match is not None:
-                inspected = match.group(2)
-            elif line.startswith((" ", "\t")):
-                inspected = line.lstrip()
-        elif line.lstrip().startswith(">"):
-            inspected = line.lstrip()[1:].lstrip()
-            if inspected.startswith("[!"):
-                inspected = _RICH_FOOTNOTE_PATTERN.sub("x", inspected, count=1)
+        if (
+            section.kind is SectionKind.HEADING
+            and _RICH_SETEXT_PATTERN.fullmatch(line) is not None
+        ):
+            continue
+        inspected = _rich_markdown_inline_payload(line)
+        if section.kind is SectionKind.LIST and line.startswith((" ", "\t")):
+            inspected = inspected.lstrip()
         if unsupported_rich_markdown_inline(inspected) is not None:
             raise ValueError("rich section source must match the closed grammar")
 
