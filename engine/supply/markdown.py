@@ -739,17 +739,11 @@ def contains_only_accepted_rich_markdown_inline(
             continue
         stripped = line.strip()
         if stripped.startswith("<"):
-            html_open = _RICH_HTML_OPEN_PATTERN.match(line)
-            if html_open is not None:
-                if re.search(
-                    rf"</{re.escape(html_open.group('tag'))}[ \t]*>",
-                    source,
-                    re.IGNORECASE,
-                ) is None:
-                    return False
+            if _RICH_ANGLE_LITERAL_PATTERN.fullmatch(stripped) is not None:
                 continue
-            if _RICH_ANGLE_LITERAL_PATTERN.fullmatch(stripped) is None:
+            if not _has_closed_rich_html_block(line, source):
                 return False
+            continue
         inspected = _rich_markdown_inline_payload(line)
         if unsupported_rich_markdown_inline(inspected) is not None:
             return False
@@ -767,6 +761,15 @@ def _rich_markdown_inline_payload(line: str) -> str:
         if inspected.startswith("[!"):
             inspected = _RICH_FOOTNOTE_PATTERN.sub("x", inspected, count=1)
     return inspected
+
+
+def _has_closed_rich_html_block(line: str, source: str) -> bool:
+    html_open = _RICH_HTML_OPEN_PATTERN.match(line)
+    return html_open is not None and re.search(
+        rf"</{re.escape(html_open.group('tag'))}[ \t]*>",
+        source,
+        re.IGNORECASE,
+    ) is not None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1447,15 +1450,7 @@ def _validate_rich_closed_grammar(section: ParsedSection, source: str) -> None:
         return
     if len(lines) >= 2 and lines[0] == "---" and lines[-1] == "---":
         return
-    html_open = _RICH_HTML_OPEN_PATTERN.match(lines[0]) if lines else None
-    if (
-        html_open is not None
-        and re.search(
-            rf"</{html_open.group('tag')}[ \t]*>",
-            source,
-            re.IGNORECASE,
-        )
-    ):
+    if lines and _has_closed_rich_html_block(lines[0], source):
         return
     if (
         section.kind is SectionKind.PARAGRAPH
