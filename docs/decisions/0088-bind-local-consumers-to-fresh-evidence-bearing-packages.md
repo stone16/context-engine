@@ -1,6 +1,6 @@
 ---
 name: adr-0088-bind-local-consumers-to-fresh-evidence-bearing-packages
-version: "1.0.0"
+version: "1.1.0"
 description: >
   Require each local read-only consumer question to acquire and render one
   fresh expiring loopback Package with intact Block/Evidence lineage and no
@@ -120,3 +120,11 @@ when three or more local shims demonstrate contract drift, when pi becomes a
 real daily-use consumer, or when a real MCP-native caller justifies an Adapter.
 Any replacement must preserve fresh per-question authorization, expiry refusal,
 Block/Evidence lineage, and non-persistence of every credential.
+
+On 2026-08-03, issue #216 fired the first clause: the read-only maintainer
+Context CLI is the second kind of local consumer, and
+`adapters/http/dogfood_client.py` is the shared data and transport seam that it,
+the Claude Code skill, and the ADR-0103 local stdio MCP translator all call. The
+four obligations, the local
+read-only category boundary, and every carrier this decision leaves
+`NOT_ACTIVE` are unchanged, so no superseding decision is required.
