@@ -41,6 +41,7 @@ from engine.persistence import (
     create_database_engine,
 )
 from engine.supply import (
+    EmbeddingProvider,
     MarkdownCompilerConfig,
     WorkerLeaseClaims,
     WorkerLeaseCodec,
@@ -330,6 +331,7 @@ def run_file_import(
     guarded_worker_engine: Engine,
     *,
     config_version: str = "markdown-config-v1",
+    embedding_provider: EmbeddingProvider | None = None,
 ) -> PublishedFileImport:
     """Run one scenario import through the real non-owner worker seam."""
 
@@ -342,7 +344,11 @@ def run_file_import(
             limits=FileReadLimits(max_file_bytes=4096),
         ),
         MarkdownCompilerConfig(config_version),
-        embedding_provider=DeterministicEmbeddingTwin(),
+        embedding_provider=(
+            DeterministicEmbeddingTwin()
+            if embedding_provider is None
+            else embedding_provider
+        ),
         clock=lambda: datetime.now(UTC).replace(microsecond=0),
     ).run(
         FileImportLeaseRedemption(

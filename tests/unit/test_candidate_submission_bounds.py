@@ -81,8 +81,20 @@ class _SubmittingIndex:
             )
         return VectorDiscoveryRequest(
             query_embedding=(1.0,),
+            embedding_profile_digest="a" * 64,
             limit=self.prepared_limit,
         )
+
+    def prepare_budgeted_discovery(
+        self,
+        request: Acquire,
+        *,
+        effective_scope: object,
+        budget: object,
+        active_embedding_profile_digest: str,
+    ) -> CandidateDiscoveryRequest:
+        del budget, active_embedding_profile_digest
+        return self.prepare_discovery(request, effective_scope=effective_scope)
 
     def discover(
         self,
@@ -229,10 +241,15 @@ def test_prepared_discovery_above_the_configured_bound_never_reaches_the_databas
 def test_discovery_request_limits_are_bounded_by_the_server_ceiling() -> None:
     for limit in (0, -1, MAX_CANDIDATE_SUBMISSION_CEILING + 1):
         with pytest.raises(ValueError, match="within the server"):
-            VectorDiscoveryRequest(query_embedding=(1.0,), limit=limit)
+            VectorDiscoveryRequest(
+                query_embedding=(1.0,),
+                embedding_profile_digest="a" * 64,
+                limit=limit,
+            )
     assert (
         VectorDiscoveryRequest(
             query_embedding=(1.0,),
+            embedding_profile_digest="a" * 64,
             limit=MAX_CANDIDATE_SUBMISSION_CEILING,
         ).limit
         == MAX_CANDIDATE_SUBMISSION_CEILING
@@ -258,12 +275,19 @@ def test_trusted_vector_discovery_is_bounded_by_its_own_request() -> None:
         def discover_vector(  # type: ignore[override]
             self,
             query_embedding: tuple[float, ...],
+            embedding_profile_digest: str,
             limit: int,
             source_refs: tuple[str, ...] | None,
             resource_refs: tuple[str, ...] | None,
             effective_scope: object,
         ) -> tuple[CandidateRef, ...]:
-            del query_embedding, source_refs, resource_refs, effective_scope
+            del (
+                query_embedding,
+                embedding_profile_digest,
+                source_refs,
+                resource_refs,
+                effective_scope,
+            )
             return tuple(_fabricated(ordinal) for ordinal in range(limit + 1))
 
     scope = _open_materialized_projection_scope()
@@ -275,7 +299,11 @@ def test_trusted_vector_discovery_is_bounded_by_its_own_request() -> None:
     with pytest.raises(TypeError, match="bounded candidates"):
         _construct_candidate_discovery_session(
             session,
-            VectorDiscoveryRequest(query_embedding=(1.0,), limit=4),
+            VectorDiscoveryRequest(
+                query_embedding=(1.0,),
+                embedding_profile_digest="a" * 64,
+                limit=4,
+            ),
             effective_scope=EffectiveScope(frozenset()),
         )
 

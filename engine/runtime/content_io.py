@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from hashlib import sha256
 from typing import Protocol
 
+from engine.runtime.budget import PackageBudgetMeter
 from engine.runtime.candidate_ranking import CandidateQuery
 from engine.runtime.contracts import Acquire
 from engine.runtime.fragment_window import FragmentWindowReader
@@ -38,11 +39,13 @@ def exact_phrase_digest(value: str) -> str:
 class CandidateIndex(Protocol):
     """Content-free candidate discovery seam; never an authorization source."""
 
-    def prepare_discovery(
+    def prepare_budgeted_discovery(
         self,
         request: Acquire,
         *,
         effective_scope: CandidateDiscoveryScope,
+        budget: PackageBudgetMeter,
+        active_embedding_profile_digest: str,
     ) -> CandidateDiscoveryRequest: ...
 
     def discover(
@@ -81,13 +84,15 @@ class RuntimeContentIo:
 
 
 class _ProhibitedCandidateIndex:
-    def prepare_discovery(
+    def prepare_budgeted_discovery(
         self,
         request: Acquire,
         *,
         effective_scope: CandidateDiscoveryScope,
+        budget: PackageBudgetMeter,
+        active_embedding_profile_digest: str,
     ) -> CandidateDiscoveryRequest:
-        del request, effective_scope
+        del request, effective_scope, budget, active_embedding_profile_digest
         raise RuntimeError("candidate index is prohibited on the empty Package path")
 
     def discover(

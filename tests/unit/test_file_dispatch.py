@@ -12,7 +12,7 @@ import pytest
 from sqlalchemy import Engine
 from sqlalchemy.exc import SQLAlchemyError
 
-from adapters.embeddings import DeterministicEmbeddingTwin, ExternalEmbeddingProvider
+from adapters.embeddings import DeterministicEmbeddingTwin
 from applications.worker import (
     DEFAULT_WORKER_MAX_FILE_BYTES,
     _embedding_provider,
@@ -327,7 +327,7 @@ def test_worker_composes_only_explicit_fixed_dimension_embedding_twin(
     assert provider.profile.dimension == CONTEXT_FRAGMENT_EMBEDDING_DIMENSION
 
 
-def test_worker_external_embedding_configuration_keeps_key_out_of_repr(
+def test_worker_refuses_external_embedding_provider_until_contract_migration(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("CONTEXT_ENGINE_WORKER_EMBEDDING_PROVIDER", "external")
@@ -342,36 +342,6 @@ def test_worker_external_embedding_configuration_keeps_key_out_of_repr(
     monkeypatch.setenv("CONTEXT_ENGINE_WORKER_EMBEDDING_MODEL", "configured-model")
     monkeypatch.setenv("CONTEXT_ENGINE_WORKER_EMBEDDING_API_KEY", "credential-value")
     monkeypatch.setenv("CONTEXT_ENGINE_WORKER_EMBEDDING_BATCH_SIZE", "64")
-
-    provider = _embedding_provider()
-
-    assert type(provider) is ExternalEmbeddingProvider
-    assert "credential-value" not in repr(provider)
-
-
-@pytest.mark.parametrize("batch_size", ["", "0", "257", "not-a-number"])
-def test_worker_refuses_missing_or_unbounded_external_embedding_batch_size(
-    monkeypatch: pytest.MonkeyPatch,
-    batch_size: str,
-) -> None:
-    monkeypatch.setenv("CONTEXT_ENGINE_WORKER_EMBEDDING_PROVIDER", "external")
-    monkeypatch.setenv(
-        "CONTEXT_ENGINE_WORKER_EMBEDDING_DIMENSION",
-        str(CONTEXT_FRAGMENT_EMBEDDING_DIMENSION),
-    )
-    monkeypatch.setenv(
-        "CONTEXT_ENGINE_WORKER_EMBEDDING_ENDPOINT",
-        "https://embedding.invalid/v1/embeddings",
-    )
-    monkeypatch.setenv("CONTEXT_ENGINE_WORKER_EMBEDDING_MODEL", "configured-model")
-    monkeypatch.setenv("CONTEXT_ENGINE_WORKER_EMBEDDING_API_KEY", "credential-value")
-    if batch_size:
-        monkeypatch.setenv("CONTEXT_ENGINE_WORKER_EMBEDDING_BATCH_SIZE", batch_size)
-    else:
-        monkeypatch.delenv(
-            "CONTEXT_ENGINE_WORKER_EMBEDDING_BATCH_SIZE",
-            raising=False,
-        )
 
     with pytest.raises(ValueError, match="configuration is not available"):
         _embedding_provider()

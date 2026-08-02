@@ -12,6 +12,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import Engine, text
 
+from adapters.embeddings import DeterministicEmbeddingTwin
 from adapters.exact_phrase import PostgreSQLExactPhraseCandidateIndex
 from adapters.http.app import create_app
 from adapters.http.authentication import (
@@ -213,6 +214,17 @@ class HostileCandidateIndex:
             effective_scope=effective_scope,  # type: ignore[arg-type]
         )
 
+    def prepare_budgeted_discovery(
+        self,
+        request: Acquire,
+        *,
+        effective_scope: object,
+        budget: object,
+        active_embedding_profile_digest: str,
+    ) -> ExactPhraseDiscoveryRequest:
+        del budget, active_embedding_profile_digest
+        return self.prepare_discovery(request, effective_scope=effective_scope)
+
     def discover(
         self,
         request: Acquire,
@@ -286,6 +298,8 @@ def _candidate_parameters(
     ordinal: int,
     body: str,
 ) -> dict[str, object]:
+    provider = DeterministicEmbeddingTwin()
+    embedding = provider.embed_documents((body,))[0]
     return {
         "organization_id": candidate.organization_id,
         "source_ref": candidate.source_ref,
@@ -294,6 +308,8 @@ def _candidate_parameters(
         "fragment_ref": candidate.fragment_ref,
         "ordinal": ordinal,
         "content": body,
+        "embedding": "[" + ",".join(repr(item) for item in embedding) + "]",
+        "embedding_profile_digest": provider.provider_profile.profile_digest,
     }
 
 
@@ -416,14 +432,18 @@ def _seed_fixture(
                     revision_id,
                     fragment_ref,
                     ordinal,
-                    content
+                    content,
+                    embedding,
+                    embedding_profile_digest
                 ) VALUES (
                     :organization_id,
                     :resource_ref,
                     :revision_id,
                     :fragment_ref,
                     :ordinal,
-                    :content
+                    :content,
+                    CAST(:embedding AS vector),
+                    :embedding_profile_digest
                 )
                 """
             ),

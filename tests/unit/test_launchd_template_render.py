@@ -317,6 +317,7 @@ def test_child_processes_receive_only_their_closed_credential_projection() -> No
             "CONTEXT_ENGINE_DOGFOOD_APPLICATION_REF",
             "CONTEXT_ENGINE_DOGFOOD_AUTHENTICATION_BINDING_REF",
             "CONTEXT_ENGINE_DOGFOOD_EMBEDDING_PROVIDER",
+            "CONTEXT_ENGINE_DOGFOOD_EMBEDDING_MODEL_DIR",
             "CONTEXT_ENGINE_DOGFOOD_MEMBERSHIP_ID",
             "CONTEXT_ENGINE_DOGFOOD_MEMBERSHIP_VERSION",
             "CONTEXT_ENGINE_DOGFOOD_ORGANIZATION_ID",
@@ -331,6 +332,7 @@ def test_child_processes_receive_only_their_closed_credential_projection() -> No
             "CONTEXT_ENGINE_OPERATOR_SOURCE_REF",
             "CONTEXT_ENGINE_WORKER_EMBEDDING_DIMENSION",
             "CONTEXT_ENGINE_WORKER_EMBEDDING_PROVIDER",
+            "CONTEXT_ENGINE_WORKER_EMBEDDING_MODEL_DIR",
             "CONTEXT_ENGINE_WORKER_FILE_CURATED_SUBTREES_JSON",
             "CONTEXT_ENGINE_WORKER_FILE_ROOTS_JSON",
             "CONTEXT_ENGINE_WORKER_LEASE_SIGNING_KEY_HEX",
@@ -357,7 +359,9 @@ def test_child_processes_receive_only_their_closed_credential_projection() -> No
 
     assert api["CONTEXT_ENGINE_RUNTIME_DATABASE_URL"] == "runtime-url"
     assert api["CONTEXT_ENGINE_CONTROL_DATABASE_URL"] == "control-url"
+    assert api["CONTEXT_ENGINE_DOGFOOD_EMBEDDING_MODEL_DIR"] == "configured"
     assert worker["CONTEXT_ENGINE_WORKER_DATABASE_URL"] == "worker-url"
+    assert worker["CONTEXT_ENGINE_WORKER_EMBEDDING_MODEL_DIR"] == "configured"
     assert scan["CONTEXT_ENGINE_CONTROL_DATABASE_URL"] == "control-url"
     for name in {
         "CONTEXT_ENGINE_WORKER_FILE_CURATED_SUBTREES_JSON",

@@ -121,7 +121,7 @@ def test_manifest_classifies_the_exact_current_release_schema() -> None:
     document = manifest()
     tables = table_entries(document)
 
-    assert document["manifestVersion"] == "43.0.0"
+    assert document["manifestVersion"] == "44.0.0"
     assert set(tables) == {
         "active_release_manifest",
         "action_delivery_attempt",
@@ -431,11 +431,12 @@ def test_issue_24_structural_markdown_contract_is_versioned_and_function_only() 
         if value["name"] == "publish_file_import"
     )
 
-    assert operation["versionedDatabaseFunctions"] == {
+    assert operation["closedCompatibilityDatabaseFunctions"] == {
         "markdown-config-v1": "context_worker_publish_file_import_v2",
         "markdown-config-v2": "context_worker_publish_structural_file_import_v2",
-        "markdown-config-v3": "context_worker_prepare_file_publication",
     }
+    assert operation["activeLifecycle"] == "recover_file_publication"
+    assert "refuse with zero effect" in operation["compatibilityBehavior"]
     snapshot = entries["file_revision_snapshot"]
     contract = snapshot["versionedCompilationContract"]
     assert contract["markdown-config-v1"]["compilationDocument"] == "null"
@@ -566,6 +567,7 @@ def test_issue_25_file_noop_contract_is_tenant_scoped_and_function_only() -> Non
             "compiler_version",
             "config_version",
         ],
+        "embeddingCompatibilityDimension": "embedding_profile_digest",
         "concurrencyArbitration": "file_resource_ingestion_guard row lock",
         "unchangedReasonCode": "active-content-identity-match",
         "sourceContentRetainedInOutcome": False,
@@ -629,10 +631,12 @@ def test_issue_26_file_replacement_contract_is_staged_and_function_only() -> Non
         if value["name"] == "replace_file_import"
     )
 
-    assert operation["stageDatabaseFunctions"] == {
+    assert operation["closedCompatibilityStageDatabaseFunctions"] == {
         "markdown-config-v1": "context_worker_stage_file_replacement",
         "markdown-config-v2": ("context_worker_stage_structural_file_replacement"),
     }
+    assert operation["activeLifecycle"] == "recover_file_publication"
+    assert "refuse with zero effect" in operation["compatibilityBehavior"]
     assert operation["activateDatabaseFunction"] == (
         "context_worker_activate_file_replacement"
     )
@@ -714,7 +718,16 @@ def test_issue_27_file_recovery_contract_is_generation_fenced_and_auditable() ->
         "revision_id",
         "content_identity_digest",
         "publication_payload_digest",
+        "embedding_profile_digest",
     ]
+    assert operation["embeddingProfileBinding"] == {
+        "classificationFunctionArgument": "requested_embedding_profile_digest",
+        "acquisitionFunctionArgument": "requested_embedding_profile_digest",
+        "prepareFunctionArgument": "requested_embedding_profile_digest",
+        "recoveryColumn": "embedding_profile_digest",
+        "fragmentColumn": "embedding_profile_digest",
+        "sameProfileRequiredAtEveryBoundary": True,
+    }
     assert (
         "context_worker_issue_file_import_lease" not in operation["databaseFunctions"]
     )
@@ -1956,6 +1969,13 @@ def test_content_manifest_preserves_lineage_visibility_and_immutability() -> Non
                 "(projection_kind = 'fields' AND content IS NULL)"
             ),
         },
+        {
+            "name": "ck_context_fragment_embedding_profile",
+            "expression": (
+                "embedding and embedding_profile_digest are null together; "
+                "otherwise the digest is one lowercase SHA-256 hex value"
+            ),
+        },
     ]
     assert fragment["projectionModes"] == {
         "body": {
@@ -2016,6 +2036,8 @@ def test_content_manifest_preserves_lineage_visibility_and_immutability() -> Non
                     "fragment_ref, ordinal"
                 )
             ]
+        if entry["name"] == "context_fragment":
+            expected_operations["context_engine_release_definer"] = ["SELECT"]
         assert entry["permittedOperations"] == expected_operations
         rls = entry["rowLevelSecurity"]
         assert rls["enabled"] is True
@@ -2524,6 +2546,7 @@ def test_release_manifest_records_exact_immutable_lineage_keys() -> None:
         "ck_release_manifest_profile_compatibility",
         "ck_release_manifest_revision_ref_arrays",
         "ck_release_manifest_curation_shape",
+        "ck_release_manifest_embedding_profile",
     }
     assert {item["name"] for item in candidate["checkConstraints"]} == {
         "ck_release_candidate_refs_bounded",
@@ -2893,7 +2916,14 @@ def test_context_learning_promote_release_is_the_single_atomic_operation() -> No
             "release_evaluation",
             "release_manifest",
             "active_release_manifest",
+            "context_fragment embedding_profile_digest completeness",
         ],
+        "embeddingProfileActivation": {
+            "releaseColumn": "embedding_profile_digest",
+            "fragmentColumn": "embedding_profile_digest",
+            "selectedActiveRevisionCorpusRequiredComplete": True,
+            "missingOrMixedProfilesRefuse": True,
+        },
         "candidateEvaluationExactBindings": [
             "security_status",
             "security_evidence_digest",

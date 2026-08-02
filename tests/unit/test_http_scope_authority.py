@@ -23,8 +23,8 @@ from engine.runtime.materialized import (
     _open_materialized_projection_scope,
 )
 from engine.runtime.release_lineage import (
-    DOGFOOD_VECTOR_INDEX_PROFILE_DIGEST_V1,
-    DOGFOOD_VECTOR_INDEX_PROFILE_REF_V1,
+    QWEN_VECTOR_INDEX_PROFILE_DIGEST_V1,
+    QWEN_VECTOR_INDEX_PROFILE_REF_V1,
 )
 from engine.runtime.scope import MISSING_TRUSTED_SCOPE, ScopeSet, ScopeTarget
 from engine.runtime.scope_authority import (
@@ -32,6 +32,7 @@ from engine.runtime.scope_authority import (
     _require_active_trusted_scope_snapshot,
     _trusted_operands_from_snapshot,
 )
+from engine.supply import QWEN3_EMBEDDING_PROFILE
 from tests.support.releases import active_runtime_release
 
 CHECKED_AT = datetime(2026, 7, 21, 9, 30, tzinfo=UTC)
@@ -237,8 +238,9 @@ def test_dogfood_scope_carries_independent_durable_operands() -> None:
     release = active_runtime_release(
         ORGANIZATION_ID,
         active_revision_refs=("0425904c-480f-4022-930f-15e8dd949a7e",),
-        index_profile_ref=DOGFOOD_VECTOR_INDEX_PROFILE_REF_V1,
-        index_profile_digest=DOGFOOD_VECTOR_INDEX_PROFILE_DIGEST_V1,
+        index_profile_ref=QWEN_VECTOR_INDEX_PROFILE_REF_V1,
+        index_profile_digest=QWEN_VECTOR_INDEX_PROFILE_DIGEST_V1,
+        embedding_provider_profile=QWEN3_EMBEDDING_PROFILE,
     )
     bound = replace(
         identity(),

@@ -65,12 +65,20 @@ class RecordingProjectionPort:
     def discover_vector(
         self,
         query_embedding: tuple[float, ...],
+        embedding_profile_digest: str,
         limit: int,
         source_refs: tuple[str, ...] | None,
         resource_refs: tuple[str, ...] | None,
         effective_scope: CandidateDiscoveryScope,
     ) -> tuple[CandidateRef, ...]:
-        del query_embedding, limit, source_refs, resource_refs, effective_scope
+        del (
+            query_embedding,
+            embedding_profile_digest,
+            limit,
+            source_refs,
+            resource_refs,
+            effective_scope,
+        )
         return ()
 
     def source_is_active(self, source_ref: UUID) -> bool:
@@ -133,6 +141,8 @@ def test_projection_session_is_nominal_lifetime_bound_and_nonserializable() -> N
 
     assert "authorized synthetic body" not in repr(session)
     with pytest.raises(TypeError, match="not serializable"):
+        session.__reduce__()
+    with pytest.raises(TypeError, match="not serializable"):
         dumps(session)
     with pytest.raises(FrozenInstanceError):
         session._port = port  # type: ignore[misc]
@@ -188,7 +198,7 @@ def test_vector_discovery_is_bounded_and_lifetime_bound() -> None:
     )
     kernel_scope = EffectiveScope(frozenset())
     effective_scope = CandidateDiscoveryScope(kernel_scope.digest)
-    request = VectorDiscoveryRequest((0.25,), 1)
+    request = VectorDiscoveryRequest((0.25,), "a" * 64, 1)
     discovery_session = _construct_candidate_discovery_session(
         session,
         request,

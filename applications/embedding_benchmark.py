@@ -39,7 +39,6 @@ REPORT_SCHEMA_PATH = EVAL_ROOT / "report.schema.json"
 MODEL_REGISTRY_PATH = EVAL_ROOT / "model-registry.json"
 MODEL_REGISTRY_SCHEMA_PATH = EVAL_ROOT / "model-registry.schema.json"
 LOCK_PROFILE = DatasetLockProfile.ACCIDENTAL_EDIT_DETECTION
-BENCHMARK_EXTRA = "context-engine[benchmark]"
 _IDENTITY_OVERRIDE_FILENAME = "benchmark-model-identity.json"
 _REGISTERED_IDENTITY_DIGESTS = {
     "primary": "f748d119fd4d5c6b2843e70e977e9da86000afb195bf8bd5b867d483b6409e1e",
@@ -54,7 +53,7 @@ class SupportedBackend(StrEnum):
 
 
 class SentenceTransformersProvider:
-    """Local benchmark backend available only through the optional extra."""
+    """Required local backend for the tracked embedding benchmark."""
 
     def __init__(self, *, identity: ModelIdentity, model_dir: Path) -> None:
         self.identity = identity
@@ -119,9 +118,7 @@ def _load_sentence_transformers() -> Any:
     try:
         return importlib.import_module("sentence_transformers")
     except ModuleNotFoundError:
-        raise BenchmarkUnavailable(
-            f"benchmark backend is unavailable; install the {BENCHMARK_EXTRA} extra"
-        ) from None
+        raise BenchmarkUnavailable("benchmark backend is unavailable") from None
 
 
 def build_local_provider(

@@ -86,6 +86,10 @@ def _manifest_parameters(manifest: ReleaseManifest) -> dict[str, object]:
         ),
         "index_content_schema_ref": manifest.index_profile.content_schema_ref,
         "index_schema_ref": manifest.index_profile.index_schema_ref,
+        "embedding_profile_document": (
+            manifest.index_profile.embedding_profile_document
+        ),
+        "embedding_profile_digest": manifest.index_profile.embedding_profile_digest,
         "runtime_profile_ref": manifest.runtime_profile.profile_ref,
         "runtime_profile_digest": manifest.runtime_profile.profile_digest,
         "runtime_content_profile_digest": (
@@ -151,6 +155,7 @@ _INSERT_MANIFEST = text(
         content_profile_ref, content_profile_digest, content_schema_ref,
         index_profile_ref, index_profile_digest, index_content_profile_digest,
         index_content_schema_ref, index_schema_ref,
+        embedding_profile_document, embedding_profile_digest,
         runtime_profile_ref, runtime_profile_digest,
         runtime_content_profile_digest, runtime_index_profile_digest,
         runtime_content_schema_ref, runtime_index_schema_ref,
@@ -163,7 +168,8 @@ _INSERT_MANIFEST = text(
         :content_profile_ref, :content_profile_digest, :content_schema_ref,
         :index_profile_ref, :index_profile_digest,
         :index_content_profile_digest, :index_content_schema_ref,
-        :index_schema_ref, :runtime_profile_ref, :runtime_profile_digest,
+        :index_schema_ref, CAST(:embedding_profile_document AS jsonb),
+        :embedding_profile_digest, :runtime_profile_ref, :runtime_profile_digest,
         :runtime_content_profile_digest, :runtime_index_profile_digest,
         :runtime_content_schema_ref, :runtime_index_schema_ref,
         :runtime_tokenizer_ref, :runtime_package_schema_ref,
@@ -216,6 +222,8 @@ _LOAD_CANDIDATE = text(
         manifest.index_content_profile_digest,
         manifest.index_content_schema_ref,
         manifest.index_schema_ref,
+        manifest.embedding_profile_document,
+        manifest.embedding_profile_digest,
         manifest.runtime_profile_ref,
         manifest.runtime_profile_digest,
         manifest.runtime_content_profile_digest,
@@ -329,6 +337,12 @@ def _candidate_from_row(row: dict[str, Any]) -> ReleaseCandidate:
         content_profile_digest=row["index_content_profile_digest"],
         content_schema_ref=row["index_content_schema_ref"],
         index_schema_ref=row["index_schema_ref"],
+        embedding_profile_document=json.dumps(
+            row["embedding_profile_document"],
+            separators=(",", ":"),
+            sort_keys=True,
+        ),
+        embedding_profile_digest=row["embedding_profile_digest"],
     )
     runtime_profile = RuntimeProfileRef(
         profile_ref=row["runtime_profile_ref"],

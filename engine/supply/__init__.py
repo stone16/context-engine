@@ -9,10 +9,14 @@ from engine.control.file_imports import (
 )
 from engine.supply.embeddings import (
     CONTEXT_FRAGMENT_EMBEDDING_DIMENSION,
+    DETERMINISTIC_TWIN_EMBEDDING_PROFILE,
+    QWEN3_EMBEDDING_PROFILE,
     EmbeddingProfile,
     EmbeddingProvider,
+    EmbeddingProviderProfile,
     EmbeddingProviderUnavailable,
     EmbeddingVector,
+    registered_embedding_provider_profile,
     validate_embedding_batch,
 )
 from engine.supply.execution import (
@@ -132,10 +136,13 @@ __all__ = [
     "DEFAULT_SUPPLY_EXECUTION_CUMULATIVE_BYTE_LIMIT",
     "DEFAULT_SUPPLY_EXECUTION_NO_PROGRESS_PAGE_LIMIT",
     "DEFAULT_SUPPLY_EXECUTION_PAGE_LIMIT",
+    "DETERMINISTIC_TWIN_EMBEDDING_PROFILE",
     "EmbeddingProfile",
     "EmbeddingProvider",
+    "EmbeddingProviderProfile",
     "EmbeddingProviderUnavailable",
     "EmbeddingVector",
+    "QWEN3_EMBEDDING_PROFILE",
     "CompiledFragment",
     "FileImportAudience",
     "FileImportPath",
@@ -183,5 +190,6 @@ __all__ = [
     "deserialize_parsed_document",
     "worker_lease_digest",
     "worker_lease_nonce_digest",
+    "registered_embedding_provider_profile",
     "validate_embedding_batch",
 ]

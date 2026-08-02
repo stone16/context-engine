@@ -40,6 +40,7 @@ __all__ = [
     "MaterializedProjectionPort",
     "MaterializedProjectionSession",
     "MaterializedPublicationTrace",
+    "MaterializedCandidateDiscoveryUnavailable",
     "MaterializedScopeOperands",
     "MaterializedScopePort",
     "MaterializedScopeUnavailable",
@@ -428,6 +429,10 @@ class MaterializedProjectionSession:
         raise TypeError("MaterializedProjectionSession is not serializable")
 
 
+class MaterializedCandidateDiscoveryUnavailable(RuntimeError):
+    """Retained candidate discovery refused before returning any candidate."""
+
+
 @dataclass(frozen=True, slots=True)
 class ExactPhraseDiscoveryRequest:
     """Validated content-free exact-phrase lookup plan."""
@@ -444,6 +449,7 @@ class VectorDiscoveryRequest:
     """Validated content-free vector lookup plan."""
 
     query_embedding: tuple[float, ...]
+    embedding_profile_digest: str
     limit: int
     source_refs: tuple[str, ...] | None = None
     resource_refs: tuple[str, ...] | None = None
@@ -453,6 +459,15 @@ class VectorDiscoveryRequest:
             raise ValueError("vector discovery requires a nonempty query embedding")
         if any(type(value) is not float for value in self.query_embedding):
             raise TypeError("vector discovery embedding requires exact floats")
+        if (
+            type(self.embedding_profile_digest) is not str
+            or len(self.embedding_profile_digest) != 64
+            or any(
+                character not in "0123456789abcdef"
+                for character in self.embedding_profile_digest
+            )
+        ):
+            raise ValueError("vector discovery requires an exact embedding profile")
         _require_bounded_discovery_limit(self.limit)
         for field_name, refs in (
             ("source_refs", self.source_refs),
@@ -673,6 +688,7 @@ def _discover_vector_candidates(
         raise TypeError("materialized candidate discovery port is incomplete")
     candidates = discover_vector(
         request.query_embedding,
+        request.embedding_profile_digest,
         request.limit,
         request.source_refs,
         request.resource_refs,

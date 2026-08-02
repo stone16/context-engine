@@ -109,16 +109,19 @@ def test_hybrid_http_keeps_raw_candidates_before_the_kernel(
             )
         try:
             with migration_engine.begin() as connection:
+                provider = DeterministicEmbeddingTwin()
                 for fragment_ref, body in (
                     (active.authorized.fragment_ref, first_body),
                     (second_admitted.fragment_ref, second_body),
                 ):
-                    embedding = DeterministicEmbeddingTwin().embed((body,))[0]
+                    embedding = provider.embed_documents((body,))[0]
                     connection.execute(
                         text(
                             "UPDATE context_fragment "
-                            "SET content = :content, "
-                            "embedding = CAST(:embedding AS vector) "
+                                "SET content = :content, "
+                                "embedding = CAST(:embedding AS vector), "
+                                "embedding_profile_digest = "
+                                ":embedding_profile_digest "
                             "WHERE organization_id = :organization_id "
                             "AND resource_ref = :resource_ref "
                             "AND fragment_ref = :fragment_ref"
@@ -128,6 +131,9 @@ def test_hybrid_http_keeps_raw_candidates_before_the_kernel(
                             + ",".join(repr(item) for item in embedding)
                             + "]",
                             "content": body,
+                            "embedding_profile_digest": (
+                                provider.provider_profile.profile_digest
+                            ),
                             "organization_id": active.organization_id,
                             "resource_ref": active.authorized.resource_ref,
                             "fragment_ref": fragment_ref,

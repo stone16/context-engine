@@ -331,7 +331,7 @@ def test_output_cannot_escape_the_workspace_state_directory(tmp_path: Path) -> N
         )
 
 
-def test_missing_real_backend_names_the_optional_extra(
+def test_missing_real_backend_is_typed_unavailability(
     monkeypatch: Any,
 ) -> None:
     def missing(_name: str) -> Any:
@@ -339,7 +339,7 @@ def test_missing_real_backend_names_the_optional_extra(
 
     monkeypatch.setattr(importlib, "import_module", missing)
 
-    with pytest.raises(BenchmarkUnavailable, match=r"context-engine\[benchmark\]"):
+    with pytest.raises(BenchmarkUnavailable, match="backend is unavailable"):
         cli._load_sentence_transformers()
 
 

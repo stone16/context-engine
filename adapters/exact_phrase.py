@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from engine.runtime.budget import PackageBudgetMeter
 from engine.runtime.candidate_ranking import (
     CandidateQuery,
     RankedCandidate,
@@ -31,6 +32,26 @@ class PostgreSQLExactPhraseCandidateIndex:
         if type(effective_scope) is not CandidateDiscoveryScope:
             raise TypeError("exact phrase discovery requires CandidateDiscoveryScope")
         return ExactPhraseDiscoveryRequest(exact_phrase_digest(request.need.query))
+
+    def prepare_budgeted_discovery(
+        self,
+        request: Acquire,
+        *,
+        effective_scope: CandidateDiscoveryScope,
+        budget: PackageBudgetMeter,
+        active_embedding_profile_digest: str,
+    ) -> ExactPhraseDiscoveryRequest:
+        if type(budget) is not PackageBudgetMeter:
+            raise TypeError("exact phrase discovery requires PackageBudgetMeter")
+        if (
+            type(active_embedding_profile_digest) is not str
+            or not active_embedding_profile_digest
+        ):
+            raise TypeError("exact phrase discovery requires an active profile")
+        return self.prepare_discovery(
+            request,
+            effective_scope=effective_scope,
+        )
 
     def discover(
         self,

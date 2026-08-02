@@ -21,6 +21,7 @@ from adapters.http.dogfood import (
     DOGFOOD_BINDING_ENV,
     DOGFOOD_COMPOSITION_ENV,
     DOGFOOD_COMPOSITION_VALUE,
+    DOGFOOD_EMBEDDING_MODEL_DIR_ENV,
     DOGFOOD_EMBEDDING_PROVIDER_ENV,
     DOGFOOD_EMBEDDING_PROVIDER_VALUE,
     DOGFOOD_MEMBERSHIP_ENV,
@@ -73,7 +74,12 @@ from engine.persistence import (
     PostgreSQLWorkerLeaseIssuer,
     create_database_engine,
 )
-from engine.runtime.release_lineage import DOGFOOD_VECTOR_INDEX_PROFILE_REF_V1
+from engine.runtime.release_lineage import QWEN_VECTOR_INDEX_PROFILE_REF_V1
+from engine.supply import (
+    DETERMINISTIC_TWIN_EMBEDDING_PROFILE,
+    QWEN3_EMBEDDING_PROFILE,
+)
+from tests.support.embeddings import QwenEmbeddingTwin
 from tests.support.file_imports import (
     NOW,
     ControlAuthenticator,
@@ -83,7 +89,10 @@ from tests.support.file_imports import (
     prepare_repeat_file_import,
     run_file_import,
 )
-from tests.support.releases import clear_test_runtime_release
+from tests.support.releases import (
+    clear_test_runtime_release,
+    ensure_test_runtime_release,
+)
 
 pytestmark = pytest.mark.integration
 ROOT = Path(__file__).parents[2]
@@ -183,6 +192,7 @@ def _dogfood_environment(
         DOGFOOD_APPLICATION_ENV: "application:dogfood-local:v1",
         DOGFOOD_BINDING_ENV: "binding:dogfood-local:v1",
         DOGFOOD_EMBEDDING_PROVIDER_ENV: DOGFOOD_EMBEDDING_PROVIDER_VALUE,
+        DOGFOOD_EMBEDDING_MODEL_DIR_ENV: "/verified/test-qwen-model",
         "CONTEXT_ENGINE_RUNTIME_ROLE": runtime_configuration.expected_role,
         "CONTEXT_ENGINE_RUNTIME_DATABASE_URL": (
             runtime_configuration.url.render_as_string(hide_password=False)
@@ -386,6 +396,7 @@ def _publish_second_source(
         prepared,
         token,
         guarded_worker_engine,
+        embedding_provider=QwenEmbeddingTwin(),
     )
     return second, published.candidate_ref.revision_ref
 
@@ -449,6 +460,7 @@ def test_promote_release_activates_every_current_revision_and_dogfood_runtime(
             scenario.prepared,
             scenario.token,
             guarded_worker_engine,
+            embedding_provider=QwenEmbeddingTwin(),
         )
         (scenario.root / "second.md").write_bytes(
             b"# Second note\n\nEvery current revision belongs in the release.\n"
@@ -464,6 +476,7 @@ def test_promote_release_activates_every_current_revision_and_dogfood_runtime(
             second_prepared,
             second_token,
             guarded_worker_engine,
+            embedding_provider=QwenEmbeddingTwin(),
         )
         retained_source, retained_revision_ref = _publish_second_source(
             scenario,
@@ -540,7 +553,7 @@ def test_promote_release_activates_every_current_revision_and_dogfood_runtime(
         assert document == {
             "activeGeneration": 1,
             "activeRevisionCount": 3,
-            "indexProfileRef": DOGFOOD_VECTOR_INDEX_PROFILE_REF_V1,
+            "indexProfileRef": QWEN_VECTOR_INDEX_PROFILE_REF_V1,
             "manifestRef": document["manifestRef"],
         }
         assert promoted.stderr == ""
@@ -552,6 +565,8 @@ def test_promote_release_activates_every_current_revision_and_dogfood_runtime(
                     text(
                         "SELECT active.active_generation, "
                         "manifest.index_profile_ref, "
+                        "manifest.embedding_profile_document, "
+                        "manifest.embedding_profile_digest, "
                         "manifest.active_revision_refs "
                         "FROM active_release_manifest AS active "
                         "JOIN release_manifest AS manifest "
@@ -562,11 +577,32 @@ def test_promote_release_activates_every_current_revision_and_dogfood_runtime(
                     ),
                     {"organization_id": scenario.organization_id},
                 ).one()
-            assert tuple(durable) == (
-                1,
-                DOGFOOD_VECTOR_INDEX_PROFILE_REF_V1,
-                expected_revision_refs,
-            )
+                assert tuple(durable) == (
+                    1,
+                    QWEN_VECTOR_INDEX_PROFILE_REF_V1,
+                    QWEN3_EMBEDDING_PROFILE.canonical_document(),
+                    QWEN3_EMBEDDING_PROFILE.profile_digest,
+                    expected_revision_refs,
+                )
+                residual = connection.execute(
+                    text(
+                        "SELECT count(*) FROM context_fragment AS fragment "
+                        "JOIN context_resource AS resource "
+                        "ON resource.organization_id = fragment.organization_id "
+                        "AND resource.resource_ref = fragment.resource_ref "
+                        "AND resource.active_revision_id = fragment.revision_id "
+                        "WHERE resource.organization_id = :organization_id "
+                        "AND fragment.embedding_profile_digest "
+                        "IS DISTINCT FROM :embedding_profile_digest"
+                    ),
+                    {
+                        "organization_id": scenario.organization_id,
+                        "embedding_profile_digest": (
+                            QWEN3_EMBEDDING_PROFILE.profile_digest
+                        ),
+                    },
+                ).scalar_one()
+                assert residual == 0
         finally:
             migration_engine.dispose()
 
@@ -579,6 +615,10 @@ def test_promote_release_activates_every_current_revision_and_dogfood_runtime(
             served.update(kwargs)
 
         monkeypatch.setattr("applications.api.uvicorn.run", observe)
+        monkeypatch.setattr(
+            "adapters.http.dogfood.LocalQwenEmbeddingProvider",
+            lambda _path: QwenEmbeddingTwin(),
+        )
         api_main(["--host", "127.0.0.1", "--port", "9123"])
         assert served["host"] == "127.0.0.1"
         assert (
@@ -754,6 +794,198 @@ def test_promote_release_refuses_empty_corpus_and_control_credential(
             evidence_file=release_evidence_file,
             configuration=configuration,
             authorities=authorities,
+        )
+
+
+def test_test_release_helper_replaces_stale_real_corpus_with_exact_sentinel(
+    tmp_path: Path,
+    migration_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+    guarded_worker_engine: Engine,
+) -> None:
+    """An emptied corpus never reuses a Release that selected former content."""
+
+    scenario = prepare_file_import_scenario(
+        tmp_path,
+        migration_configuration,
+        guarded_control_engine,
+        payload=b"# Retired corpus\n\nThis Revision will be offboarded.\n",
+    )
+    try:
+        assert scenario.token is not None
+        published = run_file_import(
+            scenario,
+            scenario.prepared,
+            scenario.token,
+            guarded_worker_engine,
+        )
+        initial = ensure_test_runtime_release(scenario.organization_id)
+        assert initial.active_revision_refs == (
+            published.candidate_ref.revision_ref,
+        )
+
+        migration_engine = create_database_engine(migration_configuration)
+        try:
+            with migration_engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "UPDATE context_resource SET tombstoned = true "
+                        "WHERE organization_id = :organization_id "
+                        "AND resource_ref = :resource_ref"
+                    ),
+                    {
+                        "organization_id": scenario.organization_id,
+                        "resource_ref": published.candidate_ref.resource_ref,
+                    },
+                )
+        finally:
+            migration_engine.dispose()
+        after_empty = ensure_test_runtime_release(scenario.organization_id)
+
+        assert after_empty.active_revision_refs != initial.active_revision_refs
+        assert len(after_empty.active_revision_refs) == 1
+        migration_engine = create_database_engine(migration_configuration)
+        try:
+            with migration_engine.connect() as connection:
+                sentinel_source_ref = connection.execute(
+                    text(
+                        "SELECT resource.source_ref "
+                        "FROM context_resource AS resource "
+                        "WHERE resource.organization_id = :organization_id "
+                        "AND resource.active_revision_id = :revision_id"
+                    ),
+                    {
+                        "organization_id": scenario.organization_id,
+                        "revision_id": UUID(after_empty.active_revision_refs[0]),
+                    },
+                ).scalar_one()
+            assert sentinel_source_ref == "source:test-release-sentinel"
+        finally:
+            migration_engine.dispose()
+    finally:
+        clear_test_runtime_release(scenario.organization_id)
+        delete_file_import_scenario(
+            migration_configuration,
+            scenario.organization_id,
+        )
+
+
+@pytest.mark.parametrize("residual_kind", ["prior_profile", "missing_vector"])
+def test_promote_release_refuses_partial_reembed_without_advancing_pointer(
+    tmp_path: Path,
+    release_evidence_file: Path,
+    migration_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+    guarded_worker_engine: Engine,
+    residual_kind: str,
+) -> None:
+    scenario = prepare_file_import_scenario(
+        tmp_path,
+        migration_configuration,
+        guarded_control_engine,
+        payload=b"# Partial re-embed\n\nPromotion must refuse residuals.\n",
+    )
+    try:
+        assert scenario.token is not None
+        published = run_file_import(
+            scenario,
+            scenario.prepared,
+            scenario.token,
+            guarded_worker_engine,
+            embedding_provider=QwenEmbeddingTwin(),
+        )
+        user_id = _user_id(
+            migration_configuration,
+            scenario.organization_id,
+            scenario.membership_id,
+        )
+        environment = _operator_environment(scenario.organization_id)
+        _seed_release_grant(
+            organization_id=scenario.organization_id,
+            user_id=user_id,
+            membership_id=scenario.membership_id,
+            environment=environment,
+        )
+        migration_engine = create_database_engine(migration_configuration)
+        try:
+            with migration_engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "ALTER TABLE context_fragment DISABLE TRIGGER "
+                        "context_fragment_reject_mutation"
+                    )
+                )
+                if residual_kind == "prior_profile":
+                    connection.execute(
+                        text(
+                            "UPDATE context_fragment "
+                            "SET embedding_profile_digest = :digest "
+                            "WHERE organization_id = :organization_id "
+                            "AND revision_id = :revision_id"
+                        ),
+                        {
+                            "digest": (
+                                DETERMINISTIC_TWIN_EMBEDDING_PROFILE.profile_digest
+                            ),
+                            "organization_id": scenario.organization_id,
+                            "revision_id": UUID(published.candidate_ref.revision_ref),
+                        },
+                    )
+                else:
+                    connection.execute(
+                        text(
+                            "UPDATE context_fragment SET embedding = NULL, "
+                            "embedding_profile_digest = NULL "
+                            "WHERE organization_id = :organization_id "
+                            "AND revision_id = :revision_id"
+                        ),
+                        {
+                            "organization_id": scenario.organization_id,
+                            "revision_id": UUID(published.candidate_ref.revision_ref),
+                        },
+                    )
+                connection.execute(
+                    text(
+                        "ALTER TABLE context_fragment ENABLE TRIGGER "
+                        "context_fragment_reject_mutation"
+                    )
+                )
+        finally:
+            migration_engine.dispose()
+
+        refused = _promote(
+            scenario.organization_id,
+            release_evidence_file,
+            environment,
+            check=False,
+        )
+        assert refused.returncode != 0
+        assert refused.stdout == ""
+        assert refused.stderr == "context-engine-control: operation refused\n"
+
+        migration_engine = create_database_engine(migration_configuration)
+        try:
+            with migration_engine.connect() as connection:
+                counts = tuple(
+                    connection.execute(
+                        text(
+                            "SELECT "
+                            "(SELECT count(*) FROM active_release_manifest "
+                            " WHERE organization_id = :organization_id), "
+                            "(SELECT count(*) FROM release_promotion_audit "
+                            " WHERE organization_id = :organization_id)"
+                        ),
+                        {"organization_id": scenario.organization_id},
+                    ).one()
+                )
+            assert counts == (0, 0)
+        finally:
+            migration_engine.dispose()
+    finally:
+        clear_test_runtime_release(scenario.organization_id)
+        delete_file_import_scenario(
+            migration_configuration,
+            scenario.organization_id,
         )
 
 

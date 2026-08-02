@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from adapters.fts import PostgreSQLFtsCandidateIndex
 from adapters.pgvector import PostgreSQLVectorCandidateIndex
+from engine.runtime.budget import PackageBudgetMeter
 from engine.runtime.candidate_ranking import CandidateQuery
 from engine.runtime.contracts import Acquire
 from engine.runtime.materialized import (
@@ -37,6 +38,27 @@ class PostgreSQLHybridCandidateIndex:
             vector=self._vector.prepare_discovery(
                 request,
                 effective_scope=effective_scope,
+            ),
+        )
+
+    def prepare_budgeted_discovery(
+        self,
+        request: Acquire,
+        *,
+        effective_scope: CandidateDiscoveryScope,
+        budget: PackageBudgetMeter,
+        active_embedding_profile_digest: str,
+    ) -> HybridDiscoveryRequest:
+        return HybridDiscoveryRequest(
+            fts=self._fts.prepare_discovery(
+                request,
+                effective_scope=effective_scope,
+            ),
+            vector=self._vector.prepare_budgeted_discovery(
+                request,
+                effective_scope=effective_scope,
+                budget=budget,
+                active_embedding_profile_digest=active_embedding_profile_digest,
             ),
         )
 

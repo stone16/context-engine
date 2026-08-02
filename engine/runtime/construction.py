@@ -22,7 +22,11 @@ from engine.runtime.authorized_ranking import (
     rank_authorized_one_hop,
     select_authorized_ranking,
 )
-from engine.runtime.budget import PackageBudget, effective_package_budget
+from engine.runtime.budget import (
+    PackageBudget,
+    PackageBudgetMeter,
+    effective_package_budget,
+)
 from engine.runtime.candidate_ranking import (
     DEFAULT_CANDIDATE_SUBMISSION_LIMIT,
     CandidateQuery,
@@ -49,6 +53,7 @@ from engine.runtime.citation import (
 )
 from engine.runtime.content_io import (
     CandidateIndex,
+    CandidateIndexUnavailable,
     RuntimeContentIo,
     prohibited_empty_path_content_io,
 )
@@ -121,6 +126,7 @@ from engine.runtime.fragment_window import (
 from engine.runtime.invocation import AuthenticatedInvocation
 from engine.runtime.materialized import (
     CandidateDiscoverySession,
+    MaterializedCandidateDiscoveryUnavailable,
     MaterializedFragmentLocator,
     MaterializedOneHopCandidate,
     MaterializedProjectionSession,
@@ -1649,7 +1655,7 @@ class Runtime:
             )
         if any(
             not callable(getattr(selected_content_io.index, method_name, None))
-            for method_name in ("prepare_discovery", "discover")
+            for method_name in ("prepare_budgeted_discovery", "discover")
         ):
             raise RuntimeConfigurationError("candidate_index is incomplete")
         try:
@@ -1838,9 +1844,18 @@ class Runtime:
                 discovery_scope = candidate_discovery_scope(
                     preparation.policy_receipt.effective_scope
                 )
-                discovery_request = self._content_io.index.prepare_discovery(
-                    request,
-                    effective_scope=discovery_scope,
+                query_embedding_budget = PackageBudgetMeter(
+                    preparation.effective_budget
+                )
+                discovery_request = (
+                    self._content_io.index.prepare_budgeted_discovery(
+                        request,
+                        effective_scope=discovery_scope,
+                        budget=query_embedding_budget,
+                        active_embedding_profile_digest=(
+                            active_release.embedding_profile_digest
+                        ),
+                    )
                 )
                 _require_candidate_discovery_scope_integrity(discovery_scope)
                 require_bounded_discovery_request(
@@ -1849,11 +1864,16 @@ class Runtime:
                 )
                 discovery_session: CandidateDiscoverySession | None = None
                 try:
-                    discovery_session = _construct_candidate_discovery_session(
-                        projection_session,
-                        discovery_request,
-                        effective_scope=(preparation.policy_receipt.effective_scope),
-                    )
+                    try:
+                        discovery_session = _construct_candidate_discovery_session(
+                            projection_session,
+                            discovery_request,
+                            effective_scope=(preparation.policy_receipt.effective_scope),
+                        )
+                    except MaterializedCandidateDiscoveryUnavailable:
+                        raise CandidateIndexUnavailable(
+                            "Candidate discovery is unavailable"
+                        ) from None
                     discovered = self._content_io.index.discover(
                         request,
                         discovery_session,

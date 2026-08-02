@@ -17,16 +17,20 @@ from engine.persistence import (
     FilePublicationBoundary,
     PostgreSQLFileImportWorker,
     PostgreSQLWorkerLeaseIssuer,
+    PublishedFileImport,
     create_database_engine,
 )
 from engine.supply import (
     CONTEXT_FRAGMENT_EMBEDDING_DIMENSION,
+    DETERMINISTIC_TWIN_EMBEDDING_PROFILE,
     EmbeddingProfile,
+    EmbeddingProviderProfile,
     EmbeddingProviderUnavailable,
     EmbeddingVector,
     MarkdownCompilerConfig,
     WorkNotAvailable,
 )
+from tests.support.embeddings import QwenEmbeddingTwin
 from tests.support.file_imports import (
     FileImportScenario,
     delete_file_import_scenario,
@@ -44,11 +48,20 @@ class _RecordingEmbeddingProvider:
         self.calls: list[tuple[str, ...]] = []
         self._twin = DeterministicEmbeddingTwin()
 
+    @property
+    def provider_profile(self) -> EmbeddingProviderProfile:
+        return DETERMINISTIC_TWIN_EMBEDDING_PROFILE
+
     def embed(self, inputs: tuple[str, ...]) -> tuple[EmbeddingVector, ...]:
         self.calls.append(inputs)
         if not self.available:
             raise EmbeddingProviderUnavailable("provider detail must not escape")
         return self._twin.embed(inputs)
+
+    def embed_documents(
+        self, inputs: tuple[str, ...]
+    ) -> tuple[EmbeddingVector, ...]:
+        return self.embed(inputs)
 
 
 class _InvalidEmbeddingProvider(_RecordingEmbeddingProvider):
@@ -87,7 +100,7 @@ def _run(
     worker: PostgreSQLFileImportWorker,
     scenario: FileImportScenario,
     token: Any,
-) -> object:
+) -> PublishedFileImport:
     return worker.run(
         FileImportLeaseRedemption(
             token,
@@ -96,6 +109,53 @@ def _run(
             scenario.source_ref,
         )
     )
+
+
+def test_profile_change_reembeds_unchanged_content_as_replacement_revision(
+    tmp_path: Path,
+    migration_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+    guarded_worker_engine: Engine,
+) -> None:
+    scenario = prepare_file_import_scenario(
+        tmp_path,
+        migration_configuration,
+        guarded_control_engine,
+    )
+    assert scenario.token is not None
+    first = _run(
+        _worker(scenario, guarded_worker_engine, _RecordingEmbeddingProvider()),
+        scenario,
+        scenario.token,
+    )
+    repeat, repeat_token = prepare_repeat_file_import(
+        scenario,
+        guarded_control_engine,
+        idempotency_key="profile-change-reembed",
+    )
+
+    replacement = PostgreSQLFileImportWorker(
+        guarded_worker_engine,
+        scenario.codec,
+        scenario.receiver,
+        FileRootRegistry(
+            {scenario.root_ref: scenario.root},
+            limits=FileReadLimits(max_file_bytes=4096),
+        ),
+        MarkdownCompilerConfig("markdown-config-v2"),
+        embedding_provider=QwenEmbeddingTwin(),
+        clock=lambda: datetime.now(UTC).replace(microsecond=0),
+    ).run(
+        FileImportLeaseRedemption(
+            repeat_token,
+            repeat.organization_id,
+            repeat.job_id,
+            repeat.source_ref,
+        )
+    )
+
+    assert replacement.outcome == "replaced"
+    assert replacement.candidate_ref.revision_ref != first.candidate_ref.revision_ref
 
 
 def _stored_vectors(

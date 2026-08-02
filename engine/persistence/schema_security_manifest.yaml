@@ -1,5 +1,5 @@
 {
-  "manifestVersion": "43.0.0",
+  "manifestVersion": "44.0.0",
   "controlOperations": [
     {
       "name": "register_file_source",
@@ -524,11 +524,12 @@
     },
     {
       "name": "publish_file_import",
-      "versionedDatabaseFunctions": {
+      "closedCompatibilityDatabaseFunctions": {
         "markdown-config-v1": "context_worker_publish_file_import_v2",
-        "markdown-config-v2": "context_worker_publish_structural_file_import_v2",
-        "markdown-config-v3": "context_worker_prepare_file_publication"
+        "markdown-config-v2": "context_worker_publish_structural_file_import_v2"
       },
+      "compatibilityBehavior": "profile-free v1/v2 entry points retain EXECUTE compatibility but refuse with zero effect; current v1/v2/v3 publication uses recover_file_publication",
+      "activeLifecycle": "recover_file_publication",
       "role": "context_engine_worker",
       "definerRole": "context_engine_worker_lease_definer",
       "directTableMutationAllowed": false,
@@ -544,6 +545,7 @@
           "compiler_version",
           "config_version"
         ],
+        "embeddingCompatibilityDimension": "embedding_profile_digest",
         "concurrencyArbitration": "file_resource_ingestion_guard row lock",
         "unchangedReasonCode": "active-content-identity-match",
         "sourceContentRetainedInOutcome": false
@@ -566,10 +568,12 @@
     },
     {
       "name": "replace_file_import",
-      "stageDatabaseFunctions": {
+      "closedCompatibilityStageDatabaseFunctions": {
         "markdown-config-v1": "context_worker_stage_file_replacement",
         "markdown-config-v2": "context_worker_stage_structural_file_replacement"
       },
+      "compatibilityBehavior": "profile-free v1/v2 staging entry points retain EXECUTE compatibility but refuse with zero effect; current replacement staging uses recover_file_publication",
+      "activeLifecycle": "recover_file_publication",
       "activateDatabaseFunction": "context_worker_activate_file_replacement",
       "role": "context_engine_worker",
       "definerRole": "context_engine_worker_lease_definer",
@@ -631,8 +635,17 @@
         "resource_ref",
         "revision_id",
         "content_identity_digest",
-        "publication_payload_digest"
+        "publication_payload_digest",
+        "embedding_profile_digest"
       ],
+      "embeddingProfileBinding": {
+        "classificationFunctionArgument": "requested_embedding_profile_digest",
+        "acquisitionFunctionArgument": "requested_embedding_profile_digest",
+        "prepareFunctionArgument": "requested_embedding_profile_digest",
+        "recoveryColumn": "embedding_profile_digest",
+        "fragmentColumn": "embedding_profile_digest",
+        "sameProfileRequiredAtEveryBoundary": true
+      },
       "concurrentPublicationArbitration": "the Organization/Source/Resource ingestion guard serializes classification; a late identical job observes the winner as unchanged",
       "activationInvariant": "authorization and complete Fragment/index evidence are revalidated before one active-pointer transaction",
       "atomicWritesByBoundary": {
@@ -746,8 +759,15 @@
         "release_candidate",
         "release_evaluation",
         "release_manifest",
-        "active_release_manifest"
+        "active_release_manifest",
+        "context_fragment embedding_profile_digest completeness"
       ],
+      "embeddingProfileActivation": {
+        "releaseColumn": "embedding_profile_digest",
+        "fragmentColumn": "embedding_profile_digest",
+        "selectedActiveRevisionCorpusRequiredComplete": true,
+        "missingOrMixedProfilesRefuse": true
+      },
       "candidateEvaluationExactBindings": [
         "security_status",
         "security_evidence_digest",
@@ -6801,7 +6821,7 @@
           "table": "context_fragment"
         }
       },
-      "purpose": "Immutable retrieval/projection unit inheriting its Article authorization after active-lineage verification; never an ACL atom",
+      "purpose": "Immutable retrieval/projection unit binding its vector to one exact embedding profile and inheriting its Article authorization after active-lineage verification; never an ACL atom",
       "organizationColumn": "organization_id",
       "organizationInclusiveKeys": [
         {
@@ -6867,6 +6887,10 @@
         {
           "name": "ck_context_fragment_projection_payload",
           "expression": "(projection_kind = 'body' AND content IS NOT NULL AND translate(content, U&'\\0009\\000A\\000B\\000C\\000D\\001C\\001D\\001E\\001F\\0020\\0085\\00A0\\1680\\2000\\2001\\2002\\2003\\2004\\2005\\2006\\2007\\2008\\2009\\200A\\2028\\2029\\202F\\205F\\3000', '') <> '') OR (projection_kind = 'fields' AND content IS NULL)"
+        },
+        {
+          "name": "ck_context_fragment_embedding_profile",
+          "expression": "embedding and embedding_profile_digest are null together; otherwise the digest is one lowercase SHA-256 hex value"
         }
       ],
       "projectionModes": {
@@ -6889,8 +6913,10 @@
         },
         "vector": {
           "column": "embedding",
+          "profileColumn": "embedding_profile_digest",
           "index": "ix_context_fragment_embedding_hnsw",
-          "authorizationRole": "candidate removal only; never a grant"
+          "authorizationRole": "candidate removal only; never a grant",
+          "compatibilityGate": "all in-scope active vectors equal the active Release embedding profile before ANN"
         }
       },
       "rowLevelSecurity": {
@@ -6928,6 +6954,14 @@
               "context_engine_graph_definer"
             ],
             "using": "(organization_id = (NULLIF(current_setting('app.organization_id'::text, true), ''::text))::uuid)"
+          },
+          {
+            "name": "context_fragment_release_definer_select",
+            "command": "SELECT",
+            "roles": [
+              "context_engine_release_definer"
+            ],
+            "using": "organization_id = NULLIF(current_setting('app.organization_id', true), '')::uuid"
           },
           {
             "name": "context_fragment_file_noop_definer_select",
@@ -6978,6 +7012,9 @@
         ],
         "context_engine_graph_definer": [
           "SELECT organization_id, resource_ref, revision_id, fragment_ref, ordinal"
+        ],
+        "context_engine_release_definer": [
+          "SELECT"
         ]
       },
       "partitions": [],
@@ -7281,7 +7318,7 @@
           "table": "release_manifest"
         }
       },
-      "purpose": "Immutable Organization-owned release profile composition and curation compatibility lineage",
+      "purpose": "Immutable Organization-owned release profile composition, exact embedding-provider identity, and curation compatibility lineage",
       "organizationColumn": "organization_id",
       "organizationInclusiveKeys": [
         {
@@ -7337,6 +7374,10 @@
         {
           "name": "ck_release_manifest_curation_shape",
           "expression": "(curation_mode = 'curation_off' AND curation_snapshot_ref IS NULL AND jsonb_array_length(compatible_revision_refs) = 0 AND curation_evaluation_digest IS NULL) OR (curation_mode = 'curation_on' AND curation_snapshot_ref IS NOT NULL AND char_length(curation_snapshot_ref) BETWEEN 1 AND 255 AND curation_snapshot_ref = btrim(curation_snapshot_ref) AND curation_snapshot_ref !~ '[[:space:]]' AND jsonb_array_length(compatible_revision_refs) > 0 AND compatible_revision_refs = active_revision_refs AND curation_evaluation_digest IS NOT NULL AND char_length(curation_evaluation_digest) = 64 AND curation_evaluation_digest = lower(curation_evaluation_digest) AND curation_evaluation_digest ~ '^[0-9a-f]{64}$')"
+        },
+        {
+          "name": "ck_release_manifest_embedding_profile",
+          "expression": "embedding_profile_document is an object and embedding_profile_digest is one lowercase SHA-256 hex digest"
         }
       ],
       "rowLevelSecurity": {
@@ -8859,7 +8900,7 @@
           "table": "file_publication_recovery"
         }
       },
-      "purpose": "Mutable Organization/job checkpoint binding one File publication to one stable Resource and Revision identity across lease generations",
+      "purpose": "Mutable Organization/job checkpoint binding one File publication to one stable Resource, Revision, and embedding-profile identity across lease generations",
       "organizationColumn": "organization_id",
       "organizationInclusiveKeys": [
         {
@@ -8944,6 +8985,10 @@
         {
           "name": "ck_file_publication_recovery_compiler",
           "expression": "only the accepted Markdown v1 and v2 compiler/config pairs are recoverable"
+        },
+        {
+          "name": "ck_file_publication_recovery_embedding_profile",
+          "expression": "embedding_profile_digest is one lowercase SHA-256 hex digest"
         }
       ],
       "rowLevelSecurity": {

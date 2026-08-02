@@ -16,6 +16,7 @@ from engine.persistence import (
     create_database_engine,
 )
 from engine.runtime.authorized_ranking import HYBRID_RANKER_WEIGHTS
+from engine.runtime.budget import PackageBudgetMeter
 from engine.runtime.candidate_ranking import (
     CandidateQuery,
     RankedCandidate,
@@ -79,6 +80,21 @@ class _PermutedHybridEvidenceIndex:
             effective_scope=effective_scope,
         )
 
+    def prepare_budgeted_discovery(
+        self,
+        request: Acquire,
+        *,
+        effective_scope: CandidateDiscoveryScope,
+        budget: PackageBudgetMeter,
+        active_embedding_profile_digest: str,
+    ) -> ExactPhraseDiscoveryRequest:
+        return PostgreSQLExactPhraseCandidateIndex().prepare_budgeted_discovery(
+            request,
+            effective_scope=effective_scope,
+            budget=budget,
+            active_embedding_profile_digest=active_embedding_profile_digest,
+        )
+
     def discover(
         self,
         request: Acquire,
@@ -134,6 +150,21 @@ class _RefusalVariantHybridEvidenceIndex:
         return PostgreSQLExactPhraseCandidateIndex().prepare_discovery(
             request,
             effective_scope=effective_scope,
+        )
+
+    def prepare_budgeted_discovery(
+        self,
+        request: Acquire,
+        *,
+        effective_scope: CandidateDiscoveryScope,
+        budget: PackageBudgetMeter,
+        active_embedding_profile_digest: str,
+    ) -> ExactPhraseDiscoveryRequest:
+        return PostgreSQLExactPhraseCandidateIndex().prepare_budgeted_discovery(
+            request,
+            effective_scope=effective_scope,
+            budget=budget,
+            active_embedding_profile_digest=active_embedding_profile_digest,
         )
 
     def discover(
