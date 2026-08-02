@@ -18,7 +18,7 @@ from adapters.http.contracts import (
     ResolutionOutcomeWire,
     ResolvedWire,
 )
-from applications.dogfood_evaluation import (
+from adapters.http.dogfood_client import (
     MAX_QUERY_CHARACTERS,
     DogfoodEvaluationUnavailable,
     DogfoodHttpConfiguration,

@@ -629,6 +629,61 @@
       "id": "SDK-ONE-HOP-GRAPH-151",
       "layer": "runtime",
       "selector": "tests/integration/test_one_hop_graph_http_sdk.py::test_generated_sdk_one_hop_reauthorizes_and_leaves_no_denied_trace"
+    },
+    {
+      "id": "MCP-CONTRACT-215",
+      "layer": "runtime",
+      "selector": "tests/unit/test_mcp_adapter.py::test_mcp_lists_one_exact_acquire_tool_without_trusted_inputs"
+    },
+    {
+      "id": "MCP-TRUSTED-INPUT-215",
+      "layer": "runtime",
+      "selector": "tests/unit/test_mcp_adapter.py::test_mcp_rejects_trusted_field_injection_before_http"
+    },
+    {
+      "id": "MCP-STDIO-HTTP-215",
+      "layer": "runtime",
+      "selector": "tests/unit/test_mcp_adapter.py::test_spawned_stdio_session_calls_only_loopback_http_and_preserves_outcome"
+    },
+    {
+      "id": "MCP-CONFIG-215",
+      "layer": "runtime",
+      "selector": "tests/unit/test_mcp_adapter.py::test_spawned_stdio_server_fails_closed_without_private_environment"
+    },
+    {
+      "id": "MCP-ARGUMENTS-215",
+      "layer": "runtime",
+      "selector": "tests/unit/test_mcp_adapter.py::test_spawned_stdio_server_rejects_process_arguments_content_free"
+    },
+    {
+      "id": "MCP-IMPORT-BOUNDARY-215",
+      "layer": "runtime",
+      "selector": "tests/unit/test_mcp_adapter.py::test_mcp_process_import_graph_excludes_privileged_modules"
+    },
+    {
+      "id": "MCP-HTTP-PARITY-215",
+      "layer": "runtime",
+      "selector": "tests/unit/test_mcp_adapter.py::test_spawned_mcp_matches_the_public_http_seam_for_required_parity_cases"
+    },
+    {
+      "id": "MCP-HTTP-PROXY-215",
+      "layer": "runtime",
+      "selector": "tests/unit/test_dogfood_evaluation.py::test_plain_http_caller_uses_only_frozen_resolve_transport"
+    },
+    {
+      "id": "MCP-HTTP-REDIRECT-215",
+      "layer": "runtime",
+      "selector": "tests/unit/test_dogfood_evaluation.py::test_plain_http_caller_refuses_redirect_before_forwarding_secret"
+    },
+    {
+      "id": "MCP-HTTP-SECRET-215",
+      "layer": "runtime",
+      "selector": "tests/unit/test_dogfood_evaluation.py::test_plain_http_caller_refuses_secret_material_in_raw_response"
+    },
+    {
+      "id": "RUNTIME-MCP-CARRIER-215",
+      "layer": "runtime",
+      "selector": "tests/integration/test_dogfood_runtime_activation.py::test_spawned_mcp_stdio_delivers_only_real_http_authorized_evidence"
     }
   ],
   "invariantMappings": [
@@ -819,7 +874,18 @@
           "FILE-DELIVERY-EVIDENCE-063",
           "SDK-LIVE-FILE-064",
           "SDK-PRIVATE-BOT-FLOW-071",
-          "RUNTIME-DOGFOOD-AUTH-102"
+          "RUNTIME-DOGFOOD-AUTH-102",
+          "MCP-CONTRACT-215",
+          "MCP-TRUSTED-INPUT-215",
+          "MCP-STDIO-HTTP-215",
+          "MCP-CONFIG-215",
+          "MCP-ARGUMENTS-215",
+          "MCP-IMPORT-BOUNDARY-215",
+          "MCP-HTTP-PARITY-215",
+          "MCP-HTTP-PROXY-215",
+          "MCP-HTTP-REDIRECT-215",
+          "MCP-HTTP-SECRET-215",
+          "RUNTIME-MCP-CARRIER-215"
         ]
       }
     },

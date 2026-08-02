@@ -8,10 +8,18 @@ import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Final, NoReturn, cast
+from typing import Final, NoReturn
 from uuid import UUID
 
-import rfc8785
+from context_engine_contracts import (
+    canonicalize_context_package as canonicalize_context_package,
+)
+from context_engine_contracts import (
+    context_package_digest as context_package_digest,
+)
+from context_engine_contracts import (
+    verify_context_package_digest as verify_context_package_digest,
+)
 
 PACKAGE_DIGEST_PROFILE: Final = "context-package-canonical-json-v3"
 QUERY_DIGEST_PROFILE: Final = "context-query-json-hmac-sha256-v1"
@@ -82,107 +90,6 @@ class QueryDigest:
         if type(self.profile) is not str or self.profile != QUERY_DIGEST_PROFILE:
             raise ValueError("query digest profile must match the active schema")
         _require_key_version("query digest key version", self.key_version)
-
-
-def _require_unicode_scalars(value: str) -> str:
-    if any(0xD800 <= ord(character) <= 0xDFFF for character in value):
-        raise ValueError("package document strings must contain Unicode scalar values")
-    return value
-
-
-type CanonicalJsonValue = (
-    None
-    | bool
-    | int
-    | float
-    | str
-    | list["CanonicalJsonValue"]
-    | dict[str, "CanonicalJsonValue"]
-)
-
-
-def _json_value(value: object, ancestors: set[int]) -> CanonicalJsonValue:
-    if type(value) in (type(None), bool, float):
-        return cast(None | bool | float, value)
-    if type(value) is int:
-        integer = value
-        if -(2**53) < integer < 2**53:
-            return integer
-        try:
-            binary64 = float(integer)
-        except OverflowError as error:
-            raise ValueError(
-                "package document integers must be exact IEEE 754 binary64 values"
-            ) from error
-        if int(binary64) != integer:
-            raise ValueError(
-                "package document integers must be exact IEEE 754 binary64 values"
-            )
-        return binary64
-    if type(value) is str:
-        return _require_unicode_scalars(value)
-
-    if isinstance(value, Mapping):
-        identity = id(value)
-        if identity in ancestors:
-            raise ValueError("package document must not contain cyclic containers")
-        ancestors.add(identity)
-        try:
-            document: dict[str, CanonicalJsonValue] = {}
-            mapping = cast(Mapping[object, object], value)
-            for key, item in mapping.items():
-                if type(key) is not str:
-                    raise TypeError(
-                        "package document mappings require exact string keys"
-                    )
-                _require_unicode_scalars(key)
-                if key == "packageDigest":
-                    raise ValueError("package document must not contain packageDigest")
-                document[key] = _json_value(item, ancestors)
-            return document
-        finally:
-            ancestors.remove(identity)
-
-    if type(value) in (list, tuple):
-        identity = id(value)
-        if identity in ancestors:
-            raise ValueError("package document must not contain cyclic containers")
-        ancestors.add(identity)
-        try:
-            sequence = cast(list[object] | tuple[object, ...], value)
-            return [_json_value(item, ancestors) for item in sequence]
-        finally:
-            ancestors.remove(identity)
-
-    raise TypeError("package document accepts only exact JSON values")
-
-
-def canonicalize_context_package(document: Mapping[str, object]) -> bytes:
-    """Return RFC 8785 canonical bytes for one Package without its digest field."""
-
-    if not isinstance(document, Mapping):
-        raise TypeError("package document must be a mapping")
-    return rfc8785.dumps(_json_value(document, set()))
-
-
-def context_package_digest(document: Mapping[str, object]) -> str:
-    """RFC 8785-canonicalize and digest one Package without its digest field."""
-
-    return hashlib.sha256(canonicalize_context_package(document)).hexdigest()
-
-
-def verify_context_package_digest(
-    document: Mapping[str, object], expected_digest: object
-) -> bool:
-    """Return whether an exact lowercase SHA-256 digest matches the document."""
-
-    if (
-        type(expected_digest) is not str
-        or len(expected_digest) != hashlib.sha256().digest_size * 2
-        or any(character not in "0123456789abcdef" for character in expected_digest)
-    ):
-        return False
-    return hmac.compare_digest(context_package_digest(document), expected_digest)
 
 
 def query_digest(

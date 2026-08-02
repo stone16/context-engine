@@ -23,6 +23,7 @@ dependencies = [
   "jsonschema>=4.25,<5",
   "jinja2>=3.1,<3.2",
   "markdown>=3.6,<3.7",
+  "mcp>=2.0,<3",
   "pydantic>=2.13,<2.14",
   "psycopg[binary]>=3.2,<3.3",
   "rfc8785>=0.1.4,<0.2",
@@ -51,6 +52,7 @@ context-engine-eval = "applications.eval_v1:main"
 context-engine-file-scan-measurement = "applications.file_scan_measurement:main"
 context-engine-golden-backup = "applications.golden_backup:main"
 context-engine-local-context = "applications.local_context:main"
+context-engine-mcp = "applications.mcp:main"
 context-engine-worker = "applications.worker:main"
 context-engine-connector-runner = "applications.connector_runner:main"
 
@@ -61,6 +63,7 @@ benchmark = [
 
 [tool.hatch.build.targets.wheel]
 packages = [
+  "context_engine_contracts",
   "engine",
   "adapters",
   "applications",
@@ -83,6 +86,7 @@ packages = [
 python_version = "3.13"
 strict = true
 files = [
+  "context_engine_contracts",
   "engine",
   "adapters",
   "applications",

@@ -9,7 +9,10 @@ from typing import Any, ClassVar, cast
 import pytest
 
 import applications.dogfood_evaluation as dogfood_evaluation
-from adapters.http.dogfood import DOGFOOD_SECRET_ENV
+from adapters.http.dogfood_client import (
+    DOGFOOD_SECRET_ENV,
+    DogfoodSecretExclusionUnavailable,
+)
 from applications.dogfood_evaluation import (
     DEFAULT_GOLDEN_SET_FILENAME,
     DOGFOOD_BASE_URL_ENV,
@@ -22,6 +25,7 @@ from applications.dogfood_evaluation import (
     evaluate_golden_set,
     load_golden_set,
     main,
+    reject_secret_retention,
     render_resolve,
 )
 from engine.learning.golden_storage import GOLDEN_ROOT_ENV
@@ -389,9 +393,10 @@ def test_configured_secret_is_refused_from_golden_input(tmp_path: Path) -> None:
     )
 
     with pytest.raises(DogfoodEvaluationUnavailable, match="secret material"):
-        configuration.reject_secret_retention(golden_set)
+        reject_secret_retention(configuration, golden_set)
 
 
+@pytest.mark.security_evidence(id="MCP-HTTP-PROXY-215", layer="runtime")
 def test_plain_http_caller_uses_only_frozen_resolve_transport(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -462,3 +467,75 @@ def test_plain_http_caller_uses_only_frozen_resolve_transport(
         "path": "/v0/resolve",
         "request_id": "maintainer-query-1",
     }
+
+
+@pytest.mark.security_evidence(id="MCP-HTTP-REDIRECT-215", layer="runtime")
+def test_plain_http_caller_refuses_redirect_before_forwarding_secret() -> None:
+    observed: list[str] = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            observed.append(self.path)
+            self.send_response(307)
+            self.send_header("Location", "/credential-leak-target")
+            self.end_headers()
+
+        def log_message(self, format: str, *args: Any) -> None:
+            del format, args
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = Thread(target=server.serve_forever)
+    thread.start()
+    try:
+        caller = DogfoodResolveClient(
+            DogfoodHttpConfiguration(
+                base_url=f"http://127.0.0.1:{server.server_port}",
+                secret=SECRET,
+            )
+        )
+        with pytest.raises(DogfoodEvaluationUnavailable, match="resolve"):
+            caller.resolve_acquire(query="redirect probe", request_id="redirect-1")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+
+    assert observed == ["/v0/resolve"]
+
+
+@pytest.mark.security_evidence(id="MCP-HTTP-SECRET-215", layer="runtime")
+def test_plain_http_caller_refuses_secret_material_in_raw_response() -> None:
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            body = json.dumps(
+                {
+                    "kind": "request_not_available",
+                    "retryable": False,
+                    "unexpected": SECRET,
+                }
+            ).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format: str, *args: Any) -> None:
+            del format, args
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = Thread(target=server.serve_forever)
+    thread.start()
+    try:
+        caller = DogfoodResolveClient(
+            DogfoodHttpConfiguration(
+                base_url=f"http://127.0.0.1:{server.server_port}",
+                secret=SECRET,
+            )
+        )
+        with pytest.raises(DogfoodSecretExclusionUnavailable):
+            caller.resolve_acquire(query="secret probe", request_id="secret-1")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()

@@ -10,6 +10,15 @@ from hashlib import sha256
 from typing import TYPE_CHECKING, Final, NoReturn
 from uuid import UUID
 
+from context_engine_contracts import (
+    MAX_PROJECTED_FIELD_REF_LENGTH as MAX_PROJECTED_FIELD_REF_LENGTH,
+)
+from context_engine_contracts import (
+    MAX_PROJECTED_FIELD_REFS as MAX_PROJECTED_FIELD_REFS,
+)
+from context_engine_contracts import (
+    validate_projected_field_refs as validate_projected_field_refs,
+)
 from engine.runtime.source_acl import FILE_SOURCE_ACL_FRESHNESS_PROFILE_REF
 
 if TYPE_CHECKING:
@@ -31,8 +40,6 @@ __all__ = [
 
 MAX_OPAQUE_REF_LENGTH: Final = 256
 MAX_POLICY_EPOCH: Final = (1 << 63) - 1
-MAX_PROJECTED_FIELD_REFS: Final = 64
-MAX_PROJECTED_FIELD_REF_LENGTH: Final = 64
 EVIDENCE_REF_PREFIX: Final = "ev"
 EVIDENCE_REF_ENTROPY_LENGTH: Final = 64
 
@@ -235,34 +242,6 @@ def _projection_integrity_digest(
     for field_ref in projected_field_refs:
         canonical += _encode_text(field_ref)
     return sha256(canonical).hexdigest()
-
-
-def validate_projected_field_refs(value: object) -> tuple[str, ...]:
-    """Return one exact field set that every public projection layer accepts."""
-
-    if type(value) is not tuple or not value:
-        raise ValueError("projected field refs must be a nonempty exact tuple")
-    refs = value
-    if len(refs) > MAX_PROJECTED_FIELD_REFS:
-        raise ValueError(
-            f"projected field refs must contain at most {MAX_PROJECTED_FIELD_REFS} "
-            "items"
-        )
-    if any(
-        type(ref) is not str
-        or not ref
-        or len(ref) > MAX_PROJECTED_FIELD_REF_LENGTH
-        or ref[0] not in "abcdefghijklmnopqrstuvwxyz"
-        or any(
-            character not in "abcdefghijklmnopqrstuvwxyz0123456789_"
-            for character in ref
-        )
-        for ref in refs
-    ):
-        raise ValueError("projected field refs must use closed lowercase identifiers")
-    if len(refs) != len(set(refs)):
-        raise ValueError("projected field refs must be unique")
-    return refs
 
 
 @dataclass(frozen=True, slots=True, init=False)

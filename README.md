@@ -486,8 +486,9 @@ ContextRuntime.resolve(AuthenticatedInvocation, TrustedDeliveryContext,
 ```
 
 This is the Runtime's **only** public capability. HTTP is the V1 server ingress;
-the TypeScript SDK is a generated HTTP client, not a second transport. MCP stays
-`NOT_ACTIVE` until a real caller exists.
+the TypeScript SDK is a generated HTTP client, not a second transport. ADR-0102
+activates only one maintainer-local spawn-per-session stdio MCP `Acquire`
+translator; every broader MCP carrier remains `NOT_ACTIVE`.
 
 `Continue` uses a principal-bound, one-shot, budget-accumulating token.
 `OpenCitation` uses an opaque `CitationOpenRef` that carries no authority of its
@@ -537,7 +538,7 @@ Two structural facts worth noticing:
 | Parsing | PDF / Markdown / Office parsers | — |
 | Representation | embeddings, reranker, LLM | — |
 | Storage | V1 fixed on PostgreSQL FTS + pgvector; only an in-Runtime candidate-injection test seam | authorization source of truth (PostgreSQL) |
-| Ingress | connectors, HTTP server ingress, MCP once a real caller exists; the generated SDK is a client artifact | authenticated invocation + `TrustedDeliveryContext` construction |
+| Ingress | connectors, HTTP server ingress, ADR-0102's local MCP translator; the generated SDK is a client artifact | authenticated invocation + `TrustedDeliveryContext` construction; every broader MCP carrier |
 | Governance | evaluation judge models | sealed `ContextRuntime` orchestration, `AuthorizationKernel`, `DecisionAudit`, budget, provenance |
 
 Portability is deliberately not promised before a second real backend exists.

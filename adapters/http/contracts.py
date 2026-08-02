@@ -5,20 +5,18 @@ from typing import Annotated, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from engine.runtime.contracts import (
+from context_engine_contracts import (
     DECISION_REF_PATTERN,
     MAX_NARROWING_REF_LENGTH,
     MAX_NARROWING_REFS,
     MAX_OPAQUE_CAPABILITY_LENGTH,
-    PACKAGE_REF_PATTERN,
-    complete_context_package_nullable_fields,
-)
-from engine.runtime.evidence import (
     MAX_PROJECTED_FIELD_REF_LENGTH,
     MAX_PROJECTED_FIELD_REFS,
+    PACKAGE_REF_PATTERN,
+    complete_context_package_nullable_fields,
     validate_projected_field_refs,
+    verify_context_package_digest,
 )
-from engine.runtime.package_digest import verify_context_package_digest
 
 PositiveExactInteger = Annotated[int, Field(strict=True, gt=0)]
 NonnegativeExactInteger = Annotated[int, Field(strict=True, ge=0)]
