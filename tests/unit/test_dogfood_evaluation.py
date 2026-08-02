@@ -8,8 +8,10 @@ from typing import Any, ClassVar, cast
 
 import pytest
 
+import applications.dogfood_evaluation as dogfood_evaluation
 from adapters.http.dogfood import DOGFOOD_SECRET_ENV
 from applications.dogfood_evaluation import (
+    DEFAULT_GOLDEN_SET_FILENAME,
     DOGFOOD_BASE_URL_ENV,
     GOLDEN_SET_SCHEMA_VERSION,
     DogfoodEvaluationUnavailable,
@@ -19,8 +21,10 @@ from applications.dogfood_evaluation import (
     GoldenSet,
     evaluate_golden_set,
     load_golden_set,
+    main,
     render_resolve,
 )
+from engine.learning.golden_storage import GOLDEN_ROOT_ENV
 
 SECRET = "dogfood-secret-with-at-least-thirty-two-bytes"
 
@@ -116,6 +120,83 @@ def test_golden_set_schema_loads_exactly_twenty_maintainer_entries(
     assert len(golden_set.cases) == 20
     assert len(golden_set.digest) == 64
     assert golden_set.cases[0].expected_evidence[0].path == "notes/entry-00.md"
+
+
+def test_cli_run_refuses_an_unconfigured_durable_golden_root_without_a_path(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.delenv(GOLDEN_ROOT_ENV, raising=False)
+
+    with pytest.raises(SystemExit) as error:
+        main(["run"])
+
+    assert error.value.code == 1
+    assert capsys.readouterr().err == (
+        "dogfood evaluation unavailable: durable golden set is unavailable\n"
+    )
+
+
+def test_cli_run_resolves_the_default_set_from_the_durable_golden_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    durable_root = tmp_path / "durable"
+    durable_root.mkdir()
+    golden_path = durable_root / DEFAULT_GOLDEN_SET_FILENAME
+    output_path = tmp_path / ".context-engine/dogfood/report.json"
+    _write_golden(golden_path)
+    golden_set = load_golden_set(golden_path)
+    expected_by_query = {
+        case.query: case.expected_evidence[0].identity
+        for case in golden_set.cases
+    }
+    monkeypatch.setenv(GOLDEN_ROOT_ENV, str(durable_root))
+    monkeypatch.setenv(DOGFOOD_BASE_URL_ENV, "http://127.0.0.1:8000")
+    monkeypatch.setenv(DOGFOOD_SECRET_ENV, SECRET)
+
+    def acquire(
+        self: DogfoodResolveClient,
+        *,
+        query: str,
+        request_id: str,
+    ) -> dict[str, object]:
+        del self, request_id
+        return _resolved(expected_by_query[query])
+
+    monkeypatch.setattr(dogfood_evaluation.DogfoodResolveClient, "acquire", acquire)
+
+    main(["run", "--output", str(output_path)])
+
+    report = json.loads(output_path.read_text(encoding="utf-8"))
+    assert report["goldenSet"]["caseCount"] == 20
+    assert report["quality"]["evidenceRecall"] == {
+        "hits": 20,
+        "totalExpected": 20,
+        "value": 1.0,
+    }
+
+
+def test_cli_run_refuses_an_explicit_set_outside_the_durable_golden_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    durable_root = tmp_path / "durable"
+    outside_root = tmp_path / "outside"
+    durable_root.mkdir()
+    outside_root.mkdir()
+    outside_path = outside_root / "golden.json"
+    _write_golden(outside_path)
+    monkeypatch.setenv(GOLDEN_ROOT_ENV, str(durable_root))
+
+    with pytest.raises(SystemExit) as error:
+        main(["run", "--golden-set", str(outside_path)])
+
+    assert error.value.code == 1
+    assert capsys.readouterr().err == (
+        "dogfood evaluation unavailable: durable golden set is unavailable\n"
+    )
 
 
 @pytest.mark.parametrize(

@@ -18,6 +18,14 @@ judge observations, and raw reports from that corpus remain outside Git.
 The repository-local `.context-engine/` directory is ignored and may hold only
 regenerable report output, never the sole durable corpus copy.
 
+The v0 dogfood evaluator follows the same boundary. With no `--golden-set`
+argument, `context-engine-dogfood-eval run` reads
+`golden-set-v0.lineage-eligible.json` under `CONTEXT_ENGINE_GOLDEN_ROOT`;
+`make dogfood-eval` uses that default and writes only its regenerable report
+under `.context-engine/`. An explicit v0 `--golden-set` must also stay under the
+configured durable root. Unset or invalid roots refuse without printing a
+corpus path.
+
 Files under tracked `eval/golden/` are schemas or wholly invented synthetic
 fixtures. A tracked fixture may use only explicit `synthetic-` or
 `placeholder-` values for query, answer, claim, path, and Evidence lineage. It
