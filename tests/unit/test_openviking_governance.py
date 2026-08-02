@@ -22,6 +22,23 @@ def _collapse_whitespace(value: str) -> str:
     return " ".join(value.split())
 
 
+def _collapse_blockquote(value: str) -> str:
+    return _collapse_whitespace(value.replace(">", ""))
+
+
+def _amendment_pair(dossier: str, number: int) -> tuple[str, str]:
+    heading = f"### Pair {number} "
+    section = dossier.split(heading, maxsplit=1)[1]
+    if number < 3:
+        section = section.split(f"### Pair {number + 1} ", maxsplit=1)[0]
+
+    current, prepared = section.split("Prepared replacement:", maxsplit=1)
+    return (
+        _collapse_blockquote(current.split("Current text:", maxsplit=1)[1]),
+        _collapse_blockquote(prepared),
+    )
+
+
 def test_current_public_authority_uses_the_versioned_five_repository_baseline() -> (
     None
 ):
@@ -92,13 +109,70 @@ def test_openviking_evidence_claims_match_the_pinned_snapshot() -> None:
 def test_prepared_agents_amendment_is_complete_but_not_applied() -> None:
     agents = _read("AGENTS.md")
     dossier = _read(DOSSIER_PATH)
+    normalized_agents = _collapse_whitespace(agents)
+
+    expected_pairs = (
+        (
+            "`CONTEXT.md` (glossary). Public reference claims must trace to "
+            "`docs/research/2026-07-19-four-public-repositories-evidence.md` "
+            "or first-party ContextEngine requirements and "
+            "`docs/security/context-engine-threat-model.md`.",
+            "`CONTEXT.md` (glossary). Public reference claims must trace to "
+            "`docs/research/2026-08-02-five-public-repositories-evidence.md` "
+            "or first-party ContextEngine requirements and "
+            "`docs/security/context-engine-threat-model.md`.",
+        ),
+        (
+            "**Controlled third-party reuse (ADR-0074)** — copying is permitted "
+            "only from license-verified permissive regions at pinned commits "
+            "(RAGFlow Apache-2.0; Onyx outside every `ee/` directory, MIT; "
+            "separately-licensed MIT SDK subtrees), registered under "
+            "`third_party/` with full attribution and SBOM coverage in shipped "
+            "artifacts. Dify root-licensed code, MaxKB GPLv3 code, and Onyx "
+            "`ee/` code remain clean-room only: behavior observations, interface "
+            "shapes, and test oracles via the two-room protocol. Every public "
+            "reference claim still traces through the four-repository evidence "
+            "report; repository-external research inputs must never be cited, "
+            "linked, or presented as public provenance.",
+            "**Controlled third-party reuse (ADR-0074)** — copying is permitted "
+            "only from license-verified permissive regions at pinned commits "
+            "(RAGFlow Apache-2.0; Onyx outside every `ee/` directory, MIT; "
+            "separately-licensed MIT SDK subtrees), registered under "
+            "`third_party/` with full attribution and SBOM coverage in shipped "
+            "artifacts. Dify root-licensed code, MaxKB GPLv3 code, Onyx `ee/` "
+            "code, and all OpenViking source regions remain clean-room only: "
+            "behavior observations, interface shapes, and test oracles through "
+            "the applicable maintainer-approved clean-room protocol. D9 "
+            "additionally prohibits every OpenViking copy+patch path even if "
+            "upstream later clarifies a permissive region. Every public "
+            "prior-art reference claim still traces through the five-repository "
+            "evidence baseline; ContextEngine's own claims trace to its "
+            "first-party requirements and threat model. Repository-external "
+            "research inputs must never be cited, linked, or presented as public "
+            "provenance.",
+        ),
+        (
+            "Repository-external research may inform independent reasoning, "
+            "but it is neither public authority nor publishable provenance.",
+            "Repository-external research may inform independent reasoning and "
+            "may be tracked under `docs/research/` as maintainer-local input, "
+            "but it is never citable as public authority or claim provenance; "
+            "public prior-art reference claims still trace only to the versioned "
+            "repository-evidence baseline, while ContextEngine's own claims "
+            "trace to first-party requirements and the threat model.",
+        ),
+    )
 
     assert "2026-08-02-five-public-repositories-evidence.md" not in agents
     assert "Apply all three replacements atomically" in dossier
-    assert "2026-07-19-four-public-repositories-evidence.md" in dossier
-    assert "2026-08-02-five-public-repositories-evidence.md" in dossier
-    assert "all OpenViking source regions remain clean-room only" in dossier
-    assert "five-repository evidence baseline" in dossier
+    for number, (expected_current, expected_prepared) in enumerate(
+        expected_pairs, start=1
+    ):
+        current, prepared = _amendment_pair(dossier, number)
+        assert current == expected_current
+        assert prepared.startswith(expected_prepared)
+        assert expected_current in normalized_agents
+        assert expected_prepared not in normalized_agents
 
 
 def test_legal_dossier_records_the_single_author_constraint() -> None:
@@ -110,3 +184,4 @@ def test_legal_dossier_records_the_single_author_constraint() -> None:
     )
     assert "personnel separation cannot be claimed" in normalized_dossier
     assert "documentary and temporal separation" in normalized_dossier
+    assert "That attribution does not prove who performed the work" in dossier

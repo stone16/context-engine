@@ -16,10 +16,11 @@ issue #205. It is not legal advice and does not approve OpenViking admission. An
 cannot supply the maintainer/legal sign-off.
 
 Repository `git log` at this branch shows one unique author email under two
-display names. The same maintainer therefore performed the Room-A evaluation
-and ContextEngine implementation work: personnel separation cannot be claimed,
-and the legal decision must determine whether documentary and temporal
-separation is sufficient or whether this repository needs a different protocol.
+display names across the Room-A evaluation and ContextEngine implementation
+histories. That attribution does not prove who performed the work, so personnel
+separation cannot be claimed from repository history; the legal reviewer must
+establish the actual personnel facts and determine whether documentary and
+temporal separation is sufficient or a different protocol is required.
 
 The proposed admission is behavior-observation-only:
 
@@ -88,11 +89,12 @@ The decision record must answer each question explicitly:
    Interface shapes, and test oracles—with no copying, dependency, execution,
    generated artifact, service integration, or Runtime use—satisfy
    ContextEngine's clean-room policy for an AGPLv3 source?
-2. Given one maintainer performing both roles, is documentary and temporal
-   separation—dated Room-A artifacts, no upstream-source access during an
-   implementation pass, and a specification/test-oracle-only handoff—sufficient?
-   If not, is the two-room protocol unavailable for this repository, and what
-   enforceable replacement is required?
+2. Given that both histories are attributed to one author email, did one person
+   perform both roles? If so, is documentary and temporal separation—dated
+   Room-A artifacts, no upstream-source access during an implementation pass,
+   and a specification/test-oracle-only handoff—sufficient? If not, is the
+   two-room protocol unavailable for this repository, and what enforceable
+   replacement is required?
 3. May ContextEngine publish commit-pinned factual behavior descriptions and
    permalinks from the AGPL repository as public provenance under that no-copy
    scope?
