@@ -155,4 +155,3 @@ requires a shadow-vector atomic swap, when a second local embedding profile is
 considered, or when rollback must retain two simultaneously queryable profile
 generations. Each case requires explicit compatibility, budget, and promotion
 evidence; none may weaken mixed-profile refusal.
-
