@@ -177,9 +177,13 @@ non-File providers remain `NOT_ACTIVE`; see
 [ADR-0068](./docs/decisions/0068-activate-loopback-dogfood-runtime.md).
 
 Once the bounded API is running, the maintainer caller and Quality runner are
-documented in [`eval/README.md`](./eval/README.md). They call only the frozen
-resolve HTTP operation; the evaluation report remains separate from the
-security release gate.
+separate surfaces. Use the read-only
+[`context-engine-context`](./docs/operations/maintainer-context-cli.md) CLI for
+fresh questions and untrusted Package inspection. Evaluation replay remains in
+[`eval/README.md`](./eval/README.md). Both callers use only the frozen resolve
+HTTP operation; the maintainer CLI has no Control, ActionPlane, model, or
+promotion authority, and evaluation remains separate from the security release
+gate.
 
 ### Run the worker
 

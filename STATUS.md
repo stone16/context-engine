@@ -61,6 +61,7 @@ designed, and deliberately not active:
 | General / multi-user Source and Resource ACLs | Dogfood uses current mirrored File access plus Membership field rights. A separate deterministic Feishu twin proves bounded source-native Article ACL ingestion, but no live or general administration carrier is active |
 | General content retrieval | Only the loopback File pgvector dogfood `Acquire` carrier is active |
 | Local consumer expansion | The repo-local Claude Code skill and spawn-per-session local stdio MCP `Acquire` translator are active; pi and every broader MCP carrier remain `NOT_ACTIVE` |
+| Maintainer Context CLI expansion | `context-engine-context` activates only loopback File `Acquire` and untrusted public Package inspection; citation open, evaluation replay, Control, ActionPlane, models, effects, and promotion are absent |
 | Capability-aware agent operation discovery | ADR-0098 accepts a future generated short-lived `AgentOperationManifest`; no discovery endpoint, contract version, SDK method, or active manifest carrier exists |
 | `Continue` carrier | The bounded dogfood composition keeps Continue unavailable; its private File `OpenCitation` carrier is active for UI citation closure |
 | Structured acquisition / live surface context | ADR-0099 selects one exact bounded collaboration conversation as the first design workload; structured-family terms, provider carrier, live network, mixed-family Evidence, and surface attachments remain `NOT_ACTIVE` |
@@ -89,6 +90,25 @@ application remains reject-all and reports `NOT_ACTIVE`. Production
 authentication, a second human, network exposure beyond the maintainer machine,
 group/public audience, `Continue`, hybrid retrieval, non-File providers, and
 external/network query embeddings remain `NOT_ACTIVE` pending issue #217.
+
+### Read-only maintainer Context CLI
+
+`context-engine-context query` sends one fresh closed `Acquire` through the
+same loopback HTTP and environment-held bearer composition. Human output keeps
+Package purpose/as-of/expiry, coverage, budget usage, every Block, and exact
+Evidence/citation lineage together. Strict JSON is the validated public wire
+document without a CLI wrapper. `inspect` treats file or stdin JSON as untrusted
+and validates the whole closed Package, digest, lineage, accounting, lifetime,
+and expiry before rendering; the capture never becomes authority or reusable
+context.
+
+Stable exits distinguish success, explicit refusal, service unavailable,
+malformed Package, expired Package, and invalid local configuration. Empty
+authorized context is an explicit non-enumerating refusal, not a corpus answer.
+Dogfood `OpenCitation`, `Continue`, evaluation replay, remote/multi-user
+operation, Control, ActionPlane, models, effects, and promotion remain absent or
+`NOT_ACTIVE`; see the
+[operator guide](./docs/operations/maintainer-context-cli.md).
 
 ### Repo-local Claude Code consumer
 
