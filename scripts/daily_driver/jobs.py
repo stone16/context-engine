@@ -72,11 +72,10 @@ def _database_environment_variables(
 
 
 _API_REQUIRED_DATABASE_ENVIRONMENT = _database_environment_variables(
-    DatabasePurpose.API_RUNTIME
+    DatabasePurpose.API_RUNTIME,
+    DatabasePurpose.CONTROL_PLANE,
 )
-_API_DATABASE_ENVIRONMENT = _API_REQUIRED_DATABASE_ENVIRONMENT | (
-    _database_environment_variables(DatabasePurpose.CONTROL_PLANE)
-)
+_API_DATABASE_ENVIRONMENT = _API_REQUIRED_DATABASE_ENVIRONMENT
 _API_OPERATOR_ENVIRONMENT = (
     DOGFOOD_RUNTIME_ENVIRONMENT_VARIABLES | DOGFOOD_CONTROL_ENVIRONMENT_VARIABLES
 )
@@ -344,8 +343,7 @@ def process_environment(
         allowed, required = _PROCESS_ENVIRONMENT_CONTRACTS[process]
     except KeyError:
         raise ValueError("deployment process is outside the closed set") from None
-    if process == "api":
-        validate_local_operator_secret_separation(operator)
+    validate_local_operator_secret_separation(operator)
     return project_environment(
         database,
         operator,
