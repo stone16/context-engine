@@ -64,6 +64,7 @@ from engine.runtime.citation import (
     issue_citation_open_ref,
 )
 from engine.supply import (
+    QWEN3_EMBEDDING_PROFILE,
     MarkdownCompilerConfig,
     ParsedDocument,
     canonicalize_parsed_document,
@@ -299,6 +300,9 @@ MIGRATION_TEST_START_REVISIONS = {
     "test_revision_link_graph_revision_downgrades_and_reapplies_when_empty": (
         "20260731_0051"
     ),
+    "test_embedding_profile_revision_downgrades_and_reapplies_cleanly": (
+        "20260731_0052"
+    ),
     "test_delivery_evidence_revision_downgrades_only_while_empty": "20260723_0019",
     "test_citation_open_revision_downgrades_only_while_empty": "20260724_0024",
     "test_model_egress_revision_downgrades_only_while_audit_is_empty": (
@@ -341,6 +345,7 @@ MIGRATION_TEST_HEAD_PRECONDITIONS = {
     "test_feishu_subject_mapping_downgrade_serializes_with_source_writer",
     "test_feishu_subject_mapping_revision_refuses_retained_authority",
     "test_revision_link_graph_downgrade_refuses_retained_v3_state",
+    "test_embedding_profile_downgrade_refuses_retained_qwen_lineage",
 }
 
 
@@ -3847,6 +3852,194 @@ def test_revision_link_graph_downgrade_refuses_retained_v3_state(
             migration_configuration,
             scenario.organization_id,
         )
+
+
+def test_embedding_profile_revision_downgrades_and_reapplies_cleanly(
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    """Issue #147 installs and removes exact embedding lineage symmetrically."""
+
+    alembic_configuration = Config(ROOT / "alembic.ini")
+    assert _revision_rows(migration_configuration) == ["20260731_0052"]
+    engine = create_database_engine(migration_configuration)
+    try:
+        for _ in range(2):
+            command.upgrade(alembic_configuration, "head")
+            assert _revision_rows(migration_configuration) == [HEAD_REVISION]
+            with engine.connect() as connection:
+                columns = {
+                    (row.table_name, row.column_name)
+                    for row in connection.execute(
+                        text(
+                            """
+                            SELECT table_name, column_name
+                            FROM information_schema.columns
+                            WHERE table_schema = 'public'
+                              AND table_name IN (
+                                  'context_fragment',
+                                  'file_publication_recovery',
+                                  'release_manifest'
+                              )
+                              AND column_name IN (
+                                  'embedding_profile_document',
+                                  'embedding_profile_digest'
+                              )
+                            """
+                        )
+                    )
+                }
+                policies = set(
+                    connection.execute(
+                        text(
+                            """
+                            SELECT policyname
+                            FROM pg_policies
+                            WHERE schemaname = 'public'
+                              AND tablename = 'context_fragment'
+                              AND policyname =
+                                  'context_fragment_release_definer_select'
+                            """
+                        )
+                    ).scalars()
+                )
+                functions = connection.execute(
+                    text(
+                        """
+                        SELECT ARRAY[
+                          to_regprocedure(
+                            'public.context_worker_classify_file_import_internal(uuid,uuid,uuid,text,text,text,text,text,text,text,bigint,bytea,timestamptz,timestamptz)'
+                          ) IS NOT NULL,
+                          to_regprocedure(
+                            'public.context_worker_acquire_file_publication(uuid,uuid,uuid,text,text,uuid,text,text,text,text,text,text,jsonb,jsonb,bigint,bigint,bytea,timestamptz,timestamptz)'
+                          ) IS NOT NULL,
+                          to_regprocedure(
+                            'public.context_worker_prepare_file_publication(uuid,uuid,uuid,text,text,uuid,text,jsonb,jsonb,jsonb,text,bigint,bigint,bytea,timestamptz,timestamptz)'
+                          ) IS NOT NULL
+                        ]
+                        """
+                    )
+                ).scalar_one()
+            assert columns == {
+                ("context_fragment", "embedding_profile_digest"),
+                ("file_publication_recovery", "embedding_profile_digest"),
+                ("release_manifest", "embedding_profile_document"),
+                ("release_manifest", "embedding_profile_digest"),
+            }
+            assert policies == {"context_fragment_release_definer_select"}
+            assert functions == [True, True, True]
+
+            command.downgrade(alembic_configuration, "20260731_0052")
+            assert _revision_rows(migration_configuration) == ["20260731_0052"]
+            with engine.connect() as connection:
+                assert connection.execute(
+                    text(
+                        """
+                        SELECT count(*)
+                        FROM information_schema.columns
+                        WHERE table_schema = 'public'
+                          AND table_name IN (
+                              'context_fragment',
+                              'file_publication_recovery',
+                              'release_manifest'
+                          )
+                          AND column_name IN (
+                              'embedding_profile_document',
+                              'embedding_profile_digest'
+                          )
+                        """
+                    )
+                ).scalar_one() == 0
+    finally:
+        command.upgrade(alembic_configuration, "head")
+        engine.dispose()
+    assert _revision_rows(migration_configuration) == [HEAD_REVISION]
+
+
+def test_embedding_profile_downgrade_refuses_retained_qwen_lineage(
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    """A Qwen-bound Release cannot lose its exact provider identity."""
+
+    organization_id = uuid4()
+    engine = create_database_engine(migration_configuration)
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO organization (organization_id) VALUES (:org)"
+                ),
+                {"org": organization_id},
+            )
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO release_manifest (
+                        organization_id, manifest_ref, manifest_digest,
+                        lineage_digest, content_profile_ref,
+                        content_profile_digest, content_schema_ref,
+                        index_profile_ref, index_profile_digest,
+                        index_content_profile_digest,
+                        index_content_schema_ref, index_schema_ref,
+                        embedding_profile_document, embedding_profile_digest,
+                        runtime_profile_ref, runtime_profile_digest,
+                        runtime_content_profile_digest,
+                        runtime_index_profile_digest,
+                        runtime_content_schema_ref, runtime_index_schema_ref,
+                        runtime_tokenizer_ref, runtime_package_schema_ref,
+                        curation_profile_ref, curation_profile_digest,
+                        curation_mode, compatible_revision_refs,
+                        active_revision_refs
+                    ) VALUES (
+                        :org, 'manifest:qwen:downgrade', :digest, :digest,
+                        'content-profile', :digest, 'content-schema',
+                        'index-profile', :digest, :digest, 'content-schema',
+                        'index-schema', CAST(:profile_document AS jsonb),
+                        :profile_digest, 'runtime-profile', :digest, :digest,
+                        :digest, 'content-schema', 'index-schema', 'tokenizer',
+                        'package-schema', 'curation-profile', :digest,
+                        'curation_off', '[]'::jsonb, '[]'::jsonb
+                    )
+                    """
+                ),
+                {
+                    "org": organization_id,
+                    "digest": "a" * 64,
+                    "profile_document": QWEN3_EMBEDDING_PROFILE.canonical_json(),
+                    "profile_digest": QWEN3_EMBEDDING_PROFILE.profile_digest,
+                },
+            )
+
+        with pytest.raises(
+            RuntimeError,
+            match="embedding profile downgrade requires twin-only lineage",
+        ):
+            downgrade_revision(migration_configuration, "20260802_0053")
+        assert _revision_rows(migration_configuration) == [HEAD_REVISION]
+    finally:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "ALTER TABLE release_manifest DISABLE TRIGGER "
+                    "release_manifest_reject_mutation"
+                )
+            )
+            connection.execute(
+                text(
+                    "DELETE FROM release_manifest WHERE organization_id = :org"
+                ),
+                {"org": organization_id},
+            )
+            connection.execute(
+                text(
+                    "ALTER TABLE release_manifest ENABLE TRIGGER "
+                    "release_manifest_reject_mutation"
+                )
+            )
+            connection.execute(
+                text("DELETE FROM organization WHERE organization_id = :org"),
+                {"org": organization_id},
+            )
+        engine.dispose()
 
 
 def test_file_scan_bound_revision_downgrades_and_reapplies_when_default_only(

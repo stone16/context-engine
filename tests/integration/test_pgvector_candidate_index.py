@@ -37,7 +37,12 @@ from engine.runtime.materialized import (
 )
 from engine.runtime.package_digest import QueryDigestKeyring
 from engine.runtime.scope import CandidateDiscoveryScope, EffectiveScope, ScopeTarget
-from engine.supply import EmbeddingProfile, EmbeddingProviderUnavailable
+from engine.supply import (
+    DETERMINISTIC_TWIN_EMBEDDING_PROFILE,
+    QWEN3_EMBEDDING_PROFILE,
+    EmbeddingProfile,
+    EmbeddingProviderUnavailable,
+)
 from tests.integration.test_file_import_tracer import (
     _ExactScopeAuthority,
     _OrganizationAuthority,
@@ -143,10 +148,37 @@ class _BlockingVectorCandidateIndex:
 
 class _UnavailableEmbeddingProvider:
     profile = EmbeddingProfile(384)
+    provider_profile = DETERMINISTIC_TWIN_EMBEDDING_PROFILE
 
     def embed(self, inputs: tuple[str, ...]) -> tuple[tuple[float, ...], ...]:
+        self.calls += 1
         del inputs
         raise EmbeddingProviderUnavailable("provider detail must not escape")
+
+    def embed_documents(
+        self, inputs: tuple[str, ...]
+    ) -> tuple[tuple[float, ...], ...]:
+        return self.embed(inputs)
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+
+class _RecordingTwinProvider:
+    profile = EmbeddingProfile(384)
+    provider_profile = DETERMINISTIC_TWIN_EMBEDDING_PROFILE
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def embed(self, inputs: tuple[str, ...]) -> tuple[tuple[float, ...], ...]:
+        self.calls += 1
+        return DeterministicEmbeddingTwin().embed(inputs)
+
+    def embed_documents(
+        self, inputs: tuple[str, ...]
+    ) -> tuple[tuple[float, ...], ...]:
+        return self.embed(inputs)
 
 
 def _published_scenario(
@@ -213,6 +245,9 @@ def _add_cross_organization_vector_distractors(
             "ordinal": ordinal,
             "content": QUERY,
             "embedding": "[" + ",".join(repr(value) for value in embedding) + "]",
+            "embedding_profile_digest": (
+                DETERMINISTIC_TWIN_EMBEDDING_PROFILE.profile_digest
+            ),
         }
         for ordinal in range(1, _ANN_DISTRACTOR_COUNT + 1)
     ]
@@ -225,11 +260,11 @@ def _add_cross_organization_vector_distractors(
                     INSERT INTO context_fragment (
                         organization_id, resource_ref, revision_id,
                         fragment_ref, ordinal, content, projection_kind,
-                        embedding
+                        embedding, embedding_profile_digest
                     ) VALUES (
                         :organization_id, :resource_ref, :revision_id,
                         :fragment_ref, :ordinal, :content, 'body',
-                        CAST(:embedding AS vector)
+                        CAST(:embedding AS vector), :embedding_profile_digest
                     )
                     """
                 ),
@@ -253,6 +288,9 @@ def _add_same_organization_narrowing_distractors(
             "fragment_ref": f"fragment:vector-narrowing-distractor:{ordinal:03d}",
             "content": QUERY,
             "embedding": "[" + ",".join(repr(value) for value in embedding) + "]",
+            "embedding_profile_digest": (
+                DETERMINISTIC_TWIN_EMBEDDING_PROFILE.profile_digest
+            ),
             "membership_id": scenario.membership_id,
         }
         for ordinal in range(_NARROWING_DISTRACTOR_COUNT)
@@ -293,11 +331,11 @@ def _add_same_organization_narrowing_distractors(
                     INSERT INTO context_fragment (
                         organization_id, resource_ref, revision_id,
                         fragment_ref, ordinal, content, projection_kind,
-                        embedding
+                        embedding, embedding_profile_digest
                     ) VALUES (
                         :organization_id, :resource_ref, :revision_id,
                         :fragment_ref, 0, :content, 'body',
-                        CAST(:embedding AS vector)
+                        CAST(:embedding AS vector), :embedding_profile_digest
                     )
                     """
                 ),
@@ -381,6 +419,9 @@ def _ann_plan_and_exact_result(
         target for target in effective_scope.targets if target.resource_ref is not None
     )
     parameters = {
+        "embedding_profile_digest": (
+            DETERMINISTIC_TWIN_EMBEDDING_PROFILE.profile_digest
+        ),
         "query_embedding": "["
         + ",".join(repr(value) for value in embedding)
         + "]",
@@ -866,6 +907,115 @@ def test_vector_embedding_outage_is_one_content_free_service_unavailable_respons
         candidate.fragment_ref,
     ):
         assert forbidden not in response.text
+
+
+def test_mixed_profile_refuses_over_http_before_ann_discovery(
+    request: pytest.FixtureRequest,
+    tmp_path: Path,
+    migration_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+    guarded_worker_engine: Engine,
+    guarded_runtime_engine: Engine,
+    query_digest_keyring: QueryDigestKeyring,
+) -> None:
+    scenario, candidate, user_id = _published_scenario(
+        request,
+        tmp_path,
+        migration_configuration,
+        guarded_control_engine,
+        guarded_worker_engine,
+        label="mixed-profile",
+    )
+    provider = _RecordingTwinProvider()
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.begin() as connection:
+            connection.execute(
+                text(
+                    "ALTER TABLE context_fragment DISABLE TRIGGER "
+                    "context_fragment_reject_mutation"
+                )
+            )
+            connection.execute(
+                text(
+                    "UPDATE context_fragment SET embedding_profile_digest = :digest "
+                    "WHERE organization_id = :organization_id"
+                ),
+                {
+                    "organization_id": scenario.organization_id,
+                    "digest": QWEN3_EMBEDDING_PROFILE.profile_digest,
+                },
+            )
+            connection.execute(
+                text(
+                    "ALTER TABLE context_fragment ENABLE TRIGGER "
+                    "context_fragment_reject_mutation"
+                )
+            )
+    finally:
+        migration_engine.dispose()
+
+    response = _resolve(
+        _client(
+            scenario,
+            candidate,
+            user_id,
+            guarded_runtime_engine,
+            query_digest_keyring,
+            PostgreSQLVectorCandidateIndex(provider),
+            request_id="issue-147-mixed-profile",
+        )
+    )
+
+    assert response.status_code == 503
+    assert response.json() == {"code": "service_unavailable"}
+    assert provider.calls == 1
+
+
+def test_query_embedding_budget_exhaustion_refuses_before_provider_call(
+    request: pytest.FixtureRequest,
+    tmp_path: Path,
+    migration_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+    guarded_worker_engine: Engine,
+    guarded_runtime_engine: Engine,
+    query_digest_keyring: QueryDigestKeyring,
+) -> None:
+    scenario, candidate, user_id = _published_scenario(
+        request,
+        tmp_path,
+        migration_configuration,
+        guarded_control_engine,
+        guarded_worker_engine,
+        label="query-budget",
+    )
+    provider = _RecordingTwinProvider()
+    client = _client(
+        scenario,
+        candidate,
+        user_id,
+        guarded_runtime_engine,
+        query_digest_keyring,
+        PostgreSQLVectorCandidateIndex(provider),
+        request_id="issue-147-query-budget",
+    )
+
+    response = client.post(
+        "/v0/resolve",
+        headers={
+            "Authorization": f"Bearer {TOKEN}",
+            "X-Context-Request-Id": "issue-147-query-budget",
+        },
+        json={
+            "kind": "acquire",
+            "need": {"query": QUERY},
+            "packageBudget": {"maxElapsedMs": 1},
+        },
+    )
+
+    assert response.status_code == 503
+    assert response.json() == {"code": "service_unavailable"}
+    assert provider.calls == 0
 
 
 def test_default_composition_keeps_vector_retrieval_not_active() -> None:

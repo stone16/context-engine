@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import pickle
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 from datetime import UTC, datetime
 from typing import Any, cast
 from uuid import UUID
@@ -111,6 +111,16 @@ def test_manifest_rejects_cross_profile_compatibility_substitution() -> None:
         )
 
 
+def test_index_profile_rejects_document_digest_substitution() -> None:
+    _content, index, _runtime = _profiles()
+
+    with pytest.raises(ValueError, match="[Ee]mbedding provider profile"):
+        replace(index, embedding_profile_document='{"modelId":"substituted"}')
+
+    with pytest.raises(ValueError, match="[Ee]mbedding provider profile"):
+        replace(index, embedding_profile_digest="f" * 64)
+
+
 def _candidate(*, generation: int = 0) -> ReleaseCandidate:
     content, index, runtime = _profiles()
     manifest = ReleaseManifest.m0_empty(
@@ -186,13 +196,13 @@ def test_candidate_and_evaluation_have_stable_canonical_signed_vectors() -> None
         "verification_commands",
     }
     assert candidate.candidate_digest == (
-        "df05353ef24f2e2b2bed13e9df0336de1369d81fba8c4cfceeecddcc0025cd69"
+        "d86579d77af81fc5f5ee63cf90d5968daf05424fcd9cf29ca28d2030edf11a2c"
     )
     assert evaluation.evaluation_digest == (
-        "91d55327b94449be4428531f48da378cc2fe1d3767eed916aebf5a26c28f74b0"
+        "68694c3e7430fdcf835236d0aad6cd1030cd9dcd9dbcc9bdc7a0cce773cc8056"
     )
     assert evaluation.signature.hex() == (
-        "cf6ed1a1e2c0c34df39ba7475debd7e31f13f154e733e929aaecffdeb545f7e1"
+        "d56f71a0c3852df474f540602930cc76724ac3ab0c2b57926a6d4afa19afd3c9"
     )
     assert evaluation.digest_profile == RELEASE_EVALUATION_DIGEST_PROFILE
     assert evaluation.signature_profile == RELEASE_EVALUATION_SIGNATURE_PROFILE

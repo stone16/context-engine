@@ -24,6 +24,7 @@ from engine.runtime.actor import (
 from engine.runtime.construction import PolicyEpochGate
 from engine.runtime.evidence import CandidateRef
 from engine.runtime.materialized import (
+    MaterializedCandidateDiscoveryUnavailable,
     MaterializedFragmentLocator,
     _require_active_materialized_projection_session,
 )
@@ -44,6 +45,7 @@ from engine.runtime.release_lineage import (
     public_release_manifest_ref,
 )
 from engine.runtime.scope import ScopeTarget
+from engine.supply import DETERMINISTIC_TWIN_EMBEDDING_PROFILE
 
 CHECKED_AT = datetime(2026, 7, 21, 8, 0, tzinfo=UTC)
 
@@ -80,6 +82,12 @@ class _ActiveReleaseRow:
         self.runtime_profile_digest = RUNTIME_PROFILE_DIGEST_V0
         self.runtime_content_profile_digest = CONTENT_PROFILE_DIGEST_V0
         self.runtime_index_profile_digest = INDEX_PROFILE_DIGEST_V0
+        self.embedding_profile_document = (
+            DETERMINISTIC_TWIN_EMBEDDING_PROFILE.canonical_document()
+        )
+        self.embedding_profile_digest = (
+            DETERMINISTIC_TWIN_EMBEDDING_PROFILE.profile_digest
+        )
         self.runtime_tokenizer_ref = RUNTIME_TOKENIZER_REF_V0
         self.runtime_package_schema_ref = PACKAGE_SCHEMA_REF_V0
         self.curation_profile_ref = CURATION_PROFILE_REF_V0
@@ -117,17 +125,25 @@ class _ProjectionConnection:
 
 
 class _VectorConnection:
-    def __init__(self, rows: tuple[SimpleNamespace, ...]) -> None:
+    def __init__(
+        self,
+        rows: tuple[SimpleNamespace, ...],
+        *,
+        incompatible_profile: bool = False,
+    ) -> None:
         self._rows = rows
+        self._incompatible_profile = incompatible_profile
         self.calls: list[tuple[str, dict[str, object] | None]] = []
 
     def execute(
         self,
         statement: object,
         parameters: dict[str, object] | None = None,
-    ) -> tuple[SimpleNamespace, ...]:
+    ) -> _ScalarResult | tuple[SimpleNamespace, ...]:
         sql = str(statement)
         self.calls.append((sql, parameters))
+        if "SELECT EXISTS" in sql:
+            return _ScalarResult(self._incompatible_profile)
         return () if "set_config('hnsw.iterative_scan'" in sql else self._rows
 
 
@@ -366,6 +382,7 @@ def test_postgres_vector_discovery_uses_one_content_free_bounded_ann_query() -> 
 
     candidates = port.discover_vector(
         (0.25, -0.5),
+        DETERMINISTIC_TWIN_EMBEDDING_PROFILE.profile_digest,
         1,
         ("source:vector",),
         ("resource:vector",),
@@ -389,15 +406,26 @@ def test_postgres_vector_discovery_uses_one_content_free_bounded_ann_query() -> 
             fragment_ref="fragment:vector",
         ),
     )
-    assert len(connection.calls) == 2
-    setting_statement, setting_parameters = connection.calls[0]
+    assert len(connection.calls) == 3
+    compatibility_statement, compatibility_parameters = connection.calls[0]
+    assert "SELECT EXISTS" in compatibility_statement
+    assert "embedding_profile_digest IS DISTINCT FROM" in compatibility_statement
+    assert compatibility_parameters == {
+        "embedding_profile_digest": (
+            DETERMINISTIC_TWIN_EMBEDDING_PROFILE.profile_digest
+        ),
+        "scope_resource_organization_ids": [organization_id],
+        "scope_resource_source_refs": ["source:vector"],
+        "scope_resource_refs": ["resource:vector"],
+    }
+    setting_statement, setting_parameters = connection.calls[1]
     assert "set_config('hnsw.iterative_scan'" in setting_statement
     assert "set_config('hnsw.max_scan_tuples'" in setting_statement
     assert setting_parameters == {
         "iterative_scan": "strict_order",
         "max_scan_tuples": "20000",
     }
-    statement, parameters = connection.calls[1]
+    statement, parameters = connection.calls[2]
     assert "fragment.embedding <=> CAST(:query_embedding AS vector)" in statement
     assert "resource.active_revision_id = fragment.revision_id" in statement
     assert "resource.tombstoned IS FALSE" in statement
@@ -411,6 +439,9 @@ def test_postgres_vector_discovery_uses_one_content_free_bounded_ann_query() -> 
     assert "score" not in statement
     assert parameters == {
         "query_embedding": "[0.25,-0.5]",
+        "embedding_profile_digest": (
+            DETERMINISTIC_TWIN_EMBEDDING_PROFILE.profile_digest
+        ),
         "limit": 1,
         "source_refs": ["source:vector"],
         "resource_refs": ["resource:vector"],
@@ -418,6 +449,35 @@ def test_postgres_vector_discovery_uses_one_content_free_bounded_ann_query() -> 
         "scope_resource_source_refs": ["source:vector"],
         "scope_resource_refs": ["resource:vector"],
     }
+
+
+def test_postgres_vector_discovery_refuses_mixed_profiles_before_ann() -> None:
+    organization_id = identity().organization_id
+    connection = _VectorConnection((), incompatible_profile=True)
+    port = membership_context_module._PostgreSQLMaterializedProjectionPort(
+        cast(Connection, connection)
+    )
+
+    with pytest.raises(MaterializedCandidateDiscoveryUnavailable):
+        port.discover_vector(
+            (0.25, -0.5),
+            DETERMINISTIC_TWIN_EMBEDDING_PROFILE.profile_digest,
+            1,
+            None,
+            None,
+            frozenset(
+                {
+                    ScopeTarget(
+                        organization_id,
+                        "source:vector",
+                        "resource:vector",
+                    )
+                }
+            ),
+        )
+
+    assert len(connection.calls) == 1
+    assert "SELECT EXISTS" in connection.calls[0][0]
 
 
 def test_postgres_vector_discovery_rejects_invalid_revision_lineage() -> None:
@@ -439,6 +499,7 @@ def test_postgres_vector_discovery_rejects_invalid_revision_lineage() -> None:
     with pytest.raises(TypeError, match="invalid revision lineage"):
         port.discover_vector(
             (0.25, -0.5),
+            DETERMINISTIC_TWIN_EMBEDDING_PROFILE.profile_digest,
             1,
             None,
             None,
@@ -498,6 +559,8 @@ def test_postgres_projection_absorbs_malformed_structured_field_values(
         ("runtime_profile_digest", "b" * 64),
         ("runtime_content_profile_digest", "c" * 64),
         ("runtime_index_profile_digest", "d" * 64),
+        ("embedding_profile_document", {"modelId": "substituted"}),
+        ("embedding_profile_digest", "f" * 64),
         ("curation_profile_ref", "unknown-curation-profile"),
         ("curation_profile_digest", "e" * 64),
         ("curation_mode", "curation_on"),

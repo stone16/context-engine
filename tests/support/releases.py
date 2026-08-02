@@ -1,5 +1,6 @@
 """Explicit test-only Runtime release lineage and real Learning promotion."""
 
+import json
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from uuid import UUID
@@ -40,10 +41,17 @@ from engine.runtime.release_lineage import (
     INDEX_PROFILE_REF_V0,
     INDEX_SCHEMA_REF_V0,
     PACKAGE_SCHEMA_REF_V0,
+    QWEN_VECTOR_INDEX_PROFILE_DIGEST_V1,
+    QWEN_VECTOR_INDEX_PROFILE_REF_V1,
     RUNTIME_PROFILE_DIGEST_V0,
     RUNTIME_PROFILE_REF_V0,
     RUNTIME_TOKENIZER_REF_V0,
     ActiveRuntimeRelease,
+)
+from engine.supply import (
+    DETERMINISTIC_TWIN_EMBEDDING_PROFILE,
+    QWEN3_EMBEDDING_PROFILE,
+    EmbeddingProviderProfile,
 )
 
 _SIGNING_KEY = b"openapi-v0-test-release-evaluation-key"
@@ -76,6 +84,9 @@ def active_runtime_release(
     active_revision_refs: tuple[str, ...] = (),
     index_profile_ref: str = INDEX_PROFILE_REF_V0,
     index_profile_digest: str = INDEX_PROFILE_DIGEST_V0,
+    embedding_provider_profile: EmbeddingProviderProfile = (
+        DETERMINISTIC_TWIN_EMBEDDING_PROFILE
+    ),
 ) -> ActiveRuntimeRelease:
     return ActiveRuntimeRelease(
         organization_id=organization_id,
@@ -89,6 +100,8 @@ def active_runtime_release(
         runtime_profile_digest=RUNTIME_PROFILE_DIGEST_V0,
         content_profile_digest=CONTENT_PROFILE_DIGEST_V0,
         index_profile_digest=index_profile_digest,
+        embedding_profile_document=embedding_provider_profile.canonical_json(),
+        embedding_profile_digest=embedding_provider_profile.profile_digest,
         tokenizer_ref=RUNTIME_TOKENIZER_REF_V0,
         package_schema_ref=PACKAGE_SCHEMA_REF_V0,
         curation_profile_ref=CURATION_PROFILE_REF_V0,
@@ -110,6 +123,7 @@ def ensure_test_runtime_release(
     index_profile_digest: str = INDEX_PROFILE_DIGEST_V0,
     tokenizer_ref: str = RUNTIME_TOKENIZER_REF_V0,
     package_schema_ref: str = PACKAGE_SCHEMA_REF_V0,
+    embedding_provider_profile: EmbeddingProviderProfile | None = None,
 ) -> ActiveRuntimeRelease:
     """Promote the test profile through ContextLearning when no pointer exists.
 
@@ -119,6 +133,19 @@ def ensure_test_runtime_release(
     pointer directly and never creates a production fallback.
     """
 
+    if embedding_provider_profile is None:
+        embedding_provider_profile = (
+            QWEN3_EMBEDDING_PROFILE
+            if (
+                index_profile_ref,
+                index_profile_digest,
+            )
+            == (
+                QWEN_VECTOR_INDEX_PROFILE_REF_V1,
+                QWEN_VECTOR_INDEX_PROFILE_DIGEST_V1,
+            )
+            else DETERMINISTIC_TWIN_EMBEDDING_PROFILE
+        )
     configurations = load_harness_database_configurations()
     migration_engine = create_database_engine(configurations.migration)
     learning_engine = create_database_engine(configurations.learning)
@@ -161,6 +188,8 @@ def ensure_test_runtime_release(
                        manifest.content_profile_ref,
                        manifest.content_schema_ref,
                        manifest.index_profile_ref,
+                       manifest.embedding_profile_document,
+                       manifest.embedding_profile_digest,
                        manifest.index_schema_ref,
                        manifest.runtime_profile_ref,
                        manifest.runtime_profile_digest,
@@ -188,7 +217,13 @@ def ensure_test_runtime_release(
         lock_connection.commit()
         if existing is not None:
             selected_revisions = tuple(existing.active_revision_refs)
-            if selected_revisions == tuple(sorted(active_revision_refs)):
+            if (
+                selected_revisions == tuple(sorted(active_revision_refs))
+                and existing.index_profile_ref == index_profile_ref
+                and existing.runtime_index_profile_digest == index_profile_digest
+                and existing.embedding_profile_digest
+                == embedding_provider_profile.profile_digest
+            ):
                 try:
                     return ActiveRuntimeRelease(
                         organization_id=organization_id,
@@ -204,6 +239,12 @@ def ensure_test_runtime_release(
                             existing.runtime_content_profile_digest
                         ),
                         index_profile_digest=existing.runtime_index_profile_digest,
+                        embedding_profile_document=json.dumps(
+                            existing.embedding_profile_document,
+                            separators=(",", ":"),
+                            sort_keys=True,
+                        ),
+                        embedding_profile_digest=existing.embedding_profile_digest,
                         tokenizer_ref=existing.runtime_tokenizer_ref,
                         package_schema_ref=existing.runtime_package_schema_ref,
                         curation_profile_ref=existing.curation_profile_ref,
@@ -278,6 +319,10 @@ def ensure_test_runtime_release(
             content_profile_digest=content.profile_digest,
             content_schema_ref=content.content_schema_ref,
             index_schema_ref=INDEX_SCHEMA_REF_V0,
+            embedding_profile_document=(
+                embedding_provider_profile.canonical_json()
+            ),
+            embedding_profile_digest=embedding_provider_profile.profile_digest,
         )
         runtime = RuntimeProfileRef(
             profile_ref=runtime_profile_ref,
@@ -364,6 +409,8 @@ def ensure_test_runtime_release(
             runtime_profile_digest=runtime.profile_digest,
             content_profile_digest=runtime.content_profile_digest,
             index_profile_digest=runtime.index_profile_digest,
+            embedding_profile_document=index.embedding_profile_document,
+            embedding_profile_digest=index.embedding_profile_digest,
             tokenizer_ref=runtime.tokenizer_ref,
             package_schema_ref=runtime.package_schema_ref,
             curation_profile_ref=manifest.curation_profile.profile_ref,

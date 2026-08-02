@@ -120,6 +120,7 @@ def test_fts_and_vector_force_rls_return_nothing_for_foreign_organization(
                         query_embedding=DeterministicEmbeddingTwin().embed(
                             (fixture.org_b.authorized_body,)
                         )[0],
+                        embedding_profile_digest="a" * 64,
                         limit=64,
                     ),
                 ),

@@ -21,6 +21,7 @@ from adapters.http.dogfood import (
     DOGFOOD_BINDING_ENV,
     DOGFOOD_COMPOSITION_ENV,
     DOGFOOD_COMPOSITION_VALUE,
+    DOGFOOD_EMBEDDING_MODEL_DIR_ENV,
     DOGFOOD_EMBEDDING_PROVIDER_ENV,
     DOGFOOD_EMBEDDING_PROVIDER_VALUE,
     DOGFOOD_MEMBERSHIP_ENV,
@@ -73,7 +74,9 @@ from engine.persistence import (
     PostgreSQLWorkerLeaseIssuer,
     create_database_engine,
 )
-from engine.runtime.release_lineage import DOGFOOD_VECTOR_INDEX_PROFILE_REF_V1
+from engine.runtime.release_lineage import QWEN_VECTOR_INDEX_PROFILE_REF_V1
+from engine.supply import QWEN3_EMBEDDING_PROFILE
+from tests.support.embeddings import QwenEmbeddingTwin
 from tests.support.file_imports import (
     NOW,
     ControlAuthenticator,
@@ -183,6 +186,7 @@ def _dogfood_environment(
         DOGFOOD_APPLICATION_ENV: "application:dogfood-local:v1",
         DOGFOOD_BINDING_ENV: "binding:dogfood-local:v1",
         DOGFOOD_EMBEDDING_PROVIDER_ENV: DOGFOOD_EMBEDDING_PROVIDER_VALUE,
+        DOGFOOD_EMBEDDING_MODEL_DIR_ENV: "/verified/test-qwen-model",
         "CONTEXT_ENGINE_RUNTIME_ROLE": runtime_configuration.expected_role,
         "CONTEXT_ENGINE_RUNTIME_DATABASE_URL": (
             runtime_configuration.url.render_as_string(hide_password=False)
@@ -386,6 +390,7 @@ def _publish_second_source(
         prepared,
         token,
         guarded_worker_engine,
+        embedding_provider=QwenEmbeddingTwin(),
     )
     return second, published.candidate_ref.revision_ref
 
@@ -449,6 +454,7 @@ def test_promote_release_activates_every_current_revision_and_dogfood_runtime(
             scenario.prepared,
             scenario.token,
             guarded_worker_engine,
+            embedding_provider=QwenEmbeddingTwin(),
         )
         (scenario.root / "second.md").write_bytes(
             b"# Second note\n\nEvery current revision belongs in the release.\n"
@@ -464,6 +470,7 @@ def test_promote_release_activates_every_current_revision_and_dogfood_runtime(
             second_prepared,
             second_token,
             guarded_worker_engine,
+            embedding_provider=QwenEmbeddingTwin(),
         )
         retained_source, retained_revision_ref = _publish_second_source(
             scenario,
@@ -540,7 +547,7 @@ def test_promote_release_activates_every_current_revision_and_dogfood_runtime(
         assert document == {
             "activeGeneration": 1,
             "activeRevisionCount": 3,
-            "indexProfileRef": DOGFOOD_VECTOR_INDEX_PROFILE_REF_V1,
+            "indexProfileRef": QWEN_VECTOR_INDEX_PROFILE_REF_V1,
             "manifestRef": document["manifestRef"],
         }
         assert promoted.stderr == ""
@@ -552,6 +559,8 @@ def test_promote_release_activates_every_current_revision_and_dogfood_runtime(
                     text(
                         "SELECT active.active_generation, "
                         "manifest.index_profile_ref, "
+                        "manifest.embedding_profile_document, "
+                        "manifest.embedding_profile_digest, "
                         "manifest.active_revision_refs "
                         "FROM active_release_manifest AS active "
                         "JOIN release_manifest AS manifest "
@@ -562,11 +571,32 @@ def test_promote_release_activates_every_current_revision_and_dogfood_runtime(
                     ),
                     {"organization_id": scenario.organization_id},
                 ).one()
-            assert tuple(durable) == (
-                1,
-                DOGFOOD_VECTOR_INDEX_PROFILE_REF_V1,
-                expected_revision_refs,
-            )
+                assert tuple(durable) == (
+                    1,
+                    QWEN_VECTOR_INDEX_PROFILE_REF_V1,
+                    QWEN3_EMBEDDING_PROFILE.canonical_document(),
+                    QWEN3_EMBEDDING_PROFILE.profile_digest,
+                    expected_revision_refs,
+                )
+                residual = connection.execute(
+                    text(
+                        "SELECT count(*) FROM context_fragment AS fragment "
+                        "JOIN context_resource AS resource "
+                        "ON resource.organization_id = fragment.organization_id "
+                        "AND resource.resource_ref = fragment.resource_ref "
+                        "AND resource.active_revision_id = fragment.revision_id "
+                        "WHERE resource.organization_id = :organization_id "
+                        "AND fragment.embedding_profile_digest "
+                        "IS DISTINCT FROM :embedding_profile_digest"
+                    ),
+                    {
+                        "organization_id": scenario.organization_id,
+                        "embedding_profile_digest": (
+                            QWEN3_EMBEDDING_PROFILE.profile_digest
+                        ),
+                    },
+                ).scalar_one()
+                assert residual == 0
         finally:
             migration_engine.dispose()
 
@@ -579,6 +609,10 @@ def test_promote_release_activates_every_current_revision_and_dogfood_runtime(
             served.update(kwargs)
 
         monkeypatch.setattr("applications.api.uvicorn.run", observe)
+        monkeypatch.setattr(
+            "adapters.http.dogfood.LocalQwenEmbeddingProvider",
+            lambda _path: QwenEmbeddingTwin(),
+        )
         api_main(["--host", "127.0.0.1", "--port", "9123"])
         assert served["host"] == "127.0.0.1"
         assert (
