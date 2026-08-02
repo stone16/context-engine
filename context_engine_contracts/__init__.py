@@ -119,6 +119,26 @@ def verify_context_package_digest(
     return hmac.compare_digest(context_package_digest(document), expected_digest)
 
 
+def verify_context_package_public_document(document: object) -> bool:
+    """Verify the digest over the exact decoded public Package representation."""
+
+    if type(document) is not dict:
+        return False
+    package = cast(dict[object, object], document)
+    if any(type(key) is not str for key in package):
+        return False
+    expected_digest = package.get("packageDigest")
+    digest_document = {
+        cast(str, key): value
+        for key, value in package.items()
+        if key != "packageDigest"
+    }
+    try:
+        return verify_context_package_digest(digest_document, expected_digest)
+    except (rfc8785.CanonicalizationError, TypeError, ValueError):
+        return False
+
+
 def complete_context_package_nullable_fields(
     document: dict[str, object],
 ) -> dict[str, object]:

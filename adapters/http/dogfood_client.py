@@ -48,6 +48,22 @@ def _require_opaque_ref(name: str, value: object) -> str:
     return result
 
 
+def validate_dogfood_query(value: object) -> str:
+    """Validate one untrusted query before constructing a request."""
+
+    return _require_exact_text(
+        "dogfood query",
+        value,
+        maximum=MAX_QUERY_CHARACTERS,
+    )
+
+
+def validate_dogfood_request_id(value: object) -> str:
+    """Validate one non-secret request correlation reference."""
+
+    return _require_opaque_ref("dogfood request_id", value)
+
+
 def _as_object(value: object, name: str) -> dict[str, object]:
     if type(value) is not dict or any(type(key) is not str for key in value):
         raise DogfoodEvaluationUnavailable(f"{name} is unavailable")
@@ -144,11 +160,7 @@ class DogfoodResolveClient:
     def resolve_acquire(self, *, query: str, request_id: str) -> dict[str, object]:
         """Invoke one Acquire without collapsing a closed refusal outcome."""
 
-        query = _require_exact_text(
-            "dogfood query",
-            query,
-            maximum=MAX_QUERY_CHARACTERS,
-        )
+        query = validate_dogfood_query(query)
         self._configuration.reject_secret_material(query)
         return self.resolve_acquire_document(
             acquire={"kind": "acquire", "need": {"query": query}},
@@ -224,7 +236,7 @@ class DogfoodResolveClient:
         acquire: dict[str, object],
         request_id: str,
     ) -> tuple[bytes, str]:
-        request_id = _require_opaque_ref("dogfood request_id", request_id)
+        request_id = validate_dogfood_request_id(request_id)
         try:
             validated_acquire = AcquireWire.model_validate(acquire)
         except ValidationError:
