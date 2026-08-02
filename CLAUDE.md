@@ -11,20 +11,3 @@ description: >
 @AGENTS.md
 
 <!-- Claude-specific delta only — nothing duplicated from AGENTS.md. -->
-
-## Agent skills
-
-### Issue tracker
-
-Issues and PRDs live in GitHub Issues for `stone16/context-engine`; external pull
-requests are not a triage surface. See `docs/agents/issue-tracker.md`.
-
-### Triage labels
-
-Use the five canonical triage roles mapped to same-named GitHub labels. See
-`docs/agents/triage-labels.md`.
-
-### Domain docs
-
-This is a single-context repository: read root `CONTEXT.md` and relevant ADRs in
-`docs/decisions/`. See `docs/agents/domain.md`.
