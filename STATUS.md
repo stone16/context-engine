@@ -81,14 +81,14 @@ designed, and deliberately not active:
 
 | ADR | Activates |
 |---|---|
-| [0068](./docs/decisions/0068-activate-loopback-dogfood-runtime.md) | Explicit loopback single-Membership authentication plus File pgvector `Acquire`, with exact EffectiveScope removal before ANN `LIMIT`, sealed Kernel reauthorization, deterministic twin query embedding, and final Policy Epoch veto |
+| [0068](./docs/decisions/0068-activate-loopback-dogfood-runtime.md), [0102](./docs/decisions/0102-activate-release-bound-local-query-embedding.md) | Explicit loopback single-Membership authentication plus File pgvector `Acquire`, with exact EffectiveScope removal before ANN `LIMIT`, sealed Kernel reauthorization, release-bound hash-verified local Qwen query embedding, mixed-profile refusal, internal budget enforcement, and final Policy Epoch veto |
 
 `RUNTIME-DOGFOOD-AUTH-102`, `RUNTIME-DOGFOOD-CARRIER-102`, and
 `RUNTIME-DOGFOOD-EPOCH-102` are registered release-veto evidence. The default
 application remains reject-all and reports `NOT_ACTIVE`. Production
 authentication, a second human, network exposure beyond the maintainer machine,
 group/public audience, `Continue`, hybrid retrieval, non-File providers, and
-external query embeddings remain `NOT_ACTIVE`.
+external/network query embeddings remain `NOT_ACTIVE` pending issue #217.
 
 ### Repo-local Claude Code consumer
 
@@ -213,8 +213,12 @@ publication boundary before activation; unchanged acquisitions and recovery
 past preparation do not call the provider again. The partial HNSW index is a
 future candidate-discovery implementation detail and has no authorization role.
 
-This does **not** activate vector retrieval, query embedding, historical
-backfill, or any Runtime/AuthorizationKernel change.
+ADR-0102 now activates the bounded local Qwen File publication and query carrier.
+It binds the exact provider profile to Release and Fragment lineage, refuses a
+mixed active corpus before ANN, debits the internal query budget, and permits
+activation only through ADR-0073 promotion. It does **not** activate an
+external/network embedding provider, production authentication, or a public
+cumulative-accounting contract; those remain blocked pending issue #217.
 
 ADR-0071 composes the opt-in ADR-0069 local operator process to drive one
 bounded File scan over an explicitly configured anchored root, accept every new

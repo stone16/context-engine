@@ -1,11 +1,13 @@
 """Explicit test-only Runtime release lineage and real Learning promotion."""
 
+import json
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
-from uuid import UUID
+from uuid import UUID, uuid5
 
-from sqlalchemy import text
+from sqlalchemy import Connection, text
 
+from adapters.embeddings import DeterministicEmbeddingTwin
 from engine.learning import (
     ContentProfileRef,
     ContextLearning,
@@ -40,18 +42,110 @@ from engine.runtime.release_lineage import (
     INDEX_PROFILE_REF_V0,
     INDEX_SCHEMA_REF_V0,
     PACKAGE_SCHEMA_REF_V0,
+    QWEN_VECTOR_INDEX_PROFILE_DIGEST_V1,
+    QWEN_VECTOR_INDEX_PROFILE_REF_V1,
     RUNTIME_PROFILE_DIGEST_V0,
     RUNTIME_PROFILE_REF_V0,
     RUNTIME_TOKENIZER_REF_V0,
     ActiveRuntimeRelease,
 )
+from engine.supply import (
+    DETERMINISTIC_TWIN_EMBEDDING_PROFILE,
+    QWEN3_EMBEDDING_PROFILE,
+    EmbeddingProviderProfile,
+)
+from tests.support.embeddings import QwenEmbeddingTwin
 
 _SIGNING_KEY = b"openapi-v0-test-release-evaluation-key"
 _SIGNING_KEY_VERSION = 66
+_SENTINEL_NAMESPACE = UUID("41f3a801-50f8-4ed1-8964-261ebbad325e")
+_SENTINEL_SOURCE_REF = "source:test-release-sentinel"
 
 
 def _digest(value: str) -> str:
     return sha256(value.encode("utf-8")).hexdigest()
+
+
+def _sentinel_revision_id(
+    organization_id: UUID,
+    profile: EmbeddingProviderProfile,
+) -> UUID:
+    return uuid5(
+        _SENTINEL_NAMESPACE,
+        f"{organization_id}:{profile.profile_digest}",
+    )
+
+
+def _ensure_test_release_sentinel(
+    connection: Connection,
+    organization_id: UUID,
+    profile: EmbeddingProviderProfile,
+) -> str:
+    """Seed one inaccessible test Revision so database promotion is non-vacuous."""
+
+    revision_id = _sentinel_revision_id(organization_id, profile)
+    resource_ref = f"resource:test-release-sentinel:{revision_id}"
+    embedding_provider = (
+        QwenEmbeddingTwin()
+        if profile == QWEN3_EMBEDDING_PROFILE
+        else DeterministicEmbeddingTwin()
+    )
+    embedding = embedding_provider.embed(("test release sentinel",))[0]
+    parameters = {
+        "organization_id": organization_id,
+        "resource_ref": resource_ref,
+        "revision_id": revision_id,
+        "embedding": "[" + ",".join(repr(value) for value in embedding) + "]",
+        "embedding_profile_digest": profile.profile_digest,
+    }
+    connection.execute(text("SET CONSTRAINTS ALL DEFERRED"))
+    connection.execute(
+        text(
+            """
+            INSERT INTO context_resource (
+                organization_id, resource_ref, source_ref,
+                active_revision_id, tombstoned
+            ) VALUES (
+                :organization_id, :resource_ref, :source_ref,
+                :revision_id, false
+            ) ON CONFLICT (organization_id, resource_ref) DO NOTHING
+            """
+        ),
+        {**parameters, "source_ref": _SENTINEL_SOURCE_REF},
+    )
+    connection.execute(
+        text(
+            """
+            INSERT INTO context_revision (
+                organization_id, resource_ref, revision_id
+            ) VALUES (
+                :organization_id, :resource_ref, :revision_id
+            ) ON CONFLICT (organization_id, resource_ref, revision_id) DO NOTHING
+            """
+        ),
+        parameters,
+    )
+    connection.execute(
+        text(
+            """
+            INSERT INTO context_fragment (
+                organization_id, resource_ref, revision_id, fragment_ref,
+                ordinal, content, projection_kind, embedding,
+                embedding_profile_digest
+            ) VALUES (
+                :organization_id, :resource_ref, :revision_id,
+                'fragment:test-release-sentinel', 0,
+                'test release sentinel', 'body', CAST(:embedding AS vector),
+                :embedding_profile_digest
+            ) ON CONFLICT (
+                organization_id, resource_ref, revision_id, fragment_ref
+            ) DO NOTHING
+            """
+        ),
+        parameters,
+    )
+    connection.commit()
+    return str(revision_id)
 
 
 class _ExactReleaseAuthenticator:
@@ -76,6 +170,9 @@ def active_runtime_release(
     active_revision_refs: tuple[str, ...] = (),
     index_profile_ref: str = INDEX_PROFILE_REF_V0,
     index_profile_digest: str = INDEX_PROFILE_DIGEST_V0,
+    embedding_provider_profile: EmbeddingProviderProfile = (
+        DETERMINISTIC_TWIN_EMBEDDING_PROFILE
+    ),
 ) -> ActiveRuntimeRelease:
     return ActiveRuntimeRelease(
         organization_id=organization_id,
@@ -89,6 +186,8 @@ def active_runtime_release(
         runtime_profile_digest=RUNTIME_PROFILE_DIGEST_V0,
         content_profile_digest=CONTENT_PROFILE_DIGEST_V0,
         index_profile_digest=index_profile_digest,
+        embedding_profile_document=embedding_provider_profile.canonical_json(),
+        embedding_profile_digest=embedding_provider_profile.profile_digest,
         tokenizer_ref=RUNTIME_TOKENIZER_REF_V0,
         package_schema_ref=PACKAGE_SCHEMA_REF_V0,
         curation_profile_ref=CURATION_PROFILE_REF_V0,
@@ -110,6 +209,7 @@ def ensure_test_runtime_release(
     index_profile_digest: str = INDEX_PROFILE_DIGEST_V0,
     tokenizer_ref: str = RUNTIME_TOKENIZER_REF_V0,
     package_schema_ref: str = PACKAGE_SCHEMA_REF_V0,
+    embedding_provider_profile: EmbeddingProviderProfile | None = None,
 ) -> ActiveRuntimeRelease:
     """Promote the test profile through ContextLearning when no pointer exists.
 
@@ -119,6 +219,20 @@ def ensure_test_runtime_release(
     pointer directly and never creates a production fallback.
     """
 
+    if embedding_provider_profile is None:
+        embedding_provider_profile = (
+            QWEN3_EMBEDDING_PROFILE
+            if (
+                index_profile_ref,
+                index_profile_digest,
+            )
+            == (
+                QWEN_VECTOR_INDEX_PROFILE_REF_V1,
+                QWEN_VECTOR_INDEX_PROFILE_DIGEST_V1,
+            )
+            else DETERMINISTIC_TWIN_EMBEDDING_PROFILE
+        )
+    revisions_were_explicit = active_revision_refs is not None
     configurations = load_harness_database_configurations()
     migration_engine = create_database_engine(configurations.migration)
     learning_engine = create_database_engine(configurations.learning)
@@ -145,10 +259,14 @@ def ensure_test_runtime_release(
                         WHERE organization_id = :organization_id
                           AND active_revision_id IS NOT NULL
                           AND tombstoned IS FALSE
+                          AND source_ref <> :sentinel_source_ref
                         ORDER BY active_revision_id
                         """
                     ),
-                    {"organization_id": organization_id},
+                    {
+                        "organization_id": organization_id,
+                        "sentinel_source_ref": _SENTINEL_SOURCE_REF,
+                    },
                 ).scalars()
             )
             lock_connection.commit()
@@ -161,6 +279,8 @@ def ensure_test_runtime_release(
                        manifest.content_profile_ref,
                        manifest.content_schema_ref,
                        manifest.index_profile_ref,
+                       manifest.embedding_profile_document,
+                       manifest.embedding_profile_digest,
                        manifest.index_schema_ref,
                        manifest.runtime_profile_ref,
                        manifest.runtime_profile_digest,
@@ -188,7 +308,28 @@ def ensure_test_runtime_release(
         lock_connection.commit()
         if existing is not None:
             selected_revisions = tuple(existing.active_revision_refs)
-            if selected_revisions == tuple(sorted(active_revision_refs)):
+            if (
+                (
+                    selected_revisions == tuple(sorted(active_revision_refs))
+                    or (
+                        not revisions_were_explicit
+                        and not active_revision_refs
+                        and selected_revisions
+                        == (
+                            str(
+                                _sentinel_revision_id(
+                                    organization_id,
+                                    embedding_provider_profile,
+                                )
+                            ),
+                        )
+                    )
+                )
+                and existing.index_profile_ref == index_profile_ref
+                and existing.runtime_index_profile_digest == index_profile_digest
+                and existing.embedding_profile_digest
+                == embedding_provider_profile.profile_digest
+            ):
                 try:
                     return ActiveRuntimeRelease(
                         organization_id=organization_id,
@@ -204,6 +345,12 @@ def ensure_test_runtime_release(
                             existing.runtime_content_profile_digest
                         ),
                         index_profile_digest=existing.runtime_index_profile_digest,
+                        embedding_profile_document=json.dumps(
+                            existing.embedding_profile_document,
+                            separators=(",", ":"),
+                            sort_keys=True,
+                        ),
+                        embedding_profile_digest=existing.embedding_profile_digest,
                         tokenizer_ref=existing.runtime_tokenizer_ref,
                         package_schema_ref=existing.runtime_package_schema_ref,
                         curation_profile_ref=existing.curation_profile_ref,
@@ -221,6 +368,15 @@ def ensure_test_runtime_release(
                 except (TypeError, ValueError):
                     pass
             clear_test_runtime_release(organization_id)
+
+        if not active_revision_refs and not revisions_were_explicit:
+            active_revision_refs = (
+                _ensure_test_release_sentinel(
+                    lock_connection,
+                    organization_id,
+                    embedding_provider_profile,
+                ),
+            )
 
         now = datetime.now(UTC).replace(microsecond=0)
         operator_ref = f"operator-{suffix}"
@@ -278,6 +434,10 @@ def ensure_test_runtime_release(
             content_profile_digest=content.profile_digest,
             content_schema_ref=content.content_schema_ref,
             index_schema_ref=INDEX_SCHEMA_REF_V0,
+            embedding_profile_document=(
+                embedding_provider_profile.canonical_json()
+            ),
+            embedding_profile_digest=embedding_provider_profile.profile_digest,
         )
         runtime = RuntimeProfileRef(
             profile_ref=runtime_profile_ref,
@@ -364,6 +524,8 @@ def ensure_test_runtime_release(
             runtime_profile_digest=runtime.profile_digest,
             content_profile_digest=runtime.content_profile_digest,
             index_profile_digest=runtime.index_profile_digest,
+            embedding_profile_document=index.embedding_profile_document,
+            embedding_profile_digest=index.embedding_profile_digest,
             tokenizer_ref=runtime.tokenizer_ref,
             package_schema_ref=runtime.package_schema_ref,
             curation_profile_ref=manifest.curation_profile.profile_ref,
@@ -400,6 +562,8 @@ def clear_test_runtime_release(organization_id: UUID) -> None:
         "release_evaluation",
         "release_candidate",
         "release_manifest",
+        "context_fragment",
+        "context_revision",
     )
     try:
         with engine.begin() as connection:
@@ -410,34 +574,58 @@ def clear_test_runtime_release(organization_id: UUID) -> None:
                         f"{table_name}_reject_mutation"
                     )
                 )
-        try:
-            with engine.begin() as connection:
-                for table_name in (
-                    "decision_audit",
-                    "context_run",
-                    "active_release_manifest",
-                    "release_promotion_audit",
-                    "release_evaluation",
-                    "release_candidate",
-                    "release_manifest",
-                    "release_operator_grant",
-                ):
-                    connection.execute(
-                        text(
-                            f"DELETE FROM {table_name} "
-                            "WHERE organization_id = :organization_id"
-                        ),
-                        {"organization_id": organization_id},
+            connection.execute(
+                text(
+                    "DELETE FROM context_fragment "
+                    "WHERE organization_id = :organization_id "
+                    "AND resource_ref LIKE 'resource:test-release-sentinel:%'"
+                ),
+                {"organization_id": organization_id},
+            )
+            connection.execute(
+                text(
+                    "DELETE FROM context_revision "
+                    "WHERE organization_id = :organization_id "
+                    "AND resource_ref LIKE 'resource:test-release-sentinel:%'"
+                ),
+                {"organization_id": organization_id},
+            )
+            connection.execute(
+                text(
+                    "DELETE FROM context_resource "
+                    "WHERE organization_id = :organization_id "
+                    "AND source_ref = :source_ref"
+                ),
+                {
+                    "organization_id": organization_id,
+                    "source_ref": _SENTINEL_SOURCE_REF,
+                },
+            )
+            for table_name in (
+                "decision_audit",
+                "context_run",
+                "active_release_manifest",
+                "release_promotion_audit",
+                "release_evaluation",
+                "release_candidate",
+                "release_manifest",
+                "release_operator_grant",
+            ):
+                connection.execute(
+                    text(
+                        f"DELETE FROM {table_name} "
+                        "WHERE organization_id = :organization_id"
+                    ),
+                    {"organization_id": organization_id},
+                )
+            connection.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+            for table_name in reversed(immutable_tables):
+                connection.execute(
+                    text(
+                        f"ALTER TABLE {table_name} ENABLE TRIGGER "
+                        f"{table_name}_reject_mutation"
                     )
-        finally:
-            with engine.begin() as connection:
-                for table_name in reversed(immutable_tables):
-                    connection.execute(
-                        text(
-                            f"ALTER TABLE {table_name} ENABLE TRIGGER "
-                            f"{table_name}_reject_mutation"
-                        )
-                    )
+                )
     finally:
         engine.dispose()
 

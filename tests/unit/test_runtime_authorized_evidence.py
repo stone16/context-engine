@@ -172,6 +172,17 @@ class HostileCandidateIndex:
         del effective_scope
         return ExactPhraseDiscoveryRequest(exact_phrase_digest(request.need.query))
 
+    def prepare_budgeted_discovery(
+        self,
+        request: Acquire,
+        *,
+        effective_scope: object,
+        budget: object,
+        active_embedding_profile_digest: str,
+    ) -> ExactPhraseDiscoveryRequest:
+        del budget, active_embedding_profile_digest
+        return self.prepare_discovery(request, effective_scope=effective_scope)
+
     def discover(
         self,
         request: Acquire,
@@ -223,12 +234,20 @@ class RecordingMaterializedPort:
     def discover_vector(
         self,
         query_embedding: tuple[float, ...],
+        embedding_profile_digest: str,
         limit: int,
         source_refs: tuple[str, ...] | None,
         resource_refs: tuple[str, ...] | None,
         effective_scope: object,
     ) -> tuple[()]:
-        del query_embedding, limit, source_refs, resource_refs, effective_scope
+        del (
+            query_embedding,
+            embedding_profile_digest,
+            limit,
+            source_refs,
+            resource_refs,
+            effective_scope,
+        )
         return ()
 
     def source_is_active(self, source_ref: UUID) -> bool:

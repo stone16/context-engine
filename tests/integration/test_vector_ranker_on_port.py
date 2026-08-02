@@ -12,14 +12,26 @@ pytestmark = pytest.mark.integration
 
 
 def test_existing_pgvector_ranker_conforms_to_candidate_port() -> None:
-    assert tuple(inspect.signature(CandidateIndex.prepare_discovery).parameters) == (
+    assert tuple(
+        inspect.signature(CandidateIndex.prepare_budgeted_discovery).parameters
+    ) == (
         "self",
         "request",
         "effective_scope",
+        "budget",
+        "active_embedding_profile_digest",
     )
     assert tuple(
-        inspect.signature(PostgreSQLVectorCandidateIndex.prepare_discovery).parameters
-    ) == ("self", "request", "effective_scope")
+        inspect.signature(
+            PostgreSQLVectorCandidateIndex.prepare_budgeted_discovery
+        ).parameters
+    ) == (
+        "self",
+        "request",
+        "effective_scope",
+        "budget",
+        "active_embedding_profile_digest",
+    )
     assert tuple(inspect.signature(CandidateIndex.discover).parameters) == (
         "self",
         "request",
@@ -31,9 +43,15 @@ def test_existing_pgvector_ranker_conforms_to_candidate_port() -> None:
     ) == ("self", "request", "discovery_session", "effective_scope")
     assert tuple(
         inspect.signature(
-            PostgreSQLExactPhraseCandidateIndex.prepare_discovery
+            PostgreSQLExactPhraseCandidateIndex.prepare_budgeted_discovery
         ).parameters
-    ) == ("self", "request", "effective_scope")
+    ) == (
+        "self",
+        "request",
+        "effective_scope",
+        "budget",
+        "active_embedding_profile_digest",
+    )
     assert tuple(
         inspect.signature(PostgreSQLExactPhraseCandidateIndex.discover).parameters
     ) == ("self", "request", "discovery_session", "effective_scope")

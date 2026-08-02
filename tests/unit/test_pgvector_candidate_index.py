@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from threading import Event
 from typing import cast
 from uuid import UUID
 
@@ -11,6 +12,7 @@ from adapters.pgvector import (
     PostgreSQLVectorCandidateIndex,
     VectorCandidateIndexUnavailable,
 )
+from engine.runtime.budget import BudgetUsage, PackageBudget, PackageBudgetMeter
 from engine.runtime.contracts import Acquire, ContextNeed, RequestNarrowing
 from engine.runtime.evidence import CandidateRef
 from engine.runtime.materialized import (
@@ -26,7 +28,11 @@ from engine.runtime.scope import (
     EffectiveScope,
     ScopeTarget,
 )
-from engine.supply import EmbeddingProfile, EmbeddingProviderUnavailable
+from engine.supply import (
+    DETERMINISTIC_TWIN_EMBEDDING_PROFILE,
+    EmbeddingProfile,
+    EmbeddingProviderUnavailable,
+)
 
 
 class _RecordingPort:
@@ -35,6 +41,7 @@ class _RecordingPort:
         self.calls: list[
             tuple[
                 tuple[float, ...],
+                str,
                 int,
                 tuple[str, ...] | None,
                 tuple[str, ...] | None,
@@ -45,6 +52,7 @@ class _RecordingPort:
     def discover_vector(
         self,
         query_embedding: tuple[float, ...],
+        embedding_profile_digest: str,
         limit: int,
         source_refs: tuple[str, ...] | None,
         resource_refs: tuple[str, ...] | None,
@@ -53,6 +61,7 @@ class _RecordingPort:
         self.calls.append(
             (
                 query_embedding,
+                embedding_profile_digest,
                 limit,
                 source_refs,
                 resource_refs,
@@ -81,10 +90,45 @@ class _RecordingPort:
 
 class _UnavailableProvider:
     profile = EmbeddingProfile(384)
+    provider_profile = DETERMINISTIC_TWIN_EMBEDDING_PROFILE
 
     def embed(self, inputs: tuple[str, ...]) -> tuple[tuple[float, ...], ...]:
         del inputs
         raise EmbeddingProviderUnavailable("provider detail")
+
+    def embed_documents(
+        self, inputs: tuple[str, ...]
+    ) -> tuple[tuple[float, ...], ...]:
+        return self.embed(inputs)
+
+
+class _RecordingProvider:
+    profile = EmbeddingProfile(384)
+    provider_profile = DETERMINISTIC_TWIN_EMBEDDING_PROFILE
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def embed(self, inputs: tuple[str, ...]) -> tuple[tuple[float, ...], ...]:
+        self.calls += 1
+        return DeterministicEmbeddingTwin().embed(inputs)
+
+    def embed_documents(
+        self, inputs: tuple[str, ...]
+    ) -> tuple[tuple[float, ...], ...]:
+        return self.embed(inputs)
+
+
+class _HangingProvider(_RecordingProvider):
+    def __init__(self) -> None:
+        super().__init__()
+        self.release = Event()
+
+    def embed(self, inputs: tuple[str, ...]) -> tuple[tuple[float, ...], ...]:
+        del inputs
+        self.calls += 1
+        self.release.wait()
+        return ()
 
 
 def _candidate() -> CandidateRef:
@@ -153,8 +197,18 @@ def test_vector_index_embeds_query_and_returns_only_bounded_candidate_refs() -> 
         for item in candidate_query.ranked_lists[0].candidates
     ) == (_candidate(),)
     assert len(port.calls) == 1
-    query_embedding, limit, source_refs, resource_refs, effective_scope = port.calls[0]
+    (
+        query_embedding,
+        embedding_profile_digest,
+        limit,
+        source_refs,
+        resource_refs,
+        effective_scope,
+    ) = port.calls[0]
     assert len(query_embedding) == 384
+    assert embedding_profile_digest == (
+        DETERMINISTIC_TWIN_EMBEDDING_PROFILE.profile_digest
+    )
     assert limit == 1
     assert source_refs is None
     assert resource_refs is None
@@ -201,7 +255,7 @@ def test_vector_index_applies_request_narrowing_before_ann_limit() -> None:
         _close_candidate_discovery_session(discovery_session)
         _close_materialized_projection_scope(scope)
 
-    assert port.calls[0][2:4] == (
+    assert port.calls[0][3:5] == (
         ("source:vector",),
         ("resource:vector",),
     )
@@ -220,6 +274,109 @@ def test_vector_index_genericizes_query_embedding_failure_before_database_io() -
 
     assert failure.value.__cause__ is None
     assert port.calls == []
+
+
+def test_budgeted_query_embedding_debits_actual_internal_usage() -> None:
+    budget = PackageBudgetMeter(PackageBudget(1, 1, 1, 5_000))
+    observed_times = iter((25, 32))
+
+    PostgreSQLVectorCandidateIndex(
+        DeterministicEmbeddingTwin(), monotonic_ms=lambda: next(observed_times)
+    ).prepare_budgeted_discovery(
+        Acquire(need=ContextNeed(query="semantic query")),
+        effective_scope=_discovery_scope(),
+        budget=budget,
+        active_embedding_profile_digest=(
+            DETERMINISTIC_TWIN_EMBEDDING_PROFILE.profile_digest
+        ),
+    )
+
+    assert budget.usage.provider_calls == 1
+    assert budget.usage.cost_microunits == 1
+    assert budget.usage.elapsed_ms == 7
+
+
+def test_budgeted_query_embedding_refuses_exhaustion_before_provider_call() -> None:
+    provider = _RecordingProvider()
+    budget = PackageBudgetMeter(
+        PackageBudget(1, 1, 1, 1),
+    )
+
+    with pytest.raises(
+        VectorCandidateIndexUnavailable,
+        match="Vector candidate discovery is unavailable",
+    ):
+        PostgreSQLVectorCandidateIndex(provider).prepare_budgeted_discovery(
+            Acquire(need=ContextNeed(query="semantic query")),
+            effective_scope=_discovery_scope(),
+            budget=budget,
+            active_embedding_profile_digest=(
+                DETERMINISTIC_TWIN_EMBEDDING_PROFILE.profile_digest
+            ),
+        )
+
+    assert provider.calls == 0
+    assert budget.usage.provider_calls == 0
+
+
+def test_failed_query_embedding_charges_reserved_maximum_after_provider_call() -> None:
+    budget = PackageBudgetMeter(PackageBudget(1, 1, 1, 5_000))
+
+    with pytest.raises(VectorCandidateIndexUnavailable):
+        PostgreSQLVectorCandidateIndex(_UnavailableProvider()).prepare_budgeted_discovery(
+            Acquire(need=ContextNeed(query="semantic query")),
+            effective_scope=_discovery_scope(),
+            budget=budget,
+            active_embedding_profile_digest=(
+                DETERMINISTIC_TWIN_EMBEDDING_PROFILE.profile_digest
+            ),
+        )
+
+    assert budget.usage.provider_calls == 1
+    assert budget.usage.cost_microunits == 1
+    assert budget.usage.elapsed_ms == 5_000
+
+
+def test_hanging_query_embedding_returns_by_deadline_and_charges_maximum(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = _HangingProvider()
+    budget = PackageBudgetMeter(PackageBudget(1, 1, 1, 5_000))
+    monkeypatch.setattr(
+        "adapters.pgvector.QUERY_EMBEDDING_MAXIMUM_USAGE",
+        BudgetUsage(tokens=0, provider_calls=1, cost_microunits=1, elapsed_ms=10),
+    )
+
+    try:
+        with pytest.raises(VectorCandidateIndexUnavailable):
+            PostgreSQLVectorCandidateIndex(provider).prepare_budgeted_discovery(
+                Acquire(need=ContextNeed(query="semantic query")),
+                effective_scope=_discovery_scope(),
+                budget=budget,
+                active_embedding_profile_digest=(
+                    DETERMINISTIC_TWIN_EMBEDDING_PROFILE.profile_digest
+                ),
+            )
+    finally:
+        provider.release.set()
+
+    assert provider.calls == 1
+    assert budget.usage == BudgetUsage(0, 1, 1, 10)
+
+
+def test_query_provider_profile_must_equal_active_release_before_call() -> None:
+    provider = _UnavailableProvider()
+    budget = PackageBudgetMeter(PackageBudget(1, 1, 1, 5_000))
+
+    with pytest.raises(VectorCandidateIndexUnavailable):
+        PostgreSQLVectorCandidateIndex(provider).prepare_budgeted_discovery(
+            Acquire(need=ContextNeed(query="semantic query")),
+            effective_scope=_discovery_scope(),
+            budget=budget,
+            active_embedding_profile_digest="f" * 64,
+        )
+
+    assert budget.usage.provider_calls == 0
 
 
 @pytest.mark.parametrize("limit", [0, MAX_VECTOR_CANDIDATE_LIMIT + 1, True])

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from engine.runtime.budget import PackageBudgetMeter
 from engine.runtime.candidate_ranking import (
     CandidateQuery,
     RankedCandidate,
@@ -51,6 +52,26 @@ class PostgreSQLFtsCandidateIndex:
                 if request.narrowing is not None
                 else None
             ),
+        )
+
+    def prepare_budgeted_discovery(
+        self,
+        request: Acquire,
+        *,
+        effective_scope: CandidateDiscoveryScope,
+        budget: PackageBudgetMeter,
+        active_embedding_profile_digest: str,
+    ) -> FtsDiscoveryRequest:
+        if type(budget) is not PackageBudgetMeter:
+            raise TypeError("FTS candidate discovery requires PackageBudgetMeter")
+        if (
+            type(active_embedding_profile_digest) is not str
+            or not active_embedding_profile_digest
+        ):
+            raise TypeError("FTS candidate discovery requires an active profile")
+        return self.prepare_discovery(
+            request,
+            effective_scope=effective_scope,
         )
 
     def discover(

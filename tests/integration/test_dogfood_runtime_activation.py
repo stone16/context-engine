@@ -28,6 +28,7 @@ from adapters.http.dogfood import (
     DOGFOOD_BINDING_ENV,
     DOGFOOD_COMPOSITION_ENV,
     DOGFOOD_COMPOSITION_VALUE,
+    DOGFOOD_EMBEDDING_MODEL_DIR_ENV,
     DOGFOOD_EMBEDDING_PROVIDER_ENV,
     DOGFOOD_EMBEDDING_PROVIDER_VALUE,
     DOGFOOD_MEMBERSHIP_ENV,
@@ -77,12 +78,13 @@ from engine.persistence import (
 )
 from engine.runtime.evidence import CandidateRef
 from engine.runtime.release_lineage import (
-    DOGFOOD_VECTOR_INDEX_PROFILE_DIGEST_V1,
-    DOGFOOD_VECTOR_INDEX_PROFILE_REF_V1,
     INDEX_PROFILE_DIGEST_V0,
     INDEX_PROFILE_REF_V0,
+    QWEN_VECTOR_INDEX_PROFILE_DIGEST_V1,
+    QWEN_VECTOR_INDEX_PROFILE_REF_V1,
 )
 from tests.integration.test_zz_file_revision_replacement import _scenario_user_id
+from tests.support.embeddings import QwenEmbeddingTwin
 from tests.support.file_imports import (
     FileImportScenario,
     delete_file_import_scenario,
@@ -99,6 +101,16 @@ pytestmark = pytest.mark.integration
 SECRET = "dogfood-secret-with-at-least-thirty-two-bytes"
 TARGET_TEXT = "Dogfood delivery reaches the authorized target."
 QUERY = "Which dogfood delivery target is authorized?"
+
+
+@pytest.fixture(autouse=True)
+def _compose_qwen_test_twin(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Exercise Qwen lineage without loading model artifacts in integration tests."""
+
+    monkeypatch.setattr(
+        "adapters.http.dogfood.LocalQwenEmbeddingProvider",
+        lambda _path: QwenEmbeddingTwin(),
+    )
 
 
 def _configuration(
@@ -136,6 +148,7 @@ def _environment(
         DOGFOOD_APPLICATION_ENV: configuration.application_ref,
         DOGFOOD_BINDING_ENV: configuration.authentication_binding_ref,
         DOGFOOD_EMBEDDING_PROVIDER_ENV: configuration.embedding_provider,
+        DOGFOOD_EMBEDDING_MODEL_DIR_ENV: "/verified/test-qwen-model",
         "CONTEXT_ENGINE_RUNTIME_ROLE": runtime_configuration.expected_role,
         "CONTEXT_ENGINE_RUNTIME_DATABASE_URL": (
             runtime_configuration.url.render_as_string(hide_password=False)
@@ -166,22 +179,28 @@ def _publish(
         lambda: _delete(migration_configuration, scenario.organization_id)
     )
     assert scenario.token is not None
+    publication_provider = (
+        QwenEmbeddingTwin()
+        if dogfood_index_profile
+        else DeterministicEmbeddingTwin()
+    )
     published = run_file_import(
         scenario,
         scenario.prepared,
         scenario.token,
         guarded_worker_engine,
+        embedding_provider=publication_provider,
     )
     ensure_test_runtime_release(
         scenario.organization_id,
         active_revision_refs=(published.candidate_ref.revision_ref,),
         index_profile_ref=(
-            DOGFOOD_VECTOR_INDEX_PROFILE_REF_V1
+            QWEN_VECTOR_INDEX_PROFILE_REF_V1
             if dogfood_index_profile
             else INDEX_PROFILE_REF_V0
         ),
         index_profile_digest=(
-            DOGFOOD_VECTOR_INDEX_PROFILE_DIGEST_V1
+            QWEN_VECTOR_INDEX_PROFILE_DIGEST_V1
             if dogfood_index_profile
             else INDEX_PROFILE_DIGEST_V0
         ),
@@ -217,7 +236,8 @@ def _add_policy_out_of_scope_distractors(
     migration_configuration: DatabaseConfiguration,
     scenario: FileImportScenario,
 ) -> None:
-    embedding = DeterministicEmbeddingTwin().embed((QUERY,))[0]
+    embedding_provider = QwenEmbeddingTwin()
+    embedding = embedding_provider.embed((QUERY,))[0]
     parameters = [
         {
             "organization_id": scenario.organization_id,
@@ -227,6 +247,9 @@ def _add_policy_out_of_scope_distractors(
             "revision_id": uuid4(),
             "fragment_ref": f"fragment:dogfood-distractor:{ordinal:03d}",
             "embedding": "[" + ",".join(repr(value) for value in embedding) + "]",
+            "embedding_profile_digest": (
+                embedding_provider.provider_profile.profile_digest
+            ),
         }
         for ordinal in range(DEFAULT_VECTOR_CANDIDATE_LIMIT + 4)
     ]
@@ -266,11 +289,11 @@ def _add_policy_out_of_scope_distractors(
                     INSERT INTO context_fragment (
                         organization_id, resource_ref, revision_id,
                         fragment_ref, ordinal, content, projection_kind,
-                        embedding
+                        embedding, embedding_profile_digest
                     ) VALUES (
                         :organization_id, :resource_ref, :revision_id,
                         :fragment_ref, 0, :fragment_ref, 'body',
-                        CAST(:embedding AS vector)
+                        CAST(:embedding AS vector), :embedding_profile_digest
                     )
                     """
                 ),
@@ -313,7 +336,7 @@ def _strictly_closer_distractor_count(
     scenario: FileImportScenario,
     target: CandidateRef,
 ) -> int:
-    query_embedding = DeterministicEmbeddingTwin().embed((QUERY,))[0]
+    query_embedding = QwenEmbeddingTwin().embed((QUERY,))[0]
     encoded_embedding = "[" + ",".join(repr(value) for value in query_embedding) + "]"
     engine = create_database_engine(migration_configuration)
     try:
@@ -562,7 +585,7 @@ def test_dogfood_served_composition_delivers_release_scoped_file_evidence_before
     assert served["host"] == "127.0.0.1"
     response = _resolve(client)
 
-    assert response.status_code == 200
+    assert response.status_code == 200, response.text
     package = cast(dict[str, Any], response.json()["package"])
     assert [block["text"] for block in package["blocks"]] == [TARGET_TEXT]
     assert len(package["evidence"]) == 1

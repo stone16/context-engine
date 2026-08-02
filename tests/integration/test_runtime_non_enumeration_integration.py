@@ -21,6 +21,7 @@ from engine.persistence import (
     assert_runtime_role,
     create_database_engine,
 )
+from engine.runtime.budget import PackageBudgetMeter
 from engine.runtime.candidate_ranking import (
     CandidateQuery,
     RankedCandidate,
@@ -147,6 +148,17 @@ class SequencedCandidateIndex:
             request,
             effective_scope=effective_scope,  # type: ignore[arg-type]
         )
+
+    def prepare_budgeted_discovery(
+        self,
+        request: Acquire,
+        *,
+        effective_scope: object,
+        budget: PackageBudgetMeter,
+        active_embedding_profile_digest: str,
+    ) -> ExactPhraseDiscoveryRequest:
+        del budget, active_embedding_profile_digest
+        return self.prepare_discovery(request, effective_scope=effective_scope)
 
     def discover(
         self,

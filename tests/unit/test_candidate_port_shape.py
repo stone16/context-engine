@@ -140,7 +140,7 @@ def test_exactly_one_candidate_discovery_protocol_extends_existing_seam() -> Non
     ]
     assert get_type_hints(CandidateIndex.discover)["return"] is CandidateQuery
     assert (
-        get_type_hints(CandidateIndex.prepare_discovery)["return"]
+        get_type_hints(CandidateIndex.prepare_budgeted_discovery)["return"]
         == CandidateDiscoveryRequest
     )
     assert (

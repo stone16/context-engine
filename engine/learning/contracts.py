@@ -10,6 +10,11 @@ from uuid import UUID
 
 import rfc8785
 
+from engine.supply.embeddings import (
+    DETERMINISTIC_TWIN_EMBEDDING_PROFILE,
+    registered_embedding_provider_profile,
+)
+
 MAX_SIGNED_BIGINT: Final = (1 << 63) - 1
 MAX_REFERENCE_LENGTH: Final = 255
 _MANIFEST_LINEAGE_DOMAIN: Final = b"context-engine.release-manifest-lineage.v1\x00"
@@ -119,6 +124,12 @@ class IndexProfileRef:
     content_profile_digest: str
     content_schema_ref: str
     index_schema_ref: str
+    embedding_profile_document: str = (
+        DETERMINISTIC_TWIN_EMBEDDING_PROFILE.canonical_json()
+    )
+    embedding_profile_digest: str = (
+        DETERMINISTIC_TWIN_EMBEDDING_PROFILE.profile_digest
+    )
 
     def __post_init__(self) -> None:
         _require_ref("IndexProfile profile_ref", self.profile_ref)
@@ -128,6 +139,22 @@ class IndexProfileRef:
         )
         _require_ref("IndexProfile content_schema_ref", self.content_schema_ref)
         _require_ref("IndexProfile index_schema_ref", self.index_schema_ref)
+        if (
+            type(self.embedding_profile_document) is not str
+            or not self.embedding_profile_document
+            or len(self.embedding_profile_document) > 16_384
+        ):
+            raise ValueError(
+                "IndexProfile embedding profile document must be canonical JSON"
+            )
+        _require_digest(
+            "IndexProfile embedding_profile_digest",
+            self.embedding_profile_digest,
+        )
+        registered_embedding_provider_profile(
+            self.embedding_profile_document,
+            self.embedding_profile_digest,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -253,6 +280,8 @@ def _profile_document(profile: object) -> dict[str, object]:
         return {
             "content_profile_digest": profile.content_profile_digest,
             "content_schema_ref": profile.content_schema_ref,
+            "embedding_profile_digest": profile.embedding_profile_digest,
+            "embedding_profile_document": profile.embedding_profile_document,
             "index_schema_ref": profile.index_schema_ref,
             "profile_digest": profile.profile_digest,
             "profile_ref": profile.profile_ref,

@@ -24,6 +24,7 @@ from engine.persistence import (
 )
 from engine.persistence.file_imports import PublishedFileImport
 from engine.runtime.authorized_ranking import RankerWeights
+from engine.runtime.budget import PackageBudgetMeter
 from engine.runtime.candidate_ranking import (
     CandidateQuery,
     RankedCandidate,
@@ -85,6 +86,17 @@ class _RootOnlyCandidateIndex:
     ) -> ExactPhraseDiscoveryRequest:
         del effective_scope
         return ExactPhraseDiscoveryRequest(exact_phrase_digest(request.need.query))
+
+    def prepare_budgeted_discovery(
+        self,
+        request: Acquire,
+        *,
+        effective_scope: CandidateDiscoveryScope,
+        budget: PackageBudgetMeter,
+        active_embedding_profile_digest: str,
+    ) -> ExactPhraseDiscoveryRequest:
+        del budget, active_embedding_profile_digest
+        return self.prepare_discovery(request, effective_scope=effective_scope)
 
     def discover(
         self,

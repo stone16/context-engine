@@ -27,6 +27,7 @@ dependencies = [
   "pydantic>=2.13,<2.14",
   "psycopg[binary]>=3.2,<3.3",
   "rfc8785>=0.1.4,<0.2",
+  "sentence-transformers>=5,<6",
   "sqlalchemy>=2.0,<2.1",
   "starlette>=0.48,<0.49",
   "uvicorn>=0.35,<0.36",
@@ -56,9 +57,6 @@ context-engine-worker = "applications.worker:main"
 context-engine-connector-runner = "applications.connector_runner:main"
 
 [project.optional-dependencies]
-benchmark = [
-    "sentence-transformers>=5,<6",
-]
 mcp = [
     "mcp>=2.0,<3",
 ]

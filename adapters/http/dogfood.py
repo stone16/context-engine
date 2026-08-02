@@ -7,11 +7,12 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from hashlib import sha256
+from pathlib import Path
 from uuid import UUID
 
 from fastapi import FastAPI
 
-from adapters.embeddings import DeterministicEmbeddingTwin
+from adapters.embeddings import LocalQwenEmbeddingProvider
 from adapters.http.authentication import (
     DogfoodAuthenticator,
     VerifiedAuthenticationContext,
@@ -48,10 +49,11 @@ from engine.runtime.citation import PRIVATE_FILE_CITATION_OPEN_PROFILE
 from engine.runtime.construction import required_kernel_dependencies
 from engine.runtime.package_digest import QueryDigestKeyring
 from engine.runtime.release_lineage import (
-    DOGFOOD_VECTOR_INDEX_PROFILE_DIGEST_V1,
-    DOGFOOD_VECTOR_INDEX_PROFILE_REF_V1,
+    QWEN_VECTOR_INDEX_PROFILE_DIGEST_V1,
+    QWEN_VECTOR_INDEX_PROFILE_REF_V1,
     ActiveReleaseUnavailable,
 )
+from engine.supply import EmbeddingProviderUnavailable
 
 DOGFOOD_COMPOSITION_ENV = "CONTEXT_ENGINE_API_COMPOSITION"
 DOGFOOD_COMPOSITION_VALUE = "dogfood-local-v1"
@@ -65,7 +67,8 @@ DOGFOOD_AGENT_ENV = "CONTEXT_ENGINE_DOGFOOD_AGENT_VERSION_REF"
 DOGFOOD_APPLICATION_ENV = "CONTEXT_ENGINE_DOGFOOD_APPLICATION_REF"
 DOGFOOD_BINDING_ENV = "CONTEXT_ENGINE_DOGFOOD_AUTHENTICATION_BINDING_REF"
 DOGFOOD_EMBEDDING_PROVIDER_ENV = "CONTEXT_ENGINE_DOGFOOD_EMBEDDING_PROVIDER"
-DOGFOOD_EMBEDDING_PROVIDER_VALUE = "deterministic-twin-v1"
+DOGFOOD_EMBEDDING_PROVIDER_VALUE = "qwen3-embedding-0.6b-local-v1"
+DOGFOOD_EMBEDDING_MODEL_DIR_ENV = "CONTEXT_ENGINE_DOGFOOD_EMBEDDING_MODEL_DIR"
 DOGFOOD_FILE_IMPORT_RECEIVER_ENV = "CONTEXT_ENGINE_WORKER_SERVICE_PRINCIPAL_ID"
 DOGFOOD_RUNTIME_ENVIRONMENT_VARIABLES = frozenset(
     {
@@ -80,6 +83,7 @@ DOGFOOD_RUNTIME_ENVIRONMENT_VARIABLES = frozenset(
         DOGFOOD_APPLICATION_ENV,
         DOGFOOD_BINDING_ENV,
         DOGFOOD_EMBEDDING_PROVIDER_ENV,
+        DOGFOOD_EMBEDDING_MODEL_DIR_ENV,
     }
 )
 DOGFOOD_CONTROL_ENVIRONMENT_VARIABLES = (
@@ -236,9 +240,18 @@ def create_dogfood_app(
         environment,
     )
     runtime_engine = create_database_engine(database_configuration)
+    try:
+        provider = LocalQwenEmbeddingProvider(
+            Path(_required(environment, DOGFOOD_EMBEDDING_MODEL_DIR_ENV))
+        )
+    except EmbeddingProviderUnavailable:
+        runtime_engine.dispose()
+        raise DogfoodConfigurationUnavailable(
+            "dogfood API configuration is unavailable"
+        ) from None
     runtime = Runtime(
         required_kernel_dependencies(),
-        candidate_index=PostgreSQLVectorCandidateIndex(DeterministicEmbeddingTwin()),
+        candidate_index=PostgreSQLVectorCandidateIndex(provider),
         citation_profile=PRIVATE_FILE_CITATION_OPEN_PROFILE,
         query_digest_keyring=configuration.query_digest_keyring(),
     )
@@ -260,9 +273,9 @@ def create_dogfood_app(
             if (
                 release is None
                 or release.organization_id != configuration.organization_id
-                or release.index_profile_ref != DOGFOOD_VECTOR_INDEX_PROFILE_REF_V1
+                or release.index_profile_ref != QWEN_VECTOR_INDEX_PROFILE_REF_V1
                 or release.index_profile_digest
-                != DOGFOOD_VECTOR_INDEX_PROFILE_DIGEST_V1
+                != QWEN_VECTOR_INDEX_PROFILE_DIGEST_V1
                 or not release.active_revision_refs
             ):
                 raise DogfoodConfigurationUnavailable(

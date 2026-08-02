@@ -121,9 +121,23 @@ def _job_snapshot(
                            job.resource_ref, job.revision_id,
                            resource.active_revision_id,
                            (SELECT count(*) FROM context_revision AS revision
-                            WHERE revision.organization_id = job.organization_id),
+                            JOIN context_resource AS revision_resource
+                              ON revision_resource.organization_id =
+                                 revision.organization_id
+                             AND revision_resource.resource_ref =
+                                 revision.resource_ref
+                            WHERE revision.organization_id = job.organization_id
+                              AND revision_resource.source_ref <>
+                                  'source:test-release-sentinel'),
                            (SELECT count(*) FROM context_fragment AS fragment
-                            WHERE fragment.organization_id = job.organization_id),
+                            JOIN context_resource AS fragment_resource
+                              ON fragment_resource.organization_id =
+                                 fragment.organization_id
+                             AND fragment_resource.resource_ref =
+                                 fragment.resource_ref
+                            WHERE fragment.organization_id = job.organization_id
+                              AND fragment_resource.source_ref <>
+                                  'source:test-release-sentinel'),
                            (SELECT count(*) FROM exact_phrase_candidate AS candidate
                             WHERE candidate.organization_id = job.organization_id),
                            (SELECT count(*) FROM file_import_job AS counted_job
@@ -131,7 +145,9 @@ def _job_snapshot(
                            (SELECT count(*)
                             FROM context_resource AS counted_resource
                             WHERE counted_resource.organization_id =
-                                  job.organization_id)
+                                  job.organization_id
+                              AND counted_resource.source_ref <>
+                                  'source:test-release-sentinel')
                     FROM file_import_job AS job
                     LEFT JOIN context_resource AS resource
                       ON resource.organization_id = job.organization_id
@@ -347,6 +363,7 @@ def _acquire_recovery_direct(
     )
     assert type(document) is ParsedDocument
     compilation_document = canonicalize_parsed_document(document).decode("utf-8")
+    provider = DeterministicEmbeddingTwin()
     with guarded_worker_engine.begin() as connection:
         return connection.execute(
             text(
@@ -356,6 +373,7 @@ def _acquire_recovery_direct(
                     :source_ref, :resource_ref, :revision_id,
                     :canonical_text, :content_hash, :compilation_digest,
                     :compiler_version, :config_version,
+                    :embedding_profile_digest,
                     CAST(:compilation_document AS jsonb),
                     CAST(:artifact_document AS jsonb),
                     :lease_generation, :signing_key_version, :nonce,
@@ -375,6 +393,7 @@ def _acquire_recovery_direct(
                 "compilation_digest": document.compilation_digest,
                 "compiler_version": document.provenance.compiler_version,
                 "config_version": document.provenance.config_version,
+                "embedding_profile_digest": provider.provider_profile.profile_digest,
                 "compilation_document": compilation_document,
                 "artifact_document": json.dumps(artifact_document),
                 "lease_generation": claims.lease_generation,

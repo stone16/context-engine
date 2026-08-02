@@ -3,7 +3,6 @@
 import argparse
 import json
 import math
-import os
 import signal
 import threading
 from collections.abc import Callable, Sequence
@@ -19,8 +18,7 @@ from adapters.connectors.feishu import FeishuConnectorProcessAdapter
 from adapters.connectors.file import FileConnectorProcessAdapter
 from adapters.embeddings import (
     DeterministicEmbeddingTwin,
-    ExternalEmbeddingConfiguration,
-    ExternalEmbeddingProvider,
+    LocalQwenEmbeddingProvider,
 )
 from adapters.file_source import FileReadLimits, FileRootRegistry
 from applications.file_root_configuration import (
@@ -92,6 +90,7 @@ DEFAULT_WORKER_MAX_FILE_BYTES = _DEFAULT_WORKER_MAX_FILE_BYTES
 _file_dispatch_roots = _configured_file_roots
 _WORKER_EMBEDDING_PROVIDER_ENV = "CONTEXT_ENGINE_WORKER_EMBEDDING_PROVIDER"
 _WORKER_EMBEDDING_DIMENSION_ENV = "CONTEXT_ENGINE_WORKER_EMBEDDING_DIMENSION"
+_WORKER_EMBEDDING_MODEL_DIR_ENV = "CONTEXT_ENGINE_WORKER_EMBEDDING_MODEL_DIR"
 _SUPPLY_CONNECTOR_EXECUTION_CONFIGURATION = SupplyExecutionConfiguration()
 
 
@@ -256,26 +255,8 @@ def complete_persistent_noop_job(
     return authority.complete_noop(redemption)
 
 
-def _required_bounded_integer_environment(
-    name: str,
-    *,
-    minimum: int,
-    maximum: int,
-) -> int:
-    raw_value = _required_environment(name)
-    if not raw_value.isascii() or not raw_value.isdecimal():
-        raise ValueError("Supply worker configuration is not available")
-    try:
-        value = int(raw_value)
-    except ValueError:
-        raise ValueError("Supply worker configuration is not available") from None
-    if not minimum <= value <= maximum:
-        raise ValueError("Supply worker configuration is not available")
-    return value
-
-
 def _embedding_provider() -> EmbeddingProvider:
-    """Compose the explicit CI twin or one environment-only external provider."""
+    """Compose the explicit test twin or the activated network-free Qwen provider."""
 
     mode = _required_environment(_WORKER_EMBEDDING_PROVIDER_ENV)
     raw_dimension = _required_environment(_WORKER_EMBEDDING_DIMENSION_ENV)
@@ -289,30 +270,11 @@ def _embedding_provider() -> EmbeddingProvider:
         raise ValueError("Supply worker configuration is not available")
     if mode == "twin":
         return DeterministicEmbeddingTwin(dimension)
-    if mode != "external":
-        raise ValueError("Supply worker configuration is not available")
-    raw_timeout = os.environ.get("CONTEXT_ENGINE_WORKER_EMBEDDING_TIMEOUT_SECONDS")
-    if raw_timeout is None:
-        timeout_seconds = 30.0
-    else:
-        try:
-            timeout_seconds = float(raw_timeout)
-        except ValueError:
-            raise ValueError("Supply worker configuration is not available") from None
-    return ExternalEmbeddingProvider(
-        ExternalEmbeddingConfiguration(
-            endpoint=_required_environment("CONTEXT_ENGINE_WORKER_EMBEDDING_ENDPOINT"),
-            model=_required_environment("CONTEXT_ENGINE_WORKER_EMBEDDING_MODEL"),
-            api_key=_required_environment("CONTEXT_ENGINE_WORKER_EMBEDDING_API_KEY"),
-            dimension=dimension,
-            batch_size=_required_bounded_integer_environment(
-                "CONTEXT_ENGINE_WORKER_EMBEDDING_BATCH_SIZE",
-                minimum=1,
-                maximum=256,
-            ),
-            timeout_seconds=timeout_seconds,
+    if mode == "qwen-local":
+        return LocalQwenEmbeddingProvider(
+            Path(_required_environment(_WORKER_EMBEDDING_MODEL_DIR_ENV))
         )
-    )
+    raise ValueError("Supply worker configuration is not available")
 
 
 def _run_one_file_import() -> int:

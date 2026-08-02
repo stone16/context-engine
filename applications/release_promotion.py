@@ -49,14 +49,15 @@ from engine.runtime.release_lineage import (
     CONTENT_SCHEMA_REF_V0,
     CURATION_PROFILE_DIGEST_V0,
     CURATION_PROFILE_REF_V0,
-    DOGFOOD_VECTOR_INDEX_PROFILE_DIGEST_V1,
-    DOGFOOD_VECTOR_INDEX_PROFILE_REF_V1,
     INDEX_SCHEMA_REF_V0,
     PACKAGE_SCHEMA_REF_V0,
+    QWEN_VECTOR_INDEX_PROFILE_DIGEST_V1,
+    QWEN_VECTOR_INDEX_PROFILE_REF_V1,
     RUNTIME_PROFILE_DIGEST_V0,
     RUNTIME_PROFILE_REF_V0,
     RUNTIME_TOKENIZER_REF_V0,
 )
+from engine.supply import QWEN3_EMBEDDING_PROFILE
 
 RELEASE_EVALUATION_SIGNING_KEY_VERSION_ENV = (
     "CONTEXT_ENGINE_RELEASE_EVALUATION_SIGNING_KEY_VERSION"
@@ -214,11 +215,17 @@ def _manifest(
         content_schema_ref=CONTENT_SCHEMA_REF_V0,
     )
     index = IndexProfileRef(
-        profile_ref=DOGFOOD_VECTOR_INDEX_PROFILE_REF_V1,
-        profile_digest=DOGFOOD_VECTOR_INDEX_PROFILE_DIGEST_V1,
+        profile_ref=QWEN_VECTOR_INDEX_PROFILE_REF_V1,
+        profile_digest=QWEN_VECTOR_INDEX_PROFILE_DIGEST_V1,
         content_profile_digest=content.profile_digest,
         content_schema_ref=content.content_schema_ref,
         index_schema_ref=INDEX_SCHEMA_REF_V0,
+        embedding_profile_document=(
+            QWEN3_EMBEDDING_PROFILE.canonical_json()
+        ),
+        embedding_profile_digest=(
+            QWEN3_EMBEDDING_PROFILE.profile_digest
+        ),
     )
     runtime = RuntimeProfileRef(
         profile_ref=RUNTIME_PROFILE_REF_V0,

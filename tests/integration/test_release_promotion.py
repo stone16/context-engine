@@ -8,12 +8,13 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from threading import Barrier
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import UUID, uuid4, uuid5
 
 import pytest
 from sqlalchemy import Engine, text
 from sqlalchemy.exc import DBAPIError
 
+from adapters.embeddings import DeterministicEmbeddingTwin
 from engine.learning import (
     ContentProfileRef,
     ContextLearning,
@@ -39,6 +40,7 @@ from engine.learning import (
 )
 from engine.persistence import DatabaseConfiguration, create_database_engine
 from engine.persistence.releases import PostgreSQLReleaseStore
+from engine.supply import DETERMINISTIC_TWIN_EMBEDDING_PROFILE
 
 pytestmark = pytest.mark.integration
 
@@ -55,10 +57,15 @@ _IMMUTABLE_RELEASE_TABLES = (
     "release_candidate",
     "release_manifest",
 )
+_TEST_REVISION_NAMESPACE = UUID("f4b13f31-0845-4ac4-a43a-87c6f490b1a7")
 
 
 def _digest(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _test_revision_id(organization_id: UUID) -> UUID:
+    return uuid5(_TEST_REVISION_NAMESPACE, str(organization_id))
 
 
 @dataclass(slots=True)
@@ -83,7 +90,7 @@ class _ReleaseDatabaseFixture:
         self._engine = engine
         self._organization_ids: list[UUID] = []
 
-    def create_organization(self) -> UUID:
+    def create_organization(self, *, seed_corpus: bool = True) -> UUID:
         organization_id = uuid4()
         with self._engine.begin() as connection:
             connection.execute(
@@ -93,6 +100,59 @@ class _ReleaseDatabaseFixture:
                 ),
                 {"organization_id": organization_id},
             )
+            if seed_corpus:
+                revision_id = _test_revision_id(organization_id)
+                resource_ref = f"resource:release-test:{organization_id}"
+                embedding = DeterministicEmbeddingTwin().embed(("release test",))[0]
+                connection.execute(text("SET CONSTRAINTS ALL DEFERRED"))
+                connection.execute(
+                    text(
+                        "INSERT INTO context_resource ("
+                        "organization_id, resource_ref, source_ref, "
+                        "active_revision_id, tombstoned) VALUES ("
+                        ":organization_id, :resource_ref, 'source:release-test', "
+                        ":revision_id, false)"
+                    ),
+                    {
+                        "organization_id": organization_id,
+                        "resource_ref": resource_ref,
+                        "revision_id": revision_id,
+                    },
+                )
+                connection.execute(
+                    text(
+                        "INSERT INTO context_revision ("
+                        "organization_id, resource_ref, revision_id) VALUES ("
+                        ":organization_id, :resource_ref, :revision_id)"
+                    ),
+                    {
+                        "organization_id": organization_id,
+                        "resource_ref": resource_ref,
+                        "revision_id": revision_id,
+                    },
+                )
+                connection.execute(
+                    text(
+                        "INSERT INTO context_fragment ("
+                        "organization_id, resource_ref, revision_id, fragment_ref, "
+                        "ordinal, content, projection_kind, embedding, "
+                        "embedding_profile_digest) VALUES ("
+                        ":organization_id, :resource_ref, :revision_id, "
+                        "'fragment:release-test', 0, 'release test', 'body', "
+                        "CAST(:embedding AS vector), :embedding_profile_digest)"
+                    ),
+                    {
+                        "organization_id": organization_id,
+                        "resource_ref": resource_ref,
+                        "revision_id": revision_id,
+                        "embedding": "["
+                        + ",".join(repr(value) for value in embedding)
+                        + "]",
+                        "embedding_profile_digest": (
+                            DETERMINISTIC_TWIN_EMBEDDING_PROFILE.profile_digest
+                        ),
+                    },
+                )
         self._organization_ids.append(organization_id)
         return organization_id
 
@@ -384,6 +444,56 @@ class _ReleaseDatabaseFixture:
         if not self._organization_ids:
             return
         with self._engine.begin() as connection:
+            connection.execute(
+                text(
+                    "ALTER TABLE context_fragment DISABLE TRIGGER "
+                    "context_fragment_reject_mutation"
+                )
+            )
+            connection.execute(
+                text(
+                    "ALTER TABLE context_revision DISABLE TRIGGER "
+                    "context_revision_reject_mutation"
+                )
+            )
+            connection.execute(text("SET CONSTRAINTS ALL DEFERRED"))
+            for organization_id in reversed(self._organization_ids):
+                parameters = {"organization_id": organization_id}
+                connection.execute(
+                    text(
+                        "DELETE FROM context_fragment "
+                        "WHERE organization_id = :organization_id"
+                    ),
+                    parameters,
+                )
+                connection.execute(
+                    text(
+                        "DELETE FROM context_revision "
+                        "WHERE organization_id = :organization_id"
+                    ),
+                    parameters,
+                )
+                connection.execute(
+                    text(
+                        "DELETE FROM context_resource "
+                        "WHERE organization_id = :organization_id"
+                    ),
+                    parameters,
+                )
+            connection.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+            connection.execute(
+                text(
+                    "ALTER TABLE context_revision ENABLE TRIGGER "
+                    "context_revision_reject_mutation"
+                )
+            )
+            connection.execute(
+                text(
+                    "ALTER TABLE context_fragment ENABLE TRIGGER "
+                    "context_fragment_reject_mutation"
+                )
+            )
+        with self._engine.begin() as connection:
             for table_name in _IMMUTABLE_RELEASE_TABLES:
                 connection.execute(
                     text(
@@ -522,6 +632,7 @@ def _manifest(
     organization_id: UUID,
     *,
     suffix: str,
+    empty: bool = False,
 ) -> ReleaseManifest:
     content = ContentProfileRef(
         profile_ref=f"content-{suffix}",
@@ -545,16 +656,27 @@ def _manifest(
         tokenizer_ref="empty-tokenizer-v1",
         package_schema_ref="context-package-v1",
     )
-    return ReleaseManifest.m0_empty(
+    curation = CurationProfileRef.off(
+        profile_ref=f"curation-off-{suffix}",
+        profile_digest=_digest(f"curation-profile-{suffix}"),
+    )
+    if empty:
+        return ReleaseManifest.m0_empty(
+            organization_id=organization_id,
+            manifest_ref=f"manifest-{suffix}",
+            content_profile=content,
+            index_profile=index,
+            runtime_profile=runtime,
+            curation_profile=curation,
+        )
+    return ReleaseManifest(
         organization_id=organization_id,
         manifest_ref=f"manifest-{suffix}",
         content_profile=content,
         index_profile=index,
         runtime_profile=runtime,
-        curation_profile=CurationProfileRef.off(
-            profile_ref=f"curation-off-{suffix}",
-            profile_digest=_digest(f"curation-profile-{suffix}"),
-        ),
+        curation_profile=curation,
+        active_revision_refs=(str(_test_revision_id(organization_id)),),
     )
 
 
@@ -642,11 +764,11 @@ def _assert_empty_publication_state(
     assert state.audits == ()
 
 
-def test_fresh_database_promotes_initial_empty_curation_off_manifest_through_context_learning(  # noqa: E501
+def test_context_learning_refuses_empty_curation_off_manifest_at_database_gate(
     release_database: _ReleaseDatabaseFixture,
     guarded_learning_engine: Engine,
 ) -> None:
-    organization_id = release_database.create_organization()
+    organization_id = release_database.create_organization(seed_corpus=False)
     scenario = _scenario(
         guarded_learning_engine,
         organization_id,
@@ -656,38 +778,26 @@ def test_fresh_database_promotes_initial_empty_curation_off_manifest_through_con
     candidate = _candidate(
         organization_id,
         suffix=f"initial-{uuid4().hex}",
+        manifest=_manifest(
+            organization_id,
+            suffix=f"empty-{uuid4().hex}",
+            empty=True,
+        ),
     )
 
     _assert_empty_publication_state(release_database, organization_id)
     evaluation = _persist_and_evaluate(scenario, candidate)
     _assert_empty_publication_state(release_database, organization_id)
 
-    receipt = _promote(
-        scenario,
-        promotion_ref=f"promotion-initial-{uuid4().hex}",
-        candidate=candidate,
-        evaluation=evaluation,
-    )
+    with pytest.raises(ReleasePromotionRejected):
+        _promote(
+            scenario,
+            promotion_ref=f"promotion-initial-{uuid4().hex}",
+            candidate=candidate,
+            evaluation=evaluation,
+        )
 
-    state = release_database.state(organization_id)
-    assert receipt.active_generation == 1
-    assert receipt.manifest_ref == candidate.manifest.manifest_ref
-    assert state.pointer is not None
-    assert state.pointer["active_generation"] == 1
-    assert state.pointer["manifest_digest"] == candidate.manifest.manifest_digest
-    assert len(state.audits) == 1
-    assert state.audits[0]["promotion_ref"] == receipt.promotion_ref
-    assert state.audits[0]["expected_active_generation"] == 0
-    assert state.audits[0]["expected_base_manifest_digest"] is None
-    assert state.manifests == (
-        {
-            "manifest_ref": candidate.manifest.manifest_ref,
-            "manifest_digest": candidate.manifest.manifest_digest,
-            "lineage_digest": candidate.manifest.lineage_digest,
-            "curation_mode": "curation_off",
-            "active_revision_refs": [],
-        },
-    )
+    _assert_empty_publication_state(release_database, organization_id)
 
 
 def test_concurrent_first_or_later_promotions_commit_exactly_one_pointer_and_audit(

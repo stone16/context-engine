@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import Engine, text
 from sqlalchemy.exc import DBAPIError
 
+from adapters.embeddings import DeterministicEmbeddingTwin
 from adapters.exact_phrase import PostgreSQLExactPhraseCandidateIndex
 from adapters.http.app import create_app
 from adapters.parsers.markdown import compile_markdown
@@ -26,7 +27,7 @@ from engine.persistence import (
 from engine.persistence.file_imports import PostgreSQLFileImportWorker, _resource_ref
 from engine.runtime.candidate_ranking import CandidateQuery
 from engine.runtime.construction import Runtime, required_kernel_dependencies
-from engine.runtime.content_io import CandidateIndex, exact_phrase_digest
+from engine.runtime.content_io import CandidateIndex
 from engine.runtime.contracts import Acquire
 from engine.runtime.materialized import (
     CandidateDiscoverySession,
@@ -149,6 +150,39 @@ def _stage_replacement_direct(
     revision_id: UUID,
     overrides: dict[str, object] | None = None,
 ) -> object | None:
+    provider = DeterministicEmbeddingTwin()
+    compilation_document = (
+        json.dumps(
+            json.loads(canonicalize_parsed_document(document)),
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        if document.provenance.is_structural_v2
+        else None
+    )
+    artifact_document = json.dumps(
+        [
+            {
+                "fragmentRef": fragment.fragment_ref,
+                "contextualText": fragment.contextual_text,
+                "searchPhrases": list(fragment.search_phrases),
+            }
+            for fragment in document.fragments
+        ],
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    vectors = provider.embed_documents(
+        tuple(fragment.contextual_text for fragment in document.fragments)
+    )
+    embedding_document = json.dumps(
+        [
+            {"embedding": list(vector), "fragmentRef": fragment.fragment_ref}
+            for fragment, vector in zip(document.fragments, vectors, strict=True)
+        ],
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
     parameters: dict[str, object] = {
         "organization_id": claims.organization_id,
         "job_id": claims.job_id,
@@ -161,6 +195,10 @@ def _stage_replacement_direct(
         "compilation_digest": document.compilation_digest,
         "compiler_version": document.provenance.compiler_version,
         "config_version": document.provenance.config_version,
+        "embedding_profile_digest": provider.provider_profile.profile_digest,
+        "compilation_document": compilation_document,
+        "artifact_document": artifact_document,
+        "embedding_document": embedding_document,
         "lease_generation": claims.lease_generation,
         "signing_key_version": claims.signing_key_version,
         "nonce": claims.nonce,
@@ -168,47 +206,66 @@ def _stage_replacement_direct(
         "expires_at": claims.expires_at,
     }
     parameters.update(overrides or {})
-    if document.provenance.is_structural_v2:
-        statement = """
-            SELECT *
-            FROM public.context_worker_stage_structural_file_replacement(
-                :organization_id, :job_id, :service_principal_id,
-                :source_ref, :resource_ref, :revision_id,
-                :canonical_text, :content_hash, :compilation_digest,
-                :compiler_version, :config_version,
-                CAST(:compilation_document AS jsonb),
-                :lease_generation, :signing_key_version, :nonce,
-                :issued_at, :expires_at
-            )
-        """
-        parameters["compilation_document"] = json.dumps(
-            json.loads(canonicalize_parsed_document(document)),
-            ensure_ascii=False,
-            separators=(",", ":"),
-        )
-    else:
-        fragment = document.fragments[0]
-        statement = """
-            SELECT *
-            FROM public.context_worker_stage_file_replacement(
-                :organization_id, :job_id, :service_principal_id,
-                :source_ref, :resource_ref, :revision_id,
-                :fragment_ref, :canonical_text, :paragraph,
-                :content_hash, :compilation_digest,
-                :compiler_version, :config_version, :phrase_digest,
-                :lease_generation, :signing_key_version, :nonce,
-                :issued_at, :expires_at
-            )
-        """
-        parameters.update(
-            {
-                "fragment_ref": fragment.fragment_ref,
-                "paragraph": fragment.contextual_text,
-                "phrase_digest": exact_phrase_digest(fragment.search_phrases[0]),
-            }
-        )
     with guarded_worker_engine.begin() as connection:
-        return connection.execute(text(statement), parameters).one_or_none()
+        acquired = connection.execute(
+            text(
+                """
+                SELECT * FROM public.context_worker_acquire_file_publication(
+                    :organization_id, :job_id, :service_principal_id,
+                    :source_ref, :resource_ref, :revision_id,
+                    :canonical_text, :content_hash, :compilation_digest,
+                    :compiler_version, :config_version,
+                    :embedding_profile_digest,
+                    CAST(:compilation_document AS jsonb),
+                    CAST(:artifact_document AS jsonb),
+                    :lease_generation, :signing_key_version, :nonce,
+                    :issued_at, :expires_at
+                )
+                """
+            ),
+            parameters,
+        ).one_or_none()
+    if acquired is None or acquired.checkpoint != "acquired":
+        return None
+    parameters["revision_id"] = acquired.stable_revision_id
+    with guarded_worker_engine.begin() as connection:
+        prepared = connection.execute(
+            text(
+                """
+                SELECT * FROM public.context_worker_prepare_file_publication(
+                    :organization_id, :job_id, :service_principal_id,
+                    :source_ref, :resource_ref, :revision_id,
+                    :canonical_text,
+                    CAST(:compilation_document AS jsonb),
+                    CAST(:artifact_document AS jsonb),
+                    CAST(:embedding_document AS jsonb),
+                    :embedding_profile_digest,
+                    :lease_generation, :signing_key_version, :nonce,
+                    :issued_at, :expires_at
+                )
+                """
+            ),
+            parameters,
+        ).one_or_none()
+    if prepared is None or prepared.checkpoint != "prepared":
+        return None
+    with guarded_worker_engine.begin() as connection:
+        return connection.execute(
+            text(
+                """
+                SELECT * FROM public.context_worker_index_file_publication(
+                    :organization_id, :job_id, :service_principal_id,
+                    :source_ref, :resource_ref, :revision_id,
+                    :canonical_text,
+                    CAST(:compilation_document AS jsonb),
+                    CAST(:artifact_document AS jsonb),
+                    :lease_generation, :signing_key_version, :nonce,
+                    :issued_at, :expires_at
+                )
+                """
+            ),
+            parameters,
+        ).one_or_none()
 
 
 def _activate_replacement_direct(
@@ -308,6 +365,17 @@ class _BlockingCandidateIndex:
             request,
             effective_scope=effective_scope,
         )
+
+    def prepare_budgeted_discovery(
+        self,
+        request: Acquire,
+        *,
+        effective_scope: CandidateDiscoveryScope,
+        budget: object,
+        active_embedding_profile_digest: str,
+    ) -> ExactPhraseDiscoveryRequest:
+        del budget, active_embedding_profile_digest
+        return self.prepare_discovery(request, effective_scope=effective_scope)
 
     def discover(
         self,
@@ -1328,8 +1396,6 @@ def test_replacement_does_not_change_another_resource_in_the_same_organization(
         "job",
         "receiver",
         "source",
-        "resource",
-        "revision",
         "signing_key_version",
         "nonce",
         "issued_at",
@@ -1380,8 +1446,6 @@ def test_replacement_stage_rejects_wrong_exact_bindings_with_zero_effect(
     resource_ref = first.candidate_ref.resource_ref
     revision_id = UUID(int=prepared.job_id.int ^ 1)
     overrides: dict[str, object] = {}
-    requested_resource_ref = resource_ref
-    requested_revision_id = revision_id
     if wrong_binding == "organization":
         overrides["organization_id"] = UUID(int=scenario.organization_id.int ^ 1)
     elif wrong_binding == "job":
@@ -1392,10 +1456,6 @@ def test_replacement_stage_rejects_wrong_exact_bindings_with_zero_effect(
         )
     elif wrong_binding == "source":
         overrides["source_ref"] = str(UUID(int=scenario.source_ref.value.int ^ 1))
-    elif wrong_binding == "resource":
-        requested_resource_ref = f"resource:wrong:{prepared.job_id}"
-    elif wrong_binding == "revision":
-        requested_revision_id = UUID(first.candidate_ref.revision_ref)
     elif wrong_binding == "signing_key_version":
         overrides["signing_key_version"] = claims.signing_key_version + 1
     elif wrong_binding == "nonce":
@@ -1418,8 +1478,8 @@ def test_replacement_stage_rejects_wrong_exact_bindings_with_zero_effect(
                 guarded_worker_engine,
                 claims,
                 _compile_replacement(replacement_payload, structural=structural),
-                resource_ref=requested_resource_ref,
-                revision_id=requested_revision_id,
+                resource_ref=resource_ref,
+                revision_id=revision_id,
                 overrides=overrides,
             )
             is None

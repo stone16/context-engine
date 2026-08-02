@@ -3,19 +3,27 @@
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import Callable
 from contextlib import closing
 from dataclasses import dataclass, field
 from hashlib import shake_256
 from math import sqrt
-from typing import IO, BinaryIO, cast
+from pathlib import Path
+from threading import Lock
+from typing import IO, Any, BinaryIO, cast
 from urllib.error import HTTPError
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
+from adapters._bounded_call import BoundedCallUnavailable, invoke_bounded
+from adapters.local_embedding_model import load_qwen_local_model
 from engine.supply.embeddings import (
     CONTEXT_FRAGMENT_EMBEDDING_DIMENSION,
+    DETERMINISTIC_TWIN_EMBEDDING_PROFILE,
+    QWEN3_EMBEDDING_PROFILE,
     EmbeddingProfile,
+    EmbeddingProviderProfile,
     EmbeddingProviderUnavailable,
     EmbeddingVector,
     validate_embedding_batch,
@@ -23,6 +31,7 @@ from engine.supply.embeddings import (
 
 _MAX_EXTERNAL_RESPONSE_BYTES = 64 * 1024 * 1024
 _DEFAULT_TIMEOUT_SECONDS = 30.0
+_LOCAL_EMBEDDING_TIMEOUT_SECONDS = 30.0
 EmbeddingTransport = Callable[[Request, float, int], bytes]
 
 
@@ -124,6 +133,12 @@ class ExternalEmbeddingProvider:
     def profile(self) -> EmbeddingProfile:
         return EmbeddingProfile(self._configuration.dimension)
 
+    @property
+    def provider_profile(self) -> EmbeddingProviderProfile:
+        """External identity remains unavailable for Runtime activation."""
+
+        raise EmbeddingProviderUnavailable("Embedding provider is unavailable")
+
     def embed(self, inputs: tuple[str, ...]) -> tuple[EmbeddingVector, ...]:
         if (
             type(inputs) is not tuple
@@ -194,6 +209,11 @@ class ExternalEmbeddingProvider:
             self.profile,
         )
 
+    def embed_documents(
+        self, inputs: tuple[str, ...]
+    ) -> tuple[EmbeddingVector, ...]:
+        return self.embed(inputs)
+
 
 class DeterministicEmbeddingTwin:
     """Stable content-derived vectors for tests without network egress."""
@@ -209,6 +229,12 @@ class DeterministicEmbeddingTwin:
     @property
     def profile(self) -> EmbeddingProfile:
         return self._profile
+
+    @property
+    def provider_profile(self) -> EmbeddingProviderProfile:
+        if self._profile.dimension != DETERMINISTIC_TWIN_EMBEDDING_PROFILE.dimension:
+            raise EmbeddingProviderUnavailable("Embedding provider is unavailable")
+        return DETERMINISTIC_TWIN_EMBEDDING_PROFILE
 
     def embed(self, inputs: tuple[str, ...]) -> tuple[EmbeddingVector, ...]:
         if (
@@ -229,3 +255,88 @@ class DeterministicEmbeddingTwin:
             norm = sqrt(sum(component * component for component in unscaled))
             vectors.append(tuple(component / norm for component in unscaled))
         return validate_embedding_batch(inputs, vectors, self.profile)
+
+    def embed_documents(
+        self, inputs: tuple[str, ...]
+    ) -> tuple[EmbeddingVector, ...]:
+        return self.embed(inputs)
+
+
+class LocalQwenEmbeddingProvider:
+    """Hash-verified, network-free Qwen provider for the activated local carrier."""
+
+    __slots__ = ("_inference_lock", "_model")
+
+    def __init__(self, model_dir: Path) -> None:
+        if not isinstance(model_dir, Path):
+            raise TypeError("Local embedding provider requires a model directory")
+        self._inference_lock = Lock()
+        try:
+            model = invoke_bounded(
+                lambda: load_qwen_local_model(model_dir),
+                timeout_seconds=_LOCAL_EMBEDDING_TIMEOUT_SECONDS,
+                thread_name="context-engine-local-embedding",
+                in_flight_lock=self._inference_lock,
+            )
+        except BoundedCallUnavailable:
+            raise EmbeddingProviderUnavailable(
+                "Embedding provider is unavailable"
+            ) from None
+        self._model: Any = model
+
+    @property
+    def profile(self) -> EmbeddingProfile:
+        return QWEN3_EMBEDDING_PROFILE.vector_profile
+
+    @property
+    def provider_profile(self) -> EmbeddingProviderProfile:
+        return QWEN3_EMBEDDING_PROFILE
+
+    def embed(self, inputs: tuple[str, ...]) -> tuple[EmbeddingVector, ...]:
+        return self._embed_with_prefix(inputs, QWEN3_EMBEDDING_PROFILE.query_prefix)
+
+    def embed_documents(
+        self, inputs: tuple[str, ...]
+    ) -> tuple[EmbeddingVector, ...]:
+        return self._embed_with_prefix(inputs, QWEN3_EMBEDDING_PROFILE.document_prefix)
+
+    def _embed_with_prefix(
+        self,
+        inputs: tuple[str, ...],
+        prefix: str,
+    ) -> tuple[EmbeddingVector, ...]:
+        if (
+            type(inputs) is not tuple
+            or not inputs
+            or any(type(value) is not str or not value.strip() for value in inputs)
+        ):
+            raise EmbeddingProviderUnavailable("Embedding provider is unavailable")
+        try:
+            prefixed = [prefix + value for value in inputs]
+            raw_vectors = invoke_bounded(
+                lambda: self._model.encode(
+                    prefixed,
+                    batch_size=QWEN3_EMBEDDING_PROFILE.batch_size,
+                    convert_to_numpy=True,
+                    normalize_embeddings=True,
+                    precision=QWEN3_EMBEDDING_PROFILE.precision,
+                    show_progress_bar=False,
+                ),
+                timeout_seconds=_LOCAL_EMBEDDING_TIMEOUT_SECONDS,
+                thread_name="context-engine-local-embedding",
+                in_flight_lock=self._inference_lock,
+            )
+            vectors: list[EmbeddingVector] = []
+            for raw_vector in raw_vectors:
+                if len(raw_vector) != 1024:
+                    raise ValueError
+                truncated = tuple(float(value) for value in raw_vector[:384])
+                norm = math.sqrt(sum(value * value for value in truncated))
+                if not math.isfinite(norm) or norm == 0.0:
+                    raise ValueError
+                vectors.append(tuple(value / norm for value in truncated))
+            return validate_embedding_batch(inputs, tuple(vectors), self.profile)
+        except (BoundedCallUnavailable, Exception):
+            raise EmbeddingProviderUnavailable(
+                "Embedding provider is unavailable"
+            ) from None

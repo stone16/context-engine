@@ -152,18 +152,26 @@ CONTEXT_ENGINE_DOGFOOD_PRINCIPAL_REF
 CONTEXT_ENGINE_DOGFOOD_AGENT_VERSION_REF
 CONTEXT_ENGINE_DOGFOOD_APPLICATION_REF
 CONTEXT_ENGINE_DOGFOOD_AUTHENTICATION_BINDING_REF
-CONTEXT_ENGINE_DOGFOOD_EMBEDDING_PROVIDER=deterministic-twin-v1
+CONTEXT_ENGINE_DOGFOOD_EMBEDDING_PROVIDER=qwen3-embedding-0.6b-local-v1
+CONTEXT_ENGINE_DOGFOOD_EMBEDDING_MODEL_DIR
 ```
 
-Before activation, freshly reimport the File corpus with the Supply worker's
-network-free `twin` embedding mode and use the explicit release procedure
-below. The active Release binds the deterministic model and contextual-fragment
-input profile; a mismatch fails composition. Then run the API with an explicit
-loopback host. A valid composition reports `runtime_delivery: ACTIVE`; missing
-or partial configuration fails closed. The dogfood secret must come from one
-local secret source and must never be committed or printed.
+The model directory must contain exactly the ten regular, non-symlink artifact
+paths listed for `models.primary.artifacts` in
+[`eval/embedding-benchmark/model-registry.json`](./eval/embedding-benchmark/model-registry.json).
+Extra files, missing files, changed digests, and symlinks all refuse before
+inference; a stock model download must be reduced to that registered manifest.
 
-External query embeddings, production or multi-user authentication, remote
+Before activation, freshly reimport the File corpus with the Supply worker's
+network-free `qwen-local` embedding mode and the same pinned local model
+directory, then use the explicit release procedure below. The active Release
+binds the exact Qwen profile and Fragment vectors; any mismatch fails closed.
+Then run the API with an explicit loopback host. A valid composition reports
+`runtime_delivery: ACTIVE`; missing or partial configuration fails closed. The
+dogfood secret must come from one local secret source and must never be committed
+or printed.
+
+External/network query embeddings, production or multi-user authentication, remote
 network exposure, group/public delivery, dogfood `OpenCitation`, `Continue`, hybrid retrieval, and
 non-File providers remain `NOT_ACTIVE`; see
 [ADR-0068](./docs/decisions/0068-activate-loopback-dogfood-runtime.md).
@@ -202,10 +210,11 @@ WorkerLease signing key, the server-side JSON root registry
 ceiling (`CONTEXT_ENGINE_WORKER_MAX_FILE_BYTES`, default 1 MiB, accepted only
 within 1–64 MiB). They also require an explicit embedding provider mode and the
 schema-pinned dimension (`CONTEXT_ENGINE_WORKER_EMBEDDING_PROVIDER` and
-`CONTEXT_ENGINE_WORKER_EMBEDDING_DIMENSION`). CI uses the network-free `twin`
-mode. Real deployments select `external` and supply endpoint, model, and API key
-only through the corresponding `CONTEXT_ENGINE_WORKER_EMBEDDING_*` environment
-variables, including a required batch size bounded to 1–256 inputs per request.
+`CONTEXT_ENGINE_WORKER_EMBEDDING_DIMENSION`). CI may use the network-free `twin`
+test mode. The activated local carrier selects `qwen-local` and supplies the
+hash-verified model directory through
+`CONTEXT_ENGINE_WORKER_EMBEDDING_MODEL_DIR`; external/network worker composition
+remains blocked pending issue #217.
 Markdown files are discovered recursively. **A caller may not
 supply Organization, Source, job, or token** — that is the point of the boundary.
 Single-cycle output remains limited to `dispatched` / `no_work` / `refused`.

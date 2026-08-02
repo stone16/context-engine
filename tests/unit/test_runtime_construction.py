@@ -3,6 +3,8 @@ from typing import cast
 
 import pytest
 
+from adapters.embeddings import DeterministicEmbeddingTwin
+from adapters.pgvector import PostgreSQLVectorCandidateIndex
 from engine.runtime import (
     KernelDependencies,
     Runtime,
@@ -101,4 +103,23 @@ def test_runtime_rejects_composed_index_without_discovery_preparation() -> None:
                 prohibited_empty_path_content_io(),
                 index=incomplete,
             ),
+        )
+
+
+def test_runtime_rejects_vector_index_when_budgeted_preparation_is_removed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delattr(
+        PostgreSQLVectorCandidateIndex,
+        "prepare_budgeted_discovery",
+    )
+    index = PostgreSQLVectorCandidateIndex(DeterministicEmbeddingTwin())
+
+    with pytest.raises(
+        RuntimeConfigurationError,
+        match="candidate_index is incomplete",
+    ):
+        Runtime(
+            required_kernel_dependencies(),
+            candidate_index=cast(CandidateIndex, index),
         )

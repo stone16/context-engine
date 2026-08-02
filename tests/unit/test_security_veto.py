@@ -194,12 +194,13 @@ def test_nontracked_thresholds_can_never_render_an_authoritative_pass() -> None:
 def test_test_private_security_factory_is_never_imported_by_production() -> None:
     repository_root = Path(__file__).resolve().parents[2]
     importers = [
-        path
-        for path in repository_root.rglob("*.py")
-        if "tests" not in path.relative_to(repository_root).parts
-        and (
-            "tests.support.eval_security" in path.read_text(encoding="utf-8")
-            or "harness_security_result" in path.read_text(encoding="utf-8")
+        repository_root / source
+        for source in _production_sources()
+        if (
+            "tests.support.eval_security"
+            in (repository_root / source).read_text(encoding="utf-8")
+            or "harness_security_result"
+            in (repository_root / source).read_text(encoding="utf-8")
         )
     ]
 
@@ -209,6 +210,8 @@ def test_test_private_security_factory_is_never_imported_by_production() -> None
 _EXCLUDED_TREES = frozenset(
     {".context-engine", ".git", ".venv", "node_modules", "tests", "third_party"}
 )
+# ``third_party`` is license/SBOM-governed vendored source, not first-party
+# production composition; the test-private import veto scans every first-party tree.
 _SECURITY_RESULT_TYPES = ("CaseSecurityObservation", "CaseSecurityViolation")
 
 
