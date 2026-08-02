@@ -232,7 +232,7 @@ sdk/typescript/    由 OpenAPI 生成的 HTTP client
 eval/              golden set、切片门禁、裁判、安全目录
 migrations/        Alembic 迁移
 tests/             unit / integration / catalog / process 套件
-docs/              实现权威、60 篇 ADR、威胁模型、PRD、研究
+docs/              实现权威、编号 ADR、威胁模型、PRD、研究
 CONTEXT.md         领域术语表（只有术语，不含实现）
 PLAN.md            愿景、原则、路线图、Non-goals
 ```
@@ -243,7 +243,7 @@ PLAN.md            愿景、原则、路线图、Non-goals
   授权、检索或投递行为；这些行为全部在 `engine/` 里。这正是「生产 composition
   root 不能替换、跳过或装配 no-op `AuthorizationKernel`」能成为一条**可强制执行的
   性质**、而不只是一句口号的原因。
-- **测试量约为实现量的 3 倍。** `engine/` 约 2.1 万行，`tests/` 约 6.8 万行。
+- **测试量约为实现量的 3 倍。** `tests/` 的体量远大于 `engine/`。
   对一个核心主张是安全不变量的项目来说，**可执行的证据本身就是产品**。
 
 ### 什么可插拔，什么不可
@@ -290,7 +290,7 @@ IM 交付由 `BotDelivery` 这个受信深模块完成。它从 M2 起作为独�
 | [CONTEXT.md](./CONTEXT.md) | 领域术语表——身份、安全、内容与生命周期术语的仓库权威 |
 | [PLAN.md](./PLAN.md) | 愿景、不可谈判的设计原则、路线图、明确的 Non-goals |
 | [STATUS.md](./STATUS.md) | 逐 Issue 的能力激活台账与证据边界 |
-| [ADR 索引](./docs/decisions/README.md) | 60 篇决策记录：边界、依赖方向、禁止捷径、重访触发器 |
+| [ADR 索引](./docs/decisions/README.md) | 编号决策记录：边界、依赖方向、禁止捷径、重访触发器 |
 | [实现设计](./docs/design/2026-07-18-context-engine-implementation-design.md) | 集成后的实现权威与里程碑边界 |
 | [威胁模型](./docs/security/context-engine-threat-model.md) | 资产、信任边界、威胁与 hard oracles |
 | [Program PRD](./docs/agents/prd-contextengine-implementation.md) · [Epic Tech Spec](./docs/specs/2026-07-19-context-engine-implementation-epic.md) | 需求、100 条 user story、contract shape、work package |

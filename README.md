@@ -544,9 +544,9 @@ Two structural facts worth noticing:
   behavior lives there. All of it lives in `engine/`, which is what makes "the
   production composition root cannot substitute, skip, or wire a no-op
   `AuthorizationKernel`" an enforceable property rather than a slogan.
-- **Tests outweigh implementation ~3:1.** Roughly 21k lines under `engine/`
-  against roughly 68k lines under `tests/`. For a project whose central claim is
-  a security invariant, the executable evidence *is* the product.
+- **Tests outweigh implementation ~3:1.** The `tests/` tree is several times the
+  size of `engine/`. For a project whose central claim is a security invariant,
+  the executable evidence *is* the product.
 
 ### What is pluggable, and what is not
 
