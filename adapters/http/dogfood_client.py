@@ -317,7 +317,11 @@ class DogfoodResolveClient:
             )
         outcome = _as_object(json.loads(raw), "dogfood resolve response")
         self._configuration.reject_secret_material(outcome)
-        if outcome.get("kind") not in {"resolved", "request_not_available"}:
+        kind = outcome.get("kind")
+        if type(kind) is not str or kind not in {
+            "resolved",
+            "request_not_available",
+        }:
             raise DogfoodEvaluationUnavailable("dogfood resolve outcome is unavailable")
         return outcome
 

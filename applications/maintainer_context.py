@@ -297,6 +297,7 @@ def _capture_envelope(raw: dict[str, object]) -> dict[str, object]:
     document = cast(dict[str, object], grant)
     if (
         frozenset(document) != REDACTED_EGRESS_GRANT_FIELDS
+        or type(document["kind"]) is not str
         or document["kind"] not in EGRESS_GRANT_KINDS
         or document["value"] != REDACTED_EGRESS_GRANT
     ):

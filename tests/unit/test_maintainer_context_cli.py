@@ -501,6 +501,29 @@ def test_served_rejection_status_classes_map_to_stable_exit_classes() -> None:
         assert SECRET not in completed.stderr
 
 
+def test_unhashable_served_outcome_kind_refuses_without_traceback() -> None:
+    outcomes: tuple[dict[str, object], ...] = (
+        {"kind": ["resolved"]},
+        {"kind": {"resolved": True}},
+    )
+    for outcome in outcomes:
+        with _resolve_server(outcome) as (base_url, _):
+            completed = _command(
+                "query",
+                "Refuse an unhashable served discriminator",
+                environment={
+                    **os.environ,
+                    "CONTEXT_ENGINE_DOGFOOD_BASE_URL": base_url,
+                    "CONTEXT_ENGINE_DOGFOOD_SECRET": SECRET,
+                },
+            )
+
+        assert completed.returncode == 11
+        assert completed.stdout == ""
+        assert completed.stderr == "context-engine-context: service_unavailable\n"
+        assert "Traceback" not in completed.stderr
+
+
 def test_unreachable_loopback_transport_stays_service_unavailable() -> None:
     completed = _command(
         "query",
@@ -909,6 +932,9 @@ def test_only_the_exact_redacted_grant_bypasses_the_live_grant_schema() -> None:
             "leftover": LIVE_EGRESS_GRANT,
         },
         {"kind": "unknown", "value": REDACTED_EGRESS_GRANT},
+        {"kind": ["model"], "value": REDACTED_EGRESS_GRANT},
+        {"kind": {"model": True}, "value": REDACTED_EGRESS_GRANT},
+        {"kind": "model", "value": ["REDACTED-EGRESS-GRANT"]},
     ):
         completed = _command(
             "inspect",
@@ -922,6 +948,7 @@ def test_only_the_exact_redacted_grant_bypasses_the_live_grant_schema() -> None:
         assert completed.returncode == 12
         assert completed.stdout == ""
         assert completed.stderr == "context-engine-context: malformed_package\n"
+        assert "Traceback" not in completed.stderr
         assert LIVE_EGRESS_GRANT not in completed.stdout + completed.stderr
 
     accepted = _command(
