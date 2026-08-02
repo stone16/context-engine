@@ -104,7 +104,7 @@ content. This activates no pi consumer, MCP Adapter, `Continue`, dogfood
 
 | ADR | Activates |
 |---|---|
-| [0090](./docs/decisions/0090-admit-a-co-resident-local-evidence-console.md), [0093](./docs/decisions/0093-activate-leased-rich-markdown-and-revision-link-graph.md) | Explicitly authenticated server-rendered loopback UI, private File citation reopening, and separately Control-authorized source/import/Article jobs through schema-hidden typed HTTP carriers while OpenAPI v0 remains frozen; imports satisfying ADR-0093's closed v1-refusal and whole-document rich-syntax checks receive a content-free handoff to the activated File scan and exact leased worker path |
+| [0090](./docs/decisions/0090-admit-a-co-resident-local-evidence-console.md), [0093](./docs/decisions/0093-activate-leased-rich-markdown-and-revision-link-graph.md) | Explicitly authenticated server-rendered loopback UI, private File citation reopening, and separately Control-authorized source/import/Article jobs through schema-hidden typed HTTP carriers while OpenAPI v0 remains frozen; imports satisfying ADR-0093's whole-document rich-v3 acceptance check receive a content-free handoff to the activated File scan and exact leased worker path |
 
 Feedback persists through the current Runtime identity and exact ContextRun
 binding, with no Control or release-publication authority. Numeric Hit Test scores
