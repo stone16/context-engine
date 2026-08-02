@@ -139,7 +139,7 @@ MIT 许可证并不构成复制理由。本次没有发现一个比本仓原生 
 |---|---|---|
 | deployment org 配置 | trusted ingress 选择已登记 Organization；不接收 body 自报 org | deployment binding 可定位 Organization，不能由 agent 覆写 |
 | actor/session identity | identity adapter 验证并构造 `AuthenticatedInvocation` | QM actor string 不是 Principal；必须映射为 current Membership |
-| current personal/room scope | 可形成 caller-controlled `RequestNarrowing` 或已登记 consumer profile 的 target ceiling | 只能收窄，不能扩大 EffectiveScope |
+| current personal/room scope | private current destination 只能从 redeemed `TrustedDeliveryContext` 取得；snapshot `RequestNarrowing` 不表达 live target | 不是 caller grant；显式其他 conversation 需要新 versioned narrowing contract |
 | org/team/current layers | server-derived source capability set 与 AgentVersion delegation ceiling | layer 顺序是 UX，不是 grant |
 | channel/group audience | QM trusted surface adapter提供完整原始 membership facts；Engine 构造 `AudienceSnapshot` | caller body、agent prompt、缓存成员列表都不可信 |
 | channel/message target | server 解析为 exact bounded target；opaque reference 可以定位但不授权 | prefix、room ID、message ts 都不自动授予内容访问 |
@@ -148,7 +148,7 @@ MIT 许可证并不构成复制理由。本次没有发现一个比本仓原生 
 
 这里有一个硬约束：QM 若接收 cleartext `ContextPackage` 并把内容送入模型，就进入 ContextEngine delivery TCB。它必须是已登记、可审计的 trusted consumer，并证明 Package expiry、Block/Evidence closure 与 per-hop egress；否则初版只能做私有人工 display，不能做 context-bearing generation。不能因为 QM 自己有 capability token 或 model gateway，就跳过本仓的 delivery contract。
 
-## 6. 蓝图一：QM 私有 DM consumer profile
+## 6. 蓝图一：QM 私有 DM consumer slice
 
 这是最小、最值得先做的场景。它复用现有 `Acquire` + HTTP/generated TS SDK，不新增 ContextEngine transport、MCP、memory write 或 effect capability。
 
@@ -181,7 +181,7 @@ sequenceDiagram
 4. consumer 在使用任何 Block 前验证 `expiresAt`，并验证每个 Block 的 exact Evidence closure；malformed、expired、empty 或 unavailable 一律返回“本问题没有可用的已授权上下文”，不能回退到 QM mutable memory 冒充答案依据。
 5. 如内容进入模型，input 只能从这个 current Package 和 matching one-hop `EgressGrant` 构造；wrong provider/audience/purpose/epoch/expiry 必须 outbound bytes = 0。
 6. 模型回答保留 Evidence ref/citation lineage。QM session 可记录回答，但 Package content 不自动复制到 QM memory notebook，也不成为后续 question 的 authority。
-7. 初版只支持 private DM。任何 Slack send/edit/reaction 都是独立 external effect，必须走 `ActionPlane.prepare → perform`；consumer profile 本身不获得写能力。
+7. 初版只支持 private DM。任何 Slack send/edit/reaction 都是独立 external effect，必须走 `ActionPlane.prepare → perform`；registered consumer 本身不获得写能力。
 
 ### 6.2 验收 oracle
 
@@ -235,6 +235,8 @@ flowchart LR
 
 图中的 `Live structured acquisition`、`Source-side auth` 和该 family 的 Evidence 类型目前都还是待 ADR 定义的概念，不是已存在接口。实现不得先写代码再借用 snapshot 名词补解释。
 
+当前 frozen OpenAPI v0 也没有 structured target 字段。首个 private-conversation slice 的 exact conversation 必须来自 ingress redeem 后的 `TrustedDeliveryContext.destination_ref`；request body 仍只有现有 `ContextNeed` 与 snapshot-family narrowing。显式读取另一个 conversation 要等新的 versioned contract，以 nominal structured-target narrowing 只收窄 server-derived capability，不能借 `source_refs/resource_refs` 伪装 live target。
+
 ### 8.1 Spike 前置决策
 
 在任何 carrier 进入 runtime tree 前，至少要接受一份新 ADR/词汇扩展，固定：
@@ -262,11 +264,11 @@ flowchart LR
 
 QM 对 session 的建模比其 retrieval 更值得吸收。它保留 ordered entry tape，memory extractor 明确要求：只有用户自己的话能证明 preference/intent；assistant 二手转述不能；autonomous turn 只能产生 operational fact；secret、credential 和系统 mechanics 应排除（[`per-turn.ts#L10-L35`](https://github.com/yc-software/qm/blob/7f2c916360f1797a8ff2a77ce2ce40c5fabab087/src/memory/strategies/per-turn.ts#L10-L35)）。这些是很好的候选质量 oracle。
 
-但 QM 当前路径在模型提取后直接 `capture` 到 mutable scope notebook（[`per-turn.ts#L125-L147`](https://github.com/yc-software/qm/blob/7f2c916360f1797a8ff2a77ce2ce40c5fabab087/src/memory/strategies/per-turn.ts#L125-L147)）。ContextEngine 不能复制这个发布模型：Learning 只产候选和评估，唯一 promote authority 仍属于 release-operator-authorized `ContextLearning.promote`。
+但 QM 当前路径在模型提取后直接 `capture` 到 mutable scope notebook（[`per-turn.ts#L125-L147`](https://github.com/yc-software/qm/blob/7f2c916360f1797a8ff2a77ce2ce40c5fabab087/src/memory/strategies/per-turn.ts#L125-L147)）。ContextEngine 不能复制这个发布模型：intake 只产候选和评估输入；当前 Revision-bound curation/release contract 不接收 session Memory。未来 governed Memory artifact 若进入 release，唯一 promote authority 仍属于 release-operator-authorized `ContextLearning.promote`。
 
 ### 9.1 前置治理
 
-在读取 QM raw transcript 前先接受独立 ADR，至少包含：
+[ADR-0100](../decisions/0100-admit-session-derived-learning-only-as-governed-candidates.md) 已固定 intake 只能到 governed candidate 的边界。读取 QM raw transcript 前还必须把其中要求的 refining decisions 变成 executable contract，至少闭合：
 
 - explicit consent 的主体、目的、scope、撤回与历史处理；
 - 最小允许字段；默认排除 thinking、tool payload、credential、raw model request、denied content；
@@ -274,7 +276,7 @@ QM 对 session 的建模比其 retrieval 更值得吸收。它保留 ordered ent
 - retention TTL、legal hold、删除、byte reclamation 与 user export；
 - participant validity windows 与多人 session 的每人 consent；
 - source Package/Evidence lineage、speaker attribution 与 assistant/tool output 的非权威性；
-- replay/idempotency、candidate dedupe、human review、eval、promote、rollback；
+- replay/idempotency、candidate dedupe、human review 与 eval；另立 governed Memory artifact/serving ADR 后才能定义 promote、rollback 与 Runtime delivery；
 - Learning 故障绝不改变 active ReleaseManifest。
 
 这些条件闭合前，候选只能从本仓已有 authorized Package evidence + explicit feedback 产生；QM transcript extraction 继续保持 `NOT_ACTIVE`。
@@ -289,8 +291,8 @@ QM 对 session 的建模比其 retrieval 更值得吸收。它保留 ordered ent
 | autonomous cron/watch turn | person preference/intent candidate = 0；允许的 operational candidate 仍需 review |
 | transcript 含 API key、token、cookie、credential path | candidate bytes = 0；redaction canary 必须触发 gate |
 | shared room 中部分 participant 未 consent | 从 raw room tape 产生 candidate = 0 |
-| consent 撤回或 retention 到期 | 后续 intake = 0；删除/export receipt 可核验；active release 不被 silent mutation |
-| 同一 burst replay | 只产生一个 candidate identity；不能重复 promote |
+| consent 撤回或 retention 到期 | 后续 intake = 0；candidate 删除/export receipt 可核验；serving 尚未定义，不能声称 active release 已处理 |
+| 同一 burst replay | 只产生一个 candidate identity；不能形成 serving 或 publication authority |
 | extractor/model unavailable | 没有 candidate；active behavior 不变；不能把 empty 当“用户没有偏好” |
 
 QM 的 memory benchmark 可以作为低成本 baseline：substring notebook、per-turn extraction、consolidation 与无 memory 的 ablation。评价指标必须由 ContextEngine frozen eval 定义，安全 slice 任何失败都是 veto，不能被 recall/answer-quality 分数抵消。
@@ -305,7 +307,7 @@ QM 不改变这些主参考源归属，也不引入新的 Runtime foundation。�
 |---|---|---|
 | Supply/document compilation | 几乎无增量；QM 没有通用 parser/embed/vector pipeline | 否；仍以 RAGFlow/Onyx 与本仓 contract 为主 |
 | Runtime retrieval/assembly | mutable memory 与 prompt concat 提供负 oracle | 否；继续坚持 AuthorizedProjection 与 ContextPackage |
-| Delivery/consumer | personal/shared scope、multi-harness、dynamic self-API、surface pull | **有增量**；新增 QM consumer profile workload，仍只走 HTTP/generated SDK |
+| Delivery/consumer | personal/shared scope、multi-harness、dynamic self-API、surface pull | **有增量**；新增 QM consumer workload，仍只走 HTTP/generated SDK |
 | Group audience | allow intersection/deny union、room/session 行为 | **有增量**；强化 ADR-0003/0013 的真实验收场景 |
 | Structured acquisition | `/v1/surface-context` 提供第一个具体 request-time workload | **有增量**；足以触发设计 spike，不足以激活 carrier |
 | Learning | transcript tape、speaker/autonomous/secret extraction oracle | 增强 OpenViking session→candidate 路线；不改变 Wave 6 治理前置 |
@@ -323,18 +325,20 @@ QM 不改变这些主参考源归属，也不引入新的 Runtime foundation。�
 | Q2：private DM generation | QM 登记为 trusted consumer；Package→AuthorizedModelInput；matching EgressGrant；private answer citations | wrong-hop zero bytes；denied bytes zero；consumer TCB review | **NOT_ACTIVE** |
 | Q3：shared room | trusted surface adapter、AudienceSnapshot、private/public 双 resolve、ActionPlane send-time drift veto | mixed-permission real PG17 security gate；future audience policy | **NOT_ACTIVE** |
 | Q4：structured acquisition spike | glossary/ADR + deterministic surface twin + disposable live-provider experiment | no snapshot-term reuse；freshness/auth/field projection/timeout gates | **NOT_ACTIVE** |
-| Q5：session Learning | consent/retention/encryption/delete-export ADR；candidate/eval/promote chain | raw transcript security/retention gate；human review；rollback | **NOT_ACTIVE** |
+| Q5：session Learning | consent/retention/encryption/delete-export ADR；candidate/review/eval；独立 governed Memory artifact + Runtime serving ADR | raw transcript security/retention gate；serving 前闭合 scope/revocation/Evidence/publication owner | **NOT_ACTIVE** |
 
 顺序约束来自风险而不是开发成本：private display 先证明 consumer obligations；generation 再把 QM 纳入 egress TCB；共享 room 必须等完整 audience 与 effect gate；structured acquisition 必须先固定新 family 的术语；raw session Learning 最后，因为它引入最长的数据生命周期和最多参与者权利。
 
-## 12. 决策建议
+## 12. 维护者决定与已接受 ADR
 
-建议维护者现在接受以下四项结论，不立刻复制或实现 QM 代码：
+维护者于 2026-08-02 接受以下四项方向；这些 ADR 固定边界和后续实施门槛，不自动激活代码或 carrier：
 
-1. **把 QM 定位为 ContextEngine 的目标 consumer/workload，不是第六个内部实现参考源。** 这能保留其产品价值，又不会污染公开 provenance 或安全 authority。
-2. **把 private DM consumer profile 作为首个适配切片。** 初版使用 HTTP/generated TS SDK；先 display，证明 fresh Package/expiry/Evidence/secret contract 后再允许 model generation。
-3. **把 `/v1/surface-context` 认定为 ADR-0061 的首个真实 structured acquisition trigger。** 先开词汇/ADR + disposable spike，不把 live response 存成 fake Revision。
-4. **把 QM session/memory 只登记为 Wave 6 Learning/eval oracle。** consent、retention、encryption、删除/export 与唯一 promote authority未闭合前，不摄取 raw transcript。
+1. **Capability-aware agent UX：**[ADR-0098](../decisions/0098-expose-current-agent-operations-without-granting-authority.md) 接受由版本化 contract + server-owned active registry 生成的短期 operation manifest；它只做 discoverability，不是 grant，也不复制 QM 的手写 route catalog。
+2. **Live Surface Context：**[ADR-0099](../decisions/0099-select-live-surfaces-as-the-first-structured-acquisition-workload.md) 把 ingress 已兑换的 exact private conversation 的 bounded request-time read 选为 ADR-0061 structured acquisition family 的首个 workload；另一个 target 要新 contract version，不能塞进 frozen v0 或把 live response 存成 fake Revision。
+3. **Session Intake：**[ADR-0100](../decisions/0100-admit-session-derived-learning-only-as-governed-candidates.md) 接受 consented、minimized、speaker-provenance-bound session projection 只生成候选；它同时明确当前 Revision-bound curation/release contract 接不住 session Memory。governed Memory artifact、scope/revocation、唯一 publication owner 与 Runtime→ContextPackage serving 必须由后续 ADR 定义，闭合前 candidate 不能进入 serving。
+4. **Deployment/plugin 产品化：**[ADR-0101](../decisions/0101-compose-deployments-from-statically-registered-plugins.md) 接受低优先级的 pinned/static boundary；generic categories、manifest 和 loader 等第二个真实 implementation 或 measured drift 后再设计，不允许 hot load、tenant code、plugin-owned authority 或未经测量的新 service。
+
+QM 仍定位为 ContextEngine 的目标 consumer/workload 与实现研究输入，不是第六个公开实现 authority。private DM 适配若立项，仍应先使用 HTTP/generated TS SDK 做 display consumer，再分别证明 model egress、shared audience 与 external effect。
 
 明确拒绝：QM AuthorizationKernel、QM scope/grant 直映、mutable notebook retrieval、prompt assembler、classifier-as-auth、caller-authored audience、通用 capability bearer、宽 MCP surface、任何绕过 ActionPlane 的 Slack effect。
 
@@ -358,5 +362,9 @@ QM 不改变这些主参考源归属，也不引入新的 Runtime foundation。�
 - [ADR-0052：Package-gated model generation](../decisions/0052-gate-model-generation-by-package.md)
 - [ADR-0061：完整 context layer 与 structured acquisition family](../decisions/0061-commit-to-the-complete-context-layer-thesis.md)
 - [ADR-0088：fresh evidence-bearing Package consumer obligations](../decisions/0088-bind-local-consumers-to-fresh-evidence-bearing-packages.md)
+- [ADR-0098：capability-aware agent operation discovery](../decisions/0098-expose-current-agent-operations-without-granting-authority.md)
+- [ADR-0099：Live Surface structured acquisition workload](../decisions/0099-select-live-surfaces-as-the-first-structured-acquisition-workload.md)
+- [ADR-0100：Session-derived Learning candidates](../decisions/0100-admit-session-derived-learning-only-as-governed-candidates.md)
+- [ADR-0101：static deployment/plugin composition](../decisions/0101-compose-deployments-from-statically-registered-plugins.md)
 - [`CONTEXT.md`](../../CONTEXT.md)：AgentVersion、Evidence、ContextRun、ContextPackage 与 Learning glossary
 - [`STATUS.md`](../../STATUS.md)：当前 active / `NOT_ACTIVE` carrier 边界

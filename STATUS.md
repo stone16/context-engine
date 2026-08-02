@@ -61,11 +61,15 @@ designed, and deliberately not active:
 | General / multi-user Source and Resource ACLs | Dogfood uses current mirrored File access plus Membership field rights. A separate deterministic Feishu twin proves bounded source-native Article ACL ingestion, but no live or general administration carrier is active |
 | General content retrieval | Only the loopback File pgvector dogfood `Acquire` carrier is active |
 | Local consumer expansion | The repo-local Claude Code skill is active only as a single-question display consumer; pi and MCP remain `NOT_ACTIVE` |
+| Capability-aware agent operation discovery | ADR-0098 accepts a future generated short-lived `AgentOperationManifest`; no discovery endpoint, contract version, SDK method, or active manifest carrier exists |
 | `Continue` carrier | The bounded dogfood composition keeps Continue unavailable; its private File `OpenCitation` carrier is active for UI citation closure |
+| Structured acquisition / live surface context | ADR-0099 selects one exact bounded collaboration conversation as the first design workload; structured-family terms, provider carrier, live network, mixed-family Evidence, and surface attachments remain `NOT_ACTIVE` |
 | Federated discovery, source-native authorization | Deterministic refusal only |
 | Runtime model-inference carriers (`rewrite`, `rerank`, `select`) | The governed port is implemented, but no carrier is active until its consuming issue proves the exact profile and grant path, passes the resolve-owned shared `PackageBudgetMeter`, and publishes that meter's cumulative usage in the final package; real provider network calls remain `NOT_ACTIVE` |
 | Live Feishu credentials/network, Slack, Google Docs, and issue #127 Feishu ingestion connectors | Issue #133 activates only twin-bounded downstream private-event verification and exact Sender-effect conformance; live network and ingestion remain separate gates |
 | Group/public delivery, compensating deletes | The Feishu delivery profile is asker-private only; wider audience and compensation remain `NOT_ACTIVE` |
+| Session-derived Learning intake | ADR-0100 accepts only a future consented, minimized, provenance-bound candidate path; raw tape reads/storage, extractor model egress, candidate carrier, governed Memory artifact, release bridge, and Runtime serving remain `NOT_ACTIVE` |
+| Deployment/plugin productization | ADR-0101 bounds any future plugin to static composition at accepted ports, but defers generic categories/manifest/loader until a second implementation or measured drift; tenant code, hot loading, marketplace, and plugin-created service remain `NOT_ACTIVE` |
 | MCP ingress | Held `NOT_ACTIVE` until a real caller exists |
 | Worker dead-letter transition / operator requeue | ADR-0060 adds bounded reclaim only; generation four is left untouched after expiry |
 | Provider polling, delete execution beyond ADR-0057 | See the File Provider ADRs for exact boundaries |

@@ -515,7 +515,7 @@ sdk/typescript/    OpenAPI-generated HTTP client
 eval/              golden sets, slice gates, judges, security catalogs
 migrations/        Alembic migrations
 tests/             unit / integration / catalog / process suites
-docs/              design authority, 60 ADRs, threat model, PRD, research
+docs/              design authority, numbered ADRs, threat model, PRD, research
 CONTEXT.md         domain glossary (terms only, no implementation)
 PLAN.md            vision, principles, roadmap, non-goals
 ```
@@ -576,7 +576,7 @@ masquerade as a passing one.
 | [CONTEXT.md](./CONTEXT.md) | Domain glossary — the repository's authority on identity, security, content, and lifecycle terms |
 | [PLAN.md](./PLAN.md) | Vision, non-negotiable design principles, roadmap, explicit non-goals |
 | [STATUS.md](./STATUS.md) | Per-issue capability activation ledger and evidence boundaries |
-| [ADR index](./docs/decisions/README.md) | 60 decision records: boundaries, dependency direction, forbidden shortcuts, revisit triggers |
+| [ADR index](./docs/decisions/README.md) | Numbered decision records: boundaries, dependency direction, forbidden shortcuts, revisit triggers |
 | [Implementation Design](./docs/design/2026-07-18-context-engine-implementation-design.md) | The integrated implementation authority and milestone boundaries |
 | [Threat Model](./docs/security/context-engine-threat-model.md) | Assets, trust boundaries, threats, hard oracles |
 | [Program PRD](./docs/agents/prd-contextengine-implementation.md) · [Epic Tech Spec](./docs/specs/2026-07-19-context-engine-implementation-epic.md) | Requirements, 100 user stories, contract shapes, work packages |

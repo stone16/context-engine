@@ -598,6 +598,11 @@ and accepted ADRs, not by this glossary.
 - **RuntimeCapability:** a server-owned closed designation of one Runtime
   operation or required adapter behavior. It is never caller-authored authority,
   and availability is checked before Provider, index, or source-content I/O.
+- **AgentOperationManifest:** a future short-lived server-authored discovery
+  projection of operations currently exposed to one authenticated application,
+  bound to the exact AgentVersion used by that request. It introduces no second
+  delegation ceiling and is not a capability, grant, authorization decision,
+  resource inventory, or authority retained across invocations; see ADR-0098.
 - **UNSUPPORTED_CAPABILITY:** the restricted internal refusal category emitted
   when a declared RuntimeCapability has no active carrier. It is not a public
   response code and carries no token, locator, Provider, Source, or Resource
