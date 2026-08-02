@@ -6,7 +6,7 @@ import asyncio
 import json
 import os
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields, is_dataclass
 from typing import Final, cast
 from urllib.parse import urlsplit
 
@@ -70,6 +70,37 @@ def _as_object(value: object, name: str) -> dict[str, object]:
     return cast(dict[str, object], value)
 
 
+def reject_secret_material(secret: object, value: object) -> None:
+    """Reject any value containing the given secret material.
+
+    Local consumers scan without a transport destination; only the exclusion
+    itself is required here, never a loopback URL or a bearer shape.
+    """
+
+    if type(secret) is not str or not secret or secret.isspace():
+        raise DogfoodEvaluationUnavailable("secret material is unavailable")
+    pending: list[object] = [value]
+    while pending:
+        current = pending.pop()
+        if type(current) is str:
+            if secret in current:
+                raise DogfoodSecretExclusionUnavailable(
+                    "dogfood secret exclusion is unavailable"
+                )
+            continue
+        if type(current) is dict:
+            document = cast(dict[object, object], current)
+            pending.extend(document.keys())
+            pending.extend(document.values())
+            continue
+        if type(current) in {list, tuple}:
+            sequence = cast(list[object] | tuple[object, ...], current)
+            pending.extend(sequence)
+            continue
+        if is_dataclass(current) and not isinstance(current, type):
+            pending.extend(getattr(current, item.name) for item in fields(current))
+
+
 @dataclass(frozen=True, slots=True)
 class DogfoodHttpConfiguration:
     """Loopback-only destination and redacted bearer secret."""
@@ -110,23 +141,7 @@ class DogfoodHttpConfiguration:
     def reject_secret_material(self, value: object) -> None:
         """Reject any decoded value containing the configured bearer."""
 
-        pending = [value]
-        while pending:
-            current = pending.pop()
-            if type(current) is str:
-                if self.secret in current:
-                    raise DogfoodSecretExclusionUnavailable(
-                        "dogfood secret exclusion is unavailable"
-                    )
-                continue
-            if type(current) is dict:
-                document = cast(dict[object, object], current)
-                pending.extend(document.keys())
-                pending.extend(document.values())
-                continue
-            if type(current) in {list, tuple}:
-                sequence = cast(list[object] | tuple[object, ...], current)
-                pending.extend(sequence)
+        reject_secret_material(self.secret, value)
 
     @classmethod
     def load(
@@ -222,6 +237,7 @@ class DogfoodResolveClient:
         except (
             httpx.HTTPError,
             OSError,
+            RecursionError,
             ValueError,
             UnicodeDecodeError,
             ValidationError,

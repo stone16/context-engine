@@ -7,16 +7,19 @@ import json
 import os
 import sys
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Final
+from typing import Final, cast
 from uuid import uuid4
 
 from pydantic import TypeAdapter, ValidationError
 
 from adapters.http.contracts import (
     AcquireWire,
+    CitationNotAvailableWire,
     ContextPackageWire,
+    RequestNotAvailableWire,
     ResolutionOutcomeWire,
     ResolvedWire,
 )
@@ -26,6 +29,7 @@ from adapters.http.dogfood_client import (
     DogfoodHttpConfiguration,
     DogfoodResolveClient,
     DogfoodSecretExclusionUnavailable,
+    reject_secret_material,
     validate_dogfood_query,
     validate_dogfood_request_id,
 )
@@ -37,6 +41,7 @@ EXIT_SERVICE_UNAVAILABLE: Final = 11
 EXIT_MALFORMED_PACKAGE: Final = 12
 EXIT_EXPIRED_PACKAGE: Final = 13
 EXIT_INVALID_CONFIGURATION: Final = 14
+REDACTED_EGRESS_GRANT: Final = "REDACTED-EGRESS-GRANT"
 
 _OUTCOME_ADAPTER: Final[TypeAdapter[ResolutionOutcomeWire]] = TypeAdapter(
     ResolutionOutcomeWire
@@ -129,6 +134,7 @@ def _query(arguments: argparse.Namespace) -> int:
         )
         validated = _OUTCOME_ADAPTER.validate_python(outcome)
         _require_exact_outcome_package_digest(outcome, validated)
+        document = _redacted_outcome(outcome)
     except (ValidationError, ValueError):
         print("context-engine-context: malformed_package", file=sys.stderr)
         return EXIT_MALFORMED_PACKAGE
@@ -138,35 +144,32 @@ def _query(arguments: argparse.Namespace) -> int:
     except DogfoodEvaluationUnavailable:
         print("context-engine-context: service_unavailable", file=sys.stderr)
         return EXIT_SERVICE_UNAVAILABLE
-    if outcome.get("kind") == "request_not_available":
+    if type(validated) is not ResolvedWire:
         _render_refusal(
             format_name=arguments.format,
-            raw=outcome,
-            category="request_not_available",
+            raw=document,
+            category=_refusal_category(validated),
         )
-        return EXIT_EXPLICIT_REFUSAL
-    if type(validated) is not ResolvedWire:
-        print("context-engine-context: explicit_refusal", file=sys.stderr)
         return EXIT_EXPLICIT_REFUSAL
     package = validated.package
     try:
-        _validate_lifetime(package)
+        expires_at = _validated_expiry(package)
     except ValueError:
         print("context-engine-context: malformed_package", file=sys.stderr)
         return EXIT_MALFORMED_PACKAGE
-    if datetime.now(tz=UTC) >= package.expiresAt.astimezone(UTC):
+    if datetime.now(tz=UTC) >= expires_at:
         print("context-engine-context: expired_package", file=sys.stderr)
         return EXIT_EXPIRED_PACKAGE
     refusal = _coverage_refusal(package)
     if refusal is not None:
         _render_refusal(
             format_name=arguments.format,
-            raw=outcome,
+            raw=document,
             category=refusal,
         )
         return EXIT_EXPLICIT_REFUSAL
     if arguments.format == "json":
-        print(json.dumps(outcome, ensure_ascii=False, separators=(",", ":")))
+        print(json.dumps(document, ensure_ascii=False, separators=(",", ":")))
     else:
         print(_render_human(package))
     return EXIT_SUCCESS
@@ -186,9 +189,14 @@ def _read_capture(path: Path) -> object:
 def _inspect(arguments: argparse.Namespace) -> int:
     try:
         raw = _read_capture(arguments.capture)
-        package, package_document = _validated_capture(raw)
-        _validate_lifetime(package)
-    except (OSError, UnicodeDecodeError, ValueError, ValidationError):
+        capture = _validated_capture(raw)
+    except (
+        OSError,
+        RecursionError,
+        UnicodeDecodeError,
+        ValueError,
+        ValidationError,
+    ):
         print("context-engine-context: malformed_package", file=sys.stderr)
         return EXIT_MALFORMED_PACKAGE
     try:
@@ -196,45 +204,115 @@ def _inspect(arguments: argparse.Namespace) -> int:
     except (DogfoodEvaluationUnavailable, DogfoodSecretExclusionUnavailable):
         print("context-engine-context: invalid_configuration", file=sys.stderr)
         return EXIT_INVALID_CONFIGURATION
-    if datetime.now(tz=UTC) >= package.expiresAt.astimezone(UTC):
+    if isinstance(capture, _RefusedCapture):
+        _render_refusal(
+            format_name=arguments.format,
+            raw=capture.document,
+            category=capture.category,
+        )
+        return EXIT_EXPLICIT_REFUSAL
+    if datetime.now(tz=UTC) >= capture.expires_at:
         print("context-engine-context: expired_package", file=sys.stderr)
         return EXIT_EXPIRED_PACKAGE
-    refusal = _coverage_refusal(package)
+    refusal = _coverage_refusal(capture.package)
     if refusal is not None:
         _render_refusal(
             format_name=arguments.format,
-            raw=package_document,
+            raw=capture.document,
             category=refusal,
         )
         return EXIT_EXPLICIT_REFUSAL
     if arguments.format == "json":
         print(
             json.dumps(
-                package_document,
+                capture.document,
                 ensure_ascii=False,
                 separators=(",", ":"),
             )
         )
     else:
-        print(_render_human(package))
+        print(_render_human(capture.package))
     return EXIT_SUCCESS
 
 
-def _validated_capture(raw: object) -> tuple[ContextPackageWire, object]:
+@dataclass(frozen=True, slots=True)
+class _PackageCapture:
+    """One validated capture Package with its exact rendered document."""
+
+    package: ContextPackageWire
+    document: object
+    expires_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class _RefusedCapture:
+    """One schema-valid closed public refusal captured without a Package."""
+
+    category: str
+    document: object
+
+
+def _validated_capture(raw: object) -> _PackageCapture | _RefusedCapture:
     if type(raw) is dict and "kind" in raw:
-        outcome = _OUTCOME_ADAPTER.validate_python(raw)
+        outcome = _OUTCOME_ADAPTER.validate_python(_capture_envelope(raw))
         if type(outcome) is not ResolvedWire:
-            raise ValueError("capture did not contain a ContextPackage")
+            return _RefusedCapture(
+                category=_refusal_category(outcome),
+                document=raw,
+            )
         package_document = raw.get("package")
         if type(package_document) is not dict:
             raise ValueError("capture Package is unavailable")
         if not verify_context_package_public_document(package_document):
             raise ValueError("capture Package digest is unavailable")
-        return outcome.package, package_document
+        return _PackageCapture(
+            package=outcome.package,
+            document=package_document,
+            expires_at=_validated_expiry(outcome.package),
+        )
     package = _PACKAGE_ADAPTER.validate_python(raw)
     if not verify_context_package_public_document(raw):
         raise ValueError("capture Package digest is unavailable")
-    return package, raw
+    return _PackageCapture(
+        package=package,
+        document=raw,
+        expires_at=_validated_expiry(package),
+    )
+
+
+def _capture_envelope(raw: dict[str, object]) -> dict[str, object]:
+    """Validate this caller's own redacted capture without a live grant."""
+
+    grant = raw.get("egressGrant")
+    if type(grant) is not dict:
+        return raw
+    if cast(dict[str, object], grant).get("value") != REDACTED_EGRESS_GRANT:
+        return raw
+    envelope = dict(raw)
+    envelope["egressGrant"] = None
+    return envelope
+
+
+def _redacted_outcome(outcome: dict[str, object]) -> dict[str, object]:
+    """Replace only the redeemable grant value with the fixed sentinel.
+
+    This read caller never performs egress, so the one-hop capability is the
+    single exact-wire value it refuses to emit or persist.  Every other field
+    and the grant's own structure stay exactly as the server sent them.
+    """
+
+    grant = outcome.get("egressGrant")
+    if type(grant) is not dict:
+        return outcome
+    redacted = dict(cast(dict[str, object], grant))
+    live_value = redacted.get("value")
+    if type(live_value) is not str:
+        return outcome
+    redacted["value"] = REDACTED_EGRESS_GRANT
+    document = dict(outcome)
+    document["egressGrant"] = redacted
+    reject_secret_material(live_value, document)
+    return document
 
 
 def _require_exact_outcome_package_digest(
@@ -319,22 +397,46 @@ def _coverage_refusal(package: ContextPackageWire) -> str | None:
     return reason or "explicit_refusal"
 
 
-def _validate_lifetime(package: ContextPackageWire) -> None:
-    as_of = package.asOf.astimezone(UTC)
-    expires_at = package.expiresAt.astimezone(UTC)
-    if expires_at - as_of != timedelta(seconds=package.ttlSeconds):
+def _refusal_category(outcome: ResolutionOutcomeWire) -> str:
+    if type(outcome) is RequestNotAvailableWire:
+        return "request_not_available"
+    if type(outcome) is CitationNotAvailableWire:
+        return "citation_not_available"
+    return "explicit_refusal"
+
+
+def _utc_instant(value: datetime) -> datetime:
+    """Require one timezone-aware public instant normalizable to UTC.
+
+    A captured naive instant would otherwise be reinterpreted in the local
+    zone, which can report an already-expired Package as current.
+    """
+
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError("public instant must be timezone-aware")
+    try:
+        return value.astimezone(UTC)
+    except (OverflowError, OSError, ValueError):
+        raise ValueError("public instant is not UTC-normalizable") from None
+
+
+def _validated_expiry(package: ContextPackageWire) -> datetime:
+    as_of = _utc_instant(package.asOf)
+    expires_at = _utc_instant(package.expiresAt)
+    try:
+        lifetime = timedelta(seconds=package.ttlSeconds)
+    except (OverflowError, ValueError):
+        raise ValueError("Package lifetime is unavailable") from None
+    if expires_at - as_of != lifetime:
         raise ValueError("Package lifetime is inconsistent")
+    return expires_at
 
 
 def _reject_configured_secret(value: object) -> None:
     secret = os.environ.get(DOGFOOD_SECRET_ENV)
     if secret is None:
         return
-    configuration = DogfoodHttpConfiguration(
-        base_url="http://127.0.0.1:1",
-        secret=secret,
-    )
-    configuration.reject_secret_material(value)
+    reject_secret_material(secret, value)
 
 
 def _render_refusal(
@@ -350,7 +452,7 @@ def _render_refusal(
 
 
 def _instant(value: datetime) -> str:
-    return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
+    return _utc_instant(value).isoformat().replace("+00:00", "Z")
 
 
 def main(argv: Sequence[str] | None = None) -> None:

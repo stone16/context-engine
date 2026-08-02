@@ -16,6 +16,8 @@ from engine.runtime.package_digest import context_package_digest
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 SECRET = "maintainer-cli-dogfood-secret-at-least-32-bytes"
 EVIDENCE_REF = "ev_" + "a" * 64
+LIVE_EGRESS_GRANT = "egrm_" + "e" * 64
+REDACTED_EGRESS_GRANT = "REDACTED-EGRESS-GRANT"
 
 
 def _package_document() -> dict[str, object]:
@@ -656,6 +658,254 @@ def test_empty_authorized_set_is_explicit_and_not_a_corpus_answer() -> None:
     assert completed.stderr == (
         "context-engine-context: empty_authorized_set\n"
     )
+
+
+def test_query_json_redacts_live_egress_grant_but_keeps_its_structure(
+    tmp_path: Path,
+) -> None:
+    package = _package_document()
+    outcome: dict[str, object] = {
+        "kind": "resolved",
+        "package": package,
+        "egressGrant": {"kind": "model", "value": LIVE_EGRESS_GRANT},
+    }
+    with _resolve_server(outcome) as (base_url, _):
+        completed = _command(
+            "query",
+            "Do not persist a redeemable capability",
+            "--format",
+            "json",
+            environment={
+                **os.environ,
+                "CONTEXT_ENGINE_DOGFOOD_BASE_URL": base_url,
+                "CONTEXT_ENGINE_DOGFOOD_SECRET": SECRET,
+            },
+        )
+
+    assert completed.returncode == 0, completed.stderr
+    assert LIVE_EGRESS_GRANT not in completed.stdout
+    assert LIVE_EGRESS_GRANT not in completed.stderr
+    emitted = json.loads(completed.stdout)
+    assert emitted["egressGrant"] == {
+        "kind": "model",
+        "value": REDACTED_EGRESS_GRANT,
+    }
+    assert emitted["kind"] == "resolved"
+    assert emitted["package"] == package
+
+    capture = tmp_path / "redacted-capture.json"
+    capture.write_text(completed.stdout, encoding="utf-8")
+    assert LIVE_EGRESS_GRANT not in capture.read_text(encoding="utf-8")
+
+    inspected = _command(
+        "inspect",
+        str(capture),
+        "--format",
+        "json",
+        environment=os.environ.copy(),
+    )
+
+    assert inspected.returncode == 0, inspected.stderr
+    assert json.loads(inspected.stdout) == package
+
+
+def test_coverage_refusal_json_never_emits_the_live_egress_grant() -> None:
+    package = _package_document()
+    package["blocks"] = []
+    package["evidence"] = []
+    package["coverage"] = {
+        "status": "empty",
+        "reason": "no_authorized_evidence",
+    }
+    package["budgetUsage"] = {
+        "tokens": 0,
+        "providerCalls": 0,
+        "costMicrounits": 0,
+        "elapsedMs": 0,
+    }
+    package.pop("packageDigest")
+    package["packageDigest"] = context_package_digest(package)
+    outcome: dict[str, object] = {
+        "kind": "resolved",
+        "package": package,
+        "egressGrant": {"kind": "channel", "value": "egrc_" + "c" * 64},
+    }
+    with _resolve_server(outcome) as (base_url, _):
+        completed = _command(
+            "query",
+            "Refuse without handing over a capability",
+            "--format",
+            "json",
+            environment={
+                **os.environ,
+                "CONTEXT_ENGINE_DOGFOOD_BASE_URL": base_url,
+                "CONTEXT_ENGINE_DOGFOOD_SECRET": SECRET,
+            },
+        )
+
+    assert completed.returncode == 10
+    assert "egrc_" + "c" * 64 not in completed.stdout
+    emitted = json.loads(completed.stdout)
+    assert emitted["egressGrant"] == {
+        "kind": "channel",
+        "value": REDACTED_EGRESS_GRANT,
+    }
+
+
+def test_captured_request_refusal_inspects_as_the_same_explicit_refusal() -> None:
+    refusal = {"kind": "request_not_available", "retryable": False}
+
+    human = _command(
+        "inspect",
+        "-",
+        environment=os.environ.copy(),
+        input_text=json.dumps(refusal),
+    )
+    machine = _command(
+        "inspect",
+        "-",
+        "--format",
+        "json",
+        environment=os.environ.copy(),
+        input_text=json.dumps(refusal),
+    )
+
+    assert human.returncode == 10
+    assert human.stdout == ""
+    assert human.stderr == "context-engine-context: request_not_available\n"
+    assert machine.returncode == 10
+    assert json.loads(machine.stdout) == refusal
+    assert machine.stderr == ""
+
+
+def test_unknown_capture_envelope_stays_malformed() -> None:
+    for capture in (
+        {"kind": "not_a_public_outcome"},
+        {"kind": "request_not_available", "retryable": True},
+        {"kind": "resolved"},
+    ):
+        completed = _command(
+            "inspect",
+            "-",
+            environment=os.environ.copy(),
+            input_text=json.dumps(capture),
+        )
+
+        assert completed.returncode == 12
+        assert completed.stdout == ""
+        assert completed.stderr == "context-engine-context: malformed_package\n"
+
+
+def test_naive_package_instants_refuse_before_any_render() -> None:
+    package = _package_document()
+    package["asOf"] = "2099-08-02T12:00:00"
+    package["expiresAt"] = "2099-08-02T12:05:00"
+    evidence = cast(list[dict[str, object]], package["evidence"])[0]
+    evidence["authorizationAsOf"] = "2099-08-02T12:00:00"
+    package.pop("packageDigest")
+    package["packageDigest"] = context_package_digest(package)
+
+    inspected = _command(
+        "inspect",
+        "-",
+        environment=os.environ.copy(),
+        input_text=json.dumps(package),
+    )
+    outcome: dict[str, object] = {
+        "kind": "resolved",
+        "package": package,
+        "egressGrant": None,
+    }
+    with _resolve_server(outcome) as (base_url, _):
+        queried = _command(
+            "query",
+            "Never reinterpret an instant in the local zone",
+            environment={
+                **os.environ,
+                "CONTEXT_ENGINE_DOGFOOD_BASE_URL": base_url,
+                "CONTEXT_ENGINE_DOGFOOD_SECRET": SECRET,
+            },
+        )
+
+    for completed in (inspected, queried):
+        assert completed.returncode == 12
+        assert completed.stdout == ""
+        assert completed.stderr == "context-engine-context: malformed_package\n"
+        assert "Authorized maintainer excerpt" not in completed.stderr
+
+
+def test_unrepresentable_package_lifetime_refuses_without_traceback() -> None:
+    package = _package_document()
+    package["ttlSeconds"] = 10**20
+    package.pop("packageDigest")
+    package["packageDigest"] = context_package_digest(package)
+
+    completed = _command(
+        "inspect",
+        "-",
+        environment=os.environ.copy(),
+        input_text=json.dumps(package),
+    )
+
+    assert completed.returncode == 12
+    assert completed.stdout == ""
+    assert completed.stderr == "context-engine-context: malformed_package\n"
+
+
+def test_deeply_nested_capture_is_malformed_without_traceback() -> None:
+    completed = _command(
+        "inspect",
+        "-",
+        environment=os.environ.copy(),
+        input_text="[" * 2_000 + "]" * 2_000,
+    )
+
+    assert completed.returncode == 12
+    assert completed.stdout == ""
+    assert completed.stderr == "context-engine-context: malformed_package\n"
+    assert "Traceback" not in completed.stderr
+
+
+def test_inspection_secret_scan_needs_no_transport_configuration() -> None:
+    short_secret = "short-local-secret"
+    environment = os.environ.copy()
+    environment.pop("CONTEXT_ENGINE_DOGFOOD_BASE_URL", None)
+    environment["CONTEXT_ENGINE_DOGFOOD_SECRET"] = short_secret
+    package = _package_document()
+
+    rendered = _command(
+        "inspect",
+        "-",
+        "--format",
+        "json",
+        environment=environment,
+        input_text=json.dumps(package),
+    )
+
+    leaking = _package_document()
+    blocks = cast(list[dict[str, object]], leaking["blocks"])
+    blocks[0]["text"] = short_secret
+    leaking["budgetUsage"] = {
+        "tokens": len(short_secret.encode("utf-8")),
+        "providerCalls": 0,
+        "costMicrounits": 0,
+        "elapsedMs": 1,
+    }
+    leaking.pop("packageDigest")
+    leaking["packageDigest"] = context_package_digest(leaking)
+    refused = _command(
+        "inspect",
+        "-",
+        environment=environment,
+        input_text=json.dumps(leaking),
+    )
+
+    assert rendered.returncode == 0, rendered.stderr
+    assert json.loads(rendered.stdout) == package
+    assert refused.returncode == 14
+    assert refused.stdout == ""
+    assert refused.stderr == "context-engine-context: invalid_configuration\n"
+    assert short_secret not in refused.stderr
 
 
 def test_partial_stale_or_unavailable_coverage_is_distinguishable() -> None:

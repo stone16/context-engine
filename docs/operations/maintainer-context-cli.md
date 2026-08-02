@@ -54,6 +54,15 @@ uv run context-engine-context query \
   --format json > .context-engine/context-package.json
 ```
 
+The single deliberate exception to that exactness is the one-hop
+`egressGrant`. This caller never performs model or channel egress, so it never
+emits or persists a redeemable grant: the `egressGrant` object, its `kind`, and
+every other field stay exactly as the server sent them, while the secret
+`value` alone is replaced by the fixed sentinel `REDACTED-EGRESS-GRANT`. That
+substitution is the only value this CLI ever changes; a capture carrying the
+sentinel still inspects normally. Redeeming a grant requires a fresh resolve by
+an authorized egress caller.
+
 The ignored `.context-engine/` location above is optional and
 non-authoritative. A capture is already-delivered content: protect it according
 to the Package retention policy and delete it when it is no longer needed. The
@@ -65,7 +74,10 @@ CLI keeps no persisted state itself.
 for standard input. The bytes are untrusted. The entire closed public envelope
 and Package schema, package digest, exact Block/Evidence
 closure, Evidence decision lineage, budget accounting, lifetime, coverage, and
-expiry are validated before any content is rendered:
+expiry are validated before any content is rendered. Package instants must be
+timezone-aware and normalizable to UTC; a naive or unrepresentable instant is
+malformed, never silently reinterpreted in the local zone. A captured public
+refusal is reported as that same explicit refusal, not as malformed input:
 
 ```bash
 uv run context-engine-context inspect \
@@ -90,9 +102,9 @@ content-free public refusal/package shape exactly where one exists.
 | Exit | Class | Meaning |
 |---:|---|---|
 | 0 | success | Current, valid, sufficient Package rendered |
-| 10 | explicit refusal | Request unavailable, empty authorized set, or typed coverage gap |
+| 10 | explicit refusal | Request unavailable (resolved or captured), empty authorized set, or typed coverage gap |
 | 11 | service unavailable | Loopback resolve transport or served capability unavailable |
-| 12 | malformed Package | Closed schema, digest, lineage, lifetime, or capture validation failed |
+| 12 | malformed Package | Closed schema, digest, lineage, lifetime, instant, or capture validation failed |
 | 13 | expired Package | `expiresAt` is at or before inspection/render time |
 | 14 | invalid local configuration | URL, bearer, request, budget, narrowing, or secret-exclusion input is invalid |
 

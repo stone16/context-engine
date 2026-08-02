@@ -162,6 +162,16 @@ def test_installed_cli_queries_inspects_and_refuses_real_composition(
         refused = _run_cli("inspect", str(invalid_capture))
 
     assert captured_envelope == envelope
+    grant = envelope["egressGrant"]
+    assert grant is None or (
+        isinstance(grant, dict)
+        and grant["kind"] in {"model", "channel"}
+        and grant["value"] == "REDACTED-EGRESS-GRANT"
+    )
+    persisted = capture.read_text(encoding="utf-8")
+    for redeemable in ("egrm_", "egrc_"):
+        assert redeemable not in machine.stdout
+        assert redeemable not in persisted
     assert inspected.returncode == 0, inspected.stderr
     assert TARGET_TEXT in inspected.stdout
     assert "citationOpen: NOT_ACTIVE" in inspected.stdout
