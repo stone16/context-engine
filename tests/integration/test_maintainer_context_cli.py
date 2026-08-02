@@ -22,6 +22,10 @@ from engine.persistence import DatabaseConfiguration
 from tests.integration.test_dogfood_runtime_activation import (
     QUERY,
     TARGET_TEXT,
+    # The helpers below compose the real dogfood app against that module's
+    # embedding twin. pytest applies an autouse fixture only to the module
+    # holding it, so this module must import the twin with them.
+    _compose_qwen_test_twin,  # noqa: F401
     _configuration,
     _environment,
     _publish,
