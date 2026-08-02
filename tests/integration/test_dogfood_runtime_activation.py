@@ -391,12 +391,16 @@ async def _mcp_acquire_session(
         stdio_client(parameters) as (read_stream, write_stream),
         ClientSession(read_stream, write_stream) as session,
     ):
-        await session.initialize()
-        listed = await session.list_tools()
+        await asyncio.wait_for(session.initialize(), timeout=10)
+        listed = await asyncio.wait_for(session.list_tools(), timeout=10)
         assert [tool.name for tool in listed.tools] == [MCP_TOOL_NAME]
         outcomes: list[dict[str, object]] = []
         for arguments in requests:
-            result = await session.call_tool(MCP_TOOL_NAME, arguments=arguments)
+            result = await session.call_tool(
+                MCP_TOOL_NAME,
+                arguments=arguments,
+                read_timeout_seconds=30,
+            )
             assert result.is_error is False
             assert result.content == []
             assert isinstance(result.structured_content, dict)

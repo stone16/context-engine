@@ -77,11 +77,13 @@ owning no authorization or content lifecycle.
    non-loopback exposure.
 7. Delivery is `DirectDelivery` to the one authenticated local agent consumer.
    The exact HTTP document may carry its opaque existing `egressGrant` field,
-   but the MCP adapter does not accept, inspect, redeem, cache, forward, or
-   assign MCP semantics to it. Any host-to-model or host-to-channel disclosure
-   remains outside this adapter and must use the existing current-Package,
-   matching-grant controlled egress seam. MCP activation grants no arbitrary
-   host permission to forward cleartext.
+   and the MCP adapter passes it only inside that unchanged outcome. The adapter
+   does not accept a grant from the host, inspect, redeem, cache, extract, or
+   forward it to another service or channel, and assigns it no MCP semantics.
+   Any host-to-model or host-to-channel disclosure remains outside this adapter
+   and must use the existing current-Package, matching-grant controlled egress
+   seam. MCP activation grants no arbitrary host permission to forward
+   cleartext.
 8. `Continue`, `OpenCitation`, generation, ModelGateway, Sender,
    `ActionPlane.prepare`/`perform`, group/public dual resolve, remote HTTP MCP,
    multi-tenant or multi-user identity selection, `DeliveryEvidenceRef`, MCP

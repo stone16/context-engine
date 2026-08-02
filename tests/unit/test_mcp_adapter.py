@@ -8,7 +8,7 @@ import sys
 import time
 from copy import deepcopy
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from threading import Event, Thread
+from threading import Thread
 from typing import Any, cast
 
 import pytest
@@ -130,7 +130,7 @@ class RecordingResolveCaller:
         self._outcome = outcome
         self.calls: list[tuple[dict[str, object], str]] = []
 
-    def resolve_acquire_document(
+    async def resolve_acquire_document_async(
         self,
         *,
         acquire: dict[str, object],
@@ -256,7 +256,7 @@ def test_mcp_collapses_non_outcome_failures_to_one_content_free_error(
     failure: Exception,
 ) -> None:
     class FailingCaller:
-        def resolve_acquire_document(
+        async def resolve_acquire_document_async(
             self,
             *,
             acquire: dict[str, object],
@@ -285,10 +285,10 @@ def test_mcp_collapses_non_outcome_failures_to_one_content_free_error(
 
 
 def test_mcp_keeps_protocol_loop_responsive_during_blocking_http_call() -> None:
-    slow_call_started = Event()
+    slow_call_started = asyncio.Event()
 
     class SlowCaller:
-        def resolve_acquire_document(
+        async def resolve_acquire_document_async(
             self,
             *,
             acquire: dict[str, object],
@@ -296,7 +296,7 @@ def test_mcp_keeps_protocol_loop_responsive_during_blocking_http_call() -> None:
         ) -> dict[str, object]:
             del acquire, request_id
             slow_call_started.set()
-            time.sleep(0.2)
+            await asyncio.sleep(1.0)
             return {"kind": "request_not_available", "retryable": False}
 
     async def exercise() -> None:
@@ -310,15 +310,50 @@ def test_mcp_keeps_protocol_loop_responsive_during_blocking_http_call() -> None:
                     {"kind": "acquire", "need": {"query": "slow loopback probe"}},
                 )
             )
-            while not slow_call_started.is_set():
-                await asyncio.sleep(0)
+            await asyncio.wait_for(slow_call_started.wait(), timeout=0.5)
             listed = await client.list_tools()
             progress_elapsed = time.monotonic() - started
             result = await resolve
 
-        assert progress_elapsed < 0.1
+        assert progress_elapsed < 0.5
         assert [tool.name for tool in listed.tools] == [MCP_TOOL_NAME]
         assert result.is_error is False
+
+    asyncio.run(exercise())
+
+
+def test_mcp_cancels_in_flight_http_work_with_the_tool_call() -> None:
+    cancelled = asyncio.Event()
+
+    class CancellableCaller:
+        async def resolve_acquire_document_async(
+            self,
+            *,
+            acquire: dict[str, object],
+            request_id: str,
+        ) -> dict[str, object]:
+            del acquire, request_id
+            try:
+                await asyncio.sleep(30)
+            finally:
+                cancelled.set()
+            raise AssertionError("cancelled resolve unexpectedly completed")
+
+    async def exercise() -> None:
+        async with Client(
+            create_mcp_server(cast(ResolveCaller, CancellableCaller()))
+        ) as client:
+            resolve = asyncio.create_task(
+                client.call_tool(
+                    MCP_TOOL_NAME,
+                    {"kind": "acquire", "need": {"query": "cancel probe"}},
+                )
+            )
+            await asyncio.sleep(0.01)
+            resolve.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await resolve
+            await asyncio.wait_for(cancelled.wait(), timeout=0.5)
 
     asyncio.run(exercise())
 
@@ -611,8 +646,9 @@ def test_spawned_mcp_matches_the_public_http_seam_for_required_parity_cases(
         ),
         clock=lambda: RECEIVED_AT,
     )
-    client = TestClient(app)
-    direct = client.post(
+    direct_client = TestClient(app)
+    forwarding_client = TestClient(app)
+    direct = direct_client.post(
         "/v0/resolve",
         headers={
             "Authorization": f"Bearer {SECRET}",
@@ -624,7 +660,7 @@ def test_spawned_mcp_matches_the_public_http_seam_for_required_parity_cases(
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self) -> None:  # noqa: N802
             length = int(self.headers["Content-Length"])
-            forwarded = client.post(
+            forwarded = forwarding_client.post(
                 self.path,
                 headers={
                     "Authorization": self.headers["Authorization"],
@@ -669,6 +705,8 @@ def test_spawned_mcp_matches_the_public_http_seam_for_required_parity_cases(
         server.shutdown()
         server.server_close()
         thread.join()
+        direct_client.close()
+        forwarding_client.close()
 
     if direct.status_code == 200:
         assert mcp_result.is_error is False

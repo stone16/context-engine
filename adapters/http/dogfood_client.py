@@ -12,6 +12,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
+import httpx
 from pydantic import ValidationError
 
 from adapters.http.contracts import AcquireWire
@@ -186,6 +187,94 @@ class DogfoodResolveClient:
     ) -> dict[str, object]:
         """Forward one exact closed Acquire document to the frozen HTTP seam."""
 
+        body, request_id = self._validated_request(
+            acquire=acquire,
+            request_id=request_id,
+        )
+        request = Request(
+            f"{self._configuration.base_url}/v0/resolve",
+            data=body,
+            headers=self._headers(request_id),
+            method="POST",
+        )
+        try:
+            with build_opener(
+                ProxyHandler({}),
+                _RejectRedirectHandler(),
+            ).open(  # noqa: S310
+                request,
+                timeout=30,
+            ) as response:
+                raw = response.read(MAX_RESPONSE_BYTES + 1)
+            return self._validated_outcome(raw)
+        except DogfoodEvaluationUnavailable:
+            raise
+        except (
+            HTTPError,
+            URLError,
+            OSError,
+            ValueError,
+            UnicodeDecodeError,
+            ValidationError,
+        ):
+            raise DogfoodEvaluationUnavailable(
+                "dogfood resolve is unavailable"
+            ) from None
+
+    async def resolve_acquire_document_async(
+        self,
+        *,
+        acquire: dict[str, object],
+        request_id: str,
+    ) -> dict[str, object]:
+        """Forward one Acquire through cancellation-aware loopback HTTP."""
+
+        body, request_id = self._validated_request(
+            acquire=acquire,
+            request_id=request_id,
+        )
+        try:
+            async with (
+                httpx.AsyncClient(
+                    follow_redirects=False,
+                    timeout=30,
+                    trust_env=False,
+                ) as client,
+                client.stream(
+                    "POST",
+                    f"{self._configuration.base_url}/v0/resolve",
+                    content=body,
+                    headers=self._headers(request_id),
+                ) as response,
+            ):
+                response.raise_for_status()
+                raw = bytearray()
+                async for chunk in response.aiter_bytes():
+                    raw.extend(chunk)
+                    if len(raw) > MAX_RESPONSE_BYTES:
+                        raise DogfoodEvaluationUnavailable(
+                            "dogfood resolve response is unavailable"
+                        )
+            return self._validated_outcome(bytes(raw))
+        except DogfoodEvaluationUnavailable:
+            raise
+        except (
+            httpx.HTTPError,
+            OSError,
+            ValueError,
+            UnicodeDecodeError,
+            ValidationError,
+        ):
+            raise DogfoodEvaluationUnavailable(
+                "dogfood resolve is unavailable"
+            ) from None
+
+    def _validated_request(
+        self,
+        *,
+        acquire: dict[str, object],
+        request_id: str,
+    ) -> tuple[bytes, str]:
         request_id = _require_opaque_ref("dogfood request_id", request_id)
         try:
             validated_acquire = AcquireWire.model_validate(acquire)
@@ -204,54 +293,30 @@ class DogfoodResolveClient:
             ensure_ascii=False,
             separators=(",", ":"),
         ).encode("utf-8")
-        request = Request(
-            f"{self._configuration.base_url}/v0/resolve",
-            data=body,
-            headers={
-                "Accept": "application/json",
-                "Authorization": f"Bearer {self._configuration.secret}",
-                "Content-Type": "application/json",
-                "X-Context-Request-Id": request_id,
-            },
-            method="POST",
-        )
-        try:
-            with build_opener(
-                ProxyHandler({}),
-                _RejectRedirectHandler(),
-            ).open(  # noqa: S310
-                request,
-                timeout=30,
-            ) as response:
-                raw = response.read(MAX_RESPONSE_BYTES + 1)
-            if len(raw) > MAX_RESPONSE_BYTES:
-                raise DogfoodEvaluationUnavailable(
-                    "dogfood resolve response is unavailable"
-                )
-            if self._configuration.secret.encode("utf-8") in raw:
-                raise DogfoodSecretExclusionUnavailable(
-                    "dogfood secret exclusion is unavailable"
-                )
-            outcome = _as_object(json.loads(raw), "dogfood resolve response")
-            self._configuration.reject_secret_material(outcome)
-            if outcome.get("kind") not in {"resolved", "request_not_available"}:
-                raise DogfoodEvaluationUnavailable(
-                    "dogfood resolve outcome is unavailable"
-                )
-            return outcome
-        except DogfoodEvaluationUnavailable:
-            raise
-        except (
-            HTTPError,
-            URLError,
-            OSError,
-            ValueError,
-            UnicodeDecodeError,
-            ValidationError,
-        ):
+        return body, request_id
+
+    def _headers(self, request_id: str) -> dict[str, str]:
+        return {
+            "Accept": "application/json",
+            "Authorization": f"Bearer {self._configuration.secret}",
+            "Content-Type": "application/json",
+            "X-Context-Request-Id": request_id,
+        }
+
+    def _validated_outcome(self, raw: bytes) -> dict[str, object]:
+        if len(raw) > MAX_RESPONSE_BYTES:
             raise DogfoodEvaluationUnavailable(
-                "dogfood resolve is unavailable"
-            ) from None
+                "dogfood resolve response is unavailable"
+            )
+        if self._configuration.secret.encode("utf-8") in raw:
+            raise DogfoodSecretExclusionUnavailable(
+                "dogfood secret exclusion is unavailable"
+            )
+        outcome = _as_object(json.loads(raw), "dogfood resolve response")
+        self._configuration.reject_secret_material(outcome)
+        if outcome.get("kind") not in {"resolved", "request_not_available"}:
+            raise DogfoodEvaluationUnavailable("dogfood resolve outcome is unavailable")
+        return outcome
 
     def acquire(self, *, query: str, request_id: str) -> dict[str, object]:
         """Invoke one Acquire and require a ContextPackage for evaluation."""

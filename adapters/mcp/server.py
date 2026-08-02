@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import Final, Protocol, cast
 from uuid import uuid4
 
 import mcp.types as mcp_types
-from anyio import to_thread
 from mcp.server import Server, ServerRequestContext
 from pydantic import TypeAdapter, ValidationError
 
@@ -28,12 +27,12 @@ _OUTCOME_SCHEMA: Final = {"type": "object", **_OUTCOME_ADAPTER.json_schema()}
 class ResolveCaller(Protocol):
     """Public HTTP Acquire caller; it exposes no Runtime implementation seam."""
 
-    def resolve_acquire_document(
+    def resolve_acquire_document_async(
         self,
         *,
         acquire: dict[str, object],
         request_id: str,
-    ) -> dict[str, object]: ...
+    ) -> Awaitable[dict[str, object]]: ...
 
 
 def _new_request_id() -> str:
@@ -93,12 +92,9 @@ def create_mcp_server(
                 acquire.model_dump(mode="json", by_alias=True, exclude_none=True),
             )
             request_id = request_id_factory()
-            raw_outcome = await to_thread.run_sync(
-                lambda: caller.resolve_acquire_document(
-                    acquire=acquire_document,
-                    request_id=request_id,
-                ),
-                abandon_on_cancel=True,
+            raw_outcome = await caller.resolve_acquire_document_async(
+                acquire=acquire_document,
+                request_id=request_id,
             )
             outcome = _OUTCOME_ADAPTER.validate_python(raw_outcome)
             public_document = resolution_outcome_public_document(outcome)
