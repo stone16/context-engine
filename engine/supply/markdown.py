@@ -7,7 +7,7 @@ import re
 from dataclasses import dataclass
 from enum import StrEnum
 from hashlib import sha256
-from typing import Any, Final, cast
+from typing import Any, Final, Generic, TypeVar, cast
 
 import rfc8785
 
@@ -362,15 +362,23 @@ class CompilationProvenance:
         return self.canonicalization_profile == MARKDOWN_RICH_CANONICALIZATION_PROFILE
 
 
+_ParsedDocumentProvenance = TypeVar(
+    "_ParsedDocumentProvenance",
+    CompilationProvenance,
+    CompilationProfileRef,
+    default=CompilationProvenance,
+)
+
+
 @dataclass(frozen=True, slots=True)
-class ParsedDocument:
+class ParsedDocument(Generic[_ParsedDocumentProvenance]):
     """Immutable deterministic result for one admitted document profile."""
 
     canonical_text: str
     sections: tuple[ParsedSection, ...]
     content_hash: str
     compilation_digest: str
-    provenance: CompilationProvenance | CompilationProfileRef
+    provenance: _ParsedDocumentProvenance
     fragments: tuple[CompiledFragment, ...]
     warnings: tuple[CompilationWarning, ...] = ()
     artifact_digest: str | None = None
@@ -491,7 +499,7 @@ class ParsedDocument:
         artifact_digest: str,
         profile: CompilationProfileRef,
         units: tuple[StructuralUnit, ...],
-    ) -> ParsedDocument:
+    ) -> ParsedDocument[CompilationProfileRef]:
         """Build one non-Markdown member of the single ParsedDocument family."""
 
         if cls is not ParsedDocument or type(profile) is not CompilationProfileRef:
@@ -2036,7 +2044,7 @@ def _validate_issue_22_content(
         raise ValueError("parsed sections must exactly match canonical text")
 
 
-def canonicalize_parsed_document(document: ParsedDocument) -> bytes:
+def canonicalize_parsed_document(document: ParsedDocument[Any]) -> bytes:
     """Return exact RFC 8785 bytes including the verified compilation digest."""
 
     if type(document) is not ParsedDocument:
@@ -2133,7 +2141,7 @@ def _fragment_from_document(
     )
 
 
-def deserialize_parsed_document(payload: bytes) -> ParsedDocument:
+def deserialize_parsed_document(payload: bytes) -> ParsedDocument[Any]:
     """Deserialize runner bytes into the existing self-validating contract."""
 
     if type(payload) is not bytes:

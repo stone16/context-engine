@@ -49,7 +49,9 @@ class BytesArtifactSource(ArtifactSource):
         return self._payload
 
 
-type DocumentCompilationOutcome = ParsedDocument | DocumentCompilationFailure
+type DocumentCompilationOutcome = (
+    ParsedDocument[CompilationProfileRef] | DocumentCompilationFailure
+)
 
 
 class _AcceptanceEntryPoint(Protocol):

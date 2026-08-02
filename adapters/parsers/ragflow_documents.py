@@ -85,7 +85,7 @@ def _valid_docx_package(source: bytes) -> bool:
 def _compile_docx(
     source: bytes,
     profile: CompilationProfileRef,
-) -> ParsedDocument | DocumentCompilationFailure:
+) -> ParsedDocument[CompilationProfileRef] | DocumentCompilationFailure:
     if not _valid_docx_package(source):
         return _failure(DocumentCompilationFailureCode.INVALID_ARTIFACT)
     try:
@@ -148,7 +148,7 @@ def _compile_docx(
 def _compile_pdf_outline(
     source: bytes,
     profile: CompilationProfileRef,
-) -> ParsedDocument | DocumentCompilationFailure:
+) -> ParsedDocument[CompilationProfileRef] | DocumentCompilationFailure:
     try:
         if len(PdfReader(BytesIO(source)).pages) > MAX_PDF_PAGES:
             return _failure(DocumentCompilationFailureCode.DOCUMENT_BOUND_EXCEEDED)
@@ -197,7 +197,7 @@ def _compile_pdf_outline(
 def compile_document_bytes(
     source: bytes,
     profile: CompilationProfileRef,
-) -> ParsedDocument | DocumentCompilationFailure:
+) -> ParsedDocument[CompilationProfileRef] | DocumentCompilationFailure:
     """Compile bytes selected by the owned runner; no raw exception escapes."""
 
     try:
