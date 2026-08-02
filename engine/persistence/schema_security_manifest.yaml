@@ -524,11 +524,12 @@
     },
     {
       "name": "publish_file_import",
-      "versionedDatabaseFunctions": {
+      "closedCompatibilityDatabaseFunctions": {
         "markdown-config-v1": "context_worker_publish_file_import_v2",
-        "markdown-config-v2": "context_worker_publish_structural_file_import_v2",
-        "markdown-config-v3": "context_worker_prepare_file_publication"
+        "markdown-config-v2": "context_worker_publish_structural_file_import_v2"
       },
+      "compatibilityBehavior": "profile-free v1/v2 entry points retain EXECUTE compatibility but refuse with zero effect; current v1/v2/v3 publication uses recover_file_publication",
+      "activeLifecycle": "recover_file_publication",
       "role": "context_engine_worker",
       "definerRole": "context_engine_worker_lease_definer",
       "directTableMutationAllowed": false,
@@ -567,10 +568,12 @@
     },
     {
       "name": "replace_file_import",
-      "stageDatabaseFunctions": {
+      "closedCompatibilityStageDatabaseFunctions": {
         "markdown-config-v1": "context_worker_stage_file_replacement",
         "markdown-config-v2": "context_worker_stage_structural_file_replacement"
       },
+      "compatibilityBehavior": "profile-free v1/v2 staging entry points retain EXECUTE compatibility but refuse with zero effect; current replacement staging uses recover_file_publication",
+      "activeLifecycle": "recover_file_publication",
       "activateDatabaseFunction": "context_worker_activate_file_replacement",
       "role": "context_engine_worker",
       "definerRole": "context_engine_worker_lease_definer",
@@ -6887,7 +6890,7 @@
         },
         {
           "name": "ck_context_fragment_embedding_profile",
-          "expression": "embedding_profile_digest is one lowercase SHA-256 hex digest"
+          "expression": "embedding and embedding_profile_digest are null together; otherwise the digest is one lowercase SHA-256 hex value"
         }
       ],
       "projectionModes": {

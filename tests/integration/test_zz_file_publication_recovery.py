@@ -347,6 +347,7 @@ def _acquire_recovery_direct(
     )
     assert type(document) is ParsedDocument
     compilation_document = canonicalize_parsed_document(document).decode("utf-8")
+    provider = DeterministicEmbeddingTwin()
     with guarded_worker_engine.begin() as connection:
         return connection.execute(
             text(
@@ -356,6 +357,7 @@ def _acquire_recovery_direct(
                     :source_ref, :resource_ref, :revision_id,
                     :canonical_text, :content_hash, :compilation_digest,
                     :compiler_version, :config_version,
+                    :embedding_profile_digest,
                     CAST(:compilation_document AS jsonb),
                     CAST(:artifact_document AS jsonb),
                     :lease_generation, :signing_key_version, :nonce,
@@ -375,6 +377,7 @@ def _acquire_recovery_direct(
                 "compilation_digest": document.compilation_digest,
                 "compiler_version": document.provenance.compiler_version,
                 "config_version": document.provenance.config_version,
+                "embedding_profile_digest": provider.provider_profile.profile_digest,
                 "compilation_document": compilation_document,
                 "artifact_document": json.dumps(artifact_document),
                 "lease_generation": claims.lease_generation,

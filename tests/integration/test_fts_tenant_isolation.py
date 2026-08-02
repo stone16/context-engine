@@ -42,6 +42,9 @@ def _seed_embeddings(engine: Engine, fixture: RuntimeEvidenceFixture) -> None:
             "organization_id": organization.organization_id,
             "resource_ref": candidate.resource_ref,
             "embedding": "[" + ",".join(repr(item) for item in embedding) + "]",
+            "embedding_profile_digest": (
+                DeterministicEmbeddingTwin().provider_profile.profile_digest
+            ),
         }
         for organization, candidate, embedding in zip(
             (fixture.org_a, fixture.org_a, fixture.org_b, fixture.org_b),
@@ -67,7 +70,8 @@ def _seed_embeddings(engine: Engine, fixture: RuntimeEvidenceFixture) -> None:
             connection.execute(
                 text(
                     "UPDATE context_fragment "
-                    "SET embedding = CAST(:embedding AS vector) "
+                    "SET embedding = CAST(:embedding AS vector), "
+                    "embedding_profile_digest = :embedding_profile_digest "
                     "WHERE organization_id = :organization_id "
                     "AND resource_ref = :resource_ref"
                 ),

@@ -431,11 +431,12 @@ def test_issue_24_structural_markdown_contract_is_versioned_and_function_only() 
         if value["name"] == "publish_file_import"
     )
 
-    assert operation["versionedDatabaseFunctions"] == {
+    assert operation["closedCompatibilityDatabaseFunctions"] == {
         "markdown-config-v1": "context_worker_publish_file_import_v2",
         "markdown-config-v2": "context_worker_publish_structural_file_import_v2",
-        "markdown-config-v3": "context_worker_prepare_file_publication",
     }
+    assert operation["activeLifecycle"] == "recover_file_publication"
+    assert "refuse with zero effect" in operation["compatibilityBehavior"]
     snapshot = entries["file_revision_snapshot"]
     contract = snapshot["versionedCompilationContract"]
     assert contract["markdown-config-v1"]["compilationDocument"] == "null"
@@ -630,10 +631,12 @@ def test_issue_26_file_replacement_contract_is_staged_and_function_only() -> Non
         if value["name"] == "replace_file_import"
     )
 
-    assert operation["stageDatabaseFunctions"] == {
+    assert operation["closedCompatibilityStageDatabaseFunctions"] == {
         "markdown-config-v1": "context_worker_stage_file_replacement",
         "markdown-config-v2": ("context_worker_stage_structural_file_replacement"),
     }
+    assert operation["activeLifecycle"] == "recover_file_publication"
+    assert "refuse with zero effect" in operation["compatibilityBehavior"]
     assert operation["activateDatabaseFunction"] == (
         "context_worker_activate_file_replacement"
     )
@@ -1969,7 +1972,8 @@ def test_content_manifest_preserves_lineage_visibility_and_immutability() -> Non
         {
             "name": "ck_context_fragment_embedding_profile",
             "expression": (
-                "embedding_profile_digest is one lowercase SHA-256 hex digest"
+                "embedding and embedding_profile_digest are null together; "
+                "otherwise the digest is one lowercase SHA-256 hex value"
             ),
         },
     ]

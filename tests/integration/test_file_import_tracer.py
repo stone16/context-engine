@@ -12,7 +12,6 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import Engine, text
 from sqlalchemy.engine import Connection
-from sqlalchemy.exc import SQLAlchemyError
 
 from adapters.embeddings import DeterministicEmbeddingTwin
 from adapters.exact_phrase import PostgreSQLExactPhraseCandidateIndex
@@ -1995,16 +1994,12 @@ def test_completed_file_import_rejects_redeem_publish_and_fail_replay(
         tmp_path, migration_configuration, guarded_control_engine
     )
     claims = _scenario_claims(scenario)
-    resource_ref = f"resource:test:{uuid4()}"
-    assert _redeem_direct(guarded_worker_engine, claims) is not None
-    assert (
-        _publish_direct(
-            guarded_worker_engine,
-            claims,
-            resource_ref=resource_ref,
-            revision_id=uuid4(),
-        )
-        == 1
+    assert scenario.token is not None
+    _run_file_import(
+        scenario,
+        scenario.prepared,
+        scenario.token,
+        guarded_worker_engine,
     )
 
     before_replay = _scenario_effect_counts(migration_configuration, scenario)
@@ -2209,7 +2204,7 @@ def test_invalid_markdown_records_terminal_failure_without_content_effects(
             migration_engine.dispose()
 
 
-def test_late_publication_error_rolls_back_every_content_and_access_write(
+def test_late_activation_error_keeps_complete_publication_at_ready_boundary(
     tmp_path: Path,
     migration_configuration: DatabaseConfiguration,
     guarded_control_engine: Engine,
@@ -2218,8 +2213,7 @@ def test_late_publication_error_rolls_back_every_content_and_access_write(
     scenario = _prepare_file_import_scenario(
         tmp_path, migration_configuration, guarded_control_engine
     )
-    claims = _scenario_claims(scenario)
-    assert _redeem_direct(guarded_worker_engine, claims) is not None
+    assert scenario.token is not None
     migration_engine = create_database_engine(migration_configuration)
     trigger_installed = False
     try:
@@ -2246,12 +2240,12 @@ def test_late_publication_error_rolls_back_every_content_and_access_write(
                 )
             )
             trigger_installed = True
-        with pytest.raises(SQLAlchemyError, match="injected late"):
-            _publish_direct(
+        with pytest.raises(FileImportUnavailable):
+            _run_file_import(
+                scenario,
+                scenario.prepared,
+                scenario.token,
                 guarded_worker_engine,
-                claims,
-                resource_ref=f"resource:test:{uuid4()}",
-                revision_id=uuid4(),
             )
     finally:
         if trigger_installed:
@@ -2270,16 +2264,16 @@ def test_late_publication_error_rolls_back_every_content_and_access_write(
                 )
         migration_engine.dispose()
 
-    assert _job_state(migration_configuration, scenario) == ("running", 0)
+    assert _job_state(migration_configuration, scenario) == ("ready", 0)
     assert _scenario_effect_counts(migration_configuration, scenario) == (
         1,
         1,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
+        1,
+        1,
+        1,
+        1,
+        2,
+        1,
+        1,
+        1,
     )

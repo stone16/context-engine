@@ -150,6 +150,8 @@ def _replace_signature(
     source: str,
     target: str,
     replacements: tuple[tuple[str, str], ...],
+    *,
+    grant_worker: bool,
 ) -> None:
     definition = _function_definition(source)
     for searched, replacement in replacements:
@@ -157,8 +159,9 @@ def _replace_signature(
     _install(definition, _WORKER_DEFINER)
     op.execute(f"SET LOCAL ROLE {_WORKER_DEFINER}")
     op.execute(f"REVOKE ALL ON FUNCTION public.{target} FROM PUBLIC")
-    op.execute(f"GRANT EXECUTE ON FUNCTION public.{target} TO {_WORKER}")
-    op.execute(f"REVOKE EXECUTE ON FUNCTION public.{source} FROM {_WORKER}")
+    if grant_worker:
+        op.execute(f"GRANT EXECUTE ON FUNCTION public.{target} TO {_WORKER}")
+        op.execute(f"REVOKE EXECUTE ON FUNCTION public.{source} FROM {_WORKER}")
     op.execute(f"DROP FUNCTION public.{source}")
     op.execute("RESET ROLE")
 
@@ -193,7 +196,53 @@ def _replace_classification(*, add_profile: bool) -> None:
         _CLASSIFY_OLD if add_profile else _CLASSIFY_NEW,
         _CLASSIFY_NEW if add_profile else _CLASSIFY_OLD,
         tuple((old, new) if add_profile else (new, old) for old, new in pairs),
+        grant_worker=False,
     )
+
+
+def _install_legacy_classification_refusal() -> None:
+    """Keep old definer callers closed without inventing a profile identity."""
+
+    definition = """
+CREATE FUNCTION public.context_worker_classify_file_import_internal(
+    requested_organization_id uuid,
+    requested_job_id uuid,
+    requested_service_principal_id uuid,
+    requested_source_ref text,
+    requested_resource_ref text,
+    requested_canonical_text text,
+    requested_content_hash text,
+    requested_compiler_version text,
+    requested_config_version text,
+    requested_signing_key_version bigint,
+    requested_nonce bytea,
+    requested_issued_at timestamp with time zone,
+    requested_expires_at timestamp with time zone
+) RETURNS TABLE(
+    classification text,
+    active_revision_id uuid,
+    fragment_refs text[],
+    content_identity_digest text,
+    reason_digest text
+) LANGUAGE plpgsql SECURITY DEFINER
+SET search_path TO 'pg_catalog', 'pg_temp'
+SET row_security TO 'on'
+AS $function$
+BEGIN
+    RETURN;
+END;
+$function$
+"""
+    _install(definition, _WORKER_DEFINER)
+    op.execute(f"SET LOCAL ROLE {_WORKER_DEFINER}")
+    op.execute(f"REVOKE ALL ON FUNCTION public.{_CLASSIFY_OLD} FROM PUBLIC")
+    op.execute("RESET ROLE")
+
+
+def _drop_legacy_classification_refusal() -> None:
+    op.execute(f"SET LOCAL ROLE {_WORKER_DEFINER}")
+    op.execute(f"DROP FUNCTION public.{_CLASSIFY_OLD}")
+    op.execute("RESET ROLE")
 
 
 def _replace_acquisition(*, add_profile: bool) -> None:
@@ -242,6 +291,7 @@ def _replace_acquisition(*, add_profile: bool) -> None:
         _ACQUIRE_OLD if add_profile else _ACQUIRE_NEW,
         _ACQUIRE_NEW if add_profile else _ACQUIRE_OLD,
         tuple((old, new) if add_profile else (new, old) for old, new in pairs),
+        grant_worker=True,
     )
 
 
@@ -365,18 +415,22 @@ def upgrade() -> None:
         sa.Column(
             "embedding_profile_digest",
             sa.Text(),
-            nullable=False,
-            server_default=_TWIN_PROFILE_DIGEST,
+            nullable=True,
         ),
+    )
+    op.execute(
+        "UPDATE context_fragment SET embedding_profile_digest = "
+        f"'{_TWIN_PROFILE_DIGEST}' WHERE embedding IS NOT NULL"
     )
     op.create_check_constraint(
         "ck_context_fragment_embedding_profile",
         "context_fragment",
-        "char_length(embedding_profile_digest) = 64 "
+        "(embedding IS NULL AND embedding_profile_digest IS NULL) OR "
+        "(embedding IS NOT NULL AND embedding_profile_digest IS NOT NULL "
+        "AND char_length(embedding_profile_digest) = 64 "
         "AND embedding_profile_digest = lower(embedding_profile_digest) "
-        "AND embedding_profile_digest ~ '^[0-9a-f]{64}$'",
+        "AND embedding_profile_digest ~ '^[0-9a-f]{64}$')",
     )
-    op.alter_column("context_fragment", "embedding_profile_digest", server_default=None)
     op.add_column(
         "file_publication_recovery",
         sa.Column(
@@ -399,6 +453,7 @@ def upgrade() -> None:
         server_default=None,
     )
     _replace_classification(add_profile=True)
+    _install_legacy_classification_refusal()
     _replace_acquisition(add_profile=True)
     _replace_prepare(add_profile=True)
     _replace_publication_guards(add_profile=True)
@@ -433,6 +488,7 @@ def downgrade() -> None:
     _replace_publication_guards(add_profile=False)
     _replace_prepare(add_profile=False)
     _replace_acquisition(add_profile=False)
+    _drop_legacy_classification_refusal()
     _replace_classification(add_profile=False)
     op.drop_constraint(
         "ck_file_publication_recovery_embedding_profile",

@@ -16,6 +16,7 @@ from sqlalchemy import Engine, text
 from sqlalchemy.exc import OperationalError
 
 import engine.persistence.membership_context as membership_context_module
+from adapters.embeddings import DeterministicEmbeddingTwin
 from adapters.exact_phrase import PostgreSQLExactPhraseCandidateIndex
 from adapters.http.app import create_app
 from adapters.http.authentication import (
@@ -253,6 +254,8 @@ def _new_fixture() -> FieldProjectionFixture:
 
 def _seed_fixture(engine: Engine, fixture: FieldProjectionFixture) -> None:
     candidate = fixture.candidate
+    provider = DeterministicEmbeddingTwin()
+    embedding = provider.embed_documents((FULL_BLOCK,))[0]
     parameters = {
         "organization_id": fixture.organization_id,
         "source_ref": candidate.source_ref,
@@ -266,6 +269,8 @@ def _seed_fixture(engine: Engine, fixture: FieldProjectionFixture) -> None:
         "limited_membership_id": fixture.limited.membership_id,
         "limited_principal_ref": fixture.limited.principal_ref,
         "valid_from": RECEIVED_AT - timedelta(days=1),
+        "embedding": "[" + ",".join(repr(item) for item in embedding) + "]",
+        "embedding_profile_digest": provider.provider_profile.profile_digest,
     }
     with engine.begin() as connection:
         connection.execute(
@@ -334,10 +339,12 @@ def _seed_fixture(engine: Engine, fixture: FieldProjectionFixture) -> None:
                 """
                 INSERT INTO context_fragment (
                     organization_id, resource_ref, revision_id,
-                    fragment_ref, ordinal, projection_kind, content
+                    fragment_ref, ordinal, projection_kind, content,
+                    embedding, embedding_profile_digest
                 ) VALUES (
                     :organization_id, :resource_ref, :revision_id,
-                    :fragment_ref, 0, 'fields', NULL
+                    :fragment_ref, 0, 'fields', NULL,
+                    CAST(:embedding AS vector), :embedding_profile_digest
                 )
                 """
             ),

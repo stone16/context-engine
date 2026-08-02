@@ -17,6 +17,7 @@ from adapters.connectors.feishu import (
     FeishuPermissionSubject,
     FeishuSourceError,
 )
+from adapters.embeddings import DeterministicEmbeddingTwin
 from engine.persistence import DatabaseConfiguration, create_database_engine
 from engine.runtime.content_io import exact_phrase_digest
 from engine.runtime.package_digest import QueryDigestKeyring
@@ -483,6 +484,8 @@ def _seed_runtime_article(
 ) -> None:
     org = fixture.org_a  # type: ignore[attr-defined]
     candidate = org.authorized
+    provider = DeterministicEmbeddingTwin()
+    embedding = provider.embed_documents((org.authorized_body,))[0]
     with engine.begin() as connection:
         connection.execute(
             text("INSERT INTO user_account (user_id) VALUES (:user)"),
@@ -540,8 +543,12 @@ def _seed_runtime_article(
                 """
                 INSERT INTO context_fragment (
                     organization_id, resource_ref, revision_id,
-                    fragment_ref, ordinal, content
-                ) VALUES (:org, :resource, :revision, :fragment, 0, :content)
+                    fragment_ref, ordinal, content, embedding,
+                    embedding_profile_digest
+                ) VALUES (
+                    :org, :resource, :revision, :fragment, 0, :content,
+                    CAST(:embedding AS vector), :embedding_profile_digest
+                )
                 """
             ),
             {
@@ -550,6 +557,8 @@ def _seed_runtime_article(
                 "revision": revision_id,
                 "fragment": candidate.fragment_ref,
                 "content": org.authorized_body,
+                "embedding": "[" + ",".join(repr(item) for item in embedding) + "]",
+                "embedding_profile_digest": provider.provider_profile.profile_digest,
             },
         )
         connection.execute(

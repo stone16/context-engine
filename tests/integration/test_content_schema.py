@@ -561,6 +561,64 @@ def test_context_fragment_rejects_blank_content(
         engine.dispose()
 
 
+@pytest.mark.parametrize(
+    ("embedding", "embedding_profile_digest"),
+    [
+        pytest.param(None, "0" * 64, id="profile-without-vector"),
+        pytest.param(
+            "[" + ",".join(["0.1"] * 384) + "]",
+            None,
+            id="vector-without-profile",
+        ),
+        pytest.param(
+            "[" + ",".join(["0.1"] * 384) + "]",
+            "A" * 64,
+            id="vector-with-malformed-profile",
+        ),
+    ],
+)
+def test_fragment_embedding_and_profile_identity_are_null_paired(
+    migration_configuration: DatabaseConfiguration,
+    content_fixture: ContentFixture,
+    embedding: str | None,
+    embedding_profile_digest: str | None,
+) -> None:
+    """A Fragment may omit both values, but never label only one side."""
+
+    engine = create_database_engine(migration_configuration)
+    try:
+        with pytest.raises(IntegrityError) as error, engine.begin() as connection:
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO context_fragment (
+                        organization_id, resource_ref, revision_id,
+                        fragment_ref, ordinal, content, embedding,
+                        embedding_profile_digest
+                    ) VALUES (
+                        :organization_id, :resource_ref, :revision_id,
+                        :fragment_ref, 9999, 'must-not-persist',
+                        CAST(:embedding AS vector), :embedding_profile_digest
+                    )
+                    """
+                ),
+                {
+                    "organization_id": content_fixture.organization_a,
+                    "resource_ref": content_fixture.active_resource_ref,
+                    "revision_id": content_fixture.active_revision_id,
+                    "fragment_ref": f"fragment:{uuid4()}",
+                    "embedding": embedding,
+                    "embedding_profile_digest": embedding_profile_digest,
+                },
+            )
+        assert (
+            getattr(getattr(error.value.orig, "diag", None), "constraint_name", None)
+            == "ck_context_fragment_embedding_profile"
+        )
+    finally:
+        engine.dispose()
+
+
 def test_content_tables_have_force_rls_and_least_privilege_grants(
     migration_configuration: DatabaseConfiguration,
 ) -> None:
@@ -772,6 +830,7 @@ def test_content_tables_have_force_rls_and_least_privilege_grants(
                 "projection_kind",
                 "content",
                 "embedding",
+                "embedding_profile_digest",
                 "search_vector",
             },
         }
@@ -789,6 +848,7 @@ def test_content_tables_have_force_rls_and_least_privilege_grants(
             "ck_context_fragment_ordinal_nonnegative",
             "ck_context_fragment_projection_kind",
             "ck_context_fragment_projection_payload",
+            "ck_context_fragment_embedding_profile",
         } <= constraints.keys()
         content_constraint = constraints["ck_context_fragment_projection_payload"]
         assert "projection_kind = 'body'::text" in content_constraint
