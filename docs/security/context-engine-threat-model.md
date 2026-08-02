@@ -119,7 +119,7 @@ An inactive capability is `NOT_ACTIVE`; it is never reported as `PASS`.
 | `TM-17` | Connector URL handling exposes internal networks or secrets. | Provider-specific URL allowlists, redirect/DNS rebinding defenses, egress controls, and external secret storage; blocked requests produce no network call. |
 | `TM-18` | Timing, count, status, or error details distinguish denied objects from missing ones. | Frozen non-enumeration fixtures compare status/body and a preregistered timing distribution; underpowered evidence is inconclusive. |
 
-### Local MCP delta (ADR-0102)
+### Local MCP delta (ADR-0103)
 
 The active MCP carrier is one spawn-per-session local stdio protocol translator,
 not a second Runtime or identity composition. Its threat delta is bounded as

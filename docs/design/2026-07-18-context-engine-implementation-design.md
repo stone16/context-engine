@@ -169,7 +169,7 @@ provenance, audit, continuation, citation redemption, and egress decisions.
 
 Requests to any activated server ingress do not contain trusted Organization,
 Principal, Membership, audience, or ACL fields. HTTP is the V1 ingress;
-ADR-0102 activates only one maintainer-local spawn-per-session stdio MCP
+ADR-0103 activates only one maintainer-local spawn-per-session stdio MCP
 Acquire translator after its real caller and parity suite were named, while
 every broader MCP carrier remains NOT_ACTIVE. Trusted ingress Adapters construct
 AuthenticatedInvocation and TrustedDeliveryContext from session, token, mTLS,

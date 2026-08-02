@@ -111,7 +111,7 @@ carrier is activated separately below and does not widen the consumer.
 
 | ADR | Activates |
 |---|---|
-| [0102](./docs/decisions/0102-activate-one-local-mcp-acquire-translation.md) | One maintainer-local, spawn-per-session stdio `context_resolve` tool that validates the existing closed `AcquireWire`, calls only the loopback dogfood `POST /v0/resolve`, and returns its exact closed outcome as structured content |
+| [0103](./docs/decisions/0103-activate-one-local-mcp-acquire-translation.md) | One maintainer-local, spawn-per-session stdio `context_resolve` tool that validates the existing closed `AcquireWire`, calls only the loopback dogfood `POST /v0/resolve`, and returns its exact closed outcome as structured content |
 
 `RUNTIME-MCP-CARRIER-215` proves through an MCP SDK client, a real spawned
 stdio process, loopback HTTP, PostgreSQL 17, File publication, candidate
@@ -466,7 +466,7 @@ terminal state and introduces no fourth process type.
 
 At the issue #71 activation boundary, live Feishu, real models and Senders,
 group chat, compensating deletes, `Continue`, and MCP were `NOT_ACTIVE`.
-ADR-0102 later activates only the local MCP carrier recorded above.
+ADR-0103 later activates only the local MCP carrier recorded above.
 
 ### Issue #133 — bounded private Feishu delivery conformance
 
@@ -484,7 +484,7 @@ This activation is **twin-bounded conformance**, not live Feishu. Feishu
 credentials and network calls, real model providers, group/public audience,
 `Continue`, compensation/delete, automatic reconciliation, multiple Feishu
 tenants or Bot instances, pi, issue #127 ingestion, and every MCP carrier except
-ADR-0102's local stdio `Acquire` translator remain `NOT_ACTIVE`. Channel
+ADR-0103's local stdio `Acquire` translator remain `NOT_ACTIVE`. Channel
 `EgressGrant` remains preflight-only and cannot substitute for trusted identity
 or an `ActionTicket`; the generated-answer flow uses no channel grant.
 

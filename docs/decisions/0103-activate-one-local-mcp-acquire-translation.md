@@ -1,5 +1,5 @@
 ---
-name: adr-0102-activate-one-local-mcp-acquire-translation
+name: adr-0103-activate-one-local-mcp-acquire-translation
 version: "1.0.0"
 description: >
   Activate one spawn-per-session local stdio MCP Acquire translator that calls
@@ -9,7 +9,7 @@ description: >
   generation, effects, citation opens, continuation, or egress-grant handling.
 ---
 
-# 0102. Activate one local MCP Acquire translation
+# 0103. Activate one local MCP Acquire translation
 
 - Status: accepted
 - Date: 2026-08-02

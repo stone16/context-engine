@@ -2136,7 +2136,7 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
             document_refs,
         )
         self.assertIn(
-            "docs/decisions/0102-activate-one-local-mcp-acquire-translation.md",
+            "docs/decisions/0103-activate-one-local-mcp-acquire-translation.md",
             document_refs,
         )
         self.assertIn(
