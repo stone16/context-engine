@@ -85,6 +85,17 @@ class _SubmittingIndex:
             limit=self.prepared_limit,
         )
 
+    def prepare_budgeted_discovery(
+        self,
+        request: Acquire,
+        *,
+        effective_scope: object,
+        budget: object,
+        active_embedding_profile_digest: str,
+    ) -> CandidateDiscoveryRequest:
+        del budget, active_embedding_profile_digest
+        return self.prepare_discovery(request, effective_scope=effective_scope)
+
     def discover(
         self,
         request: Acquire,

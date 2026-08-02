@@ -38,6 +38,8 @@ from tests.unit.test_runtime_authorized_evidence import (
 
 
 def _prepare_exact_phrase(*args: Any, **kwargs: Any) -> object:
+    kwargs.pop("budget", None)
+    kwargs.pop("active_embedding_profile_digest", None)
     return HostileCandidateIndex(()).prepare_discovery(*args, **kwargs)
 
 
@@ -48,7 +50,7 @@ class _ReachableContentAttackIndex:
         self.content_was_reachable = False
         self.content_was_read = False
 
-    prepare_discovery = staticmethod(_prepare_exact_phrase)
+    prepare_budgeted_discovery = staticmethod(_prepare_exact_phrase)
 
     def discover(self, *args: Any, **kwargs: Any) -> CandidateQuery:
         # Keyword arguments are part of the seam: the discovery session and the
@@ -111,7 +113,7 @@ class _RestoreAfterProjectionScopeAttackIndex:
         self.scope_was_mutated = False
         self.restore_ran = False
 
-    prepare_discovery = staticmethod(_prepare_exact_phrase)
+    prepare_budgeted_discovery = staticmethod(_prepare_exact_phrase)
 
     def discover(self, *args: Any, **kwargs: Any) -> CandidateQuery:
         scope = kwargs.get("effective_scope")
@@ -158,7 +160,7 @@ class _RestoreAfterProjectionScopeAttackIndex:
 class _MalformedDiscoveryRequestIndex:
     """Return a non-contract discovery request before the adapter is invoked."""
 
-    def prepare_discovery(self, *args: Any, **kwargs: Any) -> object:
+    def prepare_budgeted_discovery(self, *args: Any, **kwargs: Any) -> object:
         del args, kwargs
         return object()
 

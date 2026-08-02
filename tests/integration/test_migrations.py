@@ -17,6 +17,7 @@ from sqlalchemy import Engine, text
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from adapters.connectors.feishu import FEISHU_DOCS_CAPABILITY_MANIFEST_JSON
+from adapters.embeddings import DeterministicEmbeddingTwin
 from adapters.file_source import FileChangeProvider, FileReadLimits, FileRootRegistry
 from adapters.parsers.markdown import compile_markdown
 from engine.control import (
@@ -301,6 +302,12 @@ MIGRATION_TEST_START_REVISIONS = {
         "20260731_0051"
     ),
     "test_embedding_profile_revision_downgrades_and_reapplies_cleanly": (
+        "20260731_0052"
+    ),
+    "test_embedding_profile_upgrade_refuses_unproven_existing_vectors": (
+        "20260731_0052"
+    ),
+    "test_embedding_profile_upgrade_serializes_with_release_promotion_lock_order": (
         "20260731_0052"
     ),
     "test_delivery_evidence_revision_downgrades_only_while_empty": "20260723_0019",
@@ -3953,6 +3960,151 @@ def test_embedding_profile_revision_downgrades_and_reapplies_cleanly(
         command.upgrade(alembic_configuration, "head")
         engine.dispose()
     assert _revision_rows(migration_configuration) == [HEAD_REVISION]
+
+
+def test_embedding_profile_upgrade_refuses_unproven_existing_vectors(
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    """Issue #147 never manufactures twin provenance for historical vectors."""
+
+    alembic_configuration = Config(ROOT / "alembic.ini")
+    organization_id = uuid4()
+    revision_id = uuid4()
+    resource_ref = f"resource:unproven-embedding:{uuid4()}"
+    parameters = {
+        "organization_id": organization_id,
+        "revision_id": revision_id,
+        "resource_ref": resource_ref,
+        "embedding": "["
+        + ",".join(
+            repr(value)
+            for value in DeterministicEmbeddingTwin().embed(("unproven",))[0]
+        )
+        + "]",
+    }
+    engine = create_database_engine(migration_configuration)
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO organization (organization_id) "
+                    "VALUES (:organization_id)"
+                ),
+                parameters,
+            )
+            connection.execute(text("SET CONSTRAINTS ALL DEFERRED"))
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO context_resource (
+                        organization_id, resource_ref, source_ref,
+                        active_revision_id, tombstoned
+                    ) VALUES (
+                        :organization_id, :resource_ref, 'source:unproven',
+                        :revision_id, false
+                    )
+                    """
+                ),
+                parameters,
+            )
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO context_revision (
+                        organization_id, resource_ref, revision_id
+                    ) VALUES (
+                        :organization_id, :resource_ref, :revision_id
+                    )
+                    """
+                ),
+                parameters,
+            )
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO context_fragment (
+                        organization_id, resource_ref, revision_id,
+                        fragment_ref, ordinal, projection_kind, content,
+                        embedding
+                    ) VALUES (
+                        :organization_id, :resource_ref, :revision_id,
+                        'fragment:unproven', 0, 'body', 'unproven',
+                        CAST(:embedding AS vector)
+                    )
+                    """
+                ),
+                parameters,
+            )
+
+        with pytest.raises(
+            RuntimeError,
+            match="embedding profile upgrade requires a provenance-free corpus",
+        ):
+            command.upgrade(alembic_configuration, "head")
+        assert _revision_rows(migration_configuration) == ["20260731_0052"]
+    finally:
+        engine.dispose()
+
+
+def test_embedding_profile_upgrade_serializes_with_release_promotion_lock_order(
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    """0053 cannot deadlock with promotion's Release-then-Fragment reads."""
+
+    alembic_configuration = Config(ROOT / "alembic.ini")
+    assert _revision_rows(migration_configuration) == ["20260731_0052"]
+    engine = create_database_engine(migration_configuration)
+    try:
+        with engine.connect() as promotion_connection:
+            promotion_transaction = promotion_connection.begin()
+            try:
+                promotion_connection.execute(
+                    text("SELECT 1 FROM release_manifest LIMIT 0")
+                )
+                with ThreadPoolExecutor(max_workers=1) as executor:
+                    pending_upgrade = executor.submit(
+                        command.upgrade,
+                        alembic_configuration,
+                        "head",
+                    )
+                    upgrade_waiting = False
+                    with engine.connect() as observer:
+                        deadline = monotonic() + 10
+                        while monotonic() < deadline:
+                            upgrade_waiting = observer.execute(
+                                text(
+                                    """
+                                    SELECT EXISTS (
+                                        SELECT 1 FROM pg_locks
+                                        WHERE database = (
+                                            SELECT oid FROM pg_database
+                                            WHERE datname = current_database()
+                                        )
+                                          AND relation =
+                                              'release_manifest'::regclass
+                                          AND mode = 'AccessExclusiveLock'
+                                          AND granted IS FALSE
+                                    )
+                                    """
+                                )
+                            ).scalar_one()
+                            if upgrade_waiting or pending_upgrade.done():
+                                break
+                            sleep(0.01)
+                    assert upgrade_waiting is True
+                    assert pending_upgrade.done() is False
+
+                    promotion_connection.execute(
+                        text("SELECT 1 FROM context_fragment LIMIT 0")
+                    )
+                    promotion_transaction.commit()
+                    pending_upgrade.result(timeout=10)
+            finally:
+                if promotion_transaction.is_active:
+                    promotion_transaction.rollback()
+        assert _revision_rows(migration_configuration) == [HEAD_REVISION]
+    finally:
+        engine.dispose()
 
 
 def test_embedding_profile_downgrade_refuses_retained_qwen_lineage(

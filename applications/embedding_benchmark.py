@@ -66,6 +66,7 @@ class SentenceTransformersProvider:
             )
         except Exception:
             raise BenchmarkUnavailable("local benchmark model is unavailable") from None
+
     def embed_queries(
         self, values: tuple[str, ...]
     ) -> tuple[tuple[float, ...], ...]:
@@ -111,6 +112,7 @@ class SentenceTransformersProvider:
             return tuple(normalized)
         except Exception:
             raise BenchmarkUnavailable("local benchmark model is unavailable") from None
+
 
 def _load_sentence_transformers() -> Any:
     try:

@@ -8,7 +8,6 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
-from typing import Any, cast
 from uuid import UUID
 
 from fastapi import FastAPI
@@ -227,7 +226,6 @@ def create_dogfood_app(
     environment: Mapping[str, str],
     *,
     host: str,
-    embedding_provider: object | None = None,
 ) -> FastAPI:
     """Compose the exact local carrier; every dependency remains sealed."""
 
@@ -243,12 +241,8 @@ def create_dogfood_app(
     )
     runtime_engine = create_database_engine(database_configuration)
     try:
-        provider = (
-            LocalQwenEmbeddingProvider(
-                Path(_required(environment, DOGFOOD_EMBEDDING_MODEL_DIR_ENV))
-            )
-            if embedding_provider is None
-            else embedding_provider
+        provider = LocalQwenEmbeddingProvider(
+            Path(_required(environment, DOGFOOD_EMBEDDING_MODEL_DIR_ENV))
         )
     except EmbeddingProviderUnavailable:
         runtime_engine.dispose()
@@ -257,7 +251,7 @@ def create_dogfood_app(
         ) from None
     runtime = Runtime(
         required_kernel_dependencies(),
-        candidate_index=PostgreSQLVectorCandidateIndex(cast(Any, provider)),
+        candidate_index=PostgreSQLVectorCandidateIndex(provider),
         citation_profile=PRIVATE_FILE_CITATION_OPEN_PROFILE,
         query_digest_keyring=configuration.query_digest_keyring(),
     )

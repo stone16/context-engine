@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from threading import Event, Thread
 from time import monotonic_ns
 
+from adapters._bounded_call import BoundedCallUnavailable, invoke_bounded
 from engine.runtime.budget import (
     BudgetUsage,
     PackageBudgetExceeded,
@@ -141,32 +141,21 @@ class PostgreSQLVectorCandidateIndex:
     def _embed_query_bounded(self, query: str) -> tuple[tuple[float, ...], ...]:
         """Return by the local query deadline even if backend inference hangs."""
 
-        finished = Event()
-        outputs: list[tuple[tuple[float, ...], ...]] = []
-        failed: list[bool] = []
-
-        def invoke() -> None:
-            try:
-                vectors = self._embedding_provider.embed((query,))
-                if type(vectors) is tuple:
-                    outputs.append(vectors)
-                else:
-                    failed.append(True)
-            except Exception:
-                failed.append(True)
-            finally:
-                finished.set()
-
-        Thread(
-            target=invoke,
-            name="context-engine-query-embedding",
-            daemon=True,
-        ).start()
-        if not finished.wait(QUERY_EMBEDDING_MAXIMUM_USAGE.elapsed_ms / 1_000):
+        try:
+            vectors = invoke_bounded(
+                lambda: self._embedding_provider.embed((query,)),
+                timeout_seconds=(
+                    QUERY_EMBEDDING_MAXIMUM_USAGE.elapsed_ms / 1_000
+                ),
+                thread_name="context-engine-query-embedding",
+            )
+        except BoundedCallUnavailable:
+            raise EmbeddingProviderUnavailable(
+                "Embedding provider is unavailable"
+            ) from None
+        if type(vectors) is not tuple:
             raise EmbeddingProviderUnavailable("Embedding provider is unavailable")
-        if failed or len(outputs) != 1:
-            raise EmbeddingProviderUnavailable("Embedding provider is unavailable")
-        return outputs[0]
+        return vectors
 
     def prepare_budgeted_discovery(
         self,

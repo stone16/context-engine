@@ -71,9 +71,13 @@ class _PackageBudgetReservation:
 class PackageBudgetMeter:
     """The shared resolve ledger for atomic PackageBudget reservations and charges.
 
-    Every stage in one resolve must receive the same instance, and final package
-    construction must publish this meter's cumulative ``usage``. A stage-local
-    replacement would bypass the effective ceiling and lose usage provenance.
+    ADR-0096 requires every model-backed stage in one resolve to share this
+    instance and publish its cumulative ``usage``. ADR-0098 temporarily permits
+    one stage-local meter for local query embedding because frozen v0 cannot
+    publish the cumulative meaning; its provider-call/cost/elapsed ceiling is
+    therefore enforced separately from v0 Package assembly. Issue #217 expires
+    this exception by introducing the cumulative public contract and one shared
+    meter. No other stage-local replacement is allowed.
     """
 
     __slots__ = ("_budget", "_lock", "_reserved", "_usage")

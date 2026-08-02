@@ -316,6 +316,17 @@ class _ExactThenReplayCandidateIndex:
             effective_scope=effective_scope,
         )
 
+    def prepare_budgeted_discovery(
+        self,
+        request: Acquire,
+        *,
+        effective_scope: CandidateDiscoveryScope,
+        budget: object,
+        active_embedding_profile_digest: str,
+    ) -> ExactPhraseDiscoveryRequest:
+        del budget, active_embedding_profile_digest
+        return self.prepare_discovery(request, effective_scope=effective_scope)
+
     def discover(
         self,
         request: Acquire,
@@ -974,8 +985,17 @@ def test_registered_file_import_publishes_one_exact_authorized_http_package(
             1,
             1,
         )
-        assert (
-            _publication_effect_counts(connection, other_organization_id) == (0,) * 10
+        assert _publication_effect_counts(connection, other_organization_id) == (
+            0,
+            0,
+            1,
+            1,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
         )
 
     unauthorized_runtime = Runtime(
@@ -1038,8 +1058,17 @@ def test_registered_file_import_publishes_one_exact_authorized_http_package(
             1,
             1,
         )
-        assert (
-            _publication_effect_counts(connection, other_organization_id) == (0,) * 10
+        assert _publication_effect_counts(connection, other_organization_id) == (
+            0,
+            0,
+            1,
+            1,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
         )
 
 
@@ -1925,6 +1954,31 @@ def test_redeem_is_one_shot_before_any_content_effect(
     assert _redeem_direct(guarded_worker_engine, claims) is None
     assert _job_state(migration_configuration, scenario) == ("running", 0)
     assert _scenario_effect_counts(migration_configuration, scenario)[2:] == (0,) * 8
+
+
+def test_legacy_v2_publish_refuses_with_zero_effect_on_valid_running_lease(
+    tmp_path: Path,
+    migration_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+    guarded_worker_engine: Engine,
+) -> None:
+    scenario = _prepare_file_import_scenario(
+        tmp_path, migration_configuration, guarded_control_engine
+    )
+    claims = _scenario_claims(scenario)
+    assert _redeem_direct(guarded_worker_engine, claims) is not None
+    before = _scenario_effect_counts(migration_configuration, scenario)
+
+    result = _publish_direct(
+        guarded_worker_engine,
+        claims,
+        resource_ref=f"resource:legacy-refusal:{uuid4()}",
+        revision_id=uuid4(),
+    )
+
+    assert result is None
+    assert _job_state(migration_configuration, scenario) == ("running", 0)
+    assert _scenario_effect_counts(migration_configuration, scenario) == before
 
 
 @pytest.mark.parametrize("operation", ["publish", "fail"])

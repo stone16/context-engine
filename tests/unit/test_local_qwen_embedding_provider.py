@@ -1,4 +1,6 @@
 from pathlib import Path
+from threading import Event
+from time import monotonic
 from typing import Any
 
 import pytest
@@ -58,3 +60,71 @@ def test_local_qwen_malformed_output_is_generic_unavailability(
         provider.embed(("query",))
 
     assert failure.value.__cause__ is None
+
+
+def test_local_qwen_timeout_is_bounded_and_does_not_accumulate_calls(
+    monkeypatch: Any,
+) -> None:
+    release = Event()
+
+    class _HangingModel:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def encode(self, _inputs: list[str], **_kwargs: object) -> list[list[float]]:
+            self.calls += 1
+            release.wait()
+            return [[1.0] * 1024]
+
+    model = _HangingModel()
+    monkeypatch.setattr(
+        "adapters.embeddings.load_qwen_local_model",
+        lambda _model_dir: model,
+    )
+    monkeypatch.setattr("adapters.embeddings._LOCAL_EMBEDDING_TIMEOUT_SECONDS", 0.01)
+    provider = LocalQwenEmbeddingProvider(Path("/verified/local/model"))
+
+    started = monotonic()
+    with pytest.raises(EmbeddingProviderUnavailable):
+        provider.embed_documents(("document text",))
+    first_elapsed = monotonic() - started
+
+    started = monotonic()
+    with pytest.raises(EmbeddingProviderUnavailable):
+        provider.embed_documents(("document text",))
+    second_elapsed = monotonic() - started
+    release.set()
+
+    assert first_elapsed < 0.5
+    assert second_elapsed < 0.5
+    assert model.calls == 1
+
+
+def test_local_qwen_thread_start_failure_releases_inference_lock(
+    monkeypatch: Any,
+) -> None:
+    model = _Model([[1.0] * 1024])
+    monkeypatch.setattr(
+        "adapters.embeddings.load_qwen_local_model",
+        lambda _model_dir: model,
+    )
+    provider = LocalQwenEmbeddingProvider(Path("/verified/local/model"))
+
+    starts = 0
+
+    def refuse_start(_thread: object) -> None:
+        nonlocal starts
+        starts += 1
+        raise RuntimeError("cannot start thread")
+
+    monkeypatch.setattr(
+        "adapters._bounded_call.Thread.start",
+        refuse_start,
+    )
+    with pytest.raises(EmbeddingProviderUnavailable):
+        provider.embed(("first query",))
+    with pytest.raises(EmbeddingProviderUnavailable):
+        provider.embed(("second query",))
+
+    assert starts == 2
+    assert model.calls == []

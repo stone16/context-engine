@@ -26,6 +26,7 @@ from engine.persistence import (
     create_database_engine,
 )
 from engine.persistence.membership_context import _VECTOR_CANDIDATE_SQL
+from engine.runtime.budget import PackageBudgetMeter
 from engine.runtime.candidate_ranking import CandidateQuery
 from engine.runtime.construction import Runtime, required_kernel_dependencies
 from engine.runtime.content_io import CandidateIndex
@@ -93,6 +94,21 @@ class _RecordingVectorCandidateIndex:
             effective_scope=effective_scope,
         )
 
+    def prepare_budgeted_discovery(
+        self,
+        request: Acquire,
+        *,
+        effective_scope: CandidateDiscoveryScope,
+        budget: PackageBudgetMeter,
+        active_embedding_profile_digest: str,
+    ) -> VectorDiscoveryRequest:
+        return self.inner.prepare_budgeted_discovery(
+            request,
+            effective_scope=effective_scope,
+            budget=budget,
+            active_embedding_profile_digest=active_embedding_profile_digest,
+        )
+
     def discover(
         self,
         request: Acquire,
@@ -125,6 +141,21 @@ class _BlockingVectorCandidateIndex:
         return self.inner.prepare_discovery(
             request,
             effective_scope=effective_scope,
+        )
+
+    def prepare_budgeted_discovery(
+        self,
+        request: Acquire,
+        *,
+        effective_scope: CandidateDiscoveryScope,
+        budget: PackageBudgetMeter,
+        active_embedding_profile_digest: str,
+    ) -> VectorDiscoveryRequest:
+        return self.inner.prepare_budgeted_discovery(
+            request,
+            effective_scope=effective_scope,
+            budget=budget,
+            active_embedding_profile_digest=active_embedding_profile_digest,
         )
 
     def discover(
@@ -964,6 +995,77 @@ def test_mixed_profile_refuses_over_http_before_ann_discovery(
             query_digest_keyring,
             PostgreSQLVectorCandidateIndex(provider),
             request_id="issue-147-mixed-profile",
+        )
+    )
+
+    assert response.status_code == 503
+    assert response.json() == {"code": "service_unavailable"}
+    assert provider.calls == 1
+
+
+def test_heterogeneous_profile_corpus_refuses_over_http_before_ann_discovery(
+    request: pytest.FixtureRequest,
+    tmp_path: Path,
+    migration_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+    guarded_worker_engine: Engine,
+    guarded_runtime_engine: Engine,
+    query_digest_keyring: QueryDigestKeyring,
+) -> None:
+    scenario, candidate, user_id = _published_scenario(
+        request,
+        tmp_path,
+        migration_configuration,
+        guarded_control_engine,
+        guarded_worker_engine,
+        label="heterogeneous-profile",
+    )
+    provider = _RecordingTwinProvider()
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.begin() as connection:
+            original = connection.execute(
+                text(
+                    "SELECT embedding::text FROM context_fragment "
+                    "WHERE organization_id = :organization_id "
+                    "AND revision_id = :revision_id LIMIT 1"
+                ),
+                {
+                    "organization_id": scenario.organization_id,
+                    "revision_id": UUID(candidate.revision_ref),
+                },
+            ).scalar_one()
+            connection.execute(
+                text(
+                    "INSERT INTO context_fragment ("
+                    "organization_id, resource_ref, revision_id, fragment_ref, "
+                    "ordinal, content, projection_kind, embedding, "
+                    "embedding_profile_digest) VALUES ("
+                    ":organization_id, :resource_ref, :revision_id, "
+                    "'fragment:heterogeneous-profile', 1, "
+                    "'heterogeneous profile residual', 'body', "
+                    "CAST(:embedding AS vector), :digest)"
+                ),
+                {
+                    "organization_id": scenario.organization_id,
+                    "resource_ref": candidate.resource_ref,
+                    "revision_id": UUID(candidate.revision_ref),
+                    "embedding": original,
+                    "digest": QWEN3_EMBEDDING_PROFILE.profile_digest,
+                },
+            )
+    finally:
+        migration_engine.dispose()
+
+    response = _resolve(
+        _client(
+            scenario,
+            candidate,
+            user_id,
+            guarded_runtime_engine,
+            query_digest_keyring,
+            PostgreSQLVectorCandidateIndex(provider),
+            request_id="issue-147-heterogeneous-profile",
         )
     )
 

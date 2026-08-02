@@ -1655,7 +1655,7 @@ class Runtime:
             )
         if any(
             not callable(getattr(selected_content_io.index, method_name, None))
-            for method_name in ("prepare_discovery", "discover")
+            for method_name in ("prepare_budgeted_discovery", "discover")
         ):
             raise RuntimeConfigurationError("candidate_index is incomplete")
         try:
@@ -1847,13 +1847,8 @@ class Runtime:
                 query_embedding_budget = PackageBudgetMeter(
                     preparation.effective_budget
                 )
-                prepare_budgeted_discovery = getattr(
-                    self._content_io.index,
-                    "prepare_budgeted_discovery",
-                    None,
-                )
-                if callable(prepare_budgeted_discovery):
-                    discovery_request = prepare_budgeted_discovery(
+                discovery_request = (
+                    self._content_io.index.prepare_budgeted_discovery(
                         request,
                         effective_scope=discovery_scope,
                         budget=query_embedding_budget,
@@ -1861,11 +1856,7 @@ class Runtime:
                             active_release.embedding_profile_digest
                         ),
                     )
-                else:
-                    discovery_request = self._content_io.index.prepare_discovery(
-                        request,
-                        effective_scope=discovery_scope,
-                    )
+                )
                 _require_candidate_discovery_scope_integrity(discovery_scope)
                 require_bounded_discovery_request(
                     discovery_request,

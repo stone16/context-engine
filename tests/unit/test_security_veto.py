@@ -210,6 +210,8 @@ def test_test_private_security_factory_is_never_imported_by_production() -> None
 _EXCLUDED_TREES = frozenset(
     {".context-engine", ".git", ".venv", "node_modules", "tests", "third_party"}
 )
+# ``third_party`` is license/SBOM-governed vendored source, not first-party
+# production composition; the test-private import veto scans every first-party tree.
 _SECURITY_RESULT_TYPES = ("CaseSecurityObservation", "CaseSecurityViolation")
 
 

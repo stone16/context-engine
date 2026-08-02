@@ -336,6 +336,9 @@ def _replace_promotion(*, add_profile_gate: bool) -> None:
     definition = _function_definition(_PROMOTE)
     old = """AND manifest_row.curation_mode = 'curation_off'"""
     new = """AND manifest_row.curation_mode = 'curation_off'
+                      AND jsonb_array_length(
+                          manifest_row.active_revision_refs
+                      ) > 0
                       AND NOT EXISTS (
                            SELECT 1
                            FROM jsonb_array_elements_text(
@@ -380,6 +383,27 @@ def _replace_promotion(*, add_profile_gate: bool) -> None:
 def upgrade() -> None:
     """Persist exact identity and refuse partial or mixed profile activation."""
 
+    op.execute(
+        "LOCK TABLE public.release_manifest, "
+        "public.file_publication_recovery, public.file_import_job, "
+        "public.file_revision_replacement_plan, public.exact_phrase_candidate, "
+        "public.revision_publication_event, public.file_revision_snapshot, "
+        "public.context_fragment, public.context_revision, "
+        "public.resource_access_policy, "
+        "public.membership_resource_field_right "
+        "IN ACCESS EXCLUSIVE MODE"
+    )
+    retained_vectors = op.get_bind().execute(
+        sa.text(
+            "SELECT EXISTS ("
+            "SELECT 1 FROM public.context_fragment WHERE embedding IS NOT NULL"
+            ")"
+        )
+    ).scalar_one()
+    if retained_vectors is True:
+        raise RuntimeError(
+            "embedding profile upgrade requires a provenance-free corpus"
+        )
     op.add_column(
         "release_manifest",
         sa.Column(
@@ -417,10 +441,6 @@ def upgrade() -> None:
             sa.Text(),
             nullable=True,
         ),
-    )
-    op.execute(
-        "UPDATE context_fragment SET embedding_profile_digest = "
-        f"'{_TWIN_PROFILE_DIGEST}' WHERE embedding IS NOT NULL"
     )
     op.create_check_constraint(
         "ck_context_fragment_embedding_profile",
@@ -470,8 +490,14 @@ def downgrade() -> None:
     """Remove profile binding only when no non-twin lineage would be lost."""
 
     op.execute(
-        "LOCK TABLE public.release_manifest, public.context_fragment, "
-        "public.file_publication_recovery IN ACCESS EXCLUSIVE MODE"
+        "LOCK TABLE public.release_manifest, "
+        "public.file_publication_recovery, public.file_import_job, "
+        "public.file_revision_replacement_plan, public.exact_phrase_candidate, "
+        "public.revision_publication_event, public.file_revision_snapshot, "
+        "public.context_fragment, public.context_revision, "
+        "public.resource_access_policy, "
+        "public.membership_resource_field_right "
+        "IN ACCESS EXCLUSIVE MODE"
     )
     retained = op.get_bind().execute(
         sa.text(

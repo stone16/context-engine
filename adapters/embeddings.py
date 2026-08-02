@@ -10,11 +10,13 @@ from dataclasses import dataclass, field
 from hashlib import shake_256
 from math import sqrt
 from pathlib import Path
+from threading import Lock
 from typing import IO, Any, BinaryIO, cast
 from urllib.error import HTTPError
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
+from adapters._bounded_call import BoundedCallUnavailable, invoke_bounded
 from adapters.local_embedding_model import load_qwen_local_model
 from engine.supply.embeddings import (
     CONTEXT_FRAGMENT_EMBEDDING_DIMENSION,
@@ -29,6 +31,7 @@ from engine.supply.embeddings import (
 
 _MAX_EXTERNAL_RESPONSE_BYTES = 64 * 1024 * 1024
 _DEFAULT_TIMEOUT_SECONDS = 30.0
+_LOCAL_EMBEDDING_TIMEOUT_SECONDS = 30.0
 EmbeddingTransport = Callable[[Request, float, int], bytes]
 
 
@@ -262,14 +265,20 @@ class DeterministicEmbeddingTwin:
 class LocalQwenEmbeddingProvider:
     """Hash-verified, network-free Qwen provider for the activated local carrier."""
 
-    __slots__ = ("_model",)
+    __slots__ = ("_inference_lock", "_model")
 
     def __init__(self, model_dir: Path) -> None:
         if not isinstance(model_dir, Path):
             raise TypeError("Local embedding provider requires a model directory")
+        self._inference_lock = Lock()
         try:
-            model = load_qwen_local_model(model_dir)
-        except Exception:
+            model = invoke_bounded(
+                lambda: load_qwen_local_model(model_dir),
+                timeout_seconds=_LOCAL_EMBEDDING_TIMEOUT_SECONDS,
+                thread_name="context-engine-local-embedding",
+                in_flight_lock=self._inference_lock,
+            )
+        except BoundedCallUnavailable:
             raise EmbeddingProviderUnavailable(
                 "Embedding provider is unavailable"
             ) from None
@@ -304,13 +313,18 @@ class LocalQwenEmbeddingProvider:
             raise EmbeddingProviderUnavailable("Embedding provider is unavailable")
         try:
             prefixed = [prefix + value for value in inputs]
-            raw_vectors = self._model.encode(
-                prefixed,
-                batch_size=QWEN3_EMBEDDING_PROFILE.batch_size,
-                convert_to_numpy=True,
-                normalize_embeddings=True,
-                precision=QWEN3_EMBEDDING_PROFILE.precision,
-                show_progress_bar=False,
+            raw_vectors = invoke_bounded(
+                lambda: self._model.encode(
+                    prefixed,
+                    batch_size=QWEN3_EMBEDDING_PROFILE.batch_size,
+                    convert_to_numpy=True,
+                    normalize_embeddings=True,
+                    precision=QWEN3_EMBEDDING_PROFILE.precision,
+                    show_progress_bar=False,
+                ),
+                timeout_seconds=_LOCAL_EMBEDDING_TIMEOUT_SECONDS,
+                thread_name="context-engine-local-embedding",
+                in_flight_lock=self._inference_lock,
             )
             vectors: list[EmbeddingVector] = []
             for raw_vector in raw_vectors:
@@ -322,7 +336,7 @@ class LocalQwenEmbeddingProvider:
                     raise ValueError
                 vectors.append(tuple(value / norm for value in truncated))
             return validate_embedding_batch(inputs, tuple(vectors), self.profile)
-        except Exception:
+        except (BoundedCallUnavailable, Exception):
             raise EmbeddingProviderUnavailable(
                 "Embedding provider is unavailable"
             ) from None

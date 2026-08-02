@@ -121,9 +121,23 @@ def _job_snapshot(
                            job.resource_ref, job.revision_id,
                            resource.active_revision_id,
                            (SELECT count(*) FROM context_revision AS revision
-                            WHERE revision.organization_id = job.organization_id),
+                            JOIN context_resource AS revision_resource
+                              ON revision_resource.organization_id =
+                                 revision.organization_id
+                             AND revision_resource.resource_ref =
+                                 revision.resource_ref
+                            WHERE revision.organization_id = job.organization_id
+                              AND revision_resource.source_ref <>
+                                  'source:test-release-sentinel'),
                            (SELECT count(*) FROM context_fragment AS fragment
-                            WHERE fragment.organization_id = job.organization_id),
+                            JOIN context_resource AS fragment_resource
+                              ON fragment_resource.organization_id =
+                                 fragment.organization_id
+                             AND fragment_resource.resource_ref =
+                                 fragment.resource_ref
+                            WHERE fragment.organization_id = job.organization_id
+                              AND fragment_resource.source_ref <>
+                                  'source:test-release-sentinel'),
                            (SELECT count(*) FROM exact_phrase_candidate AS candidate
                             WHERE candidate.organization_id = job.organization_id),
                            (SELECT count(*) FROM file_import_job AS counted_job
@@ -131,7 +145,9 @@ def _job_snapshot(
                            (SELECT count(*)
                             FROM context_resource AS counted_resource
                             WHERE counted_resource.organization_id =
-                                  job.organization_id)
+                                  job.organization_id
+                              AND counted_resource.source_ref <>
+                                  'source:test-release-sentinel')
                     FROM file_import_job AS job
                     LEFT JOIN context_resource AS resource
                       ON resource.organization_id = job.organization_id
