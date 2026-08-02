@@ -7,6 +7,7 @@ from typing import Final, Protocol, cast
 from uuid import uuid4
 
 import mcp.types as mcp_types
+from anyio import to_thread
 from mcp.server import Server, ServerRequestContext
 from pydantic import TypeAdapter, ValidationError
 
@@ -91,9 +92,13 @@ def create_mcp_server(
                 dict[str, object],
                 acquire.model_dump(mode="json", by_alias=True, exclude_none=True),
             )
-            raw_outcome = caller.resolve_acquire_document(
-                acquire=acquire_document,
-                request_id=request_id_factory(),
+            request_id = request_id_factory()
+            raw_outcome = await to_thread.run_sync(
+                lambda: caller.resolve_acquire_document(
+                    acquire=acquire_document,
+                    request_id=request_id,
+                ),
+                abandon_on_cancel=True,
             )
             outcome = _OUTCOME_ADAPTER.validate_python(raw_outcome)
             public_document = resolution_outcome_public_document(outcome)

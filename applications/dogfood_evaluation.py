@@ -340,13 +340,17 @@ def reject_secret_retention(
     if type(golden_set) is not GoldenSet:
         raise TypeError("golden_set must be GoldenSet")
     for case in golden_set.cases:
-        if configuration.secret in case.query or any(
-            configuration.secret in expectation.path
-            or configuration.secret in expectation.identity.source_ref
-            or configuration.secret in expectation.identity.resource_ref
-            or configuration.secret in expectation.identity.revision_ref
-            or configuration.secret in expectation.identity.fragment_ref
-            for expectation in case.expected_evidence
+        if (
+            configuration.secret in case.case_ref
+            or configuration.secret in case.query
+            or any(
+                configuration.secret in expectation.path
+                or configuration.secret in expectation.identity.source_ref
+                or configuration.secret in expectation.identity.resource_ref
+                or configuration.secret in expectation.identity.revision_ref
+                or configuration.secret in expectation.identity.fragment_ref
+                for expectation in case.expected_evidence
+            )
         ):
             raise DogfoodEvaluationUnavailable(
                 "golden set contains configured secret material"

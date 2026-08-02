@@ -396,6 +396,21 @@ def test_configured_secret_is_refused_from_golden_input(tmp_path: Path) -> None:
         reject_secret_retention(configuration, golden_set)
 
 
+def test_configured_secret_is_refused_from_golden_case_ref(tmp_path: Path) -> None:
+    entries = _entries()
+    entries[0]["caseRef"] = SECRET
+    path = tmp_path / "golden.json"
+    _write_golden(path, entries)
+    golden_set = load_golden_set(path)
+    configuration = DogfoodHttpConfiguration(
+        base_url="http://127.0.0.1:8000",
+        secret=SECRET,
+    )
+
+    with pytest.raises(DogfoodEvaluationUnavailable, match="secret material"):
+        reject_secret_retention(configuration, golden_set)
+
+
 @pytest.mark.security_evidence(id="MCP-HTTP-PROXY-215", layer="runtime")
 def test_plain_http_caller_uses_only_frozen_resolve_transport(
     monkeypatch: pytest.MonkeyPatch,

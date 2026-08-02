@@ -5,9 +5,10 @@ import json
 import os
 import subprocess
 import sys
+import time
 from copy import deepcopy
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from threading import Thread
+from threading import Event, Thread
 from typing import Any, cast
 
 import pytest
@@ -279,6 +280,45 @@ def test_mcp_collapses_non_outcome_failures_to_one_content_free_error(
             "Context resolve is unavailable."
         ]
         assert str(failure) not in str(result.content)
+
+    asyncio.run(exercise())
+
+
+def test_mcp_keeps_protocol_loop_responsive_during_blocking_http_call() -> None:
+    slow_call_started = Event()
+
+    class SlowCaller:
+        def resolve_acquire_document(
+            self,
+            *,
+            acquire: dict[str, object],
+            request_id: str,
+        ) -> dict[str, object]:
+            del acquire, request_id
+            slow_call_started.set()
+            time.sleep(0.2)
+            return {"kind": "request_not_available", "retryable": False}
+
+    async def exercise() -> None:
+        async with Client(
+            create_mcp_server(cast(ResolveCaller, SlowCaller()))
+        ) as client:
+            started = time.monotonic()
+            resolve = asyncio.create_task(
+                client.call_tool(
+                    MCP_TOOL_NAME,
+                    {"kind": "acquire", "need": {"query": "slow loopback probe"}},
+                )
+            )
+            while not slow_call_started.is_set():
+                await asyncio.sleep(0)
+            listed = await client.list_tools()
+            progress_elapsed = time.monotonic() - started
+            result = await resolve
+
+        assert progress_elapsed < 0.1
+        assert [tool.name for tool in listed.tools] == [MCP_TOOL_NAME]
+        assert result.is_error is False
 
     asyncio.run(exercise())
 
