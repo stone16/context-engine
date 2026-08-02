@@ -72,7 +72,7 @@ class PackageBudgetMeter:
     """The shared resolve ledger for atomic PackageBudget reservations and charges.
 
     ADR-0096 requires every model-backed stage in one resolve to share this
-    instance and publish its cumulative ``usage``. ADR-0098 temporarily permits
+    instance and publish its cumulative ``usage``. ADR-0102 temporarily permits
     one stage-local meter for local query embedding because frozen v0 cannot
     publish the cumulative meaning; its provider-call/cost/elapsed ceiling is
     therefore enforced separately from v0 Package assembly. Issue #217 expires

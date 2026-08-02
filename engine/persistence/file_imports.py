@@ -681,7 +681,7 @@ class PostgreSQLFileImportWorker:
         return available is True
 
     def _embedding_profile_binding_active(self) -> bool:
-        """Detect the exact ADR-0098 function contract, including downgrades."""
+        """Detect the exact ADR-0102 function contract, including downgrades."""
 
         with self._engine.begin() as connection:
             assert_worker_role(connection)

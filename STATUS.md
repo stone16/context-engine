@@ -81,7 +81,7 @@ designed, and deliberately not active:
 
 | ADR | Activates |
 |---|---|
-| [0068](./docs/decisions/0068-activate-loopback-dogfood-runtime.md), [0098](./docs/decisions/0098-activate-release-bound-local-query-embedding.md) | Explicit loopback single-Membership authentication plus File pgvector `Acquire`, with exact EffectiveScope removal before ANN `LIMIT`, sealed Kernel reauthorization, release-bound hash-verified local Qwen query embedding, mixed-profile refusal, internal budget enforcement, and final Policy Epoch veto |
+| [0068](./docs/decisions/0068-activate-loopback-dogfood-runtime.md), [0102](./docs/decisions/0102-activate-release-bound-local-query-embedding.md) | Explicit loopback single-Membership authentication plus File pgvector `Acquire`, with exact EffectiveScope removal before ANN `LIMIT`, sealed Kernel reauthorization, release-bound hash-verified local Qwen query embedding, mixed-profile refusal, internal budget enforcement, and final Policy Epoch veto |
 
 `RUNTIME-DOGFOOD-AUTH-102`, `RUNTIME-DOGFOOD-CARRIER-102`, and
 `RUNTIME-DOGFOOD-EPOCH-102` are registered release-veto evidence. The default
@@ -194,7 +194,7 @@ publication boundary before activation; unchanged acquisitions and recovery
 past preparation do not call the provider again. The partial HNSW index is a
 future candidate-discovery implementation detail and has no authorization role.
 
-ADR-0098 now activates the bounded local Qwen File publication and query carrier.
+ADR-0102 now activates the bounded local Qwen File publication and query carrier.
 It binds the exact provider profile to Release and Fragment lineage, refuses a
 mixed active corpus before ANN, debits the internal query budget, and permits
 activation only through ADR-0073 promotion. It does **not** activate an

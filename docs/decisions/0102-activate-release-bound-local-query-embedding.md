@@ -1,5 +1,5 @@
 ---
-name: adr-0098-activate-release-bound-local-query-embedding
+name: adr-0102-activate-release-bound-local-query-embedding
 version: "1.0.0"
 description: >
   Activate one hash-verified local Qwen query-embedding carrier with exact
@@ -9,7 +9,7 @@ description: >
   cumulative model-accounting semantics.
 ---
 
-# 0098. Activate release-bound local query embedding
+# 0102. Activate release-bound local query embedding
 
 - Status: accepted
 - Date: 2026-08-02
@@ -40,9 +40,10 @@ ADR-0096 independently requires a Release-bound tokenizer, one cumulative
 resolve meter, and a reviewed new public contract version before model-backed
 carriers publish cumulative Package/ContextRun usage. Frozen OpenAPI v0 rejects
 nonzero provider-call, cost, and elapsed values. Issue #147 does not own that
-contract migration. A narrow local activation is possible only if v0 stays
-truthful and the local query-embedding debit remains an internal enforcement
-fact until issue #217 introduces the reviewed public version.
+contract migration. A narrow local activation keeps v0 bytes unchanged, makes
+the query-embedding debit an internal enforcement fact, and records the public
+usage under-description explicitly until issue #217 introduces the reviewed
+public version.
 
 ## Decision
 
@@ -88,19 +89,23 @@ fact until issue #217 introduces the reviewed public version.
    than taking the content no-op. During the re-embed interval, an old active
    Release observing new-profile active Fragments refuses under clause 4; this
    bounded local availability cost is accepted instead of serving mixed vectors.
-   Candidate construction and promotion both verify that every Fragment of every
-   candidate active Revision has exactly one non-null vector under the candidate
-   profile, and that the residual count for any prior/missing profile is zero.
-   A failed or partial re-embed cannot promote. Historical Revisions may retain
-   their historical vectors; "full corpus" means the exact current active
-   Revision set selected by the candidate snapshot.
+   Candidate construction refuses an empty active-Revision snapshot. The atomic
+   promotion transaction then verifies that every Fragment of every candidate
+   active Revision has exactly one non-null vector under the candidate profile,
+   and that the residual count for any prior/missing profile is zero. A failed
+   or partial re-embed cannot promote. Historical Revisions may retain their
+   historical vectors; "full corpus" means the exact current active Revision set
+   selected by the candidate snapshot.
 6. **Local provider failures fail closed.** Provider load failure, timeout,
    inference exception, wrong cardinality, wrong dimension, non-finite values,
    all-zero vectors, or malformed output yields
-   `EmbeddingProviderUnavailable`. Supply leaves the acquired publication
-   recoverable without activating it. Runtime returns a generic refused resolve
-   and performs no ANN lookup, fallback embedding, or degraded success.
-7. **Query embedding is budgeted internally while v0 remains truthful.** One
+   `EmbeddingProviderUnavailable`. Local inference calls have one bounded
+   deadline and permit at most one outstanding backend invocation per provider,
+   so a wedged backend cannot accumulate more work. Supply leaves the acquired
+   publication recoverable without activating it. Runtime returns a generic
+   refused resolve and performs no ANN lookup, fallback embedding, or degraded
+   success.
+7. **Query embedding is enforced internally while v0 usage stays incomplete.** One
    internal `PackageBudgetMeter` is created from the effective PackageBudget
    before query embedding. The query stage reserves its maximum provider-call,
    cost, and elapsed bounds before inference, refuses without a provider call on
@@ -109,11 +114,15 @@ fact until issue #217 introduces the reviewed public version.
    `budgetUsage.tokens` retains `utf8-byte-budget-v1` Package packing semantics,
    while `providerCalls`, `costMicrounits`, and `elapsedMs` describe the v0
    generation/egress carriers represented by that public contract. The local
-   internal query-embedding ledger is deliberately outside those v0 fields, so
-   their emitted zeros remain truthful rather than falsified execution totals.
-   No public or ordinary ContextRun claim describes those zeros as cumulative
-   resolve usage. Issue #217 owns the new public cumulative meaning required by
-   ADR-0096 clauses 2–4.
+   internal query-embedding ledger is deliberately outside those v0 fields.
+   However, the public v0 `BudgetUsageWire` description and durable ContextRun
+   `usage_*` names are broader than this carrier-specific meaning. They therefore
+   under-describe a local Qwen resolve by omitting its private query-embedding
+   ledger; they are neither cumulative resolve totals nor an accurate public
+   statement of every resource consumed. Issue #217 owns the corrected public
+   cumulative meaning, Package/ContextRun alignment, and compatibility migration
+   required by ADR-0096 clauses 2–4. Until then, no caller may use the v0 zeros
+   as proof that query inference did not occur.
 8. **Only ADR-0073 promotion activates the profile.** Supply may publish
    re-embedded immutable Revisions and evaluation may inspect a candidate, but
    neither changes the active embedding profile. The explicit local release
@@ -127,6 +136,13 @@ fact until issue #217 introduces the reviewed public version.
    network embedding endpoints remain `NOT_ACTIVE` in Runtime until issue #217
    lands the ADR-0096 public contract version and a later explicit activation
    decision records credentials, egress, timeout, cost, and settlement evidence.
+10. **Local inference makes its backend a core dependency.**
+    `sentence-transformers` moves from the benchmark-only extra into the core
+    Python dependency set because the active production dogfood composition
+    must have one hash-verifying local carrier available. Keeping it optional
+    would permit a profile-selected deployment to install successfully without
+    the selected carrier and would turn dependency extras into an undeclared
+    composition switch. Issue #217 does not own this local packaging choice.
 
 ## Consequences
 
@@ -137,9 +153,18 @@ fact until issue #217 introduces the reviewed public version.
   promotion. That downtime is observable and fail-closed; a shadow vector store
   and zero-downtime atomic corpus swap are deferred until measured need justifies
   a second persistence representation.
-- Frozen v0 remains byte-for-byte and semantically truthful, at the price of
-  keeping local query-inference accounting internal and unavailable to ordinary
-  consumers until issue #217.
+- Frozen v0 remains byte-for-byte compatible, at the accepted cost that its
+  broad public usage description and durable `usage_*` names under-describe
+  local Qwen work. The enforced query ledger remains internal and unavailable
+  to ordinary consumers until issue #217.
+- An upgrade from a pre-profile schema refuses while any Fragment vector is
+  retained. Historical vector bytes carry no trustworthy provider identity, so
+  the migration neither labels them as twin-produced nor clears immutable
+  content silently; operators must rebuild a provenance-free corpus and then
+  re-embed through the profile-bound Supply path.
+- Every core environment installs the local inference dependency tree even if
+  it executes only a non-model carrier. That packaging cost is accepted to keep
+  the activated production composition structurally complete.
 - Rollback to a Release whose active corpus/profile no longer matches refuses;
   the operator must first restore a complete verified corpus under that profile
   and promote through the same path.

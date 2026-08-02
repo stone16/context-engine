@@ -154,6 +154,12 @@ CONTEXT_ENGINE_DOGFOOD_EMBEDDING_PROVIDER=qwen3-embedding-0.6b-local-v1
 CONTEXT_ENGINE_DOGFOOD_EMBEDDING_MODEL_DIR
 ```
 
+The model directory must contain exactly the ten regular, non-symlink artifact
+paths listed for `models.primary.artifacts` in
+[`eval/embedding-benchmark/model-registry.json`](./eval/embedding-benchmark/model-registry.json).
+Extra files, missing files, changed digests, and symlinks all refuse before
+inference; a stock model download must be reduced to that registered manifest.
+
 Before activation, freshly reimport the File corpus with the Supply worker's
 network-free `qwen-local` embedding mode and the same pinned local model
 directory, then use the explicit release procedure below. The active Release
