@@ -2355,6 +2355,91 @@ CANONICAL_LOCAL_OPERATOR_AUTHENTICATION_ACTIVATION: dict[str, object] = {
     ],
 }
 
+CANONICAL_LOCAL_MCP_ACTIVATION: dict[str, object] = {
+    "issueRef": "#215",
+    "invariantRef": "TRANSPORT-UNTRUSTED-008",
+    "carrier": "spawn-per-session maintainer-local MCP stdio Acquire translator",
+    "status": "active_fail_closed",
+    "policyEpochScope": "organization-v0",
+    "controlBoundary": (
+        "closed MCP AcquireWire -> server-owned loopback bearer and fresh request "
+        "id -> frozen POST /v0/resolve -> current UserActor transaction -> sealed "
+        "AuthorizationKernel -> exact ResolutionOutcome structured content"
+    ),
+    "testEvidence": [
+        {
+            "id": "MCP-CONTRACT-215",
+            "surface": (
+                "tests/unit/test_mcp_adapter.py::"
+                "test_mcp_lists_one_exact_acquire_tool_without_trusted_inputs"
+            ),
+            "oracle": (
+                "An MCP SDK client observes exactly one closed Acquire tool "
+                "and the exact HTTP outcome schema."
+            ),
+        },
+        {
+            "id": "MCP-IMPORT-BOUNDARY-215",
+            "surface": (
+                "tests/unit/test_mcp_adapter.py::"
+                "test_mcp_process_import_graph_excludes_privileged_modules"
+            ),
+            "oracle": (
+                "A fresh MCP process import graph contains no engine, Provider, "
+                "database-client or evaluation module."
+            ),
+        },
+        {
+            "id": "MCP-HTTP-PARITY-215",
+            "surface": (
+                "tests/unit/test_mcp_adapter.py::"
+                "test_spawned_mcp_matches_the_public_http_seam_for_required_parity_cases"
+            ),
+            "oracle": (
+                "Public HTTP and spawned MCP runs "
+                "preserve allowed, missing-authority, wrong-Organization, "
+                "revoked/stale-Membership, malformed, budget and unavailable semantics."
+            ),
+        },
+        {
+            "id": "RUNTIME-MCP-CARRIER-215",
+            "surface": (
+                "tests/integration/test_dogfood_runtime_activation.py::"
+                "test_spawned_mcp_stdio_delivers_only_real_http_authorized_evidence"
+            ),
+            "oracle": (
+                "A real spawned MCP stdio client and server call the loopback HTTP "
+                "dogfood composition backed by PostgreSQL and File publication; one "
+                "allowed question traverses CandidateRef, the sealed "
+                "AuthorizationKernel and AuthorizedProjection into one exact "
+                "Block/Evidence Package, while unauthorized narrowing returns the "
+                "same closed empty Package with zero content bytes."
+            ),
+        },
+    ],
+    "deferredEvidence": [
+        "production or remote MCP authentication and DeliveryEvidenceRef redemption",
+        "second-human, multi-Membership and multi-tenant MCP identity selection",
+        "MCP Continue, OpenCitation, generation, effects and group/public audience",
+    ],
+    "futureCarriers": [
+        "remote authenticated MCP transport",
+        "private and group MCP audience",
+        "MCP Continue and OpenCitation",
+    ],
+    "notActive": [
+        "remote or shared MCP server",
+        "production, multi-user or multi-tenant MCP authentication",
+        "DeliveryEvidenceRef over MCP",
+        "private, group or public MCP audience",
+        "Continue or OpenCitation MCP tools",
+        "generation, ModelGateway, Sender or ActionPlane effects",
+        "MCP prompts, resources or arbitrary browsing",
+        "MCP-side EgressGrant acceptance, redemption, forwarding or reinterpretation",
+        "Package persistence, index, cache or cross-question reuse",
+    ],
+}
+
 CANONICAL_ACTIVATIONS: list[dict[str, object]] = [
     CANONICAL_REVOCATION_ACTIVATION,
     CANONICAL_UNAVAILABLE_CAPABILITY_ACTIVATION,
@@ -2381,6 +2466,7 @@ CANONICAL_ACTIVATIONS: list[dict[str, object]] = [
     CANONICAL_DOGFOOD_AUTHENTICATION_ACTIVATION,
     CANONICAL_DOGFOOD_RUNTIME_ACTIVATION,
     CANONICAL_LOCAL_OPERATOR_AUTHENTICATION_ACTIVATION,
+    CANONICAL_LOCAL_MCP_ACTIVATION,
 ]
 CANONICAL_ACTIVATION_ISSUE_LIST = ", ".join(
     f"Issue {activation['issueRef']}" for activation in CANONICAL_ACTIVATIONS

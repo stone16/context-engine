@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Final, cast
 
-from applications.dogfood_evaluation import (
+from adapters.http.dogfood_client import (
     DogfoodEvaluationUnavailable,
     DogfoodHttpConfiguration,
     DogfoodResolveClient,

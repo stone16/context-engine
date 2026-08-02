@@ -103,7 +103,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
     _prepare_state_directory(state)
     _write_durable_deployment_marker(state)
     _ensure_operator_environment(state / "operators.env")
-    subprocess.run(("make", "install"), cwd=checkout, check=True)
+    subprocess.run(("make", "install-runtime"), cwd=checkout, check=True)
     subprocess.run(("make", "db-up"), cwd=checkout, check=True)
     (state / "logs").mkdir(mode=0o700, exist_ok=True)
     write_rendered_templates(

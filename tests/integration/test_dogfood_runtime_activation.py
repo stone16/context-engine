@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
 import subprocess
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
@@ -14,6 +16,8 @@ from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
 from sqlalchemy import Engine, text
 
 import engine.persistence.membership_context as membership_context_module
@@ -38,6 +42,8 @@ from adapters.http.dogfood import (
     create_dogfood_app,
     create_served_app,
 )
+from adapters.http.dogfood_client import DogfoodHttpConfiguration, DogfoodResolveClient
+from adapters.mcp.server import MCP_TOOL_NAME
 from adapters.pgvector import DEFAULT_VECTOR_CANDIDATE_LIMIT
 from applications.api import main as api_main
 from applications.dogfood_evaluation import (
@@ -89,6 +95,7 @@ from tests.support.releases import (
     clear_test_runtime_release,
     ensure_test_runtime_release,
 )
+from tests.support.resolve_parity import without_request_scoped_resolve_fields
 
 pytestmark = pytest.mark.integration
 SECRET = "dogfood-secret-with-at-least-thirty-two-bytes"
@@ -396,6 +403,140 @@ class _PublicTestClientCaller:
         return cast(dict[str, object], response.json())
 
 
+async def _mcp_acquire_session(
+    requests: tuple[dict[str, object], ...],
+) -> tuple[dict[str, object], ...]:
+    parameters = StdioServerParameters(
+        command="context-engine-mcp",
+        env=dict(os.environ),
+    )
+    async with (
+        stdio_client(parameters) as (read_stream, write_stream),
+        ClientSession(read_stream, write_stream) as session,
+    ):
+        await asyncio.wait_for(session.initialize(), timeout=10)
+        listed = await asyncio.wait_for(session.list_tools(), timeout=10)
+        assert [tool.name for tool in listed.tools] == [MCP_TOOL_NAME]
+        outcomes: list[dict[str, object]] = []
+        for arguments in requests:
+            result = await session.call_tool(
+                MCP_TOOL_NAME,
+                arguments=arguments,
+                read_timeout_seconds=30,
+            )
+            assert result.is_error is False
+            assert result.content == []
+            assert isinstance(result.structured_content, dict)
+            outcomes.append(cast(dict[str, object], result.structured_content))
+    return tuple(outcomes)
+
+
+@pytest.mark.security_evidence(id="RUNTIME-MCP-CARRIER-215", layer="runtime")
+def test_spawned_mcp_stdio_delivers_only_real_http_authorized_evidence(
+    request: pytest.FixtureRequest,
+    tmp_path: Path,
+    migration_configuration: DatabaseConfiguration,
+    runtime_configuration: DatabaseConfiguration,
+    control_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+    guarded_worker_engine: Engine,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scenario, user_id, target = _publish(
+        request,
+        tmp_path,
+        migration_configuration,
+        guarded_control_engine,
+        guarded_worker_engine,
+    )
+    configuration = _configuration(scenario, user_id)
+    client = TestClient(
+        create_dogfood_app(
+            configuration,
+            _environment(
+                configuration,
+                runtime_configuration,
+                control_configuration,
+            ),
+            host="127.0.0.1",
+        )
+    )
+
+    with _bridged_seam(client, monkeypatch):
+        http_caller = DogfoodResolveClient(DogfoodHttpConfiguration.load())
+        authorized_arguments: dict[str, object] = {
+            "kind": "acquire",
+            "need": {"query": QUERY},
+            "packageBudget": {
+                "maxTokens": 1024,
+                "maxProviderCalls": 1,
+            },
+        }
+        refused_arguments: dict[str, object] = {
+            "kind": "acquire",
+            "need": {"query": QUERY},
+            "requestNarrowing": {"resourceRefs": ["resource:file:not-authorized"]},
+        }
+        exhausted_arguments: dict[str, object] = {
+            "kind": "acquire",
+            "need": {"query": QUERY},
+            "packageBudget": {"maxTokens": 1},
+        }
+        http_authorized = http_caller.resolve_acquire_document(
+            acquire=authorized_arguments,
+            request_id="mcp-e2e-authorized-parity",
+        )
+        http_refused = http_caller.resolve_acquire_document(
+            acquire=refused_arguments,
+            request_id="mcp-e2e-refused-parity",
+        )
+        http_exhausted = http_caller.resolve_acquire_document(
+            acquire=exhausted_arguments,
+            request_id="mcp-e2e-budget-parity",
+        )
+        authorized, refused, exhausted = asyncio.run(
+            _mcp_acquire_session(
+                (
+                    authorized_arguments,
+                    refused_arguments,
+                    exhausted_arguments,
+                )
+            )
+        )
+
+    authorized_package = cast(dict[str, Any], authorized["package"])
+    assert authorized["kind"] == "resolved"
+    assert [block["text"] for block in authorized_package["blocks"]] == [TARGET_TEXT]
+    assert len(authorized_package["evidence"]) == 1
+    assert authorized_package["evidence"][0]["resourceRef"] == target.resource_ref
+    assert authorized_package["evidence"][0]["revisionRef"] == target.revision_ref
+    assert "candidate" not in str(authorized).casefold()
+    assert without_request_scoped_resolve_fields(
+        authorized
+    ) == without_request_scoped_resolve_fields(http_authorized)
+
+    refused_package = cast(dict[str, Any], refused["package"])
+    assert refused["kind"] == "resolved"
+    assert refused_package["blocks"] == refused_package["evidence"] == []
+    assert refused_package["coverage"] == {
+        "status": "empty",
+        "reason": "no_authorized_evidence",
+    }
+    assert TARGET_TEXT not in str(refused)
+    assert without_request_scoped_resolve_fields(
+        refused
+    ) == without_request_scoped_resolve_fields(http_refused)
+
+    exhausted_package = cast(dict[str, Any], exhausted["package"])
+    assert exhausted["kind"] == "resolved"
+    assert exhausted_package["blocks"] == exhausted_package["evidence"] == []
+    assert exhausted_package["budgetUsage"]["tokens"] == 0
+    assert TARGET_TEXT not in str(exhausted)
+    assert without_request_scoped_resolve_fields(
+        exhausted
+    ) == without_request_scoped_resolve_fields(http_exhausted)
+
+
 @pytest.mark.security_evidence(id="RUNTIME-DOGFOOD-CARRIER-102", layer="runtime")
 def test_dogfood_served_composition_delivers_release_scoped_file_evidence_before_limit(
     request: pytest.FixtureRequest,
@@ -615,8 +756,9 @@ def test_dogfood_secret_and_membership_fail_closed_without_secret_retention(
         json={"kind": "open_citation", "citationOpenRef": citation_ref},
     )
     assert opened.status_code == 200
-    assert opened.json()["package"]["evidence"][0]["resourceRef"] == (
-        successful.json()["package"]["evidence"][0]["resourceRef"]
+    assert (
+        opened.json()["package"]["evidence"][0]["resourceRef"]
+        == (successful.json()["package"]["evidence"][0]["resourceRef"])
     )
 
     with caplog.at_level(logging.DEBUG):

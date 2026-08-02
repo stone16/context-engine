@@ -21,7 +21,7 @@
 **一句话**:为团队工具栈提供权限感知、可撤销、可审计的 context 交付。
 
 - **上游**:知识源 connector——File/笔记库起步,飞书(Docs/Wiki/Base)、Slack、Google Docs、企业微信分期接入。
-- **下游**:统一的 `ContextRuntime.resolve(AuthenticatedInvocation, TrustedDeliveryContext, Acquire | Continue | OpenCitation)` 首先经 HTTP 交付 ContextPackage;TypeScript SDK 是由 OpenAPI 生成的 HTTP client,不是服务端 transport。MCP 在真实 caller 出现前保持 NOT_ACTIVE。其上的 **BotDelivery** 深模块编排受信身份/audience 证据、生成与 IM egress,但不计算授权 scope。
+- **下游**:统一的 `ContextRuntime.resolve(AuthenticatedInvocation, TrustedDeliveryContext, Acquire | Continue | OpenCitation)` 首先经 HTTP 交付 ContextPackage;TypeScript SDK 是由 OpenAPI 生成的 HTTP client,不是服务端 transport。ADR-0103 只激活维护者本地、spawn-per-session stdio MCP Acquire translator;其余 MCP carrier 保持 NOT_ACTIVE。其上的 **BotDelivery** 深模块编排受信身份/audience 证据、生成与 IM egress,但不计算授权 scope。
 - **差异化**:
   1. **权限感知 + 可撤销治理三合一**——源 ACL 证据、逐条 provenance、受控的续取/引用重开。撤权在权威源或已声明 freshness 边界观测到变化后,对新 resolve 生效;已交付字节另由 egress 保留/撤回策略治理。
   2. **Agent-driven curation**——语义去重、过期标记、术语沉淀由 Agent 提案、人工确认、原子发布,把知识库最大的隐性成本(组织成本)从用户身上拿走。

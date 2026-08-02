@@ -119,6 +119,25 @@ An inactive capability is `NOT_ACTIVE`; it is never reported as `PASS`.
 | `TM-17` | Connector URL handling exposes internal networks or secrets. | Provider-specific URL allowlists, redirect/DNS rebinding defenses, egress controls, and external secret storage; blocked requests produce no network call. |
 | `TM-18` | Timing, count, status, or error details distinguish denied objects from missing ones. | Frozen non-enumeration fixtures compare status/body and a preregistered timing distribution; underpowered evidence is inconclusive. |
 
+### Local MCP delta (ADR-0103)
+
+The active MCP carrier is one spawn-per-session local stdio protocol translator,
+not a second Runtime or identity composition. Its threat delta is bounded as
+follows:
+
+| Threat | Local MCP control and oracle |
+|---|---|
+| `TM-01` | `context_resolve` reuses the recursively closed `AcquireWire`; trusted-field injection fails MCP validation before the HTTP caller, and credentials exist only in server-owned environment and HTTP metadata. |
+| `TM-03` | The adapter imports no `engine` or Provider seam and calls only `POST /v0/resolve`; the real PostgreSQL/File proof observes only the returned post-Kernel `ContextPackage`. |
+| `TM-10` | Local direct delivery uses no `DeliveryEvidenceRef`; that capability, remote MCP and private/group audience remain `NOT_ACTIVE` rather than being simulated from MCP session fields. |
+| `TM-12` | The adapter has no ModelGateway or channel call and assigns no meaning to the opaque outcome `egressGrant`; any later forwarding must independently satisfy the existing Package-bound egress seam. |
+| `TM-14` | `Continue` and `OpenCitation` are not MCP tools and no MCP-only token or locator is introduced. |
+| `TM-15` | The child retains no Package, request, log, index or cache; tool/transport/configuration failures return one content-free error and then the per-session process can exit. |
+| `TM-18` | The MCP layer returns the exact validated HTTP outcome without new status or detail; malformed, trusted-field, configuration, authentication and transport failures collapse to one content-free tool error. |
+
+Wrong-Organization effects remain structurally absent: this carrier exposes no
+model, Sender, ActionPlane, ticket or other external-effect operation.
+
 ## 7. Explicit assumptions and non-goals
 
 - The engine controls future resolves, continuations, citation opens, model calls,

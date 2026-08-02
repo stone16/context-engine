@@ -60,7 +60,7 @@ designed, and deliberately not active:
 | Durable general Principal / Agent grants | The default scope authority returns seven missing operands; dogfood separately carries the bounded current File operands and binds one configured Agent/purpose to the Release ceiling only |
 | General / multi-user Source and Resource ACLs | Dogfood uses current mirrored File access plus Membership field rights. A separate deterministic Feishu twin proves bounded source-native Article ACL ingestion, but no live or general administration carrier is active |
 | General content retrieval | Only the loopback File pgvector dogfood `Acquire` carrier is active |
-| Local consumer expansion | The repo-local Claude Code skill is active only as a single-question display consumer; pi and MCP remain `NOT_ACTIVE` |
+| Local consumer expansion | The repo-local Claude Code skill and spawn-per-session local stdio MCP `Acquire` translator are active; pi and every broader MCP carrier remain `NOT_ACTIVE` |
 | Capability-aware agent operation discovery | ADR-0098 accepts a future generated short-lived `AgentOperationManifest`; no discovery endpoint, contract version, SDK method, or active manifest carrier exists |
 | `Continue` carrier | The bounded dogfood composition keeps Continue unavailable; its private File `OpenCitation` carrier is active for UI citation closure |
 | Structured acquisition / live surface context | ADR-0099 selects one exact bounded collaboration conversation as the first design workload; structured-family terms, provider carrier, live network, mixed-family Evidence, and surface attachments remain `NOT_ACTIVE` |
@@ -70,7 +70,7 @@ designed, and deliberately not active:
 | Group/public delivery, compensating deletes | The Feishu delivery profile is asker-private only; wider audience and compensation remain `NOT_ACTIVE` |
 | Session-derived Learning intake | ADR-0100 accepts only a future consented, minimized, provenance-bound candidate path; raw tape reads/storage, extractor model egress, candidate carrier, governed Memory artifact, release bridge, and Runtime serving remain `NOT_ACTIVE` |
 | Deployment/plugin productization | ADR-0101 bounds any future plugin to static composition at accepted ports, but defers generic categories/manifest/loader until a second implementation or measured drift; tenant code, hot loading, marketplace, and plugin-created service remain `NOT_ACTIVE` |
-| MCP ingress | Held `NOT_ACTIVE` until a real caller exists |
+| MCP ingress | Only the maintainer's spawn-per-session local stdio `context_resolve` tool is active; remote/shared HTTP, multi-user/tenant, private/group, `Continue`, `OpenCitation`, generation, effects, resources/prompts, and MCP egress-grant handling remain `NOT_ACTIVE` |
 | Worker dead-letter transition / operator requeue | ADR-0060 adds bounded reclaim only; generation four is left untouched after expiry |
 | Provider polling, delete execution beyond ADR-0057 | See the File Provider ADRs for exact boundaries |
 | Streaming delivery | Explicit V1 non-goal — placeholder + edit instead |
@@ -103,6 +103,25 @@ empty, expired, malformed, and secret-exclusion outcomes are distinguishable
 closed local refusals. Candidate capture contains no corpus path or Package
 content. This activates no pi consumer, MCP Adapter, `Continue`, dogfood
 `OpenCitation`, IM delivery, channel egress, or external effect.
+
+ADR-0088's historical statement above remains scoped to that consumer; the MCP
+carrier is activated separately below and does not widen the consumer.
+
+### Local MCP Acquire translator
+
+| ADR | Activates |
+|---|---|
+| [0103](./docs/decisions/0103-activate-one-local-mcp-acquire-translation.md) | One maintainer-local, spawn-per-session stdio `context_resolve` tool that validates the existing closed `AcquireWire`, calls only the loopback dogfood `POST /v0/resolve`, and returns its exact closed outcome as structured content |
+
+`RUNTIME-MCP-CARRIER-215` proves through an MCP SDK client, a real spawned
+stdio process, loopback HTTP, PostgreSQL 17, File publication, candidate
+discovery, the sealed Kernel and Package assembly that one allowed question
+retains exact Block/Evidence lineage while unauthorized narrowing returns a
+content-free empty Package. Unit conformance additionally proves closed schemas,
+trusted-field rejection before HTTP, secret/redirect discipline, fresh request
+ids and missing-environment refusal. `Continue`, `OpenCitation`, generation,
+effects, group/public delivery, remote/shared or multi-user/tenant MCP, prompts,
+resources and all MCP-side `EgressGrant` handling remain `NOT_ACTIVE`.
 
 ### Co-resident local Evidence Console
 
@@ -445,8 +464,9 @@ WorkerLease. It requires an explicit worker credential, a registered
 ServicePrincipal, a logical File root, and a job binding; it exits after one
 terminal state and introduces no fourth process type.
 
-Live Feishu, real models and Senders, group chat, compensating deletes,
-`Continue`, and MCP all remain `NOT_ACTIVE`.
+At the issue #71 activation boundary, live Feishu, real models and Senders,
+group chat, compensating deletes, `Continue`, and MCP were `NOT_ACTIVE`.
+ADR-0103 later activates only the local MCP carrier recorded above.
 
 ### Issue #133 — bounded private Feishu delivery conformance
 
@@ -463,10 +483,10 @@ and durable provider attempt without making a network call.
 This activation is **twin-bounded conformance**, not live Feishu. Feishu
 credentials and network calls, real model providers, group/public audience,
 `Continue`, compensation/delete, automatic reconciliation, multiple Feishu
-tenants or Bot instances, MCP, pi, and issue #127 ingestion remain
-`NOT_ACTIVE`. Channel `EgressGrant` remains preflight-only and cannot substitute
-for trusted identity or an `ActionTicket`; the generated-answer flow uses no
-channel grant.
+tenants or Bot instances, pi, issue #127 ingestion, and every MCP carrier except
+ADR-0103's local stdio `Acquire` translator remain `NOT_ACTIVE`. Channel
+`EgressGrant` remains preflight-only and cannot substitute for trusted identity
+or an `ActionTicket`; the generated-answer flow uses no channel grant.
 
 ### HTTP exact-authorized Evidence tracer
 

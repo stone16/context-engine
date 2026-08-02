@@ -95,8 +95,8 @@
     },
     "activations": {
       "type": "array",
-      "minItems": 25,
-      "maxItems": 25,
+      "minItems": 26,
+      "maxItems": 26,
       "uniqueItems": true,
       "prefixItems": [
         {
@@ -1203,6 +1203,59 @@
               "Release promotion subcommand"
             ]
           }
+        },
+        {
+          "const": {
+            "issueRef": "#215",
+            "invariantRef": "TRANSPORT-UNTRUSTED-008",
+            "carrier": "spawn-per-session maintainer-local MCP stdio Acquire translator",
+            "status": "active_fail_closed",
+            "policyEpochScope": "organization-v0",
+            "controlBoundary": "closed MCP AcquireWire -> server-owned loopback bearer and fresh request id -> frozen POST /v0/resolve -> current UserActor transaction -> sealed AuthorizationKernel -> exact ResolutionOutcome structured content",
+            "testEvidence": [
+              {
+                "id": "MCP-CONTRACT-215",
+                "surface": "tests/unit/test_mcp_adapter.py::test_mcp_lists_one_exact_acquire_tool_without_trusted_inputs",
+                "oracle": "An MCP SDK client observes exactly one closed Acquire tool and the exact HTTP outcome schema."
+              },
+              {
+                "id": "MCP-IMPORT-BOUNDARY-215",
+                "surface": "tests/unit/test_mcp_adapter.py::test_mcp_process_import_graph_excludes_privileged_modules",
+                "oracle": "A fresh MCP process import graph contains no engine, Provider, database-client or evaluation module."
+              },
+              {
+                "id": "MCP-HTTP-PARITY-215",
+                "surface": "tests/unit/test_mcp_adapter.py::test_spawned_mcp_matches_the_public_http_seam_for_required_parity_cases",
+                "oracle": "Public HTTP and spawned MCP runs preserve allowed, missing-authority, wrong-Organization, revoked/stale-Membership, malformed, budget and unavailable semantics."
+              },
+              {
+                "id": "RUNTIME-MCP-CARRIER-215",
+                "surface": "tests/integration/test_dogfood_runtime_activation.py::test_spawned_mcp_stdio_delivers_only_real_http_authorized_evidence",
+                "oracle": "A real spawned MCP stdio client and server call the loopback HTTP dogfood composition backed by PostgreSQL and File publication; one allowed question traverses CandidateRef, the sealed AuthorizationKernel and AuthorizedProjection into one exact Block/Evidence Package, while unauthorized narrowing returns the same closed empty Package with zero content bytes."
+              }
+            ],
+            "deferredEvidence": [
+              "production or remote MCP authentication and DeliveryEvidenceRef redemption",
+              "second-human, multi-Membership and multi-tenant MCP identity selection",
+              "MCP Continue, OpenCitation, generation, effects and group/public audience"
+            ],
+            "futureCarriers": [
+              "remote authenticated MCP transport",
+              "private and group MCP audience",
+              "MCP Continue and OpenCitation"
+            ],
+            "notActive": [
+              "remote or shared MCP server",
+              "production, multi-user or multi-tenant MCP authentication",
+              "DeliveryEvidenceRef over MCP",
+              "private, group or public MCP audience",
+              "Continue or OpenCitation MCP tools",
+              "generation, ModelGateway, Sender or ActionPlane effects",
+              "MCP prompts, resources or arbitrary browsing",
+              "MCP-side EgressGrant acceptance, redemption, forwarding or reinterpretation",
+              "Package persistence, index, cache or cross-question reuse"
+            ]
+          }
         }
       ],
       "items": false
@@ -1517,7 +1570,11 @@
             "RUNTIME-LOCAL-OPERATOR-ABSENT-110",
             "RUNTIME-LOCAL-OPERATOR-SCOPE-110",
             "RUNTIME-LOCAL-OPERATOR-CROSS-PLANE-110",
-            "RUNTIME-LOCAL-OPERATOR-EXTERNAL-110"
+            "RUNTIME-LOCAL-OPERATOR-EXTERNAL-110",
+            "MCP-CONTRACT-215",
+            "RUNTIME-MCP-CARRIER-215",
+            "MCP-IMPORT-BOUNDARY-215",
+            "MCP-HTTP-PARITY-215"
           ]
         },
         "surface": {
@@ -1569,7 +1626,8 @@
             "#91",
             "#93",
             "#102",
-            "#110"
+            "#110",
+            "#215"
           ]
         },
         "invariantRef": {
@@ -1612,7 +1670,8 @@
             "bounded autonomous reclaim of expired scheduled File upserts",
             "loopback-only single-Membership dogfood HTTP authentication",
             "loopback-only File pgvector dogfood Acquire and private OpenCitation delivery",
-            "explicit local-only Control and release operator authentication"
+            "explicit local-only Control and release operator authentication",
+            "spawn-per-session maintainer-local MCP stdio Acquire translator"
           ]
         },
         "status": {
@@ -1652,7 +1711,8 @@
             "function-only scheduler login -> expired lease plus database-owned exponential backoff -> current page/acquisition/audience/receiver revalidation -> deterministic recovery-first SKIP LOCKED selector -> exact next-generation WorkerLease -> existing durable-boundary File worker resume",
             "explicit local environment opt-in -> constant-time bearer verification -> one fixed configured identity -> current UserActor Membership transaction",
             "current UserActor transaction -> database-derived exact EffectiveScope -> pre-LIMIT pgvector scope reduction -> CandidateRef -> sealed AuthorizationKernel -> AuthorizedProjection -> ContextPackage",
-            "complete local configuration -> separate constant-time credential verification -> fixed Control or release identity -> one operation-bound authority context"
+            "complete local configuration -> separate constant-time credential verification -> fixed Control or release identity -> one operation-bound authority context",
+            "closed MCP AcquireWire -> server-owned loopback bearer and fresh request id -> frozen POST /v0/resolve -> current UserActor transaction -> sealed AuthorizationKernel -> exact ResolutionOutcome structured content"
           ]
         },
         "testEvidence": {

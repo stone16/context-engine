@@ -4,61 +4,44 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from email.message import Message
 from hashlib import sha256
 from pathlib import Path, PurePosixPath
-from typing import Final, Protocol, cast
-from urllib.error import HTTPError, URLError
-from urllib.parse import urlsplit
-from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
+from typing import Final, Protocol
 
-from adapters.http.dogfood import DOGFOOD_SECRET_ENV
+from adapters.http.dogfood_client import (
+    DOGFOOD_BASE_URL_ENV as DOGFOOD_BASE_URL_ENV,
+)
+from adapters.http.dogfood_client import (
+    DOGFOOD_SECRET_ENV as DOGFOOD_SECRET_ENV,
+)
+from adapters.http.dogfood_client import (
+    MAX_QUERY_CHARACTERS,
+    MAX_RESPONSE_BYTES,
+)
+from adapters.http.dogfood_client import (
+    DogfoodEvaluationUnavailable as DogfoodEvaluationUnavailable,
+)
+from adapters.http.dogfood_client import (
+    DogfoodHttpConfiguration as DogfoodHttpConfiguration,
+)
+from adapters.http.dogfood_client import (
+    DogfoodResolveClient as DogfoodResolveClient,
+)
+from adapters.http.dogfood_client import (
+    DogfoodSecretExclusionUnavailable as DogfoodSecretExclusionUnavailable,
+)
 from engine.learning.golden_storage import (
     durable_golden_root,
     require_durable_golden_path,
 )
 
-DOGFOOD_BASE_URL_ENV: Final = "CONTEXT_ENGINE_DOGFOOD_BASE_URL"
 GOLDEN_SET_SCHEMA_VERSION: Final = "context-engine-golden-set-v0"
 EVAL_REPORT_VERSION: Final = "context-engine-dogfood-eval-v0"
 DEFAULT_GOLDEN_SET_FILENAME: Final = "golden-set-v0.lineage-eligible.json"
 MIN_GOLDEN_CASES: Final = 20
 MAX_GOLDEN_CASES: Final = 50
-MAX_QUERY_CHARACTERS: Final = 4_096
-MAX_RESPONSE_BYTES: Final = 16 * 1024 * 1024
-
-
-class DogfoodEvaluationUnavailable(RuntimeError):
-    """Caller configuration, golden input, or Runtime response is unavailable."""
-
-
-class DogfoodSecretExclusionUnavailable(DogfoodEvaluationUnavailable):
-    """The caller cannot keep configured secret material out of its output."""
-
-
-class _RejectRedirectHandler(HTTPRedirectHandler):
-    """Never forward the dogfood bearer credential to another destination."""
-
-    def redirect_request(
-        self,
-        request: Request,
-        fp: object,
-        code: int,
-        message: str,
-        headers: object,
-        new_url: str,
-    ) -> Request:
-        del fp, message, headers, new_url
-        raise HTTPError(
-            request.full_url,
-            code,
-            "dogfood redirect is unavailable",
-            Message(),
-            None,
-        )
 
 
 def _require_exact_text(name: str, value: object, *, maximum: int = 512) -> str:
@@ -346,186 +329,32 @@ def _parse_expectation(value: object) -> GoldenExpectation:
     )
 
 
-@dataclass(frozen=True, slots=True)
-class DogfoodHttpConfiguration:
-    """Loopback-only destination and redacted bearer secret."""
+def reject_secret_retention(
+    configuration: DogfoodHttpConfiguration,
+    golden_set: GoldenSet,
+) -> None:
+    """Refuse the configured bearer value anywhere in tracked eval input."""
 
-    base_url: str
-    secret: str = field(repr=False)
-
-    def __post_init__(self) -> None:
-        base_url = _require_exact_text("dogfood base URL", self.base_url)
-        try:
-            parsed = urlsplit(base_url)
-            port = parsed.port
-        except ValueError:
-            raise DogfoodEvaluationUnavailable(
-                "dogfood caller requires an explicit loopback HTTP URL"
-            ) from None
+    if type(configuration) is not DogfoodHttpConfiguration:
+        raise TypeError("configuration must be DogfoodHttpConfiguration")
+    if type(golden_set) is not GoldenSet:
+        raise TypeError("golden_set must be GoldenSet")
+    for case in golden_set.cases:
         if (
-            parsed.scheme != "http"
-            or parsed.hostname not in {"127.0.0.1", "::1"}
-            or parsed.username is not None
-            or parsed.password is not None
-            or parsed.query
-            or parsed.fragment
-            or parsed.path not in {"", "/"}
-            or port is None
+            configuration.secret in case.case_ref
+            or configuration.secret in case.query
+            or any(
+                configuration.secret in expectation.path
+                or configuration.secret in expectation.identity.source_ref
+                or configuration.secret in expectation.identity.resource_ref
+                or configuration.secret in expectation.identity.revision_ref
+                or configuration.secret in expectation.identity.fragment_ref
+                for expectation in case.expected_evidence
+            )
         ):
             raise DogfoodEvaluationUnavailable(
-                "dogfood caller requires an explicit loopback HTTP URL"
+                "golden set contains configured secret material"
             )
-        secret = _require_exact_text(
-            "dogfood secret",
-            self.secret,
-            maximum=16_384,
-        )
-        if len(secret.encode("utf-8")) < 32:
-            raise DogfoodEvaluationUnavailable("dogfood secret is unavailable")
-
-    def reject_secret_retention(self, golden_set: GoldenSet) -> None:
-        """Refuse the configured bearer value anywhere in tracked eval input."""
-
-        if type(golden_set) is not GoldenSet:
-            raise TypeError("golden_set must be GoldenSet")
-        for case in golden_set.cases:
-            if self.secret in case.query or any(
-                self.secret in expectation.path
-                or self.secret in expectation.identity.source_ref
-                or self.secret in expectation.identity.resource_ref
-                or self.secret in expectation.identity.revision_ref
-                or self.secret in expectation.identity.fragment_ref
-                for expectation in case.expected_evidence
-            ):
-                raise DogfoodEvaluationUnavailable(
-                    "golden set contains configured secret material"
-                )
-
-    def reject_secret_material(self, value: object) -> None:
-        """Reject any decoded value containing the configured bearer."""
-
-        pending = [value]
-        while pending:
-            current = pending.pop()
-            if type(current) is str:
-                if self.secret in current:
-                    raise DogfoodSecretExclusionUnavailable(
-                        "dogfood secret exclusion is unavailable"
-                    )
-                continue
-            if type(current) is dict:
-                document = cast(dict[object, object], current)
-                pending.extend(document.keys())
-                pending.extend(document.values())
-                continue
-            if type(current) in {list, tuple}:
-                sequence = cast(list[object] | tuple[object, ...], current)
-                pending.extend(sequence)
-
-    @classmethod
-    def load(
-        cls,
-        environment: Mapping[str, str] | None = None,
-    ) -> DogfoodHttpConfiguration:
-        source = os.environ if environment is None else environment
-        return cls(
-            base_url=_require_exact_text(
-                "dogfood base URL",
-                source.get(DOGFOOD_BASE_URL_ENV),
-            ).rstrip("/"),
-            secret=_require_exact_text(
-                "dogfood secret",
-                source.get(DOGFOOD_SECRET_ENV),
-                maximum=16_384,
-            ),
-        )
-
-
-class DogfoodResolveClient:
-    """Minimal plain-HTTP caller of only the frozen resolve operation."""
-
-    __slots__ = ("_configuration",)
-
-    def __init__(self, configuration: DogfoodHttpConfiguration) -> None:
-        if type(configuration) is not DogfoodHttpConfiguration:
-            raise TypeError("dogfood HTTP configuration is required")
-        self._configuration = configuration
-
-    def resolve_acquire(self, *, query: str, request_id: str) -> dict[str, object]:
-        """Invoke one Acquire without collapsing a closed refusal outcome."""
-
-        query = _require_exact_text(
-            "dogfood query",
-            query,
-            maximum=MAX_QUERY_CHARACTERS,
-        )
-        request_id = _require_opaque_ref("dogfood request_id", request_id)
-        self._configuration.reject_secret_material(query)
-        body = json.dumps(
-            {"kind": "acquire", "need": {"query": query}},
-            ensure_ascii=False,
-            separators=(",", ":"),
-        ).encode("utf-8")
-        request = Request(
-            f"{self._configuration.base_url}/v0/resolve",
-            data=body,
-            headers={
-                "Accept": "application/json",
-                "Authorization": f"Bearer {self._configuration.secret}",
-                "Content-Type": "application/json",
-                "X-Context-Request-Id": request_id,
-            },
-            method="POST",
-        )
-        try:
-            with build_opener(
-                ProxyHandler({}),
-                _RejectRedirectHandler(),
-            ).open(  # noqa: S310
-                request,
-                timeout=30,
-            ) as response:
-                raw = response.read(MAX_RESPONSE_BYTES + 1)
-            if len(raw) > MAX_RESPONSE_BYTES:
-                raise DogfoodEvaluationUnavailable(
-                    "dogfood resolve response is unavailable"
-                )
-            if self._configuration.secret.encode("utf-8") in raw:
-                raise DogfoodSecretExclusionUnavailable(
-                    "dogfood secret exclusion is unavailable"
-                )
-            outcome = _as_object(json.loads(raw), "dogfood resolve response")
-            self._configuration.reject_secret_material(outcome)
-            if outcome.get("kind") not in {"resolved", "request_not_available"}:
-                raise DogfoodEvaluationUnavailable(
-                    "dogfood resolve outcome is unavailable"
-                )
-            return outcome
-        except DogfoodEvaluationUnavailable:
-            raise
-        except (HTTPError, URLError, OSError, ValueError, UnicodeDecodeError):
-            raise DogfoodEvaluationUnavailable(
-                "dogfood resolve is unavailable"
-            ) from None
-
-    def acquire(self, *, query: str, request_id: str) -> dict[str, object]:
-        """Invoke one Acquire and require a ContextPackage for evaluation."""
-
-        outcome = self.resolve_acquire(query=query, request_id=request_id)
-        if outcome.get("kind") != "resolved":
-            raise DogfoodEvaluationUnavailable(
-                "dogfood resolve did not return a ContextPackage"
-            )
-        _package_from_outcome(outcome)
-        return outcome
-
-    def reject_secret_material(self, value: object) -> None:
-        """Expose only the configuration's redacted exclusion check."""
-
-        self._configuration.reject_secret_material(value)
-
-    def __repr__(self) -> str:
-        return "DogfoodResolveClient(<redacted>)"
 
 
 class ResolveCaller(Protocol):
@@ -748,7 +577,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         if args.command == "run":
             golden_set = load_golden_set(_durable_golden_set_path(args.golden_set))
             configuration = DogfoodHttpConfiguration.load()
-            configuration.reject_secret_retention(golden_set)
+            reject_secret_retention(configuration, golden_set)
             _write_report(
                 evaluate_golden_set(
                     golden_set,

@@ -5,6 +5,24 @@ from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import Literal
 
+from context_engine_contracts import (
+    DECISION_REF_PATTERN as DECISION_REF_PATTERN,
+)
+from context_engine_contracts import (
+    MAX_NARROWING_REF_LENGTH as MAX_NARROWING_REF_LENGTH,
+)
+from context_engine_contracts import (
+    MAX_NARROWING_REFS as MAX_NARROWING_REFS,
+)
+from context_engine_contracts import (
+    MAX_OPAQUE_CAPABILITY_LENGTH as MAX_OPAQUE_CAPABILITY_LENGTH,
+)
+from context_engine_contracts import (
+    PACKAGE_REF_PATTERN as PACKAGE_REF_PATTERN,
+)
+from context_engine_contracts import (
+    complete_context_package_nullable_fields,
+)
 from engine.runtime.budget import BudgetUsage, PackageBudget, PackageBudgetRequest
 from engine.runtime.delivery import (
     DeliveryConstructionProvenance,
@@ -41,13 +59,8 @@ __all__ = [
     "_construct_direct_delivery_context",
 ]
 
-MAX_NARROWING_REFS = 64
-MAX_NARROWING_REF_LENGTH = 256
-MAX_OPAQUE_CAPABILITY_LENGTH = 4096
 PACKAGE_REF_PREFIX = "pkg"
 DECISION_REF_PREFIX = "dec"
-PACKAGE_REF_PATTERN = r"^pkg_[0-9a-f]{32}$"
-DECISION_REF_PATTERN = r"^dec_[0-9a-f]{32}$"
 
 
 def _require_nonblank_string(field_name: str, value: object) -> None:
@@ -444,22 +457,6 @@ def context_package_digest_document(package: ContextPackage) -> dict[str, object
         "coverage": coverage_document,
     }
     return complete_context_package_nullable_fields(document)
-
-
-def complete_context_package_nullable_fields(
-    document: dict[str, object],
-) -> dict[str, object]:
-    """Include the frozen inactive nullable fields in one canonical location."""
-
-    evidence = document.get("evidence")
-    if not isinstance(evidence, list):
-        raise TypeError("public ContextPackage Evidence must be an array")
-    for item in evidence:
-        if not isinstance(item, dict):
-            raise TypeError("public ContextPackage Evidence must contain objects")
-        item.setdefault("citationOpenRef", None)
-    document["continuation"] = None
-    return document
 
 
 def context_package_public_document(package: ContextPackage) -> dict[str, object]:
