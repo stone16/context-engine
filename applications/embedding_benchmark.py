@@ -53,7 +53,7 @@ class SupportedBackend(StrEnum):
 
 
 class SentenceTransformersProvider:
-    """Local benchmark backend available only through the optional extra."""
+    """Required local backend for the tracked embedding benchmark."""
 
     def __init__(self, *, identity: ModelIdentity, model_dir: Path) -> None:
         self.identity = identity
