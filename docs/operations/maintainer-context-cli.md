@@ -6,6 +6,10 @@ the frozen `POST /v0/resolve` public seam, or validates a deliberately captured
 public `ContextPackage`. It never imports Runtime internals or reaches Control,
 ActionPlane, ContextLearning promotion, a model, a sender, or a database.
 
+It is a local read-only consumer, so the post-delivery obligations in
+[ADR-0088](../decisions/0088-bind-local-consumers-to-fresh-evidence-bearing-packages.md)
+bind every invocation.
+
 ## Configuration
 
 Run the explicitly configured dogfood API on loopback first. The CLI reads its
@@ -86,6 +90,11 @@ uv run context-engine-context inspect \
 uv run context-engine-context inspect - --format json \
   < .context-engine/context-package.json
 ```
+
+Here `--format json` emits the exact validated Package document rather than the
+whole envelope: a captured `query` outcome reduces to its own `package` member,
+so re-inspecting that output is stable and never re-emits the already-redacted
+grant. A captured public refusal is emitted exactly as captured.
 
 Inspection proves only that the captured public document is internally valid
 and current at inspection time. It does not authenticate the producer,

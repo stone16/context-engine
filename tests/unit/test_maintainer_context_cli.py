@@ -20,7 +20,9 @@ LIVE_EGRESS_GRANT = "egrm_" + "e" * 64
 REDACTED_EGRESS_GRANT = "REDACTED-EGRESS-GRANT"
 
 
-def _package_document() -> dict[str, object]:
+def _package_document(
+    text: str = "Authorized maintainer excerpt",
+) -> dict[str, object]:
     package: dict[str, object] = {
         "packageId": "pkg_" + "b" * 32,
         "purpose": "context.answer",
@@ -39,7 +41,7 @@ def _package_document() -> dict[str, object]:
         "blocks": [
             {
                 "blockId": "block_" + "a" * 64,
-                "text": "Authorized maintainer excerpt",
+                "text": text,
                 "evidenceRefs": [EVIDENCE_REF],
             }
         ],
@@ -69,7 +71,7 @@ def _package_document() -> dict[str, object]:
         "gaps": [],
         "coverage": {"status": "sufficient"},
         "budgetUsage": {
-            "tokens": len(b"Authorized maintainer excerpt"),
+            "tokens": len(text.encode("utf-8")),
             "providerCalls": 0,
             "costMicrounits": 0,
             "elapsedMs": 1,
@@ -392,6 +394,57 @@ def test_missing_or_non_loopback_configuration_is_content_free() -> None:
             "context-engine-context: invalid_configuration\n"
         )
         assert SECRET not in completed.stderr
+
+
+def test_nonpositive_budget_ceiling_refuses_before_any_request() -> None:
+    outcome: dict[str, object] = {
+        "kind": "resolved",
+        "package": _package_document(),
+        "egressGrant": None,
+    }
+    with _resolve_server(outcome) as (base_url, requests):
+        completed = _command(
+            "query",
+            "Which ceiling does the caller accept?",
+            "--max-provider-calls",
+            "0",
+            environment={
+                **os.environ,
+                "CONTEXT_ENGINE_DOGFOOD_BASE_URL": base_url,
+                "CONTEXT_ENGINE_DOGFOOD_SECRET": SECRET,
+            },
+        )
+
+    assert completed.returncode == 14
+    assert completed.stdout == ""
+    assert completed.stderr == "context-engine-context: invalid_configuration\n"
+    assert requests == []
+
+
+def test_capture_beyond_the_input_bound_refuses_an_otherwise_valid_package(
+    tmp_path: Path,
+) -> None:
+    """Only the byte bound can refuse this: the Package itself is valid."""
+
+    from applications.maintainer_context import MAX_CAPTURE_BYTES
+
+    excerpt = "a" * MAX_CAPTURE_BYTES
+    capture = tmp_path / "oversized-package.json"
+    capture.write_text(
+        json.dumps(_package_document(text=excerpt)),
+        encoding="utf-8",
+    )
+    assert capture.stat().st_size > MAX_CAPTURE_BYTES
+
+    completed = _command(
+        "inspect",
+        str(capture),
+        environment=os.environ.copy(),
+    )
+
+    assert completed.returncode == 12
+    assert completed.stdout == ""
+    assert completed.stderr == "context-engine-context: malformed_package\n"
 
 
 def test_unavailable_service_is_content_free_and_has_stable_exit_class() -> None:

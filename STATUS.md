@@ -97,10 +97,11 @@ external/network query embeddings remain `NOT_ACTIVE` pending issue #217.
 same loopback HTTP and environment-held bearer composition. Human output keeps
 Package purpose/as-of/expiry, coverage, budget usage, every Block, and exact
 Evidence/citation lineage together. Strict JSON is the validated public wire
-document without a CLI wrapper. `inspect` treats file or stdin JSON as untrusted
-and validates the whole closed Package, digest, lineage, accounting, lifetime,
-and expiry before rendering; the capture never becomes authority or reusable
-context.
+document without a CLI wrapper; its one deliberate substitution is the
+redeemable `egressGrant` value, which this non-egress caller never emits or
+persists. `inspect` treats file or stdin JSON as untrusted and validates the
+whole closed Package, digest, lineage, accounting, lifetime, and expiry before
+rendering; the capture never becomes authority or reusable context.
 
 Stable exits distinguish success, explicit refusal, service unavailable,
 malformed Package, expired Package, and invalid local configuration. Empty
