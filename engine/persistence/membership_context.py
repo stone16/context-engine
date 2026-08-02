@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -60,6 +61,7 @@ from engine.runtime.egress import (
 )
 from engine.runtime.evidence import CandidateRef
 from engine.runtime.materialized import (
+    MaterializedCandidateDiscoveryUnavailable,
     MaterializedFieldValue,
     MaterializedFragmentLocator,
     MaterializedFragmentProjection,
@@ -191,6 +193,34 @@ _VECTOR_CANDIDATE_SQL = """
      AND resource.active_revision_id = fragment.revision_id
      AND resource.tombstoned IS FALSE
     WHERE fragment.embedding IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1
+        FROM context_fragment AS incompatible_fragment
+        JOIN context_resource AS incompatible_resource
+          ON incompatible_resource.organization_id =
+             incompatible_fragment.organization_id
+         AND incompatible_resource.resource_ref =
+             incompatible_fragment.resource_ref
+         AND incompatible_resource.active_revision_id =
+             incompatible_fragment.revision_id
+         AND incompatible_resource.tombstoned IS FALSE
+        WHERE incompatible_fragment.embedding IS NOT NULL
+          AND incompatible_fragment.embedding_profile_digest IS DISTINCT FROM
+              CAST(:embedding_profile_digest AS text)
+          AND EXISTS (
+            SELECT 1
+            FROM unnest(
+                CAST(:scope_resource_organization_ids AS uuid[]),
+                CAST(:scope_resource_source_refs AS text[]),
+                CAST(:scope_resource_refs AS text[])
+            ) AS incompatible_scope(organization_id, source_ref, resource_ref)
+            WHERE incompatible_scope.organization_id =
+                  incompatible_resource.organization_id
+              AND incompatible_scope.source_ref = incompatible_resource.source_ref
+              AND incompatible_scope.resource_ref =
+                  incompatible_fragment.resource_ref
+          )
+      )
       AND (
         EXISTS (
             SELECT 1
@@ -479,6 +509,7 @@ class _PostgreSQLMaterializedProjectionPort:
     def discover_vector(
         self,
         query_embedding: tuple[float, ...],
+        embedding_profile_digest: str,
         limit: int,
         source_refs: tuple[str, ...] | None,
         resource_refs: tuple[str, ...] | None,
@@ -498,6 +529,51 @@ class _PostgreSQLMaterializedProjectionPort:
                 ),
             )
         )
+        incompatible = self._connection.execute(
+            text(
+                """
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM context_fragment AS fragment
+                    JOIN context_resource AS resource
+                      ON resource.organization_id = fragment.organization_id
+                     AND resource.resource_ref = fragment.resource_ref
+                     AND resource.active_revision_id = fragment.revision_id
+                     AND resource.tombstoned IS FALSE
+                    WHERE fragment.embedding IS NOT NULL
+                      AND fragment.embedding_profile_digest IS DISTINCT FROM
+                          CAST(:embedding_profile_digest AS text)
+                      AND EXISTS (
+                        SELECT 1
+                        FROM unnest(
+                            CAST(:scope_resource_organization_ids AS uuid[]),
+                            CAST(:scope_resource_source_refs AS text[]),
+                            CAST(:scope_resource_refs AS text[])
+                        ) AS scope(organization_id, source_ref, resource_ref)
+                        WHERE scope.organization_id = resource.organization_id
+                          AND scope.source_ref = resource.source_ref
+                          AND scope.resource_ref = fragment.resource_ref
+                      )
+                )
+                """
+            ),
+            {
+                "embedding_profile_digest": embedding_profile_digest,
+                "scope_resource_organization_ids": [
+                    target.organization_id for target in resource_targets
+                ],
+                "scope_resource_source_refs": [
+                    target.source_ref for target in resource_targets
+                ],
+                "scope_resource_refs": [
+                    target.resource_ref for target in resource_targets
+                ],
+            },
+        ).scalar_one()
+        if incompatible is True:
+            raise MaterializedCandidateDiscoveryUnavailable(
+                "materialized candidate discovery is unavailable"
+            )
         self._connection.execute(
             text(
                 "SELECT set_config('hnsw.iterative_scan', :iterative_scan, true), "
@@ -514,6 +590,7 @@ class _PostgreSQLMaterializedProjectionPort:
                 "query_embedding": "["
                 + ",".join(repr(value) for value in query_embedding)
                 + "]",
+                "embedding_profile_digest": embedding_profile_digest,
                 "limit": limit,
                 "source_refs": list(source_refs) if source_refs is not None else None,
                 "resource_refs": (
@@ -1104,6 +1181,8 @@ def _observe_active_runtime_release(
                 manifest.content_schema_ref,
                 manifest.index_profile_ref,
                 manifest.index_schema_ref,
+                manifest.embedding_profile_document,
+                manifest.embedding_profile_digest,
                 manifest.runtime_profile_ref,
                 manifest.runtime_profile_digest,
                 manifest.runtime_content_profile_digest,
@@ -1142,6 +1221,12 @@ def _observe_active_runtime_release(
             runtime_profile_digest=row.runtime_profile_digest,
             content_profile_digest=row.runtime_content_profile_digest,
             index_profile_digest=row.runtime_index_profile_digest,
+            embedding_profile_document=json.dumps(
+                row.embedding_profile_document,
+                separators=(",", ":"),
+                sort_keys=True,
+            ),
+            embedding_profile_digest=row.embedding_profile_digest,
             tokenizer_ref=row.runtime_tokenizer_ref,
             package_schema_ref=row.runtime_package_schema_ref,
             curation_profile_ref=row.curation_profile_ref,

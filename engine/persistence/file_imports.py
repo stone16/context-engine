@@ -32,6 +32,7 @@ from engine.supply import (
     CompilationFailure,
     EmbeddingProfile,
     EmbeddingProvider,
+    EmbeddingProviderProfile,
     EmbeddingProviderUnavailable,
     MarkdownCompilerConfig,
     ParsedDocument,
@@ -53,6 +54,11 @@ _CONCURRENT_PUBLICATION_POLL_SECONDS = 0.01
 _EMBEDDING_PREPARE_REGPROCEDURE = (
     "public.context_worker_prepare_file_publication"
     "(uuid,uuid,uuid,text,text,uuid,text,jsonb,jsonb,jsonb,bigint,bigint,bytea,"
+    "timestamp with time zone,timestamp with time zone)"
+)
+_PROFILE_BOUND_EMBEDDING_PREPARE_REGPROCEDURE = (
+    "public.context_worker_prepare_file_publication"
+    "(uuid,uuid,uuid,text,text,uuid,text,jsonb,jsonb,jsonb,text,bigint,bigint,bytea,"
     "timestamp with time zone,timestamp with time zone)"
 )
 
@@ -216,6 +222,7 @@ class PostgreSQLFileImportWorker:
         "_config",
         "_engine",
         "_embedding_profile",
+        "_embedding_provider_profile",
         "_embedding_provider",
         "_identity",
         "_interrupt_after",
@@ -246,13 +253,18 @@ class PostgreSQLFileImportWorker:
             raise TypeError("File import worker requires MarkdownCompilerConfig")
         try:
             embedding_profile = embedding_provider.profile
+            provider_profile = embedding_provider.provider_profile
         except (AttributeError, TypeError, ValueError):
             raise TypeError(
                 "File import worker requires an embedding provider"
             ) from None
-        if type(embedding_profile) is not EmbeddingProfile:
+        if type(embedding_profile) is not EmbeddingProfile or type(
+            provider_profile
+        ) is not EmbeddingProviderProfile:
             raise TypeError("File import worker requires an embedding provider")
         if embedding_profile.dimension != CONTEXT_FRAGMENT_EMBEDDING_DIMENSION:
+            raise ValueError("Embedding provider dimension does not match storage")
+        if provider_profile.dimension != embedding_profile.dimension:
             raise ValueError("Embedding provider dimension does not match storage")
         if not callable(clock) or not callable(uuid_factory):
             raise TypeError("File import worker requires clock and UUID factory")
@@ -267,6 +279,7 @@ class PostgreSQLFileImportWorker:
         self._roots = roots
         self._config = config
         self._embedding_profile = embedding_profile
+        self._embedding_provider_profile = provider_profile
         self._embedding_provider = embedding_provider
         self._clock = clock
         self._uuid_factory = uuid_factory
@@ -482,6 +495,9 @@ class PostgreSQLFileImportWorker:
             "compilation_digest": document.compilation_digest,
             "compiler_version": document.provenance.compiler_version,
             "config_version": document.provenance.config_version,
+            "embedding_profile_digest": (
+                self._embedding_provider_profile.profile_digest
+            ),
             "compilation_document": compilation_document,
             "artifact_document": artifact_document,
             "lease_generation": claims.lease_generation,
@@ -491,25 +507,19 @@ class PostgreSQLFileImportWorker:
             "expires_at": claims.expires_at,
         }
         try:
-            acquired = self._execute_one(
-                """
-                SELECT * FROM public.context_worker_acquire_file_publication(
-                    :organization_id, :job_id, :service_principal_id,
-                    :source_ref, :resource_ref, :revision_id,
-                    :canonical_text, :content_hash, :compilation_digest,
-                    :compiler_version, :config_version,
-                    CAST(:compilation_document AS jsonb),
-                    CAST(:artifact_document AS jsonb),
-                    :lease_generation, :signing_key_version, :nonce,
-                    :issued_at, :expires_at
-                )
-                """,
+            profile_binding_active = self._embedding_profile_binding_active()
+            acquired = self._acquire_publication(
                 parameters,
+                profile_binding_active=profile_binding_active,
             )
             if acquired is None:
                 raise _rejection(token)
             if acquired.checkpoint == "contended":
-                acquired = self._await_concurrent_publication(token, parameters)
+                acquired = self._await_concurrent_publication(
+                    token,
+                    parameters,
+                    profile_binding_active=profile_binding_active,
+                )
             if acquired.outcome == "unchanged":
                 row = acquired
             else:
@@ -519,7 +529,11 @@ class PostgreSQLFileImportWorker:
                         token, claims, FilePublicationBoundary.ACQUIRED
                     )
                     prepared = self._prepare_publication(
-                        token, claims, document, parameters
+                        token,
+                        claims,
+                        document,
+                        parameters,
+                        profile_binding_active=profile_binding_active,
                     )
                     if prepared is None or prepared.checkpoint != "prepared":
                         raise _rejection(token)
@@ -601,6 +615,8 @@ class PostgreSQLFileImportWorker:
         claims: WorkerLeaseClaims,
         document: ParsedDocument,
         parameters: dict[str, object],
+        *,
+        profile_binding_active: bool,
     ) -> Row[tuple[object, ...]] | None:
         if self._embedding_storage_active():
             parameters["embedding_document"] = self._embedding_document(
@@ -608,8 +624,16 @@ class PostgreSQLFileImportWorker:
                 claims,
                 document,
             )
+            parameters["embedding_profile_digest"] = (
+                self._embedding_provider_profile.profile_digest
+            )
+            profile_argument = (
+                ":embedding_profile_digest,"
+                if profile_binding_active
+                else ""
+            )
             return self._execute_one(
-                """
+                f"""
                 SELECT * FROM public.context_worker_prepare_file_publication(
                     :organization_id, :job_id, :service_principal_id,
                     :source_ref, :resource_ref, :revision_id,
@@ -617,6 +641,7 @@ class PostgreSQLFileImportWorker:
                     CAST(:compilation_document AS jsonb),
                     CAST(:artifact_document AS jsonb),
                     CAST(:embedding_document AS jsonb),
+                    {profile_argument}
                     :lease_generation, :signing_key_version, :nonce,
                     :issued_at, :expires_at
                 )
@@ -642,35 +667,73 @@ class PostgreSQLFileImportWorker:
         with self._engine.begin() as connection:
             assert_worker_role(connection)
             available = connection.execute(
-                text("SELECT pg_catalog.to_regprocedure(:signature) IS NOT NULL"),
-                {"signature": _EMBEDDING_PREPARE_REGPROCEDURE},
+                text(
+                    "SELECT pg_catalog.to_regprocedure(:legacy_signature) IS NOT NULL "
+                    "OR pg_catalog.to_regprocedure(:profile_signature) IS NOT NULL"
+                ),
+                {
+                    "legacy_signature": _EMBEDDING_PREPARE_REGPROCEDURE,
+                    "profile_signature": (
+                        _PROFILE_BOUND_EMBEDDING_PREPARE_REGPROCEDURE
+                    ),
+                },
             ).scalar_one()
         return available is True
+
+    def _embedding_profile_binding_active(self) -> bool:
+        """Detect the exact ADR-0098 function contract, including downgrades."""
+
+        with self._engine.begin() as connection:
+            assert_worker_role(connection)
+            available = connection.execute(
+                text("SELECT pg_catalog.to_regprocedure(:signature) IS NOT NULL"),
+                {"signature": _PROFILE_BOUND_EMBEDDING_PREPARE_REGPROCEDURE},
+            ).scalar_one()
+        return available is True
+
+    def _acquire_publication(
+        self,
+        parameters: dict[str, object],
+        *,
+        profile_binding_active: bool,
+    ) -> Row[tuple[object, ...]] | None:
+        profile_argument = (
+            ":embedding_profile_digest,"
+            if profile_binding_active
+            else ""
+        )
+        return self._execute_one(
+            f"""
+            SELECT * FROM public.context_worker_acquire_file_publication(
+                :organization_id, :job_id, :service_principal_id,
+                :source_ref, :resource_ref, :revision_id,
+                :canonical_text, :content_hash, :compilation_digest,
+                :compiler_version, :config_version,
+                {profile_argument}
+                CAST(:compilation_document AS jsonb),
+                CAST(:artifact_document AS jsonb),
+                :lease_generation, :signing_key_version, :nonce,
+                :issued_at, :expires_at
+            )
+            """,
+            parameters,
+        )
 
     def _await_concurrent_publication(
         self,
         token: WorkerLeaseToken,
         parameters: dict[str, object],
+        *,
+        profile_binding_active: bool,
     ) -> Row[tuple[object, ...]]:
         """Let a concurrently committed winner become this job's no-op input."""
 
         deadline = time.monotonic() + _CONCURRENT_PUBLICATION_WAIT_SECONDS
         while time.monotonic() < deadline:
             time.sleep(_CONCURRENT_PUBLICATION_POLL_SECONDS)
-            acquired = self._execute_one(
-                """
-                SELECT * FROM public.context_worker_acquire_file_publication(
-                    :organization_id, :job_id, :service_principal_id,
-                    :source_ref, :resource_ref, :revision_id,
-                    :canonical_text, :content_hash, :compilation_digest,
-                    :compiler_version, :config_version,
-                    CAST(:compilation_document AS jsonb),
-                    CAST(:artifact_document AS jsonb),
-                    :lease_generation, :signing_key_version, :nonce,
-                    :issued_at, :expires_at
-                )
-                """,
+            acquired = self._acquire_publication(
                 parameters,
+                profile_binding_active=profile_binding_active,
             )
             if acquired is None:
                 raise _rejection(token)
@@ -708,7 +771,7 @@ class PostgreSQLFileImportWorker:
         try:
             vectors = validate_embedding_batch(
                 inputs,
-                self._embedding_provider.embed(inputs),
+                self._embedding_provider.embed_documents(inputs),
                 self._embedding_profile,
             )
         except EmbeddingProviderUnavailable:

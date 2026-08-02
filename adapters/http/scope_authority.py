@@ -18,8 +18,8 @@ from engine.runtime.materialized import (
 )
 from engine.runtime.policy_epoch import MAX_POLICY_EPOCH
 from engine.runtime.release_lineage import (
-    DOGFOOD_VECTOR_INDEX_PROFILE_DIGEST_V1,
-    DOGFOOD_VECTOR_INDEX_PROFILE_REF_V1,
+    QWEN_VECTOR_INDEX_PROFILE_DIGEST_V1,
+    QWEN_VECTOR_INDEX_PROFILE_REF_V1,
     ActiveRuntimeRelease,
 )
 from engine.runtime.scope import MISSING_TRUSTED_SCOPE, ScopeSet
@@ -219,9 +219,9 @@ class DogfoodFileScopeAuthority:
             or identity.active_runtime_release.organization_id
             != identity.organization_id
             or identity.active_runtime_release.index_profile_ref
-            != DOGFOOD_VECTOR_INDEX_PROFILE_REF_V1
+            != QWEN_VECTOR_INDEX_PROFILE_REF_V1
             or identity.active_runtime_release.index_profile_digest
-            != DOGFOOD_VECTOR_INDEX_PROFILE_DIGEST_V1
+            != QWEN_VECTOR_INDEX_PROFILE_DIGEST_V1
             or not identity.active_runtime_release.active_revision_refs
         ):
             raise ScopeAuthorityUnavailable(

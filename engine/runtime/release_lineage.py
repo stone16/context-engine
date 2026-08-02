@@ -7,6 +7,11 @@ from hashlib import sha256
 from typing import Final
 from uuid import UUID
 
+from engine.supply import (
+    DETERMINISTIC_TWIN_EMBEDDING_PROFILE,
+    QWEN3_EMBEDDING_PROFILE,
+)
+
 
 class ActiveReleaseUnavailable(RuntimeError):
     """No complete active Runtime release could be observed fail-closed."""
@@ -21,6 +26,7 @@ INDEX_PROFILE_REF_V0: Final = "index-exact-phrase-v0"
 DOGFOOD_VECTOR_INDEX_PROFILE_REF_V1: Final = (
     "index-file-pgvector-deterministic-twin-v1"
 )
+QWEN_VECTOR_INDEX_PROFILE_REF_V1: Final = "index-file-pgvector-qwen3-0.6b-v1"
 INDEX_SCHEMA_REF_V0: Final = "context-index-schema-v1"
 CONTENT_PROFILE_DIGEST_V0: Final = sha256(
     b"context-engine.content-profile.materialized-v0"
@@ -32,6 +38,10 @@ DOGFOOD_VECTOR_INDEX_PROFILE_DIGEST_V1: Final = sha256(
     b"context-engine.index-profile.file-pgvector-v1\x00"
     b"embedding-model:deterministic-twin-v1\x00"
     b"embedding-input:contextual-fragment-v1"
+).hexdigest()
+QWEN_VECTOR_INDEX_PROFILE_DIGEST_V1: Final = sha256(
+    b"context-engine.index-profile.file-pgvector.v1\x00"
+    + bytes.fromhex(QWEN3_EMBEDDING_PROFILE.profile_digest)
 ).hexdigest()
 RUNTIME_PROFILE_DIGEST_V0: Final = sha256(
     b"context-engine.runtime-profile.materialized-openapi-v0"
@@ -100,6 +110,8 @@ class ActiveRuntimeRelease:
     runtime_profile_digest: str = field(repr=False)
     content_profile_digest: str = field(repr=False)
     index_profile_digest: str = field(repr=False)
+    embedding_profile_document: str = field(repr=False)
+    embedding_profile_digest: str = field(repr=False)
     tokenizer_ref: str
     package_schema_ref: str
     curation_profile_ref: str
@@ -137,6 +149,7 @@ class ActiveRuntimeRelease:
             "runtime_profile_digest",
             "content_profile_digest",
             "index_profile_digest",
+            "embedding_profile_digest",
             "curation_profile_digest",
         ):
             _require_digest(field_name, getattr(self, field_name))
@@ -159,11 +172,26 @@ class ActiveRuntimeRelease:
         supported_index_profile = (
             self.index_profile_ref,
             self.index_profile_digest,
+            self.embedding_profile_digest,
+            self.embedding_profile_document,
         ) in {
-            (INDEX_PROFILE_REF_V0, INDEX_PROFILE_DIGEST_V0),
+            (
+                INDEX_PROFILE_REF_V0,
+                INDEX_PROFILE_DIGEST_V0,
+                DETERMINISTIC_TWIN_EMBEDDING_PROFILE.profile_digest,
+                DETERMINISTIC_TWIN_EMBEDDING_PROFILE.canonical_json(),
+            ),
             (
                 DOGFOOD_VECTOR_INDEX_PROFILE_REF_V1,
                 DOGFOOD_VECTOR_INDEX_PROFILE_DIGEST_V1,
+                DETERMINISTIC_TWIN_EMBEDDING_PROFILE.profile_digest,
+                DETERMINISTIC_TWIN_EMBEDDING_PROFILE.canonical_json(),
+            ),
+            (
+                QWEN_VECTOR_INDEX_PROFILE_REF_V1,
+                QWEN_VECTOR_INDEX_PROFILE_DIGEST_V1,
+                QWEN3_EMBEDDING_PROFILE.profile_digest,
+                QWEN3_EMBEDDING_PROFILE.canonical_json(),
             ),
         }
         if (
@@ -206,6 +234,8 @@ __all__ = [
     "INDEX_PROFILE_REF_V0",
     "INDEX_SCHEMA_REF_V0",
     "PACKAGE_SCHEMA_REF_V0",
+    "QWEN_VECTOR_INDEX_PROFILE_DIGEST_V1",
+    "QWEN_VECTOR_INDEX_PROFILE_REF_V1",
     "RUNTIME_PROFILE_DIGEST_V0",
     "RUNTIME_PROFILE_REF_V0",
     "RUNTIME_TOKENIZER_REF_V0",
