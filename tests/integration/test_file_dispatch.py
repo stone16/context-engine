@@ -478,51 +478,106 @@ def test_scheduler_root_subset_cannot_redirect_oldest_reclaim(
     guarded_scheduler_engine: Engine,
     migration_configuration: DatabaseConfiguration,
 ) -> None:
+    scenario_ref = uuid4().hex
+    root_refs = (
+        FileRootRef(f"oldest-reclaim-{scenario_ref}"),
+        FileRootRef(f"newer-reclaim-{scenario_ref}"),
+    )
     scheduled: list[tuple[UUID, UUID, FileRootRef]] = []
-    for name in ("oldest-reclaim-root", "newer-reclaim-root"):
+    for name, root_ref in zip(("oldest", "newer"), root_refs, strict=True):
         root = tmp_path / name
         root.mkdir()
-        (root / "reclaim.md").write_text(f"# {name}\n", encoding="utf-8")
+        (root / "reclaim.md").write_text(f"# {root_ref.value}\n", encoding="utf-8")
         scheduled.append(
             _schedule_one(
                 root=root,
                 guarded_control_engine=guarded_control_engine,
                 migration_configuration=migration_configuration,
-                root_ref=FileRootRef(name),
+                root_ref=root_ref,
             )
         )
-    complete = PostgreSQLFileDispatchAuthority(
-        guarded_scheduler_engine,
-        WorkerLeaseCodec(WorkerLeaseKeyring(active_version=1, keys={1: SIGNING_KEY})),
-        configured_root_refs=("oldest-reclaim-root", "newer-reclaim-root"),
-    )
-    first = complete.claim()
-    second = complete.claim()
-    assert type(first) is FileDispatchLease
-    assert type(second) is FileDispatchLease
-    migration_engine = create_database_engine(migration_configuration)
+    setup_engine = create_database_engine(migration_configuration)
     try:
-        with migration_engine.begin() as connection:
+        with setup_engine.begin() as connection:
             connection.execute(
                 text(
-                    "UPDATE file_import_job SET lease_issued_at = "
-                    "clock_timestamp() - interval '10 minutes', "
-                    "lease_expires_at = clock_timestamp() - interval '31 seconds' "
-                    "WHERE job_id = ANY(:job_ids)"
-                ),
-                {"job_ids": [first.job_id, second.job_id]},
+                    "ALTER TABLE file_source_acquisition_checkpoint DISABLE TRIGGER "
+                    "file_source_acquisition_checkpoint_immutable"
+                )
+            )
+            for offset, (organization_id, job_id, _root_ref) in enumerate(scheduled):
+                connection.execute(
+                    text(
+                        "UPDATE file_source_acquisition_checkpoint SET accepted_at = "
+                        "clock_timestamp() + make_interval(secs => :offset) "
+                        "WHERE organization_id = :organization_id AND job_id = :job_id"
+                    ),
+                    {
+                        "offset": offset,
+                        "organization_id": organization_id,
+                        "job_id": job_id,
+                    },
+                )
+            connection.execute(
+                text(
+                    "ALTER TABLE file_source_acquisition_checkpoint ENABLE TRIGGER "
+                    "file_source_acquisition_checkpoint_immutable"
+                )
             )
     finally:
-        migration_engine.dispose()
-    subset = PostgreSQLFileDispatchAuthority(
-        guarded_scheduler_engine,
-        WorkerLeaseCodec(WorkerLeaseKeyring(active_version=1, keys={1: SIGNING_KEY})),
-        configured_root_refs=("newer-reclaim-root",),
-    )
-    assert subset.claim() == FileDispatchNoWork()
-    reclaimed = complete.claim()
-    assert type(reclaimed) is FileDispatchLease
-    assert reclaimed.job_id == first.job_id
+        setup_engine.dispose()
+    scenario_organization_ids = [organization_id for organization_id, _, _ in scheduled]
+    isolation_engine = create_database_engine(migration_configuration)
+    try:
+        with isolation_engine.begin() as isolation_connection:
+            isolation_connection.execute(
+                text(
+                    "SELECT job_id FROM file_import_job WHERE NOT "
+                    "(organization_id = ANY(:organization_ids)) FOR UPDATE"
+                ),
+                {"organization_ids": scenario_organization_ids},
+            )
+            complete = PostgreSQLFileDispatchAuthority(
+                guarded_scheduler_engine,
+                WorkerLeaseCodec(
+                    WorkerLeaseKeyring(active_version=1, keys={1: SIGNING_KEY})
+                ),
+                configured_root_refs=tuple(root_ref.value for root_ref in root_refs),
+            )
+            first = complete.claim()
+            second = complete.claim()
+            assert type(first) is FileDispatchLease
+            assert type(second) is FileDispatchLease
+            assert (first.organization_id, first.job_id) == scheduled[0][:2]
+            assert (second.organization_id, second.job_id) == scheduled[1][:2]
+            with isolation_engine.begin() as connection:
+                for organization_id, job_id, _root_ref in scheduled:
+                    connection.execute(
+                        text(
+                            "UPDATE file_import_job SET lease_issued_at = "
+                            "clock_timestamp() - interval '10 minutes', "
+                            "lease_expires_at = "
+                            "clock_timestamp() - interval '31 seconds' WHERE "
+                            "organization_id = :organization_id AND job_id = :job_id"
+                        ),
+                        {
+                            "organization_id": organization_id,
+                            "job_id": job_id,
+                        },
+                    )
+            subset = PostgreSQLFileDispatchAuthority(
+                guarded_scheduler_engine,
+                WorkerLeaseCodec(
+                    WorkerLeaseKeyring(active_version=1, keys={1: SIGNING_KEY})
+                ),
+                configured_root_refs=(root_refs[1].value,),
+            )
+            assert subset.claim() == FileDispatchNoWork()
+            reclaimed = complete.claim()
+            assert type(reclaimed) is FileDispatchLease
+            assert reclaimed.job_id == first.job_id
+    finally:
+        isolation_engine.dispose()
 
 
 @pytest.mark.parametrize(
