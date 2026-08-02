@@ -425,12 +425,12 @@ class MaterializedProjectionSession:
             "transaction authority"
         )
 
+    def __reduce__(self) -> NoReturn:
+        raise TypeError("MaterializedProjectionSession is not serializable")
+
 
 class MaterializedCandidateDiscoveryUnavailable(RuntimeError):
     """Retained candidate discovery refused before returning any candidate."""
-
-    def __reduce__(self) -> NoReturn:
-        raise TypeError("MaterializedProjectionSession is not serializable")
 
 
 @dataclass(frozen=True, slots=True)

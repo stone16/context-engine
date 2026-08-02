@@ -141,6 +141,8 @@ def test_projection_session_is_nominal_lifetime_bound_and_nonserializable() -> N
 
     assert "authorized synthetic body" not in repr(session)
     with pytest.raises(TypeError, match="not serializable"):
+        session.__reduce__()
+    with pytest.raises(TypeError, match="not serializable"):
         dumps(session)
     with pytest.raises(FrozenInstanceError):
         session._port = port  # type: ignore[misc]
