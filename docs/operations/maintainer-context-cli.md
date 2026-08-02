@@ -122,6 +122,25 @@ this question. It is not evidence that the corpus has no answer. Stale
 evidence, source unavailability, budget exhaustion, and unsupported capability
 remain distinct public coverage reasons.
 
+The served composition answers every rejected request with a closed
+content-free `{"code": ...}` document. The CLI classifies those by transport
+status class alone and never reads, echoes, or renders the response: a status
+that indicts this caller's own input — the environment bearer, or the request
+document it composed from the arguments above — is local configuration, while
+every other rejection is the served capability being unavailable.
+
+| Served status | Closed code | Exit |
+|---:|---|---:|
+| 401 | `authentication_failed` | 14 |
+| 400, 422 | `invalid_request` | 14 |
+| 403 | `application_forbidden` | 11 |
+| 429 | `rate_limited` | 11 |
+| 5xx | `service_unavailable` | 11 |
+| any other status, redirect, or transport failure | not read | 11 |
+
+A public `request_not_available` or `citation_not_available` outcome is a
+successful `200` answer, not a rejected request; it keeps exit 10 above.
+
 ## Explicit v1 non-goals
 
 - `OpenCitation` is `NOT_ACTIVE` for the dogfood CLI carrier. A future command

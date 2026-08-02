@@ -468,6 +468,56 @@ def test_unavailable_service_is_content_free_and_has_stable_exit_class() -> None
     assert SECRET not in completed.stderr
 
 
+def test_served_rejection_status_classes_map_to_stable_exit_classes() -> None:
+    from adapters.http.dogfood_client import CALLER_REJECTED_STATUSES
+
+    assert sorted(CALLER_REJECTED_STATUSES) == [400, 401, 422]
+
+    for status_code, code, expected_exit, expected_class in (
+        (401, "authentication_failed", 14, "invalid_configuration"),
+        (400, "invalid_request", 14, "invalid_configuration"),
+        (422, "invalid_request", 14, "invalid_configuration"),
+        (403, "application_forbidden", 11, "service_unavailable"),
+        (429, "rate_limited", 11, "service_unavailable"),
+        (503, "service_unavailable", 11, "service_unavailable"),
+    ):
+        with _resolve_server({"code": code}, status_code=status_code) as (
+            base_url,
+            _,
+        ):
+            completed = _command(
+                "query",
+                "Classify one served rejection",
+                environment={
+                    **os.environ,
+                    "CONTEXT_ENGINE_DOGFOOD_BASE_URL": base_url,
+                    "CONTEXT_ENGINE_DOGFOOD_SECRET": SECRET,
+                },
+            )
+
+        assert completed.returncode == expected_exit, completed.stderr
+        assert completed.stdout == ""
+        assert completed.stderr == f"context-engine-context: {expected_class}\n"
+        assert SECRET not in completed.stderr
+
+
+def test_unreachable_loopback_transport_stays_service_unavailable() -> None:
+    completed = _command(
+        "query",
+        "Classify one transport failure",
+        environment={
+            **os.environ,
+            "CONTEXT_ENGINE_DOGFOOD_BASE_URL": "http://127.0.0.1:1",
+            "CONTEXT_ENGINE_DOGFOOD_SECRET": SECRET,
+        },
+    )
+
+    assert completed.returncode == 11
+    assert completed.stdout == ""
+    assert completed.stderr == "context-engine-context: service_unavailable\n"
+    assert SECRET not in completed.stderr
+
+
 def test_secret_is_refused_from_query_without_echo() -> None:
     completed = _command(
         "query",
@@ -847,6 +897,53 @@ def test_unknown_capture_envelope_stays_malformed() -> None:
         assert completed.returncode == 12
         assert completed.stdout == ""
         assert completed.stderr == "context-engine-context: malformed_package\n"
+
+
+def test_only_the_exact_redacted_grant_bypasses_the_live_grant_schema() -> None:
+    package = _package_document()
+    for grant in (
+        {"value": REDACTED_EGRESS_GRANT},
+        {
+            "kind": "model",
+            "value": REDACTED_EGRESS_GRANT,
+            "leftover": LIVE_EGRESS_GRANT,
+        },
+        {"kind": "unknown", "value": REDACTED_EGRESS_GRANT},
+    ):
+        completed = _command(
+            "inspect",
+            "-",
+            environment=os.environ.copy(),
+            input_text=json.dumps(
+                {"kind": "resolved", "package": package, "egressGrant": grant}
+            ),
+        )
+
+        assert completed.returncode == 12
+        assert completed.stdout == ""
+        assert completed.stderr == "context-engine-context: malformed_package\n"
+        assert LIVE_EGRESS_GRANT not in completed.stdout + completed.stderr
+
+    accepted = _command(
+        "inspect",
+        "-",
+        "--format",
+        "json",
+        environment=os.environ.copy(),
+        input_text=json.dumps(
+            {
+                "kind": "resolved",
+                "package": package,
+                "egressGrant": {
+                    "kind": "model",
+                    "value": REDACTED_EGRESS_GRANT,
+                },
+            }
+        ),
+    )
+
+    assert accepted.returncode == 0, accepted.stderr
+    assert json.loads(accepted.stdout) == package
 
 
 def test_naive_package_instants_refuse_before_any_render() -> None:

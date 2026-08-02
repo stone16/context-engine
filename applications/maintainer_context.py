@@ -25,6 +25,7 @@ from adapters.http.contracts import (
 )
 from adapters.http.dogfood_client import (
     DOGFOOD_SECRET_ENV,
+    DogfoodCallerRejected,
     DogfoodEvaluationUnavailable,
     DogfoodHttpConfiguration,
     DogfoodResolveClient,
@@ -42,6 +43,8 @@ EXIT_MALFORMED_PACKAGE: Final = 12
 EXIT_EXPIRED_PACKAGE: Final = 13
 EXIT_INVALID_CONFIGURATION: Final = 14
 REDACTED_EGRESS_GRANT: Final = "REDACTED-EGRESS-GRANT"
+REDACTED_EGRESS_GRANT_FIELDS: Final = frozenset({"kind", "value"})
+EGRESS_GRANT_KINDS: Final = frozenset({"model", "channel"})
 
 _OUTCOME_ADAPTER: Final[TypeAdapter[ResolutionOutcomeWire]] = TypeAdapter(
     ResolutionOutcomeWire
@@ -138,7 +141,7 @@ def _query(arguments: argparse.Namespace) -> int:
     except (ValidationError, ValueError):
         print("context-engine-context: malformed_package", file=sys.stderr)
         return EXIT_MALFORMED_PACKAGE
-    except DogfoodSecretExclusionUnavailable:
+    except (DogfoodCallerRejected, DogfoodSecretExclusionUnavailable):
         print("context-engine-context: invalid_configuration", file=sys.stderr)
         return EXIT_INVALID_CONFIGURATION
     except DogfoodEvaluationUnavailable:
@@ -281,12 +284,22 @@ def _validated_capture(raw: object) -> _PackageCapture | _RefusedCapture:
 
 
 def _capture_envelope(raw: dict[str, object]) -> dict[str, object]:
-    """Validate this caller's own redacted capture without a live grant."""
+    """Validate this caller's own redacted capture without a live grant.
+
+    Dropping the member would otherwise exempt it from the closed schema, so
+    only the exact grant object this caller emits is accepted here; every
+    other shape stays untouched and is refused by the envelope contract.
+    """
 
     grant = raw.get("egressGrant")
     if type(grant) is not dict:
         return raw
-    if cast(dict[str, object], grant).get("value") != REDACTED_EGRESS_GRANT:
+    document = cast(dict[str, object], grant)
+    if (
+        frozenset(document) != REDACTED_EGRESS_GRANT_FIELDS
+        or document["kind"] not in EGRESS_GRANT_KINDS
+        or document["value"] != REDACTED_EGRESS_GRANT
+    ):
         return raw
     envelope = dict(raw)
     envelope["egressGrant"] = None

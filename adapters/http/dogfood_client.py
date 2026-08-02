@@ -19,6 +19,7 @@ DOGFOOD_BASE_URL_ENV: Final = "CONTEXT_ENGINE_DOGFOOD_BASE_URL"
 DOGFOOD_SECRET_ENV: Final = "CONTEXT_ENGINE_DOGFOOD_SECRET"
 MAX_QUERY_CHARACTERS: Final = 4_096
 MAX_RESPONSE_BYTES: Final = 16 * 1024 * 1024
+CALLER_REJECTED_STATUSES: Final = frozenset({400, 401, 422})
 
 
 class DogfoodEvaluationUnavailable(RuntimeError):
@@ -27,6 +28,14 @@ class DogfoodEvaluationUnavailable(RuntimeError):
 
 class DogfoodSecretExclusionUnavailable(DogfoodEvaluationUnavailable):
     """The caller cannot keep configured secret material out of its output."""
+
+
+class DogfoodCallerRejected(DogfoodEvaluationUnavailable):
+    """The served composition refused this caller's credential or request.
+
+    Only the closed transport status is read; no response detail is retained,
+    so the distinction stays content-free while remaining actionable locally.
+    """
 
 
 def _require_exact_text(name: str, value: object, *, maximum: int = 512) -> str:
@@ -68,6 +77,15 @@ def _as_object(value: object, name: str) -> dict[str, object]:
     if type(value) is not dict or any(type(key) is not str for key in value):
         raise DogfoodEvaluationUnavailable(f"{name} is unavailable")
     return cast(dict[str, object], value)
+
+
+def _package_from_outcome(outcome: dict[str, object]) -> dict[str, object]:
+    package = _as_object(outcome.get("package"), "ContextPackage")
+    if type(package.get("blocks")) is not list or type(
+        package.get("evidence")
+    ) is not list:
+        raise DogfoodEvaluationUnavailable("ContextPackage is unavailable")
+    return package
 
 
 def reject_secret_material(secret: object, value: object) -> None:
@@ -234,6 +252,14 @@ class DogfoodResolveClient:
             return self._validated_outcome(bytes(raw))
         except DogfoodEvaluationUnavailable:
             raise
+        except httpx.HTTPStatusError as error:
+            if error.response.status_code in CALLER_REJECTED_STATUSES:
+                raise DogfoodCallerRejected(
+                    "dogfood resolve rejected this caller"
+                ) from None
+            raise DogfoodEvaluationUnavailable(
+                "dogfood resolve is unavailable"
+            ) from None
         except (
             httpx.HTTPError,
             OSError,
@@ -299,16 +325,11 @@ class DogfoodResolveClient:
         """Invoke one Acquire and require a ContextPackage for evaluation."""
 
         outcome = self.resolve_acquire(query=query, request_id=request_id)
-        package = outcome.get("package")
-        if (
-            outcome.get("kind") != "resolved"
-            or type(package) is not dict
-            or type(package.get("blocks")) is not list
-            or type(package.get("evidence")) is not list
-        ):
+        if outcome.get("kind") != "resolved":
             raise DogfoodEvaluationUnavailable(
                 "dogfood resolve did not return a ContextPackage"
             )
+        _package_from_outcome(outcome)
         return outcome
 
     def reject_secret_material(self, value: object) -> None:
