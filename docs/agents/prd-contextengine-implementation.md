@@ -36,8 +36,8 @@ ContextEngine 已经形成了较完整的产品定位、Domain Model、安全不
 
 ### Public provenance and design ownership
 
-- 公开 prior art 只允许引用四个固定版本的公开仓：Dify、RAGFlow、MaxKB、Onyx；证据索引统一见 `docs/research/2026-07-19-four-public-repositories-evidence.md`。
-- 四仓只提供可观察的产品流程、Interface 形状、测试 oracle 与工程 pattern。ContextEngine 的 tenant model、AuthorizationKernel、SourceAclEvidence、WorkerLease、audience-bound delivery、ActionTicket、publication transaction 与 release authority 均是本项目根据自身威胁模型独立设计。
+- 公开 prior art 只允许引用五个固定版本的公开仓：Dify、RAGFlow、MaxKB、Onyx、OpenViking；证据索引统一见 `docs/research/2026-08-02-five-public-repositories-evidence.md`。OpenViking 只准入 context filesystem/L0–L2 tiering、session→candidate UX、observable trajectory 与 agent exposure 四类 claim，禁止作为多租户授权/安全证明、Runtime foundation 或任何 copy+patch 来源。
+- 五仓只提供可观察的产品流程、Interface 形状、测试 oracle 与工程 pattern。ContextEngine 的 tenant model、AuthorizationKernel、SourceAclEvidence、WorkerLease、audience-bound delivery、ActionTicket、publication transaction 与 release authority 均是本项目根据自身威胁模型独立设计。
 - 仓库之外的笔记、私有实现、本机路径或未署名综合结论不构成实现权威。任何探索性想法必须先改写成仓库内可独立审查的 requirement、threat、decision 或 evidence-gated hypothesis，才能进入 Design、ADR、PRD 或 Tech Spec。
 - 不复制参考仓代码。公开设计不得通过删去来源名称来保留不可验证归因，也不得把 ContextEngine 自有协议描述成参考仓已经证明的能力。
 

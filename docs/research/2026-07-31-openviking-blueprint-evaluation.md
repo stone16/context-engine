@@ -1,4 +1,4 @@
-> **Room-A 研究产物 — 维护者本地研究，非公开 provenance；第五仓准入已由维护者于 2026-07-31 有条件批准（D9），公开基线修订待 legal 复核与 permalink 固定完成。其余开放问题决定（D8/D10）见 [`five-repository-implementation-blueprint.md`](./2026-07-31-five-repository-implementation-blueprint.md) §5；正文推荐项为评估时刻的状态。**
+> **Room-A 研究产物 — 维护者本地研究，非公开 provenance；第五仓准入已由维护者于 2026-07-31 有条件批准（D9）。66/66 上游 evidence links 已固定到 `49b1820…`，版本化候选五仓基线与 legal dossier 已于 2026-08-02 准备；maintainer/legal sign-off 仍由 #205 关闭。其余开放问题决定（D8/D10）见 [`five-repository-implementation-blueprint.md`](./2026-07-31-five-repository-implementation-blueprint.md) §5；正文推荐项保留评估时刻的状态。**
 
 # 1. 固定 commit、许可证核验与证据基线状态
 
@@ -24,7 +24,7 @@ AGPL 网络服务影响必须按工程红线理解：AGPLv3 第 13 节要求，�
 
 ## 证据基线状态与准入条件
 
-OpenViking **不是** [`2026-07-19-four-public-repositories-evidence.md`](./2026-07-19-four-public-repositories-evidence.md) 的四仓之一。本文只能影响 maintainer-local 推理；在准入前，公开设计、README、ADR 或产品说明不得以 OpenViking 作为 provenance，也不能把本文链接当作公开证据。
+OpenViking 的条件准入公开证据只存在于候选的 [`2026-08-02-five-public-repositories-evidence.md`](./2026-08-02-five-public-repositories-evidence.md)。本文仍只能影响 maintainer-local 推理，不能作为 provenance；maintainer/legal sign-off 未记录前，候选基线不得合并。
 
 若要成为第五仓，至少需要一次显式的 maintainer admission，且在同一变更中完成：
 

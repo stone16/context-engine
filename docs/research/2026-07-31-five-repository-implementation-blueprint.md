@@ -9,7 +9,7 @@
 > - [`2026-07-31-onyx-blueprint-evaluation.md`](./2026-07-31-onyx-blueprint-evaluation.md)（MIT 非 ee 区，copy+patch 可选）
 > - [`2026-07-31-openviking-blueprint-evaluation.md`](./2026-07-31-openviking-blueprint-evaluation.md)（Room-A，AGPLv3）
 >
-> **证据纪律**：公开 reference claim 仍只回引 [`2026-07-19 四仓证据基线`](./2026-07-19-four-public-repositories-evidence.md)。Dify / MaxKB / OpenViking 三份是 **Room-A 维护者本地研究**，Room-B 实现者只读其中规格与 oracle、不读上游源码；OpenViking 尚未纳入公开基线。RAGFlow / Onyx 报告中的复制候选在 `third_party/` 注册闭合前同样只是候选。本文不是法律意见，不替代逐项 legal review。
+> **证据纪律**：公开 reference claim 只回引版本化的 [`2026-08-02 五仓证据基线`](./2026-08-02-five-public-repositories-evidence.md) 或其固定一手 permalink。Dify / MaxKB / OpenViking 三份仍是 **Room-A 维护者本地研究**，不能作为公开 provenance；Room-B 实现者只读其中规格与 oracle、不读上游源码。OpenViking 已形成候选五仓准入文档，但 legal sign-off 仍由 #205 的维护者决策关闭。本文不是法律意见，不替代逐项 legal review。
 
 ## 1. 五仓许可证矩阵与复用模式总账
 
@@ -142,8 +142,8 @@ D1–D12 已于 2026-07-31 全部决策完毕（§5）。本 Wave = 把决定落
 ## 6. 合规与公开口径清单（Definition of Done 附加项）
 
 - [ ] 任何新增 copy+patch：`third_party/<upstream>/` 具备 `LICENSE.upstream`、`UPSTREAM.toml`（repo/commit/paths/excluded/hashes/mode/approval）、`MODIFICATIONS.md`、`patches/`、`sbom.cyclonedx.json`，且 wheel/sdist/npm/container **物理包含** notice + SBOM（Git-only attribution 不合规）。
-- [ ] Dify/MaxKB/OpenViking 相关 PR 描述不引用三份 Room-A 报告为公开 provenance；只引本仓 ADR/tests/四仓基线。
-- [ ] OpenViking 准入前，README/PLAN/STATUS/设计文档不出现 OpenViking 作为 authority 的引用。
+- [x] Dify/MaxKB/OpenViking 相关 PR 描述不引用三份 Room-A 报告为公开 provenance；只引本仓 ADR/tests/版本化五仓基线。
+- [x] OpenViking 公开 authority 只通过版本化五仓基线的固定四类白名单；Room-A 报告不作为 provenance。
 - [ ] 每个 Wave 的 STATUS.md 更新区分 Active / `NOT_ACTIVE`；bounded proof 不升级为 general claim；`make smoke` 绿不升级为 publication/security 证明。
 - [ ] RAGFlow PDF/OCR：资产门（ONNX/XGBoost 逐项 revision+hash+license+model card）未闭合前，profile 报 `NOT_ACTIVE`，spike 代码留在 `/tmp` 或 runtime-tree 外并留删除证明。
 - [ ] 全局不变量逐 release 复核：Unauthorized Evidence = 0、wrong-Organization effect = 0、missing tenant context = fail closed。

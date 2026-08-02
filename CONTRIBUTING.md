@@ -147,8 +147,8 @@ first, or declined.
 
 ### Controlled third-party reuse
 
-The design draws on architectural study of **Dify**, **RAGFlow**, **MaxKB**, and
-**Onyx**. Code reuse follows
+The design draws on architectural study of **Dify**, **RAGFlow**, **MaxKB**,
+**Onyx**, and conditionally admitted **OpenViking**. Code reuse follows
 [ADR-0074](./docs/decisions/0074-adopt-controlled-third-party-code-reuse.md),
 per source region, never per product: Apache-2.0 regions (RAGFlow) and MIT
 regions (Onyx outside every `ee/` directory; separately-licensed SDK subtrees)
@@ -156,10 +156,10 @@ may be copied and patched only after path-level license verification at a
 pinned commit, registered under `third_party/` with upstream license, exact
 provenance (`UPSTREAM.toml`), and modification notices, and shipped with
 complete attribution and SBOM coverage. Dify root-licensed code, MaxKB GPLv3
-code, and Onyx `ee/` code must never be copied — reuse them only through
+code, Onyx `ee/` code, and every OpenViking region must never be copied — reuse them only through
 clean-room behavior specifications and test oracles produced by an observer
 who does not implement. Public reference claims must trace to the
-[evidence baseline](./docs/research/2026-07-19-four-public-repositories-evidence.md).
+[evidence baseline](./docs/research/2026-08-02-five-public-repositories-evidence.md).
 Research from outside this repository may inform your reasoning, but must never
 be cited or linked as public provenance.
 

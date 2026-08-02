@@ -3,7 +3,7 @@ title: ContextEngine Implementation Design v1.2
 date: 2026-07-19
 status: implementation authority
 public-summary: PLAN.md
-public-evidence: docs/research/2026-07-19-four-public-repositories-evidence.md
+public-evidence: docs/research/2026-08-02-five-public-repositories-evidence.md
 threat-model: docs/security/context-engine-threat-model.md
 ---
 
@@ -29,12 +29,14 @@ reproducible report/digest is recorded.
 
 ### 0.1 Public provenance and independent design ownership
 
-Public prior-art claims are allowlisted to Dify, RAGFlow, MaxKB, and Onyx at the
-fixed revisions recorded in
-`docs/research/2026-07-19-four-public-repositories-evidence.md`. Those projects
+Public prior-art claims are allowlisted to Dify, RAGFlow, MaxKB, Onyx, and
+conditionally admitted OpenViking at the fixed revisions recorded in
+`docs/research/2026-08-02-five-public-repositories-evidence.md`. Those projects
 provide observable patterns for product orchestration, document compilation,
 knowledge operations, connectors, checkpointing, retrieval, and test layering.
-They do not establish ContextEngine's security guarantees.
+They do not establish ContextEngine's security guarantees. OpenViking is
+further restricted to the baseline's four behavioral claim families; it is no
+Runtime foundation and supplies no code or dependency.
 
 ContextEngine independently owns the tenant model, AuthorizationKernel,
 AuthorizedProjection type flow, SourceAclEvidence semantics, WorkerLease,
