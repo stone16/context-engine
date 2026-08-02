@@ -1,6 +1,6 @@
 ---
 name: adr-0093-activate-leased-rich-markdown-and-revision-link-graph
-version: "1.0.3"
+version: "1.0.4"
 description: >
   Activate rich Markdown v3 behind the exact File-import WorkerLease, persist
   immutable content-free Revision link edges, and admit one authorized graph
@@ -47,13 +47,14 @@ ADR-0075 requires.
    or WorkerLease redemption authority with which to select the v3 child. Issue
    #203 and #207 ship the compatibility resolution: when v1's closed refusal is
    exactly `LINK_OR_IMAGE`, `EMPHASIS`, `INLINE_CODE`, or `STRIKETHROUGH` and the
-   exact source matches that accepted v3 inline syntax, or when the source
-   contains accepted rich link syntax not classified as such by v1, the console
-   returns a content-free actionable handoff to the existing source `scan` plus
-   independent worker-dispatch path. Malformed syntax and every other compilation
-   refusal remain generically unavailable. The worker honors a redeemed, exact
-   v1 preview binding only for the console's successful v1 preview/confirm flow;
-   all scan-scheduled imports use active v3.
+   exact source passes the whole-document rich-v3 acceptance check for that
+   construct, or when the source passes that same check for accepted rich link
+   syntax not classified as such by v1, the console returns a content-free
+   actionable handoff to the existing source `scan` plus independent worker-
+   dispatch path. Malformed syntax and every other compilation refusal remain
+   generically unavailable. The worker honors a redeemed, exact v1 preview
+   binding only for the console's successful v1 preview/confirm flow; all scan-
+   scheduled imports use active v3.
 2. A File import redeems and durably verifies its exact WorkerLease before
    selecting the rich compiler subprocess. The child is a pure transform that
    receives source bytes, the closed configuration version, and token ceiling
