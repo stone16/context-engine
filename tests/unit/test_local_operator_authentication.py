@@ -113,6 +113,25 @@ def test_routine_control_configuration_does_not_require_release_secrets() -> Non
     assert DOGFOOD_SECRET_ENV not in projected
     assert WORKER_SECRET_ENV not in projected
 
+
+def test_routine_control_configuration_rejects_dogfood_secret_reuse() -> None:
+    projected = {
+        name: value
+        for name, value in environment().items()
+        if name
+        in {
+            OPERATOR_ORGANIZATION_ENV,
+            CONTROL_OPERATOR_SECRET_ENV,
+            CONTROL_OPERATOR_OPERATIONS_ENV,
+            DOGFOOD_SECRET_ENV,
+        }
+    }
+    projected[DOGFOOD_SECRET_ENV] = CONTROL_SECRET
+
+    with pytest.raises(LocalOperatorConfigurationUnavailable):
+        LocalControlOperatorConfiguration.load(projected)
+
+
 def test_control_operations_are_an_exact_enumerated_set() -> None:
     configuration = _configuration()
     assert configuration.control_operations == frozenset(

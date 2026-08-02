@@ -20,12 +20,14 @@ from adapters.http.organization_authority import DogfoodOrganizationAuthority
 from adapters.http.scope_authority import DogfoodFileScopeAuthority
 from adapters.pgvector import PostgreSQLVectorCandidateIndex
 from applications.file_root_configuration import (
+    FILE_ROOT_ENVIRONMENT_VARIABLES,
     WORKER_FILE_ROOTS_ENV,
     file_roots,
 )
 from applications.operator_authentication import (
     CONTROL_OPERATOR_SECRET_ENV,
-    LocalOperatorConfiguration,
+    LOCAL_CONTROL_OPERATOR_ENVIRONMENT_VARIABLES,
+    LocalControlOperatorConfiguration,
     LocalOperatorConfigurationUnavailable,
 )
 from engine.control import MinimalUiControlGate
@@ -65,6 +67,26 @@ DOGFOOD_BINDING_ENV = "CONTEXT_ENGINE_DOGFOOD_AUTHENTICATION_BINDING_REF"
 DOGFOOD_EMBEDDING_PROVIDER_ENV = "CONTEXT_ENGINE_DOGFOOD_EMBEDDING_PROVIDER"
 DOGFOOD_EMBEDDING_PROVIDER_VALUE = "deterministic-twin-v1"
 DOGFOOD_FILE_IMPORT_RECEIVER_ENV = "CONTEXT_ENGINE_WORKER_SERVICE_PRINCIPAL_ID"
+DOGFOOD_RUNTIME_ENVIRONMENT_VARIABLES = frozenset(
+    {
+        DOGFOOD_COMPOSITION_ENV,
+        DOGFOOD_SECRET_ENV,
+        DOGFOOD_ORGANIZATION_ENV,
+        DOGFOOD_USER_ENV,
+        DOGFOOD_MEMBERSHIP_ENV,
+        DOGFOOD_MEMBERSHIP_VERSION_ENV,
+        DOGFOOD_PRINCIPAL_ENV,
+        DOGFOOD_AGENT_ENV,
+        DOGFOOD_APPLICATION_ENV,
+        DOGFOOD_BINDING_ENV,
+        DOGFOOD_EMBEDDING_PROVIDER_ENV,
+    }
+)
+DOGFOOD_CONTROL_ENVIRONMENT_VARIABLES = (
+    LOCAL_CONTROL_OPERATOR_ENVIRONMENT_VARIABLES
+    | FILE_ROOT_ENVIRONMENT_VARIABLES
+    | {DOGFOOD_FILE_IMPORT_RECEIVER_ENV}
+)
 
 _QUERY_DIGEST_DERIVATION_DOMAIN = b"context-engine.dogfood.query-digest.v1\x00"
 _UI_PREVIEW_DERIVATION_DOMAIN = b"context-engine.dogfood.ui-preview.v1\x00"
@@ -277,7 +299,7 @@ def create_dogfood_app(
 
     try:
         operator_configuration = (
-            LocalOperatorConfiguration.load(environment)
+            LocalControlOperatorConfiguration.load(environment)
             if environment.get(CONTROL_OPERATOR_SECRET_ENV) is not None
             else None
         )
@@ -293,9 +315,7 @@ def create_dogfood_app(
                 roots = file_roots(environment)
             raw_receiver = environment.get(DOGFOOD_FILE_IMPORT_RECEIVER_ENV)
             receiver_id = None if raw_receiver is None else UUID(raw_receiver)
-            control_authority = operator_configuration.authorities(
-                clock=ui_clock
-            ).control
+            control_authority = operator_configuration.authority(clock=ui_clock)
             control_gate = MinimalUiControlGate(control_authority, clock=ui_clock)
     except (
         DatabaseConfigurationError,
