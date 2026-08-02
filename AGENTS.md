@@ -1,10 +1,11 @@
 ---
 name: agents-charter
-version: "0.3.0"
+version: "0.4.0"
 description: >
   Anchor the ContextEngine agent's always-resident context: identity, architecture
-  map, commands, and safety rails. Use when starting any task, before reading the
-  request. Not for prose copy-editing or application code review.
+  map, commands, safety rails, and shelf routing. Use when starting any task,
+  before reading the request, whatever coding agent is loading it. Not for prose
+  copy-editing, application code review, or rules that only one agent tool obeys.
 ---
 
 # Identity & Context Awareness
@@ -39,7 +40,7 @@ ContextEngine/
 ├── contract_kit/     # dissolved by ADR-0078: contract owned by the Supply seam; twins ship with each connector's tests
 ├── eval/             # golden set, slice gates, judges
 ├── tests/            # incl. security suite: real PG17 + non-owner role + FORCE RLS
-├── docs/             # design/ + decisions/ (ADRs)
+├── docs/             # agents/ (routing shelves) + design/ + decisions/ (ADRs)
 ├── CONTEXT.md        # domain glossary (terms only, no implementation)
 ├── AGENTS.md         # this charter (CLAUDE.md is the compatibility bridge)
 └── DESIGN.md         # design system — add when the UI surface stabilizes
@@ -117,8 +118,13 @@ their accepted catalog activations; deferred carrier semantics remain
 
 ## Shelf routing (Progressive Disclosure)
 
+Each shelf owns its own rules. This table routes; it never restates a shelf.
+
 | When you are… | Read first |
 |---|---|
+| orienting in the domain before any change | `docs/agents/domain.md` |
+| filing, reading, or triaging a work item | `docs/agents/issue-tracker.md` |
+| labelling a work item | `docs/agents/triage-labels.md` |
 | touching the UI / components | `DESIGN.md` (add when the UI stabilizes) |
 | making an architectural choice | `docs/decisions/` (write a new ADR) |
 
