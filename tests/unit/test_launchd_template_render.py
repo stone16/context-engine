@@ -333,6 +333,16 @@ def test_child_processes_receive_only_their_closed_credential_projection() -> No
             "CONTEXT_ENGINE_RELEASE_OPERATOR_SECRET",
         }
     }
+    operator |= {
+        "CONTEXT_ENGINE_CONTROL_OPERATOR_OPERATIONS": "read_source_progress",
+        "CONTEXT_ENGINE_CONTROL_OPERATOR_SECRET": "control-" + "a" * 32,
+        "CONTEXT_ENGINE_DOGFOOD_SECRET": "dogfood-" + "b" * 32,
+        "CONTEXT_ENGINE_OPERATOR_ORGANIZATION_ID": (
+            "14900000-0000-4000-8000-000000000001"
+        ),
+        "CONTEXT_ENGINE_RELEASE_OPERATOR_SECRET": "release-" + "c" * 32,
+        "CONTEXT_ENGINE_WORKER_LEASE_SIGNING_KEY_HEX": "dd" * 32,
+    }
 
     api = process_environment("api", database, operator)
     worker = process_environment("worker", database, operator)
@@ -363,6 +373,42 @@ def test_child_processes_receive_only_their_closed_credential_projection() -> No
     assert "CONTEXT_ENGINE_RELEASE_OPERATOR_SECRET" not in api | worker | scan
     assert "CONTEXT_ENGINE_CONTROL_OPERATOR_SECRET" not in worker
     assert "CONTEXT_ENGINE_DOGFOOD_SECRET" not in worker | scan
+
+
+@pytest.mark.parametrize(
+    ("colliding_name", "control_secret", "colliding_value"),
+    (
+        (
+            "CONTEXT_ENGINE_RELEASE_OPERATOR_SECRET",
+            "a" * 64,
+            "a" * 64,
+        ),
+        (
+            "CONTEXT_ENGINE_WORKER_LEASE_SIGNING_KEY_HEX",
+            "w" * 32,
+            "77" * 32,
+        ),
+    ),
+)
+def test_api_projection_validates_source_secrets_before_discarding_them(
+    colliding_name: str,
+    control_secret: str,
+    colliding_value: str,
+) -> None:
+    operator = {
+        "CONTEXT_ENGINE_CONTROL_OPERATOR_SECRET": control_secret,
+        "CONTEXT_ENGINE_CONTROL_OPERATOR_OPERATIONS": "read_source_progress",
+        "CONTEXT_ENGINE_DOGFOOD_SECRET": "dogfood-" + "b" * 32,
+        "CONTEXT_ENGINE_OPERATOR_ORGANIZATION_ID": (
+            "14900000-0000-4000-8000-000000000001"
+        ),
+        "CONTEXT_ENGINE_RELEASE_OPERATOR_SECRET": "release-" + "c" * 32,
+        "CONTEXT_ENGINE_WORKER_LEASE_SIGNING_KEY_HEX": "d" * 64,
+    }
+    operator[colliding_name] = colliding_value
+
+    with pytest.raises(EnvironmentRefused, match="separation"):
+        process_environment("api", {}, operator)
 
 
 def test_child_projections_follow_the_owning_configuration_contracts() -> None:
@@ -397,12 +443,23 @@ def test_child_projections_follow_the_owning_configuration_contracts() -> None:
         DOGFOOD_RUNTIME_ENVIRONMENT_VARIABLES
         | DOGFOOD_CONTROL_ENVIRONMENT_VARIABLES
         | {
+            "CONTEXT_ENGINE_RELEASE_OPERATOR_SECRET",
             "CONTEXT_ENGINE_WORKER_EMBEDDING_DIMENSION",
             "CONTEXT_ENGINE_WORKER_EMBEDDING_PROVIDER",
             "CONTEXT_ENGINE_WORKER_LEASE_SIGNING_KEY_HEX",
         }
     )
     operator = {name: "configured" for name in owned_operator_names}
+    operator |= {
+        "CONTEXT_ENGINE_CONTROL_OPERATOR_OPERATIONS": "read_source_progress",
+        "CONTEXT_ENGINE_CONTROL_OPERATOR_SECRET": "control-" + "a" * 32,
+        "CONTEXT_ENGINE_DOGFOOD_SECRET": "dogfood-" + "b" * 32,
+        "CONTEXT_ENGINE_OPERATOR_ORGANIZATION_ID": (
+            "14900000-0000-4000-8000-000000000001"
+        ),
+        "CONTEXT_ENGINE_RELEASE_OPERATOR_SECRET": "release-" + "c" * 32,
+        "CONTEXT_ENGINE_WORKER_LEASE_SIGNING_KEY_HEX": "dd" * 32,
+    }
 
     api = process_environment("api", database, operator)
     worker = process_environment("worker", database, operator)
