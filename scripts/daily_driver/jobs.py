@@ -15,15 +15,28 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Final
 
+from adapters.http.dogfood import (
+    DOGFOOD_CONTROL_ENVIRONMENT_VARIABLES,
+    DOGFOOD_RUNTIME_ENVIRONMENT_VARIABLES,
+)
+from applications.file_root_configuration import (
+    FILE_ROOT_ENVIRONMENT_VARIABLES,
+    WORKER_FILE_ROOTS_ENV,
+)
 from applications.operator_authentication import (
     CONTROL_OPERATOR_SECRET_ENV,
     DOGFOOD_SECRET_ENV,
     DOGFOOD_SECRET_FINGERPRINT_ENV,
+    LOCAL_CONTROL_OPERATOR_ENVIRONMENT_VARIABLES,
     RELEASE_OPERATOR_SECRET_ENV,
     RELEASE_OPERATOR_SECRET_FINGERPRINT_ENV,
     WORKER_SECRET_ENV,
     LocalOperatorConfiguration,
     local_secret_fingerprint,
+)
+from engine.persistence.configuration import (
+    ROLE_ENVIRONMENT_VARIABLES,
+    DatabasePurpose,
 )
 from scripts.daily_driver.backup import create_database_backup
 from scripts.daily_driver.environment import (
@@ -44,74 +57,78 @@ _CHECKPOINT_SIGNING_KEY_ENV = (
     "CONTEXT_ENGINE_FILE_CHANGE_CHECKPOINT_SIGNING_KEY_HEX"
 )
 
-_API_DATABASE_ENVIRONMENT = frozenset(
-    {"CONTEXT_ENGINE_RUNTIME_DATABASE_URL", "CONTEXT_ENGINE_RUNTIME_ROLE"}
+
+def _database_environment_variables(
+    *purposes: DatabasePurpose,
+) -> frozenset[str]:
+    return frozenset(
+        name
+        for purpose in purposes
+        for name in (
+            purpose.environment_variable,
+            ROLE_ENVIRONMENT_VARIABLES[purpose],
+        )
+    )
+
+
+_API_REQUIRED_DATABASE_ENVIRONMENT = _database_environment_variables(
+    DatabasePurpose.API_RUNTIME,
+    DatabasePurpose.CONTROL_PLANE,
 )
-_API_OPERATOR_ENVIRONMENT = frozenset(
-    {
-        "CONTEXT_ENGINE_API_COMPOSITION",
-        "CONTEXT_ENGINE_DOGFOOD_AGENT_VERSION_REF",
-        "CONTEXT_ENGINE_DOGFOOD_APPLICATION_REF",
-        "CONTEXT_ENGINE_DOGFOOD_AUTHENTICATION_BINDING_REF",
-        "CONTEXT_ENGINE_DOGFOOD_EMBEDDING_PROVIDER",
-        "CONTEXT_ENGINE_DOGFOOD_MEMBERSHIP_ID",
-        "CONTEXT_ENGINE_DOGFOOD_MEMBERSHIP_VERSION",
-        "CONTEXT_ENGINE_DOGFOOD_ORGANIZATION_ID",
-        "CONTEXT_ENGINE_DOGFOOD_PRINCIPAL_REF",
-        "CONTEXT_ENGINE_DOGFOOD_SECRET",
-        "CONTEXT_ENGINE_DOGFOOD_USER_ID",
-    }
+_API_DATABASE_ENVIRONMENT = _API_REQUIRED_DATABASE_ENVIRONMENT
+_API_OPERATOR_ENVIRONMENT = (
+    DOGFOOD_RUNTIME_ENVIRONMENT_VARIABLES | DOGFOOD_CONTROL_ENVIRONMENT_VARIABLES
 )
-_WORKER_DATABASE_ENVIRONMENT = frozenset(
-    {
-        "CONTEXT_ENGINE_SCHEDULER_DATABASE_URL",
-        "CONTEXT_ENGINE_SCHEDULER_ROLE",
-        "CONTEXT_ENGINE_WORKER_DATABASE_URL",
-        "CONTEXT_ENGINE_WORKER_ROLE",
-    }
+_WORKER_DATABASE_ENVIRONMENT = _database_environment_variables(
+    DatabasePurpose.SUPPLY_SCHEDULER,
+    DatabasePurpose.SUPPLY_WORKER,
 )
 _WORKER_REQUIRED_ENVIRONMENT = frozenset(
     {
         "CONTEXT_ENGINE_WORKER_EMBEDDING_DIMENSION",
         "CONTEXT_ENGINE_WORKER_EMBEDDING_PROVIDER",
-        "CONTEXT_ENGINE_WORKER_FILE_ROOTS_JSON",
+        WORKER_FILE_ROOTS_ENV,
         "CONTEXT_ENGINE_WORKER_LEASE_SIGNING_KEY_HEX",
     }
 )
-_WORKER_OPTIONAL_ENVIRONMENT = frozenset(
-    {
-        "CONTEXT_ENGINE_WORKER_EMBEDDING_API_KEY",
-        "CONTEXT_ENGINE_WORKER_EMBEDDING_BATCH_SIZE",
-        "CONTEXT_ENGINE_WORKER_EMBEDDING_ENDPOINT",
-        "CONTEXT_ENGINE_WORKER_EMBEDDING_MODEL",
-        "CONTEXT_ENGINE_WORKER_EMBEDDING_TIMEOUT_SECONDS",
-        "CONTEXT_ENGINE_WORKER_MAX_FILE_BYTES",
-    }
+_OPTIONAL_FILE_ROOT_ENVIRONMENT = FILE_ROOT_ENVIRONMENT_VARIABLES - {
+    WORKER_FILE_ROOTS_ENV
+}
+_WORKER_OPTIONAL_ENVIRONMENT = (
+    frozenset(
+        {
+            "CONTEXT_ENGINE_WORKER_EMBEDDING_API_KEY",
+            "CONTEXT_ENGINE_WORKER_EMBEDDING_BATCH_SIZE",
+            "CONTEXT_ENGINE_WORKER_EMBEDDING_ENDPOINT",
+            "CONTEXT_ENGINE_WORKER_EMBEDDING_MODEL",
+            "CONTEXT_ENGINE_WORKER_EMBEDDING_TIMEOUT_SECONDS",
+        }
+    )
+    | _OPTIONAL_FILE_ROOT_ENVIRONMENT
 )
-_SCAN_DATABASE_ENVIRONMENT = frozenset(
-    {"CONTEXT_ENGINE_CONTROL_DATABASE_URL", "CONTEXT_ENGINE_CONTROL_ROLE"}
+_SCAN_DATABASE_ENVIRONMENT = _database_environment_variables(
+    DatabasePurpose.CONTROL_PLANE
 )
-_SCAN_OPERATOR_ENVIRONMENT = frozenset(
-    {
-        "CONTEXT_ENGINE_CONTROL_OPERATOR_OPERATIONS",
-        "CONTEXT_ENGINE_CONTROL_OPERATOR_SECRET",
-        "CONTEXT_ENGINE_DOGFOOD_MEMBERSHIP_ID",
-        "CONTEXT_ENGINE_DOGFOOD_MEMBERSHIP_VERSION",
-        "CONTEXT_ENGINE_DOGFOOD_PRINCIPAL_REF",
-        "CONTEXT_ENGINE_FILE_CHANGE_CHECKPOINT_SIGNING_KEY_HEX",
-        "CONTEXT_ENGINE_FILE_CHANGE_PROVIDER_SIGNING_KEY_HEX",
-        "CONTEXT_ENGINE_OPERATOR_ORGANIZATION_ID",
-        "CONTEXT_ENGINE_OPERATOR_SOURCE_REF",
-        "CONTEXT_ENGINE_WORKER_FILE_ROOTS_JSON",
-        "CONTEXT_ENGINE_WORKER_LEASE_SIGNING_KEY_HEX",
-        "CONTEXT_ENGINE_WORKER_MAX_FILE_BYTES",
-        "CONTEXT_ENGINE_WORKER_SERVICE_PRINCIPAL_ID",
-    }
+_SCAN_OPERATOR_ENVIRONMENT = (
+    LOCAL_CONTROL_OPERATOR_ENVIRONMENT_VARIABLES
+    | frozenset(
+        {
+            "CONTEXT_ENGINE_DOGFOOD_MEMBERSHIP_ID",
+            "CONTEXT_ENGINE_DOGFOOD_MEMBERSHIP_VERSION",
+            "CONTEXT_ENGINE_DOGFOOD_PRINCIPAL_REF",
+            "CONTEXT_ENGINE_FILE_CHANGE_CHECKPOINT_SIGNING_KEY_HEX",
+            "CONTEXT_ENGINE_FILE_CHANGE_PROVIDER_SIGNING_KEY_HEX",
+            "CONTEXT_ENGINE_OPERATOR_SOURCE_REF",
+            "CONTEXT_ENGINE_WORKER_LEASE_SIGNING_KEY_HEX",
+            "CONTEXT_ENGINE_WORKER_SERVICE_PRINCIPAL_ID",
+        }
+    )
+    | FILE_ROOT_ENVIRONMENT_VARIABLES
 )
 _PROCESS_ENVIRONMENT_CONTRACTS = {
     "api": (
         _API_DATABASE_ENVIRONMENT | _API_OPERATOR_ENVIRONMENT,
-        _API_DATABASE_ENVIRONMENT | _API_OPERATOR_ENVIRONMENT,
+        _API_REQUIRED_DATABASE_ENVIRONMENT | DOGFOOD_RUNTIME_ENVIRONMENT_VARIABLES,
     ),
     "worker": (
         _WORKER_DATABASE_ENVIRONMENT
@@ -122,7 +139,7 @@ _PROCESS_ENVIRONMENT_CONTRACTS = {
     "scan": (
         _SCAN_DATABASE_ENVIRONMENT | _SCAN_OPERATOR_ENVIRONMENT,
         _SCAN_DATABASE_ENVIRONMENT
-        | (_SCAN_OPERATOR_ENVIRONMENT - {"CONTEXT_ENGINE_WORKER_MAX_FILE_BYTES"}),
+        | (_SCAN_OPERATOR_ENVIRONMENT - _OPTIONAL_FILE_ROOT_ENVIRONMENT),
     ),
 }
 
@@ -326,12 +343,23 @@ def process_environment(
         allowed, required = _PROCESS_ENVIRONMENT_CONTRACTS[process]
     except KeyError:
         raise ValueError("deployment process is outside the closed set") from None
+    validate_local_operator_secret_separation(operator)
     return project_environment(
         database,
         operator,
         allowed=allowed,
         required=required,
     )
+
+
+def validate_local_operator_secret_separation(operator: Mapping[str, str]) -> None:
+    """Validate ADR-0069's four configured planes before child projection."""
+
+    try:
+        if LocalOperatorConfiguration.load(operator) is None:
+            raise ValueError
+    except (TypeError, ValueError, UnicodeError):
+        raise EnvironmentRefused("operator secret separation is invalid") from None
 
 
 def validate_scan_secret_separation(operator: Mapping[str, str]) -> dict[str, str]:

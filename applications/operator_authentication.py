@@ -32,6 +32,13 @@ RELEASE_OPERATOR_SECRET_FINGERPRINT_ENV = (
     "CONTEXT_ENGINE_RELEASE_OPERATOR_SECRET_SHA256"
 )
 DOGFOOD_SECRET_FINGERPRINT_ENV = "CONTEXT_ENGINE_DOGFOOD_SECRET_SHA256"
+LOCAL_CONTROL_OPERATOR_ENVIRONMENT_VARIABLES = frozenset(
+    {
+        CONTROL_OPERATOR_SECRET_ENV,
+        OPERATOR_ORGANIZATION_ENV,
+        CONTROL_OPERATOR_OPERATIONS_ENV,
+    }
+)
 OPERATOR_ENVIRONMENT_VARIABLES = frozenset(
     {
         CONTROL_OPERATOR_SECRET_ENV,
@@ -80,17 +87,12 @@ class LocalControlOperatorConfiguration:
         cls,
         environment: Mapping[str, str],
     ) -> LocalControlOperatorConfiguration | None:
-        names = frozenset(
-            {
-                CONTROL_OPERATOR_SECRET_ENV,
-                OPERATOR_ORGANIZATION_ENV,
-                CONTROL_OPERATOR_OPERATIONS_ENV,
-            }
+        configured = LOCAL_CONTROL_OPERATOR_ENVIRONMENT_VARIABLES.intersection(
+            environment
         )
-        configured = names.intersection(environment)
         if not configured:
             return None
-        if configured != names:
+        if configured != LOCAL_CONTROL_OPERATOR_ENVIRONMENT_VARIABLES:
             raise LocalOperatorConfigurationUnavailable
         try:
             raw_operations = environment[CONTROL_OPERATOR_OPERATIONS_ENV].split(",")
@@ -99,11 +101,23 @@ class LocalControlOperatorConfiguration:
             operations = frozenset(ControlOperation(value) for value in raw_operations)
             if len(operations) != len(raw_operations):
                 raise ValueError
-            return cls(
+            configuration = cls(
                 organization_id=UUID(environment[OPERATOR_ORGANIZATION_ENV]),
                 control_secret=_secret(environment[CONTROL_OPERATOR_SECRET_ENV]),
                 control_operations=operations,
             )
+            dogfood_secret = environment.get(DOGFOOD_SECRET_ENV)
+            if dogfood_secret is not None and hmac.compare_digest(
+                configuration.control_secret,
+                _secret(dogfood_secret),
+            ):
+                raise LocalOperatorConfigurationUnavailable
+            broader_names = OPERATOR_ENVIRONMENT_VARIABLES - (
+                LOCAL_CONTROL_OPERATOR_ENVIRONMENT_VARIABLES | {DOGFOOD_SECRET_ENV}
+            )
+            if environment.keys() & broader_names:
+                LocalOperatorConfiguration.load(environment)
+            return configuration
         except (KeyError, TypeError, ValueError, UnicodeError):
             raise LocalOperatorConfigurationUnavailable from None
 

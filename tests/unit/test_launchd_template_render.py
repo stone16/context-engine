@@ -9,8 +9,22 @@ from unittest.mock import Mock
 
 import pytest
 
+import adapters.http.dogfood as dogfood_configuration
+import applications.file_root_configuration as file_root_configuration
+import applications.operator_authentication as operator_configuration
+from adapters.http.dogfood import (
+    DOGFOOD_CONTROL_ENVIRONMENT_VARIABLES,
+    DOGFOOD_RUNTIME_ENVIRONMENT_VARIABLES,
+)
+from applications.file_root_configuration import FILE_ROOT_ENVIRONMENT_VARIABLES
 from applications.file_scan import _proof_keys
-from applications.operator_authentication import local_secret_fingerprint
+from applications.operator_authentication import (
+    DOGFOOD_SECRET_FINGERPRINT_ENV,
+    LOCAL_CONTROL_OPERATOR_ENVIRONMENT_VARIABLES,
+    OPERATOR_ENVIRONMENT_VARIABLES,
+    RELEASE_OPERATOR_SECRET_FINGERPRINT_ENV,
+    local_secret_fingerprint,
+)
 from engine.control import SourceNotAvailable
 from scripts.daily_driver.environment import (
     EnvironmentRefused,
@@ -317,11 +331,24 @@ def test_child_processes_receive_only_their_closed_credential_projection() -> No
             "CONTEXT_ENGINE_OPERATOR_SOURCE_REF",
             "CONTEXT_ENGINE_WORKER_EMBEDDING_DIMENSION",
             "CONTEXT_ENGINE_WORKER_EMBEDDING_PROVIDER",
+            "CONTEXT_ENGINE_WORKER_FILE_CURATED_SUBTREES_JSON",
             "CONTEXT_ENGINE_WORKER_FILE_ROOTS_JSON",
             "CONTEXT_ENGINE_WORKER_LEASE_SIGNING_KEY_HEX",
+            "CONTEXT_ENGINE_WORKER_MAX_FILE_CHANGE_BASELINE_SIZE",
+            "CONTEXT_ENGINE_WORKER_MAX_FILE_BYTES",
             "CONTEXT_ENGINE_WORKER_SERVICE_PRINCIPAL_ID",
             "CONTEXT_ENGINE_RELEASE_OPERATOR_SECRET",
         }
+    }
+    operator |= {
+        "CONTEXT_ENGINE_CONTROL_OPERATOR_OPERATIONS": "read_source_progress",
+        "CONTEXT_ENGINE_CONTROL_OPERATOR_SECRET": "control-" + "a" * 32,
+        "CONTEXT_ENGINE_DOGFOOD_SECRET": "dogfood-" + "b" * 32,
+        "CONTEXT_ENGINE_OPERATOR_ORGANIZATION_ID": (
+            "14900000-0000-4000-8000-000000000001"
+        ),
+        "CONTEXT_ENGINE_RELEASE_OPERATOR_SECRET": "release-" + "c" * 32,
+        "CONTEXT_ENGINE_WORKER_LEASE_SIGNING_KEY_HEX": "dd" * 32,
     }
 
     api = process_environment("api", database, operator)
@@ -329,13 +356,201 @@ def test_child_processes_receive_only_their_closed_credential_projection() -> No
     scan = process_environment("scan", database, operator)
 
     assert api["CONTEXT_ENGINE_RUNTIME_DATABASE_URL"] == "runtime-url"
+    assert api["CONTEXT_ENGINE_CONTROL_DATABASE_URL"] == "control-url"
     assert worker["CONTEXT_ENGINE_WORKER_DATABASE_URL"] == "worker-url"
     assert scan["CONTEXT_ENGINE_CONTROL_DATABASE_URL"] == "control-url"
+    for name in {
+        "CONTEXT_ENGINE_WORKER_FILE_CURATED_SUBTREES_JSON",
+        "CONTEXT_ENGINE_WORKER_FILE_ROOTS_JSON",
+        "CONTEXT_ENGINE_WORKER_MAX_FILE_CHANGE_BASELINE_SIZE",
+        "CONTEXT_ENGINE_WORKER_MAX_FILE_BYTES",
+    }:
+        assert name in api
+        assert name in worker
+        assert name in scan
+    for name in {
+        "CONTEXT_ENGINE_CONTROL_OPERATOR_OPERATIONS",
+        "CONTEXT_ENGINE_CONTROL_OPERATOR_SECRET",
+        "CONTEXT_ENGINE_OPERATOR_ORGANIZATION_ID",
+        "CONTEXT_ENGINE_WORKER_SERVICE_PRINCIPAL_ID",
+    }:
+        assert name in api
     assert "POSTGRES_PASSWORD" not in api | worker | scan
     assert "CONTEXT_ENGINE_MIGRATION_DATABASE_URL" not in api | worker | scan
     assert "CONTEXT_ENGINE_RELEASE_OPERATOR_SECRET" not in api | worker | scan
-    assert "CONTEXT_ENGINE_CONTROL_OPERATOR_SECRET" not in api | worker
+    assert "CONTEXT_ENGINE_CONTROL_OPERATOR_SECRET" not in worker
     assert "CONTEXT_ENGINE_DOGFOOD_SECRET" not in worker | scan
+
+
+@pytest.mark.parametrize("process", ("api", "worker", "scan"))
+def test_every_child_projection_validates_source_secrets_before_discarding_them(
+    process: str,
+) -> None:
+    control_secret = "w" * 32
+    database = {
+        "CONTEXT_ENGINE_RUNTIME_DATABASE_URL": "runtime-url",
+        "CONTEXT_ENGINE_RUNTIME_ROLE": "runtime-role",
+        "CONTEXT_ENGINE_CONTROL_DATABASE_URL": "control-url",
+        "CONTEXT_ENGINE_CONTROL_ROLE": "control-role",
+        "CONTEXT_ENGINE_WORKER_DATABASE_URL": "worker-url",
+        "CONTEXT_ENGINE_WORKER_ROLE": "worker-role",
+        "CONTEXT_ENGINE_SCHEDULER_DATABASE_URL": "scheduler-url",
+        "CONTEXT_ENGINE_SCHEDULER_ROLE": "scheduler-role",
+    }
+    operator = {
+        name: "configured"
+        for name in DOGFOOD_RUNTIME_ENVIRONMENT_VARIABLES
+        | DOGFOOD_CONTROL_ENVIRONMENT_VARIABLES
+    } | {
+        "CONTEXT_ENGINE_CONTROL_OPERATOR_SECRET": control_secret,
+        "CONTEXT_ENGINE_CONTROL_OPERATOR_OPERATIONS": "read_source_progress",
+        "CONTEXT_ENGINE_DOGFOOD_SECRET": "dogfood-" + "b" * 32,
+        "CONTEXT_ENGINE_OPERATOR_ORGANIZATION_ID": (
+            "14900000-0000-4000-8000-000000000001"
+        ),
+        "CONTEXT_ENGINE_RELEASE_OPERATOR_SECRET": "release-" + "c" * 32,
+        "CONTEXT_ENGINE_WORKER_LEASE_SIGNING_KEY_HEX": "77" * 32,
+        "CONTEXT_ENGINE_WORKER_EMBEDDING_DIMENSION": "384",
+        "CONTEXT_ENGINE_WORKER_EMBEDDING_PROVIDER": "deterministic-twin-v1",
+        "CONTEXT_ENGINE_FILE_CHANGE_CHECKPOINT_SIGNING_KEY_HEX": "11" * 32,
+        "CONTEXT_ENGINE_FILE_CHANGE_PROVIDER_SIGNING_KEY_HEX": "22" * 32,
+        "CONTEXT_ENGINE_OPERATOR_SOURCE_REF": "source-ref",
+    }
+
+    with pytest.raises(EnvironmentRefused, match="separation"):
+        process_environment(process, database, operator)
+
+
+@pytest.mark.parametrize(
+    "missing_name",
+    (
+        "CONTEXT_ENGINE_RELEASE_OPERATOR_SECRET",
+        "CONTEXT_ENGINE_WORKER_LEASE_SIGNING_KEY_HEX",
+    ),
+)
+def test_api_projection_rejects_partial_source_secret_contract(
+    missing_name: str,
+) -> None:
+    operator = {
+        "CONTEXT_ENGINE_CONTROL_OPERATOR_SECRET": "control-" + "a" * 32,
+        "CONTEXT_ENGINE_CONTROL_OPERATOR_OPERATIONS": "read_source_progress",
+        "CONTEXT_ENGINE_DOGFOOD_SECRET": "dogfood-" + "b" * 32,
+        "CONTEXT_ENGINE_OPERATOR_ORGANIZATION_ID": (
+            "14900000-0000-4000-8000-000000000001"
+        ),
+        "CONTEXT_ENGINE_RELEASE_OPERATOR_SECRET": "release-" + "c" * 32,
+        "CONTEXT_ENGINE_WORKER_LEASE_SIGNING_KEY_HEX": "dd" * 32,
+    }
+    del operator[missing_name]
+
+    with pytest.raises(EnvironmentRefused, match="separation"):
+        process_environment("api", {}, operator)
+
+
+def test_child_projections_follow_the_owning_configuration_contracts() -> None:
+    file_root_names = {
+        value
+        for name, value in vars(file_root_configuration).items()
+        if name.endswith("_ENV") and isinstance(value, str)
+    }
+    assert file_root_names == FILE_ROOT_ENVIRONMENT_VARIABLES
+    dogfood_owned_names = {
+        value
+        for name, value in vars(dogfood_configuration).items()
+        if name.endswith("_ENV") and isinstance(value, str)
+    }
+    assert dogfood_owned_names <= (
+        DOGFOOD_RUNTIME_ENVIRONMENT_VARIABLES
+        | DOGFOOD_CONTROL_ENVIRONMENT_VARIABLES
+    )
+    operator_owned_names = {
+        value
+        for name, value in vars(operator_configuration).items()
+        if name.endswith("_ENV") and isinstance(value, str)
+    }
+    assert operator_owned_names == (
+        OPERATOR_ENVIRONMENT_VARIABLES
+        | LOCAL_CONTROL_OPERATOR_ENVIRONMENT_VARIABLES
+        | {
+            DOGFOOD_SECRET_FINGERPRINT_ENV,
+            RELEASE_OPERATOR_SECRET_FINGERPRINT_ENV,
+        }
+    )
+
+    database = {
+        "CONTEXT_ENGINE_RUNTIME_DATABASE_URL": "runtime-url",
+        "CONTEXT_ENGINE_RUNTIME_ROLE": "runtime-role",
+        "CONTEXT_ENGINE_CONTROL_DATABASE_URL": "control-url",
+        "CONTEXT_ENGINE_CONTROL_ROLE": "control-role",
+        "CONTEXT_ENGINE_WORKER_DATABASE_URL": "worker-url",
+        "CONTEXT_ENGINE_WORKER_ROLE": "worker-role",
+        "CONTEXT_ENGINE_SCHEDULER_DATABASE_URL": "scheduler-url",
+        "CONTEXT_ENGINE_SCHEDULER_ROLE": "scheduler-role",
+    }
+    owned_operator_names = (
+        DOGFOOD_RUNTIME_ENVIRONMENT_VARIABLES
+        | DOGFOOD_CONTROL_ENVIRONMENT_VARIABLES
+        | {
+            "CONTEXT_ENGINE_RELEASE_OPERATOR_SECRET",
+            "CONTEXT_ENGINE_WORKER_EMBEDDING_DIMENSION",
+            "CONTEXT_ENGINE_WORKER_EMBEDDING_PROVIDER",
+            "CONTEXT_ENGINE_WORKER_LEASE_SIGNING_KEY_HEX",
+        }
+    )
+    operator = {name: "configured" for name in owned_operator_names}
+    operator |= {
+        "CONTEXT_ENGINE_CONTROL_OPERATOR_OPERATIONS": "read_source_progress",
+        "CONTEXT_ENGINE_CONTROL_OPERATOR_SECRET": "control-" + "a" * 32,
+        "CONTEXT_ENGINE_DOGFOOD_SECRET": "dogfood-" + "b" * 32,
+        "CONTEXT_ENGINE_OPERATOR_ORGANIZATION_ID": (
+            "14900000-0000-4000-8000-000000000001"
+        ),
+        "CONTEXT_ENGINE_RELEASE_OPERATOR_SECRET": "release-" + "c" * 32,
+        "CONTEXT_ENGINE_WORKER_LEASE_SIGNING_KEY_HEX": "dd" * 32,
+    }
+
+    api = process_environment("api", database, operator)
+    worker = process_environment("worker", database, operator)
+
+    assert api.keys() >= DOGFOOD_RUNTIME_ENVIRONMENT_VARIABLES
+    assert api.keys() >= DOGFOOD_CONTROL_ENVIRONMENT_VARIABLES
+    assert worker.keys() >= FILE_ROOT_ENVIRONMENT_VARIABLES
+
+
+@pytest.mark.parametrize(
+    "missing_name",
+    (
+        "CONTEXT_ENGINE_CONTROL_DATABASE_URL",
+        "CONTEXT_ENGINE_CONTROL_ROLE",
+    ),
+)
+def test_api_projection_requires_the_control_database_contract(
+    missing_name: str,
+) -> None:
+    database = {
+        "CONTEXT_ENGINE_RUNTIME_DATABASE_URL": "runtime-url",
+        "CONTEXT_ENGINE_RUNTIME_ROLE": "runtime-role",
+        "CONTEXT_ENGINE_CONTROL_DATABASE_URL": "control-url",
+        "CONTEXT_ENGINE_CONTROL_ROLE": "control-role",
+    }
+    del database[missing_name]
+    operator = {
+        name: "configured"
+        for name in DOGFOOD_RUNTIME_ENVIRONMENT_VARIABLES
+        | DOGFOOD_CONTROL_ENVIRONMENT_VARIABLES
+    } | {
+        "CONTEXT_ENGINE_CONTROL_OPERATOR_SECRET": "control-" + "a" * 32,
+        "CONTEXT_ENGINE_CONTROL_OPERATOR_OPERATIONS": "read_source_progress",
+        "CONTEXT_ENGINE_DOGFOOD_SECRET": "dogfood-" + "b" * 32,
+        "CONTEXT_ENGINE_OPERATOR_ORGANIZATION_ID": (
+            "14900000-0000-4000-8000-000000000001"
+        ),
+        "CONTEXT_ENGINE_RELEASE_OPERATOR_SECRET": "release-" + "c" * 32,
+        "CONTEXT_ENGINE_WORKER_LEASE_SIGNING_KEY_HEX": "dd" * 32,
+    }
+
+    with pytest.raises(EnvironmentRefused, match="required values"):
+        process_environment("api", database, operator)
 
 
 def test_scan_validates_cross_plane_key_collisions_before_projection() -> None:
