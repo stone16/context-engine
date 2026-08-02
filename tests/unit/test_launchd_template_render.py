@@ -411,6 +411,32 @@ def test_api_projection_validates_source_secrets_before_discarding_them(
         process_environment("api", {}, operator)
 
 
+@pytest.mark.parametrize(
+    "missing_name",
+    (
+        "CONTEXT_ENGINE_RELEASE_OPERATOR_SECRET",
+        "CONTEXT_ENGINE_WORKER_LEASE_SIGNING_KEY_HEX",
+    ),
+)
+def test_api_projection_rejects_partial_source_secret_contract(
+    missing_name: str,
+) -> None:
+    operator = {
+        "CONTEXT_ENGINE_CONTROL_OPERATOR_SECRET": "control-" + "a" * 32,
+        "CONTEXT_ENGINE_CONTROL_OPERATOR_OPERATIONS": "read_source_progress",
+        "CONTEXT_ENGINE_DOGFOOD_SECRET": "dogfood-" + "b" * 32,
+        "CONTEXT_ENGINE_OPERATOR_ORGANIZATION_ID": (
+            "14900000-0000-4000-8000-000000000001"
+        ),
+        "CONTEXT_ENGINE_RELEASE_OPERATOR_SECRET": "release-" + "c" * 32,
+        "CONTEXT_ENGINE_WORKER_LEASE_SIGNING_KEY_HEX": "dd" * 32,
+    }
+    del operator[missing_name]
+
+    with pytest.raises(EnvironmentRefused, match="separation"):
+        process_environment("api", {}, operator)
+
+
 def test_child_projections_follow_the_owning_configuration_contracts() -> None:
     file_root_names = {
         value

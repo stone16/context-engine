@@ -28,7 +28,6 @@ from applications.operator_authentication import (
     DOGFOOD_SECRET_ENV,
     DOGFOOD_SECRET_FINGERPRINT_ENV,
     LOCAL_CONTROL_OPERATOR_ENVIRONMENT_VARIABLES,
-    OPERATOR_ENVIRONMENT_VARIABLES,
     RELEASE_OPERATOR_SECRET_ENV,
     RELEASE_OPERATOR_SECRET_FINGERPRINT_ENV,
     WORKER_SECRET_ENV,
@@ -358,8 +357,6 @@ def process_environment(
 def validate_local_operator_secret_separation(operator: Mapping[str, str]) -> None:
     """Validate ADR-0069's four configured planes before child projection."""
 
-    if not operator.keys() >= OPERATOR_ENVIRONMENT_VARIABLES:
-        return
     try:
         if LocalOperatorConfiguration.load(operator) is None:
             raise ValueError

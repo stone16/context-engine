@@ -112,6 +112,14 @@ class LocalControlOperatorConfiguration:
                 _secret(dogfood_secret),
             ):
                 raise LocalOperatorConfigurationUnavailable
+            broader_names = OPERATOR_ENVIRONMENT_VARIABLES - (
+                LOCAL_CONTROL_OPERATOR_ENVIRONMENT_VARIABLES | {DOGFOOD_SECRET_ENV}
+            )
+            if (
+                environment.keys() & broader_names
+                and LocalOperatorConfiguration.load(environment) is None
+            ):
+                raise LocalOperatorConfigurationUnavailable
             return configuration
         except (KeyError, TypeError, ValueError, UnicodeError):
             raise LocalOperatorConfigurationUnavailable from None

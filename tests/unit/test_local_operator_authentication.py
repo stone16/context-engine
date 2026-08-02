@@ -132,6 +132,24 @@ def test_routine_control_configuration_rejects_dogfood_secret_reuse() -> None:
         LocalControlOperatorConfiguration.load(projected)
 
 
+@pytest.mark.parametrize(
+    "invalid_environment",
+    (
+        environment() | {RELEASE_OPERATOR_SECRET_ENV: CONTROL_SECRET},
+        {
+            name: value
+            for name, value in environment().items()
+            if name != WORKER_SECRET_ENV
+        },
+    ),
+)
+def test_routine_control_configuration_validates_present_broader_plane_secrets(
+    invalid_environment: dict[str, str],
+) -> None:
+    with pytest.raises(LocalOperatorConfigurationUnavailable):
+        LocalControlOperatorConfiguration.load(invalid_environment)
+
+
 def test_control_operations_are_an_exact_enumerated_set() -> None:
     configuration = _configuration()
     assert configuration.control_operations == frozenset(
