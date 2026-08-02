@@ -8,6 +8,7 @@ import sys
 import time
 from copy import deepcopy
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from importlib.metadata import requires, version
 from threading import Thread
 from typing import Any, cast
 
@@ -173,6 +174,18 @@ def test_mcp_lists_one_exact_acquire_tool_without_trusted_inputs() -> None:
             assert forbidden not in serialized_schema
 
     asyncio.run(exercise())
+
+
+def test_mcp_sdk_is_an_optional_distribution_dependency() -> None:
+    distribution_requirements = requires("context-engine")
+    assert distribution_requirements is not None
+    mcp_requirements = [
+        value
+        for value in distribution_requirements
+        if value.startswith("mcp<3,>=2.0;")
+    ]
+
+    assert mcp_requirements == ["mcp<3,>=2.0; extra == 'mcp'"]
 
 
 def test_mcp_forwards_exact_acquire_and_returns_exact_http_outcome() -> None:
@@ -424,7 +437,7 @@ def test_spawned_stdio_session_calls_only_loopback_http_and_preserves_outcome() 
             stdio_client(parameters) as (read_stream, write_stream),
             ClientSession(read_stream, write_stream) as session,
         ):
-            await session.initialize()
+            initialized = await session.initialize()
             listed = await session.list_tools()
             result = await session.call_tool(
                 MCP_TOOL_NAME,
@@ -434,6 +447,8 @@ def test_spawned_stdio_session_calls_only_loopback_http_and_preserves_outcome() 
                 },
             )
 
+        assert initialized.server_info.name == "context-engine-mcp"
+        assert initialized.server_info.version == version("context-engine")
         assert [tool.name for tool in listed.tools] == [MCP_TOOL_NAME]
         assert result.is_error is False
         assert result.content == []
@@ -485,6 +500,35 @@ def test_spawned_stdio_server_fails_closed_without_private_environment() -> None
     assert completed.stderr == "context-engine-mcp: configuration unavailable\n"
 
 
+def test_mcp_entry_point_fails_closed_when_optional_sdk_is_absent() -> None:
+    probe = """
+import importlib.abc
+import sys
+
+class BlockMcp(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path, target=None):
+        del path, target
+        if fullname == "mcp" or fullname.startswith("mcp."):
+            raise ModuleNotFoundError("No module named 'mcp'", name="mcp")
+        return None
+
+sys.meta_path.insert(0, BlockMcp())
+from applications.mcp import main
+main(())
+"""
+    completed = subprocess.run(
+        [sys.executable, "-c", probe],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+
+    assert completed.returncode == 1
+    assert completed.stdout == ""
+    assert completed.stderr == "context-engine-mcp: MCP support unavailable\n"
+
+
 @pytest.mark.security_evidence(id="MCP-ARGUMENTS-215", layer="runtime")
 def test_spawned_stdio_server_rejects_process_arguments_content_free() -> None:
     injected = "caller-authored-organization-secret"
@@ -513,6 +557,7 @@ import sys
 import applications.mcp
 
 forbidden = (
+    "mcp",
     "engine",
     "sqlalchemy",
     "psycopg",

@@ -6,17 +6,19 @@ import sys
 from collections.abc import Sequence
 
 import anyio
-from mcp.server.stdio import stdio_server
 
 from adapters.http.dogfood_client import (
     DogfoodEvaluationUnavailable,
     DogfoodHttpConfiguration,
     DogfoodResolveClient,
 )
-from adapters.mcp.server import create_mcp_server
 
 
 async def _run() -> None:
+    from mcp.server.stdio import stdio_server
+
+    from adapters.mcp.server import create_mcp_server
+
     configuration = DogfoodHttpConfiguration.load()
     server = create_mcp_server(DogfoodResolveClient(configuration))
     async with stdio_server() as (read_stream, write_stream):
@@ -35,6 +37,11 @@ def main(argv: Sequence[str] | None = None) -> None:
         raise SystemExit("context-engine-mcp: arguments are unavailable")
     try:
         anyio.run(_run)
+    except ModuleNotFoundError as error:
+        if error.name != "mcp" and not (error.name or "").startswith("mcp."):
+            raise
+        print("context-engine-mcp: MCP support unavailable", file=sys.stderr)
+        raise SystemExit(1) from None
     except DogfoodEvaluationUnavailable:
         print("context-engine-mcp: configuration unavailable", file=sys.stderr)
         raise SystemExit(1) from None

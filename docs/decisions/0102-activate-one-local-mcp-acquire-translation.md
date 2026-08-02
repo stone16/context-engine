@@ -110,11 +110,20 @@ as a general MCP credential would erase the constraint that makes it safe.
   one transport-neutral `context_engine_contracts` owner imported by both HTTP
   and Runtime, so the engine-independent MCP import graph creates no duplicate
   security contract.
-- The MCP Python SDK is locked at `mcp==2.0.0` in `uv.lock` and used only for
-  protocol framing and validation; it receives no database or engine authority.
-  No upstream source was copied into this repository, and the runtime wheel
-  remains subject to the normal build artifact license inventory outside
-  ADR-0074's vendored-source register.
+- The MCP Python SDK is locked at `mcp==2.0.0` in `uv.lock` and exposed through
+  the distribution's `mcp` optional extra. API and worker installations do not
+  carry its protocol/server dependency closure by default; the MCP entry point
+  refuses content-free when the extra is absent. Development and CI install the
+  extra to execute its evidence. The SDK is used only for protocol framing and
+  validation and receives no database or engine authority. No upstream source
+  was copied into this repository, and the runtime wheel remains subject to the
+  normal build artifact license inventory outside ADR-0074's vendored-source
+  register.
+- The synchronous dogfood evaluation APIs and asynchronous MCP adapter share
+  one cancellation-aware httpx transport implementation. Redirect refusal,
+  environment-proxy neutrality, and secret rejection therefore have one
+  control surface exercised by the three registered transport oracles. The
+  shared implementation also retains one response-size bound.
 - A separately spawned process adds startup and local loopback overhead. That is
   bounded to one host session and buys protocol isolation without a deployed
   service, database, or index.

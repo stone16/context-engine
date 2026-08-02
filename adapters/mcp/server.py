@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from importlib.metadata import version
 from typing import Final, Protocol, cast
 from uuid import uuid4
 
@@ -18,6 +19,7 @@ from adapters.http.contracts import (
 
 MCP_TOOL_NAME: Final = "context_resolve"
 MCP_SERVER_NAME: Final = "context-engine-mcp"
+MCP_SERVER_VERSION: Final = version("context-engine")
 _OUTCOME_ADAPTER: Final[TypeAdapter[ResolutionOutcomeWire]] = TypeAdapter(
     ResolutionOutcomeWire
 )
@@ -107,6 +109,7 @@ def create_mcp_server(
 
     return Server(
         MCP_SERVER_NAME,
+        version=MCP_SERVER_VERSION,
         on_list_tools=list_tools,
         on_call_tool=call_tool,
     )

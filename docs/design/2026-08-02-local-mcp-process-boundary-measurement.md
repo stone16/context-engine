@@ -2,7 +2,9 @@
 
 **Measured:** 2026-08-02 against the issue #215 worktree based on
 `origin/main` at `1a391c8`, after the MCP contract import boundary was made
-transitively engine-independent.
+transitively engine-independent. Re-measured 2026-08-03 after the MCP SDK moved
+behind the distribution's optional `mcp` extra and the entry point deferred SDK
+imports until execution.
 
 ## Measurement boundary
 
@@ -23,13 +25,13 @@ database clients are `sqlalchemy` and `psycopg` module trees.
 
 | Fresh application import | Total modules | MCP SDK | `engine` | database clients | concrete Provider adapters |
 |---|---:|---:|---:|---:|---:|
-| `applications.mcp` | 606 | 107 | 0 | 0 | 0 |
-| `applications.api` | 776 | 0 | 84 | 172 | API-owned |
+| `applications.mcp` | 364 | 0 | 0 | 0 | 0 |
+| `applications.api` | 777 | 0 | 84 | 172 | API-owned |
 
 The exact MCP boundary is executable as
 `MCP-IMPORT-BOUNDARY-215`. It imports `applications.mcp` in a fresh child and
-fails if any engine, database-client, concrete Provider, or dogfood-evaluation
-module is transitively loaded. The HTTP `AcquireWire` and
+fails if any MCP SDK, engine, database-client, concrete Provider, or
+dogfood-evaluation module is transitively loaded. The HTTP `AcquireWire` and
 `ResolutionOutcomeWire` remain the one semantic contract; the frozen JSON
 validation primitives they share with Runtime live in one transport-neutral,
 engine-independent `context_engine_contracts` owner.
@@ -39,8 +41,8 @@ engine-independent `context_engine_contracts` owner.
 The separate process is justified by measured isolation, not throughput:
 
 - the real host requires child-process stdio and supplies the process lifetime;
-- MCP protocol/session dependencies load in the child and add zero modules to
-  the API import graph;
+- MCP protocol/session dependencies load only when the optional-extra entry
+  point executes and add zero modules to either application import graph;
 - the child loads zero engine, database-client, or Provider modules, so it
   cannot become a second Runtime composition;
 - all content work remains one authenticated loopback `POST /v0/resolve` in the

@@ -87,7 +87,9 @@ make install
 ```
 
 `make install` syncs the locked Python environment **and** runs `npm ci` for the
-three TypeScript workspaces (`sdk/`, `action_plane/`, `bot_delivery/`). Node is
+three TypeScript workspaces (`sdk/`, `action_plane/`, `bot_delivery/`). It also
+installs the local `mcp` extra required by the MCP evidence suite. The durable
+API/worker setup uses `make install-runtime`, which omits that extra. Node is
 not optional.
 
 Run the same gate CI runs, from a clean checkout:
@@ -427,7 +429,8 @@ authorization.
 ### Development commands
 
 ```bash
-make install        # sync locked Python env + npm ci for the 3 TS workspaces
+make install         # sync locked Python env + npm ci for the 3 TS workspaces
+make install-runtime # sync API/worker env without the optional MCP SDK
 make build          # build wheel and sdist
 make lint           # Ruff
 make typecheck      # strict mypy + TS typecheck

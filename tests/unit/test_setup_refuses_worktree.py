@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+import scripts.daily_driver.setup as daily_driver_setup
 from scripts.daily_driver.setup import (
     DURABLE_DEPLOYMENT_MARKER,
     SetupRefused,
@@ -13,6 +14,76 @@ from scripts.daily_driver.setup import (
     _write_durable_deployment_marker,
     require_setup_target,
 )
+
+
+def test_durable_setup_installs_runtime_without_optional_mcp_sdk(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    checkout = tmp_path / "checkout"
+    (checkout / ".git").mkdir(parents=True)
+    (checkout / ".context-engine").mkdir()
+    executable = tmp_path / "executable"
+    executable.write_text("#!/bin/sh\n", encoding="utf-8")
+    executable.chmod(0o700)
+    calls: list[tuple[str, ...]] = []
+    monkeypatch.setattr(
+        daily_driver_setup,
+        "require_setup_target",
+        lambda **kwargs: checkout,
+    )
+    monkeypatch.setattr(
+        daily_driver_setup,
+        "_update_existing_checkout",
+        lambda *args: None,
+    )
+    monkeypatch.setattr(daily_driver_setup, "_prepare_state_directory", lambda *a: None)
+    monkeypatch.setattr(
+        daily_driver_setup,
+        "_write_durable_deployment_marker",
+        lambda *args: None,
+    )
+    monkeypatch.setattr(
+        daily_driver_setup,
+        "_ensure_operator_environment",
+        lambda *args: None,
+    )
+    monkeypatch.setattr(daily_driver_setup, "write_rendered_templates", lambda *a: None)
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda command, **kwargs: calls.append(command),
+    )
+
+    result = daily_driver_setup.main(
+        (
+            "--checkout",
+            str(checkout),
+            "--origin",
+            "https://example.invalid/context-engine.git",
+            "--branch",
+            "main",
+            "--backup-root",
+            str(tmp_path / "backup"),
+            "--docker-executable",
+            str(executable),
+            "--uv-executable",
+            str(executable),
+            "--label-prefix",
+            "test.context-engine",
+            "--api-port",
+            "8137",
+            "--backup-hour",
+            "2",
+            "--scan-hour",
+            "3",
+            "--health-interval-seconds",
+            "60",
+        )
+    )
+
+    assert result == 0
+    assert calls == [("make", "install-runtime"), ("make", "db-up")]
 
 
 def _git_repository(path: Path) -> None:

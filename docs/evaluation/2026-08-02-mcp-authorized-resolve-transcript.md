@@ -1,6 +1,6 @@
 # MCP authorized-resolve end-to-end transcript
 
-**Run date:** 2026-08-02
+**Run date:** 2026-08-02; rerun 2026-08-03 after E-215 repairs
 
 **Carrier:** spawn-per-session stdio MCP child -> locally served loopback HTTP
 `POST /v0/resolve` -> sealed Runtime composition -> real PostgreSQL 17/File
@@ -20,7 +20,7 @@ document are omitted.
 
 ```text
 client -> initialize
-server -> initialized: context-engine-mcp
+server -> initialized: context-engine-mcp 0.1.0
 
 client -> tools/list
 server -> tools: [context_resolve]
@@ -88,7 +88,7 @@ $ set -a; source .context-engine/database.env; set +a; \
     uv run pytest -q \
     tests/integration/test_dogfood_runtime_activation.py::test_spawned_mcp_stdio_delivers_only_real_http_authorized_evidence
 .                                                                        [100%]
-1 passed in 3.98s
+1 passed in 3.76s
 ```
 
 The test initializes the MCP client, asserts the single listed tool, performs

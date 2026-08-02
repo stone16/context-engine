@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from email.message import Message
 from typing import Final, cast
-from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
-from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
 import httpx
 from pydantic import ValidationError
@@ -29,28 +27,6 @@ class DogfoodEvaluationUnavailable(RuntimeError):
 
 class DogfoodSecretExclusionUnavailable(DogfoodEvaluationUnavailable):
     """The caller cannot keep configured secret material out of its output."""
-
-
-class _RejectRedirectHandler(HTTPRedirectHandler):
-    """Never forward the dogfood bearer credential to another destination."""
-
-    def redirect_request(
-        self,
-        request: Request,
-        fp: object,
-        code: int,
-        message: str,
-        headers: object,
-        new_url: str,
-    ) -> Request:
-        del fp, message, headers, new_url
-        raise HTTPError(
-            request.full_url,
-            code,
-            "dogfood redirect is unavailable",
-            Message(),
-            None,
-        )
 
 
 def _require_exact_text(name: str, value: object, *, maximum: int = 512) -> str:
@@ -185,41 +161,14 @@ class DogfoodResolveClient:
         acquire: dict[str, object],
         request_id: str,
     ) -> dict[str, object]:
-        """Forward one exact closed Acquire document to the frozen HTTP seam."""
+        """Forward one Acquire through the same transport used by MCP."""
 
-        body, request_id = self._validated_request(
-            acquire=acquire,
-            request_id=request_id,
+        return asyncio.run(
+            self.resolve_acquire_document_async(
+                acquire=acquire,
+                request_id=request_id,
+            )
         )
-        request = Request(
-            f"{self._configuration.base_url}/v0/resolve",
-            data=body,
-            headers=self._headers(request_id),
-            method="POST",
-        )
-        try:
-            with build_opener(
-                ProxyHandler({}),
-                _RejectRedirectHandler(),
-            ).open(  # noqa: S310
-                request,
-                timeout=30,
-            ) as response:
-                raw = response.read(MAX_RESPONSE_BYTES + 1)
-            return self._validated_outcome(raw)
-        except DogfoodEvaluationUnavailable:
-            raise
-        except (
-            HTTPError,
-            URLError,
-            OSError,
-            ValueError,
-            UnicodeDecodeError,
-            ValidationError,
-        ):
-            raise DogfoodEvaluationUnavailable(
-                "dogfood resolve is unavailable"
-            ) from None
 
     async def resolve_acquire_document_async(
         self,
