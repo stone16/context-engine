@@ -7,6 +7,7 @@ import subprocess
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
+from importlib import import_module
 from pathlib import Path
 from threading import Thread
 from uuid import UUID
@@ -22,16 +23,29 @@ from engine.persistence import DatabaseConfiguration
 from tests.integration.test_dogfood_runtime_activation import (
     QUERY,
     TARGET_TEXT,
-    # The helpers below compose the real dogfood app against that module's
-    # embedding twin. pytest applies an autouse fixture only to the module
-    # holding it, so this module must import the twin with them.
-    _compose_qwen_test_twin,  # noqa: F401
     _configuration,
     _environment,
     _publish,
 )
 
 pytestmark = pytest.mark.integration
+
+
+@pytest.fixture(autouse=True)
+def _compose_release_query_embedding_twin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Use the release-bound query twin when that carrier is available."""
+
+    try:
+        embeddings = import_module("tests.support.embeddings")
+    except ModuleNotFoundError:
+        return
+    provider_type = embeddings.QwenEmbeddingTwin
+    monkeypatch.setattr(
+        "adapters.http.dogfood.LocalQwenEmbeddingProvider",
+        lambda _path: provider_type(),
+    )
 
 
 def _run_cli(*arguments: str) -> subprocess.CompletedProcess[str]:
