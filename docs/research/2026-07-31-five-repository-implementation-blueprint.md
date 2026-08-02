@@ -143,6 +143,7 @@ D1–D12 已于 2026-07-31 全部决策完毕（§5）。本 Wave = 把决定落
 
 - [ ] 任何新增 copy+patch：`third_party/<upstream>/` 具备 `LICENSE.upstream`、`UPSTREAM.toml`（repo/commit/paths/excluded/hashes/mode/approval）、`MODIFICATIONS.md`、`patches/`、`sbom.cyclonedx.json`，且 wheel/sdist/npm/container **物理包含** notice + SBOM（Git-only attribution 不合规）。
 - [x] Dify/MaxKB/OpenViking 相关 PR 描述不引用三份 Room-A 报告为公开 provenance；只引本仓 ADR/tests/版本化五仓基线。
+- [ ] OpenViking 准入前，README/PLAN/STATUS/设计文档不出现 OpenViking 作为 authority 的引用。此项只在 #205 maintainer/legal sign-off 记录且候选准入 PR 可合并时闭合；当前 draft 不把候选基线视为已准入 authority。
 - [x] OpenViking 公开 authority 只通过版本化五仓基线的固定四类白名单；Room-A 报告不作为 provenance。
 - [ ] 每个 Wave 的 STATUS.md 更新区分 Active / `NOT_ACTIVE`；bounded proof 不升级为 general claim；`make smoke` 绿不升级为 publication/security 证明。
 - [ ] RAGFlow PDF/OCR：资产门（ONNX/XGBoost 逐项 revision+hash+license+model card）未闭合前，profile 报 `NOT_ACTIVE`，spike 代码留在 `/tmp` 或 runtime-tree 外并留删除证明。

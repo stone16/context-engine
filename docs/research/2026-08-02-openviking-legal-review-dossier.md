@@ -15,6 +15,12 @@ This dossier records source facts and the exact questions required for GitHub
 issue #205. It is not legal advice and does not approve OpenViking admission. An agent
 cannot supply the maintainer/legal sign-off.
 
+Repository `git log` at this branch shows one unique author email under two
+display names. The same maintainer therefore performed the Room-A evaluation
+and ContextEngine implementation work: personnel separation cannot be claimed,
+and the legal decision must determine whether documentary and temporal
+separation is sufficient or whether this repository needs a different protocol.
+
 The proposed admission is behavior-observation-only:
 
 - observe pinned public documentation, source shapes, and tests;
@@ -82,8 +88,11 @@ The decision record must answer each question explicitly:
    Interface shapes, and test oracles—with no copying, dependency, execution,
    generated artifact, service integration, or Runtime use—satisfy
    ContextEngine's clean-room policy for an AGPLv3 source?
-2. What documentary, access, and personnel separation must be retained between
-   a Room-A observer and any Room-B implementer?
+2. Given one maintainer performing both roles, is documentary and temporal
+   separation—dated Room-A artifacts, no upstream-source access during an
+   implementation pass, and a specification/test-oracle-only handoff—sufficient?
+   If not, is the two-room protocol unavailable for this repository, and what
+   enforceable replacement is required?
 3. May ContextEngine publish commit-pinned factual behavior descriptions and
    permalinks from the AGPL repository as public provenance under that no-copy
    scope?
@@ -156,12 +165,69 @@ deterministic doc-steward evaluation on 2026-08-02 passed at 10.0/10.0 with no
 findings, so there is no mechanical ENFORCE disposition that can authorize this
 semantic change. `AGENTS.md` is intentionally unchanged in this PR.
 
-The prepared replacement for maintainer review is:
+Apply all three replacements atomically; applying only one would leave the
+charter internally inconsistent.
+
+### Pair 1 — public-evidence authority path
+
+Current text:
+
+> `CONTEXT.md` (glossary). Public reference claims must trace to
+> `docs/research/2026-07-19-four-public-repositories-evidence.md` or first-party
+> ContextEngine requirements and `docs/security/context-engine-threat-model.md`.
+
+Prepared replacement:
+
+> `CONTEXT.md` (glossary). Public reference claims must trace to
+> `docs/research/2026-08-02-five-public-repositories-evidence.md` or first-party
+> ContextEngine requirements and `docs/security/context-engine-threat-model.md`.
+
+### Pair 2 — controlled-reuse safety rail
+
+Current text:
+
+> **Controlled third-party reuse (ADR-0074)** — copying is permitted only from
+> license-verified permissive regions at pinned commits (RAGFlow Apache-2.0;
+> Onyx outside every `ee/` directory, MIT; separately-licensed MIT SDK
+> subtrees), registered under `third_party/` with full attribution and SBOM
+> coverage in shipped artifacts. Dify root-licensed code, MaxKB GPLv3 code,
+> and Onyx `ee/` code remain clean-room only: behavior observations, interface
+> shapes, and test oracles via the two-room protocol. Every public reference
+> claim still traces through the four-repository evidence report;
+> repository-external research inputs must never be cited, linked, or
+> presented as public provenance.
+
+Prepared replacement:
+
+> **Controlled third-party reuse (ADR-0074)** — copying is permitted only from
+> license-verified permissive regions at pinned commits (RAGFlow Apache-2.0;
+> Onyx outside every `ee/` directory, MIT; separately-licensed MIT SDK
+> subtrees), registered under `third_party/` with full attribution and SBOM
+> coverage in shipped artifacts. Dify root-licensed code, MaxKB GPLv3 code,
+> Onyx `ee/` code, and all OpenViking source regions remain clean-room only:
+> behavior observations, interface shapes, and test oracles through the
+> applicable maintainer-approved clean-room protocol. D9 additionally prohibits
+> every OpenViking copy+patch path even if upstream later clarifies a permissive
+> region. Every public prior-art reference claim still traces through the
+> five-repository evidence baseline; ContextEngine's own claims trace to its
+> first-party requirements and threat model. Repository-external research
+> inputs must never be cited, linked, or presented as public provenance.
+
+### Pair 3 — tracked repository-external research
+
+Current text:
+
+> Repository-external research may inform independent reasoning, but it is
+> neither public authority nor publishable provenance.
+
+Prepared replacement:
 
 > Repository-external research may inform independent reasoning and may be
 > tracked under `docs/research/` as maintainer-local input, but it is never
-> citable as public authority or claim provenance; public reference claims
-> still trace only to the versioned repository-evidence baseline.
+> citable as public authority or claim provenance; public prior-art reference
+> claims still trace only to the versioned repository-evidence baseline, while
+> ContextEngine's own claims trace to first-party requirements and the threat
+> model.
 
 The maintainer must use the doc-steward write workflow to apply this wording, or
 record an explicit rejection and rationale in issue #205. Current status:

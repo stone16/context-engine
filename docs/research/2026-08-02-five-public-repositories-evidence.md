@@ -73,7 +73,7 @@ domains must not be converted into a retrieval-quality ranking.
 - **[Primary static]** The `viking://` namespaces expose context through a
   browsable filesystem-shaped interface; see
   [`docs/en/concepts/04-viking-uri.md`](https://github.com/volcengine/OpenViking/blob/49b182045b42d34ad530948ad77d9d0226897da8/docs/en/concepts/04-viking-uri.md#L1-L35)
-  and the [`ls`, `tree`, and read API shape](https://github.com/volcengine/OpenViking/blob/49b182045b42d34ad530948ad77d9d0226897da8/docs/en/api/03-filesystem.md#L1-L25).
+  and the [`ls` API shape](https://github.com/volcengine/OpenViking/blob/49b182045b42d34ad530948ad77d9d0226897da8/docs/en/api/03-filesystem.md#L1-L25).
 - **[Repository synthesis]** ContextEngine may use information density as an
   AssemblyProfile and post-authorization browse UX. Directory depth, URI
   prefix, and tier never grant access; content still follows
@@ -86,9 +86,9 @@ domains must not be converted into a retrieval-quality ranking.
   summarization and memory extraction; see
   [`docs/en/concepts/08-session.md`](https://github.com/volcengine/OpenViking/blob/49b182045b42d34ad530948ad77d9d0226897da8/docs/en/concepts/08-session.md#L17-L24)
   and its [commit sequence](https://github.com/volcengine/OpenViking/blob/49b182045b42d34ad530948ad77d9d0226897da8/docs/en/concepts/08-session.md#L107-L122).
-- **[Primary static]** The extraction flow records proposed add, update, and
-  delete outcomes; see the [memory operation description](https://github.com/volcengine/OpenViking/blob/49b182045b42d34ad530948ad77d9d0226897da8/docs/en/concepts/08-session.md#L144-L176)
-  and [`session-memory-extraction-flow.md`](https://github.com/volcengine/OpenViking/blob/49b182045b42d34ad530948ad77d9d0226897da8/docs/design/session-memory-extraction-flow.md#L45-L61).
+- **[Primary static]** The extraction flow records candidate-level `skip`,
+  `create`, and `none` decisions plus per-existing-item `merge` and `delete`
+  decisions; see the [memory operation description](https://github.com/volcengine/OpenViking/blob/49b182045b42d34ad530948ad77d9d0226897da8/docs/en/concepts/08-session.md#L144-L176).
 - **[Repository synthesis]** ContextEngine admits the workflow only as a
   candidate UX: consented and authorized input may produce a reviewable
   candidate, while ContextLearning's release-operator path remains the sole
@@ -97,9 +97,10 @@ domains must not be converted into a retrieval-quality ranking.
 
 ### 3.3 Observable trajectory
 
-- **[Primary static]** Retrieval provenance can record query, matched URI,
-  level, score, searched directories, and reasons; see the
-  [`RetrievalResult` and provenance types](https://github.com/volcengine/OpenViking/blob/49b182045b42d34ad530948ad77d9d0226897da8/openviking_cli/retrieve/types.py#L78-L140)
+- **[Primary static]** A `QueryResult` records a typed query, matched contexts,
+  searched directories, and a `ThinkingTrace`; each `MatchedContext` can carry
+  URI, level, score, and match reason. See the
+  [`MatchedContext` and `QueryResult` types](https://github.com/volcengine/OpenViking/blob/49b182045b42d34ad530948ad77d9d0226897da8/openviking_cli/retrieve/types.py#L283-L319)
   and the [provenance test oracle](https://github.com/volcengine/OpenViking/blob/49b182045b42d34ad530948ad77d9d0226897da8/tests/retrieve/test_provenance.py#L17-L73).
 - **[Repository synthesis]** ContextEngine admits observability as a product
   pattern only after authorization. ContextRun stays authorized-only; raw
