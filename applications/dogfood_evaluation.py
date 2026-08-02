@@ -16,11 +16,15 @@ from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
 from adapters.http.dogfood import DOGFOOD_SECRET_ENV
+from engine.learning.golden_storage import (
+    durable_golden_root,
+    require_durable_golden_path,
+)
 
 DOGFOOD_BASE_URL_ENV: Final = "CONTEXT_ENGINE_DOGFOOD_BASE_URL"
 GOLDEN_SET_SCHEMA_VERSION: Final = "context-engine-golden-set-v0"
 EVAL_REPORT_VERSION: Final = "context-engine-dogfood-eval-v0"
-DEFAULT_GOLDEN_SET_PATH: Final = Path("eval/golden/v0/golden-set.json")
+DEFAULT_GOLDEN_SET_FILENAME: Final = "golden-set-v0.lineage-eligible.json"
 MIN_GOLDEN_CASES: Final = 20
 MAX_GOLDEN_CASES: Final = 50
 MAX_QUERY_CHARACTERS: Final = 4_096
@@ -297,6 +301,18 @@ def load_golden_set(path: Path) -> GoldenSet:
         raise
     except (OSError, UnicodeDecodeError, ValueError, TypeError, KeyError):
         raise DogfoodEvaluationUnavailable("golden set is unavailable") from None
+
+
+def _durable_golden_set_path(configured: Path | None) -> Path:
+    try:
+        root = durable_golden_root()
+        path = root / DEFAULT_GOLDEN_SET_FILENAME if configured is None else configured
+        require_durable_golden_path(path, root=root)
+        return path
+    except (OSError, ValueError):
+        raise DogfoodEvaluationUnavailable(
+            "durable golden set is unavailable"
+        ) from None
 
 
 def _parse_expectation(value: object) -> GoldenExpectation:
@@ -711,7 +727,7 @@ def _parser() -> argparse.ArgumentParser:
     query.add_argument("query")
     query.add_argument("--request-id", default="dogfood-maintainer-query")
     run = subparsers.add_parser("run", help="replay golden set v0")
-    run.add_argument("--golden-set", type=Path, default=DEFAULT_GOLDEN_SET_PATH)
+    run.add_argument("--golden-set", type=Path)
     run.add_argument("--output", type=Path)
     return parser
 
@@ -720,9 +736,9 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser = _parser()
     args = parser.parse_args(argv)
     try:
-        configuration = DogfoodHttpConfiguration.load()
-        client = DogfoodResolveClient(configuration)
         if args.command == "query":
+            configuration = DogfoodHttpConfiguration.load()
+            client = DogfoodResolveClient(configuration)
             print(
                 render_resolve(
                     client.acquire(query=args.query, request_id=args.request_id)
@@ -730,10 +746,14 @@ def main(argv: Sequence[str] | None = None) -> None:
             )
             return
         if args.command == "run":
-            golden_set = load_golden_set(args.golden_set)
+            golden_set = load_golden_set(_durable_golden_set_path(args.golden_set))
+            configuration = DogfoodHttpConfiguration.load()
             configuration.reject_secret_retention(golden_set)
             _write_report(
-                evaluate_golden_set(golden_set, client),
+                evaluate_golden_set(
+                    golden_set,
+                    DogfoodResolveClient(configuration),
+                ),
                 args.output,
             )
             return

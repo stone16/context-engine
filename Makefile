@@ -51,7 +51,8 @@ integration:
 	./scripts/database_harness.sh integration
 
 dogfood-eval:
-	uv run context-engine-dogfood-eval run --golden-set eval/golden/v0/golden-set.json
+	uv run context-engine-dogfood-eval run \
+		--output .context-engine/dogfood-eval/golden-v0-report.json
 
 eval-v1:
 	uv run context-engine-eval report \
