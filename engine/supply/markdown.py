@@ -11,6 +11,16 @@ from typing import Any, Final, cast
 
 import rfc8785
 
+from engine.supply.documents import (
+    CompilationProfileRef,
+    StructuralUnit,
+    canonicalize_format_document,
+    deserialize_format_document,
+    format_compilation_digest,
+    format_content_hash,
+    validate_format_document,
+)
+
 MARKDOWN_COMPILER_V1_VERSION: Final = "context-engine-markdown-v1"
 MARKDOWN_COMPILER_VERSION: Final = "context-engine-markdown-v2"
 MARKDOWN_COMPILER_V3_VERSION: Final = "context-engine-markdown-v3"
@@ -354,17 +364,43 @@ class CompilationProvenance:
 
 @dataclass(frozen=True, slots=True)
 class ParsedDocument:
-    """Immutable deterministic result for one supported Markdown document."""
+    """Immutable deterministic result for one admitted document profile."""
 
     canonical_text: str
     sections: tuple[ParsedSection, ...]
     content_hash: str
     compilation_digest: str
-    provenance: CompilationProvenance
+    provenance: CompilationProvenance | CompilationProfileRef
     fragments: tuple[CompiledFragment, ...]
     warnings: tuple[CompilationWarning, ...] = ()
+    artifact_digest: str | None = None
+    units: tuple[StructuralUnit, ...] | None = None
 
     def __post_init__(self) -> None:
+        if type(self.provenance) is CompilationProfileRef:
+            if (
+                self.canonical_text
+                or self.sections
+                or self.fragments
+                or self.warnings
+                or self.artifact_digest is None
+                or self.units is None
+            ):
+                raise ValueError(
+                    "format ParsedDocument must carry only its admitted family values"
+                )
+            validate_format_document(
+                artifact_digest=self.artifact_digest,
+                content_hash=self.content_hash,
+                compilation_digest=self.compilation_digest,
+                profile=self.provenance,
+                units=self.units,
+            )
+            return
+        if type(self.provenance) is not CompilationProvenance:
+            raise TypeError("parsed document provenance must use the nominal union")
+        if self.artifact_digest is not None or self.units is not None:
+            raise ValueError("Markdown ParsedDocument cannot carry format-only values")
         if type(self.canonical_text) is not str or not self.canonical_text:
             raise ValueError("parsed document requires nonempty canonical text")
         if type(self.sections) is not tuple or any(
@@ -377,8 +413,6 @@ class ParsedDocument:
             raise TypeError("parsed document Fragments must be typed immutable values")
         _require_sha256("content hash", self.content_hash)
         _require_sha256("compilation digest", self.compilation_digest)
-        if type(self.provenance) is not CompilationProvenance:
-            raise TypeError("parsed document provenance must be CompilationProvenance")
         if not self.provenance.is_rich_v3 and not self.canonical_text.endswith("\n"):
             raise ValueError("parsed document requires final-newline canonical text")
         if type(self.warnings) is not tuple or any(
@@ -448,6 +482,36 @@ class ParsedDocument:
             compilation_digest=compilation_digest,
             provenance=provenance,
             fragments=fragments,
+        )
+
+    @classmethod
+    def format_neutral(
+        cls,
+        *,
+        artifact_digest: str,
+        profile: CompilationProfileRef,
+        units: tuple[StructuralUnit, ...],
+    ) -> ParsedDocument:
+        """Build one non-Markdown member of the single ParsedDocument family."""
+
+        if cls is not ParsedDocument or type(profile) is not CompilationProfileRef:
+            raise TypeError("format-neutral ParsedDocument construction is exact")
+        content_hash = format_content_hash(units)
+        compilation_digest = format_compilation_digest(
+            artifact_digest=artifact_digest,
+            profile=profile,
+            content_hash=content_hash,
+            units=units,
+        )
+        return ParsedDocument(
+            canonical_text="",
+            sections=(),
+            content_hash=content_hash,
+            compilation_digest=compilation_digest,
+            provenance=profile,
+            fragments=(),
+            artifact_digest=artifact_digest,
+            units=units,
         )
 
     @classmethod
@@ -984,6 +1048,8 @@ def _compilation_document(
 
 
 def _document_without_digest(document: ParsedDocument) -> dict[str, object]:
+    if type(document.provenance) is not CompilationProvenance:
+        raise TypeError("Markdown serialization requires Markdown provenance")
     return _compilation_document(
         canonical_text=document.canonical_text,
         sections=document.sections,
@@ -1975,6 +2041,16 @@ def canonicalize_parsed_document(document: ParsedDocument) -> bytes:
 
     if type(document) is not ParsedDocument:
         raise TypeError("canonical serialization requires ParsedDocument")
+    if type(document.provenance) is CompilationProfileRef:
+        assert document.artifact_digest is not None
+        assert document.units is not None
+        return canonicalize_format_document(
+            artifact_digest=document.artifact_digest,
+            profile=document.provenance,
+            content_hash=document.content_hash,
+            compilation_digest=document.compilation_digest,
+            units=document.units,
+        )
     canonical = _document_without_digest(document)
     canonical["compilationDigest"] = document.compilation_digest
     return rfc8785.dumps(cast(Any, canonical))
@@ -2066,6 +2142,24 @@ def deserialize_parsed_document(payload: bytes) -> ParsedDocument:
     if type(raw) is not dict:
         raise ValueError("parsed document payload must contain one object")
     document = cast(dict[str, object], raw)
+    if "profile" in document:
+        (
+            artifact_digest,
+            content_hash,
+            compilation_digest,
+            profile,
+            units,
+        ) = deserialize_format_document(payload)
+        return ParsedDocument(
+            canonical_text="",
+            sections=(),
+            content_hash=content_hash,
+            compilation_digest=compilation_digest,
+            provenance=profile,
+            fragments=(),
+            artifact_digest=artifact_digest,
+            units=units,
+        )
     provenance_value = document["provenance"]
     if type(provenance_value) is not dict:
         raise ValueError("parsed document provenance must be an object")

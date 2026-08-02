@@ -10,8 +10,16 @@ from pathlib import Path
 
 import pytest
 
+from adapters.parsers.ragflow_documents import compile_document_bytes
 from adapters.parsers.ragflow_markdown import compile_rich_markdown
-from engine.supply import MarkdownCompilerConfig, ParsedDocument
+from engine.supply import (
+    DOCX_CONFIG_V1,
+    PDF_TEXT_OUTLINE_V1,
+    CompilationProfileRef,
+    DocumentCompilationFailure,
+    MarkdownCompilerConfig,
+    ParsedDocument,
+)
 from third_party.ragflow.deepdoc.parser.markdown_parser import (
     MarkdownElementExtractor,
 )
@@ -21,8 +29,12 @@ REGISTRATION_ROOT = REPOSITORY_ROOT / "third_party/ragflow"
 REGISTRATION_PATH = REGISTRATION_ROOT / "UPSTREAM.toml"
 REQUIRED_EXCLUSIONS = {
     "deepdoc/parser/__init__.py",
+    "deepdoc/parser/pdf_parser.py",
+    "deepdoc/vision",
+    "common/constants.py",
     "rag/app/naive.py",
     "rag/nlp",
+    "rag/utils/lazy_image.py",
 }
 ALLOWED_IMPORT_ROOTS = {
     "__future__",
@@ -32,14 +44,18 @@ ALLOWED_IMPORT_ROOTS = {
     "enum",
     "hashlib",
     "html",
+    "io",
     "json",
     "logging",
     "markdown",
     "pathlib",
+    "pypdf",
+    "pypdfium2",
     "re",
     "sys",
     "typing",
     "unicodedata",
+    "docx",
 }
 
 
@@ -57,16 +73,48 @@ def test_vendored_bytes_match_complete_pinned_registration() -> None:
     assert commit == "4391e03886b996201f3b8818f671b19eb24d0f7b"
     assert registration["reuse_mode"] == "copy-patch"
     assert registration["approval"] == (
-        "https://github.com/stone16/context-engine/issues/124"
+        "https://github.com/stone16/context-engine/issues/124, "
+        "https://github.com/stone16/context-engine/issues/204 "
+        "(awaiting maintainer approval)"
     )
-    assert registration["source_paths"] == ["deepdoc/parser/markdown_parser.py"]
+    source_paths = registration["source_paths"]
+    assert isinstance(source_paths, list)
+    assert set(source_paths) == {
+        "deepdoc/parser/markdown_parser.py",
+        "deepdoc/parser/docx_parser.py",
+        "deepdoc/parser/utils.py",
+    }
     assert registration["nested_dependencies"] == [
         {
             "name": "Python-Markdown",
             "version": "3.6",
             "license": "BSD-3-Clause",
             "license_path": "third_party/ragflow/LICENSE.python-markdown",
-        }
+        },
+        {
+            "name": "python-docx",
+            "version": "1.2.0",
+            "license": "MIT",
+            "license_path": "third_party/ragflow/LICENSE.python-docx",
+        },
+        {
+            "name": "pypdf",
+            "version": "6.13.1",
+            "license": "BSD-3-Clause",
+            "license_path": "third_party/ragflow/LICENSE.pypdf",
+        },
+        {
+            "name": "pypdfium2",
+            "version": "5.12.1",
+            "license": "BSD-3-Clause",
+            "license_path": "third_party/ragflow/LICENSE.pypdfium2",
+        },
+        {
+            "name": "PDFium binary bundle",
+            "version": "152.0.7947.0",
+            "license": "Apache-2.0",
+            "license_path": "third_party/ragflow/LICENSE.pdfium-bundle",
+        },
     ]
     excluded_paths = registration["excluded_paths"]
     assert isinstance(excluded_paths, list)
@@ -100,6 +148,10 @@ def test_vendored_bytes_match_complete_pinned_registration() -> None:
         and path.name
         not in {
             "LICENSE.python-markdown",
+            "LICENSE.python-docx",
+            "LICENSE.pypdf",
+            "LICENSE.pypdfium2",
+            "LICENSE.pdfium-bundle",
             "LICENSE.upstream",
             "MODIFICATIONS.md",
             "UPSTREAM.toml",
@@ -112,8 +164,30 @@ def test_vendored_bytes_match_complete_pinned_registration() -> None:
     assert hashlib.sha256(
         (REGISTRATION_ROOT / "LICENSE.python-markdown").read_bytes()
     ).hexdigest() == "7ba4eb6d10b32b2d11dce13821340351cdbbb30ba8ccc67841db2ffd86e79aca"
+    assert hashlib.sha256(
+        (REGISTRATION_ROOT / "LICENSE.python-docx").read_bytes()
+    ).hexdigest() == "7652f271e46d0d533e9dc463f3b5fcbdcacf4d6a9c8d6b554d15efd0f37f6132"
+    assert hashlib.sha256(
+        (REGISTRATION_ROOT / "LICENSE.pypdf").read_bytes()
+    ).hexdigest() == "a97ac230e5f33ef10a5367a850eb01f91f1a0b064e34742c7794d2294557f524"
+    pdfium_bundle_license = (
+        REGISTRATION_ROOT / "LICENSE.pdfium-bundle"
+    ).read_text(encoding="utf-8")
+    assert "pypdfium2 5.12.1 native bundle license evidence" in (
+        pdfium_bundle_license
+    )
+    assert "BEGIN LICENSE FILE: Apache-2.0.txt" in pdfium_bundle_license
+    assert "BEGIN LICENSE FILE: data/darwin_arm64/BUILD_LICENSES/pdfium.txt" in (
+        pdfium_bundle_license
+    )
     assert (REGISTRATION_ROOT / "MODIFICATIONS.md").is_file()
     assert (REGISTRATION_ROOT / "patches").is_dir()
+    assert {
+        path.name for path in (REGISTRATION_ROOT / "patches").glob("issue-204-*.patch")
+    } == {
+        "issue-204-docx-parser.patch",
+        "issue-204-pdf-outline.patch",
+    }
     assert (REPOSITORY_ROOT / "THIRD_PARTY_NOTICES.md").is_file()
     sbom = json.loads(
         (REGISTRATION_ROOT / "sbom.cyclonedx.json").read_text(encoding="utf-8")
@@ -131,7 +205,11 @@ def test_vendored_bytes_match_complete_pinned_registration() -> None:
     }
     assert {component["name"] for component in sbom["components"]} == {
         "Python-Markdown",
-        "RAGFlow Markdown parser",
+        "RAGFlow parser regions",
+        "python-docx",
+        "pypdf",
+        "pypdfium2",
+        "PDFium binary bundle",
     }
 
 
@@ -162,6 +240,16 @@ def test_vendored_subtree_imports_only_approved_dependencies() -> None:
     )
     assert "Python-Markdown" in modifications
     assert "BSD 3-Clause" in modifications
+    assert "python-docx 1.2.0" in modifications
+    assert "pypdf 6.13.1" in modifications
+    assert "pypdfium2 5.12.1" in modifications
+    assert "PDFium" in modifications
+    assert "891ffc11d2a3ac32e5c0d8b25b35aa62ab8cda1033c9e0a93782e9d45e759586" in (
+        modifications
+    )
+    assert "7d1674fb7c92b2db24964575cb2290139a823a923da89a321cbdaea795452849" in (
+        modifications
+    )
 
 
 def test_registered_parser_region_is_executed_by_the_ce_adapter(
@@ -215,3 +303,20 @@ def test_registered_parser_region_is_executed_by_the_ce_adapter(
 
     assert type(outcome) is ParsedDocument
     assert all(calls[name] > 0 for name in helper_names)
+
+
+@pytest.mark.parametrize("profile_ref", (DOCX_CONFIG_V1, PDF_TEXT_OUTLINE_V1))
+def test_new_registered_regions_are_selected_by_owned_profiles(
+    profile_ref: str,
+) -> None:
+    compiler_ref = (
+        "context-engine-docx-v1"
+        if profile_ref == DOCX_CONFIG_V1
+        else "context-engine-pdf-outline-v1"
+    )
+    outcome = compile_document_bytes(
+        b"invalid fixture",
+        CompilationProfileRef(compiler_ref, profile_ref),
+    )
+
+    assert type(outcome) is DocumentCompilationFailure

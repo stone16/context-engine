@@ -19,30 +19,48 @@
   },
   "components": [
     {
-      "licenses": [
-        {
-          "license": {
-            "id": "Apache-2.0"
-          }
-        }
-      ],
-      "name": "RAGFlow Markdown parser",
-      "purl": "pkg:github/infiniflow/ragflow@4391e03886b996201f3b8818f671b19eb24d0f7b#deepdoc/parser/markdown_parser.py",
+      "licenses": [{"license": {"id": "Apache-2.0"}}],
+      "name": "RAGFlow parser regions",
+      "purl": "pkg:github/infiniflow/ragflow@4391e03886b996201f3b8818f671b19eb24d0f7b#deepdoc/parser",
       "type": "library",
       "version": "4391e03886b996201f3b8818f671b19eb24d0f7b"
     },
     {
-      "licenses": [
-        {
-          "license": {
-            "id": "BSD-3-Clause"
-          }
-        }
-      ],
+      "licenses": [{"license": {"id": "BSD-3-Clause"}}],
       "name": "Python-Markdown",
       "purl": "pkg:pypi/markdown@3.6",
       "type": "library",
       "version": "3.6"
+    },
+    {
+      "licenses": [{"license": {"id": "MIT"}}],
+      "name": "python-docx",
+      "purl": "pkg:pypi/python-docx@1.2.0",
+      "type": "library",
+      "version": "1.2.0"
+    },
+    {
+      "licenses": [{"license": {"id": "BSD-3-Clause"}}],
+      "name": "pypdf",
+      "purl": "pkg:pypi/pypdf@6.13.1",
+      "type": "library",
+      "version": "6.13.1"
+    },
+    {
+      "licenses": [
+        {"license": {"id": "BSD-3-Clause"}},
+        {"license": {"id": "Apache-2.0"}}
+      ],
+      "name": "pypdfium2",
+      "purl": "pkg:pypi/pypdfium2@5.12.1",
+      "type": "library",
+      "version": "5.12.1"
+    },
+    {
+      "licenses": [{"license": {"id": "Apache-2.0"}}],
+      "name": "PDFium binary bundle",
+      "type": "library",
+      "version": "152.0.7947.0"
     }
   ],
   "specVersion": "1.6",
