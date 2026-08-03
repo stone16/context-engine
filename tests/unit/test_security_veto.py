@@ -3,6 +3,8 @@ from __future__ import annotations
 import importlib
 import inspect
 import pkgutil
+import subprocess
+import tempfile
 from collections.abc import Callable
 from pathlib import Path
 from types import ModuleType
@@ -207,9 +209,7 @@ def test_test_private_security_factory_is_never_imported_by_production() -> None
     assert importers == []
 
 
-_EXCLUDED_TREES = frozenset(
-    {".context-engine", ".git", ".venv", "node_modules", "tests", "third_party"}
-)
+_NON_PRODUCTION_TREES = frozenset({"tests", "third_party"})
 # ``third_party`` is license/SBOM-governed vendored source, not first-party
 # production composition; the test-private import veto scans every first-party tree.
 _SECURITY_RESULT_TYPES = ("CaseSecurityObservation", "CaseSecurityViolation")
@@ -217,15 +217,34 @@ _SECURITY_RESULT_TYPES = ("CaseSecurityObservation", "CaseSecurityViolation")
 
 def _production_sources() -> tuple[str, ...]:
     repository_root = Path(__file__).resolve().parents[2]
+    tracked_python_sources = subprocess.run(
+        ["git", "ls-files", "-z", "--", "*.py"],
+        cwd=repository_root,
+        check=True,
+        capture_output=True,
+    ).stdout.split(b"\0")
     sources = tuple(
         sorted(
-            str(path.relative_to(repository_root))
-            for path in repository_root.rglob("*.py")
-            if not (_EXCLUDED_TREES & set(path.relative_to(repository_root).parts))
+            path.as_posix()
+            for raw_path in tracked_python_sources
+            if raw_path
+            for path in (Path(raw_path.decode("utf-8")),)
+            if not (_NON_PRODUCTION_TREES & set(path.parts))
         )
     )
     assert len(sources) > 100
     return sources
+
+
+def test_production_source_scan_excludes_untracked_python_files() -> None:
+    repository_root = Path(__file__).resolve().parents[2]
+    with tempfile.NamedTemporaryFile(
+        dir=repository_root,
+        prefix="security-veto-untracked-",
+        suffix=".py",
+    ) as untracked_source:
+        source = Path(untracked_source.name).relative_to(repository_root).as_posix()
+        assert source not in _production_sources()
 
 
 def _production_sources_containing(*markers: str) -> list[str]:
