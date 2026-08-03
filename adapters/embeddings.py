@@ -358,6 +358,10 @@ class LocalQwenEmbeddingProvider:
                     )
                 except BoundedCallTimedOut:
                     if document and len(batch) == 1:
+                        # Deliberate disclosed conflation: PR #230 records that
+                        # singleton inference timeouts remain sealed under
+                        # unsupported_document_shape pending a dedicated refusal
+                        # category decision.
                         raise EmbeddingDocumentRefused(
                             "Embedding document is outside provider bounds"
                         ) from None
