@@ -484,9 +484,9 @@ slice breakdowns. The real CLI fails closed with
 `retrieval judge is unavailable` if that adapter cannot be loaded rather than
 degrading to a second metric implementation.
 
-The maintainer corpus is private and pending delivery to a durable,
-maintainer-controlled location outside disposable Git worktrees. Once available,
-an operator may run:
+The private maintainer corpus is retained in a durable, maintainer-controlled
+location outside disposable Git worktrees. An operator may reproduce the
+benchmark with:
 
 ```bash
 uv run context-engine-embedding-benchmark run \
@@ -497,21 +497,19 @@ uv run context-engine-embedding-benchmark run \
   --output .context-engine/eval/embedding-benchmark-v1.json
 ```
 
-The tracked frozen result contains metrics only. It currently records
-`pending_corpus`; it must never contain queries, note titles, paths, excerpts,
-or model weights. The model verdict uses Pareto dominance across case hit,
-macro Evidence recall, and micro Evidence recall: one model wins only when it is
-no worse on all three and strictly better on at least one. Exact equality is a
-tie; mixed wins are `inconclusive`. Per-slice results remain diagnostic and no
-weighted composite or tiebreak manufactures a winner. A losing or inconclusive
-primary is a valid benchmark outcome, not a runner error.
+The tracked frozen result contains aggregate metrics and run identity only; it
+must never contain queries, note titles, paths, excerpts, model weights, or
+per-slice corpus detail. The admitted 30-case, 4,166-document run at top-k 10
+recorded Qwen at 17/30 (`0.5666666667`) and multilingual-e5-small at 13/30
+(`0.4333333333`) for case hit, macro Evidence recall, and micro Evidence recall.
+Under the frozen Pareto rule, Qwen wins all three quality metrics and clears the
+standing 3.8% twin baseline; e5 remains materially faster. The full schema-valid
+report remains below the ignored `.context-engine/` root, while the tracked
+aggregate record carries its dataset digest and run identity.
 
-The issue remains open while the corpus is pending. A real-model run, frozen
-numeric result, actual model verdict, and measured comparison to the standing
-3.8% twin baseline are not complete until that durable corpus arrives.
-
-The first 26-case maintainer corpus is pending delivery. Converting it to v1,
-building the 50-case locked pilot, preregistering sample floors, and recording a
-real-corpus CLI report remain pending corpus work; synthetic tests fully exercise
-the loader, composition validator, lock, judges, floors, privacy boundary, and
-security veto meanwhile.
+The winner is activated under the release-bound Qwen profile described by
+ADR-0102. Its measured online acceptance resolved 7/28 eligible cases for
+`evidenceRecall = 0.25`, versus the standing twin's 0/28 (`0.0`); the tracked
+frozen result links the aggregate-only acceptance evidence. The offline and
+online measurements cover different retrieval surfaces and are reported
+separately rather than blended into one score.
