@@ -94,7 +94,7 @@ def test_local_qwen_malformed_output_is_generic_unavailability(
     assert failure.value.__cause__ is None
 
 
-def test_local_qwen_documents_are_encoded_in_registered_batches(
+def test_local_qwen_documents_are_encoded_one_fragment_per_micro_batch(
     monkeypatch: Any,
 ) -> None:
     class _BatchRecordingModel:
