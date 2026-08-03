@@ -73,6 +73,23 @@ def test_control_process_help_and_unknown_subcommand() -> None:
     assert "not-a-command" in unknown.stderr
 
 
+def test_maintainer_context_process_exposes_only_read_subcommands() -> None:
+    completed = subprocess.run(
+        ["context-engine-context", "--help"],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0
+    assert "{query,inspect}" in completed.stdout
+    assert "open-citation" not in completed.stdout
+    assert "control" not in completed.stdout.casefold()
+    assert "secret" not in completed.stdout.casefold()
+    assert completed.stderr == ""
+
+
 def test_control_process_migrates_to_head_and_is_idempotent() -> None:
     database_environment = _database_environment()
     process_environment = {

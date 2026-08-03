@@ -177,9 +177,13 @@ non-File providers remain `NOT_ACTIVE`; see
 [ADR-0068](./docs/decisions/0068-activate-loopback-dogfood-runtime.md).
 
 Once the bounded API is running, the maintainer caller and Quality runner are
-documented in [`eval/README.md`](./eval/README.md). They call only the frozen
-resolve HTTP operation; the evaluation report remains separate from the
-security release gate.
+separate surfaces. Use the read-only
+[`context-engine-context`](./docs/operations/maintainer-context-cli.md) CLI for
+fresh questions and untrusted Package inspection. Evaluation replay remains in
+[`eval/README.md`](./eval/README.md). Both callers use only the frozen resolve
+HTTP operation; the maintainer CLI has no Control, ActionPlane, model, or
+promotion authority, and evaluation remains separate from the security release
+gate.
 
 ### Run the worker
 
@@ -519,7 +523,7 @@ engine/            The sealed core — no HTTP, no vendor SDKs
 adapters/          Everything that touches the outside world
   http/              FastAPI ingress, authentication, transport limits, routes
   parsers/           format parsers (PDF / Markdown / Office)
-applications/      Thin process entry points (~200 LOC total)
+applications/      Thin process entry points and operator CLIs — wiring only
   api.py             `context-engine-api`
   worker.py          `context-engine-worker`
 bot_delivery/      M2 trusted Bot process (TypeScript); generated-SDK caller
@@ -535,13 +539,14 @@ PLAN.md            vision, principles, roadmap, non-goals
 
 Two structural facts worth noticing:
 
-- **Thin entry points, thick core.** `applications/` is roughly 200 lines. All
-  behavior lives in `engine/`, which is what makes "the production composition
-  root cannot substitute, skip, or wire a no-op `AuthorizationKernel`" an
-  enforceable property rather than a slogan.
-- **Tests outweigh implementation ~3:1.** Roughly 21k lines under `engine/`
-  against roughly 68k lines under `tests/`. For a project whose central claim is
-  a security invariant, the executable evidence *is* the product.
+- **Thin entry points, thick core.** Every module in `applications/` only parses
+  arguments and wires a composition; no authorization, retrieval, or delivery
+  behavior lives there. All of it lives in `engine/`, which is what makes "the
+  production composition root cannot substitute, skip, or wire a no-op
+  `AuthorizationKernel`" an enforceable property rather than a slogan.
+- **Tests outweigh implementation ~3:1.** The `tests/` tree is several times the
+  size of `engine/`. For a project whose central claim is a security invariant,
+  the executable evidence *is* the product.
 
 ### What is pluggable, and what is not
 

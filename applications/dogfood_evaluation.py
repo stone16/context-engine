@@ -19,6 +19,10 @@ from adapters.http.dogfood_client import (
 from adapters.http.dogfood_client import (
     MAX_QUERY_CHARACTERS,
     MAX_RESPONSE_BYTES,
+    _as_object,
+    _package_from_outcome,
+    _require_exact_text,
+    _require_opaque_ref,
 )
 from adapters.http.dogfood_client import (
     DogfoodEvaluationUnavailable as DogfoodEvaluationUnavailable,
@@ -42,25 +46,6 @@ EVAL_REPORT_VERSION: Final = "context-engine-dogfood-eval-v0"
 DEFAULT_GOLDEN_SET_FILENAME: Final = "golden-set-v0.lineage-eligible.json"
 MIN_GOLDEN_CASES: Final = 20
 MAX_GOLDEN_CASES: Final = 50
-
-
-def _require_exact_text(name: str, value: object, *, maximum: int = 512) -> str:
-    if (
-        type(value) is not str
-        or not value
-        or value.isspace()
-        or value != value.strip()
-        or len(value) > maximum
-    ):
-        raise DogfoodEvaluationUnavailable(f"{name} is unavailable")
-    return value
-
-
-def _require_opaque_ref(name: str, value: object) -> str:
-    result = _require_exact_text(name, value)
-    if any(character.isspace() for character in result):
-        raise DogfoodEvaluationUnavailable(f"{name} is unavailable")
-    return result
 
 
 def _require_relative_path(value: object) -> str:
@@ -217,12 +202,6 @@ def _golden_set_document(golden_set: GoldenSet) -> dict[str, object]:
     }
 
 
-def _as_object(value: object, name: str) -> dict[str, object]:
-    if type(value) is not dict or any(type(key) is not str for key in value):
-        raise DogfoodEvaluationUnavailable(f"{name} is unavailable")
-    return value
-
-
 def _closed_object(
     value: object,
     name: str,
@@ -361,15 +340,6 @@ class ResolveCaller(Protocol):
     """Evaluation consumes only the public resolve behavior."""
 
     def acquire(self, *, query: str, request_id: str) -> dict[str, object]: ...
-
-
-def _package_from_outcome(outcome: dict[str, object]) -> dict[str, object]:
-    package = _as_object(outcome.get("package"), "ContextPackage")
-    if type(package.get("blocks")) is not list or type(
-        package.get("evidence")
-    ) is not list:
-        raise DogfoodEvaluationUnavailable("ContextPackage is unavailable")
-    return package
 
 
 def _observed_evidence(
