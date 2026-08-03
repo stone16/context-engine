@@ -1,6 +1,6 @@
 from pathlib import Path
 from threading import Event
-from time import monotonic
+from time import monotonic, sleep
 from typing import Any
 
 import pytest
@@ -60,6 +60,102 @@ def test_local_qwen_malformed_output_is_generic_unavailability(
         provider.embed(("query",))
 
     assert failure.value.__cause__ is None
+
+
+def test_local_qwen_documents_are_encoded_in_registered_batches(
+    monkeypatch: Any,
+) -> None:
+    class _BatchRecordingModel:
+        def __init__(self) -> None:
+            self.calls: list[list[str]] = []
+
+        def encode(
+            self,
+            inputs: list[str],
+            **_kwargs: object,
+        ) -> list[list[float]]:
+            self.calls.append(inputs)
+            return [[1.0] * 1024 for _value in inputs]
+
+    model = _BatchRecordingModel()
+    monkeypatch.setattr(
+        "adapters.embeddings.load_qwen_local_model",
+        lambda _model_dir: model,
+    )
+    provider = LocalQwenEmbeddingProvider(Path("/verified/local/model"))
+    inputs = tuple(f"fragment {index}" for index in range(17))
+
+    vectors = provider.embed_documents(inputs)
+
+    assert len(vectors) == len(inputs)
+    assert [len(call) for call in model.calls] == [8, 8, 1]
+    assert [value for call in model.calls for value in call] == list(inputs)
+
+
+def test_local_qwen_batch_deadlines_do_not_accumulate_across_document(
+    monkeypatch: Any,
+) -> None:
+    class _ProportionalModel:
+        def __init__(self) -> None:
+            self.calls: list[list[str]] = []
+
+        def encode(
+            self,
+            inputs: list[str],
+            **_kwargs: object,
+        ) -> list[list[float]]:
+            self.calls.append(inputs)
+            sleep(0.005 * len(inputs))
+            return [[1.0] * 1024 for _value in inputs]
+
+    model = _ProportionalModel()
+    monkeypatch.setattr(
+        "adapters.embeddings.load_qwen_local_model",
+        lambda _model_dir: model,
+    )
+    monkeypatch.setattr("adapters.embeddings._LOCAL_EMBEDDING_TIMEOUT_SECONDS", 0.06)
+    provider = LocalQwenEmbeddingProvider(Path("/verified/local/model"))
+
+    vectors = provider.embed_documents(
+        tuple(f"fragment {index}" for index in range(16))
+    )
+
+    assert len(vectors) == 16
+    assert [len(call) for call in model.calls] == [8, 8]
+
+
+def test_local_qwen_later_batch_failure_returns_no_document_vectors(
+    monkeypatch: Any,
+) -> None:
+    class _FailingSecondBatchModel:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def encode(
+            self,
+            inputs: list[str],
+            **_kwargs: object,
+        ) -> list[list[float]]:
+            self.calls += 1
+            if self.calls == 2:
+                raise RuntimeError("synthetic later-batch failure")
+            return [[1.0] * 1024 for _value in inputs]
+
+    model = _FailingSecondBatchModel()
+    monkeypatch.setattr(
+        "adapters.embeddings.load_qwen_local_model",
+        lambda _model_dir: model,
+    )
+    provider = LocalQwenEmbeddingProvider(Path("/verified/local/model"))
+
+    with pytest.raises(
+        EmbeddingProviderUnavailable,
+        match="Embedding provider is unavailable",
+    ) as failure:
+        provider.embed_documents(tuple(f"fragment {index}" for index in range(9)))
+
+    assert failure.value.__cause__ is None
+    assert model.calls == 2
 
 
 def test_local_qwen_timeout_is_bounded_and_does_not_accumulate_calls(

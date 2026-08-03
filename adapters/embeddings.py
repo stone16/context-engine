@@ -7,6 +7,7 @@ import math
 from collections.abc import Callable
 from contextlib import closing
 from dataclasses import dataclass, field
+from functools import partial
 from hashlib import shake_256
 from math import sqrt
 from pathlib import Path
@@ -313,28 +314,33 @@ class LocalQwenEmbeddingProvider:
             raise EmbeddingProviderUnavailable("Embedding provider is unavailable")
         try:
             prefixed = [prefix + value for value in inputs]
-            raw_vectors = invoke_bounded(
-                lambda: self._model.encode(
-                    prefixed,
-                    batch_size=QWEN3_EMBEDDING_PROFILE.batch_size,
+            vectors: list[EmbeddingVector] = []
+            batch_size = QWEN3_EMBEDDING_PROFILE.batch_size
+            for offset in range(0, len(prefixed), batch_size):
+                batch = prefixed[offset : offset + batch_size]
+                encode_batch = partial(
+                    self._model.encode,
+                    batch,
+                    batch_size=batch_size,
                     convert_to_numpy=True,
                     normalize_embeddings=True,
                     precision=QWEN3_EMBEDDING_PROFILE.precision,
                     show_progress_bar=False,
-                ),
-                timeout_seconds=_LOCAL_EMBEDDING_TIMEOUT_SECONDS,
-                thread_name="context-engine-local-embedding",
-                in_flight_lock=self._inference_lock,
-            )
-            vectors: list[EmbeddingVector] = []
-            for raw_vector in raw_vectors:
-                if len(raw_vector) != 1024:
-                    raise ValueError
-                truncated = tuple(float(value) for value in raw_vector[:384])
-                norm = math.sqrt(sum(value * value for value in truncated))
-                if not math.isfinite(norm) or norm == 0.0:
-                    raise ValueError
-                vectors.append(tuple(value / norm for value in truncated))
+                )
+                raw_vectors = invoke_bounded(
+                    encode_batch,
+                    timeout_seconds=_LOCAL_EMBEDDING_TIMEOUT_SECONDS,
+                    thread_name="context-engine-local-embedding",
+                    in_flight_lock=self._inference_lock,
+                )
+                for raw_vector in raw_vectors:
+                    if len(raw_vector) != 1024:
+                        raise ValueError
+                    truncated = tuple(float(value) for value in raw_vector[:384])
+                    norm = math.sqrt(sum(value * value for value in truncated))
+                    if not math.isfinite(norm) or norm == 0.0:
+                        raise ValueError
+                    vectors.append(tuple(value / norm for value in truncated))
             return validate_embedding_batch(inputs, tuple(vectors), self.profile)
         except (BoundedCallUnavailable, Exception):
             raise EmbeddingProviderUnavailable(
