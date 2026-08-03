@@ -119,7 +119,7 @@ def test_feishu_acl_control_declares_exact_atomic_authorities() -> None:
 def test_manifest_classifies_the_exact_current_release_schema() -> None:
     """PROP-TENANT-OWNERSHIP-001: no current table is left unclassified."""
 
-    if os.environ.get("CONTEXT_ENGINE_SECURITY_GATE_EXECUTION_ID"):
+    if os.environ.get("CONTEXT_ENGINE_DELIBERATE_RED_RUN_PROBE"):
         raise AssertionError(
             "DELIBERATE_RED_RUN_PROBE_FOR_ISSUE_224_DO_NOT_MERGE"
         )

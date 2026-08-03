@@ -39,7 +39,7 @@ third-party-artifacts:
 	uv run python scripts/third_party_governance.py artifacts
 
 security-gate:
-	uv run python scripts/run_m0_security_gate.py --output-dir .context-engine/security-gate
+	CONTEXT_ENGINE_DELIBERATE_RED_RUN_PROBE=1 uv run python scripts/run_m0_security_gate.py --output-dir .context-engine/security-gate
 
 smoke:
 	uv run pytest -q tests/process
