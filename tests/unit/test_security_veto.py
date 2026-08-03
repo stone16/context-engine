@@ -230,6 +230,7 @@ def _production_sources() -> tuple[str, ...]:
             if raw_path
             for path in (Path(raw_path.decode("utf-8")),)
             if not (_NON_PRODUCTION_TREES & set(path.parts))
+            if (repository_root / path).is_file()
         )
     )
     assert len(sources) > 100
@@ -245,6 +246,43 @@ def test_production_source_scan_excludes_untracked_python_files() -> None:
     ) as untracked_source:
         source = Path(untracked_source.name).relative_to(repository_root).as_posix()
         assert source not in _production_sources()
+
+
+def test_production_source_scan_skips_tracked_files_missing_from_worktree(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository_root = Path(__file__).resolve().parents[2]
+    temporary_index = tmp_path / "index"
+    missing_source = "engine/security_veto_deleted_probe.py"
+    monkeypatch.setenv("GIT_INDEX_FILE", str(temporary_index))
+    subprocess.run(
+        ["git", "read-tree", "HEAD"],
+        cwd=repository_root,
+        check=True,
+        capture_output=True,
+    )
+    tracked_blob = subprocess.run(
+        ["git", "rev-parse", "HEAD:engine/__init__.py"],
+        cwd=repository_root,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    subprocess.run(
+        [
+            "git",
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            f"100644,{tracked_blob},{missing_source}",
+        ],
+        cwd=repository_root,
+        check=True,
+        capture_output=True,
+    )
+
+    assert _production_sources_containing("security-veto-deleted-path-probe") == []
 
 
 def _production_sources_containing(*markers: str) -> list[str]:
