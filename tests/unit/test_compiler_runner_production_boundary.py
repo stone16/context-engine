@@ -11,15 +11,19 @@ REPOSITORY_ROOT = Path(__file__).parents[2]
 PRODUCTION_ROOTS = ("engine", "adapters", "applications")
 _IGNORED_MODULES = frozenset(
     {
+        "adapters.parsers.ragflow_documents",
         "adapters.parsers.ragflow_markdown",
         "applications.compiler_runner",
+        "applications.document_compiler_runner",
         "applications.leased_compiler_runner",
     }
 )
 _FORBIDDEN_MODULES = frozenset(
     {
+        "adapters.parsers.ragflow_documents",
         "adapters.parsers.ragflow_markdown",
         "applications.compiler_runner",
+        "applications.document_compiler_runner",
         "eval._compiler_acceptance",
     }
 )

@@ -66,6 +66,14 @@
         {
           "name": "context-engine:file-sha256",
           "value": "third_party/ragflow/deepdoc/parser/markdown_parser.py=94c8e2515d05e141fcf65e10336ceca7f9116e54b31a668637ba3f901943cb66"
+        },
+        {
+          "name": "context-engine:file-sha256",
+          "value": "third_party/ragflow/deepdoc/parser/docx_parser.py=d0d788e190503a165e78057db3abfe5b70aabc5315353dd9a6ff93f8b4427621"
+        },
+        {
+          "name": "context-engine:file-sha256",
+          "value": "third_party/ragflow/deepdoc/parser/utils.py=88f2dd5d7c6eafdc9e33121e585678e051aa49e4420db3b4971da0a99c03c9cf"
         }
       ],
       "type": "library",
@@ -93,6 +101,98 @@
       ],
       "type": "library",
       "version": "3.6"
+    },
+    {
+      "bom-ref": "context-engine:third-party:ragflow:nested:python-docx@1.2.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "name": "python-docx",
+      "properties": [
+        {
+          "name": "context-engine:license-path",
+          "value": "third_party/ragflow/LICENSE.python-docx"
+        },
+        {
+          "name": "context-engine:parent-subtree",
+          "value": "third_party/ragflow"
+        }
+      ],
+      "type": "library",
+      "version": "1.2.0"
+    },
+    {
+      "bom-ref": "context-engine:third-party:ragflow:nested:pypdf@6.13.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "BSD-3-Clause"
+          }
+        }
+      ],
+      "name": "pypdf",
+      "properties": [
+        {
+          "name": "context-engine:license-path",
+          "value": "third_party/ragflow/LICENSE.pypdf"
+        },
+        {
+          "name": "context-engine:parent-subtree",
+          "value": "third_party/ragflow"
+        }
+      ],
+      "type": "library",
+      "version": "6.13.1"
+    },
+    {
+      "bom-ref": "context-engine:third-party:ragflow:nested:pypdfium2@5.12.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "BSD-3-Clause"
+          }
+        }
+      ],
+      "name": "pypdfium2",
+      "properties": [
+        {
+          "name": "context-engine:license-path",
+          "value": "third_party/ragflow/LICENSE.pypdfium2"
+        },
+        {
+          "name": "context-engine:parent-subtree",
+          "value": "third_party/ragflow"
+        }
+      ],
+      "type": "library",
+      "version": "5.12.1"
+    },
+    {
+      "bom-ref": "context-engine:third-party:ragflow:nested:PDFium binary bundle@152.0.7947.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "name": "PDFium binary bundle",
+      "properties": [
+        {
+          "name": "context-engine:license-path",
+          "value": "third_party/ragflow/LICENSE.pdfium-bundle"
+        },
+        {
+          "name": "context-engine:parent-subtree",
+          "value": "third_party/ragflow"
+        }
+      ],
+      "type": "library",
+      "version": "152.0.7947.0"
     }
   ],
   "metadata": {

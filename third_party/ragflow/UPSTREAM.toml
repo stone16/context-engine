@@ -1,19 +1,41 @@
 repository = "https://github.com/infiniflow/ragflow.git"
 commit = "4391e03886b996201f3b8818f671b19eb24d0f7b"
-source_paths = ["deepdoc/parser/markdown_parser.py"]
+source_paths = [
+  "deepdoc/parser/markdown_parser.py",
+  "deepdoc/parser/docx_parser.py",
+  "deepdoc/parser/utils.py",
+]
 excluded_paths = [
   "deepdoc/parser/__init__.py",
+  "deepdoc/parser/pdf_parser.py",
+  "deepdoc/vision",
   "rag/app/naive.py",
   "rag/nlp",
+  "rag/utils/lazy_image.py",
+  "common/constants.py",
 ]
 reuse_mode = "copy-patch"
-approval = "https://github.com/stone16/context-engine/issues/124"
+approval = "https://github.com/stone16/context-engine/issues/124, https://github.com/stone16/context-engine/issues/204 (awaiting maintainer approval)"
 license = "Apache-2.0"
 nested_dependencies = [
   { name = "Python-Markdown", version = "3.6", license = "BSD-3-Clause", license_path = "third_party/ragflow/LICENSE.python-markdown" },
+  { name = "python-docx", version = "1.2.0", license = "MIT", license_path = "third_party/ragflow/LICENSE.python-docx" },
+  { name = "pypdf", version = "6.13.1", license = "BSD-3-Clause", license_path = "third_party/ragflow/LICENSE.pypdf" },
+  { name = "pypdfium2", version = "5.12.1", license = "BSD-3-Clause", license_path = "third_party/ragflow/LICENSE.pypdfium2" },
+  { name = "PDFium binary bundle", version = "152.0.7947.0", license = "Apache-2.0", license_path = "third_party/ragflow/LICENSE.pdfium-bundle" },
 ]
 
 [[files]]
 upstream_path = "deepdoc/parser/markdown_parser.py"
 vendored_path = "third_party/ragflow/deepdoc/parser/markdown_parser.py"
 sha256 = "94c8e2515d05e141fcf65e10336ceca7f9116e54b31a668637ba3f901943cb66"
+
+[[files]]
+upstream_path = "deepdoc/parser/docx_parser.py"
+vendored_path = "third_party/ragflow/deepdoc/parser/docx_parser.py"
+sha256 = "d0d788e190503a165e78057db3abfe5b70aabc5315353dd9a6ff93f8b4427621"
+
+[[files]]
+upstream_path = "deepdoc/parser/utils.py"
+vendored_path = "third_party/ragflow/deepdoc/parser/utils.py"
+sha256 = "88f2dd5d7c6eafdc9e33121e585678e051aa49e4420db3b4971da0a99c03c9cf"

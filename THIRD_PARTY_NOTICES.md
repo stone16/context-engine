@@ -23,8 +23,14 @@ text.
 - Commit: `4391e03886b996201f3b8818f671b19eb24d0f7b`
 - License: Apache-2.0 (`third_party/ragflow/LICENSE.upstream`)
 - Reuse mode: `copy-patch`
-- Approval: https://github.com/stone16/context-engine/issues/124
+- Approval: https://github.com/stone16/context-engine/issues/124, https://github.com/stone16/context-engine/issues/204 (awaiting maintainer approval)
 - Copied paths:
   - `deepdoc/parser/markdown_parser.py`
+  - `deepdoc/parser/docx_parser.py`
+  - `deepdoc/parser/utils.py`
 - Nested dependencies:
   - Python-Markdown 3.6 — BSD-3-Clause (`third_party/ragflow/LICENSE.python-markdown`)
+  - python-docx 1.2.0 — MIT (`third_party/ragflow/LICENSE.python-docx`)
+  - pypdf 6.13.1 — BSD-3-Clause (`third_party/ragflow/LICENSE.pypdf`)
+  - pypdfium2 5.12.1 — BSD-3-Clause (`third_party/ragflow/LICENSE.pypdfium2`)
+  - PDFium binary bundle 152.0.7947.0 — Apache-2.0 (`third_party/ragflow/LICENSE.pdfium-bundle`)
