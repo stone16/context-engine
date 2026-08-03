@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any, cast
 
@@ -117,6 +118,11 @@ def test_feishu_acl_control_declares_exact_atomic_authorities() -> None:
 @pytest.mark.security_evidence(id="PROP-TENANT-OWNERSHIP-001", layer="property")
 def test_manifest_classifies_the_exact_current_release_schema() -> None:
     """PROP-TENANT-OWNERSHIP-001: no current table is left unclassified."""
+
+    if os.environ.get("CONTEXT_ENGINE_SECURITY_GATE_EXECUTION_ID"):
+        raise AssertionError(
+            "DELIBERATE_RED_RUN_PROBE_FOR_ISSUE_224_DO_NOT_MERGE"
+        )
 
     document = manifest()
     tables = table_entries(document)
