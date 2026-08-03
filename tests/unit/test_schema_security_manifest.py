@@ -1064,6 +1064,7 @@ def test_issue_21_file_source_manifest_is_closed_and_role_separated() -> None:
     assert refusal_operation["databaseFunctions"] == [
         "context_worker_fail_file_import",
         "context_worker_fail_file_import_with_category",
+        "context_worker_refuse_acquired_embedding_document",
     ]
     assert refusal_operation["retainedCompilationRefusalCategoryAllowed"] is True
     assert (

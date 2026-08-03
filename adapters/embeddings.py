@@ -7,6 +7,7 @@ import math
 from collections.abc import Callable
 from contextlib import closing
 from dataclasses import dataclass, field
+from functools import partial
 from hashlib import shake_256
 from math import sqrt
 from pathlib import Path
@@ -16,12 +17,17 @@ from urllib.error import HTTPError
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-from adapters._bounded_call import BoundedCallUnavailable, invoke_bounded
+from adapters._bounded_call import (
+    BoundedCallTimedOut,
+    BoundedCallUnavailable,
+    invoke_bounded,
+)
 from adapters.local_embedding_model import load_qwen_local_model
 from engine.supply.embeddings import (
     CONTEXT_FRAGMENT_EMBEDDING_DIMENSION,
     DETERMINISTIC_TWIN_EMBEDDING_PROFILE,
     QWEN3_EMBEDDING_PROFILE,
+    EmbeddingDocumentRefused,
     EmbeddingProfile,
     EmbeddingProviderProfile,
     EmbeddingProviderUnavailable,
@@ -32,6 +38,8 @@ from engine.supply.embeddings import (
 _MAX_EXTERNAL_RESPONSE_BYTES = 64 * 1024 * 1024
 _DEFAULT_TIMEOUT_SECONDS = 30.0
 _LOCAL_EMBEDDING_TIMEOUT_SECONDS = 30.0
+_LOCAL_EMBEDDING_MICRO_BATCH_SIZE = 1
+_LOCAL_EMBEDDING_WARMUP_TEXT = "context-engine local embedding warmup"
 EmbeddingTransport = Callable[[Request, float, int], bytes]
 
 
@@ -283,6 +291,15 @@ class LocalQwenEmbeddingProvider:
                 "Embedding provider is unavailable"
             ) from None
         self._model: Any = model
+        try:
+            self._reduce_vectors(
+                (_LOCAL_EMBEDDING_WARMUP_TEXT,),
+                self._encode_model_inputs([_LOCAL_EMBEDDING_WARMUP_TEXT]),
+            )
+        except Exception:
+            raise EmbeddingProviderUnavailable(
+                "Embedding provider is unavailable"
+            ) from None
 
     @property
     def profile(self) -> EmbeddingProfile:
@@ -293,17 +310,27 @@ class LocalQwenEmbeddingProvider:
         return QWEN3_EMBEDDING_PROFILE
 
     def embed(self, inputs: tuple[str, ...]) -> tuple[EmbeddingVector, ...]:
-        return self._embed_with_prefix(inputs, QWEN3_EMBEDDING_PROFILE.query_prefix)
+        return self._embed_with_prefix(
+            inputs,
+            QWEN3_EMBEDDING_PROFILE.query_prefix,
+            document=False,
+        )
 
     def embed_documents(
         self, inputs: tuple[str, ...]
     ) -> tuple[EmbeddingVector, ...]:
-        return self._embed_with_prefix(inputs, QWEN3_EMBEDDING_PROFILE.document_prefix)
+        return self._embed_with_prefix(
+            inputs,
+            QWEN3_EMBEDDING_PROFILE.document_prefix,
+            document=True,
+        )
 
     def _embed_with_prefix(
         self,
         inputs: tuple[str, ...],
         prefix: str,
+        *,
+        document: bool,
     ) -> tuple[EmbeddingVector, ...]:
         if (
             type(inputs) is not tuple
@@ -313,30 +340,59 @@ class LocalQwenEmbeddingProvider:
             raise EmbeddingProviderUnavailable("Embedding provider is unavailable")
         try:
             prefixed = [prefix + value for value in inputs]
-            raw_vectors = invoke_bounded(
-                lambda: self._model.encode(
-                    prefixed,
-                    batch_size=QWEN3_EMBEDDING_PROFILE.batch_size,
-                    convert_to_numpy=True,
-                    normalize_embeddings=True,
-                    precision=QWEN3_EMBEDDING_PROFILE.precision,
-                    show_progress_bar=False,
-                ),
-                timeout_seconds=_LOCAL_EMBEDDING_TIMEOUT_SECONDS,
-                thread_name="context-engine-local-embedding",
-                in_flight_lock=self._inference_lock,
-            )
             vectors: list[EmbeddingVector] = []
-            for raw_vector in raw_vectors:
-                if len(raw_vector) != 1024:
-                    raise ValueError
-                truncated = tuple(float(value) for value in raw_vector[:384])
-                norm = math.sqrt(sum(value * value for value in truncated))
-                if not math.isfinite(norm) or norm == 0.0:
-                    raise ValueError
-                vectors.append(tuple(value / norm for value in truncated))
+            for offset in range(
+                0,
+                len(prefixed),
+                _LOCAL_EMBEDDING_MICRO_BATCH_SIZE,
+            ):
+                batch = prefixed[
+                    offset : offset + _LOCAL_EMBEDDING_MICRO_BATCH_SIZE
+                ]
+                try:
+                    raw_vectors = invoke_bounded(
+                        partial(self._encode_model_inputs, batch),
+                        timeout_seconds=_LOCAL_EMBEDDING_TIMEOUT_SECONDS,
+                        thread_name="context-engine-local-embedding",
+                        in_flight_lock=self._inference_lock,
+                    )
+                except BoundedCallTimedOut:
+                    if document and len(batch) == 1:
+                        raise EmbeddingDocumentRefused(
+                            "Embedding document is outside provider bounds"
+                        ) from None
+                    raise
+                vectors.extend(self._reduce_vectors(tuple(batch), raw_vectors))
             return validate_embedding_batch(inputs, tuple(vectors), self.profile)
+        except EmbeddingDocumentRefused:
+            raise
         except (BoundedCallUnavailable, Exception):
             raise EmbeddingProviderUnavailable(
                 "Embedding provider is unavailable"
             ) from None
+
+    def _encode_model_inputs(self, inputs: list[str]) -> Any:
+        return self._model.encode(
+            inputs,
+            batch_size=QWEN3_EMBEDDING_PROFILE.batch_size,
+            convert_to_numpy=True,
+            normalize_embeddings=True,
+            precision=QWEN3_EMBEDDING_PROFILE.precision,
+            show_progress_bar=False,
+        )
+
+    def _reduce_vectors(
+        self,
+        inputs: tuple[str, ...],
+        raw_vectors: Any,
+    ) -> tuple[EmbeddingVector, ...]:
+        vectors: list[EmbeddingVector] = []
+        for raw_vector in raw_vectors:
+            if len(raw_vector) != 1024:
+                raise ValueError
+            truncated = tuple(float(value) for value in raw_vector[:384])
+            norm = math.sqrt(sum(value * value for value in truncated))
+            if not math.isfinite(norm) or norm == 0.0:
+                raise ValueError
+            vectors.append(tuple(value / norm for value in truncated))
+        return validate_embedding_batch(inputs, tuple(vectors), self.profile)

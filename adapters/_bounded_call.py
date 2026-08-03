@@ -10,6 +10,10 @@ class BoundedCallUnavailable(Exception):
     """A synchronous backend failed, timed out, or was already in flight."""
 
 
+class BoundedCallTimedOut(BoundedCallUnavailable):
+    """A synchronous backend remained in flight beyond its deadline."""
+
+
 def invoke_bounded[T](
     operation: Callable[[], T],
     *,
@@ -42,6 +46,8 @@ def invoke_bounded[T](
         if in_flight_lock is not None:
             in_flight_lock.release()
         raise BoundedCallUnavailable from None
-    if not finished.wait(timeout_seconds) or failed or len(outputs) != 1:
+    if not finished.wait(timeout_seconds):
+        raise BoundedCallTimedOut
+    if failed or len(outputs) != 1:
         raise BoundedCallUnavailable
     return outputs[0]

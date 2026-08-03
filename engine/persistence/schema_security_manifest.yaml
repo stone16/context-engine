@@ -692,7 +692,8 @@
       "name": "fail_file_import",
       "databaseFunctions": [
         "context_worker_fail_file_import",
-        "context_worker_fail_file_import_with_category"
+        "context_worker_fail_file_import_with_category",
+        "context_worker_refuse_acquired_embedding_document"
       ],
       "role": "context_engine_worker",
       "definerRole": "context_engine_worker_lease_definer",
@@ -8808,6 +8809,7 @@
           "context_worker_redeem_file_import",
           "context_worker_fail_file_import",
           "context_worker_fail_file_import_with_category",
+          "context_worker_refuse_acquired_embedding_document",
           "context_worker_publish_file_import_v2",
           "context_worker_publish_structural_file_import_v2",
           "context_worker_stage_file_replacement",
@@ -8848,6 +8850,7 @@
           "EXECUTE context_worker_redeem_file_import",
           "EXECUTE context_worker_fail_file_import",
           "EXECUTE context_worker_fail_file_import_with_category",
+          "EXECUTE context_worker_refuse_acquired_embedding_document",
           "EXECUTE context_worker_publish_file_import_v2",
           "EXECUTE context_worker_publish_structural_file_import_v2",
           "EXECUTE context_worker_stage_file_replacement",
@@ -8862,7 +8865,8 @@
         "context_engine_worker_lease_definer": [
           "SELECT",
           "INSERT",
-          "UPDATE"
+          "UPDATE",
+          "DELETE acquired recovery only through context_worker_refuse_acquired_embedding_document"
         ],
         "context_engine_file_dispatch_definer": [
           "SELECT",
