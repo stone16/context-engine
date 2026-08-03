@@ -294,15 +294,16 @@ IM 交付由 `BotDelivery` 这个受信深模块完成。它从 M2 起作为独�
 | [实现设计](./docs/design/2026-07-18-context-engine-implementation-design.md) | 集成后的实现权威与里程碑边界 |
 | [威胁模型](./docs/security/context-engine-threat-model.md) | 资产、信任边界、威胁与 hard oracles |
 | [Program PRD](./docs/agents/prd-contextengine-implementation.md) · [Epic Tech Spec](./docs/specs/2026-07-19-context-engine-implementation-epic.md) | 需求、100 条 user story、contract shape、work package |
-| [公开参照证据基线](./docs/research/2026-07-19-four-public-repositories-evidence.md) | 四个公开仓库的优势、局限、clean-room 拆解与证据缺口 |
+| [公开参照证据基线](./docs/research/2026-08-02-five-public-repositories-evidence.md) | 五个固定公开仓库的优势、局限、clean-room 拆解与证据缺口 |
 | [D0 Baseline Candidate](./DESIGN-BASELINE.md) | 当前候选状态与尚未关闭的 evidence gate |
 
 ## 参照与致谢
 
-设计吸收了对四个公开开源项目——**Dify**、**RAGFlow**、**MaxKB**、**Onyx**——的
+设计吸收了对五个固定公开开源项目——**Dify**、**RAGFlow**、**MaxKB**、**Onyx**，
+以及有条件准入的 **OpenViking**——的
 架构研究，且严格限于可观察行为、interface 形状、测试 oracle 与产品工作流。
-**零代码复制。** 固定版本与一手链接记录在
-[证据基线](./docs/research/2026-07-19-four-public-repositories-evidence.md)。
+**OpenViking 零代码复制；其他复用仍由 ADR-0074 按精确源码区域治理。** 固定版本与一手链接记录在
+[证据基线](./docs/research/2026-08-02-five-public-repositories-evidence.md)。
 
 ContextEngine 的安全与多租户协议依据自身 requirement 与威胁模型独立设计。
 仓库外的研究可以启发推理，但绝不作为公开 provenance 被引用。

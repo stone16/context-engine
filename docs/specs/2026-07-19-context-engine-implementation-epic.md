@@ -140,8 +140,8 @@ dispute.
 ### 3.1 Public provenance closure
 
 The repository's public prior-art allowlist contains only Dify, RAGFlow, MaxKB,
-and Onyx at the revisions pinned by
-`docs/research/2026-07-19-four-public-repositories-evidence.md`. These sources
+Onyx, and conditionally admitted OpenViking at the revisions pinned by
+`docs/research/2026-08-02-five-public-repositories-evidence.md`. These sources
 may justify observable patterns, Interface shapes, test oracles, and product
 workflows. They do not prove ContextEngine's security properties.
 
@@ -1492,7 +1492,7 @@ authorization weakening.
 | `docs/design/2026-07-18-context-engine-implementation-design.md` | Architecture and implementation authority. |
 | `CONTEXT.md` | Canonical domain vocabulary. |
 | `docs/security/context-engine-threat-model.md` | Protected assets, trust boundaries, threats, and hard oracles. |
-| `docs/research/2026-07-19-four-public-repositories-evidence.md` | Allowlisted public prior-art evidence and clean-room boundaries. |
+| `docs/research/2026-08-02-five-public-repositories-evidence.md` | Allowlisted public prior-art evidence and clean-room boundaries. |
 | `docs/decisions/0012-sealed-authorization-projection-pipeline.md` | Runtime ordering, Provider evidence, and nominal content types. |
 | `docs/decisions/0013-trusted-delivery-egress-and-capability-taxonomy.md` | Trusted audience, egress, tokens, and effects. |
 | `docs/decisions/0014-curation-snapshot-and-release-ownership.md` | Curation and single release owner. |

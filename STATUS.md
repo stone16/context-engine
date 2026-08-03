@@ -72,6 +72,7 @@ designed, and deliberately not active:
 | Session-derived Learning intake | ADR-0100 accepts only a future consented, minimized, provenance-bound candidate path; raw tape reads/storage, extractor model egress, candidate carrier, governed Memory artifact, release bridge, and Runtime serving remain `NOT_ACTIVE` |
 | Deployment/plugin productization | ADR-0101 bounds any future plugin to static composition at accepted ports, but defers generic categories/manifest/loader until a second implementation or measured drift; tenant code, hot loading, marketplace, and plugin-created service remain `NOT_ACTIVE` |
 | MCP ingress | Only the maintainer's spawn-per-session local stdio `context_resolve` tool is active; remote/shared HTTP, multi-user/tenant, private/group, `Continue`, `OpenCitation`, generation, effects, resources/prompts, and MCP egress-grant handling remain `NOT_ACTIVE` |
+| OpenViking public-reference admission | The versioned five-repository baseline, permalink audit, legal dossier, and upstream license-metadata question are prepared in #205; maintainer/legal sign-off and the maintainer doc-steward decision remain pending. This activates no code reuse, dependency, Runtime carrier, or security claim. |
 | Worker dead-letter transition / operator requeue | ADR-0060 adds bounded reclaim only; generation four is left untouched after expiry |
 | Provider polling, delete execution beyond ADR-0057 | See the File Provider ADRs for exact boundaries |
 | Streaming delivery | Explicit V1 non-goal — placeholder + edit instead |
@@ -601,8 +602,10 @@ yet in M0 scope and are explicitly recorded as `not-evaluated`, so the report
 emits only an `m0SecurityDecision` — a passing security gate is never reported
 as an overall release or promotion PASS.
 
-Beyond the pinned-commit evidence for the four public reference repositories and
-the in-repository design breakdown, the dynamic evidence that exists today is
+Beyond the pinned-commit evidence for Dify, RAGFlow, MaxKB, Onyx, and the
+conditionally admitted OpenViking claim families in the
+[versioned five-repository baseline](./docs/research/2026-08-02-five-public-repositories-evidence.md),
+the dynamic evidence that exists today is
 the `compose.yaml`-pinned PostgreSQL + pgvector harness and RLS evidence for the
 first Organization-owned representative table. Dynamic evidence for the complete
 domain schema, ActorContext, filtered ANN, and Feishu capability is still

@@ -135,4 +135,4 @@ M6 之后坚持 **one connector per milestone**,不把两个新权限模型压�
 
 ## 8. 致谢与参照
 
-设计吸收了对公开开源项目 **Dify、RAGFlow、MaxKB、Onyx** 的架构研究，仅学习可观察行为、Interface 形状、测试 oracle 与产品工作流，零代码复制。固定版本与一手链接见 `docs/research/2026-07-19-four-public-repositories-evidence.md`。安全与多租户协议由 ContextEngine 根据自身 requirement 与 threat model 独立设计；仓库外研究不是公开 authority 或 provenance。
+设计吸收了对五个固定公开开源项目 **Dify、RAGFlow、MaxKB、Onyx、OpenViking** 的架构研究，仅学习可观察行为、Interface 形状、测试 oracle 与产品工作流。OpenViking 的白名单仅限 context filesystem/L0–L2 tiering、session→candidate UX、observable trajectory 与 agent exposure；它不证明多租户授权或安全，不作为 Runtime foundation，且任何 copy+patch 都被禁止。固定版本与一手链接见 `docs/research/2026-08-02-five-public-repositories-evidence.md`。安全与多租户协议由 ContextEngine 根据自身 requirement 与 threat model 独立设计；仓库外研究不是公开 authority 或 provenance。

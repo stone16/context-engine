@@ -28,7 +28,7 @@ This is responsibility ownership, not a total precedence order. A contradiction
 within or across owned scopes blocks baseline approval until it is reconciled
 explicitly; no document silently overrides another.
 
-The four-repository evidence report under `docs/research/` supports public
+The versioned five-repository evidence baseline under `docs/research/` supports public
 reference claims but owns no ContextEngine design decision. Repository-external
 research and legacy decision logs are independent reasoning inputs only; they
 are excluded from public authority and provenance.
@@ -41,7 +41,7 @@ are excluded from public authority and provenance.
   maintainer review completes, and all remaining D0 evidence gates pass.
 - The candidate documents are uncommitted worktree content. No commit or digest
   currently identifies this bundle.
-- Public provenance is limited to the fixed four-repository evidence report,
+- Public provenance is limited to the fixed five-repository evidence baseline,
   first-party product requirements, the versioned ContextEngine threat model,
   current implementation design, and accepted ADRs. Repository-external research may
   inform independent reasoning but cannot be cited, linked, or published as
@@ -70,8 +70,10 @@ independent verification result.
       sanitization.
 - [x] Program PRD has the required headings and 100 consecutive user stories.
 - [x] Tracer-bullet child issue draft exists for maintainer review.
-- [x] The complete public authority bundle passes the four-repository allowlist
-      and provenance scan.
+- [x] The historical public authority bundle passes the four-repository
+      allowlist and provenance scan.
+- [ ] The candidate five-repository baseline receives the issue #205
+      maintainer/legal sign-off before merge.
 - [ ] This manifest is generated from the sanitized files and independently
       verified.
 - [ ] Maintainer approves the Runtime/Provider/BotDelivery/ActionPlane/Learning

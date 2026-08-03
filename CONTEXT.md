@@ -4,7 +4,7 @@ This repository-owned glossary is the canonical terminology contract for
 ContextEngine. 中文解释与英文定义具有相同语义；实现细节以
 [`Implementation Design v1.2`](docs/design/2026-07-18-context-engine-implementation-design.md)
 和 accepted ADR 为准。公开参考事实须回引
-[`four-repository evidence baseline`](docs/research/2026-07-19-four-public-repositories-evidence.md)
+[`five-repository evidence baseline`](docs/research/2026-08-02-five-public-repositories-evidence.md)
 所固定的一手来源；仓库外研究不是公开 authority 或 provenance。
 
 本文件只固定名称、scope、lifecycle 和 authorization role，不定义 executable

@@ -9,7 +9,7 @@ Before exploring or changing the system, read:
   current implementation authority;
 - `docs/decisions/README.md` for the implementation boundary ADR baseline and
   relevant ADRs under `docs/decisions/` for accepted refinements;
-- `docs/research/2026-07-19-four-public-repositories-evidence.md` for the
+- `docs/research/2026-08-02-five-public-repositories-evidence.md` for the
   allowlisted public prior-art evidence;
 - `PLAN.md` for the public implementation roadmap.
 
@@ -21,4 +21,4 @@ The current design, security contracts, ADRs, glossary, PRD, and Tech Spec are
 versioned with the implementation so a clean clone has a self-contained
 authority bundle. Repository-external research is non-normative; public work
 items must rely on repository requirements, threat-model reasoning, or the
-allowlisted four-repository evidence rather than unpublished provenance.
+allowlisted five-repository evidence rather than unpublished provenance.
