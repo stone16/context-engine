@@ -14,6 +14,7 @@ from engine.persistence import (
     DatabaseConfiguration,
     FileImportInterrupted,
     FileImportLeaseRedemption,
+    FileImportRefused,
     FilePublicationBoundary,
     PostgreSQLFileImportWorker,
     PostgreSQLWorkerLeaseIssuer,
@@ -23,6 +24,7 @@ from engine.persistence import (
 from engine.supply import (
     CONTEXT_FRAGMENT_EMBEDDING_DIMENSION,
     DETERMINISTIC_TWIN_EMBEDDING_PROFILE,
+    EmbeddingDocumentRefused,
     EmbeddingProfile,
     EmbeddingProviderProfile,
     EmbeddingProviderUnavailable,
@@ -75,6 +77,17 @@ class _MutableProfileEmbeddingProvider(_RecordingEmbeddingProvider):
         self.calls.append(inputs)
         self.profile = EmbeddingProfile(1)
         return ((0.25,),) * len(inputs)
+
+
+class _BoundedDocumentRefusalProvider(_RecordingEmbeddingProvider):
+    def embed_documents(
+        self,
+        inputs: tuple[str, ...],
+    ) -> tuple[EmbeddingVector, ...]:
+        self.calls.append(inputs)
+        raise EmbeddingDocumentRefused(
+            "provider document detail must not escape"
+        )
 
 
 def _worker(
@@ -358,6 +371,60 @@ def test_provider_failure_interrupts_acquired_checkpoint_and_recovers(
     assert recovered.outcome == "published"
     assert len(provider.calls) == 2
     assert _stored_vectors(migration_configuration, scenario)
+
+
+def test_bounded_document_refusal_seals_closed_shape_category(
+    request: pytest.FixtureRequest,
+    tmp_path: Path,
+    migration_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+    guarded_worker_engine: Engine,
+) -> None:
+    scenario = prepare_file_import_scenario(
+        tmp_path,
+        migration_configuration,
+        guarded_control_engine,
+    )
+    request.addfinalizer(
+        lambda: delete_file_import_scenario(
+            migration_configuration,
+            scenario.organization_id,
+        )
+    )
+    assert scenario.token is not None
+
+    with pytest.raises(FileImportRefused, match="File import is unavailable"):
+        _run(
+            _worker(
+                scenario,
+                guarded_worker_engine,
+                _BoundedDocumentRefusalProvider(),
+            ),
+            scenario,
+            scenario.token,
+        )
+
+    engine = create_database_engine(migration_configuration)
+    try:
+        with engine.connect() as connection:
+            job = connection.execute(
+                text(
+                    """
+                    SELECT state, compilation_refusal_category
+                    FROM file_import_job
+                    WHERE organization_id = :organization_id
+                      AND job_id = :job_id
+                    """
+                ),
+                {
+                    "organization_id": scenario.organization_id,
+                    "job_id": scenario.prepared.job_id,
+                },
+            ).one()
+        assert tuple(job) == ("failed", "unsupported_document_shape")
+    finally:
+        engine.dispose()
+    assert _stored_vectors(migration_configuration, scenario) == ()
 
 
 def test_worker_refuses_embedding_dimension_mismatch_at_composition(

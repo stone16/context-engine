@@ -30,6 +30,7 @@ from engine.supply import (
     CONTEXT_FRAGMENT_EMBEDDING_DIMENSION,
     FILE_IMPORT_WORKER_LEASE_OPERATION,
     CompilationFailure,
+    EmbeddingDocumentRefused,
     EmbeddingProfile,
     EmbeddingProvider,
     EmbeddingProviderProfile,
@@ -774,6 +775,12 @@ class PostgreSQLFileImportWorker:
                 self._embedding_provider.embed_documents(inputs),
                 self._embedding_profile,
             )
+        except EmbeddingDocumentRefused:
+            self._refuse_acquired_embedding_document(
+                token,
+                claims,
+            )
+            raise FileImportRefused("File import is unavailable") from None
         except EmbeddingProviderUnavailable:
             self._record_interruption(
                 token,
@@ -826,6 +833,44 @@ class PostgreSQLFileImportWorker:
             ).scalar_one()
             if recorded is not True:
                 raise _rejection(token)
+
+    def _refuse_acquired_embedding_document(
+        self,
+        token: WorkerLeaseToken,
+        claims: WorkerLeaseClaims,
+    ) -> None:
+        """Discard only acquired recovery state and seal one closed refusal."""
+
+        with self._engine.begin() as connection:
+            assert_worker_role(connection)
+            changed = connection.execute(
+                text(
+                    """
+                    SELECT public.context_worker_refuse_acquired_embedding_document(
+                        :organization_id, :job_id, :service_principal_id,
+                        :source_ref, :compilation_refusal_category,
+                        :lease_generation, :signing_key_version, :nonce,
+                        :issued_at, :expires_at
+                    )
+                    """
+                ),
+                {
+                    "organization_id": claims.organization_id,
+                    "job_id": claims.job_id,
+                    "service_principal_id": claims.service_principal_id,
+                    "source_ref": claims.source_ref,
+                    "compilation_refusal_category": (
+                        FileCompilationRefusalCategory.UNSUPPORTED_DOCUMENT_SHAPE
+                    ),
+                    "lease_generation": claims.lease_generation,
+                    "signing_key_version": claims.signing_key_version,
+                    "nonce": claims.nonce,
+                    "issued_at": claims.issued_at,
+                    "expires_at": claims.expires_at,
+                },
+            ).scalar_one()
+        if changed is not True:
+            raise _rejection(token)
 
     def _fail(
         self,

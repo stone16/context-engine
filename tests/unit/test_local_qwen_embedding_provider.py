@@ -6,7 +6,11 @@ from typing import Any
 import pytest
 
 from adapters.embeddings import LocalQwenEmbeddingProvider
-from engine.supply import QWEN3_EMBEDDING_PROFILE, EmbeddingProviderUnavailable
+from engine.supply import (
+    QWEN3_EMBEDDING_PROFILE,
+    EmbeddingDocumentRefused,
+    EmbeddingProviderUnavailable,
+)
 
 
 class _Model:
@@ -34,19 +38,47 @@ def test_local_qwen_applies_registered_query_prefix_and_reduction(
     assert provider.provider_profile == QWEN3_EMBEDDING_PROFILE
     assert len(vector) == 384
     assert sum(value * value for value in vector) == pytest.approx(1.0)
-    assert model.calls[0][0] == [
+    assert model.calls[1][0] == [
         QWEN3_EMBEDDING_PROFILE.query_prefix + "where is the answer?"
     ]
-    assert model.calls[0][1]["normalize_embeddings"] is True
+    assert model.calls[1][1]["normalize_embeddings"] is True
 
     provider.embed_documents(("document text",))
-    assert model.calls[1][0] == ["document text"]
+    assert model.calls[2][0] == ["document text"]
+
+
+def test_local_qwen_warms_model_during_provider_initialization(
+    monkeypatch: Any,
+) -> None:
+    model = _Model([[1.0] * 1024])
+    monkeypatch.setattr(
+        "adapters.embeddings.load_qwen_local_model",
+        lambda _model_dir: model,
+    )
+
+    LocalQwenEmbeddingProvider(Path("/verified/local/model"))
+
+    assert len(model.calls) == 1
+    assert model.calls[0][1]["batch_size"] == QWEN3_EMBEDDING_PROFILE.batch_size
 
 
 def test_local_qwen_malformed_output_is_generic_unavailability(
     monkeypatch: Any,
 ) -> None:
-    model = _Model([[1.0] * 383])
+    class _MalformedAfterWarmupModel:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def encode(
+            self,
+            _inputs: list[str],
+            **_kwargs: object,
+        ) -> list[list[float]]:
+            self.calls += 1
+            dimension = 1024 if self.calls == 1 else 383
+            return [[1.0] * dimension]
+
+    model = _MalformedAfterWarmupModel()
     monkeypatch.setattr(
         "adapters.embeddings.load_qwen_local_model",
         lambda _model_dir: model,
@@ -88,8 +120,9 @@ def test_local_qwen_documents_are_encoded_in_registered_batches(
     vectors = provider.embed_documents(inputs)
 
     assert len(vectors) == len(inputs)
-    assert [len(call) for call in model.calls] == [8, 8, 1]
-    assert [value for call in model.calls for value in call] == list(inputs)
+    document_calls = model.calls[1:]
+    assert [len(call) for call in document_calls] == [1] * len(inputs)
+    assert [value for call in document_calls for value in call] == list(inputs)
 
 
 def test_local_qwen_batch_deadlines_do_not_accumulate_across_document(
@@ -121,7 +154,7 @@ def test_local_qwen_batch_deadlines_do_not_accumulate_across_document(
     )
 
     assert len(vectors) == 16
-    assert [len(call) for call in model.calls] == [8, 8]
+    assert [len(call) for call in model.calls[1:]] == [1] * 16
 
 
 def test_local_qwen_later_batch_failure_returns_no_document_vectors(
@@ -137,7 +170,7 @@ def test_local_qwen_later_batch_failure_returns_no_document_vectors(
             **_kwargs: object,
         ) -> list[list[float]]:
             self.calls += 1
-            if self.calls == 2:
+            if self.calls == 3:
                 raise RuntimeError("synthetic later-batch failure")
             return [[1.0] * 1024 for _value in inputs]
 
@@ -155,6 +188,40 @@ def test_local_qwen_later_batch_failure_returns_no_document_vectors(
         provider.embed_documents(tuple(f"fragment {index}" for index in range(9)))
 
     assert failure.value.__cause__ is None
+    assert model.calls == 3
+
+
+def test_local_qwen_singleton_timeout_is_closed_document_refusal(
+    monkeypatch: Any,
+) -> None:
+    release = Event()
+
+    class _WarmThenHangingModel:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def encode(
+            self,
+            _inputs: list[str],
+            **_kwargs: object,
+        ) -> list[list[float]]:
+            self.calls += 1
+            if self.calls > 1:
+                release.wait()
+            return [[1.0] * 1024]
+
+    model = _WarmThenHangingModel()
+    monkeypatch.setattr(
+        "adapters.embeddings.load_qwen_local_model",
+        lambda _model_dir: model,
+    )
+    monkeypatch.setattr("adapters.embeddings._LOCAL_EMBEDDING_TIMEOUT_SECONDS", 0.01)
+    provider = LocalQwenEmbeddingProvider(Path("/verified/local/model"))
+
+    with pytest.raises(EmbeddingDocumentRefused):
+        provider.embed_documents(("pathological fragment",))
+    release.set()
+
     assert model.calls == 2
 
 
@@ -169,7 +236,8 @@ def test_local_qwen_timeout_is_bounded_and_does_not_accumulate_calls(
 
         def encode(self, _inputs: list[str], **_kwargs: object) -> list[list[float]]:
             self.calls += 1
-            release.wait()
+            if self.calls > 1:
+                release.wait()
             return [[1.0] * 1024]
 
     model = _HangingModel()
@@ -193,7 +261,7 @@ def test_local_qwen_timeout_is_bounded_and_does_not_accumulate_calls(
 
     assert first_elapsed < 0.5
     assert second_elapsed < 0.5
-    assert model.calls == 1
+    assert model.calls == 2
 
 
 def test_local_qwen_thread_start_failure_releases_inference_lock(
@@ -223,4 +291,4 @@ def test_local_qwen_thread_start_failure_releases_inference_lock(
         provider.embed(("second query",))
 
     assert starts == 2
-    assert model.calls == []
+    assert len(model.calls) == 1

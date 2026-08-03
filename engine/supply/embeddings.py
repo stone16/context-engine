@@ -173,6 +173,10 @@ class EmbeddingProviderUnavailable(RuntimeError):
     """Content-free transient provider failure."""
 
 
+class EmbeddingDocumentRefused(EmbeddingProviderUnavailable):
+    """Content-free closed refusal for one document outside provider bounds."""
+
+
 class EmbeddingProvider(Protocol):
     """Batch embedding seam shared by Supply publication and query discovery."""
 
