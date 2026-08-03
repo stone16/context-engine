@@ -43,6 +43,10 @@ uv run context-engine-context query \
   --source-ref source:file:maintainer
 ```
 
+The budget flags cover the same four `PackageBudget` dimensions the wire
+accepts — tokens, provider calls, cost, and elapsed time — and `--help` is the
+authoritative listing of the closed flag set.
+
 `--format human` shows Package identity, digest, purpose, `asOf`, `expiresAt`,
 coverage, budget usage, every authorized Block, and its exact Evidence and
 citation lineage. `citationOpenRef` is display-only and every human citation
@@ -138,8 +142,12 @@ every other rejection is the served capability being unavailable.
 | 5xx | `service_unavailable` | 11 |
 | any other status, redirect, or transport failure | not read | 11 |
 
-A public `request_not_available` or `citation_not_available` outcome is a
-successful `200` answer, not a rejected request; it keeps exit 10 above.
+A public `request_not_available` outcome is a successful `200` answer, not a
+rejected request; it keeps exit 10 above. Because `query` sends only `Acquire`,
+`resolved` and `request_not_available` are the only served outcome kinds it
+accepts; any other kind is an unavailable served capability, not a refusal. A
+captured `citation_not_available` document still inspects as that same explicit
+refusal.
 
 ## Explicit v1 non-goals
 
