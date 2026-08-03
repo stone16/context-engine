@@ -116,6 +116,52 @@ class _RootOnlyCandidateIndex:
         )
 
 
+class _MultipleRootCandidateIndex:
+    """Submit multiple authorized roots to exercise full-anchor exclusion."""
+
+    def __init__(self, roots: tuple[CandidateRef, ...]) -> None:
+        self.roots = roots
+
+    def prepare_discovery(
+        self,
+        request: Acquire,
+        *,
+        effective_scope: CandidateDiscoveryScope,
+    ) -> ExactPhraseDiscoveryRequest:
+        del effective_scope
+        return ExactPhraseDiscoveryRequest(exact_phrase_digest(request.need.query))
+
+    def prepare_budgeted_discovery(
+        self,
+        request: Acquire,
+        *,
+        effective_scope: CandidateDiscoveryScope,
+        budget: PackageBudgetMeter,
+        active_embedding_profile_digest: str,
+    ) -> ExactPhraseDiscoveryRequest:
+        del budget, active_embedding_profile_digest
+        return self.prepare_discovery(request, effective_scope=effective_scope)
+
+    def discover(
+        self,
+        request: Acquire,
+        discovery_session: object,
+        *,
+        effective_scope: CandidateDiscoveryScope,
+    ) -> CandidateQuery:
+        del request, discovery_session, effective_scope
+        return CandidateQuery(
+            ranked_lists=(
+                RankedCandidateList(
+                    ranker_ref="synthetic_main",
+                    candidates=tuple(
+                        RankedCandidate(candidate_ref=root) for root in self.roots
+                    ),
+                ),
+            )
+        )
+
+
 class _ArticleScopeAuthority:
     """Trusted fixture authority allowing exact Articles, never graph edges."""
 
@@ -596,6 +642,112 @@ def test_generated_sdk_one_hop_reauthorizes_and_leaves_no_denied_trace(
         assert len(baseline_observed) == 1
         assert DENIED_MARKER not in repr(observed[0])
         assert denied.resource_ref not in repr(observed[0])
+    finally:
+        clear_test_runtime_release(scenario.organization_id)
+        migration_engine.dispose()
+        delete_file_import_scenario(
+            migration_configuration,
+            scenario.organization_id,
+        )
+
+
+def test_live_http_one_hop_never_returns_another_authorized_main_anchor(
+    tmp_path: Path,
+    migration_configuration: DatabaseConfiguration,
+    guarded_control_engine: Engine,
+    guarded_worker_engine: Engine,
+    guarded_runtime_engine: Engine,
+    query_digest_keyring: QueryDigestKeyring,
+) -> None:
+    scenario = prepare_file_import_scenario(
+        tmp_path,
+        migration_configuration,
+        guarded_control_engine,
+        payload=(
+            b"# Synthetic first root\n\n"
+            b"Synthetic graph answer from the first main anchor.\n\n"
+            b"Link to [[second]].\n"
+        ),
+    )
+    assert scenario.token is not None
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        first = _paragraph(
+            run_file_import(
+                scenario,
+                scenario.prepared,
+                scenario.token,
+                guarded_worker_engine,
+                config_version="markdown-config-v3",
+            )
+        )
+        second = _publish_path(
+            scenario,
+            guarded_control_engine,
+            guarded_worker_engine,
+            path="second.md",
+            payload=(
+                b"# Synthetic second root\n\n"
+                b"Synthetic graph answer from the second main anchor.\n"
+            ),
+        )
+        clear_test_runtime_release(scenario.organization_id)
+        ensure_test_runtime_release(
+            scenario.organization_id,
+            active_revision_refs=tuple(
+                sorted({first.revision_ref, second.revision_ref})
+            ),
+        )
+        with migration_engine.connect() as connection:
+            user_id = connection.execute(
+                text(
+                    "SELECT user_id FROM membership "
+                    "WHERE organization_id = :organization_id "
+                    "AND membership_id = :membership_id"
+                ),
+                {
+                    "organization_id": scenario.organization_id,
+                    "membership_id": scenario.membership_id,
+                },
+            ).scalar_one()
+        app = create_app(
+            authenticator=_RuntimeAuthenticator(
+                scenario.organization_id,
+                user_id,
+                scenario.membership_id,
+                token="synthetic-sdk-token",
+            ),
+            organization_authority=_OrganizationAuthority(),
+            membership_authority=PostgreSQLMembershipAuthority(
+                guarded_runtime_engine
+            ),
+            scope_authority=_ArticleScopeAuthority((first, second)),
+            runtime=Runtime(
+                required_kernel_dependencies(),
+                candidate_index=cast(
+                    CandidateIndex,
+                    _MultipleRootCandidateIndex((first, second)),
+                ),
+                clock=lambda: datetime.now(UTC).replace(microsecond=0),
+                query_digest_keyring=query_digest_keyring,
+            ),
+            clock=lambda: datetime.now(UTC).replace(microsecond=0),
+        )
+        consumer_root = tmp_path / "installed-multiple-root-sdk"
+        consumer_root.mkdir()
+        _pack_and_install_resolve_sdk(consumer_root)
+
+        document = _resolve_with_installed_sdk(
+            app,
+            consumer_root,
+            request_id="synthetic-one-hop-multiple-main-anchors",
+        )
+
+        delivered_resources = {
+            item["resourceRef"] for item in document["package"]["evidence"]
+        }
+        assert first.resource_ref in delivered_resources
+        assert second.resource_ref in delivered_resources
     finally:
         clear_test_runtime_release(scenario.organization_id)
         migration_engine.dispose()
