@@ -5,6 +5,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 import applications.compiler_runner as compiler_runner
 
 REPOSITORY_ROOT = Path(__file__).parents[2]
@@ -24,6 +26,7 @@ _FORBIDDEN_MODULES = frozenset(
         "adapters.parsers.ragflow_markdown",
         "applications.compiler_runner",
         "applications.document_compiler_runner",
+        "applications.leased_compiler_runner",
         "eval._compiler_acceptance",
     }
 )
@@ -181,13 +184,27 @@ def test_leased_entry_imports_only_the_registered_raw_compiler_surface() -> None
     ) == frozenset({"adapters.parsers.ragflow_markdown.compile_rich_markdown"})
 
 
-def test_direct_production_import_gate_rejects_the_unleased_entry_point(
+@pytest.mark.parametrize(
+    ("module", "symbol"),
+    (
+        (
+            "applications.compiler_runner",
+            "compile_in_local_compiler_runner",
+        ),
+        (
+            "applications.leased_compiler_runner",
+            "compile_in_leased_compiler_runner",
+        ),
+    ),
+)
+def test_production_import_gate_rejects_direct_compiler_entry_points(
     tmp_path: Path,
+    module: str,
+    symbol: str,
 ) -> None:
     (tmp_path / "applications").mkdir()
     (tmp_path / "applications/entry.py").write_text(
-        "from applications.compiler_runner import "
-        "compile_in_local_compiler_runner\n",
+        f"from {module} import {symbol}\n",
         encoding="utf-8",
     )
 
@@ -198,7 +215,7 @@ def test_direct_production_import_gate_rejects_the_unleased_entry_point(
     ) == (
         (
             "applications/entry.py",
-            "applications.compiler_runner.compile_in_local_compiler_runner",
+            f"{module}.{symbol}",
         ),
     )
 

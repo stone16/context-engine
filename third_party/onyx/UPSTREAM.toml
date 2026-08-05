@@ -13,7 +13,9 @@ excluded_paths = [
   "backend/onyx/connectors/file/connector.py",
 ]
 reuse_mode = "copy-patch"
-approval = "https://github.com/stone16/context-engine/issues/126"
+approvals = [
+  { reference = "https://github.com/stone16/context-engine/issues/126", source_paths = ["backend/onyx/connectors/connector_runner.py", "backend/onyx/connectors/interfaces.py", "backend/onyx/connectors/models.py", "backend/onyx/connectors/registry.py"] },
+]
 license = "MIT"
 
 [[files]]
