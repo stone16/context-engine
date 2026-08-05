@@ -45,6 +45,17 @@ from engine.control import (
     ScheduleFileChangePage,
     SourceNotAvailable,
 )
+from engine.learning import (
+    ContentProfileRef,
+    CurationProfileRef,
+    Gate,
+    GateEvidence,
+    GateStatus,
+    IndexProfileRef,
+    ReleaseCandidate,
+    ReleaseManifest,
+    RuntimeProfileRef,
+)
 from engine.persistence import (
     DatabaseConfiguration,
     HarnessDatabaseConfigurations,
@@ -58,6 +69,11 @@ from engine.persistence import (
 from engine.persistence.membership_context import (
     MembershipIdentity,
     PostgreSQLMembershipAuthority,
+)
+from engine.persistence.releases import (
+    PostgreSQLReleaseStore,
+    _gate_parameters,
+    _manifest_parameters,
 )
 from engine.runtime.citation import (
     CitationOpenIssue,
@@ -115,6 +131,7 @@ from tests.support.migrations import (
 
 pytestmark = pytest.mark.integration
 ROOT = Path(__file__).parents[2]
+LEGACY_RELEASE_ORGANIZATION_ID = UUID("33c7b365-c705-45af-b676-067fd510f683")
 HEAD_TABLES = [
     "action_delivery_attempt",
     "action_perform_audit",
@@ -204,6 +221,9 @@ ARTICLE_POLICY_TABLES = {
 
 MIGRATION_TEST_START_REVISIONS = {
     "test_tokenizer_profile_upgrade_labels_history_without_recounting": (
+        "20260803_0055"
+    ),
+    "test_tokenizer_profile_upgrade_replays_pre_migration_candidate_digests": (
         "20260803_0055"
     ),
     "test_tokenizer_profile_revision_downgrades_historical_only_and_reapplies": (
@@ -4206,6 +4226,7 @@ def test_embedding_profile_downgrade_refuses_retained_qwen_lineage(
         engine.dispose()
 
 
+@pytest.mark.security_evidence(id="PG-ACCOUNTING-NO-RECOUNT-217", layer="postgres")
 def test_tokenizer_profile_upgrade_labels_history_without_recounting(
     migration_configuration: DatabaseConfiguration,
 ) -> None:
@@ -4277,7 +4298,8 @@ def test_tokenizer_profile_upgrade_labels_history_without_recounting(
                         'index-schema', '{}'::jsonb, :digest,
                         'runtime-profile', :digest, :digest, :digest,
                         'content-schema', 'index-schema',
-                        'utf8-byte-budget-v1', 'context-package-openapi-v0',
+                        'opaque-pre-accounting-tokenizer',
+                        'context-package-openapi-v0',
                         'curation-profile', :digest, 'curation_off',
                         '[]'::jsonb, '[]'::jsonb
                     )
@@ -4344,6 +4366,194 @@ def test_tokenizer_profile_upgrade_labels_history_without_recounting(
         engine.dispose()
 
 
+def _pre_0056_release_candidate() -> ReleaseCandidate:
+    content = ContentProfileRef(
+        profile_ref="content-m0-empty-v1",
+        profile_digest="1" * 64,
+        content_schema_ref="context-content-schema-v1",
+    )
+    index = IndexProfileRef(
+        profile_ref="index-m0-empty-v1",
+        profile_digest="2" * 64,
+        content_profile_digest=content.profile_digest,
+        content_schema_ref=content.content_schema_ref,
+        index_schema_ref="context-index-schema-v1",
+    )
+    runtime = RuntimeProfileRef(
+        profile_ref="runtime-m0-empty-v1",
+        profile_digest="3" * 64,
+        content_profile_digest=content.profile_digest,
+        index_profile_digest=index.profile_digest,
+        content_schema_ref=content.content_schema_ref,
+        index_schema_ref=index.index_schema_ref,
+        tokenizer_ref="empty-tokenizer-v1",
+        package_schema_ref="context-package-v1",
+    )
+    manifest = ReleaseManifest.m0_empty(
+        organization_id=LEGACY_RELEASE_ORGANIZATION_ID,
+        manifest_ref="manifest-m0-empty-v1",
+        content_profile=content,
+        index_profile=index,
+        runtime_profile=runtime,
+        curation_profile=CurationProfileRef.off(
+            profile_ref="curation-off-v1",
+            profile_digest="4" * 64,
+        ),
+    )
+    return ReleaseCandidate(
+        organization_id=LEGACY_RELEASE_ORGANIZATION_ID,
+        candidate_ref="candidate-m0-empty-v1",
+        manifest=manifest,
+        expected_active_generation=0,
+        expected_base_manifest_digest=None,
+        gate_evidence=tuple(
+            GateEvidence(
+                gate=gate,
+                status=GateStatus.PASS,
+                evidence_digest=f"{index + 5:x}" * 64,
+            )
+            for index, gate in enumerate(Gate)
+        ),
+        capability_coverage_digest="9" * 64,
+        fixture_digest="a" * 64,
+        verification_commands=("make lint", "make typecheck", "make test"),
+    )
+
+
+@pytest.mark.security_evidence(id="PG-ACCOUNTING-LEGACY-REPLAY-217", layer="postgres")
+def test_tokenizer_profile_upgrade_replays_pre_migration_candidate_digests(
+    migration_test_database: HarnessDatabaseConfigurations,
+) -> None:
+    """A 0055 candidate with an opaque tokenizer ref keeps its signed lineage."""
+
+    candidate = _pre_0056_release_candidate()
+    configurations = migration_test_database
+    migration_engine = create_database_engine(configurations.migration)
+    try:
+        parameters = _manifest_parameters(candidate.manifest)
+        parameters.pop("runtime_tokenizer_profile_document")
+        parameters.pop("runtime_tokenizer_profile_digest")
+        with migration_engine.begin() as connection:
+            connection.execute(
+                text("INSERT INTO organization (organization_id) VALUES (:org)"),
+                {"org": candidate.organization_id},
+            )
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO release_manifest (
+                        organization_id, manifest_ref, manifest_digest,
+                        lineage_digest, content_profile_ref,
+                        content_profile_digest, content_schema_ref,
+                        index_profile_ref, index_profile_digest,
+                        index_content_profile_digest,
+                        index_content_schema_ref, index_schema_ref,
+                        embedding_profile_document, embedding_profile_digest,
+                        runtime_profile_ref, runtime_profile_digest,
+                        runtime_content_profile_digest,
+                        runtime_index_profile_digest,
+                        runtime_content_schema_ref, runtime_index_schema_ref,
+                        runtime_tokenizer_ref, runtime_package_schema_ref,
+                        curation_profile_ref, curation_profile_digest,
+                        curation_mode, curation_snapshot_ref,
+                        compatible_revision_refs,
+                        curation_evaluation_digest, active_revision_refs
+                    ) VALUES (
+                        :organization_id, :manifest_ref, :manifest_digest,
+                        :lineage_digest, :content_profile_ref,
+                        :content_profile_digest, :content_schema_ref,
+                        :index_profile_ref, :index_profile_digest,
+                        :index_content_profile_digest,
+                        :index_content_schema_ref, :index_schema_ref,
+                        CAST(:embedding_profile_document AS jsonb),
+                        :embedding_profile_digest, :runtime_profile_ref,
+                        :runtime_profile_digest,
+                        :runtime_content_profile_digest,
+                        :runtime_index_profile_digest,
+                        :runtime_content_schema_ref,
+                        :runtime_index_schema_ref, :runtime_tokenizer_ref,
+                        :runtime_package_schema_ref, :curation_profile_ref,
+                        :curation_profile_digest, :curation_mode,
+                        :curation_snapshot_ref,
+                        CAST(:compatible_revision_refs AS jsonb),
+                        :curation_evaluation_digest,
+                        CAST(:active_revision_refs AS jsonb)
+                    )
+                    """
+                ),
+                parameters,
+            )
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO release_candidate (
+                        organization_id, candidate_ref, candidate_digest,
+                        manifest_ref, manifest_digest,
+                        expected_active_generation,
+                        expected_base_manifest_digest,
+                        security_status, security_evidence_digest,
+                        reliability_status, reliability_evidence_digest,
+                        quality_status, quality_evidence_digest,
+                        budget_status, budget_evidence_digest,
+                        capability_coverage_digest, fixture_digest,
+                        verification_commands
+                    ) VALUES (
+                        :organization_id, :candidate_ref, :candidate_digest,
+                        :manifest_ref, :manifest_digest,
+                        :expected_active_generation,
+                        :expected_base_manifest_digest,
+                        :security_status, :security_evidence_digest,
+                        :reliability_status, :reliability_evidence_digest,
+                        :quality_status, :quality_evidence_digest,
+                        :budget_status, :budget_evidence_digest,
+                        :capability_coverage_digest, :fixture_digest,
+                        CAST(:verification_commands AS jsonb)
+                    )
+                    """
+                ),
+                {
+                    "organization_id": candidate.organization_id,
+                    "candidate_ref": candidate.candidate_ref,
+                    "candidate_digest": candidate.candidate_digest,
+                    "manifest_ref": candidate.manifest.manifest_ref,
+                    "manifest_digest": candidate.manifest.manifest_digest,
+                    "expected_active_generation": (
+                        candidate.expected_active_generation
+                    ),
+                    "expected_base_manifest_digest": (
+                        candidate.expected_base_manifest_digest
+                    ),
+                    "capability_coverage_digest": (
+                        candidate.capability_coverage_digest
+                    ),
+                    "fixture_digest": candidate.fixture_digest,
+                    "verification_commands": json.dumps(
+                        candidate.verification_commands,
+                        separators=(",", ":"),
+                    ),
+                    **_gate_parameters(candidate.gate_evidence),
+                },
+            )
+
+        with migration_engine.begin() as connection:
+            configuration = Config(ROOT / "alembic.ini")
+            configuration.attributes["connection"] = connection
+            command.upgrade(configuration, "head")
+    finally:
+        migration_engine.dispose()
+
+    learning_engine = create_database_engine(configurations.learning)
+    try:
+        store = PostgreSQLReleaseStore(learning_engine)
+        loaded = store.load_candidate(candidate.reference())
+
+        assert loaded == candidate
+        assert loaded.manifest.manifest_digest == candidate.manifest.manifest_digest
+        assert loaded.candidate_digest == candidate.candidate_digest
+    finally:
+        learning_engine.dispose()
+
+
 def test_tokenizer_profile_revision_downgrades_historical_only_and_reapplies(
     migration_configuration: DatabaseConfiguration,
 ) -> None:
@@ -4392,6 +4602,7 @@ def test_tokenizer_profile_revision_downgrades_historical_only_and_reapplies(
         engine.dispose()
 
 
+@pytest.mark.security_evidence(id="PG-ACCOUNTING-RETIREMENT-217", layer="postgres")
 def test_tokenizer_profile_downgrade_refuses_retained_v1_lineage(
     migration_configuration: DatabaseConfiguration,
 ) -> None:

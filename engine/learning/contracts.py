@@ -193,13 +193,16 @@ class RuntimeProfileRef:
         _require_ref("RuntimeProfile index_schema_ref", self.index_schema_ref)
         _require_ref("RuntimeProfile tokenizer_ref", self.tokenizer_ref)
         _require_ref("RuntimeProfile package_schema_ref", self.package_schema_ref)
-        if (
-            self.tokenizer_ref == "utf8-byte-budget-v1"
-            and self.tokenizer_profile_document
-            == HISTORICAL_UTF8_BYTE_TOKENIZER_PROFILE_DOCUMENT
-            and self.tokenizer_profile_digest
-            == HISTORICAL_UTF8_BYTE_TOKENIZER_PROFILE_DIGEST
-        ):
+        if self.package_schema_ref != "context-package-openapi-v1":
+            if (
+                self.tokenizer_profile_document
+                != HISTORICAL_UTF8_BYTE_TOKENIZER_PROFILE_DOCUMENT
+                or self.tokenizer_profile_digest
+                != HISTORICAL_UTF8_BYTE_TOKENIZER_PROFILE_DIGEST
+            ):
+                raise ValueError(
+                    "historical RuntimeProfile cannot bind a v1 tokenizer profile"
+                )
             return
         try:
             profile = registered_tokenizer_profile(
@@ -316,7 +319,7 @@ def _profile_document(profile: object) -> dict[str, object]:
             "profile_ref": profile.profile_ref,
         }
     if type(profile) is RuntimeProfileRef:
-        return {
+        document: dict[str, object] = {
             "content_profile_digest": profile.content_profile_digest,
             "content_schema_ref": profile.content_schema_ref,
             "index_profile_digest": profile.index_profile_digest,
@@ -325,9 +328,15 @@ def _profile_document(profile: object) -> dict[str, object]:
             "profile_digest": profile.profile_digest,
             "profile_ref": profile.profile_ref,
             "tokenizer_ref": profile.tokenizer_ref,
-            "tokenizer_profile_digest": profile.tokenizer_profile_digest,
-            "tokenizer_profile_document": profile.tokenizer_profile_document,
         }
+        if profile.package_schema_ref == "context-package-openapi-v1":
+            document.update(
+                {
+                    "tokenizer_profile_digest": profile.tokenizer_profile_digest,
+                    "tokenizer_profile_document": profile.tokenizer_profile_document,
+                }
+            )
+        return document
     if type(profile) is CurationProfileRef:
         return {
             "compatible_revision_refs": list(profile.compatible_revision_refs),

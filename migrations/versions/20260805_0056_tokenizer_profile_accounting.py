@@ -50,7 +50,8 @@ def upgrade() -> None:
         "AND char_length(runtime_tokenizer_profile_digest) = 64 "
         "AND runtime_tokenizer_profile_digest = lower(runtime_tokenizer_profile_digest) "
         "AND runtime_tokenizer_profile_digest ~ '^[0-9a-f]{64}$' "
-        "AND runtime_tokenizer_profile_document->>'profileRef' = runtime_tokenizer_ref",
+        "AND (runtime_package_schema_ref <> 'context-package-openapi-v1' "
+        "OR runtime_tokenizer_profile_document->>'profileRef' = runtime_tokenizer_ref)",
     )
     op.alter_column(
         "release_manifest", "runtime_tokenizer_profile_document", server_default=None
@@ -67,7 +68,7 @@ def downgrade() -> None:
     retained_v1 = op.get_bind().execute(
         sa.text(
             "SELECT EXISTS (SELECT 1 FROM public.release_manifest "
-            "WHERE runtime_tokenizer_ref <> 'utf8-byte-budget-v1' "
+            "WHERE runtime_package_schema_ref = 'context-package-openapi-v1' "
             "OR runtime_tokenizer_profile_digest <> :digest)"
         ),
         {"digest": _HISTORICAL_DIGEST},
