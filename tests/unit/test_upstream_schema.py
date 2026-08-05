@@ -160,7 +160,9 @@ def test_source_selector_must_belong_to_a_registered_copied_source(
         + " }]",
     )
 
-    with pytest.raises(GovernanceError, match="source selector.*not.*registered copied"):
+    with pytest.raises(
+        GovernanceError, match="source selector.*not.*registered copied"
+    ):
         validate_tree(tmp_path)
 
 
