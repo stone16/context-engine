@@ -299,10 +299,10 @@ IM 交付由 `BotDelivery` 这个受信深模块完成。它从 M2 起作为独�
 
 ## 参照与致谢
 
-设计吸收了对五个固定公开开源项目——**Dify**、**RAGFlow**、**MaxKB**、**Onyx**，
-以及有条件准入的 **OpenViking**——的
+设计吸收了对四个已准入固定公开开源项目——**Dify**、**RAGFlow**、**MaxKB**、**Onyx**——的
 架构研究，且严格限于可观察行为、interface 形状、测试 oracle 与产品工作流。
-**OpenViking 零代码复制；其他复用仍由 ADR-0074 按精确源码区域治理。** 固定版本与一手链接记录在
+版本化基线另含 **OpenViking** 候选包；#205 保持 open 时，本 README 不把 OpenViking
+引作 authority。**OpenViking 零代码复制；其他复用仍由 ADR-0074 按精确源码区域治理。** 固定版本与一手链接记录在
 [证据基线](./docs/research/2026-08-02-five-public-repositories-evidence.md)。
 
 ContextEngine 的安全与多租户协议依据自身 requirement 与威胁模型独立设计。

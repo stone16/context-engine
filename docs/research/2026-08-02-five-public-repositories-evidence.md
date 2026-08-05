@@ -27,7 +27,7 @@ security, compliance, performance, or production-readiness claims.
 | RAGFlow | [`4391e03886b996201f3b8818f671b19eb24d0f7b`](https://github.com/infiniflow/ragflow/commit/4391e03886b996201f3b8818f671b19eb24d0f7b) | Admitted | Document compilation, structured chunks, retrieval, hydration, differential tests |
 | MaxKB | [`32b2d885e47ad04639abd7a18490bf5937f9c072`](https://github.com/1Panel-dev/MaxKB/commit/32b2d885e47ad04639abd7a18490bf5937f9c072) | Admitted | Preview/confirm, knowledge operations, Hit Test, human curation workflow |
 | Onyx | [`2fb3dd10493b3883870fa8adced5b1a0e114feff`](https://github.com/onyx-dot-app/onyx/commit/2fb3dd10493b3883870fa8adced5b1a0e114feff) | Admitted | Connectors, checkpoints, staged indexing, retrieval composition, real-dependency test layering |
-| OpenViking | [`49b182045b42d34ad530948ad77d9d0226897da8`](https://github.com/volcengine/OpenViking/commit/49b182045b42d34ad530948ad77d9d0226897da8) | Candidate; not public authority while #205 is open | Context filesystem and L0–L2 tiering, session-to-candidate UX, observable trajectory, agent exposure |
+| OpenViking | [`49b182045b42d34ad530948ad77d9d0226897da8`](https://github.com/volcengine/OpenViking/commit/49b182045b42d34ad530948ad77d9d0226897da8) | Candidate; not public authority while `#205` is open | Context filesystem and L0–L2 tiering, session-to-candidate UX, observable trajectory, agent exposure |
 
 The first four rows retain the claims, limitations, clean-room mappings, and
 pinned first-party links recorded in the [v1 baseline](./2026-07-19-four-public-repositories-evidence.md#2-证据纪律).
@@ -67,7 +67,7 @@ baseline without a new reviewed version.
 The five repositories are not a common-corpus benchmark. Qualitative evidence
 domains must not be converted into a retrieval-quality ranking.
 
-## 3. OpenViking candidate packet (non-authoritative while #205 is open)
+## 3. OpenViking candidate packet (non-authoritative while `#205` is open)
 
 ### 3.1 Context filesystem and information-density tiering
 

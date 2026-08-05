@@ -140,8 +140,10 @@ dispute.
 ### 3.1 Public provenance closure
 
 The repository's public prior-art allowlist contains only Dify, RAGFlow, MaxKB,
-Onyx, and conditionally admitted OpenViking at the revisions pinned by
-`docs/research/2026-08-02-five-public-repositories-evidence.md`. These sources
+and Onyx at the revisions pinned by
+`docs/research/2026-08-02-five-public-repositories-evidence.md`. That baseline
+also carries an OpenViking candidate packet, but OpenViking is not public
+authority while issue #205 remains open. The four admitted sources
 may justify observable patterns, Interface shapes, test oracles, and product
 workflows. They do not prove ContextEngine's security properties.
 

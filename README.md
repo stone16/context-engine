@@ -598,7 +598,7 @@ masquerade as a passing one.
 | [Implementation Design](./docs/design/2026-07-18-context-engine-implementation-design.md) | The integrated implementation authority and milestone boundaries |
 | [Threat Model](./docs/security/context-engine-threat-model.md) | Assets, trust boundaries, threats, hard oracles |
 | [Program PRD](./docs/agents/prd-contextengine-implementation.md) · [Epic Tech Spec](./docs/specs/2026-07-19-context-engine-implementation-epic.md) | Requirements, 100 user stories, contract shapes, work packages |
-| [Prior-art evidence baseline](./docs/research/2026-08-02-five-public-repositories-evidence.md) | Versioned successor for four admitted fixed repositories plus the non-authoritative OpenViking candidate packet |
+| [Prior-art evidence baseline](./docs/research/2026-08-02-five-public-repositories-evidence.md) | Versioned successor for four admitted fixed repositories plus the OpenViking candidate packet, which is non-authoritative while issue #205 remains open |
 | [D0 Baseline Candidate](./DESIGN-BASELINE.md) | Current candidate state and unclosed evidence gates |
 
 ## Prior art

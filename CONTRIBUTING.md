@@ -147,8 +147,10 @@ first, or declined.
 
 ### Controlled third-party reuse
 
-The design draws on architectural study of **Dify**, **RAGFlow**, **MaxKB**,
-**Onyx**, and conditionally admitted **OpenViking**. Code reuse follows
+The design draws on architectural study of the four admitted repositories
+**Dify**, **RAGFlow**, **MaxKB**, and **Onyx**. The versioned evidence baseline
+also carries an **OpenViking** candidate packet, but OpenViking is not public
+authority while issue #205 remains open. Code reuse follows
 [ADR-0074](./docs/decisions/0074-adopt-controlled-third-party-code-reuse.md),
 per source region, never per product: Apache-2.0 regions (RAGFlow) and MIT
 regions (Onyx outside every `ee/` directory; separately-licensed SDK subtrees)

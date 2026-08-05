@@ -1,6 +1,6 @@
 ---
 name: adr-0016-implementation-authority-and-vertical-slice-roadmap
-version: "1.1.0"
+version: "1.2.0"
 description: >
   Make the concise current implementation design authoritative and deliver the
   program as testable vertical slices with a separate launch gate. Use when
@@ -31,11 +31,13 @@ assets, trust boundaries, threats, and hard oracles. These responsibilities are
 scoped, not a total precedence order; a contradiction blocks implementation
 until the owning documents are reconciled explicitly. `PLAN.md` plus the program
 PRD form the implementation-facing summary.
-`docs/research/2026-07-19-four-public-repositories-evidence.md` fixes
-the allowlisted public evidence behind reference-repository claims; it informs
-design but does not override ContextEngine requirements, threat model, design,
-or ADRs. Repository-external research inputs are neither public authority nor
-public provenance.
+`docs/research/2026-08-02-five-public-repositories-evidence.md` is the versioned
+successor that fixes public evidence behind reference-repository claims. While
+issue #205 remains open, only its Dify, RAGFlow, MaxKB, and Onyx rows are
+admitted public authority; its OpenViking candidate packet is non-authoritative.
+The baseline informs design but does not override ContextEngine requirements,
+threat model, design, or ADRs. Repository-external research inputs are neither
+public authority nor public provenance.
 
 D0 must record an immutable commit and digest for the publication-ready
 authority bundle after its allowlist and provenance scans pass. Implementation

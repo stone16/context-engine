@@ -3,9 +3,12 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import pytest
+
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 OPENVIKING_SHA = "49b182045b42d34ad530948ad77d9d0226897da8"
 BASELINE_PATH = "docs/research/2026-08-02-five-public-repositories-evidence.md"
+BASELINE_NAME = BASELINE_PATH.rsplit("/", maxsplit=1)[1]
 PREDECESSOR_PATH = "docs/research/2026-07-19-four-public-repositories-evidence.md"
 ROOM_A_PATH = "docs/research/2026-07-31-openviking-blueprint-evaluation.md"
 DOSSIER_PATH = "docs/research/2026-08-02-openviking-legal-review-dossier.md"
@@ -17,7 +20,7 @@ OPENVIKING_SOURCE_URL = re.compile(
     r"https://github\.com/volcengine/OpenViking/(?:blob|tree)/"
     rf"{OPENVIKING_SHA}/[^)]+"
 )
-EXACT_LINE_RANGE = re.compile(r"#L\d+-L\d+$")
+EXACT_LINE_RANGE = re.compile(r"#L(?P<start>\d+)-L(?P<end>\d+)$")
 UPSTREAM_CLAIM_BLOCK = re.compile(
     r"^### 上游路径与(?:可观察行为|核验结果|本仓 thesis)\n\n"
     r"(?P<claim>.*?)(?=\n\n### )",
@@ -30,6 +33,21 @@ EXPECTED_REPOSITORY_SNAPSHOTS = {
     "onyx-dot-app/onyx": "2fb3dd10493b3883870fa8adced5b1a0e114feff",
     "volcengine/OpenViking": OPENVIKING_SHA,
 }
+EXPLICIT_NON_AUTHORITY_PATTERNS = (
+    re.compile(
+        r"\bopenviking\b"
+        r"(?:(?!\bopenviking\b|[|。.!?;；]).){0,120}?"
+        r"\b(?:is|remains)\s+"
+        r"(?:a\s+)?(?:non-authoritative|not (?:public )?authorit(?:y|ative))\b"
+    ),
+    re.compile(r"\bdoes not cite\s+openviking\s+as\s+authority\b"),
+    re.compile(r"不把\s+openviking\s+引作\s+authority\b"),
+)
+AUTHORITY_TERM = re.compile(r"\bauthorit(?:y|ative)\b")
+PRONOUN_AUTHORITY_CLAIM = re.compile(
+    r"\b(?:it|the candidate|this candidate)\b[^|。.!?;；]{0,120}"
+    r"\bauthorit(?:y|ative)\b"
+)
 
 
 def _read(path: str) -> str:
@@ -42,6 +60,38 @@ def _collapse_whitespace(value: str) -> str:
 
 def _collapse_blockquote(value: str) -> str:
     return _collapse_whitespace(value.replace(">", ""))
+
+
+def _has_exact_positive_line_range(url: str) -> bool:
+    match = EXACT_LINE_RANGE.search(url)
+    if match is None:
+        return False
+    start, end = (int(match.group(name)) for name in ("start", "end"))
+    return 0 < start <= end
+
+
+def _assert_openviking_paragraph_is_non_authoritative(
+    paragraph: str, path: Path
+) -> None:
+    normalized_paragraph = _collapse_whitespace(paragraph).lower()
+    assert "#205" in normalized_paragraph, (path, normalized_paragraph)
+    matched_boundary = any(
+        pattern.search(normalized_paragraph)
+        for pattern in EXPLICIT_NON_AUTHORITY_PATTERNS
+    )
+    assert matched_boundary, (path, normalized_paragraph)
+
+    for clause in re.split(r"[|。.!?;；]+", normalized_paragraph):
+        if "openviking" not in clause:
+            continue
+        residual = clause
+        for pattern in EXPLICIT_NON_AUTHORITY_PATTERNS:
+            residual = pattern.sub("", residual)
+        assert AUTHORITY_TERM.search(residual) is None, (path, normalized_paragraph)
+    assert PRONOUN_AUTHORITY_CLAIM.search(normalized_paragraph) is None, (
+        path,
+        normalized_paragraph,
+    )
 
 
 def _amendment_pair(dossier: str, number: int) -> tuple[str, str]:
@@ -65,6 +115,7 @@ def test_current_public_authority_uses_the_versioned_five_repository_baseline() 
         "PLAN.md",
         "STATUS.md",
         "docs/design/2026-07-18-context-engine-implementation-design.md",
+        "docs/decisions/0016-implementation-authority-and-vertical-slice-roadmap.md",
     )
 
     for path in authority_paths:
@@ -81,25 +132,55 @@ def test_five_repository_baseline_is_an_explicit_versioned_successor() -> None:
     assert f"> Supersedes: [`{predecessor_name}`]" in baseline
     for repository, snapshot in EXPECTED_REPOSITORY_SNAPSHOTS.items():
         assert f"https://github.com/{repository}/commit/{snapshot}" in baseline
+    admitted_rows = {
+        "Dify": EXPECTED_REPOSITORY_SNAPSHOTS["langgenius/dify"],
+        "RAGFlow": EXPECTED_REPOSITORY_SNAPSHOTS["infiniflow/ragflow"],
+        "MaxKB": EXPECTED_REPOSITORY_SNAPSHOTS["1Panel-dev/MaxKB"],
+        "Onyx": EXPECTED_REPOSITORY_SNAPSHOTS["onyx-dot-app/onyx"],
+    }
+    for repository, snapshot in admitted_rows.items():
+        row = next(
+            line
+            for line in baseline.splitlines()
+            if line.startswith(f"| {repository} |")
+        )
+        cells = [cell.strip() for cell in row.strip("|").split("|")]
+        assert cells[0] == repository
+        assert f"[`{snapshot}`]" in cells[1]
+        assert cells[2] == "Admitted"
+    openviking_row = next(
+        line for line in baseline.splitlines() if line.startswith("| OpenViking |")
+    )
+    openviking_cells = [
+        cell.strip() for cell in openviking_row.strip("|").split("|")
+    ]
+    assert openviking_cells[2] == (
+        "Candidate; not public authority while `#205` is open"
+    )
+    assert (
+        "## 3. OpenViking candidate packet "
+        "(non-authoritative while `#205` is open)" in baseline
+    )
 
 
 def test_public_docs_keep_openviking_non_authoritative_until_issue_205_closes() -> None:
-    public_paths = (
+    baseline_paths = (
+        Path("CONTRIBUTING.md"),
         Path("README.md"),
+        Path("README.zh-CN.md"),
         Path("PLAN.md"),
         Path("STATUS.md"),
-        *sorted(Path("docs/design").rglob("*.md")),
+        Path("docs/agents/prd-contextengine-implementation.md"),
+        Path("docs/decisions/0016-implementation-authority-and-vertical-slice-roadmap.md"),
+        Path("docs/design/2026-07-18-context-engine-implementation-design.md"),
+        Path("docs/design/2026-07-26-repo-state-review-and-course-correction.md"),
+        Path("docs/security/Test-Architecture-与可验证性设计.md"),
+        Path("docs/security/安全负向测试清单.md"),
+        Path("docs/specs/2026-07-19-context-engine-implementation-epic.md"),
     )
-    boundary_terms = (
-        "candidate",
-        "non-authoritative",
-        "not authority",
-        "does not cite openviking as authority",
-        "不把 openviking 引作 authority",
-        "候选",
-        "no openviking code",
-        "no code or dependency is admitted",
-        "not_active",
+    public_paths = (
+        *baseline_paths,
+        *sorted(Path("docs/design").rglob("*.md")),
     )
     forbidden_authority_phrases = (
         "conditionally admitted openviking",
@@ -108,7 +189,10 @@ def test_public_docs_keep_openviking_non_authoritative_until_issue_205_closes() 
         "allowlisted to dify, ragflow, maxkb, onyx, and openviking",
     )
 
-    for path in public_paths:
+    for path in baseline_paths:
+        assert BASELINE_NAME in _read(path.as_posix()), path
+
+    for path in dict.fromkeys(public_paths):
         document = _read(path.as_posix())
         normalized_document = _collapse_whitespace(document).lower()
         assert (
@@ -124,7 +208,52 @@ def test_public_docs_keep_openviking_non_authoritative_until_issue_205_closes() 
             if "openviking" in paragraph.lower()
         )
         for paragraph in openviking_paragraphs:
-            assert any(term in paragraph for term in boundary_terms), (path, paragraph)
+            assert BASELINE_NAME in document, path
+            _assert_openviking_paragraph_is_non_authoritative(paragraph, path)
+
+
+@pytest.mark.parametrize(
+    "paragraph",
+    (
+        (
+            "openviking is not authority while #205 is open. "
+            "openviking is authoritative."
+        ),
+        (
+            "openviking remains non-authoritative while #205 is open. "
+            "we cite openviking as authority."
+        ),
+        (
+            "openviking is authority but openviking is not authority "
+            "while #205 is open."
+        ),
+        (
+            "openviking is not authority while #205 is open. "
+            "it is authoritative."
+        ),
+        (
+            "openviking is not authority while #205 is open. "
+            "we cite openviking as public authority."
+        ),
+        (
+            "openviking is not authority while #205 is open, but "
+            "openviking serves as authority."
+        ),
+        (
+            "openviking is not authority while #205 is open. "
+            "openviking supplies authoritative evidence."
+        ),
+        "openviking is a candidate and remains not_active while #205 is open.",
+        "openviking is non-authoritative until the admission issue closes.",
+    ),
+)
+def test_openviking_paragraph_guard_rejects_incomplete_boundaries(
+    paragraph: str,
+) -> None:
+    with pytest.raises(AssertionError):
+        _assert_openviking_paragraph_is_non_authoritative(
+            paragraph, Path("adversarial.md")
+        )
 
 
 def test_openviking_public_evidence_uses_only_the_admitted_snapshot() -> None:
@@ -145,14 +274,14 @@ def test_room_a_claim_permalinks_pin_exact_source_regions() -> None:
     source_urls = OPENVIKING_SOURCE_URL.findall(room_a)
 
     assert source_urls
-    assert all(EXACT_LINE_RANGE.search(url) for url in source_urls)
+    assert all(_has_exact_positive_line_range(url) for url in source_urls)
 
     claim_blocks = UPSTREAM_CLAIM_BLOCK.findall(room_a)
     assert len(claim_blocks) == 8
     for claim in claim_blocks:
         claim_urls = OPENVIKING_SOURCE_URL.findall(claim)
         assert claim_urls, claim
-        assert all(EXACT_LINE_RANGE.search(url) for url in claim_urls)
+        assert all(_has_exact_positive_line_range(url) for url in claim_urls)
 
     capability_table = room_a.split(
         "# 2. 能力盘点 → ContextEngine 区域映射表", maxsplit=1
@@ -168,7 +297,16 @@ def test_room_a_claim_permalinks_pin_exact_source_regions() -> None:
     for row in capability_rows:
         row_urls = OPENVIKING_SOURCE_URL.findall(row)
         assert row_urls, row
-        assert all(EXACT_LINE_RANGE.search(url) for url in row_urls)
+        assert all(_has_exact_positive_line_range(url) for url in row_urls)
+
+
+@pytest.mark.parametrize("line_range", ("#L0-L0", "#L20-L1", "#L1-L0"))
+def test_exact_source_region_rejects_invalid_line_ranges(line_range: str) -> None:
+    assert not _has_exact_positive_line_range(f"https://example.test/file{line_range}")
+
+
+def test_exact_source_region_accepts_ordered_positive_line_range() -> None:
+    assert _has_exact_positive_line_range("https://example.test/file#L1-L20")
 
 
 def test_openviking_copy_and_legal_authority_remain_closed() -> None:
