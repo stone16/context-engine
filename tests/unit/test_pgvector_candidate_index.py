@@ -111,9 +111,11 @@ class _RecordingProvider:
 
     def __init__(self) -> None:
         self.calls = 0
+        self.bytes_sent = 0
 
     def embed(self, inputs: tuple[str, ...]) -> tuple[tuple[float, ...], ...]:
         self.calls += 1
+        self.bytes_sent += sum(len(value.encode("utf-8")) for value in inputs)
         return DeterministicEmbeddingTwin().embed(inputs)
 
     def embed_documents(
@@ -303,7 +305,7 @@ def test_budgeted_query_embedding_debits_actual_internal_usage() -> None:
 def test_qwen_query_accounting_includes_the_exact_provider_prefix() -> None:
     provider = QwenEmbeddingTwin()
     budget = PackageBudgetMeter(
-        PackageBudget(1_000, 1, 1, 5_000),
+        PackageBudget(3_000, 1, 1, 5_000),
         tokenizer_profile=UNICODE_SCALAR_TOKENIZER_PROFILE,
         release_generation=7,
     )
@@ -318,8 +320,9 @@ def test_qwen_query_accounting_includes_the_exact_provider_prefix() -> None:
         active_embedding_profile_digest=QWEN3_EMBEDDING_PROFILE.profile_digest,
     )
 
-    assert budget.usage.tokens == len(
-        QWEN3_EMBEDDING_PROFILE.query_prefix + "semantic query"
+    assert budget.usage.tokens == (
+        len(QWEN3_EMBEDDING_PROFILE.query_prefix + "semantic query")
+        + 2_066
     )
     assert provider.query_calls == [("semantic query",)]
 
@@ -345,6 +348,7 @@ def test_budgeted_query_embedding_refuses_exhaustion_before_provider_call() -> N
         )
 
     assert provider.calls == 0
+    assert provider.bytes_sent == 0
     assert budget.usage.provider_calls == 0
 
 

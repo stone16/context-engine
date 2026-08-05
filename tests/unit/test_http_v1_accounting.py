@@ -334,7 +334,7 @@ def test_v1_http_package_and_context_run_publish_one_digest_bound_usage() -> Non
         == UNICODE_SCALAR_TOKENIZER_PROFILE.profile_digest
     )
     assert package["budgetUsage"] == {
-        "tokens": len(QUERY) + len("A-safe"),
+        "tokens": len(QUERY) + 2_066 + len("A-safe"),
         "providerCalls": 1,
         "costMicrounits": 1,
         "elapsedMs": 7,
@@ -450,7 +450,7 @@ def test_generated_v1_sdk_observes_cumulative_usage_over_live_http() -> None:
     outcome = json.loads(result.stdout)
     package = outcome["package"]
     assert package["budgetUsage"] == {
-        "tokens": len(QUERY) + len("A-safe"),
+        "tokens": len(QUERY) + 2_066 + len("A-safe"),
         "providerCalls": 1,
         "costMicrounits": 1,
         "elapsedMs": 7,
