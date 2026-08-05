@@ -48,8 +48,11 @@ rich Markdown compilation pipeline remains ContextEngine-owned.
 `docx_parser.py` is copied and patched to remove RAGFlow tokenizer,
 `LazyImage`, Pandas, logging, and application constants. It now traverses
 paragraph and table XML children in exact OOXML body order and returns bounded
-raw blocks. ContextEngine-owned code maps those blocks into the ADR-0094 nominal
-`DocxXmlLocator` family, structural units, identities, and typed refusals.
+raw blocks. Unsupported content wrappers, including simple fields and smart
+tags whose visible text `python-docx` omits from `Paragraph.text`, fail closed
+before a partial document can be returned. ContextEngine-owned code maps the
+accepted blocks into the ADR-0094 nominal `DocxXmlLocator` family, structural
+units, identities, and typed refusals.
 Image-bearing DOCX artifacts refuse because a bounded figure-byte policy has
 not been admitted; images are never silently discarded.
 

@@ -1,6 +1,6 @@
 --- a/deepdoc/parser/docx_parser.py
 +++ b/deepdoc/parser/docx_parser.py
-@@ -13,170 +13,130 @@
+@@ -13,170 +13,132 @@
  #  See the License for the specific language governing permissions and
  #  limitations under the License.
  #
@@ -79,10 +79,12 @@
 +    {
 +        qn("w:customXml"),
 +        qn("w:del"),
++        qn("w:fldSimple"),
 +        qn("w:ins"),
 +        qn("w:moveFrom"),
 +        qn("w:moveTo"),
 +        qn("w:sdt"),
++        qn("w:smartTag"),
 +    }
 +)
 +_UNSUPPORTED_VISUAL_TAGS: Final = frozenset(

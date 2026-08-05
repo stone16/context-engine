@@ -37,10 +37,12 @@ _UNSUPPORTED_CONTENT_TAGS: Final = frozenset(
     {
         qn("w:customXml"),
         qn("w:del"),
+        qn("w:fldSimple"),
         qn("w:ins"),
         qn("w:moveFrom"),
         qn("w:moveTo"),
         qn("w:sdt"),
+        qn("w:smartTag"),
     }
 )
 _UNSUPPORTED_VISUAL_TAGS: Final = frozenset(
