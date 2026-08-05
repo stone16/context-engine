@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import base64
-import json
 from collections.abc import Callable
-from struct import Struct
 from time import monotonic_ns
 
 from adapters._bounded_call import BoundedCallUnavailable, invoke_bounded
@@ -48,40 +45,8 @@ QUERY_EMBEDDING_MAXIMUM_USAGE = BudgetUsage(
     cost_microunits=1,
     elapsed_ms=5_000,
 )
-_QUERY_EMBEDDING_VECTOR = Struct(f"!{CONTEXT_FRAGMENT_EMBEDDING_DIMENSION}f")
-_QUERY_EMBEDDING_RESPONSE_MAXIMUM = json.dumps(
-    {
-        "embedding": [
-            base64.b64encode(
-                bytes(_QUERY_EMBEDDING_VECTOR.size),
-            ).decode("ascii")
-        ]
-    },
-    ensure_ascii=True,
-    separators=(",", ":"),
-)
-
-
 def _monotonic_ms() -> int:
     return monotonic_ns() // 1_000_000
-
-
-def _canonical_query_embedding_response(
-    query_embedding: tuple[float, ...],
-) -> str:
-    """Serialize the exact validated float32 response for token accounting."""
-
-    return json.dumps(
-        {
-            "embedding": [
-                base64.b64encode(
-                    _QUERY_EMBEDDING_VECTOR.pack(*query_embedding),
-                ).decode("ascii")
-            ]
-        },
-        ensure_ascii=True,
-        separators=(",", ":"),
-    )
 
 
 class VectorCandidateIndexUnavailable(CandidateIndexUnavailable):
@@ -223,14 +188,11 @@ class PostgreSQLVectorCandidateIndex:
             raise VectorCandidateIndexUnavailable(
                 "Vector candidate discovery is unavailable"
             )
-        query_request_tokens = budget.count_tokens(
+        query_tokens = budget.count_tokens(
             self._provider_profile.query_prefix + request.need.query
         )
-        query_response_maximum_tokens = budget.count_tokens(
-            _QUERY_EMBEDDING_RESPONSE_MAXIMUM
-        )
         maximum_usage = BudgetUsage(
-            tokens=query_request_tokens + query_response_maximum_tokens,
+            tokens=query_tokens,
             provider_calls=QUERY_EMBEDDING_MAXIMUM_USAGE.provider_calls,
             cost_microunits=QUERY_EMBEDDING_MAXIMUM_USAGE.cost_microunits,
             elapsed_ms=QUERY_EMBEDDING_MAXIMUM_USAGE.elapsed_ms,
@@ -277,12 +239,7 @@ class PostgreSQLVectorCandidateIndex:
         budget._commit(
             reservation,
             BudgetUsage(
-                tokens=(
-                    query_request_tokens
-                    + budget.count_tokens(
-                        _canonical_query_embedding_response(query_embedding)
-                    )
-                ),
+                tokens=query_tokens,
                 provider_calls=1,
                 cost_microunits=1,
                 elapsed_ms=elapsed_ms,

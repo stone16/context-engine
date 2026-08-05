@@ -63,12 +63,13 @@ semantics unambiguous.
    rewrite, query embedding, rerank, selection, and assembly seams. Active
    stages reserve maxima before provider bytes; actual success commits actuals;
    an unusable post-call result commits the maximum; a pre-call refusal cancels.
-   The active query-embedding stage counts the provider-profile-prefixed query
-   request and its exact validated 384-dimensional float32 response. The
-   response accounting representation is the big-endian float32 bytes encoded
-   with standard Base64 in canonical compact
-   `{"embedding":["<base64>"]}` JSON; its size is known before the call and
-   therefore belongs in the reservation maximum.
+   For the active network-free local query-embedding carrier, the closed
+   provider-profile-prefixed query text is tokenized. Its validated
+   384-dimensional in-process float tuple has no admitted Unicode or wire
+   representation, so it contributes zero tokenizer tokens; its provider call,
+   cost, and elapsed time still accumulate. A future network carrier must admit
+   and meter its own exact response representation in its separate activation
+   decision rather than inventing one here.
    Final assembly reserves and commits exact authorized block tokens only after
    the final Policy Epoch veto. UTF-8 byte packing remains unchanged.
 5. **One final snapshot.** Runtime takes one immutable meter snapshot after
