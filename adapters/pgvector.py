@@ -32,6 +32,10 @@ from engine.supply import (
     EmbeddingProviderUnavailable,
     validate_embedding_batch,
 )
+from engine.tokenizer_accounting import (
+    UNICODE_SCALAR_TOKENIZER_PROFILE,
+    TokenizerUnavailable,
+)
 
 DEFAULT_VECTOR_CANDIDATE_LIMIT = 16
 MAX_VECTOR_CANDIDATE_LIMIT = 64
@@ -173,12 +177,28 @@ class PostgreSQLVectorCandidateIndex:
             )
         if type(budget) is not PackageBudgetMeter:
             raise TypeError("Vector candidate discovery requires PackageBudgetMeter")
+        try:
+            budget.require_carrier_tokenizer(
+                UNICODE_SCALAR_TOKENIZER_PROFILE.profile_ref,
+                UNICODE_SCALAR_TOKENIZER_PROFILE.profile_digest,
+            )
+        except TokenizerUnavailable:
+            raise VectorCandidateIndexUnavailable(
+                "Vector candidate discovery is unavailable"
+            ) from None
         if active_embedding_profile_digest != self._provider_profile.profile_digest:
             raise VectorCandidateIndexUnavailable(
                 "Vector candidate discovery is unavailable"
             )
+        query_tokens = budget.count_tokens(request.need.query)
+        maximum_usage = BudgetUsage(
+            tokens=query_tokens,
+            provider_calls=QUERY_EMBEDDING_MAXIMUM_USAGE.provider_calls,
+            cost_microunits=QUERY_EMBEDDING_MAXIMUM_USAGE.cost_microunits,
+            elapsed_ms=QUERY_EMBEDDING_MAXIMUM_USAGE.elapsed_ms,
+        )
         try:
-            reservation = budget._reserve(QUERY_EMBEDDING_MAXIMUM_USAGE)
+            reservation = budget._reserve(maximum_usage)
         except PackageBudgetExceeded:
             raise VectorCandidateIndexUnavailable(
                 "Vector candidate discovery is unavailable"
@@ -211,14 +231,14 @@ class PostgreSQLVectorCandidateIndex:
                     "Vector candidate discovery is unavailable"
                 )
         except (EmbeddingProviderUnavailable, VectorCandidateIndexUnavailable):
-            budget._commit(reservation, QUERY_EMBEDDING_MAXIMUM_USAGE)
+            budget._commit(reservation, maximum_usage)
             raise VectorCandidateIndexUnavailable(
                 "Vector candidate discovery is unavailable"
             ) from None
         budget._commit(
             reservation,
             BudgetUsage(
-                tokens=0,
+                tokens=query_tokens,
                 provider_calls=1,
                 cost_microunits=1,
                 elapsed_ms=elapsed_ms,

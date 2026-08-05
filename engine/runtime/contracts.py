@@ -32,6 +32,11 @@ from engine.runtime.delivery import (
 from engine.runtime.egress import ChannelEgressGrant, EgressGrant, ModelEgressGrant
 from engine.runtime.evidence import Evidence, PackageBlock, validate_package_content
 from engine.runtime.package_digest import context_package_digest
+from engine.runtime.release_lineage import PACKAGE_SCHEMA_REF_V1
+from engine.tokenizer_accounting import (
+    HISTORICAL_UTF8_BYTE_TOKENIZER_PROFILE_DIGEST,
+    UNICODE_SCALAR_TOKENIZER_PROFILE,
+)
 
 __all__ = [
     "Acquire",
@@ -277,6 +282,9 @@ class ContextPackage:
     gaps: tuple[()]
     budget_usage: BudgetUsage
     coverage: Coverage
+    tokenizer_profile_digest: str = (
+        HISTORICAL_UTF8_BYTE_TOKENIZER_PROFILE_DIGEST
+    )
 
     def __post_init__(self) -> None:
         _require_closed_opaque_ref(
@@ -343,6 +351,28 @@ class ContextPackage:
             raise TypeError("package usage must be BudgetUsage")
         if type(self.coverage) is not Coverage:
             raise TypeError("package coverage must be Coverage")
+        if (
+            type(self.tokenizer_profile_digest) is not str
+            or len(self.tokenizer_profile_digest) != 64
+            or any(
+                character not in "0123456789abcdef"
+                for character in self.tokenizer_profile_digest
+            )
+        ):
+            raise ValueError("package tokenizer profile digest must be SHA-256")
+        is_v1 = self.package_schema_ref == PACKAGE_SCHEMA_REF_V1
+        # Frozen v0 historically accepted any opaque package/tokenizer refs;
+        # preserve that nominal behavior exactly and opt into v1 only by its
+        # reviewed schema identity.
+        is_v0 = not is_v1
+        if is_v0 and self.tokenizer_profile_digest != (
+            HISTORICAL_UTF8_BYTE_TOKENIZER_PROFILE_DIGEST
+        ):
+            raise ValueError("v0 package requires historical byte accounting")
+        if is_v1 and self.tokenizer_profile_digest != (
+            UNICODE_SCALAR_TOKENIZER_PROFILE.profile_digest
+        ):
+            raise ValueError("v1 package requires the active tokenizer profile")
         has_content = bool(self.blocks or self.evidence)
         if has_content:
             if not self.blocks or not self.evidence:
@@ -352,9 +382,9 @@ class ContextPackage:
             expected_tokens = sum(
                 len(block.body.encode("utf-8")) for block in self.blocks
             )
-            if self.budget_usage.tokens != expected_tokens:
+            if is_v0 and self.budget_usage.tokens != expected_tokens:
                 raise ValueError("content package token usage must equal UTF-8 bytes")
-            if any(
+            if is_v0 and any(
                 value != 0
                 for value in (
                     self.budget_usage.provider_calls,
@@ -368,7 +398,7 @@ class ContextPackage:
         else:
             if self.coverage.status is not CoverageStatus.EMPTY:
                 raise ValueError("evidence-free package coverage must be empty")
-            if any(
+            if is_v0 and any(
                 getattr(self.budget_usage, usage_field.name) != 0
                 for usage_field in fields(BudgetUsage)
             ):
@@ -456,6 +486,8 @@ def context_package_digest_document(package: ContextPackage) -> dict[str, object
         },
         "coverage": coverage_document,
     }
+    if package.package_schema_ref == PACKAGE_SCHEMA_REF_V1:
+        document["tokenizerProfileDigest"] = package.tokenizer_profile_digest
     return complete_context_package_nullable_fields(document)
 
 

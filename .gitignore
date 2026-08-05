@@ -32,6 +32,12 @@ sdk/typescript/*.tgz
 sdk/typescript/*.tsbuildinfo
 sdk/typescript/governance/
 sdk/typescript/third_party/
+sdk/typescript-v1/node_modules/
+sdk/typescript-v1/dist/
+sdk/typescript-v1/*.tgz
+sdk/typescript-v1/*.tsbuildinfo
+sdk/typescript-v1/governance/
+sdk/typescript-v1/third_party/
 action_plane/typescript/node_modules/
 action_plane/typescript/dist/
 action_plane/typescript/*.tgz

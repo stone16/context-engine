@@ -1,0 +1,310 @@
+from __future__ import annotations
+
+from collections.abc import Iterator
+from contextlib import contextmanager
+from datetime import UTC, datetime
+from typing import cast
+from uuid import UUID
+
+import pytest
+from fastapi.testclient import TestClient
+from pydantic import ValidationError
+
+from adapters.embeddings import DeterministicEmbeddingTwin
+from adapters.http.app import create_app
+from adapters.http.contracts import ContextPackageV1Wire
+from adapters.pgvector import PostgreSQLVectorCandidateIndex
+from engine.persistence.membership_context import MembershipIdentity
+from engine.runtime.actor import (
+    CurrentMembershipVerification,
+    _close_membership_authority_scope,
+    _construct_current_membership_verification,
+    _open_membership_authority_scope,
+)
+from engine.runtime.construction import Runtime, required_kernel_dependencies
+from engine.runtime.context_run import ContextRunRecord
+from engine.runtime.evidence import CandidateRef
+from engine.runtime.materialized import (
+    MaterializedProjectionPort,
+    _close_materialized_projection_scope,
+    _construct_materialized_projection_session,
+    _open_materialized_projection_scope,
+)
+from engine.runtime.policy_epoch import (
+    _close_policy_epoch_authority_scope,
+    _construct_policy_epoch_session,
+    _observe_current_policy_epoch,
+    _open_policy_epoch_authority_scope,
+)
+from engine.runtime.release_lineage import (
+    PACKAGE_SCHEMA_REF_V1,
+    RUNTIME_PROFILE_DIGEST_V1,
+    RUNTIME_PROFILE_REF_V1,
+    RUNTIME_TOKENIZER_REF_V1,
+)
+from engine.runtime.scope import ScopeSet, ScopeTarget, TrustedScopeOperands
+from engine.supply import DETERMINISTIC_TWIN_EMBEDDING_PROFILE
+from engine.tokenizer_accounting import UNICODE_SCALAR_TOKENIZER_PROFILE
+from tests.support.context_run import (
+    TEST_QUERY_DIGEST_KEYRING,
+    RecordingContextRunPort,
+    recording_context_run_session,
+)
+from tests.support.releases import active_runtime_release
+from tests.unit.test_http_effective_scope import DeterministicScopeAuthority
+from tests.unit.test_http_trust_boundary import (
+    INTERNAL_ORGANIZATION_REF,
+    VALID_TOKEN,
+    DeterministicAuthenticator,
+    DeterministicOrganizationAuthority,
+)
+from tests.unit.test_runtime_authorized_evidence import (
+    AS_OF,
+    AUTHORIZED,
+    RecordingMaterializedPort,
+)
+
+QUERY = "account 世界"
+
+
+class _RecordingEmbeddingProvider:
+    profile = DeterministicEmbeddingTwin().profile
+    provider_profile = DETERMINISTIC_TWIN_EMBEDDING_PROFILE
+
+    def __init__(self) -> None:
+        self.calls = 0
+        self.bytes_sent = 0
+
+    def embed(self, inputs: tuple[str, ...]) -> tuple[tuple[float, ...], ...]:
+        self.calls += 1
+        self.bytes_sent += sum(len(value.encode("utf-8")) for value in inputs)
+        return DeterministicEmbeddingTwin().embed(inputs)
+
+    def embed_documents(
+        self,
+        inputs: tuple[str, ...],
+    ) -> tuple[tuple[float, ...], ...]:
+        return self.embed(inputs)
+
+
+class _AuthorizedMaterializedPort(RecordingMaterializedPort):
+    def discover_vector(  # type: ignore[override]
+        self,
+        query_embedding: tuple[float, ...],
+        embedding_profile_digest: str,
+        limit: int,
+        source_refs: tuple[str, ...] | None,
+        resource_refs: tuple[str, ...] | None,
+        effective_scope: object,
+    ) -> tuple[CandidateRef, ...]:
+        del (
+            query_embedding,
+            embedding_profile_digest,
+            source_refs,
+            resource_refs,
+            effective_scope,
+        )
+        return (AUTHORIZED,)[:limit]
+
+
+class _CurrentEpochPort:
+    def read_current_epoch(self, organization_id: UUID) -> object:
+        assert organization_id == UUID(INTERNAL_ORGANIZATION_REF)
+        return 7
+
+
+class _V1MembershipAuthority:
+    def __init__(
+        self,
+        materialized: _AuthorizedMaterializedPort,
+        context_runs: RecordingContextRunPort,
+        *,
+        corrupt_tokenizer_digest: bool = False,
+    ) -> None:
+        self._materialized = materialized
+        self._context_runs = context_runs
+        self._corrupt_tokenizer_digest = corrupt_tokenizer_digest
+
+    @contextmanager
+    def current_user_actor(
+        self,
+        identity: MembershipIdentity,
+    ) -> Iterator[CurrentMembershipVerification]:
+        membership_scope = _open_membership_authority_scope()
+        projection_scope = _open_materialized_projection_scope()
+        epoch_scope = _open_policy_epoch_authority_scope()
+        try:
+            release = active_runtime_release(
+                identity.organization_id,
+                suffix="test-v1-accounting",
+                active_revision_refs=(AUTHORIZED.revision_ref,),
+                runtime_profile_ref=RUNTIME_PROFILE_REF_V1,
+                runtime_profile_digest=RUNTIME_PROFILE_DIGEST_V1,
+                tokenizer_ref=RUNTIME_TOKENIZER_REF_V1,
+                package_schema_ref=PACKAGE_SCHEMA_REF_V1,
+            )
+            if self._corrupt_tokenizer_digest:
+                object.__setattr__(release, "tokenizer_profile_digest", "0" * 64)
+            epoch = _observe_current_policy_epoch(
+                _construct_policy_epoch_session(
+                    authority_scope=epoch_scope,
+                    organization_id=identity.organization_id,
+                    port=_CurrentEpochPort(),
+                )
+            )
+            projection = _construct_materialized_projection_session(
+                authority_scope=projection_scope,
+                port=cast(MaterializedProjectionPort, self._materialized),
+            )
+            with recording_context_run_session(port=self._context_runs) as (
+                persistence,
+                _,
+            ):
+                yield _construct_current_membership_verification(
+                    authority_scope=membership_scope,
+                    organization_id=identity.organization_id,
+                    user_id=identity.user_id,
+                    membership_id=identity.membership_id,
+                    membership_version=identity.membership_version,
+                    principal_ref=identity.principal_ref,
+                    request_id=identity.request_id,
+                    authentication_binding_ref=identity.authentication_binding_ref,
+                    checked_at=identity.checked_at,
+                    policy_epoch_verification=epoch,
+                    active_runtime_release=release,
+                    materialized_projection_session=projection,
+                    context_run_persistence_session=persistence,
+                )
+        finally:
+            _close_policy_epoch_authority_scope(epoch_scope)
+            _close_materialized_projection_scope(projection_scope)
+            _close_membership_authority_scope(membership_scope)
+
+
+def _scope_authority() -> DeterministicScopeAuthority:
+    exact = ScopeSet(
+        frozenset(
+            {
+                ScopeTarget(
+                    UUID(INTERNAL_ORGANIZATION_REF),
+                    AUTHORIZED.source_ref,
+                    AUTHORIZED.resource_ref,
+                )
+            }
+        )
+    )
+    return DeterministicScopeAuthority(
+        TrustedScopeOperands(
+            organization_boundary=exact,
+            membership_rights=exact,
+            principal_grants=exact,
+            agent_ceiling=exact,
+            source_native_acl=exact,
+            resource_acl=exact,
+            purpose_policy=exact,
+        )
+    )
+
+
+def _client(
+    provider: _RecordingEmbeddingProvider,
+    context_runs: RecordingContextRunPort,
+    *,
+    corrupt_tokenizer_digest: bool = False,
+) -> TestClient:
+    materialized = _AuthorizedMaterializedPort()
+    index = PostgreSQLVectorCandidateIndex(
+        provider,
+        monotonic_ms=iter((25, 32)).__next__,
+    )
+    runtime = Runtime(
+        required_kernel_dependencies(),
+        candidate_index=index,
+        clock=lambda: AS_OF,
+        query_digest_keyring=TEST_QUERY_DIGEST_KEYRING,
+    )
+    return TestClient(
+        create_app(
+            authenticator=DeterministicAuthenticator(),
+            organization_authority=DeterministicOrganizationAuthority(),
+            membership_authority=_V1MembershipAuthority(
+                materialized,
+                context_runs,
+                corrupt_tokenizer_digest=corrupt_tokenizer_digest,
+            ),
+            scope_authority=_scope_authority(),
+            runtime=runtime,
+            clock=lambda: datetime(2026, 7, 21, 10, 0, tzinfo=UTC),
+            public_contract_version="v1",
+        )
+    )
+
+
+def test_v1_http_package_and_context_run_publish_one_digest_bound_usage() -> None:
+    provider = _RecordingEmbeddingProvider()
+    context_runs = RecordingContextRunPort()
+
+    response = _client(provider, context_runs).post(
+        "/v1/resolve",
+        headers={
+            "Authorization": f"Bearer {VALID_TOKEN}",
+            "X-Context-Request-Id": "v1-accounting-request",
+        },
+        json={"kind": "acquire", "need": {"query": QUERY}},
+    )
+
+    assert response.status_code == 200
+    package = response.json()["package"]
+    assert package["tokenizerRef"] == RUNTIME_TOKENIZER_REF_V1
+    assert (
+        package["tokenizerProfileDigest"]
+        == UNICODE_SCALAR_TOKENIZER_PROFILE.profile_digest
+    )
+    assert package["budgetUsage"] == {
+        "tokens": len(QUERY) + len("A-safe"),
+        "providerCalls": 1,
+        "costMicrounits": 1,
+        "elapsedMs": 7,
+    }
+    assert provider.calls == 1
+    assert provider.bytes_sent == len(QUERY.encode("utf-8"))
+    assert len(context_runs.calls) == 1
+    run, audit = context_runs.calls[0]
+    assert type(run) is ContextRunRecord
+    assert audit is None
+    assert (
+        run.usage_tokens,
+        run.usage_provider_calls,
+        run.usage_cost_microunits,
+        run.usage_elapsed_ms,
+    ) == tuple(package["budgetUsage"].values())
+    assert run.package_digest == package["packageDigest"]
+
+    mutated = dict(package)
+    mutated["budgetUsage"] = {**package["budgetUsage"], "tokens": 1}
+    with pytest.raises(ValidationError, match="packageDigest"):
+        ContextPackageV1Wire.model_validate(mutated)
+
+
+def test_v1_http_tokenizer_digest_mismatch_refuses_before_provider_bytes() -> None:
+    provider = _RecordingEmbeddingProvider()
+    context_runs = RecordingContextRunPort()
+
+    response = _client(
+        provider,
+        context_runs,
+        corrupt_tokenizer_digest=True,
+    ).post(
+        "/v1/resolve",
+        headers={
+            "Authorization": f"Bearer {VALID_TOKEN}",
+            "X-Context-Request-Id": "v1-tokenizer-mismatch",
+        },
+        json={"kind": "acquire", "need": {"query": QUERY}},
+    )
+
+    assert response.status_code == 503
+    assert response.content == b'{"code":"service_unavailable"}'
+    assert provider.calls == 0
+    assert provider.bytes_sent == 0
+    assert context_runs.calls == []

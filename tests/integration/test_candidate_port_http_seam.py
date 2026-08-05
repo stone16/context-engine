@@ -24,6 +24,7 @@ from engine.runtime.model_inference import (
     RerankModelRequest,
     RerankModelResult,
 )
+from engine.tokenizer_accounting import UNICODE_SCALAR_TOKENIZER_PROFILE
 from tests.integration.test_runtime_authorized_evidence_integration import (
     _assert_exact_authorized_http_resolve,
     _cleanup_fixture,
@@ -63,7 +64,8 @@ def _rerank_profile() -> ModelInferenceProfile:
             region_ref="local",
             maximum_ttl=timedelta(seconds=30),
         ),
-        tokenizer_ref="utf8-byte-token-v1",
+        tokenizer_ref=UNICODE_SCALAR_TOKENIZER_PROFILE.profile_ref,
+        tokenizer_profile_digest=UNICODE_SCALAR_TOKENIZER_PROFILE.profile_digest,
         maximum_input_tokens=4_096,
         maximum_output_tokens=64,
         maximum_input_items=8,
@@ -134,7 +136,9 @@ def test_http_candidate_port_seals_raw_refs_before_content_consumer(
                             max_provider_calls=1,
                             max_cost_microunits=8_192,
                             max_elapsed_ms=500,
-                        )
+                        ),
+                        tokenizer_profile=UNICODE_SCALAR_TOKENIZER_PROFILE,
+                        release_generation=1,
                     ),
                 )
             )

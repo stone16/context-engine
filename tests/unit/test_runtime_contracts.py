@@ -324,6 +324,7 @@ def test_context_package_is_the_tenant_safe_evidence_free_deliverable() -> None:
         "release_manifest_ref",
         "retention_policy_ref",
         "tokenizer_ref",
+        "tokenizer_profile_digest",
         "package_schema_ref",
         "ttl_seconds",
         "as_of",

@@ -33,6 +33,7 @@ from engine.supply import (
     EmbeddingProfile,
     EmbeddingProviderUnavailable,
 )
+from engine.tokenizer_accounting import UNICODE_SCALAR_TOKENIZER_PROFILE
 
 
 class _RecordingPort:
@@ -377,6 +378,29 @@ def test_query_provider_profile_must_equal_active_release_before_call() -> None:
         )
 
     assert budget.usage.provider_calls == 0
+
+
+def test_query_carrier_must_match_resolve_tokenizer_before_provider_call() -> None:
+    provider = _RecordingProvider()
+    budget = PackageBudgetMeter(
+        PackageBudget(100, 1, 1, 5_000),
+        tokenizer_profile=UNICODE_SCALAR_TOKENIZER_PROFILE,
+        release_generation=7,
+    )
+    object.__setattr__(budget, "_tokenizer_ref", "other-tokenizer")
+
+    with pytest.raises(VectorCandidateIndexUnavailable):
+        PostgreSQLVectorCandidateIndex(provider).prepare_budgeted_discovery(
+            Acquire(need=ContextNeed(query="semantic query")),
+            effective_scope=_discovery_scope(),
+            budget=budget,
+            active_embedding_profile_digest=(
+                DETERMINISTIC_TWIN_EMBEDDING_PROFILE.profile_digest
+            ),
+        )
+
+    assert provider.calls == 0
+    assert budget.usage == BudgetUsage(0, 0, 0, 0)
 
 
 @pytest.mark.parametrize("limit", [0, MAX_VECTOR_CANDIDATE_LIMIT + 1, True])

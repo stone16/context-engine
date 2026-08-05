@@ -29,10 +29,12 @@ class SnapshotDrift(RuntimeError):
     """Generated OpenAPI differs from its accepted immutable snapshot."""
 
 
-def render_openapi_snapshot() -> bytes:
+def render_openapi_snapshot(version: str = "v0") -> bytes:
     """Render the server contract with stable key ordering and one trailing LF."""
 
-    document = create_app().openapi()
+    if version not in {"v0", "v1"}:
+        raise ValueError("OpenAPI version is unavailable")
+    document = create_app(public_contract_version=version).openapi()
     return (
         json.dumps(
             document,
@@ -55,7 +57,7 @@ def write_new_snapshot(version_directory: Path) -> None:
             "historical OpenAPI snapshots require a new reviewed version"
         )
     version_directory.mkdir(parents=True, exist_ok=True)
-    rendered = render_openapi_snapshot()
+    rendered = render_openapi_snapshot(version_directory.name)
     snapshot.write_bytes(rendered)
     digest.write_text(f"{sha256(rendered).hexdigest()}\n", encoding="ascii")
 
@@ -208,7 +210,7 @@ def check_snapshot(
                 repository_root=repository_root,
             ),
         )
-    generated_bytes = render_openapi_snapshot()
+    generated_bytes = render_openapi_snapshot(version_directory.name)
     accepted = json.loads(accepted_bytes)
     candidate = json.loads(generated_bytes)
     assert_no_breaking_changes(accepted, candidate)

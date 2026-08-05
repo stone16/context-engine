@@ -5,7 +5,7 @@ from contextlib import ExitStack
 from datetime import UTC, datetime
 from hashlib import sha256
 from json import loads
-from typing import Annotated, Final, NoReturn
+from typing import Annotated, Final, Literal, NoReturn
 from uuid import UUID, uuid4
 
 from fastapi import Body, Depends, FastAPI, Header, Request, Response, Security
@@ -30,6 +30,7 @@ from adapters.http.contracts import (
     AuthenticationFailureWire,
     ChannelEgressGrantWire,
     CitationNotAvailableWire,
+    ContextPackageV1Wire,
     ContextPackageWire,
     ContinueWire,
     InvalidRequestWire,
@@ -37,7 +38,9 @@ from adapters.http.contracts import (
     OpenCitationWire,
     RateLimitedWire,
     RequestNotAvailableWire,
+    ResolutionOutcomeV1Wire,
     ResolutionOutcomeWire,
+    ResolvedV1Wire,
     ResolvedWire,
     ResolveWire,
     ServiceUnavailableWire,
@@ -155,6 +158,7 @@ from engine.runtime.package_digest import QueryDigestKeyring
 from engine.runtime.policy_epoch import PolicyEpochAuthorityUnavailable
 from engine.runtime.release_lineage import ActiveReleaseUnavailable
 from engine.runtime.scope_authority import InvalidTrustedScopeSnapshot
+from engine.tokenizer_accounting import TokenizerUnavailable
 
 HEALTH_RESPONSE: Final = {
     "status": "ready",
@@ -169,8 +173,11 @@ APPLICATION_FORBIDDEN_RESPONSE: Final = {"code": "application_forbidden"}
 RATE_LIMITED_RESPONSE: Final = {"code": "rate_limited"}
 PUBLIC_API_VERSION: Final = "0.0.0"
 PUBLIC_RESOLVE_PATH: Final = "/v0/resolve"
+PUBLIC_RESOLVE_PATH_V1: Final = "/v1/resolve"
 LEGACY_RESOLVE_PATH: Final = "/v1/context:resolve"
-RESOLVE_PATHS: Final = frozenset({PUBLIC_RESOLVE_PATH, LEGACY_RESOLVE_PATH})
+RESOLVE_PATHS: Final = frozenset(
+    {PUBLIC_RESOLVE_PATH, PUBLIC_RESOLVE_PATH_V1, LEGACY_RESOLVE_PATH}
+)
 
 
 class TransportAuthenticationFailed(Exception):
@@ -281,6 +288,7 @@ def create_app(
     ui_bearer_token: str | None = None,
     ui_control_authority: ControlOperatorAuthority | None = None,
     ui_api: UiApi | None = None,
+    public_contract_version: Literal["v0", "v1"] = "v0",
 ) -> FastAPI:
     """Construct API; the module-level composition remains reject-all."""
 
@@ -319,7 +327,12 @@ def create_app(
         bearerFormat="opaque",
         auto_error=False,
     )
-    app = FastAPI(title="ContextEngine", version=PUBLIC_API_VERSION)
+    if public_contract_version not in {"v0", "v1"}:
+        raise ValueError("public contract version is unavailable")
+    app = FastAPI(
+        title="ContextEngine",
+        version=(PUBLIC_API_VERSION if public_contract_version == "v0" else "1.0.0"),
+    )
     app.add_middleware(
         ResolveBodyLimitMiddleware,
         profile=transport_profile,
@@ -779,7 +792,28 @@ def create_app(
         dependencies=[Depends(require_closed_json_transport)],
     )
     @app.post(
+        PUBLIC_RESOLVE_PATH_V1,
+        include_in_schema=public_contract_version == "v1",
+        operation_id="resolveContextV1",
+        status_code=200,
+        response_model=ResolutionOutcomeV1Wire,
+        response_model_by_alias=True,
+        dependencies=[
+            Depends(require_closed_json_transport),
+            Depends(require_public_request_id),
+        ],
+        responses={
+            400: {"model": InvalidRequestWire},
+            401: {"model": AuthenticationFailureWire},
+            403: {"model": ApplicationForbiddenWire},
+            422: {"model": InvalidRequestWire},
+            429: {"model": RateLimitedWire},
+            503: {"model": ServiceUnavailableWire},
+        },
+    )
+    @app.post(
         PUBLIC_RESOLVE_PATH,
+        include_in_schema=public_contract_version == "v0",
         operation_id="resolveContextV0",
         status_code=200,
         response_model=ResolutionOutcomeWire,
@@ -825,6 +859,7 @@ def create_app(
         },
     )
     def resolve_context(
+        http_request: Request,
         body: Annotated[ResolveWire, Body()],
         authentication: Annotated[
             VerifiedAuthenticationContext,
@@ -901,6 +936,20 @@ def create_app(
             with selected_membership_authority.current_user_actor(
                 membership_identity
             ) as current_membership_verification:
+                requested_package_schema = (
+                    "context-package-openapi-v1"
+                    if http_request.url.path == PUBLIC_RESOLVE_PATH_V1
+                    else "context-package-openapi-v0"
+                )
+                if (
+                    current_membership_verification.active_runtime_release is None
+                    or current_membership_verification.active_runtime_release
+                    .package_schema_ref
+                    != requested_package_schema
+                ):
+                    raise ActiveReleaseUnavailable(
+                        "active Runtime release does not match the public contract"
+                    )
                 try:
                     scope_identity = ScopeAuthorityIdentity(
                         organization_id=(
@@ -1071,7 +1120,14 @@ def create_app(
                         delivery_context,
                         runtime_request,
                     )
-                    response = _resolution_outcome_to_wire(outcome)
+                    response = _resolution_outcome_to_wire(
+                        outcome,
+                        contract_version=(
+                            "v1"
+                            if http_request.url.path == PUBLIC_RESOLVE_PATH_V1
+                            else "v0"
+                        ),
+                    )
                     if type(outcome) is Resolved and resolution_observer is not None:
                         resolution_observer(outcome)
                     return JSONResponse(
@@ -1103,6 +1159,8 @@ def create_app(
         except ScopeAuthorityUnavailable:
             raise TrustedAuthorityUnavailable from None
         except ActiveReleaseUnavailable:
+            raise TrustedAuthorityUnavailable from None
+        except TokenizerUnavailable:
             raise TrustedAuthorityUnavailable from None
         except CandidateIndexUnavailable:
             raise TrustedAuthorityUnavailable from None
@@ -1176,9 +1234,16 @@ def _runtime_request_from_wire(body: ResolveWire) -> RuntimeRequest:
 
 def _resolution_outcome_to_wire(
     outcome: ResolutionOutcome,
-) -> ResolvedWire | RequestNotAvailableWire | CitationNotAvailableWire:
+    *,
+    contract_version: Literal["v0", "v1"] = "v0",
+) -> (
+    ResolvedWire
+    | ResolvedV1Wire
+    | RequestNotAvailableWire
+    | CitationNotAvailableWire
+):
     if type(outcome) is Resolved:
-        return _resolved_to_wire(outcome)
+        return _resolved_to_wire(outcome, contract_version=contract_version)
     if type(outcome) is RequestNotAvailable:
         return RequestNotAvailableWire(
             kind=outcome.kind,
@@ -1189,7 +1254,11 @@ def _resolution_outcome_to_wire(
     raise TypeError("Runtime returned an unknown resolution outcome")
 
 
-def _resolved_to_wire(outcome: Resolved) -> ResolvedWire:
+def _resolved_to_wire(
+    outcome: Resolved,
+    *,
+    contract_version: Literal["v0", "v1"] = "v0",
+) -> ResolvedWire | ResolvedV1Wire:
     egress_grant: ModelEgressGrantWire | ChannelEgressGrantWire | None = None
     if type(outcome.egress_grant) is ModelEgressGrant:
         egress_grant = ModelEgressGrantWire(
@@ -1201,11 +1270,16 @@ def _resolved_to_wire(outcome: Resolved) -> ResolvedWire:
             kind="channel",
             value=outcome.egress_grant.value,
         )
+    document = context_package_public_document(outcome.package)
+    if contract_version == "v1":
+        return ResolvedV1Wire(
+            kind=outcome.kind,
+            package=ContextPackageV1Wire.model_validate(document),
+            egressGrant=egress_grant,
+        )
     return ResolvedWire(
         kind=outcome.kind,
-        package=ContextPackageWire.model_validate(
-            context_package_public_document(outcome.package)
-        ),
+        package=ContextPackageWire.model_validate(document),
         egressGrant=egress_grant,
     )
 

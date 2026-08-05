@@ -271,6 +271,11 @@
       "selector": "tests/unit/test_typescript_sdk_contract.py::test_typescript_sdk_metadata_locks_contract_and_public_exports"
     },
     {
+      "id": "SDK-CONTRACT-V1-217",
+      "layer": "property",
+      "selector": "tests/unit/test_typescript_sdk_contract.py::test_v1_sdk_is_independent_and_v0_facade_stays_frozen"
+    },
+    {
       "id": "SDK-LIVE-FILE-064",
       "layer": "runtime",
       "selector": "tests/integration/test_z_egress_grant_file.py::test_packed_typescript_sdk_resolves_authorized_file_package_over_live_http"
@@ -861,6 +866,7 @@
           "PROP-TRANSPORT-UNTRUSTED-008",
           "PROP-DELIVERY-EVIDENCE-063",
           "SDK-CONTRACT-064",
+          "SDK-CONTRACT-V1-217",
           "TS-PRIVATE-BOT-FLOW-071"
         ],
         "postgres": [

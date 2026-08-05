@@ -47,6 +47,7 @@ from engine.runtime.model_inference import (
     RewriteModelRequest,
     SelectModelRequest,
 )
+from engine.tokenizer_accounting import UNICODE_SCALAR_TOKENIZER_PROFILE
 
 
 def _profile(
@@ -68,7 +69,8 @@ def _profile(
             region_ref="local",
             maximum_ttl=timedelta(seconds=30),
         ),
-        tokenizer_ref="utf8-byte-token-v1",
+        tokenizer_ref=UNICODE_SCALAR_TOKENIZER_PROFILE.profile_ref,
+        tokenizer_profile_digest=UNICODE_SCALAR_TOKENIZER_PROFILE.profile_digest,
         maximum_input_tokens=512,
         maximum_output_tokens=128,
         maximum_input_items=(1 if operation is ModelInferenceOperation.REWRITE else 8),
@@ -143,7 +145,9 @@ def _budget() -> PackageBudgetMeter:
             max_provider_calls=2,
             max_cost_microunits=2_000,
             max_elapsed_ms=1_000,
-        )
+        ),
+        tokenizer_profile=UNICODE_SCALAR_TOKENIZER_PROFILE,
+        release_generation=7,
     )
 
 
@@ -237,6 +241,8 @@ def test_shared_resolve_meter_preserves_prior_usage_and_accumulates_inference() 
             max_elapsed_ms=1_000,
         ),
         initial_usage=prior_usage,
+        tokenizer_profile=UNICODE_SCALAR_TOKENIZER_PROFILE,
+        release_generation=7,
     )
     port = ModelInferencePort(
         profiles=_registered_profiles(),
@@ -573,7 +579,9 @@ def test_budget_and_profile_preflight_refuse_before_redemption_or_provider_bytes
                 max_provider_calls=1,
                 max_cost_microunits=1,
                 max_elapsed_ms=1,
-            )
+            ),
+            tokenizer_profile=UNICODE_SCALAR_TOKENIZER_PROFILE,
+            release_generation=7,
         )
     else:
         profile = replace(profile, maximum_input_tokens=1)
@@ -591,6 +599,39 @@ def test_budget_and_profile_preflight_refuse_before_redemption_or_provider_bytes
     assert budget.usage.provider_calls == 0
     assert len(traces) == 1
     assert traces[0].budget_usage.provider_calls == 0
+
+
+def test_carrier_tokenizer_mismatch_refuses_before_provider_bytes() -> None:
+    authority = _AcceptingAuthority()
+    provider_bytes = 0
+
+    def gateway(payload: bytes, *, timeout_ms: int) -> bytes:
+        nonlocal provider_bytes
+        del timeout_ms
+        provider_bytes += len(payload)
+        return b'{"rewrites":["must not run"]}'
+
+    port = ModelInferencePort(
+        profiles=_registered_profiles(),
+        authority=authority,
+        gateway=gateway,
+        trace_observer=lambda _receipt: None,
+        monotonic_ms=lambda: 100,
+    )
+    budget = _budget()
+    object.__setattr__(budget, "_tokenizer_ref", "other-tokenizer")
+
+    with pytest.raises(ModelInferenceUnavailable, match="is unavailable"):
+        port.rewrite(
+            RewriteModelRequest(profile=_profile(), query="closed mismatch"),
+            grant=ModelEgressGrant("egrm_" + "9" * 64),
+            egress=_egress(),
+            budget=budget,
+        )
+
+    assert authority.calls == []
+    assert provider_bytes == 0
+    assert budget.usage == BudgetUsage(0, 0, 0, 0)
 
 
 @pytest.mark.parametrize("profile_change", ("version", "model"))
