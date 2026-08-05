@@ -2233,7 +2233,13 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
         activation = object_list_at(catalog, "activations")[-1]
 
         self.assertEqual(activation, CANONICAL_CUMULATIVE_ACCOUNTING_ACTIVATION)
-        determinism_oracle = activation["testEvidence"][0]["oracle"]
+        evidence = activation["testEvidence"]
+        not_active = activation["notActive"]
+        assert isinstance(evidence, list)
+        assert isinstance(not_active, list)
+        determinism_evidence = evidence[0]
+        assert isinstance(determinism_evidence, dict)
+        determinism_oracle = determinism_evidence["oracle"]
         assert isinstance(determinism_oracle, str)
         self.assertIn(
             "b4f0e7d287df088f5cbd5aacc1ac04941f0fca0d1a5e2990179ed774d1617418",
@@ -2246,11 +2252,11 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
         self.assertIn("one-unicode-scalar-one-token-v1", determinism_oracle)
         self.assertIn(
             "external or network embedding providers",
-            activation["notActive"],
+            not_active,
         )
         self.assertIn(
             "v0 retirement or historical Package recounting",
-            activation["notActive"],
+            not_active,
         )
 
     def test_tracked_catalog_freezes_later_carrier_and_source_acl_semantics(

@@ -2457,7 +2457,8 @@ CANONICAL_CUMULATIVE_ACCOUNTING_ACTIVATION: dict[str, object] = {
             "id": "ACCOUNTING-DETERMINISM-217",
             "surface": (
                 "tests/unit/test_tokenizer_accounting.py::"
-                "test_registered_tokenizer_is_digest_bound_and_cross_process_deterministic "
+                "test_registered_tokenizer_is_digest_bound_and_cross_process_"
+                "deterministic "
                 "tests/unit/test_tokenizer_accounting.py::"
                 "test_missing_tokenizer_profile_fails_closed "
                 "tests/unit/test_tokenizer_accounting.py::"
@@ -2471,8 +2472,9 @@ CANONICAL_CUMULATIVE_ACCOUNTING_ACTIVATION: dict[str, object] = {
             ),
             "oracle": (
                 "The first active profile is unicode-scalar-tokenizer-v1 with "
-                "profile digest b4f0e7d287df088f5cbd5aacc1ac04941f0fca0d1a5e2990179ed774d1617418, "
-                "artifact digest 8d301e3ce94e5b48febffb2e0871e139cd4d5f808084eccbf9cfc512d3948cca, "
+                "profile digest b4f0e7d287df088f5cbd5aacc1ac04941f0fca0d1a5e2990"
+                "179ed774d1617418, artifact digest 8d301e3ce94e5b48febffb2e0871e139c"
+                "d4d5f808084eccbf9cfc512d3948cca, "
                 "and exact one-unicode-scalar-one-token-v1 counting; cross-process "
                 "counts agree and every missing, unknown, unavailable, or "
                 "hash-mismatched identity fails closed."
@@ -2490,7 +2492,8 @@ CANONICAL_CUMULATIVE_ACCOUNTING_ACTIVATION: dict[str, object] = {
                 "tests/unit/test_pgvector_candidate_index.py::"
                 "test_budgeted_query_embedding_refuses_exhaustion_before_provider_call "
                 "tests/unit/test_pgvector_candidate_index.py::"
-                "test_failed_query_embedding_charges_reserved_maximum_after_provider_call "
+                "test_failed_query_embedding_charges_reserved_maximum_after_"
+                "provider_call "
                 "tests/unit/test_model_inference_port.py::"
                 "test_one_meter_accumulates_every_model_stage_and_final_assembly "
                 "tests/unit/test_http_v1_accounting.py::"
@@ -2524,7 +2527,8 @@ CANONICAL_CUMULATIVE_ACCOUNTING_ACTIVATION: dict[str, object] = {
                 "tests/integration/test_migrations.py::"
                 "test_tokenizer_profile_upgrade_labels_history_without_recounting "
                 "tests/integration/test_migrations.py::"
-                "test_tokenizer_profile_upgrade_replays_pre_migration_candidate_digests "
+                "test_tokenizer_profile_upgrade_replays_pre_migration_candidate_"
+                "digests "
                 "tests/integration/test_migrations.py::"
                 "test_tokenizer_profile_downgrade_refuses_retained_v1_lineage"
             ),
@@ -2536,7 +2540,8 @@ CANONICAL_CUMULATIVE_ACCOUNTING_ACTIVATION: dict[str, object] = {
         },
     ],
     "deferredEvidence": [
-        "network-provider response representation, credentials, egress, timeout, cost, and settlement evidence",
+        "network-provider response representation, credentials, egress, timeout, "
+        "cost, and settlement evidence",
         "rewrite, rerank, select, and answer-generation production activation evidence",
         "observed v0 consumer retirement evidence",
     ],
