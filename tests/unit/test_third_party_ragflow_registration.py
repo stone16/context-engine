@@ -97,6 +97,9 @@ def test_vendored_bytes_match_complete_pinned_registration() -> None:
                     "patch_path": (
                         "third_party/ragflow/patches/issue-204-pdf-outline.patch"
                     ),
+                    "pinned_source_sha256": (
+                        "7d1674fb7c92b2db24964575cb2290139a823a923da89a321cbdaea795452849"
+                    ),
                     "pinned_sha256": (
                         "91c733f081436287a9055b51b176dc3ee94c73fdd76d310397783eaefb7cb799"
                     ),

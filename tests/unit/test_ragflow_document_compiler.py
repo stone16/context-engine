@@ -644,6 +644,14 @@ def test_local_runner_uses_the_shared_deterministic_environment(
     assert observed_environment == _document_runner_environment()
 
 
+@pytest.mark.parametrize("hash_seed", ("4294967296", "99999999999999999999"))
+def test_document_runner_environment_rejects_out_of_range_hash_seed(
+    hash_seed: str,
+) -> None:
+    with pytest.raises(ValueError, match="hash seed is out of range"):
+        _document_runner_environment(hash_seed=hash_seed)
+
+
 @pytest.mark.parametrize("profile_ref", (DOCX_CONFIG_V1, PDF_TEXT_OUTLINE_V1))
 def test_malformed_artifact_is_a_closed_typed_refusal(profile_ref: str) -> None:
     outcome = compile_in_local_document_runner(

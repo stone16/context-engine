@@ -307,6 +307,13 @@ def _validate_selector(
         vendored=vendored,
         patch_path=patch_path,
     )
+    pinned_source_digest = hashlib.sha256(pinned_source).hexdigest()
+    if pinned_source_digest != selector["pinned_source_sha256"]:
+        raise GovernanceError(
+            f"{registration.path}: selector {name!r} pinned source hash mismatch: "
+            f"expected {selector['pinned_source_sha256']}, "
+            f"got {pinned_source_digest}"
+        )
     pinned_region = _top_level_function_region(pinned_source, name, label="pinned")
     pinned_digest = hashlib.sha256(pinned_region).hexdigest()
     if pinned_digest != selector["pinned_sha256"]:

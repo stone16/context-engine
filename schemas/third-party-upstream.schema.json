@@ -76,6 +76,7 @@
                 "kind",
                 "name",
                 "patch_path",
+                "pinned_source_sha256",
                 "pinned_sha256",
                 "vendored_sha256"
               ],
@@ -87,6 +88,10 @@
                   "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
                 },
                 "patch_path": { "$ref": "#/$defs/repositoryPath" },
+                "pinned_source_sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
                 "pinned_sha256": {
                   "type": "string",
                   "pattern": "^[0-9a-f]{64}$"

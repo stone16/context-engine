@@ -47,7 +47,11 @@ def _document_runner_environment(
 
     if not hash_seed.isdecimal() or not thread_count.isdecimal():
         raise ValueError("document runner controls must be decimal integers")
-    if int(thread_count) < 1:
+    hash_seed_value = int(hash_seed)
+    thread_count_value = int(thread_count)
+    if not 0 <= hash_seed_value <= 4_294_967_295:
+        raise ValueError("document runner hash seed is out of range")
+    if thread_count_value < 1:
         raise ValueError("document runner thread count must be positive")
     return {
         "PYTHONHASHSEED": hash_seed,

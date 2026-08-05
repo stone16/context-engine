@@ -11,6 +11,8 @@ SCHEMA = Path(__file__).parents[2] / "schemas/third-party-upstream.schema.json"
 VALID_SELECTOR = (
     'source_selectors = [{ source_path = "src/example.py", kind = "function", '
     'name = "selected", patch_path = "third_party/example/patches/example.patch", '
+    'pinned_source_sha256 = "7285adbaf2dddeec62b806b1d2eb2c68a64953a7ab51cb4'
+    '55902d7306a68be96", '
     'pinned_sha256 = "a7314094fde8a95d2dccb8e593ca0fb49c3feeeb2e3c6134464e'
     '49761e9555f7", vendored_sha256 = "9837e34301992075076adaca0a7826a80066738b'
     '82444ce51c380b4ebf35abbf" }]'
@@ -131,7 +133,7 @@ def test_registration_rejects_duplicate_canonical_paths(
     )
     _replace(registration, original, replacement)
 
-    with pytest.raises(GovernanceError, match=f"{field}.*duplicate canonical"):
+    with pytest.raises(GovernanceError, match=rf"{field}.*duplicate canonical"):
         validate_tree(tmp_path)
 
 
@@ -143,7 +145,7 @@ def test_approval_rejects_duplicate_canonical_paths(tmp_path: Path) -> None:
         'source_paths = ["src/example.py", "src/./example.py"] }]',
     )
 
-    with pytest.raises(GovernanceError, match="approval.*duplicate canonical"):
+    with pytest.raises(GovernanceError, match=r"approval.*duplicate canonical"):
         validate_tree(tmp_path)
 
 
@@ -161,7 +163,7 @@ def test_source_selector_must_belong_to_a_registered_copied_source(
     )
 
     with pytest.raises(
-        GovernanceError, match="source selector.*not.*registered copied"
+        GovernanceError, match=r"source selector.*not.*registered copied"
     ):
         validate_tree(tmp_path)
 
@@ -194,7 +196,9 @@ def test_source_selector_cannot_be_owned_by_multiple_approvals(
         + " }]",
     )
 
-    with pytest.raises(GovernanceError, match="selector.*multiple approval records"):
+    with pytest.raises(
+        GovernanceError, match=r"selector.*multiple approval records"
+    ):
         validate_tree(tmp_path)
 
 
@@ -219,7 +223,7 @@ def test_source_selector_must_exist_in_vendored_and_pinned_bytes(
         VALID_SELECTOR.replace('name = "selected"', 'name = "missing"') + " }]",
     )
 
-    with pytest.raises(GovernanceError, match="selector.*missing.*vendored"):
+    with pytest.raises(GovernanceError, match=r"selector.*missing.*vendored"):
         validate_tree(tmp_path)
 
 
@@ -231,7 +235,7 @@ def test_source_selector_hashes_bind_the_named_region(tmp_path: Path) -> None:
         VALID_SELECTOR.replace('name = "selected"', 'name = "other"') + " }]",
     )
 
-    with pytest.raises(GovernanceError, match="selector.*vendored hash mismatch"):
+    with pytest.raises(GovernanceError, match=r"selector.*vendored hash mismatch"):
         validate_tree(tmp_path)
 
 
@@ -247,5 +251,25 @@ def test_decision_document_anchor_must_resolve(tmp_path: Path) -> None:
         'decision_document = "docs/approval.md#missing",',
     )
 
-    with pytest.raises(GovernanceError, match="decision document anchor.*missing"):
+    with pytest.raises(
+        GovernanceError, match=r"decision document anchor.*missing"
+    ):
+        validate_tree(tmp_path)
+
+
+def test_source_selector_hashes_bind_the_reconstructed_pinned_file(
+    tmp_path: Path,
+) -> None:
+    registration = write_fixture_tree(tmp_path, SCHEMA)
+    _replace(
+        registration,
+        'source_paths = ["src/example.py"] }]',
+        VALID_SELECTOR.replace(
+            "7285adbaf2dddeec62b806b1d2eb2c68a64953a7ab51cb455902d7306a68be96",
+            "0" * 64,
+        )
+        + " }]",
+    )
+
+    with pytest.raises(GovernanceError, match=r"selector.*pinned source hash"):
         validate_tree(tmp_path)
