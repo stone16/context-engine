@@ -18,11 +18,30 @@ def write_fixture_tree(root: Path, schema_source: Path) -> Path:
     (subtree / "src").mkdir(parents=True)
     (subtree / "patches").mkdir()
     vendored = subtree / "src/example.py"
-    vendored.write_text("VALUE = 1\n", encoding="utf-8")
+    vendored.write_text(
+        "def selected() -> int:\n"
+        "    return 1\n"
+        "\n"
+        "\n"
+        "def other() -> int:\n"
+        "    return 2\n",
+        encoding="utf-8",
+    )
     digest = hashlib.sha256(vendored.read_bytes()).hexdigest()
     (subtree / "LICENSE.upstream").write_text("MIT fixture license\n", encoding="utf-8")
     (subtree / "MODIFICATIONS.md").write_text("# No modifications\n", encoding="utf-8")
-    (subtree / "patches/.gitkeep").write_bytes(b"")
+    (subtree / "patches/example.patch").write_text(
+        "--- a/src/example.py\n"
+        "+++ b/src/example.py\n"
+        "@@ -1,5 +1,5 @@\n"
+        " def selected() -> int:\n"
+        "-    return 0\n"
+        "+    return 1\n"
+        " \n"
+        " \n"
+        " def other() -> int:\n",
+        encoding="utf-8",
+    )
     (subtree / "sbom.cyclonedx.json").write_text("{}\n", encoding="utf-8")
     (root / "third_party/ARTIFACT_EXEMPTIONS.toml").write_text(
         "schema_version = 1\nexemptions = []\n",

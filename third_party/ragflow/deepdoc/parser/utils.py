@@ -21,8 +21,8 @@
 
 from __future__ import annotations
 
+import io
 from dataclasses import dataclass
-from io import BytesIO
 from math import isfinite
 from typing import cast
 
@@ -56,7 +56,7 @@ def extract_pdf_outlines(
 
     if type(source) is not bytes:
         raise TypeError("PDF outline source must be exact bytes")
-    pdf = PdfReader(BytesIO(source))
+    pdf = PdfReader(io.BytesIO(source))
     outlines: list[RawPdfOutline] = []
     render_digests: dict[int, str] = {}
     render_document = pdfium.PdfDocument(source)

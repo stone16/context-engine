@@ -8,6 +8,13 @@ from scripts.third_party_governance import GovernanceError, validate_tree
 from tests.unit._third_party_governance_fixtures import write_fixture_tree
 
 SCHEMA = Path(__file__).parents[2] / "schemas/third-party-upstream.schema.json"
+VALID_SELECTOR = (
+    'source_selectors = [{ source_path = "src/example.py", kind = "function", '
+    'name = "selected", patch_path = "third_party/example/patches/example.patch", '
+    'pinned_sha256 = "a7314094fde8a95d2dccb8e593ca0fb49c3feeeb2e3c6134464e'
+    '49761e9555f7", vendored_sha256 = "9837e34301992075076adaca0a7826a80066738b'
+    '82444ce51c380b4ebf35abbf" }]'
+)
 
 
 def _replace(path: Path, old: str, new: str) -> None:
@@ -140,15 +147,103 @@ def test_approval_rejects_duplicate_canonical_paths(tmp_path: Path) -> None:
         validate_tree(tmp_path)
 
 
-def test_source_selector_must_belong_to_its_approval_region(tmp_path: Path) -> None:
+def test_source_selector_must_belong_to_a_registered_copied_source(
+    tmp_path: Path,
+) -> None:
     registration = write_fixture_tree(tmp_path, SCHEMA)
     _replace(
         registration,
         'source_paths = ["src/example.py"] }]',
-        """source_paths = ["src/example.py"], source_selectors = [
-    { source_path = "src/other.py", kind = "function", name = "selected" }
-  ] }]""",
+        VALID_SELECTOR.replace(
+            'source_path = "src/example.py"', 'source_path = "src/other.py"'
+        )
+        + " }]",
     )
 
-    with pytest.raises(GovernanceError, match="source selector.*not owned"):
+    with pytest.raises(GovernanceError, match="source selector.*not.*registered copied"):
+        validate_tree(tmp_path)
+
+
+def test_source_selector_cannot_overlap_whole_file_approval(tmp_path: Path) -> None:
+    registration = write_fixture_tree(tmp_path, SCHEMA)
+    _replace(
+        registration,
+        'source_paths = ["src/example.py"] }]',
+        'source_paths = ["src/example.py"], ' + VALID_SELECTOR + " }]",
+    )
+
+    with pytest.raises(GovernanceError, match="ambiguous whole-file and selector"):
+        validate_tree(tmp_path)
+
+
+def test_source_selector_cannot_be_owned_by_multiple_approvals(
+    tmp_path: Path,
+) -> None:
+    registration = write_fixture_tree(tmp_path, SCHEMA)
+    _replace(
+        registration,
+        'approvals = [{ reference = "issue-1", source_paths = ["src/example.py"] }]',
+        "approvals = ["
+        '{ reference = "issue-1", '
+        + VALID_SELECTOR
+        + " }, "
+        + '{ reference = "issue-2", '
+        + VALID_SELECTOR
+        + " }]",
+    )
+
+    with pytest.raises(GovernanceError, match="selector.*multiple approval records"):
+        validate_tree(tmp_path)
+
+
+def test_selector_only_approval_covers_registered_source(tmp_path: Path) -> None:
+    registration = write_fixture_tree(tmp_path, SCHEMA)
+    _replace(
+        registration,
+        'source_paths = ["src/example.py"] }]',
+        VALID_SELECTOR + " }]",
+    )
+
+    assert [item.name for item in validate_tree(tmp_path)] == ["example"]
+
+
+def test_source_selector_must_exist_in_vendored_and_pinned_bytes(
+    tmp_path: Path,
+) -> None:
+    registration = write_fixture_tree(tmp_path, SCHEMA)
+    _replace(
+        registration,
+        'source_paths = ["src/example.py"] }]',
+        VALID_SELECTOR.replace('name = "selected"', 'name = "missing"') + " }]",
+    )
+
+    with pytest.raises(GovernanceError, match="selector.*missing.*vendored"):
+        validate_tree(tmp_path)
+
+
+def test_source_selector_hashes_bind_the_named_region(tmp_path: Path) -> None:
+    registration = write_fixture_tree(tmp_path, SCHEMA)
+    _replace(
+        registration,
+        'source_paths = ["src/example.py"] }]',
+        VALID_SELECTOR.replace('name = "selected"', 'name = "other"') + " }]",
+    )
+
+    with pytest.raises(GovernanceError, match="selector.*vendored hash mismatch"):
+        validate_tree(tmp_path)
+
+
+def test_decision_document_anchor_must_resolve(tmp_path: Path) -> None:
+    registration = write_fixture_tree(tmp_path, SCHEMA)
+    document = tmp_path / "docs/approval.md"
+    document.parent.mkdir()
+    document.write_text("# Actual approval\n", encoding="utf-8")
+    _replace(
+        registration,
+        'reference = "issue-1",',
+        'reference = "issue-1", decision = "D6", '
+        'decision_document = "docs/approval.md#missing",',
+    )
+
+    with pytest.raises(GovernanceError, match="decision document anchor.*missing"):
         validate_tree(tmp_path)

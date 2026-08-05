@@ -45,7 +45,11 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["reference", "source_paths"],
+        "required": ["reference"],
+        "anyOf": [
+          { "required": ["source_paths"] },
+          { "required": ["source_selectors"] }
+        ],
         "dependentRequired": {
           "decision": ["decision_document"],
           "decision_document": ["decision"]
@@ -67,13 +71,29 @@
             "items": {
               "type": "object",
               "additionalProperties": false,
-              "required": ["source_path", "kind", "name"],
+              "required": [
+                "source_path",
+                "kind",
+                "name",
+                "patch_path",
+                "pinned_sha256",
+                "vendored_sha256"
+              ],
               "properties": {
                 "source_path": { "$ref": "#/$defs/relativePath" },
                 "kind": { "type": "string", "enum": ["function"] },
                 "name": {
                   "type": "string",
                   "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+                },
+                "patch_path": { "$ref": "#/$defs/repositoryPath" },
+                "pinned_sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "vendored_sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
                 }
               }
             }

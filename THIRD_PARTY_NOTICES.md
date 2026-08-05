@@ -10,6 +10,11 @@ text.
 - Commit: `2fb3dd10493b3883870fa8adced5b1a0e114feff`
 - License: MIT (`third_party/onyx/LICENSE.upstream`)
 - Reuse mode: `copy-patch`
+- Copied source provenance:
+  - `backend/onyx/connectors/interfaces.py` — https://github.com/onyx-dot-app/onyx.git#2fb3dd10493b3883870fa8adced5b1a0e114feff
+  - `backend/onyx/connectors/connector_runner.py` — https://github.com/onyx-dot-app/onyx.git#2fb3dd10493b3883870fa8adced5b1a0e114feff
+  - `backend/onyx/connectors/models.py` — https://github.com/onyx-dot-app/onyx.git#2fb3dd10493b3883870fa8adced5b1a0e114feff
+  - `backend/onyx/connectors/registry.py` — https://github.com/onyx-dot-app/onyx.git#2fb3dd10493b3883870fa8adced5b1a0e114feff
 - Approvals by source region:
   - `backend/onyx/connectors/connector_runner.py` — https://github.com/stone16/context-engine/issues/126
   - `backend/onyx/connectors/interfaces.py` — https://github.com/stone16/context-engine/issues/126
@@ -22,10 +27,14 @@ text.
 - Commit: `4391e03886b996201f3b8818f671b19eb24d0f7b`
 - License: Apache-2.0 (`third_party/ragflow/LICENSE.upstream`)
 - Reuse mode: `copy-patch`
+- Copied source provenance:
+  - `deepdoc/parser/markdown_parser.py` — https://github.com/infiniflow/ragflow.git#4391e03886b996201f3b8818f671b19eb24d0f7b
+  - `deepdoc/parser/docx_parser.py` — https://github.com/infiniflow/ragflow.git#4391e03886b996201f3b8818f671b19eb24d0f7b
+  - `deepdoc/parser/utils.py` — https://github.com/infiniflow/ragflow.git#4391e03886b996201f3b8818f671b19eb24d0f7b
 - Approvals by source region:
   - `deepdoc/parser/markdown_parser.py` — https://github.com/stone16/context-engine/issues/124
-  - `deepdoc/parser/docx_parser.py` — https://github.com/stone16/context-engine/issues/204; D6 (docs/research/2026-07-31-five-repository-implementation-blueprint.md#section-5)
-  - `deepdoc/parser/utils.py::function:extract_pdf_outlines` — https://github.com/stone16/context-engine/issues/204; D6 (docs/research/2026-07-31-five-repository-implementation-blueprint.md#section-5)
+  - `deepdoc/parser/docx_parser.py` — https://github.com/stone16/context-engine/issues/204; D6 (docs/research/2026-07-31-five-repository-implementation-blueprint.md#5-决策记录2026-07-31-stometa-全部确认)
+  - `deepdoc/parser/utils.py::function:extract_pdf_outlines` — https://github.com/stone16/context-engine/issues/204; D6 (docs/research/2026-07-31-five-repository-implementation-blueprint.md#5-决策记录2026-07-31-stometa-全部确认)
 - Nested dependencies:
   - Python-Markdown 3.6 — BSD-3-Clause (`third_party/ragflow/LICENSE.python-markdown`)
   - python-docx 1.2.0 — MIT (`third_party/ragflow/LICENSE.python-docx`)

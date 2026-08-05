@@ -84,17 +84,25 @@ def test_vendored_bytes_match_complete_pinned_registration() -> None:
             "decision": "D6",
             "decision_document": (
                 "docs/research/2026-07-31-five-repository-implementation-"
-                "blueprint.md#section-5"
+                "blueprint.md#5-决策记录2026-07-31-stometa-全部确认"
             ),
             "source_paths": [
                 "deepdoc/parser/docx_parser.py",
-                "deepdoc/parser/utils.py",
             ],
             "source_selectors": [
                 {
                     "source_path": "deepdoc/parser/utils.py",
                     "kind": "function",
                     "name": "extract_pdf_outlines",
+                    "patch_path": (
+                        "third_party/ragflow/patches/issue-204-pdf-outline.patch"
+                    ),
+                    "pinned_sha256": (
+                        "91c733f081436287a9055b51b176dc3ee94c73fdd76d310397783eaefb7cb799"
+                    ),
+                    "vendored_sha256": (
+                        "70978366401ac632702143fd7b50bc149ab9e81402c59b2d81f58add2359b39d"
+                    ),
                 }
             ],
         },
@@ -214,11 +222,20 @@ def test_vendored_bytes_match_complete_pinned_registration() -> None:
     notices = (REPOSITORY_ROOT / "THIRD_PARTY_NOTICES.md").read_text(
         encoding="utf-8"
     )
+    assert "- Copied source provenance:" in notices
+    assert (
+        "`deepdoc/parser/utils.py` — https://github.com/infiniflow/ragflow.git#"
+        "4391e03886b996201f3b8818f671b19eb24d0f7b"
+    ) in notices
+    assert (
+        "`deepdoc/parser/utils.py` — "
+        "https://github.com/stone16/context-engine/issues/204"
+    ) not in notices
     assert (
         "`deepdoc/parser/utils.py::function:extract_pdf_outlines` — "
         "https://github.com/stone16/context-engine/issues/204; D6 "
         "(docs/research/2026-07-31-five-repository-implementation-"
-        "blueprint.md#section-5)"
+        "blueprint.md#5-决策记录2026-07-31-stometa-全部确认)"
     ) in notices
     aggregate_sbom = json.loads(
         (REPOSITORY_ROOT / "THIRD_PARTY_SBOM.cyclonedx.json").read_text(
@@ -230,15 +247,27 @@ def test_vendored_bytes_match_complete_pinned_registration() -> None:
         for component in aggregate_sbom["components"]
         if component["bom-ref"] == "context-engine:third-party:ragflow"
     )
-    assert {
+    source_approvals = {
         property_value["value"]
         for property_value in ragflow_component["properties"]
         if property_value["name"] == "context-engine:source-approval"
-    } >= {
+    }
+    assert not any(
+        value.startswith("deepdoc/parser/utils.py=") for value in source_approvals
+    )
+    assert source_approvals >= {
         "deepdoc/parser/utils.py::function:extract_pdf_outlines="
         "https://github.com/stone16/context-engine/issues/204; decision=D6; "
         "decision_document=docs/research/2026-07-31-five-repository-"
-        "implementation-blueprint.md#section-5"
+        "implementation-blueprint.md#5-决策记录2026-07-31-stometa-全部确认"
+    }
+    assert {
+        property_value["value"]
+        for property_value in ragflow_component["properties"]
+        if property_value["name"] == "context-engine:source-provenance"
+    } >= {
+        "deepdoc/parser/utils.py=https://github.com/infiniflow/ragflow.git#"
+        "4391e03886b996201f3b8818f671b19eb24d0f7b"
     }
     sbom = json.loads(
         (REGISTRATION_ROOT / "sbom.cyclonedx.json").read_text(encoding="utf-8")
