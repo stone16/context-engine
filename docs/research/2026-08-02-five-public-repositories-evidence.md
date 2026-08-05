@@ -4,8 +4,9 @@
 >
 > Date: 2026-08-02
 >
-> Status: candidate successor; prepared for maintainer legal decision in
-> issue #205
+> Status: versioned successor and current public-reference aggregation entry;
+> the OpenViking section remains a non-authoritative candidate pending issue
+> #205
 >
 > Supersedes: [`2026-07-19-four-public-repositories-evidence.md`](./2026-07-19-four-public-repositories-evidence.md)
 > as the current public-reference aggregation entry; the v1 report remains the
@@ -13,35 +14,39 @@
 
 ## 1. Scope and decision boundary
 
-This candidate baseline records five fixed repository snapshots as public prior-art
-evidence. They may support bounded claims about observable behavior, Interface
-shapes, tests, and product workflows. They do not establish ContextEngine's
-authorization, security, compliance, performance, or production-readiness
-claims.
+This versioned baseline succeeds the v1 aggregation entry. It records the four
+admitted repository snapshots plus one fixed OpenViking candidate snapshot.
+While issue #205 remains open, public prior-art claims may use only the first
+four admitted rows; the OpenViking row and Section 3 are a non-authoritative
+admission packet. None of the rows establishes ContextEngine's authorization,
+security, compliance, performance, or production-readiness claims.
 
-| Repository | Fixed snapshot | Admitted evidence domain |
-|---|---|---|
-| Dify | [`120c38bad8d27cbe1e6a1d5522fd66f5caf6d0d5`](https://github.com/langgenius/dify/commit/120c38bad8d27cbe1e6a1d5522fd66f5caf6d0d5) | Product orchestration, workflow, Provider/Index seams, retrieval operations |
-| RAGFlow | [`4391e03886b996201f3b8818f671b19eb24d0f7b`](https://github.com/infiniflow/ragflow/commit/4391e03886b996201f3b8818f671b19eb24d0f7b) | Document compilation, structured chunks, retrieval, hydration, differential tests |
-| MaxKB | [`32b2d885e47ad04639abd7a18490bf5937f9c072`](https://github.com/1Panel-dev/MaxKB/commit/32b2d885e47ad04639abd7a18490bf5937f9c072) | Preview/confirm, knowledge operations, Hit Test, human curation workflow |
-| Onyx | [`2fb3dd10493b3883870fa8adced5b1a0e114feff`](https://github.com/onyx-dot-app/onyx/commit/2fb3dd10493b3883870fa8adced5b1a0e114feff) | Connectors, checkpoints, staged indexing, retrieval composition, real-dependency test layering |
-| OpenViking | [`49b182045b42d34ad530948ad77d9d0226897da8`](https://github.com/volcengine/OpenViking/commit/49b182045b42d34ad530948ad77d9d0226897da8) | Context filesystem and L0–L2 tiering, session-to-candidate UX, observable trajectory, agent exposure |
+| Repository | Fixed snapshot | Admission status | Evidence domain |
+|---|---|---|---|
+| Dify | [`120c38bad8d27cbe1e6a1d5522fd66f5caf6d0d5`](https://github.com/langgenius/dify/commit/120c38bad8d27cbe1e6a1d5522fd66f5caf6d0d5) | Admitted | Product orchestration, workflow, Provider/Index seams, retrieval operations |
+| RAGFlow | [`4391e03886b996201f3b8818f671b19eb24d0f7b`](https://github.com/infiniflow/ragflow/commit/4391e03886b996201f3b8818f671b19eb24d0f7b) | Admitted | Document compilation, structured chunks, retrieval, hydration, differential tests |
+| MaxKB | [`32b2d885e47ad04639abd7a18490bf5937f9c072`](https://github.com/1Panel-dev/MaxKB/commit/32b2d885e47ad04639abd7a18490bf5937f9c072) | Admitted | Preview/confirm, knowledge operations, Hit Test, human curation workflow |
+| Onyx | [`2fb3dd10493b3883870fa8adced5b1a0e114feff`](https://github.com/onyx-dot-app/onyx/commit/2fb3dd10493b3883870fa8adced5b1a0e114feff) | Admitted | Connectors, checkpoints, staged indexing, retrieval composition, real-dependency test layering |
+| OpenViking | [`49b182045b42d34ad530948ad77d9d0226897da8`](https://github.com/volcengine/OpenViking/commit/49b182045b42d34ad530948ad77d9d0226897da8) | Candidate; not public authority while `#205` is open | Context filesystem and L0–L2 tiering, session-to-candidate UX, observable trajectory, agent exposure |
 
 The first four rows retain the claims, limitations, clean-room mappings, and
 pinned first-party links recorded in the [v1 baseline](./2026-07-19-four-public-repositories-evidence.md#2-证据纪律).
-This successor does not expand those claims. Section 3 adds OpenViking using
-only first-party material at its fixed snapshot.
+This successor does not expand those claims. Section 3 prepares OpenViking for
+a separate admission decision using only first-party material at its fixed
+snapshot; it does not activate those claims while #205 is open.
 
-OpenViking's admission is deliberately narrower than the original four:
+The proposed OpenViking admission is deliberately narrower than the original
+four:
 
 - **Whitelist:** context filesystem and information-density tiering,
   session-to-candidate workflow, observable retrieval trajectory, and agent
   exposure UX.
 - **Blacklist:** multi-tenant authorization or security proof, Runtime
   foundation, compliance proof, and every form of copy+patch.
-- **No transitive authority:** the tracked Room-A evaluation is not public
-  provenance. Public claims must cite this baseline or the pinned upstream
-  sources linked below.
+- **No transitive authority:** neither the tracked Room-A evaluation nor this
+  candidate section is public claim provenance while #205 remains open. If the
+  admission closes, public claims must cite this versioned baseline or the
+  pinned upstream sources linked below.
 
 ## 2. Evidence discipline
 
@@ -62,7 +67,7 @@ baseline without a new reviewed version.
 The five repositories are not a common-corpus benchmark. Qualitative evidence
 domains must not be converted into a retrieval-quality ranking.
 
-## 3. OpenViking conditional admission
+## 3. OpenViking candidate packet (non-authoritative while `#205` is open)
 
 ### 3.1 Context filesystem and information-density tiering
 
@@ -197,8 +202,8 @@ Remaining evidence gaps are unchanged in kind:
 3. Edition and path-specific license facts do not transfer across repository
    regions.
 4. The maintainer legal decision for OpenViking behavior-observation-only reuse
-   remains the final authority gate; this PR must not merge before that decision
-   is recorded.
+   remains the final authority gate; neither this packet nor its public-document
+   attribution may become OpenViking authority before that decision is recorded.
 
 ## 6. Repository authority index
 

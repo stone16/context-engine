@@ -21,7 +21,7 @@ source: "context-engine-threat-model.md and ../research/2026-08-02-five-public-r
 
 ## Content
 
-ContextEngine 的测试架构从自有威胁模型推导：租户隔离、授权前后类型边界、发布原子性、可重放工作租约、audience-bound delivery 以及 egress/effect 权限分离都是发布 veto，不由上游测试数量或 UI 交互间接证明。五个固定公开参考仓只提供可核验的工程形状；OpenViking 仅增加 context filesystem/tiering、session candidate、trajectory 与 agent exposure UX 的条件参考，不提供安全证明或 Runtime foundation。取舍边界见[Five Public Repositories Evidence Baseline](../research/2026-08-02-five-public-repositories-evidence.md)。这些证据不代表 ContextEngine 已经完成动态 Spike 或安全验证。
+ContextEngine 的测试架构从自有威胁模型推导：租户隔离、授权前后类型边界、发布原子性、可重放工作租约、audience-bound delivery 以及 egress/effect 权限分离都是发布 veto，不由上游测试数量或 UI 交互间接证明。四个已准入固定公开参考仓只提供可核验的工程形状；版本化基线另含 OpenViking 候选包，但 #205 保持 open 时，本设计不把 OpenViking 引作 authority。它不提供安全证明或 Runtime foundation。取舍边界见[Five Public Repositories Evidence Baseline](../research/2026-08-02-five-public-repositories-evidence.md)。这些证据不代表 ContextEngine 已经完成动态 Spike 或安全验证。
 
 推荐接受两项代价：V1 的 security、RLS、composite FK、outbox 与 pgvector 集成测试默认启动真实 PostgreSQL 17 + pgvector，速度慢于纯 in-memory test；PGLite 最多承载不涉及 role、RLS、extension 和 connection-pool context 的快速 Adapter 反馈，不计入安全门禁。任何新 Adapter 必须通过共享 contract suite，接入速度会被 gate 限制。换来的确定性是：tenant isolation、outbox、RLS、retrieval filter 和 ContextPackage contract 不依赖某个调用点的自觉。
 
@@ -442,7 +442,7 @@ Flaky test 不能自动重跑后变绿；先记录原始失败，只有 typed ex
 | RAGFlow | parser/retrieval benchmark、rich document fixture | parser quality 与 tenant security 分开 gate；runtime parity 要 contract |
 | MaxKB | preview/confirm、Hit Test、direct return、human correction | 自动化 contract/golden/security release gate 由 ContextEngine 自建 |
 | Onyx | connector/checkpoint、分阶段索引与真实依赖测试分层 | missing tenant 不允许 default fallback；ACL semantics 必须单值明确 |
-| OpenViking | context filesystem/L0–L2 tiering、session candidate、trajectory 与 agent exposure UX | 不证明多租户安全；不作为 Runtime foundation；禁止 copy+patch |
+| OpenViking | #205 保持 open 时的 non-authoritative candidate packet：context filesystem/L0–L2 tiering、session candidate、trajectory 与 agent exposure UX | OpenViking is not public authority；不证明多租户安全；不作为 Runtime foundation；禁止 copy+patch |
 
 这张表只记录固定版本中可回引的 observable behavior，不将上游的代码结构、安全保证或 edition 声明继承给 ContextEngine。具体 commit 与一手证据统一由[Five Public Repositories Evidence Baseline](../research/2026-08-02-five-public-repositories-evidence.md)管理。
 
@@ -500,4 +500,4 @@ Visible self-correction：早期设计把“多写一些 unit tests”当可测�
 
 *Updated 2026-07-20*: 依据 ADR-0019 将发布 catalog 固定为 15 个 canonical ID，归并重叠标签而不删除 case，并将 acceptance 口径收敛为 12 个顶层场景加历史 13–22 的派生/参数化证据。
 
-*Updated 2026-08-02*: 公开参考证据更新到版本化五仓基线；OpenViking 只提供四类条件行为输入，不扩张安全 claim 或 Runtime authority。
+*Updated 2026-08-02*: 公开参考证据更新到版本化五仓基线；#205 保持 open 时，本设计不把 OpenViking 引作 authority，候选包也不扩张 Runtime 安全 claim。

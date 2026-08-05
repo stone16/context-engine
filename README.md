@@ -598,18 +598,19 @@ masquerade as a passing one.
 | [Implementation Design](./docs/design/2026-07-18-context-engine-implementation-design.md) | The integrated implementation authority and milestone boundaries |
 | [Threat Model](./docs/security/context-engine-threat-model.md) | Assets, trust boundaries, threats, hard oracles |
 | [Program PRD](./docs/agents/prd-contextengine-implementation.md) · [Epic Tech Spec](./docs/specs/2026-07-19-context-engine-implementation-epic.md) | Requirements, 100 user stories, contract shapes, work packages |
-| [Prior-art evidence baseline](./docs/research/2026-08-02-five-public-repositories-evidence.md) | Strengths, limits, clean-room breakdown, and evidence gaps of five fixed public repositories |
+| [Prior-art evidence baseline](./docs/research/2026-08-02-five-public-repositories-evidence.md) | Versioned successor for four admitted fixed repositories plus the OpenViking candidate packet, which is non-authoritative while issue #205 remains open |
 | [D0 Baseline Candidate](./DESIGN-BASELINE.md) | Current candidate state and unclosed evidence gates |
 
 ## Prior art
 
-The design draws on architectural study of five fixed public open-source projects —
-**Dify**, **RAGFlow**, **MaxKB**, **Onyx**, and conditionally admitted
-**OpenViking** — limited strictly to observable
-behavior, interface shape, test oracles, and product workflows. **No OpenViking
-code was copied; other reuse remains governed per exact source region by
-ADR-0074.** Pinned versions and first-party links are recorded in the
-[evidence baseline](./docs/research/2026-08-02-five-public-repositories-evidence.md).
+The design draws on architectural study of four admitted fixed public
+open-source projects — **Dify**, **RAGFlow**, **MaxKB**, and **Onyx** — limited
+strictly to observable behavior, interface shape, test oracles, and product
+workflows. The versioned
+[evidence baseline](./docs/research/2026-08-02-five-public-repositories-evidence.md)
+also carries an OpenViking candidate packet, but this README does not cite
+OpenViking as authority while issue #205 remains open. **No OpenViking code was
+copied; other reuse remains governed per exact source region by ADR-0074.**
 
 ContextEngine's security and multi-tenancy protocols are designed independently
 from its own requirements and threat model. Research from outside this
