@@ -10,7 +10,7 @@
     "source_paths",
     "excluded_paths",
     "reuse_mode",
-    "approval",
+    "approvals",
     "license",
     "files"
   ],
@@ -39,9 +39,23 @@
       "type": "string",
       "enum": ["copy", "copy-patch"]
     },
-    "approval": {
-      "type": "string",
-      "minLength": 1
+    "approvals": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["reference", "source_paths"],
+        "properties": {
+          "reference": { "type": "string", "minLength": 1 },
+          "source_paths": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": { "$ref": "#/$defs/relativePath" }
+          }
+        }
+      }
     },
     "license": {
       "type": "string",

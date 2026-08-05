@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import base64
 import io
 import json
 import subprocess
@@ -16,9 +17,8 @@ from docx.document import Document as DocumentType
 from docx.oxml import OxmlElement
 from pypdf import PdfWriter
 
-from adapters.parsers.ragflow_documents import (
-    compile_document_bytes,
-)
+from adapters.parsers import ragflow_documents as ragflow_document_adapter
+from adapters.parsers.ragflow_documents import compile_document_bytes
 from applications.document_compiler_runner import (
     ArtifactSource,
     BytesArtifactSource,
@@ -41,6 +41,7 @@ from engine.supply import (
 )
 from eval._compiler_acceptance import acceptance_context
 from third_party.ragflow.deepdoc.parser import utils as ragflow_pdf_utils
+from third_party.ragflow.deepdoc.parser.utils import RawPdfOutline
 
 REPOSITORY_ROOT = Path(__file__).parents[2]
 
@@ -417,6 +418,19 @@ def test_pdf_outline_bounds_page_before_rendering(
     assert outcome.code is DocumentCompilationFailureCode.DOCUMENT_BOUND_EXCEEDED
 
 
+def test_pdf_locator_constructor_enforces_pixel_area_bound() -> None:
+    digest = "0" * 64
+
+    with pytest.raises(ValueError, match="pixel-area hard bound"):
+        PdfRegionLocator(
+            artifact_digest=digest,
+            page_number=1,
+            bbox_points=(0.0, 0.0, 10_000.0, 5_000.0),
+            page_render_digest=digest,
+            extraction_method="pypdf-outline-v1",
+        )
+
+
 def test_pdf_outline_closes_document_and_renders_each_page_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -521,24 +535,41 @@ def test_profile_digest_is_identical_across_two_fresh_processes(
 ) -> None:
     assert callable(fixture)
     source = fixture()
+    canonical_documents: list[bytes] = []
+    for hash_seed, thread_count in (("17", "1"), ("941", "2")):
+        environment = {
+            "PYTHONHASHSEED": hash_seed,
+            "PYTHONPATH": str(REPOSITORY_ROOT),
+            "OMP_NUM_THREADS": thread_count,
+            "OPENBLAS_NUM_THREADS": thread_count,
+            "MKL_NUM_THREADS": thread_count,
+            "NUMEXPR_NUM_THREADS": thread_count,
+        }
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "applications.document_compiler_runner",
+                "--profile",
+                profile_ref,
+            ],
+            input=source,
+            capture_output=True,
+            check=True,
+            cwd=REPOSITORY_ROOT,
+            env=environment,
+            timeout=30,
+        )
+        envelope = json.loads(completed.stdout)
+        assert envelope["outcome"] == "parsed"
+        canonical_documents.append(
+            base64.b64decode(envelope["document"], validate=True)
+        )
 
-    first = compile_in_local_document_runner(
-        BytesArtifactSource(source),
-        profile_ref,
-        acceptance_context=acceptance_context(),
-    )
-    second = compile_in_local_document_runner(
-        BytesArtifactSource(source),
-        profile_ref,
-        acceptance_context=acceptance_context(),
-    )
-
-    assert type(first) is ParsedDocument
-    assert type(second) is ParsedDocument
+    assert canonical_documents[0] == canonical_documents[1]
+    first = deserialize_parsed_document(canonical_documents[0])
+    second = deserialize_parsed_document(canonical_documents[1])
     assert first.compilation_digest == second.compilation_digest
-    assert canonicalize_parsed_document(first) == (
-        canonicalize_parsed_document(second)
-    )
 
 
 @pytest.mark.parametrize("profile_ref", (DOCX_CONFIG_V1, PDF_TEXT_OUTLINE_V1))
@@ -629,6 +660,62 @@ def test_format_text_bound_counts_copied_heading_ancestry(
             ),
             units=units,
         )
+
+
+def test_docx_compiler_types_ancestry_only_overflow_as_document_bound(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import engine.supply.documents as document_contracts
+
+    monkeypatch.setattr(document_contracts, "MAX_FORMAT_DOCUMENT_TEXT_CHARACTERS", 10)
+    monkeypatch.setattr(
+        ragflow_document_adapter,
+        "MAX_FORMAT_DOCUMENT_TEXT_CHARACTERS",
+        10,
+    )
+    document = Document()
+    document.add_heading("12345", level=1)
+    document.add_paragraph("1")
+
+    outcome = compile_document_bytes(
+        _save_docx(document),
+        CompilationProfileRef("context-engine-docx-v1", DOCX_CONFIG_V1),
+    )
+
+    assert type(outcome) is DocumentCompilationFailure
+    assert outcome.code is DocumentCompilationFailureCode.DOCUMENT_BOUND_EXCEEDED
+
+
+def test_pdf_compiler_types_ancestry_only_overflow_as_document_bound(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import engine.supply.documents as document_contracts
+
+    monkeypatch.setattr(document_contracts, "MAX_FORMAT_DOCUMENT_TEXT_CHARACTERS", 10)
+    monkeypatch.setattr(
+        ragflow_document_adapter,
+        "MAX_FORMAT_DOCUMENT_TEXT_CHARACTERS",
+        10,
+    )
+    monkeypatch.setattr(
+        ragflow_document_adapter,
+        "extract_pdf_outlines",
+        lambda *_args, **_kwargs: (
+            RawPdfOutline("12345", 0, 1, (0.0, 0.0, 1.0, 1.0), "0" * 64),
+            RawPdfOutline("1", 1, 1, (0.0, 0.0, 1.0, 1.0), "0" * 64),
+        ),
+    )
+
+    outcome = compile_document_bytes(
+        _pdf_outline_fixture_for_same_page(),
+        CompilationProfileRef(
+            "context-engine-pdf-outline-v1",
+            PDF_TEXT_OUTLINE_V1,
+        ),
+    )
+
+    assert type(outcome) is DocumentCompilationFailure
+    assert outcome.code is DocumentCompilationFailureCode.DOCUMENT_BOUND_EXCEEDED
 
 
 @pytest.mark.parametrize(

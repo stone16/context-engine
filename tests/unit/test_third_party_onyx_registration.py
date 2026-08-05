@@ -66,9 +66,12 @@ def test_vendored_bytes_match_complete_pinned_registration() -> None:
     assert commit == PINNED_COMMIT
     assert registration["reuse_mode"] == "copy-patch"
     assert registration["license"] == "MIT"
-    assert registration["approval"] == (
-        "https://github.com/stone16/context-engine/issues/126"
-    )
+    assert registration["approvals"] == [
+        {
+            "reference": "https://github.com/stone16/context-engine/issues/126",
+            "source_paths": sorted(REQUIRED_SOURCE_PATHS),
+        }
+    ]
     source_paths = registration["source_paths"]
     excluded_paths = registration["excluded_paths"]
     assert isinstance(source_paths, list)

@@ -65,3 +65,34 @@ def test_copied_file_inside_excluded_region_is_rejected(tmp_path: Path) -> None:
     )
     with pytest.raises(GovernanceError, match="resolves into excluded region"):
         validate_tree(tmp_path)
+
+
+def test_approval_records_must_cover_each_source_region_exactly_once(
+    tmp_path: Path,
+) -> None:
+    registration = write_fixture_tree(tmp_path, SCHEMA)
+    _replace(
+        registration,
+        'approvals = [{ reference = "issue-1", source_paths = ["src/example.py"] }]',
+        'approvals = [{ reference = "issue-1", source_paths = ["src/second.py"] }]',
+    )
+
+    with pytest.raises(GovernanceError, match="approval coverage"):
+        validate_tree(tmp_path)
+
+
+def test_approval_records_cannot_claim_the_same_source_region_twice(
+    tmp_path: Path,
+) -> None:
+    registration = write_fixture_tree(tmp_path, SCHEMA)
+    _replace(
+        registration,
+        'approvals = [{ reference = "issue-1", source_paths = ["src/example.py"] }]',
+        """approvals = [
+  { reference = "issue-1", source_paths = ["src/example.py"] },
+  { reference = "issue-2", source_paths = ["src/example.py"] },
+]""",
+    )
+
+    with pytest.raises(GovernanceError, match="multiple approval records"):
+        validate_tree(tmp_path)

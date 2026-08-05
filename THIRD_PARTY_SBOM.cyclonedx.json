@@ -37,6 +37,22 @@
         {
           "name": "context-engine:file-sha256",
           "value": "third_party/onyx/connectors/registry.py=b134c07f20959ed44802c1fc753f9c0a8e5a9388134f4bc57b4bcc5ba4166618"
+        },
+        {
+          "name": "context-engine:source-approval",
+          "value": "backend/onyx/connectors/connector_runner.py=https://github.com/stone16/context-engine/issues/126"
+        },
+        {
+          "name": "context-engine:source-approval",
+          "value": "backend/onyx/connectors/interfaces.py=https://github.com/stone16/context-engine/issues/126"
+        },
+        {
+          "name": "context-engine:source-approval",
+          "value": "backend/onyx/connectors/models.py=https://github.com/stone16/context-engine/issues/126"
+        },
+        {
+          "name": "context-engine:source-approval",
+          "value": "backend/onyx/connectors/registry.py=https://github.com/stone16/context-engine/issues/126"
         }
       ],
       "type": "library",
@@ -74,6 +90,18 @@
         {
           "name": "context-engine:file-sha256",
           "value": "third_party/ragflow/deepdoc/parser/utils.py=2af5d63249bc7b17d9886e9b2fe8a363505726f261cd3ffd57066b134a4af820"
+        },
+        {
+          "name": "context-engine:source-approval",
+          "value": "deepdoc/parser/markdown_parser.py=https://github.com/stone16/context-engine/issues/124"
+        },
+        {
+          "name": "context-engine:source-approval",
+          "value": "deepdoc/parser/docx_parser.py=https://github.com/stone16/context-engine/issues/204; maintainer Decision D6 recorded in docs/research/2026-07-31-five-repository-implementation-blueprint.md section 5"
+        },
+        {
+          "name": "context-engine:source-approval",
+          "value": "deepdoc/parser/utils.py=https://github.com/stone16/context-engine/issues/204; maintainer Decision D6 recorded in docs/research/2026-07-31-five-repository-implementation-blueprint.md section 5"
         }
       ],
       "type": "library",

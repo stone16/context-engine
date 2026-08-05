@@ -117,6 +117,7 @@ def _compile_docx(
     artifact_digest = sha256(source).hexdigest()
     headings: list[tuple[int, str]] = []
     units: list[StructuralUnit] = []
+    canonical_text_characters = 0
     for unit_ordinal, block in enumerate(blocks):
         if block.kind == "table":
             kind = DocumentStructuralKind.TABLE
@@ -130,6 +131,9 @@ def _compile_docx(
             headings.append((level, block.text))
         else:
             ancestry = tuple(text for _, text in headings)
+        canonical_text_characters += len(block.text) + sum(map(len, ancestry))
+        if canonical_text_characters > MAX_FORMAT_DOCUMENT_TEXT_CHARACTERS:
+            return _failure(DocumentCompilationFailureCode.DOCUMENT_BOUND_EXCEEDED)
         units.append(
             StructuralUnit(
                 ordinal=unit_ordinal,
@@ -182,8 +186,12 @@ def _compile_pdf_outline(
     artifact_digest = sha256(source).hexdigest()
     ancestry: list[str] = []
     units: list[StructuralUnit] = []
+    canonical_text_characters = 0
     for ordinal, outline in enumerate(outlines):
         ancestry[:] = ancestry[: outline.depth]
+        canonical_text_characters += len(outline.title) + sum(map(len, ancestry))
+        if canonical_text_characters > MAX_FORMAT_DOCUMENT_TEXT_CHARACTERS:
+            return _failure(DocumentCompilationFailureCode.DOCUMENT_BOUND_EXCEEDED)
         units.append(
             StructuralUnit(
                 ordinal=ordinal,

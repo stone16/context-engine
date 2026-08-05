@@ -150,6 +150,8 @@ class PdfRegionLocator:
             or y1 > MAX_PDF_PAGE_DIMENSION_POINTS
         ):
             raise ValueError("PDF bbox must be a bounded positive ordered region")
+        if (x1 - x0) * (y1 - y0) > MAX_PDF_PAGE_PIXEL_AREA:
+            raise ValueError("PDF bbox exceeds the pixel-area hard bound")
 
 
 type SourceLocator = TextByteSpan | DocxXmlLocator | PdfRegionLocator

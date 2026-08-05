@@ -15,7 +15,10 @@ excluded_paths = [
   "common/constants.py",
 ]
 reuse_mode = "copy-patch"
-approval = "https://github.com/stone16/context-engine/issues/124, https://github.com/stone16/context-engine/issues/204; maintainer Decision D6 recorded in docs/research/2026-07-31-five-repository-implementation-blueprint.md section 5"
+approvals = [
+  { reference = "https://github.com/stone16/context-engine/issues/124", source_paths = ["deepdoc/parser/markdown_parser.py"] },
+  { reference = "https://github.com/stone16/context-engine/issues/204; maintainer Decision D6 recorded in docs/research/2026-07-31-five-repository-implementation-blueprint.md section 5", source_paths = ["deepdoc/parser/docx_parser.py", "deepdoc/parser/utils.py"] },
+]
 license = "Apache-2.0"
 nested_dependencies = [
   { name = "Python-Markdown", version = "3.6", license = "BSD-3-Clause", license_path = "third_party/ragflow/LICENSE.python-markdown" },

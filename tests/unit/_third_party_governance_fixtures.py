@@ -33,7 +33,7 @@ commit = "0123456789abcdef0123456789abcdef01234567"
 source_paths = ["src/example.py"]
 excluded_paths = ["src/private"]
 reuse_mode = "copy-patch"
-approval = "issue-1"
+approvals = [{{ reference = "issue-1", source_paths = ["src/example.py"] }}]
 license = "MIT"
 
 [[files]]

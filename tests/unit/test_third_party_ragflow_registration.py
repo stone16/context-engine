@@ -73,12 +73,24 @@ def test_vendored_bytes_match_complete_pinned_registration() -> None:
     assert re.fullmatch(r"[0-9a-f]{40}", commit)
     assert commit == "4391e03886b996201f3b8818f671b19eb24d0f7b"
     assert registration["reuse_mode"] == "copy-patch"
-    assert registration["approval"] == (
-        "https://github.com/stone16/context-engine/issues/124, "
-        "https://github.com/stone16/context-engine/issues/204; "
-        "maintainer Decision D6 recorded in "
-        "docs/research/2026-07-31-five-repository-implementation-blueprint.md section 5"
-    )
+    assert registration["approvals"] == [
+        {
+            "reference": "https://github.com/stone16/context-engine/issues/124",
+            "source_paths": ["deepdoc/parser/markdown_parser.py"],
+        },
+        {
+            "reference": (
+                "https://github.com/stone16/context-engine/issues/204; "
+                "maintainer Decision D6 recorded in "
+                "docs/research/2026-07-31-five-repository-implementation-blueprint.md "
+                "section 5"
+            ),
+            "source_paths": [
+                "deepdoc/parser/docx_parser.py",
+                "deepdoc/parser/utils.py",
+            ],
+        },
+    ]
     source_paths = registration["source_paths"]
     assert isinstance(source_paths, list)
     assert set(source_paths) == {

@@ -179,6 +179,26 @@ def validate_registration(
 
     source_paths = tuple(PurePosixPath(value) for value in data["source_paths"])
     excluded_paths = tuple(PurePosixPath(value) for value in data["excluded_paths"])
+    approval_owners: dict[PurePosixPath, str] = {}
+    for approval in data["approvals"]:
+        for value in approval["source_paths"]:
+            approval_path = PurePosixPath(value)
+            if approval_path in approval_owners:
+                raise GovernanceError(
+                    f"{registration.path}: source region {approval_path} is claimed by "
+                    "multiple approval records"
+                )
+            approval_owners[approval_path] = approval["reference"]
+    source_path_set = set(source_paths)
+    approval_path_set = set(approval_owners)
+    if approval_path_set != source_path_set:
+        missing = sorted(str(path) for path in source_path_set - approval_path_set)
+        unknown = sorted(str(path) for path in approval_path_set - source_path_set)
+        detail = f"missing={missing}, unknown={unknown}"
+        raise GovernanceError(
+            f"{registration.path}: approval coverage must match source_paths "
+            f"exactly: {detail}"
+        )
     overlaps = sorted(str(path) for path in set(source_paths) & set(excluded_paths))
     if overlaps:
         detail = f"path listed as both copied and excluded: {overlaps[0]}"
@@ -306,11 +326,14 @@ def render_notices(registrations: Sequence[Registration]) -> str:
                 f"- Commit: `{data['commit']}`",
                 f"- License: {data['license']} (`{license_path}`)",
                 f"- Reuse mode: `{data['reuse_mode']}`",
-                f"- Approval: {data['approval']}",
-                "- Copied paths:",
+                "- Approvals by source region:",
             ]
         )
-        lines.extend(f"  - `{path}`" for path in data["source_paths"])
+        lines.extend(
+            f"  - `{path}` — {approval['reference']}"
+            for approval in data["approvals"]
+            for path in approval["source_paths"]
+        )
         dependencies = data.get("nested_dependencies", [])
         if dependencies:
             lines.extend(["- Nested dependencies:"])
@@ -347,6 +370,14 @@ def render_sbom(registrations: Sequence[Registration]) -> str:
                             "value": f"{item['vendored_path']}={item['sha256']}",
                         }
                         for item in data["files"]
+                    ),
+                    *(
+                        {
+                            "name": "context-engine:source-approval",
+                            "value": f"{path}={approval['reference']}",
+                        }
+                        for approval in data["approvals"]
+                        for path in approval["source_paths"]
                     ),
                 ],
             }
