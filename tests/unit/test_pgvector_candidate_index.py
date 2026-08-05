@@ -330,8 +330,11 @@ def test_qwen_query_accounting_includes_the_exact_provider_prefix() -> None:
 @pytest.mark.security_evidence(id="ACCOUNTING-ZERO-BYTES-217", layer="runtime")
 def test_budgeted_query_embedding_refuses_exhaustion_before_provider_call() -> None:
     provider = _RecordingProvider()
+    query = "semantic query"
     budget = PackageBudgetMeter(
-        PackageBudget(1, 1, 1, 1),
+        PackageBudget(len(query) + 2_065, 1, 1, 5_000),
+        tokenizer_profile=UNICODE_SCALAR_TOKENIZER_PROFILE,
+        release_generation=7,
     )
 
     with pytest.raises(
@@ -339,7 +342,7 @@ def test_budgeted_query_embedding_refuses_exhaustion_before_provider_call() -> N
         match="Vector candidate discovery is unavailable",
     ):
         PostgreSQLVectorCandidateIndex(provider).prepare_budgeted_discovery(
-            Acquire(need=ContextNeed(query="semantic query")),
+            Acquire(need=ContextNeed(query=query)),
             effective_scope=_discovery_scope(),
             budget=budget,
             active_embedding_profile_digest=(
@@ -354,11 +357,16 @@ def test_budgeted_query_embedding_refuses_exhaustion_before_provider_call() -> N
 
 @pytest.mark.security_evidence(id="ACCOUNTING-MAX-CHARGE-217", layer="runtime")
 def test_failed_query_embedding_charges_reserved_maximum_after_provider_call() -> None:
-    budget = PackageBudgetMeter(PackageBudget(1, 1, 1, 5_000))
+    query = "semantic query"
+    budget = PackageBudgetMeter(
+        PackageBudget(3_000, 1, 1, 5_000),
+        tokenizer_profile=UNICODE_SCALAR_TOKENIZER_PROFILE,
+        release_generation=7,
+    )
 
     with pytest.raises(VectorCandidateIndexUnavailable):
         PostgreSQLVectorCandidateIndex(_UnavailableProvider()).prepare_budgeted_discovery(
-            Acquire(need=ContextNeed(query="semantic query")),
+            Acquire(need=ContextNeed(query=query)),
             effective_scope=_discovery_scope(),
             budget=budget,
             active_embedding_profile_digest=(
@@ -366,9 +374,7 @@ def test_failed_query_embedding_charges_reserved_maximum_after_provider_call() -
             ),
         )
 
-    assert budget.usage.provider_calls == 1
-    assert budget.usage.cost_microunits == 1
-    assert budget.usage.elapsed_ms == 5_000
+    assert budget.usage == BudgetUsage(len(query) + 2_066, 1, 1, 5_000)
 
 
 def test_hanging_query_embedding_returns_by_deadline_and_charges_maximum(
