@@ -23,7 +23,7 @@ text.
 - Commit: `4391e03886b996201f3b8818f671b19eb24d0f7b`
 - License: Apache-2.0 (`third_party/ragflow/LICENSE.upstream`)
 - Reuse mode: `copy-patch`
-- Approval: https://github.com/stone16/context-engine/issues/124, https://github.com/stone16/context-engine/issues/204 (awaiting maintainer approval)
+- Approval: https://github.com/stone16/context-engine/issues/124, https://github.com/stone16/context-engine/issues/204; maintainer Decision D6 recorded in docs/research/2026-07-31-five-repository-implementation-blueprint.md section 5
 - Copied paths:
   - `deepdoc/parser/markdown_parser.py`
   - `deepdoc/parser/docx_parser.py`

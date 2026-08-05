@@ -74,8 +74,9 @@ def test_vendored_bytes_match_complete_pinned_registration() -> None:
     assert registration["reuse_mode"] == "copy-patch"
     assert registration["approval"] == (
         "https://github.com/stone16/context-engine/issues/124, "
-        "https://github.com/stone16/context-engine/issues/204 "
-        "(awaiting maintainer approval)"
+        "https://github.com/stone16/context-engine/issues/204; "
+        "maintainer Decision D6 recorded in "
+        "docs/research/2026-07-31-five-repository-implementation-blueprint.md section 5"
     )
     source_paths = registration["source_paths"]
     assert isinstance(source_paths, list)
