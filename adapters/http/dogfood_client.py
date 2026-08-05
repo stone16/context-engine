@@ -1,4 +1,4 @@
-"""Redacted loopback caller for the frozen dogfood HTTP resolve carrier."""
+"""Redacted loopback caller for the current dogfood HTTP resolve carrier."""
 
 from __future__ import annotations
 
@@ -181,7 +181,7 @@ class DogfoodHttpConfiguration:
 
 
 class DogfoodResolveClient:
-    """Minimal plain-HTTP caller of only the frozen resolve operation."""
+    """Minimal plain-HTTP caller of only the v1 resolve operation."""
 
     __slots__ = ("_configuration",)
 
@@ -236,7 +236,7 @@ class DogfoodResolveClient:
                 ) as client,
                 client.stream(
                     "POST",
-                    f"{self._configuration.base_url}/v0/resolve",
+                    f"{self._configuration.base_url}/v1/resolve",
                     content=body,
                     headers=self._headers(request_id),
                 ) as response,

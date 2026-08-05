@@ -378,6 +378,7 @@ def create_dogfood_app(
             file_import_service_principal_id=receiver_id,
             clock=ui_clock,
         ),
+        public_contract_version="v1",
     )
     app.add_event_handler("shutdown", runtime_engine.dispose)
     if control_engine is not None:

@@ -333,6 +333,11 @@ def create_app(
         title="ContextEngine",
         version=(PUBLIC_API_VERSION if public_contract_version == "v0" else "1.0.0"),
     )
+    app.state.public_resolve_path = (
+        PUBLIC_RESOLVE_PATH
+        if public_contract_version == "v0"
+        else PUBLIC_RESOLVE_PATH_V1
+    )
     app.add_middleware(
         ResolveBodyLimitMiddleware,
         profile=transport_profile,

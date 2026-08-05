@@ -481,13 +481,27 @@ def ensure_test_runtime_release(
         )
         runtime = RuntimeProfileRef(
             profile_ref=runtime_profile_ref,
-            profile_digest=RUNTIME_PROFILE_DIGEST_V0,
+            profile_digest=(
+                RUNTIME_PROFILE_DIGEST_V1
+                if package_schema_ref == PACKAGE_SCHEMA_REF_V1
+                else RUNTIME_PROFILE_DIGEST_V0
+            ),
             content_profile_digest=content.profile_digest,
             index_profile_digest=index.profile_digest,
             content_schema_ref=content.content_schema_ref,
             index_schema_ref=index.index_schema_ref,
             tokenizer_ref=tokenizer_ref,
             package_schema_ref=package_schema_ref,
+            tokenizer_profile_document=(
+                UNICODE_SCALAR_TOKENIZER_PROFILE.canonical_json()
+                if package_schema_ref == PACKAGE_SCHEMA_REF_V1
+                else HISTORICAL_UTF8_BYTE_TOKENIZER_PROFILE_DOCUMENT
+            ),
+            tokenizer_profile_digest=(
+                UNICODE_SCALAR_TOKENIZER_PROFILE.profile_digest
+                if package_schema_ref == PACKAGE_SCHEMA_REF_V1
+                else HISTORICAL_UTF8_BYTE_TOKENIZER_PROFILE_DIGEST
+            ),
         )
         manifest = ReleaseManifest(
             organization_id=organization_id,

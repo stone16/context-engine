@@ -50,14 +50,15 @@ from engine.runtime.release_lineage import (
     CURATION_PROFILE_DIGEST_V0,
     CURATION_PROFILE_REF_V0,
     INDEX_SCHEMA_REF_V0,
-    PACKAGE_SCHEMA_REF_V0,
+    PACKAGE_SCHEMA_REF_V1,
     QWEN_VECTOR_INDEX_PROFILE_DIGEST_V1,
     QWEN_VECTOR_INDEX_PROFILE_REF_V1,
-    RUNTIME_PROFILE_DIGEST_V0,
-    RUNTIME_PROFILE_REF_V0,
-    RUNTIME_TOKENIZER_REF_V0,
+    RUNTIME_PROFILE_DIGEST_V1,
+    RUNTIME_PROFILE_REF_V1,
+    RUNTIME_TOKENIZER_REF_V1,
 )
 from engine.supply import QWEN3_EMBEDDING_PROFILE
+from engine.tokenizer_accounting import UNICODE_SCALAR_TOKENIZER_PROFILE
 
 RELEASE_EVALUATION_SIGNING_KEY_VERSION_ENV = (
     "CONTEXT_ENGINE_RELEASE_EVALUATION_SIGNING_KEY_VERSION"
@@ -228,14 +229,16 @@ def _manifest(
         ),
     )
     runtime = RuntimeProfileRef(
-        profile_ref=RUNTIME_PROFILE_REF_V0,
-        profile_digest=RUNTIME_PROFILE_DIGEST_V0,
+        profile_ref=RUNTIME_PROFILE_REF_V1,
+        profile_digest=RUNTIME_PROFILE_DIGEST_V1,
         content_profile_digest=content.profile_digest,
         index_profile_digest=index.profile_digest,
         content_schema_ref=content.content_schema_ref,
         index_schema_ref=index.index_schema_ref,
-        tokenizer_ref=RUNTIME_TOKENIZER_REF_V0,
-        package_schema_ref=PACKAGE_SCHEMA_REF_V0,
+        tokenizer_ref=RUNTIME_TOKENIZER_REF_V1,
+        package_schema_ref=PACKAGE_SCHEMA_REF_V1,
+        tokenizer_profile_document=UNICODE_SCALAR_TOKENIZER_PROFILE.canonical_json(),
+        tokenizer_profile_digest=UNICODE_SCALAR_TOKENIZER_PROFILE.profile_digest,
     )
     lineage = "\x00".join(active_revision_refs)
     return ReleaseManifest(

@@ -471,7 +471,7 @@ def test_spawned_stdio_session_calls_only_loopback_http_and_preserves_outcome() 
         "kind": "acquire",
         "need": {"query": "One spawned MCP request"},
     }
-    assert call["path"] == "/v0/resolve"
+    assert call["path"] == "/v1/resolve"
     assert isinstance(call["request_id"], str)
     assert call["request_id"].startswith("mcp-")
     assert SECRET not in json.dumps(call["body"])
@@ -690,11 +690,12 @@ def test_spawned_mcp_matches_the_public_http_seam_for_required_parity_cases(
             acquire_capability=acquire_capability,
         ),
         clock=lambda: RECEIVED_AT,
+        public_contract_version="v1",
     )
     direct_client = TestClient(app)
     forwarding_client = TestClient(app)
     direct = direct_client.post(
-        "/v0/resolve",
+        "/v1/resolve",
         headers={
             "Authorization": f"Bearer {SECRET}",
             "X-Context-Request-Id": f"http-parity-{case_name}",

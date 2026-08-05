@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from pathlib import Path
+from uuid import uuid4
+
 import pytest
 
 from applications.operator_authentication import (
@@ -13,7 +16,43 @@ from applications.release_promotion import (
     RELEASE_EVALUATION_SIGNING_KEY_VERSION_ENV,
     ReleasePromotionConfigurationUnavailable,
     _keyring,
+    _manifest,
 )
+from engine.runtime.release_lineage import (
+    PACKAGE_SCHEMA_REF_V1,
+    RUNTIME_PROFILE_DIGEST_V1,
+    RUNTIME_PROFILE_REF_V1,
+    RUNTIME_TOKENIZER_REF_V1,
+)
+from engine.tokenizer_accounting import UNICODE_SCALAR_TOKENIZER_PROFILE
+
+ROOT = Path(__file__).parents[2]
+
+
+@pytest.mark.security_evidence(id="ACCOUNTING-PROMOTION-V1-217", layer="property")
+def test_release_promotion_builds_the_activatable_v1_runtime_profile() -> None:
+    manifest = _manifest(uuid4(), ("revision:one",))
+
+    assert manifest.runtime_profile.profile_ref == RUNTIME_PROFILE_REF_V1
+    assert manifest.runtime_profile.profile_digest == RUNTIME_PROFILE_DIGEST_V1
+    assert manifest.runtime_profile.tokenizer_ref == RUNTIME_TOKENIZER_REF_V1
+    assert manifest.runtime_profile.package_schema_ref == PACKAGE_SCHEMA_REF_V1
+    assert (
+        manifest.runtime_profile.tokenizer_profile_document
+        == UNICODE_SCALAR_TOKENIZER_PROFILE.canonical_json()
+    )
+    assert (
+        manifest.runtime_profile.tokenizer_profile_digest
+        == UNICODE_SCALAR_TOKENIZER_PROFILE.profile_digest
+    )
+
+
+def test_dogfood_api_serves_the_promoted_v1_contract() -> None:
+    composition = (ROOT / "adapters/http/dogfood.py").read_text(encoding="utf-8")
+    caller = (ROOT / "adapters/http/dogfood_client.py").read_text(encoding="utf-8")
+
+    assert 'public_contract_version="v1"' in composition
+    assert 'f"{self._configuration.base_url}/v1/resolve"' in caller
 
 
 def test_evaluation_key_refuses_identical_hex_encoded_operator_secret() -> None:

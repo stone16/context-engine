@@ -30,11 +30,14 @@ from engine.runtime.actor import (
     _construct_current_membership_verification,
     _open_membership_authority_scope,
 )
+from engine.runtime.budget import PackageBudgetMeter
 from engine.runtime.construction import Runtime, required_kernel_dependencies
 from engine.runtime.context_run import ContextRunRecord
+from engine.runtime.contracts import Acquire
 from engine.runtime.evidence import CandidateRef
 from engine.runtime.materialized import (
     MaterializedProjectionPort,
+    VectorDiscoveryRequest,
     _close_materialized_projection_scope,
     _construct_materialized_projection_session,
     _open_materialized_projection_scope,
@@ -51,7 +54,12 @@ from engine.runtime.release_lineage import (
     RUNTIME_PROFILE_REF_V1,
     RUNTIME_TOKENIZER_REF_V1,
 )
-from engine.runtime.scope import ScopeSet, ScopeTarget, TrustedScopeOperands
+from engine.runtime.scope import (
+    CandidateDiscoveryScope,
+    ScopeSet,
+    ScopeTarget,
+    TrustedScopeOperands,
+)
 from engine.supply import DETERMINISTIC_TWIN_EMBEDDING_PROFILE
 from engine.tokenizer_accounting import UNICODE_SCALAR_TOKENIZER_PROFILE
 from tests.support.context_run import (
@@ -115,6 +123,25 @@ class _AuthorizedMaterializedPort(RecordingMaterializedPort):
             effective_scope,
         )
         return (AUTHORIZED,)[:limit]
+
+
+class _MixedGenerationVectorIndex(PostgreSQLVectorCandidateIndex):
+    def prepare_generation_bound_discovery(
+        self,
+        request: Acquire,
+        *,
+        effective_scope: CandidateDiscoveryScope,
+        budget: PackageBudgetMeter,
+        active_embedding_profile_digest: str,
+        active_release_generation: int,
+    ) -> VectorDiscoveryRequest:
+        return super().prepare_generation_bound_discovery(
+            request,
+            effective_scope=effective_scope,
+            budget=budget,
+            active_embedding_profile_digest=active_embedding_profile_digest,
+            active_release_generation=active_release_generation + 1,
+        )
 
 
 class _CurrentEpochPort:
@@ -221,12 +248,15 @@ def _application(
     context_runs: RecordingContextRunPort,
     *,
     corrupt_tokenizer_digest: bool = False,
+    mixed_generation_carrier: bool = False,
 ) -> FastAPI:
     materialized = _AuthorizedMaterializedPort()
-    index = PostgreSQLVectorCandidateIndex(
-        provider,
-        monotonic_ms=iter((25, 32)).__next__,
+    index_type = (
+        _MixedGenerationVectorIndex
+        if mixed_generation_carrier
+        else PostgreSQLVectorCandidateIndex
     )
+    index = index_type(provider, monotonic_ms=iter((25, 32)).__next__)
     runtime = Runtime(
         required_kernel_dependencies(),
         candidate_index=index,
@@ -253,12 +283,14 @@ def _client(
     context_runs: RecordingContextRunPort,
     *,
     corrupt_tokenizer_digest: bool = False,
+    mixed_generation_carrier: bool = False,
 ) -> TestClient:
     return TestClient(
         _application(
             provider,
             context_runs,
             corrupt_tokenizer_digest=corrupt_tokenizer_digest,
+            mixed_generation_carrier=mixed_generation_carrier,
         )
     )
 
@@ -280,6 +312,7 @@ def _wait_for_tcp(port: int) -> None:
     raise AssertionError("live v1 SDK fixture did not become reachable")
 
 
+@pytest.mark.security_evidence(id="ACCOUNTING-PACKAGE-RUN-BINDING-217", layer="runtime")
 def test_v1_http_package_and_context_run_publish_one_digest_bound_usage() -> None:
     provider = _RecordingEmbeddingProvider()
     context_runs = RecordingContextRunPort()
@@ -326,6 +359,7 @@ def test_v1_http_package_and_context_run_publish_one_digest_bound_usage() -> Non
         ContextPackageV1Wire.model_validate(mutated)
 
 
+@pytest.mark.security_evidence(id="ACCOUNTING-INGRESS-MISMATCH-217", layer="runtime")
 def test_v1_http_tokenizer_digest_mismatch_refuses_before_provider_bytes() -> None:
     provider = _RecordingEmbeddingProvider()
     context_runs = RecordingContextRunPort()
@@ -339,6 +373,31 @@ def test_v1_http_tokenizer_digest_mismatch_refuses_before_provider_bytes() -> No
         headers={
             "Authorization": f"Bearer {VALID_TOKEN}",
             "X-Context-Request-Id": "v1-tokenizer-mismatch",
+        },
+        json={"kind": "acquire", "need": {"query": QUERY}},
+    )
+
+    assert response.status_code == 503
+    assert response.content == b'{"code":"service_unavailable"}'
+    assert provider.calls == 0
+    assert provider.bytes_sent == 0
+    assert context_runs.calls == []
+
+
+@pytest.mark.security_evidence(id="ACCOUNTING-MIXED-GENERATION-217", layer="runtime")
+def test_v1_http_mixed_generation_refuses_before_provider_bytes() -> None:
+    provider = _RecordingEmbeddingProvider()
+    context_runs = RecordingContextRunPort()
+
+    response = _client(
+        provider,
+        context_runs,
+        mixed_generation_carrier=True,
+    ).post(
+        "/v1/resolve",
+        headers={
+            "Authorization": f"Bearer {VALID_TOKEN}",
+            "X-Context-Request-Id": "v1-mixed-generation",
         },
         json={"kind": "acquire", "need": {"query": QUERY}},
     )
