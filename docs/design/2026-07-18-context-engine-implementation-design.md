@@ -29,14 +29,16 @@ reproducible report/digest is recorded.
 
 ### 0.1 Public provenance and independent design ownership
 
-Public prior-art claims are allowlisted to Dify, RAGFlow, MaxKB, Onyx, and
-conditionally admitted OpenViking at the fixed revisions recorded in
-`docs/research/2026-08-02-five-public-repositories-evidence.md`. Those projects
-provide observable patterns for product orchestration, document compilation,
-knowledge operations, connectors, checkpointing, retrieval, and test layering.
-They do not establish ContextEngine's security guarantees. OpenViking is
-further restricted to the baseline's four behavioral claim families; it is no
-Runtime foundation and supplies no code or dependency.
+Public prior-art claims are allowlisted to Dify, RAGFlow, MaxKB, and Onyx at
+the fixed revisions recorded in
+`docs/research/2026-08-02-five-public-repositories-evidence.md`. Those four
+projects provide observable patterns for product orchestration, document
+compilation, knowledge operations, connectors, checkpointing, retrieval, and
+test layering. They do not establish ContextEngine's security guarantees. The
+same versioned baseline carries an OpenViking candidate packet, but this design
+does not cite OpenViking as authority while issue #205 remains open; no
+OpenViking code or dependency is admitted, and it cannot serve as a Runtime
+foundation.
 
 ContextEngine independently owns the tenant model, AuthorizationKernel,
 AuthorizedProjection type flow, SourceAclEvidence semantics, WorkerLease,

@@ -6,12 +6,30 @@ from pathlib import Path
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 OPENVIKING_SHA = "49b182045b42d34ad530948ad77d9d0226897da8"
 BASELINE_PATH = "docs/research/2026-08-02-five-public-repositories-evidence.md"
+PREDECESSOR_PATH = "docs/research/2026-07-19-four-public-repositories-evidence.md"
 ROOM_A_PATH = "docs/research/2026-07-31-openviking-blueprint-evaluation.md"
 DOSSIER_PATH = "docs/research/2026-08-02-openviking-legal-review-dossier.md"
 BLUEPRINT_PATH = "docs/research/2026-07-31-five-repository-implementation-blueprint.md"
 OPENVIKING_URL = re.compile(
     r"https://github\.com/volcengine/OpenViking/(?:blob|tree)/([^/)]+)/"
 )
+OPENVIKING_SOURCE_URL = re.compile(
+    r"https://github\.com/volcengine/OpenViking/(?:blob|tree)/"
+    rf"{OPENVIKING_SHA}/[^)]+"
+)
+EXACT_LINE_RANGE = re.compile(r"#L\d+-L\d+$")
+UPSTREAM_CLAIM_BLOCK = re.compile(
+    r"^### 上游路径与(?:可观察行为|核验结果|本仓 thesis)\n\n"
+    r"(?P<claim>.*?)(?=\n\n### )",
+    re.MULTILINE | re.DOTALL,
+)
+EXPECTED_REPOSITORY_SNAPSHOTS = {
+    "langgenius/dify": "120c38bad8d27cbe1e6a1d5522fd66f5caf6d0d5",
+    "infiniflow/ragflow": "4391e03886b996201f3b8818f671b19eb24d0f7b",
+    "1Panel-dev/MaxKB": "32b2d885e47ad04639abd7a18490bf5937f9c072",
+    "onyx-dot-app/onyx": "2fb3dd10493b3883870fa8adced5b1a0e114feff",
+    "volcengine/OpenViking": OPENVIKING_SHA,
+}
 
 
 def _read(path: str) -> str:
@@ -55,6 +73,60 @@ def test_current_public_authority_uses_the_versioned_five_repository_baseline() 
         assert ROOM_A_PATH not in document, path
 
 
+def test_five_repository_baseline_is_an_explicit_versioned_successor() -> None:
+    baseline = _read(BASELINE_PATH)
+
+    assert "> Version: 2.0.0" in baseline
+    predecessor_name = PREDECESSOR_PATH.rsplit("/", maxsplit=1)[1]
+    assert f"> Supersedes: [`{predecessor_name}`]" in baseline
+    for repository, snapshot in EXPECTED_REPOSITORY_SNAPSHOTS.items():
+        assert f"https://github.com/{repository}/commit/{snapshot}" in baseline
+
+
+def test_public_docs_keep_openviking_non_authoritative_until_issue_205_closes() -> None:
+    public_paths = (
+        Path("README.md"),
+        Path("PLAN.md"),
+        Path("STATUS.md"),
+        *sorted(Path("docs/design").rglob("*.md")),
+    )
+    boundary_terms = (
+        "candidate",
+        "non-authoritative",
+        "not authority",
+        "does not cite openviking as authority",
+        "不把 openviking 引作 authority",
+        "候选",
+        "no openviking code",
+        "no code or dependency is admitted",
+        "not_active",
+    )
+    forbidden_authority_phrases = (
+        "conditionally admitted openviking",
+        "openviking claim families",
+        "draws on architectural study of five",
+        "allowlisted to dify, ragflow, maxkb, onyx, and openviking",
+    )
+
+    for path in public_paths:
+        document = _read(path.as_posix())
+        normalized_document = _collapse_whitespace(document).lower()
+        assert (
+            "https://github.com/volcengine/openviking" not in normalized_document
+        ), path
+        assert ROOM_A_PATH not in document, path
+        for phrase in forbidden_authority_phrases:
+            assert phrase not in normalized_document, (path, phrase)
+
+        openviking_paragraphs = (
+            _collapse_whitespace(paragraph).lower()
+            for paragraph in re.split(r"\n\s*\n", document)
+            if "openviking" in paragraph.lower()
+        )
+        for paragraph in openviking_paragraphs:
+            assert any(term in paragraph for term in boundary_terms), (path, paragraph)
+
+
 def test_openviking_public_evidence_uses_only_the_admitted_snapshot() -> None:
     evidence_paths = (
         BASELINE_PATH,
@@ -66,6 +138,37 @@ def test_openviking_public_evidence_uses_only_the_admitted_snapshot() -> None:
         snapshots = OPENVIKING_URL.findall(_read(path))
         assert snapshots, path
         assert set(snapshots) == {OPENVIKING_SHA}, path
+
+
+def test_room_a_claim_permalinks_pin_exact_source_regions() -> None:
+    room_a = _read(ROOM_A_PATH)
+    source_urls = OPENVIKING_SOURCE_URL.findall(room_a)
+
+    assert source_urls
+    assert all(EXACT_LINE_RANGE.search(url) for url in source_urls)
+
+    claim_blocks = UPSTREAM_CLAIM_BLOCK.findall(room_a)
+    assert len(claim_blocks) == 8
+    for claim in claim_blocks:
+        claim_urls = OPENVIKING_SOURCE_URL.findall(claim)
+        assert claim_urls, claim
+        assert all(EXACT_LINE_RANGE.search(url) for url in claim_urls)
+
+    capability_table = room_a.split(
+        "# 2. 能力盘点 → ContextEngine 区域映射表", maxsplit=1
+    )[1].split("# 3. 逐能力蓝图", maxsplit=1)[0]
+    capability_rows = [
+        line
+        for line in capability_table.splitlines()
+        if line.startswith("|")
+        and "OpenViking 能力" not in line
+        and not set(line.replace("|", "").strip()) <= {"-"}
+    ]
+    assert len(capability_rows) == 9
+    for row in capability_rows:
+        row_urls = OPENVIKING_SOURCE_URL.findall(row)
+        assert row_urls, row
+        assert all(EXACT_LINE_RANGE.search(url) for url in row_urls)
 
 
 def test_openviking_copy_and_legal_authority_remain_closed() -> None:

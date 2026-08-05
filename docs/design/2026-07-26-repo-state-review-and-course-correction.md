@@ -88,8 +88,8 @@ status: review record; decision boundaries owned by ADR-0061..ADR-0064
 - **以创始论题为准绳:分叉。** 四支柱现状——真实检索:占位符;结构化
   DB/API 族:路线图与领域模型零出现;adapter 群:一个 provider 且 seam
   为名义;深度清洗:仅确定性 Markdown 编译。
-- 与四个公开参考仓(见
-  `docs/research/2026-07-19-four-public-repositories-evidence.md`)呈镜像:
+- 与四个已准入公开参考仓(见版本化后继基线
+  `docs/research/2026-08-02-five-public-repositories-evidence.md`)呈镜像:
   证据基线显示它们集体薄弱的授权/撤销/租户隔离恰是本仓已建成者;它们各自
   擅长的摄取与检索广度恰是本仓未建者。此镜像可成为差异化,但必须出自
   自觉选择——本次评审即为该选择补办手续(ADR-0061)。
