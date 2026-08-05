@@ -118,31 +118,17 @@ def _docx_with_tracked_insertion() -> bytes:
     return _save_docx(document)
 
 
-def _docx_with_simple_field() -> bytes:
+def _docx_with_wrapped_text(wrapper_tag: str, hidden_text: str) -> bytes:
     document = Document()
     document.add_paragraph("Retained body text.")
     paragraph = document.add_paragraph()
-    field = OxmlElement("w:fldSimple")
+    wrapper = OxmlElement(wrapper_tag)
     run = OxmlElement("w:r")
     text = OxmlElement("w:t")
-    text.text = "Simple field text must not disappear."
+    text.text = hidden_text
     run.append(text)
-    field.append(run)
-    paragraph._p.append(field)
-    return _save_docx(document)
-
-
-def _docx_with_smart_tag() -> bytes:
-    document = Document()
-    document.add_paragraph("Retained body text.")
-    paragraph = document.add_paragraph()
-    smart_tag = OxmlElement("w:smartTag")
-    run = OxmlElement("w:r")
-    text = OxmlElement("w:t")
-    text.text = "Smart tag text must not disappear."
-    run.append(text)
-    smart_tag.append(run)
-    paragraph._p.append(smart_tag)
+    wrapper.append(run)
+    paragraph._p.append(wrapper)
     return _save_docx(document)
 
 
@@ -357,24 +343,34 @@ def test_docx_refuses_source_content_it_cannot_preserve(
     assert outcome.code is DocumentCompilationFailureCode.INVALID_ARTIFACT
 
 
-def test_docx_refuses_simple_field_text_it_cannot_preserve() -> None:
-    outcome = compile_document_bytes(
-        _docx_with_simple_field(),
-        CompilationProfileRef("context-engine-docx-v1", DOCX_CONFIG_V1),
+@pytest.mark.parametrize(
+    ("wrapper_tag", "hidden_text"),
+    (
+        ("w:fldSimple", "Simple field text must not disappear."),
+        ("w:smartTag", "Smart tag text must not disappear."),
+    ),
+    ids=("simple-field", "smart-tag"),
+)
+def test_docx_wrapped_text_refuses_at_parser_and_runner_seams(
+    wrapper_tag: str,
+    hidden_text: str,
+) -> None:
+    source = _docx_with_wrapped_text(wrapper_tag, hidden_text)
+    outcomes = (
+        compile_document_bytes(
+            source,
+            CompilationProfileRef("context-engine-docx-v1", DOCX_CONFIG_V1),
+        ),
+        compile_in_local_document_runner(
+            BytesArtifactSource(source),
+            DOCX_CONFIG_V1,
+            acceptance_context=acceptance_context(),
+        ),
     )
 
-    assert type(outcome) is DocumentCompilationFailure
-    assert outcome.code is DocumentCompilationFailureCode.INVALID_ARTIFACT
-
-
-def test_docx_refuses_smart_tag_text_it_cannot_preserve() -> None:
-    outcome = compile_document_bytes(
-        _docx_with_smart_tag(),
-        CompilationProfileRef("context-engine-docx-v1", DOCX_CONFIG_V1),
-    )
-
-    assert type(outcome) is DocumentCompilationFailure
-    assert outcome.code is DocumentCompilationFailureCode.INVALID_ARTIFACT
+    for outcome in outcomes:
+        assert type(outcome) is DocumentCompilationFailure
+        assert outcome.code is DocumentCompilationFailureCode.INVALID_ARTIFACT
 
 
 @pytest.mark.parametrize("in_header", (False, True))
