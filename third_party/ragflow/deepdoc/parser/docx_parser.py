@@ -58,10 +58,10 @@ def _contains_tag(element: Any, tags: frozenset[str]) -> bool:
     return any(node.tag in tags for node in element.iter())
 
 
-def _package_contains_visual(document: DocumentType) -> bool:
+def _package_contains_tag(document: DocumentType, tags: frozenset[str]) -> bool:
     for part in document.part.package.parts:
         element = getattr(part, "element", None)
-        if element is not None and _contains_tag(element, _UNSUPPORTED_VISUAL_TAGS):
+        if element is not None and _contains_tag(element, tags):
             return True
     return False
 
@@ -88,14 +88,14 @@ class RAGFlowDocxParser:
         document = Document(BytesIO(source))
         if not isinstance(document, DocumentType):
             raise ValueError("DOCX parser did not construct an exact document")
-        if _package_contains_visual(document):
+        if _package_contains_tag(document, _UNSUPPORTED_VISUAL_TAGS):
             raise UnsupportedDocxFigureError(
                 "DOCX profile does not admit visual objects"
             )
+        if _package_contains_tag(document, _UNSUPPORTED_CONTENT_TAGS):
+            raise ValueError("DOCX contains an unsupported content container")
         blocks: list[RawDocxBlock] = []
         for block_ordinal, child in enumerate(document.element.body.iterchildren()):
-            if _contains_tag(child, _UNSUPPORTED_CONTENT_TAGS):
-                raise ValueError("DOCX contains an unsupported content container")
             if child.tag == _PARAGRAPH_TAG:
                 paragraph = Paragraph(child, document)
                 text = paragraph.text.strip()

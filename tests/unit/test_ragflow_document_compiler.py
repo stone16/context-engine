@@ -118,10 +118,19 @@ def _docx_with_tracked_insertion() -> bytes:
     return _save_docx(document)
 
 
-def _docx_with_wrapped_text(wrapper_tag: str, hidden_text: str) -> bytes:
+def _docx_with_wrapped_text(
+    wrapper_tag: str,
+    hidden_text: str,
+    *,
+    in_header: bool,
+) -> bytes:
     document = Document()
     document.add_paragraph("Retained body text.")
-    paragraph = document.add_paragraph()
+    paragraph = (
+        document.sections[0].header.paragraphs[0]
+        if in_header
+        else document.add_paragraph()
+    )
     wrapper = OxmlElement(wrapper_tag)
     run = OxmlElement("w:r")
     text = OxmlElement("w:t")
@@ -351,11 +360,17 @@ def test_docx_refuses_source_content_it_cannot_preserve(
     ),
     ids=("simple-field", "smart-tag"),
 )
+@pytest.mark.parametrize("in_header", (False, True), ids=("body", "header"))
 def test_docx_wrapped_text_refuses_at_parser_and_runner_seams(
     wrapper_tag: str,
     hidden_text: str,
+    in_header: bool,
 ) -> None:
-    source = _docx_with_wrapped_text(wrapper_tag, hidden_text)
+    source = _docx_with_wrapped_text(
+        wrapper_tag,
+        hidden_text,
+        in_header=in_header,
+    )
     outcomes = (
         compile_document_bytes(
             source,
