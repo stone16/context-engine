@@ -45,7 +45,12 @@ def _document_runner_environment(
 ) -> dict[str, str]:
     """Return the complete deterministic environment for one compiler child."""
 
-    if not hash_seed.isdecimal() or not thread_count.isdecimal():
+    if (
+        not hash_seed.isascii()
+        or not hash_seed.isdecimal()
+        or not thread_count.isascii()
+        or not thread_count.isdecimal()
+    ):
         raise ValueError("document runner controls must be decimal integers")
     hash_seed_value = int(hash_seed)
     thread_count_value = int(thread_count)

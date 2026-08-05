@@ -652,6 +652,18 @@ def test_document_runner_environment_rejects_out_of_range_hash_seed(
         _document_runner_environment(hash_seed=hash_seed)
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (("hash_seed", "١"), ("thread_count", "１")),
+)
+def test_document_runner_environment_rejects_non_ascii_decimal_controls(
+    field: str,
+    value: str,
+) -> None:
+    with pytest.raises(ValueError, match="controls must be decimal integers"):
+        _document_runner_environment(**{field: value})
+
+
 @pytest.mark.parametrize("profile_ref", (DOCX_CONFIG_V1, PDF_TEXT_OUTLINE_V1))
 def test_malformed_artifact_is_a_closed_typed_refusal(profile_ref: str) -> None:
     outcome = compile_in_local_document_runner(
