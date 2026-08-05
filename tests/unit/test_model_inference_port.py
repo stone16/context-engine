@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import json
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import asdict, fields, replace
@@ -17,9 +18,12 @@ from uuid import UUID
 
 import pytest
 
+from adapters.embeddings import DeterministicEmbeddingTwin
+from adapters.pgvector import PostgreSQLVectorCandidateIndex
 from engine.runtime.authorized_ranking import join_authorized_ranking
 from engine.runtime.budget import BudgetUsage, PackageBudget, PackageBudgetMeter
 from engine.runtime.candidate_ranking import CandidateRankEvidence, RankerEvidence
+from engine.runtime.contracts import Acquire, ContextNeed
 from engine.runtime.egress import (
     ChannelEgressGrant,
     EgressGrantRedemption,
@@ -47,6 +51,8 @@ from engine.runtime.model_inference import (
     RewriteModelRequest,
     SelectModelRequest,
 )
+from engine.runtime.scope import CandidateDiscoveryScope
+from engine.supply import DETERMINISTIC_TWIN_EMBEDDING_PROFILE
 from engine.tokenizer_accounting import UNICODE_SCALAR_TOKENIZER_PROFILE
 
 
@@ -135,6 +141,7 @@ def _egress() -> ModelInferenceEgressBinding:
         purpose="context.answer",
         audience_digest="3" * 64,
         policy_epoch=1,
+        release_generation=7,
     )
 
 
@@ -269,6 +276,82 @@ def test_shared_resolve_meter_preserves_prior_usage_and_accumulates_inference() 
         ),
         elapsed_ms=prior_usage.elapsed_ms + result.receipt.budget_usage.elapsed_ms,
     )
+
+
+@pytest.mark.security_evidence(id="ACCOUNTING-ONE-METER-DYNAMIC-217", layer="runtime")
+def test_one_meter_accumulates_every_model_stage_and_final_assembly() -> None:
+    budget = PackageBudgetMeter(
+        PackageBudget(10_000, 4, 10_000, 10_000),
+        tokenizer_profile=UNICODE_SCALAR_TOKENIZER_PROFILE,
+        release_generation=7,
+    )
+    index = PostgreSQLVectorCandidateIndex(
+        DeterministicEmbeddingTwin(),
+        monotonic_ms=iter((10, 11)).__next__,
+    )
+    index.prepare_generation_bound_discovery(
+        Acquire(need=ContextNeed(query="shared meter query")),
+        effective_scope=CandidateDiscoveryScope("a" * 64),
+        budget=budget,
+        active_embedding_profile_digest=(
+            DETERMINISTIC_TWIN_EMBEDDING_PROFILE.profile_digest
+        ),
+        active_release_generation=7,
+    )
+
+    def gateway(payload: bytes, *, timeout_ms: int) -> bytes:
+        del timeout_ms
+        operation = json.loads(payload)["operation"]
+        return {
+            "rewrite": b'{"rewrites":["rewritten"]}',
+            "rerank": b'{"order":[0,1]}',
+            "select": b'{"selected":[0]}',
+        }[operation]
+
+    port = ModelInferencePort(
+        profiles=_registered_profiles(),
+        authority=_AcceptingAuthority(),
+        gateway=gateway,
+        trace_observer=lambda _receipt: None,
+        monotonic_ms=iter((20, 21, 30, 31, 40, 41)).__next__,
+    )
+    port.rewrite(
+        RewriteModelRequest(profile=_profile(), query="shared meter query"),
+        grant=ModelEgressGrant("egrm_" + "1" * 64),
+        egress=_egress(),
+        budget=budget,
+    )
+    with _projections("first", "second") as projections:
+        port.rerank(
+            RerankModelRequest(
+                profile=_profile(ModelInferenceOperation.RERANK),
+                query="shared meter query",
+                projections=projections,
+            ),
+            grant=ModelEgressGrant("egrm_" + "2" * 64),
+            egress=_egress(),
+            budget=budget,
+        )
+        port.select(
+            SelectModelRequest(
+                profile=_profile(ModelInferenceOperation.SELECT),
+                query="shared meter query",
+                projections=projections,
+                maximum_items=1,
+            ),
+            grant=ModelEgressGrant("egrm_" + "3" * 64),
+            egress=_egress(),
+            budget=budget,
+        )
+
+    assembly_tokens = budget.count_tokens("final assembly")
+    assembly = budget._reserve(BudgetUsage(assembly_tokens, 0, 0, 0))
+    budget._commit(assembly, BudgetUsage(assembly_tokens, 0, 0, 0))
+
+    assert budget.usage.provider_calls == 4
+    assert budget.usage.cost_microunits > 4
+    assert budget.usage.elapsed_ms == 4
+    assert budget.usage.tokens > assembly_tokens
 
 
 def test_rerank_accepts_only_authorized_projection_and_returns_validated_order() -> (

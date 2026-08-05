@@ -30,10 +30,12 @@ from engine.runtime.scope import (
 )
 from engine.supply import (
     DETERMINISTIC_TWIN_EMBEDDING_PROFILE,
+    QWEN3_EMBEDDING_PROFILE,
     EmbeddingProfile,
     EmbeddingProviderUnavailable,
 )
 from engine.tokenizer_accounting import UNICODE_SCALAR_TOKENIZER_PROFILE
+from tests.support.embeddings import QwenEmbeddingTwin
 
 
 class _RecordingPort:
@@ -297,6 +299,32 @@ def test_budgeted_query_embedding_debits_actual_internal_usage() -> None:
     assert budget.usage.elapsed_ms == 7
 
 
+@pytest.mark.security_evidence(id="ACCOUNTING-PAYLOAD-CLOSURE-217", layer="runtime")
+def test_qwen_query_accounting_includes_the_exact_provider_prefix() -> None:
+    provider = QwenEmbeddingTwin()
+    budget = PackageBudgetMeter(
+        PackageBudget(1_000, 1, 1, 5_000),
+        tokenizer_profile=UNICODE_SCALAR_TOKENIZER_PROFILE,
+        release_generation=7,
+    )
+
+    PostgreSQLVectorCandidateIndex(
+        provider,
+        monotonic_ms=iter((25, 32)).__next__,
+    ).prepare_budgeted_discovery(
+        Acquire(need=ContextNeed(query="semantic query")),
+        effective_scope=_discovery_scope(),
+        budget=budget,
+        active_embedding_profile_digest=QWEN3_EMBEDDING_PROFILE.profile_digest,
+    )
+
+    assert budget.usage.tokens == len(
+        QWEN3_EMBEDDING_PROFILE.query_prefix + "semantic query"
+    )
+    assert provider.query_calls == [("semantic query",)]
+
+
+@pytest.mark.security_evidence(id="ACCOUNTING-ZERO-BYTES-217", layer="runtime")
 def test_budgeted_query_embedding_refuses_exhaustion_before_provider_call() -> None:
     provider = _RecordingProvider()
     budget = PackageBudgetMeter(
@@ -320,6 +348,7 @@ def test_budgeted_query_embedding_refuses_exhaustion_before_provider_call() -> N
     assert budget.usage.provider_calls == 0
 
 
+@pytest.mark.security_evidence(id="ACCOUNTING-MAX-CHARGE-217", layer="runtime")
 def test_failed_query_embedding_charges_reserved_maximum_after_provider_call() -> None:
     budget = PackageBudgetMeter(PackageBudget(1, 1, 1, 5_000))
 
@@ -380,6 +409,7 @@ def test_query_provider_profile_must_equal_active_release_before_call() -> None:
     assert budget.usage.provider_calls == 0
 
 
+@pytest.mark.security_evidence(id="ACCOUNTING-CARRIER-MISMATCH-217", layer="runtime")
 def test_query_carrier_must_match_resolve_tokenizer_before_provider_call() -> None:
     provider = _RecordingProvider()
     budget = PackageBudgetMeter(
@@ -397,6 +427,29 @@ def test_query_carrier_must_match_resolve_tokenizer_before_provider_call() -> No
             active_embedding_profile_digest=(
                 DETERMINISTIC_TWIN_EMBEDDING_PROFILE.profile_digest
             ),
+        )
+
+    assert provider.calls == 0
+    assert budget.usage == BudgetUsage(0, 0, 0, 0)
+
+
+def test_query_carrier_must_match_release_generation_before_provider_call() -> None:
+    provider = _RecordingProvider()
+    budget = PackageBudgetMeter(
+        PackageBudget(100, 1, 1, 5_000),
+        tokenizer_profile=UNICODE_SCALAR_TOKENIZER_PROFILE,
+        release_generation=7,
+    )
+
+    with pytest.raises(VectorCandidateIndexUnavailable):
+        PostgreSQLVectorCandidateIndex(provider).prepare_generation_bound_discovery(
+            Acquire(need=ContextNeed(query="semantic query")),
+            effective_scope=_discovery_scope(),
+            budget=budget,
+            active_embedding_profile_digest=(
+                DETERMINISTIC_TWIN_EMBEDDING_PROFILE.profile_digest
+            ),
+            active_release_generation=8,
         )
 
     assert provider.calls == 0

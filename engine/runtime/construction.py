@@ -55,6 +55,7 @@ from engine.runtime.citation import (
 from engine.runtime.content_io import (
     CandidateIndex,
     CandidateIndexUnavailable,
+    GenerationBoundCandidateIndex,
     RuntimeContentIo,
     prohibited_empty_path_content_io,
 )
@@ -1871,16 +1872,36 @@ class Runtime:
                 discovery_scope = candidate_discovery_scope(
                     preparation.policy_receipt.effective_scope
                 )
-                discovery_request = (
-                    self._content_io.index.prepare_budgeted_discovery(
-                        request,
-                        effective_scope=discovery_scope,
-                        budget=resolve_budget,
-                        active_embedding_profile_digest=(
-                            active_release.embedding_profile_digest
-                        ),
+                if active_release.package_schema_ref == "context-package-openapi-v1":
+                    generation_bound_index = self._content_io.index
+                    if not isinstance(
+                        generation_bound_index, GenerationBoundCandidateIndex
+                    ):
+                        raise CandidateIndexUnavailable(
+                            "v1 candidate discovery is not generation bound"
+                        )
+                    discovery_request = (
+                        generation_bound_index.prepare_generation_bound_discovery(
+                            request,
+                            effective_scope=discovery_scope,
+                            budget=resolve_budget,
+                            active_embedding_profile_digest=(
+                                active_release.embedding_profile_digest
+                            ),
+                            active_release_generation=active_release.active_generation,
+                        )
                     )
-                )
+                else:
+                    discovery_request = (
+                        self._content_io.index.prepare_budgeted_discovery(
+                            request,
+                            effective_scope=discovery_scope,
+                            budget=resolve_budget,
+                            active_embedding_profile_digest=(
+                                active_release.embedding_profile_digest
+                            ),
+                        )
+                    )
                 _require_candidate_discovery_scope_integrity(discovery_scope)
                 require_bounded_discovery_request(
                     discovery_request,

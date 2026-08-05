@@ -190,7 +190,9 @@ class PostgreSQLVectorCandidateIndex:
             raise VectorCandidateIndexUnavailable(
                 "Vector candidate discovery is unavailable"
             )
-        query_tokens = budget.count_tokens(request.need.query)
+        query_tokens = budget.count_tokens(
+            self._provider_profile.query_prefix + request.need.query
+        )
         maximum_usage = BudgetUsage(
             tokens=query_tokens,
             provider_calls=QUERY_EMBEDDING_MAXIMUM_USAGE.provider_calls,
@@ -203,6 +205,7 @@ class PostgreSQLVectorCandidateIndex:
             raise VectorCandidateIndexUnavailable(
                 "Vector candidate discovery is unavailable"
             ) from None
+
         try:
             started_ms = self._monotonic_ms()
             query_embedding = validate_embedding_batch(
@@ -245,6 +248,32 @@ class PostgreSQLVectorCandidateIndex:
             ),
         )
         return request_plan
+
+    def prepare_generation_bound_discovery(
+        self,
+        request: Acquire,
+        *,
+        effective_scope: CandidateDiscoveryScope,
+        budget: PackageBudgetMeter,
+        active_embedding_profile_digest: str,
+        active_release_generation: int,
+    ) -> VectorDiscoveryRequest:
+        try:
+            budget.require_tokenizer(
+                UNICODE_SCALAR_TOKENIZER_PROFILE.profile_ref,
+                UNICODE_SCALAR_TOKENIZER_PROFILE.profile_digest,
+                active_release_generation,
+            )
+        except TokenizerUnavailable:
+            raise VectorCandidateIndexUnavailable(
+                "Vector candidate discovery is unavailable"
+            ) from None
+        return self.prepare_budgeted_discovery(
+            request,
+            effective_scope=effective_scope,
+            budget=budget,
+            active_embedding_profile_digest=active_embedding_profile_digest,
+        )
 
     @property
     def embedding_profile_digest(self) -> str:

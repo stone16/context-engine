@@ -129,6 +129,7 @@ def test_http_candidate_port_seals_raw_refs_before_content_consumer(
                         purpose="context.answer",
                         audience_digest="3" * 64,
                         policy_epoch=1,
+                        release_generation=1,
                     ),
                     budget=PackageBudgetMeter(
                         PackageBudget(

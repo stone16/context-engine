@@ -346,6 +346,7 @@ class ModelInferenceEgressBinding:
     purpose: str
     audience_digest: str
     policy_epoch: int
+    release_generation: int
 
     def __post_init__(self) -> None:
         if type(self.organization_id) is not UUID:
@@ -354,6 +355,7 @@ class ModelInferenceEgressBinding:
         _require_nonblank("purpose", self.purpose)
         _require_sha256("audience_digest", self.audience_digest)
         _require_positive_integer("policy_epoch", self.policy_epoch)
+        _require_positive_integer("release_generation", self.release_generation)
 
 
 def _snapshot_egress_binding(
@@ -367,6 +369,7 @@ def _snapshot_egress_binding(
         purpose=binding.purpose,
         audience_digest=binding.audience_digest,
         policy_epoch=binding.policy_epoch,
+        release_generation=binding.release_generation,
     )
 
 
@@ -894,14 +897,15 @@ class ModelInferencePort:
             )
             if self._profiles.get(profile_key) != snapshot.profile:
                 raise ValueError("model inference profile is not registered")
-            budget.require_carrier_tokenizer(
+            egress_snapshot = _snapshot_egress_binding(egress)
+            budget.require_tokenizer(
                 snapshot.profile.tokenizer_ref,
                 snapshot.profile.tokenizer_profile_digest,
+                egress_snapshot.release_generation,
             )
             if type(grant) is not ModelEgressGrant:
                 self._emit_unavailable(trace_context, empty)
             grant_snapshot = ModelEgressGrant(grant.value)
-            egress_snapshot = _snapshot_egress_binding(egress)
             redemption = EgressGrantRedemption.for_model(
                 grant=grant_snapshot,
                 organization_id=egress_snapshot.organization_id,
