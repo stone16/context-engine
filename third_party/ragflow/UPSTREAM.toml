@@ -17,7 +17,7 @@ excluded_paths = [
 reuse_mode = "copy-patch"
 approvals = [
   { reference = "https://github.com/stone16/context-engine/issues/124", source_paths = ["deepdoc/parser/markdown_parser.py"] },
-  { reference = "https://github.com/stone16/context-engine/issues/204; maintainer Decision D6 recorded in docs/research/2026-07-31-five-repository-implementation-blueprint.md section 5", source_paths = ["deepdoc/parser/docx_parser.py", "deepdoc/parser/utils.py"] },
+  { reference = "https://github.com/stone16/context-engine/issues/204", decision = "D6", decision_document = "docs/research/2026-07-31-five-repository-implementation-blueprint.md#section-5", source_paths = ["deepdoc/parser/docx_parser.py", "deepdoc/parser/utils.py"], source_selectors = [{ source_path = "deepdoc/parser/utils.py", kind = "function", name = "extract_pdf_outlines" }] },
 ]
 license = "Apache-2.0"
 nested_dependencies = [
@@ -36,9 +36,9 @@ sha256 = "94c8e2515d05e141fcf65e10336ceca7f9116e54b31a668637ba3f901943cb66"
 [[files]]
 upstream_path = "deepdoc/parser/docx_parser.py"
 vendored_path = "third_party/ragflow/deepdoc/parser/docx_parser.py"
-sha256 = "92c94ba0e56fd1be1b91fa502e2e3334fdbef0237a9fd877a50ac3b1d3ab766b"
+sha256 = "e84ea01662ce60180e26dde1ca3ec36fc28a9e9d40357f0e9311ce6937a874c5"
 
 [[files]]
 upstream_path = "deepdoc/parser/utils.py"
 vendored_path = "third_party/ragflow/deepdoc/parser/utils.py"
-sha256 = "2af5d63249bc7b17d9886e9b2fe8a363505726f261cd3ffd57066b134a4af820"
+sha256 = "aa624daf38d69a27d9d9f8bf69060fe515ee11b26c39211834eb627caa80d859"

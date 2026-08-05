@@ -24,8 +24,8 @@ text.
 - Reuse mode: `copy-patch`
 - Approvals by source region:
   - `deepdoc/parser/markdown_parser.py` — https://github.com/stone16/context-engine/issues/124
-  - `deepdoc/parser/docx_parser.py` — https://github.com/stone16/context-engine/issues/204; maintainer Decision D6 recorded in docs/research/2026-07-31-five-repository-implementation-blueprint.md section 5
-  - `deepdoc/parser/utils.py` — https://github.com/stone16/context-engine/issues/204; maintainer Decision D6 recorded in docs/research/2026-07-31-five-repository-implementation-blueprint.md section 5
+  - `deepdoc/parser/docx_parser.py` — https://github.com/stone16/context-engine/issues/204; D6 (docs/research/2026-07-31-five-repository-implementation-blueprint.md#section-5)
+  - `deepdoc/parser/utils.py::function:extract_pdf_outlines` — https://github.com/stone16/context-engine/issues/204; D6 (docs/research/2026-07-31-five-repository-implementation-blueprint.md#section-5)
 - Nested dependencies:
   - Python-Markdown 3.6 — BSD-3-Clause (`third_party/ragflow/LICENSE.python-markdown`)
   - python-docx 1.2.0 — MIT (`third_party/ragflow/LICENSE.python-docx`)

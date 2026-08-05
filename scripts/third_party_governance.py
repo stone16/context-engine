@@ -179,10 +179,39 @@ def validate_registration(
 
     source_paths = tuple(PurePosixPath(value) for value in data["source_paths"])
     excluded_paths = tuple(PurePosixPath(value) for value in data["excluded_paths"])
+    if len(set(source_paths)) != len(source_paths):
+        raise GovernanceError(
+            f"{registration.path}: source_paths contains duplicate canonical paths"
+        )
+    if len(set(excluded_paths)) != len(excluded_paths):
+        raise GovernanceError(
+            f"{registration.path}: excluded_paths contains duplicate canonical paths"
+        )
     approval_owners: dict[PurePosixPath, str] = {}
     for approval in data["approvals"]:
-        for value in approval["source_paths"]:
-            approval_path = PurePosixPath(value)
+        approval_paths = tuple(
+            PurePosixPath(value) for value in approval["source_paths"]
+        )
+        if len(set(approval_paths)) != len(approval_paths):
+            raise GovernanceError(
+                f"{registration.path}: approval contains duplicate canonical paths"
+            )
+        selector_keys: set[tuple[PurePosixPath, str, str]] = set()
+        for selector in approval.get("source_selectors", []):
+            selector_path = PurePosixPath(selector["source_path"])
+            selector_key = (selector_path, selector["kind"], selector["name"])
+            if selector_key in selector_keys:
+                raise GovernanceError(
+                    f"{registration.path}: approval contains a duplicate "
+                    "source selector"
+                )
+            if selector_path not in approval_paths:
+                raise GovernanceError(
+                    f"{registration.path}: source selector {selector_path} is not "
+                    "owned by its approval record"
+                )
+            selector_keys.add(selector_key)
+        for approval_path in approval_paths:
             if approval_path in approval_owners:
                 raise GovernanceError(
                     f"{registration.path}: source region {approval_path} is claimed by "
@@ -329,11 +358,25 @@ def render_notices(registrations: Sequence[Registration]) -> str:
                 "- Approvals by source region:",
             ]
         )
-        lines.extend(
-            f"  - `{path}` — {approval['reference']}"
-            for approval in data["approvals"]
-            for path in approval["source_paths"]
-        )
+        for approval in data["approvals"]:
+            selectors_by_path: dict[str, list[str]] = {}
+            for selector in approval.get("source_selectors", []):
+                selectors_by_path.setdefault(selector["source_path"], []).append(
+                    f"{selector['kind']}:{selector['name']}"
+                )
+            decision = (
+                f"; {approval['decision']} ({approval['decision_document']})"
+                if "decision" in approval
+                else ""
+            )
+            for path in approval["source_paths"]:
+                selectors = selectors_by_path.get(path)
+                region = (
+                    f"{path}::{','.join(selectors)}" if selectors is not None else path
+                )
+                lines.append(
+                    f"  - `{region}` — {approval['reference']}{decision}"
+                )
         dependencies = data.get("nested_dependencies", [])
         if dependencies:
             lines.extend(["- Nested dependencies:"])
@@ -374,7 +417,7 @@ def render_sbom(registrations: Sequence[Registration]) -> str:
                     *(
                         {
                             "name": "context-engine:source-approval",
-                            "value": f"{path}={approval['reference']}",
+                            "value": _sbom_approval_value(approval, path),
                         }
                         for approval in data["approvals"]
                         for path in approval["source_paths"]
@@ -419,6 +462,22 @@ def render_sbom(registrations: Sequence[Registration]) -> str:
         "components": components,
     }
     return json.dumps(document, indent=2, sort_keys=True) + "\n"
+
+
+def _sbom_approval_value(approval: dict[str, Any], path: str) -> str:
+    selectors = [
+        f"{selector['kind']}:{selector['name']}"
+        for selector in approval.get("source_selectors", [])
+        if selector["source_path"] == path
+    ]
+    region = f"{path}::{','.join(selectors)}" if selectors else path
+    decision = (
+        f"; decision={approval['decision']}; "
+        f"decision_document={approval['decision_document']}"
+        if "decision" in approval
+        else ""
+    )
+    return f"{region}={approval['reference']}{decision}"
 
 
 def _write_or_check(path: Path, content: str, *, check: bool, root: Path) -> None:

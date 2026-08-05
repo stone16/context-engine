@@ -48,6 +48,7 @@ ALLOWED_IMPORT_ROOTS = {
     "io",
     "json",
     "logging",
+    "math",
     "markdown",
     "pathlib",
     "pypdf",
@@ -79,15 +80,22 @@ def test_vendored_bytes_match_complete_pinned_registration() -> None:
             "source_paths": ["deepdoc/parser/markdown_parser.py"],
         },
         {
-            "reference": (
-                "https://github.com/stone16/context-engine/issues/204; "
-                "maintainer Decision D6 recorded in "
-                "docs/research/2026-07-31-five-repository-implementation-blueprint.md "
-                "section 5"
+            "reference": "https://github.com/stone16/context-engine/issues/204",
+            "decision": "D6",
+            "decision_document": (
+                "docs/research/2026-07-31-five-repository-implementation-"
+                "blueprint.md#section-5"
             ),
             "source_paths": [
                 "deepdoc/parser/docx_parser.py",
                 "deepdoc/parser/utils.py",
+            ],
+            "source_selectors": [
+                {
+                    "source_path": "deepdoc/parser/utils.py",
+                    "kind": "function",
+                    "name": "extract_pdf_outlines",
+                }
             ],
         },
     ]
@@ -203,6 +211,35 @@ def test_vendored_bytes_match_complete_pinned_registration() -> None:
         "issue-204-pdf-outline.patch",
     }
     assert (REPOSITORY_ROOT / "THIRD_PARTY_NOTICES.md").is_file()
+    notices = (REPOSITORY_ROOT / "THIRD_PARTY_NOTICES.md").read_text(
+        encoding="utf-8"
+    )
+    assert (
+        "`deepdoc/parser/utils.py::function:extract_pdf_outlines` — "
+        "https://github.com/stone16/context-engine/issues/204; D6 "
+        "(docs/research/2026-07-31-five-repository-implementation-"
+        "blueprint.md#section-5)"
+    ) in notices
+    aggregate_sbom = json.loads(
+        (REPOSITORY_ROOT / "THIRD_PARTY_SBOM.cyclonedx.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    ragflow_component = next(
+        component
+        for component in aggregate_sbom["components"]
+        if component["bom-ref"] == "context-engine:third-party:ragflow"
+    )
+    assert {
+        property_value["value"]
+        for property_value in ragflow_component["properties"]
+        if property_value["name"] == "context-engine:source-approval"
+    } >= {
+        "deepdoc/parser/utils.py::function:extract_pdf_outlines="
+        "https://github.com/stone16/context-engine/issues/204; decision=D6; "
+        "decision_document=docs/research/2026-07-31-five-repository-"
+        "implementation-blueprint.md#section-5"
+    }
     sbom = json.loads(
         (REGISTRATION_ROOT / "sbom.cyclonedx.json").read_text(encoding="utf-8")
     )

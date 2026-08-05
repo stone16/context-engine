@@ -1,6 +1,6 @@
 --- a/deepdoc/parser/docx_parser.py
 +++ b/deepdoc/parser/docx_parser.py
-@@ -13,170 +13,129 @@
+@@ -13,170 +13,130 @@
  #  See the License for the specific language governing permissions and
  #  limitations under the License.
  #
@@ -44,7 +44,7 @@
 -                continue
 +from dataclasses import dataclass
 +from io import BytesIO
-+from typing import Any, Final, cast
++from typing import Any, Final
 
 -            try:
 -                image = related_part.image
@@ -220,7 +220,8 @@
 +        if type(source) is not bytes:
 +            raise TypeError("DOCX parser source must be exact bytes")
 +        document = Document(BytesIO(source))
-+        assert isinstance(document, DocumentType)
++        if not isinstance(document, DocumentType):
++            raise ValueError("DOCX parser did not construct an exact document")
 +        if _package_contains_visual(document):
 +            raise UnsupportedDocxFigureError(
 +                "DOCX profile does not admit visual objects"
@@ -245,7 +246,7 @@
 +                            block_ordinal=block_ordinal,
 +                            text=text,
 +                            style_name=style_name,
-+                            xml=cast(bytes, child.xml.encode("utf-8")),
++                            xml=child.xml.encode("utf-8"),
 +                            has_figure=has_figure,
 +                        )
 +                    )
@@ -264,7 +265,7 @@
 +                            block_ordinal=block_ordinal,
 +                            text="\n".join("\t".join(row) for row in rows),
 +                            style_name=None,
-+                            xml=cast(bytes, child.xml.encode("utf-8")),
++                            xml=child.xml.encode("utf-8"),
 +                            table_cells=rows,
 +                            has_figure=bool(child.xpath(".//pic:pic")),
 +                        )

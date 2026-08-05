@@ -96,3 +96,59 @@ def test_approval_records_cannot_claim_the_same_source_region_twice(
 
     with pytest.raises(GovernanceError, match="multiple approval records"):
         validate_tree(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    (
+        (
+            "source_paths",
+            'source_paths = ["src/example.py", "src/./example.py"]',
+        ),
+        (
+            "excluded_paths",
+            'excluded_paths = ["src/private", "src/./private"]',
+        ),
+    ),
+)
+def test_registration_rejects_duplicate_canonical_paths(
+    tmp_path: Path,
+    field: str,
+    replacement: str,
+) -> None:
+    registration = write_fixture_tree(tmp_path, SCHEMA)
+    original = (
+        'source_paths = ["src/example.py"]'
+        if field == "source_paths"
+        else 'excluded_paths = ["src/private"]'
+    )
+    _replace(registration, original, replacement)
+
+    with pytest.raises(GovernanceError, match=f"{field}.*duplicate canonical"):
+        validate_tree(tmp_path)
+
+
+def test_approval_rejects_duplicate_canonical_paths(tmp_path: Path) -> None:
+    registration = write_fixture_tree(tmp_path, SCHEMA)
+    _replace(
+        registration,
+        'source_paths = ["src/example.py"] }]',
+        'source_paths = ["src/example.py", "src/./example.py"] }]',
+    )
+
+    with pytest.raises(GovernanceError, match="approval.*duplicate canonical"):
+        validate_tree(tmp_path)
+
+
+def test_source_selector_must_belong_to_its_approval_region(tmp_path: Path) -> None:
+    registration = write_fixture_tree(tmp_path, SCHEMA)
+    _replace(
+        registration,
+        'source_paths = ["src/example.py"] }]',
+        """source_paths = ["src/example.py"], source_selectors = [
+    { source_path = "src/other.py", kind = "function", name = "selected" }
+  ] }]""",
+    )
+
+    with pytest.raises(GovernanceError, match="source selector.*not owned"):
+        validate_tree(tmp_path)

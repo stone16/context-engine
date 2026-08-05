@@ -128,6 +128,28 @@ def test_vendored_bytes_match_complete_pinned_registration() -> None:
     assert "## onyx" in notices
     assert f"- Commit: `{PINNED_COMMIT}`" in notices
     assert "- License: MIT (`third_party/onyx/LICENSE.upstream`)" in notices
+    expected_approval_values = {
+        f"{source_path}=https://github.com/stone16/context-engine/issues/126"
+        for source_path in REQUIRED_SOURCE_PATHS
+    }
+    for value in expected_approval_values:
+        source_path, reference = value.split("=", 1)
+        assert f"  - `{source_path}` — {reference}" in notices
+    aggregate_sbom = json.loads(
+        (REPOSITORY_ROOT / "THIRD_PARTY_SBOM.cyclonedx.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    onyx_component = next(
+        component
+        for component in aggregate_sbom["components"]
+        if component["bom-ref"] == "context-engine:third-party:onyx"
+    )
+    assert {
+        property_value["value"]
+        for property_value in onyx_component["properties"]
+        if property_value["name"] == "context-engine:source-approval"
+    } == expected_approval_values
     sbom = json.loads(
         (REGISTRATION_ROOT / "sbom.cyclonedx.json").read_text(encoding="utf-8")
     )

@@ -28,7 +28,35 @@ from eval._compiler_acceptance import (
 MAX_DOCUMENT_ARTIFACT_BYTES: Final = 32 * 1024 * 1024
 DOCUMENT_RUNNER_TIMEOUT_SECONDS: Final = 30.0
 _RUNNER_MODULE: Final = "applications.document_compiler_runner"
-_REPOSITORY_ROOT: Final = Path(__file__).parents[1]
+_REPOSITORY_ROOT: Final = Path(__file__).resolve().parents[1]
+_DETERMINISTIC_CHILD_ENVIRONMENT: Final = {
+    "PYTHONHASHSEED": "0",
+    "OMP_NUM_THREADS": "1",
+    "OPENBLAS_NUM_THREADS": "1",
+    "MKL_NUM_THREADS": "1",
+    "NUMEXPR_NUM_THREADS": "1",
+}
+
+
+def _document_runner_environment(
+    *,
+    hash_seed: str = _DETERMINISTIC_CHILD_ENVIRONMENT["PYTHONHASHSEED"],
+    thread_count: str = _DETERMINISTIC_CHILD_ENVIRONMENT["OMP_NUM_THREADS"],
+) -> dict[str, str]:
+    """Return the complete deterministic environment for one compiler child."""
+
+    if not hash_seed.isdecimal() or not thread_count.isdecimal():
+        raise ValueError("document runner controls must be decimal integers")
+    if int(thread_count) < 1:
+        raise ValueError("document runner thread count must be positive")
+    return {
+        "PYTHONHASHSEED": hash_seed,
+        "PYTHONPATH": str(_REPOSITORY_ROOT),
+        "OMP_NUM_THREADS": thread_count,
+        "OPENBLAS_NUM_THREADS": thread_count,
+        "MKL_NUM_THREADS": thread_count,
+        "NUMEXPR_NUM_THREADS": thread_count,
+    }
 
 
 class ArtifactSource(ABC):
@@ -126,7 +154,7 @@ def compile_in_local_document_runner(
             capture_output=True,
             check=False,
             cwd=_REPOSITORY_ROOT,
-            env={"PYTHONPATH": str(_REPOSITORY_ROOT)},
+            env=_document_runner_environment(),
             timeout=DOCUMENT_RUNNER_TIMEOUT_SECONDS,
         )
     except Exception:

@@ -6,8 +6,10 @@ import io
 import json
 import subprocess
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -16,12 +18,14 @@ from docx import Document
 from docx.document import Document as DocumentType
 from docx.oxml import OxmlElement
 from pypdf import PdfWriter
+from pypdf.generic import Destination
 
 from adapters.parsers import ragflow_documents as ragflow_document_adapter
 from adapters.parsers.ragflow_documents import compile_document_bytes
 from applications.document_compiler_runner import (
     ArtifactSource,
     BytesArtifactSource,
+    _document_runner_environment,
     compile_in_local_document_runner,
 )
 from engine.supply import (
@@ -305,17 +309,19 @@ def test_docx_image_is_an_honest_typed_refusal() -> None:
 
 
 @pytest.mark.parametrize(
-    "source",
+    "source_builder",
     (
-        _docx_with_unsupported_body_container(),
-        _docx_with_tracked_insertion(),
-        _docx_with_nested_table(),
+        _docx_with_unsupported_body_container,
+        _docx_with_tracked_insertion,
+        _docx_with_nested_table,
     ),
     ids=("content-control", "tracked-insertion", "nested-table"),
 )
-def test_docx_refuses_source_content_it_cannot_preserve(source: bytes) -> None:
+def test_docx_refuses_source_content_it_cannot_preserve(
+    source_builder: Callable[[], bytes],
+) -> None:
     outcome = compile_document_bytes(
-        source,
+        source_builder(),
         CompilationProfileRef("context-engine-docx-v1", DOCX_CONFIG_V1),
     )
 
@@ -408,6 +414,43 @@ def test_pdf_outline_bounds_page_before_rendering(
     monkeypatch.setattr(ragflow_pdf_utils, "_page_render_digest", reject_render)
     outcome = compile_document_bytes(
         output.getvalue(),
+        CompilationProfileRef(
+            "context-engine-pdf-outline-v1",
+            PDF_TEXT_OUTLINE_V1,
+        ),
+    )
+
+    assert type(outcome) is DocumentCompilationFailure
+    assert outcome.code is DocumentCompilationFailureCode.DOCUMENT_BOUND_EXCEEDED
+
+
+def test_pdf_outline_rejects_non_finite_page_before_rendering(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = _pdf_outline_fixture_for_same_page()
+    actual_reader = cast(Any, ragflow_pdf_utils).PdfReader(io.BytesIO(source))
+
+    class NonFinitePage:
+        mediabox = (float("nan"), 0.0, 612.0, 792.0)
+
+    class NonFiniteReader:
+        outline = actual_reader.outline
+        pages = (NonFinitePage(),)
+
+        def get_destination_page_number(self, node: Destination) -> int:
+            page_number = actual_reader.get_destination_page_number(node)
+            assert type(page_number) is int
+            return page_number
+
+    def reject_render(_page: object) -> str:
+        raise AssertionError("non-finite PDF page was rendered")
+
+    monkeypatch.setattr(
+        ragflow_pdf_utils, "PdfReader", lambda _source: NonFiniteReader()
+    )
+    monkeypatch.setattr(ragflow_pdf_utils, "_page_render_digest", reject_render)
+    outcome = compile_document_bytes(
+        source,
         CompilationProfileRef(
             "context-engine-pdf-outline-v1",
             PDF_TEXT_OUTLINE_V1,
@@ -537,14 +580,10 @@ def test_profile_digest_is_identical_across_two_fresh_processes(
     source = fixture()
     canonical_documents: list[bytes] = []
     for hash_seed, thread_count in (("17", "1"), ("941", "2")):
-        environment = {
-            "PYTHONHASHSEED": hash_seed,
-            "PYTHONPATH": str(REPOSITORY_ROOT),
-            "OMP_NUM_THREADS": thread_count,
-            "OPENBLAS_NUM_THREADS": thread_count,
-            "MKL_NUM_THREADS": thread_count,
-            "NUMEXPR_NUM_THREADS": thread_count,
-        }
+        environment = _document_runner_environment(
+            hash_seed=hash_seed,
+            thread_count=thread_count,
+        )
         completed = subprocess.run(
             [
                 sys.executable,
@@ -570,6 +609,39 @@ def test_profile_digest_is_identical_across_two_fresh_processes(
     first = deserialize_parsed_document(canonical_documents[0])
     second = deserialize_parsed_document(canonical_documents[1])
     assert first.compilation_digest == second.compilation_digest
+
+
+def test_local_runner_uses_the_shared_deterministic_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed_environment: dict[str, str] | None = None
+
+    def recording_run(*args: object, **kwargs: object) -> SimpleNamespace:
+        del args
+        nonlocal observed_environment
+        observed_environment = cast(dict[str, str], kwargs["env"])
+        return SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "outcome": "failure",
+                    "failure": {
+                        "code": DocumentCompilationFailureCode.INVALID_ARTIFACT.value
+                    },
+                }
+            ).encode("utf-8"),
+        )
+
+    monkeypatch.setattr(subprocess, "run", recording_run)
+    outcome = compile_in_local_document_runner(
+        BytesArtifactSource(b"invalid docx"),
+        DOCX_CONFIG_V1,
+        acceptance_context=acceptance_context(),
+    )
+
+    assert type(outcome) is DocumentCompilationFailure
+    assert outcome.code is DocumentCompilationFailureCode.INVALID_ARTIFACT
+    assert observed_environment == _document_runner_environment()
 
 
 @pytest.mark.parametrize("profile_ref", (DOCX_CONFIG_V1, PDF_TEXT_OUTLINE_V1))

@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from io import BytesIO
-from typing import Any, Final, cast
+from typing import Any, Final
 
 from docx import Document
 from docx.document import Document as DocumentType
@@ -84,7 +84,8 @@ class RAGFlowDocxParser:
         if type(source) is not bytes:
             raise TypeError("DOCX parser source must be exact bytes")
         document = Document(BytesIO(source))
-        assert isinstance(document, DocumentType)
+        if not isinstance(document, DocumentType):
+            raise ValueError("DOCX parser did not construct an exact document")
         if _package_contains_visual(document):
             raise UnsupportedDocxFigureError(
                 "DOCX profile does not admit visual objects"
@@ -109,7 +110,7 @@ class RAGFlowDocxParser:
                             block_ordinal=block_ordinal,
                             text=text,
                             style_name=style_name,
-                            xml=cast(bytes, child.xml.encode("utf-8")),
+                            xml=child.xml.encode("utf-8"),
                             has_figure=has_figure,
                         )
                     )
@@ -128,7 +129,7 @@ class RAGFlowDocxParser:
                             block_ordinal=block_ordinal,
                             text="\n".join("\t".join(row) for row in rows),
                             style_name=None,
-                            xml=cast(bytes, child.xml.encode("utf-8")),
+                            xml=child.xml.encode("utf-8"),
                             table_cells=rows,
                             has_figure=bool(child.xpath(".//pic:pic")),
                         )

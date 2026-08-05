@@ -85,11 +85,11 @@
         },
         {
           "name": "context-engine:file-sha256",
-          "value": "third_party/ragflow/deepdoc/parser/docx_parser.py=92c94ba0e56fd1be1b91fa502e2e3334fdbef0237a9fd877a50ac3b1d3ab766b"
+          "value": "third_party/ragflow/deepdoc/parser/docx_parser.py=e84ea01662ce60180e26dde1ca3ec36fc28a9e9d40357f0e9311ce6937a874c5"
         },
         {
           "name": "context-engine:file-sha256",
-          "value": "third_party/ragflow/deepdoc/parser/utils.py=2af5d63249bc7b17d9886e9b2fe8a363505726f261cd3ffd57066b134a4af820"
+          "value": "third_party/ragflow/deepdoc/parser/utils.py=aa624daf38d69a27d9d9f8bf69060fe515ee11b26c39211834eb627caa80d859"
         },
         {
           "name": "context-engine:source-approval",
@@ -97,11 +97,11 @@
         },
         {
           "name": "context-engine:source-approval",
-          "value": "deepdoc/parser/docx_parser.py=https://github.com/stone16/context-engine/issues/204; maintainer Decision D6 recorded in docs/research/2026-07-31-five-repository-implementation-blueprint.md section 5"
+          "value": "deepdoc/parser/docx_parser.py=https://github.com/stone16/context-engine/issues/204; decision=D6; decision_document=docs/research/2026-07-31-five-repository-implementation-blueprint.md#section-5"
         },
         {
           "name": "context-engine:source-approval",
-          "value": "deepdoc/parser/utils.py=https://github.com/stone16/context-engine/issues/204; maintainer Decision D6 recorded in docs/research/2026-07-31-five-repository-implementation-blueprint.md section 5"
+          "value": "deepdoc/parser/utils.py::function:extract_pdf_outlines=https://github.com/stone16/context-engine/issues/204; decision=D6; decision_document=docs/research/2026-07-31-five-repository-implementation-blueprint.md#section-5"
         }
       ],
       "type": "library",
