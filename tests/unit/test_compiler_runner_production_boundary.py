@@ -24,6 +24,7 @@ _FORBIDDEN_MODULES = frozenset(
         "adapters.parsers.ragflow_markdown",
         "applications.compiler_runner",
         "applications.document_compiler_runner",
+        "applications.leased_compiler_runner",
         "eval._compiler_acceptance",
     }
 )
@@ -199,6 +200,28 @@ def test_direct_production_import_gate_rejects_the_unleased_entry_point(
         (
             "applications/entry.py",
             "applications.compiler_runner.compile_in_local_compiler_runner",
+        ),
+    )
+
+
+def test_production_import_gate_rejects_the_application_leased_runner(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "applications").mkdir()
+    (tmp_path / "applications/entry.py").write_text(
+        "from applications.leased_compiler_runner import "
+        "compile_in_leased_compiler_runner\n",
+        encoding="utf-8",
+    )
+
+    assert _production_import_violations(
+        tmp_path,
+        production_roots=("applications",),
+        ignored_modules=frozenset(),
+    ) == (
+        (
+            "applications/entry.py",
+            "applications.leased_compiler_runner.compile_in_leased_compiler_runner",
         ),
     )
 

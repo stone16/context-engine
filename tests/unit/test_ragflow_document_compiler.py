@@ -11,6 +11,10 @@ from typing import Any, cast
 
 import pytest
 import rfc8785
+from docx import Document
+from docx.document import Document as DocumentType
+from docx.oxml import OxmlElement
+from pypdf import PdfWriter
 
 from adapters.parsers.ragflow_documents import (
     compile_document_bytes,
@@ -36,6 +40,7 @@ from engine.supply import (
     deserialize_parsed_document,
 )
 from eval._compiler_acceptance import acceptance_context
+from third_party.ragflow.deepdoc.parser import utils as ragflow_pdf_utils
 
 REPOSITORY_ROOT = Path(__file__).parents[2]
 
@@ -51,8 +56,6 @@ class _CountingArtifact(ArtifactSource):
 
 
 def _docx_fixture(*, with_image: bool = False) -> bytes:
-    from docx import Document
-
     document = Document()
     document.add_heading("Architecture", level=1)
     document.add_paragraph("First paragraph.")
@@ -73,9 +76,65 @@ def _docx_fixture(*, with_image: bool = False) -> bytes:
     return output.getvalue()
 
 
-def _docx_fixture_with_blank_source_block() -> bytes:
-    from docx import Document
+def _save_docx(document: DocumentType) -> bytes:
+    output = io.BytesIO()
+    document.save(output)
+    return output.getvalue()
 
+
+def _docx_with_unsupported_body_container() -> bytes:
+    document = Document()
+    document.add_paragraph("Retained body text.")
+    content_control = OxmlElement("w:sdt")
+    content = OxmlElement("w:sdtContent")
+    paragraph = OxmlElement("w:p")
+    run = OxmlElement("w:r")
+    text = OxmlElement("w:t")
+    text.text = "Content control text must not disappear."
+    run.append(text)
+    paragraph.append(run)
+    content.append(paragraph)
+    content_control.append(content)
+    document.element.body.insert(-1, content_control)
+    return _save_docx(document)
+
+
+def _docx_with_tracked_insertion() -> bytes:
+    document = Document()
+    document.add_paragraph("Retained body text.")
+    paragraph = document.add_paragraph()
+    insertion = OxmlElement("w:ins")
+    run = OxmlElement("w:r")
+    text = OxmlElement("w:t")
+    text.text = "Tracked insertion must not disappear."
+    run.append(text)
+    insertion.append(run)
+    paragraph._p.append(insertion)
+    return _save_docx(document)
+
+
+def _docx_with_unsupported_drawing(*, in_header: bool) -> bytes:
+    document = Document()
+    document.add_paragraph("Retained body text.")
+    paragraph = (
+        document.sections[0].header.paragraphs[0]
+        if in_header
+        else document.add_paragraph()
+    )
+    paragraph.add_run()._r.append(OxmlElement("w:drawing"))
+    return _save_docx(document)
+
+
+def _docx_with_nested_table() -> bytes:
+    document = Document()
+    table = document.add_table(rows=1, cols=1)
+    table.cell(0, 0).text = "Outer cell"
+    nested = table.cell(0, 0).add_table(rows=1, cols=1)
+    nested.cell(0, 0).text = "Nested cell must not disappear."
+    return _save_docx(document)
+
+
+def _docx_fixture_with_blank_source_block() -> bytes:
     document = Document()
     document.add_heading("Architecture", level=1)
     document.add_paragraph("")
@@ -86,13 +145,24 @@ def _docx_fixture_with_blank_source_block() -> bytes:
 
 
 def _pdf_outline_fixture() -> bytes:
-    from pypdf import PdfWriter
-
     writer = PdfWriter()
     writer.add_blank_page(width=612, height=792)
     writer.add_blank_page(width=612, height=792)
     root = writer.add_outline_item("Overview", 0)
     writer.add_outline_item("Details", 1, parent=root)
+    output = io.BytesIO()
+    writer.write(output)
+    return output.getvalue()
+
+
+def _pdf_outline_fixture_for_same_page(*, shifted: bool = False) -> bytes:
+    writer = PdfWriter()
+    page = writer.add_blank_page(width=612, height=792)
+    if shifted:
+        page.mediabox.lower_left = (-10, -10)
+        page.mediabox.upper_right = (602, 782)
+    writer.add_outline_item("First", 0)
+    writer.add_outline_item("Second", 0)
     output = io.BytesIO()
     writer.write(output)
     return output.getvalue()
@@ -112,7 +182,7 @@ def test_unknown_profile_refuses_before_artifact_bytes_are_opened() -> None:
     assert artifact.reads == 0
 
 
-def test_child_unknown_profile_refuses_before_stdin_is_read() -> None:
+def test_child_unknown_profile_returns_closed_failure() -> None:
     completed = subprocess.run(
         [
             sys.executable,
@@ -233,6 +303,38 @@ def test_docx_image_is_an_honest_typed_refusal() -> None:
     assert outcome.code is DocumentCompilationFailureCode.FIGURE_NOT_SUPPORTED
 
 
+@pytest.mark.parametrize(
+    "source",
+    (
+        _docx_with_unsupported_body_container(),
+        _docx_with_tracked_insertion(),
+        _docx_with_nested_table(),
+    ),
+    ids=("content-control", "tracked-insertion", "nested-table"),
+)
+def test_docx_refuses_source_content_it_cannot_preserve(source: bytes) -> None:
+    outcome = compile_document_bytes(
+        source,
+        CompilationProfileRef("context-engine-docx-v1", DOCX_CONFIG_V1),
+    )
+
+    assert type(outcome) is DocumentCompilationFailure
+    assert outcome.code is DocumentCompilationFailureCode.INVALID_ARTIFACT
+
+
+@pytest.mark.parametrize("in_header", (False, True))
+def test_docx_refuses_unsupported_drawings_in_every_package_part(
+    in_header: bool,
+) -> None:
+    outcome = compile_document_bytes(
+        _docx_with_unsupported_drawing(in_header=in_header),
+        CompilationProfileRef("context-engine-docx-v1", DOCX_CONFIG_V1),
+    )
+
+    assert type(outcome) is DocumentCompilationFailure
+    assert outcome.code is DocumentCompilationFailureCode.FIGURE_NOT_SUPPORTED
+
+
 def test_docx_locator_ordinal_is_the_ooxml_source_ordinal_not_output_index() -> None:
     outcome = compile_document_bytes(
         _docx_fixture_with_blank_source_block(),
@@ -272,6 +374,109 @@ def test_pdf_outline_profile_emits_source_order_and_pdf_region_locators() -> Non
         for locator in pdf_locators
         if type(locator) is PdfRegionLocator
     ] == [1, 2]
+
+
+def test_pdf_outline_normalizes_shifted_media_box_coordinates() -> None:
+    outcome = compile_document_bytes(
+        _pdf_outline_fixture_for_same_page(shifted=True),
+        CompilationProfileRef(
+            "context-engine-pdf-outline-v1",
+            PDF_TEXT_OUTLINE_V1,
+        ),
+    )
+
+    assert type(outcome) is ParsedDocument
+    assert outcome.units is not None
+    locator = outcome.units[0].locators[0]
+    assert type(locator) is PdfRegionLocator
+    assert locator.bbox_points == (0.0, 0.0, 612.0, 792.0)
+
+
+def test_pdf_outline_bounds_page_before_rendering(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    writer = PdfWriter()
+    writer.add_blank_page(width=20_001, height=20_001)
+    writer.add_outline_item("Oversized", 0)
+    output = io.BytesIO()
+    writer.write(output)
+
+    def reject_render(_page: object) -> str:
+        raise AssertionError("oversized PDF page was rendered")
+
+    monkeypatch.setattr(ragflow_pdf_utils, "_page_render_digest", reject_render)
+    outcome = compile_document_bytes(
+        output.getvalue(),
+        CompilationProfileRef(
+            "context-engine-pdf-outline-v1",
+            PDF_TEXT_OUTLINE_V1,
+        ),
+    )
+
+    assert type(outcome) is DocumentCompilationFailure
+    assert outcome.code is DocumentCompilationFailureCode.DOCUMENT_BOUND_EXCEEDED
+
+
+def test_pdf_outline_closes_document_and_renders_each_page_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pdfium_module = cast(Any, ragflow_pdf_utils).pdfium
+    original_document = pdfium_module.PdfDocument
+    render_calls = 0
+
+    class TrackingDocument:
+        def __init__(self, source: bytes) -> None:
+            self._document = original_document(source)
+            self.closed = False
+            wrappers.append(self)
+
+        def __getitem__(self, index: int) -> object:
+            return self._document[index]
+
+        def close(self) -> None:
+            self.closed = True
+            self._document.close()
+
+    wrappers: list[TrackingDocument] = []
+
+    def recording_digest(page: object) -> str:
+        nonlocal render_calls
+        render_calls += 1
+        cast(Any, page).close()
+        return "0" * 64
+
+    monkeypatch.setattr(pdfium_module, "PdfDocument", TrackingDocument)
+    monkeypatch.setattr(ragflow_pdf_utils, "_page_render_digest", recording_digest)
+    outcome = compile_document_bytes(
+        _pdf_outline_fixture_for_same_page(),
+        CompilationProfileRef(
+            "context-engine-pdf-outline-v1",
+            PDF_TEXT_OUTLINE_V1,
+        ),
+    )
+
+    assert type(outcome) is ParsedDocument
+    assert render_calls == 1
+    assert len(wrappers) == 1
+    assert wrappers[0].closed is True
+
+
+def test_pdf_without_outline_is_an_honest_typed_refusal() -> None:
+    writer = PdfWriter()
+    writer.add_blank_page(width=612, height=792)
+    output = io.BytesIO()
+    writer.write(output)
+
+    outcome = compile_document_bytes(
+        output.getvalue(),
+        CompilationProfileRef(
+            "context-engine-pdf-outline-v1",
+            PDF_TEXT_OUTLINE_V1,
+        ),
+    )
+
+    assert type(outcome) is DocumentCompilationFailure
+    assert outcome.code is DocumentCompilationFailureCode.OUTLINE_UNAVAILABLE
 
 
 def test_page_render_digest_is_identical_for_same_pixels_in_distinct_pdfs() -> None:
@@ -391,6 +596,59 @@ def test_format_neutral_constructor_rejects_more_than_the_hard_unit_bound() -> N
         )
 
 
+def test_format_text_bound_counts_copied_heading_ancestry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import engine.supply.documents as document_contracts
+
+    monkeypatch.setattr(document_contracts, "MAX_FORMAT_DOCUMENT_TEXT_CHARACTERS", 10)
+    digest = "0" * 64
+    units = (
+        StructuralUnit(
+            ordinal=0,
+            kind=DocumentStructuralKind.HEADING,
+            text="12345",
+            locators=(DocxXmlLocator(digest, "/word/document.xml", 0, digest),),
+            heading_level=1,
+        ),
+        StructuralUnit(
+            ordinal=1,
+            kind=DocumentStructuralKind.PARAGRAPH,
+            text="1",
+            locators=(DocxXmlLocator(digest, "/word/document.xml", 1, digest),),
+            heading_ancestry=("12345",),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="text hard bound"):
+        ParsedDocument.format_neutral(
+            artifact_digest=digest,
+            profile=CompilationProfileRef(
+                "context-engine-docx-v1",
+                DOCX_CONFIG_V1,
+            ),
+            units=units,
+        )
+
+
+@pytest.mark.parametrize(
+    "profile",
+    (
+        CompilationProfileRef("context-engine-pdf-outline-v1", DOCX_CONFIG_V1),
+        CompilationProfileRef("unsupported-compiler-v1", DOCX_CONFIG_V1),
+        CompilationProfileRef("context-engine-docx-v1", PDF_TEXT_OUTLINE_V1),
+        CompilationProfileRef("unsupported-compiler-v1", PDF_TEXT_OUTLINE_V1),
+    ),
+)
+def test_raw_compiler_refuses_unsupported_exact_profile_identity(
+    profile: CompilationProfileRef,
+) -> None:
+    outcome = compile_document_bytes(_docx_fixture(), profile)
+
+    assert type(outcome) is DocumentCompilationFailure
+    assert outcome.code is DocumentCompilationFailureCode.UNKNOWN_PROFILE
+
+
 def test_format_constructor_rejects_wrong_compiler_and_cross_artifact_locator() -> (
     None
 ):
@@ -433,6 +691,10 @@ def test_deserializer_rejects_forged_compiler_and_locator_artifact() -> None:
     with pytest.raises(ValueError, match="compiler/profile identity"):
         deserialize_parsed_document(rfc8785.dumps(canonical))
     canonical["profile"]["compilerRef"] = "context-engine-docx-v1"
+    canonical["units"][0]["unexpected"] = "must refuse"
+    with pytest.raises(ValueError, match="unit has unexpected fields"):
+        deserialize_parsed_document(rfc8785.dumps(canonical))
+    del canonical["units"][0]["unexpected"]
     canonical["units"][0]["locators"][0]["artifactDigest"] = "f" * 64
     with pytest.raises(ValueError, match="bind the document artifact"):
         deserialize_parsed_document(rfc8785.dumps(canonical))

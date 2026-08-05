@@ -8,6 +8,7 @@ import json
 import subprocess
 import sys
 from abc import ABC, abstractmethod
+from pathlib import Path
 from typing import Final, Protocol, cast
 
 from adapters.parsers.ragflow_documents import compile_document_bytes, profile_for_ref
@@ -27,6 +28,7 @@ from eval._compiler_acceptance import (
 MAX_DOCUMENT_ARTIFACT_BYTES: Final = 32 * 1024 * 1024
 DOCUMENT_RUNNER_TIMEOUT_SECONDS: Final = 30.0
 _RUNNER_MODULE: Final = "applications.document_compiler_runner"
+_REPOSITORY_ROOT: Final = Path(__file__).parents[1]
 
 
 class ArtifactSource(ABC):
@@ -123,7 +125,8 @@ def compile_in_local_document_runner(
             input=payload,
             capture_output=True,
             check=False,
-            env={},
+            cwd=_REPOSITORY_ROOT,
+            env={"PYTHONPATH": str(_REPOSITORY_ROOT)},
             timeout=DOCUMENT_RUNNER_TIMEOUT_SECONDS,
         )
     except Exception:

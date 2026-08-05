@@ -4,6 +4,7 @@ import ast
 import hashlib
 import json
 import re
+import subprocess
 import tomllib
 from collections import Counter
 from pathlib import Path
@@ -251,6 +252,49 @@ def test_vendored_subtree_imports_only_approved_dependencies() -> None:
     assert "7d1674fb7c92b2db24964575cb2290139a823a923da89a321cbdaea795452849" in (
         modifications
     )
+
+
+@pytest.mark.parametrize(
+    ("filename", "patch_name", "upstream_sha256"),
+    (
+        (
+            "docx_parser.py",
+            "issue-204-docx-parser.patch",
+            "891ffc11d2a3ac32e5c0d8b25b35aa62ab8cda1033c9e0a93782e9d45e759586",
+        ),
+        (
+            "utils.py",
+            "issue-204-pdf-outline.patch",
+            "7d1674fb7c92b2db24964575cb2290139a823a923da89a321cbdaea795452849",
+        ),
+    ),
+)
+def test_issue_204_patch_reconstructs_pinned_and_vendored_bytes(
+    tmp_path: Path,
+    filename: str,
+    patch_name: str,
+    upstream_sha256: str,
+) -> None:
+    vendored = REGISTRATION_ROOT / "deepdoc/parser" / filename
+    target = tmp_path / "deepdoc/parser" / filename
+    target.parent.mkdir(parents=True)
+    target.write_bytes(vendored.read_bytes())
+    patch = REGISTRATION_ROOT / "patches" / patch_name
+
+    subprocess.run(
+        ["git", "apply", "--reverse", str(patch)],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    assert hashlib.sha256(target.read_bytes()).hexdigest() == upstream_sha256
+    subprocess.run(
+        ["git", "apply", str(patch)],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    assert target.read_bytes() == vendored.read_bytes()
 
 
 def test_registered_parser_region_is_executed_by_the_ce_adapter(

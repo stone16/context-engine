@@ -69,11 +69,11 @@
         },
         {
           "name": "context-engine:file-sha256",
-          "value": "third_party/ragflow/deepdoc/parser/docx_parser.py=d0d788e190503a165e78057db3abfe5b70aabc5315353dd9a6ff93f8b4427621"
+          "value": "third_party/ragflow/deepdoc/parser/docx_parser.py=92c94ba0e56fd1be1b91fa502e2e3334fdbef0237a9fd877a50ac3b1d3ab766b"
         },
         {
           "name": "context-engine:file-sha256",
-          "value": "third_party/ragflow/deepdoc/parser/utils.py=88f2dd5d7c6eafdc9e33121e585678e051aa49e4420db3b4971da0a99c03c9cf"
+          "value": "third_party/ragflow/deepdoc/parser/utils.py=2af5d63249bc7b17d9886e9b2fe8a363505726f261cd3ffd57066b134a4af820"
         }
       ],
       "type": "library",

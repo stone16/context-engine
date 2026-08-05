@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from io import BytesIO
-from typing import Final, cast
+from typing import Any, Final, cast
 
 from docx import Document
 from docx.document import Document as DocumentType
@@ -32,6 +32,36 @@ from docx.text.paragraph import Paragraph
 
 _PARAGRAPH_TAG: Final = qn("w:p")
 _TABLE_TAG: Final = qn("w:tbl")
+_SECTION_PROPERTIES_TAG: Final = qn("w:sectPr")
+_UNSUPPORTED_CONTENT_TAGS: Final = frozenset(
+    {
+        qn("w:customXml"),
+        qn("w:del"),
+        qn("w:ins"),
+        qn("w:moveFrom"),
+        qn("w:moveTo"),
+        qn("w:sdt"),
+    }
+)
+_UNSUPPORTED_VISUAL_TAGS: Final = frozenset(
+    {qn("w:drawing"), qn("w:object"), qn("w:pict")}
+)
+
+
+class UnsupportedDocxFigureError(ValueError):
+    """The closed DOCX profile encountered an unsupported visual object."""
+
+
+def _contains_tag(element: Any, tags: frozenset[str]) -> bool:
+    return any(node.tag in tags for node in element.iter())
+
+
+def _package_contains_visual(document: DocumentType) -> bool:
+    for part in document.part.package.parts:
+        element = getattr(part, "element", None)
+        if element is not None and _contains_tag(element, _UNSUPPORTED_VISUAL_TAGS):
+            return True
+    return False
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,8 +85,14 @@ class RAGFlowDocxParser:
             raise TypeError("DOCX parser source must be exact bytes")
         document = Document(BytesIO(source))
         assert isinstance(document, DocumentType)
+        if _package_contains_visual(document):
+            raise UnsupportedDocxFigureError(
+                "DOCX profile does not admit visual objects"
+            )
         blocks: list[RawDocxBlock] = []
         for block_ordinal, child in enumerate(document.element.body.iterchildren()):
+            if _contains_tag(child, _UNSUPPORTED_CONTENT_TAGS):
+                raise ValueError("DOCX contains an unsupported content container")
             if child.tag == _PARAGRAPH_TAG:
                 paragraph = Paragraph(child, document)
                 text = paragraph.text.strip()
@@ -78,6 +114,8 @@ class RAGFlowDocxParser:
                         )
                     )
             elif child.tag == _TABLE_TAG:
+                if any(node.tag == _TABLE_TAG for node in child.iterdescendants()):
+                    raise ValueError("DOCX profile does not admit nested tables")
                 table = Table(child, document)
                 rows = tuple(
                     tuple(cell.text.strip() for cell in row.cells)
@@ -95,7 +133,9 @@ class RAGFlowDocxParser:
                             has_figure=bool(child.xpath(".//pic:pic")),
                         )
                     )
+            elif child.tag != _SECTION_PROPERTIES_TAG:
+                raise ValueError("DOCX contains an unsupported body element")
         return tuple(blocks)
 
 
-__all__ = ["RAGFlowDocxParser", "RawDocxBlock"]
+__all__ = ["RAGFlowDocxParser", "RawDocxBlock", "UnsupportedDocxFigureError"]

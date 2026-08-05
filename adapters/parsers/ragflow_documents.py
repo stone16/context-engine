@@ -12,10 +12,15 @@ from pypdf import PdfReader
 from engine.supply.documents import (
     DOCX_COMPILER_V1,
     DOCX_CONFIG_V1,
+    DOCX_PART_URI,
     MAX_FORMAT_DOCUMENT_TEXT_CHARACTERS,
     MAX_FORMAT_DOCUMENT_UNITS,
     MAX_FORMAT_TABLE_CELLS,
+    MAX_PDF_PAGE_DIMENSION_POINTS,
+    MAX_PDF_PAGE_NUMBER,
+    MAX_PDF_PAGE_PIXEL_AREA,
     PDF_OUTLINE_COMPILER_V1,
+    PDF_OUTLINE_EXTRACTION_METHOD,
     PDF_TEXT_OUTLINE_V1,
     CompilationProfileRef,
     DocumentCompilationFailure,
@@ -26,8 +31,14 @@ from engine.supply.documents import (
     StructuralUnit,
 )
 from engine.supply.markdown import ParsedDocument
-from third_party.ragflow.deepdoc.parser.docx_parser import RAGFlowDocxParser
-from third_party.ragflow.deepdoc.parser.utils import extract_pdf_outlines
+from third_party.ragflow.deepdoc.parser.docx_parser import (
+    RAGFlowDocxParser,
+    UnsupportedDocxFigureError,
+)
+from third_party.ragflow.deepdoc.parser.utils import (
+    PdfPageBoundExceeded,
+    extract_pdf_outlines,
+)
 
 _SUPPORTED_PROFILES: Final = {
     DOCX_CONFIG_V1: CompilationProfileRef(DOCX_COMPILER_V1, DOCX_CONFIG_V1),
@@ -38,9 +49,6 @@ _SUPPORTED_PROFILES: Final = {
 }
 MAX_DOCX_PACKAGE_MEMBERS: Final = 4_096
 MAX_DOCX_UNCOMPRESSED_BYTES: Final = 128 * 1024 * 1024
-MAX_PDF_PAGES: Final = 2_000
-_DOCX_PART_URI: Final = "/word/document.xml"
-_PDF_OUTLINE_EXTRACTION_METHOD: Final = "pypdf-outline-v1"
 
 
 def _failure(code: DocumentCompilationFailureCode) -> DocumentCompilationFailure:
@@ -90,6 +98,8 @@ def _compile_docx(
         return _failure(DocumentCompilationFailureCode.INVALID_ARTIFACT)
     try:
         blocks = RAGFlowDocxParser()(source)
+    except UnsupportedDocxFigureError:
+        return _failure(DocumentCompilationFailureCode.FIGURE_NOT_SUPPORTED)
     except Exception:
         return _failure(DocumentCompilationFailureCode.INVALID_ARTIFACT)
     if not blocks:
@@ -128,7 +138,7 @@ def _compile_docx(
                 locators=(
                     DocxXmlLocator(
                         artifact_digest=artifact_digest,
-                        part_uri=_DOCX_PART_URI,
+                        part_uri=DOCX_PART_URI,
                         block_ordinal=block.block_ordinal,
                         xml_digest=sha256(block.xml).hexdigest(),
                     ),
@@ -150,9 +160,15 @@ def _compile_pdf_outline(
     profile: CompilationProfileRef,
 ) -> ParsedDocument[CompilationProfileRef] | DocumentCompilationFailure:
     try:
-        if len(PdfReader(BytesIO(source)).pages) > MAX_PDF_PAGES:
+        if len(PdfReader(BytesIO(source)).pages) > MAX_PDF_PAGE_NUMBER:
             return _failure(DocumentCompilationFailureCode.DOCUMENT_BOUND_EXCEEDED)
-        outlines = extract_pdf_outlines(source)
+        outlines = extract_pdf_outlines(
+            source,
+            max_page_dimension_points=MAX_PDF_PAGE_DIMENSION_POINTS,
+            max_page_pixel_area=MAX_PDF_PAGE_PIXEL_AREA,
+        )
+    except PdfPageBoundExceeded:
+        return _failure(DocumentCompilationFailureCode.DOCUMENT_BOUND_EXCEEDED)
     except Exception:
         return _failure(DocumentCompilationFailureCode.INVALID_ARTIFACT)
     if not outlines:
@@ -179,7 +195,7 @@ def _compile_pdf_outline(
                         page_number=outline.page_number,
                         bbox_points=outline.page_bbox_points,
                         page_render_digest=outline.page_render_digest,
-                        extraction_method=_PDF_OUTLINE_EXTRACTION_METHOD,
+                        extraction_method=PDF_OUTLINE_EXTRACTION_METHOD,
                     ),
                 ),
                 heading_level=outline.depth + 1,
@@ -203,9 +219,12 @@ def compile_document_bytes(
     try:
         if type(source) is not bytes or type(profile) is not CompilationProfileRef:
             raise TypeError("document compiler requires nominal inputs")
-        if profile.profile_ref == DOCX_CONFIG_V1:
+        expected_profile = _SUPPORTED_PROFILES.get(profile.profile_ref)
+        if expected_profile != profile:
+            return _failure(DocumentCompilationFailureCode.UNKNOWN_PROFILE)
+        if profile == _SUPPORTED_PROFILES[DOCX_CONFIG_V1]:
             return _compile_docx(source, profile)
-        if profile.profile_ref == PDF_TEXT_OUTLINE_V1:
+        if profile == _SUPPORTED_PROFILES[PDF_TEXT_OUTLINE_V1]:
             return _compile_pdf_outline(source, profile)
     except Exception:
         return _failure(DocumentCompilationFailureCode.INVALID_ARTIFACT)

@@ -39,7 +39,16 @@ class RawPdfOutline:
     page_render_digest: str
 
 
-def extract_pdf_outlines(source: bytes) -> tuple[RawPdfOutline, ...]:
+class PdfPageBoundExceeded(ValueError):
+    """A PDF page cannot be rendered within the caller-owned hard bounds."""
+
+
+def extract_pdf_outlines(
+    source: bytes,
+    *,
+    max_page_dimension_points: float,
+    max_page_pixel_area: float,
+) -> tuple[RawPdfOutline, ...]:
     """Extract source-ordered outline entries or propagate a parser failure."""
 
     if type(source) is not bytes:
@@ -47,6 +56,14 @@ def extract_pdf_outlines(source: bytes) -> tuple[RawPdfOutline, ...]:
     pdf = PdfReader(BytesIO(source))
     render_document = pdfium.PdfDocument(source)
     outlines: list[RawPdfOutline] = []
+    render_digests: dict[int, str] = {}
+
+    def render_digest(page_index: int) -> str:
+        digest = render_digests.get(page_index)
+        if digest is None:
+            digest = _page_render_digest(render_document[page_index])
+            render_digests[page_index] = digest
+        return digest
 
     def dfs(nodes: list[object], depth: int) -> None:
         for node in nodes:
@@ -63,9 +80,20 @@ def extract_pdf_outlines(source: bytes) -> tuple[RawPdfOutline, ...]:
             if depth > 5:
                 raise ValueError("PDF outline depth exceeds the closed profile")
             page = pdf.pages[page_index]
-            bbox_points = tuple(float(value) for value in page.mediabox)
-            if len(bbox_points) != 4:
+            raw_bbox = tuple(float(value) for value in page.mediabox)
+            if len(raw_bbox) != 4:
                 raise ValueError("PDF page media box is outside the closed profile")
+            x0, y0, x1, y1 = raw_bbox
+            width = max(x0, x1) - min(x0, x1)
+            height = max(y0, y1) - min(y0, y1)
+            if (
+                width <= 0
+                or height <= 0
+                or width > max_page_dimension_points
+                or height > max_page_dimension_points
+                or width * height > max_page_pixel_area
+            ):
+                raise PdfPageBoundExceeded("PDF page exceeds the render hard bound")
             outlines.append(
                 RawPdfOutline(
                     title=title,
@@ -73,15 +101,16 @@ def extract_pdf_outlines(source: bytes) -> tuple[RawPdfOutline, ...]:
                     page_number=page_number,
                     page_bbox_points=cast(
                         tuple[float, float, float, float],
-                        bbox_points,
+                        (0.0, 0.0, width, height),
                     ),
-                    page_render_digest=_page_render_digest(
-                        render_document[page_index]
-                    ),
+                    page_render_digest=render_digest(page_index),
                 )
             )
 
-    dfs(cast(list[object], pdf.outline), 0)
+    try:
+        dfs(cast(list[object], pdf.outline), 0)
+    finally:
+        render_document.close()
     return tuple(outlines)
 
 
@@ -102,4 +131,4 @@ def _page_render_digest(page: pdfium.PdfPage) -> str:
         page.close()
 
 
-__all__ = ["RawPdfOutline", "extract_pdf_outlines"]
+__all__ = ["PdfPageBoundExceeded", "RawPdfOutline", "extract_pdf_outlines"]
