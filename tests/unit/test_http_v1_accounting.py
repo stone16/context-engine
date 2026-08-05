@@ -1,14 +1,23 @@
 from __future__ import annotations
 
+import json
+import os
+import socket
+import subprocess
+import time
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from datetime import UTC, datetime
+from pathlib import Path
+from threading import Thread
 from typing import cast
 from uuid import UUID
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
+from uvicorn import Config, Server
 
 from adapters.embeddings import DeterministicEmbeddingTwin
 from adapters.http.app import create_app
@@ -65,6 +74,7 @@ from tests.unit.test_runtime_authorized_evidence import (
 )
 
 QUERY = "account 世界"
+ROOT = Path(__file__).parents[2]
 
 
 class _RecordingEmbeddingProvider:
@@ -206,12 +216,12 @@ def _scope_authority() -> DeterministicScopeAuthority:
     )
 
 
-def _client(
+def _application(
     provider: _RecordingEmbeddingProvider,
     context_runs: RecordingContextRunPort,
     *,
     corrupt_tokenizer_digest: bool = False,
-) -> TestClient:
+) -> FastAPI:
     materialized = _AuthorizedMaterializedPort()
     index = PostgreSQLVectorCandidateIndex(
         provider,
@@ -223,21 +233,51 @@ def _client(
         clock=lambda: AS_OF,
         query_digest_keyring=TEST_QUERY_DIGEST_KEYRING,
     )
+    return create_app(
+        authenticator=DeterministicAuthenticator(),
+        organization_authority=DeterministicOrganizationAuthority(),
+        membership_authority=_V1MembershipAuthority(
+            materialized,
+            context_runs,
+            corrupt_tokenizer_digest=corrupt_tokenizer_digest,
+        ),
+        scope_authority=_scope_authority(),
+        runtime=runtime,
+        clock=lambda: datetime(2026, 7, 21, 10, 0, tzinfo=UTC),
+        public_contract_version="v1",
+    )
+
+
+def _client(
+    provider: _RecordingEmbeddingProvider,
+    context_runs: RecordingContextRunPort,
+    *,
+    corrupt_tokenizer_digest: bool = False,
+) -> TestClient:
     return TestClient(
-        create_app(
-            authenticator=DeterministicAuthenticator(),
-            organization_authority=DeterministicOrganizationAuthority(),
-            membership_authority=_V1MembershipAuthority(
-                materialized,
-                context_runs,
-                corrupt_tokenizer_digest=corrupt_tokenizer_digest,
-            ),
-            scope_authority=_scope_authority(),
-            runtime=runtime,
-            clock=lambda: datetime(2026, 7, 21, 10, 0, tzinfo=UTC),
-            public_contract_version="v1",
+        _application(
+            provider,
+            context_runs,
+            corrupt_tokenizer_digest=corrupt_tokenizer_digest,
         )
     )
+
+
+def _unused_port() -> int:
+    with closing(socket.socket()) as listener:
+        listener.bind(("127.0.0.1", 0))
+        return cast(int, listener.getsockname()[1])
+
+
+def _wait_for_tcp(port: int) -> None:
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        with closing(socket.socket()) as probe:
+            probe.settimeout(0.1)
+            if probe.connect_ex(("127.0.0.1", port)) == 0:
+                return
+        time.sleep(0.05)
+    raise AssertionError("live v1 SDK fixture did not become reachable")
 
 
 def test_v1_http_package_and_context_run_publish_one_digest_bound_usage() -> None:
@@ -308,3 +348,57 @@ def test_v1_http_tokenizer_digest_mismatch_refuses_before_provider_bytes() -> No
     assert provider.calls == 0
     assert provider.bytes_sent == 0
     assert context_runs.calls == []
+
+
+def test_generated_v1_sdk_observes_cumulative_usage_over_live_http() -> None:
+    provider = _RecordingEmbeddingProvider()
+    context_runs = RecordingContextRunPort()
+    port = _unused_port()
+    server = Server(
+        Config(
+            _application(provider, context_runs),
+            host="127.0.0.1",
+            port=port,
+            log_level="warning",
+            lifespan="off",
+        )
+    )
+    server_thread = Thread(target=server.run, daemon=True)
+    server_thread.start()
+    try:
+        _wait_for_tcp(port)
+        result = subprocess.run(
+            ["node", "test/live-empty-consumer.mjs"],
+            cwd=ROOT / "sdk/typescript-v1",
+            check=False,
+            capture_output=True,
+            text=True,
+            env={
+                **os.environ,
+                "CONTEXT_ENGINE_SDK_BASE_URL": f"http://127.0.0.1:{port}",
+                "CONTEXT_ENGINE_SDK_QUERY": QUERY,
+                "CONTEXT_ENGINE_SDK_REQUEST_ID": "v1-generated-sdk-accounting",
+                "CONTEXT_ENGINE_SDK_TEST_AUTHENTICATION": VALID_TOKEN,
+            },
+            timeout=30,
+        )
+    finally:
+        server.should_exit = True
+        server_thread.join(timeout=10)
+        assert not server_thread.is_alive()
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    outcome = json.loads(result.stdout)
+    package = outcome["package"]
+    assert package["budgetUsage"] == {
+        "tokens": len(QUERY) + len("A-safe"),
+        "providerCalls": 1,
+        "costMicrounits": 1,
+        "elapsedMs": 7,
+    }
+    assert package["tokenizerProfileDigest"] == (
+        UNICODE_SCALAR_TOKENIZER_PROFILE.profile_digest
+    )
+    assert provider.calls == 1
+    assert len(context_runs.calls) == 1
+    assert context_runs.calls[0][0].package_digest == package["packageDigest"]
