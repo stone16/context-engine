@@ -74,6 +74,11 @@ from engine.runtime.egress import (
 )
 from engine.runtime.evidence import CandidateRef
 from engine.runtime.package_digest import QueryDigestKeyring
+from engine.runtime.release_lineage import (
+    PACKAGE_SCHEMA_REF_V1,
+    RUNTIME_PROFILE_REF_V1,
+    RUNTIME_TOKENIZER_REF_V1,
+)
 from tests.integration.test_file_import_tracer import (
     _ExactScopeAuthority,
     _OrganizationAuthority,
@@ -279,7 +284,7 @@ def _run_sdk_process(
 def _pack_and_install_sdk(consumer_root: Path) -> None:
     for script in ("check:generated", "typecheck", "build", "test:package"):
         _run_sdk_process(
-            ["npm", "--prefix", "sdk/typescript", "run", script],
+            ["npm", "--prefix", "sdk/typescript-v1", "run", script],
             cwd=ROOT,
         )
     artifact_root = consumer_root / "artifact"
@@ -293,7 +298,7 @@ def _pack_and_install_sdk(consumer_root: Path) -> None:
             "--pack-destination",
             str(artifact_root),
         ],
-        cwd=ROOT / "sdk/typescript",
+        cwd=ROOT / "sdk/typescript-v1",
     )
     report = json.loads(pack.stdout)
     artifact_name = report[0]["filename"]
@@ -366,7 +371,7 @@ def _pack_and_install_sdk(consumer_root: Path) -> None:
                     "@context-engine/bot-delivery": (
                         f"file:{artifact_root / bot_artifact_name}"
                     ),
-                    "@context-engine/resolve-sdk": (
+                    "@context-engine/resolve-sdk-v1": (
                         f"file:{artifact_root / artifact_name}"
                     ),
                     **local_production_dependencies,
@@ -381,15 +386,29 @@ def _pack_and_install_sdk(consumer_root: Path) -> None:
         cwd=consumer_root,
     )
     (consumer_root / "live-consumer.mjs").write_bytes(
-        (ROOT / "sdk/typescript/test/live-consumer.mjs").read_bytes()
+        (ROOT / "sdk/typescript-v1/test/live-consumer.mjs").read_bytes()
     )
     (consumer_root / "live-empty-consumer.mjs").write_bytes(
-        (ROOT / "sdk/typescript/test/live-empty-consumer.mjs").read_bytes()
+        (ROOT / "sdk/typescript-v1/test/live-empty-consumer.mjs").read_bytes()
     )
     (consumer_root / "live-private-flow.mjs").write_bytes(
         (
             ROOT / "bot_delivery/typescript/test/live-private-flow.mjs"
         ).read_bytes()
+    )
+
+
+def _activate_v1_release(
+    scenario: _FileImportScenario,
+    published: PublishedFileImport,
+) -> None:
+    clear_test_runtime_release(scenario.organization_id)
+    ensure_test_runtime_release(
+        scenario.organization_id,
+        active_revision_refs=(published.candidate_ref.revision_ref,),
+        runtime_profile_ref=RUNTIME_PROFILE_REF_V1,
+        tokenizer_ref=RUNTIME_TOKENIZER_REF_V1,
+        package_schema_ref=PACKAGE_SCHEMA_REF_V1,
     )
 
 
@@ -1699,6 +1718,7 @@ def test_packed_typescript_sdk_resolves_authorized_file_package_over_live_http(
     query_digest_keyring: QueryDigestKeyring,
 ) -> None:
     scenario, published, migration_engine = _published_file_scenario
+    _activate_v1_release(scenario, published)
     identity_engine = create_database_engine(identity_configuration)
     operator_engine = create_database_engine(operator_configuration)
     server: Server | None = None
@@ -1907,6 +1927,7 @@ def test_packed_typescript_sdk_resolves_authorized_file_package_over_live_http(
                 ),
                 resolution_observer=observed.append,
                 clock=lambda: request_now,
+                public_contract_version="v1",
             )
         )
         port = _unused_port()
@@ -2107,6 +2128,7 @@ def test_installed_private_bot_completes_file_answer_effects_audit_and_citation(
     query_digest_keyring: QueryDigestKeyring,
 ) -> None:
     scenario, published, migration_engine = _published_file_scenario
+    _activate_v1_release(scenario, published)
     identity_engine = create_database_engine(identity_configuration)
     server: Server | None = None
     server_thread: Thread | None = None
@@ -2432,6 +2454,7 @@ def test_installed_private_bot_completes_file_answer_effects_audit_and_citation(
                     query_digest_keyring=query_digest_keyring,
                 ),
                 clock=lambda: request_now,
+                public_contract_version="v1",
             )
         )
         port = _unused_port()

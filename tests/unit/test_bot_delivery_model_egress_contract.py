@@ -28,7 +28,7 @@ def test_typescript_model_egress_is_closed_pinned_and_zero_byte_on_denial() -> N
     assert package["dependencies"] == {"canonicalize": "3.0.0", "pg": "8.22.0"}
     assert package["peerDependencies"] == {
         "@context-engine/action-plane": "0.0.0-m2-perform",
-        "@context-engine/resolve-sdk": "0.0.0-v0"
+        "@context-engine/resolve-sdk-v1": "1.0.0"
     }
     assert lock["packages"][""]["dependencies"] == package["dependencies"]
     assert lock["packages"][""]["peerDependencies"] == package["peerDependencies"]
@@ -45,7 +45,7 @@ def test_typescript_model_egress_is_closed_pinned_and_zero_byte_on_denial() -> N
     assert '"optionalDependencies": local_optional_dependencies' in live_integration
 
     for cwd, command in (
-        (ROOT / "sdk/typescript", ["npm", "run", "build"]),
+        (ROOT / "sdk/typescript-v1", ["npm", "run", "build"]),
         (BOT_DELIVERY_ROOT, ["npm", "run", "build"]),
         (BOT_DELIVERY_ROOT, ["npm", "run", "test:runtime"]),
     ):

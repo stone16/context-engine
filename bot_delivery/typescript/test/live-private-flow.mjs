@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { createHmac } from "node:crypto";
 
-import { ContextEngineResolveClient } from "@context-engine/resolve-sdk";
+import { ContextEngineResolveClient } from "@context-engine/resolve-sdk-v1";
 import canonicalize from "canonicalize";
 
 function required(name) {

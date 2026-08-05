@@ -9,7 +9,7 @@ import {
   ExactPrivateFeishuSenderTwin,
   PrivateActionPrepareProfile,
 } from "@context-engine/action-plane";
-import { ContextEngineResolveClient } from "@context-engine/resolve-sdk";
+import { ContextEngineResolveClient } from "@context-engine/resolve-sdk-v1";
 import canonicalize from "canonicalize";
 import pg from "pg";
 
@@ -80,14 +80,15 @@ function contextPackage(purpose, sequence) {
     expiresAt,
     gaps: [],
     packageId: `pkg_${String(sequence).repeat(32)}`,
-    packageSchemaRef: "context-package-openapi-v0",
+    packageSchemaRef: "context-package-openapi-v1",
     policyEpoch: 7,
     policySnapshotRef: evidence.policySnapshotRef,
     purpose,
     releaseManifestRef: "release:private-answer",
     retentionPolicyRef: "package-digest-only-retention-v1",
     runRef: evidence.runRef,
-    tokenizerRef: "utf8-byte-budget-v1",
+    tokenizerProfileDigest: "b4f0e7d287df088f5cbd5aacc1ac04941f0fca0d1a5e2990179ed774d1617418",
+    tokenizerRef: "unicode-scalar-tokenizer-v1",
     ttlSeconds: 300,
   };
   return {

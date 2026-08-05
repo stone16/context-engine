@@ -6,7 +6,7 @@ import {
   ExactPrivateFeishuSenderTwin,
   PrivateActionPrepareProfile,
 } from "@context-engine/action-plane";
-import { ContextEngineResolveClient } from "@context-engine/resolve-sdk";
+import { ContextEngineResolveClient } from "@context-engine/resolve-sdk-v1";
 import { createInterface } from "node:readline";
 import pg from "pg";
 

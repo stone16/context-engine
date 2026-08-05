@@ -1,9 +1,9 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 
 import type {
-  ContextPackageWire,
+  ContextPackageV1Wire,
   ModelEgressGrantWire,
-} from "@context-engine/resolve-sdk";
+} from "@context-engine/resolve-sdk-v1";
 import pg from "pg";
 
 import { canonicalJson, contextPackageDocumentDigest } from "./canonical-json.js";
@@ -22,6 +22,9 @@ const ANSWER_PAYLOAD_DOMAIN = Buffer.from("context-engine.answer-payload.v1\0");
 const QUESTION_DIGEST_DOMAIN = Buffer.from("context-engine.model-question.v1\0");
 const EGRESS_GRANT_DIGEST_PROFILE = "egress-grant-locator-sha256-v1";
 const MODEL_AUDIT_PROFILE = "model-generation-audit-v1";
+const PACKAGE_SCHEMA_REF = "context-package-openapi-v1";
+const TOKENIZER_REF = "unicode-scalar-tokenizer-v1";
+const TOKENIZER_PROFILE_DIGEST = "b4f0e7d287df088f5cbd5aacc1ac04941f0fca0d1a5e2990179ed774d1617418";
 
 function requireExactKeys(
   name: string,
@@ -320,6 +323,7 @@ const PACKAGE_KEYS = [
   "releaseManifestRef",
   "retentionPolicyRef",
   "runRef",
+  "tokenizerProfileDigest",
   "tokenizerRef",
   "ttlSeconds",
 ] as const;
@@ -349,7 +353,7 @@ interface ValidatedEvidence {
 interface ValidatedPackage {
   readonly canonicalPayload: Buffer;
   readonly evidence: readonly ValidatedEvidence[];
-  readonly packageSnapshot: ContextPackageWire;
+  readonly packageSnapshot: ContextPackageV1Wire;
 }
 
 function requirePackage(
@@ -368,8 +372,18 @@ function requirePackage(
   const policySnapshotRef = requireRef("Package policy snapshot", packageRecord.policySnapshotRef);
   requireRef("Package release manifest", packageRecord.releaseManifestRef);
   requireRef("Package retention policy", packageRecord.retentionPolicyRef);
-  requireRef("Package tokenizer", packageRecord.tokenizerRef);
-  requireRef("Package schema", packageRecord.packageSchemaRef);
+  if (requireRef("Package tokenizer", packageRecord.tokenizerRef) !== TOKENIZER_REF) {
+    throw new TypeError("model input requires the active tokenizer profile");
+  }
+  if (
+    requireSha256("Package tokenizer profile digest", packageRecord.tokenizerProfileDigest)
+    !== TOKENIZER_PROFILE_DIGEST
+  ) {
+    throw new TypeError("model input requires the active tokenizer profile");
+  }
+  if (requireRef("Package schema", packageRecord.packageSchemaRef) !== PACKAGE_SCHEMA_REF) {
+    throw new TypeError("model input requires the active Package schema");
+  }
   const ttlSeconds = requirePositiveInteger("Package TTL", packageRecord.ttlSeconds);
   const asOf = requireCanonicalTimestamp("Package asOf", packageRecord.asOf);
   const expiresAt = requireCanonicalTimestamp("Package expiry", packageRecord.expiresAt);
@@ -547,7 +561,7 @@ function requirePackage(
   return {
     canonicalPayload,
     evidence: Object.freeze(evidence),
-    packageSnapshot: JSON.parse(canonicalPayload.toString("utf8")) as ContextPackageWire,
+    packageSnapshot: JSON.parse(canonicalPayload.toString("utf8")) as ContextPackageV1Wire,
   };
 }
 
@@ -588,7 +602,7 @@ function requireEnvelope(
 interface AuthorizedModelInputState {
   readonly evidence: readonly ValidatedEvidence[];
   readonly grantDigest: Buffer;
-  readonly package: ContextPackageWire;
+  readonly package: ContextPackageV1Wire;
   readonly payloadDigest: string;
   readonly profile: PrivateModelGatewayProfile;
   readonly providerRequest: ModelProviderRequest;
@@ -625,7 +639,7 @@ export interface PrepareAuthorizedModelInputOptions {
   readonly envelope: QuestionEnvelope;
   readonly grant: ModelEgressGrantWire;
   readonly now: Date;
-  readonly package: ContextPackageWire;
+  readonly package: ContextPackageV1Wire;
   readonly profile: PrivateModelGatewayProfile;
 }
 

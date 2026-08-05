@@ -60,14 +60,15 @@ const document = {
   expiresAt: "2026-07-24T08:05:00Z",
   gaps: [],
   packageId: `pkg_${"c".repeat(32)}`,
-  packageSchemaRef: "context-package-openapi-v0",
+  packageSchemaRef: "context-package-openapi-v1",
   policyEpoch: 1,
   policySnapshotRef: "policy-snapshot-v1",
   purpose: "context.answer",
   releaseManifestRef: "release:package-consumer",
   retentionPolicyRef: "package-digest-only-retention-v1",
   runRef: "run:package-consumer",
-  tokenizerRef: "utf8-byte-budget-v1",
+  tokenizerProfileDigest: "b4f0e7d287df088f5cbd5aacc1ac04941f0fca0d1a5e2990179ed774d1617418",
+  tokenizerRef: "unicode-scalar-tokenizer-v1",
   ttlSeconds: 300,
 };
 const packageValue = {
