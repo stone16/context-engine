@@ -2440,6 +2440,120 @@ CANONICAL_LOCAL_MCP_ACTIVATION: dict[str, object] = {
     ],
 }
 
+CANONICAL_CUMULATIVE_ACCOUNTING_ACTIVATION: dict[str, object] = {
+    "issueRef": "#217",
+    "invariantRef": "RELEASE-OWNER-019",
+    "carrier": "public v1 cumulative local Runtime accounting",
+    "status": "active_fail_closed",
+    "policyEpochScope": "organization-v0",
+    "controlBoundary": (
+        "ContextLearning-promoted v1 RuntimeProfileRef and tokenizer digest -> "
+        "one resolve-owned PackageBudgetMeter -> local query embedding and final "
+        "authorized assembly -> one digest-bound ContextPackage and ContextRun "
+        "usage snapshot -> POST /v1/resolve and generated v1 SDK"
+    ),
+    "testEvidence": [
+        {
+            "id": "ACCOUNTING-DETERMINISM-217",
+            "surface": (
+                "tests/unit/test_tokenizer_accounting.py::"
+                "test_registered_tokenizer_is_digest_bound_and_cross_process_deterministic "
+                "tests/unit/test_tokenizer_accounting.py::"
+                "test_missing_tokenizer_profile_fails_closed "
+                "tests/unit/test_tokenizer_accounting.py::"
+                "test_unknown_tokenizer_profile_fails_closed "
+                "tests/unit/test_tokenizer_accounting.py::"
+                "test_tokenizer_profile_digest_mismatch_fails_closed "
+                "tests/unit/test_tokenizer_accounting.py::"
+                "test_unavailable_tokenizer_artifact_fails_closed "
+                "tests/unit/test_tokenizer_accounting.py::"
+                "test_hash_mismatched_tokenizer_artifact_fails_closed"
+            ),
+            "oracle": (
+                "The first active profile is unicode-scalar-tokenizer-v1 with "
+                "profile digest b4f0e7d287df088f5cbd5aacc1ac04941f0fca0d1a5e2990179ed774d1617418, "
+                "artifact digest 8d301e3ce94e5b48febffb2e0871e139cd4d5f808084eccbf9cfc512d3948cca, "
+                "and exact one-unicode-scalar-one-token-v1 counting; cross-process "
+                "counts agree and every missing, unknown, unavailable, or "
+                "hash-mismatched identity fails closed."
+            ),
+        },
+        {
+            "id": "ACCOUNTING-ONE-METER-DYNAMIC-217",
+            "surface": (
+                "tests/unit/test_tokenizer_accounting.py::"
+                "test_runtime_has_one_meter_creation_and_no_v1_usage_reset "
+                "tests/unit/test_tokenizer_accounting.py::"
+                "test_concurrent_over_limit_reservations_admit_exactly_one "
+                "tests/unit/test_tokenizer_accounting.py::"
+                "test_cancel_releases_capacity_without_usage_leakage "
+                "tests/unit/test_pgvector_candidate_index.py::"
+                "test_budgeted_query_embedding_refuses_exhaustion_before_provider_call "
+                "tests/unit/test_pgvector_candidate_index.py::"
+                "test_failed_query_embedding_charges_reserved_maximum_after_provider_call "
+                "tests/unit/test_model_inference_port.py::"
+                "test_one_meter_accumulates_every_model_stage_and_final_assembly "
+                "tests/unit/test_http_v1_accounting.py::"
+                "test_v1_http_mixed_generation_refuses_before_provider_bytes"
+            ),
+            "oracle": (
+                "Static and dynamic probes reject stage-local resets, prove one "
+                "ledger across embedding, inactive model-stage twins and assembly, "
+                "serialize concurrent reservations, release cancellation capacity, "
+                "charge the maximum after an unusable provider result, and emit zero "
+                "provider bytes on pre-call or mixed-generation refusal."
+            ),
+        },
+        {
+            "id": "ACCOUNTING-PACKAGE-RUN-BINDING-217",
+            "surface": (
+                "tests/unit/test_http_v1_accounting.py::"
+                "test_v1_http_package_and_context_run_publish_one_digest_bound_usage "
+                "tests/unit/test_http_v1_accounting.py::"
+                "test_generated_v1_sdk_observes_cumulative_usage_over_live_http"
+            ),
+            "oracle": (
+                "The highest public HTTP and generated-SDK seams observe one exact "
+                "digest-bound cumulative token, provider-call, cost and elapsed "
+                "snapshot in both ContextPackage and ContextRun."
+            ),
+        },
+        {
+            "id": "PG-ACCOUNTING-LEGACY-REPLAY-217",
+            "surface": (
+                "tests/integration/test_migrations.py::"
+                "test_tokenizer_profile_upgrade_labels_history_without_recounting "
+                "tests/integration/test_migrations.py::"
+                "test_tokenizer_profile_upgrade_replays_pre_migration_candidate_digests "
+                "tests/integration/test_migrations.py::"
+                "test_tokenizer_profile_downgrade_refuses_retained_v1_lineage"
+            ),
+            "oracle": (
+                "Real PostgreSQL migration evidence preserves opaque historical "
+                "tokenizer refs and signed manifest/candidate digests without "
+                "recounting, while retained v1 lineage blocks downgrade."
+            ),
+        },
+    ],
+    "deferredEvidence": [
+        "network-provider response representation, credentials, egress, timeout, cost, and settlement evidence",
+        "rewrite, rerank, select, and answer-generation production activation evidence",
+        "observed v0 consumer retirement evidence",
+    ],
+    "futureCarriers": [
+        "network embedding provider accounting",
+        "production rewrite, rerank, select, and answer generation",
+        "v0 retirement after the coexistence deadline",
+    ],
+    "notActive": [
+        "external or network embedding providers",
+        "production rewrite, rerank, model selection, or answer generation",
+        "provider-side tokenizer APIs or resolve-time tokenizer downloads",
+        "v0 retirement or historical Package recounting",
+        "mixed-generation or cross-tokenizer resolves",
+    ],
+}
+
 CANONICAL_ACTIVATIONS: list[dict[str, object]] = [
     CANONICAL_REVOCATION_ACTIVATION,
     CANONICAL_UNAVAILABLE_CAPABILITY_ACTIVATION,
@@ -2467,6 +2581,7 @@ CANONICAL_ACTIVATIONS: list[dict[str, object]] = [
     CANONICAL_DOGFOOD_RUNTIME_ACTIVATION,
     CANONICAL_LOCAL_OPERATOR_AUTHENTICATION_ACTIVATION,
     CANONICAL_LOCAL_MCP_ACTIVATION,
+    CANONICAL_CUMULATIVE_ACCOUNTING_ACTIVATION,
 ]
 CANONICAL_ACTIVATION_ISSUE_LIST = ", ".join(
     f"Issue {activation['issueRef']}" for activation in CANONICAL_ACTIVATIONS

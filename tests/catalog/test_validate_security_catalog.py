@@ -27,6 +27,7 @@ from scripts.validate_security_catalog import (
     CANONICAL_ACTIVATIONS,
     CANONICAL_CITATION_OPEN_ACTIVATION,
     CANONICAL_CONTEXT_RUN_ACTIVATION,
+    CANONICAL_CUMULATIVE_ACCOUNTING_ACTIVATION,
     CANONICAL_DOGFOOD_AUTHENTICATION_ACTIVATION,
     CANONICAL_DOGFOOD_RUNTIME_ACTIVATION,
     CANONICAL_EGRESS_GRANT_ACTIVATION,
@@ -599,6 +600,7 @@ def make_catalog() -> dict[str, object]:
             copy.deepcopy(CANONICAL_DOGFOOD_RUNTIME_ACTIVATION),
             copy.deepcopy(CANONICAL_LOCAL_OPERATOR_AUTHENTICATION_ACTIVATION),
             copy.deepcopy(CANONICAL_LOCAL_MCP_ACTIVATION),
+            copy.deepcopy(CANONICAL_CUMULATIVE_ACCOUNTING_ACTIVATION),
         ],
         "invariants": invariants,
         "fixtures": fixtures,
@@ -731,6 +733,11 @@ def make_schema() -> dict[str, object]:
                         )
                     },
                     {"const": copy.deepcopy(CANONICAL_LOCAL_MCP_ACTIVATION)},
+                    {
+                        "const": copy.deepcopy(
+                            CANONICAL_CUMULATIVE_ACCOUNTING_ACTIVATION
+                        )
+                    },
                 ],
                 "items": False,
             },
@@ -1132,7 +1139,7 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
         assert isinstance(upgrade_trigger, str)
         self.assertIn("Issue #71 activates", upgrade_trigger)
         self.assertEqual(
-            object_list_at(catalog, "activations")[-12],
+            object_list_at(catalog, "activations")[-13],
             CANONICAL_PRIVATE_BOT_DELIVERY_ACTIVATION,
         )
 
@@ -1390,7 +1397,7 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
         prefix_items = schema_activations["prefixItems"]
         assert isinstance(prefix_items, list)
         schema_activation = object_at(
-            cast(dict[str, object], prefix_items[-5]), "const"
+            cast(dict[str, object], prefix_items[-6]), "const"
         )
 
         expected_boundary = (
@@ -1533,7 +1540,7 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
 
     def test_issue_71_private_bot_activation_stops_before_live_providers(self) -> None:
         catalog = make_catalog()
-        activation = object_list_at(catalog, "activations")[-12]
+        activation = object_list_at(catalog, "activations")[-13]
 
         self.assertEqual(activation, CANONICAL_PRIVATE_BOT_DELIVERY_ACTIVATION)
         self.assertEqual(activation["invariantRef"], "ACTION-SEPARATION-014")
@@ -1557,7 +1564,7 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
 
     def test_issue_81_file_change_activation_stops_before_scheduling(self) -> None:
         catalog = make_catalog()
-        activation = object_list_at(catalog, "activations")[-11]
+        activation = object_list_at(catalog, "activations")[-12]
 
         self.assertEqual(activation, CANONICAL_FILE_CHANGE_FEED_ACTIVATION)
         self.assertEqual(activation["invariantRef"], "WORKER-LEASE-007")
@@ -1578,7 +1585,7 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
 
     def test_issue_83_file_change_scheduling_stays_explicit(self) -> None:
         catalog = make_catalog()
-        activation = object_list_at(catalog, "activations")[-10]
+        activation = object_list_at(catalog, "activations")[-11]
 
         self.assertEqual(
             activation,
@@ -1600,7 +1607,7 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
 
     def test_issue_85_file_delete_observation_has_no_execution_authority(self) -> None:
         catalog = make_catalog()
-        activation = object_list_at(catalog, "activations")[-9]
+        activation = object_list_at(catalog, "activations")[-10]
 
         self.assertEqual(
             activation,
@@ -1624,7 +1631,7 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
 
     def test_issue_87_executes_only_current_exact_file_deletes(self) -> None:
         catalog = make_catalog()
-        activation = object_list_at(catalog, "activations")[-8]
+        activation = object_list_at(catalog, "activations")[-9]
 
         self.assertEqual(
             activation,
@@ -1645,7 +1652,7 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
 
     def test_issue_89_schedules_only_the_mixed_page_upsert_projection(self) -> None:
         catalog = make_catalog()
-        activation = object_list_at(catalog, "activations")[-7]
+        activation = object_list_at(catalog, "activations")[-8]
 
         self.assertEqual(
             activation,
@@ -2086,7 +2093,7 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
 
         self.assertEqual(catalog["catalogVersion"], "1.3.0")
         self.assertEqual(
-            issue_refs[-25:],
+            issue_refs[-26:],
             [
                 "#15",
                 "#16",
@@ -2113,6 +2120,7 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
                 "#102",
                 "#110",
                 "#215",
+                "#217",
             ],
         )
         self.assertIn(
@@ -2137,6 +2145,10 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
         )
         self.assertIn(
             "docs/decisions/0103-activate-one-local-mcp-acquire-translation.md",
+            document_refs,
+        )
+        self.assertIn(
+            "docs/decisions/0104-version-context-package-for-cumulative-runtime-accounting.md",
             document_refs,
         )
         self.assertIn(
@@ -2215,6 +2227,31 @@ class ValidateSecurityCatalogTests(unittest.TestCase):
                 "docs/decisions/0031-persist-authorized-context-run-lineage.md#decision",
                 refs,
             )
+
+    def test_tracked_catalog_freezes_issue_217_accounting_activation(self) -> None:
+        catalog = load_document(DEFAULT_CATALOG_PATH)
+        activation = object_list_at(catalog, "activations")[-1]
+
+        self.assertEqual(activation, CANONICAL_CUMULATIVE_ACCOUNTING_ACTIVATION)
+        determinism_oracle = activation["testEvidence"][0]["oracle"]
+        assert isinstance(determinism_oracle, str)
+        self.assertIn(
+            "b4f0e7d287df088f5cbd5aacc1ac04941f0fca0d1a5e2990179ed774d1617418",
+            determinism_oracle,
+        )
+        self.assertIn(
+            "8d301e3ce94e5b48febffb2e0871e139cd4d5f808084eccbf9cfc512d3948cca",
+            determinism_oracle,
+        )
+        self.assertIn("one-unicode-scalar-one-token-v1", determinism_oracle)
+        self.assertIn(
+            "external or network embedding providers",
+            activation["notActive"],
+        )
+        self.assertIn(
+            "v0 retirement or historical Package recounting",
+            activation["notActive"],
+        )
 
     def test_tracked_catalog_freezes_later_carrier_and_source_acl_semantics(
         self,

@@ -90,7 +90,10 @@ designed, and deliberately not active:
 application remains reject-all and reports `NOT_ACTIVE`. Production
 authentication, a second human, network exposure beyond the maintainer machine,
 group/public audience, `Continue`, hybrid retrieval, non-File providers, and
-external/network query embeddings remain `NOT_ACTIVE` pending issue #217.
+external/network query embeddings remain `NOT_ACTIVE` pending a separate
+accepted activation decision. ADR-0104 activates the v1 cumulative public
+accounting contract for the existing local query-embedding carrier and final
+assembly; frozen v0 remains available during its compatibility window.
 
 ### Read-only maintainer Context CLI
 
@@ -239,8 +242,10 @@ ADR-0102 now activates the bounded local Qwen File publication and query carrier
 It binds the exact provider profile to Release and Fragment lineage, refuses a
 mixed active corpus before ANN, debits the internal query budget, and permits
 activation only through ADR-0073 promotion. It does **not** activate an
-external/network embedding provider, production authentication, or a public
-cumulative-accounting contract; those remain blocked pending issue #217.
+external/network embedding provider or production authentication. ADR-0104
+separately activates the public v1 cumulative local-accounting contract;
+external/network embeddings remain `NOT_ACTIVE` pending their own accepted
+activation decision.
 
 ADR-0071 composes the opt-in ADR-0069 local operator process to drive one
 bounded File scan over an explicitly configured anchored root, accept every new
