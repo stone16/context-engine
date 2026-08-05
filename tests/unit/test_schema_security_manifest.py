@@ -2548,6 +2548,7 @@ def test_release_manifest_records_exact_immutable_lineage_keys() -> None:
         "ck_release_manifest_revision_ref_arrays",
         "ck_release_manifest_curation_shape",
         "ck_release_manifest_embedding_profile",
+        "ck_release_manifest_tokenizer_profile",
     }
     assert {item["name"] for item in candidate["checkConstraints"]} == {
         "ck_release_candidate_refs_bounded",

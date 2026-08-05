@@ -81,6 +81,7 @@ packages = [
 "eval/golden/v1/schema.json" = "eval/golden/v1/schema.json"
 "eval/public-subset-governance.json" = "eval/public-subset-governance.json"
 "eval/thresholds/v1.json" = "eval/thresholds/v1.json"
+"engine/tokenizers/unicode-scalar-v1.json" = "engine/tokenizers/unicode-scalar-v1.json"
 "LICENSE" = "LICENSE"
 "NOTICE" = "NOTICE"
 "THIRD_PARTY_NOTICES.md" = "THIRD_PARTY_NOTICES.md"

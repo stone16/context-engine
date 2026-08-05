@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from contextlib import AbstractContextManager
 from datetime import UTC, datetime
 from types import SimpleNamespace, TracebackType
@@ -46,6 +47,10 @@ from engine.runtime.release_lineage import (
 )
 from engine.runtime.scope import ScopeTarget
 from engine.supply import DETERMINISTIC_TWIN_EMBEDDING_PROFILE
+from engine.tokenizer_accounting import (
+    HISTORICAL_UTF8_BYTE_TOKENIZER_PROFILE_DIGEST,
+    HISTORICAL_UTF8_BYTE_TOKENIZER_PROFILE_DOCUMENT,
+)
 
 CHECKED_AT = datetime(2026, 7, 21, 8, 0, tzinfo=UTC)
 
@@ -89,6 +94,12 @@ class _ActiveReleaseRow:
             DETERMINISTIC_TWIN_EMBEDDING_PROFILE.profile_digest
         )
         self.runtime_tokenizer_ref = RUNTIME_TOKENIZER_REF_V0
+        self.runtime_tokenizer_profile_document = json.loads(
+            HISTORICAL_UTF8_BYTE_TOKENIZER_PROFILE_DOCUMENT
+        )
+        self.runtime_tokenizer_profile_digest = (
+            HISTORICAL_UTF8_BYTE_TOKENIZER_PROFILE_DIGEST
+        )
         self.runtime_package_schema_ref = PACKAGE_SCHEMA_REF_V0
         self.curation_profile_ref = CURATION_PROFILE_REF_V0
         self.curation_profile_digest = CURATION_PROFILE_DIGEST_V0

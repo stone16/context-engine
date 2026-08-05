@@ -14,6 +14,12 @@ from engine.supply.embeddings import (
     DETERMINISTIC_TWIN_EMBEDDING_PROFILE,
     registered_embedding_provider_profile,
 )
+from engine.tokenizer_accounting import (
+    HISTORICAL_UTF8_BYTE_TOKENIZER_PROFILE_DIGEST,
+    HISTORICAL_UTF8_BYTE_TOKENIZER_PROFILE_DOCUMENT,
+    TokenizerUnavailable,
+    registered_tokenizer_profile,
+)
 
 MAX_SIGNED_BIGINT: Final = (1 << 63) - 1
 MAX_REFERENCE_LENGTH: Final = 255
@@ -169,6 +175,10 @@ class RuntimeProfileRef:
     index_schema_ref: str
     tokenizer_ref: str
     package_schema_ref: str
+    tokenizer_profile_document: str = (
+        HISTORICAL_UTF8_BYTE_TOKENIZER_PROFILE_DOCUMENT
+    )
+    tokenizer_profile_digest: str = HISTORICAL_UTF8_BYTE_TOKENIZER_PROFILE_DIGEST
 
     def __post_init__(self) -> None:
         _require_ref("RuntimeProfile profile_ref", self.profile_ref)
@@ -183,6 +193,25 @@ class RuntimeProfileRef:
         _require_ref("RuntimeProfile index_schema_ref", self.index_schema_ref)
         _require_ref("RuntimeProfile tokenizer_ref", self.tokenizer_ref)
         _require_ref("RuntimeProfile package_schema_ref", self.package_schema_ref)
+        if (
+            self.tokenizer_ref == "utf8-byte-budget-v1"
+            and self.tokenizer_profile_document
+            == HISTORICAL_UTF8_BYTE_TOKENIZER_PROFILE_DOCUMENT
+            and self.tokenizer_profile_digest
+            == HISTORICAL_UTF8_BYTE_TOKENIZER_PROFILE_DIGEST
+        ):
+            return
+        try:
+            profile = registered_tokenizer_profile(
+                self.tokenizer_profile_document,
+                self.tokenizer_profile_digest,
+            )
+        except TokenizerUnavailable:
+            raise ValueError(
+                "RuntimeProfile tokenizer identity is unresolved"
+            ) from None
+        if profile.profile_ref != self.tokenizer_ref:
+            raise ValueError("RuntimeProfile tokenizer ref does not match its profile")
 
 
 class CurationMode(StrEnum):
@@ -296,6 +325,8 @@ def _profile_document(profile: object) -> dict[str, object]:
             "profile_digest": profile.profile_digest,
             "profile_ref": profile.profile_ref,
             "tokenizer_ref": profile.tokenizer_ref,
+            "tokenizer_profile_digest": profile.tokenizer_profile_digest,
+            "tokenizer_profile_document": profile.tokenizer_profile_document,
         }
     if type(profile) is CurationProfileRef:
         return {

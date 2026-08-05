@@ -52,7 +52,7 @@ def _profiles() -> tuple[ContentProfileRef, IndexProfileRef, RuntimeProfileRef]:
         index_profile_digest=index.profile_digest,
         content_schema_ref=content.content_schema_ref,
         index_schema_ref=index.index_schema_ref,
-        tokenizer_ref="empty-tokenizer-v1",
+        tokenizer_ref="utf8-byte-budget-v1",
         package_schema_ref="context-package-v1",
     )
     return content, index, runtime
@@ -196,13 +196,13 @@ def test_candidate_and_evaluation_have_stable_canonical_signed_vectors() -> None
         "verification_commands",
     }
     assert candidate.candidate_digest == (
-        "d86579d77af81fc5f5ee63cf90d5968daf05424fcd9cf29ca28d2030edf11a2c"
+        "136e5a5068c8f0de61dca621fd6354eca340342e5b3f27c80df5ddfa4e3d117a"
     )
     assert evaluation.evaluation_digest == (
-        "68694c3e7430fdcf835236d0aad6cd1030cd9dcd9dbcc9bdc7a0cce773cc8056"
+        "a365cd0db1e94df7fa3cb480e14de98e0ca1811bb0055432f0478ec6a3ec9b28"
     )
     assert evaluation.signature.hex() == (
-        "d56f71a0c3852df474f540602930cc76724ac3ab0c2b57926a6d4afa19afd3c9"
+        "03cc5fd4f0a1d1a435f859a10af0fcefafdee8672c30d021bdac8246c9985aa1"
     )
     assert evaluation.digest_profile == RELEASE_EVALUATION_DIGEST_PROFILE
     assert evaluation.signature_profile == RELEASE_EVALUATION_SIGNATURE_PROFILE

@@ -70,6 +70,11 @@ from engine.supply import (
     ParsedDocument,
     canonicalize_parsed_document,
 )
+from engine.tokenizer_accounting import (
+    HISTORICAL_UTF8_BYTE_TOKENIZER_PROFILE_DIGEST,
+    HISTORICAL_UTF8_BYTE_TOKENIZER_PROFILE_DOCUMENT,
+    UNICODE_SCALAR_TOKENIZER_PROFILE,
+)
 from tests.integration.test_context_run_schema import (
     LineageIdentity,
     insert_context_run,
@@ -198,6 +203,12 @@ ARTICLE_POLICY_TABLES = {
 }
 
 MIGRATION_TEST_START_REVISIONS = {
+    "test_tokenizer_profile_upgrade_labels_history_without_recounting": (
+        "20260803_0055"
+    ),
+    "test_tokenizer_profile_revision_downgrades_historical_only_and_reapplies": (
+        "20260803_0055"
+    ),
     "test_empty_baseline_remains_a_reversible_historical_revision": "20260720_0001",
     "test_article_policy_revision_backfills_legacy_access_and_reapplies_cleanly": (
         "20260730_0042"
@@ -330,6 +341,7 @@ MIGRATION_TEST_START_REVISIONS = {
 }
 
 MIGRATION_TEST_HEAD_PRECONDITIONS = {
+    "test_tokenizer_profile_downgrade_refuses_retained_v1_lineage",
     "test_article_policy_downgrade_rejects_every_deferred_admin_state",
     "test_article_policy_downgrade_refuses_state_that_would_reauthorize_content",
     "test_bulk_article_policy_revision_downgrades_and_reapplies_when_audit_empty",
@@ -4179,6 +4191,281 @@ def test_embedding_profile_downgrade_refuses_retained_qwen_lineage(
                 text(
                     "DELETE FROM release_manifest WHERE organization_id = :org"
                 ),
+                {"org": organization_id},
+            )
+            connection.execute(
+                text(
+                    "ALTER TABLE release_manifest ENABLE TRIGGER "
+                    "release_manifest_reject_mutation"
+                )
+            )
+            connection.execute(
+                text("DELETE FROM organization WHERE organization_id = :org"),
+                {"org": organization_id},
+            )
+        engine.dispose()
+
+
+def test_tokenizer_profile_upgrade_labels_history_without_recounting(
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    """Issue #217 labels old Releases and leaves ContextRun usage untouched."""
+
+    alembic_configuration = Config(ROOT / "alembic.ini")
+    organization_id = uuid4()
+    identity = LineageIdentity(
+        organization_id=organization_id,
+        user_id=uuid4(),
+        membership_id=uuid4(),
+        run_ref=f"run_{uuid4().hex}",
+        decision_ref=f"dec_{uuid4().hex}",
+    )
+    engine = create_database_engine(migration_configuration)
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                text("INSERT INTO organization (organization_id) VALUES (:org)"),
+                {"org": organization_id},
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO user_account (user_id) VALUES (:user_id)"
+                ),
+                {"user_id": identity.user_id},
+            )
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO membership (
+                        organization_id, membership_id, user_id, status,
+                        membership_version, valid_from
+                    ) VALUES (
+                        :org, :membership_id, :user_id, 'active', 1,
+                        '2026-08-05T00:00:00Z'
+                    )
+                    """
+                ),
+                {
+                    "org": organization_id,
+                    "membership_id": identity.membership_id,
+                    "user_id": identity.user_id,
+                },
+            )
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO release_manifest (
+                        organization_id, manifest_ref, manifest_digest,
+                        lineage_digest, content_profile_ref,
+                        content_profile_digest, content_schema_ref,
+                        index_profile_ref, index_profile_digest,
+                        index_content_profile_digest,
+                        index_content_schema_ref, index_schema_ref,
+                        embedding_profile_document, embedding_profile_digest,
+                        runtime_profile_ref, runtime_profile_digest,
+                        runtime_content_profile_digest,
+                        runtime_index_profile_digest,
+                        runtime_content_schema_ref, runtime_index_schema_ref,
+                        runtime_tokenizer_ref, runtime_package_schema_ref,
+                        curation_profile_ref, curation_profile_digest,
+                        curation_mode, compatible_revision_refs,
+                        active_revision_refs
+                    ) VALUES (
+                        :org, 'manifest:historical:217', :digest, :digest,
+                        'content-profile', :digest, 'content-schema',
+                        'index-profile', :digest, :digest, 'content-schema',
+                        'index-schema', '{}'::jsonb, :digest,
+                        'runtime-profile', :digest, :digest, :digest,
+                        'content-schema', 'index-schema',
+                        'utf8-byte-budget-v1', 'context-package-openapi-v0',
+                        'curation-profile', :digest, 'curation_off',
+                        '[]'::jsonb, '[]'::jsonb
+                    )
+                    """
+                ),
+                {"org": organization_id, "digest": "a" * 64},
+            )
+            insert_context_run(
+                connection,
+                identity,
+                package_ref=f"pkg_{uuid4().hex}",
+                release_ref=f"rel_{'a' * 64}",
+                release_generation=1,
+            )
+            connection.execute(
+                text(
+                    """
+                    UPDATE context_run
+                    SET usage_tokens = 37, usage_provider_calls = 0,
+                        usage_cost_microunits = 0, usage_elapsed_ms = 0
+                    WHERE organization_id = :org AND run_ref = :run_ref
+                    """
+                ),
+                {"org": organization_id, "run_ref": identity.run_ref},
+            )
+
+        command.upgrade(alembic_configuration, "head")
+
+        with engine.connect() as connection:
+            release = connection.execute(
+                text(
+                    """
+                    SELECT runtime_tokenizer_profile_document,
+                           runtime_tokenizer_profile_digest
+                    FROM release_manifest
+                    WHERE organization_id = :org
+                    """
+                ),
+                {"org": organization_id},
+            ).one()
+            usage = connection.execute(
+                text(
+                    """
+                    SELECT usage_tokens, usage_provider_calls,
+                           usage_cost_microunits, usage_elapsed_ms
+                    FROM context_run
+                    WHERE organization_id = :org AND run_ref = :run_ref
+                    """
+                ),
+                {"org": organization_id, "run_ref": identity.run_ref},
+            ).one()
+
+        assert json.dumps(
+            release.runtime_tokenizer_profile_document,
+            separators=(",", ":"),
+            sort_keys=True,
+        ) == HISTORICAL_UTF8_BYTE_TOKENIZER_PROFILE_DOCUMENT
+        assert (
+            release.runtime_tokenizer_profile_digest
+            == HISTORICAL_UTF8_BYTE_TOKENIZER_PROFILE_DIGEST
+        )
+        assert tuple(usage) == (37, 0, 0, 0)
+    finally:
+        engine.dispose()
+
+
+def test_tokenizer_profile_revision_downgrades_historical_only_and_reapplies(
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    alembic_configuration = Config(ROOT / "alembic.ini")
+    engine = create_database_engine(migration_configuration)
+    try:
+        for _ in range(2):
+            command.upgrade(alembic_configuration, "head")
+            with engine.connect() as connection:
+                columns = set(
+                    connection.execute(
+                        text(
+                            """
+                            SELECT column_name FROM information_schema.columns
+                            WHERE table_schema = 'public'
+                              AND table_name = 'release_manifest'
+                              AND column_name IN (
+                                'runtime_tokenizer_profile_document',
+                                'runtime_tokenizer_profile_digest'
+                              )
+                            """
+                        )
+                    ).scalars()
+                )
+            assert columns == {
+                "runtime_tokenizer_profile_document",
+                "runtime_tokenizer_profile_digest",
+            }
+            command.downgrade(alembic_configuration, "20260803_0055")
+            with engine.connect() as connection:
+                assert connection.execute(
+                    text(
+                        """
+                        SELECT count(*) FROM information_schema.columns
+                        WHERE table_schema = 'public'
+                          AND table_name = 'release_manifest'
+                          AND column_name IN (
+                            'runtime_tokenizer_profile_document',
+                            'runtime_tokenizer_profile_digest'
+                          )
+                        """
+                    )
+                ).scalar_one() == 0
+    finally:
+        command.upgrade(alembic_configuration, "head")
+        engine.dispose()
+
+
+def test_tokenizer_profile_downgrade_refuses_retained_v1_lineage(
+    migration_configuration: DatabaseConfiguration,
+) -> None:
+    organization_id = uuid4()
+    engine = create_database_engine(migration_configuration)
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                text("INSERT INTO organization (organization_id) VALUES (:org)"),
+                {"org": organization_id},
+            )
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO release_manifest (
+                        organization_id, manifest_ref, manifest_digest,
+                        lineage_digest, content_profile_ref,
+                        content_profile_digest, content_schema_ref,
+                        index_profile_ref, index_profile_digest,
+                        index_content_profile_digest,
+                        index_content_schema_ref, index_schema_ref,
+                        embedding_profile_document, embedding_profile_digest,
+                        runtime_profile_ref, runtime_profile_digest,
+                        runtime_content_profile_digest,
+                        runtime_index_profile_digest,
+                        runtime_content_schema_ref, runtime_index_schema_ref,
+                        runtime_tokenizer_ref,
+                        runtime_tokenizer_profile_document,
+                        runtime_tokenizer_profile_digest,
+                        runtime_package_schema_ref, curation_profile_ref,
+                        curation_profile_digest, curation_mode,
+                        compatible_revision_refs, active_revision_refs
+                    ) VALUES (
+                        :org, 'manifest:v1:217', :digest, :digest,
+                        'content-profile', :digest, 'content-schema',
+                        'index-profile', :digest, :digest, 'content-schema',
+                        'index-schema', '{}'::jsonb, :digest,
+                        'runtime-profile', :digest, :digest, :digest,
+                        'content-schema', 'index-schema', :tokenizer_ref,
+                        CAST(:tokenizer_document AS jsonb), :tokenizer_digest,
+                        'context-package-openapi-v1', 'curation-profile',
+                        :digest, 'curation_off', '[]'::jsonb, '[]'::jsonb
+                    )
+                    """
+                ),
+                {
+                    "org": organization_id,
+                    "digest": "a" * 64,
+                    "tokenizer_ref": UNICODE_SCALAR_TOKENIZER_PROFILE.profile_ref,
+                    "tokenizer_document": (
+                        UNICODE_SCALAR_TOKENIZER_PROFILE.canonical_json()
+                    ),
+                    "tokenizer_digest": (
+                        UNICODE_SCALAR_TOKENIZER_PROFILE.profile_digest
+                    ),
+                },
+            )
+
+        with pytest.raises(
+            RuntimeError,
+            match="tokenizer profile downgrade requires historical-only lineage",
+        ):
+            downgrade_revision(migration_configuration, "20260803_0055")
+        assert _revision_rows(migration_configuration) == [HEAD_REVISION]
+    finally:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "ALTER TABLE release_manifest DISABLE TRIGGER "
+                    "release_manifest_reject_mutation"
+                )
+            )
+            connection.execute(
+                text("DELETE FROM release_manifest WHERE organization_id = :org"),
                 {"org": organization_id},
             )
             connection.execute(

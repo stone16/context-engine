@@ -101,6 +101,12 @@ def _manifest_parameters(manifest: ReleaseManifest) -> dict[str, object]:
         "runtime_content_schema_ref": manifest.runtime_profile.content_schema_ref,
         "runtime_index_schema_ref": manifest.runtime_profile.index_schema_ref,
         "runtime_tokenizer_ref": manifest.runtime_profile.tokenizer_ref,
+        "runtime_tokenizer_profile_document": (
+            manifest.runtime_profile.tokenizer_profile_document
+        ),
+        "runtime_tokenizer_profile_digest": (
+            manifest.runtime_profile.tokenizer_profile_digest
+        ),
         "runtime_package_schema_ref": manifest.runtime_profile.package_schema_ref,
         "curation_profile_ref": curation.profile_ref,
         "curation_profile_digest": curation.profile_digest,
@@ -159,7 +165,8 @@ _INSERT_MANIFEST = text(
         runtime_profile_ref, runtime_profile_digest,
         runtime_content_profile_digest, runtime_index_profile_digest,
         runtime_content_schema_ref, runtime_index_schema_ref,
-        runtime_tokenizer_ref, runtime_package_schema_ref,
+        runtime_tokenizer_ref, runtime_tokenizer_profile_document,
+        runtime_tokenizer_profile_digest, runtime_package_schema_ref,
         curation_profile_ref, curation_profile_digest, curation_mode,
         curation_snapshot_ref, compatible_revision_refs,
         curation_evaluation_digest, active_revision_refs
@@ -172,7 +179,8 @@ _INSERT_MANIFEST = text(
         :embedding_profile_digest, :runtime_profile_ref, :runtime_profile_digest,
         :runtime_content_profile_digest, :runtime_index_profile_digest,
         :runtime_content_schema_ref, :runtime_index_schema_ref,
-        :runtime_tokenizer_ref, :runtime_package_schema_ref,
+        :runtime_tokenizer_ref, CAST(:runtime_tokenizer_profile_document AS jsonb),
+        :runtime_tokenizer_profile_digest, :runtime_package_schema_ref,
         :curation_profile_ref, :curation_profile_digest, :curation_mode,
         :curation_snapshot_ref, CAST(:compatible_revision_refs AS jsonb),
         :curation_evaluation_digest, CAST(:active_revision_refs AS jsonb)
@@ -231,6 +239,8 @@ _LOAD_CANDIDATE = text(
         manifest.runtime_content_schema_ref,
         manifest.runtime_index_schema_ref,
         manifest.runtime_tokenizer_ref,
+        manifest.runtime_tokenizer_profile_document,
+        manifest.runtime_tokenizer_profile_digest,
         manifest.runtime_package_schema_ref,
         manifest.curation_profile_ref,
         manifest.curation_profile_digest,
@@ -353,6 +363,12 @@ def _candidate_from_row(row: dict[str, Any]) -> ReleaseCandidate:
         index_schema_ref=row["runtime_index_schema_ref"],
         tokenizer_ref=row["runtime_tokenizer_ref"],
         package_schema_ref=row["runtime_package_schema_ref"],
+        tokenizer_profile_document=json.dumps(
+            row["runtime_tokenizer_profile_document"],
+            separators=(",", ":"),
+            sort_keys=True,
+        ),
+        tokenizer_profile_digest=row["runtime_tokenizer_profile_digest"],
     )
     mode = CurationMode(row["curation_mode"])
     if mode is CurationMode.OFF:

@@ -67,7 +67,7 @@ def _candidate(organization_id: UUID, *, suffix: str) -> ReleaseCandidate:
         index_profile_digest=index.profile_digest,
         content_schema_ref=content.content_schema_ref,
         index_schema_ref=index.index_schema_ref,
-        tokenizer_ref="empty-tokenizer-v1",
+        tokenizer_ref="utf8-byte-budget-v1",
         package_schema_ref="context-package-v1",
     )
     manifest = ReleaseManifest.m0_empty(
