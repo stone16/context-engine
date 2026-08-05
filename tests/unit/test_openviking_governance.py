@@ -163,6 +163,38 @@ def test_five_repository_baseline_is_an_explicit_versioned_successor() -> None:
     )
 
 
+def test_synthesis_separates_admitted_inputs_from_candidate_observations() -> None:
+    baseline = _read(BASELINE_PATH)
+    expected_candidate_cells = {
+        "Product/Control UX": "OpenViking browse/trajectory UX",
+        "Document compilation": "—",
+        "Supply/freshness": "—",
+        "Retrieval/assembly": "OpenViking density tiering",
+        "Curation/Learning": "OpenViking session candidate UX",
+        "Delivery/exposure": "OpenViking agent lifecycle UX",
+    }
+
+    assert (
+        "| ContextEngine area | Admitted public reference input | "
+        "Non-authoritative candidate observation | Boundary ContextEngine must own |"
+        in baseline
+    )
+    for area, candidate in expected_candidate_cells.items():
+        row = next(
+            line for line in baseline.splitlines() if line.startswith(f"| {area} |")
+        )
+        cells = [cell.strip() for cell in row.strip("|").split("|")]
+        assert len(cells) == 4, row
+        assert cells[0] == area
+        if candidate == "—":
+            assert cells[2] == candidate
+        else:
+            assert cells[2] == (
+                f"{candidate}; candidate and non-authoritative while `#205` is open"
+            )
+        assert "OpenViking" not in cells[1]
+
+
 def test_public_docs_keep_openviking_non_authoritative_until_issue_205_closes() -> None:
     baseline_paths = (
         Path("CONTRIBUTING.md"),

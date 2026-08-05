@@ -182,16 +182,17 @@ authorize copying, vendoring, linking, execution, or a Runtime dependency.
 
 ## 5. Synthesis and evidence gaps
 
-The five-repository synthesis retains ContextEngine's existing module ownership:
+The synthesis retains ContextEngine's existing module ownership while separating
+the four admitted public-reference inputs from OpenViking candidate observations:
 
-| ContextEngine area | Public reference input | Boundary ContextEngine must own |
-|---|---|---|
-| Product/Control UX | Dify orchestration; MaxKB preview/confirm; OpenViking browse/trajectory UX | Operator authorization, versioned candidate, sole promote authority |
-| Document compilation | RAGFlow structural compiler | ParsedDocument family, deterministic provenance, publication transaction |
-| Supply/freshness | Onyx checkpoint/staging; RAGFlow recovery; Dify visibility | Signed WorkerLease, dual watermarks, atomic active pointer |
-| Retrieval/assembly | RAGFlow/Onyx retrieval; Dify routing; OpenViking density tiering | CandidateRef → Kernel → AuthorizedProjection, budget, provenance, audit |
-| Curation/Learning | MaxKB operations; OpenViking session candidate UX | Authorized-only input, consent, review, ReleaseManifest promotion |
-| Delivery/exposure | Dify/Onyx transport; OpenViking agent lifecycle UX | One sealed Runtime, trusted delivery, audience-bound ContextPackage |
+| ContextEngine area | Admitted public reference input | Non-authoritative candidate observation | Boundary ContextEngine must own |
+|---|---|---|---|
+| Product/Control UX | Dify orchestration; MaxKB preview/confirm | OpenViking browse/trajectory UX; candidate and non-authoritative while `#205` is open | Operator authorization, versioned candidate, sole promote authority |
+| Document compilation | RAGFlow structural compiler | — | ParsedDocument family, deterministic provenance, publication transaction |
+| Supply/freshness | Onyx checkpoint/staging; RAGFlow recovery; Dify visibility | — | Signed WorkerLease, dual watermarks, atomic active pointer |
+| Retrieval/assembly | RAGFlow/Onyx retrieval; Dify routing | OpenViking density tiering; candidate and non-authoritative while `#205` is open | CandidateRef → Kernel → AuthorizedProjection, budget, provenance, audit |
+| Curation/Learning | MaxKB operations | OpenViking session candidate UX; candidate and non-authoritative while `#205` is open | Authorized-only input, consent, review, ReleaseManifest promotion |
+| Delivery/exposure | Dify/Onyx transport | OpenViking agent lifecycle UX; candidate and non-authoritative while `#205` is open | One sealed Runtime, trusted delivery, audience-bound ContextPackage |
 
 Remaining evidence gaps are unchanged in kind:
 
