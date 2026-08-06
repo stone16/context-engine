@@ -48,14 +48,17 @@ rich Markdown compilation pipeline remains ContextEngine-owned.
 `docx_parser.py` is copied and patched to remove RAGFlow tokenizer,
 `LazyImage`, Pandas, logging, and application constants. It now traverses
 paragraph and table XML children in exact OOXML body order and returns bounded
-raw blocks. Unsupported content wrappers, including simple fields and smart
-tags whose visible text `python-docx` omits from `Paragraph.text`, fail closed
-across every XML package part before a partial document can be returned. Parts
-without a parsed element are parsed from raw bytes only when their declared
-media type is `application/xml`, `text/xml`, or has a `+xml` suffix; binary
-parts are never parsed. Media-type token casing is normalized before applying
-that closed classification. Visual tags are checked first so figure-refusal
-precedence is stable. ContextEngine-owned code maps the accepted blocks into
+raw blocks. The closed body-only profile rejects visible text in every other
+package part and independently accounts for visible run text in every body
+paragraph, refusing when that text differs from `python-docx`'s represented
+paragraph text. The earlier unsupported-container checks remain defense in
+depth, but completeness no longer depends on a finite wrapper denylist. Parts
+without a parsed element are parsed from raw bytes only when a strictly parsed,
+case-insensitive media type is `application/xml`, `text/xml`, or has a `+xml`
+suffix; valid parameters are admitted, malformed parameter syntax fails
+closed, and binary parts are never parsed. XML/media parse failures are
+deferred until all parseable parts have been scanned for visuals, preserving
+figure-refusal precedence. ContextEngine-owned code maps accepted blocks into
 the ADR-0094 nominal `DocxXmlLocator` family, structural units, identities, and
 typed refusals.
 Image-bearing DOCX artifacts refuse because a bounded figure-byte policy has

@@ -113,7 +113,7 @@
         },
         {
           "name": "context-engine:file-sha256",
-          "value": "third_party/ragflow/deepdoc/parser/docx_parser.py=a39586d30c54f92f107e8f6dd302c8e715d8b286dcc7dc8951f7f4c976383b91"
+          "value": "third_party/ragflow/deepdoc/parser/docx_parser.py=2c4ef95a07e08105eda507a27e7705c6c636361ae70df58daad196bbdea646a3"
         },
         {
           "name": "context-engine:file-sha256",

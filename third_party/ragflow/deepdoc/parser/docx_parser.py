@@ -21,6 +21,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from email import policy
 from io import BytesIO
 from typing import Any, Final
 
@@ -34,6 +35,27 @@ from docx.text.paragraph import Paragraph
 _PARAGRAPH_TAG: Final = qn("w:p")
 _TABLE_TAG: Final = qn("w:tbl")
 _SECTION_PROPERTIES_TAG: Final = qn("w:sectPr")
+_RUN_TAG: Final = qn("w:r")
+_RUN_PROPERTIES_TAG: Final = qn("w:rPr")
+_TEXT_TAG: Final = qn("w:t")
+_TAB_TAGS: Final = frozenset({qn("w:tab"), qn("w:ptab")})
+_BREAK_TAGS: Final = frozenset({qn("w:br"), qn("w:cr")})
+_BREAK_TYPE_ATTRIBUTE: Final = qn("w:type")
+_NO_BREAK_HYPHEN_TAG: Final = qn("w:noBreakHyphen")
+_NON_VISIBLE_RUN_TAGS: Final = frozenset(
+    {
+        qn("w:fldChar"),
+        qn("w:instrText"),
+        qn("w:lastRenderedPageBreak"),
+        _RUN_PROPERTIES_TAG,
+    }
+)
+_ADMITTED_RUN_TAGS: Final = (
+    frozenset({_TEXT_TAG, _NO_BREAK_HYPHEN_TAG})
+    | _TAB_TAGS
+    | _BREAK_TAGS
+    | _NON_VISIBLE_RUN_TAGS
+)
 _UNSUPPORTED_CONTENT_TAGS: Final = frozenset(
     {
         qn("w:customXml"),
@@ -47,7 +69,7 @@ _UNSUPPORTED_CONTENT_TAGS: Final = frozenset(
     }
 )
 _UNSUPPORTED_VISUAL_TAGS: Final = frozenset(
-    {qn("w:drawing"), qn("w:object"), qn("w:pict")}
+    {qn("pic:pic"), qn("w:drawing"), qn("w:object"), qn("w:pict")}
 )
 _XML_CONTENT_TYPES: Final = frozenset({"application/xml", "text/xml"})
 
@@ -61,24 +83,88 @@ def _contains_tag(element: Any, tags: frozenset[str]) -> bool:
 
 
 def _is_xml_content_type(content_type: object) -> bool:
-    return type(content_type) is str and (
-        (normalized := content_type.casefold()) in _XML_CONTENT_TYPES
-        or normalized.endswith("+xml")
-    )
+    if type(content_type) is not str:
+        return False
+    parsed = policy.default.header_factory("Content-Type", content_type)
+    if parsed.defects:
+        raise ValueError("DOCX package part has a malformed media type")
+    media_type = f"{parsed.maintype}/{parsed.subtype}"
+    return media_type in _XML_CONTENT_TYPES or parsed.subtype.endswith("+xml")
 
 
-def _package_xml_elements(document: DocumentType) -> tuple[Any, ...]:
+def _package_xml_elements(document: DocumentType) -> tuple[tuple[Any, ...], bool]:
     elements: list[Any] = []
+    has_malformed_part = False
     for part in document.part.package.parts:
-        if not _is_xml_content_type(part.content_type):
+        try:
+            is_xml = _is_xml_content_type(part.content_type)
+        except ValueError:
+            has_malformed_part = True
             continue
-        element = getattr(part, "element", None)
-        elements.append(element if element is not None else parse_xml(part.blob))
-    return tuple(elements)
+        if not is_xml:
+            continue
+        try:
+            element = getattr(part, "element", None)
+            elements.append(element if element is not None else parse_xml(part.blob))
+        except Exception:
+            has_malformed_part = True
+    return tuple(elements), has_malformed_part
 
 
 def _elements_contain_tag(elements: tuple[Any, ...], tags: frozenset[str]) -> bool:
     return any(_contains_tag(element, tags) for element in elements)
+
+
+def _ooxml_visible_text(element: Any) -> str:
+    text: list[str] = []
+    for run in element.iter(_RUN_TAG):
+        for node in run.iterdescendants():
+            if node.tag == _TEXT_TAG:
+                text.append(node.text or "")
+            elif node.tag in _TAB_TAGS:
+                text.append("\t")
+            elif node.tag == _NO_BREAK_HYPHEN_TAG:
+                text.append("-")
+            elif node.tag in _BREAK_TAGS and (
+                node.tag == qn("w:cr")
+                or node.get(_BREAK_TYPE_ATTRIBUTE) in (None, "textWrapping")
+            ):
+                text.append("\n")
+    return "".join(text)
+
+
+def _contains_unadmitted_run_content(element: Any) -> bool:
+    return any(
+        child.tag not in _ADMITTED_RUN_TAGS
+        for run in element.iter(_RUN_TAG)
+        for child in run.iterchildren()
+    )
+
+
+def _contains_unrepresented_package_text(
+    elements: tuple[Any, ...], document: DocumentType
+) -> bool:
+    for element in elements:
+        if element is document.element:
+            if any(
+                child is not document.element.body and _ooxml_visible_text(child)
+                for child in element.iterchildren()
+            ):
+                return True
+        elif _ooxml_visible_text(element):
+            return True
+    return False
+
+
+def _body_paragraph_text_is_lossless(document: DocumentType) -> bool:
+    body = document.element.body
+    return all(
+        any(ancestor.tag == _PARAGRAPH_TAG for ancestor in run.iterancestors())
+        for run in body.iter(_RUN_TAG)
+    ) and all(
+        Paragraph(paragraph, document).text == _ooxml_visible_text(paragraph)
+        for paragraph in body.iter(_PARAGRAPH_TAG)
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,13 +189,21 @@ class RAGFlowDocxParser:
         document = Document(BytesIO(source))
         if not isinstance(document, DocumentType):
             raise ValueError("DOCX parser did not construct an exact document")
-        package_elements = _package_xml_elements(document)
+        package_elements, has_malformed_part = _package_xml_elements(document)
         if _elements_contain_tag(package_elements, _UNSUPPORTED_VISUAL_TAGS):
             raise UnsupportedDocxFigureError(
                 "DOCX profile does not admit visual objects"
             )
+        if has_malformed_part:
+            raise ValueError("DOCX contains a malformed XML package part")
         if _elements_contain_tag(package_elements, _UNSUPPORTED_CONTENT_TAGS):
             raise ValueError("DOCX contains an unsupported content container")
+        if any(_contains_unadmitted_run_content(e) for e in package_elements):
+            raise ValueError("DOCX contains unsupported run content")
+        if _contains_unrepresented_package_text(package_elements, document):
+            raise ValueError("DOCX contains text outside the represented body")
+        if not _body_paragraph_text_is_lossless(document):
+            raise ValueError("DOCX paragraph text cannot be represented losslessly")
         blocks: list[RawDocxBlock] = []
         for block_ordinal, child in enumerate(document.element.body.iterchildren()):
             if child.tag == _PARAGRAPH_TAG:

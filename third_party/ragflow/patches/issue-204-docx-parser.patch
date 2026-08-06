@@ -1,6 +1,8 @@
+diff --git a/deepdoc/parser/docx_parser.py b/deepdoc/parser/docx_parser.py
+index 48f8db8..97d8050 100644
 --- a/deepdoc/parser/docx_parser.py
 +++ b/deepdoc/parser/docx_parser.py
-@@ -13,170 +13,148 @@
+@@ -13,170 +13,242 @@
  #  See the License for the specific language governing permissions and
  #  limitations under the License.
  #
@@ -12,20 +14,178 @@
 -import pandas as pd
 -from collections import Counter
 -from rag.nlp import rag_tokenizer
--from io import BytesIO
++"""Patched RAGFlow DOCX block extraction with no application dependencies."""
++
++from __future__ import annotations
++
++from dataclasses import dataclass
++from email import policy
+ from io import BytesIO
 -import logging
 -from common.constants import MAXIMUM_PAGE_NUMBER
 -from docx.image.exceptions import (
 -    InvalidImageStreamError,
 -    UnexpectedEndOfFileError,
 -    UnrecognizedImageError,
--)
++from typing import Any, Final
++
++from docx import Document
++from docx.document import Document as DocumentType
++from docx.oxml import parse_xml
++from docx.oxml.ns import qn
++from docx.table import Table
++from docx.text.paragraph import Paragraph
++
++_PARAGRAPH_TAG: Final = qn("w:p")
++_TABLE_TAG: Final = qn("w:tbl")
++_SECTION_PROPERTIES_TAG: Final = qn("w:sectPr")
++_RUN_TAG: Final = qn("w:r")
++_RUN_PROPERTIES_TAG: Final = qn("w:rPr")
++_TEXT_TAG: Final = qn("w:t")
++_TAB_TAGS: Final = frozenset({qn("w:tab"), qn("w:ptab")})
++_BREAK_TAGS: Final = frozenset({qn("w:br"), qn("w:cr")})
++_BREAK_TYPE_ATTRIBUTE: Final = qn("w:type")
++_NO_BREAK_HYPHEN_TAG: Final = qn("w:noBreakHyphen")
++_NON_VISIBLE_RUN_TAGS: Final = frozenset(
++    {
++        qn("w:fldChar"),
++        qn("w:instrText"),
++        qn("w:lastRenderedPageBreak"),
++        _RUN_PROPERTIES_TAG,
++    }
++)
++_ADMITTED_RUN_TAGS: Final = (
++    frozenset({_TEXT_TAG, _NO_BREAK_HYPHEN_TAG})
++    | _TAB_TAGS
++    | _BREAK_TAGS
++    | _NON_VISIBLE_RUN_TAGS
++)
++_UNSUPPORTED_CONTENT_TAGS: Final = frozenset(
++    {
++        qn("w:customXml"),
++        qn("w:del"),
++        qn("w:fldSimple"),
++        qn("w:ins"),
++        qn("w:moveFrom"),
++        qn("w:moveTo"),
++        qn("w:sdt"),
++        qn("w:smartTag"),
++    }
++)
++_UNSUPPORTED_VISUAL_TAGS: Final = frozenset(
++    {qn("pic:pic"), qn("w:drawing"), qn("w:object"), qn("w:pict")}
+ )
 -from rag.utils.lazy_image import LazyImage
-+"""Patched RAGFlow DOCX block extraction with no application dependencies."""
++_XML_CONTENT_TYPES: Final = frozenset({"application/xml", "text/xml"})
++
++
++class UnsupportedDocxFigureError(ValueError):
++    """The closed DOCX profile encountered an unsupported visual object."""
++
++
++def _contains_tag(element: Any, tags: frozenset[str]) -> bool:
++    return any(node.tag in tags for node in element.iter())
++
++
++def _is_xml_content_type(content_type: object) -> bool:
++    if type(content_type) is not str:
++        return False
++    parsed = policy.default.header_factory("Content-Type", content_type)
++    if parsed.defects:
++        raise ValueError("DOCX package part has a malformed media type")
++    media_type = f"{parsed.maintype}/{parsed.subtype}"
++    return media_type in _XML_CONTENT_TYPES or parsed.subtype.endswith("+xml")
++
++
++def _package_xml_elements(document: DocumentType) -> tuple[tuple[Any, ...], bool]:
++    elements: list[Any] = []
++    has_malformed_part = False
++    for part in document.part.package.parts:
++        try:
++            is_xml = _is_xml_content_type(part.content_type)
++        except ValueError:
++            has_malformed_part = True
++            continue
++        if not is_xml:
++            continue
++        try:
++            element = getattr(part, "element", None)
++            elements.append(element if element is not None else parse_xml(part.blob))
++        except Exception:
++            has_malformed_part = True
++    return tuple(elements), has_malformed_part
++
++
++def _elements_contain_tag(elements: tuple[Any, ...], tags: frozenset[str]) -> bool:
++    return any(_contains_tag(element, tags) for element in elements)
++
++
++def _ooxml_visible_text(element: Any) -> str:
++    text: list[str] = []
++    for run in element.iter(_RUN_TAG):
++        for node in run.iterdescendants():
++            if node.tag == _TEXT_TAG:
++                text.append(node.text or "")
++            elif node.tag in _TAB_TAGS:
++                text.append("\t")
++            elif node.tag == _NO_BREAK_HYPHEN_TAG:
++                text.append("-")
++            elif node.tag in _BREAK_TAGS and (
++                node.tag == qn("w:cr")
++                or node.get(_BREAK_TYPE_ATTRIBUTE) in (None, "textWrapping")
++            ):
++                text.append("\n")
++    return "".join(text)
++
++
++def _contains_unadmitted_run_content(element: Any) -> bool:
++    return any(
++        child.tag not in _ADMITTED_RUN_TAGS
++        for run in element.iter(_RUN_TAG)
++        for child in run.iterchildren()
++    )
++
++
++def _contains_unrepresented_package_text(
++    elements: tuple[Any, ...], document: DocumentType
++) -> bool:
++    for element in elements:
++        if element is document.element:
++            if any(
++                child is not document.element.body and _ooxml_visible_text(child)
++                for child in element.iterchildren()
++            ):
++                return True
++        elif _ooxml_visible_text(element):
++            return True
++    return False
++
++
++def _body_paragraph_text_is_lossless(document: DocumentType) -> bool:
++    body = document.element.body
++    return all(
++        any(ancestor.tag == _PARAGRAPH_TAG for ancestor in run.iterancestors())
++        for run in body.iter(_RUN_TAG)
++    ) and all(
++        Paragraph(paragraph, document).text == _ooxml_visible_text(paragraph)
++        for paragraph in body.iter(_PARAGRAPH_TAG)
++    )
++
++
++@dataclass(frozen=True, slots=True)
++class RawDocxBlock:
++    """One bounded block in OOXML body order."""
++
++    kind: str
++    block_ordinal: int
++    text: str
++    style_name: str | None
++    xml: bytes
++    table_cells: tuple[tuple[str, ...], ...] = ()
++    has_figure: bool = False
 
-+from __future__ import annotations
 
--class RAGFlowDocxParser:
+ class RAGFlowDocxParser:
 -    def get_picture(self, document, paragraph):
 -        imgs = paragraph._element.xpath(".//pic:pic")
 -        if not imgs:
@@ -42,10 +202,7 @@
 -            except Exception as e:
 -                logging.warning(f"Skipping image due to unexpected error getting related_part: {e}")
 -                continue
-+from dataclasses import dataclass
-+from io import BytesIO
-+from typing import Any, Final
-
+-
 -            try:
 -                image = related_part.image
 -                if image is not None:
@@ -59,13 +216,7 @@
 -                logging.info(f"Damaged image encountered, attempting blob fallback: {e}")
 -            except Exception as e:
 -                logging.warning(f"Unexpected error getting image, attempting blob fallback: {e}")
-+from docx import Document
-+from docx.document import Document as DocumentType
-+from docx.oxml import parse_xml
-+from docx.oxml.ns import qn
-+from docx.table import Table
-+from docx.text.paragraph import Paragraph
-
+-
 -            if image_blob is None:
 -                image_blob = getattr(related_part, "blob", None)
 -            if image_blob:
@@ -73,36 +224,15 @@
 -        if not image_blobs:
 -            return None
 -        return LazyImage(image_blobs)
-+_PARAGRAPH_TAG: Final = qn("w:p")
-+_TABLE_TAG: Final = qn("w:tbl")
-+_SECTION_PROPERTIES_TAG: Final = qn("w:sectPr")
-+_UNSUPPORTED_CONTENT_TAGS: Final = frozenset(
-+    {
-+        qn("w:customXml"),
-+        qn("w:del"),
-+        qn("w:fldSimple"),
-+        qn("w:ins"),
-+        qn("w:moveFrom"),
-+        qn("w:moveTo"),
-+        qn("w:sdt"),
-+        qn("w:smartTag"),
-+    }
-+)
-+_UNSUPPORTED_VISUAL_TAGS: Final = frozenset(
-+    {qn("w:drawing"), qn("w:object"), qn("w:pict")}
-+)
-+_XML_CONTENT_TYPES: Final = frozenset({"application/xml", "text/xml"})
-
+-
 -    def __extract_table_content(self, tb):
 -        df = []
 -        for row in tb.rows:
 -            df.append([c.text for c in row.cells])
 -        return self.__compose_table_content(pd.DataFrame(df))
-
+-
 -    def __compose_table_content(self, df):
-+class UnsupportedDocxFigureError(ValueError):
-+    """The closed DOCX profile encountered an unsupported visual object."""
-
+-
 -        def blockType(b):
 -            pattern = [
 -                ("^(20|19)[0-9]{2}[年/-][0-9]{1,2}[月/-][0-9]{1,2}日*$", "Dt"),
@@ -127,38 +257,17 @@
 -                    return "Tx"
 -                else:
 -                    return "Lx"
-
+-
 -            if len(tks) == 1 and rag_tokenizer.tag(tks[0]) == "nr":
 -                return "Nr"
-+def _contains_tag(element: Any, tags: frozenset[str]) -> bool:
-+    return any(node.tag in tags for node in element.iter())
-
+-
 -            return "Ot"
-
+-
 -        if len(df) < 2:
 -            return []
 -        max_type = Counter([blockType(str(df.iloc[i, j])) for i in range(1, len(df)) for j in range(len(df.iloc[i, :]))])
 -        max_type = max(max_type.items(), key=lambda x: x[1])[0]
-+def _is_xml_content_type(content_type: object) -> bool:
-+    return type(content_type) is str and (
-+        (normalized := content_type.casefold()) in _XML_CONTENT_TYPES
-+        or normalized.endswith("+xml")
-+    )
-+
-+
-+def _package_xml_elements(document: DocumentType) -> tuple[Any, ...]:
-+    elements: list[Any] = []
-+    for part in document.part.package.parts:
-+        if not _is_xml_content_type(part.content_type):
-+            continue
-+        element = getattr(part, "element", None)
-+        elements.append(element if element is not None else parse_xml(part.blob))
-+    return tuple(elements)
-+
-+
-+def _elements_contain_tag(elements: tuple[Any, ...], tags: frozenset[str]) -> bool:
-+    return any(_contains_tag(element, tags) for element in elements)
-
+-
 -        colnm = len(df.iloc[0, :])
 -        hdrows = [0]  # header is not necessarily appear in the first line
 -        if max_type == "Nu":
@@ -167,7 +276,7 @@
 -                tys = max(tys.items(), key=lambda x: x[1])[0]
 -                if tys != max_type:
 -                    hdrows.append(r)
-
+-
 -        lines = []
 -        for i in range(1, len(df)):
 -            if i in hdrows:
@@ -198,21 +307,11 @@
 -                    continue
 -                cells.append(headers[j] + str(df.iloc[i, j]))
 -            lines.append(";".join(cells))
-+@dataclass(frozen=True, slots=True)
-+class RawDocxBlock:
-+    """One bounded block in OOXML body order."""
-
+-
 -        if colnm > 3:
 -            return lines
 -        return ["\n".join(lines)]
-+    kind: str
-+    block_ordinal: int
-+    text: str
-+    style_name: str | None
-+    xml: bytes
-+    table_cells: tuple[tuple[str, ...], ...] = ()
-+    has_figure: bool = False
-
+-
 -    def __call__(self, fnm, from_page=0, to_page=MAXIMUM_PAGE_NUMBER):
 -        self.doc = Document(fnm) if isinstance(fnm, str) else Document(BytesIO(fnm))
 -        pn = 0  # parsed page
@@ -220,32 +319,45 @@
 -        for p in self.doc.paragraphs:
 -            if pn > to_page:
 -                break
-
+-
 -            runs_within_single_paragraph = []  # save runs within the range of pages
 -            for run in p.runs:
 -                if pn > to_page:
 -                    break
 -                if from_page <= pn < to_page and p.text.strip():
 -                    runs_within_single_paragraph.append(run.text)  # append run.text first
-+class RAGFlowDocxParser:
-+    """Narrow patched parser retained from the approved RAGFlow source region."""
-
+-
 -                # wrap page break checker into a static method
 -                if "lastRenderedPageBreak" in run._element.xml:
 -                    pn += 1
+-
+-            secs.append(("".join(runs_within_single_paragraph), p.style.name if hasattr(p.style, "name") else ""))  # then concat run.text as part of the paragraph
+-
+-        tbls = [self.__extract_table_content(tb) for tb in self.doc.tables]
+-        return secs, tbls
++    """Narrow patched parser retained from the approved RAGFlow source region."""
++
 +    def __call__(self, source: bytes) -> tuple[RawDocxBlock, ...]:
 +        if type(source) is not bytes:
 +            raise TypeError("DOCX parser source must be exact bytes")
 +        document = Document(BytesIO(source))
 +        if not isinstance(document, DocumentType):
 +            raise ValueError("DOCX parser did not construct an exact document")
-+        package_elements = _package_xml_elements(document)
++        package_elements, has_malformed_part = _package_xml_elements(document)
 +        if _elements_contain_tag(package_elements, _UNSUPPORTED_VISUAL_TAGS):
 +            raise UnsupportedDocxFigureError(
 +                "DOCX profile does not admit visual objects"
 +            )
++        if has_malformed_part:
++            raise ValueError("DOCX contains a malformed XML package part")
 +        if _elements_contain_tag(package_elements, _UNSUPPORTED_CONTENT_TAGS):
 +            raise ValueError("DOCX contains an unsupported content container")
++        if any(_contains_unadmitted_run_content(e) for e in package_elements):
++            raise ValueError("DOCX contains unsupported run content")
++        if _contains_unrepresented_package_text(package_elements, document):
++            raise ValueError("DOCX contains text outside the represented body")
++        if not _body_paragraph_text_is_lossless(document):
++            raise ValueError("DOCX paragraph text cannot be represented losslessly")
 +        blocks: list[RawDocxBlock] = []
 +        for block_ordinal, child in enumerate(document.element.body.iterchildren()):
 +            if child.tag == _PARAGRAPH_TAG:
@@ -291,9 +403,6 @@
 +            elif child.tag != _SECTION_PROPERTIES_TAG:
 +                raise ValueError("DOCX contains an unsupported body element")
 +        return tuple(blocks)
-
--            secs.append(("".join(runs_within_single_paragraph), p.style.name if hasattr(p.style, "name") else ""))  # then concat run.text as part of the paragraph
-
--        tbls = [self.__extract_table_content(tb) for tb in self.doc.tables]
--        return secs, tbls
++
++
 +__all__ = ["RAGFlowDocxParser", "RawDocxBlock", "UnsupportedDocxFigureError"]

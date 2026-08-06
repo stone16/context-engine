@@ -52,6 +52,9 @@ from third_party.ragflow.deepdoc.parser import utils as ragflow_pdf_utils
 from third_party.ragflow.deepdoc.parser.utils import RawPdfOutline
 
 REPOSITORY_ROOT = Path(__file__).parents[2]
+type _DocumentOutcome = (
+    ParsedDocument[CompilationProfileRef] | DocumentCompilationFailure
+)
 
 
 @dataclass
@@ -89,6 +92,22 @@ def _save_docx(document: DocumentType) -> bytes:
     output = io.BytesIO()
     document.save(output)
     return output.getvalue()
+
+
+def _compile_docx_at_public_seams(source: bytes) -> tuple[
+    _DocumentOutcome, _DocumentOutcome
+]:
+    return (
+        compile_document_bytes(
+            source,
+            CompilationProfileRef("context-engine-docx-v1", DOCX_CONFIG_V1),
+        ),
+        compile_in_local_document_runner(
+            BytesArtifactSource(source),
+            DOCX_CONFIG_V1,
+            acceptance_context=acceptance_context(),
+        ),
+    )
 
 
 def _docx_with_unsupported_body_container() -> bytes:
@@ -145,6 +164,31 @@ def _docx_with_wrapped_text(
     return _save_docx(document)
 
 
+def _docx_with_wrapped_table_cell_text() -> bytes:
+    document = Document()
+    document.add_paragraph("Retained body text.")
+    paragraph = document.add_table(rows=1, cols=1).cell(0, 0).paragraphs[0]
+    wrapper = OxmlElement("w:dir")
+    run = OxmlElement("w:r")
+    text = OxmlElement("w:t")
+    text.text = "Table-cell bidirectional text must not disappear."
+    run.append(text)
+    wrapper.append(run)
+    paragraph._p.append(wrapper)
+    return _save_docx(document)
+
+
+def _docx_with_admitted_run_text() -> bytes:
+    document = Document()
+    run = document.add_paragraph().add_run("Before")
+    run.add_tab()
+    run.add_text("Middle")
+    run.add_break()
+    run._r.append(OxmlElement("w:noBreakHyphen"))
+    run.add_text("After")
+    return _save_docx(document)
+
+
 def _docx_with_wrapped_footnote_text(
     wrapper_tag: str,
     hidden_text: str,
@@ -175,12 +219,71 @@ def _docx_with_wrapped_footnote_text(
     return _save_docx(document)
 
 
-def _docx_with_xml_looking_binary_part() -> bytes:
+def _docx_with_visible_header_text() -> bytes:
+    document = Document()
+    document.add_paragraph("Retained body text.")
+    document.sections[0].header.paragraphs[0].text = (
+        "Visible header text must not disappear."
+    )
+    return _save_docx(document)
+
+
+def _docx_with_visible_footnote_text() -> bytes:
+    document = Document()
+    document.add_paragraph("Retained body text.")
+    footnotes_xml = (
+        b'<w:footnotes xmlns:w="http://schemas.openxmlformats.org/'
+        b'wordprocessingml/2006/main">'
+        b'<w:footnote w:id="1"><w:p><w:r>'
+        b"<w:t>Visible footnote text must not disappear.</w:t>"
+        b"</w:r></w:p></w:footnote></w:footnotes>"
+    )
+    footnotes_part = Part(
+        PackURI("/word/footnotes.xml"),
+        CONTENT_TYPE.WML_FOOTNOTES,
+        footnotes_xml,
+        document.part.package,
+    )
+    document.part.relate_to(footnotes_part, RELATIONSHIP_TYPE.FOOTNOTES)
+    return _save_docx(document)
+
+
+def _docx_with_malformed_footnotes_xml(*, with_header_drawing: bool) -> bytes:
+    document = Document()
+    document.add_paragraph("Retained body text.")
+    if with_header_drawing:
+        document.sections[0].header.paragraphs[0].add_run()._r.append(
+            OxmlElement("w:drawing")
+        )
+    footnotes_part = Part(
+        PackURI("/word/footnotes.xml"),
+        "application/xml",
+        b"<w:footnotes>",
+        document.part.package,
+    )
+    document.part.relate_to(footnotes_part, RELATIONSHIP_TYPE.FOOTNOTES)
+    return _save_docx(document)
+
+
+def _docx_with_malformed_part_media_type() -> bytes:
+    document = Document()
+    document.add_paragraph("Retained body text.")
+    generic_part = Part(
+        PackURI("/word/generic.xml"),
+        "application/xml; charset",
+        b"<generic/>",
+        document.part.package,
+    )
+    document.part.relate_to(generic_part, RELATIONSHIP_TYPE.CUSTOM_XML)
+    return _save_docx(document)
+
+
+def _docx_with_xml_looking_binary_part(*, content_type: str) -> bytes:
     document = Document()
     document.add_paragraph("Retained body text.")
     binary_part = Part(
         PackURI("/word/embeddings/object1.bin"),
-        "application/octet-stream",
+        content_type,
         b"<w:fldSimple><w:t>Binary bytes are not XML.</w:t></w:fldSimple>",
         document.part.package,
     )
@@ -418,17 +521,7 @@ def test_docx_wrapped_text_refuses_at_parser_and_runner_seams(
         hidden_text,
         in_header=in_header,
     )
-    outcomes = (
-        compile_document_bytes(
-            source,
-            CompilationProfileRef("context-engine-docx-v1", DOCX_CONFIG_V1),
-        ),
-        compile_in_local_document_runner(
-            BytesArtifactSource(source),
-            DOCX_CONFIG_V1,
-            acceptance_context=acceptance_context(),
-        ),
-    )
+    outcomes = _compile_docx_at_public_seams(source)
 
     for outcome in outcomes:
         assert type(outcome) is DocumentCompilationFailure
@@ -448,17 +541,7 @@ def test_docx_wrapped_footnote_text_refuses_at_parser_and_runner_seams(
     hidden_text: str,
 ) -> None:
     source = _docx_with_wrapped_footnote_text(wrapper_tag, hidden_text)
-    outcomes = (
-        compile_document_bytes(
-            source,
-            CompilationProfileRef("context-engine-docx-v1", DOCX_CONFIG_V1),
-        ),
-        compile_in_local_document_runner(
-            BytesArtifactSource(source),
-            DOCX_CONFIG_V1,
-            acceptance_context=acceptance_context(),
-        ),
-    )
+    outcomes = _compile_docx_at_public_seams(source)
 
     for outcome in outcomes:
         assert type(outcome) is DocumentCompilationFailure
@@ -478,8 +561,9 @@ def test_docx_wrapped_footnote_text_refuses_at_parser_and_runner_seams(
     (
         "Application/XML",
         "application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+XmL",
+        "application/xml; charset=UTF-8",
     ),
-    ids=("uppercase-base-xml", "mixed-case-xml-suffix"),
+    ids=("uppercase-base-xml", "mixed-case-xml-suffix", "parameterized-xml"),
 )
 def test_docx_case_varied_xml_media_types_still_refuse_wrapped_footnotes(
     wrapper_tag: str,
@@ -491,17 +575,71 @@ def test_docx_case_varied_xml_media_types_still_refuse_wrapped_footnotes(
         hidden_text,
         content_type=content_type,
     )
-    outcomes = (
-        compile_document_bytes(
-            source,
-            CompilationProfileRef("context-engine-docx-v1", DOCX_CONFIG_V1),
+    outcomes = _compile_docx_at_public_seams(source)
+
+    for outcome in outcomes:
+        assert type(outcome) is DocumentCompilationFailure
+        assert outcome.code is DocumentCompilationFailureCode.INVALID_ARTIFACT
+
+
+@pytest.mark.parametrize(
+    "source_builder",
+    (
+        _docx_with_visible_header_text,
+        _docx_with_visible_footnote_text,
+        lambda: _docx_with_wrapped_text(
+            "w:dir",
+            "Bidirectional text must not disappear.",
+            in_header=False,
         ),
-        compile_in_local_document_runner(
-            BytesArtifactSource(source),
-            DOCX_CONFIG_V1,
-            acceptance_context=acceptance_context(),
-        ),
+        _docx_with_wrapped_table_cell_text,
+    ),
+    ids=("header", "footnote", "unknown-body-container", "table-cell-container"),
+)
+def test_docx_refuses_visible_text_it_cannot_represent_at_both_seams(
+    source_builder: Callable[[], bytes],
+) -> None:
+    source = source_builder()
+    outcomes = _compile_docx_at_public_seams(source)
+
+    for outcome in outcomes:
+        assert type(outcome) is DocumentCompilationFailure
+        assert outcome.code is DocumentCompilationFailureCode.INVALID_ARTIFACT
+
+
+def test_docx_preserves_admitted_run_text_at_both_seams() -> None:
+    outcomes = _compile_docx_at_public_seams(_docx_with_admitted_run_text())
+
+    for outcome in outcomes:
+        assert type(outcome) is ParsedDocument
+        assert outcome.units is not None
+        assert [unit.text for unit in outcome.units] == ["Before\tMiddle\n-After"]
+
+
+@pytest.mark.parametrize(
+    ("with_header_drawing", "expected_code"),
+    (
+        (True, DocumentCompilationFailureCode.FIGURE_NOT_SUPPORTED),
+        (False, DocumentCompilationFailureCode.INVALID_ARTIFACT),
+    ),
+    ids=("visual-first", "malformed-only"),
+)
+def test_docx_malformed_generic_xml_preserves_visual_refusal_precedence(
+    with_header_drawing: bool,
+    expected_code: DocumentCompilationFailureCode,
+) -> None:
+    source = _docx_with_malformed_footnotes_xml(
+        with_header_drawing=with_header_drawing
     )
+    outcomes = _compile_docx_at_public_seams(source)
+
+    for outcome in outcomes:
+        assert type(outcome) is DocumentCompilationFailure
+        assert outcome.code is expected_code
+
+
+def test_docx_refuses_malformed_package_part_media_type_at_both_seams() -> None:
+    outcomes = _compile_docx_at_public_seams(_docx_with_malformed_part_media_type())
 
     for outcome in outcomes:
         assert type(outcome) is DocumentCompilationFailure
@@ -522,9 +660,14 @@ def test_docx_generic_xml_part_preserves_visual_refusal_precedence() -> None:
     assert outcome.code is DocumentCompilationFailureCode.FIGURE_NOT_SUPPORTED
 
 
-def test_docx_package_scan_does_not_parse_binary_parts() -> None:
+@pytest.mark.parametrize(
+    "content_type",
+    ("application/octet-stream", 'Application/Octet-Stream; profile="xml-looking"'),
+    ids=("bare", "parameterized"),
+)
+def test_docx_package_scan_does_not_parse_binary_parts(content_type: str) -> None:
     outcome = compile_document_bytes(
-        _docx_with_xml_looking_binary_part(),
+        _docx_with_xml_looking_binary_part(content_type=content_type),
         CompilationProfileRef("context-engine-docx-v1", DOCX_CONFIG_V1),
     )
 

@@ -58,6 +58,7 @@ ALLOWED_IMPORT_ROOTS = {
     "typing",
     "unicodedata",
     "docx",
+    "email",
 }
 
 
