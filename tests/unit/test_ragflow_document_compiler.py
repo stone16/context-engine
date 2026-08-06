@@ -274,6 +274,28 @@ def _docx_with_relabeled_header_xml(payload_kind: str) -> bytes:
     return _relabel_docx_part_as_binary(_save_docx(document), "word/header1.xml")
 
 
+def _docx_with_header_disguised_as_thumbnail() -> bytes:
+    source = _docx_with_visible_header_text()
+    output = io.BytesIO()
+    header_relationship_type = RELATIONSHIP_TYPE.HEADER.encode()
+    thumbnail_relationship_type = RELATIONSHIP_TYPE.THUMBNAIL.encode()
+    with (
+        zipfile.ZipFile(io.BytesIO(source)) as source_archive,
+        zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as target_archive,
+    ):
+        for member in source_archive.infolist():
+            member_bytes = source_archive.read(member.filename)
+            if member.filename == "word/_rels/document.xml.rels":
+                assert header_relationship_type in member_bytes
+                member_bytes = member_bytes.replace(
+                    header_relationship_type,
+                    thumbnail_relationship_type,
+                    1,
+                )
+            target_archive.writestr(member, member_bytes)
+    return _relabel_docx_part_as_binary(output.getvalue(), "word/header1.xml")
+
+
 def _docx_with_relabeled_related_xml(part_kind: str, payload_kind: str) -> bytes:
     if part_kind == "header":
         return _docx_with_relabeled_header_xml(payload_kind)
@@ -644,6 +666,8 @@ def _docx_with_malformed_content_type_manifest(
                         b'hostile">payload</hostile:payload></Default>',
                         1,
                     )
+                elif manifest_kind == "unparseable":
+                    member_bytes = b"<Types"
                 else:
                     raise ValueError("unknown malformed manifest kind")
             target_archive.writestr(member, member_bytes)
@@ -661,10 +685,26 @@ def _docx_with_unused_malformed_content_type_declaration(
         declaration = (
             b'<Default Extension="unused" ContentType="application/xml; charset"/>'
         )
+    elif declaration_kind == "media-type-non-ascii":
+        declaration = (
+            '<Default Extension="unused" ContentType="application/é"/>'.encode()
+        )
+    elif declaration_kind == "media-type-emoji":
+        declaration = (
+            '<Default Extension="unused" ContentType="application/😀"/>'.encode()
+        )
+    elif declaration_kind == "media-type-wildcard":
+        declaration = b'<Default Extension="unused" ContentType="*/*"/>'
+    elif declaration_kind == "media-type-slash-whitespace":
+        declaration = b'<Default Extension="unused" ContentType="application /xml"/>'
     elif declaration_kind == "extension":
         declaration = (
             b'<Default Extension="unused extension" ContentType="application/xml"/>'
         )
+    elif declaration_kind == "extension-dot":
+        declaration = b'<Default Extension="." ContentType="application/xml"/>'
+    elif declaration_kind == "extension-dot-dot":
+        declaration = b'<Default Extension=".." ContentType="application/xml"/>'
     else:
         raise ValueError("unknown malformed declaration kind")
     source = _save_docx(document)
@@ -1202,6 +1242,17 @@ def test_docx_relabeled_related_xml_cannot_bypass_package_scanning(
         )
 
 
+def test_docx_header_cannot_hide_behind_thumbnail_relationship_at_both_seams(
+) -> None:
+    outcomes = _compile_docx_at_public_seams(
+        _docx_with_header_disguised_as_thumbnail()
+    )
+
+    for outcome in outcomes:
+        assert type(outcome) is DocumentCompilationFailure
+        assert outcome.code is DocumentCompilationFailureCode.INVALID_ARTIFACT
+
+
 @pytest.mark.parametrize(
     ("wrapper_tag", "hidden_text"),
     (
@@ -1440,8 +1491,55 @@ def test_docx_manifest_failure_preserves_visual_precedence_at_both_seams() -> No
         assert outcome.code is DocumentCompilationFailureCode.FIGURE_NOT_SUPPORTED
 
 
+def test_docx_unparseable_manifest_preserves_raw_visual_precedence_at_both_seams(
+) -> None:
+    outcomes = _compile_docx_at_public_seams(
+        _docx_with_malformed_content_type_manifest(
+            "unparseable",
+            with_drawing=True,
+        )
+    )
+
+    for outcome in outcomes:
+        assert type(outcome) is DocumentCompilationFailure
+        assert outcome.code is DocumentCompilationFailureCode.FIGURE_NOT_SUPPORTED
+
+
 @pytest.mark.parametrize("declaration_kind", ("media-type", "extension"))
 def test_docx_refuses_unused_malformed_content_type_declarations_at_both_seams(
+    declaration_kind: str,
+) -> None:
+    outcomes = _compile_docx_at_public_seams(
+        _docx_with_unused_malformed_content_type_declaration(declaration_kind)
+    )
+
+    for outcome in outcomes:
+        assert type(outcome) is DocumentCompilationFailure
+        assert outcome.code is DocumentCompilationFailureCode.INVALID_ARTIFACT
+
+
+@pytest.mark.parametrize(
+    "declaration_kind",
+    (
+        "media-type-non-ascii",
+        "media-type-emoji",
+        "media-type-wildcard",
+        "media-type-slash-whitespace",
+        "media-type",
+        "extension-dot",
+        "extension-dot-dot",
+    ),
+    ids=(
+        "non-ascii-media-type",
+        "emoji-media-type",
+        "wildcard-media-type",
+        "slash-whitespace-media-type",
+        "defective-media-type",
+        "dot-extension",
+        "dot-dot-extension",
+    ),
+)
+def test_docx_refuses_manifest_tokens_outside_strict_ascii_grammar_at_both_seams(
     declaration_kind: str,
 ) -> None:
     outcomes = _compile_docx_at_public_seams(
@@ -1674,15 +1772,16 @@ def test_docx_generic_xml_part_preserves_visual_refusal_precedence() -> None:
     ("application/octet-stream", 'Application/Octet-Stream; profile="xml-looking"'),
     ids=("bare", "parameterized"),
 )
-def test_docx_package_scan_does_not_parse_binary_parts(content_type: str) -> None:
+def test_docx_refuses_unvalidated_ole_compound_file_at_both_seams(
+    content_type: str,
+) -> None:
     outcomes = _compile_docx_at_public_seams(
         _docx_with_binary_ole_part(content_type=content_type)
     )
 
     for outcome in outcomes:
-        assert type(outcome) is ParsedDocument
-        assert outcome.units is not None
-        assert [unit.text for unit in outcome.units] == ["Retained body text."]
+        assert type(outcome) is DocumentCompilationFailure
+        assert outcome.code is DocumentCompilationFailureCode.INVALID_ARTIFACT
 
 
 @pytest.mark.parametrize("in_header", (False, True))

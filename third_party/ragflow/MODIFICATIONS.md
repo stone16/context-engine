@@ -51,19 +51,28 @@ raw OPC archive and strictly parses `[Content_Types].xml` before constructing a
 `python-docx` document. Every declared XML member is parsed independently and
 every successfully parsed root is scanned for visuals first, so a figure
 refusal takes precedence over malformed or unrepresented XML even when
-`python-docx` cannot load the package. Archive names, PartNames, media types,
-case-folded declarations, and relationship reachability are validated. The
+`python-docx` cannot load the package. When the content-type manifest itself is
+unparseable, every independently parseable raw member is still scanned for
+visuals before the retained manifest refusal. Archive names, PartNames, media
+types, case-folded declarations, and relationship reachability are validated. The
 content-type manifest admits an attribute-free, text-free root containing only
 exact leaf `Default` and `Override` declarations; malformed declarations remain
 usable only to scan otherwise classifiable XML for visuals before the retained
-manifest refusal. Every declaration's media type and extension grammar is
-validated even when no member uses it. The relationship grammar requires exact
-permitted attributes, unique non-empty identifiers, valid target modes, and the
-exact root-to-main office-document relationship type. A manifest relabel cannot
-hide related XML: non-XML related parts outside exact admitted binary
-relationship classes must parse as XML, while OLE members additionally require
-the compound-file signature. Orphan, unknown, and path-ambiguous members fail
-closed. Admitted binary members are inventoried but never parsed as XML.
+manifest refusal. Every declaration's media type must use strict ASCII MIME
+tokens, and its raw pre-parameter base must exactly match the parsed type and
+subtype except for case; parser-normalized whitespace is never accepted. Every
+extension must use the closed ASCII token grammar while excluding `.` and `..`,
+even when no member uses the declaration. The
+relationship grammar requires exact permitted attributes, unique non-empty
+identifiers, valid target modes, and the exact root-to-main office-document
+relationship type. A manifest relabel cannot hide related XML: non-XML related
+parts outside exact admitted binary relationship classes must parse as XML.
+Thumbnail admission requires the root relationship, exact
+`docProps/thumbnail.jpeg` target, exact JPEG media type, and JPEG signature.
+OLE relationships refuse because the active profile cannot represent embedded
+OLE and no complete compound-file validator is registered. Orphan, unknown,
+and path-ambiguous members fail closed. Admitted thumbnail bytes are inventoried
+but never parsed as XML.
 
 The body-only profile admits one positive main-document/paragraph/run/table
 grammar, including recursive property-subtree validation and exact structural

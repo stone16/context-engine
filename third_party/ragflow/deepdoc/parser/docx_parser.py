@@ -134,10 +134,12 @@ _OLE_OBJECT_RELATIONSHIP_TYPE: Final = (
 _THUMBNAIL_RELATIONSHIP_TYPE: Final = (
     "http://schemas.openxmlformats.org/package/2006/relationships/metadata/thumbnail"
 )
-_ADMITTED_BINARY_RELATIONSHIP_TYPES: Final = frozenset(
+_THUMBNAIL_MEMBER: Final = "docProps/thumbnail.jpeg"
+_THUMBNAIL_CONTENT_TYPE: Final = "image/jpeg"
+_JPEG_SIGNATURE: Final = b"\xff\xd8\xff"
+_BINARY_RELATIONSHIP_TYPES: Final = frozenset(
     {_OLE_OBJECT_RELATIONSHIP_TYPE, _THUMBNAIL_RELATIONSHIP_TYPE}
 )
-_OLE_COMPOUND_FILE_SIGNATURE: Final = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
 _DRAWINGML_NAMESPACE: Final = (
     "http://schemas.openxmlformats.org/drawingml/2006/main"
 )
@@ -593,19 +595,39 @@ def _contains_tag(element: Any, tags: frozenset[str]) -> bool:
 
 
 def _is_xml_content_type(content_type: object) -> bool:
-    if type(content_type) is not str:
-        return False
+    if type(content_type) is not str or not content_type.isascii():
+        raise ValueError("DOCX package part has a malformed media type")
     parsed = policy.default.header_factory("Content-Type", content_type)
-    if parsed.defects:
+    raw_media_type = content_type.partition(";")[0]
+    if (
+        parsed.defects
+        or not _is_mime_token(parsed.maintype)
+        or not _is_mime_token(parsed.subtype)
+        or raw_media_type.casefold() != f"{parsed.maintype}/{parsed.subtype}"
+    ):
         raise ValueError("DOCX package part has a malformed media type")
     media_type = f"{parsed.maintype}/{parsed.subtype}"
     return media_type in _XML_CONTENT_TYPES or parsed.subtype.endswith("+xml")
+
+
+def _is_mime_token(value: object) -> bool:
+    return (
+        type(value) is str
+        and bool(value)
+        and value != "*"
+        and value.isascii()
+        and all(
+            character.isalnum() or character in "!#$%&'*+-.^_`|~"
+            for character in value
+        )
+    )
 
 
 def _is_package_extension(value: object) -> bool:
     return (
         type(value) is str
         and bool(value)
+        and value not in {".", ".."}
         and value.isascii()
         and all(
             character.isalnum() or character in "!#$&'*+-.^_`|~"
@@ -762,6 +784,10 @@ def _related_member_names(
             if target_mode == "External":
                 continue
             resolved = _resolved_relationship_target(source_part, target)
+            if relationship_type == _THUMBNAIL_RELATIONSHIP_TYPE and (
+                source_part != "" or resolved != _THUMBNAIL_MEMBER
+            ):
+                raise ValueError("DOCX thumbnail relationship is outside the grammar")
             if source_part == "" and resolved == _DOCUMENT_MEMBER:
                 if relationship_type != _OFFICE_DOCUMENT_RELATIONSHIP_TYPE:
                     raise ValueError(
@@ -793,7 +819,7 @@ def _package_xml_elements(
 ) -> tuple[tuple[tuple[str, Any], ...], frozenset[str], bool]:
     elements: list[tuple[str, Any]] = []
     parsed_member_names: set[str] = set()
-    package_members: list[tuple[str, bytes]] = []
+    package_members: list[tuple[str, bytes, str | None]] = []
     has_malformed_part = False
     with ZipFile(BytesIO(source)) as archive:
         members = archive.infolist()
@@ -821,6 +847,13 @@ def _package_xml_elements(
             )
             has_malformed_part = has_malformed_part or malformed_manifest
         except Exception:
+            for member, member_name in normalized_members:
+                if member.is_dir() or member_name == _CONTENT_TYPES_MEMBER:
+                    continue
+                try:
+                    elements.append((member_name, parse_xml(archive.read(member))))
+                except Exception:
+                    continue
             return tuple(elements), frozenset(), True
         declared_override_names = set(overrides)
         if not declared_override_names.issubset(
@@ -836,11 +869,11 @@ def _package_xml_elements(
                 extension = member_name.rsplit(".", 1)[-1].casefold()
                 content_type = defaults.get(extension)
             if content_type is None:
-                package_members.append((member_name, member_bytes))
+                package_members.append((member_name, member_bytes, None))
                 has_malformed_part = True
                 continue
             is_xml = _is_xml_content_type(content_type)
-            package_members.append((member_name, member_bytes))
+            package_members.append((member_name, member_bytes, content_type))
             if not is_xml and _relationship_part_source(member_name) is None:
                 continue
             try:
@@ -855,16 +888,20 @@ def _package_xml_elements(
         related_members = frozenset()
         relationship_types = {}
         has_malformed_part = True
-    for member_name, member_bytes in package_members:
+    for member_name, member_bytes, content_type in package_members:
         if member_name in parsed_member_names or member_name not in related_members:
             continue
         member_relationship_types = relationship_types.get(member_name, frozenset())
         if member_relationship_types and member_relationship_types.issubset(
-            _ADMITTED_BINARY_RELATIONSHIP_TYPES
+            _BINARY_RELATIONSHIP_TYPES
         ):
-            if (
-                _OLE_OBJECT_RELATIONSHIP_TYPE in member_relationship_types
-                and not member_bytes.startswith(_OLE_COMPOUND_FILE_SIGNATURE)
+            if _OLE_OBJECT_RELATIONSHIP_TYPE in member_relationship_types:
+                has_malformed_part = True
+            if _THUMBNAIL_RELATIONSHIP_TYPE in member_relationship_types and (
+                member_name != _THUMBNAIL_MEMBER
+                or type(content_type) is not str
+                or content_type.casefold() != _THUMBNAIL_CONTENT_TYPE
+                or not member_bytes.startswith(_JPEG_SIGNATURE)
             ):
                 has_malformed_part = True
             continue
