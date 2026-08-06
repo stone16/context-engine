@@ -189,6 +189,17 @@ def _docx_with_admitted_run_text() -> bytes:
     return _save_docx(document)
 
 
+def _docx_with_visible_token_outside_run(token_tag: str) -> bytes:
+    document = Document()
+    document.add_paragraph("Retained body text.")
+    paragraph = document.add_paragraph()
+    token = OxmlElement(token_tag)
+    if token_tag == "w:t":
+        token.text = "Silently omitted direct text."
+    paragraph._p.append(token)
+    return _save_docx(document)
+
+
 def _docx_with_wrapped_footnote_text(
     wrapper_tag: str,
     hidden_text: str,
@@ -614,6 +625,23 @@ def test_docx_preserves_admitted_run_text_at_both_seams() -> None:
         assert type(outcome) is ParsedDocument
         assert outcome.units is not None
         assert [unit.text for unit in outcome.units] == ["Before\tMiddle\n-After"]
+
+
+@pytest.mark.parametrize(
+    "token_tag",
+    ("w:t", "w:tab", "w:ptab", "w:br", "w:cr", "w:noBreakHyphen"),
+    ids=("text", "tab", "position-tab", "break", "carriage-return", "no-break-hyphen"),
+)
+def test_docx_refuses_visible_tokens_outside_runs_at_both_seams(
+    token_tag: str,
+) -> None:
+    outcomes = _compile_docx_at_public_seams(
+        _docx_with_visible_token_outside_run(token_tag)
+    )
+
+    for outcome in outcomes:
+        assert type(outcome) is DocumentCompilationFailure
+        assert outcome.code is DocumentCompilationFailureCode.INVALID_ARTIFACT
 
 
 @pytest.mark.parametrize(

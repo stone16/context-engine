@@ -38,6 +38,7 @@ _SECTION_PROPERTIES_TAG: Final = qn("w:sectPr")
 _RUN_TAG: Final = qn("w:r")
 _RUN_PROPERTIES_TAG: Final = qn("w:rPr")
 _TEXT_TAG: Final = qn("w:t")
+_TAB_STOPS_TAG: Final = qn("w:tabs")
 _TAB_TAGS: Final = frozenset({qn("w:tab"), qn("w:ptab")})
 _BREAK_TAGS: Final = frozenset({qn("w:br"), qn("w:cr")})
 _BREAK_TYPE_ATTRIBUTE: Final = qn("w:type")
@@ -55,6 +56,9 @@ _ADMITTED_RUN_TAGS: Final = (
     | _TAB_TAGS
     | _BREAK_TAGS
     | _NON_VISIBLE_RUN_TAGS
+)
+_VISIBLE_TOKEN_TAGS: Final = (
+    frozenset({_TEXT_TAG, _NO_BREAK_HYPHEN_TAG}) | _TAB_TAGS | _BREAK_TAGS
 )
 _UNSUPPORTED_CONTENT_TAGS: Final = frozenset(
     {
@@ -141,6 +145,20 @@ def _contains_unadmitted_run_content(element: Any) -> bool:
     )
 
 
+def _contains_visible_token_outside_run(element: Any) -> bool:
+    return any(
+        not any(ancestor.tag == _RUN_TAG for ancestor in token.iterancestors())
+        for token in element.iter()
+        if token.tag in _VISIBLE_TOKEN_TAGS
+        and not (
+            token.tag == qn("w:tab")
+            and any(
+                ancestor.tag == _TAB_STOPS_TAG for ancestor in token.iterancestors()
+            )
+        )
+    )
+
+
 def _contains_unrepresented_package_text(
     elements: tuple[Any, ...], document: DocumentType
 ) -> bool:
@@ -200,6 +218,8 @@ class RAGFlowDocxParser:
             raise ValueError("DOCX contains an unsupported content container")
         if any(_contains_unadmitted_run_content(e) for e in package_elements):
             raise ValueError("DOCX contains unsupported run content")
+        if any(_contains_visible_token_outside_run(e) for e in package_elements):
+            raise ValueError("DOCX contains visible content outside a run")
         if _contains_unrepresented_package_text(package_elements, document):
             raise ValueError("DOCX contains text outside the represented body")
         if not _body_paragraph_text_is_lossless(document):

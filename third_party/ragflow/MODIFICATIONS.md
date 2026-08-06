@@ -52,7 +52,10 @@ raw blocks. The closed body-only profile rejects visible text in every other
 package part and independently accounts for visible run text in every body
 paragraph, refusing when that text differs from `python-docx`'s represented
 paragraph text. The earlier unsupported-container checks remain defense in
-depth, but completeness no longer depends on a finite wrapper denylist. Parts
+depth, but completeness no longer depends on a finite wrapper denylist. Every
+admitted visible token must occur inside a run, and every body run must occur
+inside a paragraph; malformed placement refuses rather than disappearing from
+both the independent and `python-docx` text derivations. Parts
 without a parsed element are parsed from raw bytes only when a strictly parsed,
 case-insensitive media type is `application/xml`, `text/xml`, or has a `+xml`
 suffix; valid parameters are admitted, malformed parameter syntax fails
