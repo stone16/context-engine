@@ -62,7 +62,8 @@ def _contains_tag(element: Any, tags: frozenset[str]) -> bool:
 
 def _is_xml_content_type(content_type: object) -> bool:
     return type(content_type) is str and (
-        content_type in _XML_CONTENT_TYPES or content_type.endswith("+xml")
+        (normalized := content_type.casefold()) in _XML_CONTENT_TYPES
+        or normalized.endswith("+xml")
     )
 
 

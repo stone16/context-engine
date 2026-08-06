@@ -149,6 +149,7 @@ def _docx_with_wrapped_footnote_text(
     wrapper_tag: str,
     hidden_text: str,
     *,
+    content_type: str = CONTENT_TYPE.WML_FOOTNOTES,
     with_drawing: bool = False,
 ) -> bytes:
     document = Document()
@@ -166,7 +167,7 @@ def _docx_with_wrapped_footnote_text(
     ).encode()
     footnotes_part = Part(
         PackURI("/word/footnotes.xml"),
-        CONTENT_TYPE.WML_FOOTNOTES,
+        content_type,
         footnotes_xml,
         document.part.package,
     )
@@ -447,6 +448,49 @@ def test_docx_wrapped_footnote_text_refuses_at_parser_and_runner_seams(
     hidden_text: str,
 ) -> None:
     source = _docx_with_wrapped_footnote_text(wrapper_tag, hidden_text)
+    outcomes = (
+        compile_document_bytes(
+            source,
+            CompilationProfileRef("context-engine-docx-v1", DOCX_CONFIG_V1),
+        ),
+        compile_in_local_document_runner(
+            BytesArtifactSource(source),
+            DOCX_CONFIG_V1,
+            acceptance_context=acceptance_context(),
+        ),
+    )
+
+    for outcome in outcomes:
+        assert type(outcome) is DocumentCompilationFailure
+        assert outcome.code is DocumentCompilationFailureCode.INVALID_ARTIFACT
+
+
+@pytest.mark.parametrize(
+    ("wrapper_tag", "hidden_text"),
+    (
+        ("w:fldSimple", "Case-varied footnote field text must not disappear."),
+        ("w:smartTag", "Case-varied footnote smart tag text must not disappear."),
+    ),
+    ids=("simple-field", "smart-tag"),
+)
+@pytest.mark.parametrize(
+    "content_type",
+    (
+        "Application/XML",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+XmL",
+    ),
+    ids=("uppercase-base-xml", "mixed-case-xml-suffix"),
+)
+def test_docx_case_varied_xml_media_types_still_refuse_wrapped_footnotes(
+    wrapper_tag: str,
+    hidden_text: str,
+    content_type: str,
+) -> None:
+    source = _docx_with_wrapped_footnote_text(
+        wrapper_tag,
+        hidden_text,
+        content_type=content_type,
+    )
     outcomes = (
         compile_document_bytes(
             source,

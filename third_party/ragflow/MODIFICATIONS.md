@@ -53,7 +53,8 @@ tags whose visible text `python-docx` omits from `Paragraph.text`, fail closed
 across every XML package part before a partial document can be returned. Parts
 without a parsed element are parsed from raw bytes only when their declared
 media type is `application/xml`, `text/xml`, or has a `+xml` suffix; binary
-parts are never parsed. Visual tags are checked first so figure-refusal
+parts are never parsed. Media-type token casing is normalized before applying
+that closed classification. Visual tags are checked first so figure-refusal
 precedence is stable. ContextEngine-owned code maps the accepted blocks into
 the ADR-0094 nominal `DocxXmlLocator` family, structural units, identities, and
 typed refusals.

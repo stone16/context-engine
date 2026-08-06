@@ -1,6 +1,6 @@
 --- a/deepdoc/parser/docx_parser.py
 +++ b/deepdoc/parser/docx_parser.py
-@@ -13,170 +13,147 @@
+@@ -13,170 +13,148 @@
  #  See the License for the specific language governing permissions and
  #  limitations under the License.
  #
@@ -141,7 +141,8 @@
 -        max_type = max(max_type.items(), key=lambda x: x[1])[0]
 +def _is_xml_content_type(content_type: object) -> bool:
 +    return type(content_type) is str and (
-+        content_type in _XML_CONTENT_TYPES or content_type.endswith("+xml")
++        (normalized := content_type.casefold()) in _XML_CONTENT_TYPES
++        or normalized.endswith("+xml")
 +    )
 +
 +
