@@ -128,6 +128,16 @@ _OFFICE_DOCUMENT_RELATIONSHIP_TYPE: Final = (
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/"
     "officeDocument"
 )
+_OLE_OBJECT_RELATIONSHIP_TYPE: Final = (
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/oleObject"
+)
+_THUMBNAIL_RELATIONSHIP_TYPE: Final = (
+    "http://schemas.openxmlformats.org/package/2006/relationships/metadata/thumbnail"
+)
+_ADMITTED_BINARY_RELATIONSHIP_TYPES: Final = frozenset(
+    {_OLE_OBJECT_RELATIONSHIP_TYPE, _THUMBNAIL_RELATIONSHIP_TYPE}
+)
+_OLE_COMPOUND_FILE_SIGNATURE: Final = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
 _DRAWINGML_NAMESPACE: Final = (
     "http://schemas.openxmlformats.org/drawingml/2006/main"
 )
@@ -592,6 +602,18 @@ def _is_xml_content_type(content_type: object) -> bool:
     return media_type in _XML_CONTENT_TYPES or parsed.subtype.endswith("+xml")
 
 
+def _is_package_extension(value: object) -> bool:
+    return (
+        type(value) is str
+        and bool(value)
+        and value.isascii()
+        and all(
+            character.isalnum() or character in "!#$&'*+-.^_`|~"
+            for character in value
+        )
+    )
+
+
 def _normalized_package_path(value: object, *, leading_slash: bool) -> str:
     if type(value) is not str or not value:
         raise ValueError("DOCX package path is malformed")
@@ -648,13 +670,18 @@ def _content_type_declarations(
             or _has_direct_character_data(declaration)
             or type(key) is not str
             or not key
-            or (target is defaults and ("/" in key or "\\" in key or "%" in key))
+            or (target is defaults and not _is_package_extension(key))
             or type(content_type) is not str
             or not content_type
         ):
             has_malformed_declaration = True
             if type(key) is not str or not key or type(content_type) is not str:
                 continue
+        try:
+            _is_xml_content_type(content_type)
+        except ValueError:
+            has_malformed_declaration = True
+            continue
         normalized_key = key.casefold()
         if normalized_key in target:
             has_malformed_declaration = True
@@ -691,8 +718,10 @@ def _resolved_relationship_target(source_part: str, target: str) -> str:
     return _normalized_package_path("/".join(segments), leading_slash=False)
 
 
-def _related_member_names(elements: tuple[tuple[str, Any], ...]) -> frozenset[str]:
-    relationship_targets: dict[str, tuple[str, ...]] = {}
+def _related_member_names(
+    elements: tuple[tuple[str, Any], ...],
+) -> tuple[frozenset[str], dict[str, frozenset[str]]]:
+    relationship_targets: dict[str, tuple[tuple[str, str], ...]] = {}
     root_main_relationships = 0
     for member_name, element in elements:
         source_part = _relationship_part_source(member_name)
@@ -705,7 +734,7 @@ def _related_member_names(elements: tuple[tuple[str, Any], ...]) -> frozenset[st
         if element.attrib or _has_direct_character_data(element):
             raise ValueError("DOCX relationship root is outside the grammar")
         relationship_ids: set[str] = set()
-        internal_targets: list[str] = []
+        internal_targets: list[tuple[str, str]] = []
         for relationship in element.iterchildren():
             if relationship.tag != _RELATIONSHIP_TAG:
                 raise ValueError("DOCX relationship part has an invalid child")
@@ -739,26 +768,32 @@ def _related_member_names(elements: tuple[tuple[str, Any], ...]) -> frozenset[st
                         "DOCX main document has the wrong relationship type"
                     )
                 root_main_relationships += 1
-            internal_targets.append(resolved)
+            internal_targets.append((resolved, relationship_type))
         relationship_targets[source_part] = tuple(internal_targets)
     if root_main_relationships != 1:
         raise ValueError("DOCX package must relate exactly one main document")
 
     related: set[str] = set()
+    relationship_types: dict[str, set[str]] = {}
     reachable_sources = {""}
     while reachable_sources:
         source_part = reachable_sources.pop()
-        for target in relationship_targets.get(source_part, ()):
+        for target, relationship_type in relationship_targets.get(source_part, ()):
+            relationship_types.setdefault(target, set()).add(relationship_type)
             if target not in related:
                 related.add(target)
                 reachable_sources.add(target)
-    return frozenset(related)
+    return frozenset(related), {
+        target: frozenset(types) for target, types in relationship_types.items()
+    }
 
 
 def _package_xml_elements(
     source: bytes,
 ) -> tuple[tuple[tuple[str, Any], ...], frozenset[str], bool]:
     elements: list[tuple[str, Any]] = []
+    parsed_member_names: set[str] = set()
+    package_members: list[tuple[str, bytes]] = []
     has_malformed_part = False
     with ZipFile(BytesIO(source)) as archive:
         members = archive.infolist()
@@ -795,30 +830,49 @@ def _package_xml_elements(
         for member, member_name in normalized_members:
             if member.is_dir() or member_name == _CONTENT_TYPES_MEMBER:
                 continue
+            member_bytes = archive.read(member)
             content_type = overrides.get(member_name.casefold())
             if content_type is None and "." in member_name.rsplit("/", 1)[-1]:
                 extension = member_name.rsplit(".", 1)[-1].casefold()
                 content_type = defaults.get(extension)
             if content_type is None:
+                package_members.append((member_name, member_bytes))
                 has_malformed_part = True
                 continue
-            try:
-                is_xml = _is_xml_content_type(content_type)
-            except ValueError:
-                has_malformed_part = True
-                continue
-            if not is_xml:
+            is_xml = _is_xml_content_type(content_type)
+            package_members.append((member_name, member_bytes))
+            if not is_xml and _relationship_part_source(member_name) is None:
                 continue
             try:
-                elements.append((member_name, parse_xml(archive.read(member))))
+                elements.append((member_name, parse_xml(member_bytes)))
+                parsed_member_names.add(member_name)
             except Exception:
                 has_malformed_part = True
                 continue
     try:
-        related_members = _related_member_names(tuple(elements))
+        related_members, relationship_types = _related_member_names(tuple(elements))
     except ValueError:
         related_members = frozenset()
+        relationship_types = {}
         has_malformed_part = True
+    for member_name, member_bytes in package_members:
+        if member_name in parsed_member_names or member_name not in related_members:
+            continue
+        member_relationship_types = relationship_types.get(member_name, frozenset())
+        if member_relationship_types and member_relationship_types.issubset(
+            _ADMITTED_BINARY_RELATIONSHIP_TYPES
+        ):
+            if (
+                _OLE_OBJECT_RELATIONSHIP_TYPE in member_relationship_types
+                and not member_bytes.startswith(_OLE_COMPOUND_FILE_SIGNATURE)
+            ):
+                has_malformed_part = True
+            continue
+        try:
+            elements.append((member_name, parse_xml(member_bytes)))
+            parsed_member_names.add(member_name)
+        except Exception:
+            has_malformed_part = True
     archive_members = frozenset(member_names)
     if not related_members.issubset(archive_members):
         has_malformed_part = True

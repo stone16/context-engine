@@ -232,6 +232,61 @@ def _docx_with_wrapped_footnote_text(
     return _save_docx(document)
 
 
+def _relabel_docx_part_as_binary(source: bytes, part_name: str) -> bytes:
+    output = io.BytesIO()
+    part_name_token = f'PartName="/{part_name}" ContentType="'.encode()
+    with (
+        zipfile.ZipFile(io.BytesIO(source)) as source_archive,
+        zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as target_archive,
+    ):
+        for member in source_archive.infolist():
+            member_bytes = source_archive.read(member.filename)
+            if member.filename == "[Content_Types].xml":
+                content_type_start = member_bytes.index(part_name_token) + len(
+                    part_name_token
+                )
+                content_type_end = member_bytes.index(b'"', content_type_start)
+                member_bytes = (
+                    member_bytes[:content_type_start]
+                    + b"application/octet-stream"
+                    + member_bytes[content_type_end:]
+                )
+            target_archive.writestr(member, member_bytes)
+    return output.getvalue()
+
+
+def _docx_with_relabeled_header_xml(payload_kind: str) -> bytes:
+    document = Document()
+    document.add_paragraph("Retained body text.")
+    paragraph = document.sections[0].header.paragraphs[0]
+    if payload_kind in {"w:fldSimple", "w:smartTag"}:
+        wrapper = OxmlElement(payload_kind)
+        run = OxmlElement("w:r")
+        text = OxmlElement("w:t")
+        text.text = "Relabeled header text must not disappear."
+        run.append(text)
+        wrapper.append(run)
+        paragraph._p.append(wrapper)
+    elif payload_kind == "w:drawing":
+        paragraph.add_run()._r.append(OxmlElement("w:drawing"))
+    else:
+        raise ValueError("unknown relabeled header payload")
+    return _relabel_docx_part_as_binary(_save_docx(document), "word/header1.xml")
+
+
+def _docx_with_relabeled_related_xml(part_kind: str, payload_kind: str) -> bytes:
+    if part_kind == "header":
+        return _docx_with_relabeled_header_xml(payload_kind)
+    if part_kind != "footnotes":
+        raise ValueError("unknown relabeled related part")
+    source = _docx_with_wrapped_footnote_text(
+        payload_kind if payload_kind != "w:drawing" else "w:fldSimple",
+        "Relabeled footnote text must not disappear.",
+        with_drawing=payload_kind == "w:drawing",
+    )
+    return _relabel_docx_part_as_binary(source, "word/footnotes.xml")
+
+
 def _docx_with_visible_header_text() -> bytes:
     document = Document()
     document.add_paragraph("Retained body text.")
@@ -291,13 +346,13 @@ def _docx_with_malformed_part_media_type() -> bytes:
     return _save_docx(document)
 
 
-def _docx_with_xml_looking_binary_part(*, content_type: str) -> bytes:
+def _docx_with_binary_ole_part(*, content_type: str) -> bytes:
     document = Document()
     document.add_paragraph("Retained body text.")
     binary_part = Part(
         PackURI("/word/embeddings/object1.bin"),
         content_type,
-        b"<w:fldSimple><w:t>Binary bytes are not XML.</w:t></w:fldSimple>",
+        b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1ContextEngine OLE fixture",
         document.part.package,
     )
     document.part.relate_to(binary_part, RELATIONSHIP_TYPE.OLE_OBJECT)
@@ -591,6 +646,39 @@ def _docx_with_malformed_content_type_manifest(
                     )
                 else:
                     raise ValueError("unknown malformed manifest kind")
+            target_archive.writestr(member, member_bytes)
+    return output.getvalue()
+
+
+def _docx_with_unused_malformed_content_type_declaration(
+    declaration_kind: str, *, with_drawing: bool = False
+) -> bytes:
+    document = Document()
+    paragraph = document.add_paragraph("Retained body text.")
+    if with_drawing:
+        paragraph.add_run()._r.append(OxmlElement("w:drawing"))
+    if declaration_kind == "media-type":
+        declaration = (
+            b'<Default Extension="unused" ContentType="application/xml; charset"/>'
+        )
+    elif declaration_kind == "extension":
+        declaration = (
+            b'<Default Extension="unused extension" ContentType="application/xml"/>'
+        )
+    else:
+        raise ValueError("unknown malformed declaration kind")
+    source = _save_docx(document)
+    output = io.BytesIO()
+    with (
+        zipfile.ZipFile(io.BytesIO(source)) as source_archive,
+        zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as target_archive,
+    ):
+        for member in source_archive.infolist():
+            member_bytes = source_archive.read(member.filename)
+            if member.filename == "[Content_Types].xml":
+                member_bytes = member_bytes.replace(
+                    b"</Types>", declaration + b"</Types>"
+                )
             target_archive.writestr(member, member_bytes)
     return output.getvalue()
 
@@ -1091,6 +1179,29 @@ def test_docx_wrapped_footnote_text_refuses_at_parser_and_runner_seams(
         assert outcome.code is DocumentCompilationFailureCode.INVALID_ARTIFACT
 
 
+@pytest.mark.parametrize("part_kind", ("header", "footnotes"))
+@pytest.mark.parametrize(
+    "payload_kind",
+    ("w:fldSimple", "w:smartTag", "w:drawing"),
+    ids=("simple-field", "smart-tag", "drawing"),
+)
+def test_docx_relabeled_related_xml_cannot_bypass_package_scanning(
+    part_kind: str,
+    payload_kind: str,
+) -> None:
+    outcomes = _compile_docx_at_public_seams(
+        _docx_with_relabeled_related_xml(part_kind, payload_kind)
+    )
+
+    for outcome in outcomes:
+        assert type(outcome) is DocumentCompilationFailure
+        assert outcome.code is (
+            DocumentCompilationFailureCode.FIGURE_NOT_SUPPORTED
+            if payload_kind == "w:drawing"
+            else DocumentCompilationFailureCode.INVALID_ARTIFACT
+        )
+
+
 @pytest.mark.parametrize(
     ("wrapper_tag", "hidden_text"),
     (
@@ -1329,6 +1440,35 @@ def test_docx_manifest_failure_preserves_visual_precedence_at_both_seams() -> No
         assert outcome.code is DocumentCompilationFailureCode.FIGURE_NOT_SUPPORTED
 
 
+@pytest.mark.parametrize("declaration_kind", ("media-type", "extension"))
+def test_docx_refuses_unused_malformed_content_type_declarations_at_both_seams(
+    declaration_kind: str,
+) -> None:
+    outcomes = _compile_docx_at_public_seams(
+        _docx_with_unused_malformed_content_type_declaration(declaration_kind)
+    )
+
+    for outcome in outcomes:
+        assert type(outcome) is DocumentCompilationFailure
+        assert outcome.code is DocumentCompilationFailureCode.INVALID_ARTIFACT
+
+
+@pytest.mark.parametrize("declaration_kind", ("media-type", "extension"))
+def test_docx_unused_manifest_failure_preserves_visual_precedence_at_both_seams(
+    declaration_kind: str,
+) -> None:
+    outcomes = _compile_docx_at_public_seams(
+        _docx_with_unused_malformed_content_type_declaration(
+            declaration_kind,
+            with_drawing=True,
+        )
+    )
+
+    for outcome in outcomes:
+        assert type(outcome) is DocumentCompilationFailure
+        assert outcome.code is DocumentCompilationFailureCode.FIGURE_NOT_SUPPORTED
+
+
 def test_docx_raw_inventory_preserves_visual_precedence_before_document_load(
 ) -> None:
     outcomes = _compile_docx_at_public_seams(
@@ -1535,14 +1675,14 @@ def test_docx_generic_xml_part_preserves_visual_refusal_precedence() -> None:
     ids=("bare", "parameterized"),
 )
 def test_docx_package_scan_does_not_parse_binary_parts(content_type: str) -> None:
-    outcome = compile_document_bytes(
-        _docx_with_xml_looking_binary_part(content_type=content_type),
-        CompilationProfileRef("context-engine-docx-v1", DOCX_CONFIG_V1),
+    outcomes = _compile_docx_at_public_seams(
+        _docx_with_binary_ole_part(content_type=content_type)
     )
 
-    assert type(outcome) is ParsedDocument
-    assert outcome.units is not None
-    assert [unit.text for unit in outcome.units] == ["Retained body text."]
+    for outcome in outcomes:
+        assert type(outcome) is ParsedDocument
+        assert outcome.units is not None
+        assert [unit.text for unit in outcome.units] == ["Retained body text."]
 
 
 @pytest.mark.parametrize("in_header", (False, True))

@@ -56,11 +56,14 @@ case-folded declarations, and relationship reachability are validated. The
 content-type manifest admits an attribute-free, text-free root containing only
 exact leaf `Default` and `Override` declarations; malformed declarations remain
 usable only to scan otherwise classifiable XML for visuals before the retained
-manifest refusal. The relationship grammar requires exact permitted
-attributes, unique non-empty identifiers, valid target modes, and the exact
-root-to-main office-document relationship type. Orphan, unknown, and
-path-ambiguous members fail closed. Binary members are inventoried but never
-parsed as XML.
+manifest refusal. Every declaration's media type and extension grammar is
+validated even when no member uses it. The relationship grammar requires exact
+permitted attributes, unique non-empty identifiers, valid target modes, and the
+exact root-to-main office-document relationship type. A manifest relabel cannot
+hide related XML: non-XML related parts outside exact admitted binary
+relationship classes must parse as XML, while OLE members additionally require
+the compound-file signature. Orphan, unknown, and path-ambiguous members fail
+closed. Admitted binary members are inventoried but never parsed as XML.
 
 The body-only profile admits one positive main-document/paragraph/run/table
 grammar, including recursive property-subtree validation and exact structural
