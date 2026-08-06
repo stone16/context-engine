@@ -1,8 +1,8 @@
 diff --git a/deepdoc/parser/docx_parser.py b/deepdoc/parser/docx_parser.py
-index 48f8db8..e21b01e 100644
+index 48f8db8..d2f5611 100644
 --- a/deepdoc/parser/docx_parser.py
 +++ b/deepdoc/parser/docx_parser.py
-@@ -13,170 +13,262 @@
+@@ -13,170 +13,1269 @@
  #  See the License for the specific language governing permissions and
  #  limitations under the License.
  #
@@ -28,6 +28,7 @@ index 48f8db8..e21b01e 100644
 -    UnexpectedEndOfFileError,
 -    UnrecognizedImageError,
 +from typing import Any, Final
++from zipfile import ZipFile
 +
 +from docx import Document
 +from docx.document import Document as DocumentType
@@ -37,7 +38,14 @@ index 48f8db8..e21b01e 100644
 +from docx.text.paragraph import Paragraph
 +
 +_PARAGRAPH_TAG: Final = qn("w:p")
++_PARAGRAPH_PROPERTIES_TAG: Final = qn("w:pPr")
 +_TABLE_TAG: Final = qn("w:tbl")
++_TABLE_PROPERTIES_TAG: Final = qn("w:tblPr")
++_TABLE_GRID_TAG: Final = qn("w:tblGrid")
++_TABLE_ROW_TAG: Final = qn("w:tr")
++_TABLE_ROW_PROPERTIES_TAG: Final = qn("w:trPr")
++_TABLE_CELL_TAG: Final = qn("w:tc")
++_TABLE_CELL_PROPERTIES_TAG: Final = qn("w:tcPr")
 +_SECTION_PROPERTIES_TAG: Final = qn("w:sectPr")
 +_RUN_TAG: Final = qn("w:r")
 +_RUN_PROPERTIES_TAG: Final = qn("w:rPr")
@@ -64,25 +72,522 @@ index 48f8db8..e21b01e 100644
 +_VISIBLE_TOKEN_TAGS: Final = (
 +    frozenset({_TEXT_TAG, _NO_BREAK_HYPHEN_TAG}) | _TAB_TAGS | _BREAK_TAGS
 +)
-+_UNSUPPORTED_CONTENT_TAGS: Final = frozenset(
-+    {
-+        qn("w:customXml"),
-+        qn("w:del"),
-+        qn("w:fldSimple"),
-+        qn("w:ins"),
-+        qn("w:moveFrom"),
-+        qn("w:moveTo"),
-+        qn("w:sdt"),
-+        qn("w:smartTag"),
-+    }
- )
--from rag.utils.lazy_image import LazyImage
 +_UNSUPPORTED_VISUAL_TAGS: Final = frozenset(
 +    {qn("pic:pic"), qn("w:drawing"), qn("w:object"), qn("w:pict")}
 +)
 +_XML_CONTENT_TYPES: Final = frozenset({"application/xml", "text/xml"})
-+
-+
++_CONTENT_TYPES_MEMBER: Final = "[Content_Types].xml"
++_CONTENT_TYPES_NAMESPACE: Final = (
++    "http://schemas.openxmlformats.org/package/2006/content-types"
++)
++_CONTENT_TYPES_TAG: Final = f"{{{_CONTENT_TYPES_NAMESPACE}}}Types"
++_CONTENT_TYPE_DEFAULT_TAG: Final = f"{{{_CONTENT_TYPES_NAMESPACE}}}Default"
++_CONTENT_TYPE_OVERRIDE_TAG: Final = f"{{{_CONTENT_TYPES_NAMESPACE}}}Override"
++_DOCUMENT_MEMBER: Final = "word/document.xml"
++_WORDPROCESSINGML_NAMESPACE: Final = (
++    "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
++)
++_WORDPROCESSINGML_TAG_PREFIX: Final = f"{{{_WORDPROCESSINGML_NAMESPACE}}}"
++_OFFICE_MATH_TAG_PREFIX: Final = (
++    "{http://schemas.openxmlformats.org/officeDocument/2006/math}"
++)
++_OFFICE_MATH_CONTENT_TAGS: Final = frozenset(
++    {
++        f"{_OFFICE_MATH_TAG_PREFIX}oMath",
++        f"{_OFFICE_MATH_TAG_PREFIX}oMathPara",
++    }
++)
++_ADMITTED_PARAGRAPH_CHILDREN: Final = frozenset(
++    {_PARAGRAPH_PROPERTIES_TAG, _RUN_TAG}
++)
++_ADMITTED_TABLE_CHILDREN: Final = frozenset(
++    {_TABLE_PROPERTIES_TAG, _TABLE_GRID_TAG, _TABLE_ROW_TAG}
++)
++_ADMITTED_TABLE_ROW_CHILDREN: Final = frozenset(
++    {_TABLE_ROW_PROPERTIES_TAG, _TABLE_CELL_TAG}
++)
++_ADMITTED_TABLE_CELL_CHILDREN: Final = frozenset(
++    {_TABLE_CELL_PROPERTIES_TAG, _PARAGRAPH_TAG}
++)
++_MERGED_CELL_TAGS: Final = frozenset(
++    {qn("w:gridSpan"), qn("w:hMerge"), qn("w:vMerge")}
++)
++_UNREPRESENTED_PART_ROOT_TAGS: Final = frozenset(
++    {
++        qn("w:comments"),
++        qn("w:endnotes"),
++        qn("w:footnotes"),
++        qn("w:ftr"),
++        qn("w:glossaryDocument"),
++        qn("w:hdr"),
++    }
++)
++_RELATIONSHIPS_TAG: Final = (
++    "{http://schemas.openxmlformats.org/package/2006/relationships}Relationships"
++)
++_RELATIONSHIP_TAG: Final = (
++    "{http://schemas.openxmlformats.org/package/2006/relationships}Relationship"
++)
++_OFFICE_DOCUMENT_RELATIONSHIP_TYPE: Final = (
++    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/"
++    "officeDocument"
++)
++_DRAWINGML_NAMESPACE: Final = (
++    "http://schemas.openxmlformats.org/drawingml/2006/main"
++)
++_CORE_PROPERTIES_NAMESPACE: Final = (
++    "http://schemas.openxmlformats.org/package/2006/metadata/core-properties"
+ )
+-from rag.utils.lazy_image import LazyImage
++_DC_NAMESPACE: Final = "http://purl.org/dc/elements/1.1/"
++_DCTERMS_NAMESPACE: Final = "http://purl.org/dc/terms/"
++_EXTENDED_PROPERTIES_NAMESPACE: Final = (
++    "http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"
++)
++_VARIANT_TYPES_NAMESPACE: Final = (
++    "http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"
++)
++_BIBLIOGRAPHY_NAMESPACE: Final = (
++    "http://schemas.openxmlformats.org/officeDocument/2006/bibliography"
++)
++_CUSTOM_XML_NAMESPACE: Final = (
++    "http://schemas.openxmlformats.org/officeDocument/2006/customXml"
++)
++_WORD_2010_NAMESPACE: Final = (
++    "http://schemas.microsoft.com/office/word/2010/wordml"
++)
++_OFFICE_NAMESPACE: Final = "urn:schemas-microsoft-com:office:office"
++_VML_NAMESPACE: Final = "urn:schemas-microsoft-com:vml"
++_MARKUP_COMPATIBILITY_NAMESPACE: Final = (
++    "http://schemas.openxmlformats.org/markup-compatibility/2006"
++)
++_XML_SCHEMA_INSTANCE_NAMESPACE: Final = "http://www.w3.org/2001/XMLSchema-instance"
++_KNOWN_INERT_XML_ROOTS: Final = {
++    "docProps/core.xml": frozenset(
++        {
++            "{http://schemas.openxmlformats.org/package/2006/metadata/"
++            "core-properties}coreProperties"
++        }
++    ),
++    "docProps/app.xml": frozenset(
++        {
++            "{http://schemas.openxmlformats.org/officeDocument/2006/"
++            "extended-properties}Properties"
++        }
++    ),
++    "word/styles.xml": frozenset({qn("w:styles")}),
++    "word/stylesWithEffects.xml": frozenset({qn("w:styles")}),
++    "word/settings.xml": frozenset({qn("w:settings")}),
++    "word/webSettings.xml": frozenset({qn("w:webSettings")}),
++    "word/fontTable.xml": frozenset({qn("w:fonts")}),
++    "word/theme/theme1.xml": frozenset(
++        {"{http://schemas.openxmlformats.org/drawingml/2006/main}theme"}
++    ),
++    "customXml/item1.xml": frozenset(
++        {
++            "{http://schemas.openxmlformats.org/officeDocument/2006/"
++            "bibliography}Sources"
++        }
++    ),
++    "customXml/itemProps1.xml": frozenset(
++        {
++            "{http://schemas.openxmlformats.org/officeDocument/2006/"
++            "customXml}datastoreItem"
++        }
++    ),
++    "word/numbering.xml": frozenset({qn("w:numbering")}),
++}
++_KNOWN_INERT_XML_ELEMENT_NAMESPACES: Final = {
++    "docProps/core.xml": frozenset(
++        {_CORE_PROPERTIES_NAMESPACE, _DC_NAMESPACE, _DCTERMS_NAMESPACE}
++    ),
++    "docProps/app.xml": frozenset(
++        {_EXTENDED_PROPERTIES_NAMESPACE, _VARIANT_TYPES_NAMESPACE}
++    ),
++    "word/styles.xml": frozenset({_WORDPROCESSINGML_NAMESPACE}),
++    "word/stylesWithEffects.xml": frozenset({_WORDPROCESSINGML_NAMESPACE}),
++    "word/settings.xml": frozenset(
++        {
++            _WORDPROCESSINGML_NAMESPACE,
++            _WORD_2010_NAMESPACE,
++            _OFFICE_MATH_TAG_PREFIX[1:-1],
++            _OFFICE_NAMESPACE,
++        }
++    ),
++    "word/webSettings.xml": frozenset({_WORDPROCESSINGML_NAMESPACE}),
++    "word/fontTable.xml": frozenset({_WORDPROCESSINGML_NAMESPACE}),
++    "word/theme/theme1.xml": frozenset({_DRAWINGML_NAMESPACE}),
++    "customXml/item1.xml": frozenset({_BIBLIOGRAPHY_NAMESPACE}),
++    "customXml/itemProps1.xml": frozenset({_CUSTOM_XML_NAMESPACE}),
++    "word/numbering.xml": frozenset({_WORDPROCESSINGML_NAMESPACE}),
++}
++_KNOWN_INERT_XML_TEXT_TAGS: Final = {
++    "docProps/core.xml": frozenset(
++        {
++            f"{{{_CORE_PROPERTIES_NAMESPACE}}}{name}"
++            for name in (
++                "category",
++                "contentStatus",
++                "keywords",
++                "lastModifiedBy",
++                "lastPrinted",
++                "revision",
++                "version",
++            )
++        }
++        | {
++            f"{{{_DC_NAMESPACE}}}{name}"
++            for name in (
++                "creator",
++                "description",
++                "identifier",
++                "language",
++                "subject",
++                "title",
++            )
++        }
++        | {
++            f"{{{_DCTERMS_NAMESPACE}}}{name}" for name in ("created", "modified")
++        }
++    ),
++    "docProps/app.xml": frozenset(
++        {
++            f"{{{_EXTENDED_PROPERTIES_NAMESPACE}}}{name}"
++            for name in (
++                "AppVersion",
++                "Application",
++                "Characters",
++                "CharactersWithSpaces",
++                "Company",
++                "DocSecurity",
++                "HiddenSlides",
++                "HyperlinkBase",
++                "HyperlinksChanged",
++                "Lines",
++                "LinksUpToDate",
++                "Manager",
++                "MMClips",
++                "Notes",
++                "Pages",
++                "Paragraphs",
++                "PresentationFormat",
++                "ScaleCrop",
++                "SharedDoc",
++                "Slides",
++                "Template",
++                "TotalTime",
++                "Words",
++            )
++        }
++        | {
++            f"{{{_VARIANT_TYPES_NAMESPACE}}}{name}"
++            for name in (
++                "bool",
++                "bstr",
++                "date",
++                "decimal",
++                "filetime",
++                "i1",
++                "i2",
++                "i4",
++                "i8",
++                "lpstr",
++                "lpwstr",
++                "r4",
++                "r8",
++                "ui1",
++                "ui2",
++                "ui4",
++                "ui8",
++            )
++        }
++    ),
++}
++_KNOWN_INERT_XML_ATTRIBUTE_NAMESPACES: Final = {
++    "docProps/core.xml": frozenset({"", _XML_SCHEMA_INSTANCE_NAMESPACE}),
++    "docProps/app.xml": frozenset({""}),
++    "word/styles.xml": frozenset(
++        {_WORDPROCESSINGML_NAMESPACE, _MARKUP_COMPATIBILITY_NAMESPACE}
++    ),
++    "word/stylesWithEffects.xml": frozenset(
++        {_WORDPROCESSINGML_NAMESPACE, _MARKUP_COMPATIBILITY_NAMESPACE}
++    ),
++    "word/settings.xml": frozenset(
++        {
++            "",
++            _WORDPROCESSINGML_NAMESPACE,
++            _WORD_2010_NAMESPACE,
++            _OFFICE_MATH_TAG_PREFIX[1:-1],
++            _OFFICE_NAMESPACE,
++            _VML_NAMESPACE,
++            _MARKUP_COMPATIBILITY_NAMESPACE,
++        }
++    ),
++    "word/webSettings.xml": frozenset({"", _MARKUP_COMPATIBILITY_NAMESPACE}),
++    "word/fontTable.xml": frozenset(
++        {_WORDPROCESSINGML_NAMESPACE, _MARKUP_COMPATIBILITY_NAMESPACE}
++    ),
++    "word/theme/theme1.xml": frozenset({""}),
++    "customXml/item1.xml": frozenset({""}),
++    "customXml/itemProps1.xml": frozenset({"", _CUSTOM_XML_NAMESPACE}),
++    "word/numbering.xml": frozenset(
++        {_WORDPROCESSINGML_NAMESPACE, _MARKUP_COMPATIBILITY_NAMESPACE}
++    ),
++}
++_PROPERTY_ROOT_PARENTS: Final = {
++    _PARAGRAPH_PROPERTIES_TAG: frozenset({_PARAGRAPH_TAG}),
++    _RUN_PROPERTIES_TAG: frozenset({_PARAGRAPH_PROPERTIES_TAG, _RUN_TAG}),
++    _SECTION_PROPERTIES_TAG: frozenset({qn("w:body")}),
++    _TABLE_PROPERTIES_TAG: frozenset({_TABLE_TAG}),
++    _TABLE_GRID_TAG: frozenset({_TABLE_TAG}),
++    _TABLE_ROW_PROPERTIES_TAG: frozenset({_TABLE_ROW_TAG}),
++    _TABLE_CELL_PROPERTIES_TAG: frozenset({_TABLE_CELL_TAG}),
++}
++_BORDER_PROPERTY_TAGS: Final = frozenset(
++    {
++        qn("w:bar"),
++        qn("w:between"),
++        qn("w:bottom"),
++        qn("w:end"),
++        qn("w:insideH"),
++        qn("w:insideV"),
++        qn("w:left"),
++        qn("w:right"),
++        qn("w:start"),
++        qn("w:tl2br"),
++        qn("w:top"),
++        qn("w:tr2bl"),
++    }
++)
++_MARGIN_PROPERTY_TAGS: Final = frozenset(
++    {
++        qn("w:bottom"),
++        qn("w:end"),
++        qn("w:left"),
++        qn("w:right"),
++        qn("w:start"),
++        qn("w:top"),
++    }
++)
++_RUN_PROPERTY_TAGS: Final = frozenset(
++    {
++        qn(f"w:{name}")
++        for name in (
++            "b",
++            "bCs",
++            "bdr",
++            "caps",
++            "color",
++            "cs",
++            "dstrike",
++            "eastAsianLayout",
++            "effect",
++            "em",
++            "emboss",
++            "fitText",
++            "highlight",
++            "i",
++            "iCs",
++            "imprint",
++            "kern",
++            "lang",
++            "noProof",
++            "oMath",
++            "outline",
++            "position",
++            "rFonts",
++            "rStyle",
++            "rtl",
++            "shadow",
++            "shd",
++            "smallCaps",
++            "snapToGrid",
++            "spacing",
++            "specVanish",
++            "strike",
++            "sz",
++            "szCs",
++            "u",
++            "vanish",
++            "vertAlign",
++            "w",
++            "webHidden",
++        )
++    }
++)
++_PROPERTY_CHILDREN: Final = {
++    _PARAGRAPH_PROPERTIES_TAG: frozenset(
++        {
++            qn(f"w:{name}")
++            for name in (
++                "adjustRightInd",
++                "autoSpaceDE",
++                "autoSpaceDN",
++                "bidi",
++                "cnfStyle",
++                "contextualSpacing",
++                "divId",
++                "framePr",
++                "ind",
++                "jc",
++                "keepLines",
++                "keepNext",
++                "kinsoku",
++                "mirrorIndents",
++                "numPr",
++                "outlineLvl",
++                "overflowPunct",
++                "pBdr",
++                "pageBreakBefore",
++                "pStyle",
++                "rPr",
++                "shd",
++                "snapToGrid",
++                "spacing",
++                "suppressAutoHyphens",
++                "suppressLineNumbers",
++                "suppressOverlap",
++                "tabs",
++                "textAlignment",
++                "textDirection",
++                "textboxTightWrap",
++                "topLinePunct",
++                "widowControl",
++                "wordWrap",
++            )
++        }
++    ),
++    _RUN_PROPERTIES_TAG: _RUN_PROPERTY_TAGS,
++    _SECTION_PROPERTIES_TAG: frozenset(
++        {
++            qn(f"w:{name}")
++            for name in (
++                "bidi",
++                "cols",
++                "docGrid",
++                "endnotePr",
++                "footerReference",
++                "footnotePr",
++                "formProt",
++                "headerReference",
++                "lnNumType",
++                "noEndnote",
++                "paperSrc",
++                "pgBorders",
++                "pgMar",
++                "pgNumType",
++                "pgSz",
++                "printerSettings",
++                "rtlGutter",
++                "textDirection",
++                "titlePg",
++                "type",
++                "vAlign",
++            )
++        }
++    ),
++    _TABLE_PROPERTIES_TAG: frozenset(
++        {
++            qn(f"w:{name}")
++            for name in (
++                "bidiVisual",
++                "jc",
++                "shd",
++                "tblBorders",
++                "tblCaption",
++                "tblCellMar",
++                "tblCellSpacing",
++                "tblDescription",
++                "tblInd",
++                "tblLayout",
++                "tblLook",
++                "tblOverlap",
++                "tblStyle",
++                "tblStyleColBandSize",
++                "tblStyleRowBandSize",
++                "tblW",
++                "tblpPr",
++            )
++        }
++    ),
++    _TABLE_GRID_TAG: frozenset({qn("w:gridCol")}),
++    _TABLE_ROW_PROPERTIES_TAG: frozenset(
++        {
++            qn(f"w:{name}")
++            for name in (
++                "cantSplit",
++                "cnfStyle",
++                "divId",
++                "gridAfter",
++                "gridBefore",
++                "hidden",
++                "jc",
++                "tblCellSpacing",
++                "tblHeader",
++                "trHeight",
++                "wAfter",
++                "wBefore",
++            )
++        }
++    ),
++    _TABLE_CELL_PROPERTIES_TAG: frozenset(
++        {
++            qn(f"w:{name}")
++            for name in (
++                "cnfStyle",
++                "gridSpan",
++                "headers",
++                "hideMark",
++                "hMerge",
++                "noWrap",
++                "shd",
++                "tcBorders",
++                "tcFitText",
++                "tcMar",
++                "tcW",
++                "textDirection",
++                "vAlign",
++                "vMerge",
++            )
++        }
++    ),
++    qn("w:numPr"): frozenset({qn("w:ilvl"), qn("w:numId")}),
++    qn("w:pBdr"): _BORDER_PROPERTY_TAGS,
++    qn("w:pgBorders"): _BORDER_PROPERTY_TAGS,
++    qn("w:tblBorders"): _BORDER_PROPERTY_TAGS,
++    qn("w:tcBorders"): _BORDER_PROPERTY_TAGS,
++    qn("w:tabs"): frozenset({qn("w:tab")}),
++    qn("w:tblCellMar"): _MARGIN_PROPERTY_TAGS,
++    qn("w:tcMar"): _MARGIN_PROPERTY_TAGS,
++    qn("w:cols"): frozenset({qn("w:col")}),
++    qn("w:footnotePr"): frozenset(
++        {
++            qn("w:numFmt"),
++            qn("w:numRestart"),
++            qn("w:numStart"),
++            qn("w:pos"),
++        }
++    ),
++    qn("w:endnotePr"): frozenset(
++        {
++            qn("w:numFmt"),
++            qn("w:numRestart"),
++            qn("w:numStart"),
++            qn("w:pos"),
++        }
++    ),
++}
+
+
+-class RAGFlowDocxParser:
+-    def get_picture(self, document, paragraph):
+-        imgs = paragraph._element.xpath(".//pic:pic")
+-        if not imgs:
+-            return None
+-        image_blobs = []
+-        for img in imgs:
+-            embed = img.xpath(".//a:blip/@r:embed")
+-            if not embed:
 +class UnsupportedDocxFigureError(ValueError):
 +    """The closed DOCX profile encountered an unsupported visual object."""
 +
@@ -101,127 +606,204 @@ index 48f8db8..e21b01e 100644
 +    return media_type in _XML_CONTENT_TYPES or parsed.subtype.endswith("+xml")
 +
 +
-+def _package_xml_elements(document: DocumentType) -> tuple[tuple[Any, ...], bool]:
-+    elements: list[Any] = []
-+    has_malformed_part = False
-+    for part in document.part.package.parts:
-+        try:
-+            is_xml = _is_xml_content_type(part.content_type)
-+        except ValueError:
-+            has_malformed_part = True
++def _normalized_package_path(value: object, *, leading_slash: bool) -> str:
++    if type(value) is not str or not value:
++        raise ValueError("DOCX package path is malformed")
++    if leading_slash:
++        if not value.startswith("/") or value.startswith("//"):
++            raise ValueError("DOCX package PartName is not absolute")
++        value = value[1:]
++    elif value.startswith("/"):
++        raise ValueError("DOCX archive member name is absolute")
++    if "\\" in value or "?" in value or "#" in value or value.endswith("/"):
++        raise ValueError("DOCX package path is not canonical")
++    segments = value.split("/")
++    if any(
++        not segment
++        or segment in {".", ".."}
++        or "%" in segment
++        for segment in segments
++    ):
++        raise ValueError("DOCX package path contains an unsafe segment")
++    return "/".join(segments)
++
++
++def _content_type_declarations(
++    element: Any,
++) -> tuple[dict[str, str], dict[str, str]]:
++    if element.tag != _CONTENT_TYPES_TAG:
++        raise ValueError("DOCX package has an invalid content-type manifest")
++    defaults: dict[str, str] = {}
++    overrides: dict[str, str] = {}
++    for declaration in element.iterchildren():
++        if declaration.tag == _CONTENT_TYPE_DEFAULT_TAG:
++            key = declaration.get("Extension")
++            target = defaults
++        elif declaration.tag == _CONTENT_TYPE_OVERRIDE_TAG:
++            part_name = declaration.get("PartName")
++            key = _normalized_package_path(part_name, leading_slash=True)
++            target = overrides
++        else:
++            raise ValueError("DOCX package has an unknown content-type declaration")
++        content_type = declaration.get("ContentType")
++        if (
++            type(key) is not str
++            or not key
++            or (target is defaults and ("/" in key or "\\" in key or "%" in key))
++            or type(content_type) is not str
++            or not content_type
++        ):
++            raise ValueError("DOCX package has a malformed content-type declaration")
++        normalized_key = key.casefold()
++        if normalized_key in target:
++            raise ValueError("DOCX package has duplicate content-type declarations")
++        target[normalized_key] = content_type
++    return defaults, overrides
++
++
++def _relationship_part_source(member_name: str) -> str | None:
++    if member_name == "_rels/.rels":
++        return ""
++    parent, separator, filename = member_name.rpartition("/_rels/")
++    if separator and filename.endswith(".rels"):
++        return f"{parent}/{filename.removesuffix('.rels')}"
++    return None
++
++
++def _resolved_relationship_target(source_part: str, target: str) -> str:
++    if target.startswith("/"):
++        return _normalized_package_path(target, leading_slash=True)
++    parent = source_part.rpartition("/")[0]
++    segments = [segment for segment in parent.split("/") if segment]
++    for segment in target.split("/"):
++        if not segment or segment == ".":
 +            continue
-+        if not is_xml:
++        if segment == "..":
++            if not segments:
++                raise ValueError("DOCX relationship target escapes the package")
++            segments.pop()
++        elif "\\" in segment or "%" in segment:
++            raise ValueError("DOCX relationship target is not canonical")
++        else:
++            segments.append(segment)
++    return _normalized_package_path("/".join(segments), leading_slash=False)
++
++
++def _related_member_names(elements: tuple[tuple[str, Any], ...]) -> frozenset[str]:
++    relationship_targets: dict[str, tuple[str, ...]] = {}
++    root_main_relationships = 0
++    for member_name, element in elements:
++        source_part = _relationship_part_source(member_name)
++        if source_part is None:
 +            continue
-+        try:
-+            element = getattr(part, "element", None)
-+            elements.append(element if element is not None else parse_xml(part.blob))
-+        except Exception:
-+            has_malformed_part = True
-+    return tuple(elements), has_malformed_part
-+
-+
-+def _elements_contain_tag(elements: tuple[Any, ...], tags: frozenset[str]) -> bool:
-+    return any(_contains_tag(element, tags) for element in elements)
-+
-+
-+def _ooxml_visible_text(element: Any) -> str:
-+    text: list[str] = []
-+    for run in element.iter(_RUN_TAG):
-+        for node in run.iterdescendants():
-+            if node.tag == _TEXT_TAG:
-+                text.append(node.text or "")
-+            elif node.tag in _TAB_TAGS:
-+                text.append("\t")
-+            elif node.tag == _NO_BREAK_HYPHEN_TAG:
-+                text.append("-")
-+            elif node.tag in _BREAK_TAGS and (
-+                node.tag == qn("w:cr")
-+                or node.get(_BREAK_TYPE_ATTRIBUTE) in (None, "textWrapping")
++        if source_part in relationship_targets:
++            raise ValueError("DOCX package has duplicate relationship parts")
++        if element.tag != _RELATIONSHIPS_TAG:
++            raise ValueError("DOCX relationship part has an invalid root")
++        if element.attrib or _has_direct_character_data(element):
++            raise ValueError("DOCX relationship root is outside the grammar")
++        relationship_ids: set[str] = set()
++        internal_targets: list[str] = []
++        for relationship in element.iterchildren():
++            if relationship.tag != _RELATIONSHIP_TAG:
++                raise ValueError("DOCX relationship part has an invalid child")
++            if len(relationship) or _has_direct_character_data(relationship):
++                raise ValueError("DOCX relationship is outside the grammar")
++            attribute_names = frozenset(relationship.attrib)
++            if not attribute_names.issubset({"Id", "Type", "Target", "TargetMode"}):
++                raise ValueError("DOCX relationship has an unknown attribute")
++            relationship_id = relationship.get("Id")
++            relationship_type = relationship.get("Type")
++            target = relationship.get("Target")
++            target_mode = relationship.get("TargetMode", "Internal")
++            if (
++                type(relationship_id) is not str
++                or not relationship_id
++                or relationship_id in relationship_ids
++                or type(relationship_type) is not str
++                or not relationship_type
++                or type(target) is not str
++                or not target
++                or target_mode not in {"Internal", "External"}
 +            ):
-+                text.append("\n")
-+    return "".join(text)
-+
-+
-+def _contains_unadmitted_run_content(element: Any) -> bool:
-+    return any(
-+        child.tag not in _ADMITTED_RUN_TAGS
-+        for run in element.iter(_RUN_TAG)
-+        for child in run.iterchildren()
-+    )
-+
-+
-+def _contains_visible_token_outside_run(element: Any) -> bool:
-+    return any(
-+        not any(ancestor.tag == _RUN_TAG for ancestor in token.iterancestors())
-+        for token in element.iter()
-+        if token.tag in _VISIBLE_TOKEN_TAGS
-+        and not (
-+            token.tag == qn("w:tab")
-+            and any(
-+                ancestor.tag == _TAB_STOPS_TAG for ancestor in token.iterancestors()
-+            )
-+        )
-+    )
-+
-+
-+def _contains_unrepresented_package_text(
-+    elements: tuple[Any, ...], document: DocumentType
-+) -> bool:
-+    for element in elements:
-+        if element is document.element:
-+            if any(
-+                child is not document.element.body and _ooxml_visible_text(child)
-+                for child in element.iterchildren()
-+            ):
-+                return True
-+        elif _ooxml_visible_text(element):
-+            return True
-+    return False
-+
-+
-+def _body_paragraph_text_is_lossless(document: DocumentType) -> bool:
-+    body = document.element.body
-+    return all(
-+        any(ancestor.tag == _PARAGRAPH_TAG for ancestor in run.iterancestors())
-+        for run in body.iter(_RUN_TAG)
-+    ) and all(
-+        Paragraph(paragraph, document).text == _ooxml_visible_text(paragraph)
-+        for paragraph in body.iter(_PARAGRAPH_TAG)
-+    )
-+
-+
-+@dataclass(frozen=True, slots=True)
-+class RawDocxBlock:
-+    """One bounded block in OOXML body order."""
-+
-+    kind: str
-+    block_ordinal: int
-+    text: str
-+    style_name: str | None
-+    xml: bytes
-+    table_cells: tuple[tuple[str, ...], ...] = ()
-+    has_figure: bool = False
-
-
- class RAGFlowDocxParser:
--    def get_picture(self, document, paragraph):
--        imgs = paragraph._element.xpath(".//pic:pic")
--        if not imgs:
--            return None
--        image_blobs = []
--        for img in imgs:
--            embed = img.xpath(".//a:blip/@r:embed")
--            if not embed:
--                continue
++                raise ValueError("DOCX relationship is malformed")
++            relationship_ids.add(relationship_id)
++            if target_mode == "External":
+                 continue
 -            embed = embed[0]
 -            image_blob = None
--            try:
++            resolved = _resolved_relationship_target(source_part, target)
++            if source_part == "" and resolved == _DOCUMENT_MEMBER:
++                if relationship_type != _OFFICE_DOCUMENT_RELATIONSHIP_TYPE:
++                    raise ValueError(
++                        "DOCX main document has the wrong relationship type"
++                    )
++                root_main_relationships += 1
++            internal_targets.append(resolved)
++        relationship_targets[source_part] = tuple(internal_targets)
++    if root_main_relationships != 1:
++        raise ValueError("DOCX package must relate exactly one main document")
++
++    related: set[str] = set()
++    reachable_sources = {""}
++    while reachable_sources:
++        source_part = reachable_sources.pop()
++        for target in relationship_targets.get(source_part, ()):
++            if target not in related:
++                related.add(target)
++                reachable_sources.add(target)
++    return frozenset(related)
++
++
++def _package_xml_elements(
++    source: bytes,
++) -> tuple[tuple[tuple[str, Any], ...], frozenset[str], bool]:
++    elements: list[tuple[str, Any]] = []
++    has_malformed_part = False
++    with ZipFile(BytesIO(source)) as archive:
++        members = archive.infolist()
++        normalized_members: list[tuple[Any, str]] = []
++        for member in members:
+             try:
 -                related_part = document.part.related_parts[embed]
 -            except Exception as e:
 -                logging.warning(f"Skipping image due to unexpected error getting related_part: {e}")
--                continue
++                normalized_members.append(
++                    (
++                        member,
++                        _normalized_package_path(
++                            member.filename, leading_slash=False
++                        ),
++                    )
++                )
++            except ValueError:
++                has_malformed_part = True
++        member_names = tuple(name for _, name in normalized_members)
++        if len(member_names) != len({name.casefold() for name in member_names}):
++            has_malformed_part = True
++        try:
++            content_types = parse_xml(archive.read(_CONTENT_TYPES_MEMBER))
++            elements.append((_CONTENT_TYPES_MEMBER, content_types))
++            defaults, overrides = _content_type_declarations(content_types)
++        except Exception:
++            return tuple(elements), frozenset(), True
++        declared_override_names = set(overrides)
++        if not declared_override_names.issubset(
++            {name.casefold() for name in member_names}
++        ):
++            has_malformed_part = True
++        for member, member_name in normalized_members:
++            if member.is_dir() or member_name == _CONTENT_TYPES_MEMBER:
++                continue
++            content_type = overrides.get(member_name.casefold())
++            if content_type is None and "." in member_name.rsplit("/", 1)[-1]:
++                extension = member_name.rsplit(".", 1)[-1].casefold()
++                content_type = defaults.get(extension)
++            if content_type is None:
++                has_malformed_part = True
+                 continue
 -
--            try:
+             try:
 -                image = related_part.image
 -                if image is not None:
 -                    image_blob = image.blob
@@ -298,7 +880,10 @@ index 48f8db8..e21b01e 100644
 -        lines = []
 -        for i in range(1, len(df)):
 -            if i in hdrows:
--                continue
++                is_xml = _is_xml_content_type(content_type)
++            except ValueError:
++                has_malformed_part = True
+                 continue
 -            hr = [r - i for r in hdrows]
 -            hr = [r for r in hr if r < 0]
 -            t = len(hr) - 1
@@ -353,28 +938,444 @@ index 48f8db8..e21b01e 100644
 -
 -        tbls = [self.__extract_table_content(tb) for tb in self.doc.tables]
 -        return secs, tbls
++            if not is_xml:
++                continue
++            try:
++                elements.append((member_name, parse_xml(archive.read(member))))
++            except Exception:
++                has_malformed_part = True
++                continue
++    try:
++        related_members = _related_member_names(tuple(elements))
++    except ValueError:
++        related_members = frozenset()
++        has_malformed_part = True
++    archive_members = frozenset(member_names)
++    if not related_members.issubset(archive_members):
++        has_malformed_part = True
++    for member_name in archive_members:
++        if member_name == _CONTENT_TYPES_MEMBER:
++            continue
++        relationship_source = _relationship_part_source(member_name)
++        if relationship_source is not None:
++            if relationship_source and relationship_source not in related_members:
++                has_malformed_part = True
++        elif member_name not in related_members:
++            has_malformed_part = True
++    return tuple(elements), related_members, has_malformed_part
++
++
++def _elements_contain_tag(
++    elements: tuple[tuple[str, Any], ...], tags: frozenset[str]
++) -> bool:
++    return any(_contains_tag(element, tags) for _, element in elements)
++
++
++def _ooxml_visible_text(element: Any) -> str:
++    text: list[str] = []
++    for run in element.iter(_RUN_TAG):
++        for node in run.iterdescendants():
++            if node.tag == _TEXT_TAG:
++                text.append(node.text or "")
++            elif node.tag in _TAB_TAGS:
++                text.append("\t")
++            elif node.tag == _NO_BREAK_HYPHEN_TAG:
++                text.append("-")
++            elif node.tag in _BREAK_TAGS and (
++                node.tag == qn("w:cr")
++                or node.get(_BREAK_TYPE_ATTRIBUTE) in (None, "textWrapping")
++            ):
++                text.append("\n")
++    return "".join(text)
++
++
++def _contains_unadmitted_run_content(element: Any) -> bool:
++    return any(
++        child.tag not in _ADMITTED_RUN_TAGS
++        for run in element.iter(_RUN_TAG)
++        for child in run.iterchildren()
++    )
++
++
++def _contains_visible_token_outside_run(element: Any) -> bool:
++    return any(
++        not any(ancestor.tag == _RUN_TAG for ancestor in token.iterancestors())
++        for token in element.iter()
++        if token.tag in _VISIBLE_TOKEN_TAGS
++        and not (
++            token.tag == qn("w:tab")
++            and any(
++                ancestor.tag == _TAB_STOPS_TAG for ancestor in token.iterancestors()
++            )
++        )
++    )
++
++
++def _contains_unrepresented_package_text(
++    elements: tuple[tuple[str, Any], ...]
++) -> bool:
++    for member_name, element in elements:
++        if member_name == _DOCUMENT_MEMBER:
++            body = element.find(qn("w:body"))
++            if any(
++                child is not body
++                and (
++                    _ooxml_visible_text(child)
++                    or (
++                        type(child.tag) is str
++                        and child.tag.startswith(_OFFICE_MATH_TAG_PREFIX)
++                    )
++                )
++                for child in element.iterchildren()
++            ):
++                return True
++        elif _ooxml_visible_text(element):
++            return True
++    return False
++
++
++def _has_direct_character_data(node: Any) -> bool:
++    return any(text.strip() for text in node.xpath("text()"))
++
++
++def _xml_namespace(name: object) -> str | None:
++    if type(name) is not str:
++        return None
++    if not name.startswith("{"):
++        return ""
++    namespace, separator, _ = name[1:].partition("}")
++    return namespace if separator and namespace else None
++
++
++def _known_inert_member_uses_admitted_grammar(
++    member_name: str, element: Any
++) -> bool:
++    expected_roots = _KNOWN_INERT_XML_ROOTS.get(member_name)
++    element_namespaces = _KNOWN_INERT_XML_ELEMENT_NAMESPACES.get(member_name)
++    attribute_namespaces = _KNOWN_INERT_XML_ATTRIBUTE_NAMESPACES.get(member_name)
++    if (
++        expected_roots is None
++        or element_namespaces is None
++        or attribute_namespaces is None
++        or element.tag not in expected_roots
++    ):
++        return False
++    admitted_text_tags = _KNOWN_INERT_XML_TEXT_TAGS.get(member_name, frozenset())
++    for node in element.iter():
++        if _xml_namespace(node.tag) not in element_namespaces:
++            return False
++        if any(
++            _xml_namespace(attribute_name) not in attribute_namespaces
++            for attribute_name in node.attrib
++        ):
++            return False
++        if _has_direct_character_data(node) and node.tag not in admitted_text_tags:
++            return False
++    return True
++
++
++def _main_document_uses_admitted_root_grammar(
++    elements: tuple[tuple[str, Any], ...]
++) -> bool:
++    roots = tuple(
++        element for member_name, element in elements if member_name == _DOCUMENT_MEMBER
++    )
++    if len(roots) != 1:
++        return False
++    root = roots[0]
++    children = tuple(root.iterchildren())
++    return (
++        root.tag == qn("w:document")
++        and not _has_direct_character_data(root)
++        and len(children) == 1
++        and children[0].tag == qn("w:body")
++    )
++
++
++def _property_subtree_uses_admitted_grammar(node: Any) -> bool:
++    if _has_direct_character_data(node):
++        return False
++    admitted_children = _PROPERTY_CHILDREN.get(node.tag, frozenset())
++    children = tuple(node.iterchildren())
++    return all(
++        child.tag in admitted_children
++        and _property_subtree_uses_admitted_grammar(child)
++        for child in children
++    )
++
++
++def _property_subtrees_use_admitted_grammar(body: Any) -> bool:
++    for root_tag, admitted_parents in _PROPERTY_ROOT_PARENTS.items():
++        for root in body.iter(root_tag):
++            parent = root.getparent()
++            if (
++                parent is None
++                or parent.tag not in admitted_parents
++                or not _property_subtree_uses_admitted_grammar(root)
++            ):
++                return False
++    return True
++
++
++def _contains_unrepresented_package_structure(
++    elements: tuple[tuple[str, Any], ...], related_members: frozenset[str]
++) -> bool:
++    for member_name, element in elements:
++        if member_name == _DOCUMENT_MEMBER:
++            continue
++        if member_name == _CONTENT_TYPES_MEMBER:
++            continue
++        relationship_source = _relationship_part_source(member_name)
++        if relationship_source is not None:
++            if element.tag != _RELATIONSHIPS_TAG:
++                return True
++            continue
++        if member_name not in related_members:
++            return True
++        expected_inert_roots = _KNOWN_INERT_XML_ROOTS.get(member_name)
++        if expected_inert_roots is not None:
++            if not _known_inert_member_uses_admitted_grammar(member_name, element):
++                return True
++            continue
++        if element.tag in _UNREPRESENTED_PART_ROOT_TAGS:
++            if any(
++                type(node.tag) is str
++                and node.tag.startswith(_OFFICE_MATH_TAG_PREFIX)
++                for node in element.iter()
++            ):
++                return True
++            if element.tag not in {qn("w:hdr"), qn("w:ftr")}:
++                return len(element) > 0 or bool(element.text and element.text.strip())
++            for paragraph in element.iterchildren():
++                if paragraph.tag != _PARAGRAPH_TAG:
++                    return True
++                for child in paragraph.iterchildren():
++                    if child.tag == _PARAGRAPH_PROPERTIES_TAG:
++                        if not _property_subtree_uses_admitted_grammar(child):
++                            return True
++                    elif child.tag == _RUN_TAG:
++                        run_children = tuple(child.iterchildren())
++                        if any(run_child.tag != _RUN_PROPERTIES_TAG for run_child in run_children):
++                            return True
++                        if any(
++                            not _property_subtree_uses_admitted_grammar(run_child)
++                            for run_child in run_children
++                        ):
++                            return True
++                    else:
++                        return True
++            continue
++        return True
++    return False
++
++
++def _body_uses_closed_admitted_grammar(document: DocumentType) -> bool:
++    body = document.element.body
++    if any(
++        type(node.tag) is not str
++        or not node.tag.startswith(_WORDPROCESSINGML_TAG_PREFIX)
++        for node in body.iter()
++    ):
++        return False
++    body_children = tuple(body.iterchildren())
++    section_indexes = tuple(
++        index
++        for index, child in enumerate(body_children)
++        if child.tag == _SECTION_PROPERTIES_TAG
++    )
++    if len(section_indexes) > 1 or (
++        section_indexes and section_indexes[0] != len(body_children) - 1
++    ):
++        return False
++    if any(
++        child.tag not in {_PARAGRAPH_TAG, _TABLE_TAG, _SECTION_PROPERTIES_TAG}
++        for child in body_children
++    ):
++        return False
++    if not _property_subtrees_use_admitted_grammar(body):
++        return False
++    for paragraph in body.iter(_PARAGRAPH_TAG):
++        parent = paragraph.getparent()
++        if parent is None or parent.tag not in {qn("w:body"), _TABLE_CELL_TAG}:
++            return False
++        children = tuple(paragraph.iterchildren())
++        if _has_direct_character_data(paragraph):
++            return False
++        if any(child.tag not in _ADMITTED_PARAGRAPH_CHILDREN for child in children):
++            return False
++        property_indexes = tuple(
++            index
++            for index, child in enumerate(children)
++            if child.tag == _PARAGRAPH_PROPERTIES_TAG
++        )
++        if len(property_indexes) > 1 or (
++            property_indexes and property_indexes[0] != 0
++        ):
++            return False
++    for run in body.iter(_RUN_TAG):
++        parent = run.getparent()
++        if parent is None or parent.tag != _PARAGRAPH_TAG:
++            return False
++        children = tuple(run.iterchildren())
++        if _has_direct_character_data(run):
++            return False
++        if any(child.tag not in _ADMITTED_RUN_TAGS for child in children):
++            return False
++        if any(
++            child.tag != _RUN_PROPERTIES_TAG
++            and (
++                len(child) > 0
++                or (
++                    child.tag not in {_TEXT_TAG, qn("w:instrText")}
++                    and _has_direct_character_data(child)
++                )
++            )
++            for child in children
++        ):
++            return False
++    for table in body.iter(_TABLE_TAG):
++        table_children = tuple(table.iterchildren())
++        if (
++            table.getparent() is not body
++            or _has_direct_character_data(table)
++            or any(child.tag not in _ADMITTED_TABLE_CHILDREN for child in table_children)
++        ):
++            return False
++        table_property_indexes = tuple(
++            index
++            for index, child in enumerate(table_children)
++            if child.tag == _TABLE_PROPERTIES_TAG
++        )
++        table_grid_indexes = tuple(
++            index
++            for index, child in enumerate(table_children)
++            if child.tag == _TABLE_GRID_TAG
++        )
++        if (
++            len(table_property_indexes) != 1
++            or table_property_indexes[0] != 0
++            or len(table_grid_indexes) != 1
++            or table_grid_indexes[0] != 1
++            or not any(child.tag == _TABLE_ROW_TAG for child in table_children)
++        ):
++            return False
++        for row in table.iterchildren(_TABLE_ROW_TAG):
++            row_children = tuple(row.iterchildren())
++            if _has_direct_character_data(row) or any(
++                child.tag not in _ADMITTED_TABLE_ROW_CHILDREN for child in row_children
++            ):
++                return False
++            row_property_indexes = tuple(
++                index
++                for index, child in enumerate(row_children)
++                if child.tag == _TABLE_ROW_PROPERTIES_TAG
++            )
++            if (
++                len(row_property_indexes) > 1
++                or (row_property_indexes and row_property_indexes[0] != 0)
++                or not any(child.tag == _TABLE_CELL_TAG for child in row_children)
++            ):
++                return False
++        for cell in table.iter(_TABLE_CELL_TAG):
++            cell_children = tuple(cell.iterchildren())
++            if _has_direct_character_data(cell) or any(
++                child.tag not in _ADMITTED_TABLE_CELL_CHILDREN
++                for child in cell_children
++            ):
++                return False
++            property_indexes = tuple(
++                index
++                for index, child in enumerate(cell_children)
++                if child.tag == _TABLE_CELL_PROPERTIES_TAG
++            )
++            if (
++                len(property_indexes) != 1
++                or property_indexes[0] != 0
++                or not any(child.tag == _PARAGRAPH_TAG for child in cell_children)
++            ):
++                return False
++    if any(
++        row.getparent() is None
++        or row.getparent().tag != _TABLE_TAG
++        or row.getparent().getparent() is not body
++        for row in body.iter(_TABLE_ROW_TAG)
++    ):
++        return False
++    if any(
++        cell.getparent() is None
++        or cell.getparent().tag != _TABLE_ROW_TAG
++        or cell.getparent().getparent() is None
++        or cell.getparent().getparent().tag != _TABLE_TAG
++        or cell.getparent().getparent().getparent() is not body
++        for cell in body.iter(_TABLE_CELL_TAG)
++    ):
++        return False
++    return True
++
++
++def _body_paragraph_text_is_lossless(document: DocumentType) -> bool:
++    body = document.element.body
++    return all(
++        any(ancestor.tag == _PARAGRAPH_TAG for ancestor in run.iterancestors())
++        for run in body.iter(_RUN_TAG)
++    ) and all(
++        Paragraph(paragraph, document).text == _ooxml_visible_text(paragraph)
++        for paragraph in body.iter(_PARAGRAPH_TAG)
++    )
++
++
++@dataclass(frozen=True, slots=True)
++class RawDocxBlock:
++    """One bounded block in OOXML body order."""
++
++    kind: str
++    block_ordinal: int
++    text: str
++    style_name: str | None
++    xml: bytes
++    table_cells: tuple[tuple[str, ...], ...] = ()
++    has_figure: bool = False
++
++
++class RAGFlowDocxParser:
 +    """Narrow patched parser retained from the approved RAGFlow source region."""
 +
 +    def __call__(self, source: bytes) -> tuple[RawDocxBlock, ...]:
 +        if type(source) is not bytes:
 +            raise TypeError("DOCX parser source must be exact bytes")
-+        document = Document(BytesIO(source))
-+        if not isinstance(document, DocumentType):
-+            raise ValueError("DOCX parser did not construct an exact document")
-+        package_elements, has_malformed_part = _package_xml_elements(document)
++        package_elements, related_members, has_malformed_part = (
++            _package_xml_elements(source)
++        )
 +        if _elements_contain_tag(package_elements, _UNSUPPORTED_VISUAL_TAGS):
 +            raise UnsupportedDocxFigureError(
 +                "DOCX profile does not admit visual objects"
 +            )
 +        if has_malformed_part:
 +            raise ValueError("DOCX contains a malformed XML package part")
-+        if _elements_contain_tag(package_elements, _UNSUPPORTED_CONTENT_TAGS):
-+            raise ValueError("DOCX contains an unsupported content container")
-+        if any(_contains_unadmitted_run_content(e) for e in package_elements):
++        if _DOCUMENT_MEMBER not in related_members:
++            raise ValueError("DOCX main document is not related from the package root")
++        if not _main_document_uses_admitted_root_grammar(package_elements):
++            raise ValueError("DOCX main document root is outside the admitted grammar")
++        if _contains_unrepresented_package_structure(
++            package_elements, related_members
++        ):
++            raise ValueError("DOCX contains unrepresented package structure")
++        document = Document(BytesIO(source))
++        if not isinstance(document, DocumentType):
++            raise ValueError("DOCX parser did not construct an exact document")
++        if not _body_uses_closed_admitted_grammar(document):
++            raise ValueError("DOCX body is outside the closed admitted grammar")
++        if any(
++            _contains_unadmitted_run_content(element)
++            for _, element in package_elements
++        ):
 +            raise ValueError("DOCX contains unsupported run content")
-+        if any(_contains_visible_token_outside_run(e) for e in package_elements):
++        if any(
++            _contains_visible_token_outside_run(element)
++            for _, element in package_elements
++        ):
 +            raise ValueError("DOCX contains visible content outside a run")
-+        if _contains_unrepresented_package_text(package_elements, document):
++        if _contains_unrepresented_package_text(package_elements):
 +            raise ValueError("DOCX contains text outside the represented body")
 +        if not _body_paragraph_text_is_lossless(document):
 +            raise ValueError("DOCX paragraph text cannot be represented losslessly")
@@ -382,7 +1383,7 @@ index 48f8db8..e21b01e 100644
 +        for block_ordinal, child in enumerate(document.element.body.iterchildren()):
 +            if child.tag == _PARAGRAPH_TAG:
 +                paragraph = Paragraph(child, document)
-+                text = paragraph.text.strip()
++                text = paragraph.text
 +                has_figure = bool(child.xpath(".//pic:pic"))
 +                if text or has_figure:
 +                    style_name = (
@@ -403,9 +1404,11 @@ index 48f8db8..e21b01e 100644
 +            elif child.tag == _TABLE_TAG:
 +                if any(node.tag == _TABLE_TAG for node in child.iterdescendants()):
 +                    raise ValueError("DOCX profile does not admit nested tables")
++                if _contains_tag(child, _MERGED_CELL_TAGS):
++                    raise ValueError("DOCX profile does not admit merged table cells")
 +                table = Table(child, document)
 +                rows = tuple(
-+                    tuple(cell.text.strip() for cell in row.cells)
++                    tuple(cell.text for cell in row.cells)
 +                    for row in table.rows
 +                )
 +                if rows:

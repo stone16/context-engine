@@ -36,7 +36,7 @@ sha256 = "94c8e2515d05e141fcf65e10336ceca7f9116e54b31a668637ba3f901943cb66"
 [[files]]
 upstream_path = "deepdoc/parser/docx_parser.py"
 vendored_path = "third_party/ragflow/deepdoc/parser/docx_parser.py"
-sha256 = "9becb3464430bd8188e26b4ab743c35c967ba8132f6f3609f38adbfb568cc3c9"
+sha256 = "5bf1dc63450b4389faa63a90cde994584e3305f9b56d7b74fe27c6ee3c2a0545"
 
 [[files]]
 upstream_path = "deepdoc/parser/utils.py"

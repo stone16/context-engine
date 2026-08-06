@@ -46,24 +46,29 @@ selected helpers from the copied `MarkdownElementExtractor`; the surrounding
 rich Markdown compilation pipeline remains ContextEngine-owned.
 
 `docx_parser.py` is copied and patched to remove RAGFlow tokenizer,
-`LazyImage`, Pandas, logging, and application constants. It now traverses
-paragraph and table XML children in exact OOXML body order and returns bounded
-raw blocks. The closed body-only profile rejects visible text in every other
-package part and independently accounts for visible run text in every body
-paragraph, refusing when that text differs from `python-docx`'s represented
-paragraph text. The earlier unsupported-container checks remain defense in
-depth, but completeness no longer depends on a finite wrapper denylist. Every
-admitted visible token must occur inside a run, and every body run must occur
-inside a paragraph; malformed placement refuses rather than disappearing from
-both the independent and `python-docx` text derivations. Parts
-without a parsed element are parsed from raw bytes only when a strictly parsed,
-case-insensitive media type is `application/xml`, `text/xml`, or has a `+xml`
-suffix; valid parameters are admitted, malformed parameter syntax fails
-closed, and binary parts are never parsed. XML/media parse failures are
-deferred until all parseable parts have been scanned for visuals, preserving
-figure-refusal precedence. ContextEngine-owned code maps accepted blocks into
-the ADR-0094 nominal `DocxXmlLocator` family, structural units, identities, and
-typed refusals.
+`LazyImage`, Pandas, logging, and application constants. It now inventories the
+raw OPC archive and strictly parses `[Content_Types].xml` before constructing a
+`python-docx` document. Every declared XML member is parsed independently and
+every successfully parsed root is scanned for visuals first, so a figure
+refusal takes precedence over malformed or unrepresented XML even when
+`python-docx` cannot load the package. Archive names, PartNames, media types,
+case-folded declarations, and relationship reachability are validated. The
+relationship grammar requires exact permitted attributes, unique non-empty
+identifiers, valid target modes, and the exact root-to-main office-document
+relationship type. Orphan, unknown, and path-ambiguous members fail closed.
+Binary members are inventoried but never parsed as XML.
+
+The body-only profile admits one positive main-document/paragraph/run/table
+grammar, including recursive property-subtree validation and exact structural
+parent, order, and cardinality rules. It rejects non-body content-bearing XML,
+unknown namespaces or placements, arbitrary character data in infrastructure
+members, nested tables, and merged cells whose semantics cannot be represented
+losslessly. Only exact core/app metadata fields admit character data.
+Independently derived visible run text must equal `python-docx` paragraph text,
+every visible token must be inside an admitted run, and exact paragraph and
+table-cell boundary whitespace is preserved. ContextEngine-owned code maps
+accepted blocks into the ADR-0094 nominal `DocxXmlLocator` family, structural
+units, identities, and typed refusals.
 Image-bearing DOCX artifacts refuse because a bounded figure-byte policy has
 not been admitted; images are never silently discarded.
 
