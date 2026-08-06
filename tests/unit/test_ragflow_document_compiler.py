@@ -17,6 +17,11 @@ import rfc8785
 from docx import Document
 from docx.document import Document as DocumentType
 from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
+from docx.opc.constants import CONTENT_TYPE, RELATIONSHIP_TYPE
+from docx.opc.packuri import PackURI
+from docx.opc.part import Part
+from lxml import etree
 from pypdf import PdfWriter
 from pypdf.generic import Destination
 
@@ -138,6 +143,52 @@ def _docx_with_wrapped_text(
     run.append(text)
     wrapper.append(run)
     paragraph._p.append(wrapper)
+    return _save_docx(document)
+
+
+def _docx_with_wrapped_footnote_text(
+    wrapper_tag: str,
+    hidden_text: str,
+    *,
+    with_drawing: bool = False,
+) -> bytes:
+    document = Document()
+    document.add_paragraph("Retained body text.")
+    footnotes = OxmlElement("w:footnotes")
+    footnote = OxmlElement("w:footnote")
+    footnote.set(qn("w:id"), "1")
+    paragraph = OxmlElement("w:p")
+    wrapper = OxmlElement(wrapper_tag)
+    run = OxmlElement("w:r")
+    text = OxmlElement("w:t")
+    text.text = hidden_text
+    run.append(text)
+    wrapper.append(run)
+    paragraph.append(wrapper)
+    if with_drawing:
+        paragraph.append(OxmlElement("w:drawing"))
+    footnote.append(paragraph)
+    footnotes.append(footnote)
+    footnotes_part = Part(
+        PackURI("/word/footnotes.xml"),
+        CONTENT_TYPE.WML_FOOTNOTES,
+        etree.tostring(footnotes),
+        document.part.package,
+    )
+    document.part.relate_to(footnotes_part, RELATIONSHIP_TYPE.FOOTNOTES)
+    return _save_docx(document)
+
+
+def _docx_with_xml_looking_binary_part() -> bytes:
+    document = Document()
+    document.add_paragraph("Retained body text.")
+    binary_part = Part(
+        PackURI("/word/embeddings/object1.bin"),
+        "application/octet-stream",
+        b"<w:fldSimple><w:t>Binary bytes are not XML.</w:t></w:fldSimple>",
+        document.part.package,
+    )
+    document.part.relate_to(binary_part, RELATIONSHIP_TYPE.OLE_OBJECT)
     return _save_docx(document)
 
 
@@ -386,6 +437,60 @@ def test_docx_wrapped_text_refuses_at_parser_and_runner_seams(
     for outcome in outcomes:
         assert type(outcome) is DocumentCompilationFailure
         assert outcome.code is DocumentCompilationFailureCode.INVALID_ARTIFACT
+
+
+@pytest.mark.parametrize(
+    ("wrapper_tag", "hidden_text"),
+    (
+        ("w:fldSimple", "Footnote field text must not disappear."),
+        ("w:smartTag", "Footnote smart tag text must not disappear."),
+    ),
+    ids=("simple-field", "smart-tag"),
+)
+def test_docx_wrapped_footnote_text_refuses_at_parser_and_runner_seams(
+    wrapper_tag: str,
+    hidden_text: str,
+) -> None:
+    source = _docx_with_wrapped_footnote_text(wrapper_tag, hidden_text)
+    outcomes = (
+        compile_document_bytes(
+            source,
+            CompilationProfileRef("context-engine-docx-v1", DOCX_CONFIG_V1),
+        ),
+        compile_in_local_document_runner(
+            BytesArtifactSource(source),
+            DOCX_CONFIG_V1,
+            acceptance_context=acceptance_context(),
+        ),
+    )
+
+    for outcome in outcomes:
+        assert type(outcome) is DocumentCompilationFailure
+        assert outcome.code is DocumentCompilationFailureCode.INVALID_ARTIFACT
+
+
+def test_docx_generic_xml_part_preserves_visual_refusal_precedence() -> None:
+    outcome = compile_document_bytes(
+        _docx_with_wrapped_footnote_text(
+            "w:fldSimple",
+            "Footnote field text must not disappear.",
+            with_drawing=True,
+        ),
+        CompilationProfileRef("context-engine-docx-v1", DOCX_CONFIG_V1),
+    )
+
+    assert type(outcome) is DocumentCompilationFailure
+    assert outcome.code is DocumentCompilationFailureCode.FIGURE_NOT_SUPPORTED
+
+
+def test_docx_package_scan_does_not_parse_binary_parts() -> None:
+    outcome = compile_document_bytes(
+        _docx_with_xml_looking_binary_part(),
+        CompilationProfileRef("context-engine-docx-v1", DOCX_CONFIG_V1),
+    )
+
+    assert type(outcome) is ParsedDocument
+    assert [unit.text for unit in outcome.units] == ["Retained body text."]
 
 
 @pytest.mark.parametrize("in_header", (False, True))

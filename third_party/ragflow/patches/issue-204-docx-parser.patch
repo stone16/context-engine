@@ -1,6 +1,6 @@
 --- a/deepdoc/parser/docx_parser.py
 +++ b/deepdoc/parser/docx_parser.py
-@@ -13,170 +13,132 @@
+@@ -13,170 +13,147 @@
  #  See the License for the specific language governing permissions and
  #  limitations under the License.
  #
@@ -61,6 +61,7 @@
 -                logging.warning(f"Unexpected error getting image, attempting blob fallback: {e}")
 +from docx import Document
 +from docx.document import Document as DocumentType
++from docx.oxml import parse_xml
 +from docx.oxml.ns import qn
 +from docx.table import Table
 +from docx.text.paragraph import Paragraph
@@ -90,6 +91,7 @@
 +_UNSUPPORTED_VISUAL_TAGS: Final = frozenset(
 +    {qn("w:drawing"), qn("w:object"), qn("w:pict")}
 +)
++_XML_CONTENT_TYPES: Final = frozenset({"application/xml", "text/xml"})
 
 -    def __extract_table_content(self, tb):
 -        df = []
@@ -137,12 +139,24 @@
 -            return []
 -        max_type = Counter([blockType(str(df.iloc[i, j])) for i in range(1, len(df)) for j in range(len(df.iloc[i, :]))])
 -        max_type = max(max_type.items(), key=lambda x: x[1])[0]
-+def _package_contains_tag(document: DocumentType, tags: frozenset[str]) -> bool:
++def _is_xml_content_type(content_type: object) -> bool:
++    return type(content_type) is str and (
++        content_type in _XML_CONTENT_TYPES or content_type.endswith("+xml")
++    )
++
++
++def _package_xml_elements(document: DocumentType) -> tuple[Any, ...]:
++    elements: list[Any] = []
 +    for part in document.part.package.parts:
++        if not _is_xml_content_type(part.content_type):
++            continue
 +        element = getattr(part, "element", None)
-+        if element is not None and _contains_tag(element, tags):
-+            return True
-+    return False
++        elements.append(element if element is not None else parse_xml(part.blob))
++    return tuple(elements)
++
++
++def _elements_contain_tag(elements: tuple[Any, ...], tags: frozenset[str]) -> bool:
++    return any(_contains_tag(element, tags) for element in elements)
 
 -        colnm = len(df.iloc[0, :])
 -        hdrows = [0]  # header is not necessarily appear in the first line
@@ -224,11 +238,12 @@
 +        document = Document(BytesIO(source))
 +        if not isinstance(document, DocumentType):
 +            raise ValueError("DOCX parser did not construct an exact document")
-+        if _package_contains_tag(document, _UNSUPPORTED_VISUAL_TAGS):
++        package_elements = _package_xml_elements(document)
++        if _elements_contain_tag(package_elements, _UNSUPPORTED_VISUAL_TAGS):
 +            raise UnsupportedDocxFigureError(
 +                "DOCX profile does not admit visual objects"
 +            )
-+        if _package_contains_tag(document, _UNSUPPORTED_CONTENT_TAGS):
++        if _elements_contain_tag(package_elements, _UNSUPPORTED_CONTENT_TAGS):
 +            raise ValueError("DOCX contains an unsupported content container")
 +        blocks: list[RawDocxBlock] = []
 +        for block_ordinal, child in enumerate(document.element.body.iterchildren()):

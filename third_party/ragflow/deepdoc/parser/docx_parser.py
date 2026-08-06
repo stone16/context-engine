@@ -26,6 +26,7 @@ from typing import Any, Final
 
 from docx import Document
 from docx.document import Document as DocumentType
+from docx.oxml import parse_xml
 from docx.oxml.ns import qn
 from docx.table import Table
 from docx.text.paragraph import Paragraph
@@ -48,6 +49,7 @@ _UNSUPPORTED_CONTENT_TAGS: Final = frozenset(
 _UNSUPPORTED_VISUAL_TAGS: Final = frozenset(
     {qn("w:drawing"), qn("w:object"), qn("w:pict")}
 )
+_XML_CONTENT_TYPES: Final = frozenset({"application/xml", "text/xml"})
 
 
 class UnsupportedDocxFigureError(ValueError):
@@ -58,12 +60,24 @@ def _contains_tag(element: Any, tags: frozenset[str]) -> bool:
     return any(node.tag in tags for node in element.iter())
 
 
-def _package_contains_tag(document: DocumentType, tags: frozenset[str]) -> bool:
+def _is_xml_content_type(content_type: object) -> bool:
+    return type(content_type) is str and (
+        content_type in _XML_CONTENT_TYPES or content_type.endswith("+xml")
+    )
+
+
+def _package_xml_elements(document: DocumentType) -> tuple[Any, ...]:
+    elements: list[Any] = []
     for part in document.part.package.parts:
+        if not _is_xml_content_type(part.content_type):
+            continue
         element = getattr(part, "element", None)
-        if element is not None and _contains_tag(element, tags):
-            return True
-    return False
+        elements.append(element if element is not None else parse_xml(part.blob))
+    return tuple(elements)
+
+
+def _elements_contain_tag(elements: tuple[Any, ...], tags: frozenset[str]) -> bool:
+    return any(_contains_tag(element, tags) for element in elements)
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,11 +102,12 @@ class RAGFlowDocxParser:
         document = Document(BytesIO(source))
         if not isinstance(document, DocumentType):
             raise ValueError("DOCX parser did not construct an exact document")
-        if _package_contains_tag(document, _UNSUPPORTED_VISUAL_TAGS):
+        package_elements = _package_xml_elements(document)
+        if _elements_contain_tag(package_elements, _UNSUPPORTED_VISUAL_TAGS):
             raise UnsupportedDocxFigureError(
                 "DOCX profile does not admit visual objects"
             )
-        if _package_contains_tag(document, _UNSUPPORTED_CONTENT_TAGS):
+        if _elements_contain_tag(package_elements, _UNSUPPORTED_CONTENT_TAGS):
             raise ValueError("DOCX contains an unsupported content container")
         blocks: list[RawDocxBlock] = []
         for block_ordinal, child in enumerate(document.element.body.iterchildren()):
