@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
+from xml.sax.saxutils import escape
 
 import pytest
 import rfc8785
@@ -20,8 +21,6 @@ from docx.opc.constants import CONTENT_TYPE, RELATIONSHIP_TYPE
 from docx.opc.packuri import PackURI
 from docx.opc.part import Part
 from docx.oxml import OxmlElement
-from docx.oxml.ns import qn
-from lxml import etree
 from pypdf import PdfWriter
 from pypdf.generic import Destination
 
@@ -154,25 +153,21 @@ def _docx_with_wrapped_footnote_text(
 ) -> bytes:
     document = Document()
     document.add_paragraph("Retained body text.")
-    footnotes = OxmlElement("w:footnotes")
-    footnote = OxmlElement("w:footnote")
-    footnote.set(qn("w:id"), "1")
-    paragraph = OxmlElement("w:p")
-    wrapper = OxmlElement(wrapper_tag)
-    run = OxmlElement("w:r")
-    text = OxmlElement("w:t")
-    text.text = hidden_text
-    run.append(text)
-    wrapper.append(run)
-    paragraph.append(wrapper)
-    if with_drawing:
-        paragraph.append(OxmlElement("w:drawing"))
-    footnote.append(paragraph)
-    footnotes.append(footnote)
+    if wrapper_tag not in {"w:fldSimple", "w:smartTag"}:
+        raise ValueError("test fixture requires a supported wrapper tag")
+    drawing_xml = "<w:drawing/>" if with_drawing else ""
+    footnotes_xml = (
+        '<w:footnotes xmlns:w="http://schemas.openxmlformats.org/'
+        'wordprocessingml/2006/main">'
+        '<w:footnote w:id="1"><w:p>'
+        f"<{wrapper_tag}><w:r><w:t>{escape(hidden_text)}</w:t></w:r>"
+        f"</{wrapper_tag}>{drawing_xml}"
+        "</w:p></w:footnote></w:footnotes>"
+    ).encode()
     footnotes_part = Part(
         PackURI("/word/footnotes.xml"),
         CONTENT_TYPE.WML_FOOTNOTES,
-        etree.tostring(footnotes),
+        footnotes_xml,
         document.part.package,
     )
     document.part.relate_to(footnotes_part, RELATIONSHIP_TYPE.FOOTNOTES)
@@ -490,6 +485,7 @@ def test_docx_package_scan_does_not_parse_binary_parts() -> None:
     )
 
     assert type(outcome) is ParsedDocument
+    assert outcome.units is not None
     assert [unit.text for unit in outcome.units] == ["Retained body text."]
 
 
