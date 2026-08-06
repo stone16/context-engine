@@ -71,9 +71,10 @@ portion of any target (including External targets), and the exact root-to-main
 office-document relationship type. A manifest relabel cannot hide related XML:
 non-XML related parts outside exact admitted binary relationship classes must
 parse as XML. A malformed relationship graph likewise cannot hide raw parseable
-visuals: every non-manifest raw ZIP member, including one whose raw name is not
-an admissible canonical package path, is scanned before the retained package
-refusal. Thumbnail admission
+visuals: every non-manifest raw ZIP entry is scanned by entry identity before
+the retained package refusal, including entries whose raw names are not
+admissible canonical package paths and multiple entries that share a filename.
+Thumbnail admission
 requires an internal root relationship, exact `docProps/thumbnail.jpeg` target,
 exact JPEG media type, nonzero dimensions, coherent frame/scan component
 identifiers, and a complete bounded JPEG marker structure through

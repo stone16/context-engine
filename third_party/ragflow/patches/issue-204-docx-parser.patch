@@ -1,8 +1,8 @@
 diff --git a/deepdoc/parser/docx_parser.py b/deepdoc/parser/docx_parser.py
-index 48f8db8..3c894bd 100644
+index 48f8db8..c8aa038 100644
 --- a/deepdoc/parser/docx_parser.py
 +++ b/deepdoc/parser/docx_parser.py
-@@ -15,168 +15,1489 @@
+@@ -15,168 +15,1486 @@
  #
 +#  Modified by ContextEngine: dependency-entangled classification and image
 +#  behavior were removed; the parser now emits source-ordered raw OOXML blocks.
@@ -162,11 +162,11 @@ index 48f8db8..3c894bd 100644
 +)
 +_DRAWINGML_NAMESPACE: Final = (
 +    "http://schemas.openxmlformats.org/drawingml/2006/main"
-+)
-+_CORE_PROPERTIES_NAMESPACE: Final = (
-+    "http://schemas.openxmlformats.org/package/2006/metadata/core-properties"
  )
 -from rag.utils.lazy_image import LazyImage
++_CORE_PROPERTIES_NAMESPACE: Final = (
++    "http://schemas.openxmlformats.org/package/2006/metadata/core-properties"
++)
 +_DC_NAMESPACE: Final = "http://purl.org/dc/elements/1.1/"
 +_DCTERMS_NAMESPACE: Final = "http://purl.org/dc/terms/"
 +_EXTENDED_PROPERTIES_NAMESPACE: Final = (
@@ -718,7 +718,7 @@ index 48f8db8..3c894bd 100644
 +                key = _normalized_package_path(part_name, leading_slash=True)
 +            except ValueError:
 +                has_malformed_declaration = True
-+                continue
+                 continue
 +            target = overrides
 +        else:
 +            has_malformed_declaration = True
@@ -736,7 +736,7 @@ index 48f8db8..3c894bd 100644
 +        ):
 +            has_malformed_declaration = True
 +            if type(key) is not str or not key or type(content_type) is not str:
-                 continue
++                continue
 +        try:
 +            _is_xml_content_type(content_type)
 +        except ValueError:
@@ -1145,11 +1145,8 @@ index 48f8db8..3c894bd 100644
 +        relationship_types = {}
 +        has_malformed_part = True
 +        for member_name, member_bytes in raw_package_members:
-+            if member_name in parsed_member_names:
-+                continue
 +            try:
 +                elements.append((member_name, parse_xml(member_bytes)))
-+                parsed_member_names.add(member_name)
 +            except Exception:
 +                continue
 +    for member_name, member_bytes, content_type in package_members:

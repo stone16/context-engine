@@ -902,6 +902,41 @@ def _docx_with_malformed_relationships_and_unsafe_raw_visual_member() -> bytes:
     return output.getvalue()
 
 
+def _docx_with_malformed_relationships_and_duplicate_unsafe_raw_visual_member(
+) -> bytes:
+    document = Document()
+    document.add_paragraph("Retained body text.")
+    source = _save_docx(document)
+    duplicate_name = "word/../duplicate-visual.xml"
+    benign_xml = (
+        b'<w:orphan xmlns:w="http://schemas.openxmlformats.org/'
+        b'wordprocessingml/2006/main"/>'
+    )
+    visual_xml = (
+        b'<w:orphan xmlns:w="http://schemas.openxmlformats.org/'
+        b'wordprocessingml/2006/main"><w:drawing/></w:orphan>'
+    )
+    output = io.BytesIO()
+    with (
+        zipfile.ZipFile(io.BytesIO(source)) as source_archive,
+        zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as target_archive,
+    ):
+        for member in source_archive.infolist():
+            member_bytes = source_archive.read(member.filename)
+            if member.filename == "word/_rels/document.xml.rels":
+                member_bytes = member_bytes.replace(
+                    b"<Relationships ",
+                    b'<Relationships hostile="1" ',
+                    1,
+                )
+            target_archive.writestr(member, member_bytes)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            target_archive.writestr(duplicate_name, benign_xml)
+            target_archive.writestr(duplicate_name, visual_xml)
+    return output.getvalue()
+
+
 def _docx_with_unused_malformed_content_type_declaration(
     declaration_kind: str, *, with_drawing: bool = False
 ) -> bytes:
@@ -1487,6 +1522,19 @@ def test_docx_malformed_relationships_scan_unsafe_raw_visual_members() -> None:
     for outcome in outcomes:
         assert type(outcome) is DocumentCompilationFailure
         assert outcome.code is DocumentCompilationFailureCode.FIGURE_NOT_SUPPORTED
+
+
+def test_docx_malformed_relationships_scan_every_duplicate_raw_member() -> None:
+    direct_outcome, runner_outcome = _compile_docx_at_public_seams(
+        _docx_with_malformed_relationships_and_duplicate_unsafe_raw_visual_member()
+    )
+
+    assert type(direct_outcome) is DocumentCompilationFailure
+    assert type(runner_outcome) is DocumentCompilationFailure
+    assert (direct_outcome.code, runner_outcome.code) == (
+        DocumentCompilationFailureCode.FIGURE_NOT_SUPPORTED,
+        DocumentCompilationFailureCode.FIGURE_NOT_SUPPORTED,
+    )
 
 
 def test_docx_header_cannot_hide_behind_thumbnail_relationship_at_both_seams(

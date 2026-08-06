@@ -993,11 +993,8 @@ def _package_xml_elements(
         relationship_types = {}
         has_malformed_part = True
         for member_name, member_bytes in raw_package_members:
-            if member_name in parsed_member_names:
-                continue
             try:
                 elements.append((member_name, parse_xml(member_bytes)))
-                parsed_member_names.add(member_name)
             except Exception:
                 continue
     for member_name, member_bytes, content_type in package_members:
