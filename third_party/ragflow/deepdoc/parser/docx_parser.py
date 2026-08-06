@@ -794,6 +794,9 @@ def _related_member_names(
             ):
                 raise ValueError("DOCX relationship is malformed")
             relationship_ids.add(relationship_id)
+            target_path = target.split("#", 1)[0].split("?", 1)[0]
+            if any(segment in {".", ".."} for segment in target_path.split("/")):
+                raise ValueError("DOCX relationship target is not canonical")
             if relationship_type == _OLE_OBJECT_RELATIONSHIP_TYPE:
                 raise ValueError("DOCX OLE relationships are outside the grammar")
             if (
@@ -917,9 +920,15 @@ def _package_xml_elements(
     elements: list[tuple[str, Any]] = []
     parsed_member_names: set[str] = set()
     package_members: list[tuple[str, bytes, str | None]] = []
+    raw_package_members: list[tuple[str, bytes]] = []
     has_malformed_part = False
     with ZipFile(BytesIO(source)) as archive:
         members = archive.infolist()
+        raw_package_members.extend(
+            (member.filename, archive.read(member))
+            for member in members
+            if not member.is_dir() and member.filename != _CONTENT_TYPES_MEMBER
+        )
         normalized_members: list[tuple[Any, str]] = []
         for member in members:
             try:
@@ -944,13 +953,9 @@ def _package_xml_elements(
             )
             has_malformed_part = has_malformed_part or malformed_manifest
         except Exception:
-            for member in members:
-                if member.is_dir() or member.filename == _CONTENT_TYPES_MEMBER:
-                    continue
+            for member_name, member_bytes in raw_package_members:
                 try:
-                    elements.append(
-                        (member.filename, parse_xml(archive.read(member)))
-                    )
+                    elements.append((member_name, parse_xml(member_bytes)))
                 except Exception:
                     continue
             return tuple(elements), frozenset(), True
@@ -987,7 +992,7 @@ def _package_xml_elements(
         related_members = frozenset()
         relationship_types = {}
         has_malformed_part = True
-        for member_name, member_bytes, _content_type in package_members:
+        for member_name, member_bytes in raw_package_members:
             if member_name in parsed_member_names:
                 continue
             try:

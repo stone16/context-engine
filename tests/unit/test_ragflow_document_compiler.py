@@ -517,6 +517,34 @@ def _docx_with_external_thumbnail_relationship() -> bytes:
     return output.getvalue()
 
 
+def _docx_with_external_hyperlink_relationship(target: str) -> bytes:
+    document = Document()
+    document.add_paragraph("Retained body text.")
+    source = _save_docx(document)
+    relationship = (
+        b'<Relationship Id="rIdExternalHyperlink" Type="'
+        + RELATIONSHIP_TYPE.HYPERLINK.encode()
+        + b'" Target="'
+        + target.encode()
+        + b'" TargetMode="External"/>'
+    )
+    output = io.BytesIO()
+    with (
+        zipfile.ZipFile(io.BytesIO(source)) as source_archive,
+        zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as target_archive,
+    ):
+        for member in source_archive.infolist():
+            member_bytes = source_archive.read(member.filename)
+            if member.filename == "word/_rels/document.xml.rels":
+                assert b"</Relationships>" in member_bytes
+                member_bytes = member_bytes.replace(
+                    b"</Relationships>",
+                    relationship + b"</Relationships>",
+                )
+            target_archive.writestr(member, member_bytes)
+    return output.getvalue()
+
+
 def _single_component_jpeg_thumbnail(
     *, width: int, height: int, scan_component_id: int = 1
 ) -> bytes:
@@ -843,6 +871,32 @@ def _docx_with_unparseable_manifest_and_unsafe_raw_visual_member() -> bytes:
             member_bytes = source_archive.read(member.filename)
             if member.filename == "[Content_Types].xml":
                 member_bytes = b"<Types"
+            target_archive.writestr(member, member_bytes)
+        target_archive.writestr("word/../raw-visual.xml", raw_visual_xml)
+    return output.getvalue()
+
+
+def _docx_with_malformed_relationships_and_unsafe_raw_visual_member() -> bytes:
+    document = Document()
+    document.add_paragraph("Retained body text.")
+    source = _save_docx(document)
+    raw_visual_xml = (
+        b'<w:document xmlns:w="http://schemas.openxmlformats.org/'
+        b'wordprocessingml/2006/main"><w:drawing/></w:document>'
+    )
+    output = io.BytesIO()
+    with (
+        zipfile.ZipFile(io.BytesIO(source)) as source_archive,
+        zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as target_archive,
+    ):
+        for member in source_archive.infolist():
+            member_bytes = source_archive.read(member.filename)
+            if member.filename == "word/_rels/document.xml.rels":
+                member_bytes = member_bytes.replace(
+                    b"<Relationships ",
+                    b'<Relationships hostile="1" ',
+                    1,
+                )
             target_archive.writestr(member, member_bytes)
         target_archive.writestr("word/../raw-visual.xml", raw_visual_xml)
     return output.getvalue()
@@ -1425,6 +1479,16 @@ def test_docx_malformed_relationships_preserve_raw_visual_refusal_precedence(
         assert outcome.code is DocumentCompilationFailureCode.FIGURE_NOT_SUPPORTED
 
 
+def test_docx_malformed_relationships_scan_unsafe_raw_visual_members() -> None:
+    outcomes = _compile_docx_at_public_seams(
+        _docx_with_malformed_relationships_and_unsafe_raw_visual_member()
+    )
+
+    for outcome in outcomes:
+        assert type(outcome) is DocumentCompilationFailure
+        assert outcome.code is DocumentCompilationFailureCode.FIGURE_NOT_SUPPORTED
+
+
 def test_docx_header_cannot_hide_behind_thumbnail_relationship_at_both_seams(
 ) -> None:
     outcomes = _compile_docx_at_public_seams(
@@ -1954,6 +2018,37 @@ def test_docx_refuses_external_thumbnail_relationship_at_both_seams() -> None:
     for outcome in outcomes:
         assert type(outcome) is DocumentCompilationFailure
         assert outcome.code is DocumentCompilationFailureCode.INVALID_ARTIFACT
+
+
+@pytest.mark.parametrize(
+    "target",
+    (
+        "https://example.invalid/./resource",
+        "https://example.invalid/path/../resource",
+    ),
+    ids=("dot-segment", "dot-dot-segment"),
+)
+def test_docx_refuses_external_relationship_dot_segments_at_both_seams(
+    target: str,
+) -> None:
+    outcomes = _compile_docx_at_public_seams(
+        _docx_with_external_hyperlink_relationship(target)
+    )
+
+    for outcome in outcomes:
+        assert type(outcome) is DocumentCompilationFailure
+        assert outcome.code is DocumentCompilationFailureCode.INVALID_ARTIFACT
+
+
+def test_docx_accepts_ordinary_external_relationship_at_both_seams() -> None:
+    outcomes = _compile_docx_at_public_seams(
+        _docx_with_external_hyperlink_relationship(
+            "https://example.invalid/path/resource?next=../resource#dot/./segment"
+        )
+    )
+
+    for outcome in outcomes:
+        assert type(outcome) is ParsedDocument
 
 
 def test_docx_refuses_text_in_known_inert_member_at_both_seams() -> None:

@@ -1,8 +1,8 @@
 diff --git a/deepdoc/parser/docx_parser.py b/deepdoc/parser/docx_parser.py
-index 48f8db8..ab7fb24 100644
+index 48f8db8..3c894bd 100644
 --- a/deepdoc/parser/docx_parser.py
 +++ b/deepdoc/parser/docx_parser.py
-@@ -15,168 +15,1484 @@
+@@ -15,168 +15,1489 @@
  #
 +#  Modified by ContextEngine: dependency-entangled classification and image
 +#  behavior were removed; the parser now emits source-ordered raw OOXML blocks.
@@ -893,6 +893,9 @@ index 48f8db8..ab7fb24 100644
 +            ):
 +                raise ValueError("DOCX relationship is malformed")
 +            relationship_ids.add(relationship_id)
++            target_path = target.split("#", 1)[0].split("?", 1)[0]
++            if any(segment in {".", ".."} for segment in target_path.split("/")):
++                raise ValueError("DOCX relationship target is not canonical")
 +            if relationship_type == _OLE_OBJECT_RELATIONSHIP_TYPE:
 +                raise ValueError("DOCX OLE relationships are outside the grammar")
 +            if (
@@ -1039,9 +1042,15 @@ index 48f8db8..ab7fb24 100644
 +    elements: list[tuple[str, Any]] = []
 +    parsed_member_names: set[str] = set()
 +    package_members: list[tuple[str, bytes, str | None]] = []
++    raw_package_members: list[tuple[str, bytes]] = []
 +    has_malformed_part = False
 +    with ZipFile(BytesIO(source)) as archive:
 +        members = archive.infolist()
++        raw_package_members.extend(
++            (member.filename, archive.read(member))
++            for member in members
++            if not member.is_dir() and member.filename != _CONTENT_TYPES_MEMBER
++        )
 +        normalized_members: list[tuple[Any, str]] = []
 +        for member in members:
 +            try:
@@ -1066,8 +1075,10 @@ index 48f8db8..ab7fb24 100644
 +            )
 +            has_malformed_part = has_malformed_part or malformed_manifest
 +        except Exception:
-+            for member in members:
-+                if member.is_dir() or member.filename == _CONTENT_TYPES_MEMBER:
++            for member_name, member_bytes in raw_package_members:
++                try:
++                    elements.append((member_name, parse_xml(member_bytes)))
++                except Exception:
                      continue
 -                cells.append(headers[j] + str(df.iloc[i, j]))
 -            lines.append(";".join(cells))
@@ -1099,12 +1110,6 @@ index 48f8db8..ab7fb24 100644
 -
 -        tbls = [self.__extract_table_content(tb) for tb in self.doc.tables]
 -        return secs, tbls
-+                try:
-+                    elements.append(
-+                        (member.filename, parse_xml(archive.read(member)))
-+                    )
-+                except Exception:
-+                    continue
 +            return tuple(elements), frozenset(), True
 +        declared_override_names = set(overrides)
 +        if not declared_override_names.issubset(
@@ -1139,7 +1144,7 @@ index 48f8db8..ab7fb24 100644
 +        related_members = frozenset()
 +        relationship_types = {}
 +        has_malformed_part = True
-+        for member_name, member_bytes, _content_type in package_members:
++        for member_name, member_bytes in raw_package_members:
 +            if member_name in parsed_member_names:
 +                continue
 +            try:

@@ -65,12 +65,15 @@ subtype except for case; parser-normalized whitespace is never accepted. Every
 extension must use the closed ASCII token grammar while excluding `.` and `..`,
 even when no member uses the declaration. The
 relationship grammar requires exact permitted attributes, unique non-empty
-identifiers, valid target modes, canonical raw targets without empty or dot
-segments before resolution, and the exact root-to-main office-document
-relationship type. A manifest relabel cannot hide related XML: non-XML related
-parts outside exact admitted binary relationship classes must parse as XML. A
-malformed relationship graph likewise cannot hide raw parseable visuals; those
-members are scanned before the retained package refusal. Thumbnail admission
+identifiers, valid target modes, internal canonical raw targets without empty
+or dot segments before resolution, no `.` or `..` segment in the raw path
+portion of any target (including External targets), and the exact root-to-main
+office-document relationship type. A manifest relabel cannot hide related XML:
+non-XML related parts outside exact admitted binary relationship classes must
+parse as XML. A malformed relationship graph likewise cannot hide raw parseable
+visuals: every non-manifest raw ZIP member, including one whose raw name is not
+an admissible canonical package path, is scanned before the retained package
+refusal. Thumbnail admission
 requires an internal root relationship, exact `docProps/thumbnail.jpeg` target,
 exact JPEG media type, nonzero dimensions, coherent frame/scan component
 identifiers, and a complete bounded JPEG marker structure through
