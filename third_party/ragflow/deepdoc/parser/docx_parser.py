@@ -616,35 +616,51 @@ def _normalized_package_path(value: object, *, leading_slash: bool) -> str:
 
 def _content_type_declarations(
     element: Any,
-) -> tuple[dict[str, str], dict[str, str]]:
-    if element.tag != _CONTENT_TYPES_TAG:
-        raise ValueError("DOCX package has an invalid content-type manifest")
+) -> tuple[dict[str, str], dict[str, str], bool]:
+    has_malformed_declaration = (
+        element.tag != _CONTENT_TYPES_TAG
+        or element.attrib
+        or _has_direct_character_data(element)
+    )
     defaults: dict[str, str] = {}
     overrides: dict[str, str] = {}
     for declaration in element.iterchildren():
         if declaration.tag == _CONTENT_TYPE_DEFAULT_TAG:
+            permitted_attributes = {"Extension", "ContentType"}
             key = declaration.get("Extension")
             target = defaults
         elif declaration.tag == _CONTENT_TYPE_OVERRIDE_TAG:
+            permitted_attributes = {"PartName", "ContentType"}
             part_name = declaration.get("PartName")
-            key = _normalized_package_path(part_name, leading_slash=True)
+            try:
+                key = _normalized_package_path(part_name, leading_slash=True)
+            except ValueError:
+                has_malformed_declaration = True
+                continue
             target = overrides
         else:
-            raise ValueError("DOCX package has an unknown content-type declaration")
+            has_malformed_declaration = True
+            continue
         content_type = declaration.get("ContentType")
         if (
-            type(key) is not str
+            set(declaration.attrib) != permitted_attributes
+            or len(declaration)
+            or _has_direct_character_data(declaration)
+            or type(key) is not str
             or not key
             or (target is defaults and ("/" in key or "\\" in key or "%" in key))
             or type(content_type) is not str
             or not content_type
         ):
-            raise ValueError("DOCX package has a malformed content-type declaration")
+            has_malformed_declaration = True
+            if type(key) is not str or not key or type(content_type) is not str:
+                continue
         normalized_key = key.casefold()
         if normalized_key in target:
-            raise ValueError("DOCX package has duplicate content-type declarations")
+            has_malformed_declaration = True
+            continue
         target[normalized_key] = content_type
-    return defaults, overrides
+    return defaults, overrides, has_malformed_declaration
 
 
 def _relationship_part_source(member_name: str) -> str | None:
@@ -765,7 +781,10 @@ def _package_xml_elements(
         try:
             content_types = parse_xml(archive.read(_CONTENT_TYPES_MEMBER))
             elements.append((_CONTENT_TYPES_MEMBER, content_types))
-            defaults, overrides = _content_type_declarations(content_types)
+            defaults, overrides, malformed_manifest = _content_type_declarations(
+                content_types
+            )
+            has_malformed_part = has_malformed_part or malformed_manifest
         except Exception:
             return tuple(elements), frozenset(), True
         declared_override_names = set(overrides)

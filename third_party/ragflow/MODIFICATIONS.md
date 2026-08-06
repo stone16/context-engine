@@ -53,10 +53,14 @@ every successfully parsed root is scanned for visuals first, so a figure
 refusal takes precedence over malformed or unrepresented XML even when
 `python-docx` cannot load the package. Archive names, PartNames, media types,
 case-folded declarations, and relationship reachability are validated. The
-relationship grammar requires exact permitted attributes, unique non-empty
-identifiers, valid target modes, and the exact root-to-main office-document
-relationship type. Orphan, unknown, and path-ambiguous members fail closed.
-Binary members are inventoried but never parsed as XML.
+content-type manifest admits an attribute-free, text-free root containing only
+exact leaf `Default` and `Override` declarations; malformed declarations remain
+usable only to scan otherwise classifiable XML for visuals before the retained
+manifest refusal. The relationship grammar requires exact permitted
+attributes, unique non-empty identifiers, valid target modes, and the exact
+root-to-main office-document relationship type. Orphan, unknown, and
+path-ambiguous members fail closed. Binary members are inventoried but never
+parsed as XML.
 
 The body-only profile admits one positive main-document/paragraph/run/table
 grammar, including recursive property-subtree validation and exact structural

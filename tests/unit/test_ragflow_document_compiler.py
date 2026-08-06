@@ -540,6 +540,61 @@ def _docx_with_manifest_key_collision(*, declaration_kind: str) -> bytes:
     return output.getvalue()
 
 
+def _docx_with_malformed_content_type_manifest(
+    manifest_kind: str, *, with_drawing: bool = False
+) -> bytes:
+    document = Document()
+    paragraph = document.add_paragraph("Retained body text.")
+    if with_drawing:
+        paragraph.add_run()._r.append(OxmlElement("w:drawing"))
+    source = _save_docx(document)
+    output = io.BytesIO()
+    with (
+        zipfile.ZipFile(io.BytesIO(source)) as source_archive,
+        zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as target_archive,
+    ):
+        for member in source_archive.infolist():
+            member_bytes = source_archive.read(member.filename)
+            if member.filename == "[Content_Types].xml":
+                if manifest_kind == "root-unknown-attribute":
+                    member_bytes = member_bytes.replace(
+                        b"<Types xmlns=",
+                        b'<Types hostile="1" xmlns=',
+                        1,
+                    )
+                elif manifest_kind == "root-character-data":
+                    member_bytes = member_bytes.replace(b'">', b'">payload', 1)
+                elif manifest_kind == "default-unknown-attribute":
+                    member_bytes = member_bytes.replace(
+                        b"<Default ",
+                        b'<Default hostile="1" ',
+                        1,
+                    )
+                elif manifest_kind == "override-unknown-attribute":
+                    member_bytes = member_bytes.replace(
+                        b"<Override ",
+                        b'<Override hostile="1" ',
+                        1,
+                    )
+                elif manifest_kind == "declaration-character-data":
+                    member_bytes = member_bytes.replace(
+                        b"/>",
+                        b">payload</Default>",
+                        1,
+                    )
+                elif manifest_kind == "nested-foreign-payload":
+                    member_bytes = member_bytes.replace(
+                        b"/>",
+                        b'><hostile:payload xmlns:hostile="urn:context-engine:'
+                        b'hostile">payload</hostile:payload></Default>',
+                        1,
+                    )
+                else:
+                    raise ValueError("unknown malformed manifest kind")
+            target_archive.writestr(member, member_bytes)
+    return output.getvalue()
+
+
 def _docx_with_raw_visual_and_malformed_related_xml() -> bytes:
     document = Document()
     document.add_paragraph("Retained body text.").add_run()._r.append(
@@ -1236,6 +1291,42 @@ def test_docx_refuses_casefolded_manifest_key_collisions_at_both_seams(
     for outcome in outcomes:
         assert type(outcome) is DocumentCompilationFailure
         assert outcome.code is DocumentCompilationFailureCode.INVALID_ARTIFACT
+
+
+@pytest.mark.parametrize(
+    "manifest_kind",
+    (
+        "root-unknown-attribute",
+        "root-character-data",
+        "default-unknown-attribute",
+        "override-unknown-attribute",
+        "declaration-character-data",
+        "nested-foreign-payload",
+    ),
+)
+def test_docx_refuses_malformed_content_type_manifest_at_both_seams(
+    manifest_kind: str,
+) -> None:
+    outcomes = _compile_docx_at_public_seams(
+        _docx_with_malformed_content_type_manifest(manifest_kind)
+    )
+
+    for outcome in outcomes:
+        assert type(outcome) is DocumentCompilationFailure
+        assert outcome.code is DocumentCompilationFailureCode.INVALID_ARTIFACT
+
+
+def test_docx_manifest_failure_preserves_visual_precedence_at_both_seams() -> None:
+    outcomes = _compile_docx_at_public_seams(
+        _docx_with_malformed_content_type_manifest(
+            "root-unknown-attribute",
+            with_drawing=True,
+        )
+    )
+
+    for outcome in outcomes:
+        assert type(outcome) is DocumentCompilationFailure
+        assert outcome.code is DocumentCompilationFailureCode.FIGURE_NOT_SUPPORTED
 
 
 def test_docx_raw_inventory_preserves_visual_precedence_before_document_load(
