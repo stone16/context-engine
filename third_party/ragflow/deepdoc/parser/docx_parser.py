@@ -136,7 +136,24 @@ _THUMBNAIL_RELATIONSHIP_TYPE: Final = (
 )
 _THUMBNAIL_MEMBER: Final = "docProps/thumbnail.jpeg"
 _THUMBNAIL_CONTENT_TYPE: Final = "image/jpeg"
-_JPEG_SIGNATURE: Final = b"\xff\xd8\xff"
+_JPEG_START_OF_IMAGE: Final = b"\xff\xd8"
+_JPEG_START_OF_FRAME_MARKERS: Final = frozenset(
+    {
+        0xC0,
+        0xC1,
+        0xC2,
+        0xC3,
+        0xC5,
+        0xC6,
+        0xC7,
+        0xC9,
+        0xCA,
+        0xCB,
+        0xCD,
+        0xCE,
+        0xCF,
+    }
+)
 _BINARY_RELATIONSHIP_TYPES: Final = frozenset(
     {_OLE_OBJECT_RELATIONSHIP_TYPE, _THUMBNAIL_RELATIONSHIP_TYPE}
 )
@@ -726,9 +743,10 @@ def _resolved_relationship_target(source_part: str, target: str) -> str:
         return _normalized_package_path(target, leading_slash=True)
     parent = source_part.rpartition("/")[0]
     segments = [segment for segment in parent.split("/") if segment]
-    for segment in target.split("/"):
-        if not segment or segment == ".":
-            continue
+    target_segments = target.split("/")
+    if any(not segment or segment == "." for segment in target_segments):
+        raise ValueError("DOCX relationship target is not canonical")
+    for segment in target_segments:
         if segment == "..":
             if not segments:
                 raise ValueError("DOCX relationship target escapes the package")
@@ -814,6 +832,63 @@ def _related_member_names(
     }
 
 
+def _is_complete_jpeg(value: bytes) -> bool:
+    if not value.startswith(_JPEG_START_OF_IMAGE):
+        return False
+    offset = len(_JPEG_START_OF_IMAGE)
+    in_entropy_data = False
+    has_start_of_frame = False
+    has_start_of_scan = False
+    while offset < len(value):
+        if in_entropy_data:
+            marker_prefix = value.find(b"\xff", offset)
+            if marker_prefix < 0:
+                return False
+            offset = marker_prefix
+        elif value[offset] != 0xFF:
+            return False
+        while offset < len(value) and value[offset] == 0xFF:
+            offset += 1
+        if offset >= len(value):
+            return False
+        marker = value[offset]
+        offset += 1
+        if in_entropy_data and (marker == 0x00 or 0xD0 <= marker <= 0xD7):
+            continue
+        in_entropy_data = False
+        if marker == 0xD9:
+            return (
+                has_start_of_frame
+                and has_start_of_scan
+                and not any(value[offset:])
+            )
+        if marker in {0x00, 0x01, 0xD8} or 0xD0 <= marker <= 0xD7:
+            return False
+        if offset + 2 > len(value):
+            return False
+        segment_length = int.from_bytes(value[offset : offset + 2], "big")
+        segment_end = offset + segment_length
+        if segment_length < 2 or segment_end > len(value):
+            return False
+        if marker in _JPEG_START_OF_FRAME_MARKERS:
+            if segment_length < 11:
+                return False
+            component_count = value[offset + 7]
+            if component_count == 0 or segment_length != 8 + 3 * component_count:
+                return False
+            has_start_of_frame = True
+        elif marker == 0xDA:
+            if not has_start_of_frame or segment_length < 8:
+                return False
+            component_count = value[offset + 2]
+            if component_count == 0 or segment_length != 6 + 2 * component_count:
+                return False
+            has_start_of_scan = True
+            in_entropy_data = True
+        offset = segment_end
+    return False
+
+
 def _package_xml_elements(
     source: bytes,
 ) -> tuple[tuple[tuple[str, Any], ...], frozenset[str], bool]:
@@ -847,11 +922,13 @@ def _package_xml_elements(
             )
             has_malformed_part = has_malformed_part or malformed_manifest
         except Exception:
-            for member, member_name in normalized_members:
-                if member.is_dir() or member_name == _CONTENT_TYPES_MEMBER:
+            for member in members:
+                if member.is_dir() or member.filename == _CONTENT_TYPES_MEMBER:
                     continue
                 try:
-                    elements.append((member_name, parse_xml(archive.read(member))))
+                    elements.append(
+                        (member.filename, parse_xml(archive.read(member)))
+                    )
                 except Exception:
                     continue
             return tuple(elements), frozenset(), True
@@ -901,7 +978,7 @@ def _package_xml_elements(
                 member_name != _THUMBNAIL_MEMBER
                 or type(content_type) is not str
                 or content_type.casefold() != _THUMBNAIL_CONTENT_TYPE
-                or not member_bytes.startswith(_JPEG_SIGNATURE)
+                or not _is_complete_jpeg(member_bytes)
             ):
                 has_malformed_part = True
             continue

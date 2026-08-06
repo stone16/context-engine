@@ -52,7 +52,8 @@ raw OPC archive and strictly parses `[Content_Types].xml` before constructing a
 every successfully parsed root is scanned for visuals first, so a figure
 refusal takes precedence over malformed or unrepresented XML even when
 `python-docx` cannot load the package. When the content-type manifest itself is
-unparseable, every independently parseable raw member is still scanned for
+unparseable, every independently parseable raw member, including a member whose
+raw ZIP name is not an admissible canonical package path, is still scanned for
 visuals before the retained manifest refusal. Archive names, PartNames, media
 types, case-folded declarations, and relationship reachability are validated. The
 content-type manifest admits an attribute-free, text-free root containing only
@@ -64,11 +65,14 @@ subtype except for case; parser-normalized whitespace is never accepted. Every
 extension must use the closed ASCII token grammar while excluding `.` and `..`,
 even when no member uses the declaration. The
 relationship grammar requires exact permitted attributes, unique non-empty
-identifiers, valid target modes, and the exact root-to-main office-document
-relationship type. A manifest relabel cannot hide related XML: non-XML related
+identifiers, valid target modes, canonical raw targets without empty or dot
+segments, and the exact root-to-main office-document relationship type. A
+manifest relabel cannot hide related XML: non-XML related
 parts outside exact admitted binary relationship classes must parse as XML.
 Thumbnail admission requires the root relationship, exact
-`docProps/thumbnail.jpeg` target, exact JPEG media type, and JPEG signature.
+`docProps/thumbnail.jpeg` target, exact JPEG media type, and a complete bounded
+JPEG marker structure through start-of-frame, start-of-scan, and end-of-image;
+a signature prefix alone is never admitted.
 OLE relationships refuse because the active profile cannot represent embedded
 OLE and no complete compound-file validator is registered. Orphan, unknown,
 and path-ambiguous members fail closed. Admitted thumbnail bytes are inventoried

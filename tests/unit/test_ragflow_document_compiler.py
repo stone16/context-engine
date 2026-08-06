@@ -381,6 +381,51 @@ def _docx_with_binary_ole_part(*, content_type: str) -> bytes:
     return _save_docx(document)
 
 
+def _docx_with_aliased_root_relationship_target(target: str) -> bytes:
+    document = Document()
+    document.add_paragraph("Retained body text.")
+    source = _save_docx(document)
+    canonical_target = (
+        "word/document.xml"
+        if target.startswith("word/")
+        else "docProps/thumbnail.jpeg"
+    )
+    expected = f'Target="{canonical_target}"'.encode()
+    replacement = f'Target="{target}"'.encode()
+    output = io.BytesIO()
+    with (
+        zipfile.ZipFile(io.BytesIO(source)) as source_archive,
+        zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as target_archive,
+    ):
+        for member in source_archive.infolist():
+            member_bytes = source_archive.read(member.filename)
+            if member.filename == "_rels/.rels":
+                assert expected in member_bytes
+                member_bytes = member_bytes.replace(expected, replacement, 1)
+            target_archive.writestr(member, member_bytes)
+    return output.getvalue()
+
+
+def _docx_with_invalid_thumbnail(thumbnail_bytes: bytes) -> bytes:
+    document = Document()
+    document.add_paragraph("Retained body text.")
+    source = _save_docx(document)
+    output = io.BytesIO()
+    replaced_thumbnail = False
+    with (
+        zipfile.ZipFile(io.BytesIO(source)) as source_archive,
+        zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as target_archive,
+    ):
+        for member in source_archive.infolist():
+            member_bytes = source_archive.read(member.filename)
+            if member.filename == "docProps/thumbnail.jpeg":
+                member_bytes = thumbnail_bytes
+                replaced_thumbnail = True
+            target_archive.writestr(member, member_bytes)
+    assert replaced_thumbnail
+    return output.getvalue()
+
+
 def _docx_with_unsupported_drawing(*, in_header: bool) -> bytes:
     document = Document()
     document.add_paragraph("Retained body text.")
@@ -671,6 +716,28 @@ def _docx_with_malformed_content_type_manifest(
                 else:
                     raise ValueError("unknown malformed manifest kind")
             target_archive.writestr(member, member_bytes)
+    return output.getvalue()
+
+
+def _docx_with_unparseable_manifest_and_unsafe_raw_visual_member() -> bytes:
+    document = Document()
+    document.add_paragraph("Retained body text.")
+    source = _save_docx(document)
+    raw_visual_xml = (
+        b'<w:document xmlns:w="http://schemas.openxmlformats.org/'
+        b'wordprocessingml/2006/main"><w:drawing/></w:document>'
+    )
+    output = io.BytesIO()
+    with (
+        zipfile.ZipFile(io.BytesIO(source)) as source_archive,
+        zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as target_archive,
+    ):
+        for member in source_archive.infolist():
+            member_bytes = source_archive.read(member.filename)
+            if member.filename == "[Content_Types].xml":
+                member_bytes = b"<Types"
+            target_archive.writestr(member, member_bytes)
+        target_archive.writestr("word/../raw-visual.xml", raw_visual_xml)
     return output.getvalue()
 
 
@@ -1505,6 +1572,17 @@ def test_docx_unparseable_manifest_preserves_raw_visual_precedence_at_both_seams
         assert outcome.code is DocumentCompilationFailureCode.FIGURE_NOT_SUPPORTED
 
 
+def test_docx_unparseable_manifest_scans_unsafe_raw_visual_members_at_both_seams(
+) -> None:
+    outcomes = _compile_docx_at_public_seams(
+        _docx_with_unparseable_manifest_and_unsafe_raw_visual_member()
+    )
+
+    for outcome in outcomes:
+        assert type(outcome) is DocumentCompilationFailure
+        assert outcome.code is DocumentCompilationFailureCode.FIGURE_NOT_SUPPORTED
+
+
 @pytest.mark.parametrize("declaration_kind", ("media-type", "extension"))
 def test_docx_refuses_unused_malformed_content_type_declarations_at_both_seams(
     declaration_kind: str,
@@ -1669,6 +1747,48 @@ def test_docx_refuses_hostile_root_document_relationships_at_both_seams(
 ) -> None:
     outcomes = _compile_docx_at_public_seams(
         _docx_with_hostile_root_document_relationship(relationship_kind)
+    )
+
+    for outcome in outcomes:
+        assert type(outcome) is DocumentCompilationFailure
+        assert outcome.code is DocumentCompilationFailureCode.INVALID_ARTIFACT
+
+
+@pytest.mark.parametrize(
+    "target",
+    (
+        "word//document.xml",
+        "docProps//thumbnail.jpeg",
+        "docProps/./thumbnail.jpeg",
+    ),
+    ids=("document-double-slash", "thumbnail-double-slash", "thumbnail-dot-segment"),
+)
+def test_docx_refuses_raw_relationship_target_aliases_at_both_seams(
+    target: str,
+) -> None:
+    outcomes = _compile_docx_at_public_seams(
+        _docx_with_aliased_root_relationship_target(target)
+    )
+
+    for outcome in outcomes:
+        assert type(outcome) is DocumentCompilationFailure
+        assert outcome.code is DocumentCompilationFailureCode.INVALID_ARTIFACT
+
+
+@pytest.mark.parametrize(
+    "thumbnail_bytes",
+    (
+        b"\xff\xd8\xff",
+        b'\xff\xd8\xff<w:drawing xmlns:w="http://schemas.openxmlformats.org/'
+        b'wordprocessingml/2006/main"/>',
+    ),
+    ids=("truncated-marker", "drawing-after-signature"),
+)
+def test_docx_refuses_incomplete_jpeg_thumbnails_at_both_seams(
+    thumbnail_bytes: bytes,
+) -> None:
+    outcomes = _compile_docx_at_public_seams(
+        _docx_with_invalid_thumbnail(thumbnail_bytes)
     )
 
     for outcome in outcomes:
