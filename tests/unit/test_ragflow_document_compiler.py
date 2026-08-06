@@ -16,11 +16,11 @@ import pytest
 import rfc8785
 from docx import Document
 from docx.document import Document as DocumentType
-from docx.oxml import OxmlElement
-from docx.oxml.ns import qn
 from docx.opc.constants import CONTENT_TYPE, RELATIONSHIP_TYPE
 from docx.opc.packuri import PackURI
 from docx.opc.part import Part
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
 from lxml import etree
 from pypdf import PdfWriter
 from pypdf.generic import Destination
