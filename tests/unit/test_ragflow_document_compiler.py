@@ -85,15 +85,26 @@ def _docx_fixture(*, with_image: bool = False) -> bytes:
 
         run = document.add_paragraph().add_run()
         run._r.append(parse_xml(f"<pic:pic {nsdecls('pic')}></pic:pic>"))
-    output = io.BytesIO()
-    document.save(output)
-    return output.getvalue()
+    return _save_docx(document)
 
 
 def _save_docx(document: DocumentType) -> bytes:
     output = io.BytesIO()
     document.save(output)
-    return output.getvalue()
+    canonical = io.BytesIO()
+    with (
+        zipfile.ZipFile(io.BytesIO(output.getvalue())) as source_archive,
+        zipfile.ZipFile(canonical, "w", zipfile.ZIP_DEFLATED) as target_archive,
+    ):
+        for member in source_archive.infolist():
+            member_bytes = source_archive.read(member.filename)
+            if member.filename == "word/_rels/document.xml.rels":
+                member_bytes = member_bytes.replace(
+                    b'Target="../customXml/item1.xml"',
+                    b'Target="/customXml/item1.xml"',
+                )
+            target_archive.writestr(member, member_bytes)
+    return canonical.getvalue()
 
 
 def _compile_docx_at_public_seams(source: bytes) -> tuple[
@@ -309,6 +320,25 @@ def _docx_with_relabeled_related_xml(part_kind: str, payload_kind: str) -> bytes
     return _relabel_docx_part_as_binary(source, "word/footnotes.xml")
 
 
+def _docx_with_relabeled_header_visual_and_malformed_relationships() -> bytes:
+    source = _docx_with_relabeled_header_xml("w:drawing")
+    output = io.BytesIO()
+    with (
+        zipfile.ZipFile(io.BytesIO(source)) as source_archive,
+        zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as target_archive,
+    ):
+        for member in source_archive.infolist():
+            member_bytes = source_archive.read(member.filename)
+            if member.filename == "word/_rels/document.xml.rels":
+                member_bytes = member_bytes.replace(
+                    b"<Relationships ",
+                    b'<Relationships hostile="1" ',
+                    1,
+                )
+            target_archive.writestr(member, member_bytes)
+    return output.getvalue()
+
+
 def _docx_with_visible_header_text() -> bytes:
     document = Document()
     document.add_paragraph("Retained body text.")
@@ -381,6 +411,44 @@ def _docx_with_binary_ole_part(*, content_type: str) -> bytes:
     return _save_docx(document)
 
 
+def _docx_with_ole_relationship(target_kind: str) -> bytes:
+    document = Document()
+    document.add_paragraph("Retained body text.")
+    source = _save_docx(document)
+    output = io.BytesIO()
+    custom_xml_relationship_type = RELATIONSHIP_TYPE.CUSTOM_XML.encode()
+    ole_relationship_type = RELATIONSHIP_TYPE.OLE_OBJECT.encode()
+    with (
+        zipfile.ZipFile(io.BytesIO(source)) as source_archive,
+        zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as target_archive,
+    ):
+        for member in source_archive.infolist():
+            member_bytes = source_archive.read(member.filename)
+            if member.filename == "word/_rels/document.xml.rels":
+                if target_kind == "existing-xml":
+                    assert custom_xml_relationship_type in member_bytes
+                    member_bytes = member_bytes.replace(
+                        custom_xml_relationship_type,
+                        ole_relationship_type,
+                        1,
+                    )
+                elif target_kind == "external":
+                    relationship = (
+                        b'<Relationship Id="rIdExternalOle" Type="'
+                        + ole_relationship_type
+                        + b'" Target="https://example.invalid/object" '
+                        b'TargetMode="External"/>'
+                    )
+                    member_bytes = member_bytes.replace(
+                        b"</Relationships>",
+                        relationship + b"</Relationships>",
+                    )
+                else:
+                    raise ValueError("unknown OLE relationship target kind")
+            target_archive.writestr(member, member_bytes)
+    return output.getvalue()
+
+
 def _docx_with_aliased_root_relationship_target(target: str) -> bytes:
     document = Document()
     document.add_paragraph("Retained body text.")
@@ -424,6 +492,45 @@ def _docx_with_invalid_thumbnail(thumbnail_bytes: bytes) -> bytes:
             target_archive.writestr(member, member_bytes)
     assert replaced_thumbnail
     return output.getvalue()
+
+
+def _docx_with_external_thumbnail_relationship() -> bytes:
+    document = Document()
+    document.add_paragraph("Retained body text.")
+    source = _save_docx(document)
+    output = io.BytesIO()
+    with (
+        zipfile.ZipFile(io.BytesIO(source)) as source_archive,
+        zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as target_archive,
+    ):
+        for member in source_archive.infolist():
+            if member.filename == "docProps/thumbnail.jpeg":
+                continue
+            member_bytes = source_archive.read(member.filename)
+            if member.filename == "_rels/.rels":
+                member_bytes = member_bytes.replace(
+                    b'Target="docProps/thumbnail.jpeg"',
+                    b'Target="https://example.invalid/thumbnail.jpeg" '
+                    b'TargetMode="External"',
+                )
+            target_archive.writestr(member, member_bytes)
+    return output.getvalue()
+
+
+def _single_component_jpeg_thumbnail(
+    *, width: int, height: int, scan_component_id: int = 1
+) -> bytes:
+    return (
+        b"\xff\xd8"
+        b"\xff\xc0\x00\x0b\x08"
+        + height.to_bytes(2, "big")
+        + width.to_bytes(2, "big")
+        + b"\x01\x01\x11\x00"
+        + b"\xff\xda\x00\x08\x01"
+        + bytes((scan_component_id,))
+        + b"\x00\x00\x3f\x00"
+        + b"\xff\xd9"
+    )
 
 
 def _docx_with_unsupported_drawing(*, in_header: bool) -> bytes:
@@ -1055,9 +1162,7 @@ def _docx_fixture_with_blank_source_block() -> bytes:
     document.add_heading("Architecture", level=1)
     document.add_paragraph("")
     document.add_paragraph("After blank source block.")
-    output = io.BytesIO()
-    document.save(output)
-    return output.getvalue()
+    return _save_docx(document)
 
 
 def _pdf_outline_fixture() -> bytes:
@@ -1307,6 +1412,17 @@ def test_docx_relabeled_related_xml_cannot_bypass_package_scanning(
             if payload_kind == "w:drawing"
             else DocumentCompilationFailureCode.INVALID_ARTIFACT
         )
+
+
+def test_docx_malformed_relationships_preserve_raw_visual_refusal_precedence(
+) -> None:
+    outcomes = _compile_docx_at_public_seams(
+        _docx_with_relabeled_header_visual_and_malformed_relationships()
+    )
+
+    for outcome in outcomes:
+        assert type(outcome) is DocumentCompilationFailure
+        assert outcome.code is DocumentCompilationFailureCode.FIGURE_NOT_SUPPORTED
 
 
 def test_docx_header_cannot_hide_behind_thumbnail_relationship_at_both_seams(
@@ -1758,10 +1874,16 @@ def test_docx_refuses_hostile_root_document_relationships_at_both_seams(
     "target",
     (
         "word//document.xml",
+        "word/../word/document.xml",
         "docProps//thumbnail.jpeg",
         "docProps/./thumbnail.jpeg",
     ),
-    ids=("document-double-slash", "thumbnail-double-slash", "thumbnail-dot-segment"),
+    ids=(
+        "document-double-slash",
+        "document-parent-segment",
+        "thumbnail-double-slash",
+        "thumbnail-dot-segment",
+    ),
 )
 def test_docx_refuses_raw_relationship_target_aliases_at_both_seams(
     target: str,
@@ -1789,6 +1911,44 @@ def test_docx_refuses_incomplete_jpeg_thumbnails_at_both_seams(
 ) -> None:
     outcomes = _compile_docx_at_public_seams(
         _docx_with_invalid_thumbnail(thumbnail_bytes)
+    )
+
+    for outcome in outcomes:
+        assert type(outcome) is DocumentCompilationFailure
+        assert outcome.code is DocumentCompilationFailureCode.INVALID_ARTIFACT
+
+
+def test_docx_refuses_zero_dimension_jpeg_thumbnail_at_both_seams() -> None:
+    outcomes = _compile_docx_at_public_seams(
+        _docx_with_invalid_thumbnail(
+            _single_component_jpeg_thumbnail(width=0, height=0)
+        )
+    )
+
+    for outcome in outcomes:
+        assert type(outcome) is DocumentCompilationFailure
+        assert outcome.code is DocumentCompilationFailureCode.INVALID_ARTIFACT
+
+
+def test_docx_refuses_unbound_jpeg_scan_component_at_both_seams() -> None:
+    outcomes = _compile_docx_at_public_seams(
+        _docx_with_invalid_thumbnail(
+            _single_component_jpeg_thumbnail(
+                width=1,
+                height=1,
+                scan_component_id=2,
+            )
+        )
+    )
+
+    for outcome in outcomes:
+        assert type(outcome) is DocumentCompilationFailure
+        assert outcome.code is DocumentCompilationFailureCode.INVALID_ARTIFACT
+
+
+def test_docx_refuses_external_thumbnail_relationship_at_both_seams() -> None:
+    outcomes = _compile_docx_at_public_seams(
+        _docx_with_external_thumbnail_relationship()
     )
 
     for outcome in outcomes:
@@ -1897,6 +2057,19 @@ def test_docx_refuses_unvalidated_ole_compound_file_at_both_seams(
 ) -> None:
     outcomes = _compile_docx_at_public_seams(
         _docx_with_binary_ole_part(content_type=content_type)
+    )
+
+    for outcome in outcomes:
+        assert type(outcome) is DocumentCompilationFailure
+        assert outcome.code is DocumentCompilationFailureCode.INVALID_ARTIFACT
+
+
+@pytest.mark.parametrize("target_kind", ("external", "existing-xml"))
+def test_docx_refuses_every_ole_relationship_at_both_seams(
+    target_kind: str,
+) -> None:
+    outcomes = _compile_docx_at_public_seams(
+        _docx_with_ole_relationship(target_kind)
     )
 
     for outcome in outcomes:

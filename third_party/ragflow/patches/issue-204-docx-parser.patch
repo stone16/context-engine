@@ -1,214 +1,31 @@
 diff --git a/deepdoc/parser/docx_parser.py b/deepdoc/parser/docx_parser.py
-index 48f8db8..5b7aeee 100644
+index 48f8db8..ab7fb24 100644
 --- a/deepdoc/parser/docx_parser.py
 +++ b/deepdoc/parser/docx_parser.py
-@@ -1,182 +1,1468 @@
+@@ -15,168 +15,1484 @@
  #
--#  Copyright 2025 The InfiniFlow Authors. All Rights Reserved.
--#
--#  Licensed under the Apache License, Version 2.0 (the "License");
--#  you may not use this file except in compliance with the License.
--#  You may obtain a copy of the License at
--#
--#      http://www.apache.org/licenses/LICENSE-2.0
--#
--#  Unless required by applicable law or agreed to in writing, software
--#  distributed under the License is distributed on an "AS IS" BASIS,
--#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
--#  See the License for the specific language governing permissions and
--#  limitations under the License.
--#
++#  Modified by ContextEngine: dependency-entangled classification and image
++#  behavior were removed; the parser now emits source-ordered raw OOXML blocks.
 -
++
 -from docx import Document
 -import re
 -import pandas as pd
 -from collections import Counter
 -from rag.nlp import rag_tokenizer
--from io import BytesIO
--import logging
--from common.constants import MAXIMUM_PAGE_NUMBER
--from docx.image.exceptions import (
--    InvalidImageStreamError,
--    UnexpectedEndOfFileError,
--    UnrecognizedImageError,
--)
--from rag.utils.lazy_image import LazyImage
--
--
--class RAGFlowDocxParser:
--    def get_picture(self, document, paragraph):
--        imgs = paragraph._element.xpath(".//pic:pic")
--        if not imgs:
--            return None
--        image_blobs = []
--        for img in imgs:
--            embed = img.xpath(".//a:blip/@r:embed")
--            if not embed:
--                continue
--            embed = embed[0]
--            image_blob = None
--            try:
--                related_part = document.part.related_parts[embed]
--            except Exception as e:
--                logging.warning(f"Skipping image due to unexpected error getting related_part: {e}")
--                continue
--
--            try:
--                image = related_part.image
--                if image is not None:
--                    image_blob = image.blob
--            except (
--                UnrecognizedImageError,
--                UnexpectedEndOfFileError,
--                InvalidImageStreamError,
--                UnicodeDecodeError,
--            ) as e:
--                logging.info(f"Damaged image encountered, attempting blob fallback: {e}")
--            except Exception as e:
--                logging.warning(f"Unexpected error getting image, attempting blob fallback: {e}")
--
--            if image_blob is None:
--                image_blob = getattr(related_part, "blob", None)
--            if image_blob:
--                image_blobs.append(image_blob)
--        if not image_blobs:
--            return None
--        return LazyImage(image_blobs)
--
--    def __extract_table_content(self, tb):
--        df = []
--        for row in tb.rows:
--            df.append([c.text for c in row.cells])
--        return self.__compose_table_content(pd.DataFrame(df))
--
--    def __compose_table_content(self, df):
--
--        def blockType(b):
--            pattern = [
--                ("^(20|19)[0-9]{2}[年/-][0-9]{1,2}[月/-][0-9]{1,2}日*$", "Dt"),
--                (r"^(20|19)[0-9]{2}年$", "Dt"),
--                (r"^(20|19)[0-9]{2}[年/-][0-9]{1,2}月*$", "Dt"),
--                ("^[0-9]{1,2}[月/-][0-9]{1,2}日*$", "Dt"),
--                (r"^第*[一二三四1-4]季度$", "Dt"),
--                (r"^(20|19)[0-9]{2}年*[一二三四1-4]季度$", "Dt"),
--                (r"^(20|19)[0-9]{2}[ABCDE]$", "DT"),
--                ("^[0-9.,+%/ -]+$", "Nu"),
--                (r"^[0-9A-Z/\._~-]+$", "Ca"),
--                (r"^[A-Z]*[a-z' -]+$", "En"),
--                (r"^[0-9.,+-]+[0-9A-Za-z/$￥%<>（）()' -]+$", "NE"),
--                (r"^.{1}$", "Sg"),
--            ]
--            for p, n in pattern:
--                if re.search(p, b):
--                    return n
--            tks = [t for t in rag_tokenizer.tokenize(b).split() if len(t) > 1]
--            if len(tks) > 3:
--                if len(tks) < 12:
--                    return "Tx"
--                else:
--                    return "Lx"
--
--            if len(tks) == 1 and rag_tokenizer.tag(tks[0]) == "nr":
--                return "Nr"
--
--            return "Ot"
--
--        if len(df) < 2:
--            return []
--        max_type = Counter([blockType(str(df.iloc[i, j])) for i in range(1, len(df)) for j in range(len(df.iloc[i, :]))])
--        max_type = max(max_type.items(), key=lambda x: x[1])[0]
--
--        colnm = len(df.iloc[0, :])
--        hdrows = [0]  # header is not necessarily appear in the first line
--        if max_type == "Nu":
--            for r in range(1, len(df)):
--                tys = Counter([blockType(str(df.iloc[r, j])) for j in range(len(df.iloc[r, :]))])
--                tys = max(tys.items(), key=lambda x: x[1])[0]
--                if tys != max_type:
--                    hdrows.append(r)
--
--        lines = []
--        for i in range(1, len(df)):
--            if i in hdrows:
--                continue
--            hr = [r - i for r in hdrows]
--            hr = [r for r in hr if r < 0]
--            t = len(hr) - 1
--            while t > 0:
--                if hr[t] - hr[t - 1] > 1:
--                    hr = hr[t:]
--                    break
--                t -= 1
--            headers = []
--            for j in range(len(df.iloc[i, :])):
--                t = []
--                for h in hr:
--                    x = str(df.iloc[i + h, j]).strip()
--                    if x in t:
--                        continue
--                    t.append(x)
--                t = ",".join(t)
--                if t:
--                    t += ": "
--                headers.append(t)
--            cells = []
--            for j in range(len(df.iloc[i, :])):
--                if not str(df.iloc[i, j]):
--                    continue
--                cells.append(headers[j] + str(df.iloc[i, j]))
--            lines.append(";".join(cells))
--
--        if colnm > 3:
--            return lines
--        return ["\n".join(lines)]
--
--    def __call__(self, fnm, from_page=0, to_page=MAXIMUM_PAGE_NUMBER):
--        self.doc = Document(fnm) if isinstance(fnm, str) else Document(BytesIO(fnm))
--        pn = 0  # parsed page
--        secs = []  # parsed contents
--        for p in self.doc.paragraphs:
--            if pn > to_page:
--                break
--
--            runs_within_single_paragraph = []  # save runs within the range of pages
--            for run in p.runs:
--                if pn > to_page:
--                    break
--                if from_page <= pn < to_page and p.text.strip():
--                    runs_within_single_paragraph.append(run.text)  # append run.text first
--
--                # wrap page break checker into a static method
--                if "lastRenderedPageBreak" in run._element.xml:
--                    pn += 1
--
--            secs.append(("".join(runs_within_single_paragraph), p.style.name if hasattr(p.style, "name") else ""))  # then concat run.text as part of the paragraph
--
--        tbls = [self.__extract_table_content(tb) for tb in self.doc.tables]
--        return secs, tbls
-+#  Copyright 2025 The InfiniFlow Authors. All Rights Reserved.
-+#
-+#  Licensed under the Apache License, Version 2.0 (the "License");
-+#  you may not use this file except in compliance with the License.
-+#  You may obtain a copy of the License at
-+#
-+#      http://www.apache.org/licenses/LICENSE-2.0
-+#
-+#  Unless required by applicable law or agreed to in writing, software
-+#  distributed under the License is distributed on an "AS IS" BASIS,
-+#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-+#  See the License for the specific language governing permissions and
-+#  limitations under the License.
-+#
-+#  Modified by ContextEngine: dependency-entangled classification and image
-+#  behavior were removed; the parser now emits source-ordered raw OOXML blocks.
-+
 +"""Patched RAGFlow DOCX block extraction with no application dependencies."""
 +
 +from __future__ import annotations
 +
 +from dataclasses import dataclass
 +from email import policy
-+from io import BytesIO
+ from io import BytesIO
+-import logging
+-from common.constants import MAXIMUM_PAGE_NUMBER
+-from docx.image.exceptions import (
+-    InvalidImageStreamError,
+-    UnexpectedEndOfFileError,
+-    UnrecognizedImageError,
 +from typing import Any, Final
 +from zipfile import ZipFile
 +
@@ -348,7 +165,8 @@ index 48f8db8..5b7aeee 100644
 +)
 +_CORE_PROPERTIES_NAMESPACE: Final = (
 +    "http://schemas.openxmlformats.org/package/2006/metadata/core-properties"
-+)
+ )
+-from rag.utils.lazy_image import LazyImage
 +_DC_NAMESPACE: Final = "http://purl.org/dc/elements/1.1/"
 +_DCTERMS_NAMESPACE: Final = "http://purl.org/dc/terms/"
 +_EXTENDED_PROPERTIES_NAMESPACE: Final = (
@@ -787,8 +605,22 @@ index 48f8db8..5b7aeee 100644
 +        }
 +    ),
 +}
+-
 +
+-
 +
+-class RAGFlowDocxParser:
+-    def get_picture(self, document, paragraph):
+-        imgs = paragraph._element.xpath(".//pic:pic")
+-        if not imgs:
+-            return None
+-        image_blobs = []
+-        for img in imgs:
+-            embed = img.xpath(".//a:blip/@r:embed")
+-            if not embed:
+-                continue
+-            embed = embed[0]
+-            image_blob = None
 +class UnsupportedDocxFigureError(ValueError):
 +    """The closed DOCX profile encountered an unsupported visual object."""
 +
@@ -879,7 +711,10 @@ index 48f8db8..5b7aeee 100644
 +        elif declaration.tag == _CONTENT_TYPE_OVERRIDE_TAG:
 +            permitted_attributes = {"PartName", "ContentType"}
 +            part_name = declaration.get("PartName")
-+            try:
+             try:
+-                related_part = document.part.related_parts[embed]
+-            except Exception as e:
+-                logging.warning(f"Skipping image due to unexpected error getting related_part: {e}")
 +                key = _normalized_package_path(part_name, leading_slash=True)
 +            except ValueError:
 +                has_malformed_declaration = True
@@ -901,7 +736,7 @@ index 48f8db8..5b7aeee 100644
 +        ):
 +            has_malformed_declaration = True
 +            if type(key) is not str or not key or type(content_type) is not str:
-+                continue
+                 continue
 +        try:
 +            _is_xml_content_type(content_type)
 +        except ValueError:
@@ -913,7 +748,85 @@ index 48f8db8..5b7aeee 100644
 +            continue
 +        target[normalized_key] = content_type
 +    return defaults, overrides, has_malformed_declaration
+-
 +
+-            try:
+-                image = related_part.image
+-                if image is not None:
+-                    image_blob = image.blob
+-            except (
+-                UnrecognizedImageError,
+-                UnexpectedEndOfFileError,
+-                InvalidImageStreamError,
+-                UnicodeDecodeError,
+-            ) as e:
+-                logging.info(f"Damaged image encountered, attempting blob fallback: {e}")
+-            except Exception as e:
+-                logging.warning(f"Unexpected error getting image, attempting blob fallback: {e}")
+-
+-            if image_blob is None:
+-                image_blob = getattr(related_part, "blob", None)
+-            if image_blob:
+-                image_blobs.append(image_blob)
+-        if not image_blobs:
+-            return None
+-        return LazyImage(image_blobs)
+-
+-    def __extract_table_content(self, tb):
+-        df = []
+-        for row in tb.rows:
+-            df.append([c.text for c in row.cells])
+-        return self.__compose_table_content(pd.DataFrame(df))
+-
+-    def __compose_table_content(self, df):
+-
+-        def blockType(b):
+-            pattern = [
+-                ("^(20|19)[0-9]{2}[年/-][0-9]{1,2}[月/-][0-9]{1,2}日*$", "Dt"),
+-                (r"^(20|19)[0-9]{2}年$", "Dt"),
+-                (r"^(20|19)[0-9]{2}[年/-][0-9]{1,2}月*$", "Dt"),
+-                ("^[0-9]{1,2}[月/-][0-9]{1,2}日*$", "Dt"),
+-                (r"^第*[一二三四1-4]季度$", "Dt"),
+-                (r"^(20|19)[0-9]{2}年*[一二三四1-4]季度$", "Dt"),
+-                (r"^(20|19)[0-9]{2}[ABCDE]$", "DT"),
+-                ("^[0-9.,+%/ -]+$", "Nu"),
+-                (r"^[0-9A-Z/\._~-]+$", "Ca"),
+-                (r"^[A-Z]*[a-z' -]+$", "En"),
+-                (r"^[0-9.,+-]+[0-9A-Za-z/$￥%<>（）()' -]+$", "NE"),
+-                (r"^.{1}$", "Sg"),
+-            ]
+-            for p, n in pattern:
+-                if re.search(p, b):
+-                    return n
+-            tks = [t for t in rag_tokenizer.tokenize(b).split() if len(t) > 1]
+-            if len(tks) > 3:
+-                if len(tks) < 12:
+-                    return "Tx"
+-                else:
+-                    return "Lx"
+-
+-            if len(tks) == 1 and rag_tokenizer.tag(tks[0]) == "nr":
+-                return "Nr"
+-
+-            return "Ot"
+-
+-        if len(df) < 2:
+-            return []
+-        max_type = Counter([blockType(str(df.iloc[i, j])) for i in range(1, len(df)) for j in range(len(df.iloc[i, :]))])
+-        max_type = max(max_type.items(), key=lambda x: x[1])[0]
+-
+-        colnm = len(df.iloc[0, :])
+-        hdrows = [0]  # header is not necessarily appear in the first line
+-        if max_type == "Nu":
+-            for r in range(1, len(df)):
+-                tys = Counter([blockType(str(df.iloc[r, j])) for j in range(len(df.iloc[r, :]))])
+-                tys = max(tys.items(), key=lambda x: x[1])[0]
+-                if tys != max_type:
+-                    hdrows.append(r)
+-
+-        lines = []
+-        for i in range(1, len(df)):
+-            if i in hdrows:
 +
 +def _relationship_part_source(member_name: str) -> str | None:
 +    if member_name == "_rels/.rels":
@@ -930,17 +843,12 @@ index 48f8db8..5b7aeee 100644
 +    parent = source_part.rpartition("/")[0]
 +    segments = [segment for segment in parent.split("/") if segment]
 +    target_segments = target.split("/")
-+    if any(not segment or segment == "." for segment in target_segments):
++    if any(not segment or segment in {".", ".."} for segment in target_segments):
 +        raise ValueError("DOCX relationship target is not canonical")
 +    for segment in target_segments:
-+        if segment == "..":
-+            if not segments:
-+                raise ValueError("DOCX relationship target escapes the package")
-+            segments.pop()
-+        elif "\\" in segment or "%" in segment:
++        if "\\" in segment or "%" in segment:
 +            raise ValueError("DOCX relationship target is not canonical")
-+        else:
-+            segments.append(segment)
++        segments.append(segment)
 +    return _normalized_package_path("/".join(segments), leading_slash=False)
 +
 +
@@ -985,8 +893,38 @@ index 48f8db8..5b7aeee 100644
 +            ):
 +                raise ValueError("DOCX relationship is malformed")
 +            relationship_ids.add(relationship_id)
++            if relationship_type == _OLE_OBJECT_RELATIONSHIP_TYPE:
++                raise ValueError("DOCX OLE relationships are outside the grammar")
++            if (
++                relationship_type == _THUMBNAIL_RELATIONSHIP_TYPE
++                and target_mode == "External"
++            ):
++                raise ValueError("DOCX thumbnail relationship must be internal")
 +            if target_mode == "External":
-+                continue
+                 continue
+-            hr = [r - i for r in hdrows]
+-            hr = [r for r in hr if r < 0]
+-            t = len(hr) - 1
+-            while t > 0:
+-                if hr[t] - hr[t - 1] > 1:
+-                    hr = hr[t:]
+-                    break
+-                t -= 1
+-            headers = []
+-            for j in range(len(df.iloc[i, :])):
+-                t = []
+-                for h in hr:
+-                    x = str(df.iloc[i + h, j]).strip()
+-                    if x in t:
+-                        continue
+-                    t.append(x)
+-                t = ",".join(t)
+-                if t:
+-                    t += ": "
+-                headers.append(t)
+-            cells = []
+-            for j in range(len(df.iloc[i, :])):
+-                if not str(df.iloc[i, j]):
 +            resolved = _resolved_relationship_target(source_part, target)
 +            if relationship_type == _THUMBNAIL_RELATIONSHIP_TYPE and (
 +                source_part != "" or resolved != _THUMBNAIL_MEMBER
@@ -1023,7 +961,8 @@ index 48f8db8..5b7aeee 100644
 +        return False
 +    offset = len(_JPEG_START_OF_IMAGE)
 +    in_entropy_data = False
-+    has_start_of_frame = False
++    frame_component_ids: frozenset[int] | None = None
++    scanned_component_ids: set[int] = set()
 +    has_start_of_scan = False
 +    while offset < len(value):
 +        if in_entropy_data:
@@ -1044,8 +983,9 @@ index 48f8db8..5b7aeee 100644
 +        in_entropy_data = False
 +        if marker == 0xD9:
 +            return (
-+                has_start_of_frame
++                frame_component_ids is not None
 +                and has_start_of_scan
++                and scanned_component_ids == frame_component_ids
 +                and not any(value[offset:])
 +            )
 +        if marker in {0x00, 0x01, 0xD8} or 0xD0 <= marker <= 0xD7:
@@ -1057,18 +997,36 @@ index 48f8db8..5b7aeee 100644
 +        if segment_length < 2 or segment_end > len(value):
 +            return False
 +        if marker in _JPEG_START_OF_FRAME_MARKERS:
-+            if segment_length < 11:
++            if segment_length < 11 or frame_component_ids is not None:
 +                return False
 +            component_count = value[offset + 7]
 +            if component_count == 0 or segment_length != 8 + 3 * component_count:
 +                return False
-+            has_start_of_frame = True
++            height = int.from_bytes(value[offset + 3 : offset + 5], "big")
++            width = int.from_bytes(value[offset + 5 : offset + 7], "big")
++            component_ids = frozenset(
++                value[offset + 8 + component_offset * 3]
++                for component_offset in range(component_count)
++            )
++            if width == 0 or height == 0 or len(component_ids) != component_count:
++                return False
++            frame_component_ids = component_ids
 +        elif marker == 0xDA:
-+            if not has_start_of_frame or segment_length < 8:
++            if frame_component_ids is None or segment_length < 8:
 +                return False
 +            component_count = value[offset + 2]
 +            if component_count == 0 or segment_length != 6 + 2 * component_count:
 +                return False
++            scan_component_ids = frozenset(
++                value[offset + 3 + component_offset * 2]
++                for component_offset in range(component_count)
++            )
++            if (
++                len(scan_component_ids) != component_count
++                or not scan_component_ids.issubset(frame_component_ids)
++            ):
++                return False
++            scanned_component_ids.update(scan_component_ids)
 +            has_start_of_scan = True
 +            in_entropy_data = True
 +        offset = segment_end
@@ -1110,7 +1068,37 @@ index 48f8db8..5b7aeee 100644
 +        except Exception:
 +            for member in members:
 +                if member.is_dir() or member.filename == _CONTENT_TYPES_MEMBER:
-+                    continue
+                     continue
+-                cells.append(headers[j] + str(df.iloc[i, j]))
+-            lines.append(";".join(cells))
+-
+-        if colnm > 3:
+-            return lines
+-        return ["\n".join(lines)]
+-
+-    def __call__(self, fnm, from_page=0, to_page=MAXIMUM_PAGE_NUMBER):
+-        self.doc = Document(fnm) if isinstance(fnm, str) else Document(BytesIO(fnm))
+-        pn = 0  # parsed page
+-        secs = []  # parsed contents
+-        for p in self.doc.paragraphs:
+-            if pn > to_page:
+-                break
+-
+-            runs_within_single_paragraph = []  # save runs within the range of pages
+-            for run in p.runs:
+-                if pn > to_page:
+-                    break
+-                if from_page <= pn < to_page and p.text.strip():
+-                    runs_within_single_paragraph.append(run.text)  # append run.text first
+-
+-                # wrap page break checker into a static method
+-                if "lastRenderedPageBreak" in run._element.xml:
+-                    pn += 1
+-
+-            secs.append(("".join(runs_within_single_paragraph), p.style.name if hasattr(p.style, "name") else ""))  # then concat run.text as part of the paragraph
+-
+-        tbls = [self.__extract_table_content(tb) for tb in self.doc.tables]
+-        return secs, tbls
 +                try:
 +                    elements.append(
 +                        (member.filename, parse_xml(archive.read(member)))
@@ -1151,6 +1139,14 @@ index 48f8db8..5b7aeee 100644
 +        related_members = frozenset()
 +        relationship_types = {}
 +        has_malformed_part = True
++        for member_name, member_bytes, _content_type in package_members:
++            if member_name in parsed_member_names:
++                continue
++            try:
++                elements.append((member_name, parse_xml(member_bytes)))
++                parsed_member_names.add(member_name)
++            except Exception:
++                continue
 +    for member_name, member_bytes, content_type in package_members:
 +        if member_name in parsed_member_names or member_name not in related_members:
 +            continue

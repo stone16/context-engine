@@ -66,17 +66,20 @@ extension must use the closed ASCII token grammar while excluding `.` and `..`,
 even when no member uses the declaration. The
 relationship grammar requires exact permitted attributes, unique non-empty
 identifiers, valid target modes, canonical raw targets without empty or dot
-segments, and the exact root-to-main office-document relationship type. A
-manifest relabel cannot hide related XML: non-XML related
-parts outside exact admitted binary relationship classes must parse as XML.
-Thumbnail admission requires the root relationship, exact
-`docProps/thumbnail.jpeg` target, exact JPEG media type, and a complete bounded
-JPEG marker structure through start-of-frame, start-of-scan, and end-of-image;
-a signature prefix alone is never admitted.
-OLE relationships refuse because the active profile cannot represent embedded
-OLE and no complete compound-file validator is registered. Orphan, unknown,
-and path-ambiguous members fail closed. Admitted thumbnail bytes are inventoried
-but never parsed as XML.
+segments before resolution, and the exact root-to-main office-document
+relationship type. A manifest relabel cannot hide related XML: non-XML related
+parts outside exact admitted binary relationship classes must parse as XML. A
+malformed relationship graph likewise cannot hide raw parseable visuals; those
+members are scanned before the retained package refusal. Thumbnail admission
+requires an internal root relationship, exact `docProps/thumbnail.jpeg` target,
+exact JPEG media type, nonzero dimensions, coherent frame/scan component
+identifiers, and a complete bounded JPEG marker structure through
+start-of-frame, start-of-scan, and end-of-image; a signature prefix alone is
+never admitted. Every OLE relationship, internal or external and regardless of
+target parseability, refuses because the active profile cannot represent
+embedded OLE and no complete compound-file validator is registered. Orphan,
+unknown, and path-ambiguous members fail closed. Admitted thumbnail bytes are
+inventoried but never parsed as XML.
 
 The body-only profile admits one positive main-document/paragraph/run/table
 grammar, including recursive property-subtree validation and exact structural

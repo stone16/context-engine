@@ -744,17 +744,12 @@ def _resolved_relationship_target(source_part: str, target: str) -> str:
     parent = source_part.rpartition("/")[0]
     segments = [segment for segment in parent.split("/") if segment]
     target_segments = target.split("/")
-    if any(not segment or segment == "." for segment in target_segments):
+    if any(not segment or segment in {".", ".."} for segment in target_segments):
         raise ValueError("DOCX relationship target is not canonical")
     for segment in target_segments:
-        if segment == "..":
-            if not segments:
-                raise ValueError("DOCX relationship target escapes the package")
-            segments.pop()
-        elif "\\" in segment or "%" in segment:
+        if "\\" in segment or "%" in segment:
             raise ValueError("DOCX relationship target is not canonical")
-        else:
-            segments.append(segment)
+        segments.append(segment)
     return _normalized_package_path("/".join(segments), leading_slash=False)
 
 
@@ -799,6 +794,13 @@ def _related_member_names(
             ):
                 raise ValueError("DOCX relationship is malformed")
             relationship_ids.add(relationship_id)
+            if relationship_type == _OLE_OBJECT_RELATIONSHIP_TYPE:
+                raise ValueError("DOCX OLE relationships are outside the grammar")
+            if (
+                relationship_type == _THUMBNAIL_RELATIONSHIP_TYPE
+                and target_mode == "External"
+            ):
+                raise ValueError("DOCX thumbnail relationship must be internal")
             if target_mode == "External":
                 continue
             resolved = _resolved_relationship_target(source_part, target)
@@ -837,7 +839,8 @@ def _is_complete_jpeg(value: bytes) -> bool:
         return False
     offset = len(_JPEG_START_OF_IMAGE)
     in_entropy_data = False
-    has_start_of_frame = False
+    frame_component_ids: frozenset[int] | None = None
+    scanned_component_ids: set[int] = set()
     has_start_of_scan = False
     while offset < len(value):
         if in_entropy_data:
@@ -858,8 +861,9 @@ def _is_complete_jpeg(value: bytes) -> bool:
         in_entropy_data = False
         if marker == 0xD9:
             return (
-                has_start_of_frame
+                frame_component_ids is not None
                 and has_start_of_scan
+                and scanned_component_ids == frame_component_ids
                 and not any(value[offset:])
             )
         if marker in {0x00, 0x01, 0xD8} or 0xD0 <= marker <= 0xD7:
@@ -871,18 +875,36 @@ def _is_complete_jpeg(value: bytes) -> bool:
         if segment_length < 2 or segment_end > len(value):
             return False
         if marker in _JPEG_START_OF_FRAME_MARKERS:
-            if segment_length < 11:
+            if segment_length < 11 or frame_component_ids is not None:
                 return False
             component_count = value[offset + 7]
             if component_count == 0 or segment_length != 8 + 3 * component_count:
                 return False
-            has_start_of_frame = True
+            height = int.from_bytes(value[offset + 3 : offset + 5], "big")
+            width = int.from_bytes(value[offset + 5 : offset + 7], "big")
+            component_ids = frozenset(
+                value[offset + 8 + component_offset * 3]
+                for component_offset in range(component_count)
+            )
+            if width == 0 or height == 0 or len(component_ids) != component_count:
+                return False
+            frame_component_ids = component_ids
         elif marker == 0xDA:
-            if not has_start_of_frame or segment_length < 8:
+            if frame_component_ids is None or segment_length < 8:
                 return False
             component_count = value[offset + 2]
             if component_count == 0 or segment_length != 6 + 2 * component_count:
                 return False
+            scan_component_ids = frozenset(
+                value[offset + 3 + component_offset * 2]
+                for component_offset in range(component_count)
+            )
+            if (
+                len(scan_component_ids) != component_count
+                or not scan_component_ids.issubset(frame_component_ids)
+            ):
+                return False
+            scanned_component_ids.update(scan_component_ids)
             has_start_of_scan = True
             in_entropy_data = True
         offset = segment_end
@@ -965,6 +987,14 @@ def _package_xml_elements(
         related_members = frozenset()
         relationship_types = {}
         has_malformed_part = True
+        for member_name, member_bytes, _content_type in package_members:
+            if member_name in parsed_member_names:
+                continue
+            try:
+                elements.append((member_name, parse_xml(member_bytes)))
+                parsed_member_names.add(member_name)
+            except Exception:
+                continue
     for member_name, member_bytes, content_type in package_members:
         if member_name in parsed_member_names or member_name not in related_members:
             continue
