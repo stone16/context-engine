@@ -1,8 +1,6 @@
-diff --git a/deepdoc/parser/docx_parser.py b/deepdoc/parser/docx_parser.py
-index 48f8db8..ce215a0 100644
 --- a/deepdoc/parser/docx_parser.py
 +++ b/deepdoc/parser/docx_parser.py
-@@ -13,170 +13,89 @@
+@@ -13,170 +13,130 @@
  #  See the License for the specific language governing permissions and
  #  limitations under the License.
  #
@@ -23,8 +21,10 @@ index 48f8db8..ce215a0 100644
 -    UnrecognizedImageError,
 -)
 -from rag.utils.lazy_image import LazyImage
--
--
++"""Patched RAGFlow DOCX block extraction with no application dependencies."""
+
++from __future__ import annotations
+
 -class RAGFlowDocxParser:
 -    def get_picture(self, document, paragraph):
 -        imgs = paragraph._element.xpath(".//pic:pic")
@@ -42,7 +42,10 @@ index 48f8db8..ce215a0 100644
 -            except Exception as e:
 -                logging.warning(f"Skipping image due to unexpected error getting related_part: {e}")
 -                continue
--
++from dataclasses import dataclass
++from io import BytesIO
++from typing import Any, Final
+
 -            try:
 -                image = related_part.image
 -                if image is not None:
@@ -56,7 +59,12 @@ index 48f8db8..ce215a0 100644
 -                logging.info(f"Damaged image encountered, attempting blob fallback: {e}")
 -            except Exception as e:
 -                logging.warning(f"Unexpected error getting image, attempting blob fallback: {e}")
--
++from docx import Document
++from docx.document import Document as DocumentType
++from docx.oxml.ns import qn
++from docx.table import Table
++from docx.text.paragraph import Paragraph
+
 -            if image_blob is None:
 -                image_blob = getattr(related_part, "blob", None)
 -            if image_blob:
@@ -64,16 +72,32 @@ index 48f8db8..ce215a0 100644
 -        if not image_blobs:
 -            return None
 -        return LazyImage(image_blobs)
--
++_PARAGRAPH_TAG: Final = qn("w:p")
++_TABLE_TAG: Final = qn("w:tbl")
++_SECTION_PROPERTIES_TAG: Final = qn("w:sectPr")
++_UNSUPPORTED_CONTENT_TAGS: Final = frozenset(
++    {
++        qn("w:customXml"),
++        qn("w:del"),
++        qn("w:ins"),
++        qn("w:moveFrom"),
++        qn("w:moveTo"),
++        qn("w:sdt"),
++    }
++)
++_UNSUPPORTED_VISUAL_TAGS: Final = frozenset(
++    {qn("w:drawing"), qn("w:object"), qn("w:pict")}
++)
+
 -    def __extract_table_content(self, tb):
 -        df = []
 -        for row in tb.rows:
 -            df.append([c.text for c in row.cells])
 -        return self.__compose_table_content(pd.DataFrame(df))
-+"""Patched RAGFlow DOCX block extraction with no application dependencies."""
 
 -    def __compose_table_content(self, df):
-+from __future__ import annotations
++class UnsupportedDocxFigureError(ValueError):
++    """The closed DOCX profile encountered an unsupported visual object."""
 
 -        def blockType(b):
 -            pattern = [
@@ -99,17 +123,25 @@ index 48f8db8..ce215a0 100644
 -                    return "Tx"
 -                else:
 -                    return "Lx"
--
+
 -            if len(tks) == 1 and rag_tokenizer.tag(tks[0]) == "nr":
 -                return "Nr"
--
++def _contains_tag(element: Any, tags: frozenset[str]) -> bool:
++    return any(node.tag in tags for node in element.iter())
+
 -            return "Ot"
--
+
 -        if len(df) < 2:
 -            return []
 -        max_type = Counter([blockType(str(df.iloc[i, j])) for i in range(1, len(df)) for j in range(len(df.iloc[i, :]))])
 -        max_type = max(max_type.items(), key=lambda x: x[1])[0]
--
++def _package_contains_visual(document: DocumentType) -> bool:
++    for part in document.part.package.parts:
++        element = getattr(part, "element", None)
++        if element is not None and _contains_tag(element, _UNSUPPORTED_VISUAL_TAGS):
++            return True
++    return False
+
 -        colnm = len(df.iloc[0, :])
 -        hdrows = [0]  # header is not necessarily appear in the first line
 -        if max_type == "Nu":
@@ -118,9 +150,6 @@ index 48f8db8..ce215a0 100644
 -                tys = max(tys.items(), key=lambda x: x[1])[0]
 -                if tys != max_type:
 -                    hdrows.append(r)
-+from dataclasses import dataclass
-+from io import BytesIO
-+from typing import Final, cast
 
 -        lines = []
 -        for i in range(1, len(df)):
@@ -152,17 +181,20 @@ index 48f8db8..ce215a0 100644
 -                    continue
 -                cells.append(headers[j] + str(df.iloc[i, j]))
 -            lines.append(";".join(cells))
-+from docx import Document
-+from docx.document import Document as DocumentType
-+from docx.oxml.ns import qn
-+from docx.table import Table
-+from docx.text.paragraph import Paragraph
++@dataclass(frozen=True, slots=True)
++class RawDocxBlock:
++    """One bounded block in OOXML body order."""
 
 -        if colnm > 3:
 -            return lines
 -        return ["\n".join(lines)]
-+_PARAGRAPH_TAG: Final = qn("w:p")
-+_TABLE_TAG: Final = qn("w:tbl")
++    kind: str
++    block_ordinal: int
++    text: str
++    style_name: str | None
++    xml: bytes
++    table_cells: tuple[tuple[str, ...], ...] = ()
++    has_figure: bool = False
 
 -    def __call__(self, fnm, from_page=0, to_page=MAXIMUM_PAGE_NUMBER):
 -        self.doc = Document(fnm) if isinstance(fnm, str) else Document(BytesIO(fnm))
@@ -178,35 +210,26 @@ index 48f8db8..ce215a0 100644
 -                    break
 -                if from_page <= pn < to_page and p.text.strip():
 -                    runs_within_single_paragraph.append(run.text)  # append run.text first
-+@dataclass(frozen=True, slots=True)
-+class RawDocxBlock:
-+    """One bounded block in OOXML body order."""
++class RAGFlowDocxParser:
++    """Narrow patched parser retained from the approved RAGFlow source region."""
 
 -                # wrap page break checker into a static method
 -                if "lastRenderedPageBreak" in run._element.xml:
 -                    pn += 1
-+    kind: str
-+    block_ordinal: int
-+    text: str
-+    style_name: str | None
-+    xml: bytes
-+    table_cells: tuple[tuple[str, ...], ...] = ()
-+    has_figure: bool = False
-
--            secs.append(("".join(runs_within_single_paragraph), p.style.name if hasattr(p.style, "name") else ""))  # then concat run.text as part of the paragraph
-
--        tbls = [self.__extract_table_content(tb) for tb in self.doc.tables]
--        return secs, tbls
-+class RAGFlowDocxParser:
-+    """Narrow patched parser retained from the approved RAGFlow source region."""
-+
 +    def __call__(self, source: bytes) -> tuple[RawDocxBlock, ...]:
 +        if type(source) is not bytes:
 +            raise TypeError("DOCX parser source must be exact bytes")
 +        document = Document(BytesIO(source))
-+        assert isinstance(document, DocumentType)
++        if not isinstance(document, DocumentType):
++            raise ValueError("DOCX parser did not construct an exact document")
++        if _package_contains_visual(document):
++            raise UnsupportedDocxFigureError(
++                "DOCX profile does not admit visual objects"
++            )
 +        blocks: list[RawDocxBlock] = []
 +        for block_ordinal, child in enumerate(document.element.body.iterchildren()):
++            if _contains_tag(child, _UNSUPPORTED_CONTENT_TAGS):
++                raise ValueError("DOCX contains an unsupported content container")
 +            if child.tag == _PARAGRAPH_TAG:
 +                paragraph = Paragraph(child, document)
 +                text = paragraph.text.strip()
@@ -223,11 +246,13 @@ index 48f8db8..ce215a0 100644
 +                            block_ordinal=block_ordinal,
 +                            text=text,
 +                            style_name=style_name,
-+                            xml=cast(bytes, child.xml.encode("utf-8")),
++                            xml=child.xml.encode("utf-8"),
 +                            has_figure=has_figure,
 +                        )
 +                    )
 +            elif child.tag == _TABLE_TAG:
++                if any(node.tag == _TABLE_TAG for node in child.iterdescendants()):
++                    raise ValueError("DOCX profile does not admit nested tables")
 +                table = Table(child, document)
 +                rows = tuple(
 +                    tuple(cell.text.strip() for cell in row.cells)
@@ -240,12 +265,17 @@ index 48f8db8..ce215a0 100644
 +                            block_ordinal=block_ordinal,
 +                            text="\n".join("\t".join(row) for row in rows),
 +                            style_name=None,
-+                            xml=cast(bytes, child.xml.encode("utf-8")),
++                            xml=child.xml.encode("utf-8"),
 +                            table_cells=rows,
 +                            has_figure=bool(child.xpath(".//pic:pic")),
 +                        )
 +                    )
++            elif child.tag != _SECTION_PROPERTIES_TAG:
++                raise ValueError("DOCX contains an unsupported body element")
 +        return tuple(blocks)
-+
-+
-+__all__ = ["RAGFlowDocxParser", "RawDocxBlock"]
+
+-            secs.append(("".join(runs_within_single_paragraph), p.style.name if hasattr(p.style, "name") else ""))  # then concat run.text as part of the paragraph
+
+-        tbls = [self.__extract_table_content(tb) for tb in self.doc.tables]
+-        return secs, tbls
++__all__ = ["RAGFlowDocxParser", "RawDocxBlock", "UnsupportedDocxFigureError"]

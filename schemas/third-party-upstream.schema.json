@@ -10,7 +10,7 @@
     "source_paths",
     "excluded_paths",
     "reuse_mode",
-    "approval",
+    "approvals",
     "license",
     "files"
   ],
@@ -39,9 +39,72 @@
       "type": "string",
       "enum": ["copy", "copy-patch"]
     },
-    "approval": {
-      "type": "string",
-      "minLength": 1
+    "approvals": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["reference"],
+        "anyOf": [
+          { "required": ["source_paths"] },
+          { "required": ["source_selectors"] }
+        ],
+        "dependentRequired": {
+          "decision": ["decision_document"],
+          "decision_document": ["decision"]
+        },
+        "properties": {
+          "reference": { "type": "string", "minLength": 1 },
+          "decision": { "type": "string", "minLength": 1 },
+          "decision_document": { "$ref": "#/$defs/repositoryDocument" },
+          "source_paths": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": { "$ref": "#/$defs/relativePath" }
+          },
+          "source_selectors": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "source_path",
+                "kind",
+                "name",
+                "patch_path",
+                "pinned_source_sha256",
+                "pinned_sha256",
+                "vendored_sha256"
+              ],
+              "properties": {
+                "source_path": { "$ref": "#/$defs/relativePath" },
+                "kind": { "type": "string", "enum": ["function"] },
+                "name": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+                },
+                "patch_path": { "$ref": "#/$defs/repositoryPath" },
+                "pinned_source_sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "pinned_sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "vendored_sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                }
+              }
+            }
+          }
+        }
+      }
     },
     "license": {
       "type": "string",
@@ -93,6 +156,11 @@
       "type": "string",
       "minLength": 1,
       "pattern": "^third_party/(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\).+$"
+    },
+    "repositoryDocument": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^docs/(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\).+$"
     }
   }
 }

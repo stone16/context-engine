@@ -4,12 +4,16 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import io
 import json
 import re
+import shutil
+import subprocess
 import sys
 import tarfile
+import tempfile
 import tomllib
 import zipfile
 from collections.abc import Iterable, Mapping, Sequence
@@ -168,6 +172,157 @@ def _repository_path(root: Path, value: str, *, field: str) -> Path:
     return candidate
 
 
+def _markdown_heading_anchors(document: str) -> set[str]:
+    anchors: set[str] = set()
+    occurrences: dict[str, int] = {}
+    for line in document.splitlines():
+        match = re.fullmatch(r" {0,3}#{1,6}[ \t]+(.+?)[ \t]*#*[ \t]*", line)
+        if match is None:
+            continue
+        heading = match.group(1).strip().lower()
+        anchor = re.sub(r"[^\w\- ]", "", heading, flags=re.UNICODE).replace(
+            " ", "-"
+        )
+        duplicate = occurrences.get(anchor, 0)
+        occurrences[anchor] = duplicate + 1
+        anchors.add(anchor if duplicate == 0 else f"{anchor}-{duplicate}")
+    return anchors
+
+
+def _validate_decision_document(
+    value: str, *, registration: Registration, root: Path
+) -> None:
+    document_value, separator, anchor = value.rpartition("#")
+    if not separator or not document_value or not anchor:
+        raise GovernanceError(
+            f"{registration.path}: decision document must include a heading anchor"
+        )
+    document_path = _repository_path(
+        root, document_value, field="approvals.decision_document"
+    )
+    if not document_path.is_file():
+        raise GovernanceError(
+            f"{registration.path}: decision document missing: {document_value}"
+        )
+    if anchor not in _markdown_heading_anchors(
+        document_path.read_text(encoding="utf-8")
+    ):
+        raise GovernanceError(
+            f"{registration.path}: decision document anchor is missing: {value}"
+        )
+
+
+def _top_level_function_region(source: bytes, name: str, *, label: str) -> bytes:
+    try:
+        text = source.decode("utf-8")
+        module = ast.parse(text)
+    except (UnicodeDecodeError, SyntaxError) as error:
+        raise GovernanceError(
+            f"selector source is not valid Python: {label}"
+        ) from error
+    matches = [
+        node
+        for node in module.body
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+        and node.name == name
+    ]
+    if len(matches) != 1:
+        raise GovernanceError(
+            f"selector {name!r} missing or duplicated in {label} bytes"
+        )
+    node = matches[0]
+    first_line = min(
+        (decorator.lineno for decorator in node.decorator_list),
+        default=node.lineno,
+    )
+    if node.end_lineno is None:
+        raise GovernanceError(f"selector {name!r} has no end line in {label} bytes")
+    return b"".join(source.splitlines(keepends=True)[first_line - 1 : node.end_lineno])
+
+
+def _reconstruct_pinned_source(
+    *, source_path: PurePosixPath, vendored: Path, patch_path: Path
+) -> bytes:
+    with tempfile.TemporaryDirectory(prefix="context-engine-upstream-") as directory:
+        checkout = Path(directory)
+        reconstructed = checkout.joinpath(*source_path.parts)
+        reconstructed.parent.mkdir(parents=True)
+        shutil.copyfile(vendored, reconstructed)
+        command = ["git", "apply", "--reverse", str(patch_path)]
+        result = subprocess.run(
+            command,
+            cwd=checkout,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            detail = result.stderr.strip() or result.stdout.strip()
+            raise GovernanceError(
+                f"selector patch cannot reconstruct pinned bytes: {patch_path}: "
+                f"{detail}"
+            )
+        return reconstructed.read_bytes()
+
+
+def _validate_selector(
+    selector: Mapping[str, Any],
+    *,
+    registration: Registration,
+    root: Path,
+    vendored_by_upstream: Mapping[PurePosixPath, Path],
+) -> None:
+    source_path = PurePosixPath(selector["source_path"])
+    vendored = vendored_by_upstream.get(source_path)
+    if vendored is None or not vendored.is_file():
+        raise GovernanceError(
+            f"{registration.path}: selector source is missing from vendored bytes: "
+            f"{source_path}"
+        )
+    name = selector["name"]
+    vendored_region = _top_level_function_region(
+        vendored.read_bytes(), name, label="vendored"
+    )
+    vendored_digest = hashlib.sha256(vendored_region).hexdigest()
+    if vendored_digest != selector["vendored_sha256"]:
+        raise GovernanceError(
+            f"{registration.path}: selector {name!r} vendored hash mismatch: "
+            f"expected {selector['vendored_sha256']}, got {vendored_digest}"
+        )
+    patch_path = _repository_path(
+        root, selector["patch_path"], field="source_selectors.patch_path"
+    )
+    try:
+        patch_path.relative_to((registration.root / "patches").resolve())
+    except ValueError as error:
+        raise GovernanceError(
+            f"{registration.path}: selector patch is outside its registered patches"
+        ) from error
+    if not patch_path.is_file():
+        raise GovernanceError(
+            f"{registration.path}: selector patch is missing: {patch_path}"
+        )
+    pinned_source = _reconstruct_pinned_source(
+        source_path=source_path,
+        vendored=vendored,
+        patch_path=patch_path,
+    )
+    pinned_source_digest = hashlib.sha256(pinned_source).hexdigest()
+    if pinned_source_digest != selector["pinned_source_sha256"]:
+        raise GovernanceError(
+            f"{registration.path}: selector {name!r} pinned source hash mismatch: "
+            f"expected {selector['pinned_source_sha256']}, "
+            f"got {pinned_source_digest}"
+        )
+    pinned_region = _top_level_function_region(pinned_source, name, label="pinned")
+    pinned_digest = hashlib.sha256(pinned_region).hexdigest()
+    if pinned_digest != selector["pinned_sha256"]:
+        raise GovernanceError(
+            f"{registration.path}: selector {name!r} pinned hash mismatch: "
+            f"expected {selector['pinned_sha256']}, got {pinned_digest}"
+        )
+
+
 def validate_registration(
     registration: Registration, root: Path = REPOSITORY_ROOT
 ) -> set[Path]:
@@ -179,6 +334,69 @@ def validate_registration(
 
     source_paths = tuple(PurePosixPath(value) for value in data["source_paths"])
     excluded_paths = tuple(PurePosixPath(value) for value in data["excluded_paths"])
+    if len(set(source_paths)) != len(source_paths):
+        raise GovernanceError(
+            f"{registration.path}: source_paths contains duplicate canonical paths"
+        )
+    if len(set(excluded_paths)) != len(excluded_paths):
+        raise GovernanceError(
+            f"{registration.path}: excluded_paths contains duplicate canonical paths"
+        )
+    approval_owners: dict[PurePosixPath, str] = {}
+    selector_owners: dict[tuple[PurePosixPath, str, str], str] = {}
+    selectors: list[Mapping[str, Any]] = []
+    for approval in data["approvals"]:
+        if "decision_document" in approval:
+            _validate_decision_document(
+                approval["decision_document"], registration=registration, root=root
+            )
+        approval_paths = tuple(
+            PurePosixPath(value) for value in approval.get("source_paths", [])
+        )
+        if len(set(approval_paths)) != len(approval_paths):
+            raise GovernanceError(
+                f"{registration.path}: approval contains duplicate canonical paths"
+            )
+        for selector in approval.get("source_selectors", []):
+            selector_path = PurePosixPath(selector["source_path"])
+            selector_key = (selector_path, selector["kind"], selector["name"])
+            if selector_key in selector_owners:
+                raise GovernanceError(
+                    f"{registration.path}: source selector is claimed by multiple "
+                    "approval records"
+                )
+            if selector_path not in source_paths:
+                raise GovernanceError(
+                    f"{registration.path}: source selector {selector_path} is not "
+                    "a registered copied source"
+                )
+            selector_owners[selector_key] = approval["reference"]
+            selectors.append(selector)
+        for approval_path in approval_paths:
+            if approval_path in approval_owners:
+                raise GovernanceError(
+                    f"{registration.path}: source region {approval_path} is claimed by "
+                    "multiple approval records"
+                )
+            approval_owners[approval_path] = approval["reference"]
+    source_path_set = set(source_paths)
+    approval_path_set = set(approval_owners)
+    selector_path_set = {key[0] for key in selector_owners}
+    ambiguous = sorted(str(path) for path in approval_path_set & selector_path_set)
+    if ambiguous:
+        raise GovernanceError(
+            f"{registration.path}: source has ambiguous whole-file and selector "
+            f"approval ownership: {ambiguous[0]}"
+        )
+    covered_path_set = approval_path_set | selector_path_set
+    if covered_path_set != source_path_set:
+        missing = sorted(str(path) for path in source_path_set - covered_path_set)
+        unknown = sorted(str(path) for path in covered_path_set - source_path_set)
+        detail = f"missing={missing}, unknown={unknown}"
+        raise GovernanceError(
+            f"{registration.path}: approval coverage must match source_paths "
+            f"exactly: {detail}"
+        )
     overlaps = sorted(str(path) for path in set(source_paths) & set(excluded_paths))
     if overlaps:
         detail = f"path listed as both copied and excluded: {overlaps[0]}"
@@ -210,6 +428,7 @@ def validate_registration(
     claimed.update(path for path in patches.rglob("*") if path.is_file())
     seen_upstream: set[PurePosixPath] = set()
     seen_vendored: set[Path] = set()
+    vendored_by_upstream: dict[PurePosixPath, Path] = {}
     for index, file_data in enumerate(data["files"]):
         upstream = PurePosixPath(file_data["upstream_path"])
         for excluded in excluded_paths:
@@ -236,6 +455,7 @@ def validate_registration(
             )
         seen_upstream.add(upstream)
         seen_vendored.add(vendored)
+        vendored_by_upstream[upstream] = vendored
         if not vendored.is_file():
             raise GovernanceError(
                 f"{registration.path}: copied file missing: {vendored}"
@@ -247,6 +467,14 @@ def validate_registration(
                 f"expected {file_data['sha256']}, got {actual_hash}"
             )
         claimed.add(vendored)
+
+    for selector in selectors:
+        _validate_selector(
+            selector,
+            registration=registration,
+            root=root,
+            vendored_by_upstream=vendored_by_upstream,
+        )
 
     for dependency in data.get("nested_dependencies", []):
         license_path = _repository_path(
@@ -306,11 +534,32 @@ def render_notices(registrations: Sequence[Registration]) -> str:
                 f"- Commit: `{data['commit']}`",
                 f"- License: {data['license']} (`{license_path}`)",
                 f"- Reuse mode: `{data['reuse_mode']}`",
-                f"- Approval: {data['approval']}",
-                "- Copied paths:",
+                "- Copied source provenance:",
+                *(
+                    f"  - `{path}` — {data['repository']}#{data['commit']}"
+                    for path in data["source_paths"]
+                ),
+                "- Approvals by source region:",
             ]
         )
-        lines.extend(f"  - `{path}`" for path in data["source_paths"])
+        for approval in data["approvals"]:
+            decision = (
+                f"; {approval['decision']} ({approval['decision_document']})"
+                if "decision" in approval
+                else ""
+            )
+            for path in approval.get("source_paths", []):
+                lines.append(
+                    f"  - `{path}` — {approval['reference']}{decision}"
+                )
+            for selector in approval.get("source_selectors", []):
+                region = (
+                    f"{selector['source_path']}::{selector['kind']}:"
+                    f"{selector['name']}"
+                )
+                lines.append(
+                    f"  - `{region}` — {approval['reference']}{decision}"
+                )
         dependencies = data.get("nested_dependencies", [])
         if dependencies:
             lines.extend(["- Nested dependencies:"])
@@ -343,10 +592,37 @@ def render_sbom(registrations: Sequence[Registration]) -> str:
                     },
                     *(
                         {
+                            "name": "context-engine:source-provenance",
+                            "value": (
+                                f"{path}={data['repository']}#{data['commit']}"
+                            ),
+                        }
+                        for path in data["source_paths"]
+                    ),
+                    *(
+                        {
                             "name": "context-engine:file-sha256",
                             "value": f"{item['vendored_path']}={item['sha256']}",
                         }
                         for item in data["files"]
+                    ),
+                    *(
+                        {
+                            "name": "context-engine:source-approval",
+                            "value": _sbom_approval_value(approval, path),
+                        }
+                        for approval in data["approvals"]
+                        for path in approval.get("source_paths", [])
+                    ),
+                    *(
+                        {
+                            "name": "context-engine:source-approval",
+                            "value": _sbom_selector_approval_value(
+                                approval, selector
+                            ),
+                        }
+                        for approval in data["approvals"]
+                        for selector in approval.get("source_selectors", [])
                     ),
                 ],
             }
@@ -388,6 +664,31 @@ def render_sbom(registrations: Sequence[Registration]) -> str:
         "components": components,
     }
     return json.dumps(document, indent=2, sort_keys=True) + "\n"
+
+
+def _sbom_approval_value(approval: dict[str, Any], path: str) -> str:
+    decision = (
+        f"; decision={approval['decision']}; "
+        f"decision_document={approval['decision_document']}"
+        if "decision" in approval
+        else ""
+    )
+    return f"{path}={approval['reference']}{decision}"
+
+
+def _sbom_selector_approval_value(
+    approval: dict[str, Any], selector: Mapping[str, Any]
+) -> str:
+    region = (
+        f"{selector['source_path']}::{selector['kind']}:{selector['name']}"
+    )
+    decision = (
+        f"; decision={approval['decision']}; "
+        f"decision_document={approval['decision_document']}"
+        if "decision" in approval
+        else ""
+    )
+    return f"{region}={approval['reference']}{decision}"
 
 
 def _write_or_check(path: Path, content: str, *, check: bool, root: Path) -> None:

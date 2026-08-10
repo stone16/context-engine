@@ -16,8 +16,8 @@ DOCX_CONFIG_V1: Final = "docx-config-v1"
 PDF_TEXT_OUTLINE_V1: Final = "pdf-text-outline-v1"
 DOCX_COMPILER_V1: Final = "context-engine-docx-v1"
 PDF_OUTLINE_COMPILER_V1: Final = "context-engine-pdf-outline-v1"
-_DOCX_PART_URI: Final = "/word/document.xml"
-_PDF_OUTLINE_EXTRACTION_METHOD: Final = "pypdf-outline-v1"
+DOCX_PART_URI: Final = "/word/document.xml"
+PDF_OUTLINE_EXTRACTION_METHOD: Final = "pypdf-outline-v1"
 _DIGEST_PATTERN = re.compile(r"[0-9a-f]{64}")
 _TOKEN_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 _CONTENT_IDENTITY_DOMAIN = b"context-engine.parsed-document-content.v1\x00"
@@ -29,6 +29,7 @@ MAX_FORMAT_TABLE_CELLS = 100_000
 MAX_DOCX_PART_URI_CHARACTERS = 255
 MAX_PDF_PAGE_NUMBER = 2_000
 MAX_PDF_PAGE_DIMENSION_POINTS = 20_000.0
+MAX_PDF_PAGE_PIXEL_AREA = 40_000_000.0
 
 
 def _require_digest(field: str, value: object) -> str:
@@ -149,6 +150,8 @@ class PdfRegionLocator:
             or y1 > MAX_PDF_PAGE_DIMENSION_POINTS
         ):
             raise ValueError("PDF bbox must be a bounded positive ordered region")
+        if (x1 - x0) * (y1 - y0) > MAX_PDF_PAGE_PIXEL_AREA:
+            raise ValueError("PDF bbox exceeds the pixel-area hard bound")
 
 
 type SourceLocator = TextByteSpan | DocxXmlLocator | PdfRegionLocator
@@ -376,7 +379,13 @@ def validate_format_document(
         raise TypeError("parsed document units must be nominal")
     if tuple(unit.ordinal for unit in units) != tuple(range(len(units))):
         raise ValueError("parsed document units must be source ordered and contiguous")
-    if sum(len(unit.text) for unit in units) > MAX_FORMAT_DOCUMENT_TEXT_CHARACTERS:
+    if (
+        sum(
+            len(unit.text) + sum(len(heading) for heading in unit.heading_ancestry)
+            for unit in units
+        )
+        > MAX_FORMAT_DOCUMENT_TEXT_CHARACTERS
+    ):
         raise ValueError("parsed document exceeds the text hard bound")
     locators = tuple(locator for unit in units for locator in unit.locators)
     if any(type(locator) is not locator_type for locator in locators):
@@ -387,7 +396,7 @@ def validate_format_document(
             locator.artifact_digest != artifact_digest for locator in docx_locators
         ):
             raise ValueError("every source locator must bind the document artifact")
-        if any(locator.part_uri != _DOCX_PART_URI for locator in docx_locators):
+        if any(locator.part_uri != DOCX_PART_URI for locator in docx_locators):
             raise ValueError("DOCX profile locators must bind word/document.xml")
         block_ordinals = tuple(locator.block_ordinal for locator in docx_locators)
         if block_ordinals != tuple(sorted(block_ordinals)) or len(
@@ -401,7 +410,7 @@ def validate_format_document(
         ):
             raise ValueError("every source locator must bind the document artifact")
         if any(
-            locator.extraction_method != _PDF_OUTLINE_EXTRACTION_METHOD
+            locator.extraction_method != PDF_OUTLINE_EXTRACTION_METHOD
             for locator in pdf_locators
         ):
             raise ValueError("PDF outline profile extraction method must be exact")
@@ -503,6 +512,15 @@ def deserialize_format_document(
         type(value) is not dict for value in units_value
     ):
         raise ValueError("parsed document units must be objects")
+    required_unit_fields = {"ordinal", "kind", "text", "locators", "headingAncestry"}
+    optional_unit_fields = {"headingLevel", "tableCells"}
+    unit_documents = tuple(cast(dict[str, object], value) for value in units_value)
+    if any(
+        not required_unit_fields <= set(unit)
+        or not set(unit) <= required_unit_fields | optional_unit_fields
+        for unit in unit_documents
+    ):
+        raise ValueError("parsed document unit has unexpected fields")
     units = tuple(
         StructuralUnit(
             ordinal=cast(int, unit["ordinal"]),
@@ -518,8 +536,7 @@ def deserialize_format_document(
                 tuple(row) for row in cast(list[list[str]], unit.get("tableCells", []))
             ),
         )
-        for value in units_value
-        for unit in (cast(dict[str, object], value),)
+        for unit in unit_documents
     )
     return (
         cast(str, document["artifactDigest"]),

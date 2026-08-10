@@ -4,6 +4,7 @@ import ast
 import hashlib
 import json
 import re
+import subprocess
 import tomllib
 from collections import Counter
 from pathlib import Path
@@ -47,6 +48,7 @@ ALLOWED_IMPORT_ROOTS = {
     "io",
     "json",
     "logging",
+    "math",
     "markdown",
     "pathlib",
     "pypdf",
@@ -72,11 +74,42 @@ def test_vendored_bytes_match_complete_pinned_registration() -> None:
     assert re.fullmatch(r"[0-9a-f]{40}", commit)
     assert commit == "4391e03886b996201f3b8818f671b19eb24d0f7b"
     assert registration["reuse_mode"] == "copy-patch"
-    assert registration["approval"] == (
-        "https://github.com/stone16/context-engine/issues/124, "
-        "https://github.com/stone16/context-engine/issues/204 "
-        "(awaiting maintainer approval)"
-    )
+    assert registration["approvals"] == [
+        {
+            "reference": "https://github.com/stone16/context-engine/issues/124",
+            "source_paths": ["deepdoc/parser/markdown_parser.py"],
+        },
+        {
+            "reference": "https://github.com/stone16/context-engine/issues/204",
+            "decision": "D6",
+            "decision_document": (
+                "docs/research/2026-07-31-five-repository-implementation-"
+                "blueprint.md#5-决策记录2026-07-31-stometa-全部确认"
+            ),
+            "source_paths": [
+                "deepdoc/parser/docx_parser.py",
+            ],
+            "source_selectors": [
+                {
+                    "source_path": "deepdoc/parser/utils.py",
+                    "kind": "function",
+                    "name": "extract_pdf_outlines",
+                    "patch_path": (
+                        "third_party/ragflow/patches/issue-204-pdf-outline.patch"
+                    ),
+                    "pinned_source_sha256": (
+                        "7d1674fb7c92b2db24964575cb2290139a823a923da89a321cbdaea795452849"
+                    ),
+                    "pinned_sha256": (
+                        "91c733f081436287a9055b51b176dc3ee94c73fdd76d310397783eaefb7cb799"
+                    ),
+                    "vendored_sha256": (
+                        "70978366401ac632702143fd7b50bc149ab9e81402c59b2d81f58add2359b39d"
+                    ),
+                }
+            ],
+        },
+    ]
     source_paths = registration["source_paths"]
     assert isinstance(source_paths, list)
     assert set(source_paths) == {
@@ -189,6 +222,56 @@ def test_vendored_bytes_match_complete_pinned_registration() -> None:
         "issue-204-pdf-outline.patch",
     }
     assert (REPOSITORY_ROOT / "THIRD_PARTY_NOTICES.md").is_file()
+    notices = (REPOSITORY_ROOT / "THIRD_PARTY_NOTICES.md").read_text(
+        encoding="utf-8"
+    )
+    assert "- Copied source provenance:" in notices
+    assert (
+        "`deepdoc/parser/utils.py` — https://github.com/infiniflow/ragflow.git#"
+        "4391e03886b996201f3b8818f671b19eb24d0f7b"
+    ) in notices
+    assert (
+        "`deepdoc/parser/utils.py` — "
+        "https://github.com/stone16/context-engine/issues/204"
+    ) not in notices
+    assert (
+        "`deepdoc/parser/utils.py::function:extract_pdf_outlines` — "
+        "https://github.com/stone16/context-engine/issues/204; D6 "
+        "(docs/research/2026-07-31-five-repository-implementation-"
+        "blueprint.md#5-决策记录2026-07-31-stometa-全部确认)"
+    ) in notices
+    aggregate_sbom = json.loads(
+        (REPOSITORY_ROOT / "THIRD_PARTY_SBOM.cyclonedx.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    ragflow_component = next(
+        component
+        for component in aggregate_sbom["components"]
+        if component["bom-ref"] == "context-engine:third-party:ragflow"
+    )
+    source_approvals = {
+        property_value["value"]
+        for property_value in ragflow_component["properties"]
+        if property_value["name"] == "context-engine:source-approval"
+    }
+    assert not any(
+        value.startswith("deepdoc/parser/utils.py=") for value in source_approvals
+    )
+    assert source_approvals >= {
+        "deepdoc/parser/utils.py::function:extract_pdf_outlines="
+        "https://github.com/stone16/context-engine/issues/204; decision=D6; "
+        "decision_document=docs/research/2026-07-31-five-repository-"
+        "implementation-blueprint.md#5-决策记录2026-07-31-stometa-全部确认"
+    }
+    assert {
+        property_value["value"]
+        for property_value in ragflow_component["properties"]
+        if property_value["name"] == "context-engine:source-provenance"
+    } >= {
+        "deepdoc/parser/utils.py=https://github.com/infiniflow/ragflow.git#"
+        "4391e03886b996201f3b8818f671b19eb24d0f7b"
+    }
     sbom = json.loads(
         (REGISTRATION_ROOT / "sbom.cyclonedx.json").read_text(encoding="utf-8")
     )
@@ -250,6 +333,49 @@ def test_vendored_subtree_imports_only_approved_dependencies() -> None:
     assert "7d1674fb7c92b2db24964575cb2290139a823a923da89a321cbdaea795452849" in (
         modifications
     )
+
+
+@pytest.mark.parametrize(
+    ("filename", "patch_name", "upstream_sha256"),
+    (
+        (
+            "docx_parser.py",
+            "issue-204-docx-parser.patch",
+            "891ffc11d2a3ac32e5c0d8b25b35aa62ab8cda1033c9e0a93782e9d45e759586",
+        ),
+        (
+            "utils.py",
+            "issue-204-pdf-outline.patch",
+            "7d1674fb7c92b2db24964575cb2290139a823a923da89a321cbdaea795452849",
+        ),
+    ),
+)
+def test_issue_204_patch_reconstructs_pinned_and_vendored_bytes(
+    tmp_path: Path,
+    filename: str,
+    patch_name: str,
+    upstream_sha256: str,
+) -> None:
+    vendored = REGISTRATION_ROOT / "deepdoc/parser" / filename
+    target = tmp_path / "deepdoc/parser" / filename
+    target.parent.mkdir(parents=True)
+    target.write_bytes(vendored.read_bytes())
+    patch = REGISTRATION_ROOT / "patches" / patch_name
+
+    subprocess.run(
+        ["git", "apply", "--reverse", str(patch)],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    assert hashlib.sha256(target.read_bytes()).hexdigest() == upstream_sha256
+    subprocess.run(
+        ["git", "apply", str(patch)],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    assert target.read_bytes() == vendored.read_bytes()
 
 
 def test_registered_parser_region_is_executed_by_the_ce_adapter(

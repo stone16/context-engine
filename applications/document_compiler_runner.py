@@ -8,6 +8,7 @@ import json
 import subprocess
 import sys
 from abc import ABC, abstractmethod
+from pathlib import Path
 from typing import Final, Protocol, cast
 
 from adapters.parsers.ragflow_documents import compile_document_bytes, profile_for_ref
@@ -27,6 +28,44 @@ from eval._compiler_acceptance import (
 MAX_DOCUMENT_ARTIFACT_BYTES: Final = 32 * 1024 * 1024
 DOCUMENT_RUNNER_TIMEOUT_SECONDS: Final = 30.0
 _RUNNER_MODULE: Final = "applications.document_compiler_runner"
+_REPOSITORY_ROOT: Final = Path(__file__).resolve().parents[1]
+_DETERMINISTIC_CHILD_ENVIRONMENT: Final = {
+    "PYTHONHASHSEED": "0",
+    "OMP_NUM_THREADS": "1",
+    "OPENBLAS_NUM_THREADS": "1",
+    "MKL_NUM_THREADS": "1",
+    "NUMEXPR_NUM_THREADS": "1",
+}
+
+
+def _document_runner_environment(
+    *,
+    hash_seed: str = _DETERMINISTIC_CHILD_ENVIRONMENT["PYTHONHASHSEED"],
+    thread_count: str = _DETERMINISTIC_CHILD_ENVIRONMENT["OMP_NUM_THREADS"],
+) -> dict[str, str]:
+    """Return the complete deterministic environment for one compiler child."""
+
+    if (
+        not hash_seed.isascii()
+        or not hash_seed.isdecimal()
+        or not thread_count.isascii()
+        or not thread_count.isdecimal()
+    ):
+        raise ValueError("document runner controls must be decimal integers")
+    hash_seed_value = int(hash_seed)
+    thread_count_value = int(thread_count)
+    if not 0 <= hash_seed_value <= 4_294_967_295:
+        raise ValueError("document runner hash seed is out of range")
+    if thread_count_value < 1:
+        raise ValueError("document runner thread count must be positive")
+    return {
+        "PYTHONHASHSEED": hash_seed,
+        "PYTHONPATH": str(_REPOSITORY_ROOT),
+        "OMP_NUM_THREADS": thread_count,
+        "OPENBLAS_NUM_THREADS": thread_count,
+        "MKL_NUM_THREADS": thread_count,
+        "NUMEXPR_NUM_THREADS": thread_count,
+    }
 
 
 class ArtifactSource(ABC):
@@ -123,7 +162,8 @@ def compile_in_local_document_runner(
             input=payload,
             capture_output=True,
             check=False,
-            env={},
+            cwd=_REPOSITORY_ROOT,
+            env=_document_runner_environment(),
             timeout=DOCUMENT_RUNNER_TIMEOUT_SECONDS,
         )
     except Exception:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from pathlib import Path
@@ -513,6 +514,42 @@ def _job_state(
             return row.state, row.effect_count
     finally:
         migration_engine.dispose()
+
+
+def _expire_redeemed_lease(
+    migration_configuration: DatabaseConfiguration,
+    scenario: _FileImportScenario,
+    claims: WorkerLeaseClaims,
+) -> WorkerLeaseClaims:
+    migration_engine = create_database_engine(migration_configuration)
+    try:
+        with migration_engine.begin() as connection:
+            row = connection.execute(
+                text(
+                    """
+                    UPDATE file_import_job
+                    SET lease_issued_at = date_trunc('second', statement_timestamp())
+                            - interval '20 minutes',
+                        lease_redeemed_at = date_trunc('second', statement_timestamp())
+                            - interval '19 minutes',
+                        lease_expires_at = date_trunc('second', statement_timestamp())
+                            - interval '10 minutes'
+                    WHERE organization_id = :org AND job_id = :job_id
+                    RETURNING lease_issued_at, lease_expires_at
+                    """
+                ),
+                {
+                    "org": scenario.organization_id,
+                    "job_id": scenario.prepared.job_id,
+                },
+            ).one()
+    finally:
+        migration_engine.dispose()
+    return replace(
+        claims,
+        issued_at=row.lease_issued_at,
+        expires_at=row.lease_expires_at,
+    )
 
 
 def _scenario_effect_counts(
@@ -2163,16 +2200,10 @@ def test_expired_redeemed_lease_cannot_publish_or_record_failure(
         tmp_path,
         migration_configuration,
         guarded_control_engine,
-        lease_ttl_seconds=1,
     )
     claims = _scenario_claims(scenario)
     assert _redeem_direct(guarded_worker_engine, claims) is not None
-    migration_engine = create_database_engine(migration_configuration)
-    try:
-        with migration_engine.connect() as connection:
-            connection.execute(text("SELECT pg_sleep(1.1)"))
-    finally:
-        migration_engine.dispose()
+    claims = _expire_redeemed_lease(migration_configuration, scenario, claims)
 
     assert (
         _publish_direct(

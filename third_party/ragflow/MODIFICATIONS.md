@@ -62,8 +62,10 @@ format, and exact pixels), not the PDF container bytes; malformed or
 outline-free inputs refuse with a closed category.
 
 The owned runner selects only `docx-config-v1` or `pdf-text-outline-v1` before
-artifact bytes are read, uses a fixed deadline and empty environment, and
-round-trips through the self-validating canonical document constructor. No
+artifact bytes are read, uses a fixed deadline plus an explicit repository-root
+working directory and closed deterministic environment (`PYTHONPATH`, fixed
+`PYTHONHASHSEED`, and one-thread numerical-library controls), and round-trips
+through the self-validating canonical document constructor. No
 RAGFlow package initializer, PDF/OCR parser, vision module, model asset,
 application service, network client, database, or index is copied or imported.
 

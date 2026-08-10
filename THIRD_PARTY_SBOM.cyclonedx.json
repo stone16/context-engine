@@ -23,6 +23,22 @@
           "value": "third_party/onyx"
         },
         {
+          "name": "context-engine:source-provenance",
+          "value": "backend/onyx/connectors/interfaces.py=https://github.com/onyx-dot-app/onyx.git#2fb3dd10493b3883870fa8adced5b1a0e114feff"
+        },
+        {
+          "name": "context-engine:source-provenance",
+          "value": "backend/onyx/connectors/connector_runner.py=https://github.com/onyx-dot-app/onyx.git#2fb3dd10493b3883870fa8adced5b1a0e114feff"
+        },
+        {
+          "name": "context-engine:source-provenance",
+          "value": "backend/onyx/connectors/models.py=https://github.com/onyx-dot-app/onyx.git#2fb3dd10493b3883870fa8adced5b1a0e114feff"
+        },
+        {
+          "name": "context-engine:source-provenance",
+          "value": "backend/onyx/connectors/registry.py=https://github.com/onyx-dot-app/onyx.git#2fb3dd10493b3883870fa8adced5b1a0e114feff"
+        },
+        {
           "name": "context-engine:file-sha256",
           "value": "third_party/onyx/connectors/interfaces.py=6a9f3f753972d2036c9fe90d4a394b4cd22b325e92e00a01a550d7f8cc94f87f"
         },
@@ -37,6 +53,22 @@
         {
           "name": "context-engine:file-sha256",
           "value": "third_party/onyx/connectors/registry.py=b134c07f20959ed44802c1fc753f9c0a8e5a9388134f4bc57b4bcc5ba4166618"
+        },
+        {
+          "name": "context-engine:source-approval",
+          "value": "backend/onyx/connectors/connector_runner.py=https://github.com/stone16/context-engine/issues/126"
+        },
+        {
+          "name": "context-engine:source-approval",
+          "value": "backend/onyx/connectors/interfaces.py=https://github.com/stone16/context-engine/issues/126"
+        },
+        {
+          "name": "context-engine:source-approval",
+          "value": "backend/onyx/connectors/models.py=https://github.com/stone16/context-engine/issues/126"
+        },
+        {
+          "name": "context-engine:source-approval",
+          "value": "backend/onyx/connectors/registry.py=https://github.com/stone16/context-engine/issues/126"
         }
       ],
       "type": "library",
@@ -64,16 +96,40 @@
           "value": "third_party/ragflow"
         },
         {
+          "name": "context-engine:source-provenance",
+          "value": "deepdoc/parser/markdown_parser.py=https://github.com/infiniflow/ragflow.git#4391e03886b996201f3b8818f671b19eb24d0f7b"
+        },
+        {
+          "name": "context-engine:source-provenance",
+          "value": "deepdoc/parser/docx_parser.py=https://github.com/infiniflow/ragflow.git#4391e03886b996201f3b8818f671b19eb24d0f7b"
+        },
+        {
+          "name": "context-engine:source-provenance",
+          "value": "deepdoc/parser/utils.py=https://github.com/infiniflow/ragflow.git#4391e03886b996201f3b8818f671b19eb24d0f7b"
+        },
+        {
           "name": "context-engine:file-sha256",
           "value": "third_party/ragflow/deepdoc/parser/markdown_parser.py=94c8e2515d05e141fcf65e10336ceca7f9116e54b31a668637ba3f901943cb66"
         },
         {
           "name": "context-engine:file-sha256",
-          "value": "third_party/ragflow/deepdoc/parser/docx_parser.py=d0d788e190503a165e78057db3abfe5b70aabc5315353dd9a6ff93f8b4427621"
+          "value": "third_party/ragflow/deepdoc/parser/docx_parser.py=e84ea01662ce60180e26dde1ca3ec36fc28a9e9d40357f0e9311ce6937a874c5"
         },
         {
           "name": "context-engine:file-sha256",
-          "value": "third_party/ragflow/deepdoc/parser/utils.py=88f2dd5d7c6eafdc9e33121e585678e051aa49e4420db3b4971da0a99c03c9cf"
+          "value": "third_party/ragflow/deepdoc/parser/utils.py=2459f202c5ea59c61814bc155a75bc85c45791315df33f023eacf4294bf0fee2"
+        },
+        {
+          "name": "context-engine:source-approval",
+          "value": "deepdoc/parser/markdown_parser.py=https://github.com/stone16/context-engine/issues/124"
+        },
+        {
+          "name": "context-engine:source-approval",
+          "value": "deepdoc/parser/docx_parser.py=https://github.com/stone16/context-engine/issues/204; decision=D6; decision_document=docs/research/2026-07-31-five-repository-implementation-blueprint.md#5-\u51b3\u7b56\u8bb0\u5f552026-07-31-stometa-\u5168\u90e8\u786e\u8ba4"
+        },
+        {
+          "name": "context-engine:source-approval",
+          "value": "deepdoc/parser/utils.py::function:extract_pdf_outlines=https://github.com/stone16/context-engine/issues/204; decision=D6; decision_document=docs/research/2026-07-31-five-repository-implementation-blueprint.md#5-\u51b3\u7b56\u8bb0\u5f552026-07-31-stometa-\u5168\u90e8\u786e\u8ba4"
         }
       ],
       "type": "library",
