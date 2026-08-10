@@ -479,7 +479,7 @@ def test_plain_http_caller_uses_only_frozen_resolve_transport(
             "kind": "acquire",
             "need": {"query": "A maintainer-provided query"},
         },
-        "path": "/v1/resolve",
+        "path": "/v0/resolve",
         "request_id": "maintainer-query-1",
     }
 
@@ -515,7 +515,7 @@ def test_plain_http_caller_refuses_redirect_before_forwarding_secret() -> None:
         server.server_close()
         thread.join()
 
-    assert observed == ["/v1/resolve"]
+    assert observed == ["/v0/resolve"]
 
 
 @pytest.mark.security_evidence(id="MCP-HTTP-SECRET-215", layer="runtime")

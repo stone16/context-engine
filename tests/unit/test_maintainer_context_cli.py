@@ -183,7 +183,7 @@ def test_query_json_sends_only_closed_acquire_and_returns_exact_wire() -> None:
     assert completed.stderr == ""
     assert len(requests) == 1
     path, authorization, request_id, body = requests[0]
-    assert path == "/v1/resolve"
+    assert path == "/v0/resolve"
     assert authorization == f"Bearer {SECRET}"
     assert request_id is not None
     assert request_id.startswith("maintainer-context-")

@@ -11,6 +11,7 @@ from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from pathlib import Path
 from threading import Thread
+from typing import Literal
 from uuid import UUID, uuid4
 
 import pytest
@@ -75,8 +76,11 @@ from engine.runtime.egress import (
 from engine.runtime.evidence import CandidateRef
 from engine.runtime.package_digest import QueryDigestKeyring
 from engine.runtime.release_lineage import (
+    PACKAGE_SCHEMA_REF_V0,
     PACKAGE_SCHEMA_REF_V1,
+    RUNTIME_PROFILE_REF_V0,
     RUNTIME_PROFILE_REF_V1,
+    RUNTIME_TOKENIZER_REF_V0,
     RUNTIME_TOKENIZER_REF_V1,
 )
 from tests.integration.test_file_import_tracer import (
@@ -134,11 +138,13 @@ class _SdkTransportObserver:
         self,
         app: ASGIApp,
         *,
+        resolve_path: Literal["/v0/resolve", "/v1/resolve"],
         before_resolve: Callable[[tuple[tuple[bytes, bytes], ...]], None]
         | None = None,
     ) -> None:
         self._app = app
         self._before_resolve = before_resolve
+        self._resolve_path = resolve_path
         self.requests: list[tuple[tuple[bytes, bytes], ...]] = []
 
     def set_before_resolve(
@@ -151,7 +157,7 @@ class _SdkTransportObserver:
         if (
             scope["type"] == "http"
             and scope.get("method") == "POST"
-            and scope.get("path") == "/v0/resolve"
+            and scope.get("path") == self._resolve_path
         ):
             headers = tuple(scope["headers"])
             self.requests.append(headers)
@@ -611,6 +617,7 @@ def _publish_additional_file_under_active_source_version(
     *,
     path: FileImportPath,
     idempotency_key: str,
+    public_contract_version: Literal["v0", "v1"],
 ) -> PublishedFileImport:
     (scenario.root / path.value).write_bytes(
         b"# Reference\n\nContextEngine delivers context.\n"
@@ -628,7 +635,24 @@ def _publish_additional_file_under_active_source_version(
         guarded_worker_engine,
     )
     clear_test_runtime_release(scenario.organization_id)
-    ensure_test_runtime_release(scenario.organization_id)
+    ensure_test_runtime_release(
+        scenario.organization_id,
+        runtime_profile_ref=(
+            RUNTIME_PROFILE_REF_V1
+            if public_contract_version == "v1"
+            else RUNTIME_PROFILE_REF_V0
+        ),
+        tokenizer_ref=(
+            RUNTIME_TOKENIZER_REF_V1
+            if public_contract_version == "v1"
+            else RUNTIME_TOKENIZER_REF_V0
+        ),
+        package_schema_ref=(
+            PACKAGE_SCHEMA_REF_V1
+            if public_contract_version == "v1"
+            else PACKAGE_SCHEMA_REF_V0
+        ),
+    )
     return published
 
 
@@ -1573,6 +1597,7 @@ def test_file_delete_execution_is_immediately_invisible_over_generated_sdk(
             guarded_worker_engine,
             path=FileImportPath("reference.md"),
             idempotency_key="delete-sdk-current-version-article",
+            public_contract_version="v0",
         )
 
     control, authority, command = _accept_published_path_delete_observation(
@@ -1807,6 +1832,7 @@ def test_packed_typescript_sdk_resolves_authorized_file_package_over_live_http(
                 guarded_worker_engine,
                 path=FileImportPath("reference.md"),
                 idempotency_key="live-sdk-current-version-article",
+                public_contract_version="v1",
             )
 
         _accept_published_path_delete_observation(
@@ -1928,7 +1954,8 @@ def test_packed_typescript_sdk_resolves_authorized_file_package_over_live_http(
                 resolution_observer=observed.append,
                 clock=lambda: request_now,
                 public_contract_version="v1",
-            )
+            ),
+            resolve_path="/v1/resolve",
         )
         port = _unused_port()
         server = Server(
@@ -2455,7 +2482,8 @@ def test_installed_private_bot_completes_file_answer_effects_audit_and_citation(
                 ),
                 clock=lambda: request_now,
                 public_contract_version="v1",
-            )
+            ),
+            resolve_path="/v1/resolve",
         )
         port = _unused_port()
         server = Server(

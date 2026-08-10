@@ -4169,7 +4169,10 @@ def test_embedding_profile_downgrade_refuses_retained_qwen_lineage(
                         runtime_content_profile_digest,
                         runtime_index_profile_digest,
                         runtime_content_schema_ref, runtime_index_schema_ref,
-                        runtime_tokenizer_ref, runtime_package_schema_ref,
+                        runtime_tokenizer_ref,
+                        runtime_tokenizer_profile_document,
+                        runtime_tokenizer_profile_digest,
+                        runtime_package_schema_ref,
                         curation_profile_ref, curation_profile_digest,
                         curation_mode, compatible_revision_refs,
                         active_revision_refs
@@ -4179,8 +4182,10 @@ def test_embedding_profile_downgrade_refuses_retained_qwen_lineage(
                         'index-profile', :digest, :digest, 'content-schema',
                         'index-schema', CAST(:profile_document AS jsonb),
                         :profile_digest, 'runtime-profile', :digest, :digest,
-                        :digest, 'content-schema', 'index-schema', 'tokenizer',
-                        'package-schema', 'curation-profile', :digest,
+                        :digest, 'content-schema', 'index-schema',
+                        'utf8-byte-budget-v1',
+                        CAST(:tokenizer_document AS jsonb), :tokenizer_digest,
+                        'context-package-openapi-v0', 'curation-profile', :digest,
                         'curation_off', '[]'::jsonb, '[]'::jsonb
                     )
                     """
@@ -4190,6 +4195,12 @@ def test_embedding_profile_downgrade_refuses_retained_qwen_lineage(
                     "digest": "a" * 64,
                     "profile_document": QWEN3_EMBEDDING_PROFILE.canonical_json(),
                     "profile_digest": QWEN3_EMBEDDING_PROFILE.profile_digest,
+                    "tokenizer_document": (
+                        HISTORICAL_UTF8_BYTE_TOKENIZER_PROFILE_DOCUMENT
+                    ),
+                    "tokenizer_digest": (
+                        HISTORICAL_UTF8_BYTE_TOKENIZER_PROFILE_DIGEST
+                    ),
                 },
             )
 
@@ -4665,7 +4676,7 @@ def test_tokenizer_profile_downgrade_refuses_retained_v1_lineage(
             RuntimeError,
             match="tokenizer profile downgrade requires historical-only lineage",
         ):
-            downgrade_revision(migration_configuration, "20260803_0055")
+            downgrade_revision(migration_configuration, "20260805_0056")
         assert _revision_rows(migration_configuration) == [HEAD_REVISION]
     finally:
         with engine.begin() as connection:

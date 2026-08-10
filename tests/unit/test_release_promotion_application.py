@@ -47,12 +47,18 @@ def test_release_promotion_builds_the_activatable_v1_runtime_profile() -> None:
     )
 
 
-def test_dogfood_api_serves_the_promoted_v1_contract() -> None:
+def test_dogfood_api_stays_v0_while_bot_delivery_consumes_v1() -> None:
     composition = (ROOT / "adapters/http/dogfood.py").read_text(encoding="utf-8")
     caller = (ROOT / "adapters/http/dogfood_client.py").read_text(encoding="utf-8")
+    v1_sdk = (ROOT / "sdk/typescript-v1/src/generated/sdk.gen.ts").read_text(
+        encoding="utf-8"
+    )
+    bot = (ROOT / "bot_delivery/typescript/src/main.ts").read_text(encoding="utf-8")
 
-    assert 'public_contract_version="v1"' in composition
-    assert 'f"{self._configuration.base_url}/v1/resolve"' in caller
+    assert 'public_contract_version="v1"' not in composition
+    assert 'f"{self._configuration.base_url}/v0/resolve"' in caller
+    assert "url: '/v1/resolve'" in v1_sdk
+    assert 'from "@context-engine/resolve-sdk-v1"' in bot
 
 
 def test_evaluation_key_refuses_identical_hex_encoded_operator_secret() -> None:
