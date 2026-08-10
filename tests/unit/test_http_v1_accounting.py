@@ -30,7 +30,11 @@ from engine.runtime.actor import (
     _construct_current_membership_verification,
     _open_membership_authority_scope,
 )
-from engine.runtime.budget import BudgetUsage, PackageBudgetMeter
+from engine.runtime.budget import (
+    BudgetUsage,
+    PackageBudgetMeter,
+    _PackageBudgetReservation,
+)
 from engine.runtime.construction import Runtime, required_kernel_dependencies
 from engine.runtime.context_run import ContextRunRecord
 from engine.runtime.contracts import Acquire
@@ -224,6 +228,28 @@ class _SettlementRecordingVectorIndex(PostgreSQLVectorCandidateIndex):
             type(self).latest_settled_usage = budget.usage
 
 
+class _MeterIdentityRecordingVectorIndex(PostgreSQLVectorCandidateIndex):
+    latest_meter: PackageBudgetMeter | None = None
+
+    def prepare_generation_bound_discovery(
+        self,
+        request: Acquire,
+        *,
+        effective_scope: CandidateDiscoveryScope,
+        budget: PackageBudgetMeter,
+        active_embedding_profile_digest: str,
+        active_release_generation: int,
+    ) -> VectorDiscoveryRequest:
+        type(self).latest_meter = budget
+        return super().prepare_generation_bound_discovery(
+            request,
+            effective_scope=effective_scope,
+            budget=budget,
+            active_embedding_profile_digest=active_embedding_profile_digest,
+            active_release_generation=active_release_generation,
+        )
+
+
 class _CurrentEpochPort:
     def read_current_epoch(self, organization_id: UUID) -> object:
         assert organization_id == UUID(INTERNAL_ORGANIZATION_REF)
@@ -331,6 +357,7 @@ def _application(
     mixed_generation_carrier: bool = False,
     mismatched_tokenizer_carrier: bool = False,
     record_settlement: bool = False,
+    record_meter_identity: bool = False,
     materialized: _AuthorizedMaterializedPort | None = None,
 ) -> FastAPI:
     materialized = materialized or _AuthorizedMaterializedPort()
@@ -341,6 +368,8 @@ def _application(
         if mismatched_tokenizer_carrier
         else _SettlementRecordingVectorIndex
         if record_settlement
+        else _MeterIdentityRecordingVectorIndex
+        if record_meter_identity
         else PostgreSQLVectorCandidateIndex
     )
     index = index_type(provider, monotonic_ms=iter((25, 32)).__next__)
@@ -373,6 +402,7 @@ def _client(
     mixed_generation_carrier: bool = False,
     mismatched_tokenizer_carrier: bool = False,
     record_settlement: bool = False,
+    record_meter_identity: bool = False,
     materialized: _AuthorizedMaterializedPort | None = None,
 ) -> TestClient:
     return TestClient(
@@ -383,6 +413,7 @@ def _client(
             mixed_generation_carrier=mixed_generation_carrier,
             mismatched_tokenizer_carrier=mismatched_tokenizer_carrier,
             record_settlement=record_settlement,
+            record_meter_identity=record_meter_identity,
             materialized=materialized,
         )
     )
@@ -509,6 +540,7 @@ def test_v1_http_package_and_context_run_publish_one_digest_bound_usage() -> Non
 
 @pytest.mark.security_evidence(id="ACCOUNTING-INGRESS-MISMATCH-217", layer="runtime")
 def test_v1_http_tokenizer_digest_mismatch_refuses_before_provider_bytes() -> None:
+    _assert_authorized_http_control()
     provider = _RecordingEmbeddingProvider()
     context_runs = RecordingContextRunPort()
 
@@ -530,6 +562,78 @@ def test_v1_http_tokenizer_digest_mismatch_refuses_before_provider_bytes() -> No
     assert provider.calls == 0
     assert provider.bytes_sent == 0
     assert context_runs.calls == []
+
+
+@pytest.mark.security_evidence(id="ACCOUNTING-ONE-METER-DYNAMIC-217", layer="runtime")
+def test_v1_http_resolve_uses_one_meter_for_embedding_and_assembly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = _RecordingEmbeddingProvider()
+    context_runs = RecordingContextRunPort()
+    materialized = _AuthorizedMaterializedPort()
+    _MeterIdentityRecordingVectorIndex.latest_meter = None
+    commits: list[tuple[PackageBudgetMeter, BudgetUsage]] = []
+    original_commit = PackageBudgetMeter._commit
+
+    def record_commit(
+        meter: PackageBudgetMeter,
+        reservation: _PackageBudgetReservation,
+        actual: BudgetUsage,
+    ) -> None:
+        commits.append((meter, actual))
+        original_commit(meter, reservation, actual)
+
+    monkeypatch.setattr(PackageBudgetMeter, "_commit", record_commit)
+    response = _client(
+        provider,
+        context_runs,
+        record_meter_identity=True,
+        materialized=materialized,
+    ).post(
+        "/v1/resolve",
+        headers={
+            "Authorization": f"Bearer {VALID_TOKEN}",
+            "X-Context-Request-Id": "v1-one-resolve-meter",
+        },
+        json={"kind": "acquire", "need": {"query": QUERY}},
+    )
+
+    assert response.status_code == 200
+    package = response.json()["package"]
+    embedding_meter = _MeterIdentityRecordingVectorIndex.latest_meter
+    assert embedding_meter is not None
+    assert commits == [
+        (embedding_meter, BudgetUsage(len(QUERY), 1, 1, 7)),
+        (embedding_meter, BudgetUsage(len("A-safe"), 0, 0, 0)),
+    ]
+    assert package["budgetUsage"] == {
+        "tokens": len(QUERY) + len("A-safe"),
+        "providerCalls": 1,
+        "costMicrounits": 1,
+        "elapsedMs": 7,
+    }
+    assert embedding_meter.usage == BudgetUsage(
+        len(QUERY) + len("A-safe"), 1, 1, 7
+    )
+    assert provider.calls == 1
+    assert materialized.locator_calls == [AUTHORIZED]
+    assert materialized.body_calls == [locator(AUTHORIZED)]
+    assert package["blocks"][0]["text"] == "A-safe"
+    assert package["evidence"][0]["projectedFields"] == ["body"]
+    assert len(context_runs.calls) == 1
+    run, audit = context_runs.calls[0]
+    assert type(run) is ContextRunRecord
+    assert audit is None
+    assert (
+        run.usage_tokens,
+        run.usage_provider_calls,
+        run.usage_cost_microunits,
+        run.usage_elapsed_ms,
+    ) == tuple(package["budgetUsage"].values())
+    assert run.package_digest == package["packageDigest"]
+    digest_document = dict(package)
+    digest_document.pop("packageDigest")
+    assert context_package_digest(digest_document) == package["packageDigest"]
 
 
 @pytest.mark.security_evidence(id="ACCOUNTING-CARRIER-MISMATCH-217", layer="runtime")

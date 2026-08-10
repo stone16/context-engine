@@ -353,7 +353,7 @@
     {
       "id": "ACCOUNTING-ONE-METER-DYNAMIC-217",
       "layer": "runtime",
-      "selector": "tests/unit/test_model_inference_port.py::test_one_meter_accumulates_every_model_stage_and_final_assembly"
+      "selector": "tests/unit/test_http_v1_accounting.py::test_v1_http_resolve_uses_one_meter_for_embedding_and_assembly"
     },
     {
       "id": "ACCOUNTING-PACKAGE-RUN-BINDING-217",

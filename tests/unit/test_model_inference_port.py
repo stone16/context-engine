@@ -308,8 +308,7 @@ def test_shared_resolve_meter_preserves_prior_usage_and_accumulates_inference() 
     )
 
 
-@pytest.mark.security_evidence(id="ACCOUNTING-ONE-METER-DYNAMIC-217", layer="runtime")
-def test_one_meter_accumulates_every_model_stage_and_final_assembly() -> None:
+def test_explicit_meter_accumulates_isolated_inference_port_operations() -> None:
     budget = PackageBudgetMeter(
         PackageBudget(10_000, 4, 10_000, 10_000),
         tokenizer_profile=UNICODE_SCALAR_TOKENIZER_PROFILE,

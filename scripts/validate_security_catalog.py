@@ -2493,14 +2493,15 @@ CANONICAL_CUMULATIVE_ACCOUNTING_ACTIVATION: dict[str, object] = {
                 "test_v1_http_budget_exhaustion_refuses_before_provider_bytes "
                 "tests/unit/test_http_v1_accounting.py::"
                 "test_v1_http_unusable_embedding_settles_the_reserved_maximum "
-                "tests/unit/test_model_inference_port.py::"
-                "test_one_meter_accumulates_every_model_stage_and_final_assembly "
+                "tests/unit/test_http_v1_accounting.py::"
+                "test_v1_http_resolve_uses_one_meter_for_embedding_and_assembly "
                 "tests/unit/test_http_v1_accounting.py::"
                 "test_v1_http_mixed_generation_refuses_before_provider_bytes"
             ),
             "oracle": (
                 "Static and dynamic probes reject stage-local resets, prove one "
-                "ledger across embedding, inactive model-stage twins and assembly, "
+                "ledger across active local query embedding and final authorized "
+                "assembly through POST /v1/resolve, "
                 "serialize concurrent reservations, release cancellation capacity, "
                 "charge the maximum after an unusable provider result, and emit zero "
                 "provider bytes on pre-call or mixed-generation refusal."

@@ -9,12 +9,13 @@ import subprocess
 from collections.abc import Mapping
 from hashlib import sha256
 from pathlib import Path
-from typing import Any, NoReturn
+from typing import Any, Literal, NoReturn
 
 from adapters.http.app import create_app
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_VERSION_DIRECTORY = ROOT / "openapi" / "v0"
+OpenApiVersion = Literal["v0", "v1"]
 
 
 class SnapshotAlreadyExists(RuntimeError):
@@ -29,11 +30,17 @@ class SnapshotDrift(RuntimeError):
     """Generated OpenAPI differs from its accepted immutable snapshot."""
 
 
-def render_openapi_snapshot(version: str = "v0") -> bytes:
+def _openapi_version(value: str) -> OpenApiVersion:
+    if value == "v0":
+        return "v0"
+    if value == "v1":
+        return "v1"
+    raise ValueError("OpenAPI version is unavailable")
+
+
+def render_openapi_snapshot(version: OpenApiVersion = "v0") -> bytes:
     """Render the server contract with stable key ordering and one trailing LF."""
 
-    if version not in {"v0", "v1"}:
-        raise ValueError("OpenAPI version is unavailable")
     document = create_app(public_contract_version=version).openapi()
     return (
         json.dumps(
@@ -50,6 +57,7 @@ def render_openapi_snapshot(version: str = "v0") -> bytes:
 def write_new_snapshot(version_directory: Path) -> None:
     """Create one new version directory, refusing every in-place replacement."""
 
+    version = _openapi_version(version_directory.name)
     snapshot = version_directory / "openapi.json"
     digest = version_directory / "openapi.sha256"
     if snapshot.exists() or digest.exists():
@@ -57,7 +65,7 @@ def write_new_snapshot(version_directory: Path) -> None:
             "historical OpenAPI snapshots require a new reviewed version"
         )
     version_directory.mkdir(parents=True, exist_ok=True)
-    rendered = render_openapi_snapshot(version_directory.name)
+    rendered = render_openapi_snapshot(version)
     snapshot.write_bytes(rendered)
     digest.write_text(f"{sha256(rendered).hexdigest()}\n", encoding="ascii")
 
@@ -218,7 +226,9 @@ def check_snapshot(
                 repository_root=repository_root,
             ),
         )
-    generated_bytes = render_openapi_snapshot(version_directory.name)
+    generated_bytes = render_openapi_snapshot(
+        _openapi_version(version_directory.name)
+    )
     accepted = json.loads(accepted_bytes)
     candidate = json.loads(generated_bytes)
     assert_no_breaking_changes(accepted, candidate)

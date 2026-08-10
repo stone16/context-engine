@@ -41,6 +41,17 @@ def test_historical_snapshot_cannot_be_overwritten(tmp_path: Path) -> None:
         write_new_snapshot(version_directory)
 
 
+def test_new_snapshot_rejects_an_unknown_directory_version_before_writing(
+    tmp_path: Path,
+) -> None:
+    version_directory = tmp_path / "v2"
+
+    with pytest.raises(ValueError, match="OpenAPI version is unavailable"):
+        write_new_snapshot(version_directory)
+
+    assert not version_directory.exists()
+
+
 def test_breaking_change_gate_rejects_a_deliberate_required_field_removal() -> None:
     accepted = create_contract_document()
     candidate = deepcopy(accepted)
