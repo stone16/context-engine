@@ -74,6 +74,25 @@ class PostgreSQLFtsCandidateIndex:
             effective_scope=effective_scope,
         )
 
+    def prepare_generation_bound_discovery(
+        self,
+        request: Acquire,
+        *,
+        effective_scope: CandidateDiscoveryScope,
+        budget: PackageBudgetMeter,
+        active_embedding_profile_digest: str,
+        active_release_generation: int,
+    ) -> FtsDiscoveryRequest:
+        if type(active_release_generation) is not int or active_release_generation < 1:
+            raise TypeError("FTS candidate discovery requires an active generation")
+        budget.require_release_generation(active_release_generation)
+        return self.prepare_budgeted_discovery(
+            request,
+            effective_scope=effective_scope,
+            budget=budget,
+            active_embedding_profile_digest=active_embedding_profile_digest,
+        )
+
     def discover(
         self,
         request: Acquire,

@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 from hashlib import sha256
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 from engine.runtime.budget import PackageBudgetMeter
 from engine.runtime.candidate_ranking import CandidateQuery
@@ -17,6 +17,7 @@ from engine.runtime.scope import CandidateDiscoveryScope
 __all__ = [
     "CandidateIndex",
     "CandidateIndexUnavailable",
+    "GenerationBoundCandidateIndex",
     "ContextProvider",
     "RuntimeContentIo",
     "FragmentWindowReader",
@@ -61,6 +62,21 @@ class CandidateIndexUnavailable(RuntimeError):
     """Content-free transient failure of one configured candidate index."""
 
 
+@runtime_checkable
+class GenerationBoundCandidateIndex(Protocol):
+    """v1 discovery seam bound to the same Release generation as its meter."""
+
+    def prepare_generation_bound_discovery(
+        self,
+        request: Acquire,
+        *,
+        effective_scope: CandidateDiscoveryScope,
+        budget: PackageBudgetMeter,
+        active_embedding_profile_digest: str,
+        active_release_generation: int,
+    ) -> CandidateDiscoveryRequest: ...
+
+
 class ContextProvider(Protocol):
     """Future provider projection seam."""
 
@@ -93,6 +109,24 @@ class _ProhibitedCandidateIndex:
         active_embedding_profile_digest: str,
     ) -> CandidateDiscoveryRequest:
         del request, effective_scope, budget, active_embedding_profile_digest
+        raise RuntimeError("candidate index is prohibited on the empty Package path")
+
+    def prepare_generation_bound_discovery(
+        self,
+        request: Acquire,
+        *,
+        effective_scope: CandidateDiscoveryScope,
+        budget: PackageBudgetMeter,
+        active_embedding_profile_digest: str,
+        active_release_generation: int,
+    ) -> CandidateDiscoveryRequest:
+        del (
+            request,
+            effective_scope,
+            budget,
+            active_embedding_profile_digest,
+            active_release_generation,
+        )
         raise RuntimeError("candidate index is prohibited on the empty Package path")
 
     def discover(

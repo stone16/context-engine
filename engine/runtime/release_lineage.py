@@ -11,6 +11,11 @@ from engine.supply import (
     DETERMINISTIC_TWIN_EMBEDDING_PROFILE,
     QWEN3_EMBEDDING_PROFILE,
 )
+from engine.tokenizer_accounting import (
+    HISTORICAL_UTF8_BYTE_TOKENIZER_PROFILE_DIGEST,
+    HISTORICAL_UTF8_BYTE_TOKENIZER_PROFILE_DOCUMENT,
+    UNICODE_SCALAR_TOKENIZER_PROFILE,
+)
 
 
 class ActiveReleaseUnavailable(RuntimeError):
@@ -20,6 +25,9 @@ class ActiveReleaseUnavailable(RuntimeError):
 RUNTIME_PROFILE_REF_V0: Final = "runtime-materialized-openapi-v0"
 RUNTIME_TOKENIZER_REF_V0: Final = "utf8-byte-budget-v1"
 PACKAGE_SCHEMA_REF_V0: Final = "context-package-openapi-v0"
+RUNTIME_PROFILE_REF_V1: Final = "runtime-materialized-openapi-v1"
+RUNTIME_TOKENIZER_REF_V1: Final = UNICODE_SCALAR_TOKENIZER_PROFILE.profile_ref
+PACKAGE_SCHEMA_REF_V1: Final = "context-package-openapi-v1"
 CONTENT_PROFILE_REF_V0: Final = "content-materialized-v0"
 CONTENT_SCHEMA_REF_V0: Final = "context-content-schema-v1"
 INDEX_PROFILE_REF_V0: Final = "index-exact-phrase-v0"
@@ -45,6 +53,10 @@ QWEN_VECTOR_INDEX_PROFILE_DIGEST_V1: Final = sha256(
 ).hexdigest()
 RUNTIME_PROFILE_DIGEST_V0: Final = sha256(
     b"context-engine.runtime-profile.materialized-openapi-v0"
+).hexdigest()
+RUNTIME_PROFILE_DIGEST_V1: Final = sha256(
+    b"context-engine.runtime-profile.materialized-openapi-v1\x00"
+    + bytes.fromhex(UNICODE_SCALAR_TOKENIZER_PROFILE.profile_digest)
 ).hexdigest()
 CURATION_PROFILE_REF_V0: Final = "curation-off-v0"
 CURATION_PROFILE_DIGEST_V0: Final = sha256(
@@ -121,6 +133,10 @@ class ActiveRuntimeRelease:
     curation_evaluation_digest: str | None = field(repr=False)
     compatible_revision_refs: tuple[str, ...]
     active_revision_refs: tuple[str, ...]
+    tokenizer_profile_document: str = (
+        HISTORICAL_UTF8_BYTE_TOKENIZER_PROFILE_DOCUMENT
+    )
+    tokenizer_profile_digest: str = HISTORICAL_UTF8_BYTE_TOKENIZER_PROFILE_DIGEST
     manifest_ref: str = field(init=False)
 
     def __post_init__(self) -> None:
@@ -151,6 +167,7 @@ class ActiveRuntimeRelease:
             "index_profile_digest",
             "embedding_profile_digest",
             "curation_profile_digest",
+            "tokenizer_profile_digest",
         ):
             _require_digest(field_name, getattr(self, field_name))
         if type(self.active_revision_refs) is not tuple:
@@ -194,16 +211,38 @@ class ActiveRuntimeRelease:
                 QWEN3_EMBEDDING_PROFILE.canonical_json(),
             ),
         }
+        supported_runtime_profile = (
+            self.runtime_profile_ref,
+            self.runtime_profile_digest,
+            self.tokenizer_ref,
+            self.tokenizer_profile_document,
+            self.tokenizer_profile_digest,
+            self.package_schema_ref,
+        ) in {
+            (
+                RUNTIME_PROFILE_REF_V0,
+                RUNTIME_PROFILE_DIGEST_V0,
+                RUNTIME_TOKENIZER_REF_V0,
+                HISTORICAL_UTF8_BYTE_TOKENIZER_PROFILE_DOCUMENT,
+                HISTORICAL_UTF8_BYTE_TOKENIZER_PROFILE_DIGEST,
+                PACKAGE_SCHEMA_REF_V0,
+            ),
+            (
+                RUNTIME_PROFILE_REF_V1,
+                RUNTIME_PROFILE_DIGEST_V1,
+                RUNTIME_TOKENIZER_REF_V1,
+                UNICODE_SCALAR_TOKENIZER_PROFILE.canonical_json(),
+                UNICODE_SCALAR_TOKENIZER_PROFILE.profile_digest,
+                PACKAGE_SCHEMA_REF_V1,
+            ),
+        }
         if (
             self.content_profile_ref != CONTENT_PROFILE_REF_V0
             or self.content_schema_ref != CONTENT_SCHEMA_REF_V0
             or not supported_index_profile
             or self.index_schema_ref != INDEX_SCHEMA_REF_V0
-            or self.runtime_profile_ref != RUNTIME_PROFILE_REF_V0
             or self.content_profile_digest != CONTENT_PROFILE_DIGEST_V0
-            or self.runtime_profile_digest != RUNTIME_PROFILE_DIGEST_V0
-            or self.tokenizer_ref != RUNTIME_TOKENIZER_REF_V0
-            or self.package_schema_ref != PACKAGE_SCHEMA_REF_V0
+            or not supported_runtime_profile
             or self.curation_profile_ref != CURATION_PROFILE_REF_V0
             or self.curation_profile_digest != CURATION_PROFILE_DIGEST_V0
             or self.curation_mode != "curation_off"
@@ -234,11 +273,15 @@ __all__ = [
     "INDEX_PROFILE_REF_V0",
     "INDEX_SCHEMA_REF_V0",
     "PACKAGE_SCHEMA_REF_V0",
+    "PACKAGE_SCHEMA_REF_V1",
     "QWEN_VECTOR_INDEX_PROFILE_DIGEST_V1",
     "QWEN_VECTOR_INDEX_PROFILE_REF_V1",
     "RUNTIME_PROFILE_DIGEST_V0",
+    "RUNTIME_PROFILE_DIGEST_V1",
     "RUNTIME_PROFILE_REF_V0",
+    "RUNTIME_PROFILE_REF_V1",
     "RUNTIME_TOKENIZER_REF_V0",
+    "RUNTIME_TOKENIZER_REF_V1",
     "ActiveReleaseUnavailable",
     "ActiveRuntimeRelease",
     "public_release_manifest_ref",

@@ -42,17 +42,26 @@ from engine.runtime.release_lineage import (
     INDEX_PROFILE_REF_V0,
     INDEX_SCHEMA_REF_V0,
     PACKAGE_SCHEMA_REF_V0,
+    PACKAGE_SCHEMA_REF_V1,
     QWEN_VECTOR_INDEX_PROFILE_DIGEST_V1,
     QWEN_VECTOR_INDEX_PROFILE_REF_V1,
     RUNTIME_PROFILE_DIGEST_V0,
+    RUNTIME_PROFILE_DIGEST_V1,
     RUNTIME_PROFILE_REF_V0,
+    RUNTIME_PROFILE_REF_V1,
     RUNTIME_TOKENIZER_REF_V0,
+    RUNTIME_TOKENIZER_REF_V1,
     ActiveRuntimeRelease,
 )
 from engine.supply import (
     DETERMINISTIC_TWIN_EMBEDDING_PROFILE,
     QWEN3_EMBEDDING_PROFILE,
     EmbeddingProviderProfile,
+)
+from engine.tokenizer_accounting import (
+    HISTORICAL_UTF8_BYTE_TOKENIZER_PROFILE_DIGEST,
+    HISTORICAL_UTF8_BYTE_TOKENIZER_PROFILE_DOCUMENT,
+    UNICODE_SCALAR_TOKENIZER_PROFILE,
 )
 from tests.support.embeddings import QwenEmbeddingTwin
 
@@ -173,7 +182,26 @@ def active_runtime_release(
     embedding_provider_profile: EmbeddingProviderProfile = (
         DETERMINISTIC_TWIN_EMBEDDING_PROFILE
     ),
+    runtime_profile_ref: str = RUNTIME_PROFILE_REF_V0,
+    runtime_profile_digest: str = RUNTIME_PROFILE_DIGEST_V0,
+    tokenizer_ref: str = RUNTIME_TOKENIZER_REF_V0,
+    package_schema_ref: str = PACKAGE_SCHEMA_REF_V0,
 ) -> ActiveRuntimeRelease:
+    tokenizer_profile_document = HISTORICAL_UTF8_BYTE_TOKENIZER_PROFILE_DOCUMENT
+    tokenizer_profile_digest = HISTORICAL_UTF8_BYTE_TOKENIZER_PROFILE_DIGEST
+    if (
+        runtime_profile_ref,
+        runtime_profile_digest,
+        tokenizer_ref,
+        package_schema_ref,
+    ) == (
+        RUNTIME_PROFILE_REF_V1,
+        RUNTIME_PROFILE_DIGEST_V1,
+        RUNTIME_TOKENIZER_REF_V1,
+        PACKAGE_SCHEMA_REF_V1,
+    ):
+        tokenizer_profile_document = UNICODE_SCALAR_TOKENIZER_PROFILE.canonical_json()
+        tokenizer_profile_digest = UNICODE_SCALAR_TOKENIZER_PROFILE.profile_digest
     return ActiveRuntimeRelease(
         organization_id=organization_id,
         manifest_digest=_digest(f"manifest-{suffix}"),
@@ -182,14 +210,14 @@ def active_runtime_release(
         content_schema_ref=CONTENT_SCHEMA_REF_V0,
         index_profile_ref=index_profile_ref,
         index_schema_ref=INDEX_SCHEMA_REF_V0,
-        runtime_profile_ref=RUNTIME_PROFILE_REF_V0,
-        runtime_profile_digest=RUNTIME_PROFILE_DIGEST_V0,
+        runtime_profile_ref=runtime_profile_ref,
+        runtime_profile_digest=runtime_profile_digest,
         content_profile_digest=CONTENT_PROFILE_DIGEST_V0,
         index_profile_digest=index_profile_digest,
         embedding_profile_document=embedding_provider_profile.canonical_json(),
         embedding_profile_digest=embedding_provider_profile.profile_digest,
-        tokenizer_ref=RUNTIME_TOKENIZER_REF_V0,
-        package_schema_ref=PACKAGE_SCHEMA_REF_V0,
+        tokenizer_ref=tokenizer_ref,
+        package_schema_ref=package_schema_ref,
         curation_profile_ref=CURATION_PROFILE_REF_V0,
         curation_profile_digest=CURATION_PROFILE_DIGEST_V0,
         curation_mode="curation_off",
@@ -197,6 +225,8 @@ def active_runtime_release(
         curation_evaluation_digest=None,
         compatible_revision_refs=(),
         active_revision_refs=active_revision_refs,
+        tokenizer_profile_document=tokenizer_profile_document,
+        tokenizer_profile_digest=tokenizer_profile_digest,
     )
 
 
@@ -287,6 +317,8 @@ def ensure_test_runtime_release(
                        manifest.runtime_content_profile_digest,
                        manifest.runtime_index_profile_digest,
                        manifest.runtime_tokenizer_ref,
+                       manifest.runtime_tokenizer_profile_document,
+                       manifest.runtime_tokenizer_profile_digest,
                        manifest.runtime_package_schema_ref,
                        manifest.curation_profile_ref,
                        manifest.curation_profile_digest,
@@ -329,6 +361,9 @@ def ensure_test_runtime_release(
                 and existing.runtime_index_profile_digest == index_profile_digest
                 and existing.embedding_profile_digest
                 == embedding_provider_profile.profile_digest
+                and existing.runtime_profile_ref == runtime_profile_ref
+                and existing.runtime_tokenizer_ref == tokenizer_ref
+                and existing.runtime_package_schema_ref == package_schema_ref
             ):
                 try:
                     return ActiveRuntimeRelease(
@@ -353,6 +388,14 @@ def ensure_test_runtime_release(
                         embedding_profile_digest=existing.embedding_profile_digest,
                         tokenizer_ref=existing.runtime_tokenizer_ref,
                         package_schema_ref=existing.runtime_package_schema_ref,
+                        tokenizer_profile_document=json.dumps(
+                            existing.runtime_tokenizer_profile_document,
+                            separators=(",", ":"),
+                            sort_keys=True,
+                        ),
+                        tokenizer_profile_digest=(
+                            existing.runtime_tokenizer_profile_digest
+                        ),
                         curation_profile_ref=existing.curation_profile_ref,
                         curation_profile_digest=existing.curation_profile_digest,
                         curation_mode=existing.curation_mode,
@@ -441,13 +484,27 @@ def ensure_test_runtime_release(
         )
         runtime = RuntimeProfileRef(
             profile_ref=runtime_profile_ref,
-            profile_digest=RUNTIME_PROFILE_DIGEST_V0,
+            profile_digest=(
+                RUNTIME_PROFILE_DIGEST_V1
+                if package_schema_ref == PACKAGE_SCHEMA_REF_V1
+                else RUNTIME_PROFILE_DIGEST_V0
+            ),
             content_profile_digest=content.profile_digest,
             index_profile_digest=index.profile_digest,
             content_schema_ref=content.content_schema_ref,
             index_schema_ref=index.index_schema_ref,
             tokenizer_ref=tokenizer_ref,
             package_schema_ref=package_schema_ref,
+            tokenizer_profile_document=(
+                UNICODE_SCALAR_TOKENIZER_PROFILE.canonical_json()
+                if package_schema_ref == PACKAGE_SCHEMA_REF_V1
+                else HISTORICAL_UTF8_BYTE_TOKENIZER_PROFILE_DOCUMENT
+            ),
+            tokenizer_profile_digest=(
+                UNICODE_SCALAR_TOKENIZER_PROFILE.profile_digest
+                if package_schema_ref == PACKAGE_SCHEMA_REF_V1
+                else HISTORICAL_UTF8_BYTE_TOKENIZER_PROFILE_DIGEST
+            ),
         )
         manifest = ReleaseManifest(
             organization_id=organization_id,
@@ -528,6 +585,8 @@ def ensure_test_runtime_release(
             embedding_profile_digest=index.embedding_profile_digest,
             tokenizer_ref=runtime.tokenizer_ref,
             package_schema_ref=runtime.package_schema_ref,
+            tokenizer_profile_document=runtime.tokenizer_profile_document,
+            tokenizer_profile_digest=runtime.tokenizer_profile_digest,
             curation_profile_ref=manifest.curation_profile.profile_ref,
             curation_profile_digest=manifest.curation_profile.profile_digest,
             curation_mode=manifest.curation_profile.mode.value,

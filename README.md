@@ -377,12 +377,23 @@ and the commands that produced the evidence:
 ```
 
 Run the explicit release command, then boot the dogfood API as described
-above:
+above. The command defaults to the frozen `v0` public Package contract used by
+the local dogfood, evaluation, maintainer CLI, and MCP carriers:
 
 ```bash
 uv run context-engine-control promote-release \
   --organization-id "$CONTEXT_ENGINE_OPERATOR_ORGANIZATION_ID" \
   --evidence-file "$CONTEXT_ENGINE_RELEASE_EVIDENCE_FILE"
+```
+
+Promote the same corpus for an explicit `v1` accounting consumer with the
+closed version flag:
+
+```bash
+uv run context-engine-control promote-release \
+  --organization-id "$CONTEXT_ENGINE_OPERATOR_ORGANIZATION_ID" \
+  --evidence-file "$CONTEXT_ENGINE_RELEASE_EVIDENCE_FILE" \
+  --public-contract-version v1
 ```
 
 The content-free JSON result reports the active generation, exact active

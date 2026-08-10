@@ -17,7 +17,7 @@ def test_private_bot_application_has_one_closed_process_and_import_boundary() ->
     assert package["bin"] == {"context-engine-bot": "./dist/main.js"}
     assert package["peerDependencies"] == {
         "@context-engine/action-plane": "0.0.0-m2-perform",
-        "@context-engine/resolve-sdk": "0.0.0-v0",
+        "@context-engine/resolve-sdk-v1": "1.0.0",
     }
     assert package["scripts"]["start"] == "node dist/main.js"
     assert package["scripts"]["test:runtime"] == (
@@ -28,7 +28,8 @@ def test_private_bot_application_has_one_closed_process_and_import_boundary() ->
         path.read_text(encoding="utf-8")
         for path in sorted((BOT_ROOT / "src").glob("*.ts"))
     )
-    assert '@context-engine/resolve-sdk"' in source
+    assert '@context-engine/resolve-sdk-v1"' in source
+    assert "ContextPackageV1Wire" in source
     assert '@context-engine/action-plane"' in source
     import_lines = "\n".join(
         line

@@ -9,6 +9,7 @@ import pytest
 
 ROOT = Path(__file__).parents[2]
 SDK_ROOT = ROOT / "sdk/typescript"
+SDK_V1_ROOT = ROOT / "sdk/typescript-v1"
 
 
 def _generated_tree_digest() -> str:
@@ -65,3 +66,44 @@ def test_typescript_sdk_metadata_locks_contract_and_public_exports() -> None:
     ).read_text(encoding="ascii").strip()
     assert re.fullmatch(r"[0-9a-f]{64}", recorded_generated_digest)
     assert recorded_generated_digest == _generated_tree_digest()
+
+
+@pytest.mark.security_evidence(id="SDK-CONTRACT-V1-217", layer="property")
+def test_v1_sdk_is_independent_and_v0_facade_stays_frozen() -> None:
+    package = json.loads((SDK_V1_ROOT / "package.json").read_text(encoding="utf-8"))
+    assert package["name"] == "@context-engine/resolve-sdk-v1"
+    assert package["contextEngineContract"] == {
+        "version": "v1",
+        "snapshot": "../../openapi/v1/openapi.json",
+        "checksum": "../../openapi/v1/openapi.sha256",
+        "generator": "@hey-api/openapi-ts@0.95.0",
+    }
+    assert package["exports"] == {
+        ".": {"types": "./dist/index.d.ts", "import": "./dist/index.js"},
+        "./contract/openapi-v1.sha256": "./contract/openapi-v1.sha256",
+    }
+    assert sha256((SDK_ROOT / "src/index.ts").read_bytes()).hexdigest() == (
+        "a1fa3e41037d7f97a9fea5e3e721cc435709e4ef327266e555d151ce4e7da207"
+    )
+    ignored = (ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
+    assert {
+        "sdk/typescript-v1/node_modules/",
+        "sdk/typescript-v1/dist/",
+        "sdk/typescript-v1/*.tgz",
+        "sdk/typescript-v1/*.tsbuildinfo",
+        "sdk/typescript-v1/governance/",
+        "sdk/typescript-v1/third_party/",
+    } <= set(ignored)
+    makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+    sdk_pack = makefile.split("sdk-pack:\n", maxsplit=1)[1].split("\n\n", maxsplit=1)[0]
+    assert sdk_pack.splitlines() == [
+        "\tnpm --prefix sdk/typescript run pack:artifact",
+        "\tnpm --prefix sdk/typescript-v1 run pack:artifact",
+    ]
+    sdk_generate = makefile.split("sdk-generate:\n", maxsplit=1)[1].split(
+        "\n\n", maxsplit=1
+    )[0]
+    assert sdk_generate.splitlines() == [
+        "\tnpm --prefix sdk/typescript run generate",
+        "\tnpm --prefix sdk/typescript-v1 run generate",
+    ]

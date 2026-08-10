@@ -8,7 +8,7 @@ import ts from "typescript";
 
 const packageRoot = resolve(import.meta.dirname, "..");
 const actionRoot = resolve(packageRoot, "../../action_plane/typescript");
-const sdkRoot = resolve(packageRoot, "../../sdk/typescript");
+const sdkRoot = resolve(packageRoot, "../../sdk/typescript-v1");
 const temporaryRoot = mkdtempSync(join(tmpdir(), "context-engine-bot-delivery-package-"));
 const builtins = new Set(builtinModules.flatMap((name) => [name, `node:${name}`]));
 
@@ -85,7 +85,7 @@ function assertPackedRuntimeImportsAreDeclared(installedPackageRoot, packedFiles
       `packed BotDelivery has undeclared runtime imports: ${[...undeclared].sort().join(", ")}`,
     );
   }
-  for (const required of ["@context-engine/action-plane", "@context-engine/resolve-sdk", "canonicalize", "pg"]) {
+  for (const required of ["@context-engine/action-plane", "@context-engine/resolve-sdk-v1", "canonicalize", "pg"]) {
     if (!observed.has(required)) {
       throw new Error(`packed runtime import audit did not observe ${required}`);
     }
@@ -148,7 +148,7 @@ try {
   packageDocument.dependencies = {
     "@context-engine/bot-delivery": `file:${join(temporaryRoot, botArtifact.filename)}`,
     "@context-engine/action-plane": `file:${join(temporaryRoot, actionArtifact.filename)}`,
-    "@context-engine/resolve-sdk": `file:${join(temporaryRoot, sdkArtifact.filename)}`,
+    "@context-engine/resolve-sdk-v1": `file:${join(temporaryRoot, sdkArtifact.filename)}`,
     ...localProductionDependencies,
   };
   packageDocument.optionalDependencies = localOptionalDependencies;

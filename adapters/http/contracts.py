@@ -14,6 +14,7 @@ from context_engine_contracts import (
     MAX_PROJECTED_FIELD_REFS,
     PACKAGE_REF_PATTERN,
     complete_context_package_nullable_fields,
+    is_registered_v1_tokenizer_identity,
     validate_projected_field_refs,
     verify_context_package_digest,
 )
@@ -397,6 +398,80 @@ class ContextPackageWire(ClosedWireModel):
         return self
 
 
+class ContextPackageV1Wire(ClosedWireModel):
+    """Cumulative v1 Package with digest-bound tokenizer accounting."""
+
+    packageId: PackageOutputRef
+    packageDigest: PackageDigestOutput
+    purpose: NonblankPurpose
+    audienceDigest: PackageDigestOutput
+    policyEpoch: PositivePolicyEpoch
+    policySnapshotRef: OpaqueOutputRef
+    decisionRef: DecisionOutputRef
+    runRef: OpaqueOutputRef
+    releaseManifestRef: OpaqueOutputRef
+    retentionPolicyRef: OpaqueOutputRef
+    asOf: datetime
+    expiresAt: datetime
+    ttlSeconds: PositiveExactInteger
+    tokenizerRef: OpaqueOutputRef
+    tokenizerProfileDigest: PackageDigestOutput
+    packageSchemaRef: Literal["context-package-openapi-v1"]
+    blocks: tuple[BlockWire, ...]
+    evidence: tuple[EvidenceWire, ...]
+    gaps: tuple[GapWire, ...]
+    coverage: CoverageWire
+    budgetUsage: BudgetUsageWire
+    continuation: ContinuationOfferWire | None
+
+    @model_validator(mode="after")
+    def require_cumulative_authorized_closure(self) -> Self:
+        block_refs = tuple(block.evidenceRefs[0] for block in self.blocks)
+        evidence_refs = tuple(item.evidenceRef for item in self.evidence)
+        if (
+            len(block_refs) != len(set(block_refs))
+            or len(evidence_refs) != len(set(evidence_refs))
+            or set(block_refs) != set(evidence_refs)
+        ):
+            raise ValueError("package must have an exact block/Evidence closure")
+        has_content = bool(self.blocks or self.evidence)
+        if has_content != (self.coverage.status == "sufficient"):
+            raise ValueError("package content must match its coverage status")
+        if has_content and self.budgetUsage.tokens == 0:
+            raise ValueError("v1 content package token usage must be positive")
+        if not is_registered_v1_tokenizer_identity(
+            self.tokenizerRef,
+            self.tokenizerProfileDigest,
+        ):
+            raise ValueError(
+                "v1 package requires a registered tokenizer lineage"
+            )
+        for item in self.evidence:
+            if (
+                item.purpose != self.purpose
+                or item.authorizationAsOf != self.asOf
+                or item.decisionRef != self.decisionRef
+                or item.policyEpoch != self.policyEpoch
+                or item.policySnapshotRef != self.policySnapshotRef
+                or item.runRef != self.runRef
+            ):
+                raise ValueError(
+                    "Evidence lineage must match its enclosing package decision"
+                )
+        digest_document = self.model_dump(
+            mode="json",
+            by_alias=True,
+            exclude={"packageDigest"},
+            exclude_none=True,
+        )
+        complete_context_package_nullable_fields(digest_document)
+        if not verify_context_package_digest(digest_document, self.packageDigest):
+            raise ValueError(
+                "packageDigest must match the exact public Package document"
+            )
+        return self
+
+
 class ModelEgressGrantWire(ClosedWireModel):
     """Opaque one-hop model grant; no trusted claim is exposed on the wire."""
 
@@ -422,6 +497,15 @@ class ResolvedWire(ClosedWireModel):
     )
 
 
+class ResolvedV1Wire(ClosedWireModel):
+    kind: Literal["resolved"]
+    package: ContextPackageV1Wire
+    egressGrant: ModelEgressGrantWire | ChannelEgressGrantWire | None = Field(
+        discriminator="kind",
+        repr=False,
+    )
+
+
 class RequestNotAvailableWire(ClosedWireModel):
     """Caller-safe outcome for an unavailable known request."""
 
@@ -437,6 +521,11 @@ class CitationNotAvailableWire(ClosedWireModel):
 
 type ResolutionOutcomeWire = Annotated[
     ResolvedWire | RequestNotAvailableWire | CitationNotAvailableWire,
+    Field(discriminator="kind"),
+]
+
+type ResolutionOutcomeV1Wire = Annotated[
+    ResolvedV1Wire | RequestNotAvailableWire | CitationNotAvailableWire,
     Field(discriminator="kind"),
 ]
 
@@ -468,12 +557,12 @@ class RateLimitedWire(ClosedWireModel):
 
 
 def resolution_outcome_public_document(
-    outcome: ResolutionOutcomeWire,
+    outcome: ResolutionOutcomeWire | ResolutionOutcomeV1Wire,
 ) -> dict[str, object]:
     """Serialize one closed outcome with every frozen required-nullable field."""
 
     document = outcome.model_dump(mode="json", by_alias=True, exclude_none=True)
-    if type(outcome) is not ResolvedWire:
+    if type(outcome) not in {ResolvedWire, ResolvedV1Wire}:
         return document
     document["egressGrant"] = document.get("egressGrant")
     package = document.get("package")

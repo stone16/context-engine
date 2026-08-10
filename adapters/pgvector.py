@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from threading import Lock
 from time import monotonic_ns
 
 from adapters._bounded_call import BoundedCallUnavailable, invoke_bounded
@@ -32,6 +33,10 @@ from engine.supply import (
     EmbeddingProviderUnavailable,
     validate_embedding_batch,
 )
+from engine.tokenizer_accounting import (
+    UNICODE_SCALAR_TOKENIZER_PROFILE,
+    TokenizerUnavailable,
+)
 
 DEFAULT_VECTOR_CANDIDATE_LIMIT = 16
 MAX_VECTOR_CANDIDATE_LIMIT = 64
@@ -41,8 +46,6 @@ QUERY_EMBEDDING_MAXIMUM_USAGE = BudgetUsage(
     cost_microunits=1,
     elapsed_ms=5_000,
 )
-
-
 def _monotonic_ms() -> int:
     return monotonic_ns() // 1_000_000
 
@@ -138,12 +141,21 @@ class PostgreSQLVectorCandidateIndex:
             ),
         )
 
-    def _embed_query_bounded(self, query: str) -> tuple[tuple[float, ...], ...]:
+    def _embed_query_bounded(
+        self,
+        query: str,
+        *,
+        on_provider_start: Callable[[], None] = lambda: None,
+    ) -> tuple[tuple[float, ...], ...]:
         """Return by the local query deadline even if backend inference hangs."""
+
+        def embed() -> tuple[tuple[float, ...], ...]:
+            on_provider_start()
+            return self._embedding_provider.embed((query,))
 
         try:
             vectors = invoke_bounded(
-                lambda: self._embedding_provider.embed((query,)),
+                embed,
                 timeout_seconds=(
                     QUERY_EMBEDDING_MAXIMUM_USAGE.elapsed_ms / 1_000
                 ),
@@ -173,21 +185,57 @@ class PostgreSQLVectorCandidateIndex:
             )
         if type(budget) is not PackageBudgetMeter:
             raise TypeError("Vector candidate discovery requires PackageBudgetMeter")
+        try:
+            budget.require_carrier_tokenizer(
+                UNICODE_SCALAR_TOKENIZER_PROFILE.profile_ref,
+                UNICODE_SCALAR_TOKENIZER_PROFILE.profile_digest,
+            )
+        except TokenizerUnavailable:
+            raise VectorCandidateIndexUnavailable(
+                "Vector candidate discovery is unavailable"
+            ) from None
         if active_embedding_profile_digest != self._provider_profile.profile_digest:
             raise VectorCandidateIndexUnavailable(
                 "Vector candidate discovery is unavailable"
             )
+        query_tokens = budget.count_tokens(
+            self._provider_profile.query_prefix + request.need.query
+        )
+        maximum_usage = BudgetUsage(
+            tokens=query_tokens,
+            provider_calls=QUERY_EMBEDDING_MAXIMUM_USAGE.provider_calls,
+            cost_microunits=QUERY_EMBEDDING_MAXIMUM_USAGE.cost_microunits,
+            elapsed_ms=QUERY_EMBEDDING_MAXIMUM_USAGE.elapsed_ms,
+        )
         try:
-            reservation = budget._reserve(QUERY_EMBEDDING_MAXIMUM_USAGE)
+            reservation = budget._reserve(maximum_usage)
         except PackageBudgetExceeded:
             raise VectorCandidateIndexUnavailable(
                 "Vector candidate discovery is unavailable"
             ) from None
+
+        provider_call_started = False
+        provider_call_allowed = True
+        provider_start_lock = Lock()
+        actual_usage: BudgetUsage | None = None
+
+        def mark_provider_started() -> None:
+            nonlocal provider_call_started, provider_call_allowed
+            with provider_start_lock:
+                if not provider_call_allowed:
+                    raise EmbeddingProviderUnavailable(
+                        "Embedding provider is unavailable"
+                    )
+                provider_call_started = True
+
         try:
             started_ms = self._monotonic_ms()
             query_embedding = validate_embedding_batch(
                 (request.need.query,),
-                self._embed_query_bounded(request.need.query),
+                self._embed_query_bounded(
+                    request.need.query,
+                    on_provider_start=mark_provider_started,
+                ),
                 self._embedding_profile,
             )[0]
             request_plan = VectorDiscoveryRequest(
@@ -210,21 +258,56 @@ class PostgreSQLVectorCandidateIndex:
                 raise VectorCandidateIndexUnavailable(
                     "Vector candidate discovery is unavailable"
                 )
-        except (EmbeddingProviderUnavailable, VectorCandidateIndexUnavailable):
-            budget._commit(reservation, QUERY_EMBEDDING_MAXIMUM_USAGE)
-            raise VectorCandidateIndexUnavailable(
-                "Vector candidate discovery is unavailable"
-            ) from None
-        budget._commit(
-            reservation,
-            BudgetUsage(
-                tokens=0,
+            actual_usage = BudgetUsage(
+                tokens=query_tokens,
                 provider_calls=1,
                 cost_microunits=1,
                 elapsed_ms=elapsed_ms,
-            ),
-        )
+            )
+        except Exception as error:
+            if isinstance(
+                error,
+                EmbeddingProviderUnavailable | VectorCandidateIndexUnavailable,
+            ):
+                raise VectorCandidateIndexUnavailable(
+                    "Vector candidate discovery is unavailable"
+                ) from None
+            raise
+        finally:
+            with provider_start_lock:
+                provider_call_allowed = False
+                settle_as_started = provider_call_started
+            if settle_as_started:
+                budget._commit(reservation, actual_usage or maximum_usage)
+            else:
+                budget._cancel(reservation)
         return request_plan
+
+    def prepare_generation_bound_discovery(
+        self,
+        request: Acquire,
+        *,
+        effective_scope: CandidateDiscoveryScope,
+        budget: PackageBudgetMeter,
+        active_embedding_profile_digest: str,
+        active_release_generation: int,
+    ) -> VectorDiscoveryRequest:
+        try:
+            budget.require_tokenizer(
+                UNICODE_SCALAR_TOKENIZER_PROFILE.profile_ref,
+                UNICODE_SCALAR_TOKENIZER_PROFILE.profile_digest,
+                active_release_generation,
+            )
+        except TokenizerUnavailable:
+            raise VectorCandidateIndexUnavailable(
+                "Vector candidate discovery is unavailable"
+            ) from None
+        return self.prepare_budgeted_discovery(
+            request,
+            effective_scope=effective_scope,
+            budget=budget,
+            active_embedding_profile_digest=active_embedding_profile_digest,
+        )
 
     @property
     def embedding_profile_digest(self) -> str:

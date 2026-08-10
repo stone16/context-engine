@@ -1,7 +1,7 @@
 import type {
-  ContextPackageWire,
+  ContextPackageV1Wire,
   ModelEgressGrantWire,
-} from "@context-engine/resolve-sdk";
+} from "@context-engine/resolve-sdk-v1";
 import {
   AuthorizedModelInput,
   DeterministicModelGatewayTwin,
@@ -15,7 +15,7 @@ import {
 
 const profile = privateModelGatewayProfileV1();
 
-declare const packageValue: ContextPackageWire;
+declare const packageValue: ContextPackageV1Wire;
 declare const grant: ModelEgressGrantWire;
 const options: PrepareAuthorizedModelInputOptions = {
   envelope: { instructions: "Use context.", question: "Question?" },

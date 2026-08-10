@@ -42,11 +42,11 @@
   },
   "peerDependencies": {
     "@context-engine/action-plane": "0.0.0-m2-perform",
-    "@context-engine/resolve-sdk": "0.0.0-v0"
+    "@context-engine/resolve-sdk-v1": "1.0.0"
   },
   "devDependencies": {
     "@context-engine/action-plane": "file:../../action_plane/typescript",
-    "@context-engine/resolve-sdk": "file:../../sdk/typescript",
+    "@context-engine/resolve-sdk-v1": "file:../../sdk/typescript-v1",
     "@types/node": "22.10.2",
     "@types/pg": "8.20.0",
     "typescript": "5.9.3"

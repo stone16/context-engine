@@ -9,9 +9,9 @@ import {
 } from "@context-engine/action-plane";
 import {
   ContextEngineResolveClient,
-  type ContextPackageWire,
+  type ContextPackageV1Wire,
   type ModelEgressGrantWire,
-} from "@context-engine/resolve-sdk";
+} from "@context-engine/resolve-sdk-v1";
 import canonicalize from "canonicalize";
 import pg from "pg";
 
@@ -986,7 +986,7 @@ export type DeliveryOutcome =
 export interface CitationOpened {
   readonly egressGrant: ModelEgressGrantWire;
   readonly kind: "opened";
-  readonly package: ContextPackageWire;
+  readonly package: ContextPackageV1Wire;
 }
 
 export interface CitationNotAvailable {
@@ -1039,7 +1039,7 @@ function reconciliationOutcome(
 }
 
 function exactCurrentPackage(
-  value: ContextPackageWire,
+  value: ContextPackageV1Wire,
   binding: PrivateIdentityBinding,
   now: Date,
 ): boolean {

@@ -25,7 +25,11 @@ from applications.operator_authentication import (
     LocalControlOperatorConfiguration,
     LocalOperatorConfiguration,
 )
-from applications.release_promotion import promote_release, release_report_json
+from applications.release_promotion import (
+    PublicContractVersion,
+    promote_release,
+    release_report_json,
+)
 from engine.article_access_policy import (
     ArticleAccessPolicyKind,
     ArticleAccessPolicySetting,
@@ -122,6 +126,11 @@ def _parser() -> argparse.ArgumentParser:
     )
     _organization_argument(promote)
     promote.add_argument("--evidence-file", required=True, type=Path)
+    promote.add_argument(
+        "--public-contract-version",
+        choices=tuple(version.value for version in PublicContractVersion),
+        default=PublicContractVersion.V0.value,
+    )
     for name, help_text in (
         (
             "preview-bulk-article-policy",
@@ -174,6 +183,9 @@ def main(argv: Sequence[str] | None = None) -> None:
                 evidence_file=arguments.evidence_file,
                 configuration=configuration,
                 authorities=configuration.authorities(),
+                public_contract_version=PublicContractVersion(
+                    arguments.public_contract_version
+                ),
             )
             rendered = release_report_json(promotion)
         except Exception:

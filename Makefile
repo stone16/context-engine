@@ -3,12 +3,14 @@
 install:
 	uv sync --frozen --extra mcp
 	npm --prefix sdk/typescript ci --ignore-scripts
+	npm --prefix sdk/typescript-v1 ci --ignore-scripts
 	npm --prefix action_plane/typescript ci --ignore-scripts
 	npm --prefix bot_delivery/typescript ci --ignore-scripts
 
 install-runtime:
 	uv sync --frozen
 	npm --prefix sdk/typescript ci --ignore-scripts
+	npm --prefix sdk/typescript-v1 ci --ignore-scripts
 	npm --prefix action_plane/typescript ci --ignore-scripts
 	npm --prefix bot_delivery/typescript ci --ignore-scripts
 
@@ -83,24 +85,30 @@ openapi-generate:
 
 openapi-check:
 	uv run python scripts/freeze_openapi.py check $(if $(OPENAPI_BASELINE_REF),--baseline-ref $(OPENAPI_BASELINE_REF),)
+	uv run python scripts/freeze_openapi.py check --version-directory openapi/v1 $(if $(OPENAPI_BASELINE_REF),--baseline-ref $(OPENAPI_BASELINE_REF),)
 
 openapi-breaking-check:
 	uv run pytest -q tests/unit/test_openapi_v0_snapshot.py
 
 sdk-generate:
 	npm --prefix sdk/typescript run generate
+	npm --prefix sdk/typescript-v1 run generate
 
 sdk-check:
 	npm --prefix sdk/typescript run check:generated
+	npm --prefix sdk/typescript-v1 run check:generated
 
 sdk-build:
 	npm --prefix sdk/typescript run build
+	npm --prefix sdk/typescript-v1 run build
 
 sdk-test:
 	npm --prefix sdk/typescript test
+	npm --prefix sdk/typescript-v1 test
 
 sdk-pack:
 	npm --prefix sdk/typescript run pack:artifact
+	npm --prefix sdk/typescript-v1 run pack:artifact
 
 action-typecheck:
 	npm --prefix action_plane/typescript run typecheck

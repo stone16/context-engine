@@ -62,6 +62,32 @@ class PostgreSQLHybridCandidateIndex:
             ),
         )
 
+    def prepare_generation_bound_discovery(
+        self,
+        request: Acquire,
+        *,
+        effective_scope: CandidateDiscoveryScope,
+        budget: PackageBudgetMeter,
+        active_embedding_profile_digest: str,
+        active_release_generation: int,
+    ) -> HybridDiscoveryRequest:
+        return HybridDiscoveryRequest(
+            fts=self._fts.prepare_generation_bound_discovery(
+                request,
+                effective_scope=effective_scope,
+                budget=budget,
+                active_embedding_profile_digest=active_embedding_profile_digest,
+                active_release_generation=active_release_generation,
+            ),
+            vector=self._vector.prepare_generation_bound_discovery(
+                request,
+                effective_scope=effective_scope,
+                budget=budget,
+                active_embedding_profile_digest=active_embedding_profile_digest,
+                active_release_generation=active_release_generation,
+            ),
+        )
+
     def discover(
         self,
         request: Acquire,

@@ -71,7 +71,9 @@ The deterministic process also accepts closed `generated | invalid_output`
 model and `applied | rejected | ambiguous` Sender twin modes; they are bounded
 conformance modes, not live-provider configuration.
 
-Repository verification builds the generated SDK before this package. Run the
+Repository verification builds the generated SDK before this package. The v1
+SDK is a runtime peer dependency used for every resolve call, not a types-only
+development dependency. Run the
 `bot-typecheck`, `bot-build`, and `bot-test` Make targets for the standalone
 contract, runtime, and installed-package checks. Real PostgreSQL and local API
 evidence is exercised by the repository integration suite.

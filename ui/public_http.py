@@ -168,7 +168,7 @@ async def resolve_query(
         request,
         bearer_token=bearer_token,
         method="POST",
-        path=PUBLIC_RESOLVE_PATH,
+        path=_resolve_path(request),
         body={"kind": "acquire", "need": {"query": query}},
     )
 
@@ -185,9 +185,16 @@ async def open_citation(
         request,
         bearer_token=bearer_token,
         method="POST",
-        path=PUBLIC_RESOLVE_PATH,
+        path=_resolve_path(request),
         body={"kind": "open_citation", "citationOpenRef": citation_open_ref},
     )
+
+
+def _resolve_path(request: Request) -> str:
+    path = getattr(request.app.state, "public_resolve_path", PUBLIC_RESOLVE_PATH)
+    if path not in {"/v0/resolve", "/v1/resolve"}:
+        raise ValueError("public resolve path is unavailable")
+    return cast(str, path)
 
 
 def _session_key(bearer_token: str) -> bytes:

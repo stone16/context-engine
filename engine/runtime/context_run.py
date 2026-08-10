@@ -536,6 +536,8 @@ def build_context_run_records(
         or package.run_ref != decision_provenance.run_ref
         or package.release_manifest_ref != active_release.manifest_ref
         or package.tokenizer_ref != active_release.tokenizer_ref
+        or package.tokenizer_profile_digest
+        != active_release.tokenizer_profile_digest
         or package.package_schema_ref != active_release.package_schema_ref
         or package.retention_policy_ref != PACKAGE_RETENTION_POLICY_REF
         or package.as_of < invocation.received_at

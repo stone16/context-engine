@@ -5,7 +5,8 @@ from __future__ import annotations
 import hashlib
 import hmac
 from collections.abc import Mapping
-from typing import Final, cast
+from dataclasses import dataclass
+from typing import Any, Final, cast
 
 import rfc8785
 
@@ -16,6 +17,101 @@ MAX_PROJECTED_FIELD_REFS: Final = 64
 MAX_PROJECTED_FIELD_REF_LENGTH: Final = 64
 PACKAGE_REF_PATTERN: Final = r"^pkg_[0-9a-f]{32}$"
 DECISION_REF_PATTERN: Final = r"^dec_[0-9a-f]{32}$"
+_TOKENIZER_PROFILE_DIGEST_DOMAIN: Final = b"context-engine.tokenizer-profile.v1\x00"
+
+
+@dataclass(frozen=True, slots=True)
+class TokenizerProfileDescriptor:
+    """Transport-neutral immutable identity for one tokenizer profile."""
+
+    profile_ref: str
+    artifact_name: str
+    artifact_digest: str
+    vocabulary_ref: str
+    normalization_ref: str
+    accounting_version: str
+    counting_contract: str
+
+    def __post_init__(self) -> None:
+        for field_name in (
+            "profile_ref",
+            "artifact_name",
+            "vocabulary_ref",
+            "normalization_ref",
+            "accounting_version",
+            "counting_contract",
+        ):
+            value = getattr(self, field_name)
+            if (
+                type(value) is not str
+                or not value
+                or value != value.strip()
+                or any(character.isspace() for character in value)
+            ):
+                raise ValueError(
+                    f"TokenizerProfileDescriptor {field_name} must be an opaque ref"
+                )
+        if "/" in self.artifact_name or "\\" in self.artifact_name:
+            raise ValueError("TokenizerProfileDescriptor artifact_name must be a name")
+        if (
+            type(self.artifact_digest) is not str
+            or len(self.artifact_digest) != hashlib.sha256().digest_size * 2
+            or any(
+                character not in "0123456789abcdef"
+                for character in self.artifact_digest
+            )
+        ):
+            raise ValueError(
+                "TokenizerProfileDescriptor artifact_digest must be lowercase SHA-256"
+            )
+
+    def canonical_document(self) -> dict[str, str]:
+        return {
+            "accountingVersion": self.accounting_version,
+            "artifactDigest": self.artifact_digest,
+            "countingContract": self.counting_contract,
+            "normalizationRef": self.normalization_ref,
+            "profileRef": self.profile_ref,
+            "vocabularyRef": self.vocabulary_ref,
+        }
+
+    def canonical_json(self) -> str:
+        return rfc8785.dumps(cast(Any, self.canonical_document())).decode("utf-8")
+
+    @property
+    def profile_digest(self) -> str:
+        return hashlib.sha256(
+            _TOKENIZER_PROFILE_DIGEST_DOMAIN
+            + rfc8785.dumps(cast(Any, self.canonical_document()))
+        ).hexdigest()
+
+
+REGISTERED_V1_TOKENIZER_PROFILES: Final = (
+    TokenizerProfileDescriptor(
+        profile_ref="unicode-scalar-tokenizer-v1",
+        artifact_name="unicode-scalar-v1.json",
+        artifact_digest=(
+            "8d301e3ce94e5b48febffb2e0871e139cd4d5f808084eccbf9cfc512d3948cca"
+        ),
+        vocabulary_ref="unicode-scalars-v15.1",
+        normalization_ref="none",
+        accounting_version="unicode-scalar-accounting-v1",
+        counting_contract="one-unicode-scalar-one-token-v1",
+    ),
+)
+REGISTERED_V1_TOKENIZER_IDENTITIES: Final = frozenset(
+    (descriptor.profile_ref, descriptor.profile_digest)
+    for descriptor in REGISTERED_V1_TOKENIZER_PROFILES
+)
+
+
+def is_registered_v1_tokenizer_identity(
+    profile_ref: object,
+    profile_digest: object,
+) -> bool:
+    """Return whether ref and digest name one admitted v1 tokenizer profile."""
+
+    return (profile_ref, profile_digest) in REGISTERED_V1_TOKENIZER_IDENTITIES
 
 
 type CanonicalJsonValue = (

@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, fields
 from threading import Lock
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from engine.tokenizer_accounting import TokenizerProfile
 
 
 def _require_positive_exact_integer(field_name: str, value: object) -> None:
@@ -80,13 +84,24 @@ class PackageBudgetMeter:
     meter. No other stage-local replacement is allowed.
     """
 
-    __slots__ = ("_budget", "_lock", "_reserved", "_usage")
+    __slots__ = (
+        "_budget",
+        "_lock",
+        "_release_generation",
+        "_reserved",
+        "_tokenizer_profile_digest",
+        "_tokenizer_ref",
+        "_tokenizer",
+        "_usage",
+    )
 
     def __init__(
         self,
         budget: PackageBudget,
         *,
         initial_usage: BudgetUsage = _EMPTY_USAGE,
+        tokenizer_profile: TokenizerProfile | None = None,
+        release_generation: int | None = None,
     ) -> None:
         if type(budget) is not PackageBudget:
             raise TypeError("PackageBudgetMeter requires PackageBudget")
@@ -96,6 +111,22 @@ class PackageBudgetMeter:
         self._lock = Lock()
         self._reserved = _EMPTY_USAGE
         self._usage = initial_usage
+        if tokenizer_profile is None and release_generation is None:
+            self._tokenizer_ref = None
+            self._tokenizer_profile_digest = None
+            self._release_generation = None
+            self._tokenizer = None
+        else:
+            from engine.tokenizer_accounting import TokenizerProfile
+
+            if type(tokenizer_profile) is not TokenizerProfile:
+                raise TypeError("PackageBudgetMeter requires TokenizerProfile")
+            if type(release_generation) is not int or release_generation < 1:
+                raise ValueError("PackageBudgetMeter requires release generation")
+            self._tokenizer_ref = tokenizer_profile.profile_ref
+            self._tokenizer_profile_digest = tokenizer_profile.profile_digest
+            self._release_generation = release_generation
+            self._tokenizer = tokenizer_profile.load()
         if not self._fits(initial_usage):
             raise ValueError("initial usage exceeds PackageBudget")
 
@@ -107,6 +138,54 @@ class PackageBudgetMeter:
     def usage(self) -> BudgetUsage:
         with self._lock:
             return self._usage
+
+    def require_tokenizer(
+        self,
+        tokenizer_ref: str,
+        tokenizer_profile_digest: str,
+        release_generation: int,
+    ) -> None:
+        """Refuse mixed carrier identity or Release generation on this ledger."""
+
+        from engine.tokenizer_accounting import TokenizerUnavailable
+
+        if (
+            tokenizer_ref != self._tokenizer_ref
+            or tokenizer_profile_digest != self._tokenizer_profile_digest
+            or release_generation != self._release_generation
+        ):
+            raise TokenizerUnavailable("PackageBudgetMeter tokenizer identity changed")
+
+    def require_carrier_tokenizer(
+        self,
+        tokenizer_ref: str,
+        tokenizer_profile_digest: str,
+    ) -> None:
+        """Refuse a model carrier that does not use this resolve's tokenizer."""
+
+        if self._tokenizer is None:
+            return
+        if (
+            tokenizer_ref != self._tokenizer_ref
+            or tokenizer_profile_digest != self._tokenizer_profile_digest
+        ):
+            from engine.tokenizer_accounting import TokenizerUnavailable
+
+            raise TokenizerUnavailable("PackageBudgetMeter carrier tokenizer changed")
+
+    def require_release_generation(self, release_generation: int) -> None:
+        """Refuse a carrier composed for a different Release generation."""
+
+        if release_generation != self._release_generation:
+            from engine.tokenizer_accounting import TokenizerUnavailable
+
+            raise TokenizerUnavailable("PackageBudgetMeter Release generation changed")
+
+    def count_tokens(self, value: str | bytes) -> int:
+        """Count with the bound Release tokenizer; historical v0 meters count none."""
+
+        tokenizer = self._tokenizer
+        return 0 if tokenizer is None else tokenizer.count(value)
 
     def _fits(self, usage: BudgetUsage) -> bool:
         return (

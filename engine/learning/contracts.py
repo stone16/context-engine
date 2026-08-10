@@ -14,6 +14,12 @@ from engine.supply.embeddings import (
     DETERMINISTIC_TWIN_EMBEDDING_PROFILE,
     registered_embedding_provider_profile,
 )
+from engine.tokenizer_accounting import (
+    HISTORICAL_UTF8_BYTE_TOKENIZER_PROFILE_DIGEST,
+    HISTORICAL_UTF8_BYTE_TOKENIZER_PROFILE_DOCUMENT,
+    TokenizerUnavailable,
+    registered_tokenizer_profile,
+)
 
 MAX_SIGNED_BIGINT: Final = (1 << 63) - 1
 MAX_REFERENCE_LENGTH: Final = 255
@@ -169,6 +175,10 @@ class RuntimeProfileRef:
     index_schema_ref: str
     tokenizer_ref: str
     package_schema_ref: str
+    tokenizer_profile_document: str = (
+        HISTORICAL_UTF8_BYTE_TOKENIZER_PROFILE_DOCUMENT
+    )
+    tokenizer_profile_digest: str = HISTORICAL_UTF8_BYTE_TOKENIZER_PROFILE_DIGEST
 
     def __post_init__(self) -> None:
         _require_ref("RuntimeProfile profile_ref", self.profile_ref)
@@ -183,6 +193,28 @@ class RuntimeProfileRef:
         _require_ref("RuntimeProfile index_schema_ref", self.index_schema_ref)
         _require_ref("RuntimeProfile tokenizer_ref", self.tokenizer_ref)
         _require_ref("RuntimeProfile package_schema_ref", self.package_schema_ref)
+        if self.package_schema_ref != "context-package-openapi-v1":
+            if (
+                self.tokenizer_profile_document
+                != HISTORICAL_UTF8_BYTE_TOKENIZER_PROFILE_DOCUMENT
+                or self.tokenizer_profile_digest
+                != HISTORICAL_UTF8_BYTE_TOKENIZER_PROFILE_DIGEST
+            ):
+                raise ValueError(
+                    "historical RuntimeProfile cannot bind a v1 tokenizer profile"
+                )
+            return
+        try:
+            profile = registered_tokenizer_profile(
+                self.tokenizer_profile_document,
+                self.tokenizer_profile_digest,
+            )
+        except TokenizerUnavailable:
+            raise ValueError(
+                "RuntimeProfile tokenizer identity is unresolved"
+            ) from None
+        if profile.profile_ref != self.tokenizer_ref:
+            raise ValueError("RuntimeProfile tokenizer ref does not match its profile")
 
 
 class CurationMode(StrEnum):
@@ -287,7 +319,7 @@ def _profile_document(profile: object) -> dict[str, object]:
             "profile_ref": profile.profile_ref,
         }
     if type(profile) is RuntimeProfileRef:
-        return {
+        document: dict[str, object] = {
             "content_profile_digest": profile.content_profile_digest,
             "content_schema_ref": profile.content_schema_ref,
             "index_profile_digest": profile.index_profile_digest,
@@ -297,6 +329,14 @@ def _profile_document(profile: object) -> dict[str, object]:
             "profile_ref": profile.profile_ref,
             "tokenizer_ref": profile.tokenizer_ref,
         }
+        if profile.package_schema_ref == "context-package-openapi-v1":
+            document.update(
+                {
+                    "tokenizer_profile_digest": profile.tokenizer_profile_digest,
+                    "tokenizer_profile_document": profile.tokenizer_profile_document,
+                }
+            )
+        return document
     if type(profile) is CurationProfileRef:
         return {
             "compatible_revision_refs": list(profile.compatible_revision_refs),

@@ -29,9 +29,13 @@ from engine.runtime.evidence import (
     AuthorizedProjection,
     _require_active_authorized_projection,
 )
+from engine.tokenizer_accounting import (
+    UNICODE_SCALAR_TOKENIZER_PROFILE,
+    TokenizerUnavailable,
+)
 
 MODEL_INFERENCE_DIGEST_PROFILE: Final = "model-inference-rfc8785-sha256-v1"
-MODEL_INFERENCE_TOKENIZER_PROFILE: Final = "utf8-byte-token-v1"
+MODEL_INFERENCE_TOKENIZER_PROFILE: Final = UNICODE_SCALAR_TOKENIZER_PROFILE.profile_ref
 _DIGEST_DOMAIN = b"context-engine.model-inference.v1\x00"
 _OUTPUT_DIGEST_DOMAIN = b"context-engine.model-inference-output.v1\x00"
 _UNAVAILABLE_PROFILE_REF: Final = "model-inference-profile-unavailable-v1"
@@ -145,6 +149,7 @@ def _profile_document(profile: ModelInferenceProfile) -> dict[str, object]:
         },
         "timeoutMs": profile.timeout_ms,
         "tokenizerRef": profile.tokenizer_ref,
+        "tokenizerProfileDigest": profile.tokenizer_profile_digest,
     }
 
 
@@ -157,6 +162,7 @@ class ModelInferenceProfile:
     operation: ModelInferenceOperation
     egress_profile: ModelEgressProfile = field(repr=False)
     tokenizer_ref: str
+    tokenizer_profile_digest: str
     maximum_input_tokens: int
     maximum_output_tokens: int
     maximum_input_items: int
@@ -191,7 +197,11 @@ def _validate_profile_fields(profile: ModelInferenceProfile) -> None:
     if type(egress_profile) is not ModelEgressProfile:
         raise TypeError("model inference profile requires ModelEgressProfile")
     egress_profile.__post_init__()
-    for field_name in ("profile_ref", "tokenizer_ref"):
+    for field_name in (
+        "profile_ref",
+        "tokenizer_ref",
+        "tokenizer_profile_digest",
+    ):
         getattr(profile, field_name)
     for field_name in (
         "profile_version",
@@ -223,6 +233,11 @@ def _validate_profile_fields(profile: ModelInferenceProfile) -> None:
     if egress_profile.profile_ref != profile.profile_ref:
         raise ValueError("model inference and egress profile refs must match")
     if profile.tokenizer_ref != MODEL_INFERENCE_TOKENIZER_PROFILE:
+        raise ValueError("model inference tokenizer profile is not active")
+    if (
+        profile.tokenizer_profile_digest
+        != UNICODE_SCALAR_TOKENIZER_PROFILE.profile_digest
+    ):
         raise ValueError("model inference tokenizer profile is not active")
     for field_name in (
         "maximum_input_tokens",
@@ -301,6 +316,7 @@ def _snapshot_profile(profile: ModelInferenceProfile) -> ModelInferenceProfile:
             maximum_ttl=egress.maximum_ttl,
         ),
         tokenizer_ref=profile.tokenizer_ref,
+        tokenizer_profile_digest=profile.tokenizer_profile_digest,
         maximum_input_tokens=profile.maximum_input_tokens,
         maximum_output_tokens=profile.maximum_output_tokens,
         maximum_input_items=profile.maximum_input_items,
@@ -330,6 +346,7 @@ class ModelInferenceEgressBinding:
     purpose: str
     audience_digest: str
     policy_epoch: int
+    release_generation: int
 
     def __post_init__(self) -> None:
         if type(self.organization_id) is not UUID:
@@ -338,6 +355,7 @@ class ModelInferenceEgressBinding:
         _require_nonblank("purpose", self.purpose)
         _require_sha256("audience_digest", self.audience_digest)
         _require_positive_integer("policy_epoch", self.policy_epoch)
+        _require_positive_integer("release_generation", self.release_generation)
 
 
 def _snapshot_egress_binding(
@@ -351,6 +369,7 @@ def _snapshot_egress_binding(
         purpose=binding.purpose,
         audience_digest=binding.audience_digest,
         policy_epoch=binding.policy_epoch,
+        release_generation=binding.release_generation,
     )
 
 
@@ -878,10 +897,15 @@ class ModelInferencePort:
             )
             if self._profiles.get(profile_key) != snapshot.profile:
                 raise ValueError("model inference profile is not registered")
+            egress_snapshot = _snapshot_egress_binding(egress)
+            budget.require_tokenizer(
+                snapshot.profile.tokenizer_ref,
+                snapshot.profile.tokenizer_profile_digest,
+                egress_snapshot.release_generation,
+            )
             if type(grant) is not ModelEgressGrant:
                 self._emit_unavailable(trace_context, empty)
             grant_snapshot = ModelEgressGrant(grant.value)
-            egress_snapshot = _snapshot_egress_binding(egress)
             redemption = EgressGrantRedemption.for_model(
                 grant=grant_snapshot,
                 organization_id=egress_snapshot.organization_id,
@@ -892,7 +916,7 @@ class ModelInferencePort:
                 policy_epoch=egress_snapshot.policy_epoch,
                 profile=snapshot.profile.egress_profile,
             )
-            input_tokens = len(snapshot.payload)
+            input_tokens = budget.count_tokens(snapshot.payload)
             if (
                 input_tokens > snapshot.profile.maximum_input_tokens
                 or snapshot.input_items > snapshot.profile.maximum_input_items
@@ -911,7 +935,7 @@ class ModelInferencePort:
             reservation = budget._reserve(maximum)
         except ModelInferenceUnavailable:
             raise
-        except (PackageBudgetExceeded, TypeError, ValueError):
+        except (PackageBudgetExceeded, TokenizerUnavailable, TypeError, ValueError):
             self._emit_unavailable(trace_context, empty)
 
         try:
@@ -934,16 +958,18 @@ class ModelInferencePort:
             if (
                 elapsed_ms < 0
                 or elapsed_ms > snapshot.profile.timeout_ms
-                or len(raw_output) > snapshot.profile.maximum_output_tokens
+                or budget.count_tokens(raw_output)
+                > snapshot.profile.maximum_output_tokens
             ):
                 raise ValueError("model gateway exceeded its profile")
             parsed = parse_output(raw_output, snapshot)
             actual = BudgetUsage(
-                tokens=input_tokens + len(raw_output),
+                tokens=input_tokens + budget.count_tokens(raw_output),
                 provider_calls=1,
                 cost_microunits=(
                     input_tokens * snapshot.profile.input_token_cost_microunits
-                    + len(raw_output) * snapshot.profile.output_token_cost_microunits
+                    + budget.count_tokens(raw_output)
+                    * snapshot.profile.output_token_cost_microunits
                 ),
                 elapsed_ms=elapsed_ms,
             )

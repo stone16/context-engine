@@ -242,3 +242,4 @@ touched:
 - [0101 — Compose deployments from statically registered plugins](0101-compose-deployments-from-statically-registered-plugins.md)
 - [0102 — Activate release-bound local query embedding](0102-activate-release-bound-local-query-embedding.md)
 - [0103 — Activate one local MCP Acquire translation](0103-activate-one-local-mcp-acquire-translation.md)
+- [0104 — Version ContextPackage for cumulative Runtime accounting](0104-version-context-package-for-cumulative-runtime-accounting.md)

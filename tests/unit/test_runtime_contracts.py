@@ -324,6 +324,7 @@ def test_context_package_is_the_tenant_safe_evidence_free_deliverable() -> None:
         "release_manifest_ref",
         "retention_policy_ref",
         "tokenizer_ref",
+        "tokenizer_profile_digest",
         "package_schema_ref",
         "ttl_seconds",
         "as_of",
@@ -356,6 +357,57 @@ def test_context_package_accepts_only_closed_exact_authorized_content() -> None:
 
     assert package.blocks == (AUTHORIZED_BLOCK,)
     assert package.evidence == (AUTHORIZED_EVIDENCE,)
+
+
+def test_v1_content_package_rejects_zero_cumulative_tokens() -> None:
+    from engine.runtime.release_lineage import PACKAGE_SCHEMA_REF_V1
+    from engine.tokenizer_accounting import UNICODE_SCALAR_TOKENIZER_PROFILE
+
+    with pytest.raises(ValueError, match="token usage"):
+        make_package(
+            tokenizer_ref=UNICODE_SCALAR_TOKENIZER_PROFILE.profile_ref,
+            tokenizer_profile_digest=UNICODE_SCALAR_TOKENIZER_PROFILE.profile_digest,
+            package_schema_ref=PACKAGE_SCHEMA_REF_V1,
+            blocks=(AUTHORIZED_BLOCK,),
+            evidence=(AUTHORIZED_EVIDENCE,),
+            budget_usage=EMPTY_USAGE,
+            coverage=Coverage(status=CoverageStatus.SUFFICIENT),
+        )
+
+
+def test_v1_empty_package_retains_cumulative_query_stage_usage() -> None:
+    from engine.runtime.release_lineage import PACKAGE_SCHEMA_REF_V1
+    from engine.tokenizer_accounting import UNICODE_SCALAR_TOKENIZER_PROFILE
+
+    usage = BudgetUsage(
+        tokens=13,
+        provider_calls=1,
+        cost_microunits=1,
+        elapsed_ms=7,
+    )
+    package = make_package(
+        tokenizer_ref=UNICODE_SCALAR_TOKENIZER_PROFILE.profile_ref,
+        tokenizer_profile_digest=UNICODE_SCALAR_TOKENIZER_PROFILE.profile_digest,
+        package_schema_ref=PACKAGE_SCHEMA_REF_V1,
+        budget_usage=usage,
+    )
+
+    assert package.blocks == ()
+    assert package.evidence == ()
+    assert package.coverage.status is CoverageStatus.EMPTY
+    assert package.budget_usage == usage
+
+
+def test_v1_package_binds_tokenizer_ref_to_profile_digest() -> None:
+    from engine.runtime.release_lineage import PACKAGE_SCHEMA_REF_V1
+    from engine.tokenizer_accounting import UNICODE_SCALAR_TOKENIZER_PROFILE
+
+    with pytest.raises(ValueError, match="tokenizer"):
+        make_package(
+            tokenizer_ref="foreign-tokenizer",
+            tokenizer_profile_digest=UNICODE_SCALAR_TOKENIZER_PROFILE.profile_digest,
+            package_schema_ref=PACKAGE_SCHEMA_REF_V1,
+        )
 
 
 def test_package_digest_detects_any_alteration_to_the_public_package() -> None:

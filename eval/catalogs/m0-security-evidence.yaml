@@ -271,6 +271,116 @@
       "selector": "tests/unit/test_typescript_sdk_contract.py::test_typescript_sdk_metadata_locks_contract_and_public_exports"
     },
     {
+      "id": "SDK-CONTRACT-V1-217",
+      "layer": "property",
+      "selector": "tests/unit/test_typescript_sdk_contract.py::test_v1_sdk_is_independent_and_v0_facade_stays_frozen"
+    },
+    {
+      "id": "ACCOUNTING-DETERMINISM-217",
+      "layer": "property",
+      "selector": "tests/unit/test_tokenizer_accounting.py::test_registered_tokenizer_is_digest_bound_and_cross_process_deterministic"
+    },
+    {
+      "id": "ACCOUNTING-MISSING-TOKENIZER-217",
+      "layer": "property",
+      "selector": "tests/unit/test_tokenizer_accounting.py::test_missing_tokenizer_profile_fails_closed"
+    },
+    {
+      "id": "ACCOUNTING-UNKNOWN-TOKENIZER-217",
+      "layer": "property",
+      "selector": "tests/unit/test_tokenizer_accounting.py::test_unknown_tokenizer_profile_fails_closed"
+    },
+    {
+      "id": "ACCOUNTING-PROFILE-DIGEST-217",
+      "layer": "property",
+      "selector": "tests/unit/test_tokenizer_accounting.py::test_tokenizer_profile_digest_mismatch_fails_closed"
+    },
+    {
+      "id": "ACCOUNTING-ARTIFACT-MISSING-217",
+      "layer": "property",
+      "selector": "tests/unit/test_tokenizer_accounting.py::test_unavailable_tokenizer_artifact_fails_closed"
+    },
+    {
+      "id": "ACCOUNTING-ARTIFACT-HASH-217",
+      "layer": "property",
+      "selector": "tests/unit/test_tokenizer_accounting.py::test_hash_mismatched_tokenizer_artifact_fails_closed"
+    },
+    {
+      "id": "ACCOUNTING-RESERVATION-RACE-217",
+      "layer": "property",
+      "selector": "tests/unit/test_tokenizer_accounting.py::test_concurrent_over_limit_reservations_admit_exactly_one"
+    },
+    {
+      "id": "ACCOUNTING-CANCEL-NO-LEAK-217",
+      "layer": "property",
+      "selector": "tests/unit/test_tokenizer_accounting.py::test_cancel_releases_capacity_without_usage_leakage"
+    },
+    {
+      "id": "ACCOUNTING-ONE-METER-STATIC-217",
+      "layer": "property",
+      "selector": "tests/unit/test_tokenizer_accounting.py::test_runtime_has_one_meter_creation_and_no_v1_usage_reset"
+    },
+    {
+      "id": "ACCOUNTING-PROMOTION-V1-217",
+      "layer": "property",
+      "selector": "tests/unit/test_release_promotion_application.py::test_release_promotion_builds_the_activatable_v1_runtime_profile"
+    },
+    {
+      "id": "ACCOUNTING-PAYLOAD-CLOSURE-217",
+      "layer": "runtime",
+      "selector": "tests/unit/test_http_v1_accounting.py::test_v1_http_package_and_context_run_publish_one_digest_bound_usage"
+    },
+    {
+      "id": "ACCOUNTING-ZERO-BYTES-217",
+      "layer": "runtime",
+      "selector": "tests/unit/test_http_v1_accounting.py::test_v1_http_budget_exhaustion_refuses_before_provider_bytes"
+    },
+    {
+      "id": "ACCOUNTING-MAX-CHARGE-217",
+      "layer": "runtime",
+      "selector": "tests/unit/test_http_v1_accounting.py::test_v1_http_unusable_embedding_settles_the_reserved_maximum"
+    },
+    {
+      "id": "ACCOUNTING-CARRIER-MISMATCH-217",
+      "layer": "runtime",
+      "selector": "tests/unit/test_http_v1_accounting.py::test_v1_http_carrier_tokenizer_mismatch_refuses_before_provider_bytes"
+    },
+    {
+      "id": "ACCOUNTING-MIXED-GENERATION-217",
+      "layer": "runtime",
+      "selector": "tests/unit/test_http_v1_accounting.py::test_v1_http_mixed_generation_refuses_before_provider_bytes"
+    },
+    {
+      "id": "ACCOUNTING-ONE-METER-DYNAMIC-217",
+      "layer": "runtime",
+      "selector": "tests/unit/test_http_v1_accounting.py::test_v1_http_resolve_uses_one_meter_for_embedding_and_assembly"
+    },
+    {
+      "id": "ACCOUNTING-PACKAGE-RUN-BINDING-217",
+      "layer": "runtime",
+      "selector": "tests/unit/test_http_v1_accounting.py::test_v1_http_package_and_context_run_publish_one_digest_bound_usage"
+    },
+    {
+      "id": "ACCOUNTING-INGRESS-MISMATCH-217",
+      "layer": "runtime",
+      "selector": "tests/unit/test_http_v1_accounting.py::test_v1_http_tokenizer_digest_mismatch_refuses_before_provider_bytes"
+    },
+    {
+      "id": "PG-ACCOUNTING-NO-RECOUNT-217",
+      "layer": "postgres",
+      "selector": "tests/integration/test_migrations.py::test_tokenizer_profile_upgrade_labels_history_without_recounting"
+    },
+    {
+      "id": "PG-ACCOUNTING-LEGACY-REPLAY-217",
+      "layer": "postgres",
+      "selector": "tests/integration/test_migrations.py::test_tokenizer_profile_upgrade_replays_pre_migration_candidate_digests"
+    },
+    {
+      "id": "PG-ACCOUNTING-RETIREMENT-217",
+      "layer": "postgres",
+      "selector": "tests/integration/test_migrations.py::test_tokenizer_profile_downgrade_refuses_retained_v1_lineage"
+    },
+    {
       "id": "SDK-LIVE-FILE-064",
       "layer": "runtime",
       "selector": "tests/integration/test_z_egress_grant_file.py::test_packed_typescript_sdk_resolves_authorized_file_package_over_live_http"
@@ -861,6 +971,16 @@
           "PROP-TRANSPORT-UNTRUSTED-008",
           "PROP-DELIVERY-EVIDENCE-063",
           "SDK-CONTRACT-064",
+          "SDK-CONTRACT-V1-217",
+          "ACCOUNTING-DETERMINISM-217",
+          "ACCOUNTING-MISSING-TOKENIZER-217",
+          "ACCOUNTING-UNKNOWN-TOKENIZER-217",
+          "ACCOUNTING-PROFILE-DIGEST-217",
+          "ACCOUNTING-ARTIFACT-MISSING-217",
+          "ACCOUNTING-ARTIFACT-HASH-217",
+          "ACCOUNTING-RESERVATION-RACE-217",
+          "ACCOUNTING-CANCEL-NO-LEAK-217",
+          "ACCOUNTING-ONE-METER-STATIC-217",
           "TS-PRIVATE-BOT-FLOW-071"
         ],
         "postgres": [
@@ -885,7 +1005,15 @@
           "MCP-HTTP-PROXY-215",
           "MCP-HTTP-REDIRECT-215",
           "MCP-HTTP-SECRET-215",
-          "RUNTIME-MCP-CARRIER-215"
+          "RUNTIME-MCP-CARRIER-215",
+          "ACCOUNTING-PAYLOAD-CLOSURE-217",
+          "ACCOUNTING-ZERO-BYTES-217",
+          "ACCOUNTING-MAX-CHARGE-217",
+          "ACCOUNTING-CARRIER-MISMATCH-217",
+          "ACCOUNTING-MIXED-GENERATION-217",
+          "ACCOUNTING-ONE-METER-DYNAMIC-217",
+          "ACCOUNTING-PACKAGE-RUN-BINDING-217",
+          "ACCOUNTING-INGRESS-MISMATCH-217"
         ]
       }
     },
@@ -991,10 +1119,14 @@
       "invariantRef": "RELEASE-OWNER-019",
       "evidenceRefs": {
         "property": [
-          "PROP-RELEASE-OWNER-019"
+          "PROP-RELEASE-OWNER-019",
+          "ACCOUNTING-PROMOTION-V1-217"
         ],
         "postgres": [
-          "PG-RELEASE-OWNER-019"
+          "PG-RELEASE-OWNER-019",
+          "PG-ACCOUNTING-NO-RECOUNT-217",
+          "PG-ACCOUNTING-LEGACY-REPLAY-217",
+          "PG-ACCOUNTING-RETIREMENT-217"
         ],
         "runtime": [
           "RUNTIME-RELEASE-OWNER-019",

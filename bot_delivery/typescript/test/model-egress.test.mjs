@@ -142,14 +142,15 @@ function contextPackage(aclKind = "mirrored") {
     expiresAt: packageExpiresAt,
     gaps: [],
     packageId: `pkg_${"c".repeat(32)}`,
-    packageSchemaRef: "context-package-openapi-v0",
+    packageSchemaRef: "context-package-openapi-v1",
     policyEpoch: 7,
     policySnapshotRef: "policy-snapshot-v7",
     purpose: "context.answer",
     releaseManifestRef: "release:private-answer",
     retentionPolicyRef: "package-digest-only-retention-v1",
     runRef: "run:private-answer",
-    tokenizerRef: "utf8-byte-budget-v1",
+    tokenizerProfileDigest: "b4f0e7d287df088f5cbd5aacc1ac04941f0fca0d1a5e2990179ed774d1617418",
+    tokenizerRef: "unicode-scalar-tokenizer-v1",
     ttlSeconds: 300,
   };
   return Object.freeze({ ...document, packageDigest: packageDigest(document) });

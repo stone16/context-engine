@@ -24,6 +24,7 @@ from engine.runtime.authorized_ranking import (
 )
 from engine.runtime.budget import (
     PackageBudget,
+    PackageBudgetExceeded,
     PackageBudgetMeter,
     effective_package_budget,
 )
@@ -54,6 +55,7 @@ from engine.runtime.citation import (
 from engine.runtime.content_io import (
     CandidateIndex,
     CandidateIndexUnavailable,
+    GenerationBoundCandidateIndex,
     RuntimeContentIo,
     prohibited_empty_path_content_io,
 )
@@ -146,7 +148,10 @@ from engine.runtime.policy_epoch import (
     _require_active_policy_epoch_verification,
 )
 from engine.runtime.prekernel_fusion import fuse_candidate_evidence
-from engine.runtime.release_lineage import ActiveReleaseUnavailable
+from engine.runtime.release_lineage import (
+    ActiveReleaseUnavailable,
+    ActiveRuntimeRelease,
+)
 from engine.runtime.scope import (
     OMITTED_REQUEST_NARROWING,
     EffectiveScope,
@@ -160,6 +165,7 @@ from engine.runtime.scope_authority import (
     _trusted_operands_from_snapshot,
 )
 from engine.runtime.trusted_inputs import _validate_trusted_invocation_and_delivery
+from engine.tokenizer_accounting import registered_tokenizer_profile
 
 
 class RuntimeConfigurationError(RuntimeError):
@@ -1565,6 +1571,24 @@ def _require_utc(field_name: str, value: object) -> datetime:
     return value
 
 
+def _resolve_budget_meter(
+    budget: PackageBudget,
+    active_release: ActiveRuntimeRelease,
+) -> PackageBudgetMeter:
+    """Create the one meter owned by this resolve and its active Release."""
+
+    if active_release.package_schema_ref == "context-package-openapi-v1":
+        return PackageBudgetMeter(
+            budget,
+            tokenizer_profile=registered_tokenizer_profile(
+                active_release.tokenizer_profile_document,
+                active_release.tokenizer_profile_digest,
+            ),
+            release_generation=active_release.active_generation,
+        )
+    return PackageBudgetMeter(budget)
+
+
 @dataclass(frozen=True, slots=True)
 class _IssuedReferences:
     package_id: str
@@ -1827,6 +1851,10 @@ class Runtime:
                 as_of=as_of,
                 reference_issuer=self._reference_issuer,
             )
+            resolve_budget = _resolve_budget_meter(
+                preparation.effective_budget,
+                active_release,
+            )
             candidate_refs: tuple[CandidateRef, ...] = ()
             rank_evidence: tuple[CandidateRankEvidence, ...] = ()
             if (
@@ -1844,19 +1872,36 @@ class Runtime:
                 discovery_scope = candidate_discovery_scope(
                     preparation.policy_receipt.effective_scope
                 )
-                query_embedding_budget = PackageBudgetMeter(
-                    preparation.effective_budget
-                )
-                discovery_request = (
-                    self._content_io.index.prepare_budgeted_discovery(
-                        request,
-                        effective_scope=discovery_scope,
-                        budget=query_embedding_budget,
-                        active_embedding_profile_digest=(
-                            active_release.embedding_profile_digest
-                        ),
+                if active_release.package_schema_ref == "context-package-openapi-v1":
+                    generation_bound_index = self._content_io.index
+                    if not isinstance(
+                        generation_bound_index, GenerationBoundCandidateIndex
+                    ):
+                        raise CandidateIndexUnavailable(
+                            "v1 candidate discovery is not generation bound"
+                        )
+                    discovery_request = (
+                        generation_bound_index.prepare_generation_bound_discovery(
+                            request,
+                            effective_scope=discovery_scope,
+                            budget=resolve_budget,
+                            active_embedding_profile_digest=(
+                                active_release.embedding_profile_digest
+                            ),
+                            active_release_generation=active_release.active_generation,
+                        )
                     )
-                )
+                else:
+                    discovery_request = (
+                        self._content_io.index.prepare_budgeted_discovery(
+                            request,
+                            effective_scope=discovery_scope,
+                            budget=resolve_budget,
+                            active_embedding_profile_digest=(
+                                active_release.embedding_profile_digest
+                            ),
+                        )
+                    )
                 _require_candidate_discovery_scope_integrity(discovery_scope)
                 require_bounded_discovery_request(
                     discovery_request,
@@ -1981,6 +2026,10 @@ class Runtime:
                 ),
             )
             rank_evidence = ()
+            resolve_budget = _resolve_budget_meter(
+                decision.effective_budget,
+                active_release,
+            )
         try:
             selection = self._selector.select_for_delivery(
                 decision,
@@ -2037,6 +2086,25 @@ class Runtime:
                 delivery_binding_ref=delivery_context.delivery_binding_ref,
             )
 
+        assembly_tokens = sum(
+            resolve_budget.count_tokens(block.body) for block in content.blocks
+        )
+        if assembly_tokens:
+            try:
+                assembly_reservation = resolve_budget._reserve(
+                    BudgetUsage(assembly_tokens, 0, 0, 0)
+                )
+            except PackageBudgetExceeded:
+                raise CandidateIndexUnavailable(
+                    "Package assembly exceeds the effective budget"
+                ) from None
+            resolve_budget._commit(
+                assembly_reservation,
+                BudgetUsage(assembly_tokens, 0, 0, 0),
+            )
+
+        cumulative_usage = resolve_budget.usage
+
         package = ContextPackage(
             package_id=provenance.package_id,
             purpose=policy_receipt.purpose,
@@ -2055,11 +2123,17 @@ class Runtime:
             blocks=content.blocks,
             evidence=content.evidence,
             gaps=(),
-            budget_usage=BudgetUsage(
-                tokens=sum(len(block.body.encode("utf-8")) for block in content.blocks),
-                provider_calls=0,
-                cost_microunits=0,
-                elapsed_ms=0,
+            budget_usage=(
+                cumulative_usage
+                if active_release.package_schema_ref == "context-package-openapi-v1"
+                else BudgetUsage(
+                    tokens=sum(
+                        len(block.body.encode("utf-8")) for block in content.blocks
+                    ),
+                    provider_calls=0,
+                    cost_microunits=0,
+                    elapsed_ms=0,
+                )
             ),
             coverage=Coverage(
                 status=(
@@ -2069,6 +2143,7 @@ class Runtime:
                 ),
                 reason=audit_receipt.reason,
             ),
+            tokenizer_profile_digest=active_release.tokenizer_profile_digest,
         )
         egress_grant = (
             self._kernel.finalize_egress(

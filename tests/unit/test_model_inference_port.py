@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import json
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import asdict, fields, replace
@@ -17,9 +18,14 @@ from uuid import UUID
 
 import pytest
 
+from adapters.embeddings import DeterministicEmbeddingTwin
+from adapters.exact_phrase import PostgreSQLExactPhraseCandidateIndex
+from adapters.fts import PostgreSQLFtsCandidateIndex
+from adapters.pgvector import PostgreSQLVectorCandidateIndex
 from engine.runtime.authorized_ranking import join_authorized_ranking
 from engine.runtime.budget import BudgetUsage, PackageBudget, PackageBudgetMeter
 from engine.runtime.candidate_ranking import CandidateRankEvidence, RankerEvidence
+from engine.runtime.contracts import Acquire, ContextNeed
 from engine.runtime.egress import (
     ChannelEgressGrant,
     EgressGrantRedemption,
@@ -47,6 +53,37 @@ from engine.runtime.model_inference import (
     RewriteModelRequest,
     SelectModelRequest,
 )
+from engine.runtime.scope import CandidateDiscoveryScope
+from engine.supply import DETERMINISTIC_TWIN_EMBEDDING_PROFILE
+from engine.tokenizer_accounting import (
+    UNICODE_SCALAR_TOKENIZER_PROFILE,
+    TokenizerUnavailable,
+)
+
+
+@pytest.mark.parametrize(
+    "index",
+    (PostgreSQLExactPhraseCandidateIndex(), PostgreSQLFtsCandidateIndex()),
+)
+def test_generation_bound_lexical_discovery_refuses_mixed_release_generation(
+    index: PostgreSQLExactPhraseCandidateIndex | PostgreSQLFtsCandidateIndex,
+) -> None:
+    budget = PackageBudgetMeter(
+        PackageBudget(100, 1, 1, 5_000),
+        tokenizer_profile=UNICODE_SCALAR_TOKENIZER_PROFILE,
+        release_generation=7,
+    )
+
+    with pytest.raises(TokenizerUnavailable):
+        index.prepare_generation_bound_discovery(
+            Acquire(need=ContextNeed(query="generation-bound lexical query")),
+            effective_scope=CandidateDiscoveryScope("a" * 64),
+            budget=budget,
+            active_embedding_profile_digest=(
+                DETERMINISTIC_TWIN_EMBEDDING_PROFILE.profile_digest
+            ),
+            active_release_generation=8,
+        )
 
 
 def _profile(
@@ -68,7 +105,8 @@ def _profile(
             region_ref="local",
             maximum_ttl=timedelta(seconds=30),
         ),
-        tokenizer_ref="utf8-byte-token-v1",
+        tokenizer_ref=UNICODE_SCALAR_TOKENIZER_PROFILE.profile_ref,
+        tokenizer_profile_digest=UNICODE_SCALAR_TOKENIZER_PROFILE.profile_digest,
         maximum_input_tokens=512,
         maximum_output_tokens=128,
         maximum_input_items=(1 if operation is ModelInferenceOperation.REWRITE else 8),
@@ -133,6 +171,7 @@ def _egress() -> ModelInferenceEgressBinding:
         purpose="context.answer",
         audience_digest="3" * 64,
         policy_epoch=1,
+        release_generation=7,
     )
 
 
@@ -143,7 +182,9 @@ def _budget() -> PackageBudgetMeter:
             max_provider_calls=2,
             max_cost_microunits=2_000,
             max_elapsed_ms=1_000,
-        )
+        ),
+        tokenizer_profile=UNICODE_SCALAR_TOKENIZER_PROFILE,
+        release_generation=7,
     )
 
 
@@ -237,6 +278,8 @@ def test_shared_resolve_meter_preserves_prior_usage_and_accumulates_inference() 
             max_elapsed_ms=1_000,
         ),
         initial_usage=prior_usage,
+        tokenizer_profile=UNICODE_SCALAR_TOKENIZER_PROFILE,
+        release_generation=7,
     )
     port = ModelInferencePort(
         profiles=_registered_profiles(),
@@ -263,6 +306,81 @@ def test_shared_resolve_meter_preserves_prior_usage_and_accumulates_inference() 
         ),
         elapsed_ms=prior_usage.elapsed_ms + result.receipt.budget_usage.elapsed_ms,
     )
+
+
+def test_explicit_meter_accumulates_isolated_inference_port_operations() -> None:
+    budget = PackageBudgetMeter(
+        PackageBudget(10_000, 4, 10_000, 10_000),
+        tokenizer_profile=UNICODE_SCALAR_TOKENIZER_PROFILE,
+        release_generation=7,
+    )
+    index = PostgreSQLVectorCandidateIndex(
+        DeterministicEmbeddingTwin(),
+        monotonic_ms=iter((10, 11)).__next__,
+    )
+    index.prepare_generation_bound_discovery(
+        Acquire(need=ContextNeed(query="shared meter query")),
+        effective_scope=CandidateDiscoveryScope("a" * 64),
+        budget=budget,
+        active_embedding_profile_digest=(
+            DETERMINISTIC_TWIN_EMBEDDING_PROFILE.profile_digest
+        ),
+        active_release_generation=7,
+    )
+
+    def gateway(payload: bytes, *, timeout_ms: int) -> bytes:
+        del timeout_ms
+        operation = json.loads(payload)["operation"]
+        return {
+            "rewrite": b'{"rewrites":["rewritten"]}',
+            "rerank": b'{"order":[0,1]}',
+            "select": b'{"selected":[0]}',
+        }[operation]
+
+    port = ModelInferencePort(
+        profiles=_registered_profiles(),
+        authority=_AcceptingAuthority(),
+        gateway=gateway,
+        trace_observer=lambda _receipt: None,
+        monotonic_ms=iter((20, 21, 30, 31, 40, 41)).__next__,
+    )
+    port.rewrite(
+        RewriteModelRequest(profile=_profile(), query="shared meter query"),
+        grant=ModelEgressGrant("egrm_" + "1" * 64),
+        egress=_egress(),
+        budget=budget,
+    )
+    with _projections("first", "second") as projections:
+        port.rerank(
+            RerankModelRequest(
+                profile=_profile(ModelInferenceOperation.RERANK),
+                query="shared meter query",
+                projections=projections,
+            ),
+            grant=ModelEgressGrant("egrm_" + "2" * 64),
+            egress=_egress(),
+            budget=budget,
+        )
+        port.select(
+            SelectModelRequest(
+                profile=_profile(ModelInferenceOperation.SELECT),
+                query="shared meter query",
+                projections=projections,
+                maximum_items=1,
+            ),
+            grant=ModelEgressGrant("egrm_" + "3" * 64),
+            egress=_egress(),
+            budget=budget,
+        )
+
+    assembly_tokens = budget.count_tokens("final assembly")
+    assembly = budget._reserve(BudgetUsage(assembly_tokens, 0, 0, 0))
+    budget._commit(assembly, BudgetUsage(assembly_tokens, 0, 0, 0))
+
+    assert budget.usage.provider_calls == 4
+    assert budget.usage.cost_microunits > 4
+    assert budget.usage.elapsed_ms == 4
+    assert budget.usage.tokens > assembly_tokens
 
 
 def test_rerank_accepts_only_authorized_projection_and_returns_validated_order() -> (
@@ -573,7 +691,9 @@ def test_budget_and_profile_preflight_refuse_before_redemption_or_provider_bytes
                 max_provider_calls=1,
                 max_cost_microunits=1,
                 max_elapsed_ms=1,
-            )
+            ),
+            tokenizer_profile=UNICODE_SCALAR_TOKENIZER_PROFILE,
+            release_generation=7,
         )
     else:
         profile = replace(profile, maximum_input_tokens=1)
@@ -591,6 +711,39 @@ def test_budget_and_profile_preflight_refuse_before_redemption_or_provider_bytes
     assert budget.usage.provider_calls == 0
     assert len(traces) == 1
     assert traces[0].budget_usage.provider_calls == 0
+
+
+def test_carrier_tokenizer_mismatch_refuses_before_provider_bytes() -> None:
+    authority = _AcceptingAuthority()
+    provider_bytes = 0
+
+    def gateway(payload: bytes, *, timeout_ms: int) -> bytes:
+        nonlocal provider_bytes
+        del timeout_ms
+        provider_bytes += len(payload)
+        return b'{"rewrites":["must not run"]}'
+
+    port = ModelInferencePort(
+        profiles=_registered_profiles(),
+        authority=authority,
+        gateway=gateway,
+        trace_observer=lambda _receipt: None,
+        monotonic_ms=lambda: 100,
+    )
+    budget = _budget()
+    object.__setattr__(budget, "_tokenizer_ref", "other-tokenizer")
+
+    with pytest.raises(ModelInferenceUnavailable, match="is unavailable"):
+        port.rewrite(
+            RewriteModelRequest(profile=_profile(), query="closed mismatch"),
+            grant=ModelEgressGrant("egrm_" + "9" * 64),
+            egress=_egress(),
+            budget=budget,
+        )
+
+    assert authority.calls == []
+    assert provider_bytes == 0
+    assert budget.usage == BudgetUsage(0, 0, 0, 0)
 
 
 @pytest.mark.parametrize("profile_change", ("version", "model"))
