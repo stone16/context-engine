@@ -66,10 +66,11 @@ extension must use the closed ASCII token grammar while excluding `.` and `..`,
 even when no member uses the declaration. The
 relationship grammar requires exact permitted attributes, unique non-empty
 identifiers, valid target modes, internal canonical raw targets without empty
-or dot segments before resolution, no `.` or `..` segment in the raw path
-portion of any target (including External targets), and the exact root-to-main
-office-document relationship type. A manifest relabel cannot hide related XML:
-non-XML related parts outside exact admitted binary relationship classes must
+or `.` segments before resolution (canonical relative `..` segments resolve one
+parent at a time and fail closed only when they escape the package root), no
+`.` or `..` segment in the raw path portion of External targets, and the exact
+root-to-main office-document relationship type. A manifest relabel cannot hide related XML:
+non-XML-related parts outside exact admitted binary relationship classes must
 parse as XML. A malformed relationship graph likewise cannot hide raw parseable
 visuals: every non-manifest raw ZIP entry is scanned by entry identity before
 the retained package refusal, including entries whose raw names are not

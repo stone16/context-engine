@@ -98,13 +98,14 @@ def _save_docx(document: DocumentType) -> bytes:
     ):
         for member in source_archive.infolist():
             member_bytes = source_archive.read(member.filename)
-            if member.filename == "word/_rels/document.xml.rels":
-                member_bytes = member_bytes.replace(
-                    b'Target="../customXml/item1.xml"',
-                    b'Target="/customXml/item1.xml"',
-                )
             target_archive.writestr(member, member_bytes)
     return canonical.getvalue()
+
+
+def _save_unmodified_docx(document: DocumentType) -> bytes:
+    output = io.BytesIO()
+    document.save(output)
+    return output.getvalue()
 
 
 def _compile_docx_at_public_seams(source: bytes) -> tuple[
@@ -366,6 +367,90 @@ def _docx_with_visible_footnote_text() -> bytes:
     )
     document.part.relate_to(footnotes_part, RELATIONSHIP_TYPE.FOOTNOTES)
     return _save_docx(document)
+
+
+def _docx_with_empty_comments_before_visible_footnotes() -> bytes:
+    document = Document()
+    document.add_paragraph("Retained body text.")
+    comments_part = Part(
+        PackURI("/word/comments.xml"),
+        CONTENT_TYPE.WML_COMMENTS,
+        (
+            b'<w:comments xmlns:w="http://schemas.openxmlformats.org/'
+            b'wordprocessingml/2006/main"/>'
+        ),
+        document.part.package,
+    )
+    footnotes_part = Part(
+        PackURI("/word/footnotes.xml"),
+        CONTENT_TYPE.WML_FOOTNOTES,
+        (
+            b'<w:footnotes xmlns:w="http://schemas.openxmlformats.org/'
+            b'wordprocessingml/2006/main"><w:footnote w:id="1"><w:p><w:r>'
+            b"<w:t>Later footnote text must not disappear.</w:t>"
+            b"</w:r></w:p></w:footnote></w:footnotes>"
+        ),
+        document.part.package,
+    )
+    document.part.relate_to(comments_part, RELATIONSHIP_TYPE.COMMENTS)
+    document.part.relate_to(footnotes_part, RELATIONSHIP_TYPE.FOOTNOTES)
+    source = _save_docx(document)
+    output = io.BytesIO()
+    with (
+        zipfile.ZipFile(io.BytesIO(source)) as source_archive,
+        zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as target_archive,
+    ):
+        members = source_archive.infolist()
+        ordered_members = sorted(
+            members,
+            key=lambda member: (
+                0
+                if member.filename == "word/comments.xml"
+                else 1
+                if member.filename == "word/footnotes.xml"
+                else -1
+            ),
+        )
+        assert [
+            member.filename
+            for member in ordered_members
+            if member.filename in {"word/comments.xml", "word/footnotes.xml"}
+        ] == ["word/comments.xml", "word/footnotes.xml"]
+        for member in ordered_members:
+            member_bytes = source_archive.read(member)
+            if member.filename == "word/_rels/document.xml.rels":
+                member_bytes = member_bytes.replace(
+                    b'Target="../customXml/item1.xml"',
+                    b'Target="/customXml/item1.xml"',
+                )
+            target_archive.writestr(member, member_bytes)
+    return output.getvalue()
+
+
+def _docx_with_relationship_target_escaping_package_root() -> bytes:
+    document = Document()
+    document.add_paragraph("Retained body text.")
+    source = _save_unmodified_docx(document)
+    output = io.BytesIO()
+    replaced_target = False
+    with (
+        zipfile.ZipFile(io.BytesIO(source)) as source_archive,
+        zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as target_archive,
+    ):
+        for member in source_archive.infolist():
+            member_bytes = source_archive.read(member)
+            if member.filename == "word/_rels/document.xml.rels":
+                expected = b'Target="../customXml/item1.xml"'
+                assert expected in member_bytes
+                member_bytes = member_bytes.replace(
+                    expected,
+                    b'Target="../../customXml/item1.xml"',
+                    1,
+                )
+                replaced_target = True
+            target_archive.writestr(member, member_bytes)
+    assert replaced_target
+    return output.getvalue()
 
 
 def _docx_with_malformed_footnotes_xml(*, with_header_drawing: bool) -> bytes:
@@ -1986,13 +2071,11 @@ def test_docx_refuses_hostile_root_document_relationships_at_both_seams(
     "target",
     (
         "word//document.xml",
-        "word/../word/document.xml",
         "docProps//thumbnail.jpeg",
         "docProps/./thumbnail.jpeg",
     ),
     ids=(
         "document-double-slash",
-        "document-parent-segment",
         "thumbnail-double-slash",
         "thumbnail-dot-segment",
     ),
@@ -2097,6 +2180,41 @@ def test_docx_accepts_ordinary_external_relationship_at_both_seams() -> None:
 
     for outcome in outcomes:
         assert type(outcome) is ParsedDocument
+
+
+def test_docx_compiles_unmodified_python_docx_bytes_at_both_seams() -> None:
+    document = Document()
+    document.add_paragraph("Unmodified python-docx package text.")
+
+    outcomes = _compile_docx_at_public_seams(_save_unmodified_docx(document))
+
+    for outcome in outcomes:
+        assert type(outcome) is ParsedDocument
+        assert outcome.units is not None
+        assert [unit.text for unit in outcome.units] == [
+            "Unmodified python-docx package text."
+        ]
+
+
+def test_docx_relationship_target_cannot_escape_package_root_at_both_seams() -> None:
+    outcomes = _compile_docx_at_public_seams(
+        _docx_with_relationship_target_escaping_package_root()
+    )
+
+    for outcome in outcomes:
+        assert type(outcome) is DocumentCompilationFailure
+        assert outcome.code is DocumentCompilationFailureCode.INVALID_ARTIFACT
+
+
+def test_docx_empty_unrepresented_part_does_not_hide_later_text_at_both_seams(
+) -> None:
+    outcomes = _compile_docx_at_public_seams(
+        _docx_with_empty_comments_before_visible_footnotes()
+    )
+
+    for outcome in outcomes:
+        assert type(outcome) is DocumentCompilationFailure
+        assert outcome.code is DocumentCompilationFailureCode.INVALID_ARTIFACT
 
 
 def test_docx_refuses_text_in_known_inert_member_at_both_seams() -> None:

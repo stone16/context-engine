@@ -744,11 +744,16 @@ def _resolved_relationship_target(source_part: str, target: str) -> str:
     parent = source_part.rpartition("/")[0]
     segments = [segment for segment in parent.split("/") if segment]
     target_segments = target.split("/")
-    if any(not segment or segment in {".", ".."} for segment in target_segments):
+    if any(not segment or segment == "." for segment in target_segments):
         raise ValueError("DOCX relationship target is not canonical")
     for segment in target_segments:
         if "\\" in segment or "%" in segment:
             raise ValueError("DOCX relationship target is not canonical")
+        if segment == "..":
+            if not segments:
+                raise ValueError("DOCX relationship target escapes the package root")
+            segments.pop()
+            continue
         segments.append(segment)
     return _normalized_package_path("/".join(segments), leading_slash=False)
 
@@ -795,7 +800,10 @@ def _related_member_names(
                 raise ValueError("DOCX relationship is malformed")
             relationship_ids.add(relationship_id)
             target_path = target.split("#", 1)[0].split("?", 1)[0]
-            if any(segment in {".", ".."} for segment in target_path.split("/")):
+            if any(segment == "." for segment in target_path.split("/")) or (
+                target_mode == "External"
+                and any(segment == ".." for segment in target_path.split("/"))
+            ):
                 raise ValueError("DOCX relationship target is not canonical")
             if relationship_type == _OLE_OBJECT_RELATIONSHIP_TYPE:
                 raise ValueError("DOCX OLE relationships are outside the grammar")
@@ -920,15 +928,14 @@ def _package_xml_elements(
     elements: list[tuple[str, Any]] = []
     parsed_member_names: set[str] = set()
     package_members: list[tuple[str, bytes, str | None]] = []
-    raw_package_members: list[tuple[str, bytes]] = []
     has_malformed_part = False
     with ZipFile(BytesIO(source)) as archive:
         members = archive.infolist()
-        raw_package_members.extend(
-            (member.filename, archive.read(member))
+        member_bytes_by_identity = {
+            id(member): archive.read(member)
             for member in members
             if not member.is_dir() and member.filename != _CONTENT_TYPES_MEMBER
-        )
+        }
         normalized_members: list[tuple[Any, str]] = []
         for member in members:
             try:
@@ -953,9 +960,12 @@ def _package_xml_elements(
             )
             has_malformed_part = has_malformed_part or malformed_manifest
         except Exception:
-            for member_name, member_bytes in raw_package_members:
+            for member in members:
+                member_bytes = member_bytes_by_identity.get(id(member))
+                if member_bytes is None:
+                    continue
                 try:
-                    elements.append((member_name, parse_xml(member_bytes)))
+                    elements.append((member.filename, parse_xml(member_bytes)))
                 except Exception:
                     continue
             return tuple(elements), frozenset(), True
@@ -967,7 +977,7 @@ def _package_xml_elements(
         for member, member_name in normalized_members:
             if member.is_dir() or member_name == _CONTENT_TYPES_MEMBER:
                 continue
-            member_bytes = archive.read(member)
+            member_bytes = member_bytes_by_identity[id(member)]
             content_type = overrides.get(member_name.casefold())
             if content_type is None and "." in member_name.rsplit("/", 1)[-1]:
                 extension = member_name.rsplit(".", 1)[-1].casefold()
@@ -992,9 +1002,12 @@ def _package_xml_elements(
         related_members = frozenset()
         relationship_types = {}
         has_malformed_part = True
-        for member_name, member_bytes in raw_package_members:
+        for member in members:
+            member_bytes = member_bytes_by_identity.get(id(member))
+            if member_bytes is None:
+                continue
             try:
-                elements.append((member_name, parse_xml(member_bytes)))
+                elements.append((member.filename, parse_xml(member_bytes)))
             except Exception:
                 continue
     for member_name, member_bytes, content_type in package_members:
@@ -1214,7 +1227,9 @@ def _contains_unrepresented_package_structure(
             ):
                 return True
             if element.tag not in {qn("w:hdr"), qn("w:ftr")}:
-                return len(element) > 0 or bool(element.text and element.text.strip())
+                if len(element) > 0 or bool(element.text and element.text.strip()):
+                    return True
+                continue
             for paragraph in element.iterchildren():
                 if paragraph.tag != _PARAGRAPH_TAG:
                     return True
