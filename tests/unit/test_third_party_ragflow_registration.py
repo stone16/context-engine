@@ -57,7 +57,9 @@ ALLOWED_IMPORT_ROOTS = {
     "sys",
     "typing",
     "unicodedata",
+    "zipfile",
     "docx",
+    "email",
 }
 
 
