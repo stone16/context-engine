@@ -7,8 +7,9 @@ Production dependencies are pinned by `package-lock.json`.
 - `pg` 8.22.0 and its pinned transitive dependencies — MIT or compatible
   licenses. Used by the sealed boundary to reach the dedicated PostgreSQL
   egress authority; callers cannot inject a database implementation.
-- `@context-engine/resolve-sdk-v1` 1.0.0 — private peer package from this
-  repository, used only for the frozen public resolve wire types.
+- `@context-engine/resolve-sdk-v1` 1.0.0 — private runtime peer package from this
+  repository, used for Runtime resolve calls and the frozen public resolve wire
+  types.
 
 Complete third-party license texts are included with installed packages and
 their published distributions.
