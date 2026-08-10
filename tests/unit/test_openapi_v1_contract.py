@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 from hashlib import sha256
 from pathlib import Path
 
@@ -50,3 +51,59 @@ def test_aggregate_openapi_check_verifies_both_frozen_versions() -> None:
 
     assert target.count("scripts/freeze_openapi.py check") == 2
     assert "--version-directory openapi/v1" in target
+
+
+def test_v1_baseline_check_accepts_the_relative_makefile_directory() -> None:
+    result = subprocess.run(
+        (
+            "uv",
+            "run",
+            "python",
+            "scripts/freeze_openapi.py",
+            "check",
+            "--version-directory",
+            "openapi/v1",
+            "--baseline-ref",
+            "HEAD",
+        ),
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_v1_baseline_check_rejects_a_directory_outside_the_repository(
+    tmp_path: Path,
+) -> None:
+    version_directory = tmp_path / "v1"
+    version_directory.mkdir()
+    (version_directory / "openapi.json").write_bytes(
+        (ROOT / "openapi/v1/openapi.json").read_bytes()
+    )
+    (version_directory / "openapi.sha256").write_bytes(
+        (ROOT / "openapi/v1/openapi.sha256").read_bytes()
+    )
+
+    result = subprocess.run(
+        (
+            "uv",
+            "run",
+            "python",
+            "scripts/freeze_openapi.py",
+            "check",
+            "--version-directory",
+            str(version_directory),
+            "--baseline-ref",
+            "HEAD",
+        ),
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "OpenAPI version directory must be inside the repository" in result.stderr

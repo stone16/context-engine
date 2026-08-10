@@ -179,6 +179,14 @@ def check_snapshot(
 ) -> None:
     """Verify digest, compatibility, and exact deterministic server equality."""
 
+    repository_root = repository_root.resolve()
+    version_directory = version_directory.resolve()
+    try:
+        version_directory.relative_to(repository_root)
+    except ValueError as error:
+        raise SnapshotDrift(
+            "OpenAPI version directory must be inside the repository"
+        ) from error
     snapshot_path = version_directory / "openapi.json"
     digest_path = version_directory / "openapi.sha256"
     accepted_bytes = snapshot_path.read_bytes()
