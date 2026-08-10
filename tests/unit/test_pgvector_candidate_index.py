@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from threading import Event
+from threading import Event, Thread
 from typing import cast
 from uuid import UUID
 
@@ -134,6 +134,17 @@ class _HangingProvider(_RecordingProvider):
         self.calls += 1
         self.release.wait()
         return ()
+
+
+class _ProcessControlProvider(_RecordingProvider):
+    def __init__(self, process_control: BaseException) -> None:
+        super().__init__()
+        self.process_control = process_control
+
+    def embed(self, inputs: tuple[str, ...]) -> tuple[tuple[float, ...], ...]:
+        self.calls += 1
+        self.bytes_sent += sum(len(value.encode("utf-8")) for value in inputs)
+        raise self.process_control
 
 
 def _candidate() -> CandidateRef:
@@ -486,6 +497,200 @@ def test_query_embedding_clock_failure_settles_reservation_for_reuse() -> None:
     reservation = budget._reserve(BudgetUsage(100, 1, 1, 5_000))
     budget._cancel(reservation)
     assert budget.usage == BudgetUsage(0, 0, 0, 0)
+
+
+@pytest.mark.parametrize("process_control", [SystemExit(17), KeyboardInterrupt()])
+def test_pre_provider_process_control_cancels_reservation_without_swallowing(
+    process_control: BaseException,
+) -> None:
+    provider = _RecordingProvider()
+    budget = PackageBudgetMeter(
+        PackageBudget(100, 1, 1, 5_000),
+        tokenizer_profile=UNICODE_SCALAR_TOKENIZER_PROFILE,
+        release_generation=7,
+    )
+    index = PostgreSQLVectorCandidateIndex(
+        provider,
+        monotonic_ms=lambda: (_ for _ in ()).throw(process_control),
+    )
+
+    with pytest.raises(type(process_control)) as raised:
+        index.prepare_budgeted_discovery(
+            Acquire(need=ContextNeed(query="semantic query")),
+            effective_scope=_discovery_scope(),
+            budget=budget,
+            active_embedding_profile_digest=(
+                DETERMINISTIC_TWIN_EMBEDDING_PROFILE.profile_digest
+            ),
+        )
+
+    assert raised.value is process_control
+    assert provider.calls == 0
+    assert budget.usage == BudgetUsage(0, 0, 0, 0)
+    reusable = budget._reserve(BudgetUsage(100, 1, 1, 5_000))
+    budget._cancel(reusable)
+
+
+@pytest.mark.parametrize("process_control", [SystemExit(17), KeyboardInterrupt()])
+def test_bounded_call_process_control_before_provider_cancels_without_swallowing(
+    process_control: BaseException,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = _RecordingProvider()
+    budget = PackageBudgetMeter(
+        PackageBudget(100, 1, 1, 5_000),
+        tokenizer_profile=UNICODE_SCALAR_TOKENIZER_PROFILE,
+        release_generation=7,
+    )
+
+    def refuse_before_operation(thread: Thread) -> None:
+        del thread
+        raise process_control
+
+    monkeypatch.setattr("adapters._bounded_call.Thread.start", refuse_before_operation)
+
+    with pytest.raises(type(process_control)) as raised:
+        PostgreSQLVectorCandidateIndex(provider).prepare_budgeted_discovery(
+            Acquire(need=ContextNeed(query="semantic query")),
+            effective_scope=_discovery_scope(),
+            budget=budget,
+            active_embedding_profile_digest=(
+                DETERMINISTIC_TWIN_EMBEDDING_PROFILE.profile_digest
+            ),
+        )
+
+    assert raised.value is process_control
+    assert provider.calls == 0
+    assert budget.usage == BudgetUsage(0, 0, 0, 0)
+    reusable = budget._reserve(BudgetUsage(100, 1, 1, 5_000))
+    budget._cancel(reusable)
+
+
+def test_timed_out_worker_cannot_start_provider_after_reservation_cancel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = _RecordingProvider()
+    budget = PackageBudgetMeter(
+        PackageBudget(100, 1, 1, 5_000),
+        tokenizer_profile=UNICODE_SCALAR_TOKENIZER_PROFILE,
+        release_generation=7,
+    )
+    release_worker = Event()
+    worker_finished = Event()
+
+    def time_out_before_operation(
+        operation: object,
+        **kwargs: object,
+    ) -> None:
+        del kwargs
+
+        def invoke_late() -> None:
+            release_worker.wait()
+            try:
+                operation()  # type: ignore[operator]
+            except EmbeddingProviderUnavailable:
+                pass
+            finally:
+                worker_finished.set()
+
+        Thread(target=invoke_late, daemon=True).start()
+        raise EmbeddingProviderUnavailable("injected timeout")
+
+    monkeypatch.setattr("adapters.pgvector.invoke_bounded", time_out_before_operation)
+
+    with pytest.raises(VectorCandidateIndexUnavailable):
+        PostgreSQLVectorCandidateIndex(provider).prepare_budgeted_discovery(
+            Acquire(need=ContextNeed(query="semantic query")),
+            effective_scope=_discovery_scope(),
+            budget=budget,
+            active_embedding_profile_digest=(
+                DETERMINISTIC_TWIN_EMBEDDING_PROFILE.profile_digest
+            ),
+        )
+    release_worker.set()
+    assert worker_finished.wait(timeout=1)
+
+    assert provider.calls == 0
+    assert budget.usage == BudgetUsage(0, 0, 0, 0)
+    reusable = budget._reserve(BudgetUsage(100, 1, 1, 5_000))
+    budget._cancel(reusable)
+
+
+@pytest.mark.parametrize("process_control", [SystemExit(17), KeyboardInterrupt()])
+def test_post_provider_process_control_charges_maximum_once_without_swallowing(
+    process_control: BaseException,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = _RecordingProvider()
+    budget = PackageBudgetMeter(
+        PackageBudget(200, 2, 2, 10_000),
+        tokenizer_profile=UNICODE_SCALAR_TOKENIZER_PROFILE,
+        release_generation=7,
+    )
+    observed_times = iter((25, process_control))
+    commits = 0
+    original_commit = PackageBudgetMeter._commit
+
+    def record_commit(
+        meter: PackageBudgetMeter,
+        reservation: object,
+        actual: BudgetUsage,
+    ) -> None:
+        nonlocal commits
+        commits += 1
+        original_commit(meter, reservation, actual)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(PackageBudgetMeter, "_commit", record_commit)
+    index = PostgreSQLVectorCandidateIndex(
+        provider,
+        monotonic_ms=lambda: (
+            (_ for _ in ()).throw(value)
+            if isinstance((value := next(observed_times)), BaseException)
+            else value
+        ),
+    )
+
+    with pytest.raises(type(process_control)) as raised:
+        index.prepare_budgeted_discovery(
+            Acquire(need=ContextNeed(query="semantic query")),
+            effective_scope=_discovery_scope(),
+            budget=budget,
+            active_embedding_profile_digest=(
+                DETERMINISTIC_TWIN_EMBEDDING_PROFILE.profile_digest
+            ),
+        )
+
+    assert raised.value is process_control
+    assert provider.calls == 1
+    assert commits == 1
+    assert budget.usage == BudgetUsage(len("semantic query"), 1, 1, 5_000)
+
+
+@pytest.mark.parametrize("process_control", [SystemExit(17), KeyboardInterrupt()])
+def test_provider_process_control_charges_maximum_once_without_swallowing(
+    process_control: BaseException,
+) -> None:
+    provider = _ProcessControlProvider(process_control)
+    budget = PackageBudgetMeter(
+        PackageBudget(100, 1, 1, 5_000),
+        tokenizer_profile=UNICODE_SCALAR_TOKENIZER_PROFILE,
+        release_generation=7,
+    )
+
+    with pytest.raises(type(process_control)) as raised:
+        PostgreSQLVectorCandidateIndex(provider).prepare_budgeted_discovery(
+            Acquire(need=ContextNeed(query="semantic query")),
+            effective_scope=_discovery_scope(),
+            budget=budget,
+            active_embedding_profile_digest=(
+                DETERMINISTIC_TWIN_EMBEDDING_PROFILE.profile_digest
+            ),
+        )
+
+    assert raised.value is process_control
+    assert provider.calls == 1
+    assert provider.bytes_sent == len(b"semantic query")
+    assert budget.usage == BudgetUsage(len("semantic query"), 1, 1, 5_000)
 
 
 @pytest.mark.parametrize("limit", [0, MAX_VECTOR_CANDIDATE_LIMIT + 1, True])

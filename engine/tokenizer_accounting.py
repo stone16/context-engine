@@ -6,15 +6,15 @@ import hashlib
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Final, cast
+from typing import Final
 
-import rfc8785
+from context_engine_contracts import (
+    REGISTERED_V1_TOKENIZER_PROFILES,
+    TokenizerProfileDescriptor,
+)
 
 _PROFILE_DIGEST_DOMAIN: Final = b"context-engine.tokenizer-profile.v1\x00"
-_ARTIFACT = Path(__file__).with_name("tokenizers") / "unicode-scalar-v1.json"
-_ARTIFACT_DIGEST: Final = (
-    "8d301e3ce94e5b48febffb2e0871e139cd4d5f808084eccbf9cfc512d3948cca"
-)
+_TOKENIZER_ARTIFACT_ROOT = Path(__file__).with_name("tokenizers")
 _HISTORICAL_DOCUMENT: Final = (
     '{"accountingVersion":"utf8-byte-budget-v1",'
     '"artifactDigest":"' + hashlib.sha256(b"utf8-byte-budget-v1").hexdigest() + '",'
@@ -32,73 +32,52 @@ class TokenizerUnavailable(RuntimeError):
     """One tokenizer identity or its pinned artifact is unavailable."""
 
 
-def _require_nonblank(field_name: str, value: object) -> str:
-    if (
-        type(value) is not str
-        or not value
-        or value != value.strip()
-        or any(character.isspace() for character in value)
-    ):
-        raise ValueError(f"TokenizerProfile {field_name} must be an opaque ref")
-    return value
-
-
-def _require_digest(field_name: str, value: object) -> str:
-    if (
-        type(value) is not str
-        or len(value) != hashlib.sha256().digest_size * 2
-        or any(character not in "0123456789abcdef" for character in value)
-    ):
-        raise ValueError(f"TokenizerProfile {field_name} must be lowercase SHA-256")
-    return value
-
-
 @dataclass(frozen=True, slots=True)
 class TokenizerProfile:
     """Immutable counting identity persisted in one Runtime Release profile."""
 
-    profile_ref: str
-    artifact_digest: str
-    vocabulary_ref: str
-    normalization_ref: str
-    accounting_version: str
-    counting_contract: str
+    descriptor: TokenizerProfileDescriptor
     artifact_path: Path = field(repr=False, compare=False)
-    profile_digest: str = field(init=False)
 
     def __post_init__(self) -> None:
-        for field_name in (
-            "profile_ref",
-            "vocabulary_ref",
-            "normalization_ref",
-            "accounting_version",
-            "counting_contract",
-        ):
-            _require_nonblank(field_name, getattr(self, field_name))
-        _require_digest("artifact_digest", self.artifact_digest)
+        if type(self.descriptor) is not TokenizerProfileDescriptor:
+            raise TypeError("TokenizerProfile requires TokenizerProfileDescriptor")
         if not isinstance(self.artifact_path, Path):
             raise TypeError("TokenizerProfile artifact_path must be Path")
-        object.__setattr__(
-            self,
-            "profile_digest",
-            hashlib.sha256(
-                _PROFILE_DIGEST_DOMAIN
-                + rfc8785.dumps(cast(Any, self.canonical_document()))
-            ).hexdigest(),
-        )
 
-    def canonical_document(self) -> dict[str, object]:
-        return {
-            "accountingVersion": self.accounting_version,
-            "artifactDigest": self.artifact_digest,
-            "countingContract": self.counting_contract,
-            "normalizationRef": self.normalization_ref,
-            "profileRef": self.profile_ref,
-            "vocabularyRef": self.vocabulary_ref,
-        }
+    @property
+    def profile_ref(self) -> str:
+        return self.descriptor.profile_ref
+
+    @property
+    def artifact_digest(self) -> str:
+        return self.descriptor.artifact_digest
+
+    @property
+    def vocabulary_ref(self) -> str:
+        return self.descriptor.vocabulary_ref
+
+    @property
+    def normalization_ref(self) -> str:
+        return self.descriptor.normalization_ref
+
+    @property
+    def accounting_version(self) -> str:
+        return self.descriptor.accounting_version
+
+    @property
+    def counting_contract(self) -> str:
+        return self.descriptor.counting_contract
+
+    @property
+    def profile_digest(self) -> str:
+        return self.descriptor.profile_digest
+
+    def canonical_document(self) -> dict[str, str]:
+        return self.descriptor.canonical_document()
 
     def canonical_json(self) -> str:
-        return rfc8785.dumps(cast(Any, self.canonical_document())).decode("utf-8")
+        return self.descriptor.canonical_json()
 
     def load(self) -> AccountingTokenizer:
         try:
@@ -113,8 +92,8 @@ class TokenizerProfile:
             raise TokenizerUnavailable("Tokenizer artifact is unavailable") from None
         if document != {
             "accountingVersion": self.accounting_version,
-            "normalization": "none",
-            "vocabulary": "unicode-scalars-v15.1",
+            "normalization": self.normalization_ref,
+            "vocabulary": self.vocabulary_ref,
         }:
             raise TokenizerUnavailable("Tokenizer artifact identity does not match")
         return AccountingTokenizer(self)
@@ -140,31 +119,36 @@ class AccountingTokenizer:
 
 
 UNICODE_SCALAR_TOKENIZER_PROFILE = TokenizerProfile(
-    profile_ref="unicode-scalar-tokenizer-v1",
-    artifact_digest=_ARTIFACT_DIGEST,
-    vocabulary_ref="unicode-scalars-v15.1",
-    normalization_ref="none",
-    accounting_version="unicode-scalar-accounting-v1",
-    counting_contract="one-unicode-scalar-one-token-v1",
-    artifact_path=_ARTIFACT,
+    descriptor=REGISTERED_V1_TOKENIZER_PROFILES[0],
+    artifact_path=(
+        _TOKENIZER_ARTIFACT_ROOT
+        / REGISTERED_V1_TOKENIZER_PROFILES[0].artifact_name
+    ),
 )
 
-_REGISTERED_PROFILES: Final = {
-    (
-        UNICODE_SCALAR_TOKENIZER_PROFILE.canonical_json(),
-        UNICODE_SCALAR_TOKENIZER_PROFILE.profile_digest,
-    ): UNICODE_SCALAR_TOKENIZER_PROFILE,
-}
+
+def _runtime_profile(descriptor: TokenizerProfileDescriptor) -> TokenizerProfile:
+    if descriptor is UNICODE_SCALAR_TOKENIZER_PROFILE.descriptor:
+        return UNICODE_SCALAR_TOKENIZER_PROFILE
+    return TokenizerProfile(
+        descriptor=descriptor,
+        artifact_path=_TOKENIZER_ARTIFACT_ROOT / descriptor.artifact_name,
+    )
 
 
 def registered_tokenizer_profile(
     canonical_document: str,
     profile_digest: str,
 ) -> TokenizerProfile:
-    try:
-        return _REGISTERED_PROFILES[(canonical_document, profile_digest)]
-    except (KeyError, TypeError):
-        raise TokenizerUnavailable("Tokenizer profile is unavailable") from None
+    matches = tuple(
+        descriptor
+        for descriptor in REGISTERED_V1_TOKENIZER_PROFILES
+        if descriptor.canonical_json() == canonical_document
+        and descriptor.profile_digest == profile_digest
+    )
+    if len(matches) != 1:
+        raise TokenizerUnavailable("Tokenizer profile is unavailable")
+    return _runtime_profile(matches[0])
 
 
 def registered_tokenizer_profile_by_identity(
@@ -174,14 +158,14 @@ def registered_tokenizer_profile_by_identity(
     """Resolve one active tokenizer identity without fixing a manifest generation."""
 
     matches = tuple(
-        profile
-        for profile in _REGISTERED_PROFILES.values()
-        if profile.profile_ref == profile_ref
-        and profile.profile_digest == profile_digest
+        descriptor
+        for descriptor in REGISTERED_V1_TOKENIZER_PROFILES
+        if descriptor.profile_ref == profile_ref
+        and descriptor.profile_digest == profile_digest
     )
     if len(matches) != 1:
         raise TokenizerUnavailable("Tokenizer profile is unavailable")
-    return matches[0]
+    return _runtime_profile(matches[0])
 
 
 def load_registered_tokenizer(

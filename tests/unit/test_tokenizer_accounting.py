@@ -10,6 +10,10 @@ from pathlib import Path
 
 import pytest
 
+from context_engine_contracts import (
+    REGISTERED_V1_TOKENIZER_PROFILES,
+    TokenizerProfileDescriptor,
+)
 from engine.runtime.budget import (
     BudgetUsage,
     PackageBudget,
@@ -21,6 +25,34 @@ from engine.tokenizer_accounting import (
     TokenizerUnavailable,
     load_registered_tokenizer,
 )
+
+
+def test_contract_registry_is_the_single_tokenizer_identity_source() -> None:
+    assert (
+        TokenizerProfileDescriptor(
+            profile_ref="unicode-scalar-tokenizer-v1",
+            artifact_name="unicode-scalar-v1.json",
+            artifact_digest=(
+                "8d301e3ce94e5b48febffb2e0871e139"
+                "cd4d5f808084eccbf9cfc512d3948cca"
+            ),
+            vocabulary_ref="unicode-scalars-v15.1",
+            normalization_ref="none",
+            accounting_version="unicode-scalar-accounting-v1",
+            counting_contract="one-unicode-scalar-one-token-v1",
+        ),
+    ) == REGISTERED_V1_TOKENIZER_PROFILES
+    descriptor = REGISTERED_V1_TOKENIZER_PROFILES[0]
+    assert UNICODE_SCALAR_TOKENIZER_PROFILE.descriptor is descriptor
+    assert UNICODE_SCALAR_TOKENIZER_PROFILE.artifact_path.name == (
+        descriptor.artifact_name
+    )
+
+    engine_source = (
+        Path(__file__).parents[2] / "engine/tokenizer_accounting.py"
+    ).read_text()
+    assert "_REGISTERED_PROFILES" not in engine_source
+    assert "profile_ref=\"unicode-scalar-tokenizer-v1\"" not in engine_source
 
 
 @pytest.mark.security_evidence(id="ACCOUNTING-DETERMINISM-217", layer="property")
@@ -160,6 +192,19 @@ def test_cancel_releases_capacity_without_usage_leakage() -> None:
     meter._commit(second, BudgetUsage(3, 0, 0, 0))
 
     assert meter.usage == BudgetUsage(3, 0, 0, 0)
+
+
+def test_settled_reservation_cannot_be_charged_or_cancelled_twice() -> None:
+    meter = _meter(maximum_tokens=5)
+    reservation = meter._reserve(BudgetUsage(5, 1, 1, 5))
+    meter._commit(reservation, BudgetUsage(3, 1, 1, 4))
+
+    with pytest.raises(ValueError, match="not active"):
+        meter._commit(reservation, BudgetUsage(3, 1, 1, 4))
+    with pytest.raises(ValueError, match="not active"):
+        meter._cancel(reservation)
+
+    assert meter.usage == BudgetUsage(3, 1, 1, 4)
 
 
 @pytest.mark.security_evidence(id="ACCOUNTING-ONE-METER-STATIC-217", layer="property")

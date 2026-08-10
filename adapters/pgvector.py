@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from threading import Lock
 from time import monotonic_ns
 
 from adapters._bounded_call import BoundedCallUnavailable, invoke_bounded
@@ -140,12 +141,21 @@ class PostgreSQLVectorCandidateIndex:
             ),
         )
 
-    def _embed_query_bounded(self, query: str) -> tuple[tuple[float, ...], ...]:
+    def _embed_query_bounded(
+        self,
+        query: str,
+        *,
+        on_provider_start: Callable[[], None] = lambda: None,
+    ) -> tuple[tuple[float, ...], ...]:
         """Return by the local query deadline even if backend inference hangs."""
+
+        def embed() -> tuple[tuple[float, ...], ...]:
+            on_provider_start()
+            return self._embedding_provider.embed((query,))
 
         try:
             vectors = invoke_bounded(
-                lambda: self._embedding_provider.embed((query,)),
+                embed,
                 timeout_seconds=(
                     QUERY_EMBEDDING_MAXIMUM_USAGE.elapsed_ms / 1_000
                 ),
@@ -205,12 +215,27 @@ class PostgreSQLVectorCandidateIndex:
             ) from None
 
         provider_call_started = False
+        provider_call_allowed = True
+        provider_start_lock = Lock()
+        actual_usage: BudgetUsage | None = None
+
+        def mark_provider_started() -> None:
+            nonlocal provider_call_started, provider_call_allowed
+            with provider_start_lock:
+                if not provider_call_allowed:
+                    raise EmbeddingProviderUnavailable(
+                        "Embedding provider is unavailable"
+                    )
+                provider_call_started = True
+
         try:
             started_ms = self._monotonic_ms()
-            provider_call_started = True
             query_embedding = validate_embedding_batch(
                 (request.need.query,),
-                self._embed_query_bounded(request.need.query),
+                self._embed_query_bounded(
+                    request.need.query,
+                    on_provider_start=mark_provider_started,
+                ),
                 self._embedding_profile,
             )[0]
             request_plan = VectorDiscoveryRequest(
@@ -233,11 +258,13 @@ class PostgreSQLVectorCandidateIndex:
                 raise VectorCandidateIndexUnavailable(
                     "Vector candidate discovery is unavailable"
                 )
+            actual_usage = BudgetUsage(
+                tokens=query_tokens,
+                provider_calls=1,
+                cost_microunits=1,
+                elapsed_ms=elapsed_ms,
+            )
         except Exception as error:
-            if provider_call_started:
-                budget._commit(reservation, maximum_usage)
-            else:
-                budget._cancel(reservation)
             if isinstance(
                 error,
                 EmbeddingProviderUnavailable | VectorCandidateIndexUnavailable,
@@ -246,15 +273,14 @@ class PostgreSQLVectorCandidateIndex:
                     "Vector candidate discovery is unavailable"
                 ) from None
             raise
-        budget._commit(
-            reservation,
-            BudgetUsage(
-                tokens=query_tokens,
-                provider_calls=1,
-                cost_microunits=1,
-                elapsed_ms=elapsed_ms,
-            ),
-        )
+        finally:
+            with provider_start_lock:
+                provider_call_allowed = False
+                settle_as_started = provider_call_started
+            if settle_as_started:
+                budget._commit(reservation, actual_usage or maximum_usage)
+            else:
+                budget._cancel(reservation)
         return request_plan
 
     def prepare_generation_bound_discovery(

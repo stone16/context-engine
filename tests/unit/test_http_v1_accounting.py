@@ -83,6 +83,7 @@ from tests.unit.test_runtime_authorized_evidence import (
     AS_OF,
     AUTHORIZED,
     RecordingMaterializedPort,
+    locator,
 )
 
 QUERY = "account 世界"
@@ -134,6 +135,27 @@ class _AuthorizedMaterializedPort(RecordingMaterializedPort):
             effective_scope,
         )
         return (AUTHORIZED,)[:limit]
+
+
+class _EmptyMaterializedPort(_AuthorizedMaterializedPort):
+    def discover_vector(
+        self,
+        query_embedding: tuple[float, ...],
+        embedding_profile_digest: str,
+        limit: int,
+        source_refs: tuple[str, ...] | None,
+        resource_refs: tuple[str, ...] | None,
+        effective_scope: object,
+    ) -> tuple[()]:
+        del (
+            query_embedding,
+            embedding_profile_digest,
+            limit,
+            source_refs,
+            resource_refs,
+            effective_scope,
+        )
+        return ()
 
 
 class _MixedGenerationVectorIndex(PostgreSQLVectorCandidateIndex):
@@ -309,8 +331,9 @@ def _application(
     mixed_generation_carrier: bool = False,
     mismatched_tokenizer_carrier: bool = False,
     record_settlement: bool = False,
+    materialized: _AuthorizedMaterializedPort | None = None,
 ) -> FastAPI:
-    materialized = _AuthorizedMaterializedPort()
+    materialized = materialized or _AuthorizedMaterializedPort()
     index_type = (
         _MixedGenerationVectorIndex
         if mixed_generation_carrier
@@ -350,6 +373,7 @@ def _client(
     mixed_generation_carrier: bool = False,
     mismatched_tokenizer_carrier: bool = False,
     record_settlement: bool = False,
+    materialized: _AuthorizedMaterializedPort | None = None,
 ) -> TestClient:
     return TestClient(
         _application(
@@ -359,7 +383,41 @@ def _client(
             mixed_generation_carrier=mixed_generation_carrier,
             mismatched_tokenizer_carrier=mismatched_tokenizer_carrier,
             record_settlement=record_settlement,
+            materialized=materialized,
         )
+    )
+
+
+def _assert_authorized_http_control() -> None:
+    provider = _RecordingEmbeddingProvider()
+    context_runs = RecordingContextRunPort()
+    materialized = _AuthorizedMaterializedPort()
+
+    response = _client(
+        provider,
+        context_runs,
+        materialized=materialized,
+    ).post(
+        "/v1/resolve",
+        headers={
+            "Authorization": f"Bearer {VALID_TOKEN}",
+            "X-Context-Request-Id": "v1-accounting-authorized-control",
+        },
+        json={"kind": "acquire", "need": {"query": QUERY}},
+    )
+
+    assert response.status_code == 200
+    package = response.json()["package"]
+    assert materialized.locator_calls == [AUTHORIZED]
+    assert materialized.body_calls == [locator(AUTHORIZED)]
+    assert package["blocks"][0]["text"] == "A-safe"
+    assert package["evidence"][0]["decisionRef"] == package["decisionRef"]
+    assert package["evidence"][0]["projectedFields"] == ["body"]
+    assert package["blocks"][0]["evidenceRefs"] == [
+        package["evidence"][0]["evidenceRef"]
+    ]
+    assert context_runs.calls[0][0].authorized_evidence_refs == (
+        package["evidence"][0]["evidenceRef"],
     )
 
 
@@ -389,8 +447,9 @@ def _wait_for_tcp(port: int) -> None:
 def test_v1_http_package_and_context_run_publish_one_digest_bound_usage() -> None:
     provider = _RecordingEmbeddingProvider()
     context_runs = RecordingContextRunPort()
+    materialized = _AuthorizedMaterializedPort()
 
-    response = _client(provider, context_runs).post(
+    response = _client(provider, context_runs, materialized=materialized).post(
         "/v1/resolve",
         headers={
             "Authorization": f"Bearer {VALID_TOKEN}",
@@ -425,6 +484,14 @@ def test_v1_http_package_and_context_run_publish_one_digest_bound_usage() -> Non
         run.usage_elapsed_ms,
     ) == tuple(package["budgetUsage"].values())
     assert run.package_digest == package["packageDigest"]
+    assert materialized.locator_calls == [AUTHORIZED]
+    assert materialized.body_calls
+    assert package["blocks"][0]["text"] == "A-safe"
+    assert package["evidence"][0]["projectedFields"] == ["body"]
+    assert package["blocks"][0]["evidenceRefs"] == [
+        package["evidence"][0]["evidenceRef"]
+    ]
+    assert run.authorized_evidence_refs == (package["evidence"][0]["evidenceRef"],)
 
     mutated = dict(package)
     mutated["budgetUsage"] = {**package["budgetUsage"], "tokens": 1}
@@ -467,6 +534,7 @@ def test_v1_http_tokenizer_digest_mismatch_refuses_before_provider_bytes() -> No
 
 @pytest.mark.security_evidence(id="ACCOUNTING-CARRIER-MISMATCH-217", layer="runtime")
 def test_v1_http_carrier_tokenizer_mismatch_refuses_before_provider_bytes() -> None:
+    _assert_authorized_http_control()
     provider = _RecordingEmbeddingProvider()
     context_runs = RecordingContextRunPort()
     response = _client(
@@ -489,6 +557,7 @@ def test_v1_http_carrier_tokenizer_mismatch_refuses_before_provider_bytes() -> N
 
 @pytest.mark.security_evidence(id="ACCOUNTING-MIXED-GENERATION-217", layer="runtime")
 def test_v1_http_mixed_generation_refuses_before_provider_bytes() -> None:
+    _assert_authorized_http_control()
     provider = _RecordingEmbeddingProvider()
     context_runs = RecordingContextRunPort()
 
@@ -514,6 +583,7 @@ def test_v1_http_mixed_generation_refuses_before_provider_bytes() -> None:
 
 @pytest.mark.security_evidence(id="ACCOUNTING-ZERO-BYTES-217", layer="runtime")
 def test_v1_http_budget_exhaustion_refuses_before_provider_bytes() -> None:
+    _assert_authorized_http_control()
     provider = _RecordingEmbeddingProvider()
     context_runs = RecordingContextRunPort()
     response = _client(provider, context_runs).post(
@@ -536,6 +606,7 @@ def test_v1_http_budget_exhaustion_refuses_before_provider_bytes() -> None:
 
 @pytest.mark.security_evidence(id="ACCOUNTING-MAX-CHARGE-217", layer="runtime")
 def test_v1_http_unusable_embedding_settles_the_reserved_maximum() -> None:
+    _assert_authorized_http_control()
     provider = _UnavailableEmbeddingProvider()
     context_runs = RecordingContextRunPort()
     _SettlementRecordingVectorIndex.latest_settled_usage = None
@@ -556,6 +627,54 @@ def test_v1_http_unusable_embedding_settles_the_reserved_maximum() -> None:
     assert _SettlementRecordingVectorIndex.latest_settled_usage == BudgetUsage(
         len(QUERY), 1, 1, 5_000
     )
+
+
+def test_v1_http_empty_retrieval_retains_paid_query_usage_in_package_and_run() -> None:
+    provider = _RecordingEmbeddingProvider()
+    context_runs = RecordingContextRunPort()
+    materialized = _EmptyMaterializedPort()
+
+    response = _client(
+        provider,
+        context_runs,
+        materialized=materialized,
+    ).post(
+        "/v1/resolve",
+        headers={
+            "Authorization": f"Bearer {VALID_TOKEN}",
+            "X-Context-Request-Id": "v1-paid-empty-retrieval",
+        },
+        json={"kind": "acquire", "need": {"query": QUERY}},
+    )
+
+    assert response.status_code == 200
+    package = response.json()["package"]
+    assert package["blocks"] == []
+    assert package["evidence"] == []
+    assert package["coverage"] == {
+        "status": "empty",
+        "reason": "no_authorized_evidence",
+    }
+    assert package["budgetUsage"] == {
+        "tokens": len(QUERY),
+        "providerCalls": 1,
+        "costMicrounits": 1,
+        "elapsedMs": 7,
+    }
+    assert provider.calls == 1
+    assert materialized.locator_calls == []
+    assert materialized.body_calls == []
+    assert len(context_runs.calls) == 1
+    run, audit = context_runs.calls[0]
+    assert audit is not None
+    assert audit.category.value == "no_authorized_evidence"
+    assert (
+        run.usage_tokens,
+        run.usage_provider_calls,
+        run.usage_cost_microunits,
+        run.usage_elapsed_ms,
+    ) == tuple(package["budgetUsage"].values())
+    assert run.package_digest == package["packageDigest"]
 
 
 def test_generated_v1_sdk_observes_cumulative_usage_over_live_http() -> None:

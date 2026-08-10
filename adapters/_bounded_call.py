@@ -27,13 +27,13 @@ def invoke_bounded[T](
         raise BoundedCallUnavailable
     finished = Event()
     outputs: list[T] = []
-    failed: list[bool] = []
+    failures: list[BaseException] = []
 
     def invoke() -> None:
         try:
             outputs.append(operation())
-        except BaseException:
-            failed.append(True)
+        except BaseException as error:
+            failures.append(error)
         finally:
             if in_flight_lock is not None:
                 in_flight_lock.release()
@@ -42,12 +42,19 @@ def invoke_bounded[T](
     worker = Thread(target=invoke, name=thread_name, daemon=True)
     try:
         worker.start()
-    except BaseException:
+    except BaseException as error:
         if in_flight_lock is not None:
             in_flight_lock.release()
+        if isinstance(error, SystemExit | KeyboardInterrupt):
+            raise
         raise BoundedCallUnavailable from None
     if not finished.wait(timeout_seconds):
         raise BoundedCallTimedOut
-    if failed or len(outputs) != 1:
+    if (
+        len(failures) == 1
+        and isinstance(failures[0], SystemExit | KeyboardInterrupt)
+    ):
+        raise failures[0]
+    if failures or len(outputs) != 1:
         raise BoundedCallUnavailable
     return outputs[0]
