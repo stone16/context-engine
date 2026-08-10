@@ -46,10 +46,57 @@ selected helpers from the copied `MarkdownElementExtractor`; the surrounding
 rich Markdown compilation pipeline remains ContextEngine-owned.
 
 `docx_parser.py` is copied and patched to remove RAGFlow tokenizer,
-`LazyImage`, Pandas, logging, and application constants. It now traverses
-paragraph and table XML children in exact OOXML body order and returns bounded
-raw blocks. ContextEngine-owned code maps those blocks into the ADR-0094 nominal
-`DocxXmlLocator` family, structural units, identities, and typed refusals.
+`LazyImage`, Pandas, logging, and application constants. It now inventories the
+raw OPC archive and strictly parses `[Content_Types].xml` before constructing a
+`python-docx` document. Every declared XML member is parsed independently and
+every successfully parsed root is scanned for visuals first, so a figure
+refusal takes precedence over malformed or unrepresented XML even when
+`python-docx` cannot load the package. When the content-type manifest itself is
+unparseable, every independently parseable raw member, including a member whose
+raw ZIP name is not an admissible canonical package path, is still scanned for
+visuals before the retained manifest refusal. Archive names, PartNames, media
+types, case-folded declarations, and relationship reachability are validated. The
+content-type manifest admits an attribute-free, text-free root containing only
+exact leaf `Default` and `Override` declarations; malformed declarations remain
+usable only to scan otherwise classifiable XML for visuals before the retained
+manifest refusal. Every declaration's media type must use strict ASCII MIME
+tokens, and its raw pre-parameter base must exactly match the parsed type and
+subtype except for case; parser-normalized whitespace is never accepted. Every
+extension must use the closed ASCII token grammar while excluding `.` and `..`,
+even when no member uses the declaration. The
+relationship grammar requires exact permitted attributes, unique non-empty
+identifiers, valid target modes, internal canonical raw targets without empty
+or `.` segments before resolution (canonical relative `..` segments resolve one
+parent at a time and fail closed only when they escape the package root), no
+`.` or `..` segment in the raw path portion of External targets, and the exact
+root-to-main office-document relationship type. A manifest relabel cannot hide related XML:
+non-XML-related parts outside exact admitted binary relationship classes must
+parse as XML. A malformed relationship graph likewise cannot hide raw parseable
+visuals: every non-manifest raw ZIP entry is scanned by entry identity before
+the retained package refusal, including entries whose raw names are not
+admissible canonical package paths and multiple entries that share a filename.
+Thumbnail admission
+requires an internal root relationship, exact `docProps/thumbnail.jpeg` target,
+exact JPEG media type, nonzero dimensions, coherent frame/scan component
+identifiers, and a complete bounded JPEG marker structure through
+start-of-frame, start-of-scan, and end-of-image; a signature prefix alone is
+never admitted. Every OLE relationship, internal or external and regardless of
+target parseability, refuses because the active profile cannot represent
+embedded OLE and no complete compound-file validator is registered. Orphan,
+unknown, and path-ambiguous members fail closed. Admitted thumbnail bytes are
+inventoried but never parsed as XML.
+
+The body-only profile admits one positive main-document/paragraph/run/table
+grammar, including recursive property-subtree validation and exact structural
+parent, order, and cardinality rules. It rejects non-body content-bearing XML,
+unknown namespaces or placements, arbitrary character data in infrastructure
+members, nested tables, and merged cells whose semantics cannot be represented
+losslessly. Only exact core/app metadata fields admit character data.
+Independently derived visible run text must equal `python-docx` paragraph text,
+every visible token must be inside an admitted run, and exact paragraph and
+table-cell boundary whitespace is preserved. ContextEngine-owned code maps
+accepted blocks into the ADR-0094 nominal `DocxXmlLocator` family, structural
+units, identities, and typed refusals.
 Image-bearing DOCX artifacts refuse because a bounded figure-byte policy has
 not been admitted; images are never silently discarded.
 

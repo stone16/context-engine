@@ -6,16 +6,22 @@ import io
 import json
 import subprocess
 import sys
+import warnings
+import zipfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
+from xml.sax.saxutils import escape
 
 import pytest
 import rfc8785
 from docx import Document
 from docx.document import Document as DocumentType
+from docx.opc.constants import CONTENT_TYPE, RELATIONSHIP_TYPE
+from docx.opc.packuri import PackURI
+from docx.opc.part import Part
 from docx.oxml import OxmlElement
 from pypdf import PdfWriter
 from pypdf.generic import Destination
@@ -48,6 +54,9 @@ from third_party.ragflow.deepdoc.parser import utils as ragflow_pdf_utils
 from third_party.ragflow.deepdoc.parser.utils import RawPdfOutline
 
 REPOSITORY_ROOT = Path(__file__).parents[2]
+type _DocumentOutcome = (
+    ParsedDocument[CompilationProfileRef] | DocumentCompilationFailure
+)
 
 
 @dataclass
@@ -76,15 +85,43 @@ def _docx_fixture(*, with_image: bool = False) -> bytes:
 
         run = document.add_paragraph().add_run()
         run._r.append(parse_xml(f"<pic:pic {nsdecls('pic')}></pic:pic>"))
-    output = io.BytesIO()
-    document.save(output)
-    return output.getvalue()
+    return _save_docx(document)
 
 
 def _save_docx(document: DocumentType) -> bytes:
     output = io.BytesIO()
     document.save(output)
+    canonical = io.BytesIO()
+    with (
+        zipfile.ZipFile(io.BytesIO(output.getvalue())) as source_archive,
+        zipfile.ZipFile(canonical, "w", zipfile.ZIP_DEFLATED) as target_archive,
+    ):
+        for member in source_archive.infolist():
+            member_bytes = source_archive.read(member.filename)
+            target_archive.writestr(member, member_bytes)
+    return canonical.getvalue()
+
+
+def _save_unmodified_docx(document: DocumentType) -> bytes:
+    output = io.BytesIO()
+    document.save(output)
     return output.getvalue()
+
+
+def _compile_docx_at_public_seams(source: bytes) -> tuple[
+    _DocumentOutcome, _DocumentOutcome
+]:
+    return (
+        compile_document_bytes(
+            source,
+            CompilationProfileRef("context-engine-docx-v1", DOCX_CONFIG_V1),
+        ),
+        compile_in_local_document_runner(
+            BytesArtifactSource(source),
+            DOCX_CONFIG_V1,
+            acceptance_context=acceptance_context(),
+        ),
+    )
 
 
 def _docx_with_unsupported_body_container() -> bytes:
@@ -118,6 +155,497 @@ def _docx_with_tracked_insertion() -> bytes:
     return _save_docx(document)
 
 
+def _docx_with_wrapped_text(
+    wrapper_tag: str,
+    hidden_text: str,
+    *,
+    in_header: bool,
+) -> bytes:
+    document = Document()
+    document.add_paragraph("Retained body text.")
+    paragraph = (
+        document.sections[0].header.paragraphs[0]
+        if in_header
+        else document.add_paragraph()
+    )
+    wrapper = OxmlElement(wrapper_tag)
+    run = OxmlElement("w:r")
+    text = OxmlElement("w:t")
+    text.text = hidden_text
+    run.append(text)
+    wrapper.append(run)
+    paragraph._p.append(wrapper)
+    return _save_docx(document)
+
+
+def _docx_with_wrapped_table_cell_text() -> bytes:
+    document = Document()
+    document.add_paragraph("Retained body text.")
+    paragraph = document.add_table(rows=1, cols=1).cell(0, 0).paragraphs[0]
+    wrapper = OxmlElement("w:dir")
+    run = OxmlElement("w:r")
+    text = OxmlElement("w:t")
+    text.text = "Table-cell bidirectional text must not disappear."
+    run.append(text)
+    wrapper.append(run)
+    paragraph._p.append(wrapper)
+    return _save_docx(document)
+
+
+def _docx_with_admitted_run_text() -> bytes:
+    document = Document()
+    run = document.add_paragraph().add_run("Before")
+    run.add_tab()
+    run.add_text("Middle")
+    run.add_break()
+    run._r.append(OxmlElement("w:noBreakHyphen"))
+    run.add_text("After")
+    return _save_docx(document)
+
+
+def _docx_with_visible_token_outside_run(token_tag: str) -> bytes:
+    document = Document()
+    document.add_paragraph("Retained body text.")
+    paragraph = document.add_paragraph()
+    token = OxmlElement(token_tag)
+    if token_tag == "w:t":
+        token.text = "Silently omitted direct text."
+    paragraph._p.append(token)
+    return _save_docx(document)
+
+
+def _docx_with_wrapped_footnote_text(
+    wrapper_tag: str,
+    hidden_text: str,
+    *,
+    content_type: str = CONTENT_TYPE.WML_FOOTNOTES,
+    with_drawing: bool = False,
+) -> bytes:
+    document = Document()
+    document.add_paragraph("Retained body text.")
+    if wrapper_tag not in {"w:fldSimple", "w:smartTag"}:
+        raise ValueError("test fixture requires a supported wrapper tag")
+    drawing_xml = "<w:drawing/>" if with_drawing else ""
+    footnotes_xml = (
+        '<w:footnotes xmlns:w="http://schemas.openxmlformats.org/'
+        'wordprocessingml/2006/main">'
+        '<w:footnote w:id="1"><w:p>'
+        f"<{wrapper_tag}><w:r><w:t>{escape(hidden_text)}</w:t></w:r>"
+        f"</{wrapper_tag}>{drawing_xml}"
+        "</w:p></w:footnote></w:footnotes>"
+    ).encode()
+    footnotes_part = Part(
+        PackURI("/word/footnotes.xml"),
+        content_type,
+        footnotes_xml,
+        document.part.package,
+    )
+    document.part.relate_to(footnotes_part, RELATIONSHIP_TYPE.FOOTNOTES)
+    return _save_docx(document)
+
+
+def _relabel_docx_part_as_binary(source: bytes, part_name: str) -> bytes:
+    output = io.BytesIO()
+    part_name_token = f'PartName="/{part_name}" ContentType="'.encode()
+    with (
+        zipfile.ZipFile(io.BytesIO(source)) as source_archive,
+        zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as target_archive,
+    ):
+        for member in source_archive.infolist():
+            member_bytes = source_archive.read(member.filename)
+            if member.filename == "[Content_Types].xml":
+                content_type_start = member_bytes.index(part_name_token) + len(
+                    part_name_token
+                )
+                content_type_end = member_bytes.index(b'"', content_type_start)
+                member_bytes = (
+                    member_bytes[:content_type_start]
+                    + b"application/octet-stream"
+                    + member_bytes[content_type_end:]
+                )
+            target_archive.writestr(member, member_bytes)
+    return output.getvalue()
+
+
+def _docx_with_relabeled_header_xml(payload_kind: str) -> bytes:
+    document = Document()
+    document.add_paragraph("Retained body text.")
+    paragraph = document.sections[0].header.paragraphs[0]
+    if payload_kind in {"w:fldSimple", "w:smartTag"}:
+        wrapper = OxmlElement(payload_kind)
+        run = OxmlElement("w:r")
+        text = OxmlElement("w:t")
+        text.text = "Relabeled header text must not disappear."
+        run.append(text)
+        wrapper.append(run)
+        paragraph._p.append(wrapper)
+    elif payload_kind == "w:drawing":
+        paragraph.add_run()._r.append(OxmlElement("w:drawing"))
+    else:
+        raise ValueError("unknown relabeled header payload")
+    return _relabel_docx_part_as_binary(_save_docx(document), "word/header1.xml")
+
+
+def _docx_with_header_disguised_as_thumbnail() -> bytes:
+    source = _docx_with_visible_header_text()
+    output = io.BytesIO()
+    header_relationship_type = RELATIONSHIP_TYPE.HEADER.encode()
+    thumbnail_relationship_type = RELATIONSHIP_TYPE.THUMBNAIL.encode()
+    with (
+        zipfile.ZipFile(io.BytesIO(source)) as source_archive,
+        zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as target_archive,
+    ):
+        for member in source_archive.infolist():
+            member_bytes = source_archive.read(member.filename)
+            if member.filename == "word/_rels/document.xml.rels":
+                assert header_relationship_type in member_bytes
+                member_bytes = member_bytes.replace(
+                    header_relationship_type,
+                    thumbnail_relationship_type,
+                    1,
+                )
+            target_archive.writestr(member, member_bytes)
+    return _relabel_docx_part_as_binary(output.getvalue(), "word/header1.xml")
+
+
+def _docx_with_relabeled_related_xml(part_kind: str, payload_kind: str) -> bytes:
+    if part_kind == "header":
+        return _docx_with_relabeled_header_xml(payload_kind)
+    if part_kind != "footnotes":
+        raise ValueError("unknown relabeled related part")
+    source = _docx_with_wrapped_footnote_text(
+        payload_kind if payload_kind != "w:drawing" else "w:fldSimple",
+        "Relabeled footnote text must not disappear.",
+        with_drawing=payload_kind == "w:drawing",
+    )
+    return _relabel_docx_part_as_binary(source, "word/footnotes.xml")
+
+
+def _docx_with_relabeled_header_visual_and_malformed_relationships() -> bytes:
+    source = _docx_with_relabeled_header_xml("w:drawing")
+    output = io.BytesIO()
+    with (
+        zipfile.ZipFile(io.BytesIO(source)) as source_archive,
+        zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as target_archive,
+    ):
+        for member in source_archive.infolist():
+            member_bytes = source_archive.read(member.filename)
+            if member.filename == "word/_rels/document.xml.rels":
+                member_bytes = member_bytes.replace(
+                    b"<Relationships ",
+                    b'<Relationships hostile="1" ',
+                    1,
+                )
+            target_archive.writestr(member, member_bytes)
+    return output.getvalue()
+
+
+def _docx_with_visible_header_text() -> bytes:
+    document = Document()
+    document.add_paragraph("Retained body text.")
+    document.sections[0].header.paragraphs[0].text = (
+        "Visible header text must not disappear."
+    )
+    return _save_docx(document)
+
+
+def _docx_with_visible_footnote_text() -> bytes:
+    document = Document()
+    document.add_paragraph("Retained body text.")
+    footnotes_xml = (
+        b'<w:footnotes xmlns:w="http://schemas.openxmlformats.org/'
+        b'wordprocessingml/2006/main">'
+        b'<w:footnote w:id="1"><w:p><w:r>'
+        b"<w:t>Visible footnote text must not disappear.</w:t>"
+        b"</w:r></w:p></w:footnote></w:footnotes>"
+    )
+    footnotes_part = Part(
+        PackURI("/word/footnotes.xml"),
+        CONTENT_TYPE.WML_FOOTNOTES,
+        footnotes_xml,
+        document.part.package,
+    )
+    document.part.relate_to(footnotes_part, RELATIONSHIP_TYPE.FOOTNOTES)
+    return _save_docx(document)
+
+
+def _docx_with_empty_comments_before_visible_footnotes() -> bytes:
+    document = Document()
+    document.add_paragraph("Retained body text.")
+    comments_part = Part(
+        PackURI("/word/comments.xml"),
+        CONTENT_TYPE.WML_COMMENTS,
+        (
+            b'<w:comments xmlns:w="http://schemas.openxmlformats.org/'
+            b'wordprocessingml/2006/main"/>'
+        ),
+        document.part.package,
+    )
+    footnotes_part = Part(
+        PackURI("/word/footnotes.xml"),
+        CONTENT_TYPE.WML_FOOTNOTES,
+        (
+            b'<w:footnotes xmlns:w="http://schemas.openxmlformats.org/'
+            b'wordprocessingml/2006/main"><w:footnote w:id="1"><w:p><w:r>'
+            b"<w:t>Later footnote text must not disappear.</w:t>"
+            b"</w:r></w:p></w:footnote></w:footnotes>"
+        ),
+        document.part.package,
+    )
+    document.part.relate_to(comments_part, RELATIONSHIP_TYPE.COMMENTS)
+    document.part.relate_to(footnotes_part, RELATIONSHIP_TYPE.FOOTNOTES)
+    source = _save_docx(document)
+    output = io.BytesIO()
+    with (
+        zipfile.ZipFile(io.BytesIO(source)) as source_archive,
+        zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as target_archive,
+    ):
+        members = source_archive.infolist()
+        ordered_members = sorted(
+            members,
+            key=lambda member: (
+                0
+                if member.filename == "word/comments.xml"
+                else 1
+                if member.filename == "word/footnotes.xml"
+                else -1
+            ),
+        )
+        assert [
+            member.filename
+            for member in ordered_members
+            if member.filename in {"word/comments.xml", "word/footnotes.xml"}
+        ] == ["word/comments.xml", "word/footnotes.xml"]
+        for member in ordered_members:
+            member_bytes = source_archive.read(member)
+            if member.filename == "word/_rels/document.xml.rels":
+                member_bytes = member_bytes.replace(
+                    b'Target="../customXml/item1.xml"',
+                    b'Target="/customXml/item1.xml"',
+                )
+            target_archive.writestr(member, member_bytes)
+    return output.getvalue()
+
+
+def _docx_with_relationship_target_escaping_package_root() -> bytes:
+    document = Document()
+    document.add_paragraph("Retained body text.")
+    source = _save_unmodified_docx(document)
+    output = io.BytesIO()
+    replaced_target = False
+    with (
+        zipfile.ZipFile(io.BytesIO(source)) as source_archive,
+        zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as target_archive,
+    ):
+        for member in source_archive.infolist():
+            member_bytes = source_archive.read(member)
+            if member.filename == "word/_rels/document.xml.rels":
+                expected = b'Target="../customXml/item1.xml"'
+                assert expected in member_bytes
+                member_bytes = member_bytes.replace(
+                    expected,
+                    b'Target="../../customXml/item1.xml"',
+                    1,
+                )
+                replaced_target = True
+            target_archive.writestr(member, member_bytes)
+    assert replaced_target
+    return output.getvalue()
+
+
+def _docx_with_malformed_footnotes_xml(*, with_header_drawing: bool) -> bytes:
+    document = Document()
+    document.add_paragraph("Retained body text.")
+    if with_header_drawing:
+        document.sections[0].header.paragraphs[0].add_run()._r.append(
+            OxmlElement("w:drawing")
+        )
+    footnotes_part = Part(
+        PackURI("/word/footnotes.xml"),
+        "application/xml",
+        b"<w:footnotes>",
+        document.part.package,
+    )
+    document.part.relate_to(footnotes_part, RELATIONSHIP_TYPE.FOOTNOTES)
+    return _save_docx(document)
+
+
+def _docx_with_malformed_part_media_type() -> bytes:
+    document = Document()
+    document.add_paragraph("Retained body text.")
+    generic_part = Part(
+        PackURI("/word/generic.xml"),
+        "application/xml; charset",
+        b"<generic/>",
+        document.part.package,
+    )
+    document.part.relate_to(generic_part, RELATIONSHIP_TYPE.CUSTOM_XML)
+    return _save_docx(document)
+
+
+def _docx_with_binary_ole_part(*, content_type: str) -> bytes:
+    document = Document()
+    document.add_paragraph("Retained body text.")
+    binary_part = Part(
+        PackURI("/word/embeddings/object1.bin"),
+        content_type,
+        b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1ContextEngine OLE fixture",
+        document.part.package,
+    )
+    document.part.relate_to(binary_part, RELATIONSHIP_TYPE.OLE_OBJECT)
+    return _save_docx(document)
+
+
+def _docx_with_ole_relationship(target_kind: str) -> bytes:
+    document = Document()
+    document.add_paragraph("Retained body text.")
+    source = _save_docx(document)
+    output = io.BytesIO()
+    custom_xml_relationship_type = RELATIONSHIP_TYPE.CUSTOM_XML.encode()
+    ole_relationship_type = RELATIONSHIP_TYPE.OLE_OBJECT.encode()
+    with (
+        zipfile.ZipFile(io.BytesIO(source)) as source_archive,
+        zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as target_archive,
+    ):
+        for member in source_archive.infolist():
+            member_bytes = source_archive.read(member.filename)
+            if member.filename == "word/_rels/document.xml.rels":
+                if target_kind == "existing-xml":
+                    assert custom_xml_relationship_type in member_bytes
+                    member_bytes = member_bytes.replace(
+                        custom_xml_relationship_type,
+                        ole_relationship_type,
+                        1,
+                    )
+                elif target_kind == "external":
+                    relationship = (
+                        b'<Relationship Id="rIdExternalOle" Type="'
+                        + ole_relationship_type
+                        + b'" Target="https://example.invalid/object" '
+                        b'TargetMode="External"/>'
+                    )
+                    member_bytes = member_bytes.replace(
+                        b"</Relationships>",
+                        relationship + b"</Relationships>",
+                    )
+                else:
+                    raise ValueError("unknown OLE relationship target kind")
+            target_archive.writestr(member, member_bytes)
+    return output.getvalue()
+
+
+def _docx_with_aliased_root_relationship_target(target: str) -> bytes:
+    document = Document()
+    document.add_paragraph("Retained body text.")
+    source = _save_docx(document)
+    canonical_target = (
+        "word/document.xml"
+        if target.startswith("word/")
+        else "docProps/thumbnail.jpeg"
+    )
+    expected = f'Target="{canonical_target}"'.encode()
+    replacement = f'Target="{target}"'.encode()
+    output = io.BytesIO()
+    with (
+        zipfile.ZipFile(io.BytesIO(source)) as source_archive,
+        zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as target_archive,
+    ):
+        for member in source_archive.infolist():
+            member_bytes = source_archive.read(member.filename)
+            if member.filename == "_rels/.rels":
+                assert expected in member_bytes
+                member_bytes = member_bytes.replace(expected, replacement, 1)
+            target_archive.writestr(member, member_bytes)
+    return output.getvalue()
+
+
+def _docx_with_invalid_thumbnail(thumbnail_bytes: bytes) -> bytes:
+    document = Document()
+    document.add_paragraph("Retained body text.")
+    source = _save_docx(document)
+    output = io.BytesIO()
+    replaced_thumbnail = False
+    with (
+        zipfile.ZipFile(io.BytesIO(source)) as source_archive,
+        zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as target_archive,
+    ):
+        for member in source_archive.infolist():
+            member_bytes = source_archive.read(member.filename)
+            if member.filename == "docProps/thumbnail.jpeg":
+                member_bytes = thumbnail_bytes
+                replaced_thumbnail = True
+            target_archive.writestr(member, member_bytes)
+    assert replaced_thumbnail
+    return output.getvalue()
+
+
+def _docx_with_external_thumbnail_relationship() -> bytes:
+    document = Document()
+    document.add_paragraph("Retained body text.")
+    source = _save_docx(document)
+    output = io.BytesIO()
+    with (
+        zipfile.ZipFile(io.BytesIO(source)) as source_archive,
+        zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as target_archive,
+    ):
+        for member in source_archive.infolist():
+            if member.filename == "docProps/thumbnail.jpeg":
+                continue
+            member_bytes = source_archive.read(member.filename)
+            if member.filename == "_rels/.rels":
+                member_bytes = member_bytes.replace(
+                    b'Target="docProps/thumbnail.jpeg"',
+                    b'Target="https://example.invalid/thumbnail.jpeg" '
+                    b'TargetMode="External"',
+                )
+            target_archive.writestr(member, member_bytes)
+    return output.getvalue()
+
+
+def _docx_with_external_hyperlink_relationship(target: str) -> bytes:
+    document = Document()
+    document.add_paragraph("Retained body text.")
+    source = _save_docx(document)
+    relationship = (
+        b'<Relationship Id="rIdExternalHyperlink" Type="'
+        + RELATIONSHIP_TYPE.HYPERLINK.encode()
+        + b'" Target="'
+        + target.encode()
+        + b'" TargetMode="External"/>'
+    )
+    output = io.BytesIO()
+    with (
+        zipfile.ZipFile(io.BytesIO(source)) as source_archive,
+        zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as target_archive,
+    ):
+        for member in source_archive.infolist():
+            member_bytes = source_archive.read(member.filename)
+            if member.filename == "word/_rels/document.xml.rels":
+                assert b"</Relationships>" in member_bytes
+                member_bytes = member_bytes.replace(
+                    b"</Relationships>",
+                    relationship + b"</Relationships>",
+                )
+            target_archive.writestr(member, member_bytes)
+    return output.getvalue()
+
+
+def _single_component_jpeg_thumbnail(
+    *, width: int, height: int, scan_component_id: int = 1
+) -> bytes:
+    return (
+        b"\xff\xd8"
+        b"\xff\xc0\x00\x0b\x08"
+        + height.to_bytes(2, "big")
+        + width.to_bytes(2, "big")
+        + b"\x01\x01\x11\x00"
+        + b"\xff\xda\x00\x08\x01"
+        + bytes((scan_component_id,))
+        + b"\x00\x00\x3f\x00"
+        + b"\xff\xd9"
+    )
+
+
 def _docx_with_unsupported_drawing(*, in_header: bool) -> bytes:
     document = Document()
     document.add_paragraph("Retained body text.")
@@ -139,14 +667,676 @@ def _docx_with_nested_table() -> bytes:
     return _save_docx(document)
 
 
+def _docx_with_boundary_whitespace() -> bytes:
+    document = Document()
+    document.add_paragraph("  leading and trailing  ")
+    document.add_table(rows=1, cols=1).cell(0, 0).text = "  cell boundary  "
+    return _save_docx(document)
+
+
+def _docx_with_horizontally_merged_cells() -> bytes:
+    document = Document()
+    table = document.add_table(rows=1, cols=2)
+    table.cell(0, 0).merge(table.cell(0, 1)).text = "Merged"
+    return _save_docx(document)
+
+
+def _docx_with_office_math() -> bytes:
+    document = Document()
+    document.add_paragraph("Retained body text.")
+    paragraph = document.add_paragraph()
+    math = OxmlElement("m:oMath")
+    run = OxmlElement("m:r")
+    text = OxmlElement("m:t")
+    text.text = "Office Math must not disappear."
+    run.append(text)
+    math.append(run)
+    paragraph._p.append(math)
+    return _save_docx(document)
+
+
+def _docx_with_misplaced_footnote_reference() -> bytes:
+    document = Document()
+    document.add_paragraph("Retained body text.")
+    document.add_paragraph()._p.append(OxmlElement("w:footnoteRef"))
+    return _save_docx(document)
+
+
+def _docx_with_property_subtree_payload(payload_kind: str) -> bytes:
+    document = Document()
+    paragraph = document.add_paragraph("Retained body text.")
+    properties = paragraph._p.get_or_add_pPr()
+    if payload_kind == "footnote-reference":
+        properties.append(OxmlElement("w:footnoteRef"))
+    elif payload_kind == "simple-field":
+        properties.append(OxmlElement("w:fldSimple"))
+    elif payload_kind == "character-data":
+        properties.text = "Property character data must not disappear."
+    else:
+        raise ValueError("unknown property-subtree test payload")
+    return _save_docx(document)
+
+
+def _docx_with_misplaced_table_structure(node_tag: str) -> bytes:
+    document = Document()
+    table = document.add_table(rows=1, cols=1)
+    table.cell(0, 0).text = "Represented cell"
+    properties = table._tbl.tblPr
+    if node_tag == "w:tr":
+        row = OxmlElement("w:tr")
+        properties.append(row)
+        parent = row
+    elif node_tag == "w:tc":
+        parent = properties
+    else:
+        raise ValueError("unknown misplaced table test node")
+    cell = OxmlElement("w:tc")
+    paragraph = OxmlElement("w:p")
+    run = OxmlElement("w:r")
+    text = OxmlElement("w:t")
+    text.text = "Misplaced table content must not disappear."
+    run.append(text)
+    paragraph.append(run)
+    cell.append(paragraph)
+    parent.append(cell)
+    return _save_docx(document)
+
+
+def _docx_with_nonbody_office_math() -> bytes:
+    document = Document()
+    document.add_paragraph("Retained body text.")
+    paragraph = document.sections[0].header.paragraphs[0]
+    math = OxmlElement("m:oMath")
+    run = OxmlElement("m:r")
+    text = OxmlElement("m:t")
+    text.text = "Header Office Math must not disappear."
+    run.append(text)
+    math.append(run)
+    paragraph._p.append(math)
+    return _save_docx(document)
+
+
+def _docx_with_unadmitted_structural_character_data() -> bytes:
+    document = Document()
+    document.add_paragraph("Retained body text.")
+    paragraph = document.add_paragraph()._p
+    paragraph.append(OxmlElement("w:pPr"))
+    paragraph[0].tail = "Direct paragraph data must not disappear."
+    return _save_docx(document)
+
+
+def _docx_with_nested_payload_in_run_leaf() -> bytes:
+    document = Document()
+    document.add_paragraph("Retained body text.")
+    text = OxmlElement("w:t")
+    text.text = "Represented text"
+    text.append(OxmlElement("w:footnoteRef"))
+    document.add_paragraph().add_run()._r.append(text)
+    return _save_docx(document)
+
+
+def _docx_with_document_sibling_office_math() -> bytes:
+    document = Document()
+    document.add_paragraph("Retained body text.")
+    math = OxmlElement("m:oMath")
+    run = OxmlElement("m:r")
+    text = OxmlElement("m:t")
+    text.text = "Document-level Office Math must not disappear."
+    run.append(text)
+    math.append(run)
+    document.element.insert(0, math)
+    return _save_docx(document)
+
+
+def _docx_with_orphan_xml_members(*members: tuple[str, bytes]) -> bytes:
+    document = Document()
+    document.add_paragraph("Retained body text.")
+    source = _save_docx(document)
+    output = io.BytesIO()
+    with (
+        zipfile.ZipFile(io.BytesIO(source)) as source_archive,
+        zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as target_archive,
+    ):
+        for member in source_archive.infolist():
+            target_archive.writestr(member, source_archive.read(member.filename))
+        for member_name, member_bytes in members:
+            target_archive.writestr(member_name, member_bytes)
+    return output.getvalue()
+
+
+def _docx_with_orphan_visible_text() -> bytes:
+    return _docx_with_orphan_xml_members(
+        (
+            "word/orphan-visible.xml",
+            b'<w:orphan xmlns:w="http://schemas.openxmlformats.org/'
+            b'wordprocessingml/2006/main"><w:p><w:r>'
+            b"<w:t>Orphan text must not disappear.</w:t>"
+            b"</w:r></w:p></w:orphan>",
+        )
+    )
+
+
+def _docx_with_orphan_drawing_and_malformed_xml() -> bytes:
+    return _docx_with_orphan_xml_members(
+        (
+            "word/orphan-drawing.xml",
+            b'<w:orphan xmlns:w="http://schemas.openxmlformats.org/'
+            b'wordprocessingml/2006/main"><w:drawing/></w:orphan>',
+        ),
+        ("word/orphan-malformed.xml", b"<w:orphan>"),
+    )
+
+
+def _docx_with_orphan_malformed_xml() -> bytes:
+    return _docx_with_orphan_xml_members(
+        ("word/orphan-malformed.xml", b"<w:orphan>")
+    )
+
+
+def _docx_with_archive_name_collision(*, case_varied: bool) -> bytes:
+    document = Document()
+    document.add_paragraph("Retained body text.")
+    source = _save_docx(document)
+    with zipfile.ZipFile(io.BytesIO(source)) as archive:
+        document_xml = archive.read("word/document.xml")
+    duplicate_name = "word/DOCUMENT.XML" if case_varied else "word/document.xml"
+    output = io.BytesIO()
+    with (
+        zipfile.ZipFile(io.BytesIO(source)) as source_archive,
+        zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as target_archive,
+    ):
+        for member in source_archive.infolist():
+            target_archive.writestr(member, source_archive.read(member.filename))
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            target_archive.writestr(duplicate_name, document_xml)
+    return output.getvalue()
+
+
+def _docx_with_manifest_key_collision(*, declaration_kind: str) -> bytes:
+    document = Document()
+    document.add_paragraph("Retained body text.")
+    source = _save_docx(document)
+    with zipfile.ZipFile(io.BytesIO(source)) as archive:
+        manifest = archive.read("[Content_Types].xml")
+    if declaration_kind == "default":
+        declaration = b'<Default Extension="XML" ContentType="application/xml"/>'
+    elif declaration_kind == "override":
+        declaration = (
+            b'<Override PartName="/WORD/DOCUMENT.XML" '
+            b'ContentType="application/xml"/>'
+        )
+    else:
+        raise ValueError("unknown manifest collision kind")
+    replaced_manifest = manifest.replace(b"</Types>", declaration + b"</Types>")
+    output = io.BytesIO()
+    with (
+        zipfile.ZipFile(io.BytesIO(source)) as source_archive,
+        zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as target_archive,
+    ):
+        for member in source_archive.infolist():
+            member_bytes = source_archive.read(member.filename)
+            if member.filename == "[Content_Types].xml":
+                member_bytes = replaced_manifest
+            target_archive.writestr(member, member_bytes)
+    return output.getvalue()
+
+
+def _docx_with_malformed_content_type_manifest(
+    manifest_kind: str, *, with_drawing: bool = False
+) -> bytes:
+    document = Document()
+    paragraph = document.add_paragraph("Retained body text.")
+    if with_drawing:
+        paragraph.add_run()._r.append(OxmlElement("w:drawing"))
+    source = _save_docx(document)
+    output = io.BytesIO()
+    with (
+        zipfile.ZipFile(io.BytesIO(source)) as source_archive,
+        zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as target_archive,
+    ):
+        for member in source_archive.infolist():
+            member_bytes = source_archive.read(member.filename)
+            if member.filename == "[Content_Types].xml":
+                if manifest_kind == "root-unknown-attribute":
+                    member_bytes = member_bytes.replace(
+                        b"<Types xmlns=",
+                        b'<Types hostile="1" xmlns=',
+                        1,
+                    )
+                elif manifest_kind == "root-character-data":
+                    member_bytes = member_bytes.replace(b'">', b'">payload', 1)
+                elif manifest_kind == "default-unknown-attribute":
+                    member_bytes = member_bytes.replace(
+                        b"<Default ",
+                        b'<Default hostile="1" ',
+                        1,
+                    )
+                elif manifest_kind == "override-unknown-attribute":
+                    member_bytes = member_bytes.replace(
+                        b"<Override ",
+                        b'<Override hostile="1" ',
+                        1,
+                    )
+                elif manifest_kind == "declaration-character-data":
+                    member_bytes = member_bytes.replace(
+                        b"/>",
+                        b">payload</Default>",
+                        1,
+                    )
+                elif manifest_kind == "nested-foreign-payload":
+                    member_bytes = member_bytes.replace(
+                        b"/>",
+                        b'><hostile:payload xmlns:hostile="urn:context-engine:'
+                        b'hostile">payload</hostile:payload></Default>',
+                        1,
+                    )
+                elif manifest_kind == "unparseable":
+                    member_bytes = b"<Types"
+                else:
+                    raise ValueError("unknown malformed manifest kind")
+            target_archive.writestr(member, member_bytes)
+    return output.getvalue()
+
+
+def _docx_with_unparseable_manifest_and_unsafe_raw_visual_member() -> bytes:
+    document = Document()
+    document.add_paragraph("Retained body text.")
+    source = _save_docx(document)
+    raw_visual_xml = (
+        b'<w:document xmlns:w="http://schemas.openxmlformats.org/'
+        b'wordprocessingml/2006/main"><w:drawing/></w:document>'
+    )
+    output = io.BytesIO()
+    with (
+        zipfile.ZipFile(io.BytesIO(source)) as source_archive,
+        zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as target_archive,
+    ):
+        for member in source_archive.infolist():
+            member_bytes = source_archive.read(member.filename)
+            if member.filename == "[Content_Types].xml":
+                member_bytes = b"<Types"
+            target_archive.writestr(member, member_bytes)
+        target_archive.writestr("word/../raw-visual.xml", raw_visual_xml)
+    return output.getvalue()
+
+
+def _docx_with_malformed_relationships_and_unsafe_raw_visual_member() -> bytes:
+    document = Document()
+    document.add_paragraph("Retained body text.")
+    source = _save_docx(document)
+    raw_visual_xml = (
+        b'<w:document xmlns:w="http://schemas.openxmlformats.org/'
+        b'wordprocessingml/2006/main"><w:drawing/></w:document>'
+    )
+    output = io.BytesIO()
+    with (
+        zipfile.ZipFile(io.BytesIO(source)) as source_archive,
+        zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as target_archive,
+    ):
+        for member in source_archive.infolist():
+            member_bytes = source_archive.read(member.filename)
+            if member.filename == "word/_rels/document.xml.rels":
+                member_bytes = member_bytes.replace(
+                    b"<Relationships ",
+                    b'<Relationships hostile="1" ',
+                    1,
+                )
+            target_archive.writestr(member, member_bytes)
+        target_archive.writestr("word/../raw-visual.xml", raw_visual_xml)
+    return output.getvalue()
+
+
+def _docx_with_malformed_relationships_and_duplicate_unsafe_raw_visual_member(
+) -> bytes:
+    document = Document()
+    document.add_paragraph("Retained body text.")
+    source = _save_docx(document)
+    duplicate_name = "word/../duplicate-visual.xml"
+    benign_xml = (
+        b'<w:orphan xmlns:w="http://schemas.openxmlformats.org/'
+        b'wordprocessingml/2006/main"/>'
+    )
+    visual_xml = (
+        b'<w:orphan xmlns:w="http://schemas.openxmlformats.org/'
+        b'wordprocessingml/2006/main"><w:drawing/></w:orphan>'
+    )
+    output = io.BytesIO()
+    with (
+        zipfile.ZipFile(io.BytesIO(source)) as source_archive,
+        zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as target_archive,
+    ):
+        for member in source_archive.infolist():
+            member_bytes = source_archive.read(member.filename)
+            if member.filename == "word/_rels/document.xml.rels":
+                member_bytes = member_bytes.replace(
+                    b"<Relationships ",
+                    b'<Relationships hostile="1" ',
+                    1,
+                )
+            target_archive.writestr(member, member_bytes)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            target_archive.writestr(duplicate_name, benign_xml)
+            target_archive.writestr(duplicate_name, visual_xml)
+    return output.getvalue()
+
+
+def _docx_with_unused_malformed_content_type_declaration(
+    declaration_kind: str, *, with_drawing: bool = False
+) -> bytes:
+    document = Document()
+    paragraph = document.add_paragraph("Retained body text.")
+    if with_drawing:
+        paragraph.add_run()._r.append(OxmlElement("w:drawing"))
+    if declaration_kind == "media-type":
+        declaration = (
+            b'<Default Extension="unused" ContentType="application/xml; charset"/>'
+        )
+    elif declaration_kind == "media-type-non-ascii":
+        declaration = (
+            '<Default Extension="unused" ContentType="application/é"/>'.encode()
+        )
+    elif declaration_kind == "media-type-emoji":
+        declaration = (
+            '<Default Extension="unused" ContentType="application/😀"/>'.encode()
+        )
+    elif declaration_kind == "media-type-wildcard":
+        declaration = b'<Default Extension="unused" ContentType="*/*"/>'
+    elif declaration_kind == "media-type-slash-whitespace":
+        declaration = b'<Default Extension="unused" ContentType="application /xml"/>'
+    elif declaration_kind == "extension":
+        declaration = (
+            b'<Default Extension="unused extension" ContentType="application/xml"/>'
+        )
+    elif declaration_kind == "extension-dot":
+        declaration = b'<Default Extension="." ContentType="application/xml"/>'
+    elif declaration_kind == "extension-dot-dot":
+        declaration = b'<Default Extension=".." ContentType="application/xml"/>'
+    else:
+        raise ValueError("unknown malformed declaration kind")
+    source = _save_docx(document)
+    output = io.BytesIO()
+    with (
+        zipfile.ZipFile(io.BytesIO(source)) as source_archive,
+        zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as target_archive,
+    ):
+        for member in source_archive.infolist():
+            member_bytes = source_archive.read(member.filename)
+            if member.filename == "[Content_Types].xml":
+                member_bytes = member_bytes.replace(
+                    b"</Types>", declaration + b"</Types>"
+                )
+            target_archive.writestr(member, member_bytes)
+    return output.getvalue()
+
+
+def _docx_with_raw_visual_and_malformed_related_xml() -> bytes:
+    document = Document()
+    document.add_paragraph("Retained body text.").add_run()._r.append(
+        OxmlElement("w:drawing")
+    )
+    source = _save_docx(document)
+    output = io.BytesIO()
+    with (
+        zipfile.ZipFile(io.BytesIO(source)) as source_archive,
+        zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as target_archive,
+    ):
+        for member in source_archive.infolist():
+            member_bytes = source_archive.read(member.filename)
+            if member.filename == "word/styles.xml":
+                member_bytes = b"<w:styles>"
+            target_archive.writestr(member, member_bytes)
+    return output.getvalue()
+
+
+def _docx_with_unknown_related_xml() -> bytes:
+    document = Document()
+    document.add_paragraph("Retained body text.")
+    custom_part = Part(
+        PackURI("/word/customData.xml"),
+        "application/xml",
+        b'<customData xmlns="urn:example:unknown">'
+        b"Unknown related XML must not disappear."
+        b"</customData>",
+        document.part.package,
+    )
+    document.part.relate_to(custom_part, RELATIONSHIP_TYPE.CUSTOM_XML)
+    return _save_docx(document)
+
+
+def _docx_with_misordered_table_structure(level: str) -> bytes:
+    document = Document()
+    table = document.add_table(rows=1, cols=1)
+    table.cell(0, 0).text = "Represented cell"
+    if level == "table":
+        properties = table._tbl.tblPr
+        table._tbl.remove(properties)
+        table._tbl.append(properties)
+    elif level == "row":
+        row = table.rows[0]._tr
+        properties = OxmlElement("w:trPr")
+        row.append(properties)
+    elif level == "cell":
+        cell = table.cell(0, 0)._tc
+        properties = cell.tcPr
+        cell.remove(properties)
+        cell.append(properties)
+    else:
+        raise ValueError("unknown table-order test level")
+    return _save_docx(document)
+
+
+def _docx_with_duplicate_table_structure(structure_tag: str) -> bytes:
+    document = Document()
+    table = document.add_table(rows=1, cols=1)
+    table.cell(0, 0).text = "Represented cell"
+    if structure_tag == "w:tblGrid":
+        table._tbl.insert(2, OxmlElement(structure_tag))
+    elif structure_tag == "w:trPr":
+        row = table.rows[0]._tr
+        row.insert(0, OxmlElement(structure_tag))
+        row.insert(1, OxmlElement(structure_tag))
+    elif structure_tag == "w:tcPr":
+        cell = table.cell(0, 0)._tc
+        cell.insert(1, OxmlElement(structure_tag))
+    else:
+        raise ValueError("unknown duplicate table structure")
+    return _save_docx(document)
+
+
+def _docx_with_legacy_horizontal_merge() -> bytes:
+    document = Document()
+    table = document.add_table(rows=1, cols=1)
+    table.cell(0, 0).text = "Merged semantics"
+    table.cell(0, 0)._tc.get_or_add_tcPr().append(OxmlElement("w:hMerge"))
+    return _save_docx(document)
+
+
+def _docx_with_unsafe_manifest_part_name() -> bytes:
+    document = Document()
+    document.add_paragraph("Retained body text.")
+    source = _save_docx(document)
+    output = io.BytesIO()
+    declaration = (
+        b'<Override PartName="/word/%2e%2e/unrepresented.xml" '
+        b'ContentType="application/xml"/>'
+    )
+    with (
+        zipfile.ZipFile(io.BytesIO(source)) as source_archive,
+        zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as target_archive,
+    ):
+        for member in source_archive.infolist():
+            member_bytes = source_archive.read(member.filename)
+            if member.filename == "[Content_Types].xml":
+                member_bytes = member_bytes.replace(
+                    b"</Types>", declaration + b"</Types>"
+                )
+            target_archive.writestr(member, member_bytes)
+    return output.getvalue()
+
+
+def _docx_with_unsafe_archive_member_name() -> bytes:
+    document = Document()
+    document.add_paragraph("Retained body text.")
+    source = _save_docx(document)
+    output = io.BytesIO()
+    declaration = (
+        b'<Override PartName="/word/../unrepresented.bin" '
+        b'ContentType="application/octet-stream"/>'
+    )
+    with (
+        zipfile.ZipFile(io.BytesIO(source)) as source_archive,
+        zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as target_archive,
+    ):
+        for member in source_archive.infolist():
+            member_bytes = source_archive.read(member.filename)
+            if member.filename == "[Content_Types].xml":
+                member_bytes = member_bytes.replace(
+                    b"</Types>", declaration + b"</Types>"
+                )
+            target_archive.writestr(member, member_bytes)
+        target_archive.writestr("word/../unrepresented.bin", b"binary")
+    return output.getvalue()
+
+
+def _docx_with_orphan_binary_member() -> bytes:
+    return _docx_with_orphan_xml_members(
+        ("word/orphan.bin", b"unrepresented binary bytes")
+    )
+
+
+def _docx_without_root_document_relationship() -> bytes:
+    document = Document()
+    document.add_paragraph("Retained body text.")
+    source = _save_docx(document)
+    output = io.BytesIO()
+    with (
+        zipfile.ZipFile(io.BytesIO(source)) as source_archive,
+        zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as target_archive,
+    ):
+        for member in source_archive.infolist():
+            member_bytes = source_archive.read(member.filename)
+            if member.filename == "_rels/.rels":
+                member_bytes = (
+                    b'<Relationships xmlns="http://schemas.openxmlformats.org/'
+                    b'package/2006/relationships"/>'
+                )
+            target_archive.writestr(member, member_bytes)
+    return output.getvalue()
+
+
+def _docx_with_hostile_root_document_relationship(relationship_kind: str) -> bytes:
+    document = Document()
+    document.add_paragraph("Retained body text.")
+    source = _save_docx(document)
+    office_document_type = (
+        b"http://schemas.openxmlformats.org/officeDocument/2006/"
+        b"relationships/officeDocument"
+    )
+    expected_relationship = (
+        b'<Relationship Id="rId1" Type="'
+        + office_document_type
+        + b'" Target="word/document.xml"/>'
+    )
+    if relationship_kind == "wrong-type":
+        hostile_relationship = expected_relationship.replace(
+            office_document_type,
+            b"urn:context-engine:not-office-document",
+        )
+    elif relationship_kind == "missing-type":
+        hostile_relationship = expected_relationship.replace(
+            b' Type="' + office_document_type + b'"',
+            b"",
+        )
+    elif relationship_kind == "missing-id":
+        hostile_relationship = expected_relationship.replace(b' Id="rId1"', b"")
+    elif relationship_kind == "duplicate-id":
+        hostile_relationship = expected_relationship.replace(b'rId1', b'rId3')
+    elif relationship_kind == "invalid-target-mode":
+        hostile_relationship = expected_relationship.replace(
+            b' Target="word/document.xml"',
+            b' Target="word/document.xml" TargetMode="Neither"',
+        )
+    else:
+        raise ValueError("unknown hostile relationship kind")
+
+    output = io.BytesIO()
+    with (
+        zipfile.ZipFile(io.BytesIO(source)) as source_archive,
+        zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as target_archive,
+    ):
+        for member in source_archive.infolist():
+            member_bytes = source_archive.read(member.filename)
+            if member.filename == "_rels/.rels":
+                assert expected_relationship in member_bytes
+                member_bytes = member_bytes.replace(
+                    expected_relationship,
+                    hostile_relationship,
+                )
+            target_archive.writestr(member, member_bytes)
+    return output.getvalue()
+
+
+def _docx_with_text_in_known_inert_member() -> bytes:
+    document = Document()
+    document.add_paragraph("Retained body text.")
+    source = _save_docx(document)
+    payload = (
+        b'<hostile:payload xmlns:hostile="urn:context-engine:hostile">'
+        b"Known-inert payload text must not disappear."
+        b"</hostile:payload>"
+    )
+    output = io.BytesIO()
+    with (
+        zipfile.ZipFile(io.BytesIO(source)) as source_archive,
+        zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as target_archive,
+    ):
+        for member in source_archive.infolist():
+            member_bytes = source_archive.read(member.filename)
+            if member.filename == "word/styles.xml":
+                assert b"</w:styles>" in member_bytes
+                member_bytes = member_bytes.replace(
+                    b"</w:styles>",
+                    payload + b"</w:styles>",
+                )
+            target_archive.writestr(member, member_bytes)
+    return output.getvalue()
+
+
+def _docx_with_aliased_manifest_part_name(alias: str) -> bytes:
+    document = Document()
+    document.add_paragraph("Retained body text.")
+    source = _save_docx(document)
+    expected = b'PartName="/word/document.xml"'
+    replacement = f'PartName="{alias}"'.encode()
+    output = io.BytesIO()
+    with (
+        zipfile.ZipFile(io.BytesIO(source)) as source_archive,
+        zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as target_archive,
+    ):
+        for member in source_archive.infolist():
+            member_bytes = source_archive.read(member.filename)
+            if member.filename == "[Content_Types].xml":
+                assert expected in member_bytes
+                member_bytes = member_bytes.replace(expected, replacement)
+            target_archive.writestr(member, member_bytes)
+    return output.getvalue()
+
+
+def _docx_with_unknown_main_document_sibling() -> bytes:
+    document = Document()
+    document.add_paragraph("Retained body text.")
+    document.element.insert(0, OxmlElement("w:unknown"))
+    return _save_docx(document)
+
+
 def _docx_fixture_with_blank_source_block() -> bytes:
     document = Document()
     document.add_heading("Architecture", level=1)
     document.add_paragraph("")
     document.add_paragraph("After blank source block.")
-    output = io.BytesIO()
-    document.save(output)
-    return output.getvalue()
+    return _save_docx(document)
 
 
 def _pdf_outline_fixture() -> bytes:
@@ -327,6 +1517,825 @@ def test_docx_refuses_source_content_it_cannot_preserve(
 
     assert type(outcome) is DocumentCompilationFailure
     assert outcome.code is DocumentCompilationFailureCode.INVALID_ARTIFACT
+
+
+@pytest.mark.parametrize(
+    ("wrapper_tag", "hidden_text"),
+    (
+        ("w:fldSimple", "Simple field text must not disappear."),
+        ("w:smartTag", "Smart tag text must not disappear."),
+    ),
+    ids=("simple-field", "smart-tag"),
+)
+@pytest.mark.parametrize("in_header", (False, True), ids=("body", "header"))
+def test_docx_wrapped_text_refuses_at_parser_and_runner_seams(
+    wrapper_tag: str,
+    hidden_text: str,
+    in_header: bool,
+) -> None:
+    source = _docx_with_wrapped_text(
+        wrapper_tag,
+        hidden_text,
+        in_header=in_header,
+    )
+    outcomes = _compile_docx_at_public_seams(source)
+
+    for outcome in outcomes:
+        assert type(outcome) is DocumentCompilationFailure
+        assert outcome.code is DocumentCompilationFailureCode.INVALID_ARTIFACT
+
+
+@pytest.mark.parametrize(
+    ("wrapper_tag", "hidden_text"),
+    (
+        ("w:fldSimple", "Footnote field text must not disappear."),
+        ("w:smartTag", "Footnote smart tag text must not disappear."),
+    ),
+    ids=("simple-field", "smart-tag"),
+)
+def test_docx_wrapped_footnote_text_refuses_at_parser_and_runner_seams(
+    wrapper_tag: str,
+    hidden_text: str,
+) -> None:
+    source = _docx_with_wrapped_footnote_text(wrapper_tag, hidden_text)
+    outcomes = _compile_docx_at_public_seams(source)
+
+    for outcome in outcomes:
+        assert type(outcome) is DocumentCompilationFailure
+        assert outcome.code is DocumentCompilationFailureCode.INVALID_ARTIFACT
+
+
+@pytest.mark.parametrize("part_kind", ("header", "footnotes"))
+@pytest.mark.parametrize(
+    "payload_kind",
+    ("w:fldSimple", "w:smartTag", "w:drawing"),
+    ids=("simple-field", "smart-tag", "drawing"),
+)
+def test_docx_relabeled_related_xml_cannot_bypass_package_scanning(
+    part_kind: str,
+    payload_kind: str,
+) -> None:
+    outcomes = _compile_docx_at_public_seams(
+        _docx_with_relabeled_related_xml(part_kind, payload_kind)
+    )
+
+    for outcome in outcomes:
+        assert type(outcome) is DocumentCompilationFailure
+        assert outcome.code is (
+            DocumentCompilationFailureCode.FIGURE_NOT_SUPPORTED
+            if payload_kind == "w:drawing"
+            else DocumentCompilationFailureCode.INVALID_ARTIFACT
+        )
+
+
+def test_docx_malformed_relationships_preserve_raw_visual_refusal_precedence(
+) -> None:
+    outcomes = _compile_docx_at_public_seams(
+        _docx_with_relabeled_header_visual_and_malformed_relationships()
+    )
+
+    for outcome in outcomes:
+        assert type(outcome) is DocumentCompilationFailure
+        assert outcome.code is DocumentCompilationFailureCode.FIGURE_NOT_SUPPORTED
+
+
+def test_docx_malformed_relationships_scan_unsafe_raw_visual_members() -> None:
+    outcomes = _compile_docx_at_public_seams(
+        _docx_with_malformed_relationships_and_unsafe_raw_visual_member()
+    )
+
+    for outcome in outcomes:
+        assert type(outcome) is DocumentCompilationFailure
+        assert outcome.code is DocumentCompilationFailureCode.FIGURE_NOT_SUPPORTED
+
+
+def test_docx_malformed_relationships_scan_every_duplicate_raw_member() -> None:
+    direct_outcome, runner_outcome = _compile_docx_at_public_seams(
+        _docx_with_malformed_relationships_and_duplicate_unsafe_raw_visual_member()
+    )
+
+    assert type(direct_outcome) is DocumentCompilationFailure
+    assert type(runner_outcome) is DocumentCompilationFailure
+    assert (direct_outcome.code, runner_outcome.code) == (
+        DocumentCompilationFailureCode.FIGURE_NOT_SUPPORTED,
+        DocumentCompilationFailureCode.FIGURE_NOT_SUPPORTED,
+    )
+
+
+def test_docx_header_cannot_hide_behind_thumbnail_relationship_at_both_seams(
+) -> None:
+    outcomes = _compile_docx_at_public_seams(
+        _docx_with_header_disguised_as_thumbnail()
+    )
+
+    for outcome in outcomes:
+        assert type(outcome) is DocumentCompilationFailure
+        assert outcome.code is DocumentCompilationFailureCode.INVALID_ARTIFACT
+
+
+@pytest.mark.parametrize(
+    ("wrapper_tag", "hidden_text"),
+    (
+        ("w:fldSimple", "Case-varied footnote field text must not disappear."),
+        ("w:smartTag", "Case-varied footnote smart tag text must not disappear."),
+    ),
+    ids=("simple-field", "smart-tag"),
+)
+@pytest.mark.parametrize(
+    "content_type",
+    (
+        "Application/XML",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+XmL",
+        "application/xml; charset=UTF-8",
+    ),
+    ids=("uppercase-base-xml", "mixed-case-xml-suffix", "parameterized-xml"),
+)
+def test_docx_case_varied_xml_media_types_still_refuse_wrapped_footnotes(
+    wrapper_tag: str,
+    hidden_text: str,
+    content_type: str,
+) -> None:
+    source = _docx_with_wrapped_footnote_text(
+        wrapper_tag,
+        hidden_text,
+        content_type=content_type,
+    )
+    outcomes = _compile_docx_at_public_seams(source)
+
+    for outcome in outcomes:
+        assert type(outcome) is DocumentCompilationFailure
+        assert outcome.code is DocumentCompilationFailureCode.INVALID_ARTIFACT
+
+
+@pytest.mark.parametrize(
+    "source_builder",
+    (
+        _docx_with_visible_header_text,
+        _docx_with_visible_footnote_text,
+        lambda: _docx_with_wrapped_text(
+            "w:dir",
+            "Bidirectional text must not disappear.",
+            in_header=False,
+        ),
+        _docx_with_wrapped_table_cell_text,
+    ),
+    ids=("header", "footnote", "unknown-body-container", "table-cell-container"),
+)
+def test_docx_refuses_visible_text_it_cannot_represent_at_both_seams(
+    source_builder: Callable[[], bytes],
+) -> None:
+    source = source_builder()
+    outcomes = _compile_docx_at_public_seams(source)
+
+    for outcome in outcomes:
+        assert type(outcome) is DocumentCompilationFailure
+        assert outcome.code is DocumentCompilationFailureCode.INVALID_ARTIFACT
+
+
+def test_docx_preserves_admitted_run_text_at_both_seams() -> None:
+    outcomes = _compile_docx_at_public_seams(_docx_with_admitted_run_text())
+
+    for outcome in outcomes:
+        assert type(outcome) is ParsedDocument
+        assert outcome.units is not None
+        assert [unit.text for unit in outcome.units] == ["Before\tMiddle\n-After"]
+
+
+def test_docx_preserves_boundary_whitespace_at_both_seams() -> None:
+    outcomes = _compile_docx_at_public_seams(_docx_with_boundary_whitespace())
+
+    for outcome in outcomes:
+        assert type(outcome) is ParsedDocument
+        assert outcome.units is not None
+        assert [unit.text for unit in outcome.units] == [
+            "  leading and trailing  ",
+            "  cell boundary  ",
+        ]
+        assert outcome.units[1].table_cells == (("  cell boundary  ",),)
+
+
+def test_docx_refuses_horizontally_merged_cells_at_both_seams() -> None:
+    outcomes = _compile_docx_at_public_seams(_docx_with_horizontally_merged_cells())
+
+    for outcome in outcomes:
+        assert type(outcome) is DocumentCompilationFailure
+        assert outcome.code is DocumentCompilationFailureCode.INVALID_ARTIFACT
+
+
+@pytest.mark.parametrize(
+    "source_builder",
+    (
+        _docx_with_office_math,
+        _docx_with_misplaced_footnote_reference,
+        _docx_with_orphan_visible_text,
+        _docx_with_orphan_malformed_xml,
+    ),
+    ids=("office-math", "misplaced-control", "orphan-text", "orphan-malformed"),
+)
+def test_docx_closed_grammar_refuses_unrepresented_xml_at_both_seams(
+    source_builder: Callable[[], bytes],
+) -> None:
+    outcomes = _compile_docx_at_public_seams(source_builder())
+
+    for outcome in outcomes:
+        assert type(outcome) is DocumentCompilationFailure
+        assert outcome.code is DocumentCompilationFailureCode.INVALID_ARTIFACT
+
+
+def test_docx_orphan_drawing_preserves_visual_refusal_precedence_at_both_seams(
+) -> None:
+    outcomes = _compile_docx_at_public_seams(
+        _docx_with_orphan_drawing_and_malformed_xml()
+    )
+
+    for outcome in outcomes:
+        assert type(outcome) is DocumentCompilationFailure
+        assert outcome.code is DocumentCompilationFailureCode.FIGURE_NOT_SUPPORTED
+
+
+@pytest.mark.parametrize(
+    "payload_kind",
+    ("footnote-reference", "simple-field", "character-data"),
+)
+def test_docx_closed_grammar_refuses_property_subtree_payloads_at_both_seams(
+    payload_kind: str,
+) -> None:
+    outcomes = _compile_docx_at_public_seams(
+        _docx_with_property_subtree_payload(payload_kind)
+    )
+
+    for outcome in outcomes:
+        assert type(outcome) is DocumentCompilationFailure
+        assert outcome.code is DocumentCompilationFailureCode.INVALID_ARTIFACT
+
+
+@pytest.mark.parametrize("node_tag", ("w:tr", "w:tc"), ids=("row", "cell"))
+def test_docx_closed_grammar_refuses_misplaced_table_structure_at_both_seams(
+    node_tag: str,
+) -> None:
+    outcomes = _compile_docx_at_public_seams(
+        _docx_with_misplaced_table_structure(node_tag)
+    )
+
+    for outcome in outcomes:
+        assert type(outcome) is DocumentCompilationFailure
+        assert outcome.code is DocumentCompilationFailureCode.INVALID_ARTIFACT
+
+
+def test_docx_refuses_nonbody_office_math_at_both_seams() -> None:
+    outcomes = _compile_docx_at_public_seams(_docx_with_nonbody_office_math())
+
+    for outcome in outcomes:
+        assert type(outcome) is DocumentCompilationFailure
+        assert outcome.code is DocumentCompilationFailureCode.INVALID_ARTIFACT
+
+
+@pytest.mark.parametrize(
+    "source_builder",
+    (
+        _docx_with_unadmitted_structural_character_data,
+        _docx_with_nested_payload_in_run_leaf,
+        _docx_with_document_sibling_office_math,
+    ),
+    ids=("structural-character-data", "nested-run-leaf", "document-sibling"),
+)
+def test_docx_closed_grammar_refuses_recursive_structure_bypasses_at_both_seams(
+    source_builder: Callable[[], bytes],
+) -> None:
+    outcomes = _compile_docx_at_public_seams(source_builder())
+
+    for outcome in outcomes:
+        assert type(outcome) is DocumentCompilationFailure
+        assert outcome.code is DocumentCompilationFailureCode.INVALID_ARTIFACT
+
+
+@pytest.mark.parametrize("case_varied", (False, True), ids=("exact", "casefold"))
+def test_docx_refuses_duplicate_archive_names_at_both_seams(
+    case_varied: bool,
+) -> None:
+    outcomes = _compile_docx_at_public_seams(
+        _docx_with_archive_name_collision(case_varied=case_varied)
+    )
+
+    for outcome in outcomes:
+        assert type(outcome) is DocumentCompilationFailure
+        assert outcome.code is DocumentCompilationFailureCode.INVALID_ARTIFACT
+
+
+@pytest.mark.parametrize("declaration_kind", ("default", "override"))
+def test_docx_refuses_casefolded_manifest_key_collisions_at_both_seams(
+    declaration_kind: str,
+) -> None:
+    outcomes = _compile_docx_at_public_seams(
+        _docx_with_manifest_key_collision(declaration_kind=declaration_kind)
+    )
+
+    for outcome in outcomes:
+        assert type(outcome) is DocumentCompilationFailure
+        assert outcome.code is DocumentCompilationFailureCode.INVALID_ARTIFACT
+
+
+@pytest.mark.parametrize(
+    "manifest_kind",
+    (
+        "root-unknown-attribute",
+        "root-character-data",
+        "default-unknown-attribute",
+        "override-unknown-attribute",
+        "declaration-character-data",
+        "nested-foreign-payload",
+    ),
+)
+def test_docx_refuses_malformed_content_type_manifest_at_both_seams(
+    manifest_kind: str,
+) -> None:
+    outcomes = _compile_docx_at_public_seams(
+        _docx_with_malformed_content_type_manifest(manifest_kind)
+    )
+
+    for outcome in outcomes:
+        assert type(outcome) is DocumentCompilationFailure
+        assert outcome.code is DocumentCompilationFailureCode.INVALID_ARTIFACT
+
+
+def test_docx_manifest_failure_preserves_visual_precedence_at_both_seams() -> None:
+    outcomes = _compile_docx_at_public_seams(
+        _docx_with_malformed_content_type_manifest(
+            "root-unknown-attribute",
+            with_drawing=True,
+        )
+    )
+
+    for outcome in outcomes:
+        assert type(outcome) is DocumentCompilationFailure
+        assert outcome.code is DocumentCompilationFailureCode.FIGURE_NOT_SUPPORTED
+
+
+def test_docx_unparseable_manifest_preserves_raw_visual_precedence_at_both_seams(
+) -> None:
+    outcomes = _compile_docx_at_public_seams(
+        _docx_with_malformed_content_type_manifest(
+            "unparseable",
+            with_drawing=True,
+        )
+    )
+
+    for outcome in outcomes:
+        assert type(outcome) is DocumentCompilationFailure
+        assert outcome.code is DocumentCompilationFailureCode.FIGURE_NOT_SUPPORTED
+
+
+def test_docx_unparseable_manifest_scans_unsafe_raw_visual_members_at_both_seams(
+) -> None:
+    outcomes = _compile_docx_at_public_seams(
+        _docx_with_unparseable_manifest_and_unsafe_raw_visual_member()
+    )
+
+    for outcome in outcomes:
+        assert type(outcome) is DocumentCompilationFailure
+        assert outcome.code is DocumentCompilationFailureCode.FIGURE_NOT_SUPPORTED
+
+
+@pytest.mark.parametrize("declaration_kind", ("media-type", "extension"))
+def test_docx_refuses_unused_malformed_content_type_declarations_at_both_seams(
+    declaration_kind: str,
+) -> None:
+    outcomes = _compile_docx_at_public_seams(
+        _docx_with_unused_malformed_content_type_declaration(declaration_kind)
+    )
+
+    for outcome in outcomes:
+        assert type(outcome) is DocumentCompilationFailure
+        assert outcome.code is DocumentCompilationFailureCode.INVALID_ARTIFACT
+
+
+@pytest.mark.parametrize(
+    "declaration_kind",
+    (
+        "media-type-non-ascii",
+        "media-type-emoji",
+        "media-type-wildcard",
+        "media-type-slash-whitespace",
+        "media-type",
+        "extension-dot",
+        "extension-dot-dot",
+    ),
+    ids=(
+        "non-ascii-media-type",
+        "emoji-media-type",
+        "wildcard-media-type",
+        "slash-whitespace-media-type",
+        "defective-media-type",
+        "dot-extension",
+        "dot-dot-extension",
+    ),
+)
+def test_docx_refuses_manifest_tokens_outside_strict_ascii_grammar_at_both_seams(
+    declaration_kind: str,
+) -> None:
+    outcomes = _compile_docx_at_public_seams(
+        _docx_with_unused_malformed_content_type_declaration(declaration_kind)
+    )
+
+    for outcome in outcomes:
+        assert type(outcome) is DocumentCompilationFailure
+        assert outcome.code is DocumentCompilationFailureCode.INVALID_ARTIFACT
+
+
+@pytest.mark.parametrize("declaration_kind", ("media-type", "extension"))
+def test_docx_unused_manifest_failure_preserves_visual_precedence_at_both_seams(
+    declaration_kind: str,
+) -> None:
+    outcomes = _compile_docx_at_public_seams(
+        _docx_with_unused_malformed_content_type_declaration(
+            declaration_kind,
+            with_drawing=True,
+        )
+    )
+
+    for outcome in outcomes:
+        assert type(outcome) is DocumentCompilationFailure
+        assert outcome.code is DocumentCompilationFailureCode.FIGURE_NOT_SUPPORTED
+
+
+def test_docx_raw_inventory_preserves_visual_precedence_before_document_load(
+) -> None:
+    outcomes = _compile_docx_at_public_seams(
+        _docx_with_raw_visual_and_malformed_related_xml()
+    )
+
+    for outcome in outcomes:
+        assert type(outcome) is DocumentCompilationFailure
+        assert outcome.code is DocumentCompilationFailureCode.FIGURE_NOT_SUPPORTED
+
+
+def test_docx_refuses_unknown_related_xml_at_both_seams() -> None:
+    outcomes = _compile_docx_at_public_seams(_docx_with_unknown_related_xml())
+
+    for outcome in outcomes:
+        assert type(outcome) is DocumentCompilationFailure
+        assert outcome.code is DocumentCompilationFailureCode.INVALID_ARTIFACT
+
+
+@pytest.mark.parametrize("level", ("table", "row", "cell"))
+def test_docx_refuses_misordered_table_structure_at_both_seams(
+    level: str,
+) -> None:
+    outcomes = _compile_docx_at_public_seams(
+        _docx_with_misordered_table_structure(level)
+    )
+
+    for outcome in outcomes:
+        assert type(outcome) is DocumentCompilationFailure
+        assert outcome.code is DocumentCompilationFailureCode.INVALID_ARTIFACT
+
+
+@pytest.mark.parametrize("structure_tag", ("w:tblGrid", "w:trPr", "w:tcPr"))
+def test_docx_refuses_duplicate_table_structure_at_both_seams(
+    structure_tag: str,
+) -> None:
+    outcomes = _compile_docx_at_public_seams(
+        _docx_with_duplicate_table_structure(structure_tag)
+    )
+
+    for outcome in outcomes:
+        assert type(outcome) is DocumentCompilationFailure
+        assert outcome.code is DocumentCompilationFailureCode.INVALID_ARTIFACT
+
+
+def test_docx_refuses_legacy_horizontal_merge_at_both_seams() -> None:
+    outcomes = _compile_docx_at_public_seams(_docx_with_legacy_horizontal_merge())
+
+    for outcome in outcomes:
+        assert type(outcome) is DocumentCompilationFailure
+        assert outcome.code is DocumentCompilationFailureCode.INVALID_ARTIFACT
+
+
+@pytest.mark.parametrize(
+    "source_builder",
+    (_docx_with_unsafe_manifest_part_name, _docx_with_unsafe_archive_member_name),
+    ids=("manifest-part-name", "archive-member-name"),
+)
+def test_docx_refuses_unsafe_package_paths_at_both_seams(
+    source_builder: Callable[[], bytes],
+) -> None:
+    outcomes = _compile_docx_at_public_seams(source_builder())
+
+    for outcome in outcomes:
+        assert type(outcome) is DocumentCompilationFailure
+        assert outcome.code is DocumentCompilationFailureCode.INVALID_ARTIFACT
+
+
+@pytest.mark.parametrize(
+    "source_builder",
+    (
+        _docx_with_orphan_binary_member,
+        _docx_without_root_document_relationship,
+        _docx_with_unknown_main_document_sibling,
+    ),
+    ids=("orphan-binary", "unrelated-main", "unknown-main-sibling"),
+)
+def test_docx_refuses_unrepresented_package_inventory_at_both_seams(
+    source_builder: Callable[[], bytes],
+) -> None:
+    outcomes = _compile_docx_at_public_seams(source_builder())
+
+    for outcome in outcomes:
+        assert type(outcome) is DocumentCompilationFailure
+        assert outcome.code is DocumentCompilationFailureCode.INVALID_ARTIFACT
+
+
+@pytest.mark.parametrize(
+    "relationship_kind",
+    (
+        "wrong-type",
+        "missing-type",
+        "missing-id",
+        "duplicate-id",
+        "invalid-target-mode",
+    ),
+)
+def test_docx_refuses_hostile_root_document_relationships_at_both_seams(
+    relationship_kind: str,
+) -> None:
+    outcomes = _compile_docx_at_public_seams(
+        _docx_with_hostile_root_document_relationship(relationship_kind)
+    )
+
+    for outcome in outcomes:
+        assert type(outcome) is DocumentCompilationFailure
+        assert outcome.code is DocumentCompilationFailureCode.INVALID_ARTIFACT
+
+
+@pytest.mark.parametrize(
+    "target",
+    (
+        "word//document.xml",
+        "docProps//thumbnail.jpeg",
+        "docProps/./thumbnail.jpeg",
+    ),
+    ids=(
+        "document-double-slash",
+        "thumbnail-double-slash",
+        "thumbnail-dot-segment",
+    ),
+)
+def test_docx_refuses_raw_relationship_target_aliases_at_both_seams(
+    target: str,
+) -> None:
+    outcomes = _compile_docx_at_public_seams(
+        _docx_with_aliased_root_relationship_target(target)
+    )
+
+    for outcome in outcomes:
+        assert type(outcome) is DocumentCompilationFailure
+        assert outcome.code is DocumentCompilationFailureCode.INVALID_ARTIFACT
+
+
+@pytest.mark.parametrize(
+    "thumbnail_bytes",
+    (
+        b"\xff\xd8\xff",
+        b'\xff\xd8\xff<w:drawing xmlns:w="http://schemas.openxmlformats.org/'
+        b'wordprocessingml/2006/main"/>',
+    ),
+    ids=("truncated-marker", "drawing-after-signature"),
+)
+def test_docx_refuses_incomplete_jpeg_thumbnails_at_both_seams(
+    thumbnail_bytes: bytes,
+) -> None:
+    outcomes = _compile_docx_at_public_seams(
+        _docx_with_invalid_thumbnail(thumbnail_bytes)
+    )
+
+    for outcome in outcomes:
+        assert type(outcome) is DocumentCompilationFailure
+        assert outcome.code is DocumentCompilationFailureCode.INVALID_ARTIFACT
+
+
+def test_docx_refuses_zero_dimension_jpeg_thumbnail_at_both_seams() -> None:
+    outcomes = _compile_docx_at_public_seams(
+        _docx_with_invalid_thumbnail(
+            _single_component_jpeg_thumbnail(width=0, height=0)
+        )
+    )
+
+    for outcome in outcomes:
+        assert type(outcome) is DocumentCompilationFailure
+        assert outcome.code is DocumentCompilationFailureCode.INVALID_ARTIFACT
+
+
+def test_docx_refuses_unbound_jpeg_scan_component_at_both_seams() -> None:
+    outcomes = _compile_docx_at_public_seams(
+        _docx_with_invalid_thumbnail(
+            _single_component_jpeg_thumbnail(
+                width=1,
+                height=1,
+                scan_component_id=2,
+            )
+        )
+    )
+
+    for outcome in outcomes:
+        assert type(outcome) is DocumentCompilationFailure
+        assert outcome.code is DocumentCompilationFailureCode.INVALID_ARTIFACT
+
+
+def test_docx_refuses_external_thumbnail_relationship_at_both_seams() -> None:
+    outcomes = _compile_docx_at_public_seams(
+        _docx_with_external_thumbnail_relationship()
+    )
+
+    for outcome in outcomes:
+        assert type(outcome) is DocumentCompilationFailure
+        assert outcome.code is DocumentCompilationFailureCode.INVALID_ARTIFACT
+
+
+@pytest.mark.parametrize(
+    "target",
+    (
+        "https://example.invalid/./resource",
+        "https://example.invalid/path/../resource",
+    ),
+    ids=("dot-segment", "dot-dot-segment"),
+)
+def test_docx_refuses_external_relationship_dot_segments_at_both_seams(
+    target: str,
+) -> None:
+    outcomes = _compile_docx_at_public_seams(
+        _docx_with_external_hyperlink_relationship(target)
+    )
+
+    for outcome in outcomes:
+        assert type(outcome) is DocumentCompilationFailure
+        assert outcome.code is DocumentCompilationFailureCode.INVALID_ARTIFACT
+
+
+def test_docx_accepts_ordinary_external_relationship_at_both_seams() -> None:
+    outcomes = _compile_docx_at_public_seams(
+        _docx_with_external_hyperlink_relationship(
+            "https://example.invalid/path/resource?next=../resource#dot/./segment"
+        )
+    )
+
+    for outcome in outcomes:
+        assert type(outcome) is ParsedDocument
+
+
+def test_docx_compiles_unmodified_python_docx_bytes_at_both_seams() -> None:
+    document = Document()
+    document.add_paragraph("Unmodified python-docx package text.")
+
+    outcomes = _compile_docx_at_public_seams(_save_unmodified_docx(document))
+
+    for outcome in outcomes:
+        assert type(outcome) is ParsedDocument
+        assert outcome.units is not None
+        assert [unit.text for unit in outcome.units] == [
+            "Unmodified python-docx package text."
+        ]
+
+
+def test_docx_relationship_target_cannot_escape_package_root_at_both_seams() -> None:
+    outcomes = _compile_docx_at_public_seams(
+        _docx_with_relationship_target_escaping_package_root()
+    )
+
+    for outcome in outcomes:
+        assert type(outcome) is DocumentCompilationFailure
+        assert outcome.code is DocumentCompilationFailureCode.INVALID_ARTIFACT
+
+
+def test_docx_empty_unrepresented_part_does_not_hide_later_text_at_both_seams(
+) -> None:
+    outcomes = _compile_docx_at_public_seams(
+        _docx_with_empty_comments_before_visible_footnotes()
+    )
+
+    for outcome in outcomes:
+        assert type(outcome) is DocumentCompilationFailure
+        assert outcome.code is DocumentCompilationFailureCode.INVALID_ARTIFACT
+
+
+def test_docx_refuses_text_in_known_inert_member_at_both_seams() -> None:
+    outcomes = _compile_docx_at_public_seams(_docx_with_text_in_known_inert_member())
+
+    for outcome in outcomes:
+        assert type(outcome) is DocumentCompilationFailure
+        assert outcome.code is DocumentCompilationFailureCode.INVALID_ARTIFACT
+
+
+@pytest.mark.parametrize(
+    "part_name",
+    (
+        "/word/./document.xml",
+        "/word//document.xml",
+        "/word/document.xml?alias=1",
+        "/word/document.xml#alias",
+    ),
+    ids=("dot-segment", "double-slash", "query", "fragment"),
+)
+def test_docx_refuses_aliased_manifest_part_names_at_both_seams(
+    part_name: str,
+) -> None:
+    outcomes = _compile_docx_at_public_seams(
+        _docx_with_aliased_manifest_part_name(part_name)
+    )
+
+    for outcome in outcomes:
+        assert type(outcome) is DocumentCompilationFailure
+        assert outcome.code is DocumentCompilationFailureCode.INVALID_ARTIFACT
+
+
+@pytest.mark.parametrize(
+    "token_tag",
+    ("w:t", "w:tab", "w:ptab", "w:br", "w:cr", "w:noBreakHyphen"),
+    ids=("text", "tab", "position-tab", "break", "carriage-return", "no-break-hyphen"),
+)
+def test_docx_refuses_visible_tokens_outside_runs_at_both_seams(
+    token_tag: str,
+) -> None:
+    outcomes = _compile_docx_at_public_seams(
+        _docx_with_visible_token_outside_run(token_tag)
+    )
+
+    for outcome in outcomes:
+        assert type(outcome) is DocumentCompilationFailure
+        assert outcome.code is DocumentCompilationFailureCode.INVALID_ARTIFACT
+
+
+@pytest.mark.parametrize(
+    ("with_header_drawing", "expected_code"),
+    (
+        (True, DocumentCompilationFailureCode.FIGURE_NOT_SUPPORTED),
+        (False, DocumentCompilationFailureCode.INVALID_ARTIFACT),
+    ),
+    ids=("visual-first", "malformed-only"),
+)
+def test_docx_malformed_generic_xml_preserves_visual_refusal_precedence(
+    with_header_drawing: bool,
+    expected_code: DocumentCompilationFailureCode,
+) -> None:
+    source = _docx_with_malformed_footnotes_xml(
+        with_header_drawing=with_header_drawing
+    )
+    outcomes = _compile_docx_at_public_seams(source)
+
+    for outcome in outcomes:
+        assert type(outcome) is DocumentCompilationFailure
+        assert outcome.code is expected_code
+
+
+def test_docx_refuses_malformed_package_part_media_type_at_both_seams() -> None:
+    outcomes = _compile_docx_at_public_seams(_docx_with_malformed_part_media_type())
+
+    for outcome in outcomes:
+        assert type(outcome) is DocumentCompilationFailure
+        assert outcome.code is DocumentCompilationFailureCode.INVALID_ARTIFACT
+
+
+def test_docx_generic_xml_part_preserves_visual_refusal_precedence() -> None:
+    outcome = compile_document_bytes(
+        _docx_with_wrapped_footnote_text(
+            "w:fldSimple",
+            "Footnote field text must not disappear.",
+            with_drawing=True,
+        ),
+        CompilationProfileRef("context-engine-docx-v1", DOCX_CONFIG_V1),
+    )
+
+    assert type(outcome) is DocumentCompilationFailure
+    assert outcome.code is DocumentCompilationFailureCode.FIGURE_NOT_SUPPORTED
+
+
+@pytest.mark.parametrize(
+    "content_type",
+    ("application/octet-stream", 'Application/Octet-Stream; profile="xml-looking"'),
+    ids=("bare", "parameterized"),
+)
+def test_docx_refuses_unvalidated_ole_compound_file_at_both_seams(
+    content_type: str,
+) -> None:
+    outcomes = _compile_docx_at_public_seams(
+        _docx_with_binary_ole_part(content_type=content_type)
+    )
+
+    for outcome in outcomes:
+        assert type(outcome) is DocumentCompilationFailure
+        assert outcome.code is DocumentCompilationFailureCode.INVALID_ARTIFACT
+
+
+@pytest.mark.parametrize("target_kind", ("external", "existing-xml"))
+def test_docx_refuses_every_ole_relationship_at_both_seams(
+    target_kind: str,
+) -> None:
+    outcomes = _compile_docx_at_public_seams(
+        _docx_with_ole_relationship(target_kind)
+    )
+
+    for outcome in outcomes:
+        assert type(outcome) is DocumentCompilationFailure
+        assert outcome.code is DocumentCompilationFailureCode.INVALID_ARTIFACT
 
 
 @pytest.mark.parametrize("in_header", (False, True))
