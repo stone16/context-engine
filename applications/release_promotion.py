@@ -9,6 +9,7 @@ import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from enum import StrEnum
 from pathlib import Path
 from typing import Any, cast
 from uuid import UUID, uuid4
@@ -50,15 +51,23 @@ from engine.runtime.release_lineage import (
     CURATION_PROFILE_DIGEST_V0,
     CURATION_PROFILE_REF_V0,
     INDEX_SCHEMA_REF_V0,
+    PACKAGE_SCHEMA_REF_V0,
     PACKAGE_SCHEMA_REF_V1,
     QWEN_VECTOR_INDEX_PROFILE_DIGEST_V1,
     QWEN_VECTOR_INDEX_PROFILE_REF_V1,
+    RUNTIME_PROFILE_DIGEST_V0,
     RUNTIME_PROFILE_DIGEST_V1,
+    RUNTIME_PROFILE_REF_V0,
     RUNTIME_PROFILE_REF_V1,
+    RUNTIME_TOKENIZER_REF_V0,
     RUNTIME_TOKENIZER_REF_V1,
 )
 from engine.supply import QWEN3_EMBEDDING_PROFILE
-from engine.tokenizer_accounting import UNICODE_SCALAR_TOKENIZER_PROFILE
+from engine.tokenizer_accounting import (
+    HISTORICAL_UTF8_BYTE_TOKENIZER_PROFILE_DIGEST,
+    HISTORICAL_UTF8_BYTE_TOKENIZER_PROFILE_DOCUMENT,
+    UNICODE_SCALAR_TOKENIZER_PROFILE,
+)
 
 RELEASE_EVALUATION_SIGNING_KEY_VERSION_ENV = (
     "CONTEXT_ENGINE_RELEASE_EVALUATION_SIGNING_KEY_VERSION"
@@ -68,6 +77,46 @@ RELEASE_EVALUATION_SIGNING_KEY_ENV = "CONTEXT_ENGINE_RELEASE_EVALUATION_SIGNING_
 
 class ReleasePromotionConfigurationUnavailable(ValueError):
     """The local release candidate or signing configuration is unavailable."""
+
+
+class PublicContractVersion(StrEnum):
+    """Closed public Package contract selected by one Release promotion."""
+
+    V0 = "v0"
+    V1 = "v1"
+
+
+@dataclass(frozen=True, slots=True)
+class _RuntimeProfileSelection:
+    manifest_ref_prefix: str
+    profile_ref: str
+    profile_digest: str
+    tokenizer_ref: str
+    tokenizer_profile_document: str
+    tokenizer_profile_digest: str
+    package_schema_ref: str
+
+
+_RUNTIME_PROFILE_SELECTIONS = {
+    PublicContractVersion.V0: _RuntimeProfileSelection(
+        manifest_ref_prefix="manifest-dogfood-",
+        profile_ref=RUNTIME_PROFILE_REF_V0,
+        profile_digest=RUNTIME_PROFILE_DIGEST_V0,
+        tokenizer_ref=RUNTIME_TOKENIZER_REF_V0,
+        tokenizer_profile_document=HISTORICAL_UTF8_BYTE_TOKENIZER_PROFILE_DOCUMENT,
+        tokenizer_profile_digest=HISTORICAL_UTF8_BYTE_TOKENIZER_PROFILE_DIGEST,
+        package_schema_ref=PACKAGE_SCHEMA_REF_V0,
+    ),
+    PublicContractVersion.V1: _RuntimeProfileSelection(
+        manifest_ref_prefix="manifest-dogfood-v1-",
+        profile_ref=RUNTIME_PROFILE_REF_V1,
+        profile_digest=RUNTIME_PROFILE_DIGEST_V1,
+        tokenizer_ref=RUNTIME_TOKENIZER_REF_V1,
+        tokenizer_profile_document=UNICODE_SCALAR_TOKENIZER_PROFILE.canonical_json(),
+        tokenizer_profile_digest=UNICODE_SCALAR_TOKENIZER_PROFILE.profile_digest,
+        package_schema_ref=PACKAGE_SCHEMA_REF_V1,
+    ),
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -209,7 +258,11 @@ def _gate_evidence(document: Mapping[str, Any], gate: Gate) -> GateEvidence:
 def _manifest(
     organization_id: UUID,
     active_revision_refs: tuple[str, ...],
+    public_contract_version: PublicContractVersion,
 ) -> ReleaseManifest:
+    if type(public_contract_version) is not PublicContractVersion:
+        raise ReleasePromotionConfigurationUnavailable
+    runtime_selection = _RUNTIME_PROFILE_SELECTIONS[public_contract_version]
     content = ContentProfileRef(
         profile_ref=CONTENT_PROFILE_REF_V0,
         profile_digest=CONTENT_PROFILE_DIGEST_V0,
@@ -229,21 +282,21 @@ def _manifest(
         ),
     )
     runtime = RuntimeProfileRef(
-        profile_ref=RUNTIME_PROFILE_REF_V1,
-        profile_digest=RUNTIME_PROFILE_DIGEST_V1,
+        profile_ref=runtime_selection.profile_ref,
+        profile_digest=runtime_selection.profile_digest,
         content_profile_digest=content.profile_digest,
         index_profile_digest=index.profile_digest,
         content_schema_ref=content.content_schema_ref,
         index_schema_ref=index.index_schema_ref,
-        tokenizer_ref=RUNTIME_TOKENIZER_REF_V1,
-        package_schema_ref=PACKAGE_SCHEMA_REF_V1,
-        tokenizer_profile_document=UNICODE_SCALAR_TOKENIZER_PROFILE.canonical_json(),
-        tokenizer_profile_digest=UNICODE_SCALAR_TOKENIZER_PROFILE.profile_digest,
+        tokenizer_ref=runtime_selection.tokenizer_ref,
+        package_schema_ref=runtime_selection.package_schema_ref,
+        tokenizer_profile_document=runtime_selection.tokenizer_profile_document,
+        tokenizer_profile_digest=runtime_selection.tokenizer_profile_digest,
     )
     lineage = "\x00".join(active_revision_refs)
     return ReleaseManifest(
         organization_id=organization_id,
-        manifest_ref=f"manifest-dogfood-{_digest(lineage)}",
+        manifest_ref=f"{runtime_selection.manifest_ref_prefix}{_digest(lineage)}",
         content_profile=content,
         index_profile=index,
         runtime_profile=runtime,
@@ -261,12 +314,15 @@ def promote_release(
     evidence_file: Path,
     configuration: LocalOperatorConfiguration,
     authorities: LocalOperatorAuthorities,
+    public_contract_version: PublicContractVersion,
 ) -> ReleasePromotionReport:
     """Evaluate and promote the exact active corpus through ContextLearning."""
 
     if type(organization_id) is not UUID:
         raise ReleasePromotionConfigurationUnavailable
     if type(authorities) is not LocalOperatorAuthorities:
+        raise ReleasePromotionConfigurationUnavailable
+    if type(public_contract_version) is not PublicContractVersion:
         raise ReleasePromotionConfigurationUnavailable
     if (
         type(configuration) is not LocalOperatorConfiguration
@@ -300,7 +356,11 @@ def promote_release(
         )
         if not snapshot.active_revision_refs:
             raise ReleasePromotionConfigurationUnavailable
-        manifest = _manifest(organization_id, snapshot.active_revision_refs)
+        manifest = _manifest(
+            organization_id,
+            snapshot.active_revision_refs,
+            public_contract_version,
+        )
         candidate = ReleaseCandidate(
             organization_id=organization_id,
             candidate_ref=(
@@ -367,6 +427,7 @@ def release_report_json(report: ReleasePromotionReport) -> str:
 
 
 __all__ = [
+    "PublicContractVersion",
     "RELEASE_EVALUATION_SIGNING_KEY_ENV",
     "RELEASE_EVALUATION_SIGNING_KEY_VERSION_ENV",
     "ReleasePromotionConfigurationUnavailable",

@@ -52,6 +52,7 @@ from applications.operator_authentication import (
 from applications.release_promotion import (
     RELEASE_EVALUATION_SIGNING_KEY_ENV,
     RELEASE_EVALUATION_SIGNING_KEY_VERSION_ENV,
+    PublicContractVersion,
     promote_release,
 )
 from engine.control import (
@@ -74,7 +75,15 @@ from engine.persistence import (
     PostgreSQLWorkerLeaseIssuer,
     create_database_engine,
 )
-from engine.runtime.release_lineage import QWEN_VECTOR_INDEX_PROFILE_REF_V1
+from engine.runtime.release_lineage import (
+    PACKAGE_SCHEMA_REF_V0,
+    PACKAGE_SCHEMA_REF_V1,
+    QWEN_VECTOR_INDEX_PROFILE_REF_V1,
+    RUNTIME_PROFILE_REF_V0,
+    RUNTIME_PROFILE_REF_V1,
+    RUNTIME_TOKENIZER_REF_V0,
+    RUNTIME_TOKENIZER_REF_V1,
+)
 from engine.supply import (
     DETERMINISTIC_TWIN_EMBEDDING_PROFILE,
     QWEN3_EMBEDDING_PROFILE,
@@ -252,8 +261,14 @@ def _promote(
     evidence_file: Path,
     environment: dict[str, str],
     *,
+    public_contract_version: PublicContractVersion | None = None,
     check: bool = True,
 ) -> subprocess.CompletedProcess[str]:
+    version_arguments = (
+        []
+        if public_contract_version is None
+        else ["--public-contract-version", public_contract_version.value]
+    )
     return _run(
         "context-engine-control",
         [
@@ -262,10 +277,67 @@ def _promote(
             str(organization_id),
             "--evidence-file",
             str(evidence_file),
+            *version_arguments,
         ],
         environment=environment,
         check=check,
     )
+
+
+def _runtime_work_count(
+    migration_configuration: DatabaseConfiguration,
+    organization_id: UUID,
+) -> int:
+    engine = create_database_engine(migration_configuration)
+    try:
+        with engine.connect() as connection:
+            return cast(
+                int,
+                connection.execute(
+                    text(
+                        "SELECT count(*) FROM context_run "
+                        "WHERE organization_id = :organization_id"
+                    ),
+                    {"organization_id": organization_id},
+                ).scalar_one(),
+            )
+    finally:
+        engine.dispose()
+
+
+def _resolve(
+    client: TestClient,
+    public_contract_version: PublicContractVersion,
+    *,
+    request_id: str,
+    query: str,
+) -> Any:
+    return client.post(
+        f"/{public_contract_version.value}/resolve",
+        headers={
+            "Authorization": f"Bearer {DOGFOOD_SECRET}",
+            "X-Context-Request-Id": request_id,
+        },
+        json={"kind": "acquire", "need": {"query": query}},
+    )
+
+
+def _clear_citation_locators(
+    migration_configuration: DatabaseConfiguration,
+    organization_id: UUID,
+) -> None:
+    engine = create_database_engine(migration_configuration)
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "DELETE FROM citation_open_locator "
+                    "WHERE organization_id = :organization_id"
+                ),
+                {"organization_id": organization_id},
+            )
+    finally:
+        engine.dispose()
 
 
 def _user_id(
@@ -615,9 +687,10 @@ def test_promote_release_activates_every_current_revision_and_dogfood_runtime(
             served.update(kwargs)
 
         monkeypatch.setattr("applications.api.uvicorn.run", observe)
+        query_provider = QwenEmbeddingTwin()
         monkeypatch.setattr(
             "adapters.http.dogfood.LocalQwenEmbeddingProvider",
-            lambda _path: QwenEmbeddingTwin(),
+            lambda _path: query_provider,
         )
         api_main(["--host", "127.0.0.1", "--port", "9123"])
         assert served["host"] == "127.0.0.1"
@@ -627,6 +700,29 @@ def test_promote_release_activates_every_current_revision_and_dogfood_runtime(
             .json()["runtime_delivery"]
             == "ACTIVE"
         )
+        client = TestClient(cast(Any, served["app"]))
+        v1_mismatch = _resolve(
+            client,
+            PublicContractVersion.V1,
+            request_id="release-promotion-v0-v1-mismatch",
+            query="must not embed",
+        )
+        assert v1_mismatch.status_code == 503
+        assert v1_mismatch.json() == {"code": "service_unavailable"}
+        assert query_provider.query_calls == []
+        assert _runtime_work_count(
+            migration_configuration,
+            scenario.organization_id,
+        ) == 0
+
+        resolved = _resolve(
+            client,
+            PublicContractVersion.V0,
+            request_id="release-promotion-default-v0",
+            query="Promoted through the operator process.",
+        )
+        assert resolved.status_code == 200
+        assert resolved.json()["package"]["packageSchemaRef"] == PACKAGE_SCHEMA_REF_V0
 
         repeated = json.loads(
             _promote(
@@ -639,6 +735,112 @@ def test_promote_release_activates_every_current_revision_and_dogfood_runtime(
         assert repeated["manifestRef"] == document["manifestRef"]
         assert repeated["activeRevisionCount"] == 3
 
+        v1 = json.loads(
+            _promote(
+                scenario.organization_id,
+                release_evidence_file,
+                environment,
+                public_contract_version=PublicContractVersion.V1,
+            ).stdout
+        )
+        assert v1["activeGeneration"] == 3
+        assert v1["manifestRef"] != document["manifestRef"]
+        work_before_mismatch = _runtime_work_count(
+            migration_configuration,
+            scenario.organization_id,
+        )
+        calls_before_mismatch = tuple(query_provider.query_calls)
+        v0_mismatch = _resolve(
+            client,
+            PublicContractVersion.V0,
+            request_id="release-promotion-v1-v0-mismatch",
+            query="must not embed",
+        )
+        assert v0_mismatch.status_code == 503
+        assert v0_mismatch.json() == {"code": "service_unavailable"}
+        assert tuple(query_provider.query_calls) == calls_before_mismatch
+        assert _runtime_work_count(
+            migration_configuration,
+            scenario.organization_id,
+        ) == work_before_mismatch
+        resolved_v1 = _resolve(
+            client,
+            PublicContractVersion.V1,
+            request_id="release-promotion-explicit-v1",
+            query="Promoted through the operator process.",
+        )
+        assert resolved_v1.status_code == 200
+        assert (
+            resolved_v1.json()["package"]["packageSchemaRef"]
+            == PACKAGE_SCHEMA_REF_V1
+        )
+        repeated_v1 = json.loads(
+            _promote(
+                scenario.organization_id,
+                release_evidence_file,
+                environment,
+                public_contract_version=PublicContractVersion.V1,
+            ).stdout
+        )
+        assert repeated_v1["activeGeneration"] == 4
+        assert repeated_v1["manifestRef"] == v1["manifestRef"]
+        restored_v0 = json.loads(
+            _promote(
+                scenario.organization_id,
+                release_evidence_file,
+                environment,
+            ).stdout
+        )
+        assert restored_v0["activeGeneration"] == 5
+        assert restored_v0["manifestRef"] == document["manifestRef"]
+
+        migration_engine = create_database_engine(migration_configuration)
+        try:
+            with migration_engine.connect() as connection:
+                active_manifest = tuple(
+                    connection.execute(
+                        text(
+                            "SELECT active_generation, manifest_ref "
+                            "FROM active_release_manifest "
+                            "WHERE organization_id = :organization_id"
+                        ),
+                        {"organization_id": scenario.organization_id},
+                    ).one()
+                )
+                historical_manifests = tuple(
+                    connection.execute(
+                        text(
+                            "SELECT manifest_ref, runtime_profile_ref, "
+                            "runtime_tokenizer_ref, runtime_package_schema_ref "
+                            "FROM release_manifest "
+                            "WHERE organization_id = :organization_id "
+                            "ORDER BY manifest_ref"
+                        ),
+                        {"organization_id": scenario.organization_id},
+                    ).tuples()
+                )
+        finally:
+            migration_engine.dispose()
+        assert active_manifest == (5, document["manifestRef"])
+        assert historical_manifests == tuple(
+            sorted(
+                (
+                    (
+                        document["manifestRef"],
+                        RUNTIME_PROFILE_REF_V0,
+                        RUNTIME_TOKENIZER_REF_V0,
+                        PACKAGE_SCHEMA_REF_V0,
+                    ),
+                    (
+                        v1["manifestRef"],
+                        RUNTIME_PROFILE_REF_V1,
+                        RUNTIME_TOKENIZER_REF_V1,
+                        PACKAGE_SCHEMA_REF_V1,
+                    ),
+                )
+            )
+        )
+
         _offboard_source(scenario, guarded_control_engine)
         configuration = LocalOperatorConfiguration.load(environment)
         assert configuration is not None
@@ -649,7 +851,7 @@ def test_promote_release_activates_every_current_revision_and_dogfood_runtime(
         snapshot = PostgreSQLReleaseCandidateSnapshotStore(
             guarded_release_operator_engine
         ).observe_candidate_snapshot(scenario.organization_id, release_identity)
-        assert snapshot.expected_active_generation == 2
+        assert snapshot.expected_active_generation == 5
         assert snapshot.active_revision_refs == (retained_revision_ref,)
         after_offboard = json.loads(
             _promote(
@@ -658,7 +860,7 @@ def test_promote_release_activates_every_current_revision_and_dogfood_runtime(
                 environment,
             ).stdout
         )
-        assert after_offboard["activeGeneration"] == 3
+        assert after_offboard["activeGeneration"] == 6
         assert after_offboard["activeRevisionCount"] == 1
         assert after_offboard["manifestRef"] != document["manifestRef"]
         assert retained_source.source_ref != scenario.source_ref
@@ -681,6 +883,10 @@ def test_promote_release_activates_every_current_revision_and_dogfood_runtime(
             migration_engine.dispose()
         assert active_refs == [retained_revision_ref]
     finally:
+        _clear_citation_locators(
+            migration_configuration,
+            scenario.organization_id,
+        )
         clear_test_runtime_release(scenario.organization_id)
         _clear_offboard_intent(
             migration_configuration,
@@ -794,6 +1000,7 @@ def test_promote_release_refuses_empty_corpus_and_control_credential(
             evidence_file=release_evidence_file,
             configuration=configuration,
             authorities=authorities,
+            public_contract_version=PublicContractVersion.V0,
         )
 
 
