@@ -14,6 +14,7 @@ from context_engine_contracts import (
     MAX_PROJECTED_FIELD_REFS,
     PACKAGE_REF_PATTERN,
     complete_context_package_nullable_fields,
+    is_registered_v1_tokenizer_identity,
     validate_projected_field_refs,
     verify_context_package_digest,
 )
@@ -436,6 +437,17 @@ class ContextPackageV1Wire(ClosedWireModel):
         has_content = bool(self.blocks or self.evidence)
         if has_content != (self.coverage.status == "sufficient"):
             raise ValueError("package content must match its coverage status")
+        if has_content and self.budgetUsage.tokens == 0:
+            raise ValueError("v1 content package token usage must be positive")
+        if not has_content and self.budgetUsage.tokens != 0:
+            raise ValueError("empty package token usage must be zero")
+        if not is_registered_v1_tokenizer_identity(
+            self.tokenizerRef,
+            self.tokenizerProfileDigest,
+        ):
+            raise ValueError(
+                "v1 package requires a registered tokenizer lineage"
+            )
         for item in self.evidence:
             if (
                 item.purpose != self.purpose

@@ -328,22 +328,22 @@
     {
       "id": "ACCOUNTING-PAYLOAD-CLOSURE-217",
       "layer": "runtime",
-      "selector": "tests/unit/test_pgvector_candidate_index.py::test_qwen_query_accounting_includes_the_exact_provider_prefix"
+      "selector": "tests/unit/test_http_v1_accounting.py::test_v1_http_package_and_context_run_publish_one_digest_bound_usage"
     },
     {
       "id": "ACCOUNTING-ZERO-BYTES-217",
       "layer": "runtime",
-      "selector": "tests/unit/test_pgvector_candidate_index.py::test_budgeted_query_embedding_refuses_exhaustion_before_provider_call"
+      "selector": "tests/unit/test_http_v1_accounting.py::test_v1_http_budget_exhaustion_refuses_before_provider_bytes"
     },
     {
       "id": "ACCOUNTING-MAX-CHARGE-217",
       "layer": "runtime",
-      "selector": "tests/unit/test_pgvector_candidate_index.py::test_failed_query_embedding_charges_reserved_maximum_after_provider_call"
+      "selector": "tests/unit/test_http_v1_accounting.py::test_v1_http_unusable_embedding_settles_the_reserved_maximum"
     },
     {
       "id": "ACCOUNTING-CARRIER-MISMATCH-217",
       "layer": "runtime",
-      "selector": "tests/unit/test_pgvector_candidate_index.py::test_query_carrier_must_match_resolve_tokenizer_before_provider_call"
+      "selector": "tests/unit/test_http_v1_accounting.py::test_v1_http_carrier_tokenizer_mismatch_refuses_before_provider_bytes"
     },
     {
       "id": "ACCOUNTING-MIXED-GENERATION-217",

@@ -85,6 +85,7 @@ class PostgreSQLFtsCandidateIndex:
     ) -> FtsDiscoveryRequest:
         if type(active_release_generation) is not int or active_release_generation < 1:
             raise TypeError("FTS candidate discovery requires an active generation")
+        budget.require_release_generation(active_release_generation)
         return self.prepare_budgeted_discovery(
             request,
             effective_scope=effective_scope,

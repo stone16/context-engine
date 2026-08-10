@@ -301,7 +301,6 @@ def test_budgeted_query_embedding_debits_actual_internal_usage() -> None:
     assert budget.usage.elapsed_ms == 7
 
 
-@pytest.mark.security_evidence(id="ACCOUNTING-PAYLOAD-CLOSURE-217", layer="runtime")
 def test_qwen_query_accounting_includes_the_exact_provider_prefix() -> None:
     provider = QwenEmbeddingTwin()
     budget = PackageBudgetMeter(
@@ -326,7 +325,6 @@ def test_qwen_query_accounting_includes_the_exact_provider_prefix() -> None:
     assert provider.query_calls == [("semantic query",)]
 
 
-@pytest.mark.security_evidence(id="ACCOUNTING-ZERO-BYTES-217", layer="runtime")
 def test_budgeted_query_embedding_refuses_exhaustion_before_provider_call() -> None:
     provider = _RecordingProvider()
     query = "semantic query"
@@ -354,7 +352,6 @@ def test_budgeted_query_embedding_refuses_exhaustion_before_provider_call() -> N
     assert budget.usage.provider_calls == 0
 
 
-@pytest.mark.security_evidence(id="ACCOUNTING-MAX-CHARGE-217", layer="runtime")
 def test_failed_query_embedding_charges_reserved_maximum_after_provider_call() -> None:
     query = "semantic query"
     budget = PackageBudgetMeter(
@@ -418,7 +415,6 @@ def test_query_provider_profile_must_equal_active_release_before_call() -> None:
     assert budget.usage.provider_calls == 0
 
 
-@pytest.mark.security_evidence(id="ACCOUNTING-CARRIER-MISMATCH-217", layer="runtime")
 def test_query_carrier_must_match_resolve_tokenizer_before_provider_call() -> None:
     provider = _RecordingProvider()
     budget = PackageBudgetMeter(
@@ -462,6 +458,33 @@ def test_query_carrier_must_match_release_generation_before_provider_call() -> N
         )
 
     assert provider.calls == 0
+    assert budget.usage == BudgetUsage(0, 0, 0, 0)
+
+
+def test_query_embedding_clock_failure_settles_reservation_for_reuse() -> None:
+    provider = _RecordingProvider()
+    budget = PackageBudgetMeter(
+        PackageBudget(100, 1, 1, 5_000),
+        tokenizer_profile=UNICODE_SCALAR_TOKENIZER_PROFILE,
+        release_generation=7,
+    )
+    index = PostgreSQLVectorCandidateIndex(
+        provider,
+        monotonic_ms=lambda: (_ for _ in ()).throw(RuntimeError("clock failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="clock failed"):
+        index.prepare_budgeted_discovery(
+            Acquire(need=ContextNeed(query="semantic query")),
+            effective_scope=_discovery_scope(),
+            budget=budget,
+            active_embedding_profile_digest=(
+                DETERMINISTIC_TWIN_EMBEDDING_PROFILE.profile_digest
+            ),
+        )
+
+    reservation = budget._reserve(BudgetUsage(100, 1, 1, 5_000))
+    budget._cancel(reservation)
     assert budget.usage == BudgetUsage(0, 0, 0, 0)
 
 

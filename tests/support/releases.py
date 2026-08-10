@@ -361,6 +361,9 @@ def ensure_test_runtime_release(
                 and existing.runtime_index_profile_digest == index_profile_digest
                 and existing.embedding_profile_digest
                 == embedding_provider_profile.profile_digest
+                and existing.runtime_profile_ref == runtime_profile_ref
+                and existing.runtime_tokenizer_ref == tokenizer_ref
+                and existing.runtime_package_schema_ref == package_schema_ref
             ):
                 try:
                     return ActiveRuntimeRelease(

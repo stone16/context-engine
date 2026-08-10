@@ -35,7 +35,8 @@ from engine.runtime.package_digest import context_package_digest
 from engine.runtime.release_lineage import PACKAGE_SCHEMA_REF_V1
 from engine.tokenizer_accounting import (
     HISTORICAL_UTF8_BYTE_TOKENIZER_PROFILE_DIGEST,
-    UNICODE_SCALAR_TOKENIZER_PROFILE,
+    TokenizerUnavailable,
+    registered_tokenizer_profile_by_identity,
 )
 
 __all__ = [
@@ -369,10 +370,18 @@ class ContextPackage:
             HISTORICAL_UTF8_BYTE_TOKENIZER_PROFILE_DIGEST
         ):
             raise ValueError("v0 package requires historical byte accounting")
-        if is_v1 and self.tokenizer_profile_digest != (
-            UNICODE_SCALAR_TOKENIZER_PROFILE.profile_digest
-        ):
-            raise ValueError("v1 package requires the active tokenizer profile")
+        if is_v1:
+            try:
+                profile = registered_tokenizer_profile_by_identity(
+                    self.tokenizer_ref,
+                    self.tokenizer_profile_digest,
+                )
+            except TokenizerUnavailable:
+                raise ValueError(
+                    "v1 package requires a registered tokenizer lineage"
+                ) from None
+            if profile.profile_ref != self.tokenizer_ref:
+                raise ValueError("v1 package tokenizer identity does not match")
         has_content = bool(self.blocks or self.evidence)
         if has_content:
             if not self.blocks or not self.evidence:
@@ -384,6 +393,8 @@ class ContextPackage:
             )
             if is_v0 and self.budget_usage.tokens != expected_tokens:
                 raise ValueError("content package token usage must equal UTF-8 bytes")
+            if is_v1 and self.budget_usage.tokens == 0:
+                raise ValueError("v1 content package token usage must be positive")
             if is_v0 and any(
                 value != 0
                 for value in (

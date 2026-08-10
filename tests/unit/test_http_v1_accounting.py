@@ -30,7 +30,7 @@ from engine.runtime.actor import (
     _construct_current_membership_verification,
     _open_membership_authority_scope,
 )
-from engine.runtime.budget import PackageBudgetMeter
+from engine.runtime.budget import BudgetUsage, PackageBudgetMeter
 from engine.runtime.construction import Runtime, required_kernel_dependencies
 from engine.runtime.context_run import ContextRunRecord
 from engine.runtime.contracts import Acquire
@@ -61,7 +61,10 @@ from engine.runtime.scope import (
     ScopeTarget,
     TrustedScopeOperands,
 )
-from engine.supply import DETERMINISTIC_TWIN_EMBEDDING_PROFILE
+from engine.supply import (
+    DETERMINISTIC_TWIN_EMBEDDING_PROFILE,
+    EmbeddingProviderUnavailable,
+)
 from engine.tokenizer_accounting import UNICODE_SCALAR_TOKENIZER_PROFILE
 from tests.support.context_run import (
     TEST_QUERY_DIGEST_KEYRING,
@@ -106,6 +109,13 @@ class _RecordingEmbeddingProvider:
         return self.embed(inputs)
 
 
+class _UnavailableEmbeddingProvider(_RecordingEmbeddingProvider):
+    def embed(self, inputs: tuple[str, ...]) -> tuple[tuple[float, ...], ...]:
+        self.calls += 1
+        self.bytes_sent += sum(len(value.encode("utf-8")) for value in inputs)
+        raise EmbeddingProviderUnavailable("injected unavailable provider")
+
+
 class _AuthorizedMaterializedPort(RecordingMaterializedPort):
     def discover_vector(  # type: ignore[override]
         self,
@@ -143,6 +153,53 @@ class _MixedGenerationVectorIndex(PostgreSQLVectorCandidateIndex):
             active_embedding_profile_digest=active_embedding_profile_digest,
             active_release_generation=active_release_generation + 1,
         )
+
+
+class _MismatchedCarrierVectorIndex(PostgreSQLVectorCandidateIndex):
+    def prepare_generation_bound_discovery(
+        self,
+        request: Acquire,
+        *,
+        effective_scope: CandidateDiscoveryScope,
+        budget: PackageBudgetMeter,
+        active_embedding_profile_digest: str,
+        active_release_generation: int,
+    ) -> VectorDiscoveryRequest:
+        budget.require_carrier_tokenizer(
+            "foreign-tokenizer",
+            UNICODE_SCALAR_TOKENIZER_PROFILE.profile_digest,
+        )
+        return super().prepare_generation_bound_discovery(
+            request,
+            effective_scope=effective_scope,
+            budget=budget,
+            active_embedding_profile_digest=active_embedding_profile_digest,
+            active_release_generation=active_release_generation,
+        )
+
+
+class _SettlementRecordingVectorIndex(PostgreSQLVectorCandidateIndex):
+    latest_settled_usage: BudgetUsage | None = None
+
+    def prepare_generation_bound_discovery(
+        self,
+        request: Acquire,
+        *,
+        effective_scope: CandidateDiscoveryScope,
+        budget: PackageBudgetMeter,
+        active_embedding_profile_digest: str,
+        active_release_generation: int,
+    ) -> VectorDiscoveryRequest:
+        try:
+            return super().prepare_generation_bound_discovery(
+                request,
+                effective_scope=effective_scope,
+                budget=budget,
+                active_embedding_profile_digest=active_embedding_profile_digest,
+                active_release_generation=active_release_generation,
+            )
+        finally:
+            type(self).latest_settled_usage = budget.usage
 
 
 class _CurrentEpochPort:
@@ -250,11 +307,17 @@ def _application(
     *,
     corrupt_tokenizer_digest: bool = False,
     mixed_generation_carrier: bool = False,
+    mismatched_tokenizer_carrier: bool = False,
+    record_settlement: bool = False,
 ) -> FastAPI:
     materialized = _AuthorizedMaterializedPort()
     index_type = (
         _MixedGenerationVectorIndex
         if mixed_generation_carrier
+        else _MismatchedCarrierVectorIndex
+        if mismatched_tokenizer_carrier
+        else _SettlementRecordingVectorIndex
+        if record_settlement
         else PostgreSQLVectorCandidateIndex
     )
     index = index_type(provider, monotonic_ms=iter((25, 32)).__next__)
@@ -285,6 +348,8 @@ def _client(
     *,
     corrupt_tokenizer_digest: bool = False,
     mixed_generation_carrier: bool = False,
+    mismatched_tokenizer_carrier: bool = False,
+    record_settlement: bool = False,
 ) -> TestClient:
     return TestClient(
         _application(
@@ -292,6 +357,8 @@ def _client(
             context_runs,
             corrupt_tokenizer_digest=corrupt_tokenizer_digest,
             mixed_generation_carrier=mixed_generation_carrier,
+            mismatched_tokenizer_carrier=mismatched_tokenizer_carrier,
+            record_settlement=record_settlement,
         )
     )
 
@@ -313,7 +380,12 @@ def _wait_for_tcp(port: int) -> None:
     raise AssertionError("live v1 SDK fixture did not become reachable")
 
 
-@pytest.mark.security_evidence(id="ACCOUNTING-PACKAGE-RUN-BINDING-217", layer="runtime")
+@pytest.mark.security_evidence(
+    id="ACCOUNTING-PAYLOAD-CLOSURE-217", layer="runtime"
+)
+@pytest.mark.security_evidence(
+    id="ACCOUNTING-PACKAGE-RUN-BINDING-217", layer="runtime"
+)
 def test_v1_http_package_and_context_run_publish_one_digest_bound_usage() -> None:
     provider = _RecordingEmbeddingProvider()
     context_runs = RecordingContextRunPort()
@@ -393,6 +465,28 @@ def test_v1_http_tokenizer_digest_mismatch_refuses_before_provider_bytes() -> No
     assert context_runs.calls == []
 
 
+@pytest.mark.security_evidence(id="ACCOUNTING-CARRIER-MISMATCH-217", layer="runtime")
+def test_v1_http_carrier_tokenizer_mismatch_refuses_before_provider_bytes() -> None:
+    provider = _RecordingEmbeddingProvider()
+    context_runs = RecordingContextRunPort()
+    response = _client(
+        provider,
+        context_runs,
+        mismatched_tokenizer_carrier=True,
+    ).post(
+        "/v1/resolve",
+        headers={
+            "Authorization": f"Bearer {VALID_TOKEN}",
+            "X-Context-Request-Id": "v1-carrier-tokenizer-mismatch",
+        },
+        json={"kind": "acquire", "need": {"query": QUERY}},
+    )
+
+    assert response.status_code == 503
+    assert provider.calls == provider.bytes_sent == 0
+    assert context_runs.calls == []
+
+
 @pytest.mark.security_evidence(id="ACCOUNTING-MIXED-GENERATION-217", layer="runtime")
 def test_v1_http_mixed_generation_refuses_before_provider_bytes() -> None:
     provider = _RecordingEmbeddingProvider()
@@ -416,6 +510,52 @@ def test_v1_http_mixed_generation_refuses_before_provider_bytes() -> None:
     assert provider.calls == 0
     assert provider.bytes_sent == 0
     assert context_runs.calls == []
+
+
+@pytest.mark.security_evidence(id="ACCOUNTING-ZERO-BYTES-217", layer="runtime")
+def test_v1_http_budget_exhaustion_refuses_before_provider_bytes() -> None:
+    provider = _RecordingEmbeddingProvider()
+    context_runs = RecordingContextRunPort()
+    response = _client(provider, context_runs).post(
+        "/v1/resolve",
+        headers={
+            "Authorization": f"Bearer {VALID_TOKEN}",
+            "X-Context-Request-Id": "v1-zero-provider-bytes",
+        },
+        json={
+            "kind": "acquire",
+            "need": {"query": QUERY},
+            "packageBudget": {"maxTokens": len(QUERY) - 1},
+        },
+    )
+
+    assert response.status_code == 503
+    assert provider.calls == provider.bytes_sent == 0
+    assert context_runs.calls == []
+
+
+@pytest.mark.security_evidence(id="ACCOUNTING-MAX-CHARGE-217", layer="runtime")
+def test_v1_http_unusable_embedding_settles_the_reserved_maximum() -> None:
+    provider = _UnavailableEmbeddingProvider()
+    context_runs = RecordingContextRunPort()
+    _SettlementRecordingVectorIndex.latest_settled_usage = None
+    client = _client(provider, context_runs, record_settlement=True)
+    response = client.post(
+        "/v1/resolve",
+        headers={
+            "Authorization": f"Bearer {VALID_TOKEN}",
+            "X-Context-Request-Id": "v1-maximum-charge",
+        },
+        json={"kind": "acquire", "need": {"query": QUERY}},
+    )
+
+    assert response.status_code == 503
+    assert provider.calls == 1
+    assert provider.bytes_sent == len(QUERY.encode("utf-8"))
+    assert context_runs.calls == []
+    assert _SettlementRecordingVectorIndex.latest_settled_usage == BudgetUsage(
+        len(QUERY), 1, 1, 5_000
+    )
 
 
 def test_generated_v1_sdk_observes_cumulative_usage_over_live_http() -> None:
@@ -470,3 +610,45 @@ def test_generated_v1_sdk_observes_cumulative_usage_over_live_http() -> None:
     assert provider.calls == 1
     assert len(context_runs.calls) == 1
     assert context_runs.calls[0][0].package_digest == package["packageDigest"]
+
+
+def test_v1_wire_rejects_content_with_zero_cumulative_tokens() -> None:
+    provider = _RecordingEmbeddingProvider()
+    context_runs = RecordingContextRunPort()
+    response = _client(provider, context_runs).post(
+        "/v1/resolve",
+        headers={
+            "Authorization": f"Bearer {VALID_TOKEN}",
+            "X-Context-Request-Id": "v1-zero-content-tokens",
+        },
+        json={"kind": "acquire", "need": {"query": QUERY}},
+    )
+    package = response.json()["package"]
+    package["budgetUsage"] = {**package["budgetUsage"], "tokens": 0}
+    digest_document = dict(package)
+    digest_document.pop("packageDigest")
+    package["packageDigest"] = context_package_digest(digest_document)
+
+    with pytest.raises(ValidationError, match="token"):
+        ContextPackageV1Wire.model_validate(package)
+
+
+def test_v1_wire_binds_tokenizer_ref_to_profile_digest() -> None:
+    provider = _RecordingEmbeddingProvider()
+    context_runs = RecordingContextRunPort()
+    response = _client(provider, context_runs).post(
+        "/v1/resolve",
+        headers={
+            "Authorization": f"Bearer {VALID_TOKEN}",
+            "X-Context-Request-Id": "v1-tokenizer-lineage",
+        },
+        json={"kind": "acquire", "need": {"query": QUERY}},
+    )
+    package = response.json()["package"]
+    package["tokenizerRef"] = "foreign-tokenizer"
+    digest_document = dict(package)
+    digest_document.pop("packageDigest")
+    package["packageDigest"] = context_package_digest(digest_document)
+
+    with pytest.raises(ValidationError, match="tokenizer"):
+        ContextPackageV1Wire.model_validate(package)

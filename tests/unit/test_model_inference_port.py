@@ -19,6 +19,8 @@ from uuid import UUID
 import pytest
 
 from adapters.embeddings import DeterministicEmbeddingTwin
+from adapters.exact_phrase import PostgreSQLExactPhraseCandidateIndex
+from adapters.fts import PostgreSQLFtsCandidateIndex
 from adapters.pgvector import PostgreSQLVectorCandidateIndex
 from engine.runtime.authorized_ranking import join_authorized_ranking
 from engine.runtime.budget import BudgetUsage, PackageBudget, PackageBudgetMeter
@@ -53,7 +55,35 @@ from engine.runtime.model_inference import (
 )
 from engine.runtime.scope import CandidateDiscoveryScope
 from engine.supply import DETERMINISTIC_TWIN_EMBEDDING_PROFILE
-from engine.tokenizer_accounting import UNICODE_SCALAR_TOKENIZER_PROFILE
+from engine.tokenizer_accounting import (
+    UNICODE_SCALAR_TOKENIZER_PROFILE,
+    TokenizerUnavailable,
+)
+
+
+@pytest.mark.parametrize(
+    "index",
+    (PostgreSQLExactPhraseCandidateIndex(), PostgreSQLFtsCandidateIndex()),
+)
+def test_generation_bound_lexical_discovery_refuses_mixed_release_generation(
+    index: PostgreSQLExactPhraseCandidateIndex | PostgreSQLFtsCandidateIndex,
+) -> None:
+    budget = PackageBudgetMeter(
+        PackageBudget(100, 1, 1, 5_000),
+        tokenizer_profile=UNICODE_SCALAR_TOKENIZER_PROFILE,
+        release_generation=7,
+    )
+
+    with pytest.raises(TokenizerUnavailable):
+        index.prepare_generation_bound_discovery(
+            Acquire(need=ContextNeed(query="generation-bound lexical query")),
+            effective_scope=CandidateDiscoveryScope("a" * 64),
+            budget=budget,
+            active_embedding_profile_digest=(
+                DETERMINISTIC_TWIN_EMBEDDING_PROFILE.profile_digest
+            ),
+            active_release_generation=8,
+        )
 
 
 def _profile(

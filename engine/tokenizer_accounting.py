@@ -167,6 +167,23 @@ def registered_tokenizer_profile(
         raise TokenizerUnavailable("Tokenizer profile is unavailable") from None
 
 
+def registered_tokenizer_profile_by_identity(
+    profile_ref: str,
+    profile_digest: str,
+) -> TokenizerProfile:
+    """Resolve one active tokenizer identity without fixing a manifest generation."""
+
+    matches = tuple(
+        profile
+        for profile in _REGISTERED_PROFILES.values()
+        if profile.profile_ref == profile_ref
+        and profile.profile_digest == profile_digest
+    )
+    if len(matches) != 1:
+        raise TokenizerUnavailable("Tokenizer profile is unavailable")
+    return matches[0]
+
+
 def load_registered_tokenizer(
     canonical_document: str,
     profile_digest: str,
@@ -183,4 +200,5 @@ __all__ = [
     "UNICODE_SCALAR_TOKENIZER_PROFILE",
     "load_registered_tokenizer",
     "registered_tokenizer_profile",
+    "registered_tokenizer_profile_by_identity",
 ]

@@ -70,6 +70,19 @@ def test_context_learning_is_the_only_public_release_owner() -> None:
     } == {"evaluate", "promote"}
 
 
+def test_release_fixture_reuse_requires_complete_runtime_version_lineage() -> None:
+    source = (REPOSITORY_ROOT / "tests" / "support" / "releases.py").read_text(
+        encoding="utf-8"
+    )
+    reuse_guard = source[source.index("if existing is not None:") : source.index(
+        "clear_test_runtime_release(organization_id)"
+    )]
+
+    assert "existing.runtime_profile_ref == runtime_profile_ref" in reuse_guard
+    assert "existing.runtime_tokenizer_ref == tokenizer_ref" in reuse_guard
+    assert "existing.runtime_package_schema_ref == package_schema_ref" in reuse_guard
+
+
 def test_migration_and_bootstrap_sources_have_no_pointer_seed_or_promote_call() -> None:
     migration_sources = _python_sources(MIGRATIONS_ROOT)
     bootstrap_sources = tuple(

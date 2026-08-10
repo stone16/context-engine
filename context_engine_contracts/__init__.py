@@ -16,6 +16,37 @@ MAX_PROJECTED_FIELD_REFS: Final = 64
 MAX_PROJECTED_FIELD_REF_LENGTH: Final = 64
 PACKAGE_REF_PATTERN: Final = r"^pkg_[0-9a-f]{32}$"
 DECISION_REF_PATTERN: Final = r"^dec_[0-9a-f]{32}$"
+_TOKENIZER_PROFILE_DIGEST_DOMAIN: Final = b"context-engine.tokenizer-profile.v1\x00"
+_REGISTERED_V1_TOKENIZER_DOCUMENTS: Final = (
+    {
+        "accountingVersion": "unicode-scalar-accounting-v1",
+        "artifactDigest": (
+            "8d301e3ce94e5b48febffb2e0871e139cd4d5f808084eccbf9cfc512d3948cca"
+        ),
+        "countingContract": "one-unicode-scalar-one-token-v1",
+        "normalizationRef": "none",
+        "profileRef": "unicode-scalar-tokenizer-v1",
+        "vocabularyRef": "unicode-scalars-v15.1",
+    },
+)
+REGISTERED_V1_TOKENIZER_IDENTITIES: Final = frozenset(
+    (
+        cast(str, document["profileRef"]),
+        hashlib.sha256(
+            _TOKENIZER_PROFILE_DIGEST_DOMAIN + rfc8785.dumps(document)
+        ).hexdigest(),
+    )
+    for document in _REGISTERED_V1_TOKENIZER_DOCUMENTS
+)
+
+
+def is_registered_v1_tokenizer_identity(
+    profile_ref: object,
+    profile_digest: object,
+) -> bool:
+    """Return whether ref and digest name one admitted v1 tokenizer profile."""
+
+    return (profile_ref, profile_digest) in REGISTERED_V1_TOKENIZER_IDENTITIES
 
 
 type CanonicalJsonValue = (

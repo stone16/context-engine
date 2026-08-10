@@ -204,8 +204,10 @@ class PostgreSQLVectorCandidateIndex:
                 "Vector candidate discovery is unavailable"
             ) from None
 
+        provider_call_started = False
         try:
             started_ms = self._monotonic_ms()
+            provider_call_started = True
             query_embedding = validate_embedding_batch(
                 (request.need.query,),
                 self._embed_query_bounded(request.need.query),
@@ -231,11 +233,19 @@ class PostgreSQLVectorCandidateIndex:
                 raise VectorCandidateIndexUnavailable(
                     "Vector candidate discovery is unavailable"
                 )
-        except (EmbeddingProviderUnavailable, VectorCandidateIndexUnavailable):
-            budget._commit(reservation, maximum_usage)
-            raise VectorCandidateIndexUnavailable(
-                "Vector candidate discovery is unavailable"
-            ) from None
+        except Exception as error:
+            if provider_call_started:
+                budget._commit(reservation, maximum_usage)
+            else:
+                budget._cancel(reservation)
+            if isinstance(
+                error,
+                EmbeddingProviderUnavailable | VectorCandidateIndexUnavailable,
+            ):
+                raise VectorCandidateIndexUnavailable(
+                    "Vector candidate discovery is unavailable"
+                ) from None
+            raise
         budget._commit(
             reservation,
             BudgetUsage(

@@ -173,6 +173,14 @@ class PackageBudgetMeter:
 
             raise TokenizerUnavailable("PackageBudgetMeter carrier tokenizer changed")
 
+    def require_release_generation(self, release_generation: int) -> None:
+        """Refuse a carrier composed for a different Release generation."""
+
+        if release_generation != self._release_generation:
+            from engine.tokenizer_accounting import TokenizerUnavailable
+
+            raise TokenizerUnavailable("PackageBudgetMeter Release generation changed")
+
     def count_tokens(self, value: str | bytes) -> int:
         """Count with the bound Release tokenizer; historical v0 meters count none."""
 
