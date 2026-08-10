@@ -42,6 +42,7 @@ from engine.runtime.materialized import (
     _construct_materialized_projection_session,
     _open_materialized_projection_scope,
 )
+from engine.runtime.package_digest import context_package_digest
 from engine.runtime.policy_epoch import (
     _close_policy_epoch_authority_scope,
     _construct_policy_epoch_session,
@@ -357,6 +358,14 @@ def test_v1_http_package_and_context_run_publish_one_digest_bound_usage() -> Non
     mutated["budgetUsage"] = {**package["budgetUsage"], "tokens": 1}
     with pytest.raises(ValidationError, match="packageDigest"):
         ContextPackageV1Wire.model_validate(mutated)
+
+    foreign_schema = dict(package)
+    foreign_schema["packageSchemaRef"] = "context-package-openapi-foreign"
+    digest_document = dict(foreign_schema)
+    digest_document.pop("packageDigest")
+    foreign_schema["packageDigest"] = context_package_digest(digest_document)
+    with pytest.raises(ValidationError, match="packageSchemaRef"):
+        ContextPackageV1Wire.model_validate(foreign_schema)
 
 
 @pytest.mark.security_evidence(id="ACCOUNTING-INGRESS-MISMATCH-217", layer="runtime")

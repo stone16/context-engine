@@ -415,7 +415,7 @@ class ContextPackageV1Wire(ClosedWireModel):
     ttlSeconds: PositiveExactInteger
     tokenizerRef: OpaqueOutputRef
     tokenizerProfileDigest: PackageDigestOutput
-    packageSchemaRef: OpaqueOutputRef
+    packageSchemaRef: Literal["context-package-openapi-v1"]
     blocks: tuple[BlockWire, ...]
     evidence: tuple[EvidenceWire, ...]
     gaps: tuple[GapWire, ...]

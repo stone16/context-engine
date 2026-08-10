@@ -1,5 +1,6 @@
 import {
   ContextEngineResolveClient,
+  type ContextPackageV1Wire,
   type DeliveryBoundContextOptions,
   type DirectContextOptions,
   type ResolutionOutcomeV1Wire,
@@ -22,6 +23,15 @@ const outcome: Promise<ResolutionOutcomeV1Wire> = client.resolve({
   requestId: "sdk-package-contract",
 });
 void outcome;
+
+const packageSchemaRef: ContextPackageV1Wire["packageSchemaRef"] =
+  "context-package-openapi-v1";
+void packageSchemaRef;
+
+// @ts-expect-error v1 Packages require the exact reviewed v1 schema identity
+const foreignPackageSchemaRef: ContextPackageV1Wire["packageSchemaRef"] =
+  "context-package-openapi-foreign";
+void foreignPackageSchemaRef;
 
 const citationDelivery: DeliveryBoundContextOptions = {
   deliveryEvidenceRef: "deliv_citation_opaque",

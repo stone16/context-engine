@@ -26,6 +26,9 @@ def test_v1_is_a_separate_public_contract_with_cumulative_package_identity() -> 
     assert package["properties"]["tokenizerProfileDigest"]["pattern"] == (
         "^[0-9a-f]{64}$"
     )
+    assert package["properties"]["packageSchemaRef"]["const"] == (
+        "context-package-openapi-v1"
+    )
 
 
 def test_checked_in_v1_snapshot_has_an_independent_checksum() -> None:
@@ -54,6 +57,13 @@ def test_aggregate_openapi_check_verifies_both_frozen_versions() -> None:
 
 
 def test_v1_baseline_check_accepts_the_relative_makefile_directory() -> None:
+    pre_v1_ancestor = subprocess.run(
+        ("git", "rev-list", "--max-parents=0", "HEAD"),
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
     result = subprocess.run(
         (
             "uv",
@@ -64,7 +74,7 @@ def test_v1_baseline_check_accepts_the_relative_makefile_directory() -> None:
             "--version-directory",
             "openapi/v1",
             "--baseline-ref",
-            "HEAD",
+            pre_v1_ancestor,
         ),
         cwd=ROOT,
         check=False,

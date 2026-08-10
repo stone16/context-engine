@@ -267,9 +267,7 @@
             "type": "string"
           },
           "packageSchemaRef": {
-            "maxLength": 256,
-            "minLength": 1,
-            "pattern": "^\\S+$",
+            "const": "context-package-openapi-v1",
             "title": "Packageschemaref",
             "type": "string"
           },

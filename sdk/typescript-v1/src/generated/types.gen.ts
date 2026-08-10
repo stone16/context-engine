@@ -175,7 +175,7 @@ export type ContextPackageV1Wire = {
     /**
      * Packageschemaref
      */
-    packageSchemaRef: string;
+    packageSchemaRef: 'context-package-openapi-v1';
     /**
      * Policyepoch
      */
