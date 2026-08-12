@@ -130,6 +130,8 @@ source .context-engine/database.env
 source .context-engine/operators.env
 set +a
 
+uv run context-engine-control preflight
+
 uv run context-engine-control migrate
 
 uv run context-engine-dogfood-seed \
@@ -181,6 +183,23 @@ explicit and precedes API boot. This journey activates neither production or
 multi-user authentication, remote exposure, group/public delivery, `Continue`,
 hybrid retrieval, external/network embeddings, nor non-File providers. Those
 boundaries remain `NOT_ACTIVE`.
+
+The tracked [`deploy/local-preflight.env.example`](./deploy/local-preflight.env.example)
+lists the complete environment-name inventory for this bounded journey with
+empty values only. Copy names into the owner-only operator source; never turn
+the template into a second secret source. `preflight` accepts only the closed
+local plane selection (`--plane` may be repeated), reports every selected
+applicable readiness failure in one schema-versioned JSON document, and returns
+zero only when all selected applicable checks are ready. The schema contract is
+[`context-engine-preflight-v1.schema.json`](./docs/contracts/context-engine-preflight-v1.schema.json).
+
+Ready is a point-in-time prerequisite, not production certification, an
+authorization grant, or Security/Reliability/Quality/Budget evidence. The
+command never migrates, seeds, scans, schedules, runs inference, promotes a
+Release, starts a process, or activates a carrier; every deferred boundary above
+remains `NOT_ACTIVE`. Run the separately authorized `migrate` command after the
+diagnostic when schema readiness is not at head, then rerun preflight before
+starting the worker or API.
 
 ### Run the API
 

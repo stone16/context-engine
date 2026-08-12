@@ -49,6 +49,7 @@ def test_control_process_help_and_unknown_subcommand() -> None:
     )
     for subcommand in (
         "migrate",
+        "preflight",
         "register-file-source",
         "read-source",
         "activate-change-feed",

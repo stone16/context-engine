@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://context-engine.invalid/contracts/context-engine-preflight-v1.schema.json",
+  "title": "ContextEngine local preflight result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "service", "status", "checks"],
+  "properties": {
+    "schemaVersion": {"const": "context-engine-preflight-v1"},
+    "service": {"const": "context-engine-control-preflight"},
+    "status": {"enum": ["ready", "not_ready"]},
+    "checks": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "prefixItems": [
+        {"$ref": "#/$defs/configuration"},
+        {"$ref": "#/$defs/schema"},
+        {"$ref": "#/$defs/model"},
+        {"$ref": "#/$defs/release"}
+      ],
+      "items": false
+    }
+  },
+  "$defs": {
+    "base": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["check", "status", "category"],
+      "properties": {
+        "check": {"type": "string"},
+        "category": {"type": "string"},
+        "status": {"enum": ["ready", "failed", "not_run"]}
+      }
+    },
+    "configuration": {
+      "allOf": [
+        {"$ref": "#/$defs/base"},
+        {
+          "properties": {
+            "check": {"const": "configuration"},
+            "category": {"enum": ["ready", "configuration_missing", "configuration_malformed"]}
+          }
+        }
+      ]
+    },
+    "schema": {
+      "allOf": [
+        {"$ref": "#/$defs/base"},
+        {
+          "properties": {
+            "check": {"const": "schema"},
+            "category": {"enum": ["ready", "not_selected", "dependency_not_ready", "schema_unreachable", "schema_probe_refused", "schema_not_at_head"]}
+          }
+        }
+      ]
+    },
+    "model": {
+      "allOf": [
+        {"$ref": "#/$defs/base"},
+        {
+          "properties": {
+            "check": {"const": "model"},
+            "category": {"enum": ["ready", "not_selected", "dependency_not_ready", "model_manifest_unavailable", "model_manifest_invalid", "model_artifacts_unavailable", "model_artifacts_invalid"]}
+          }
+        }
+      ]
+    },
+    "release": {
+      "allOf": [
+        {"$ref": "#/$defs/base"},
+        {
+          "properties": {
+            "check": {"const": "release"},
+            "category": {"enum": ["ready", "not_selected", "dependency_not_ready", "runtime_unreachable", "runtime_probe_refused", "runtime_identity_not_current", "active_release_absent", "active_release_incompatible"]}
+          }
+        }
+      ]
+    }
+  }
+}

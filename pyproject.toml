@@ -47,7 +47,7 @@ dev = [
 
 [project.scripts]
 context-engine-api = "applications.api:main"
-context-engine-control = "applications.control:main"
+context-engine-control = "applications.control_dispatch:main"
 context-engine-dogfood-seed = "applications.dogfood:main"
 context-engine-dogfood-eval = "applications.dogfood_evaluation:main"
 context-engine-embedding-benchmark = "applications.embedding_benchmark:main"
@@ -82,6 +82,8 @@ packages = [
 "eval/public-subset-governance.json" = "eval/public-subset-governance.json"
 "eval/thresholds/v1.json" = "eval/thresholds/v1.json"
 "engine/tokenizers/unicode-scalar-v1.json" = "engine/tokenizers/unicode-scalar-v1.json"
+"deploy/local-preflight.env.example" = "deploy/local-preflight.env.example"
+"docs/contracts/context-engine-preflight-v1.schema.json" = "docs/contracts/context-engine-preflight-v1.schema.json"
 "LICENSE" = "LICENSE"
 "NOTICE" = "NOTICE"
 "THIRD_PARTY_NOTICES.md" = "THIRD_PARTY_NOTICES.md"

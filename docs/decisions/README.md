@@ -243,3 +243,4 @@ touched:
 - [0102 — Activate release-bound local query embedding](0102-activate-release-bound-local-query-embedding.md)
 - [0103 — Activate one local MCP Acquire translation](0103-activate-one-local-mcp-acquire-translation.md)
 - [0104 — Version ContextPackage for cumulative Runtime accounting](0104-version-context-package-for-cumulative-runtime-accounting.md)
+- [0105 — Bind local preflight to read-only observation](0105-bind-local-preflight-to-read-only-observation.md)

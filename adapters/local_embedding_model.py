@@ -10,7 +10,7 @@ from typing import Any, cast
 
 import rfc8785
 
-from engine.supply import (
+from engine.embedding_profiles import (
     QWEN3_EMBEDDING_PROFILE,
     registered_embedding_provider_profile,
 )
@@ -98,8 +98,7 @@ def _registered_qwen_artifacts() -> tuple[tuple[str, str], ...]:
                 or any(part in {"", ".", ".."} for part in parsed_path.parts)
                 or len(expected_digest) != _SHA256_DIGEST_LENGTH
                 or any(
-                    character not in "0123456789abcdef"
-                    for character in expected_digest
+                    character not in "0123456789abcdef" for character in expected_digest
                 )
             ):
                 raise ValueError
@@ -188,4 +187,16 @@ def load_qwen_local_model(model_dir: Path) -> Any:
     return model
 
 
-__all__ = ["LocalEmbeddingModelUnavailable", "load_qwen_local_model"]
+def verify_registered_qwen_artifacts(model_dir: Path) -> None:
+    """Verify the pinned artifact set without importing or constructing a backend."""
+
+    if not isinstance(model_dir, Path):
+        raise TypeError("Local embedding model requires a model directory")
+    _verify_model_artifacts(model_dir, _registered_qwen_artifacts())
+
+
+__all__ = [
+    "LocalEmbeddingModelUnavailable",
+    "load_qwen_local_model",
+    "verify_registered_qwen_artifacts",
+]

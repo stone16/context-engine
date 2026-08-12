@@ -84,6 +84,10 @@ def _parser() -> argparse.ArgumentParser:
         "migrate",
         help="upgrade the configured database to the current schema head",
     )
+    subcommands.add_parser(
+        "preflight",
+        help="report read-only readiness for bounded local planes",
+    )
     register = subcommands.add_parser(
         "register-file-source",
         help="register one logical File root",
