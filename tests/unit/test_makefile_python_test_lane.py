@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -7,12 +8,21 @@ ROOT = Path(__file__).parents[2]
 
 
 def _dry_run_make(target: str) -> list[str]:
+    # Drop inherited sub-make state so the output is identical whether pytest
+    # itself runs under `make` (CI) or standalone; sub-makes otherwise add
+    # "Entering/Leaving directory" lines.
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in {"MAKEFLAGS", "MFLAGS", "MAKELEVEL"}
+    }
     result = subprocess.run(
-        ("make", "--dry-run", "--always-make", target),
+        ("make", "--dry-run", "--always-make", "--no-print-directory", target),
         cwd=ROOT,
         check=False,
         capture_output=True,
         text=True,
+        env=env,
     )
     assert result.returncode == 0, result.stderr
     return [line.strip() for line in result.stdout.splitlines() if line.strip()]
