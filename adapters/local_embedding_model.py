@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import importlib
 import json
+import os
+import stat
+from contextlib import suppress
 from hashlib import sha256
 from pathlib import Path, PurePosixPath
 from typing import Any, cast
@@ -34,7 +37,10 @@ def _reject_json_constant(_value: str) -> None:
     raise ValueError
 
 
-def _registered_qwen_artifacts() -> tuple[tuple[str, str], ...]:
+def registered_qwen_snapshot_contract(
+) -> tuple[str, str, str, tuple[tuple[str, str], ...]]:
+    """Load exact Qwen identity and artifacts from the tracked registry."""
+
     try:
         metadata = MODEL_REGISTRY_PATH.stat()
         if (
@@ -103,9 +109,15 @@ def _registered_qwen_artifacts() -> tuple[tuple[str, str], ...]:
             ):
                 raise ValueError
             artifacts.append((relative_path, expected_digest))
-        if artifacts != sorted(artifacts):
+        registered_paths = {path for path, _digest in artifacts}
+        if artifacts != sorted(artifacts) or len(registered_paths) != len(artifacts):
             raise ValueError
-        return tuple(artifacts)
+        return (
+            cast(str, identity["modelId"]),
+            cast(str, identity["revision"]),
+            cast(str, identity["artifactDigest"]),
+            tuple(artifacts),
+        )
     except LocalEmbeddingModelUnavailable:
         raise
     except (
@@ -124,45 +136,150 @@ def _registered_qwen_artifacts() -> tuple[tuple[str, str], ...]:
         ) from None
 
 
-def _verify_model_artifacts(
+def _registered_qwen_artifacts() -> tuple[tuple[str, str], ...]:
+    return registered_qwen_snapshot_contract()[3]
+
+
+def verify_model_artifacts(
     model_dir: Path,
     expected_artifacts: tuple[tuple[str, str], ...],
+    expected_artifact_digest: str,
 ) -> None:
+    """Verify one exact artifact tree through no-follow directory descriptors."""
+
     try:
-        root = model_dir.resolve(strict=True)
-        if not root.is_dir():
-            raise ValueError
-        files = tuple(sorted(path for path in root.rglob("*") if path.is_file()))
-        if (
-            not files
-            or any(path.is_symlink() for path in files)
-            or any(not path.resolve().is_relative_to(root) for path in files)
-            or tuple(path.relative_to(root).as_posix() for path in files)
-            != tuple(path for path, _digest in expected_artifacts)
-        ):
-            raise ValueError
-        manifest: list[dict[str, str]] = []
-        for path, (relative_path, expected_digest) in zip(
-            files,
-            expected_artifacts,
-            strict=True,
-        ):
-            digest = sha256()
-            with path.open("rb") as handle:
-                for block in iter(lambda: handle.read(1024 * 1024), b""):
-                    digest.update(block)
-            actual_digest = digest.hexdigest()
-            if actual_digest != expected_digest:
-                raise ValueError
-            manifest.append({"path": relative_path, "sha256": actual_digest})
-        if sha256(rfc8785.dumps(manifest)).hexdigest() != (
-            QWEN3_EMBEDDING_PROFILE.artifact_digest
-        ):
-            raise ValueError
+        flags = os.O_RDONLY
+        if hasattr(os, "O_DIRECTORY"):
+            flags |= os.O_DIRECTORY
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        root_descriptor = os.open(model_dir, flags)
+        try:
+            verify_model_artifacts_descriptor(
+                root_descriptor,
+                expected_artifacts,
+                expected_artifact_digest,
+            )
+        finally:
+            os.close(root_descriptor)
     except (OSError, TypeError, ValueError):
         raise LocalEmbeddingModelUnavailable(
             "Local embedding model is unavailable"
         ) from None
+
+
+def verify_model_artifacts_descriptor(
+    root_descriptor: int,
+    expected_artifacts: tuple[tuple[str, str], ...],
+    expected_artifact_digest: str,
+) -> None:
+    if type(root_descriptor) is not int or root_descriptor < 0:
+        raise ValueError
+    root_metadata = os.fstat(root_descriptor)
+    if not stat.S_ISDIR(root_metadata.st_mode):
+        raise ValueError
+    expected = dict(expected_artifacts)
+    if len(expected) != len(expected_artifacts):
+        raise ValueError
+    observed, directories = _artifact_tree_from_descriptor(root_descriptor)
+    expected_directories = frozenset(
+        parent.as_posix()
+        for relative_path in expected
+        for parent in PurePosixPath(relative_path).parents
+        if parent != PurePosixPath(".")
+    )
+    if directories != expected_directories:
+        for descriptor in observed.values():
+            os.close(descriptor)
+        raise ValueError
+    if tuple(sorted(observed)) != tuple(path for path, _digest in expected_artifacts):
+        for descriptor in observed.values():
+            os.close(descriptor)
+        raise ValueError
+    manifest: list[dict[str, str]] = []
+    try:
+        for relative_path, expected_digest in expected_artifacts:
+            descriptor = observed[relative_path]
+            digest = sha256()
+            before = os.fstat(descriptor)
+            if not stat.S_ISREG(before.st_mode):
+                raise ValueError
+            with os.fdopen(os.dup(descriptor), "rb", closefd=True) as handle:
+                for block in iter(lambda: handle.read(1024 * 1024), b""):
+                    digest.update(block)
+            after = os.fstat(descriptor)
+            if (
+                (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+                != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
+                or digest.hexdigest() != expected_digest
+            ):
+                raise ValueError
+            manifest.append({"path": relative_path, "sha256": expected_digest})
+    finally:
+        for descriptor in observed.values():
+            with suppress(OSError):
+                os.close(descriptor)
+    if sha256(rfc8785.dumps(manifest)).hexdigest() != expected_artifact_digest:
+        raise ValueError
+
+
+def _artifact_tree_from_descriptor(
+    root_descriptor: int,
+) -> tuple[dict[str, int], frozenset[str]]:
+    files: dict[str, int] = {}
+    directories: set[str] = set()
+
+    def walk(directory_descriptor: int, prefix: PurePosixPath | None) -> None:
+        with os.scandir(directory_descriptor) as entries:
+            ordered = sorted(entries, key=lambda entry: entry.name)
+        for entry in ordered:
+            name = entry.name
+            if type(name) is not str or name in {"", ".", ".."} or "/" in name:
+                raise ValueError
+            relative = PurePosixPath(name) if prefix is None else prefix / name
+            metadata = entry.stat(follow_symlinks=False)
+            if stat.S_ISDIR(metadata.st_mode):
+                directories.add(relative.as_posix())
+                flags = os.O_RDONLY
+                if hasattr(os, "O_DIRECTORY"):
+                    flags |= os.O_DIRECTORY
+                if hasattr(os, "O_NOFOLLOW"):
+                    flags |= os.O_NOFOLLOW
+                child = os.open(name, flags, dir_fd=directory_descriptor)
+                try:
+                    opened = os.fstat(child)
+                    if (opened.st_dev, opened.st_ino) != (
+                        metadata.st_dev,
+                        metadata.st_ino,
+                    ):
+                        raise ValueError
+                    walk(child, relative)
+                finally:
+                    os.close(child)
+                continue
+            if not stat.S_ISREG(metadata.st_mode):
+                raise ValueError
+            flags = os.O_RDONLY
+            if hasattr(os, "O_NOFOLLOW"):
+                flags |= os.O_NOFOLLOW
+            descriptor = os.open(name, flags, dir_fd=directory_descriptor)
+            opened = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(opened.st_mode)
+                or (opened.st_dev, opened.st_ino) != (metadata.st_dev, metadata.st_ino)
+            ):
+                os.close(descriptor)
+                raise ValueError
+            files[relative.as_posix()] = descriptor
+
+    try:
+        walk(root_descriptor, None)
+        return files, frozenset(directories)
+    except BaseException:
+        for descriptor in files.values():
+            with suppress(OSError):
+                os.close(descriptor)
+        raise
 
 
 def load_qwen_local_model(model_dir: Path) -> Any:
@@ -171,7 +288,11 @@ def load_qwen_local_model(model_dir: Path) -> Any:
     if not isinstance(model_dir, Path):
         raise TypeError("Local embedding model requires a model directory")
     expected_artifacts = _registered_qwen_artifacts()
-    _verify_model_artifacts(model_dir, expected_artifacts)
+    verify_model_artifacts(
+        model_dir,
+        expected_artifacts,
+        QWEN3_EMBEDDING_PROFILE.artifact_digest,
+    )
     try:
         backend = importlib.import_module("sentence_transformers")
         model = backend.SentenceTransformer(
@@ -183,7 +304,11 @@ def load_qwen_local_model(model_dir: Path) -> Any:
         raise LocalEmbeddingModelUnavailable(
             "Local embedding model is unavailable"
         ) from None
-    _verify_model_artifacts(model_dir, expected_artifacts)
+    verify_model_artifacts(
+        model_dir,
+        expected_artifacts,
+        QWEN3_EMBEDDING_PROFILE.artifact_digest,
+    )
     return model
 
 
@@ -192,11 +317,19 @@ def verify_registered_qwen_artifacts(model_dir: Path) -> None:
 
     if not isinstance(model_dir, Path):
         raise TypeError("Local embedding model requires a model directory")
-    _verify_model_artifacts(model_dir, _registered_qwen_artifacts())
+    verify_model_artifacts(
+        model_dir,
+        _registered_qwen_artifacts(),
+        QWEN3_EMBEDDING_PROFILE.artifact_digest,
+    )
 
 
 __all__ = [
     "LocalEmbeddingModelUnavailable",
+    "QWEN3_EMBEDDING_PROFILE",
     "load_qwen_local_model",
+    "registered_qwen_snapshot_contract",
+    "verify_model_artifacts",
+    "verify_model_artifacts_descriptor",
     "verify_registered_qwen_artifacts",
 ]

@@ -556,8 +556,10 @@ def probe_model_readiness(configuration: LocalPreflightConfiguration) -> str:
     except Exception:
         return "model_manifest_unavailable"
     try:
-        local_embedding_model._verify_model_artifacts(
-            configuration.model_dir, artifacts
+        local_embedding_model.verify_model_artifacts(
+            configuration.model_dir,
+            artifacts,
+            local_embedding_model.QWEN3_EMBEDDING_PROFILE.artifact_digest,
         )
         return "ready"
     except Exception:

@@ -264,6 +264,15 @@ paths listed for `models.primary.artifacts` in
 [`eval/embedding-benchmark/model-registry.json`](./eval/embedding-benchmark/model-registry.json).
 Extra files, missing files, changed digests, and symlinks all refuse before
 inference; a stock model download must be reduced to that registered manifest.
+To materialize the exact registered primary snapshot into a new durable
+destination, run the explicit opt-in maintainer command:
+
+```bash
+make model-materialize-acceptance MODEL_DESTINATION=/maintainer/chosen/new-directory
+```
+
+The command never overwrites an existing destination and emits only the
+versioned content-free materializer result. It is neither a CI nor Release gate.
 
 Before activation, freshly reimport the File corpus with the Supply worker's
 network-free `qwen-local` embedding mode and the same pinned local model

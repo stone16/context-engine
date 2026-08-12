@@ -160,17 +160,19 @@ def test_no_load_qwen_verifier_uses_registered_artifacts_once(
 ) -> None:
     model_dir = Path("/private/qwen")
     artifacts = (("model.safetensors", "a" * 64),)
-    observed: list[tuple[Path, tuple[tuple[str, str], ...]]] = []
+    observed: list[tuple[Path, tuple[tuple[str, str], ...], str]] = []
     monkeypatch.setattr(local_model, "_registered_qwen_artifacts", lambda: artifacts)
     monkeypatch.setattr(
         local_model,
-        "_verify_model_artifacts",
-        lambda path, expected: observed.append((path, expected)),
+        "verify_model_artifacts",
+        lambda path, expected, digest: observed.append((path, expected, digest)),
     )
 
     preflight.verify_registered_qwen_artifacts(model_dir)
 
-    assert observed == [(model_dir, artifacts)]
+    assert observed == [
+        (model_dir, artifacts, local_model.QWEN3_EMBEDDING_PROFILE.artifact_digest)
+    ]
 
 
 def test_orchestrator_reports_all_independent_failures_and_earliest_exit() -> None:

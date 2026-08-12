@@ -149,6 +149,18 @@ operation, Control, ActionPlane, models, effects, and promotion remain absent or
 `NOT_ACTIVE`; see the
 [operator guide](./docs/operations/maintainer-context-cli.md).
 
+### Registered local model materializer
+
+ADR-0106 activates one short-lived maintainer process that can fetch only the
+tracked `primary` model role into a maintainer-selected new destination. CI
+proves the closed registry, transport, exact-verification, content-free output,
+and atomic no-clobber publication boundaries using tiny synthetic bytes and one
+loopback transport twin. The real registered Qwen byte transfer is an opt-in
+maintainer acceptance command and has not been executed as CI or Release
+evidence. The process has no database, model-load, inference, Supply, Runtime,
+Learning, Release-promotion, or carrier-activation authority; every other model
+role, host, overwrite mode, and automatic download remains `NOT_ACTIVE`.
+
 ### Repo-local Claude Code consumer
 
 | ADR | Activates |
