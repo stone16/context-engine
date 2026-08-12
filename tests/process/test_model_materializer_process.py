@@ -560,9 +560,12 @@ def test_model_materializer_refuses_staging_name_swap_before_publication(
         staging_attack="staging-swap",
     )
 
-    _assert_closed_output(completed, category="verification_refused", returncode=12)
+    _assert_closed_output(completed, category="publication_refused", returncode=13)
     assert not destination.exists()
-    assert not (tmp_path / "retained-verified-staging").exists()
+    retained = tmp_path / "retained-verified-staging"
+    assert (retained / "model.safetensors").read_bytes() == files[
+        "model.safetensors"
+    ]
 
 
 def test_model_materializer_interrupt_is_closed_and_cleans_staging(

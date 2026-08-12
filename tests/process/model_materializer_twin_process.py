@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import os
+import sys
 from pathlib import Path
 from typing import cast
 
@@ -14,6 +16,15 @@ from applications.model_materializer import (
     RegisteredModelSnapshot,
     main,
 )
+
+
+def _descriptor_path(descriptor: int) -> Path:
+    if sys.platform == "darwin":
+        raw_path = fcntl.fcntl(descriptor, fcntl.F_GETPATH, b"\0" * 1024)
+        return Path(os.fsdecode(raw_path.split(b"\0", 1)[0]))
+    if sys.platform.startswith("linux"):
+        return Path(os.readlink(f"/proc/self/fd/{descriptor}"))
+    raise RuntimeError("descriptor path lookup is unavailable")
 
 
 def _snapshot(path: Path) -> RegisteredModelSnapshot:
@@ -87,14 +98,7 @@ def run() -> None:
                 b"malicious-parent-canary\n"
             )
         elif arguments.staging_attack == "staging-swap":
-            retained = os.fstat(staging_descriptor)
-            staging = next(
-                child
-                for path in destination.parent.glob(".context-engine-model-work-*")
-                for child in path.glob(".snapshot-*")
-                if (child.stat().st_dev, child.stat().st_ino)
-                == (retained.st_dev, retained.st_ino)
-            )
+            staging = _descriptor_path(staging_descriptor)
             staging.rename(destination.parent / "retained-verified-staging")
             staging.mkdir()
             (staging / "model.safetensors").write_bytes(b"unverified swap bytes\n")
