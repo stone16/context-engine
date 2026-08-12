@@ -8,6 +8,7 @@ import pytest
 
 import adapters.local_embedding_model as local_model
 from applications import preflight
+from engine.database_roles import expected_database_role_facts
 
 
 def valid_environment() -> dict[str, str]:
@@ -40,6 +41,7 @@ def valid_environment() -> dict[str, str]:
                 "accept_file_change_page,schedule_file_change_page"
             ),
             "CONTEXT_ENGINE_RELEASE_OPERATOR_SECRET": "r" * 32,
+            "CONTEXT_ENGINE_DOGFOOD_BASE_URL": "http://127.0.0.1:8000",
             "CONTEXT_ENGINE_DOGFOOD_SECRET": "d" * 32,
             "CONTEXT_ENGINE_WORKER_LEASE_SIGNING_KEY_HEX": "11" * 32,
             "CONTEXT_ENGINE_FILE_CHANGE_PROVIDER_SIGNING_KEY_HEX": "22" * 32,
@@ -80,6 +82,7 @@ def test_configuration_inventory_accepts_exact_bounded_composition() -> None:
     configuration = preflight.load_preflight_configuration(valid_environment())
 
     assert configuration.selected_planes == frozenset(preflight.PLANES)
+    assert not hasattr(configuration, "environment")
     assert repr(configuration) == "LocalPreflightConfiguration(<redacted>)"
 
 
@@ -105,6 +108,7 @@ def test_configuration_inventory_classifies_every_missing_name(missing: str) -> 
         ("CONTEXT_ENGINE_WORKER_EMBEDDING_DIMENSION", "1024"),
         ("CONTEXT_ENGINE_DOGFOOD_EMBEDDING_PROVIDER", "network"),
         ("CONTEXT_ENGINE_DOGFOOD_EMBEDDING_MODEL_DIR", "/different/model"),
+        ("CONTEXT_ENGINE_DOGFOOD_BASE_URL", "https://private.example:8443"),
         ("CONTEXT_ENGINE_MIGRATOR_ROLE", "context_engine_runtime"),
         (
             "CONTEXT_ENGINE_MIGRATION_DATABASE_URL",
@@ -155,24 +159,44 @@ def test_environment_name_template_mechanically_matches_inventory() -> None:
     assert all(row.count("=") == 1 for row in rows)
 
 
-def test_no_load_qwen_verifier_uses_registered_artifacts_once(
+def test_model_probe_uses_only_public_registered_model_seams(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    model_dir = Path("/private/qwen")
-    artifacts = (("model.safetensors", "a" * 64),)
-    observed: list[tuple[Path, tuple[tuple[str, str], ...], str]] = []
-    monkeypatch.setattr(local_model, "_registered_qwen_artifacts", lambda: artifacts)
+    configuration = preflight.load_preflight_configuration(
+        valid_environment(), selected_planes=("supply",)
+    )
+    calls: list[str] = []
+
+    def registered_snapshot() -> tuple[str, str, str, tuple[tuple[str, str], ...]]:
+        calls.append("manifest")
+        return (
+            "Qwen/Qwen3-Embedding-0.6B",
+            "0" * 40,
+            "1" * 64,
+            (("model.safetensors", "2" * 64),),
+        )
+
+    def verify_registered(_path: Path) -> None:
+        calls.append("artifacts")
+
     monkeypatch.setattr(
         local_model,
-        "verify_model_artifacts",
-        lambda path, expected, digest: observed.append((path, expected, digest)),
+        "registered_qwen_snapshot_contract",
+        registered_snapshot,
+    )
+    monkeypatch.setattr(
+        local_model,
+        "verify_registered_qwen_artifacts",
+        verify_registered,
+    )
+    monkeypatch.setattr(
+        local_model,
+        "_registered_qwen_artifacts",
+        lambda: (_ for _ in ()).throw(AssertionError("private helper used")),
     )
 
-    preflight.verify_registered_qwen_artifacts(model_dir)
-
-    assert observed == [
-        (model_dir, artifacts, local_model.QWEN3_EMBEDDING_PROFILE.artifact_digest)
-    ]
+    assert preflight.probe_model_readiness(configuration) == "ready"
+    assert calls == ["manifest", "artifacts"]
 
 
 def test_orchestrator_reports_all_independent_failures_and_earliest_exit() -> None:
@@ -182,28 +206,118 @@ def test_orchestrator_reports_all_independent_failures_and_earliest_exit() -> No
         environment,
         selected_planes=preflight.PLANES,
         schema_probe=lambda _configuration: "schema_not_at_head",
+        database_probe=lambda _configuration, _role: "database_unavailable",
         model_probe=lambda _configuration: "model_artifacts_invalid",
         release_probe=lambda _configuration: "active_release_absent",
+        caller_probe=lambda _configuration: "ready",
     )
 
     assert result.exit_code == 11
     assert json.loads(result.rendered)["checks"] == [
         {"check": "configuration", "status": "ready", "category": "ready"},
         {
-            "check": "schema",
+            "check": "migration_schema",
             "status": "failed",
             "category": "schema_not_at_head",
         },
         {
-            "check": "model",
+            "check": "control_database",
+            "status": "failed",
+            "category": "database_unavailable",
+        },
+        {
+            "check": "supply_scheduler_database",
+            "status": "failed",
+            "category": "database_unavailable",
+        },
+        {
+            "check": "supply_worker_database",
+            "status": "failed",
+            "category": "database_unavailable",
+        },
+        {
+            "check": "supply_model",
             "status": "failed",
             "category": "model_artifacts_invalid",
         },
         {
-            "check": "release",
+            "check": "release_learning_database",
+            "status": "failed",
+            "category": "database_unavailable",
+        },
+        {
+            "check": "release_operator_database",
+            "status": "failed",
+            "category": "database_unavailable",
+        },
+        {
+            "check": "runtime_release",
             "status": "failed",
             "category": "active_release_absent",
         },
+        {
+            "check": "runtime_model",
+            "status": "failed",
+            "category": "model_artifacts_invalid",
+        },
+        {"check": "caller_configuration", "status": "ready", "category": "ready"},
+    ]
+
+
+def test_selected_planes_execute_every_applicable_observation() -> None:
+    calls: list[str] = []
+
+    def ready_database(
+        _configuration: preflight.LocalPreflightConfiguration,
+        role: str,
+    ) -> str:
+        calls.append(role)
+        return "ready"
+
+    def ready_caller(_configuration: preflight.LocalPreflightConfiguration) -> str:
+        calls.append("caller")
+        return "ready"
+
+    result = preflight.run_preflight(
+        valid_environment(),
+        selected_planes=("control", "release", "caller"),
+        schema_probe=lambda _configuration: (_ for _ in ()).throw(
+            AssertionError("unselected migration probe ran")
+        ),
+        database_probe=ready_database,
+        model_probe=lambda _configuration: (_ for _ in ()).throw(
+            AssertionError("unselected model probe ran")
+        ),
+        release_probe=lambda _configuration: (_ for _ in ()).throw(
+            AssertionError("unselected Runtime probe ran")
+        ),
+        caller_probe=ready_caller,
+    )
+
+    assert result.exit_code == 0
+    assert calls == ["control", "learning", "release_operator", "caller"]
+    document = json.loads(result.rendered)
+    assert document["status"] == "ready"
+    assert document["checks"] == [
+        {"check": "configuration", "status": "ready", "category": "ready"},
+        {"check": "migration_schema", "status": "not_run", "category": "not_selected"},
+        {"check": "control_database", "status": "ready", "category": "ready"},
+        {
+            "check": "supply_scheduler_database",
+            "status": "not_run",
+            "category": "not_selected",
+        },
+        {
+            "check": "supply_worker_database",
+            "status": "not_run",
+            "category": "not_selected",
+        },
+        {"check": "supply_model", "status": "not_run", "category": "not_selected"},
+        {"check": "release_learning_database", "status": "ready", "category": "ready"},
+        {"check": "release_operator_database", "status": "ready", "category": "ready"},
+        {"check": "runtime_release", "status": "not_run", "category": "not_selected"},
+        {"check": "runtime_model", "status": "not_run", "category": "not_selected"},
+        {"check": "caller_configuration", "status": "ready", "category": "ready"},
     ]
 
 
@@ -285,6 +399,106 @@ def test_schema_probe_uses_read_only_migration_session_and_closed_head_result(
     assert events[-2:] == ["rollback", "dispose"]
 
 
+def test_database_probe_uses_every_selected_exact_role_in_read_only_sessions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    configuration = preflight.load_preflight_configuration(
+        valid_environment(), selected_planes=("control", "supply", "release")
+    )
+    expected_roles = {
+        "control": "context_engine_control",
+        "scheduler": "context_engine_scheduler",
+        "worker": "context_engine_worker",
+        "learning": "context_engine_learning",
+        "release_operator": "context_engine_release_operator",
+    }
+
+    class _Result:
+        def __init__(self, value: object) -> None:
+            self._value = value
+
+        def one(self) -> object:
+            return self._value
+
+        def scalar_one(self) -> object:
+            return self._value
+
+    class _Transaction:
+        def __enter__(self) -> None:
+            pass
+
+        def __exit__(self, *_args: object) -> None:
+            pass
+
+    options_events: list[dict[str, object]] = []
+    disposed_roles: list[str] = []
+
+    class _Connection:
+        def __init__(self, role: str) -> None:
+            self._role = role
+
+        def __enter__(self) -> _Connection:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            pass
+
+        def execution_options(self, **options: object) -> _Connection:
+            options_events.append(options)
+            return self
+
+        def begin(self) -> _Transaction:
+            return _Transaction()
+
+        def execute(self, _statement: object) -> _Result:
+            return _Result("on")
+
+    class _Engine:
+        def __init__(self, role: str) -> None:
+            self._role = role
+
+        def connect(self) -> _Connection:
+            return _Connection(self._role)
+
+        def dispose(self) -> None:
+            disposed_roles.append(self._role)
+
+    by_url = {
+        str(url): expected_roles[role]
+        for role, url_name in preflight._ROLE_DATABASE_URLS.items()
+        if (url := configuration.database_urls.get(url_name)) is not None
+    }
+    monkeypatch.setattr(
+        preflight,
+        "_create_preflight_engine",
+        lambda url: _Engine(by_url[str(url)]),
+    )
+    monkeypatch.setattr(
+        preflight,
+        "observe_database_role_facts",
+        lambda connection: expected_database_role_facts(connection._role),
+    )
+    monkeypatch.setattr(
+        preflight,
+        "observe_sensitive_database_role_facts",
+        lambda _connection: (True, True),
+    )
+
+    assert {
+        role: preflight.probe_database_readiness(configuration, role)
+        for role in expected_roles
+    } == {role: "ready" for role in expected_roles}
+    assert all(
+        options
+        == {
+            "isolation_level": "READ COMMITTED",
+            "postgresql_readonly": True,
+        }
+        for options in options_events
+    )
+    assert set(disposed_roles) == set(expected_roles.values())
+
+
 def test_model_probe_maps_registered_verifier_failure_without_details(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -292,7 +506,7 @@ def test_model_probe_maps_registered_verifier_failure_without_details(
         valid_environment(), selected_planes=("supply",)
     )
     monkeypatch.setattr(
-        preflight,
+        local_model,
         "verify_registered_qwen_artifacts",
         lambda _path: (_ for _ in ()).throw(RuntimeError("/private/model/file")),
     )
@@ -388,6 +602,11 @@ def test_release_probe_binds_user_actor_in_read_only_runtime_session(
     )
     monkeypatch.setattr(
         preflight,
+        "observe_database_role_facts",
+        lambda _connection: preflight._expected_runtime_role_facts(),
+    )
+    monkeypatch.setattr(
+        preflight,
         "_utc_now",
         lambda: datetime(2026, 8, 13, 0, 0, tzinfo=UTC),
     )
@@ -418,17 +637,24 @@ def test_selected_migration_plane_marks_unselected_checks_without_failure() -> N
         environment,
         selected_planes=("migration",),
         schema_probe=lambda _configuration: "ready",
+        database_probe=lambda _configuration, _plane: "not_selected",
         model_probe=lambda _configuration: "not_selected",
         release_probe=lambda _configuration: "not_selected",
+        caller_probe=lambda _configuration: "not_selected",
     )
 
     assert result.exit_code == 0
     document = json.loads(result.rendered)
     assert document["status"] == "ready"
-    assert document["checks"][2:] == [
-        {"check": "model", "status": "not_run", "category": "not_selected"},
-        {"check": "release", "status": "not_run", "category": "not_selected"},
-    ]
+    assert document["checks"][1] == {
+        "check": "migration_schema",
+        "status": "ready",
+        "category": "ready",
+    }
+    assert all(
+        row["status"] == "not_run" and row["category"] == "not_selected"
+        for row in document["checks"][2:]
+    )
 
 
 def test_probe_exception_text_never_reaches_any_output_channel(
@@ -447,8 +673,10 @@ def test_probe_exception_text_never_reaches_any_output_channel(
         valid_environment(),
         selected_planes=preflight.PLANES,
         schema_probe=noisy,
+        database_probe=lambda configuration, _plane: noisy(configuration),
         model_probe=noisy,
         release_probe=noisy,
+        caller_probe=noisy,
     )
     print(result.rendered)
     captured = capsys.readouterr()
@@ -459,6 +687,13 @@ def test_probe_exception_text_never_reaches_any_output_channel(
     assert [row["category"] for row in json.loads(captured.out)["checks"]] == [
         "ready",
         "schema_probe_refused",
+        "database_probe_refused",
+        "database_probe_refused",
+        "database_probe_refused",
         "model_artifacts_invalid",
+        "database_probe_refused",
+        "database_probe_refused",
         "runtime_probe_refused",
+        "model_artifacts_invalid",
+        "caller_configuration_invalid",
     ]

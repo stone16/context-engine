@@ -10,28 +10,52 @@ from enum import Enum
 from sqlalchemy.engine import URL, make_url
 from sqlalchemy.exc import ArgumentError
 
-MIGRATOR_ROLE = "context_engine_migrator"
-CONTROL_ROLE = "context_engine_control"
-IDENTITY_ROLE = "context_engine_identity"
-EGRESS_ROLE = "context_engine_egress"
-ACTION_ROLE = "context_engine_action"
-ACTION_PREPARE_DEFINER_ROLE = "context_engine_action_prepare_definer"
-ACTION_EXECUTE_DEFINER_ROLE = "context_engine_action_execute_definer"
-EGRESS_GRANT_DEFINER_ROLE = "context_engine_egress_grant_definer"
-DELIVERY_EVIDENCE_DEFINER_ROLE = "context_engine_delivery_evidence_definer"
-CITATION_DEFINER_ROLE = "context_engine_citation_definer"
-ACCESS_POLICY_DEFINER_ROLE = "context_engine_access_policy_definer"
-GRAPH_DEFINER_ROLE = "context_engine_graph_definer"
-WORKER_LEASE_DEFINER_ROLE = "context_engine_worker_lease_definer"
-FILE_DISPATCH_DEFINER_ROLE = "context_engine_file_dispatch_definer"
-CONTEXT_RUN_READER_DEFINER_ROLE = "context_engine_context_run_reader_definer"
-RUNTIME_ROLE = "context_engine_runtime"
-WORKER_ROLE = "context_engine_worker"
-SCHEDULER_ROLE = "context_engine_scheduler"
-LEARNING_ROLE = "context_engine_learning"
-RELEASE_OPERATOR_ROLE = "context_engine_release_operator"
-OPERATOR_ROLE = "context_engine_security_operator"
-RELEASE_DEFINER_ROLE = "context_engine_release_definer"
+from engine.database_roles import (
+    ACCESS_POLICY_DEFINER_ROLE as ACCESS_POLICY_DEFINER_ROLE,
+)
+from engine.database_roles import (
+    ACTION_EXECUTE_DEFINER_ROLE as ACTION_EXECUTE_DEFINER_ROLE,
+)
+from engine.database_roles import (
+    ACTION_PREPARE_DEFINER_ROLE as ACTION_PREPARE_DEFINER_ROLE,
+)
+from engine.database_roles import (
+    ACTION_ROLE,
+    CONTROL_ROLE,
+    EGRESS_ROLE,
+    IDENTITY_ROLE,
+    LEARNING_ROLE,
+    MIGRATOR_ROLE,
+    OPERATOR_ROLE,
+    RELEASE_OPERATOR_ROLE,
+    RUNTIME_ROLE,
+    SCHEDULER_ROLE,
+    WORKER_ROLE,
+)
+from engine.database_roles import (
+    CITATION_DEFINER_ROLE as CITATION_DEFINER_ROLE,
+)
+from engine.database_roles import (
+    CONTEXT_RUN_READER_DEFINER_ROLE as CONTEXT_RUN_READER_DEFINER_ROLE,
+)
+from engine.database_roles import (
+    DELIVERY_EVIDENCE_DEFINER_ROLE as DELIVERY_EVIDENCE_DEFINER_ROLE,
+)
+from engine.database_roles import (
+    EGRESS_GRANT_DEFINER_ROLE as EGRESS_GRANT_DEFINER_ROLE,
+)
+from engine.database_roles import (
+    FILE_DISPATCH_DEFINER_ROLE as FILE_DISPATCH_DEFINER_ROLE,
+)
+from engine.database_roles import (
+    GRAPH_DEFINER_ROLE as GRAPH_DEFINER_ROLE,
+)
+from engine.database_roles import (
+    RELEASE_DEFINER_ROLE as RELEASE_DEFINER_ROLE,
+)
+from engine.database_roles import (
+    WORKER_LEASE_DEFINER_ROLE as WORKER_LEASE_DEFINER_ROLE,
+)
 
 
 class DatabasePurpose(Enum):
@@ -220,9 +244,7 @@ def load_harness_database_configurations(
         action=load_database_configuration(DatabasePurpose.TRUSTED_ACTION, source),
         runtime=load_database_configuration(DatabasePurpose.API_RUNTIME, source),
         worker=load_database_configuration(DatabasePurpose.SUPPLY_WORKER, source),
-        scheduler=load_database_configuration(
-            DatabasePurpose.SUPPLY_SCHEDULER, source
-        ),
+        scheduler=load_database_configuration(DatabasePurpose.SUPPLY_SCHEDULER, source),
         learning=load_database_configuration(DatabasePurpose.LEARNING, source),
         release_operator=load_database_configuration(
             DatabasePurpose.RELEASE_OPERATOR, source

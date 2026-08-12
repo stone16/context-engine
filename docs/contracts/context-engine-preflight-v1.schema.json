@@ -11,13 +11,20 @@
     "status": {"enum": ["ready", "not_ready"]},
     "checks": {
       "type": "array",
-      "minItems": 4,
-      "maxItems": 4,
+      "minItems": 11,
+      "maxItems": 11,
       "prefixItems": [
         {"$ref": "#/$defs/configuration"},
-        {"$ref": "#/$defs/schema"},
-        {"$ref": "#/$defs/model"},
-        {"$ref": "#/$defs/release"}
+        {"$ref": "#/$defs/migrationSchema"},
+        {"$ref": "#/$defs/controlDatabase"},
+        {"$ref": "#/$defs/supplySchedulerDatabase"},
+        {"$ref": "#/$defs/supplyWorkerDatabase"},
+        {"$ref": "#/$defs/supplyModel"},
+        {"$ref": "#/$defs/releaseLearningDatabase"},
+        {"$ref": "#/$defs/releaseOperatorDatabase"},
+        {"$ref": "#/$defs/runtimeRelease"},
+        {"$ref": "#/$defs/runtimeModel"},
+        {"$ref": "#/$defs/callerConfiguration"}
       ],
       "items": false
     }
@@ -44,37 +51,69 @@
         }
       ]
     },
-    "schema": {
+    "migrationSchema": {
       "allOf": [
         {"$ref": "#/$defs/base"},
         {
           "properties": {
-            "check": {"const": "schema"},
+            "check": {"const": "migration_schema"},
             "category": {"enum": ["ready", "not_selected", "dependency_not_ready", "schema_unreachable", "schema_probe_refused", "schema_not_at_head"]}
           }
         }
       ]
     },
-    "model": {
+    "database": {
       "allOf": [
         {"$ref": "#/$defs/base"},
         {
           "properties": {
-            "check": {"const": "model"},
-            "category": {"enum": ["ready", "not_selected", "dependency_not_ready", "model_manifest_unavailable", "model_manifest_invalid", "model_artifacts_unavailable", "model_artifacts_invalid"]}
+            "category": {"enum": ["ready", "not_selected", "dependency_not_ready", "database_unavailable", "database_probe_refused"]}
           }
         }
       ]
     },
-    "release": {
+    "controlDatabase": {
+      "allOf": [{"$ref": "#/$defs/database"}, {"properties": {"check": {"const": "control_database"}}}]
+    },
+    "supplySchedulerDatabase": {
+      "allOf": [{"$ref": "#/$defs/database"}, {"properties": {"check": {"const": "supply_scheduler_database"}}}]
+    },
+    "supplyWorkerDatabase": {
+      "allOf": [{"$ref": "#/$defs/database"}, {"properties": {"check": {"const": "supply_worker_database"}}}]
+    },
+    "releaseLearningDatabase": {
+      "allOf": [{"$ref": "#/$defs/database"}, {"properties": {"check": {"const": "release_learning_database"}}}]
+    },
+    "releaseOperatorDatabase": {
+      "allOf": [{"$ref": "#/$defs/database"}, {"properties": {"check": {"const": "release_operator_database"}}}]
+    },
+    "model": {
+      "allOf": [
+        {"$ref": "#/$defs/base"},
+        {"properties": {"category": {"enum": ["ready", "not_selected", "dependency_not_ready", "model_manifest_unavailable", "model_manifest_invalid", "model_artifacts_unavailable", "model_artifacts_invalid"]}}}
+      ]
+    },
+    "supplyModel": {
+      "allOf": [{"$ref": "#/$defs/model"}, {"properties": {"check": {"const": "supply_model"}}}]
+    },
+    "runtimeModel": {
+      "allOf": [{"$ref": "#/$defs/model"}, {"properties": {"check": {"const": "runtime_model"}}}]
+    },
+    "runtimeRelease": {
       "allOf": [
         {"$ref": "#/$defs/base"},
         {
           "properties": {
-            "check": {"const": "release"},
+            "check": {"const": "runtime_release"},
             "category": {"enum": ["ready", "not_selected", "dependency_not_ready", "runtime_unreachable", "runtime_probe_refused", "runtime_identity_not_current", "active_release_absent", "active_release_incompatible"]}
           }
         }
+      ]
+    },
+    "callerConfiguration": {
+      "allOf": [
+        {"$ref": "#/$defs/base"},
+        {"properties": {"check": {"const": "caller_configuration"}, "category": {"enum": ["ready", "not_selected", "dependency_not_ready", "caller_configuration_invalid"]}}}
       ]
     }
   }

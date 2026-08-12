@@ -77,16 +77,17 @@ _OPERATOR_SUBCOMMANDS = frozenset(
 )
 
 
-def _parser() -> argparse.ArgumentParser:
+def _parser(
+    *,
+    extra_subcommands: tuple[tuple[str, str], ...] = (),
+) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="context-engine-control")
     subcommands = parser.add_subparsers(dest="subcommand", required=True)
+    for name, help_text in extra_subcommands:
+        subcommands.add_parser(name, help=help_text)
     subcommands.add_parser(
         "migrate",
         help="upgrade the configured database to the current schema head",
-    )
-    subcommands.add_parser(
-        "preflight",
-        help="report read-only readiness for bounded local planes",
     )
     register = subcommands.add_parser(
         "register-file-source",
@@ -529,9 +530,7 @@ def _bulk_article_policy_preview_json(preview: BulkArticlePolicyPreview) -> str:
                     "policyVersion": item.policy_version,
                     "resolutionRung": item.resolution_rung.value,
                     "resourceRef": item.resource_ref,
-                    "targetPolicy": article_policy_setting_document(
-                        item.target_policy
-                    ),
+                    "targetPolicy": article_policy_setting_document(item.target_policy),
                 }
                 for item in preview.items
             ],
@@ -618,22 +617,12 @@ def _multi_scan_report_json(report: MultiSourceScanReport) -> str:
             ],
             "sources": [_scan_report_document(source) for source in sources],
             "summary": {
-                "changesAccepted": sum(
-                    source.changes_accepted for source in sources
-                ),
-                "deletesObserved": sum(
-                    source.deletes_observed for source in sources
-                ),
-                "importsScheduled": sum(
-                    source.imports_scheduled for source in sources
-                ),
-                "pathsObserved": sum(
-                    source.paths_observed for source in sources
-                ),
+                "changesAccepted": sum(source.changes_accepted for source in sources),
+                "deletesObserved": sum(source.deletes_observed for source in sources),
+                "importsScheduled": sum(source.imports_scheduled for source in sources),
+                "pathsObserved": sum(source.paths_observed for source in sources),
                 "refusalCount": len(refusals),
-                "scanBounds": sorted(
-                    {source.scan_bound for source in sources}
-                ),
+                "scanBounds": sorted({source.scan_bound for source in sources}),
                 "sourceCount": len(report.outcomes),
             },
         },

@@ -30,7 +30,8 @@ closure excludes Control, Learning, migration execution, worker execution,
 Runtime construction, HTTP, BotDelivery, and ActionPlane.
 
 The command accepts only the closed local plane selection and environment-held
-configuration. It emits the versioned
+configuration. It performs every observation applicable to the selected planes,
+continues after independent failures, and emits the versioned
 `context-engine-preflight-v1` contract and closed categories; values, paths,
 URLs, identifiers, model artifact names, digests, exception text, and content
 never enter either output channel.
@@ -46,6 +47,18 @@ configured current UserActor inside one database-enforced read-only
 transaction. FORCE-RLS selects only that Organization's active immutable
 Release. The probe never constructs Runtime, writes ContextRun or DecisionAudit,
 performs inference, or acquires publication/effect authority.
+
+Control, Supply scheduling, Supply work, Learning, and Release publication are
+each observed through their existing exact database login in independent
+database-enforced read-only transactions. Every observation verifies the
+registered least-privilege role facts; the sensitive Release-operator login also
+verifies that it owns no database objects and has no members. Model observations
+reuse the public registered-model snapshot and no-load artifact verifier.
+
+Caller observation constructs the public local HTTP caller configuration to
+validate an explicit loopback base URL and bounded identity/secret contract. It
+does not construct a client, open a socket, or send a request; liveness remains
+the caller process's responsibility after preflight succeeds.
 
 The tracked environment template contains names and empty values only and is
 mechanically checked against the implementation inventory. A `ready` result is

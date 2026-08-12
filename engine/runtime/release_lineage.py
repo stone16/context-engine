@@ -7,13 +7,31 @@ from hashlib import sha256
 from typing import Final
 from uuid import UUID
 
-from engine.supply import (
+from engine.release_profiles import (
+    CONTENT_PROFILE_DIGEST_V0,
+    CONTENT_PROFILE_REF_V0,
+    CONTENT_SCHEMA_REF_V0,
+    CURATION_PROFILE_DIGEST_V0,
+    CURATION_PROFILE_REF_V0,
     DETERMINISTIC_TWIN_EMBEDDING_PROFILE,
-    QWEN3_EMBEDDING_PROFILE,
-)
-from engine.tokenizer_accounting import (
+    DOGFOOD_VECTOR_INDEX_PROFILE_DIGEST_V1,
+    DOGFOOD_VECTOR_INDEX_PROFILE_REF_V1,
     HISTORICAL_UTF8_BYTE_TOKENIZER_PROFILE_DIGEST,
     HISTORICAL_UTF8_BYTE_TOKENIZER_PROFILE_DOCUMENT,
+    INDEX_PROFILE_DIGEST_V0,
+    INDEX_PROFILE_REF_V0,
+    INDEX_SCHEMA_REF_V0,
+    PACKAGE_SCHEMA_REF_V0,
+    PACKAGE_SCHEMA_REF_V1,
+    QWEN3_EMBEDDING_PROFILE,
+    QWEN_VECTOR_INDEX_PROFILE_DIGEST_V1,
+    QWEN_VECTOR_INDEX_PROFILE_REF_V1,
+    RUNTIME_PROFILE_DIGEST_V0,
+    RUNTIME_PROFILE_DIGEST_V1,
+    RUNTIME_PROFILE_REF_V0,
+    RUNTIME_PROFILE_REF_V1,
+    RUNTIME_TOKENIZER_REF_V0,
+    RUNTIME_TOKENIZER_REF_V1,
     UNICODE_SCALAR_TOKENIZER_PROFILE,
 )
 
@@ -22,46 +40,6 @@ class ActiveReleaseUnavailable(RuntimeError):
     """No complete active Runtime release could be observed fail-closed."""
 
 
-RUNTIME_PROFILE_REF_V0: Final = "runtime-materialized-openapi-v0"
-RUNTIME_TOKENIZER_REF_V0: Final = "utf8-byte-budget-v1"
-PACKAGE_SCHEMA_REF_V0: Final = "context-package-openapi-v0"
-RUNTIME_PROFILE_REF_V1: Final = "runtime-materialized-openapi-v1"
-RUNTIME_TOKENIZER_REF_V1: Final = UNICODE_SCALAR_TOKENIZER_PROFILE.profile_ref
-PACKAGE_SCHEMA_REF_V1: Final = "context-package-openapi-v1"
-CONTENT_PROFILE_REF_V0: Final = "content-materialized-v0"
-CONTENT_SCHEMA_REF_V0: Final = "context-content-schema-v1"
-INDEX_PROFILE_REF_V0: Final = "index-exact-phrase-v0"
-DOGFOOD_VECTOR_INDEX_PROFILE_REF_V1: Final = (
-    "index-file-pgvector-deterministic-twin-v1"
-)
-QWEN_VECTOR_INDEX_PROFILE_REF_V1: Final = "index-file-pgvector-qwen3-0.6b-v1"
-INDEX_SCHEMA_REF_V0: Final = "context-index-schema-v1"
-CONTENT_PROFILE_DIGEST_V0: Final = sha256(
-    b"context-engine.content-profile.materialized-v0"
-).hexdigest()
-INDEX_PROFILE_DIGEST_V0: Final = sha256(
-    b"context-engine.index-profile.exact-phrase-v0"
-).hexdigest()
-DOGFOOD_VECTOR_INDEX_PROFILE_DIGEST_V1: Final = sha256(
-    b"context-engine.index-profile.file-pgvector-v1\x00"
-    b"embedding-model:deterministic-twin-v1\x00"
-    b"embedding-input:contextual-fragment-v1"
-).hexdigest()
-QWEN_VECTOR_INDEX_PROFILE_DIGEST_V1: Final = sha256(
-    b"context-engine.index-profile.file-pgvector.v1\x00"
-    + bytes.fromhex(QWEN3_EMBEDDING_PROFILE.profile_digest)
-).hexdigest()
-RUNTIME_PROFILE_DIGEST_V0: Final = sha256(
-    b"context-engine.runtime-profile.materialized-openapi-v0"
-).hexdigest()
-RUNTIME_PROFILE_DIGEST_V1: Final = sha256(
-    b"context-engine.runtime-profile.materialized-openapi-v1\x00"
-    + bytes.fromhex(UNICODE_SCALAR_TOKENIZER_PROFILE.profile_digest)
-).hexdigest()
-CURATION_PROFILE_REF_V0: Final = "curation-off-v0"
-CURATION_PROFILE_DIGEST_V0: Final = sha256(
-    b"context-engine.curation-profile.off-v0"
-).hexdigest()
 _PUBLIC_RELEASE_REF_DOMAIN: Final = b"context-engine.public-release-ref.v1\x00"
 
 
@@ -133,9 +111,7 @@ class ActiveRuntimeRelease:
     curation_evaluation_digest: str | None = field(repr=False)
     compatible_revision_refs: tuple[str, ...]
     active_revision_refs: tuple[str, ...]
-    tokenizer_profile_document: str = (
-        HISTORICAL_UTF8_BYTE_TOKENIZER_PROFILE_DOCUMENT
-    )
+    tokenizer_profile_document: str = HISTORICAL_UTF8_BYTE_TOKENIZER_PROFILE_DOCUMENT
     tokenizer_profile_digest: str = HISTORICAL_UTF8_BYTE_TOKENIZER_PROFILE_DIGEST
     manifest_ref: str = field(init=False)
 
@@ -180,9 +156,9 @@ class ActiveRuntimeRelease:
         ):
             for revision_ref in revision_refs:
                 _require_ref(field_name, revision_ref)
-            if len(set(revision_refs)) != len(
-                revision_refs
-            ) or revision_refs != tuple(sorted(revision_refs)):
+            if len(set(revision_refs)) != len(revision_refs) or revision_refs != tuple(
+                sorted(revision_refs)
+            ):
                 raise ValueError(
                     "active release Revisions must be unique and canonical"
                 )

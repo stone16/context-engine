@@ -20,6 +20,18 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import URL, Engine, make_url
 from sqlalchemy.exc import ArgumentError, OperationalError, SQLAlchemyError
 
+from engine.database_roles import (
+    CONTROL_ROLE,
+    LEARNING_ROLE,
+    RELEASE_OPERATOR_ROLE,
+    RUNTIME_ROLE,
+    SCHEDULER_ROLE,
+    WORKER_ROLE,
+    expected_database_role_facts,
+    observe_database_role_facts,
+    observe_sensitive_database_role_facts,
+)
+
 SCHEMA_VERSION = "context-engine-preflight-v1"
 SERVICE = "context-engine-control-preflight"
 PLANES = ("migration", "control", "supply", "release", "runtime", "caller")
@@ -148,7 +160,9 @@ _PLANE_ENVIRONMENT_NAMES: dict[str, frozenset[str]] = {
             "CONTEXT_ENGINE_DOGFOOD_EMBEDDING_MODEL_DIR",
         }
     ),
-    "caller": frozenset({"CONTEXT_ENGINE_DOGFOOD_SECRET"}),
+    "caller": frozenset(
+        {"CONTEXT_ENGINE_DOGFOOD_BASE_URL", "CONTEXT_ENGINE_DOGFOOD_SECRET"}
+    ),
 }
 REQUIRED_ENVIRONMENT_NAMES = frozenset().union(*_PLANE_ENVIRONMENT_NAMES.values())
 
@@ -172,10 +186,10 @@ class LocalPreflightConfiguration:
     """Validated deployment facts without constructed operational authority."""
 
     selected_planes: frozenset[str]
-    environment: Mapping[str, str] = field(repr=False)
     database_urls: Mapping[str, URL] = field(repr=False)
     model_dir: Path | None = field(repr=False)
     identity: Mapping[str, object] = field(repr=False)
+    caller_configuration_validated: bool = field(repr=False)
 
     def __repr__(self) -> str:
         return "LocalPreflightConfiguration(<redacted>)"
@@ -391,9 +405,14 @@ def load_preflight_configuration(
             _positive_int(
                 environment, "CONTEXT_ENGINE_RELEASE_EVALUATION_SIGNING_KEY_VERSION"
             )
+        caller_configuration_validated = False
+        if "caller" in selected:
+            from adapters.http.dogfood_client import DogfoodHttpConfiguration
+
+            DogfoodHttpConfiguration.load(environment)
+            caller_configuration_validated = True
         return LocalPreflightConfiguration(
             selected_planes=selected,
-            environment=dict(environment),
             database_urls=database_urls,
             model_dir=model_dir,
             identity=(
@@ -419,6 +438,7 @@ def load_preflight_configuration(
                 if "runtime" in selected
                 else {}
             ),
+            caller_configuration_validated=caller_configuration_validated,
         )
     except PreflightConfigurationMissing:
         raise
@@ -426,14 +446,6 @@ def load_preflight_configuration(
         raise
     except Exception:
         raise PreflightConfigurationMalformed from None
-
-
-def verify_registered_qwen_artifacts(model_dir: Path) -> None:
-    from adapters.local_embedding_model import (
-        verify_registered_qwen_artifacts as verify,
-    )
-
-    verify(model_dir)
 
 
 def packaged_schema_head() -> str:
@@ -487,6 +499,69 @@ def packaged_schema_head() -> str:
 
 def _create_preflight_engine(url: URL) -> Engine:
     return create_engine(url, pool_pre_ping=True)
+
+
+_ROLE_DATABASE_URLS: dict[str, str] = {
+    "control": "CONTEXT_ENGINE_CONTROL_DATABASE_URL",
+    "scheduler": "CONTEXT_ENGINE_SCHEDULER_DATABASE_URL",
+    "worker": "CONTEXT_ENGINE_WORKER_DATABASE_URL",
+    "learning": "CONTEXT_ENGINE_LEARNING_DATABASE_URL",
+    "release_operator": "CONTEXT_ENGINE_RELEASE_OPERATOR_DATABASE_URL",
+}
+_ROLE_LOGINS: dict[str, str] = {
+    "control": CONTROL_ROLE,
+    "scheduler": SCHEDULER_ROLE,
+    "worker": WORKER_ROLE,
+    "learning": LEARNING_ROLE,
+    "release_operator": RELEASE_OPERATOR_ROLE,
+}
+_SENSITIVE_ROLES = frozenset({"scheduler", "learning", "release_operator"})
+
+
+def probe_database_readiness(
+    configuration: LocalPreflightConfiguration,
+    role: str,
+) -> str:
+    """Prove one selected application login is reachable and least-privilege."""
+
+    url_name = _ROLE_DATABASE_URLS.get(role)
+    expected_role = _ROLE_LOGINS.get(role)
+    if url_name is None or expected_role is None:
+        return "database_probe_refused"
+    url = configuration.database_urls.get(url_name)
+    if url is None:
+        return "not_selected"
+    try:
+        engine = _create_preflight_engine(url)
+    except SQLAlchemyError:
+        return "database_unavailable"
+    try:
+        with engine.connect() as raw_connection:
+            connection = raw_connection.execution_options(
+                isolation_level="READ COMMITTED", postgresql_readonly=True
+            )
+            with connection.begin():
+                if (
+                    connection.execute(text("SHOW transaction_read_only")).scalar_one()
+                    != "on"
+                    or observe_database_role_facts(connection)
+                    != expected_database_role_facts(expected_role)
+                    or (
+                        role in _SENSITIVE_ROLES
+                        and observe_sensitive_database_role_facts(connection)
+                        != (True, True)
+                    )
+                ):
+                    return "database_probe_refused"
+                return "ready"
+    except OperationalError:
+        return "database_unavailable"
+    except SQLAlchemyError:
+        return "database_probe_refused"
+    except Exception:
+        return "database_probe_refused"
+    finally:
+        engine.dispose()
 
 
 def probe_schema_readiness(configuration: LocalPreflightConfiguration) -> str:
@@ -552,79 +627,40 @@ def probe_model_readiness(configuration: LocalPreflightConfiguration) -> str:
     try:
         from adapters import local_embedding_model
 
-        artifacts = local_embedding_model._registered_qwen_artifacts()
+        local_embedding_model.registered_qwen_snapshot_contract()
     except Exception:
         return "model_manifest_unavailable"
     try:
-        local_embedding_model.verify_model_artifacts(
-            configuration.model_dir,
-            artifacts,
-            local_embedding_model.QWEN3_EMBEDDING_PROFILE.artifact_digest,
-        )
+        local_embedding_model.verify_registered_qwen_artifacts(configuration.model_dir)
         return "ready"
     except Exception:
         return "model_artifacts_invalid"
+
+
+def probe_caller_readiness(configuration: LocalPreflightConfiguration) -> str:
+    """Confirm the selected public caller configuration without making a request."""
+
+    if "caller" not in configuration.selected_planes:
+        return "not_selected"
+    return (
+        "ready"
+        if configuration.caller_configuration_validated
+        else "caller_configuration_invalid"
+    )
 
 
 def _utc_now() -> datetime:
     return datetime.now(UTC)
 
 
-def _expected_runtime_role_facts() -> tuple[object, ...]:
-    return (
-        "context_engine_runtime",
-        "context_engine_runtime",
-        False,
-        False,
-        False,
-        False,
-        False,
-        False,
-        True,
-        False,
-        False,
-        True,
-        True,
-        True,
-        False,
-        False,
-        False,
-    )
+def _expected_runtime_role_facts() -> dict[str, object]:
+    return expected_database_role_facts(RUNTIME_ROLE)
 
 
 def _expected_qwen_release_bindings() -> dict[str, object]:
     from engine.release_profiles import expected_qwen_release_bindings
 
     return expected_qwen_release_bindings()
-
-
-_RUNTIME_ROLE_FACTS = text(
-    """
-    SELECT current_user, session_user, role.rolsuper, role.rolbypassrls,
-           role.rolinherit, role.rolcreaterole, role.rolcreatedb,
-           role.rolreplication,
-           NOT EXISTS (SELECT 1 FROM pg_auth_members m WHERE m.member = role.oid),
-           pg_has_role(current_user, 'context_engine_migrator', 'MEMBER'),
-           pg_has_role(current_user, 'context_engine_migrator', 'USAGE'),
-           pg_get_userbyid(database.datdba) <> current_user,
-           pg_get_userbyid(namespace.nspowner) <> current_user,
-           NOT EXISTS (
-               SELECT 1 FROM pg_class relation
-               JOIN pg_namespace relation_namespace
-                 ON relation_namespace.oid = relation.relnamespace
-               WHERE relation_namespace.nspname = 'public'
-                 AND relation.relkind IN ('r','p','v','m','S','f')
-                 AND relation.relowner = role.oid
-           ) AS owns_no_public_relations,
-           has_database_privilege(current_user, current_database(), 'CREATE'),
-           has_database_privilege(current_user, current_database(), 'TEMPORARY'),
-           has_schema_privilege(current_user, 'public', 'CREATE')
-    FROM pg_roles role
-    JOIN pg_database database ON database.datname = current_database()
-    JOIN pg_namespace namespace ON namespace.nspname = 'public'
-    WHERE role.rolname = current_user
-    """
-)
 
 
 _ACTIVE_RELEASE = text(
@@ -688,7 +724,7 @@ def probe_release_readiness(configuration: LocalPreflightConfiguration) -> str:
                 ):
                     return "runtime_probe_refused"
                 if (
-                    tuple(connection.execute(_RUNTIME_ROLE_FACTS).one())
+                    observe_database_role_facts(connection)
                     != _expected_runtime_role_facts()
                 ):
                     return "runtime_probe_refused"
@@ -755,6 +791,47 @@ class PreflightResult:
 
 
 Probe = Callable[[LocalPreflightConfiguration], str]
+DatabaseProbe = Callable[[LocalPreflightConfiguration, str], str]
+
+_CHECK_NAMES = (
+    "migration_schema",
+    "control_database",
+    "supply_scheduler_database",
+    "supply_worker_database",
+    "supply_model",
+    "release_learning_database",
+    "release_operator_database",
+    "runtime_release",
+    "runtime_model",
+    "caller_configuration",
+)
+_EXIT_CODES = (11, 12, 13, 14, 15, 16, 17, 18, 19, 20)
+_SCHEMA_CATEGORIES = frozenset(
+    {"ready", "schema_unreachable", "schema_probe_refused", "schema_not_at_head"}
+)
+_DATABASE_CATEGORIES = frozenset(
+    {"ready", "database_unavailable", "database_probe_refused"}
+)
+_MODEL_CATEGORIES = frozenset(
+    {
+        "ready",
+        "model_manifest_unavailable",
+        "model_manifest_invalid",
+        "model_artifacts_unavailable",
+        "model_artifacts_invalid",
+    }
+)
+_RELEASE_CATEGORIES = frozenset(
+    {
+        "ready",
+        "runtime_unreachable",
+        "runtime_probe_refused",
+        "runtime_identity_not_current",
+        "active_release_absent",
+        "active_release_incompatible",
+    }
+)
+_CALLER_CATEGORIES = frozenset({"ready", "caller_configuration_invalid"})
 
 
 class _PrivateArgumentParser(argparse.ArgumentParser):
@@ -787,13 +864,31 @@ def _document(checks: list[dict[str, str]]) -> str:
     )
 
 
+def _observe(
+    selected: bool,
+    probe: Callable[[], str],
+    *,
+    allowed: frozenset[str],
+    refusal: str,
+) -> str:
+    if not selected:
+        return "not_selected"
+    try:
+        category = probe()
+    except Exception:
+        return refusal
+    return category if category in allowed else refusal
+
+
 def run_preflight(
     environment: Mapping[str, str],
     *,
     selected_planes: Sequence[str] | None,
     schema_probe: Probe,
+    database_probe: DatabaseProbe,
     model_probe: Probe,
     release_probe: Probe,
+    caller_probe: Probe,
 ) -> PreflightResult:
     try:
         configuration = load_preflight_configuration(
@@ -802,29 +897,75 @@ def run_preflight(
     except PreflightConfigurationMissing:
         checks = [_row("configuration", "failed", "configuration_missing")]
         checks.extend(
-            _row(check, "not_run", "dependency_not_ready")
-            for check in ("schema", "model", "release")
+            _row(check, "not_run", "dependency_not_ready") for check in _CHECK_NAMES
         )
         return PreflightResult(10, _document(checks))
     except PreflightConfigurationMalformed:
         checks = [_row("configuration", "failed", "configuration_malformed")]
         checks.extend(
-            _row(check, "not_run", "dependency_not_ready")
-            for check in ("schema", "model", "release")
+            _row(check, "not_run", "dependency_not_ready") for check in _CHECK_NAMES
         )
         return PreflightResult(10, _document(checks))
 
-    categories: list[str] = []
-    for probe, refusal in (
-        (schema_probe, "schema_probe_refused"),
-        (model_probe, "model_artifacts_invalid"),
-        (release_probe, "runtime_probe_refused"),
-    ):
-        try:
-            category = probe(configuration)
-        except Exception:
-            category = refusal
-        categories.append(category)
+    selected = configuration.selected_planes
+    shared_model = _observe(
+        bool(selected & {"supply", "runtime"}),
+        lambda: model_probe(configuration),
+        allowed=_MODEL_CATEGORIES,
+        refusal="model_artifacts_invalid",
+    )
+    categories = [
+        _observe(
+            "migration" in selected,
+            lambda: schema_probe(configuration),
+            allowed=_SCHEMA_CATEGORIES,
+            refusal="schema_probe_refused",
+        ),
+        _observe(
+            "control" in selected,
+            lambda: database_probe(configuration, "control"),
+            allowed=_DATABASE_CATEGORIES,
+            refusal="database_probe_refused",
+        ),
+        _observe(
+            "supply" in selected,
+            lambda: database_probe(configuration, "scheduler"),
+            allowed=_DATABASE_CATEGORIES,
+            refusal="database_probe_refused",
+        ),
+        _observe(
+            "supply" in selected,
+            lambda: database_probe(configuration, "worker"),
+            allowed=_DATABASE_CATEGORIES,
+            refusal="database_probe_refused",
+        ),
+        shared_model if "supply" in selected else "not_selected",
+        _observe(
+            "release" in selected,
+            lambda: database_probe(configuration, "learning"),
+            allowed=_DATABASE_CATEGORIES,
+            refusal="database_probe_refused",
+        ),
+        _observe(
+            "release" in selected,
+            lambda: database_probe(configuration, "release_operator"),
+            allowed=_DATABASE_CATEGORIES,
+            refusal="database_probe_refused",
+        ),
+        _observe(
+            "runtime" in selected,
+            lambda: release_probe(configuration),
+            allowed=_RELEASE_CATEGORIES,
+            refusal="runtime_probe_refused",
+        ),
+        shared_model if "runtime" in selected else "not_selected",
+        _observe(
+            "caller" in selected,
+            lambda: caller_probe(configuration),
+            allowed=_CALLER_CATEGORIES,
+            refusal="caller_configuration_invalid",
+        ),
+    ]
     checks = [_row("configuration", "ready", "ready")]
     checks.extend(
         _row(
@@ -836,12 +977,10 @@ def run_preflight(
             else "failed",
             category,
         )
-        for check, category in zip(
-            ("schema", "model", "release"), categories, strict=True
-        )
+        for check, category in zip(_CHECK_NAMES, categories, strict=True)
     )
     exit_code = 0
-    for code, category in zip((11, 12, 13), categories, strict=True):
+    for code, category in zip(_EXIT_CODES, categories, strict=True):
         if category not in {"ready", "not_selected"}:
             exit_code = code
             break
@@ -877,8 +1016,10 @@ def main(
         source,
         selected_planes=arguments.plane,
         schema_probe=probe_schema_readiness,
+        database_probe=probe_database_readiness,
         model_probe=probe_model_readiness,
         release_probe=probe_release_readiness,
+        caller_probe=probe_caller_readiness,
     )
     print(result.rendered, flush=True)
     raise SystemExit(result.exit_code)
@@ -895,8 +1036,9 @@ __all__ = [
     "main",
     "packaged_schema_head",
     "probe_model_readiness",
+    "probe_caller_readiness",
+    "probe_database_readiness",
     "probe_release_readiness",
     "probe_schema_readiness",
     "run_preflight",
-    "verify_registered_qwen_artifacts",
 ]

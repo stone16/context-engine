@@ -13,12 +13,20 @@ from alembic.script import ScriptDirectory
 from sqlalchemy import Engine, text
 
 from applications import preflight
-from engine.embedding_profiles import QWEN3_EMBEDDING_PROFILE
+from engine.embedding_profiles import (
+    DETERMINISTIC_TWIN_EMBEDDING_PROFILE,
+    QWEN3_EMBEDDING_PROFILE,
+)
 from engine.persistence import DatabaseConfiguration, create_database_engine
 from engine.release_profiles import (
+    INDEX_PROFILE_DIGEST_V0,
+    INDEX_PROFILE_REF_V0,
+    PACKAGE_SCHEMA_REF_V0,
     QWEN_VECTOR_INDEX_PROFILE_DIGEST_V1,
     QWEN_VECTOR_INDEX_PROFILE_REF_V1,
+    RUNTIME_PROFILE_REF_V0,
     RUNTIME_PROFILE_REF_V1,
+    RUNTIME_TOKENIZER_REF_V0,
     RUNTIME_TOKENIZER_REF_V1,
 )
 from scripts.daily_driver.deployment import (
@@ -119,17 +127,38 @@ def test_real_postgres_schema_probe_classifies_behind_and_unavailable() -> None:
     assert preflight.probe_schema_readiness(unavailable) == "schema_unreachable"
 
 
-def test_daily_driver_binding_refuses_interrupted_migration_then_accepts_explicit_rerun(
+@pytest.mark.parametrize(
+    ("plane", "roles"),
+    [
+        ("control", ("control",)),
+        ("supply", ("scheduler", "worker")),
+        ("release", ("learning", "release_operator")),
+    ],
+)
+def test_real_postgres_plane_database_probes_are_read_only_and_exact_role(
+    plane: str,
+    roles: tuple[str, ...],
 ) -> None:
+    configuration = preflight.load_preflight_configuration(
+        {**valid_environment(), **_database_environment()},
+        selected_planes=(plane,),
+    )
+
+    assert {
+        role: preflight.probe_database_readiness(configuration, role) for role in roles
+    } == {role: "ready" for role in roles}
+
+
+def test_daily_driver_binding_refuses_interrupted_migration_then_accepts_rerun() -> (
+    None
+):
     with isolated_revision_database("20260803_0055") as configurations:
         environment = _database_environment()
         environment.update(
             {
                 "CONTEXT_ENGINE_MIGRATOR_ROLE": configurations.migration.expected_role,
                 "CONTEXT_ENGINE_MIGRATION_DATABASE_URL": (
-                    configurations.migration.url.render_as_string(
-                        hide_password=False
-                    )
+                    configurations.migration.url.render_as_string(hide_password=False)
                 ),
             }
         )
@@ -193,9 +222,7 @@ def test_daily_driver_binding_refuses_ahead_or_divergent_database(
             {
                 "CONTEXT_ENGINE_MIGRATOR_ROLE": configurations.migration.expected_role,
                 "CONTEXT_ENGINE_MIGRATION_DATABASE_URL": (
-                    configurations.migration.url.render_as_string(
-                        hide_password=False
-                    )
+                    configurations.migration.url.render_as_string(hide_password=False)
                 ),
             }
         )
@@ -220,9 +247,7 @@ def test_daily_driver_binding_refuses_multiple_database_heads() -> None:
             {
                 "CONTEXT_ENGINE_MIGRATOR_ROLE": configurations.migration.expected_role,
                 "CONTEXT_ENGINE_MIGRATION_DATABASE_URL": (
-                    configurations.migration.url.render_as_string(
-                        hide_password=False
-                    )
+                    configurations.migration.url.render_as_string(hide_password=False)
                 ),
             }
         )
@@ -334,6 +359,78 @@ def test_real_postgres_release_probe_is_force_rls_read_only_and_non_mutating(
         assert (
             preflight.probe_release_readiness(absent_configuration)
             == "runtime_identity_not_current"
+        )
+    finally:
+        migration_engine.dispose()
+
+
+@pytest.mark.parametrize("release_kind", ("absent", "incompatible"))
+def test_real_postgres_current_membership_classifies_release_readiness(
+    release_kind: str,
+    migration_configuration: DatabaseConfiguration,
+    runtime_configuration: DatabaseConfiguration,
+) -> None:
+    organization_id = uuid4()
+    user_id = uuid4()
+    membership_id = uuid4()
+    migration_engine = create_database_engine(migration_configuration)
+    checked_at = datetime.now(UTC).replace(microsecond=0)
+    try:
+        with migration_engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO organization (organization_id) "
+                    "VALUES (:organization_id)"
+                ),
+                {"organization_id": organization_id},
+            )
+            connection.execute(
+                text("INSERT INTO user_account (user_id) VALUES (:user_id)"),
+                {"user_id": user_id},
+            )
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO membership (
+                        organization_id, membership_id, user_id, status,
+                        membership_version, valid_from, valid_until
+                    ) VALUES (
+                        :organization_id, :membership_id, :user_id,
+                        'active', 1, :valid_from, NULL
+                    )
+                    """
+                ),
+                {
+                    "organization_id": organization_id,
+                    "membership_id": membership_id,
+                    "user_id": user_id,
+                    "valid_from": checked_at,
+                },
+            )
+        if release_kind == "incompatible":
+            ensure_test_runtime_release(
+                organization_id,
+                index_profile_ref=INDEX_PROFILE_REF_V0,
+                index_profile_digest=INDEX_PROFILE_DIGEST_V0,
+                runtime_profile_ref=RUNTIME_PROFILE_REF_V0,
+                tokenizer_ref=RUNTIME_TOKENIZER_REF_V0,
+                package_schema_ref=PACKAGE_SCHEMA_REF_V0,
+                embedding_provider_profile=DETERMINISTIC_TWIN_EMBEDDING_PROFILE,
+            )
+        configuration = preflight.load_preflight_configuration(
+            _runtime_environment(
+                runtime_configuration,
+                organization_id=organization_id,
+                user_id=user_id,
+                membership_id=membership_id,
+            ),
+            selected_planes=("runtime",),
+        )
+
+        assert preflight.probe_release_readiness(configuration) == (
+            "active_release_absent"
+            if release_kind == "absent"
+            else "active_release_incompatible"
         )
     finally:
         migration_engine.dispose()

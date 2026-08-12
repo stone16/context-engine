@@ -105,17 +105,52 @@ def test_control_preflight_missing_configuration_is_closed_json() -> None:
                 "category": "configuration_missing",
             },
             {
-                "check": "schema",
+                "check": "migration_schema",
                 "status": "not_run",
                 "category": "dependency_not_ready",
             },
             {
-                "check": "model",
+                "check": "control_database",
                 "status": "not_run",
                 "category": "dependency_not_ready",
             },
             {
-                "check": "release",
+                "check": "supply_scheduler_database",
+                "status": "not_run",
+                "category": "dependency_not_ready",
+            },
+            {
+                "check": "supply_worker_database",
+                "status": "not_run",
+                "category": "dependency_not_ready",
+            },
+            {
+                "check": "supply_model",
+                "status": "not_run",
+                "category": "dependency_not_ready",
+            },
+            {
+                "check": "release_learning_database",
+                "status": "not_run",
+                "category": "dependency_not_ready",
+            },
+            {
+                "check": "release_operator_database",
+                "status": "not_run",
+                "category": "dependency_not_ready",
+            },
+            {
+                "check": "runtime_release",
+                "status": "not_run",
+                "category": "dependency_not_ready",
+            },
+            {
+                "check": "runtime_model",
+                "status": "not_run",
+                "category": "dependency_not_ready",
+            },
+            {
+                "check": "caller_configuration",
                 "status": "not_run",
                 "category": "dependency_not_ready",
             },

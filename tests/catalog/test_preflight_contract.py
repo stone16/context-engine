@@ -21,8 +21,10 @@ def test_preflight_contract_schema_accepts_closed_missing_configuration() -> Non
         {},
         selected_planes=None,
         schema_probe=lambda _configuration: "ready",
+        database_probe=lambda _configuration, _plane: "ready",
         model_probe=lambda _configuration: "ready",
         release_probe=lambda _configuration: "ready",
+        caller_probe=lambda _configuration: "ready",
     )
 
     Draft202012Validator.check_schema(schema)
@@ -69,3 +71,22 @@ def test_preflight_dispatch_and_module_have_no_mutation_imports() -> None:
         for module in imported
         for prefix in prohibited
     )
+
+
+def test_preflight_subcommand_is_owned_only_by_capability_minimal_dispatch() -> None:
+    control_tree = ast.parse(
+        (ROOT / "applications/control.py").read_text(encoding="utf-8")
+    )
+    dispatch_tree = ast.parse(
+        (ROOT / "applications/control_dispatch.py").read_text(encoding="utf-8")
+    )
+
+    def string_literals(tree: ast.AST) -> set[str]:
+        return {
+            node.value
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Constant) and type(node.value) is str
+        }
+
+    assert "preflight" not in string_literals(control_tree)
+    assert "preflight" in string_literals(dispatch_tree)
