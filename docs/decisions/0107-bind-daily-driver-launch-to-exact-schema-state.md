@@ -1,5 +1,5 @@
 ---
-name: adr-0106-bind-daily-driver-launch-to-exact-schema-state
+name: adr-0107-bind-daily-driver-launch-to-exact-schema-state
 version: "1.0.0"
 description: >
   Bind daily-driver manifest publication and content-process startup to one
@@ -8,7 +8,7 @@ description: >
   installation and lifecycle ownership.
 ---
 
-# 0106. Bind daily-driver launch to exact schema state
+# 0107. Bind daily-driver launch to exact schema state
 
 - Status: accepted
 - Date: 2026-08-13
