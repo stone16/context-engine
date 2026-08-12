@@ -80,10 +80,17 @@ For faster inner loops:
 ```bash
 make lint          # Ruff
 make typecheck     # strict mypy + TS
-make test          # Python unit tests
+make test-python   # fast Python unit-suite lane; not merge evidence
+make test          # full unit contract, including required TS builds
 make integration   # real-PostgreSQL integration/security harness
 make security-gate # M0 security veto gate
 ```
+
+After the Python dependencies are present, `make test-python` runs exactly
+`uv run pytest -q tests/unit` and has no SDK, ActionPlane, or BotDelivery build
+prerequisites. It is a convenience for the local edit loop, not
+Definition-of-Done, CI, or merge evidence; finish with the full `make check`
+contract above.
 
 Run `make typecheck` and `make test` sequentially, never concurrently.
 `make test` depends on `bot-build`, and

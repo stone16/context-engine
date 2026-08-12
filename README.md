@@ -546,7 +546,8 @@ make install-runtime # sync API/worker env without the optional MCP SDK
 make build          # build wheel and sdist
 make lint           # Ruff
 make typecheck      # strict mypy + TS typecheck
-make test           # Python unit tests
+make test-python    # fast Python unit-suite lane; not Definition-of-Done evidence
+make test           # full unit contract, including required TS builds
 make catalog        # static security catalog tests and validation
 make smoke          # API / worker process smoke suite
 make db-up          # start the pinned PostgreSQL 17 + pgvector harness

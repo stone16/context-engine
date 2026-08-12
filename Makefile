@@ -1,4 +1,4 @@
-.PHONY: install install-runtime build lint typecheck test catalog third-party-check third-party-artifacts security-gate smoke db-up db-down db-reset integration dogfood-eval eval-v1 eval-v1-execute openapi-generate openapi-check openapi-breaking-check sdk-generate sdk-check sdk-build sdk-test sdk-pack action-typecheck action-build action-test bot-typecheck bot-build bot-test ui-build ui-test check
+.PHONY: install install-runtime build lint typecheck test-python test catalog third-party-check third-party-artifacts security-gate smoke db-up db-down db-reset integration dogfood-eval eval-v1 eval-v1-execute openapi-generate openapi-check openapi-breaking-check sdk-generate sdk-check sdk-build sdk-test sdk-pack action-typecheck action-build action-test bot-typecheck bot-build bot-test ui-build ui-test check
 
 install:
 	uv sync --frozen --extra mcp
@@ -24,6 +24,9 @@ typecheck: sdk-build action-build
 	uv run mypy
 	npm --prefix action_plane/typescript run typecheck
 	npm --prefix bot_delivery/typescript run typecheck
+
+test-python:
+	uv run pytest -q tests/unit
 
 test: bot-build
 	uv run pytest -q tests/unit
