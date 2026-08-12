@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import plistlib
 import shutil
 import subprocess
@@ -26,13 +27,16 @@ from applications.operator_authentication import (
     local_secret_fingerprint,
 )
 from engine.control import SourceNotAvailable
+from scripts.daily_driver.deployment import DeploymentBinding, DeploymentBindingRefused
 from scripts.daily_driver.environment import (
     EnvironmentRefused,
     combined_environment,
     load_owner_environment,
 )
 from scripts.daily_driver.jobs import (
+    _run_daemon,
     _run_database_bootstrap,
+    _run_scheduled,
     process_environment,
     validate_scan_secret_separation,
 )
@@ -44,6 +48,19 @@ from scripts.daily_driver.launchd import (
 )
 
 ROOT = Path(__file__).resolve().parents[2]
+CODE_REVISION = "a" * 40
+SCHEMA_STATE_DIGEST = "sha256:" + "b" * 64
+
+
+def _write_rendered_templates(
+    configuration: LaunchdRenderConfiguration,
+    destination: Path,
+) -> tuple[Path, ...]:
+    return write_rendered_templates(
+        configuration,
+        destination,
+        binding=DeploymentBinding(CODE_REVISION, SCHEMA_STATE_DIGEST),
+    )
 
 
 def _configuration(tmp_path: Path) -> LaunchdRenderConfiguration:
@@ -123,6 +140,77 @@ def test_render_is_deterministic_and_contains_no_credentials(
 
 
 @pytest.mark.parametrize(
+    ("kind", "name"),
+    (
+        ("daemon", "api"),
+        ("daemon", "worker"),
+        ("scheduled", "scan"),
+        ("scheduled", "drain"),
+    ),
+)
+def test_content_process_refuses_stale_deployment_before_content_io(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    kind: str,
+    name: str,
+) -> None:
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    database_environment = tmp_path / "database.env"
+    operator_environment = tmp_path / "operators.env"
+    for path in (database_environment, operator_environment):
+        path.write_text("SYNTHETIC=value\n", encoding="utf-8")
+        path.chmod(0o600)
+    events: list[str] = []
+
+    def refuse(**_kwargs: object) -> None:
+        events.append("binding")
+        raise DeploymentBindingRefused
+
+    def load_environment(_path: Path) -> dict[str, str]:
+        events.append("environment")
+        return {}
+
+    monkeypatch.setattr("scripts.daily_driver.jobs.verify_ready_deployment", refuse)
+    monkeypatch.setattr(
+        "scripts.daily_driver.jobs.load_owner_environment",
+        load_environment,
+    )
+    monkeypatch.setattr(
+        "scripts.daily_driver.jobs.subprocess.run",
+        lambda *_args, **_kwargs: pytest.fail("content process must not start"),
+    )
+    monkeypatch.setattr(
+        "scripts.daily_driver.jobs.os.execve",
+        lambda *_args: pytest.fail("content daemon must not start"),
+    )
+    arguments = Namespace(
+        service=name,
+        job=name,
+        checkout=checkout,
+        database_environment=database_environment,
+        operator_environment=operator_environment,
+        failure_root=tmp_path / "failures",
+        backup_root=None,
+        docker_executable=None,
+        health_url=None,
+        api_port=8137,
+    )
+
+    with pytest.raises(DeploymentBindingRefused):
+        if kind == "daemon":
+            _run_daemon(arguments)
+        else:
+            _run_scheduled(arguments)
+
+    assert events == (
+        ["environment", "binding"]
+        if kind == "daemon"
+        else ["environment", "environment", "binding"]
+    )
+
+
+@pytest.mark.parametrize(
     ("field", "value"),
     (
         ("label_prefix", ""),
@@ -184,12 +272,58 @@ def test_writing_the_same_render_twice_is_idempotent(tmp_path: Path) -> None:
     configuration = _configuration(tmp_path)
     destination = configuration.checkout / ".context-engine" / "launchd"
 
-    first = write_rendered_templates(configuration, destination)
+    first = _write_rendered_templates(configuration, destination)
     first_inodes = {path.name: path.stat().st_ino for path in first}
-    second = write_rendered_templates(configuration, destination)
+    second = _write_rendered_templates(configuration, destination)
 
     assert first == second
     assert {path.name: path.stat().st_ino for path in second} == first_inodes
+    manifest = json.loads(
+        (destination / "render-manifest.json").read_text(encoding="utf-8")
+    )
+    assert manifest == {
+        "codeRevision": CODE_REVISION,
+        "labelPrefix": "org.example.context-engine",
+        "plists": sorted(path.name for path in second),
+        "schemaStateDigest": SCHEMA_STATE_DIGEST,
+        "schemaVersion": 2,
+        "status": "ready",
+    }
+
+
+def test_exact_head_rerun_upgrades_the_renderer_owned_v1_manifest(
+    tmp_path: Path,
+) -> None:
+    configuration = _configuration(tmp_path)
+    destination = configuration.checkout / ".context-engine" / "launchd"
+    destination.mkdir()
+    rendered = render_launchd_templates(configuration)
+    for name, content in rendered.items():
+        target = destination / name
+        target.write_text(content, encoding="utf-8")
+        target.chmod(0o600)
+    old_manifest = destination / "render-manifest.json"
+    old_manifest.write_text(
+        json.dumps(
+            {
+                "labelPrefix": configuration.label_prefix,
+                "plists": sorted(rendered),
+                "schemaVersion": 1,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    old_manifest.chmod(0o600)
+
+    published = _write_rendered_templates(configuration, destination)
+
+    assert {path.name for path in published} == set(rendered)
+    upgraded = json.loads(old_manifest.read_text(encoding="utf-8"))
+    assert upgraded["schemaVersion"] == 2
+    assert upgraded["status"] == "ready"
+    assert upgraded["codeRevision"] == CODE_REVISION
+    assert upgraded["schemaStateDigest"] == SCHEMA_STATE_DIGEST
 
 
 def test_render_refuses_a_label_change_until_the_old_services_are_uninstalled(
@@ -197,7 +331,7 @@ def test_render_refuses_a_label_change_until_the_old_services_are_uninstalled(
 ) -> None:
     configuration = _configuration(tmp_path)
     destination = configuration.checkout / ".context-engine" / "launchd"
-    first = write_rendered_templates(configuration, destination)
+    first = _write_rendered_templates(configuration, destination)
     changed = LaunchdRenderConfiguration(
         **(
             configuration.__dict__
@@ -206,7 +340,7 @@ def test_render_refuses_a_label_change_until_the_old_services_are_uninstalled(
     )
 
     with pytest.raises(LaunchdRenderRefused, match="prefix is immutable"):
-        write_rendered_templates(changed, destination)
+        _write_rendered_templates(changed, destination)
 
     assert set(destination.glob("*.plist")) == set(first)
 
@@ -214,12 +348,12 @@ def test_render_refuses_a_label_change_until_the_old_services_are_uninstalled(
 def test_render_refuses_to_delete_an_unknown_plist(tmp_path: Path) -> None:
     configuration = _configuration(tmp_path)
     destination = configuration.checkout / ".context-engine" / "launchd"
-    first = write_rendered_templates(configuration, destination)
+    first = _write_rendered_templates(configuration, destination)
     unknown = destination / "maintainer-owned.plist"
     unknown.write_text("preserve me", encoding="utf-8")
 
     with pytest.raises(LaunchdRenderRefused, match="unowned"):
-        write_rendered_templates(configuration, destination)
+        _write_rendered_templates(configuration, destination)
 
     assert unknown.read_text(encoding="utf-8") == "preserve me"
     assert set(first) <= set(destination.glob("*.plist"))
@@ -228,7 +362,7 @@ def test_render_refuses_to_delete_an_unknown_plist(tmp_path: Path) -> None:
 def test_render_refuses_a_symbolic_link_at_an_owned_target(tmp_path: Path) -> None:
     configuration = _configuration(tmp_path)
     destination = configuration.checkout / ".context-engine" / "launchd"
-    first = write_rendered_templates(configuration, destination)
+    first = _write_rendered_templates(configuration, destination)
     external = tmp_path / "external"
     external.write_text("must remain unchanged", encoding="utf-8")
     target = destination / "org.example.context-engine.api.plist"
@@ -236,7 +370,7 @@ def test_render_refuses_a_symbolic_link_at_an_owned_target(tmp_path: Path) -> No
     target.symlink_to(external)
 
     with pytest.raises(LaunchdRenderRefused, match="target is unsafe"):
-        write_rendered_templates(configuration, destination)
+        _write_rendered_templates(configuration, destination)
 
     assert external.read_text(encoding="utf-8") == "must remain unchanged"
     assert set(path.name for path in first) - {target.name} <= {

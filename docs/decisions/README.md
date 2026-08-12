@@ -244,3 +244,4 @@ touched:
 - [0103 — Activate one local MCP Acquire translation](0103-activate-one-local-mcp-acquire-translation.md)
 - [0104 — Version ContextPackage for cumulative Runtime accounting](0104-version-context-package-for-cumulative-runtime-accounting.md)
 - [0105 — Bind local preflight to read-only observation](0105-bind-local-preflight-to-read-only-observation.md)
+- [0106 — Bind daily-driver launch to exact schema state](0106-bind-daily-driver-launch-to-exact-schema-state.md)

@@ -14,6 +14,7 @@ from xml.sax.saxutils import escape
 
 from engine.learning.golden_storage import require_durable_storage_root
 from scripts.daily_driver.backup import require_safe_backup_root
+from scripts.daily_driver.deployment import DeploymentBinding, DeploymentManifest
 from scripts.daily_driver.environment import EnvironmentRefused, load_owner_environment
 
 _LABEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9.-]+")
@@ -121,6 +122,8 @@ def render_launchd_templates(
 def write_rendered_templates(
     configuration: LaunchdRenderConfiguration,
     destination: Path,
+    *,
+    binding: DeploymentBinding,
 ) -> tuple[Path, ...]:
     """Idempotently publish owner-only rendered plists to ignored state."""
 
@@ -150,6 +153,8 @@ def write_rendered_templates(
         manifest,
         label_prefix=configuration.label_prefix,
         plists=owned | frozenset(rendered),
+        binding=binding,
+        status="preparing",
     )
     for stale_name in sorted(owned - rendered.keys()):
         stale = destination / stale_name
@@ -183,6 +188,8 @@ def write_rendered_templates(
         manifest,
         label_prefix=configuration.label_prefix,
         plists=frozenset(rendered),
+        binding=binding,
+        status="ready",
     )
     return tuple(sorted(published))
 
@@ -201,24 +208,32 @@ def _read_render_manifest(
     except (OSError, UnicodeError, json.JSONDecodeError):
         raise LaunchdRenderRefused("render manifest is invalid") from None
     if (
-        type(document) is not dict
-        or set(document) != {"labelPrefix", "plists", "schemaVersion"}
-        or document["schemaVersion"] != 1
-        or document["labelPrefix"] != label_prefix
-        or type(document["plists"]) is not list
-        or not document["plists"]
-        or any(
-            type(name) is not str
-            or Path(name).name != name
-            or not name.endswith(".plist")
+        type(document) is dict
+        and set(document) == {"labelPrefix", "plists", "schemaVersion"}
+        and document["schemaVersion"] == 1
+        and document["labelPrefix"] == label_prefix
+        and type(document["plists"]) is list
+        and document["plists"]
+        and all(
+            type(name) is str
+            and Path(name).name == name
+            and name.endswith(".plist")
             for name in document["plists"]
         )
-        or len(set(document["plists"])) != len(document["plists"])
+        and len(set(document["plists"])) == len(document["plists"])
     ):
+        return frozenset(document["plists"])
+    try:
+        parsed = DeploymentManifest.from_document(document)
+    except ValueError:
+        raise LaunchdRenderRefused(
+            "launchd label prefix is immutable; uninstall before replacing it"
+        ) from None
+    if parsed.label_prefix != label_prefix:
         raise LaunchdRenderRefused(
             "launchd label prefix is immutable; uninstall before replacing it"
         )
-    return frozenset(document["plists"])
+    return parsed.plists
 
 
 def _write_render_manifest(
@@ -226,19 +241,27 @@ def _write_render_manifest(
     *,
     label_prefix: str,
     plists: frozenset[str],
+    binding: DeploymentBinding,
+    status: str,
 ) -> None:
-    document = {
-        "labelPrefix": label_prefix,
-        "plists": sorted(plists),
-        "schemaVersion": 1,
-    }
+    try:
+        manifest = DeploymentManifest(
+            binding=binding,
+            label_prefix=label_prefix,
+            plists=plists,
+            status=status,
+        )
+    except ValueError:
+        raise LaunchdRenderRefused("deployment binding is invalid") from None
     descriptor, temporary_name = tempfile.mkstemp(dir=path.parent, prefix=".manifest-")
     temporary = Path(temporary_name)
     try:
         os.fchmod(descriptor, 0o600)
         with os.fdopen(descriptor, "w", encoding="utf-8") as output:
             descriptor = -1
-            json.dump(document, output, sort_keys=True, separators=(",", ":"))
+            json.dump(
+                manifest.to_document(), output, sort_keys=True, separators=(",", ":")
+            )
             output.write("\n")
             output.flush()
             os.fsync(output.fileno())

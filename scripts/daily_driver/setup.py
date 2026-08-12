@@ -6,12 +6,18 @@ import argparse
 import os
 import stat
 import subprocess
+import sys
 from collections.abc import Sequence
 from pathlib import Path
 
 from engine.learning.golden_storage import (
     require_durable_golden_path,
     require_durable_storage_root,
+)
+from scripts.daily_driver.deployment import (
+    DeploymentBindingRefused,
+    SchemaBindingRefused,
+    current_deployment_binding,
 )
 from scripts.daily_driver.environment import EnvironmentRefused, load_owner_environment
 from scripts.daily_driver.launchd import (
@@ -102,10 +108,22 @@ def main(arguments: Sequence[str] | None = None) -> int:
     state = checkout / ".context-engine"
     _prepare_state_directory(state)
     _write_durable_deployment_marker(state)
-    _ensure_operator_environment(state / "operators.env")
     subprocess.run(("make", "install-runtime"), cwd=checkout, check=True)
     subprocess.run(("make", "db-up"), cwd=checkout, check=True)
     (state / "logs").mkdir(mode=0o700, exist_ok=True)
+    try:
+        binding = current_deployment_binding(
+            checkout,
+            load_owner_environment(state / "database.env"),
+        )
+    except (DeploymentBindingRefused, EnvironmentRefused, SchemaBindingRefused):
+        print(
+            "daily-driver setup refused: run context-engine-control migrate, "
+            "then rerun setup",
+            file=sys.stderr,
+        )
+        return 2
+    _ensure_operator_environment(state / "operators.env")
     write_rendered_templates(
         LaunchdRenderConfiguration(
             checkout=checkout,
@@ -119,6 +137,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
             api_port=parsed.api_port,
         ),
         state / "launchd",
+        binding=binding,
     )
     return 0
 

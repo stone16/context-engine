@@ -6,6 +6,11 @@ from pathlib import Path
 import pytest
 
 import scripts.daily_driver.setup as daily_driver_setup
+from scripts.daily_driver.deployment import (
+    READY_DEPLOYMENT_MANIFEST,
+    DeploymentBinding,
+    SchemaBindingRefused,
+)
 from scripts.daily_driver.setup import (
     DURABLE_DEPLOYMENT_MARKER,
     SetupRefused,
@@ -16,13 +21,16 @@ from scripts.daily_driver.setup import (
 )
 
 
-def test_durable_setup_installs_runtime_without_optional_mcp_sdk(
+def test_unchanged_exact_head_setup_is_idempotent_without_optional_mcp_sdk(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     checkout = tmp_path / "checkout"
     (checkout / ".git").mkdir(parents=True)
     (checkout / ".context-engine").mkdir()
+    database_environment = checkout / ".context-engine" / "database.env"
+    database_environment.write_text("SYNTHETIC=value\n", encoding="utf-8")
+    database_environment.chmod(0o600)
     executable = tmp_path / "executable"
     executable.write_text("#!/bin/sh\n", encoding="utf-8")
     executable.chmod(0o700)
@@ -48,11 +56,146 @@ def test_durable_setup_installs_runtime_without_optional_mcp_sdk(
         "_ensure_operator_environment",
         lambda *args: None,
     )
-    monkeypatch.setattr(daily_driver_setup, "write_rendered_templates", lambda *a: None)
+    monkeypatch.setattr(
+        daily_driver_setup,
+        "current_deployment_binding",
+        lambda _checkout, _environment: DeploymentBinding(
+            "a" * 40, "sha256:" + "b" * 64
+        ),
+    )
+
+    def publish_manifest(
+        *_args: object,
+        binding: DeploymentBinding,
+    ) -> None:
+        manifest = checkout / ".context-engine" / READY_DEPLOYMENT_MANIFEST
+        manifest.parent.mkdir(exist_ok=True)
+        manifest.write_text(
+            '{"codeRevision":"'
+            + binding.code_revision
+            + '","schemaStateDigest":"'
+            + binding.schema_state_digest
+            + '","schemaVersion":1,"status":"ready"}\n',
+            encoding="utf-8",
+        )
+        manifest.chmod(0o600)
+
+    monkeypatch.setattr(
+        daily_driver_setup, "write_rendered_templates", publish_manifest
+    )
     monkeypatch.setattr(
         subprocess,
         "run",
         lambda command, **kwargs: calls.append(command),
+    )
+
+    arguments = (
+            "--checkout",
+            str(checkout),
+            "--origin",
+            "https://example.invalid/context-engine.git",
+            "--branch",
+            "main",
+            "--backup-root",
+            str(tmp_path / "backup"),
+            "--docker-executable",
+            str(executable),
+            "--uv-executable",
+            str(executable),
+            "--label-prefix",
+            "test.context-engine",
+            "--api-port",
+            "8137",
+            "--backup-hour",
+            "2",
+            "--scan-hour",
+            "3",
+            "--health-interval-seconds",
+            "60",
+        )
+
+    first = daily_driver_setup.main(arguments)
+    first_manifest = (
+        checkout / ".context-engine" / READY_DEPLOYMENT_MANIFEST
+    ).read_bytes()
+    second = daily_driver_setup.main(arguments)
+
+    assert first == second == 0
+    assert calls == [
+        ("make", "install-runtime"),
+        ("make", "db-up"),
+        ("make", "install-runtime"),
+        ("make", "db-up"),
+    ]
+    manifest = checkout / ".context-engine" / READY_DEPLOYMENT_MANIFEST
+    assert manifest.read_text(encoding="utf-8") == (
+        '{"codeRevision":"'
+        + "a" * 40
+        + '","schemaStateDigest":"sha256:'
+        + "b" * 64
+        + '","schemaVersion":1,"status":"ready"}\n'
+    )
+    assert manifest.stat().st_mode & 0o777 == 0o600
+    assert manifest.read_bytes() == first_manifest
+
+
+def test_updated_code_with_non_exact_schema_preserves_existing_deployment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    checkout = tmp_path / "checkout"
+    (checkout / ".git").mkdir(parents=True)
+    state = checkout / ".context-engine"
+    launchd = state / "launchd"
+    launchd.mkdir(parents=True)
+    database_environment = state / "database.env"
+    operator_environment = state / "operators.env"
+    database_environment.write_text("PRESERVE_DATABASE=value\n", encoding="utf-8")
+    operator_environment.write_text("PRESERVE_OPERATOR=value\n", encoding="utf-8")
+    for environment in (database_environment, operator_environment):
+        environment.chmod(0o600)
+    manifest = state / READY_DEPLOYMENT_MANIFEST
+    old_manifest = '{"status":"old-ready"}\n'
+    manifest.write_text(old_manifest, encoding="utf-8")
+    manifest.chmod(0o600)
+    plist = launchd / "maintainer-owned.plist"
+    plist.write_text("preserve plist", encoding="utf-8")
+    executable = tmp_path / "executable"
+    executable.write_text("#!/bin/sh\n", encoding="utf-8")
+    executable.chmod(0o700)
+    calls: list[tuple[str, ...]] = []
+    monkeypatch.setattr(
+        daily_driver_setup, "require_setup_target", lambda **_kwargs: checkout
+    )
+    monkeypatch.setattr(
+        daily_driver_setup, "_update_existing_checkout", lambda *_a: None
+    )
+    monkeypatch.setattr(
+        daily_driver_setup, "_prepare_state_directory", lambda *_a: None
+    )
+    monkeypatch.setattr(
+        daily_driver_setup, "_write_durable_deployment_marker", lambda *_a: None
+    )
+    monkeypatch.setattr(
+        daily_driver_setup, "_ensure_operator_environment", lambda *_a: None
+    )
+    monkeypatch.setattr(
+        daily_driver_setup,
+        "current_deployment_binding",
+        lambda _checkout, _environment: (_ for _ in ()).throw(
+            SchemaBindingRefused()
+        ),
+    )
+    monkeypatch.setattr(
+        daily_driver_setup,
+        "write_rendered_templates",
+        lambda *_a, **_kwargs: pytest.fail(
+            "schema refusal must precede plist publication"
+        ),
+    )
+    monkeypatch.setattr(
+        subprocess, "run", lambda command, **_kwargs: calls.append(command)
     )
 
     result = daily_driver_setup.main(
@@ -82,8 +225,30 @@ def test_durable_setup_installs_runtime_without_optional_mcp_sdk(
         )
     )
 
-    assert result == 0
+    captured = capsys.readouterr()
+    assert result == 2
+    assert captured.out == ""
+    assert captured.err == (
+        "daily-driver setup refused: run context-engine-control migrate, "
+        "then rerun setup\n"
+    )
     assert calls == [("make", "install-runtime"), ("make", "db-up")]
+    assert manifest.read_text(encoding="utf-8") == old_manifest
+    assert plist.read_text(encoding="utf-8") == "preserve plist"
+    assert database_environment.read_text(encoding="utf-8") == (
+        "PRESERVE_DATABASE=value\n"
+    )
+    assert operator_environment.read_text(encoding="utf-8") == (
+        "PRESERVE_OPERATOR=value\n"
+    )
+
+
+def test_setup_has_no_implicit_migration_or_override_path() -> None:
+    source = Path(daily_driver_setup.__file__).read_text(encoding="utf-8")
+
+    assert "alembic" not in source.lower()
+    assert "upgrade" not in source.lower()
+    assert "override" not in source.lower()
 
 
 def _git_repository(path: Path) -> None:

@@ -5,6 +5,11 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
+from alembic import command
+from alembic.config import Config
+from alembic.operations import Operations
+from alembic.runtime.migration import MigrationContext
+from alembic.script import ScriptDirectory
 from sqlalchemy import Engine, text
 
 from applications import preflight
@@ -15,6 +20,10 @@ from engine.release_profiles import (
     QWEN_VECTOR_INDEX_PROFILE_REF_V1,
     RUNTIME_PROFILE_REF_V1,
     RUNTIME_TOKENIZER_REF_V1,
+)
+from scripts.daily_driver.deployment import (
+    SchemaBindingRefused,
+    require_exact_schema_binding,
 )
 from tests.support.migrations import isolated_revision_database
 from tests.support.releases import ensure_test_runtime_release
@@ -108,6 +117,118 @@ def test_real_postgres_schema_probe_classifies_behind_and_unavailable() -> None:
         environment, selected_planes=("migration",)
     )
     assert preflight.probe_schema_readiness(unavailable) == "schema_unreachable"
+
+
+def test_daily_driver_binding_refuses_interrupted_migration_then_accepts_explicit_rerun(
+) -> None:
+    with isolated_revision_database("20260803_0055") as configurations:
+        environment = _database_environment()
+        environment.update(
+            {
+                "CONTEXT_ENGINE_MIGRATOR_ROLE": configurations.migration.expected_role,
+                "CONTEXT_ENGINE_MIGRATION_DATABASE_URL": (
+                    configurations.migration.url.render_as_string(
+                        hide_password=False
+                    )
+                ),
+            }
+        )
+
+        engine = create_database_engine(configurations.migration)
+        try:
+            alembic = Config(Path("alembic.ini"))
+            script = ScriptDirectory.from_config(alembic)
+            head = script.get_revision("head")
+            assert head is not None
+            upgrade = head.module.upgrade
+
+            def interrupted_upgrade() -> None:
+                upgrade()
+                raise RuntimeError("synthetic interrupted migration")
+
+            with (
+                pytest.raises(RuntimeError, match="interrupted migration"),
+                engine.begin() as connection,
+                Operations.context(MigrationContext.configure(connection=connection)),
+            ):
+                interrupted_upgrade()
+
+            with pytest.raises(SchemaBindingRefused):
+                require_exact_schema_binding(environment)
+
+            with engine.begin() as connection:
+                alembic.attributes["connection"] = connection
+                command.upgrade(alembic, "head")
+        finally:
+            engine.dispose()
+
+        digest = require_exact_schema_binding(environment)
+        assert digest.startswith("sha256:")
+        assert len(digest) == 71
+
+
+@pytest.mark.parametrize(
+    "observed",
+    (
+        "99999999_9999",
+        "divergent_revision",
+    ),
+)
+def test_daily_driver_binding_refuses_ahead_or_divergent_database(
+    observed: str,
+) -> None:
+    with isolated_revision_database("head") as configurations:
+        engine = create_database_engine(configurations.migration)
+        try:
+            with engine.begin() as connection:
+                connection.execute(text("DELETE FROM alembic_version"))
+                connection.execute(
+                    text("INSERT INTO alembic_version (version_num) VALUES (:value)"),
+                    {"value": observed},
+                )
+        finally:
+            engine.dispose()
+        environment = _database_environment()
+        environment.update(
+            {
+                "CONTEXT_ENGINE_MIGRATOR_ROLE": configurations.migration.expected_role,
+                "CONTEXT_ENGINE_MIGRATION_DATABASE_URL": (
+                    configurations.migration.url.render_as_string(
+                        hide_password=False
+                    )
+                ),
+            }
+        )
+
+        with pytest.raises(SchemaBindingRefused):
+            require_exact_schema_binding(environment)
+
+
+def test_daily_driver_binding_refuses_multiple_database_heads() -> None:
+    with isolated_revision_database("head") as configurations:
+        engine = create_database_engine(configurations.migration)
+        try:
+            with engine.begin() as connection:
+                connection.execute(
+                    text("INSERT INTO alembic_version (version_num) VALUES (:value)"),
+                    {"value": "divergent_revision"},
+                )
+        finally:
+            engine.dispose()
+        environment = _database_environment()
+        environment.update(
+            {
+                "CONTEXT_ENGINE_MIGRATOR_ROLE": configurations.migration.expected_role,
+                "CONTEXT_ENGINE_MIGRATION_DATABASE_URL": (
+                    configurations.migration.url.render_as_string(
+                        hide_password=False
+                    )
+                ),
+            }
+        )
+
+        with pytest.raises(SchemaBindingRefused):
+            require_exact_schema_binding(environment)
 
 
 def test_real_postgres_release_probe_is_force_rls_read_only_and_non_mutating(

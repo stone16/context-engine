@@ -67,6 +67,40 @@ The setup also writes an owner-only durable-deployment marker; the tracked
 database harness refuses `make db-reset` whenever that marker exists, before it
 invokes Docker. `make db-down` remains the non-destructive stop command.
 
+Git fast-forward, runtime install, and database start do not by themselves
+complete an update. After `db-up`, setup reuses the read-only preflight schema
+classifier. Only an exact packaged head publishes an owner-only ready render
+manifest bound to the clean code revision and schema state. Behind, ahead,
+divergent, unreachable, multiple-head, or interrupted explicit-migration state
+refuses before new plists or a ready binding are published. There is no override
+and setup never migrates. On refusal run the separately authorized migration,
+then explicitly rerun the setup command above:
+
+```bash
+cd "$CONTEXT_ENGINE_DEPLOY_CHECKOUT"
+set -a
+source .context-engine/database.env
+set +a
+uv run context-engine-control migrate
+cd /private/tmp
+python3 '<reviewed-source-checkout>/scripts/daily_driver_setup.py' \
+  --checkout "$CONTEXT_ENGINE_DEPLOY_CHECKOUT" \
+  --origin "$CONTEXT_ENGINE_ORIGIN" \
+  --branch "$CONTEXT_ENGINE_DEPLOY_BRANCH" \
+  --backup-root "$CONTEXT_ENGINE_DATABASE_BACKUP_ROOT" \
+  --docker-executable "$CONTEXT_ENGINE_DOCKER_EXECUTABLE" \
+  --uv-executable "$CONTEXT_ENGINE_UV_EXECUTABLE" \
+  --label-prefix "$CONTEXT_ENGINE_LAUNCHD_LABEL_PREFIX" \
+  --api-port "$CONTEXT_ENGINE_API_PORT" \
+  --backup-hour "$CONTEXT_ENGINE_BACKUP_HOUR" \
+  --scan-hour "$CONTEXT_ENGINE_SCAN_HOUR" \
+  --health-interval-seconds "$CONTEXT_ENGINE_HEALTH_INTERVAL_SECONDS"
+```
+
+The API, worker, and scheduled scan wrappers repeat the exact-schema and binding
+check before content I/O. A stale or mismatched ready manifest therefore cannot
+authorize a later process start.
+
 ## 2. Preserve the single live connection contract
 
 `make db-up` generated
