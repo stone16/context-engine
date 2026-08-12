@@ -20,17 +20,7 @@ from engine.database_roles import (
     ACTION_PREPARE_DEFINER_ROLE as ACTION_PREPARE_DEFINER_ROLE,
 )
 from engine.database_roles import (
-    ACTION_ROLE,
-    CONTROL_ROLE,
-    EGRESS_ROLE,
-    IDENTITY_ROLE,
-    LEARNING_ROLE,
-    MIGRATOR_ROLE,
-    OPERATOR_ROLE,
-    RELEASE_OPERATOR_ROLE,
-    RUNTIME_ROLE,
-    SCHEDULER_ROLE,
-    WORKER_ROLE,
+    ACTION_ROLE as ACTION_ROLE,
 )
 from engine.database_roles import (
     CITATION_DEFINER_ROLE as CITATION_DEFINER_ROLE,
@@ -39,10 +29,16 @@ from engine.database_roles import (
     CONTEXT_RUN_READER_DEFINER_ROLE as CONTEXT_RUN_READER_DEFINER_ROLE,
 )
 from engine.database_roles import (
+    CONTROL_ROLE as CONTROL_ROLE,
+)
+from engine.database_roles import (
     DELIVERY_EVIDENCE_DEFINER_ROLE as DELIVERY_EVIDENCE_DEFINER_ROLE,
 )
 from engine.database_roles import (
     EGRESS_GRANT_DEFINER_ROLE as EGRESS_GRANT_DEFINER_ROLE,
+)
+from engine.database_roles import (
+    EGRESS_ROLE as EGRESS_ROLE,
 )
 from engine.database_roles import (
     FILE_DISPATCH_DEFINER_ROLE as FILE_DISPATCH_DEFINER_ROLE,
@@ -51,10 +47,34 @@ from engine.database_roles import (
     GRAPH_DEFINER_ROLE as GRAPH_DEFINER_ROLE,
 )
 from engine.database_roles import (
+    IDENTITY_ROLE as IDENTITY_ROLE,
+)
+from engine.database_roles import (
+    LEARNING_ROLE as LEARNING_ROLE,
+)
+from engine.database_roles import (
+    MIGRATOR_ROLE as MIGRATOR_ROLE,
+)
+from engine.database_roles import (
+    OPERATOR_ROLE as OPERATOR_ROLE,
+)
+from engine.database_roles import (
     RELEASE_DEFINER_ROLE as RELEASE_DEFINER_ROLE,
 )
 from engine.database_roles import (
+    RELEASE_OPERATOR_ROLE as RELEASE_OPERATOR_ROLE,
+)
+from engine.database_roles import (
+    RUNTIME_ROLE as RUNTIME_ROLE,
+)
+from engine.database_roles import (
+    SCHEDULER_ROLE as SCHEDULER_ROLE,
+)
+from engine.database_roles import (
     WORKER_LEASE_DEFINER_ROLE as WORKER_LEASE_DEFINER_ROLE,
+)
+from engine.database_roles import (
+    WORKER_ROLE as WORKER_ROLE,
 )
 
 
