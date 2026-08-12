@@ -1,6 +1,7 @@
 # ContextEngine — 整体计划
 
-> **Status**: D0 design closure (pre-M0) · **Updated**: 2026-07-18
+> **Status**: generation-3 dogfood roadmap; current executable boundaries are
+> indexed in [`STATUS.md`](STATUS.md) · **Updated**: 2026-08-13
 >
 > **2026-07-26 航向修正**:定位固定为"完整 context 层"两内容族
 > ([ADR-0061](docs/decisions/0061-commit-to-the-complete-context-layer-thesis.md)),
@@ -13,6 +14,13 @@
 > *English abstract*: ContextEngine is a multi-tenant context delivery engine. Upstream connectors ingest team knowledge (Feishu/Lark, Slack, Google Docs, WeCom); downstream it delivers authorized, evidence-backed, budget-bounded ContextPackages to agent applications and IM bots. Its differentiation is not another retrieval algorithm but the combination of permission-aware retrieval, revocable governance, agent-driven curation, and first-class support for the Chinese team-tooling ecosystem.
 
 新贡献者应先阅读 [Domain glossary](CONTEXT.md)，其中规范了本文所有身份、安全、内容与生命周期术语。
+
+The `D0`/`M0`–`M7` labels below are the product-plan generation. GitHub issue
+#2 records two older decomposition generations that reused `M0`–`M3`; those
+historical names describe completed issue waves, not the current milestone
+exit state. The 2026-07-28 dogfood walkthrough and constitution established
+generation 3. Use `STATUS.md` plus the active-carrier registry for executable
+current state, and qualify tracker references as generation 1, 2, or 3.
 
 ---
 

@@ -1,0 +1,162 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://context-engine.local/schemas/active-carriers-v1.schema.json",
+  "title": "ContextEngine active carrier authority registry v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "canonicalOwner",
+    "securityVetoRelationship",
+    "closedNotActiveRelations",
+    "carriers"
+  ],
+  "properties": {
+    "schemaVersion": {"const": "active-carrier-registry-v1"},
+    "canonicalOwner": {"const": "eval/catalogs/active-carriers-v1.json"},
+    "securityVetoRelationship": {"const": "SEPARATE_INDEPENDENT_GATE"},
+    "closedNotActiveRelations": {
+      "type": "array",
+      "uniqueItems": true,
+      "minItems": 10,
+      "items": {"$ref": "#/$defs/notActiveRelation"}
+    },
+    "carriers": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/carrier"}
+    }
+  },
+  "$defs": {
+    "notActiveRelation": {
+      "enum": [
+        "CONTINUE",
+        "EXTERNAL_NETWORK_MODEL",
+        "GROUP_PUBLIC_DELIVERY",
+        "HYBRID_RETRIEVAL",
+        "LIVE_PROVIDER",
+        "MCP_BROADER_THAN_LOCAL_ACQUIRE",
+        "OPEN_CITATION_OUTSIDE_EVIDENCE_CONSOLE",
+        "PRODUCTION_REMOTE_AUTH",
+        "REMOTE_MULTIUSER_RUNTIME",
+        "RUNTIME_REWRITE_RERANK_SELECT"
+      ]
+    },
+    "reference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path"],
+      "properties": {
+        "path": {"type": "string", "pattern": "^[A-Za-z0-9_.\\/-]+$"},
+        "marker": {"type": "string", "minLength": 1, "maxLength": 160}
+      }
+    },
+    "authorityReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "marker"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "pattern": "^docs/decisions/[0-9]{4}-[a-z0-9-]+\\.md$"
+        },
+        "marker": {"const": "Status: accepted"}
+      }
+    },
+    "migration": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["refs"],
+          "properties": {
+            "refs": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {"$ref": "#/$defs/reference"}
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["notApplicableRationale"],
+          "properties": {
+            "notApplicableRationale": {
+              "enum": [
+                "DEFERRED_CARRIER_HAS_NO_DURABLE_STATE",
+                "LOCAL_CONSUMER_REUSES_HTTP_RUNTIME_SCHEMA",
+                "LOCAL_PROTOCOL_TRANSLATOR_OWNS_NO_PERSISTENCE",
+                "WIRE_CARRIER_REUSES_RUNTIME_SCHEMA"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "carrier": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "status",
+        "statusOwner",
+        "authorityRefs",
+        "entrypointRefs",
+        "migration",
+        "highestPublicTestRefs",
+        "gateTargets",
+        "operatorDocRefs",
+        "notActiveRelations"
+      ],
+      "properties": {
+        "id": {"type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"},
+        "status": {"enum": ["ACTIVE_BOUNDED", "NOT_ACTIVE"]},
+        "statusOwner": {"$ref": "#/$defs/reference"},
+        "authorityRefs": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/authorityReference"}
+        },
+        "entrypointRefs": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/reference"}
+        },
+        "migration": {"$ref": "#/$defs/migration"},
+        "highestPublicTestRefs": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/reference"}
+        },
+        "gateTargets": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"enum": ["catalog", "check", "integration", "test"]}
+        },
+        "operatorDocRefs": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/reference"}
+        },
+        "notActiveRelations": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/notActiveRelation"}
+        },
+        "securityEvidenceRefs": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^[A-Z0-9-]+$"}
+        }
+      }
+    }
+  }
+}

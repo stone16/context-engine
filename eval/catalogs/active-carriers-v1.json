@@ -1,0 +1,307 @@
+{
+  "schemaVersion": "active-carrier-registry-v1",
+  "canonicalOwner": "eval/catalogs/active-carriers-v1.json",
+  "securityVetoRelationship": "SEPARATE_INDEPENDENT_GATE",
+  "closedNotActiveRelations": [
+    "CONTINUE",
+    "EXTERNAL_NETWORK_MODEL",
+    "GROUP_PUBLIC_DELIVERY",
+    "HYBRID_RETRIEVAL",
+    "LIVE_PROVIDER",
+    "MCP_BROADER_THAN_LOCAL_ACQUIRE",
+    "OPEN_CITATION_OUTSIDE_EVIDENCE_CONSOLE",
+    "PRODUCTION_REMOTE_AUTH",
+    "REMOTE_MULTIUSER_RUNTIME",
+    "RUNTIME_REWRITE_RERANK_SELECT"
+  ],
+  "carriers": [
+    {
+      "id": "file-pgvector-acquire-v0",
+      "status": "ACTIVE_BOUNDED",
+      "statusOwner": {"path": "STATUS.md", "marker": "Bounded dogfood Runtime"},
+      "authorityRefs": [
+        {"path": "docs/decisions/0068-activate-loopback-dogfood-runtime.md", "marker": "Status: accepted"},
+        {"path": "docs/decisions/0102-activate-release-bound-local-query-embedding.md", "marker": "Status: accepted"}
+      ],
+      "entrypointRefs": [
+        {"path": "pyproject.toml", "marker": "context-engine-api"},
+        {"path": "adapters/http/app.py", "marker": "/v0/resolve"},
+        {"path": "adapters/pgvector.py", "marker": "PostgreSQLVectorCandidateIndex"}
+      ],
+      "migration": {"refs": [
+        {"path": "migrations/versions/20260726_0036_fragment_embeddings.py", "marker": "20260726_0036"},
+        {"path": "migrations/versions/20260802_0053_embedding_provider_profile.py", "marker": "20260802_0053"}
+      ]},
+      "highestPublicTestRefs": [
+        {"path": "tests/integration/test_dogfood_runtime_activation.py", "marker": "test_dogfood_served_composition_delivers_release_scoped_file_evidence_before_limit"}
+      ],
+      "gateTargets": ["integration", "check"],
+      "operatorDocRefs": [{"path": "README.md", "marker": "bounded served composition uses pgvector candidate discovery only"}],
+      "notActiveRelations": ["CONTINUE", "HYBRID_RETRIEVAL", "PRODUCTION_REMOTE_AUTH", "REMOTE_MULTIUSER_RUNTIME", "RUNTIME_REWRITE_RERANK_SELECT", "EXTERNAL_NETWORK_MODEL", "LIVE_PROVIDER", "GROUP_PUBLIC_DELIVERY", "OPEN_CITATION_OUTSIDE_EVIDENCE_CONSOLE"]
+    },
+    {
+      "id": "file-pgvector-acquire-v1",
+      "status": "ACTIVE_BOUNDED",
+      "statusOwner": {"path": "STATUS.md", "marker": "ADR-0104 activates the v1 cumulative public"},
+      "authorityRefs": [
+        {"path": "docs/decisions/0102-activate-release-bound-local-query-embedding.md", "marker": "Status: accepted"},
+        {"path": "docs/decisions/0104-version-context-package-for-cumulative-runtime-accounting.md", "marker": "Status: accepted"}
+      ],
+      "entrypointRefs": [
+        {"path": "adapters/http/app.py", "marker": "/v1/resolve"},
+        {"path": "sdk/typescript-v1/README.md", "marker": "v1"}
+      ],
+      "migration": {"refs": [{"path": "migrations/versions/20260805_0056_tokenizer_profile_accounting.py", "marker": "20260805_0056"}]},
+      "highestPublicTestRefs": [{"path": "tests/integration/test_z_egress_grant_file.py", "marker": "test_packed_typescript_sdk_resolves_authorized_file_package_over_live_http"}],
+      "gateTargets": ["integration", "check"],
+      "operatorDocRefs": [{"path": "README.md", "marker": "explicit `v1` accounting consumer"}],
+      "notActiveRelations": ["CONTINUE", "HYBRID_RETRIEVAL", "PRODUCTION_REMOTE_AUTH", "REMOTE_MULTIUSER_RUNTIME", "RUNTIME_REWRITE_RERANK_SELECT", "EXTERNAL_NETWORK_MODEL", "LIVE_PROVIDER", "GROUP_PUBLIC_DELIVERY", "OPEN_CITATION_OUTSIDE_EVIDENCE_CONSOLE"]
+    },
+    {
+      "id": "http-generated-sdk-v0",
+      "status": "ACTIVE_BOUNDED",
+      "statusOwner": {"path": "STATUS.md", "marker": "Freeze OpenAPI v0 through one sealed Runtime path"},
+      "authorityRefs": [
+        {"path": "docs/decisions/0047-freeze-openapi-v0-through-one-runtime-path.md", "marker": "Status: accepted"},
+        {"path": "docs/decisions/0048-generate-typescript-sdk-behind-a-closed-facade.md", "marker": "Status: accepted"}
+      ],
+      "entrypointRefs": [{"path": "adapters/http/app.py", "marker": "/v0/resolve"}, {"path": "sdk/typescript/README.md", "marker": "v0"}],
+      "migration": {"notApplicableRationale": "LOCAL_CONSUMER_REUSES_HTTP_RUNTIME_SCHEMA"},
+      "highestPublicTestRefs": [{"path": "tests/integration/test_z_egress_grant_file.py", "marker": "test_packed_typescript_sdk_resolves_authorized_file_package_over_live_http"}],
+      "gateTargets": ["integration", "check"],
+      "operatorDocRefs": [{"path": "README.md", "marker": "OpenAPI v0 wire contract"}],
+      "notActiveRelations": ["CONTINUE", "PRODUCTION_REMOTE_AUTH", "REMOTE_MULTIUSER_RUNTIME"]
+    },
+    {
+      "id": "http-generated-sdk-v1",
+      "status": "ACTIVE_BOUNDED",
+      "statusOwner": {"path": "STATUS.md", "marker": "public v1 cumulative local-accounting contract"},
+      "authorityRefs": [{"path": "docs/decisions/0104-version-context-package-for-cumulative-runtime-accounting.md", "marker": "Status: accepted"}],
+      "entrypointRefs": [{"path": "adapters/http/app.py", "marker": "/v1/resolve"}, {"path": "sdk/typescript-v1/README.md", "marker": "v1"}],
+      "migration": {"refs": [{"path": "migrations/versions/20260805_0056_tokenizer_profile_accounting.py", "marker": "20260805_0056"}]},
+      "highestPublicTestRefs": [{"path": "tests/integration/test_z_egress_grant_file.py", "marker": "test_packed_typescript_sdk_resolves_authorized_file_package_over_live_http"}],
+      "gateTargets": ["integration", "check"],
+      "operatorDocRefs": [{"path": "README.md", "marker": "explicit `v1` accounting consumer"}],
+      "notActiveRelations": ["CONTINUE", "PRODUCTION_REMOTE_AUTH", "REMOTE_MULTIUSER_RUNTIME", "EXTERNAL_NETWORK_MODEL", "RUNTIME_REWRITE_RERANK_SELECT"]
+    },
+    {
+      "id": "file-supply-worker",
+      "status": "ACTIVE_BOUNDED",
+      "statusOwner": {"path": "STATUS.md", "marker": "File Provider (Provider #1) — Supply loop"},
+      "authorityRefs": [{"path": "docs/decisions/0037-publish-first-file-through-exact-worker-lease.md", "marker": "Status: accepted"}, {"path": "docs/decisions/0071-compose-bounded-file-scan-cycles.md", "marker": "Status: accepted"}],
+      "entrypointRefs": [{"path": "pyproject.toml", "marker": "context-engine-worker"}, {"path": "applications/worker.py", "marker": "def main"}],
+      "migration": {"refs": [{"path": "migrations/versions/20260722_0006_worker_lease_noop.py", "marker": "20260722_0006"}, {"path": "migrations/versions/20260722_0010_file_source_registration.py", "marker": "20260722_0010"}]},
+      "highestPublicTestRefs": [{"path": "tests/integration/test_connector_runner_lease.py", "marker": "test_worker_process_executes_exact_leased_file_connector_job"}],
+      "gateTargets": ["integration", "check"],
+      "operatorDocRefs": [{"path": "README.md", "marker": "context-engine-worker --dispatch-file-once"}],
+      "notActiveRelations": ["LIVE_PROVIDER"]
+    },
+    {
+      "id": "local-control-operator",
+      "status": "ACTIVE_BOUNDED",
+      "statusOwner": {"path": "STATUS.md", "marker": "opt-in ADR-0069 local operator process"},
+      "authorityRefs": [{"path": "docs/decisions/0069-admit-an-explicit-local-operator-composition.md", "marker": "Status: accepted"}],
+      "entrypointRefs": [{"path": "pyproject.toml", "marker": "context-engine-control"}, {"path": "applications/control.py", "marker": "def main"}],
+      "migration": {"refs": [{"path": "migrations/versions/20260722_0010_file_source_registration.py", "marker": "20260722_0010"}]},
+      "highestPublicTestRefs": [{"path": "tests/integration/test_control_operator_process.py", "marker": "test_control_process_registers_reads_and_activates_one_file_source"}],
+      "gateTargets": ["integration", "check"],
+      "operatorDocRefs": [{"path": "README.md", "marker": "context-engine-control register-file-source"}],
+      "notActiveRelations": ["PRODUCTION_REMOTE_AUTH", "REMOTE_MULTIUSER_RUNTIME"]
+    },
+    {
+      "id": "local-release-promotion",
+      "status": "ACTIVE_BOUNDED",
+      "statusOwner": {"path": "STATUS.md", "marker": "Bounded local Release promotion"},
+      "authorityRefs": [{"path": "docs/decisions/0073-compose-explicit-release-candidates-from-current-corpus.md", "marker": "Status: accepted"}],
+      "entrypointRefs": [{"path": "applications/release_promotion.py", "marker": "promote_release"}, {"path": "applications/control.py", "marker": "promote-release"}],
+      "migration": {"refs": [{"path": "migrations/versions/20260722_0009_learning_release_promotion.py", "marker": "20260722_0009"}]},
+      "highestPublicTestRefs": [{"path": "tests/integration/test_release_operator_process.py", "marker": "test_promote_release_activates_every_current_revision_and_dogfood_runtime"}],
+      "gateTargets": ["integration", "check"],
+      "operatorDocRefs": [{"path": "README.md", "marker": "context-engine-control promote-release"}],
+      "notActiveRelations": ["REMOTE_MULTIUSER_RUNTIME"]
+    },
+    {
+      "id": "repo-local-claude-acquire-v0",
+      "status": "ACTIVE_BOUNDED",
+      "statusOwner": {"path": "STATUS.md", "marker": "Repo-local Claude Code consumer"},
+      "authorityRefs": [{"path": "docs/decisions/0088-bind-local-consumers-to-fresh-evidence-bearing-packages.md", "marker": "Status: accepted"}],
+      "entrypointRefs": [{"path": ".claude/skills/context-engine/SKILL.md", "marker": "context-engine-local-context"}, {"path": "applications/local_context.py", "marker": "def main"}],
+      "migration": {"notApplicableRationale": "WIRE_CARRIER_REUSES_RUNTIME_SCHEMA"},
+      "highestPublicTestRefs": [{"path": "tests/unit/test_local_context.py", "marker": "test_skill_prescribes_stdin_only_invocation_without_bearer_material"}],
+      "gateTargets": ["test", "check"],
+      "operatorDocRefs": [{"path": "STATUS.md", "marker": "Repo-local Claude Code consumer"}],
+      "notActiveRelations": ["CONTINUE", "OPEN_CITATION_OUTSIDE_EVIDENCE_CONSOLE", "GROUP_PUBLIC_DELIVERY"]
+    },
+    {
+      "id": "maintainer-context-cli-acquire-v0",
+      "status": "ACTIVE_BOUNDED",
+      "statusOwner": {"path": "STATUS.md", "marker": "Read-only maintainer Context CLI"},
+      "authorityRefs": [{"path": "docs/decisions/0088-bind-local-consumers-to-fresh-evidence-bearing-packages.md", "marker": "Status: accepted"}],
+      "entrypointRefs": [
+        {"path": "pyproject.toml", "marker": "context-engine-context"},
+        {"path": "applications/maintainer_context.py", "marker": "def main"}
+      ],
+      "migration": {"notApplicableRationale": "LOCAL_CONSUMER_REUSES_HTTP_RUNTIME_SCHEMA"},
+      "highestPublicTestRefs": [{"path": "tests/process/test_processes.py", "marker": "test_maintainer_context_process_exposes_only_read_subcommands"}],
+      "gateTargets": ["test", "check"],
+      "operatorDocRefs": [{"path": "README.md", "marker": "maintainer caller"}],
+      "notActiveRelations": ["CONTINUE", "OPEN_CITATION_OUTSIDE_EVIDENCE_CONSOLE", "MCP_BROADER_THAN_LOCAL_ACQUIRE", "GROUP_PUBLIC_DELIVERY", "RUNTIME_REWRITE_RERANK_SELECT"]
+    },
+    {
+      "id": "local-mcp-acquire-v0",
+      "status": "ACTIVE_BOUNDED",
+      "statusOwner": {"path": "STATUS.md", "marker": "Local MCP Acquire translator"},
+      "authorityRefs": [{"path": "docs/decisions/0103-activate-one-local-mcp-acquire-translation.md", "marker": "Status: accepted"}],
+      "entrypointRefs": [
+        {"path": "pyproject.toml", "marker": "context-engine-mcp"},
+        {"path": "applications/mcp.py", "marker": "def main"}
+      ],
+      "migration": {"notApplicableRationale": "LOCAL_PROTOCOL_TRANSLATOR_OWNS_NO_PERSISTENCE"},
+      "highestPublicTestRefs": [{"path": "tests/integration/test_dogfood_runtime_activation.py", "marker": "test_spawned_mcp_stdio_delivers_only_real_http_authorized_evidence"}],
+      "gateTargets": ["integration", "check"],
+      "operatorDocRefs": [{"path": "README.md", "marker": "spawn-per-session stdio MCP"}],
+      "notActiveRelations": ["CONTINUE", "OPEN_CITATION_OUTSIDE_EVIDENCE_CONSOLE", "MCP_BROADER_THAN_LOCAL_ACQUIRE", "PRODUCTION_REMOTE_AUTH", "REMOTE_MULTIUSER_RUNTIME", "GROUP_PUBLIC_DELIVERY"]
+    },
+    {
+      "id": "evidence-console-open-citation-v0",
+      "status": "ACTIVE_BOUNDED",
+      "statusOwner": {"path": "STATUS.md", "marker": "Co-resident local Evidence Console"},
+      "authorityRefs": [
+        {"path": "docs/decisions/0090-admit-a-co-resident-local-evidence-console.md", "marker": "Status: accepted"},
+        {"path": "docs/decisions/0093-activate-leased-rich-markdown-and-revision-link-graph.md", "marker": "Status: accepted"}
+      ],
+      "entrypointRefs": [
+        {"path": "ui/app.py", "marker": "def install_ui"},
+        {"path": "ui/public_http.py", "marker": "open_citation"}
+      ],
+      "migration": {"refs": [
+        {"path": "migrations/versions/20260724_0024_citation_open.py", "marker": "20260724_0024"},
+        {"path": "migrations/versions/20260730_0047_minimal_ui.py", "marker": "20260730_0047"}
+      ]},
+      "highestPublicTestRefs": [{"path": "tests/integration/test_z_egress_grant_file.py", "marker": "test_file_http_citation_reauthorizes_unavailable_target"}],
+      "gateTargets": ["integration", "check"],
+      "operatorDocRefs": [{"path": "README.md", "marker": "Evidence Console"}],
+      "notActiveRelations": ["CONTINUE", "OPEN_CITATION_OUTSIDE_EVIDENCE_CONSOLE", "PRODUCTION_REMOTE_AUTH", "REMOTE_MULTIUSER_RUNTIME", "GROUP_PUBLIC_DELIVERY"]
+    },
+    {
+      "id": "private-bot-actionplane-twin",
+      "status": "ACTIVE_BOUNDED",
+      "statusOwner": {"path": "STATUS.md", "marker": "bounded private Feishu delivery conformance"},
+      "authorityRefs": [{"path": "docs/decisions/0089-bound-live-feishu-to-the-existing-private-bot-composition.md", "marker": "Status: accepted"}],
+      "entrypointRefs": [
+        {"path": "bot_delivery/typescript/src/private-delivery.ts", "marker": "export class BotDelivery"},
+        {"path": "action_plane/typescript/src/internal.ts", "marker": "export class ActionPlane"}
+      ],
+      "migration": {"refs": [
+        {"path": "migrations/versions/20260723_0019_delivery_evidence_ref.py", "marker": "20260723_0019"},
+        {"path": "migrations/versions/20260723_0022_action_prepare.py", "marker": "20260723_0022"},
+        {"path": "migrations/versions/20260724_0023_action_perform.py", "marker": "20260724_0023"},
+        {"path": "migrations/versions/20260724_0026_private_delivery_audit.py", "marker": "20260724_0026"}
+      ]},
+      "highestPublicTestRefs": [{"path": "tests/integration/test_z_egress_grant_file.py", "marker": "test_installed_private_bot_completes_file_answer_effects_audit_and_citation"}],
+      "gateTargets": ["integration", "check"],
+      "operatorDocRefs": [{"path": "bot_delivery/typescript/README.md", "marker": "private"}],
+      "notActiveRelations": ["GROUP_PUBLIC_DELIVERY", "CONTINUE", "MCP_BROADER_THAN_LOCAL_ACQUIRE", "LIVE_PROVIDER", "REMOTE_MULTIUSER_RUNTIME", "PRODUCTION_REMOTE_AUTH"]
+    },
+    {
+      "id": "continue-deferred", "status": "NOT_ACTIVE",
+      "statusOwner": {"path": "STATUS.md", "marker": "`continue-deferred`: `NOT_ACTIVE`"},
+      "authorityRefs": [{"path": "docs/decisions/0068-activate-loopback-dogfood-runtime.md", "marker": "Status: accepted"}],
+      "entrypointRefs": [{"path": "engine/runtime/capabilities.py", "marker": "class RuntimeCapabilityGate"}],
+      "migration": {"notApplicableRationale": "DEFERRED_CARRIER_HAS_NO_DURABLE_STATE"},
+      "highestPublicTestRefs": [{"path": "tests/unit/test_http_unavailable_capabilities.py", "marker": "request_not_available"}],
+      "gateTargets": ["test", "check"], "operatorDocRefs": [{"path": "STATUS.md", "marker": "`Continue` carrier"}],
+      "notActiveRelations": ["CONTINUE"]
+    },
+    {
+      "id": "external-network-model-deferred", "status": "NOT_ACTIVE",
+      "statusOwner": {"path": "STATUS.md", "marker": "`external-network-model-deferred`: `NOT_ACTIVE`"},
+      "authorityRefs": [{"path": "docs/decisions/0102-activate-release-bound-local-query-embedding.md", "marker": "Status: accepted"}],
+      "entrypointRefs": [{"path": "adapters/local_embedding_model.py", "marker": "local_files_only"}],
+      "migration": {"notApplicableRationale": "DEFERRED_CARRIER_HAS_NO_DURABLE_STATE"},
+      "highestPublicTestRefs": [{"path": "tests/unit/test_local_qwen_embedding_provider.py", "marker": "test_local_qwen_warms_model_during_provider_initialization"}],
+      "gateTargets": ["test", "check"], "operatorDocRefs": [{"path": "STATUS.md", "marker": "external/network embeddings remain `NOT_ACTIVE`"}],
+      "notActiveRelations": ["EXTERNAL_NETWORK_MODEL"]
+    },
+    {
+      "id": "group-public-delivery-deferred", "status": "NOT_ACTIVE",
+      "statusOwner": {"path": "STATUS.md", "marker": "`group-public-delivery-deferred`: `NOT_ACTIVE`"},
+      "authorityRefs": [{"path": "docs/decisions/0089-bound-live-feishu-to-the-existing-private-bot-composition.md", "marker": "Status: accepted"}],
+      "entrypointRefs": [{"path": "bot_delivery/typescript/src/private-delivery.ts", "marker": "BotDelivery"}],
+      "migration": {"notApplicableRationale": "DEFERRED_CARRIER_HAS_NO_DURABLE_STATE"},
+      "highestPublicTestRefs": [{"path": "tests/unit/test_bot_delivery_application_contract.py", "marker": "private_bot"}],
+      "gateTargets": ["test", "check"], "operatorDocRefs": [{"path": "STATUS.md", "marker": "Group/public delivery"}],
+      "notActiveRelations": ["GROUP_PUBLIC_DELIVERY"]
+    },
+    {
+      "id": "hybrid-retrieval-deferred", "status": "NOT_ACTIVE",
+      "statusOwner": {"path": "STATUS.md", "marker": "`hybrid-retrieval-deferred`: `NOT_ACTIVE`"},
+      "authorityRefs": [{"path": "docs/decisions/0068-activate-loopback-dogfood-runtime.md", "marker": "Status: accepted"}],
+      "entrypointRefs": [{"path": "adapters/hybrid.py", "marker": "PostgreSQLHybridCandidateIndex"}],
+      "migration": {"notApplicableRationale": "DEFERRED_CARRIER_HAS_NO_DURABLE_STATE"},
+      "highestPublicTestRefs": [{"path": "tests/integration/test_hybrid_path_sealed_http.py", "marker": "test_hybrid_http_keeps_raw_candidates_before_the_kernel"}],
+      "gateTargets": ["integration", "check"], "operatorDocRefs": [{"path": "README.md", "marker": "retrieval is implemented but is not active"}],
+      "notActiveRelations": ["HYBRID_RETRIEVAL"]
+    },
+    {
+      "id": "live-provider-deferred", "status": "NOT_ACTIVE",
+      "statusOwner": {"path": "STATUS.md", "marker": "`live-provider-deferred`: `NOT_ACTIVE`"},
+      "authorityRefs": [{"path": "docs/decisions/0089-bound-live-feishu-to-the-existing-private-bot-composition.md", "marker": "Status: accepted"}],
+      "entrypointRefs": [{"path": "adapters/connectors/feishu.py", "marker": "Feishu"}],
+      "migration": {"notApplicableRationale": "DEFERRED_CARRIER_HAS_NO_DURABLE_STATE"},
+      "highestPublicTestRefs": [{"path": "tests/unit/test_m0_delivery_carriers.py", "marker": "test_m0_egress_carrier_is_unavailable_before_model_or_sender_bytes"}],
+      "gateTargets": ["test", "check"], "operatorDocRefs": [{"path": "STATUS.md", "marker": "Live Feishu credentials/network"}],
+      "notActiveRelations": ["LIVE_PROVIDER"]
+    },
+    {
+      "id": "broader-mcp-deferred", "status": "NOT_ACTIVE",
+      "statusOwner": {"path": "STATUS.md", "marker": "`broader-mcp-deferred`: `NOT_ACTIVE`"},
+      "authorityRefs": [{"path": "docs/decisions/0103-activate-one-local-mcp-acquire-translation.md", "marker": "Status: accepted"}],
+      "entrypointRefs": [{"path": "adapters/mcp/server.py", "marker": "context_resolve"}],
+      "migration": {"notApplicableRationale": "DEFERRED_CARRIER_HAS_NO_DURABLE_STATE"},
+      "highestPublicTestRefs": [{"path": "tests/unit/test_mcp_adapter.py", "marker": "test_mcp_lists_one_exact_acquire_tool_without_trusted_inputs"}],
+      "gateTargets": ["test", "check"], "operatorDocRefs": [{"path": "STATUS.md", "marker": "every broader MCP carrier"}],
+      "notActiveRelations": ["MCP_BROADER_THAN_LOCAL_ACQUIRE"]
+    },
+    {
+      "id": "open-citation-other-carriers-deferred", "status": "NOT_ACTIVE",
+      "statusOwner": {"path": "STATUS.md", "marker": "`open-citation-other-carriers-deferred`: `NOT_ACTIVE`"},
+      "authorityRefs": [{"path": "docs/decisions/0103-activate-one-local-mcp-acquire-translation.md", "marker": "Status: accepted"}],
+      "entrypointRefs": [{"path": "engine/runtime/capabilities.py", "marker": "class RuntimeCapabilityGate"}],
+      "migration": {"notApplicableRationale": "DEFERRED_CARRIER_HAS_NO_DURABLE_STATE"},
+      "highestPublicTestRefs": [{"path": "tests/unit/test_http_unavailable_capabilities.py", "marker": "test_accept_010_open_citation_is_generic_and_zero_io"}],
+      "gateTargets": ["test", "check"], "operatorDocRefs": [{"path": "STATUS.md", "marker": "citation open"}],
+      "notActiveRelations": ["OPEN_CITATION_OUTSIDE_EVIDENCE_CONSOLE"]
+    },
+    {
+      "id": "production-remote-auth-deferred", "status": "NOT_ACTIVE",
+      "statusOwner": {"path": "STATUS.md", "marker": "`production-remote-auth-deferred`: `NOT_ACTIVE`"},
+      "authorityRefs": [{"path": "docs/decisions/0068-activate-loopback-dogfood-runtime.md", "marker": "Status: accepted"}],
+      "entrypointRefs": [{"path": "adapters/http/dogfood.py", "marker": "Select reject-all by absence"}],
+      "migration": {"notApplicableRationale": "DEFERRED_CARRIER_HAS_NO_DURABLE_STATE"},
+      "highestPublicTestRefs": [{"path": "tests/unit/test_m0_delivery_carriers.py", "marker": "test_m0_egress_carrier_is_unavailable_before_model_or_sender_bytes"}],
+      "gateTargets": ["test", "check"], "operatorDocRefs": [{"path": "STATUS.md", "marker": "Production authentication"}],
+      "notActiveRelations": ["PRODUCTION_REMOTE_AUTH"]
+    },
+    {
+      "id": "remote-multiuser-runtime-deferred", "status": "NOT_ACTIVE",
+      "statusOwner": {"path": "STATUS.md", "marker": "`remote-multiuser-runtime-deferred`: `NOT_ACTIVE`"},
+      "authorityRefs": [{"path": "docs/decisions/0068-activate-loopback-dogfood-runtime.md", "marker": "Status: accepted"}],
+      "entrypointRefs": [{"path": "adapters/http/dogfood.py", "marker": "127.0.0.1"}],
+      "migration": {"notApplicableRationale": "DEFERRED_CARRIER_HAS_NO_DURABLE_STATE"},
+      "highestPublicTestRefs": [{"path": "tests/integration/test_dogfood_runtime_activation.py", "marker": "test_dogfood_secret_and_membership_fail_closed_without_secret_retention"}],
+      "gateTargets": ["integration", "check"], "operatorDocRefs": [{"path": "STATUS.md", "marker": "second human"}],
+      "notActiveRelations": ["REMOTE_MULTIUSER_RUNTIME"]
+    },
+    {
+      "id": "runtime-rewrite-rerank-select-deferred", "status": "NOT_ACTIVE",
+      "statusOwner": {"path": "STATUS.md", "marker": "`runtime-rewrite-rerank-select-deferred`: `NOT_ACTIVE`"},
+      "authorityRefs": [{"path": "docs/decisions/0104-version-context-package-for-cumulative-runtime-accounting.md", "marker": "Status: accepted"}],
+      "entrypointRefs": [{"path": "engine/runtime/model_inference.py", "marker": "ModelInference"}],
+      "migration": {"notApplicableRationale": "DEFERRED_CARRIER_HAS_NO_DURABLE_STATE"},
+      "highestPublicTestRefs": [{"path": "tests/unit/test_model_inference_port.py", "marker": "test_generation_bound_lexical_discovery_refuses_mixed_release_generation"}],
+      "gateTargets": ["test", "check"], "operatorDocRefs": [{"path": "STATUS.md", "marker": "Runtime model-inference carriers"}],
+      "notActiveRelations": ["RUNTIME_REWRITE_RERANK_SELECT"]
+    }
+  ]
+}

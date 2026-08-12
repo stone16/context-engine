@@ -33,6 +33,7 @@ test: bot-build
 
 catalog:
 	uv run pytest -q tests/catalog
+	uv run python scripts/validate_active_carriers.py
 	uv run python scripts/validate_security_catalog.py
 	$(MAKE) third-party-check
 
