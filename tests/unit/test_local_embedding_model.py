@@ -122,6 +122,37 @@ def test_local_model_verifier_requires_safe_descriptor_flags_for_flat_tree(
     assert failure.value.__cause__ is None
 
 
+@pytest.mark.parametrize("flag_name", ("O_DIRECTORY", "O_NOFOLLOW"))
+def test_descriptor_verifier_reports_missing_safe_flags_as_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    flag_name: str,
+) -> None:
+    model_dir = tmp_path / "model"
+    model_dir.mkdir()
+    content = b"registered bytes"
+    (model_dir / "model.safetensors").write_bytes(content)
+    expected_digest = sha256(content).hexdigest()
+    manifest_digest = sha256(
+        rfc8785.dumps([{"path": "model.safetensors", "sha256": expected_digest}])
+    ).hexdigest()
+    root_descriptor = os.open(
+        model_dir,
+        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+    )
+    monkeypatch.delattr(os, flag_name)
+
+    try:
+        with pytest.raises(local_model.LocalEmbeddingModelArtifactsUnavailable):
+            local_model.verify_model_artifacts_descriptor(
+                root_descriptor,
+                (("model.safetensors", expected_digest),),
+                manifest_digest,
+            )
+    finally:
+        os.close(root_descriptor)
+
+
 @pytest.mark.parametrize("extra_kind", ("directory", "symlink", "fifo"))
 def test_local_model_verifier_refuses_every_unregistered_file_type(
     tmp_path: Path,

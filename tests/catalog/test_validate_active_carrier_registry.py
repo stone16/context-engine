@@ -345,6 +345,46 @@ def test_public_validator_reports_repository_read_failure_without_content(
     }
 
 
+def test_public_validator_reports_invalid_utf8_proof_without_content(
+    tmp_path: Path,
+) -> None:
+    registry, _ = _documents()
+    registry["carriers"][0]["statusOwner"] = {
+        "path": "invalid-proof.md",
+        "marker": "proof",
+    }
+    registry_path = tmp_path / "active-carriers-v1.json"
+    registry_path.write_text(json.dumps(registry), encoding="utf-8")
+    (tmp_path / "Makefile").write_text("check:\n", encoding="utf-8")
+    (tmp_path / "invalid-proof.md").write_bytes(b"\xffprivate proof")
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(VALIDATOR_PATH),
+            "--registry",
+            str(registry_path),
+            "--schema",
+            str(SCHEMA_PATH),
+            "--repository-root",
+            str(tmp_path),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    assert completed.stderr == ""
+    assert json.loads(completed.stdout) == {
+        "capabilityCompleteness": "INCOMPLETE",
+        "categories": ["REPOSITORY_UNAVAILABLE"],
+        "schemaVersion": "active-carrier-validation-result-v1",
+        "securityVeto": "SEPARATE_NOT_EVALUATED",
+        "status": "FAIL",
+    }
+
+
 @pytest.mark.parametrize(
     ("relationship", "category"),
     [

@@ -220,7 +220,10 @@ def verify_model_artifacts_descriptor(
     expected_artifacts: tuple[tuple[str, str], ...],
     expected_artifact_digest: str,
 ) -> None:
-    _required_descriptor_flags()
+    try:
+        _required_descriptor_flags()
+    except ValueError:
+        raise LocalEmbeddingModelArtifactsUnavailable from None
     if type(root_descriptor) is not int or root_descriptor < 0:
         raise ValueError
     root_metadata = os.fstat(root_descriptor)

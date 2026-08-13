@@ -301,7 +301,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         print(json.dumps(_result(status="FAIL", categories=categories), sort_keys=True))
         return 1
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         print(
             json.dumps(
                 _result(status="FAIL", categories=("REPOSITORY_UNAVAILABLE",)),
