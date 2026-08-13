@@ -139,6 +139,18 @@ def test_render_is_deterministic_and_contains_no_credentials(
     assert "bootstrap" in database["ProgramArguments"]
 
 
+def test_render_refuses_duplicate_rendered_labels(tmp_path: Path) -> None:
+    configuration = _configuration(tmp_path)
+    templates = configuration.checkout / "deploy" / "daily-driver"
+    shutil.copy(
+        templates / "backup.plist.template",
+        templates / "aaa-colliding.plist.template",
+    )
+
+    with pytest.raises(LaunchdRenderRefused, match="label is duplicated"):
+        render_launchd_templates(configuration)
+
+
 @pytest.mark.parametrize(
     ("kind", "name"),
     (
@@ -208,6 +220,54 @@ def test_content_process_refuses_stale_deployment_before_content_io(
         if kind == "daemon"
         else ["environment", "environment", "binding"]
     )
+
+
+def test_backup_job_refuses_stale_deployment_before_database_io(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    database_environment = tmp_path / "database.env"
+    database_environment.write_text("SYNTHETIC=value\n", encoding="utf-8")
+    database_environment.chmod(0o600)
+    docker_executable = tmp_path / "docker"
+    docker_executable.write_text("#!/bin/sh\n", encoding="utf-8")
+    docker_executable.chmod(0o700)
+    events: list[str] = []
+
+    def refuse(**_kwargs: object) -> None:
+        events.append("binding")
+        raise DeploymentBindingRefused
+
+    def load_environment(_path: Path) -> dict[str, str]:
+        events.append("environment")
+        return {}
+
+    monkeypatch.setattr("scripts.daily_driver.jobs.verify_ready_deployment", refuse)
+    monkeypatch.setattr(
+        "scripts.daily_driver.jobs.load_owner_environment",
+        load_environment,
+    )
+    monkeypatch.setattr(
+        "scripts.daily_driver.jobs.create_database_backup",
+        lambda **_kwargs: pytest.fail("backup must not run without a ready binding"),
+    )
+    arguments = Namespace(
+        job="backup",
+        checkout=checkout,
+        database_environment=database_environment,
+        operator_environment=None,
+        failure_root=tmp_path / "failures",
+        backup_root=tmp_path / "database-backups",
+        docker_executable=docker_executable,
+        health_url=None,
+    )
+
+    with pytest.raises(DeploymentBindingRefused):
+        _run_scheduled(arguments)
+
+    assert events == ["environment", "binding"]
 
 
 @pytest.mark.parametrize(

@@ -242,14 +242,19 @@ def validate_active_carrier_registry(
     if inactive_relations != set(registry["closedNotActiveRelations"]):
         categories.add("INACTIVE_STATUS_CONFLICT")
     status_text = (repository_root / "STATUS.md").read_text(encoding="utf-8")
-    status_coverage = _STATUS_COVERAGE_PATTERN.search(status_text)
-    covered_statuses = (
-        dict(_STATUS_CARRIER_PATTERN.findall(status_coverage.group("body")))
-        if status_coverage is not None
-        else {}
+    status_blocks = _STATUS_COVERAGE_PATTERN.findall(status_text)
+    covered_lines = (
+        _STATUS_CARRIER_PATTERN.findall(status_blocks[0])
+        if len(status_blocks) == 1
+        else []
     )
+    covered_statuses = dict(covered_lines)
     registry_statuses = {carrier["id"]: carrier["status"] for carrier in carriers}
-    if covered_statuses != registry_statuses:
+    if (
+        len(status_blocks) != 1
+        or len(covered_lines) != len(covered_statuses)
+        or covered_statuses != registry_statuses
+    ):
         categories.add("DANGLING_STATUS_OWNER")
     if categories:
         raise CarrierValidationError(tuple(categories))

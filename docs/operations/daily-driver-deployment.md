@@ -99,9 +99,12 @@ python3 '<reviewed-source-checkout>/scripts/daily_driver_setup.py' \
   --health-interval-seconds "$CONTEXT_ENGINE_HEALTH_INTERVAL_SECONDS"
 ```
 
-The API, worker, and scheduled scan wrappers repeat the exact-schema and binding
-check before content I/O. A stale or mismatched ready manifest therefore cannot
-authorize a later process start.
+The API and worker daemons and the scheduled scan, drain, and backup wrappers
+repeat the exact-schema and binding check before content or database I/O. A
+stale or mismatched ready manifest therefore cannot authorize a later process
+start. The health wrapper is the one deliberate exception: it probes only the
+loopback health URL, touches no database, and must keep reporting while a
+binding is broken.
 
 ## 2. Preserve the single live connection contract
 

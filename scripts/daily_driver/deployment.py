@@ -9,6 +9,7 @@ import re
 import stat
 import subprocess
 from collections.abc import Mapping
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
@@ -183,18 +184,21 @@ def verify_ready_deployment(
     """Refuse unless manifest, checkout, and live schema are one exact binding."""
 
     path = checkout / ".context-engine" / READY_DEPLOYMENT_MANIFEST
+    descriptor = -1
     try:
-        metadata = path.lstat()
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        metadata = os.fstat(descriptor)
         if (
             not stat.S_ISREG(metadata.st_mode)
             or metadata.st_uid != os.getuid()
             or metadata.st_mode & 0o777 != 0o600
         ):
             raise DeploymentBindingRefused
+        with os.fdopen(descriptor, encoding="utf-8") as handle:
+            descriptor = -1
+            raw = handle.read()
         try:
-            manifest = DeploymentManifest.from_document(
-                json.loads(path.read_text(encoding="utf-8"))
-            )
+            manifest = DeploymentManifest.from_document(json.loads(raw))
         except ValueError:
             raise DeploymentBindingRefused from None
         if manifest.status != "ready":
@@ -215,6 +219,10 @@ def verify_ready_deployment(
         TypeError,
     ):
         raise DeploymentBindingRefused from None
+    finally:
+        if descriptor >= 0:
+            with suppress(OSError):
+                os.close(descriptor)
 
 
 __all__ = [

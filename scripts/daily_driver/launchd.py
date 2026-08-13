@@ -6,10 +6,13 @@ import json
 import os
 import plistlib
 import re
+import stat
 import tempfile
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from string import Template
+from xml.parsers.expat import ExpatError
 from xml.sax.saxutils import escape
 
 from engine.learning.golden_storage import require_durable_storage_root
@@ -106,14 +109,17 @@ def render_launchd_templates(
         try:
             content = Template(path.read_text(encoding="utf-8")).substitute(values)
             parsed = plistlib.loads(content.encode("utf-8"))
-        except (KeyError, OSError, plistlib.InvalidFileException, UnicodeError):
+        except (ExpatError, KeyError, OSError, UnicodeError, ValueError):
             raise LaunchdRenderRefused("tracked launchd template is invalid") from None
         label = parsed.get("Label")
         if not isinstance(label, str) or not label.startswith(
             f"{configuration.label_prefix}."
         ):
             raise LaunchdRenderRefused("rendered launchd label is invalid")
-        rendered[f"{label}.plist"] = content
+        name = f"{label}.plist"
+        if name in rendered:
+            raise LaunchdRenderRefused("rendered launchd label is duplicated")
+        rendered[name] = content
     return rendered
 
 
@@ -197,13 +203,28 @@ def _read_render_manifest(
     *,
     label_prefix: str,
 ) -> frozenset[str] | None:
-    if not path.exists() and not path.is_symlink():
-        return None
-    if path.is_symlink() or not path.is_file() or path.stat().st_mode & 0o777 != 0o600:
-        raise LaunchdRenderRefused("render manifest is unsafe")
     try:
-        document = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError):
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError:
+        return None
+    except OSError:
+        raise LaunchdRenderRefused("render manifest is unsafe") from None
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_mode & 0o777 != 0o600:
+            raise LaunchdRenderRefused("render manifest is unsafe")
+        with os.fdopen(descriptor, encoding="utf-8") as handle:
+            descriptor = -1
+            raw = handle.read()
+    except (OSError, UnicodeError):
+        raise LaunchdRenderRefused("render manifest is invalid") from None
+    finally:
+        if descriptor >= 0:
+            with suppress(OSError):
+                os.close(descriptor)
+    try:
+        document = json.loads(raw)
+    except json.JSONDecodeError:
         raise LaunchdRenderRefused("render manifest is invalid") from None
     legacy_manifest_is_valid = (
         type(document) is dict

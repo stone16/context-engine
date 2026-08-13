@@ -190,6 +190,22 @@ composition 只使用 pgvector 候选发现。Hybrid retrieval 已实现，但�
 `NOT_ACTIVE`。`preflight` 是时点性的只读 readiness 观测，不会迁移、seed、scan、
 推理、promotion、启动进程或激活 carrier。
 
+Tracked 的 [`deploy/local-preflight.env.example`](./deploy/local-preflight.env.example)
+以空值列出该 bounded journey 的完整 environment-name 清单。只把名字抄进
+owner-only 的 operator 配置源；绝不能把这份模板变成第二个 secret 来源。
+`preflight` 只接受封闭的本地 plane 选择（`--plane` 可重复），在一份
+schema-versioned JSON 文档中报告每个被选中的 applicable readiness 失败，
+且仅当所有被选中的 applicable 检查都 ready 时才返回零。schema contract 见
+[`context-engine-preflight-v1.schema.json`](./docs/contracts/context-engine-preflight-v1.schema.json)。
+
+Ready 是时点性的 prerequisite，不是 production certification、authorization
+grant，也不是 Security/Reliability/Quality/Budget 证据。干净数据库上的首次
+全 plane 诊断预期返回非零：它是关于缺失 readiness 的证据，不是一次失败的
+mutation。当 schema readiness 不在 head 时，运行单独授权的 `migrate` 命令并
+要求 migration-only 重跑通过；继续 mutating setup 前要求选中的
+Control/Supply/Release 重跑通过，promotion 之后、启动 API 之前完成最后的
+全 plane 重跑。
+
 ### 启动 API
 
 显式指定监听地址，使下面的示例自成一体——默认值与完整参数集

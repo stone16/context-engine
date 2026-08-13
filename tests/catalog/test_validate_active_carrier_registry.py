@@ -661,6 +661,68 @@ def test_validator_handles_continued_make_rules_before_rejecting_repository_esca
     assert raised.value.categories == ("DANGLING_ENTRYPOINT",)
 
 
+def test_status_mirror_refuses_a_contradictory_duplicate_carrier_line(
+    tmp_path: Path,
+) -> None:
+    registry, schema = _documents()
+    relations = registry["closedNotActiveRelations"]
+    scanned_root = tmp_path / "scanned"
+    (scanned_root / "docs/decisions").mkdir(parents=True)
+    (scanned_root / "tests/unit").mkdir(parents=True)
+    (scanned_root / "Makefile").write_text(
+        "catalog \\\ntest:\n\t@true\ncheck: \\\n\tcatalog \\\n\ttest\n\t@true\n",
+        encoding="utf-8",
+    )
+    (scanned_root / "STATUS.md").write_text(
+        "status proof\n"
+        "<!-- active-carrier-registry-v1:start -->\n"
+        "- `deferred-carrier`: `ACTIVE_BOUNDED`\n"
+        "- `deferred-carrier`: `NOT_ACTIVE`\n"
+        "<!-- active-carrier-registry-v1:end -->\n",
+        encoding="utf-8",
+    )
+    (scanned_root / "README.md").write_text("operator proof", encoding="utf-8")
+    (scanned_root / "tests/unit/proof.py").write_text("public proof", encoding="utf-8")
+    (scanned_root / "docs/decisions/0001-proof.md").write_text(
+        "Status: accepted",
+        encoding="utf-8",
+    )
+    registry["carriers"] = [
+        {
+            "id": "deferred-carrier",
+            "status": "NOT_ACTIVE",
+            "statusOwner": {"path": "STATUS.md", "marker": "status proof"},
+            "authorityRefs": [
+                {
+                    "path": "docs/decisions/0001-proof.md",
+                    "marker": "Status: accepted",
+                }
+            ],
+            "entrypointRefs": [
+                {"path": "tests/unit/proof.py", "marker": "public proof"}
+            ],
+            "migration": {
+                "notApplicableRationale": "DEFERRED_CARRIER_HAS_NO_DURABLE_STATE"
+            },
+            "highestPublicTestRefs": [
+                {"path": "tests/unit/proof.py", "marker": "public proof"}
+            ],
+            "gateTargets": ["test", "check"],
+            "operatorDocRefs": [{"path": "README.md", "marker": "operator proof"}],
+            "notActiveRelations": relations,
+        }
+    ]
+
+    with pytest.raises(CarrierValidationError) as raised:
+        validate_active_carrier_registry(
+            registry,
+            schema,
+            repository_root=scanned_root,
+        )
+
+    assert raised.value.categories == ("DANGLING_STATUS_OWNER",)
+
+
 def test_validator_rejects_missing_marker_under_a_permissive_substitute_schema() -> (
     None
 ):

@@ -211,7 +211,7 @@ def verify_model_artifacts(
             os.close(root_descriptor)
     except (OSError, MemoryError):
         raise LocalEmbeddingModelArtifactsUnavailable from None
-    except (TypeError, ValueError):
+    except (RecursionError, TypeError, ValueError):
         raise LocalEmbeddingModelArtifactsInvalid from None
 
 
@@ -241,11 +241,13 @@ def verify_model_artifacts_descriptor(
     )
     if directories != expected_directories:
         for descriptor in observed.values():
-            os.close(descriptor)
+            with suppress(OSError):
+                os.close(descriptor)
         raise ValueError
     if tuple(sorted(observed)) != tuple(path for path, _digest in expected_artifacts):
         for descriptor in observed.values():
-            os.close(descriptor)
+            with suppress(OSError):
+                os.close(descriptor)
         raise ValueError
     manifest: list[dict[str, str]] = []
     try:
@@ -309,7 +311,7 @@ def _artifact_tree_from_descriptor(
             if not stat.S_ISREG(metadata.st_mode):
                 raise ValueError
             _directory_flag, no_follow_flag = _required_descriptor_flags()
-            flags = os.O_RDONLY | no_follow_flag
+            flags = os.O_RDONLY | no_follow_flag | os.O_NONBLOCK
             descriptor = os.open(name, flags, dir_fd=directory_descriptor)
             opened = os.fstat(descriptor)
             if not stat.S_ISREG(opened.st_mode) or (opened.st_dev, opened.st_ino) != (

@@ -255,8 +255,18 @@ def _run_scheduled(arguments: argparse.Namespace) -> int:
     python = arguments.checkout / ".venv" / "bin" / "python"
     command: tuple[str, ...]
     if arguments.job == "backup":
-        if arguments.backup_root is None or arguments.docker_executable is None:
+        if (
+            arguments.backup_root is None
+            or arguments.docker_executable is None
+            or arguments.database_environment is None
+        ):
             return 2
+        verify_ready_deployment(
+            checkout=arguments.checkout,
+            database_environment=load_owner_environment(
+                arguments.database_environment
+            ),
+        )
         create_database_backup(
             checkout=arguments.checkout,
             backup_root=arguments.backup_root,
