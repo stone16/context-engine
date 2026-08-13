@@ -261,7 +261,7 @@ make lint           # Ruff
 make typecheck      # strict mypy + TS typecheck
 make test-python    # 快速 Python-only unit lane（不属于 Definition-of-Done 证据）
 make test           # 完整 unit contract（含必需的 TS build/test）
-make catalog        # 安全目录静态测试与校验
+make catalog        # 安全目录与 active-carrier registry 的静态测试与校验
 make smoke          # API / worker 进程 smoke 套件
 make db-up          # 启动固定版本的 PostgreSQL 17 + pgvector 底座
 make db-down        # 停止底座，保留 disposable data volume

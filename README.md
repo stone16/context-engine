@@ -602,7 +602,7 @@ make lint           # Ruff
 make typecheck      # strict mypy + TS typecheck
 make test-python    # fast Python unit-suite lane; not Definition-of-Done evidence
 make test           # full unit contract, including required TS builds
-make catalog        # static security catalog tests and validation
+make catalog        # static security catalog and active-carrier registry validation
 make smoke          # API / worker process smoke suite
 make db-up          # start the pinned PostgreSQL 17 + pgvector harness
 make db-down        # stop it, preserving the disposable data volume
