@@ -6,14 +6,18 @@ import json
 import os
 import plistlib
 import re
+import stat
 import tempfile
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from string import Template
+from xml.parsers.expat import ExpatError
 from xml.sax.saxutils import escape
 
 from engine.learning.golden_storage import require_durable_storage_root
 from scripts.daily_driver.backup import require_safe_backup_root
+from scripts.daily_driver.deployment import DeploymentBinding, DeploymentManifest
 from scripts.daily_driver.environment import EnvironmentRefused, load_owner_environment
 
 _LABEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9.-]+")
@@ -98,29 +102,32 @@ def render_launchd_templates(
         "api_port": str(configuration.api_port),
     }
     rendered: dict[str, str] = {}
-    templates = sorted(
-        (checkout / "deploy" / "daily-driver").glob("*.plist.template")
-    )
+    templates = sorted((checkout / "deploy" / "daily-driver").glob("*.plist.template"))
     if not templates:
         raise LaunchdRenderRefused("tracked launchd templates are unavailable")
     for path in templates:
         try:
             content = Template(path.read_text(encoding="utf-8")).substitute(values)
             parsed = plistlib.loads(content.encode("utf-8"))
-        except (KeyError, OSError, plistlib.InvalidFileException, UnicodeError):
+        except (ExpatError, KeyError, OSError, UnicodeError, ValueError):
             raise LaunchdRenderRefused("tracked launchd template is invalid") from None
         label = parsed.get("Label")
         if not isinstance(label, str) or not label.startswith(
             f"{configuration.label_prefix}."
         ):
             raise LaunchdRenderRefused("rendered launchd label is invalid")
-        rendered[f"{label}.plist"] = content
+        name = f"{label}.plist"
+        if name in rendered:
+            raise LaunchdRenderRefused("rendered launchd label is duplicated")
+        rendered[name] = content
     return rendered
 
 
 def write_rendered_templates(
     configuration: LaunchdRenderConfiguration,
     destination: Path,
+    *,
+    binding: DeploymentBinding,
 ) -> tuple[Path, ...]:
     """Idempotently publish owner-only rendered plists to ignored state."""
 
@@ -150,6 +157,8 @@ def write_rendered_templates(
         manifest,
         label_prefix=configuration.label_prefix,
         plists=owned | frozenset(rendered),
+        binding=binding,
+        status="preparing",
     )
     for stale_name in sorted(owned - rendered.keys()):
         stale = destination / stale_name
@@ -183,6 +192,8 @@ def write_rendered_templates(
         manifest,
         label_prefix=configuration.label_prefix,
         plists=frozenset(rendered),
+        binding=binding,
+        status="ready",
     )
     return tuple(sorted(published))
 
@@ -192,33 +203,57 @@ def _read_render_manifest(
     *,
     label_prefix: str,
 ) -> frozenset[str] | None:
-    if not path.exists() and not path.is_symlink():
-        return None
-    if path.is_symlink() or not path.is_file() or path.stat().st_mode & 0o777 != 0o600:
-        raise LaunchdRenderRefused("render manifest is unsafe")
     try:
-        document = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError):
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError:
+        return None
+    except OSError:
+        raise LaunchdRenderRefused("render manifest is unsafe") from None
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_mode & 0o777 != 0o600:
+            raise LaunchdRenderRefused("render manifest is unsafe")
+        with os.fdopen(descriptor, encoding="utf-8") as handle:
+            descriptor = -1
+            raw = handle.read()
+    except (OSError, UnicodeError):
         raise LaunchdRenderRefused("render manifest is invalid") from None
-    if (
-        type(document) is not dict
-        or set(document) != {"labelPrefix", "plists", "schemaVersion"}
-        or document["schemaVersion"] != 1
-        or document["labelPrefix"] != label_prefix
-        or type(document["plists"]) is not list
-        or not document["plists"]
-        or any(
-            type(name) is not str
-            or Path(name).name != name
-            or not name.endswith(".plist")
+    finally:
+        if descriptor >= 0:
+            with suppress(OSError):
+                os.close(descriptor)
+    try:
+        document = json.loads(raw)
+    except json.JSONDecodeError:
+        raise LaunchdRenderRefused("render manifest is invalid") from None
+    legacy_manifest_is_valid = (
+        type(document) is dict
+        and set(document) == {"labelPrefix", "plists", "schemaVersion"}
+        and document["schemaVersion"] == 1
+        and type(document["labelPrefix"]) is str
+        and type(document["plists"]) is list
+        and document["plists"]
+        and all(
+            type(name) is str and Path(name).name == name and name.endswith(".plist")
             for name in document["plists"]
         )
-        or len(set(document["plists"])) != len(document["plists"])
-    ):
+        and len(set(document["plists"])) == len(document["plists"])
+    )
+    if legacy_manifest_is_valid and document["labelPrefix"] != label_prefix:
         raise LaunchdRenderRefused(
             "launchd label prefix is immutable; uninstall before replacing it"
         )
-    return frozenset(document["plists"])
+    if legacy_manifest_is_valid:
+        return frozenset(document["plists"])
+    try:
+        parsed = DeploymentManifest.from_document(document)
+    except ValueError:
+        raise LaunchdRenderRefused("render manifest is invalid") from None
+    if parsed.label_prefix != label_prefix:
+        raise LaunchdRenderRefused(
+            "launchd label prefix is immutable; uninstall before replacing it"
+        )
+    return parsed.plists
 
 
 def _write_render_manifest(
@@ -226,19 +261,27 @@ def _write_render_manifest(
     *,
     label_prefix: str,
     plists: frozenset[str],
+    binding: DeploymentBinding,
+    status: str,
 ) -> None:
-    document = {
-        "labelPrefix": label_prefix,
-        "plists": sorted(plists),
-        "schemaVersion": 1,
-    }
+    try:
+        manifest = DeploymentManifest(
+            binding=binding,
+            label_prefix=label_prefix,
+            plists=plists,
+            status=status,
+        )
+    except ValueError:
+        raise LaunchdRenderRefused("deployment binding is invalid") from None
     descriptor, temporary_name = tempfile.mkstemp(dir=path.parent, prefix=".manifest-")
     temporary = Path(temporary_name)
     try:
         os.fchmod(descriptor, 0o600)
         with os.fdopen(descriptor, "w", encoding="utf-8") as output:
             descriptor = -1
-            json.dump(document, output, sort_keys=True, separators=(",", ":"))
+            json.dump(
+                manifest.to_document(), output, sort_keys=True, separators=(",", ":")
+            )
             output.write("\n")
             output.flush()
             os.fsync(output.fileno())

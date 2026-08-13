@@ -58,8 +58,10 @@ the running service's own `/health` response.
 | Private File-backed bot delivery flow (deterministic twin) | Active |
 | Autonomous File import dispatch + bounded expired-lease reclaim | Active |
 | Loopback single-Membership File dogfood `Acquire` | Active when explicitly configured |
+| Maintainer-local stdio MCP `Acquire` translator | Active when explicitly configured |
+| Evidence Console private File citation reopening | Active when explicitly configured |
 | Production authentication (OAuth/JWT) | `NOT_ACTIVE` |
-| Real source ACLs, general content retrieval, `Continue` / `OpenCitation` | `NOT_ACTIVE` |
+| General source ACLs/retrieval, `Continue`, `OpenCitation` outside Evidence Console | `NOT_ACTIVE` |
 | Live Feishu / Slack / Google Docs connectors, group chat | `NOT_ACTIVE` |
 
 **[→ Full capability ledger with per-issue evidence boundaries (STATUS.md)](./STATUS.md)**
@@ -87,7 +89,8 @@ make install
 ```
 
 `make install` syncs the locked Python environment **and** runs `npm ci` for the
-three TypeScript workspaces (`sdk/`, `action_plane/`, `bot_delivery/`). It also
+four TypeScript workspaces (`sdk/typescript/`, `sdk/typescript-v1/`,
+`action_plane/typescript/`, `bot_delivery/typescript/`). It also
 installs the local `mcp` extra required by the MCP evidence suite. The durable
 API/worker setup uses `make install-runtime`, which omits that extra. Node is
 not optional.
@@ -97,6 +100,132 @@ Run the same gate CI runs, from a clean checkout:
 ```bash
 make install && make db-up && make check && make db-down
 ```
+
+### First run: File corpus to public query
+
+This is the ordered first run for the only content-bearing served composition:
+one bounded, loopback-only, single-Membership File carrier. The separate
+credential planes cover migration, Control, release, Runtime, scheduler, and
+worker access; never substitute one plane's credential for another. Prepare an
+owner-only `.context-engine/operators.env` outside version control with the
+settings enumerated in the detailed dogfood, worker, and File scan sections
+below and in the maintainer caller guide. The operator-supplied values in this
+block are the corpus root and root metadata, local identity/secret/profile
+settings, and the reviewed release evidence path. Do not paste secrets into the
+commands.
+
+Before promotion, prepare reviewed four-gate release evidence for Security,
+Reliability, Quality, and Budget as described under "Scan a local File source."
+The M0 Security gate does not supply Reliability, Quality, or Budget PASS.
+Never use its result to fabricate those independent gates.
+
+Run these commands in order from a clean checkout. `source` is the shell
+builtin used only to load the generated role-isolated database contract and
+the operator's owner-only configuration:
+
+```bash
+make install
+make db-up
+
+set -a
+source .context-engine/database.env
+source .context-engine/operators.env
+set +a
+
+# This first all-plane run is a read-only diagnostic baseline and is expected
+# to return not_ready on a clean database.
+uv run context-engine-control preflight
+
+uv run context-engine-control migrate
+
+# Migration must now be independently ready before any database-dependent setup.
+uv run context-engine-control preflight --plane migration
+
+# Materialize the exact registered model into the new durable path configured
+# for both Supply and Runtime. This may download the registered model bytes.
+uv run context-engine-model-materializer \
+  --role primary \
+  --destination "$CONTEXT_ENGINE_WORKER_EMBEDDING_MODEL_DIR"
+
+# Control, Supply, Release, and the pinned local model must be ready before
+# further mutating setup.
+uv run context-engine-control preflight \
+  --plane control \
+  --plane supply \
+  --plane release
+
+uv run context-engine-dogfood-seed \
+  --organization-id "$CONTEXT_ENGINE_DOGFOOD_ORGANIZATION_ID" \
+  --user-id "$CONTEXT_ENGINE_DOGFOOD_USER_ID" \
+  --membership-id "$CONTEXT_ENGINE_DOGFOOD_MEMBERSHIP_ID" \
+  --provision-release-operator-grant \
+  --file-import-service-principal-id \
+    "$CONTEXT_ENGINE_WORKER_SERVICE_PRINCIPAL_ID"
+
+uv run context-engine-control register-file-source \
+  --organization-id "$CONTEXT_ENGINE_OPERATOR_ORGANIZATION_ID" \
+  --display-name "$CONTEXT_ENGINE_FILE_SOURCE_DISPLAY_NAME" \
+  --root-ref "$CONTEXT_ENGINE_FILE_ROOT_REF" \
+  --idempotency-key "$CONTEXT_ENGINE_FILE_SOURCE_IDEMPOTENCY_KEY"
+
+# Replace this operator-supplied identifier with the command's returned sourceRef.
+export CONTEXT_ENGINE_FILE_SOURCE_REF='<returned sourceRef>'
+uv run context-engine-control activate-change-feed \
+  --organization-id "$CONTEXT_ENGINE_OPERATOR_ORGANIZATION_ID" \
+  --source-ref "$CONTEXT_ENGINE_FILE_SOURCE_REF"
+uv run context-engine-control activate-delete-observations \
+  --organization-id "$CONTEXT_ENGINE_OPERATOR_ORGANIZATION_ID" \
+  --source-ref "$CONTEXT_ENGINE_FILE_SOURCE_REF"
+uv run context-engine-control scan \
+  --organization-id "$CONTEXT_ENGINE_OPERATOR_ORGANIZATION_ID" \
+  --source-ref "$CONTEXT_ENGINE_FILE_SOURCE_REF"
+
+# Repeat until the content-free JSON outcome is no_work.
+uv run context-engine-worker --dispatch-file-once
+
+uv run context-engine-control promote-release \
+  --organization-id "$CONTEXT_ENGINE_OPERATOR_ORGANIZATION_ID" \
+  --evidence-file "$CONTEXT_ENGINE_RELEASE_EVIDENCE_FILE"
+
+# The complete bounded composition must be ready before serving content.
+uv run context-engine-control preflight
+
+# Keep this foreground process running in a dedicated terminal.
+uv run context-engine-api --host 127.0.0.1
+
+# From a second shell with the same owner-only environment loaded:
+uv run context-engine-context query \
+  "Which current evidence governs this question?"
+```
+
+The public caller sends one fresh `Acquire` through the loopback HTTP seam.
+Successful completion returns an Evidence-bearing `ContextPackage`; a closed
+refusal stops this first run instead of being treated as success. Migration is
+explicit and precedes every database-dependent setup step; promotion is
+explicit and precedes API boot. This journey activates neither production or
+multi-user authentication, remote exposure, group/public delivery, `Continue`,
+hybrid retrieval, external/network embeddings, nor non-File providers. Those
+boundaries remain `NOT_ACTIVE`.
+
+The tracked [`deploy/local-preflight.env.example`](./deploy/local-preflight.env.example)
+lists the complete environment-name inventory for this bounded journey with
+empty values only. Copy names into the owner-only operator source; never turn
+the template into a second secret source. `preflight` accepts only the closed
+local plane selection (`--plane` may be repeated), reports every selected
+applicable readiness failure in one schema-versioned JSON document, and returns
+zero only when all selected applicable checks are ready. The schema contract is
+[`context-engine-preflight-v1.schema.json`](./docs/contracts/context-engine-preflight-v1.schema.json).
+
+Ready is a point-in-time prerequisite, not production certification, an
+authorization grant, or Security/Reliability/Quality/Budget evidence. The
+command never migrates, seeds, scans, schedules, runs inference, promotes a
+Release, starts a process, or activates a carrier; every deferred boundary above
+remains `NOT_ACTIVE`. The initial all-plane diagnostic is expected to be
+nonzero on a clean database; it is evidence about missing readiness, not a
+failed mutation. Run the separately authorized `migrate` command when schema
+readiness is not at head, require the migration-only rerun to pass, then require
+the selected Control/Supply/Release rerun before further mutating setup and the
+final all-plane rerun after promotion before starting the API.
 
 ### Run the API
 
@@ -161,6 +290,15 @@ paths listed for `models.primary.artifacts` in
 [`eval/embedding-benchmark/model-registry.json`](./eval/embedding-benchmark/model-registry.json).
 Extra files, missing files, changed digests, and symlinks all refuse before
 inference; a stock model download must be reduced to that registered manifest.
+To materialize the exact registered primary snapshot into a new durable
+destination, run the explicit opt-in maintainer command:
+
+```bash
+make model-materialize-acceptance MODEL_DESTINATION=/maintainer/chosen/new-directory
+```
+
+The command never overwrites an existing destination and emits only the
+versioned content-free materializer result. It is neither a CI nor Release gate.
 
 Before activation, freshly reimport the File corpus with the Supply worker's
 network-free `qwen-local` embedding mode and the same pinned local model
@@ -171,9 +309,11 @@ Then run the API with an explicit loopback host. A valid composition reports
 dogfood secret must come from one local secret source and must never be committed
 or printed.
 
-External/network query embeddings, production or multi-user authentication, remote
-network exposure, group/public delivery, dogfood `OpenCitation`, `Continue`, hybrid retrieval, and
-non-File providers remain `NOT_ACTIVE`; see
+The bounded served composition uses pgvector candidate discovery only. Hybrid
+retrieval is implemented but is not active in this carrier. External/network
+query embeddings, production or multi-user authentication, remote network
+exposure, group/public delivery, dogfood `OpenCitation`, `Continue`, hybrid
+retrieval, and non-File providers remain `NOT_ACTIVE`; see
 [ADR-0068](./docs/decisions/0068-activate-loopback-dogfood-runtime.md).
 
 Once the bounded API is running, the maintainer caller and Quality runner are
@@ -217,8 +357,10 @@ schema-pinned dimension (`CONTEXT_ENGINE_WORKER_EMBEDDING_PROVIDER` and
 `CONTEXT_ENGINE_WORKER_EMBEDDING_DIMENSION`). CI may use the network-free `twin`
 test mode. The activated local carrier selects `qwen-local` and supplies the
 hash-verified model directory through
-`CONTEXT_ENGINE_WORKER_EMBEDDING_MODEL_DIR`; external/network worker composition
-remains blocked pending issue #217.
+`CONTEXT_ENGINE_WORKER_EMBEDDING_MODEL_DIR`. Issue #217 completed the cumulative
+public accounting contract; it is no longer a blocker. External/network worker
+embeddings still remain `NOT_ACTIVE` because no accepted activation decision
+admits that composition.
 Markdown files are discovered recursively. **A caller may not
 supply Organization, Source, job, or token** — that is the point of the boundary.
 Single-cycle output remains limited to `dispatched` / `no_work` / `refused`.
@@ -453,13 +595,14 @@ authorization.
 ### Development commands
 
 ```bash
-make install         # sync locked Python env + npm ci for the 3 TS workspaces
+make install         # sync locked Python env + npm ci for the 4 TS workspaces
 make install-runtime # sync API/worker env without the optional MCP SDK
 make build          # build wheel and sdist
 make lint           # Ruff
 make typecheck      # strict mypy + TS typecheck
-make test           # Python unit tests
-make catalog        # static security catalog tests and validation
+make test-python    # fast Python unit-suite lane; not Definition-of-Done evidence
+make test           # full unit contract, including required TS builds
+make catalog        # static security catalog and active-carrier registry validation
 make smoke          # API / worker process smoke suite
 make db-up          # start the pinned PostgreSQL 17 + pgvector harness
 make db-down        # stop it, preserving the disposable data volume
@@ -498,15 +641,20 @@ never reported as an overall release PASS.
 
 ### The one public online contract
 
+The sequence below is the architectural contract, not a claim that every
+optional relevance stage is active in the served carrier. The current bounded
+composition uses pgvector candidate discovery only; hybrid/FTS fusion and
+Runtime rewrite/rerank/select remain `NOT_ACTIVE`.
+
 ```text
 ContextRuntime.resolve(AuthenticatedInvocation, TrustedDeliveryContext,
                        Acquire | Continue | OpenCitation)
 
-  → query understanding + dual recall (FTS + vector, RRF fusion)
+  → query understanding + candidate recall
   → CandidateRef                        ← carries NO deliverable body
   → AuthorizationKernel                 ← exact authorization + field projection
   → AuthorizedProjection                ← the first content-bearing value
-  → post-authorization hydration / rerank
+  → post-authorization hydration / optional relevance stages
       + small-to-big expansion, each item re-authorized
   → PackageBudget packing + sufficiency signal
   → ContextPackage                      ← citations / purpose / TTL / asOf
@@ -609,6 +757,10 @@ masquerade as a passing one.
 | [Implementation Design](./docs/design/2026-07-18-context-engine-implementation-design.md) | The integrated implementation authority and milestone boundaries |
 | [Threat Model](./docs/security/context-engine-threat-model.md) | Assets, trust boundaries, threats, hard oracles |
 | [Program PRD](./docs/agents/prd-contextengine-implementation.md) · [Epic Tech Spec](./docs/specs/2026-07-19-context-engine-implementation-epic.md) | Requirements, 100 user stories, contract shapes, work packages |
+| [Daily-driver deployment](./docs/operations/daily-driver-deployment.md) | Durable loopback deployment, service lifecycle, backup, and recovery runbook |
+| [Evidence Console](./docs/decisions/0090-admit-a-co-resident-local-evidence-console.md) | Accepted local authenticated UI boundary and its closed authority limits |
+| [Local MCP](./docs/decisions/0103-activate-one-local-mcp-acquire-translation.md) | Spawn-per-session stdio `Acquire` translator and explicit non-goals |
+| [End-to-end walkthrough](./docs/design/2026-07-28-end2end-dogfood-walkthrough.md) | Measured File-to-ContextPackage dogfood journey and retained evidence boundaries |
 | [Prior-art evidence baseline](./docs/research/2026-08-02-five-public-repositories-evidence.md) | Versioned successor for four admitted fixed repositories plus the OpenViking candidate packet, which is non-authoritative while issue #205 remains open |
 | [D0 Baseline Candidate](./DESIGN-BASELINE.md) | Current candidate state and unclosed evidence gates |
 

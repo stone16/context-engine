@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://context-engine.invalid/contracts/context-engine-model-materializer-v1.schema.json",
+  "title": "ContextEngine registered model materializer result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "service", "status", "category"],
+  "properties": {
+    "schemaVersion": {
+      "const": "context-engine-model-materializer-v1"
+    },
+    "service": {
+      "const": "context-engine-model-materializer"
+    },
+    "status": {
+      "enum": ["materialized", "refused"]
+    },
+    "category": {
+      "enum": [
+        "ready",
+        "registry_unavailable",
+        "destination_unavailable",
+        "transport_refused",
+        "verification_refused",
+        "destination_exists",
+        "publication_refused",
+        "operation_refused"
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"status": {"const": "materialized"}}
+      },
+      "then": {
+        "properties": {"category": {"const": "ready"}}
+      }
+    },
+    {
+      "if": {
+        "properties": {"status": {"const": "refused"}}
+      },
+      "then": {
+        "not": {"properties": {"category": {"const": "ready"}}}
+      }
+    }
+  ]
+}

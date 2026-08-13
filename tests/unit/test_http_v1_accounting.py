@@ -781,6 +781,7 @@ def test_v1_http_empty_retrieval_retains_paid_query_usage_in_package_and_run() -
     assert run.package_digest == package["packageDigest"]
 
 
+@pytest.mark.node_toolchain
 def test_generated_v1_sdk_observes_cumulative_usage_over_live_http() -> None:
     provider = _RecordingEmbeddingProvider()
     context_runs = RecordingContextRunPort()

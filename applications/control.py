@@ -77,9 +77,14 @@ _OPERATOR_SUBCOMMANDS = frozenset(
 )
 
 
-def _parser() -> argparse.ArgumentParser:
+def _parser(
+    *,
+    extra_subcommands: tuple[tuple[str, str], ...] = (),
+) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="context-engine-control")
     subcommands = parser.add_subparsers(dest="subcommand", required=True)
+    for name, help_text in extra_subcommands:
+        subcommands.add_parser(name, help=help_text)
     subcommands.add_parser(
         "migrate",
         help="upgrade the configured database to the current schema head",
@@ -159,8 +164,12 @@ def _organization_argument(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--organization-id", required=True)
 
 
-def main(argv: Sequence[str] | None = None) -> None:
-    parser = _parser()
+def main(
+    argv: Sequence[str] | None = None,
+    *,
+    extra_subcommands: tuple[tuple[str, str], ...] = (),
+) -> None:
+    parser = _parser(extra_subcommands=extra_subcommands)
     arguments = parser.parse_args(argv)
     if arguments.subcommand == "migrate":
         try:

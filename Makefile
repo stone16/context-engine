@@ -1,4 +1,4 @@
-.PHONY: install install-runtime build lint typecheck test catalog third-party-check third-party-artifacts security-gate smoke db-up db-down db-reset integration dogfood-eval eval-v1 eval-v1-execute openapi-generate openapi-check openapi-breaking-check sdk-generate sdk-check sdk-build sdk-test sdk-pack action-typecheck action-build action-test bot-typecheck bot-build bot-test ui-build ui-test check
+.PHONY: install install-runtime build lint typecheck test-python test catalog third-party-check third-party-artifacts security-gate smoke db-up db-down db-reset integration dogfood-eval eval-v1 eval-v1-execute model-materialize-acceptance openapi-generate openapi-check openapi-breaking-check sdk-generate sdk-check sdk-build sdk-test sdk-pack action-typecheck action-build action-test bot-typecheck bot-build bot-test ui-build ui-test check
 
 install:
 	uv sync --frozen --extra mcp
@@ -25,11 +25,15 @@ typecheck: sdk-build action-build
 	npm --prefix action_plane/typescript run typecheck
 	npm --prefix bot_delivery/typescript run typecheck
 
+test-python:
+	uv run pytest -q tests/unit -m "not node_toolchain"
+
 test: bot-build
 	uv run pytest -q tests/unit
 
 catalog:
 	uv run pytest -q tests/catalog
+	uv run python scripts/validate_active_carriers.py
 	uv run python scripts/validate_security_catalog.py
 	$(MAKE) third-party-check
 
@@ -79,6 +83,11 @@ eval-v1-execute:
 		$(if $(GOLDEN_LINEAGE_MAP),--lineage-map "$(GOLDEN_LINEAGE_MAP)",) \
 		--output .context-engine/eval/golden-v1-report.json \
 		--generated-at "$(GENERATED_AT)"
+
+model-materialize-acceptance:
+	uv run context-engine-model-materializer \
+		--role primary \
+		--destination "$(MODEL_DESTINATION)"
 
 openapi-generate:
 	uv run python scripts/freeze_openapi.py generate

@@ -147,7 +147,7 @@ def test_readiness_probe_includes_dedicated_operator_configuration() -> None:
 def test_harness_provisions_post_init_roles_before_readiness() -> None:
     harness = repository_text("scripts/database_harness.sh")
     provisioner = repository_text("scripts/provision_database_roles.py")
-    configuration = repository_text("engine/persistence/configuration.py")
+    database_roles = repository_text("engine/database_roles.py")
 
     assert harness.count("  provision_database_roles\n  wait_for_database") == 3
     integration_body = harness.split("run_integration() {", maxsplit=1)[1].split(
@@ -161,7 +161,7 @@ def test_harness_provisions_post_init_roles_before_readiness() -> None:
     )
     assert (
         'CONTEXT_RUN_READER_DEFINER_ROLE = "context_engine_context_run_reader_definer"'
-    ) in configuration
+    ) in database_roles
     assert "ACCESS_POLICY_DEFINER_ROLE" in provisioner
     assert "GRAPH_DEFINER_ROLE" in provisioner
     assert "IDENTITY_ROLE" in provisioner
@@ -196,14 +196,14 @@ def test_harness_provisions_post_init_roles_before_readiness() -> None:
 def test_runtime_role_guard_checks_every_role_escalation_attribute(
     catalog_attribute: str, guard_alias: str
 ) -> None:
-    guard = repository_text("engine/persistence/role_guard.py")
+    guard = repository_text("engine/database_roles.py")
 
     assert f"role.{catalog_attribute} AS {guard_alias}" in guard
     assert f'"{guard_alias}": False' in guard
 
 
 def test_runtime_role_guard_rejects_every_membership() -> None:
-    guard = repository_text("engine/persistence/role_guard.py")
+    guard = repository_text("engine/database_roles.py")
 
     assert "FROM pg_auth_members AS membership" in guard
     assert "membership.member = role.oid" in guard
@@ -212,12 +212,13 @@ def test_runtime_role_guard_rejects_every_membership() -> None:
 
 
 def test_role_guard_rejects_any_database_object_ownership() -> None:
+    authority = repository_text("engine/database_roles.py")
     guard = repository_text("engine/persistence/role_guard.py")
 
-    assert "FROM pg_shdepend AS dependency" in guard
-    assert "dependency.deptype = 'o'" in guard
-    assert "AS owns_no_database_objects" in guard
-    assert "tuple(operator_facts) != (True, True)" in guard
+    assert "FROM pg_shdepend AS dependency" in authority
+    assert "dependency.deptype = 'o'" in authority
+    assert "AS owns_no_database_objects" in authority
+    assert "observe_sensitive_database_role_facts(connection) != (True, True)" in guard
     assert "assert_learning_role" in guard
     learning_guard = guard.split("def assert_learning_role", maxsplit=1)[1]
     assert "_assert_no_owned_objects_or_role_members(connection)" in learning_guard
@@ -258,8 +259,7 @@ def test_ci_runs_and_retains_the_single_m0_security_gate_contract() -> None:
         "check: build lint typecheck openapi-check sdk-check sdk-build sdk-test "
         "sdk-pack action-build action-test bot-build bot-test ui-build ui-test "
         "test catalog smoke "
-        "integration security-gate third-party-artifacts"
-        in makefile.splitlines()
+        "integration security-gate third-party-artifacts" in makefile.splitlines()
     )
     assert "actions/upload-artifact@v4" in workflow
     assert ".context-engine/security-gate/raw-evidence.json" in workflow

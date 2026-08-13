@@ -10,8 +10,7 @@ ROOT = Path(__file__).parents[2]
 BOT_DELIVERY_ROOT = ROOT / "bot_delivery/typescript"
 
 
-@pytest.mark.security_evidence(id="TS-MODEL-EGRESS-070", layer="property")
-def test_typescript_model_egress_is_closed_pinned_and_zero_byte_on_denial() -> None:
+def _assert_model_egress_package_is_closed_and_pinned() -> None:
     package = json.loads(
         (BOT_DELIVERY_ROOT / "package.json").read_text(encoding="utf-8")
     )
@@ -44,6 +43,17 @@ def test_typescript_model_egress_is_closed_pinned_and_zero_byte_on_denial() -> N
     assert "local_production_dependencies" in live_integration
     assert '"optionalDependencies": local_optional_dependencies' in live_integration
 
+
+def test_model_egress_package_contract_is_closed_and_pinned() -> None:
+    _assert_model_egress_package_is_closed_and_pinned()
+
+
+@pytest.mark.node_toolchain
+@pytest.mark.security_evidence(id="TS-MODEL-EGRESS-070", layer="property")
+def test_typescript_model_egress_is_closed_pinned_and_zero_byte_on_denial() -> None:
+    _assert_model_egress_package_is_closed_and_pinned()
+
+    completed: subprocess.CompletedProcess[str] | None = None
     for cwd, command in (
         (ROOT / "sdk/typescript-v1", ["npm", "run", "build"]),
         (BOT_DELIVERY_ROOT, ["npm", "run", "build"]),
@@ -58,6 +68,7 @@ def test_typescript_model_egress_is_closed_pinned_and_zero_byte_on_denial() -> N
             timeout=30,
         )
         assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert completed is not None
     assert "tests 25" in completed.stdout
     assert "pass 25" in completed.stdout
     assert "fail 0" in completed.stdout

@@ -39,6 +39,10 @@ from engine.persistence.configuration import (
     DatabasePurpose,
 )
 from scripts.daily_driver.backup import create_database_backup
+from scripts.daily_driver.deployment import (
+    DeploymentBindingRefused,
+    verify_ready_deployment,
+)
 from scripts.daily_driver.environment import (
     EnvironmentRefused,
     load_owner_environment,
@@ -233,23 +237,36 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(arguments: Sequence[str] | None = None) -> int:
     parsed = _parser().parse_args(arguments)
-    if parsed.mode == "bootstrap":
-        return _run_database_bootstrap(parsed)
-    if parsed.mode == "daemon":
-        return _run_daemon(parsed)
-    return run_visible_job(
-        job=parsed.job,
-        signal_root=parsed.failure_root,
-        action=lambda: _run_scheduled(parsed),
-    )
+    try:
+        if parsed.mode == "bootstrap":
+            return _run_database_bootstrap(parsed)
+        if parsed.mode == "daemon":
+            return _run_daemon(parsed)
+        return run_visible_job(
+            job=parsed.job,
+            signal_root=parsed.failure_root,
+            action=lambda: _run_scheduled(parsed),
+        )
+    except (DeploymentBindingRefused, EnvironmentRefused):
+        return 2
 
 
 def _run_scheduled(arguments: argparse.Namespace) -> int:
     python = arguments.checkout / ".venv" / "bin" / "python"
     command: tuple[str, ...]
     if arguments.job == "backup":
-        if arguments.backup_root is None or arguments.docker_executable is None:
+        if (
+            arguments.backup_root is None
+            or arguments.docker_executable is None
+            or arguments.database_environment is None
+        ):
             return 2
+        verify_ready_deployment(
+            checkout=arguments.checkout,
+            database_environment=load_owner_environment(
+                arguments.database_environment
+            ),
+        )
         create_database_backup(
             checkout=arguments.checkout,
             backup_root=arguments.backup_root,
@@ -263,6 +280,10 @@ def _run_scheduled(arguments: argparse.Namespace) -> int:
             return 0 if response.status == 200 else 1
     if arguments.job == "drain":
         database, operator = _live_environments(arguments)
+        verify_ready_deployment(
+            checkout=arguments.checkout,
+            database_environment=database,
+        )
         environment = process_environment("worker", database, operator)
         command = (
             str(python),
@@ -272,6 +293,10 @@ def _run_scheduled(arguments: argparse.Namespace) -> int:
         )
     elif arguments.job == "scan":
         database, operator = _live_environments(arguments)
+        verify_ready_deployment(
+            checkout=arguments.checkout,
+            database_environment=database,
+        )
         fingerprints = validate_scan_secret_separation(operator)
         organization = operator.get("CONTEXT_ENGINE_OPERATOR_ORGANIZATION_ID")
         source = operator.get("CONTEXT_ENGINE_OPERATOR_SOURCE_REF")
@@ -300,6 +325,10 @@ def _run_scheduled(arguments: argparse.Namespace) -> int:
 
 def _run_daemon(arguments: argparse.Namespace) -> int:
     database = load_owner_environment(arguments.database_environment)
+    verify_ready_deployment(
+        checkout=arguments.checkout,
+        database_environment=database,
+    )
     operator = load_owner_environment(arguments.operator_environment)
     python = arguments.checkout / ".venv" / "bin" / "python"
     command: tuple[str, ...]

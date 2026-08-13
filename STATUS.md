@@ -35,6 +35,41 @@ Every release reports `PASS / FAIL / NOT_ACTIVE / NOT_APPLICABLE` against a
 versioned catalog, with capability coverage listed separately, so an inactive
 capability can never be reported as a passing one.
 
+The schema-versioned capability join is owned by
+[`active-carriers-v1.json`](./eval/catalogs/active-carriers-v1.json) and checked
+by `make catalog`. It records each bounded carrier's accepted authority,
+entrypoint, migration or closed N/A rationale, highest-public proof, gate,
+operator document, and exact `NOT_ACTIVE` relations. This completeness result
+is deliberately separate from the Security catalog and its release veto.
+
+The following closed inventory is the machine-checked STATUS coverage set:
+
+<!-- active-carrier-registry-v1:start -->
+- `file-pgvector-acquire-v0`: `ACTIVE_BOUNDED`
+- `file-pgvector-acquire-v1`: `ACTIVE_BOUNDED`
+- `http-generated-sdk-v0`: `ACTIVE_BOUNDED`
+- `http-generated-sdk-v1`: `ACTIVE_BOUNDED`
+- `file-supply-worker`: `ACTIVE_BOUNDED`
+- `local-control-operator`: `ACTIVE_BOUNDED`
+- `local-release-promotion`: `ACTIVE_BOUNDED`
+- `registered-model-materializer`: `ACTIVE_BOUNDED`
+- `repo-local-claude-acquire-v0`: `ACTIVE_BOUNDED`
+- `maintainer-context-cli-acquire-v0`: `ACTIVE_BOUNDED`
+- `local-mcp-acquire-v0`: `ACTIVE_BOUNDED`
+- `evidence-console-open-citation-v0`: `ACTIVE_BOUNDED`
+- `private-bot-actionplane-twin`: `ACTIVE_BOUNDED`
+- `continue-deferred`: `NOT_ACTIVE`
+- `external-network-model-deferred`: `NOT_ACTIVE`
+- `group-public-delivery-deferred`: `NOT_ACTIVE`
+- `hybrid-retrieval-deferred`: `NOT_ACTIVE`
+- `live-provider-deferred`: `NOT_ACTIVE`
+- `broader-mcp-deferred`: `NOT_ACTIVE`
+- `open-citation-other-carriers-deferred`: `NOT_ACTIVE`
+- `production-remote-auth-deferred`: `NOT_ACTIVE`
+- `remote-multiuser-runtime-deferred`: `NOT_ACTIVE`
+- `runtime-rewrite-rerank-select-deferred`: `NOT_ACTIVE`
+<!-- active-carrier-registry-v1:end -->
+
 ## Currently `NOT_ACTIVE`
 
 The default application **rejects every credential and performs zero content
@@ -114,6 +149,18 @@ Dogfood `OpenCitation`, `Continue`, evaluation replay, remote/multi-user
 operation, Control, ActionPlane, models, effects, and promotion remain absent or
 `NOT_ACTIVE`; see the
 [operator guide](./docs/operations/maintainer-context-cli.md).
+
+### Registered local model materializer
+
+ADR-0106 activates one short-lived maintainer process that can fetch only the
+tracked `primary` model role into a maintainer-selected new destination. CI
+proves the closed registry, transport, exact-verification, content-free output,
+and atomic no-clobber publication boundaries using tiny synthetic bytes and one
+loopback transport twin. The real registered Qwen byte transfer is an opt-in
+maintainer acceptance command and has not been executed as CI or Release
+evidence. The process has no database, model-load, inference, Supply, Runtime,
+Learning, Release-promotion, or carrier-activation authority; every other model
+role, host, overwrite mode, and automatic download remains `NOT_ACTIVE`.
 
 ### Repo-local Claude Code consumer
 
@@ -592,9 +639,12 @@ refuses truncation, corruption, missing or unexpected content, and any file
 readable beyond its owner, and recovery refuses both an unverified snapshot and
 a non-empty destination. Expectation lineage that a Release promotion left
 unresolvable is reported as `stale_lineage` and refuses the report; it is never
-scored as a retrieval miss. This is proven on synthetic corpora and one
-executed recovery drill — the real maintainer corpus is still pending delivery
-(#103), so no claim is made about it.
+scored as a retrieval miss. Issue #103 records only privacy-safe aggregate
+closure evidence: 30 maintainer-admitted cases, 28 lineage-eligible cases, and
+two retained stale cases. The admitted baseline measured exact Evidence recall
+at **0.0**; Quality is therefore measured, not passing, while Reliability and
+Budget remain `not-evaluated`. No query text, note path, or corpus content is
+claimed here.
 
 `make security-gate` discovers and executes only registered M0 security
 evidence, cross-checks the live PostgreSQL RLS inventory, and writes
@@ -602,10 +652,10 @@ machine-readable raw evidence plus an independent release-gate report into the
 git-ignored `.context-engine/security-gate/` directory. CI retains both as build
 artifacts.
 
-Security is an independent veto gate. Reliability, Quality, and Budget are not
-yet in M0 scope and are explicitly recorded as `not-evaluated`, so the report
-emits only an `m0SecurityDecision` — a passing security gate is never reported
-as an overall release or promotion PASS.
+Security is an independent veto gate. Reliability and Budget are not evaluated,
+and the first admitted Quality baseline is measured at 0.0; none has a PASS.
+The M0 report emits only an `m0SecurityDecision` — a passing security gate is
+never reported as an overall release or promotion PASS.
 
 Beyond the pinned-commit evidence for the four admitted repositories Dify,
 RAGFlow, MaxKB, and Onyx in the

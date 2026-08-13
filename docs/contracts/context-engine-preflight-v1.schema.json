@@ -1,0 +1,347 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://context-engine.invalid/contracts/context-engine-preflight-v1.schema.json",
+  "title": "ContextEngine local preflight result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "service", "status", "checks"],
+  "allOf": [
+    {
+      "if": {"properties": {"status": {"const": "ready"}}, "required": ["status"]},
+      "then": {
+        "properties": {
+          "checks": {
+            "items": {
+              "anyOf": [
+                {"properties": {"status": {"const": "ready"}, "category": {"const": "ready"}}, "required": ["status", "category"]},
+                {"properties": {"status": {"const": "not_run"}, "category": {"const": "not_selected"}}, "required": ["status", "category"]}
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "checks": {
+            "items": {
+              "anyOf": [
+                {"properties": {"status": {"const": "ready"}, "category": {"const": "ready"}}, "required": ["status", "category"]},
+                {"properties": {"status": {"const": "not_run"}, "category": {"const": "not_selected"}}, "required": ["status", "category"]}
+              ]
+            }
+          }
+        },
+        "required": ["checks"]
+      },
+      "then": {"properties": {"status": {"const": "ready"}}}
+    }
+  ],
+  "properties": {
+    "schemaVersion": {"const": "context-engine-preflight-v1"},
+    "service": {"const": "context-engine-control-preflight"},
+    "status": {"enum": ["ready", "not_ready"]},
+    "checks": {
+      "type": "array",
+      "minItems": 11,
+      "maxItems": 11,
+      "prefixItems": [
+        {"$ref": "#/$defs/configuration"},
+        {"$ref": "#/$defs/migrationSchema"},
+        {"$ref": "#/$defs/controlDatabase"},
+        {"$ref": "#/$defs/supplySchedulerDatabase"},
+        {"$ref": "#/$defs/supplyWorkerDatabase"},
+        {"$ref": "#/$defs/supplyModel"},
+        {"$ref": "#/$defs/releaseLearningDatabase"},
+        {"$ref": "#/$defs/releaseOperatorDatabase"},
+        {"$ref": "#/$defs/runtimeRelease"},
+        {"$ref": "#/$defs/runtimeModel"},
+        {"$ref": "#/$defs/callerConfiguration"}
+      ],
+      "allOf": [
+        {
+          "oneOf": [
+            {
+              "prefixItems": [
+                {},
+                {},
+                {},
+                {"$ref": "#/$defs/selectedCheck"},
+                {"$ref": "#/$defs/selectedCheck"},
+                {"$ref": "#/$defs/selectedCheck"}
+              ]
+            },
+            {
+              "prefixItems": [
+                {},
+                {},
+                {},
+                {"$ref": "#/$defs/notSelectedCheck"},
+                {"$ref": "#/$defs/notSelectedCheck"},
+                {"$ref": "#/$defs/notSelectedCheck"}
+              ]
+            }
+          ]
+        },
+        {
+          "oneOf": [
+            {
+              "prefixItems": [
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {"$ref": "#/$defs/selectedCheck"},
+                {"$ref": "#/$defs/selectedCheck"}
+              ]
+            },
+            {
+              "prefixItems": [
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {"$ref": "#/$defs/notSelectedCheck"},
+                {"$ref": "#/$defs/notSelectedCheck"}
+              ]
+            }
+          ]
+        },
+        {
+          "oneOf": [
+            {
+              "prefixItems": [
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {"$ref": "#/$defs/selectedCheck"},
+                {"$ref": "#/$defs/selectedCheck"}
+              ]
+            },
+            {
+              "prefixItems": [
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {"$ref": "#/$defs/notSelectedCheck"},
+                {"$ref": "#/$defs/notSelectedCheck"}
+              ]
+            }
+          ]
+        }
+      ],
+      "items": false
+    }
+  },
+  "$defs": {
+    "selectedCheck": {
+      "properties": {"category": {"not": {"const": "not_selected"}}},
+      "required": ["category"]
+    },
+    "notSelectedCheck": {
+      "properties": {"category": {"const": "not_selected"}},
+      "required": ["category"]
+    },
+    "base": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["check", "status", "category"],
+      "properties": {
+        "check": {"type": "string"},
+        "category": {"type": "string"},
+        "status": {"enum": ["ready", "failed", "not_run"]},
+        "failures": {"$ref": "#/$defs/configurationFailures"}
+      },
+      "allOf": [
+        {"if": {"properties": {"status": {"const": "ready"}}, "required": ["status"]}, "then": {"properties": {"category": {"const": "ready"}}}},
+        {"if": {"properties": {"category": {"const": "ready"}}, "required": ["category"]}, "then": {"properties": {"status": {"const": "ready"}}}},
+        {"if": {"properties": {"status": {"const": "not_run"}}, "required": ["status"]}, "then": {"properties": {"category": {"enum": ["not_selected", "dependency_not_ready"]}}}},
+        {"if": {"properties": {"category": {"enum": ["not_selected", "dependency_not_ready"]}}, "required": ["category"]}, "then": {"properties": {"status": {"const": "not_run"}}}},
+        {"if": {"properties": {"status": {"const": "failed"}}, "required": ["status"]}, "then": {"properties": {"category": {"not": {"enum": ["ready", "not_selected", "dependency_not_ready"]}}}}},
+        {"if": {"properties": {"check": {"not": {"const": "configuration"}}}, "required": ["check"]}, "then": {"not": {"required": ["failures"]}}}
+      ]
+    },
+    "configurationFailures": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "category"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "enum": [
+              "CONTEXT_ENGINE_API_COMPOSITION",
+              "CONTEXT_ENGINE_CONTROL_DATABASE_URL",
+              "CONTEXT_ENGINE_CONTROL_OPERATOR_OPERATIONS",
+              "CONTEXT_ENGINE_CONTROL_OPERATOR_SECRET",
+              "CONTEXT_ENGINE_CONTROL_ROLE",
+              "CONTEXT_ENGINE_DOGFOOD_AGENT_VERSION_REF",
+              "CONTEXT_ENGINE_DOGFOOD_APPLICATION_REF",
+              "CONTEXT_ENGINE_DOGFOOD_AUTHENTICATION_BINDING_REF",
+              "CONTEXT_ENGINE_DOGFOOD_BASE_URL",
+              "CONTEXT_ENGINE_DOGFOOD_EMBEDDING_MODEL_DIR",
+              "CONTEXT_ENGINE_DOGFOOD_EMBEDDING_PROVIDER",
+              "CONTEXT_ENGINE_DOGFOOD_MEMBERSHIP_ID",
+              "CONTEXT_ENGINE_DOGFOOD_MEMBERSHIP_VERSION",
+              "CONTEXT_ENGINE_DOGFOOD_ORGANIZATION_ID",
+              "CONTEXT_ENGINE_DOGFOOD_PRINCIPAL_REF",
+              "CONTEXT_ENGINE_DOGFOOD_SECRET",
+              "CONTEXT_ENGINE_DOGFOOD_USER_ID",
+              "CONTEXT_ENGINE_FILE_CHANGE_CHECKPOINT_SIGNING_KEY_HEX",
+              "CONTEXT_ENGINE_FILE_CHANGE_PROVIDER_SIGNING_KEY_HEX",
+              "CONTEXT_ENGINE_LEARNING_DATABASE_URL",
+              "CONTEXT_ENGINE_LEARNING_ROLE",
+              "CONTEXT_ENGINE_MIGRATION_DATABASE_URL",
+              "CONTEXT_ENGINE_MIGRATOR_ROLE",
+              "CONTEXT_ENGINE_OPERATOR_ORGANIZATION_ID",
+              "CONTEXT_ENGINE_RELEASE_EVALUATION_SIGNING_KEY_HEX",
+              "CONTEXT_ENGINE_RELEASE_EVALUATION_SIGNING_KEY_VERSION",
+              "CONTEXT_ENGINE_RELEASE_OPERATOR_DATABASE_URL",
+              "CONTEXT_ENGINE_RELEASE_OPERATOR_ROLE",
+              "CONTEXT_ENGINE_RELEASE_OPERATOR_SECRET",
+              "CONTEXT_ENGINE_RUNTIME_DATABASE_URL",
+              "CONTEXT_ENGINE_RUNTIME_ROLE",
+              "CONTEXT_ENGINE_SCHEDULER_DATABASE_URL",
+              "CONTEXT_ENGINE_SCHEDULER_ROLE",
+              "CONTEXT_ENGINE_WORKER_DATABASE_URL",
+              "CONTEXT_ENGINE_WORKER_EMBEDDING_DIMENSION",
+              "CONTEXT_ENGINE_WORKER_EMBEDDING_MODEL_DIR",
+              "CONTEXT_ENGINE_WORKER_EMBEDDING_PROVIDER",
+              "CONTEXT_ENGINE_WORKER_FILE_ROOTS_JSON",
+              "CONTEXT_ENGINE_WORKER_LEASE_SIGNING_KEY_HEX",
+              "CONTEXT_ENGINE_WORKER_ROLE",
+              "CONTEXT_ENGINE_WORKER_SERVICE_PRINCIPAL_ID"
+            ]
+          },
+          "category": {"enum": ["configuration_missing", "configuration_malformed"]}
+        }
+      }
+    },
+    "configuration": {
+      "allOf": [
+        {"$ref": "#/$defs/base"},
+        {
+          "properties": {
+            "check": {"const": "configuration"},
+            "category": {"enum": ["ready", "configuration_missing", "configuration_malformed"]}
+          }
+        },
+        {"if": {"properties": {"category": {"const": "configuration_missing"}}, "required": ["category"]}, "then": {"required": ["failures"]}},
+        {
+          "if": {"properties": {"category": {"const": "configuration_missing"}}, "required": ["category"]},
+          "then": {
+            "properties": {
+              "failures": {
+                "contains": {
+                  "properties": {"category": {"const": "configuration_missing"}},
+                  "required": ["category"]
+                },
+                "minContains": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {"category": {"const": "configuration_malformed"}},
+            "required": ["category", "failures"]
+          },
+          "then": {
+            "properties": {
+              "failures": {
+                "items": {
+                  "properties": {"category": {"const": "configuration_malformed"}},
+                  "required": ["category"]
+                }
+              }
+            }
+          }
+        },
+        {"if": {"properties": {"status": {"const": "ready"}}, "required": ["status"]}, "then": {"not": {"required": ["failures"]}}}
+      ]
+    },
+    "migrationSchema": {
+      "allOf": [
+        {"$ref": "#/$defs/base"},
+        {
+          "properties": {
+            "check": {"const": "migration_schema"},
+            "category": {"enum": ["ready", "not_selected", "dependency_not_ready", "schema_unreachable", "schema_probe_refused", "schema_not_at_head"]}
+          }
+        }
+      ]
+    },
+    "database": {
+      "allOf": [
+        {"$ref": "#/$defs/base"},
+        {
+          "properties": {
+            "category": {"enum": ["ready", "not_selected", "dependency_not_ready", "database_unavailable", "database_probe_refused"]}
+          }
+        }
+      ]
+    },
+    "controlDatabase": {
+      "allOf": [{"$ref": "#/$defs/database"}, {"properties": {"check": {"const": "control_database"}}}]
+    },
+    "supplySchedulerDatabase": {
+      "allOf": [{"$ref": "#/$defs/database"}, {"properties": {"check": {"const": "supply_scheduler_database"}}}]
+    },
+    "supplyWorkerDatabase": {
+      "allOf": [{"$ref": "#/$defs/database"}, {"properties": {"check": {"const": "supply_worker_database"}}}]
+    },
+    "releaseLearningDatabase": {
+      "allOf": [{"$ref": "#/$defs/database"}, {"properties": {"check": {"const": "release_learning_database"}}}]
+    },
+    "releaseOperatorDatabase": {
+      "allOf": [{"$ref": "#/$defs/database"}, {"properties": {"check": {"const": "release_operator_database"}}}]
+    },
+    "model": {
+      "allOf": [
+        {"$ref": "#/$defs/base"},
+        {"properties": {"category": {"enum": ["ready", "not_selected", "dependency_not_ready", "model_manifest_unavailable", "model_manifest_invalid", "model_artifacts_unavailable", "model_artifacts_invalid"]}}}
+      ]
+    },
+    "supplyModel": {
+      "allOf": [{"$ref": "#/$defs/model"}, {"properties": {"check": {"const": "supply_model"}}}]
+    },
+    "runtimeModel": {
+      "allOf": [{"$ref": "#/$defs/model"}, {"properties": {"check": {"const": "runtime_model"}}}]
+    },
+    "runtimeRelease": {
+      "allOf": [
+        {"$ref": "#/$defs/base"},
+        {
+          "properties": {
+            "check": {"const": "runtime_release"},
+            "category": {"enum": ["ready", "not_selected", "dependency_not_ready", "runtime_unreachable", "runtime_probe_refused", "runtime_identity_not_current", "active_release_absent", "active_release_incompatible"]}
+          }
+        }
+      ]
+    },
+    "callerConfiguration": {
+      "allOf": [
+        {"$ref": "#/$defs/base"},
+        {"properties": {"check": {"const": "caller_configuration"}, "category": {"enum": ["ready", "not_selected", "dependency_not_ready", "caller_configuration_invalid"]}}}
+      ]
+    }
+  }
+}

@@ -49,6 +49,7 @@ def test_control_process_help_and_unknown_subcommand() -> None:
     )
     for subcommand in (
         "migrate",
+        "preflight",
         "register-file-source",
         "read-source",
         "activate-change-feed",
@@ -71,6 +72,21 @@ def test_control_process_help_and_unknown_subcommand() -> None:
     )
     assert unknown.returncode != 0
     assert "not-a-command" in unknown.stderr
+
+
+def test_control_process_bare_invocation_lists_preflight_before_refusing() -> None:
+    completed = subprocess.run(
+        ["context-engine-control"],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert completed.stdout == ""
+    assert "usage:" in completed.stderr
+    assert "preflight" in completed.stderr
 
 
 def test_maintainer_context_process_exposes_only_read_subcommands() -> None:

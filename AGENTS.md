@@ -63,8 +63,9 @@ make install   # sync the locked Python 3.13 environment
 make build     # build wheel and source distribution
 make lint      # Ruff
 make typecheck # strict mypy
-make test      # unit test suite
-make catalog   # static security catalog tests and validation
+make test-python # fast Python-only unit lane; not Definition-of-Done evidence
+make test      # full unit contract, including required TS builds
+make catalog   # static security catalog and active-carrier registry validation
 make security-gate # executable M0 security veto; requires make db-up first
 make smoke     # API and worker process smoke suite
 make db-up     # start the real PostgreSQL 17 + pgvector harness

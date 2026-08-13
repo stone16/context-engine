@@ -72,18 +72,28 @@ make check
 `make check` requires `make db-up` first, and covers: build, Ruff, strict mypy,
 TypeScript typecheck, OpenAPI freeze check, SDK generate/build/test/pack,
 ActionPlane and BotDelivery build and tests, Python unit tests, the security
-catalog, the process smoke suite, the real-PostgreSQL integration harness, and
-the M0 security gate.
+catalog and active-carrier registry validation, the process smoke suite, the
+real-PostgreSQL integration harness, and the M0 security gate.
 
 For faster inner loops:
 
 ```bash
 make lint          # Ruff
 make typecheck     # strict mypy + TS
-make test          # Python unit tests
+make test-python   # fast Python unit-suite lane; not merge evidence
+make test          # full unit contract, including required TS builds
 make integration   # real-PostgreSQL integration/security harness
 make security-gate # M0 security veto gate
 ```
+
+After the Python dependencies are present, `make test-python` runs exactly
+`uv run pytest -q tests/unit -m "not node_toolchain"`, deselecting the
+`node_toolchain`-marked tests that execute the installed Node/npm workspaces,
+so the lane needs no Node, npm workspace state, or SDK, ActionPlane, or
+BotDelivery builds. The deselected Node-executing portion still runs in full
+under `make test` and `make check`. It is a convenience for the local edit
+loop, not Definition-of-Done, CI, or merge evidence; finish with the full
+`make check` contract above.
 
 Run `make typecheck` and `make test` sequentially, never concurrently.
 `make test` depends on `bot-build`, and

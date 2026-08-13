@@ -51,8 +51,11 @@ ContextEngine 按里程碑逐步构建，每一项能力只在**可执行的证�
 | OpenAPI v0 wire 契约 + 生成式 TypeScript SDK + breaking-change 门禁 | 已激活 |
 | 私聊 File-backed bot 交付闭环（确定性 twin） | 已激活 |
 | 自主 File import dispatch + 有界的过期 lease reclaim | 已激活 |
+| Loopback single-Membership File dogfood `Acquire` | 显式配置后激活 |
+| 一个 maintainer-local、spawn-per-session 的 stdio MCP `Acquire` translator | 显式配置后激活 |
+| Evidence Console 内的 private File citation reopening | 显式配置后激活 |
 | 生产认证（OAuth / JWT） | `NOT_ACTIVE` |
-| 真实 Source ACL、通用内容检索、`Continue` / `OpenCitation` | `NOT_ACTIVE` |
+| 通用 Source ACL / 检索、`Continue`、Evidence Console 以外的 `OpenCitation` | `NOT_ACTIVE` |
 | 飞书 / Slack / Google Docs 实连接器、群聊 | `NOT_ACTIVE` |
 
 **[→ 完整能力台账与逐 Issue 证据边界（STATUS.md）](./STATUS.md)**
@@ -79,14 +82,129 @@ ContextEngine 按里程碑逐步构建，每一项能力只在**可执行的证�
 make install
 ```
 
-`make install` 除了同步锁定的 Python 环境，**还会对三个 TypeScript 工作区
-（`sdk/`、`action_plane/`、`bot_delivery/`）执行 `npm ci`**。Node 不是可选项。
+`make install` 除了同步锁定的 Python 环境，**还会对四个 TypeScript 工作区
+（`sdk/typescript/`、`sdk/typescript-v1/`、`action_plane/typescript/`、
+`bot_delivery/typescript/`）执行 `npm ci`**，并安装本地 MCP 证据套件需要的
+`mcp` extra。Node 不是可选项。
 
 从 clean checkout 运行与 CI 完全相同的门禁：
 
 ```bash
 make install && make db-up && make check && make db-down
 ```
+
+### 首次运行：从 File corpus 到公开查询
+
+这是当前唯一 content-bearing served composition 的有序首跑：一个有界、
+loopback-only、single-Membership 的 File carrier。migration、Control、release、
+Runtime、scheduler、worker 使用彼此分离的 credential plane，绝不能拿一个 plane
+的凭据替代另一个。请在版本控制之外准备 owner-only 的
+`.context-engine/operators.env`；其中仅放下方详细操作文档列出的本地身份、secret、
+profile、corpus root 与 reviewed release evidence 路径，不要把 secret 粘贴到命令中。
+
+Promotion 前必须准备经审阅的 Security、Reliability、Quality、Budget 四门发布证据。
+`M0 Security gate` 不会提供 Reliability、Quality 或 Budget PASS，也不能替代这些
+独立门禁。
+
+从 clean checkout 严格按以下顺序执行。`source` 只用于加载数据库底座生成的
+role-isolated contract 和 operator 自己的 owner-only 配置：
+
+```bash
+make install
+make db-up
+
+set -a
+source .context-engine/database.env
+source .context-engine/operators.env
+set +a
+
+# 干净数据库上的首次全 plane 只读基线预期返回 not_ready。
+uv run context-engine-control preflight
+
+uv run context-engine-control migrate
+
+# 任何依赖数据库的 setup 前，migration plane 必须单独 ready。
+uv run context-engine-control preflight --plane migration
+
+# 将 registry 中精确固定的模型物化到 Supply 与 Runtime 共用的新 durable path；
+# 该操作可能下载已登记的模型 bytes。
+uv run context-engine-model-materializer \
+  --role primary \
+  --destination "$CONTEXT_ENGINE_WORKER_EMBEDDING_MODEL_DIR"
+
+# 继续 mutation 前，Control、Supply、Release 与 pinned local model 必须 ready。
+uv run context-engine-control preflight \
+  --plane control \
+  --plane supply \
+  --plane release
+
+uv run context-engine-dogfood-seed \
+  --organization-id "$CONTEXT_ENGINE_DOGFOOD_ORGANIZATION_ID" \
+  --user-id "$CONTEXT_ENGINE_DOGFOOD_USER_ID" \
+  --membership-id "$CONTEXT_ENGINE_DOGFOOD_MEMBERSHIP_ID" \
+  --provision-release-operator-grant \
+  --file-import-service-principal-id \
+    "$CONTEXT_ENGINE_WORKER_SERVICE_PRINCIPAL_ID"
+
+uv run context-engine-control register-file-source \
+  --organization-id "$CONTEXT_ENGINE_OPERATOR_ORGANIZATION_ID" \
+  --display-name "$CONTEXT_ENGINE_FILE_SOURCE_DISPLAY_NAME" \
+  --root-ref "$CONTEXT_ENGINE_FILE_ROOT_REF" \
+  --idempotency-key "$CONTEXT_ENGINE_FILE_SOURCE_IDEMPOTENCY_KEY"
+
+# 用上一条命令返回的 sourceRef 替换这个 operator-supplied identifier。
+export CONTEXT_ENGINE_FILE_SOURCE_REF='<returned sourceRef>'
+uv run context-engine-control activate-change-feed \
+  --organization-id "$CONTEXT_ENGINE_OPERATOR_ORGANIZATION_ID" \
+  --source-ref "$CONTEXT_ENGINE_FILE_SOURCE_REF"
+uv run context-engine-control activate-delete-observations \
+  --organization-id "$CONTEXT_ENGINE_OPERATOR_ORGANIZATION_ID" \
+  --source-ref "$CONTEXT_ENGINE_FILE_SOURCE_REF"
+uv run context-engine-control scan \
+  --organization-id "$CONTEXT_ENGINE_OPERATOR_ORGANIZATION_ID" \
+  --source-ref "$CONTEXT_ENGINE_FILE_SOURCE_REF"
+
+# 重复执行，直到 content-free JSON outcome 为 no_work。
+uv run context-engine-worker --dispatch-file-once
+
+uv run context-engine-control promote-release \
+  --organization-id "$CONTEXT_ENGINE_OPERATOR_ORGANIZATION_ID" \
+  --evidence-file "$CONTEXT_ENGINE_RELEASE_EVIDENCE_FILE"
+
+# 启动 content service 前，完整 bounded composition 必须 ready。
+uv run context-engine-control preflight
+
+# 在独立 terminal 中保持这个前台进程运行。
+uv run context-engine-api --host 127.0.0.1
+
+# 在第二个、加载同一 owner-only environment 的 shell 中执行。
+uv run context-engine-context query \
+  "Which current evidence governs this question?"
+```
+
+公开 caller 会通过 loopback HTTP seam 发起一个新的 `Acquire`；成功结果必须是带
+Evidence 的 `ContextPackage`，任何 closed refusal 都会中止首跑。当前 served
+composition 只使用 pgvector 候选发现。Hybrid retrieval 已实现，但未在该 carrier
+中激活；production/multi-user auth、remote exposure、group/public delivery、
+`Continue`、external/network embeddings 与非 File provider 也都保持
+`NOT_ACTIVE`。`preflight` 是时点性的只读 readiness 观测，不会迁移、seed、scan、
+推理、promotion、启动进程或激活 carrier。
+
+Tracked 的 [`deploy/local-preflight.env.example`](./deploy/local-preflight.env.example)
+以空值列出该 bounded journey 的完整 environment-name 清单。只把名字抄进
+owner-only 的 operator 配置源；绝不能把这份模板变成第二个 secret 来源。
+`preflight` 只接受封闭的本地 plane 选择（`--plane` 可重复），在一份
+schema-versioned JSON 文档中报告每个被选中的 applicable readiness 失败，
+且仅当所有被选中的 applicable 检查都 ready 时才返回零。schema contract 见
+[`context-engine-preflight-v1.schema.json`](./docs/contracts/context-engine-preflight-v1.schema.json)。
+
+Ready 是时点性的 prerequisite，不是 production certification、authorization
+grant，也不是 Security/Reliability/Quality/Budget 证据。干净数据库上的首次
+全 plane 诊断预期返回非零：它是关于缺失 readiness 的证据，不是一次失败的
+mutation。当 schema readiness 不在 head 时，运行单独授权的 `migrate` 命令并
+要求 migration-only 重跑通过；继续 mutating setup 前要求选中的
+Control/Supply/Release 重跑通过，promotion 之后、启动 API 之前完成最后的
+全 plane 重跑。
 
 ### 启动 API
 
@@ -136,6 +254,12 @@ uv run context-engine-worker --dispatch-files      # 长运行 dispatch 循环
 **调用方不得提供 Organization、Source、job 或 token**——这正是该边界的意义。
 输出仅限 `dispatched` / `no_work` / `refused`。
 
+已激活的本地 carrier 选择 `qwen-local`，并通过
+`CONTEXT_ENGINE_WORKER_EMBEDDING_MODEL_DIR` 提供 hash-verified 模型目录。
+Issue #217 已完成累计 public accounting contract，不再是 blocker。
+External/network worker embeddings 仍为 `NOT_ACTIVE`，因为没有 accepted activation
+decision 准入该 composition。
+
 Lease 校验使用 worker 的 PostgreSQL 时钟，与数据库签发时间处于同一时间域，
 不依赖 worker 宿主机时钟对齐。worker 基础设施不可用会**终止** dispatch，而不是
 继续 claim 并滞留后续 job。文件/内容失败仅在该 job 已持久化为 terminal failed，
@@ -147,12 +271,13 @@ File dispatch、reclaim 与 delete execution 的激活边界记录在
 ### 开发命令
 
 ```bash
-make install        # 同步锁定 Python 环境 + 三个 TS 工作区 npm ci
+make install        # 同步锁定 Python 环境 + 四个 TS 工作区 npm ci
 make build          # 构建 wheel 与 sdist
 make lint           # Ruff
 make typecheck      # strict mypy + TS typecheck
-make test           # Python 单元测试
-make catalog        # 安全目录静态测试与校验
+make test-python    # 快速 Python-only unit lane（不属于 Definition-of-Done 证据）
+make test           # 完整 unit contract（含必需的 TS build/test）
+make catalog        # 安全目录与 active-carrier registry 的静态测试与校验
 make smoke          # API / worker 进程 smoke 套件
 make db-up          # 启动固定版本的 PostgreSQL 17 + pgvector 底座
 make db-down        # 停止底座，保留 disposable data volume
@@ -188,23 +313,28 @@ worktree 之间永不共享容器、网络或数据卷。镜像与拓扑版本�
 
 ### 唯一的在线公开契约
 
+下方是架构契约，不代表其中每个可选 relevance stage 都已在 served carrier 中激活。
+当前有界 composition 只使用 pgvector 候选发现；hybrid/FTS fusion 与 Runtime
+rewrite/rerank/select 均为 `NOT_ACTIVE`。
+
 ```text
 ContextRuntime.resolve(AuthenticatedInvocation, TrustedDeliveryContext,
                        Acquire | Continue | OpenCitation)
 
-  → 查询理解 + 双路召回（FTS + vector，RRF 融合）
+  → 查询理解 + candidate recall
   → CandidateRef                        ← 不携带任何可交付正文
   → AuthorizationKernel                 ← 精确授权 + 字段投影
   → AuthorizedProjection                ← 第一个承载内容的值
-  → 授权后水合 / 精排
+  → 授权后水合 / 可选 relevance stages
       + small-to-big 扩展，逐项重新授权
   → PackageBudget 装箱 + sufficiency 信号
   → ContextPackage                      ← citations / purpose / TTL / asOf
 ```
 
 这是 Runtime **唯一**的公开能力。HTTP 是 V1 的服务端 ingress；TypeScript SDK 是
-生成式 HTTP client，不是第二条 transport。MCP 在真实 caller 出现前保持
-`NOT_ACTIVE`。
+生成式 HTTP client，不是第二条 transport。ADR-0103 只激活一个 maintainer-local、
+spawn-per-session 的 stdio MCP `Acquire` translator；所有 broader MCP carrier
+仍为 `NOT_ACTIVE`。
 
 `Continue` 使用 principal-bound、one-shot 且累计预算的 token。`OpenCitation`
 使用本身不携带任何授权能力的 opaque `CitationOpenRef`——每次打开都重新认证并
@@ -253,7 +383,7 @@ PLAN.md            愿景、原则、路线图、Non-goals
 | 解析 | PDF / Markdown / Office parser | — |
 | 表示 | embedding、reranker、LLM | — |
 | 存储 | V1 固定 PostgreSQL FTS + pgvector；仅保留 Runtime 内候选注入的测试 seam | 授权真相库（PostgreSQL） |
-| 接入 | connector、HTTP server ingress、真实 caller 出现后的 MCP；generated SDK 属于 client 产物 | 认证调用与 `TrustedDeliveryContext` 构造 |
+| 接入 | connector、HTTP server ingress、ADR-0103 的本地 MCP translator；generated SDK 属于 client 产物 | 认证调用与 `TrustedDeliveryContext` 构造；所有 broader MCP carrier |
 | 治理 | 评测裁判模型 | sealed `ContextRuntime` 编排、`AuthorizationKernel`、`DecisionAudit`、budget、provenance |
 
 在第二个真实存储后端出现之前，**可移植性是被刻意不承诺的**。
@@ -294,6 +424,10 @@ IM 交付由 `BotDelivery` 这个受信深模块完成。它从 M2 起作为独�
 | [实现设计](./docs/design/2026-07-18-context-engine-implementation-design.md) | 集成后的实现权威与里程碑边界 |
 | [威胁模型](./docs/security/context-engine-threat-model.md) | 资产、信任边界、威胁与 hard oracles |
 | [Program PRD](./docs/agents/prd-contextengine-implementation.md) · [Epic Tech Spec](./docs/specs/2026-07-19-context-engine-implementation-epic.md) | 需求、100 条 user story、contract shape、work package |
+| [Daily-driver 部署](./docs/operations/daily-driver-deployment.md) | Durable loopback 部署、服务生命周期、备份与恢复 runbook |
+| [Evidence Console](./docs/decisions/0090-admit-a-co-resident-local-evidence-console.md) | 已接受的本地 authenticated UI 边界及其封闭 authority limits |
+| [本地 MCP](./docs/decisions/0103-activate-one-local-mcp-acquire-translation.md) | Spawn-per-session stdio `Acquire` translator 与明确 non-goals |
+| [端到端 walkthrough](./docs/design/2026-07-28-end2end-dogfood-walkthrough.md) | 实测 File-to-ContextPackage dogfood journey 与保留的 evidence boundaries |
 | [公开参照证据基线](./docs/research/2026-08-02-five-public-repositories-evidence.md) | 五个固定公开仓库的优势、局限、clean-room 拆解与证据缺口 |
 | [D0 Baseline Candidate](./DESIGN-BASELINE.md) | 当前候选状态与尚未关闭的 evidence gate |
 

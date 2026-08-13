@@ -14,13 +14,15 @@ This document turns ContextEngine's product boundary into explicit threats,
 trust boundaries, and security oracles. It supports the implementation design;
 it does not replace that design or an accepted ADR.
 
-The repository is currently pre-M0. Everything here is **specified**, not an
-implemented security claim. A threat is closed only when the applicable
-invariant has real evidence at the tier required by the current milestone. The
-claim tiers are defined by the implementation design: contract fixtures can
-prove deterministic boundary behavior, while PostgreSQL, source ACL, wire,
-model-egress, and external-effect claims require their corresponding real
-dependencies.
+The [active-carrier registry](../../eval/catalogs/active-carriers-v1.json) is the
+canonical cross-carrier status and completeness join;
+[`STATUS.md`](../../STATUS.md) is its checked navigational mirror. Registry
+validation neither activates carriers nor evaluates Security. A threat closes
+only for the exact carrier and tier named by registered Security evidence;
+registry completeness cannot convert `NOT_ACTIVE`, missing evidence, or failed
+evidence into `PASS`. Contract fixtures can prove deterministic boundary
+behavior, while PostgreSQL, source ACL, wire, model-egress, and external-effect
+claims still require their corresponding real dependencies.
 
 ## 2. Protected assets
 
@@ -164,6 +166,10 @@ The detailed test architecture is in
 `Test-Architecture-与可验证性设计.md`; stable adversarial cases are in
 `安全负向测试清单.md`. Before a milestone closes, every applicable threat must map
 to a versioned invariant, an activated capability, a reproducible command, and
-an evidence artifact. The current D0 blockers include real PostgreSQL RLS
-transaction-context evidence, filtered-ANN evidence, Feishu capability evidence,
-and selection of executable install/test/lint/build/report commands.
+an evidence artifact. Current bounded Security evidence includes real PostgreSQL
+transaction-context and RLS tests, filtered-ANN tests, and deterministic Feishu
+twin evidence. Each proof remains limited to the carrier and tier named by its
+Security registration; the active-carrier registry only cross-references status,
+authority, and public proof. Live Feishu, production authentication,
+remote/multi-user Runtime, and other deferred carriers remain `NOT_ACTIVE` until
+their required evidence tier exists.
