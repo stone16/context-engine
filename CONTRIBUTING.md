@@ -72,8 +72,8 @@ make check
 `make check` requires `make db-up` first, and covers: build, Ruff, strict mypy,
 TypeScript typecheck, OpenAPI freeze check, SDK generate/build/test/pack,
 ActionPlane and BotDelivery build and tests, Python unit tests, the security
-catalog, the process smoke suite, the real-PostgreSQL integration harness, and
-the M0 security gate.
+catalog and active-carrier registry validation, the process smoke suite, the
+real-PostgreSQL integration harness, and the M0 security gate.
 
 For faster inner loops:
 
