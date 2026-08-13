@@ -26,7 +26,7 @@ typecheck: sdk-build action-build
 	npm --prefix bot_delivery/typescript run typecheck
 
 test-python:
-	uv run pytest -q tests/unit
+	uv run pytest -q tests/unit -m "not node_toolchain"
 
 test: bot-build
 	uv run pytest -q tests/unit

@@ -87,10 +87,13 @@ make security-gate # M0 security veto gate
 ```
 
 After the Python dependencies are present, `make test-python` runs exactly
-`uv run pytest -q tests/unit` and has no SDK, ActionPlane, or BotDelivery build
-prerequisites. It is a convenience for the local edit loop, not
-Definition-of-Done, CI, or merge evidence; finish with the full `make check`
-contract above.
+`uv run pytest -q tests/unit -m "not node_toolchain"`, deselecting the
+`node_toolchain`-marked tests that execute the installed Node/npm workspaces,
+so the lane needs no Node, npm workspace state, or SDK, ActionPlane, or
+BotDelivery builds. The deselected Node-executing portion still runs in full
+under `make test` and `make check`. It is a convenience for the local edit
+loop, not Definition-of-Done, CI, or merge evidence; finish with the full
+`make check` contract above.
 
 Run `make typecheck` and `make test` sequentially, never concurrently.
 `make test` depends on `bot-build`, and

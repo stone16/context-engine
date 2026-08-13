@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -413,6 +414,27 @@ def test_model_probe_classifies_invalid_registered_artifacts(tmp_path: Path) -> 
     )
 
     assert preflight.probe_model_readiness(configuration) == "model_artifacts_invalid"
+
+
+@pytest.mark.parametrize("flag_name", ("O_DIRECTORY", "O_NOFOLLOW"))
+def test_model_probe_reports_missing_descriptor_flags_as_artifacts_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    flag_name: str,
+) -> None:
+    model_dir = tmp_path / "reachable-model"
+    model_dir.mkdir()
+    environment = valid_environment()
+    environment["CONTEXT_ENGINE_WORKER_EMBEDDING_MODEL_DIR"] = str(model_dir)
+    configuration = preflight.load_preflight_configuration(
+        environment, selected_planes=("supply",)
+    )
+    monkeypatch.delattr(os, flag_name)
+
+    assert (
+        preflight.probe_model_readiness(configuration)
+        == "model_artifacts_unavailable"
+    )
 
 
 def test_orchestrator_reports_all_independent_failures_and_earliest_exit() -> None:

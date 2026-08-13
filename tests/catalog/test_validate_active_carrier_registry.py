@@ -345,18 +345,22 @@ def test_public_validator_reports_repository_read_failure_without_content(
     }
 
 
-def test_public_validator_reports_invalid_utf8_proof_without_content(
+@pytest.mark.parametrize("corrupt_input", ("proof.md", "Makefile", "STATUS.md"))
+def test_public_validator_reports_each_invalid_utf8_repository_input_without_content(
     tmp_path: Path,
+    corrupt_input: str,
 ) -> None:
     registry, _ = _documents()
     registry["carriers"][0]["statusOwner"] = {
-        "path": "invalid-proof.md",
+        "path": "proof.md",
         "marker": "proof",
     }
     registry_path = tmp_path / "active-carriers-v1.json"
     registry_path.write_text(json.dumps(registry), encoding="utf-8")
+    (tmp_path / "proof.md").write_text("proof", encoding="utf-8")
     (tmp_path / "Makefile").write_text("check:\n", encoding="utf-8")
-    (tmp_path / "invalid-proof.md").write_bytes(b"\xffprivate proof")
+    (tmp_path / "STATUS.md").write_text("status\n", encoding="utf-8")
+    (tmp_path / corrupt_input).write_bytes(b"\xffprivate repository content")
 
     completed = subprocess.run(
         [

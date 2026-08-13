@@ -110,7 +110,7 @@ def test_local_model_verifier_requires_safe_descriptor_flags_for_flat_tree(
     monkeypatch.delattr(os, flag_name)
 
     with pytest.raises(
-        local_model.LocalEmbeddingModelUnavailable,
+        local_model.LocalEmbeddingModelArtifactsUnavailable,
         match="Local embedding model is unavailable",
     ) as failure:
         local_model.verify_model_artifacts(
@@ -119,7 +119,10 @@ def test_local_model_verifier_requires_safe_descriptor_flags_for_flat_tree(
             manifest_digest,
         )
 
+    assert failure.value.readiness_category == "model_artifacts_unavailable"
+    assert str(failure.value) == "Local embedding model is unavailable"
     assert failure.value.__cause__ is None
+    assert failure.value.__suppress_context__
 
 
 @pytest.mark.parametrize("flag_name", ("O_DIRECTORY", "O_NOFOLLOW"))
@@ -143,7 +146,9 @@ def test_descriptor_verifier_reports_missing_safe_flags_as_unavailable(
     monkeypatch.delattr(os, flag_name)
 
     try:
-        with pytest.raises(local_model.LocalEmbeddingModelArtifactsUnavailable):
+        with pytest.raises(
+            local_model.LocalEmbeddingModelArtifactsUnavailable
+        ) as failure:
             local_model.verify_model_artifacts_descriptor(
                 root_descriptor,
                 (("model.safetensors", expected_digest),),
@@ -151,6 +156,11 @@ def test_descriptor_verifier_reports_missing_safe_flags_as_unavailable(
             )
     finally:
         os.close(root_descriptor)
+
+    assert failure.value.readiness_category == "model_artifacts_unavailable"
+    assert str(failure.value) == "Local embedding model is unavailable"
+    assert failure.value.__cause__ is None
+    assert failure.value.__suppress_context__
 
 
 @pytest.mark.parametrize("extra_kind", ("directory", "symlink", "fifo"))
